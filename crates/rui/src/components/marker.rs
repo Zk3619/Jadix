@@ -872,6 +872,7 @@ impl From<MarkerBuilder> for Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::style::apply_class_list;
 
     fn slot_of(el: &Element) -> Option<&str> {
         el.attrs.get(ATTR_SLOT).map(String::as_str)
@@ -1323,5 +1324,35 @@ mod tests {
             here + el.children.iter().map(|c| count(c, slot)).sum::<usize>()
         }
         assert_eq!(count(&el, SLOT_ICON), 1);
+    }
+
+    #[test]
+    fn marker_spin_icon_child_is_pointer_events_none() {
+        let mut glyph = crate::utils::build_named_icon_text_node("loader-circle", "\u{ea0e}");
+        apply_class_list(&mut glyph, "animate-spin");
+        assert_eq!(
+            glyph.pointer_events_mode(),
+            crate::core::tree::PointerEvents::BoundingBox,
+            "lucide Icon defaults to bounding-box before the Marker slot stamps none"
+        );
+        let el: Element = marker()
+            .icon(glyph)
+            .content_with(|c| c.class("shimmer").text("Thinking..."))
+            .into();
+        let icon = find_slot(&el, SLOT_ICON).expect("icon slot");
+        assert_eq!(
+            icon.pointer_events_mode(),
+            crate::core::tree::PointerEvents::None
+        );
+        let spin = icon
+            .children
+            .iter()
+            .find(|c| c.attrs.get("rui_animate").map(String::as_str) == Some("spin"))
+            .expect("spin glyph");
+        assert_eq!(
+            spin.pointer_events_mode(),
+            crate::core::tree::PointerEvents::None,
+            "spin AABB must not steal hover from the Marker row"
+        );
     }
 }

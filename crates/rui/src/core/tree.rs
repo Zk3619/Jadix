@@ -483,6 +483,18 @@ pub fn pointer_events_targets_children(el: &Element) -> bool {
     el.pointer_events_mode().targets_children()
 }
 
+/// `animate-spin` / `animation: spin` must hit the unrotated layout box.
+///
+/// Lucide icons default to SVG `bounding-box`, which uses the visual AABB. A
+/// 1s spin grows that box to the circumcircle every 45°, so a still cursor on
+/// a Marker loader-circle enters/leaves every tick — CursorMoved then storms
+/// extra `dt≈0` paints and the icon looks frozen.
+#[inline]
+pub(crate) fn css_spin_locks_pointer_to_layout_box(el: &Element) -> bool {
+    el.attrs.get("rui_animate").map(String::as_str) == Some("spin")
+        || el.style.animations.iter().any(|a| a.name == "spin")
+}
+
 /// [`Element::button_hover_paint`]：用于无整树重建的按钮 hover / focus 环同步（见 `components/button.rs`）。
 #[derive(Debug, Clone)]
 pub struct ButtonHoverPaint {

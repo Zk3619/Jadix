@@ -1262,6 +1262,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         prev_scroll_paint_only: false,
         app_builder: std::rc::Rc::new(std::cell::RefCell::new(app_builder)),
         cursor_pos: winit::dpi::PhysicalPosition::new(0.0, 0.0),
+        cursor_move_pending: false,
         cursor_inside_window: false,
         last_frame_time: std::time::Instant::now(),
         modifiers: ModifiersState::default(),

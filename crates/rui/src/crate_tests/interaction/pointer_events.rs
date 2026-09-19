@@ -1,6 +1,7 @@
 //! `pointer-events`：CSS 通用 + RUI `box-none` + MDN SVG-only 关键字。
 
 use crate::app::scroll_support::collect_scroll_rest_chain_at;
+use crate::app::tree_hit::element_self_pointer_hit;
 use crate::app::tree_hit::find_click;
 use crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX;
 use crate::core::tree::{
@@ -183,4 +184,28 @@ fn none_subtree_hides_scroll_targets() {
         &mut chain
     ));
     assert!(chain.is_empty());
+}
+
+#[test]
+fn css_spin_bounding_box_hits_layout_box_not_circumcircle_corner() {
+    // Lucide `bounding-box` would accept the 45° AABB corner; a still cursor on a
+    // Marker loader then enters/leaves every tick and CursorMoved storms dt≈0 paints.
+    let mut el = Element::new()
+        .w(16.0)
+        .h(16.0)
+        .pointer_events("bounding-box");
+    apply_class_list(&mut el, "animate-spin");
+    el.layout_bounds = [0.0, 0.0, 16.0, 16.0];
+    el.style.rotate_deg = 45.0;
+    assert!(
+        element_self_pointer_hit(&el, 8.0, 8.0, [0.0, 0.0]),
+        "layout center must stay hittable"
+    );
+    // Unrotated top-right sits in the 45° visual AABB (bounding-box would hit) but
+    // outside the rotated layout square — same empty corner as
+    // `find_click_rotate_45_misses_aabb_corner`.
+    assert!(
+        !element_self_pointer_hit(&el, 16.0, 0.0, [0.0, 0.0]),
+        "AABB empty corner must miss so hover does not flicker with spin"
+    );
 }

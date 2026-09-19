@@ -129,6 +129,24 @@ impl ClassSet {
             hover && is_hover_paint_utility(util)
         })
     }
+
+    /// Pointer-dependent selectors (`hover:` / `group-hover:` / `peer-hover:`).
+    ///
+    /// `sm:` / `dark:` / `data-*` also live in [`Self::variants`], but entering those
+    /// boxes must not `request_redraw` — that storms Marker `animate-spin` while the
+    /// pointer slides ordinary gallery padding.
+    pub fn has_pointer_hover_variants(&self) -> bool {
+        self.variants.iter().any(|(sels, _)| {
+            sels.iter().any(|s| {
+                matches!(
+                    s,
+                    VariantSelector::Hover
+                        | VariantSelector::GroupHover { .. }
+                        | VariantSelector::PeerHover { .. }
+                )
+            })
+        })
+    }
 }
 
 fn is_hover_paint_utility(util: &str) -> bool {
@@ -839,6 +857,8 @@ pub fn tick_active_css_transitions_subtree(
         let has_active_css = el.transition_snapshot.has_active_tweens();
         let css_needs =
             super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
+        let prev_pointer_hover =
+            el.class_set.as_ref().and_then(|cs| cs.last_pointer_hover) == Some(true);
         let force_leave = class_hover_should_leave(
             el,
             mouse_pos,
@@ -856,18 +876,27 @@ pub fn tick_active_css_transitions_subtree(
                 frame.ancestor_scale,
                 &hit_nodes,
             );
+        // Color `:hover` has no tween. Strip blit copies last frame's hover ink, so
+        // the first enter / leave must named-pin dest-reset. Still-hovered re-apply
+        // after chrome restamp is paint-in-place — the blit already carries hover.
+        let hover_edge = force_leave || (force_hover_enter && !prev_pointer_hover);
         // Culled nodes still advance in-flight tweens. Spring has duration_ms=0 so the
         // duration clock cannot "catch up" after a skip — it looks like a forced pause.
         // Settled `:hover` (no active tween) must still leave when the pointer is gone.
         // `collect_skip_live` means a descendant is spin/shimmer/keyframes: do not
         // `continue` the parent or idle chrome never notes `page_css` (maximize /
         // stop-scroll then WaitUntil).
+        // A short overflow-visible parent can be layout-offscreen while a hovered
+        // child (or `hover:scale` leftover) is still painted in the viewport. Skipping
+        // the parent here never runs `force_leave` on that child — hover sticks until
+        // settle, when full sync walks the same subtree.
+        let hover_walk = force_leave || force_hover_enter || class_hover_subtree_armed(el);
         if offscreen
             && !(has_spin
                 || has_css_anim
                 || has_active_css
-                || force_leave
-                || force_hover_enter
+                || css_needs
+                || hover_walk
                 || el.collect_skip_live)
         {
             continue;
@@ -949,21 +978,42 @@ pub fn tick_active_css_transitions_subtree(
             } else {
                 false
             };
-            if spun || css_anim || css_trans || el.style != before || local != LayoutStatus::Clean {
+            if spun
+                || css_anim
+                || css_trans
+                || el.style != before
+                || local != LayoutStatus::Clean
+                || hover_edge
+            {
                 *impact = impact.merge(local.merge(LayoutStatus::StyleChanged));
-                mark_hover_paint_dirty();
-                if spun || css_anim || css_trans {
+                // Spin / keyframes already arm `page_css` + node-present dirty.
+                // Hover-dirty is for pointer chrome. CSS ticks must not set it:
+                // CursorMoved `take()` anywhere on the page would storm extra paints
+                // and freeze Marker `animate-spin`.
+                if (local != LayoutStatus::Clean || hover_edge) && !(spun || css_anim || css_trans)
+                {
+                    mark_hover_paint_dirty();
+                }
+                if spun || css_anim || css_trans || hover_edge {
                     // Paint-only motion must be a node-present dirty. StyleChanged with an
                     // empty damage list FullClears; a sibling Input PartialLoad would skip
                     // this icon and the retain angle jumps on the next Clear.
+                    // Color hover enter/leave has no tween: without a pin, scroll blit
+                    // keeps the previous hover/rest ink until settle.
                     crate::app::damage::push_frame_paint_element(el, scroll_acc);
                 }
                 if css_trans
                     || (el.style.scale[0] - before.scale[0]).abs() > 1e-5
                     || (el.style.scale[1] - before.scale[1]).abs() > 1e-5
                     || (el.style.rotate_deg - before.rotate_deg).abs() > 1e-5
+                    || hover_edge
                 {
-                    layout_tree.note_collect_skip_hash_bust_if_idle(el.collect_skip_live);
+                    // Hover color leave is paint-only on an idle chip. Passing
+                    // `collect_skip_live` skips the bust when a spinner ancestor
+                    // marked the leaf live last stamp, and `reuse_idle` then
+                    // skip-replays the hovered bake until scroll settles.
+                    layout_tree
+                        .note_collect_skip_hash_bust_if_idle(el.collect_skip_live && !hover_edge);
                 }
                 // Padding/margin/size tweens must request flex recompute. StyleChanged alone
                 // is treated as scroll-only paint and leaves geometry stuck at the hover size.
@@ -980,7 +1030,7 @@ pub fn tick_active_css_transitions_subtree(
             }
         }
 
-        if offscreen {
+        if offscreen && !el.collect_skip_live && !class_hover_subtree_armed(el) {
             continue;
         }
 
@@ -988,7 +1038,9 @@ pub fn tick_active_css_transitions_subtree(
         let child_acc = if is_portal {
             scroll_acc
         } else {
-            crate::core::tree::child_scroll_accumulation(el, scroll_acc)
+            // Match hit-test: `scroll:` viewports read live offset signals, not
+            // a lagging `Element.scroll_offset`.
+            crate::app::tree_hit::next_hit_scroll_acc(el, scroll_acc)
         };
         let (child_lin, child_sc) = crate::core::tree::child_paint_ancestor(
             el,
@@ -1075,7 +1127,7 @@ fn class_variant_hover_needs_frame_inner(
         );
 
         if let Some(cs) = el.class_set.as_ref() {
-            if !cs.variants.is_empty() {
+            if cs.has_pointer_hover_variants() {
                 match cs.last_pointer_hover {
                     Some(prev) if prev == inside => {}
                     Some(_) => return true,
@@ -1096,7 +1148,7 @@ fn class_variant_hover_needs_frame_inner(
         let child_scroll_acc = if is_portal {
             scroll_acc
         } else {
-            crate::core::tree::child_scroll_accumulation(el, scroll_acc)
+            crate::app::tree_hit::next_hit_scroll_acc(el, scroll_acc)
         };
         let (child_lin, child_sc) = crate::core::tree::child_paint_ancestor(
             el,
@@ -1171,6 +1223,15 @@ fn pointer_inside_for_class_hover(
         );
     }
     if el.pointer_events_mode() == PointerEvents::BoundingBox {
+        if crate::core::tree::css_spin_locks_pointer_to_layout_box(el) {
+            return crate::core::tree::pointer_in_paint_border_box(
+                el,
+                mouse_pos,
+                scroll_acc,
+                ancestor_linear,
+                ancestor_scale,
+            );
+        }
         return true;
     }
     crate::core::tree::pointer_in_paint_border_box(
@@ -1275,6 +1336,16 @@ fn resolve_scroll_hover_enter(
         cs.last_ctx_fp = None;
     }
     local
+}
+
+/// Freeze offscreen-cull must still descend into a wrapper whose descendant is
+/// `:hover`. `last_pointer_hover` lives on the leaf; the wrapper itself is not
+/// `force_leave`.
+fn class_hover_subtree_armed(el: &Element) -> bool {
+    if el.class_set.as_ref().and_then(|cs| cs.last_pointer_hover) == Some(true) {
+        return true;
+    }
+    el.children.iter().any(class_hover_subtree_armed)
 }
 
 /// Already-hovered class variants whose paint AABB no longer contains the pointer.
@@ -1525,7 +1596,8 @@ fn sync_class_variants_subtree_inner(
             // Scroll frames (`tick_active_css_transitions_subtree`) still tick `has_spin`
             // when offscreen. Idle sync matches that: the node itself advances, children
             // of a truly offscreen parent stay culled — unless the parent is live
-            // (`collect_skip_live`: descendant spin / shimmer). Otherwise maximize /
+            // (`collect_skip_live`: descendant spin / shimmer) or a descendant is still
+            // `:hover` (overflow-visible / scale leftover). Otherwise maximize /
             // stop-scroll never notes `page_css` and `about_to_wait` sleeps.
             if offscreen
                 && !has_spin
@@ -1533,6 +1605,7 @@ fn sync_class_variants_subtree_inner(
                 && !has_active_css
                 && !css_needs
                 && !el.collect_skip_live
+                && !class_hover_subtree_armed(el)
             {
                 continue;
             }
@@ -1581,6 +1654,8 @@ fn sync_class_variants_subtree_inner(
                 .is_some_and(|cs| !cs.variants.is_empty());
             if has_variants || has_spin || has_css_anim || has_active_css || css_needs {
                 let hovered = inside;
+                let prev_pointer_hover = el.class_set.as_ref().and_then(|cs| cs.last_pointer_hover);
+                let hover_edge = has_variants && prev_pointer_hover.unwrap_or(false) != hovered;
                 if has_variants {
                     if let Some(cs) = el.class_set.as_mut() {
                         cs.last_pointer_hover = Some(hovered);
@@ -1693,14 +1768,25 @@ fn sync_class_variants_subtree_inner(
                         || css_trans
                         || el.style != before
                         || el.text_style != before_text
+                        || hover_edge
                     {
                         *impact = impact.merge(if spun || css_anim || css_trans {
                             local.merge(LayoutStatus::StyleChanged)
                         } else {
                             local
                         });
-                        mark_hover_paint_dirty();
-                        if spun || css_anim || css_trans {
+                        // Paint-only CSS ticks must not set hover-dirty. Gallery pointer
+                        // storms (`hover:scale` tiles, sidebar) `take()` this flag on
+                        // every CursorMoved — extra `dt≈0` paints freeze Marker spin.
+                        if !(spun || css_anim || css_trans)
+                            && (local != LayoutStatus::Clean
+                                || el.style != before
+                                || el.text_style != before_text
+                                || hover_edge)
+                        {
+                            mark_hover_paint_dirty();
+                        }
+                        if spun || css_anim || css_trans || hover_edge {
                             crate::app::damage::push_frame_paint_element(el, scroll_acc);
                         }
                         if css_trans
@@ -1708,12 +1794,15 @@ fn sync_class_variants_subtree_inner(
                             || (el.style.scale[1] - before.scale[1]).abs() > 1e-5
                             || (el.style.rotate_deg - before.rotate_deg).abs() > 1e-5
                             || el.text_style != before_text
+                            || hover_edge
                         {
                             // ViewportsOnly `reuse_idle` skips idle wrappers. First
                             // hover:scale / hover:underline / hover:text frame is not
                             // `collect_skip_live` yet — without this bust, skip-replays
                             // the rest Bake (lost enlarge, Link/Breadcrumb hover chrome).
-                            layout_tree.note_collect_skip_hash_bust_if_idle(el.collect_skip_live);
+                            layout_tree.note_collect_skip_hash_bust_if_idle(
+                                el.collect_skip_live && !hover_edge,
+                            );
                         }
                         // scale/rotate/translate/opacity are paint-only. Pushing them into Taffy every
                         // transition frame dirties flex geometry and can make sidebar hit-test flicker.
@@ -1756,7 +1845,7 @@ fn sync_class_variants_subtree_inner(
 
             let mut child_scroll_acc = scroll_acc;
             if !is_portal {
-                child_scroll_acc = crate::core::tree::child_scroll_accumulation(el, scroll_acc);
+                child_scroll_acc = crate::app::tree_hit::next_hit_scroll_acc(el, scroll_acc);
             }
             frame.child_scroll_acc = child_scroll_acc;
             frame.child_clip = child_clip;
@@ -3892,6 +3981,321 @@ mod p1_utility_tests {
     }
 
     #[test]
+    fn scroll_paint_freeze_hover_color_leave_pins_paint_dirty() {
+        // Strip blit copies last frame's hover ink. Color `:hover` has no tween, so
+        // freeze leave must named-pin dest-reset or the chip stays hovered until
+        // scroll settles (no blit) and a full present runs.
+        let _ = crate::app::damage::take_frame_paint_nodes();
+        let mut chip = Element::new();
+        apply_class_list(&mut chip, "bg-transparent hover:bg-muted");
+        chip.layout_bounds = [400.0, 200.0, 80.0, 32.0];
+        let rest = chip.style.bg_color;
+        let hover_bg = parse_color("muted");
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut chip,
+            [440.0, 216.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(chip.style.bg_color, hover_bg);
+        let enter_dirty = crate::app::damage::take_frame_paint_nodes();
+        assert!(
+            !enter_dirty.is_empty(),
+            "first geometric hover enter must pin blit dest-reset, got {enter_dirty:?}"
+        );
+
+        impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut chip,
+            [440.0, 216.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        let stay_dirty = crate::app::damage::take_frame_paint_nodes();
+        assert!(
+            stay_dirty.is_empty(),
+            "still-hovered re-apply must not pin every scroll frame, got {stay_dirty:?}"
+        );
+
+        impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut chip,
+            [10.0, 10.0],
+            "",
+            false,
+            1024.0,
+            800.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            chip.class_set.as_ref().and_then(|cs| cs.last_pointer_hover),
+            Some(false),
+            "freeze leave must clear last_pointer_hover"
+        );
+        assert_eq!(chip.style.bg_color, rest, "hover:bg must restore rest");
+        let leave_dirty = crate::app::damage::take_frame_paint_nodes();
+        assert!(
+            !leave_dirty.is_empty(),
+            "hover leave during scroll freeze must pin dest-reset, got {leave_dirty:?}"
+        );
+    }
+
+    #[test]
+    fn scroll_paint_freeze_hover_leave_follows_scroll_offset() {
+        let _ = crate::app::damage::take_frame_paint_nodes();
+        let mut chip = Element::new();
+        apply_class_list(&mut chip, "bg-transparent hover:bg-muted");
+        chip.layout_bounds = [20.0, 100.0, 80.0, 32.0];
+        let rest = chip.style.bg_color;
+
+        let mut viewport = Element::new().overflow("scroll");
+        viewport.focus_id = Some("scroll:hover-leave".into());
+        viewport.layout_bounds = [0.0, 0.0, 200.0, 200.0];
+        viewport.scroll_offset = [0.0, 0.0];
+        viewport = viewport.child(chip);
+
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut viewport,
+            [40.0, 110.0],
+            "",
+            false,
+            400.0,
+            400.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            viewport.children[0]
+                .class_set
+                .as_ref()
+                .and_then(|cs| cs.last_pointer_hover),
+            Some(true),
+            "stationary pointer over the chip must enter hover"
+        );
+        let _ = crate::app::damage::take_frame_paint_nodes();
+
+        viewport.scroll_offset = [0.0, 80.0];
+        crate::core::reactivity::use_signal(
+            &crate::core::scroll_viewport::scroll_offset_y_signal_key("hover-leave"),
+            || 0.0_f32,
+        )
+        .set_silent(80.0);
+        impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut viewport,
+            [40.0, 110.0],
+            "",
+            false,
+            400.0,
+            400.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            viewport.children[0]
+                .class_set
+                .as_ref()
+                .and_then(|cs| cs.last_pointer_hover),
+            Some(false),
+            "content sliding out from under a still pointer must leave hover"
+        );
+        assert_eq!(viewport.children[0].style.bg_color, rest);
+        let leave_dirty = crate::app::damage::take_frame_paint_nodes();
+        assert!(
+            !leave_dirty.is_empty(),
+            "scroll-induced hover leave must pin dest-reset, got {leave_dirty:?}"
+        );
+    }
+
+    #[test]
+    fn freeze_leaves_hover_on_child_when_parent_layout_box_is_offscreen() {
+        // Overflow-visible (or stale skip-replay) parent: layout box is fully past
+        // the viewport pad, child chip is still painted in-view. Freeze used to
+        // `continue` the parent and never `force_leave` the leaf — hover stuck until
+        // settle (full sync does not have that second child skip).
+        let _ = crate::app::damage::take_frame_paint_nodes();
+        let mut chip = Element::new();
+        apply_class_list(&mut chip, "bg-transparent hover:bg-muted");
+        chip.layout_bounds = [20.0, 80.0, 80.0, 32.0];
+        let rest = chip.style.bg_color;
+
+        let mut parent = Element::new();
+        parent.layout_bounds = [0.0, 0.0, 200.0, 50.0];
+        parent = parent.child(chip);
+
+        let mut viewport = Element::new().overflow("scroll");
+        viewport.focus_id = Some("scroll:offscreen-parent-hover".into());
+        viewport.layout_bounds = [0.0, 0.0, 200.0, 200.0];
+        viewport.scroll_offset = [0.0, 0.0];
+        viewport = viewport.child(parent);
+
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        let mouse = [40.0, 96.0];
+        tick_active_css_transitions_subtree(
+            &mut viewport,
+            mouse,
+            "",
+            false,
+            200.0,
+            200.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            viewport.children[0].children[0]
+                .class_set
+                .as_ref()
+                .and_then(|cs| cs.last_pointer_hover),
+            Some(true),
+            "pointer on the overflowing child must enter hover"
+        );
+        let _ = crate::app::damage::take_frame_paint_nodes();
+
+        // Parent visual y = 0-100 = -100, h=50 → fully past PAD (32). Child visual
+        // y = 80-100 = -20, h=32 → still intersects the viewport. Mouse stays put.
+        viewport.scroll_offset = [0.0, 100.0];
+        crate::core::reactivity::use_signal(
+            &crate::core::scroll_viewport::scroll_offset_y_signal_key("offscreen-parent-hover"),
+            || 0.0_f32,
+        )
+        .set_silent(100.0);
+        impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut viewport,
+            mouse,
+            "",
+            false,
+            200.0,
+            200.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            viewport.children[0].children[0]
+                .class_set
+                .as_ref()
+                .and_then(|cs| cs.last_pointer_hover),
+            Some(false),
+            "freeze must leave a hovered child even when its parent layout box is offscreen"
+        );
+        assert_eq!(viewport.children[0].children[0].style.bg_color, rest);
+        let leave_dirty = crate::app::damage::take_frame_paint_nodes();
+        assert!(
+            !leave_dirty.is_empty(),
+            "overflowing-child hover leave must pin dest-reset, got {leave_dirty:?}"
+        );
+    }
+
+    #[test]
+    fn scroll_paint_freeze_hover_scale_leave_follows_scroll_offset() {
+        let _ = crate::app::damage::take_frame_paint_nodes();
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+        let mut chip = Element::new();
+        apply_class_list(
+            &mut chip,
+            "scale-100 transition-transform duration-300 hover:scale-125",
+        );
+        chip.layout_bounds = [20.0, 40.0, 64.0, 64.0];
+
+        let mut viewport = Element::new().overflow("scroll");
+        viewport.focus_id = Some("scroll:hover-scale-leave".into());
+        viewport.layout_bounds = [0.0, 0.0, 200.0, 200.0];
+        viewport.scroll_offset = [0.0, 0.0];
+        viewport = viewport.child(chip);
+
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut viewport,
+            [52.0, 72.0],
+            "",
+            false,
+            200.0,
+            200.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            viewport.children[0]
+                .class_set
+                .as_ref()
+                .and_then(|cs| cs.last_pointer_hover),
+            Some(true),
+            "stationary pointer over the tile must enter hover:scale"
+        );
+        crate::style::advance_css_transition_timeline_ms(320.0);
+        impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut viewport,
+            [52.0, 72.0],
+            "",
+            false,
+            200.0,
+            200.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        let hovered_scale = viewport.children[0].style.scale[0];
+        assert!(
+            hovered_scale > 1.1,
+            "hover:scale must settle near 1.25 before leave, got {hovered_scale}"
+        );
+        let _ = crate::app::damage::take_frame_paint_nodes();
+
+        viewport.scroll_offset = [0.0, 120.0];
+        crate::core::reactivity::use_signal(
+            &crate::core::scroll_viewport::scroll_offset_y_signal_key("hover-scale-leave"),
+            || 0.0_f32,
+        )
+        .set_silent(120.0);
+        impact = LayoutStatus::Clean;
+        tick_active_css_transitions_subtree(
+            &mut viewport,
+            [52.0, 72.0],
+            "",
+            false,
+            200.0,
+            200.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        assert_eq!(
+            viewport.children[0]
+                .class_set
+                .as_ref()
+                .and_then(|cs| cs.last_pointer_hover),
+            Some(false),
+            "content sliding out from under a still pointer must leave hover:scale"
+        );
+        crate::style::set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
     fn scroll_paint_applies_color_and_scale_hover() {
         let mut chip = Element::new();
         apply_class_list(
@@ -4624,6 +5028,75 @@ mod p1_utility_tests {
         assert!(
             class_variant_hover_needs_frame(&el, [10.0, 10.0]),
             "leave must wake a frame so hover:scale can shrink"
+        );
+    }
+
+    #[test]
+    fn class_variant_hover_needs_frame_ignores_non_pointer_variants() {
+        let mut page = Element::new();
+        apply_class_list(&mut page, "md:flex dark:bg-accent");
+        page.layout_bounds = [0.0, 0.0, 400.0, 400.0];
+        assert!(
+            !class_variant_hover_needs_frame(&page, [40.0, 40.0]),
+            "sm/md/dark/data variants must not request_redraw when the pointer enters a box — that storms Marker spin while sliding the page"
+        );
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut page,
+            [40.0, 40.0],
+            "",
+            false,
+            400.0,
+            400.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert!(
+            !class_variant_hover_needs_frame(&page, [200.0, 80.0]),
+            "sliding inside a breakpoint-only box must not wake extra paints"
+        );
+        assert!(
+            !class_variant_hover_needs_frame(&page, [-10.0, -10.0]),
+            "leaving a breakpoint-only box must not wake extra paints"
+        );
+    }
+
+    #[test]
+    fn class_variant_hover_needs_frame_false_on_empty_padding_after_seed() {
+        let mut icon = Element::new().w(16.0).h(16.0);
+        apply_class_list(&mut icon, "animate-spin");
+        icon.layout_bounds = [8.0, 8.0, 16.0, 16.0];
+        let mut tile = Element::new().w(64.0).h(64.0);
+        apply_class_list(&mut tile, "hover:scale-125");
+        tile.layout_bounds = [300.0, 300.0, 64.0, 64.0];
+        let mut root = Element::new().w(400.0).h(400.0).child(icon).child(tile);
+        root.layout_bounds = [0.0, 0.0, 400.0, 400.0];
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_class_variants_subtree(
+            &mut root,
+            [20.0, 80.0],
+            "",
+            false,
+            400.0,
+            400.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert!(
+            !class_variant_hover_needs_frame(&root, [20.0, 80.0]),
+            "padding after seed must not keep waking frames"
+        );
+        assert!(
+            !class_variant_hover_needs_frame(&root, [90.0, 110.0]),
+            "sliding empty padding must not wake a hover: frame"
+        );
+        let a = crate::app::pointer_events::hit_path(&root, 20.0, 80.0);
+        let b = crate::app::pointer_events::hit_path(&root, 90.0, 110.0);
+        assert!(
+            crate::app::pointer_events::hit_path_identity_eq(&a, &b),
+            "empty-padding slides must keep the same hit chain so CursorMoved can skip gallery walks"
         );
     }
 

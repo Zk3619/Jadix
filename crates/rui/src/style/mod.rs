@@ -62,6 +62,7 @@ pub use animation::{
     AnimationSnapshot, AnimationTick, CubicTween, CubicTweenState, TimelineProgress,
     TransitionSnapshot,
 };
+pub(crate) use animation::note_page_css_needs_frame;
 pub use clip_path::{
     begin_named_clip_pass, clamp_border_radii, lookup_clip_path, parse_clip_path,
     radii_affect_clip, register_clip_path, rounded_rect_contains, tessellate_rounded_rect,

@@ -240,6 +240,15 @@ pub struct HitPathEntry {
     /// 该节点可视盒（窗口像素，已扣祖先 `scroll_acc`）。与命中判定同一套坐标，
     /// 供 handler 把指针映射到局部逻辑坐标（Chart / ScrollArea 内控件）。
     pub bounds: [f32; 4],
+    /// `hover:` / `group-hover:` / `peer-hover:` utilities on this node.
+    pub class_pointer_hover: bool,
+    /// Tailwind `group` / `peer` marker (`rui_group` / `rui_peer`).
+    pub class_group_or_peer: bool,
+    /// This node's `cursor`, if set. Deepest `Some` is the resolved pointer icon.
+    pub cursor: Option<crate::style::CursorValue>,
+    /// `on_hover` is installed. CursorMoved skips the hover walk when neither
+    /// the previous nor the next chain has one.
+    pub has_on_hover: bool,
 }
 
 impl HitPathEntry {
@@ -287,6 +296,14 @@ impl HitPathEntry {
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
             bounds,
+            class_pointer_hover: el
+                .class_set
+                .as_ref()
+                .is_some_and(|cs| cs.has_pointer_hover_variants()),
+            class_group_or_peer: el.attrs.contains_key("rui_group")
+                || el.attrs.contains_key("rui_peer"),
+            cursor: el.cursor.clone(),
+            has_on_hover: el.on_hover.is_some(),
         }
     }
 
@@ -333,6 +350,45 @@ pub fn same_hit_node(a: &HitPathEntry, b: &HitPathEntry) -> bool {
         && a.hoisted_portal == b.hoisted_portal
         && a.on_click.is_none() == b.on_click.is_none()
         && a.on_mousedown.is_none() == b.on_mousedown.is_none()
+}
+
+/// Same widget chain (empty padding, sliding inside one box). Used to skip the
+/// gallery-wide `class_variant_hover_needs_frame` walk on CursorMoved.
+pub fn hit_path_identity_eq(a: &[HitPathEntry], b: &[HitPathEntry]) -> bool {
+    a.len() == b.len() && a.iter().zip(b.iter()).all(|(x, y)| same_hit_node(x, y))
+}
+
+/// Either chain samples a pointer-dependent class variant (or a `group`/`peer`
+/// marker whose descendants might). Crossing `sm:`/`dark:`-only boxes must not
+/// pay the gallery-wide `class_variant_hover_needs_frame` walk.
+pub fn class_hover_path_may_change_samples(prev: &[HitPathEntry], next: &[HitPathEntry]) -> bool {
+    prev.iter()
+        .chain(next.iter())
+        .any(|e| e.class_pointer_hover || e.class_group_or_peer)
+}
+
+/// Deepest `focus_id` on an exclusive hit chain. Same bubble as `find_focus_id_at`.
+pub fn path_deepest_focus_id(path: &[HitPathEntry]) -> Option<&str> {
+    path.iter().rev().find_map(|e| e.focus_id.as_deref())
+}
+
+/// Deepest `scroll:` viewport rest on the chain. Replaces `collect_scroll_chain_at`
+/// for area-hover, which only kept this string.
+pub fn path_deepest_scroll_area_rest(path: &[HitPathEntry]) -> Option<&str> {
+    path.iter().rev().find_map(|e| {
+        e.focus_id
+            .as_deref()?
+            .strip_prefix(crate::core::scroll_viewport::SCROLL_AREA_FOCUS_PREFIX)
+    })
+}
+
+/// Deepest explicit `cursor`. Same bubble as `pick_cursor`.
+pub fn path_resolved_cursor(path: &[HitPathEntry]) -> Option<crate::style::CursorValue> {
+    path.iter().rev().find_map(|e| e.cursor.clone())
+}
+
+pub fn path_has_on_hover(path: &[HitPathEntry]) -> bool {
+    path.iter().any(|e| e.has_on_hover)
 }
 
 /// DOM-like click target: nearest common ancestor of mousedown and mouseup hit paths.
@@ -759,6 +815,112 @@ mod tests {
         assert!(path.len() >= 2);
         assert_eq!(path[0].focus_id.as_deref(), Some("root"));
         assert_eq!(path.last().unwrap().focus_id.as_deref(), Some("leaf"));
+    }
+
+    #[test]
+    fn hit_path_identity_eq_same_padding_slide() {
+        let mut root = Element::new();
+        root.layout_bounds = [0.0, 0.0, 400.0, 400.0];
+        root.focus_id = Some("page".into());
+        let a = hit_path(&root, 20.0, 20.0);
+        let b = hit_path(&root, 80.0, 90.0);
+        assert!(
+            hit_path_identity_eq(&a, &b),
+            "sliding inside one box must be the same hit chain"
+        );
+        let mut btn = Element::new();
+        btn.layout_bounds = [200.0, 200.0, 40.0, 24.0];
+        btn.focus_id = Some("btn".into());
+        root.children.push(btn);
+        let pad = hit_path(&root, 20.0, 20.0);
+        let on_btn = hit_path(&root, 210.0, 210.0);
+        assert!(
+            !hit_path_identity_eq(&pad, &on_btn),
+            "entering a widget must change the hit chain"
+        );
+    }
+
+    #[test]
+    fn class_hover_path_may_change_samples_ignores_breakpoint_boxes() {
+        let mut a = Element::new();
+        crate::style::apply_class_list(&mut a, "md:flex dark:bg-accent");
+        a.layout_bounds = [0.0, 0.0, 80.0, 80.0];
+        a.focus_id = Some("a".into());
+        let mut b = Element::new();
+        crate::style::apply_class_list(&mut b, "sm:p-4");
+        b.layout_bounds = [80.0, 0.0, 80.0, 80.0];
+        b.focus_id = Some("b".into());
+        let mut hover = Element::new();
+        crate::style::apply_class_list(&mut hover, "hover:scale-125");
+        hover.layout_bounds = [160.0, 0.0, 80.0, 80.0];
+        hover.focus_id = Some("hover".into());
+        let mut root = Element::new();
+        root.layout_bounds = [0.0, 0.0, 240.0, 80.0];
+        root.children.push(a);
+        root.children.push(b);
+        root.children.push(hover);
+
+        let on_a = hit_path(&root, 40.0, 40.0);
+        let on_b = hit_path(&root, 120.0, 40.0);
+        let on_hover = hit_path(&root, 200.0, 40.0);
+        assert!(
+            on_a.last().is_some_and(|e| !e.class_pointer_hover && !e.class_group_or_peer),
+            "md:/dark: must not stamp pointer-hover on the hit path"
+        );
+        assert!(
+            !class_hover_path_may_change_samples(&on_a, &on_b),
+            "sliding across breakpoint-only boxes must not schedule a class-hover walk"
+        );
+        assert!(
+            class_hover_path_may_change_samples(&on_b, &on_hover),
+            "entering hover:scale must still schedule the class-hover walk"
+        );
+    }
+
+    #[test]
+    fn hit_path_resolves_cursor_focus_and_scroll_without_a_second_walk() {
+        let mut page = Element::new();
+        page.layout_bounds = [0.0, 0.0, 400.0, 300.0];
+        page.focus_id = Some("page".into());
+        page.cursor = Some(crate::style::CursorValue::keyword(
+            crate::style::CursorKind::Default,
+        ));
+
+        let mut scroller = Element::new();
+        scroller.layout_bounds = [0.0, 0.0, 400.0, 300.0];
+        scroller.focus_id = Some("scroll:main".into());
+
+        let mut tile = Element::new();
+        tile.layout_bounds = [20.0, 40.0, 80.0, 40.0];
+        tile.focus_id = Some("tile".into());
+        tile.cursor = Some(crate::style::CursorValue::keyword(
+            crate::style::CursorKind::Pointer,
+        ));
+        tile = tile.on_hover(|_inside| {});
+
+        scroller.children.push(tile);
+        page.children.push(scroller);
+
+        let on_tile = hit_path(&page, 40.0, 50.0);
+        assert_eq!(path_deepest_focus_id(&on_tile), Some("tile"));
+        assert_eq!(path_deepest_scroll_area_rest(&on_tile), Some("main"));
+        assert_eq!(
+            path_resolved_cursor(&on_tile).map(|c| c.kind),
+            Some(crate::style::CursorKind::Pointer)
+        );
+        assert!(path_has_on_hover(&on_tile));
+
+        let on_pad = hit_path(&page, 200.0, 200.0);
+        assert_eq!(path_deepest_focus_id(&on_pad), Some("scroll:main"));
+        assert_eq!(path_deepest_scroll_area_rest(&on_pad), Some("main"));
+        assert_eq!(
+            path_resolved_cursor(&on_pad).map(|c| c.kind),
+            Some(crate::style::CursorKind::Default)
+        );
+        assert!(
+            !path_has_on_hover(&on_pad),
+            "padding inside the scroller has no on_hover; CursorMoved must not walk update_hovers"
+        );
     }
 
     #[test]

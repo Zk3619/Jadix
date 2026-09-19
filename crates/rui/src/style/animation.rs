@@ -568,6 +568,9 @@ pub struct AnimationSnapshot {
     /// Specified slot for style-only ticks (Element also has `specified_present`).
     pub specified: super::specified::SpecifiedPresent,
     written_props: HashMap<super::animatable::PropertyId, super::animatable::AnimatableValue>,
+    /// Last CSS-timeline sample (ms). CursorMoved extra paints often arrive with
+    /// `dt≈0`; without this, summing frame delta freezes `animate-spin`.
+    last_tick_ms: Option<f64>,
 }
 
 impl AnimationSnapshot {
@@ -780,6 +783,33 @@ fn entry_timing_model(entry: &super::element_style::AnimationEntry) -> super::ti
     }
 }
 
+/// Frame delta for `@keyframes` / `animate-spin`.
+///
+/// A pointer storm blocks this thread, so the next present can be hundreds of
+/// milliseconds late while `dt_secs` stays tiny. Clamping that gap to
+/// [`CSS_TRANSITION_IDLE_JUMP_MS`] and stamping `last_tick_ms` to *now* drops the
+/// rest — spin crawls for the whole slide. Transitions keep that cap in
+/// [`duration_tween_elapsed_ms`]. Keyframes apply the full gap. `frame` is only
+/// the fallback when the timeline has not moved (unit tests).
+fn animation_tick_dt_ms(snap: &mut AnimationSnapshot, dt_secs: f32, reduced: bool) -> f32 {
+    if reduced {
+        return 1.0e9;
+    }
+    let now_ms = css_timeline_now_ms();
+    let frame = if dt_secs > 1.0e-4 {
+        (dt_secs * 1000.0).min(80.0)
+    } else {
+        0.0
+    };
+    let wall = snap
+        .last_tick_ms
+        .map(|last| (now_ms - last).max(0.0) as f32)
+        .unwrap_or(0.0);
+    let dt_ms = wall.max(frame);
+    snap.last_tick_ms = Some(now_ms);
+    dt_ms
+}
+
 /// Advance CSS `@keyframes` animations on one element. Returns true if still active.
 pub fn tick_element_animations(
     style: &mut super::Style,
@@ -883,11 +913,7 @@ pub fn tick_element_animations_ex_named(
     snap.runs.truncate(style.animations.len());
 
     let reduced = prefers_reduced_motion();
-    let dt_ms = if reduced {
-        1.0e9
-    } else {
-        (dt_secs.max(0.0) * 1000.0).min(80.0)
-    };
+    let dt_ms = animation_tick_dt_ms(snap, dt_secs, reduced);
     let mut any_active = false;
     let mut lock = AnimationLock::default();
     let mut animations = style.animations.clone();
@@ -3073,6 +3099,80 @@ mod tests {
             "expected ~115deg after 320ms of 1s spin, got {}",
             style.rotate_deg
         );
+    }
+
+    #[test]
+    fn tick_element_animations_zero_dt_storm_uses_monotonic_clock() {
+        // Gallery Marker: CursorMoved over the row requests extra paints with dt≈0.
+        // Summing that froze loader-circle; flooring it would fast-forward during the storm.
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.animations.push(crate::style::AnimationEntry {
+            name: "spin".into(),
+            duration_ms: 1000.0,
+            timing: crate::style::TimingFunction::Linear,
+            iteration_count: crate::style::AnimationIterationCount::Infinite,
+            ..Default::default()
+        });
+        let mut snap = AnimationSnapshot::default();
+        assert!(tick_element_animations(&mut style, &mut snap, 0.0));
+        let at_origin = style.rotate_deg;
+        for _ in 0..12 {
+            assert!(tick_element_animations(&mut style, &mut snap, 0.0));
+        }
+        assert!(
+            (style.rotate_deg - at_origin).abs() < 1.0,
+            "virtual clock must not invent spin from zero dt, origin={at_origin} now={}",
+            style.rotate_deg
+        );
+        set_css_transition_timeline_ms(80.0);
+        assert!(tick_element_animations(&mut style, &mut snap, 0.0));
+        assert!(
+            (style.rotate_deg - 28.8).abs() < 2.0,
+            "dt≈0 extra frame must still sample wall/virtual time (expected ~28.8deg, got {})",
+            style.rotate_deg
+        );
+        // Page-wide CursorMoved extra paints often report 1–8ms, not dt≈0 — enough
+        // to take the frame-dt branch and ignore the CSS timeline (spin crawls).
+        set_css_transition_timeline_ms(160.0);
+        assert!(tick_element_animations(&mut style, &mut snap, 0.002));
+        assert!(
+            (style.rotate_deg - 57.6).abs() < 2.0,
+            "tiny extra-frame dt must not starve the CSS timeline (expected ~57.6deg, got {})",
+            style.rotate_deg
+        );
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn late_frame_must_not_drop_spin_time() {
+        // Pointer motion blocks the GUI thread. The next present is late by
+        // hundreds of ms and still reports a tiny frame dt. Capping the gap at
+        // 80ms and stamping the clock to *now* deletes the rest — spin freezes
+        // for the whole slide, then the icon pops when the mouse stops.
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut style = crate::style::Style::default();
+        style.animations.push(crate::style::AnimationEntry {
+            name: "spin".into(),
+            duration_ms: 1000.0,
+            timing: crate::style::TimingFunction::Linear,
+            iteration_count: crate::style::AnimationIterationCount::Infinite,
+            ..Default::default()
+        });
+        let mut snap = AnimationSnapshot::default();
+        assert!(tick_element_animations(&mut style, &mut snap, 1.0 / 60.0));
+        let seeded = style.rotate_deg;
+        set_css_transition_timeline_ms(240.0);
+        assert!(tick_element_animations(&mut style, &mut snap, 0.002));
+        let advanced = style.rotate_deg - seeded;
+        assert!(
+            (advanced - 86.4).abs() < 3.0,
+            "a 240ms late present must rotate the full gap, not the 80ms idle cap (seed {seeded:.1} now {:.1}, delta {advanced:.1})",
+            style.rotate_deg
+        );
+        set_css_transition_virtual_timeline(false);
     }
 
     #[test]

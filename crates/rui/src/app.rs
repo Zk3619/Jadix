@@ -165,6 +165,11 @@ struct App {
     prev_scroll_paint_only: bool,
     app_builder: std::rc::Rc<std::cell::RefCell<dyn FnMut() -> Element>>,
     cursor_pos: winit::dpi::PhysicalPosition<f64>,
+    /// `WM_MOUSEMOVE` only stores the latest point. Hit-testing runs once in
+    /// [`Self::flush_pending_cursor_moved`] at the start of the next present.
+    /// Walking the gallery on every move shares the GUI thread with
+    /// `RedrawRequested` and is what freezes Marker `animate-spin`.
+    cursor_move_pending: bool,
     /// False after `CursorLeft` until the next `CursorMoved` / enter.
     /// Render then samples class-variant `:hover` at an offscreen point so leave clears.
     cursor_inside_window: bool,

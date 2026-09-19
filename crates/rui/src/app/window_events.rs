@@ -1316,6 +1316,41 @@ impl super::App {
         &mut self,
         id: WindowId,
         position: winit::dpi::PhysicalPosition<f64>,
+        _event_loop: &ActiveEventLoop,
+    ) {
+        // Latest sample wins. Hit-testing here used to run on every WM_MOUSEMOVE,
+        // on the same thread as present, so a page slide dropped spin frames and
+        // the late dest-reset flashed the icon.
+        self.cursor_pos = position;
+        self.cursor_inside_window = true;
+        if self.cursor_move_pending {
+            return;
+        }
+        self.cursor_move_pending = true;
+        if let Some(st) = self.state.borrow().as_ref() {
+            if st.window.id() == id {
+                st.window.request_redraw();
+            }
+        }
+    }
+
+    pub(super) fn flush_pending_cursor_moved(
+        &mut self,
+        id: WindowId,
+        event_loop: &ActiveEventLoop,
+    ) {
+        if !self.cursor_move_pending {
+            return;
+        }
+        self.cursor_move_pending = false;
+        let position = self.cursor_pos;
+        self.apply_cursor_moved(id, position, event_loop);
+    }
+
+    fn apply_cursor_moved(
+        &mut self,
+        id: WindowId,
+        position: winit::dpi::PhysicalPosition<f64>,
         event_loop: &ActiveEventLoop,
     ) {
         let mut state_borrow = self.state.borrow_mut();
@@ -1343,13 +1378,34 @@ impl super::App {
         // under the cursor and keep its hover signal set while we remain inside.
         let overlay_dragging = crate::utils::drag::is_dragging()
             || crate::utils::anchored_overlay::is_floating_panel_dragging();
+        let mouse_path = if overlay_dragging {
+            Vec::new()
+        } else {
+            super::pointer_events::hit_path(&state.root_element, x, y)
+        };
+        let pointer_path_unchanged = super::pointer_events::hit_path_identity_eq(
+            self.last_mouse_path.as_deref().unwrap_or(&[]),
+            &mouse_path,
+        );
+        let class_hover_path_changed = !pointer_path_unchanged;
+        let class_hover_may_change = super::pointer_events::class_hover_path_may_change_samples(
+            self.last_mouse_path.as_deref().unwrap_or(&[]),
+            &mouse_path,
+        );
+        // Same widget chain (empty padding): keep last scrollbar hover latched and
+        // skip gallery-wide hit walks. Those walks on every WM_MOUSEMOVE are what
+        // starve Marker `animate-spin` when the pointer never enters a hover target.
         let mut hover_rest: Option<String> = None;
         let mut hover_axis: Option<(String, super::scroll_support::ScrollAxis)> = None;
-        if !overlay_dragging {
-            if let Some(fid) =
-                super::tree_hit::find_focus_id_at(&state.root_element, x, y, [0.0, 0.0])
-            {
-                if let Some((rest, axis, _)) = super::scroll_support::parse_scrollbar_focus_id(&fid)
+        if pointer_path_unchanged {
+            hover_rest = self.hover_scroll_rest.clone();
+            hover_axis = self.hover_scroll_axis.clone();
+        } else if !overlay_dragging {
+            // `hit_path` already walked the exclusive chain. A second gallery-wide
+            // `find_focus_id_at` / `collect_scroll_chain_at` on every box crossing
+            // is what keeps Marker spin from holding vsync during a page slide.
+            if let Some(fid) = super::pointer_events::path_deepest_focus_id(&mouse_path) {
+                if let Some((rest, axis, _)) = super::scroll_support::parse_scrollbar_focus_id(fid)
                 {
                     // Hovering scrollbar track/thumb should only affect that axis.
                     // Do not set area-hover here, otherwise both axes are treated as hovered.
@@ -1357,21 +1413,14 @@ impl super::App {
                 }
             }
             if hover_rest.is_none() {
-                let mut targets = Vec::new();
-                super::scroll_support::collect_scroll_chain_at(
-                    &state.root_element,
-                    x,
-                    y,
-                    [0.0, 0.0],
-                    &mut targets,
-                );
-                // `collect_scroll_chain_at` only keeps the topmost branch; first is deepest.
-                if let Some((rest, _, _, _)) = targets.first() {
+                if let Some(rest) =
+                    super::pointer_events::path_deepest_scroll_area_rest(&mouse_path)
+                {
                     let key = crate::core::scroll_viewport::scroll_hover_mode_signal_key(rest);
                     let mode =
                         crate::core::reactivity::use_signal(&key, || "scrollbar".to_string()).get();
                     if mode.eq_ignore_ascii_case("area") {
-                        hover_rest = Some(rest.clone());
+                        hover_rest = Some(rest.to_string());
                     }
                 }
             }
@@ -1495,35 +1544,37 @@ impl super::App {
             }
         }
 
-        let cursor_pick = if overlay_dragging {
+        let cursor_pick = if overlay_dragging || pointer_path_unchanged {
             None
         } else {
-            super::tree_hit::pick_cursor(&state.root_element, x, y, [0.0, 0.0])
+            super::pointer_events::path_resolved_cursor(&mouse_path)
         };
         let mut to_run = Vec::new();
-        if !overlay_dragging {
-            super::tree_hit::update_hovers(&state.root_element, x, y, [0.0, 0.0], &mut to_run);
+        if !overlay_dragging && !pointer_path_unchanged {
+            let prev_path = self.last_mouse_path.as_deref().unwrap_or(&[]);
+            if super::pointer_events::path_has_on_hover(prev_path)
+                || super::pointer_events::path_has_on_hover(&mouse_path)
+            {
+                super::tree_hit::update_hovers(&state.root_element, x, y, [0.0, 0.0], &mut to_run);
+            }
         }
-        let mouse_path = if overlay_dragging {
-            Vec::new()
-        } else {
-            super::pointer_events::hit_path(&state.root_element, x, y)
-        };
 
         // Always apply: occluders (modal underlay) return None and must reset to Default,
         // otherwise gallery scrollbar Pointer cursors stick through the mask.
         // Drag overlay is pointer-events none — lock grabbing so redraw/move cannot flicker
         // Default ↔ Grabbing (Windows 默认指针 ↔ 移动指针).
-        super::tree_hit::apply_session_cursor(
-            &window,
-            Some(event_loop),
-            &mut self.custom_cursors,
-            cursor_pick.clone(),
-            self.textarea_resize_drag.is_some(),
-            (self.drag_reorder.is_some() && self.left_button_down)
-                || crate::utils::drag::is_dragging()
-                || crate::utils::anchored_overlay::is_floating_panel_dragging(),
-        );
+        if !pointer_path_unchanged {
+            super::tree_hit::apply_session_cursor(
+                &window,
+                Some(event_loop),
+                &mut self.custom_cursors,
+                cursor_pick.clone(),
+                self.textarea_resize_drag.is_some(),
+                (self.drag_reorder.is_some() && self.left_button_down)
+                    || crate::utils::drag::is_dragging()
+                    || crate::utils::anchored_overlay::is_floating_panel_dragging(),
+            );
+        }
 
         let drawer_dragging = if overlay_dragging {
             false
@@ -1774,8 +1825,14 @@ impl super::App {
         // Utility-class `:hover` (e.g. gallery `hover:scale-x-150`) has no `on_hover`.
         // Wake a frame when pointer geometry would change those samples — otherwise enter
         // waits for scrollbar auto-hide redraws and leave sticks until another chrome hover.
+        // Same hit path (empty padding, no widget enter/leave) cannot change those samples;
+        // walking the whole gallery here is what freezes Marker spin during a pointer storm.
+        // Crossing `sm:`/`dark:`-only boxes also cannot change `:hover` samples — skip that
+        // walk so spin keeps vsync instead of hitching on every layout-box boundary.
         if !crate::utils::drag::is_dragging()
             && !crate::utils::anchored_overlay::is_floating_panel_dragging()
+            && class_hover_path_changed
+            && class_hover_may_change
         {
             if let Some(st) = (*self.state.borrow()).as_ref() {
                 if crate::style::class_variant_hover_needs_frame(&st.root_element, [x, y]) {
@@ -1819,7 +1876,9 @@ impl super::App {
         if crate::primitives::interactive::take_hover_paint_dirty() {
             window.request_redraw();
         }
-        self.apply_hover_cursor(&window, Some(event_loop), cursor_pick);
+        if !pointer_path_unchanged {
+            self.apply_hover_cursor(&window, Some(event_loop), cursor_pick);
+        }
     }
 
     pub(super) fn handle_cursor_left(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
@@ -3114,6 +3173,7 @@ impl super::App {
     }
 
     pub(super) fn handle_redraw_requested(&mut self, id: WindowId, event_loop: &ActiveEventLoop) {
+        self.flush_pending_cursor_moved(id, event_loop);
         let _scope = super::window_scope::enter_primary();
         crate::app::reactive::drain_deferred_view_remounts();
         crate::utils::modal_motion::drain_pending_modal_unmounts();

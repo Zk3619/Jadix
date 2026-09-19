@@ -1291,9 +1291,13 @@ fn paint_button_root_from_hover(
         // Button hover leave (including Inspector Set/Apply).
         *impact = impact.merge(LayoutStatus::StyleChanged);
         push_button_paint_damage(el);
+        layout_tree.note_collect_skip_hash_bust_if_idle(el.collect_skip_live);
     } else if style_hit {
         *impact = impact.merge(LayoutStatus::StyleChanged);
         push_button_paint_damage(el);
+        // Color hover leave is paint-only. Without a skip-hash bust, ViewportsOnly
+        // `reuse_idle` skip-replays the hovered bake until scroll settles.
+        layout_tree.note_collect_skip_hash_bust_if_idle(el.collect_skip_live);
     }
 }
 
@@ -1455,7 +1459,7 @@ pub(crate) fn sync_button_hover_paint_subtree(
                 );
             }
         }
-        let child_acc = crate::core::tree::child_scroll_accumulation(node, frame.scroll_acc);
+        let child_acc = crate::app::tree_hit::next_hit_scroll_acc(node, frame.scroll_acc);
         let n = node.children.len();
         for i in (0..n).rev() {
             stack.push(Frame {
