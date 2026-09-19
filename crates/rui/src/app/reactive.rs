@@ -466,6 +466,21 @@ pub fn reactive_placeholder_sized(
     placeholder
 }
 
+/// In-flow content slot for Accordion / Collapsible / Tabs (ShadCN `hidden` / CSS `display:none`).
+///
+/// Collapsed or unselected panels must **not** use [`crate::utils::popup::flow_hidden_portal_host`]
+/// (`position:absolute`): when the island mounts they have to take height in the document flow.
+/// A static `0×0` leftover still occupies parent flex `gap`; `display:none` does not.
+/// Open / selected panels stay sized `0×0` until reconcile fills them so a root `gap` between
+/// the trigger row and the visible panel is already reserved.
+pub fn reactive_placeholder_in_flow(anchor_id: impl Into<String>, visible: bool) -> Element {
+    let mut placeholder = reactive_placeholder_sized(anchor_id, 0.0, 0.0);
+    if !visible {
+        placeholder.style.display = taffy::style::Display::None;
+    }
+    placeholder
+}
+
 /// Register a **single** effect (first call per `anchor_id`) that rebuilds `fragment` and runs
 /// [`runtime::try_reconcile_subtree`], then [`runtime::request_redraw`] when reconciliation runs.
 pub fn reactive_anchor<F>(anchor_id: impl Into<String>, mut f: F)
@@ -826,13 +841,23 @@ pub(crate) fn bind_text_metric_needs_layout(el: &Element, old: &str, next: &str)
         return true;
     }
     // Specified width (px / %): the used box does not shrink-wrap glyphs.
-    // Equal-length, equal-newline replacements (padded mouse-log coords, digit
-    // counters) cannot change wrap; skip cosmic `prepare` on the pointer path.
-    if bind_text_width_is_specified(el)
-        && old.len() == next.len()
-        && newline_bytes(old) == newline_bytes(next)
-    {
-        return false;
+    // Skip cosmic `prepare` on the pointer path. Length may change ("Play" /
+    // "Pause") — wrap/height is the only geometry that can still move.
+    if bind_text_width_is_specified(el) {
+        if newline_bytes(old) == newline_bytes(next) {
+            let box_w = el.layout_bounds[2];
+            let box_h = el.layout_bounds[3];
+            let avail = if box_w > 1.0 { box_w } else { f32::MAX };
+            let before_h = text_layout_height(el, old, avail);
+            let after_h = text_layout_height(el, next, avail);
+            return match (before_h, after_h) {
+                (Some(before), Some(after)) => {
+                    (after - before).abs() > 0.01 || (box_h > 1.0 && after > box_h + 0.01)
+                }
+                _ => true,
+            };
+        }
+        return true;
     }
     let before_w = text_intrinsic_width(el, old);
     let after_w = text_intrinsic_width(el, next);
@@ -870,6 +895,30 @@ fn bind_text_width_is_specified(el: &Element) -> bool {
     el.style.unit_specs.iter().any(|(slot, dim)| {
         matches!(*slot, UnitSlot::Width | UnitSlot::InlineSize) && dim.has_percent()
     })
+}
+
+/// Definite px/rem inline size (not `%`). A `min-w` Button can absorb Play/Pause
+/// `bind_text` without a page `LayoutChanged` (gallery CSS row hitch).
+fn element_has_definite_px_inline_size(el: &Element) -> bool {
+    crate::layout::dim_length_px(el.style.size.width).is_some_and(|w| w > 0.0)
+        || crate::layout::dim_length_px(el.style.min_size.width).is_some_and(|w| w > 0.0)
+}
+
+/// Leaf `bind_text` LayoutChanged whose used box is clamped by a px/`rem`
+/// ancestor (Play/Pause inside `min_w` Button). Skip promoting that to a page
+/// `LayoutChanged` — root Taffy compute hitch other CSS animations for a frame.
+pub(crate) fn bind_layout_absorbed_by_specified_ancestor(root: &Element, path: &[usize]) -> bool {
+    let mut el = root;
+    for &i in path {
+        if i >= el.children.len() {
+            return false;
+        }
+        el = &el.children[i];
+        if element_has_definite_px_inline_size(el) {
+            return true;
+        }
+    }
+    false
 }
 
 fn plain_text_leaf(el: &Element) -> bool {
@@ -1742,6 +1791,42 @@ phase={:<8}  stop={}  prevent={}",
     }
 
     #[test]
+    fn specified_width_play_pause_stays_paint_only() {
+        // Gallery play-state: "Pause"/"Play" different byte lengths, but the used
+        // box is authored. Must not LayoutChanged (root Taffy hitch sibling CSS).
+        let mut el = label("Pause").w(76.0);
+        el.layout_bounds = [8.0, 8.0, 76.0, 28.0];
+        assert!(
+            !bind_text_metric_needs_layout(&el, "Pause", "Play"),
+            "definite-width Play/Pause must stay paint-only"
+        );
+        let status = apply_bound_text_value(&mut el, "Play".into());
+        assert_eq!(status, LayoutStatus::StyleChanged);
+    }
+
+    #[test]
+    fn play_pause_inside_min_w_button_is_absorbed() {
+        let mut text = Element::new().text("Pause");
+        text.layout_bounds = [8.0, 80.0, 48.0, 20.0];
+        let mut btn = Element::new().min_w(76.0).child(text);
+        btn.layout_bounds = [8.0, 72.0, 76.0, 28.0];
+        let mut root = Element::new().w("100%").child(btn);
+        root.layout_bounds = [0.0, 0.0, 320.0, 200.0];
+        assert!(
+            bind_layout_absorbed_by_specified_ancestor(&root, &[0, 0]),
+            "min_w Button on the bind_text path must absorb leaf LayoutChanged"
+        );
+        let mut chip = Element::new().text("Blocked");
+        chip.layout_bounds = [8.0, 8.0, 64.0, 20.0];
+        let mut page = Element::new().w("100%").child(chip);
+        page.layout_bounds = [0.0, 0.0, 320.0, 200.0];
+        assert!(
+            !bind_layout_absorbed_by_specified_ancestor(&page, &[0]),
+            "content-sized badge under % width page must still LayoutChanged"
+        );
+    }
+
+    #[test]
     fn shorter_label_shrink_requests_layout() {
         // Gallery ReactiveStatusBadge: "Blocked" → "Ready" must collapse chip width.
         let el = label("Blocked");
@@ -1887,5 +1972,65 @@ phase={:<8}  stop={}  prevent={}",
             "same anchor id must register once per window scope"
         );
         reset_registered_anchors();
+    }
+}
+
+#[cfg(test)]
+mod in_flow_placeholder_tests {
+    use super::*;
+    use crate::layout::layout_tree::LayoutTree;
+    use crate::primitives::vstack;
+    use taffy::style::Display;
+
+    fn neighbor_gap_in_column(middle: Element) -> f32 {
+        fn find_tid<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(id) {
+                Some(el)
+            } else {
+                el.children.iter().find_map(|c| find_tid(c, id))
+            }
+        }
+
+        let mut a = Element::new().w(20.0).h(20.0);
+        a.template_id = Some("gap-a".into());
+        let mut b = Element::new().w(20.0).h(20.0);
+        b.template_id = Some("gap-b".into());
+        let mut col: Element = vstack().gap(8.0).child(a).child(middle).child(b).into();
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut col, 80.0, 200.0, [0.0, 0.0]);
+        let aa = find_tid(&col, "gap-a")
+            .unwrap_or_else(|| panic!("missing gap-a"))
+            .layout_bounds;
+        let bb = find_tid(&col, "gap-b")
+            .unwrap_or_else(|| panic!("missing gap-b"))
+            .layout_bounds;
+        bb[1] - (aa[1] + aa[3])
+    }
+
+    #[test]
+    fn display_none_placeholder_does_not_occupy_flex_gap() {
+        let in_flow = neighbor_gap_in_column(Element::new().w(0.0).h(0.0));
+        let hidden = neighbor_gap_in_column(reactive_placeholder_in_flow("hide-gap", false));
+        let visible = neighbor_gap_in_column(reactive_placeholder_in_flow("show-gap", true));
+        assert!(
+            (in_flow - 16.0).abs() < 1.0,
+            "static 0×0 still takes a gap slot (expected ~16, got {in_flow})"
+        );
+        assert!(
+            (hidden - 8.0).abs() < 1.0,
+            "display:none must not occupy gap (expected ~8, got {hidden})"
+        );
+        assert!(
+            (visible - 16.0).abs() < 1.0,
+            "visible 0×0 still takes a gap slot (expected ~16, got {visible})"
+        );
+        assert_eq!(
+            reactive_placeholder_in_flow("closed", false).style.display,
+            Display::None
+        );
+        assert_ne!(
+            reactive_placeholder_in_flow("open", true).style.display,
+            Display::None
+        );
     }
 }

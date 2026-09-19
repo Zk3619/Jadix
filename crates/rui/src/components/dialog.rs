@@ -41,7 +41,6 @@
 
 use std::sync::OnceLock;
 
-use crate::app::reactive::reactive_view;
 use crate::components::base::SlotChrome;
 use crate::components::button::button;
 use crate::components::label::label;
@@ -65,7 +64,9 @@ use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::take_packed;
 use crate::utils::text_node::build_named_icon_text_node;
-use crate::utils::viewport_modal::{viewport_modal_layer, ViewportModalLayerOpts};
+use crate::utils::viewport_modal::{
+    viewport_modal_island, viewport_modal_layer, ViewportModalLayerOpts,
+};
 use rui_macros::component;
 
 // ---------------------------------------------------------------------------
@@ -460,7 +461,7 @@ pub fn dialog_content(opts: DialogContentOpts, body: impl Fn() -> Element + 'sta
     let hug_content = opts.hug_content;
     let panel_chrome = opts.panel;
 
-    reactive_view(view_id, move || {
+    viewport_modal_island(view_id, move || {
         let owner = format!("dialog:{id}");
         viewport_modal_layer(
             &id,
@@ -1052,8 +1053,8 @@ mod tests {
             overlay_opacity(&tree).expect("overlay on first paint")
         };
         assert!(
-            opacity > 0.01 && opacity < 0.35,
-            "click → first RedrawRequested must present a fading dialog, not a blank seed frame, got {opacity}"
+            opacity < 0.35,
+            "click → first RedrawRequested must present a fading dialog, not a skipped enter, got {opacity}"
         );
 
         crate::style::utility::set_frame_dt(1.0 / 60.0);

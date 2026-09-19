@@ -1636,10 +1636,6 @@ pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
                 }
                 shell
             };
-            let (enter_started, exiting) = {
-                let c = cell_rc.borrow();
-                (c.enter_started, c.gate.phase() == PresencePhase::Exiting)
-            };
             let overlay_tid = format!("{}__modal_overlay", shell.modal_id);
             let motion_tid = if shell.motion == ModalSurfaceMotion::DialogFade {
                 dialog_fade_motion_tid(root, &shell.modal_id)
@@ -1653,37 +1649,17 @@ pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
                 continue;
             };
             let (overlay, motion_el) = unsafe { (&mut *overlay_ptr, &mut *motion_ptr) };
-            // Recreated nodes (first-open layout churn) have empty snapshots — seek to
-            // `enter_started` instead of restarting at 0%.
-            //
-            // Same-turn seed+tick used to pass the raw idle `frame_dt` (seconds) and jump
-            // a 200ms zoom-in-90 to settle. `dt` is already capped to one display frame,
-            // so a 0-step "hold seed" present is no longer needed — and that blank
-            // present was the wait before the popup appeared: click → expensive first
-            // layout at opacity 0 → extra vsync before any pixels.
+            // Recreated nodes (first-open layout churn) have empty snapshots.
+            // Seeking `enter_started` (often 80–200ms of gallery layout after click)
+            // ate most of the 200ms fade/zoom in one tick — the dialog looked like
+            // it skipped enter, and dest-reset of the still-hovered trigger caption
+            // could punch through an already-opaque scrim. Play from the seed pose
+            // at one display frame so the first present is not blank and the rest
+            // of the animation still runs. Exit never seeks enter elapsed.
             let hold_seed = overlay.animation_snapshot.runs.is_empty()
                 && motion_el.animation_snapshot.runs.is_empty();
-            // Catch-up is enter-only. Exit rebuilds (AlertDialog Action click) often
-            // drop snapshots; seeking `enter_started` (seconds ago) would consume the
-            // whole 200ms fade/zoom in one tick and skip the exit animation.
-            let step = if hold_seed {
-                if shell.motion != ModalSurfaceMotion::DialogFade {
-                    0.0
-                } else if exiting {
-                    dt
-                } else {
-                    match enter_started {
-                        Some(t) => {
-                            let elapsed = t.elapsed().as_secs_f32();
-                            if elapsed < 0.0005 {
-                                dt
-                            } else {
-                                elapsed.min(DIALOG_ENTER_ANIM_MS / 1000.0)
-                            }
-                        }
-                        None => dt,
-                    }
-                }
+            let step = if hold_seed && shell.motion != ModalSurfaceMotion::DialogFade {
+                0.0
             } else {
                 dt
             };
@@ -2187,16 +2163,17 @@ mod tests {
     }
 
     #[test]
-    fn dialog_enter_recreated_nodes_seek_enter_started() {
+    fn dialog_enter_layout_delay_must_not_skip_to_settled() {
         create_root(|| {
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
             let mut root = Element::new();
             let mut overlay = Element::new();
             let mut panel = Element::new();
-            attach_dialog_zoom_shell("dlg", &mut panel);
-            let handle = use_modal_presence("enter-seek");
+            attach_dialog_zoom_shell("dlg-delay", &mut panel);
+            let handle = use_modal_presence("enter-delay");
             sync_modal_presence(&handle, true);
             apply_modal_shell_motion(
-                "dlg",
+                "dlg-delay",
                 &mut overlay,
                 &mut panel,
                 ModalSurfaceMotion::DialogFade,
@@ -2209,38 +2186,29 @@ mod tests {
             root.children.push(overlay);
             root.children.push(panel);
             assert!(flush_modal_shell_motion_subtree(&mut root));
+            // Gallery first-open layout often lands 80–150ms after `enter_started`.
             handle.cell.borrow_mut().enter_started =
-                Some(Instant::now() - Duration::from_millis(80));
-
-            let mut overlay2 = Element::new();
-            let mut panel2 = Element::new();
-            attach_dialog_zoom_shell("dlg", &mut panel2);
-            apply_modal_shell_motion(
-                "dlg",
-                &mut overlay2,
-                &mut panel2,
-                ModalSurfaceMotion::DialogFade,
-                PresencePhase::Present,
-                &handle,
-                [0.0, 0.0],
-                false,
-                800.0,
-            );
-            root.children.clear();
-            root.children.push(overlay2);
-            root.children.push(panel2);
-            assert!(flush_modal_shell_motion_subtree(&mut root));
+                Some(Instant::now() - Duration::from_millis(150));
+            {
+                let o = find_template_id_mut(&mut root, "dlg-delay__modal_overlay").unwrap();
+                o.animation_snapshot = Default::default();
+                let z = find_template_id_mut(&mut root, "dlg-delay__modal_zoom").unwrap();
+                z.animation_snapshot = Default::default();
+            }
             let _ = tick_hoisted_modal_css(&mut root);
-            let zoom = find_template_id_mut(&mut root, "dlg__modal_zoom").unwrap();
+            let overlay = find_template_id_mut(&mut root, "dlg-delay__modal_overlay").unwrap();
             assert!(
-                zoom.style.opacity > 0.12,
-                "recreated zoom must seek mid-enter, not restart at 0%; got {}",
-                zoom.style.opacity
+                overlay.style.opacity < 0.35,
+                "150ms layout delay must not seek the 200ms fade to opaque; got {}",
+                overlay.style.opacity
             );
             assert!(
-                zoom.style.scale[0] > 0.92,
-                "recreated zoom must seek scale past 0.90; got {}",
-                zoom.style.scale[0]
+                overlay
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-in-0"),
+                "enter keyframes must still be playing after first present"
             );
         });
     }

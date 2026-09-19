@@ -54,7 +54,6 @@
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-use crate::app::reactive::reactive_view;
 use crate::components::button::button;
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
@@ -76,7 +75,7 @@ use crate::utils::sync_focus_trap;
 use crate::utils::take_packed;
 use crate::utils::text_node::build_icon_text_node;
 use crate::utils::viewport_modal::{
-    viewport_modal_layer, ModalSurfaceMotion, ViewportModalLayerOpts,
+    viewport_modal_island, viewport_modal_layer, ModalSurfaceMotion, ViewportModalLayerOpts,
 };
 use rui_macros::component;
 
@@ -541,7 +540,7 @@ pub fn sheet_content(opts: SheetContentOpts, body: impl Fn() -> Element + 'stati
     let height = opts.height;
     let panel_chrome = opts.panel;
 
-    reactive_view(view_id, move || {
+    viewport_modal_island(view_id, move || {
         let owner = format!("sheet:{id}");
         let (vw, vh) = crate::utils::modal_surface::modal_viewport_size();
         let slide_axis = match side {

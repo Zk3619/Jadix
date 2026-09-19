@@ -37,6 +37,7 @@ use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, vstack};
 use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
+use crate::utils::popup::flow_hidden_portal_host;
 use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 use rui_macros::component;
 use winit::keyboard::{Key, NamedKey};
@@ -528,7 +529,9 @@ fn build_calendar_view(
             .border_width(1.0)
             .border_color(tokens::border());
     }
-    root = root.child(reactive_placeholder_sized(sync_id, 0.0, 0.0).pointer_events_box_none());
+    root = root.child(flow_hidden_portal_host(
+        reactive_placeholder_sized(sync_id, 0.0, 0.0).pointer_events_box_none(),
+    ));
     if !disabled {
         let y_k = y_sig;
         let m_k = m_sig;
@@ -1039,6 +1042,44 @@ mod tests {
         assert!(
             has_text(&el, "August") || has_text(&el, "14"),
             "month grid should render"
+        );
+    }
+
+    #[test]
+    fn calendar_sync_placeholder_is_out_of_flow() {
+        let val = use_signal("t-cal-gap-val", || "2026-08-14".to_string());
+        let year = use_signal("t-cal-gap-y", || 2026i32);
+        let month = use_signal("t-cal-gap-m", || 8u32);
+        let focus = use_signal("t-cal-gap-f", || 14u32);
+        let msel = use_signal("t-cal-gap-msel", || "8".to_string());
+        let ysel = use_signal("t-cal-gap-ysel", || "2026".to_string());
+        let el = build_calendar_view(
+            CalendarRenderProps {
+                id: "t-cal-gap".into(),
+                caption: CalendarCaption::Label,
+                disabled: false,
+                bordered: true,
+            },
+            val,
+            year,
+            month,
+            focus,
+            msel,
+            ysel,
+            None,
+            SlotMap::default(),
+        );
+        fn in_flow_zero_flex_item(el: &Element) -> bool {
+            el.children.iter().any(|c| {
+                let zero = crate::layout::dim_length_px(c.style.size.width)
+                    .is_some_and(|w| w == 0.0)
+                    && crate::layout::dim_length_px(c.style.size.height).is_some_and(|h| h == 0.0);
+                zero && c.style.position != taffy::style::Position::Absolute
+            })
+        }
+        assert!(
+            !in_flow_zero_flex_item(&el),
+            "0×0 month-sync placeholder must not occupy the caption column gap"
         );
     }
 

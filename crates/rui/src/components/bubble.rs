@@ -1315,10 +1315,10 @@ fn build_bubble_content_element(variant: BubbleVariant, kids: Vec<Element>) -> E
                     ..Default::default()
                 },
             );
-        } else if child.text.is_some() {
-            child.text_style.color = Some(text_color);
         }
     }
+    // 嵌套正文（Label / 多段）不在直接子节点上，仍要吃到变体前景色。
+    paint_descendant_text(&mut el, text_color);
     el
 }
 
@@ -1330,7 +1330,11 @@ fn finalize_bubble_children(variant: BubbleVariant, kids: Vec<Element>) -> Vec<E
                 c
             } else if c.attrs.get(ATTR_CONTENT_PACK).map(|s| s.as_str()) == Some("1") {
                 let chrome = take_content_pack_chrome(&c);
-                chrome.apply(build_bubble_content_element(variant, take_packed(c)))
+                // Pack 只是搬运壳。单子节点时 take_packed 不会拆开，字色就停在壳上，
+                // default（primary 底）会变成全黑、正文不可见。
+                let mut pack = c;
+                let kids = std::mem::take(&mut pack.children);
+                chrome.apply(build_bubble_content_element(variant, kids))
             } else {
                 build_bubble_content_element(variant, vec![c])
             }
@@ -2915,8 +2919,15 @@ mod tests {
                 return [0.0, 0.0, 0.0, 0.0];
             }
         }
+        let layered = crate::app::draw_cull::layered_overlay_slot_bounds(
+            dirty.key,
+            dirty.bounds,
+            &result.node_paints,
+        )
+        .is_some();
         let skip_wipe = dirty.kind == crate::app::damage::PaintDirtyKind::Node
-            && crate::app::damage::paint_dirty_nested_in_larger_node(dirty, dirties);
+            && crate::app::damage::paint_dirty_skips_node_dest_reset(dirty, dirties, layered)
+            && !crate::app::draw_cull::slot_visual_exceeds_rest(dirty.key, &result.node_paints);
         if !skip_wipe && dirty.kind == crate::app::damage::PaintDirtyKind::Node {
             let scaled_tex = crate::renderer::scale_textured_draws(&result.textured_draws, 1.0);
             let prev = crate::app::draw_cull::last_present_prev_for_dirty(
@@ -4240,6 +4251,33 @@ mod tests {
             .get(ATTR_SLOT)
             .map(|s| s.as_str() == SLOT_REACTIONS)
             .unwrap_or(false)
+    }
+
+    #[test]
+    fn default_variant_text_uses_primary_foreground() {
+        let el: Element = bubble()
+            .variant("default")
+            .align("end")
+            .child(bubble_content().text("You tell me!"))
+            .into();
+        let content = el
+            .children
+            .iter()
+            .find(|c| is_bubble_content(c))
+            .expect("bubble-content");
+        let want = parse_text_color("primary-foreground");
+        let mut found = false;
+        crate::core::tree::walk_elements(content, |n| {
+            if n.text.as_deref() == Some("You tell me!") {
+                found = true;
+                assert_eq!(
+                    n.text_style.color,
+                    Some(want),
+                    "default bubble text must contrast with primary fill"
+                );
+            }
+        });
+        assert!(found, "default bubble must keep its text node");
     }
 
     #[test]

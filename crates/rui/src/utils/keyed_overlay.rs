@@ -18,7 +18,7 @@ use crate::core::tree::Element;
 use crate::layout::layout_tree::ATTR_PORTAL_KEY;
 use crate::style::{css_animation_needs_frame, css_transition_needs_frame};
 use crate::utils::popup::{
-    portal_panel, ATTR_FLOATING_ANCHOR_EDGE_Y, ATTR_FLOATING_CONTENT_H,
+    flow_hidden_portal_host, portal_panel, ATTR_FLOATING_ANCHOR_EDGE_Y, ATTR_FLOATING_CONTENT_H,
     ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_MEASURE,
 };
 
@@ -158,13 +158,13 @@ pub fn viewport_portal_stage(portal_key: impl Into<String>, panel: Element, z: i
 }
 
 /// 0×0 reactive 锚点外壳。反应根 **不得** 带 `rui_portal`，否则 hoist 后调和会丢壳。
+/// Leftover host is out of flow so a parent wrap/`gap` row does not reserve a slot.
 pub fn mount_reactive_anchor(view_id: &str, paint: impl Fn() -> Element + 'static) -> Element {
     reactive_anchor(view_id, paint);
-    Element::new()
-        .w(0.0)
-        .h(0.0)
-        .pointer_events_box_none()
-        .child(reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none())
+    flow_hidden_portal_host(
+        Element::new()
+            .child(reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()),
+    )
 }
 
 /// 同 `template_id` 的 reconcile：保留 transition mid + 阴影（非 hoist 路径）。

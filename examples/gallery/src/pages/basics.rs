@@ -2037,14 +2037,16 @@ pub(crate) fn animation_showcase_demos(
             </VStack>
             <VStack gap="0.35rem" items="center" shrink={0.0}>
                 <Label font_weight="700" text_size="0.75rem">"ping"</Label>
-                <Box w="2rem" h="2rem" relative={true} items="center" justify="center">
-                    <Box w="2rem" h="2rem" class="rounded-full" bg="primary" />
-                    <Box
-                        absolute={true}
-                        inset="0"
-                        class="rounded-full animate-ping"
-                        bg="primary"
-                    />
+                <Box w="4rem" h="4rem" items="center" justify="center" overflow="hidden">
+                    <Box w="2rem" h="2rem" relative={true} items="center" justify="center">
+                        <Box w="2rem" h="2rem" class="rounded-full" bg="primary" />
+                        <Box
+                            absolute={true}
+                            inset="0"
+                            class="rounded-full animate-ping"
+                            bg="primary"
+                        />
+                    </Box>
                 </Box>
             </VStack>
             <VStack gap="0.35rem" items="center" shrink={0.0}>
@@ -2067,17 +2069,21 @@ pub(crate) fn animation_showcase_demos(
             </VStack>
             <VStack gap="0.35rem" items="center" shrink={0.0}>
                 <Label font_weight="700" text_size="0.75rem">"play-state"</Label>
-                <Box
-                    w="2.5rem"
-                    h="2.5rem"
-                    bg="primary"
-                    class="rounded-md"
-                    animation="1s linear infinite spin"
-                    animation_play_state={ if play_box.get() { "running" } else { "paused" } }
-                />
-                <Button size="sm" variant="outline" on_click={move || play_btn.set(!play_btn.get())}>
-                    { if play.get() { "Pause" } else { "Play" } }
-                </Button>
+                <Box w="5rem" h="5rem" items="center" justify="center">
+                    <Box
+                        w="2.5rem"
+                        h="2.5rem"
+                        bg="primary"
+                        class="rounded-md"
+                        animation="1s linear infinite spin"
+                        animation_play_state={ if play_box.get() { "running" } else { "paused" } }
+                    />
+                </Box>
+                <Box min_w="4.75rem" items="center">
+                    <Button size="sm" variant="outline" on_click={move || play_btn.set(!play_btn.get())}>
+                        { if play.get() { "Pause" } else { "Play" } }
+                    </Button>
+                </Box>
             </VStack>
             <VStack gap="0.35rem" items="center" shrink={0.0}>
                 <Label font_weight="700" text_size="0.75rem">"fade alternate"</Label>

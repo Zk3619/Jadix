@@ -11,6 +11,10 @@
 //! Entry and exit matchup ShadCN community practice `collapsible-down` / `collapsible-up` (height 0 ↔ content-height, 200ms),
 //! 与 Accordion 的 `accordion-down/up` **同形不同名**（官方 base 默认无动画；有动画时用独立 keyframes）。
 //!
+//! 间距对齐 ShadCN Root（普通块级容器，不是带 `gap` 的 flex）：Root 默认 `gap: 0`，
+//! Trigger↔Content 间距走 Content `pb-4`。收起后 `display:none`，打开后仍在文档流里长高度，
+//! 不把占位改成 `absolute`。
+//!
 //! `<Collapsible>` in `ui!` / `<CollapsibleContent>` is expanded by macro ([`collapsible_scope`] /
 //![`collapsible_content`]). Builder [`collapsible`] Shared implementation with RSX.
 //!
@@ -46,7 +50,7 @@ use std::sync::OnceLock;
 use rui_macros::component;
 use taffy::style::{AlignItems, Display, FlexDirection, JustifyContent};
 
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::app::reactive::{reactive_anchor, reactive_placeholder_in_flow};
 use crate::components::base::{ensure_data_slot, overlay_root_author_text, SlotChrome};
 use crate::core::reactivity::{
     create_context, create_effect, on_cleanup, provide_context, use_context, use_signal,
@@ -359,7 +363,7 @@ pub fn collapsible_content(body: impl Fn() -> Element + 'static) -> Element {
         wrap
     });
 
-    let mut panel = reactive_placeholder_sized(anchor, 0.0, 0.0);
+    let mut panel = reactive_placeholder_in_flow(anchor, open_sig.try_peek().unwrap_or(false));
     panel
         .attrs
         .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
@@ -514,6 +518,9 @@ pub fn CollapsibleContent(children: Option<Element>) -> Element {
         .attrs
         .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
     panel = panel.overflow_y("hidden");
+    if !open_sig.try_peek().unwrap_or(false) {
+        panel.style.display = Display::None;
+    }
     panel.template_id = Some(format!("{}:panel", ctx.id));
 
     let sync_presence = presence.clone();
@@ -805,6 +812,40 @@ mod tests {
             ..Default::default()
         });
         let _: Element = el;
+    }
+
+    #[test]
+    fn closed_content_is_display_none() {
+        let (_o, el): (_, Element) = create_root(|| {
+            collapsible("col-hidden")
+                .default_open(false)
+                .trigger(|| Element::new().text("Toggle"))
+                .content(|| Element::new().text("Body"))
+                .into()
+        });
+        let panel = find_slot(&el, SLOT_CONTENT).expect("content");
+        assert_eq!(
+            panel.style.display,
+            Display::None,
+            "closed panel matches CSS hidden — not a 0×0 flex sibling"
+        );
+    }
+
+    #[test]
+    fn open_content_placeholder_stays_in_flow() {
+        let (_o, el): (_, Element) = create_root(|| {
+            collapsible("col-open")
+                .default_open(true)
+                .trigger(|| Element::new().text("Toggle"))
+                .content(|| Element::new().text("Body"))
+                .into()
+        });
+        let panel = find_slot(&el, SLOT_CONTENT).expect("content");
+        assert_ne!(
+            panel.style.display,
+            Display::None,
+            "open panel must stay in-flow so height animation can run"
+        );
     }
 
     #[test]

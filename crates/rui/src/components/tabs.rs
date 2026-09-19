@@ -6,7 +6,7 @@
 //! Tabs                      // Root；horizontal=column / vertical=row
 //! ├── TabsList              // default：bg-muted 圆角条（横向 w-full + wrap）；line：透明 + 底边指示
 //! │   └── TabsTrigger       // 内容宽优先（ContentBox + flex_shrink=0）；选中：bg-background + shadow-sm
-//! └── TabsContent           // 仅当前 value 挂载（宏走 tabs_content：0×0 + Display::None）
+//! └── TabsContent           // 仅当前 value 挂载（未选中：`display:none`，不占 Root `gap`）
 //! ```
 //!
 //! 另保留：
@@ -55,7 +55,7 @@
 //! - Trigger `focus_id = "{tabs_id}:{value}"`；方向键只移焦点环，点击 / Enter / Space 改选中。
 //! - 无头 `focus_id` 为 `tabstrip:{id}`（AccessKit TabList）。
 
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::app::reactive::{reactive_anchor, reactive_placeholder_in_flow};
 use crate::components::base::SlotChrome;
 use crate::components::toggle_group::toggle_group;
 use crate::core::reactivity::{
@@ -570,8 +570,9 @@ impl TabsBuilder {
 ///
 /// 不用 `show_reactive`（其占位默认 `100%×100%`，隐藏分支是裸 `Element::new()`）：
 /// 多个 Content 并排在带 `gap` 的 Tabs 列里时，未选中槽若仍参与 flex / 残留叶测高，
-/// 会在芯片条与当前面板文案之间挤出一整块空白。这里用 `0×0` 壳 + `Display::None`，
-/// 与非宏 [`TabsContent`] 的显隐策略对齐。
+/// 会在芯片条与当前面板文案之间挤出一整块空白。这里对齐 CSS `hidden`：未选中占位
+/// `Display::None`（不占 Root `gap`）；选中占位留在文档流里等 reconcile 填入高度。
+/// 不要改成 `position:absolute`。
 ///
 /// 选中分支必须把 `body()` 包进壳层：`reactive_anchor` 会把 fragment 的 `template_id`
 /// 改写成 `{tabs}:content:{value}`。若直接返回 DatePicker / ColorPicker 等
@@ -604,7 +605,10 @@ pub fn tabs_content(value: impl Into<String>, body: impl Fn() -> Element + 'stat
             hidden
         }
     });
-    let mut panel = reactive_placeholder_sized(anchor, 0.0, 0.0);
+    let mut panel = reactive_placeholder_in_flow(
+        anchor,
+        selected.try_peek().as_deref() == Some(value.as_str()),
+    );
     panel
         .attrs
         .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
@@ -813,6 +817,9 @@ pub fn TabsContent(value: String, children: Option<Element>) -> Element {
     panel.template_id = Some(format!("{}:content:{value}", ctx.id));
     let selected = ctx.value;
     let want = value;
+    if selected.try_peek().as_deref() != Some(want.as_str()) {
+        panel.style.display = Display::None;
+    }
     panel = panel.reactive_sync(move |el, layout_tree| {
         let Some(current) = selected.try_peek() else {
             return LayoutStatus::Clean;
@@ -1882,5 +1889,52 @@ mod tests {
         assert_eq!(el.style.bg_color, [1.0, 0.0, 0.0, 1.0]);
         assert!((length_px(el.style.padding.left) - 20.0).abs() < 0.01);
         assert_eq!(el.text_style.size, Some(18.0));
+    }
+
+    fn tabs_with_n_contents(id: &str, selected: &str, n: usize) -> Element {
+        let selected = selected.to_string();
+        tabs_scope(id, None, selected, "horizontal", false, move || {
+            let mut kids = vec![Element::new().w(80.0).h(24.0)];
+            for i in 0..n {
+                let value = if i == 0 {
+                    "a".to_string()
+                } else {
+                    format!("t{i}")
+                };
+                kids.push(tabs_content(value, || Element::new().text("panel")));
+            }
+            let mut frag = Element::new();
+            frag.set_attr("rui_fragment", "1");
+            frag.children(kids)
+        })
+    }
+
+    #[test]
+    fn unselected_content_is_display_none_and_does_not_stack_root_gap() {
+        let mut many = tabs_with_n_contents("tabs-gap-many", "a", 3);
+        let panels: Vec<_> = many
+            .children
+            .iter()
+            .filter(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_CONTENT))
+            .collect();
+        assert_eq!(panels.len(), 3);
+        assert_ne!(
+            panels[0].style.display,
+            Display::None,
+            "selected panel stays in-flow (ShadCN gap between List and active Content)"
+        );
+        assert_eq!(panels[1].style.display, Display::None);
+        assert_eq!(panels[2].style.display, Display::None);
+
+        let mut one = tabs_with_n_contents("tabs-gap-one", "a", 1);
+        let mut layout = LayoutTree::new();
+        let _ = layout.build_and_layout(&mut one, 400.0, 400.0, [-1.0, -1.0]);
+        let _ = layout.build_and_layout(&mut many, 400.0, 400.0, [-1.0, -1.0]);
+        assert!(
+            (many.layout_bounds[3] - one.layout_bounds[3]).abs() < 1.0,
+            "hidden Contents must not add extra Root gap (one={} many={})",
+            one.layout_bounds[3],
+            many.layout_bounds[3]
+        );
     }
 }

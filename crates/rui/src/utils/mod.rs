@@ -125,12 +125,12 @@ pub use motion::{
 };
 pub use popup::{
     apply_stored_floating_place, arm_underlay_close, compute_anchored_placement,
-    compute_cursor_menu_placement, disarm_underlay_close, floating_portal_anchor, mark_floating,
-    mark_floating_at_point, mark_floating_with_gap, mark_portal, mark_portal_mount,
-    mount_anchored_overlay, mount_modal_layer, mount_viewport_portal_stage, panel_block_clicks,
-    path_hits_floating_trigger, portal_panel, portal_panel_mount, swallow_clicks,
-    sync_floating_placement, underlay_close_is_armed, underlay_close_on_click,
-    visit_floating_panels, PopupPlacement, ATTR_FLOATING, ATTR_FLOATING_H,
+    compute_cursor_menu_placement, disarm_underlay_close, floating_portal_anchor,
+    flow_hidden_portal_host, mark_floating, mark_floating_at_point, mark_floating_with_gap,
+    mark_portal, mark_portal_mount, mount_anchored_overlay, mount_modal_layer,
+    mount_viewport_portal_stage, panel_block_clicks, path_hits_floating_trigger, portal_panel,
+    portal_panel_mount, swallow_clicks, sync_floating_placement, underlay_close_is_armed,
+    underlay_close_on_click, visit_floating_panels, PopupPlacement, ATTR_FLOATING, ATTR_FLOATING_H,
     ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W,
     ATTR_FLOATING_PLACEMENT, ATTR_FLOATING_POINT, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_TRIGGER,
     ATTR_FLOATING_W, FLOATING_TRIGGER_GAP, FLOATING_VIEWPORT_MARGIN,

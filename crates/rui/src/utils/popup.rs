@@ -1324,6 +1324,21 @@ pub fn panel_block_clicks(mut inner: Element, z: i32) -> Element {
     portal_panel(swallow_clicks(inner), z)
 }
 
+/// Keep a leftover portal/island host out of the parent's flex wrap.
+///
+/// A 0×0 `static` item still participates in `gap` (and can wrap onto a second
+/// line, turning `gap` into row-gap). `position: absolute` drops it from flow.
+/// Do not apply this to a `rui_portal` panel itself — wrap a host around it so
+/// hoist still lifts the panel, not a 0×0 leftover.
+pub fn flow_hidden_portal_host(el: Element) -> Element {
+    el.absolute()
+        .w(0.0)
+        .h(0.0)
+        .min_w(0.0)
+        .min_h(0.0)
+        .pointer_events_box_none()
+}
+
 /// Zero-size mount for a portal-hoisted floating panel (Select / DatePicker / ColorPicker).
 ///
 /// The panel stays in the tree until [`hoist_portal_subtrees`] lifts it; the anchor must **not**
@@ -1333,11 +1348,7 @@ pub fn panel_block_clicks(mut inner: Element, z: i32) -> Element {
 ///
 /// Prefer [`mount_anchored_overlay`] (this + [`panel_block_clicks`]) at call sites.
 pub fn floating_portal_anchor(panel: Element) -> Element {
-    Element::new()
-        .w(0.0)
-        .h(0.0)
-        .child(panel)
-        .pointer_events_box_none()
+    flow_hidden_portal_host(Element::new().child(panel))
 }
 
 /// 锚定浮层单一路径：已 [`mark_floating`] 的panel → 吞click + portal + 0×0 layout锚。
@@ -2664,7 +2675,70 @@ mod tests {
             find_anchored_overlay(&root),
             "anchored overlay must be 0×0 host + rui_portal + rui_floating"
         );
+        assert_eq!(
+            root.style.position,
+            taffy::style::Position::Absolute,
+            "leftover host must be out of flow so parent flex gap is not doubled"
+        );
         assert!(!portal_nests_portal(&root), "must not nest rui_portal");
+    }
+
+    fn neighbor_gap_in_row(middle: Element) -> f32 {
+        use crate::layout::layout_tree::LayoutTree;
+        use crate::primitives::hstack;
+
+        fn find_tid<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(id) {
+                Some(el)
+            } else {
+                el.children.iter().find_map(|c| find_tid(c, id))
+            }
+        }
+
+        let mut a = Element::new().w(40.0).h(20.0);
+        a.template_id = Some("gap-a".into());
+        let mut b = Element::new().w(40.0).h(20.0);
+        b.template_id = Some("gap-b".into());
+        let mut row: Element = hstack().gap(8.0).child(a).child(middle).child(b).into();
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut row, 400.0, 80.0, [0.0, 0.0]);
+        let aa = find_tid(&row, "gap-a")
+            .unwrap_or_else(|| panic!("missing gap-a"))
+            .layout_bounds;
+        let bb = find_tid(&row, "gap-b")
+            .unwrap_or_else(|| panic!("missing gap-b"))
+            .layout_bounds;
+        bb[0] - (aa[0] + aa[2])
+    }
+
+    #[test]
+    fn flow_hidden_portal_host_does_not_occupy_flex_gap() {
+        let in_flow = neighbor_gap_in_row(Element::new().w(0.0).h(0.0));
+        let hidden = neighbor_gap_in_row(flow_hidden_portal_host(Element::new()));
+        assert!(
+            (in_flow - 16.0).abs() < 1.0,
+            "static 0×0 still takes a gap slot (expected ~16, got {in_flow})"
+        );
+        assert!(
+            (hidden - 8.0).abs() < 1.0,
+            "absolute 0×0 leftover must not occupy gap (expected ~8, got {hidden})"
+        );
+    }
+
+    #[test]
+    fn floating_portal_anchor_does_not_occupy_flex_gap() {
+        let mut panel = Element::new().text("menu");
+        mark_floating(
+            &mut panel,
+            "gap-sel",
+            "gap-trig",
+            PopupPlacement::BottomStart,
+        );
+        let gap = neighbor_gap_in_row(floating_portal_anchor(panel));
+        assert!(
+            (gap - 8.0).abs() < 1.0,
+            "Select/Popover leftover host must not occupy parent gap, got {gap}"
+        );
     }
 
     #[test]

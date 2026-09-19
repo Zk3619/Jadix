@@ -57,7 +57,6 @@ use std::sync::OnceLock;
 use std::time::Instant;
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
-use crate::app::reactive::reactive_view;
 use crate::app::{release_pointer_capture, runtime::request_redraw, set_pointer_capture};
 use crate::components::button::button;
 use crate::components::label::label;
@@ -80,8 +79,8 @@ use crate::utils::sync_focus_trap;
 use crate::utils::take_packed;
 use crate::utils::text_node::build_icon_text_node;
 use crate::utils::viewport_modal::{
-    viewport_modal_is_mounted, viewport_modal_layer, viewport_modal_motion_busy,
-    ModalSurfaceMotion, ViewportModalLayerOpts,
+    viewport_modal_is_mounted, viewport_modal_island, viewport_modal_layer,
+    viewport_modal_motion_busy, ModalSurfaceMotion, ViewportModalLayerOpts,
 };
 use rui_macros::component;
 
@@ -917,7 +916,7 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
     let had_mounted_key = format!("{id}__drawer_had_mounted");
     let had_mounted = use_signal(had_mounted_key.as_str(), || false);
 
-    reactive_view(view_id, move || {
+    viewport_modal_island(view_id, move || {
         let owner = format!("drawer:{id}");
         let (vw, vh) = drawer_viewport_size();
         let axis = if direction.is_vertical() {

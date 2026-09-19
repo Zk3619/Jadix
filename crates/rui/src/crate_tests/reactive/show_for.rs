@@ -563,7 +563,7 @@ fn show_for_spot_check_button_toast_have_no_reactive_view() {
 fn show_for_spot_check_dialog_island_is_viewport_modal() {
     let dialog = include_str!("../../components/dialog.rs");
     assert!(
-        dialog.contains("reactive_view("),
+        dialog.contains("viewport_modal_island("),
         "Dialog open/close is a structure island"
     );
     assert!(

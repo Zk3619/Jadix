@@ -23,10 +23,10 @@ use crate::core::tree::Element;
 #[cfg(test)]
 use crate::utils::floating_motion::floating_mounted_signal;
 use crate::utils::popup::{
-    apply_stored_floating_place, mark_floating_at_point, mark_floating_with_gap,
-    mount_anchored_overlay, PopupPlacement, ATTR_FLOATING, ATTR_FLOATING_MATCH_TRIGGER,
-    ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_POINT, ATTR_FLOATING_STRATEGY,
-    ATTR_FLOATING_TRIGGER, ATTR_FLOATING_W, FLOATING_TRIGGER_GAP,
+    apply_stored_floating_place, flow_hidden_portal_host, mark_floating_at_point,
+    mark_floating_with_gap, mount_anchored_overlay, PopupPlacement, ATTR_FLOATING,
+    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_POINT,
+    ATTR_FLOATING_STRATEGY, ATTR_FLOATING_TRIGGER, ATTR_FLOATING_W, FLOATING_TRIGGER_GAP,
 };
 
 pub use crate::app::portal_overlay::{
@@ -554,7 +554,7 @@ pub fn anchored_overlay_content(
                 opts.mode,
                 opts.resolved_scroll_freeze(),
             );
-            return Element::new().w(0.0).h(0.0);
+            return flow_hidden_portal_host(Element::new());
         }
         let Some((phase, oz)) = floating_portal_phase(
             &id,
@@ -564,7 +564,7 @@ pub fn anchored_overlay_content(
             opts.mode,
             opts.resolved_scroll_freeze(),
         ) else {
-            return Element::new().w(0.0).h(0.0);
+            return flow_hidden_portal_host(Element::new());
         };
         assemble_mounted_panel(
             &id,
@@ -577,7 +577,7 @@ pub fn anchored_overlay_content(
             oz,
         )
     });
-    reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+    flow_hidden_portal_host(reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none())
 }
 
 /// RSX `<AnchoredOverlayContent>` entry (same implementation as [`anchored_overlay_content`]).
@@ -605,7 +605,7 @@ fn assemble_panel(
         opts.mode,
         opts.resolved_scroll_freeze(),
     ) else {
-        return Element::new().w(0.0).h(0.0);
+        return flow_hidden_portal_host(Element::new());
     };
     assemble_mounted_panel(id, open, trigger_fid, presence, opts, panel, phase, oz)
 }

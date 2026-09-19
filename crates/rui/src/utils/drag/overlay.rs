@@ -22,7 +22,7 @@ use crate::core::tree::{lpa_length_px, Element, IntoCssDim, IntoOpacity, LayoutS
 use crate::layout::layout_tree::{ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT};
 use crate::layout::{dim_kind, dim_length_px, DimKind};
 use crate::utils::anchored_overlay::pin_overlay_follow_insets;
-use crate::utils::popup::{mount_anchored_overlay, ATTR_FLOATING};
+use crate::utils::popup::{flow_hidden_portal_host, mount_anchored_overlay, ATTR_FLOATING};
 
 use super::builder::{
     clone_source_preview, provide_drag_ctx, require_drag, source_preview_item, DragCtx, DragItemCtx,
@@ -718,7 +718,9 @@ impl From<DragOverlayBuilder> for Element {
             );
             mount_anchored_overlay(panel, pinned_overlay_z().panel)
         });
-        reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()
+        flow_hidden_portal_host(
+            reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none(),
+        )
     }
 }
 

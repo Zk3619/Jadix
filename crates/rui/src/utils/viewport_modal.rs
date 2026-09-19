@@ -5,7 +5,7 @@
 
 use std::sync::OnceLock;
 
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized, reactive_view_sized};
 use crate::core::reactivity::{
     create_computed, create_context, isolate_reads, provide_context, use_context, use_signal,
     with_child_owner, Context, Signal,
@@ -20,6 +20,7 @@ use crate::utils::modal_shell::ModalShellZs;
 use crate::utils::modal_shell::{
     build_modal_overlay, modal_sync_presence, ShellOverlayOpts as ModalOverlayOpts,
 };
+pub(crate) use crate::utils::popup::flow_hidden_portal_host;
 use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage, swallow_clicks};
 use crate::utils::presence::PresencePhase;
 
@@ -250,16 +251,19 @@ impl ViewportModalContentOpts {
 // Content
 // ---------------------------------------------------------------------------
 
-/// Keep the in-flow island host out of the parent's flex wrap. A 0×0 `static`
-/// item still wraps onto a second line; `gap` then becomes row-gap and
-/// everything below the trigger jumps with viewport width / label length.
-fn flow_hidden_portal_host(el: Element) -> Element {
-    el.absolute()
-        .w(0.0)
-        .h(0.0)
-        .min_w(0.0)
-        .min_h(0.0)
-        .pointer_events_box_none()
+/// Dialog / AlertDialog / Sheet / Drawer content island.
+///
+/// `reactive_view` defaults to a 100%×100% in-flow placeholder. Gallery RSX unpacks
+/// Trigger+Content into the parent wrap HStack (`rui_fragment` + `IntoElementList`),
+/// so that leftover is a flex item: closed `Element::new()` is a 0×0 static (double
+/// `gap` to the next trigger), open `absolute` 0×0 drops it. The clicked trigger's
+/// neighbor spacing jumps, dest-reset punches its glyphs through the scrim, and
+/// overlay StructureChanged skips enter/exit.
+pub(crate) fn viewport_modal_island(
+    view_id: impl Into<String>,
+    render: impl FnMut() -> Element + 'static,
+) -> Element {
+    flow_hidden_portal_host(reactive_view_sized(view_id, 0.0, 0.0, render))
 }
 
 pub fn viewport_modal_content(
@@ -460,10 +464,10 @@ pub fn viewport_modal_layer(
     let portal = viewport_modal_portal_if_mounted(id, open, &presence);
     let phase = portal.as_ref().map(|p| p.phase);
     let Some(panel) = body(phase) else {
-        return Element::new();
+        return flow_hidden_portal_host(Element::new());
     };
     let Some(portal) = portal else {
-        return Element::new();
+        return flow_hidden_portal_host(Element::new());
     };
     finish_viewport_modal_layer(id, open, overlay, opts, &presence, portal, panel)
 }

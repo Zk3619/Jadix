@@ -18,6 +18,10 @@
 //! `cn-accordion-content`：`flex w-full flex-col` · 项 `border-b` · 触发器 `py-4 text-sm font-medium`
 //! · Content `pb-4 text-sm font-normal text-muted-foreground`.
 //!
+//! 间距对齐 ShadCN：Root 默认 `gap: 0`（项靠 `border-b` 分隔）；作者 `gap` / `space-y` 加在
+//! **Accordion 根**上，落在 Item 外壳之间。Item 内部 Trigger↔Content 不加 flex `gap`
+//! （打开态间距是 Content `pb-4`）。收起面板用 `display:none`，不把 0×0 改成 `absolute`。
+//!
 //! `<Accordion>` in `ui!` / `<AccordionContent>` is expanded by macro ([`accordion_scope`] /
 //![`accordion_content`]). Builder [`accordion`] Shared implementation with RSX.
 //!
@@ -60,7 +64,7 @@ use std::sync::OnceLock;
 use rui_macros::component;
 use taffy::style::{AlignItems, Dimension, Display, FlexDirection, JustifyContent, Overflow};
 
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::app::reactive::{reactive_anchor, reactive_placeholder_in_flow};
 use crate::components::base::{overlay_root_author_text, packed_children, SlotChrome};
 use crate::core::reactivity::{
     create_context, create_effect, provide_context, use_context, use_scoped_signal, use_signal,
@@ -313,8 +317,10 @@ pub fn accordion_scope(
 
 /// 宏 `<AccordionContent>`：按 Item 上下文显隐 + 进出场过渡。
 ///
-/// 显隐由 [`reactive_anchor`] + [`ExitGate`] 负责：收起时保持挂载至退场动画结束
-/// (Compare Dialog/Sheet presence; do not apply reactive_sync of `Display::None` to placeholder).
+/// 显隐由 [`reactive_anchor`] + [`ExitGate`] 负责：收起时保持挂载至退场动画结束。
+/// 未挂载占位用 `display:none`（CSS `hidden`），这样 Item 上若被作者加了 flex `gap`
+/// 也不会多占一份。不要对占位做 `position:absolute`，也不要在退场动画期间用
+/// `reactive_sync` 提前把面板打成 `Display::None`。
 pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
     let acc = require_accordion("AccordionContent");
     let item = require_accordion_item("AccordionContent");
@@ -388,7 +394,10 @@ pub fn accordion_content(body: impl Fn() -> Element + 'static) -> Element {
         wrap
     });
 
-    let mut panel = reactive_placeholder_sized(anchor, 0.0, 0.0);
+    let mut panel = reactive_placeholder_in_flow(
+        anchor,
+        is_item_open(&open_sig.try_peek().unwrap_or_default(), &value),
+    );
     panel
         .attrs
         .insert(ATTR_SLOT.to_string(), SLOT_CONTENT.to_string());
@@ -615,6 +624,7 @@ fn build_accordion_item_shell(value: String, _disabled: bool, kids: Vec<Element>
     let mut item: Element = vstack()
         .w("100%")
         .min_w(0.0)
+        .gap(0.0)
         .border_bottom(parse_color("border"), 1.0)
         .children(kids)
         .into();
@@ -773,6 +783,9 @@ pub fn AccordionContent(children: Option<Element>) -> Element {
         .attrs
         .insert(ATTR_ITEM_VALUE.to_string(), value.clone());
     panel = panel.overflow_y("hidden");
+    if !is_item_open(&open_sig.try_peek().unwrap_or_default(), &value) {
+        panel.style.display = Display::None;
+    }
     panel.template_id = Some(format!("{}:panel:{value}", acc.id));
 
     let sync_presence = presence.clone();
@@ -1266,6 +1279,66 @@ mod tests {
             .first()
             .and_then(|item| find_slot_child(item, SLOT_CONTENT));
         assert!(panel.is_some(), "expected accordion content panel");
+    }
+
+    #[test]
+    fn collapsed_content_is_display_none_and_item_has_zero_gap() {
+        let (_h, el): (_, Element) = create_root(|| {
+            accordion("acc-hidden")
+                .item("x", "Q", || Element::new().text("A"))
+                .into()
+        });
+        let item = &el.children[0];
+        let gap = crate::layout::lp_length_px(item.style.gap.height).unwrap_or(0.0);
+        assert!(
+            gap.abs() < 0.01,
+            "AccordionItem must not flex-gap Trigger/Content (got {gap})"
+        );
+        let panel = find_slot_child(item, SLOT_CONTENT).expect("content");
+        assert_eq!(
+            panel.style.display,
+            Display::None,
+            "collapsed panel matches CSS hidden — not a 0×0 flex sibling"
+        );
+    }
+
+    #[test]
+    fn open_content_placeholder_stays_in_flow() {
+        let (_h, el): (_, Element) = create_root(|| {
+            accordion("acc-open")
+                .default_value(vec!["x".into()])
+                .item("x", "Q", || Element::new().text("A"))
+                .into()
+        });
+        let panel = find_slot_child(&el, SLOT_CONTENT).expect("content");
+        assert_ne!(
+            panel.style.display,
+            Display::None,
+            "open panel must stay in-flow so height animation can run"
+        );
+    }
+
+    #[test]
+    fn collapsed_display_none_skips_author_item_gap() {
+        let (_h, mut root): (_, Element) = create_root(|| {
+            accordion("acc-item-gap")
+                .item("x", "Q", || Element::new().text("A"))
+                .into()
+        });
+        let item = &mut root.children[0];
+        item.style.gap = taffy::geometry::Size {
+            width: taffy::style::LengthPercentage::length(16.0),
+            height: taffy::style::LengthPercentage::length(16.0),
+        };
+        let mut layout = LayoutTree::new();
+        let _ = layout.build_and_layout(&mut root, 400.0, 400.0, [-1.0, -1.0]);
+        let item = &root.children[0];
+        let trigger_shell = &item.children[0];
+        let extra = item.layout_bounds[3] - trigger_shell.layout_bounds[3];
+        assert!(
+            extra < 4.0,
+            "Item gap must not apply around display:none content (extra={extra})"
+        );
     }
 
     #[test]

@@ -95,7 +95,7 @@ use crate::style::{parse_color, parse_text_color, TAILWIND_TEXT_SM_LEADING_SCALE
 use crate::tokens;
 use crate::utils::activate_registry;
 use crate::utils::modal_shell::ShellOverlayOpts;
-use crate::utils::popup::swallow_clicks;
+use crate::utils::popup::{flow_hidden_portal_host, swallow_clicks};
 use crate::utils::take_packed;
 use crate::utils::text_field::input_focus_id;
 use crate::utils::text_node::build_icon_text_node;
@@ -504,13 +504,13 @@ pub fn command_dialog_scope(
         )
     });
     // DialogContent defaults to 100%×100% placeholder; leaving it in an HStack/card flow blows out layout.
-    // A 0×0 anchor still hoists underlay/stage (same as Select / Combobox).
-    Element::new()
-        .w(0.0)
-        .h(0.0)
-        .pointer_events_box_none()
-        .child(host)
-        .child(reactive_placeholder_sized(reset_view, 0.0, 0.0).pointer_events_box_none())
+    // A 0×0 out-of-flow host still hoists underlay/stage (same as Select / Combobox) without occupying `gap`.
+    flow_hidden_portal_host(
+        Element::new()
+            .pointer_events_box_none()
+            .child(host)
+            .child(reactive_placeholder_sized(reset_view, 0.0, 0.0).pointer_events_box_none()),
+    )
 }
 
 /// VS Code-style command palette: viewport-centered panel, transparent dismiss layer, no Dialog.
@@ -563,11 +563,12 @@ pub fn command_overlay_scope(
     // Anchor must be a child: when gallery does `let el = ui! { <CommandOverlay/> }`, the outer `ui!`
     // stamps `template_id(file:line:column)` over the root identity so `try_reconcile_subtree` cannot find
     // `{id}__cmd_overlay` and the opened stage is dropped. Same for CommandDialog's 0×0 shell.
-    Element::new()
-        .w(0.0)
-        .h(0.0)
-        .pointer_events_box_none()
-        .child(reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none())
+    // Host is out of flow so a wrap HStack `gap` does not reserve an extra slot.
+    flow_hidden_portal_host(
+        Element::new()
+            .pointer_events_box_none()
+            .child(reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none()),
+    )
 }
 
 /// ShadCN CommandDialog chrome (transparent scrim is applied by the viewport shell).
@@ -2053,6 +2054,49 @@ mod tests {
         );
         clear_overlay_stack();
         crate::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn command_overlay_in_gapped_row_does_not_occupy_flex_gap() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::primitives::hstack;
+
+        fn find_tid<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(id) {
+                Some(el)
+            } else {
+                el.children.iter().find_map(|c| find_tid(c, id))
+            }
+        }
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        let (_owner, mut row) = create_root(|| {
+            let open = use_signal("cmd_gap_open", || false);
+            let mut a = Element::new().w(40.0).h(20.0);
+            a.template_id = Some("cmd-gap-a".into());
+            let mut b = Element::new().w(40.0).h(20.0);
+            b.template_id = Some("cmd-gap-b".into());
+            let host = command_overlay_scope("cmd-gap", Some(open), "", || {
+                Element::new().w(200.0).h(48.0)
+            });
+            hstack().gap(8.0).child(a).child(host).child(b).into()
+        });
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut row, 400.0, 80.0, [0.0, 0.0]);
+        let aa = find_tid(&row, "cmd-gap-a")
+            .unwrap_or_else(|| panic!("missing cmd-gap-a"))
+            .layout_bounds;
+        let bb = find_tid(&row, "cmd-gap-b")
+            .unwrap_or_else(|| panic!("missing cmd-gap-b"))
+            .layout_bounds;
+        let gap = bb[0] - (aa[0] + aa[2]);
+        assert!(
+            (gap - 8.0).abs() < 1.0,
+            "CommandOverlay leftover host must not occupy parent gap, got {gap}"
+        );
+        clear_overlay_stack();
+        reset_registered_anchors();
     }
 
     /// Gallery shape: overlay host sits in an auto-height card inside a ScrollArea

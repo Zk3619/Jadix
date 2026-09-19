@@ -63,7 +63,6 @@
 
 use std::sync::OnceLock;
 
-use crate::app::reactive::reactive_view;
 use crate::components::alert::AlertVariant;
 use crate::components::button::button;
 use crate::components::dialog::dialog_shell_panel;
@@ -87,7 +86,9 @@ use crate::utils::presence::PresencePhase;
 use crate::utils::sync_focus_trap;
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
-use crate::utils::viewport_modal::{viewport_modal_layer, ViewportModalLayerOpts};
+use crate::utils::viewport_modal::{
+    viewport_modal_island, viewport_modal_layer, ViewportModalLayerOpts,
+};
 use rui_macros::component;
 
 const ATTR_SLOT: &str = "data-slot";
@@ -689,7 +690,7 @@ pub fn alert_dialog_content(
     let panel_chrome = opts.panel;
     let body = std::sync::Arc::new(body);
 
-    reactive_view(view_id, move || {
+    viewport_modal_island(view_id, move || {
         let owner = format!("alert-dialog:{id}");
         let active_variant = variant_signal
             .map(|s| AlertDialogVariant::from(s.get().as_str()))
@@ -1559,6 +1560,211 @@ mod tests {
                 "zoom capture after Allow must keep success muted"
             );
         }
+        drain_pending_modal_unmounts();
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    #[test]
+    fn alert_dialog_open_in_wrap_row_keeps_neighbor_gap_and_enter_fade() {
+        // Gallery 1c-ad unpacks Trigger+Content into a wrap HStack. A 0×0 static
+        // island host between buttons doubles `gap`; opening makes it absolute so
+        // only the clicked trigger's neighbor spacing jumps. Dest-reset then
+        // punches that caption through the scrim and StructureChanged skips fade.
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::core::tree::IntoElementList;
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::primitives::r#box::hstack;
+        use crate::renderer::font_loader;
+        use crate::text::install_shared_font_system;
+        use crate::utils::modal_motion::{
+            drain_pending_modal_unmounts, flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+        };
+
+        fn pack_dialog(id: &str, open: Signal<bool>, btn_id: &str, label: &str) -> Element {
+            alert_dialog_scope(id, Some(open), || {
+                let trigger = AlertDialogTrigger(AlertDialogTriggerProps {
+                    id: String::new(),
+                    children: Some(
+                        button(btn_id)
+                            .variant("outline")
+                            .size("sm")
+                            .text(label)
+                            .into(),
+                    ),
+                    base: None,
+                    ..Default::default()
+                });
+                let content = alert_dialog_content(AlertDialogContentOpts::default(), || {
+                    AlertDialogTitle(AlertDialogTitleProps {
+                        children: Some(Element::new().text("Sure?")),
+                        base: None,
+                        ..Default::default()
+                    })
+                });
+                let mut frag = Element::new();
+                frag.set_attr("rui_fragment", "1");
+                frag.children(vec![trigger, content])
+            })
+        }
+
+        fn btn_box(el: &Element, tid: &str) -> [f32; 4] {
+            let btn = find_tid(el, tid).unwrap_or_else(|| panic!("missing `{tid}`"));
+            btn.layout_bounds
+        }
+
+        fn neighbor_gap(el: &Element, a: &str, b: &str) -> f32 {
+            let aa = btn_box(el, a);
+            let bb = btn_box(el, b);
+            bb[0] - (aa[0] + aa[2])
+        }
+
+        fn has_fade_in(el: &Element) -> bool {
+            el.style.animations.iter().any(|a| a.name == "fade-in-0")
+                || el.children.iter().any(has_fade_in)
+        }
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        font_loader::ensure_coverage_for_text(&mut fs, "one two Sure?");
+        install_shared_font_system(&mut fs);
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, open_a) = create_root(|| {
+            let open_a = use_signal("ad_gap_a__open", || false);
+            let open_b = use_signal("ad_gap_b__open", || false);
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let mut row = hstack()
+                    .gap("0.5rem")
+                    .items("center")
+                    .wrap("wrap")
+                    .w("100%");
+                for child in
+                    pack_dialog("ad-gap-a", open_a, "ad-gap-a-btn", "one").into_element_list()
+                {
+                    row = row.child(child);
+                }
+                for child in
+                    pack_dialog("ad-gap-b", open_b, "ad-gap-b-btn", "two").into_element_list()
+                {
+                    row = row.child(child);
+                }
+                *live_e.borrow_mut() = row.into();
+            });
+            open_a
+        });
+
+        let layout_once = |live: &RefCell<Element>, layout: &mut LayoutTree| {
+            drain_deferred_view_remounts();
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            let _ = flush_modal_shell_motion_subtree(&mut tree);
+            layout.build_and_layout(&mut tree, 800.0, 400.0, [0.0, 0.0])
+        };
+
+        drain_deferred_view_remounts();
+        let mut layout = LayoutTree::new();
+        let _ = layout_once(&live, &mut layout);
+        let gap_closed = neighbor_gap(&live.borrow(), "ad-gap-a-btn", "ad-gap-b-btn");
+        assert!(
+            gap_closed > 4.0 && gap_closed < 16.0,
+            "closed wrap row should keep a single 0.5rem gap, not a doubled flex hole, gap={gap_closed}"
+        );
+
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        open_a.set(true);
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            assert!(
+                flush_modal_shell_motion_subtree(&mut tree),
+                "first open must seed enter motion"
+            );
+            assert!(
+                has_fade_in(&tree),
+                "first open must seed fade-in-0; a layout jump FullClear looks like a skipped enter"
+            );
+            let _ = tick_hoisted_modal_css(&mut tree);
+        }
+        let open_result = layout_once(&live, &mut layout);
+        let gap_open = neighbor_gap(&live.borrow(), "ad-gap-a-btn", "ad-gap-b-btn");
+        assert!(
+            (gap_open - gap_closed).abs() < 1.0,
+            "opening must not change the gap to the next trigger (closed={gap_closed} open={gap_open})"
+        );
+
+        let one = open_result
+            .text_nodes
+            .iter()
+            .position(|n| n.text == "one")
+            .expect("clicked trigger caption");
+        assert!(
+            one < open_result.overlay_split.text_start,
+            "clicked trigger text must stay in the page band under the scrim, not overlay_split.text_start={}",
+            open_result.overlay_split.text_start
+        );
+
+        let split_i = open_result
+            .overlay_split
+            .instance_start
+            .min(open_result.instances.len());
+        let btn = btn_box(&live.borrow(), "ad-gap-a-btn");
+        let scrim_covers_trigger = open_result.instances[split_i..].iter().any(|i| {
+            i.rect_size[0] > 400.0
+                && i.rect_pos[0] <= btn[0] + 1.0
+                && i.rect_pos[1] <= btn[1] + 1.0
+                && i.rect_pos[0] + i.rect_size[0] >= btn[0] + btn[2] - 1.0
+                && i.rect_pos[1] + i.rect_size[1] >= btn[1] + btn[3] - 1.0
+        });
+        assert!(
+            scrim_covers_trigger,
+            "overlay occupancy must include the fullscreen scrim over the clicked trigger, otherwise hover dest-reset punches the caption through; overlay sizes={:?}",
+            open_result.instances[split_i..]
+                .iter()
+                .map(|i| (i.rect_pos, i.rect_size, i.color[3]))
+                .collect::<Vec<_>>()
+        );
+
+        let overlay = {
+            fn overlay_opacity(el: &Element) -> Option<f32> {
+                if el
+                    .template_id
+                    .as_deref()
+                    .is_some_and(|t| t.ends_with("__modal_overlay"))
+                {
+                    return Some(el.style.opacity);
+                }
+                el.children.iter().find_map(overlay_opacity)
+            }
+            overlay_opacity(&live.borrow()).expect("overlay after first tick")
+        };
+        assert!(
+            overlay < 0.35,
+            "first present after open must still be fading, not a skipped enter; opacity={overlay}"
+        );
+        assert!(
+            has_fade_in(&live.borrow()),
+            "enter fade-in-0 must survive the first layout after open"
+        );
+
+        crate::style::utility::set_frame_dt(0.0);
         drain_pending_modal_unmounts();
         clear_test_reconcile_root();
         drop(live);

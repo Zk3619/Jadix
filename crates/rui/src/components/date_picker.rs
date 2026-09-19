@@ -48,7 +48,8 @@ use crate::utils::anchored_overlay::{
 use crate::utils::controlled::{resolve_open_signal, resolve_string_signal};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::popup::{
-    PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, FLOATING_TRIGGER_GAP,
+    flow_hidden_portal_host, PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W,
+    FLOATING_TRIGGER_GAP,
 };
 use crate::utils::roving::{focus_by_id, focus_id_only};
 use crate::utils::text_field::{commit_value_sig, input_value_signal_key};
@@ -671,8 +672,12 @@ fn build_date_picker_view(
             Element::new().w(0.0).h(0.0)
         });
         view = view
-            .child(reactive_placeholder_sized(to_val, 0.0, 0.0).pointer_events_box_none())
-            .child(reactive_placeholder_sized(from_val, 0.0, 0.0).pointer_events_box_none());
+            .child(flow_hidden_portal_host(
+                reactive_placeholder_sized(to_val, 0.0, 0.0).pointer_events_box_none(),
+            ))
+            .child(flow_hidden_portal_host(
+                reactive_placeholder_sized(from_val, 0.0, 0.0).pointer_events_box_none(),
+            ));
     }
 
     let trigger_fid = use_signal(format!("{id}__dp_trigger_fid").as_str(), || {
@@ -851,7 +856,9 @@ fn build_date_picker_panel_content(
             // Sync anchor is 0×0 — keep it out of a gapped column or `gap` still
             // inserts 1rem above the only visible row.
             panel = panel
-                .child(reactive_placeholder_sized(sync_id, 0.0, 0.0).pointer_events_box_none())
+                .child(flow_hidden_portal_host(
+                    reactive_placeholder_sized(sync_id, 0.0, 0.0).pointer_events_box_none(),
+                ))
                 .child(vstack().w(CALENDAR_W).p("0.75rem").child(header));
         }
         DatePickerKind::Week => {
