@@ -1192,6 +1192,9 @@ thread_local! {
     static DRAWER_SCALE_BG_APPLIED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// After a Y-axis snap CSS settle (horizontal drawers). Vertical snap resizes height immediately.
     static DRAWER_Y_SETTLING: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    /// `tick_drawer_drag` runs while `AppState` is borrowed. Queue shell layout
+    /// bumps and drain after the RefCell drop (same contract as ColorPicker SV).
+    static PENDING_DRAWER_LAYOUT_BUMP: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
 #[derive(Clone)]
@@ -1246,6 +1249,23 @@ fn drawer_layout_bump(id: &str) -> Signal<u32> {
 
 fn bump_drawer_shell_layout(id: &str) {
     drawer_layout_bump(id).update(|n| *n = n.wrapping_add(1));
+}
+
+fn queue_drawer_layout_bump(id: &str) {
+    PENDING_DRAWER_LAYOUT_BUMP.with(|q| {
+        let mut q = q.borrow_mut();
+        if !q.iter().any(|s| s == id) {
+            q.push(id.to_string());
+        }
+    });
+}
+
+/// Apply queued vertical-drag shell layout bumps. Call only when `AppState` is not borrowed.
+pub(crate) fn drain_drawer_layout_bumps() {
+    let ids = PENDING_DRAWER_LAYOUT_BUMP.with(|q| std::mem::take(&mut *q.borrow_mut()));
+    for id in ids {
+        bump_drawer_shell_layout(&id);
+    }
 }
 
 fn clear_drawer_y_settling(id: &str) {
@@ -1576,7 +1596,7 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
             &drag.id,
             next.clamp(0.0, 1.0),
         );
-        bump_drawer_shell_layout(&drag.id);
+        queue_drawer_layout_bump(&drag.id);
         request_redraw();
     } else {
         let extra = drawer_drag_translate(drag.direction, next, drag.axis_px);
@@ -1986,5 +2006,85 @@ mod tests {
             assert!(!drag.committed);
             DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
         });
+    }
+
+    #[test]
+    fn drawer_drag_layout_bump_sets_after_tree_borrow_drop() {
+        use crate::app::reactive::{bind_prop, drain_deferred_view_remounts};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root, use_signal};
+        use crate::core::tree::LayoutStatus;
+        use std::rc::Rc;
+
+        crate::app::reactive::reset_registered_anchors();
+        clear_test_reconcile_root();
+        let tree = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&tree));
+        let id = "drawer-bump-drop";
+        let (_handle, _) = create_root({
+            let tree = Rc::clone(&tree);
+            move || {
+                let open = use_signal("drawer-bump-open", || true);
+                DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
+                set_drawer_viewport_size(800.0, 800.0);
+                drawer_frac_signal(id).set(0.5);
+                create_effect({
+                    let tree = Rc::clone(&tree);
+                    let id = id.to_string();
+                    move || {
+                        let leaf = bind_prop(
+                            Element::new().template_id("drawer-bump-leaf"),
+                            "drawer-bump-leaf",
+                            {
+                                let id = id.clone();
+                                move || drawer_layout_bump(&id).get()
+                            },
+                            |el, n| {
+                                el.text = Some(n.to_string());
+                                LayoutStatus::StyleChanged
+                            },
+                        );
+                        *tree.borrow_mut() = leaf;
+                    }
+                });
+                begin_drawer_drag(
+                    id.to_string(),
+                    DrawerDirection::Down,
+                    400.0,
+                    600.0,
+                    &[
+                        DrawerSnapPoint::Fraction(0.5),
+                        DrawerSnapPoint::Fraction(1.0),
+                    ],
+                    false,
+                    open,
+                    format!("{id}__handle"),
+                    true,
+                );
+            }
+        });
+        drain_deferred_view_remounts();
+        assert_eq!(tree.borrow().text.as_deref(), Some("0"));
+
+        {
+            let held = tree.borrow_mut();
+            let mut dummy = Element::new();
+            assert!(tick_drawer_drag(&mut dummy, 400.0, 640.0));
+            assert_eq!(
+                held.text.as_deref(),
+                Some("0"),
+                "layout bump must not Signal::update while the live tree is borrowed"
+            );
+            assert_eq!(drawer_layout_bump(id).peek(), 0);
+        }
+        drain_drawer_layout_bumps();
+        assert_eq!(drawer_layout_bump(id).peek(), 1);
+        drain_deferred_view_remounts();
+        assert_eq!(
+            tree.borrow().text.as_deref(),
+            Some("1"),
+            "leaf bind must land once try_borrow_mut succeeds"
+        );
+        DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
     }
 }

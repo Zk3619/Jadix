@@ -75,7 +75,7 @@ use crate::core::tree::{
 use crate::primitives::r#box::{hstack, r#box, vstack, BoxBuilder};
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::text_field::commit_value;
-use crate::utils::text_node::build_icon_text_node;
+use crate::utils::text_node::build_lucide_icon_text_node;
 use rui_macros::component;
 use winit::event::MouseButton;
 
@@ -932,11 +932,11 @@ pub(crate) fn lucide_named(name: &str) -> String {
 
 pub(crate) fn input_adornment_button(
     template_id: String,
-    glyph: String,
+    icon_name: &str,
     disabled: bool,
     on_click: impl FnMut() + 'static,
 ) -> Element {
-    let icon = build_icon_text_node(glyph)
+    let icon = build_lucide_icon_text_node(icon_name)
         .text_size(14.0)
         .text_color(parse_text_color("muted-foreground"));
     let mut btn: Element = r#box()
@@ -961,13 +961,13 @@ pub(crate) fn input_adornment_button(
 /// solid-ui `NumberFieldIncrement/DecrementTrigger`: `size-4` Up and down arrows.
 pub(crate) fn input_number_step_button(
     template_id: String,
-    glyph: String,
+    icon_name: &str,
     disabled: bool,
     field_id: String,
     focus_id: String,
     delta: f64,
 ) -> Element {
-    let icon = build_icon_text_node(glyph)
+    let icon = build_lucide_icon_text_node(icon_name)
         .text_size(16.0)
         .text_color(parse_text_color("muted-foreground"))
         .pointer_events_none();
@@ -1049,17 +1049,23 @@ pub(crate) fn set_adornment_visible(btn: &mut Element, visible: bool) -> bool {
     changed
 }
 
-pub(crate) fn set_adornment_icon_glyph(btn: &mut Element, glyph: &str) -> bool {
+pub(crate) fn set_adornment_icon_name(btn: &mut Element, name: &str) -> bool {
     let Some(icon) = btn.children.first_mut() else {
         return false;
     };
-    if icon.text.as_deref() == Some(glyph)
+    let glyph = lucide_glyph(name).unwrap_or_else(|| "?".into());
+    if icon.text.as_deref() == Some(glyph.as_str())
         && icon.text_style.font_family.as_deref() == Some("lucide")
+        && icon
+            .get_attr(crate::utils::ATTR_ICON_NAME)
+            .map(String::as_str)
+            == Some(name)
     {
         return false;
     }
-    icon.text = Some(glyph.to_string());
+    icon.text = Some(glyph);
     icon.text_style.font_family = Some("lucide".into());
+    icon.set_attr(crate::utils::ATTR_ICON_NAME, name);
     true
 }
 

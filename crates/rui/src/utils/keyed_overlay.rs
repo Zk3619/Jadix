@@ -78,7 +78,12 @@ fn preserve_modal_shell_motion(fresh: &mut Element, prev: &Element) {
     }
     let enter_mid_rebuild = prev.style.opacity + 0.02 < fresh.style.opacity
         || (is_zoom && (prev.style.scale[0] + 0.02 < fresh.style.scale[0]));
-    if !modal_shell_should_preserve_motion(prev) && !enter_mid_rebuild {
+    let exit_kf = prev.style.animations.iter().any(|a| {
+        a.name == "fade-out-0"
+            || a.name == "zoom-out-90"
+            || a.name.starts_with("rui-modal-slide-out-")
+    });
+    if !modal_shell_should_preserve_motion(prev) && !enter_mid_rebuild && !exit_kf {
         return;
     }
     copy_keyed_motion_state(fresh, prev);
@@ -640,6 +645,37 @@ mod tests {
         );
 
         set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn modal_shell_preserves_exit_keyframes_before_first_tick() {
+        let mut prev = Element::new().template_id("dlg__modal_overlay");
+        prev.style.opacity = 1.0;
+        prev.style.animations = vec![crate::style::keyframes_anim_entry(
+            "fade-out-0",
+            200.0,
+            crate::style::TimingFunction::EaseIn,
+            crate::style::AnimationFillMode::Both,
+        )];
+        prev.animation_snapshot = Default::default();
+
+        let mut fresh = Element::new().template_id("dlg__modal_overlay");
+        fresh.style.opacity = 1.0;
+
+        adopt_keyed_overlay(&mut fresh, &mut prev);
+        assert!(
+            fresh
+                .style
+                .animations
+                .iter()
+                .any(|a| a.name == "fade-out-0"),
+            "exit fade-out-0 must survive hoist adopt even before the first CSS tick"
+        );
+        assert!(
+            (fresh.style.opacity - 1.0).abs() < f32::EPSILON,
+            "exit adopt must start from the open pose, got {}",
+            fresh.style.opacity
+        );
     }
 
     #[test]

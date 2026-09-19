@@ -1435,6 +1435,27 @@ mod tests {
                 "fade-out-0 must still be playing after Allow click"
             );
         }
+        // Second remount after `needs_exit_anim` was consumed (gallery chrome
+        // / variant paint). Must re-seed, not dest-reset the scrim.
+        drain_deferred_view_remounts();
+        {
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            assert!(
+                flush_modal_shell_motion_subtree(&mut tree),
+                "second close rebuild must keep exit, not finish"
+            );
+            let tid = "ad_allow_exit__modal_overlay";
+            let opacity = overlay_opacity(&tree, tid).expect("overlay after second remount");
+            assert!(
+                opacity > 0.5,
+                "second remount must not skip fade-out, overlay opacity={opacity}"
+            );
+            assert!(
+                overlay_has_fade_out(&tree, tid),
+                "fade-out-0 must survive a second island remount"
+            );
+        }
         drain_pending_modal_unmounts();
         clear_test_reconcile_root();
         drop(live);
@@ -1762,6 +1783,576 @@ mod tests {
         assert!(
             has_fade_in(&live.borrow()),
             "enter fade-in-0 must survive the first layout after open"
+        );
+
+        crate::style::utility::set_frame_dt(0.0);
+        drain_pending_modal_unmounts();
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    #[test]
+    fn alert_dialog_open_must_become_visible_across_layout_frames() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::utils::modal_motion::{
+            drain_pending_modal_unmounts, flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+        };
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, open) = create_root(|| {
+            let open = use_signal("ad_open_vis__open", || false);
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let el = alert_dialog("ad_open_vis").open(open).child(move || {
+                    alert_dialog_content(AlertDialogContentOpts::default(), || {
+                        AlertDialogTitle(AlertDialogTitleProps {
+                            children: Some(Element::new().text("Open me")),
+                            base: None,
+                        })
+                        .into()
+                    })
+                });
+                *live_e.borrow_mut() = el;
+            });
+            open
+        });
+
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        open.set(true);
+        drain_deferred_view_remounts();
+        let mut layout = LayoutTree::new();
+        let mut opacities = Vec::new();
+        for _ in 0..10 {
+            drain_deferred_view_remounts();
+            drain_pending_modal_unmounts();
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            let _ = flush_modal_shell_motion_subtree(&mut tree);
+            let _ = layout.build_and_layout(&mut tree, 800.0, 600.0, [0.0, 0.0]);
+            let _ = tick_hoisted_modal_css(&mut tree);
+            opacities.push(overlay_opacity(&tree, "ad_open_vis__modal_overlay"));
+        }
+        let first = opacities[0].expect("first open frame must keep the overlay");
+        let last = opacities[9].expect("dialog must stay mounted while entering");
+        assert!(
+            first < 0.35,
+            "first open frame must still be fading in, not skipped to rest; opacities={opacities:?}"
+        );
+        assert!(
+            last > 0.45,
+            "dialog must become visible across open frames, not stay opacity 0; opacities={opacities:?}"
+        );
+        assert!(
+            last > first + 0.15,
+            "enter opacity must keep rising; opacities={opacities:?}"
+        );
+
+        crate::style::utility::set_frame_dt(0.0);
+        drain_pending_modal_unmounts();
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    fn card_chrome_instances(instances: &[crate::renderer::InstanceInput]) -> Vec<(usize, [f32; 2], f32, f32)> {
+        instances
+            .iter()
+            .enumerate()
+            .filter(|(_, i)| i.rect_size[0] > 180.0 && (i.shadow_blur > 4.0 || i.border_width > 0.4))
+            .map(|(idx, i)| (idx, i.rect_size, i.shadow_blur, i.border_width))
+            .collect()
+    }
+
+    #[test]
+    fn alert_dialog_info_footer_hover_must_not_stack_card_chrome() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::damage::{
+            damage_covers_full, intersect_rects, overlay_encode_occupancy, overlay_encode_scissor,
+            overlay_mounted_replace_holes, take_frame_paint_nodes, PaintDirtyKind,
+        };
+        use crate::app::draw_cull::padded_xywh;
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, hoisted_portal_stamps, LayoutTree};
+        use crate::utils::modal_motion::{
+            drain_pending_modal_unmounts, flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+        };
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, open) = create_root(|| {
+            let open = use_signal("ad_hover_stack__open", || false);
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let el = alert_dialog("ad_hover_stack").open(open).child(move || {
+                    alert_dialog_content(
+                        AlertDialogContentOpts {
+                            variant: AlertDialogVariant::Info,
+                            ..Default::default()
+                        },
+                        || {
+                            vstack()
+                                .gap("1rem")
+                                .child(AlertDialogTitle(AlertDialogTitleProps {
+                                    children: Some(Element::new().text("Builder + Contentent")),
+                                    base: None,
+                                }))
+                                .child(AlertDialogCancel(AlertDialogCancelProps {
+                                    id: "ad_hover_stack__cancel".into(),
+                                    children: Some(
+                                        button("ad_hover_stack__cancel").text("Cancel").into(),
+                                    ),
+                                    base: None,
+                                    ..Default::default()
+                                }))
+                                .child(AlertDialogAction(AlertDialogActionProps {
+                                    children: Some(
+                                        button("ad_hover_stack__ok").text("OK").into(),
+                                    ),
+                                    base: None,
+                                    ..Default::default()
+                                }))
+                                .into()
+                        },
+                    )
+                });
+                *live_e.borrow_mut() = el;
+            });
+            open
+        });
+
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        open.set(true);
+        drain_deferred_view_remounts();
+        let mut layout = LayoutTree::new();
+        let open_result = {
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            assert!(flush_modal_shell_motion_subtree(&mut tree));
+            for _ in 0..24 {
+                let _ = tick_hoisted_modal_css(&mut tree);
+            }
+            layout.build_and_layout(&mut tree, 800.0, 600.0, [0.0, 0.0])
+        };
+
+        let chrome = card_chrome_instances(&open_result.instances);
+        assert_eq!(
+            chrome.len(),
+            1,
+            "info card must emit live border/shadow once; stacking copies thicken the corner halo: {chrome:?}"
+        );
+
+        let stamps = hoisted_portal_stamps(&live.borrow());
+        assert!(
+            stamps.len() >= 2,
+            "overlay + stage stamps required; stamps={stamps:?}"
+        );
+
+        let (ok, card) = {
+            let tree = live.borrow();
+            let ok = find_tid(&tree, "ad_hover_stack__ok").expect("OK");
+            let card = find_tid(&tree, "ad_hover_stack__modal_zoom").expect("zoom card");
+            assert!(
+                ok.paint_overlay_stamp.is_some(),
+                "OK must inherit overlay stamp or hover dest-resets as a page Node and stacks card chrome"
+            );
+            (ok.layout_bounds, card.layout_bounds)
+        };
+
+        let _ = take_frame_paint_nodes();
+        {
+            let tree = live.borrow();
+            let ok = find_tid(&tree, "ad_hover_stack__ok").expect("OK");
+            crate::app::damage::push_frame_paint_element(ok, ok.paint_scroll_acc);
+        }
+        let dirties = take_frame_paint_nodes();
+        let overlay_dirties: Vec<_> = dirties
+            .iter()
+            .filter(|d| d.kind == PaintDirtyKind::Overlay)
+            .copied()
+            .collect();
+        assert!(
+            !overlay_dirties.is_empty(),
+            "OK hover must be Overlay dirty; dirties={dirties:?}"
+        );
+
+        for d in &overlay_dirties {
+            let holes = overlay_mounted_replace_holes(&stamps, &stamps, d.key, Some(d.bounds));
+            let occ = overlay_encode_occupancy(d.key, Some(d.bounds), &stamps, None);
+            let scissor = overlay_encode_scissor(Some(d.bounds), occ, None)
+                .expect("hover must still have an overlay encode scissor");
+            let card_halo = padded_xywh(card, 16.0);
+            if let Some(halo_in_scissor) = intersect_rects(card_halo, scissor) {
+                assert!(
+                    holes.iter().any(|h| damage_covers_full(halo_in_scissor, *h)),
+                    "OK hover dest-reset must cover card chrome in the encode scissor or src-over stacks the blue corner; holes={holes:?} scissor={scissor:?} ok={ok:?} card={card:?} stamps={stamps:?}"
+                );
+            }
+            assert!(
+                holes.iter().any(|h| damage_covers_full(scissor, *h)),
+                "OK hover dest-reset must cover encode or PAGE slivers remain; holes={holes:?} scissor={scissor:?}"
+            );
+            assert!(
+                holes.iter().any(|h| damage_covers_full(*h, scissor)),
+                "OK hover encode must cover dest-reset or leftover chrome stacks; holes={holes:?} scissor={scissor:?}"
+            );
+            assert!(
+                !holes.iter().any(|h| damage_covers_full(card_halo, *h)),
+                "OK hover must not dest-reset pad(card) (punches the blur ring); holes={holes:?} card_halo={card_halo:?}"
+            );
+        }
+
+        crate::style::utility::set_frame_dt(0.0);
+        drain_pending_modal_unmounts();
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    #[test]
+    fn alert_dialog_info_cancel_hover_must_not_leave_card_bottom_residual() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::damage::{
+            damage_covers_full, intersect_rects, overlay_encode_occupancy, overlay_encode_scissor,
+            overlay_mounted_replace_holes, take_frame_paint_nodes, PaintDirtyKind,
+        };
+        use crate::app::draw_cull::padded_xywh;
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, hoisted_portal_stamps, LayoutTree};
+        use crate::utils::modal_motion::{
+            drain_pending_modal_unmounts, flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+        };
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, open) = create_root(|| {
+            let open = use_signal("ad_cancel_hover__open", || false);
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let el = alert_dialog("ad_cancel_hover").open(open).child(move || {
+                    alert_dialog_content(
+                        AlertDialogContentOpts {
+                            variant: AlertDialogVariant::Info,
+                            ..Default::default()
+                        },
+                        || {
+                            vstack()
+                                .gap("1rem")
+                                .child(AlertDialogTitle(AlertDialogTitleProps {
+                                    children: Some(Element::new().text("Builder + Contentent")),
+                                    base: None,
+                                }))
+                                .child(
+                                    hstack()
+                                        .gap("0.5rem")
+                                        .justify("end")
+                                        .child(AlertDialogCancel(AlertDialogCancelProps {
+                                            id: "ad_cancel_hover__cancel".into(),
+                                            children: Some(
+                                                button("ad_cancel_hover__cancel")
+                                                    .text("Cancel")
+                                                    .into(),
+                                            ),
+                                            base: None,
+                                            ..Default::default()
+                                        }))
+                                        .child(AlertDialogAction(AlertDialogActionProps {
+                                            children: Some(
+                                                button("ad_cancel_hover__ok").text("OK").into(),
+                                            ),
+                                            base: None,
+                                            ..Default::default()
+                                        })),
+                                )
+                                .into()
+                        },
+                    )
+                });
+                *live_e.borrow_mut() = el;
+            });
+            open
+        });
+
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        open.set(true);
+        drain_deferred_view_remounts();
+        let mut layout = LayoutTree::new();
+        {
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            assert!(flush_modal_shell_motion_subtree(&mut tree));
+            for _ in 0..24 {
+                let _ = tick_hoisted_modal_css(&mut tree);
+            }
+            let _ = layout.build_and_layout(&mut tree, 800.0, 600.0, [0.0, 0.0]);
+        }
+
+        let (cancel, card) = {
+            let tree = live.borrow();
+            let cancel = find_tid(&tree, "ad_cancel_hover__cancel").expect("Cancel");
+            let card = find_tid(&tree, "ad_cancel_hover__modal_zoom").expect("zoom card");
+            assert!(
+                cancel.paint_overlay_stamp.is_some(),
+                "Cancel must inherit overlay stamp or hover dest-resets as a page Node"
+            );
+            (cancel.layout_bounds, card.layout_bounds)
+        };
+
+        let stamps = hoisted_portal_stamps(&live.borrow());
+        let _ = take_frame_paint_nodes();
+        {
+            let tree = live.borrow();
+            let cancel = find_tid(&tree, "ad_cancel_hover__cancel").expect("Cancel");
+            crate::app::damage::push_frame_paint_element(cancel, cancel.paint_scroll_acc);
+        }
+        let dirties = take_frame_paint_nodes();
+        let overlay_dirties: Vec<_> = dirties
+            .iter()
+            .filter(|d| d.kind == PaintDirtyKind::Overlay)
+            .copied()
+            .collect();
+        assert!(
+            !overlay_dirties.is_empty(),
+            "Cancel hover must be Overlay dirty; dirties={dirties:?}"
+        );
+
+        let card_bottom = [card[0], card[1] + card[3] - 2.0, card[2], 2.0];
+        let card_pad = padded_xywh(card, 16.0);
+        let far_scrim = [card[0] - 16.0, card[1] - 16.0, 8.0, 8.0];
+        for d in &overlay_dirties {
+            let holes = overlay_mounted_replace_holes(&stamps, &stamps, d.key, Some(d.bounds));
+            let occ = overlay_encode_occupancy(d.key, Some(d.bounds), &stamps, None);
+            let scissor = overlay_encode_scissor(Some(d.bounds), occ, None)
+                .expect("Cancel hover must still have an overlay encode scissor");
+            if let Some(nearby) = intersect_rects(card_bottom, scissor) {
+                assert!(
+                    holes.iter().any(|h| damage_covers_full(nearby, *h)),
+                    "Cancel dest-reset must cover nearby bottom chrome in the encode scissor; holes={holes:?} nearby={nearby:?} cancel={cancel:?} card={card:?}"
+                );
+            }
+            assert!(
+                !holes.iter().any(|h| damage_covers_full(card_pad, *h)),
+                "Cancel hover must not dest-reset pad(card) (punches the blur ring); holes={holes:?} card_pad={card_pad:?}"
+            );
+            assert!(
+                !holes.iter().any(|h| intersect_rects(*h, far_scrim).is_some()),
+                "Cancel hover must not PAGE-punch the far blur ring; holes={holes:?} far={far_scrim:?}"
+            );
+            assert!(
+                holes.iter().any(|h| damage_covers_full(scissor, *h)),
+                "Cancel dest-reset must cover encode or PAGE sliver remains; holes={holes:?} scissor={scissor:?}"
+            );
+            assert!(
+                holes.iter().any(|h| damage_covers_full(*h, scissor)),
+                "Cancel encode must cover dest-reset or leftover chrome stacks; holes={holes:?} scissor={scissor:?}"
+            );
+        }
+
+        crate::style::utility::set_frame_dt(0.0);
+        drain_pending_modal_unmounts();
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    #[test]
+    fn alert_dialog_info_ok_click_must_keep_exit_mid_across_layout_frames() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::utils::modal_motion::{
+            drain_pending_modal_unmounts, flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+        };
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+
+        let (owner, open) = create_root(|| {
+            let open = use_signal("ad_exit_layout__open", || false);
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let el = alert_dialog("ad_exit_layout").open(open).child(move || {
+                    alert_dialog_content(
+                        AlertDialogContentOpts {
+                            variant: AlertDialogVariant::Info,
+                            ..Default::default()
+                        },
+                        || {
+                            AlertDialogAction(AlertDialogActionProps {
+                                children: Some(button("ad_exit_layout__ok").text("OK").into()),
+                                base: None,
+                                ..Default::default()
+                            })
+                        },
+                    )
+                });
+                *live_e.borrow_mut() = el;
+            });
+            open
+        });
+
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        open.set(true);
+        drain_deferred_view_remounts();
+        let mut layout = LayoutTree::new();
+        {
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            assert!(flush_modal_shell_motion_subtree(&mut tree));
+            for _ in 0..24 {
+                let _ = tick_hoisted_modal_css(&mut tree);
+            }
+            let _ = layout.build_and_layout(&mut tree, 800.0, 600.0, [0.0, 0.0]);
+        }
+
+        let click = {
+            let mut tree = live.borrow_mut();
+            find_tid_mut(&mut tree, "ad_exit_layout__ok")
+                .expect("OK")
+                .on_click
+                .as_ref()
+                .expect("close")
+                .clone()
+        };
+        click.borrow_mut()();
+        drain_deferred_view_remounts();
+
+        let mut opacities = Vec::new();
+        for frame in 0..8 {
+            // Gallery RedrawRequested: present, then hover callbacks, then drain.
+            // A flush that finishes too early unmounts here and the next frame pops.
+            drain_deferred_view_remounts();
+            drain_pending_modal_unmounts();
+            let mut tree = live.borrow_mut();
+            let _ = hoist_portal_subtrees(&mut tree);
+            let _ = flush_modal_shell_motion_subtree(&mut tree);
+            let _ = layout.build_and_layout(&mut tree, 800.0, 600.0, [0.0, 0.0]);
+            let _ = tick_hoisted_modal_css(&mut tree);
+            let tid = "ad_exit_layout__modal_overlay";
+            let opacity = overlay_opacity(&tree, tid);
+            opacities.push(opacity);
+            if frame == 0 {
+                let o = opacity.expect("first exit layout frame must keep the overlay");
+                assert!(
+                    o > 0.55,
+                    "first gallery-like exit frame must still be fading, not popped; opacity={o} frames={opacities:?}"
+                );
+                assert!(
+                    overlay_has_fade_out(&tree, tid),
+                    "fade-out-0 must survive the first layout after OK"
+                );
+                use crate::app::damage::{
+                    overlay_band_encode_flags, overlay_band_promote_dest_reset_siblings,
+                    overlay_mounted_replace_holes, take_frame_paint_nodes, PaintDirtyKind,
+                };
+                use crate::layout::layout_tree::hoisted_portal_stamps;
+                let stamps = hoisted_portal_stamps(&tree);
+                let dirties = take_frame_paint_nodes();
+                let overlay_dirties: Vec<_> = dirties
+                    .iter()
+                    .filter(|d| d.kind == PaintDirtyKind::Overlay)
+                    .copied()
+                    .collect();
+                assert!(
+                    !overlay_dirties.is_empty(),
+                    "first exit tick must dest-reset overlay/zoom; dirties={dirties:?}"
+                );
+                let mut holes = Vec::new();
+                let dirty_keys: Vec<u64> = overlay_dirties.iter().map(|d| d.key).collect();
+                for d in &overlay_dirties {
+                    holes.extend(overlay_mounted_replace_holes(
+                        &stamps,
+                        &stamps,
+                        d.key,
+                        Some(d.bounds),
+                    ));
+                }
+                let band_keys: Vec<u64> = stamps.iter().map(|(k, _)| *k).collect();
+                let mut flags =
+                    overlay_band_encode_flags(&band_keys, &dirty_keys, false, &band_keys);
+                overlay_band_promote_dest_reset_siblings(
+                    &mut flags,
+                    &band_keys,
+                    &dirty_keys,
+                    &stamps,
+                    &holes,
+                );
+                assert!(
+                    flags.iter().any(|f| *f),
+                    "exit dest-reset must encode at least one overlay band or PAGE wipe is a pop; holes={holes:?} flags={flags:?} stamps={stamps:?}"
+                );
+                if stamps.len() >= 2 {
+                    assert!(
+                        flags.iter().filter(|f| **f).count() >= 2,
+                        "exit dest-reset of overlay+card must encode both bands; holes={holes:?} flags={flags:?} stamps={stamps:?} dirty={overlay_dirties:?}"
+                    );
+                }
+            }
+        }
+        let live_frames = opacities.iter().filter(|o| o.is_some()).count();
+        assert!(
+            live_frames >= 4,
+            "exit must stay mounted across several layout frames, not overlay-then-card pop; opacities={opacities:?}"
+        );
+        let first = opacities[0].unwrap();
+        let mid = opacities[3].unwrap_or(0.0);
+        assert!(
+            mid + 0.04 < first,
+            "exit opacity must keep moving across layout frames; opacities={opacities:?}"
         );
 
         crate::style::utility::set_frame_dt(0.0);

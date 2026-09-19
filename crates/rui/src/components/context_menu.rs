@@ -377,7 +377,7 @@ fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
                     }
                     true
                 }
-                Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+                k if crate::utils::keyboard::is_enter_or_space(&k) => {
                     let ix = sub_active.peek();
                     if ix == ACTIVE_NONE {
                         return true;
@@ -456,7 +456,7 @@ fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
                 }
                 true
             }
-            Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+            k if crate::utils::keyboard::is_enter_or_space(&k) => {
                 let ix = active_keys.peek();
                 if ix == ACTIVE_NONE {
                     return false;

@@ -604,7 +604,7 @@ fn build_calendar_view(
                         mm = nm;
                         dd = clamp_day(yy, mm, dd);
                     }
-                    Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+                    k if crate::utils::keyboard::is_enter_or_space(&k) => {
                         let s = format_ymd(yy, mm, dd);
                         v_k.set(s.clone());
                         if let Some(cb) = &on_k {

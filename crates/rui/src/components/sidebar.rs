@@ -457,7 +457,7 @@ pub fn try_toggle_sidebar_from_key(
     if !c.eq_ignore_ascii_case(SIDEBAR_KEYBOARD_SHORTCUT) {
         return false;
     }
-    if !(modifiers.control_key() || modifiers.super_key()) {
+    if !(modifiers.control_key() || modifiers.meta_key()) {
         return false;
     }
     toggle_sidebar();

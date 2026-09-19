@@ -1,4 +1,15 @@
+use winit::keyboard::Key;
+
 use crate::utils::text_field::caret_line_and_local;
+
+/// winit 0.31 / keyboard-types 0.8: Space is `Key::Character(" ")`, not a named key.
+pub fn is_space_key(key: &Key) -> bool {
+    matches!(key, Key::Character(s) if s.as_str() == " ")
+}
+
+pub fn is_enter_or_space(key: &Key) -> bool {
+    matches!(key, Key::Named(winit::keyboard::NamedKey::Enter)) || is_space_key(key)
+}
 
 /// Hard-`\n` lines as `(byte_start, line_body)` — trailing empty line after final `\n` included.
 fn hard_line_slices(text: &str) -> Vec<(usize, &str)> {

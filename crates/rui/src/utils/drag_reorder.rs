@@ -28,6 +28,13 @@ pub fn drag_hover_signal_key(list_id: &str) -> String {
     format!("__rui_drag_hover:{}", list_id)
 }
 
+/// Write the live preview hover. Call only when `AppState` is not borrowed —
+/// `Signal::set` flushes `bind_prop` which re-borrows the tree (C1 / Wave 53).
+pub(crate) fn set_drag_hover(list_id: &str, hover: Option<usize>) {
+    crate::core::reactivity::use_signal(&drag_hover_signal_key(list_id), || None::<usize>)
+        .set(hover);
+}
+
 pub fn drag_commit_signal_key(list_id: &str) -> String {
     format!("__rui_drag_commit:{}", list_id)
 }
@@ -135,5 +142,74 @@ mod tests {
         sorted.sort_unstable();
         assert_eq!(sorted, (0..8).collect::<Vec<_>>());
         assert_eq!(v.len(), 8);
+    }
+
+    #[test]
+    fn drag_hover_set_lands_after_tree_borrow_drop() {
+        use crate::app::reactive::{
+            bind_prop, drain_deferred_view_remounts, reset_registered_anchors,
+        };
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::core::tree::{Element, LayoutStatus};
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+        let tree = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&tree));
+        let list = "drag-hover-drop";
+        let (_handle, _) = create_root({
+            let tree = Rc::clone(&tree);
+            move || {
+                create_effect({
+                    let tree = Rc::clone(&tree);
+                    let list = list.to_string();
+                    move || {
+                        let leaf = bind_prop(
+                            Element::new().template_id("drag-hover-leaf"),
+                            "drag-hover-leaf",
+                            {
+                                let list = list.clone();
+                                move || {
+                                    crate::core::reactivity::use_signal(
+                                        &drag_hover_signal_key(&list),
+                                        || None::<usize>,
+                                    )
+                                    .get()
+                                }
+                            },
+                            |el, n| {
+                                el.text = Some(n.map(|i| i.to_string()).unwrap_or_default());
+                                LayoutStatus::StyleChanged
+                            },
+                        );
+                        *tree.borrow_mut() = leaf;
+                    }
+                });
+            }
+        });
+        drain_deferred_view_remounts();
+        assert_eq!(tree.borrow().text.as_deref(), Some(""));
+
+        {
+            let held = tree.borrow_mut();
+            set_drag_hover(list, Some(2));
+            assert_eq!(
+                held.text.as_deref(),
+                Some(""),
+                "hover bind must miss while the live tree is borrowed"
+            );
+        }
+        drain_deferred_view_remounts();
+        assert_eq!(
+            tree.borrow().text.as_deref(),
+            Some("2"),
+            "leaf bind must land once try_borrow_mut succeeds"
+        );
+        set_drag_hover(list, None);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
     }
 }

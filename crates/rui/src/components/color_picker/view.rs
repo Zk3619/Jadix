@@ -1343,7 +1343,7 @@ pub(super) fn build_color_picker_view(
                         focus_by_id(trig.clone());
                         true
                     }
-                    Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+                    k if crate::utils::keyboard::is_enter_or_space(&k) => {
                         if open_k.peek() {
                             open_k.set(false);
                             focus_by_id(trig.clone());

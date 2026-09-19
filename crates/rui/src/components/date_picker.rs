@@ -632,7 +632,7 @@ fn build_date_picker_view(
                             close_picker_keyboard(open_k, trig.clone());
                             true
                         }
-                        Key::Named(NamedKey::Enter) | Key::Named(NamedKey::Space) => {
+                        k if crate::utils::keyboard::is_enter_or_space(&k) => {
                             if open_k.peek() {
                                 close_picker_keyboard(open_k, trig.clone());
                             } else {

@@ -8,6 +8,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock};
 
 use crate::core::tree::{Element, IntoElementList, LayoutStatus};
+use crate::style::{GeneratorSample, Spring, SpringPhysics};
 use crate::utils::icon_morph::{
     build_plan, canonical_d, fit_icon, icon_input_from_src, interp_plan_d_kind, morph_d_at_kind,
     resample_icon, sampled_from_outputs, IconInput, MorphPlan, Sampled, SAMPLE_N,
@@ -138,6 +139,8 @@ struct MorphPlay {
     v: f32,
     k: f32,
     c: f32,
+    gen: Option<Spring>,
+    gen_t_ms: f32,
     controlled: bool,
     settled: bool,
     /// morphicons `based`: mid-flight seek without re-basing onto `from`.
@@ -166,6 +169,8 @@ fn new_play(
         v: 0.0,
         k: cfg.k,
         c: cfg.c,
+        gen: None,
+        gen_t_ms: 0.0,
         controlled,
         settled,
         based: false,
@@ -268,16 +273,37 @@ fn emit_doc(d: &str, color: [u8; 4], stroke_width: f32) -> String {
     )
 }
 
+fn arm_play_gen(play: &mut MorphPlay) {
+    play.gen = Some(Spring::from_physics(
+        play.x,
+        1.0,
+        play.v,
+        SpringPhysics {
+            stiffness: play.k,
+            damping: play.c,
+            mass: 1.0,
+        },
+    ));
+    play.gen_t_ms = 0.0;
+}
+
 fn spring_step(play: &mut MorphPlay, dt: f32) -> bool {
-    let h = 1.0 / 240.0;
-    let steps = (dt / h).ceil().clamp(1.0, 16.0) as i32;
-    let s = dt / steps as f32;
-    for _ in 0..steps {
-        let a = play.k * (1.0 - play.x) - play.c * play.v;
-        play.v += a * s;
-        play.x += play.v * s;
+    if play.gen.is_none() {
+        arm_play_gen(play);
     }
-    (1.0 - play.x).abs() < 0.001 && play.v.abs() < 0.02
+    play.gen_t_ms += dt.max(0.0) * 1000.0;
+    let sample = play
+        .gen
+        .as_ref()
+        .map(|s| s.next(play.gen_t_ms))
+        .unwrap_or(GeneratorSample {
+            value: 1.0,
+            velocity: 0.0,
+            done: true,
+        });
+    play.x = sample.value;
+    play.v = sample.velocity;
+    sample.done || ((1.0 - play.x).abs() < 0.001 && play.v.abs() < 0.02)
 }
 
 fn ensure_play(el: &Element) -> Option<u64> {
@@ -396,6 +422,7 @@ fn start_morph(el: &Element, play: &mut MorphPlay, from_src: &str, to_src: &str,
             play.c = cfg.c;
             play.settled = false;
             play.controlled = false;
+            arm_play_gen(play);
             invalidate_pair(play);
         }
         Err(_) => {

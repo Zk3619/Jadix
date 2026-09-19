@@ -7,8 +7,8 @@ use crate::components::input::{
     input_number_step_button, input_number_steppers_column, input_overwrite_signal_key,
     input_password_reveal_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key,
     input_reveal_template_id, input_selection_signal_key, input_text_template_id,
-    input_type_signal_key, input_value_signal_key, lucide_named, map_byte_range_to_masked,
-    resolve_placeholder, set_adornment_visible, InputType,
+    input_type_signal_key, input_value_signal_key, map_byte_range_to_masked, resolve_placeholder,
+    set_adornment_visible, InputType,
 };
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_color, parse_text_color, Element, TextEditPaintSync};
@@ -536,7 +536,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         let disabled_clear = disabled;
         let mut clear_btn = input_adornment_button(
             input_clear_template_id(&field_id),
-            lucide_named("x"),
+            "x",
             disabled_clear,
             move || {
                 if disabled_clear {
@@ -578,14 +578,10 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         let focus_key_rev = focus_key;
         let id_rev = field_id.clone();
         let disabled_rev = disabled;
-        let eye_glyph = if reveal {
-            lucide_named("eye-off")
-        } else {
-            lucide_named("eye")
-        };
+        let eye_name = if reveal { "eye-off" } else { "eye" };
         let mut reveal_btn = input_adornment_button(
             input_reveal_template_id(&field_id),
-            eye_glyph,
+            eye_name,
             disabled_rev,
             move || {
                 if disabled_rev {
@@ -610,7 +606,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         };
         let inc = input_number_step_button(
             input_number_inc_template_id(&field_id),
-            lucide_named("chevron-up"),
+            "chevron-up",
             disabled,
             field_id.clone(),
             fid.clone(),
@@ -618,7 +614,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         );
         let dec = input_number_step_button(
             input_number_dec_template_id(&field_id),
-            lucide_named("chevron-down"),
+            "chevron-down",
             disabled,
             field_id.clone(),
             fid.clone(),
@@ -666,6 +662,9 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let mut out: Element = interactive(el)
         .focus_id(fid)
         .focusable(!disabled)
+        // Group shell owns the ring (`InputAdornment` / Command). `focusable`
+        // also latches `focus_ring`; plain_chrome must opt out.
+        .focus_ring(!disabled && !plain_chrome)
         .on_click(move || {
             if !disabled {
                 use_signal(focus_key, String::new).set(id_for_click.clone());

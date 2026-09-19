@@ -5,9 +5,9 @@ use crate::components::input::{
     effective_invalid, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
     input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id,
-    input_selection_signal_key, input_text_template_id, input_value_signal_key, lucide_named,
-    map_byte_index_to_masked, map_byte_range_to_masked, resolve_placeholder,
-    set_adornment_icon_glyph, set_adornment_visible, InputType,
+    input_selection_signal_key, input_text_template_id, input_value_signal_key,
+    map_byte_index_to_masked, map_byte_range_to_masked, resolve_placeholder, set_adornment_visible,
+    InputType,
 };
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{parse_color, parse_text_color, Element, InputPaintSync, LayoutStatus};
@@ -295,6 +295,7 @@ fn sync_one_text_edit_paint(
 
     let mut text_layout = false;
     let mut text_style = false;
+    let mut caret_changed = false;
 
     if el.children.is_empty() {
         if container_layout {
@@ -467,8 +468,16 @@ fn sync_one_text_edit_paint(
         };
 
         if text_el.text_style.input_caret != caret_draw {
+            // Blur drops `input_caret` before the post-sync dirty walk. Pushing
+            // after the clear no-ops, PartialLoad keeps the I-beam (光标残留).
+            if caret_draw.is_none()
+                && text_el.text_style.input_caret.is_some()
+                && crate::renderer::caret_blink_visible()
+            {
+                push_focused_text_edit_caret_damage(text_el);
+            }
             text_el.text_style.input_caret = caret_draw.clone();
-            text_style = true;
+            caret_changed = true;
         }
 
         let want_scroll_x = if !desc.multiline && text_el.text_style.overflow.allows_caret_scroll()
@@ -626,12 +635,8 @@ fn sync_one_text_edit_paint(
     if desc.password_toggle {
         let reveal_tid = input_reveal_template_id(&desc.base_id);
         if let Some(btn) = find_descendant_by_template_id_mut(el, &reveal_tid) {
-            let glyph = if reveal {
-                lucide_named("eye-off")
-            } else {
-                lucide_named("eye")
-            };
-            if set_adornment_icon_glyph(btn, &glyph) {
+            let name = if reveal { "eye-off" } else { "eye" };
+            if crate::components::input::set_adornment_icon_name(btn, name) {
                 adorn_style = true;
             }
             if set_adornment_visible(btn, is_focused && !desc.disabled) {
@@ -884,7 +889,7 @@ fn sync_one_text_edit_paint(
         if text_el.layout_node.is_some() {
             if text_layout {
                 layout_tree.mark_element_layout_dirty(text_el);
-            } else if text_style {
+            } else if text_style || caret_changed {
                 layout_tree.update_taffy_node_style(text_el);
             }
         }
@@ -903,13 +908,23 @@ fn sync_one_text_edit_paint(
     }
 
     let layout_hit = container_layout || text_layout || adorn_layout;
-    let style_hit = !layout_hit && (container_style || text_style || adorn_style);
+    let style_hit = !layout_hit && (container_style || text_style || adorn_style || caret_changed);
     if layout_hit {
         *impact = impact.merge(LayoutStatus::LayoutChanged);
         push_text_edit_paint_dirty(el);
     } else if style_hit {
         *impact = impact.merge(LayoutStatus::StyleChanged);
-        push_text_edit_paint_dirty(el);
+        if caret_changed && !container_style && !text_style && !adorn_style {
+            // I-beam on/off only. Dirtying the Input box dest-resets placeholder
+            // (and can punch a sibling ⌘K) — Gallery Search blur flash.
+            // Blur while blink is already OFF: retain has no I-beam. Dirtying
+            // the flex leaf then dest-resets the whole placeholder (失焦闪一下).
+            if is_focused || crate::renderer::caret_blink_visible() {
+                push_focused_text_edit_caret_damage(el);
+            }
+        } else {
+            push_text_edit_paint_dirty(el);
+        }
     }
 }
 
@@ -943,18 +958,95 @@ fn push_text_edit_paint_dirty(el: &Element) {
 /// Caret on/off is paint-only. Do not `mark_full_redraw` — that clears every other
 /// node's dirty list (spin, hover) and FullClears the gallery.
 ///
-/// Dirty the **text leaf's visual layout box**, not the Input chrome. Hard-ring
-/// SDF pad (spread 3 + vertex 2) plus dest-reset AA punches `form_field` labels
-/// (`gap(4)` — WP-3.9「邮箱」flicker on every blink).
+/// Dirty the **I-beam**, not the text leaf's flex `w(100%)` box. That AABB was
+/// `node_present` scissor (+8) and dest-reset's no-prev fallback, so every blink
+/// punched the rounded stroke / sibling chrome and recaptured "Search…" (叠影).
+/// Hard-ring still lives on the Input chrome — this key is the text leaf.
 pub(crate) fn push_focused_text_edit_caret_damage(el: &Element) {
-    if el.text_style.input_caret.is_some() {
-        let b = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
-        crate::app::damage::push_frame_paint_key(crate::app::damage::paint_element_key(el), b);
+    if let Some(caret) = el.text_style.input_caret.as_ref() {
+        let leaf = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
+        let mut dirty = caret_ibeam_damage_box(el, leaf, caret.caret_byte_index);
+        for &ix in &caret.extra_carets {
+            dirty = crate::app::damage::union_rects(dirty, caret_ibeam_damage_box(el, leaf, ix));
+        }
+        crate::app::damage::push_frame_paint_key(
+            crate::app::damage::paint_element_key(el),
+            dirty,
+        );
         return;
     }
     for child in &el.children {
         push_focused_text_edit_caret_damage(child);
     }
+}
+
+/// Same paint-space I-beam collect emits (`push_input_chrome_instances`).
+fn caret_ibeam_damage_box(el: &Element, leaf: [f32; 4], byte_index: usize) -> [f32; 4] {
+    let text = el.text.as_deref().unwrap_or("");
+    let size = el.text_style.size_resolved();
+    let weight = el.text_style.weight_resolved();
+    let line_height = el.text_style.line_height_px.unwrap_or_else(|| {
+        size * crate::style::tailwind_default_leading_scale(size)
+    });
+    let caret_w = crate::utils::text_field::TEXT_EDIT_CARET_W;
+    let caret_h = crate::utils::text_field::text_edit_caret_height_px(line_height, size);
+    let pan = el.text_style.overflow.allows_caret_scroll();
+    let soft_wrap = el.text_style.white_space == crate::style::WhiteSpace::Normal && !pan;
+    let ix = text.floor_char_boundary(byte_index.min(text.len()));
+    let (line_i, prefix, line_w) = if soft_wrap {
+        let ranges = crate::text::soft_visual_line_byte_ranges(
+            text,
+            size,
+            weight,
+            line_height.max(1.0),
+            leaf[2].max(1.0),
+            el.text_style.wrap_mode.to_line_break_source(),
+        );
+        let i = crate::text::caret_visual_line_index(&ranges, ix);
+        let (s, e) = ranges.get(i).copied().unwrap_or((0, 0));
+        let body = text.get(s..e).unwrap_or("");
+        let local = ix.saturating_sub(s).min(body.len());
+        let prefix = if local == 0 {
+            0.0
+        } else {
+            crate::text::measure_prefix_advance(&body[..local], size, weight, line_height.max(1.0))
+        };
+        let line_w = crate::text::measure_prefix_advance(body, size, weight, line_height.max(1.0));
+        (i, prefix, line_w)
+    } else {
+        let (line_i, local) = crate::utils::text_field::caret_line_and_local(text, ix);
+        let mut start = 0usize;
+        for _ in 0..line_i {
+            if let Some(n) = text[start..].find('\n') {
+                start += n + 1;
+            }
+        }
+        let body = text[start..].split('\n').next().unwrap_or("");
+        let local = local.min(body.len());
+        let prefix = if local == 0 {
+            0.0
+        } else {
+            crate::text::measure_prefix_advance(&body[..local], size, weight, line_height.max(1.0))
+        };
+        let line_w = crate::text::measure_prefix_advance(body, size, weight, line_height.max(1.0));
+        (line_i, prefix, line_w)
+    };
+    let origin_x = leaf[0] - el.text_style.scroll_x.max(0.0);
+    let align_dx = el.text_style.align_inline_offset(line_w, leaf[2]);
+    let mut caret_x = origin_x + align_dx + prefix;
+    if soft_wrap {
+        caret_x = caret_x.max(origin_x);
+    } else if !pan {
+        caret_x = caret_x.min(origin_x + leaf[2] - caret_w).max(origin_x);
+    }
+    let multi = line_i > 0 || text.contains('\n') || soft_wrap;
+    let line_origin_y = if multi {
+        leaf[1] + line_i as f32 * line_height
+    } else {
+        leaf[1] + (leaf[3] - line_height).max(0.0) * 0.5
+    };
+    let caret_y = line_origin_y + (line_height - caret_h) * 0.5;
+    [caret_x, caret_y, caret_w, caret_h.max(1.0)]
 }
 
 fn find_descendant_by_template_id_mut<'a>(

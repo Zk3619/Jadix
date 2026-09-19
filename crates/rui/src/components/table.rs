@@ -29,6 +29,9 @@
 //! 列轨是领域 prop `col_w`（不是根布局 `w`）。RSX 写 `col_w`；Builder `.w()` 是别名。
 //! 见 `docs/COMPONENT_LIBRARY.md` §1.1。
 //!
+//! 表体走 [`crate::app::reactive::reactive_view`] **结构岛**（排序 / 分页整表 rebuild），
+//! 不是项级 `bind_*`。不要按组件把这里改成叶子绑（closeout Wave 55 停做）。
+//!
 //! ## Usage (dual style · ADR-9)
 //! ```ignore
 //! // A · RSX / tags（ShadCN invoices 示例）
@@ -86,12 +89,9 @@ use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::mark_hover_paint_dirty;
 use crate::primitives::r#box::{gstack, hstack, r#box, vstack};
 use crate::primitives::text::text;
-use crate::style::ensure_class_list;
 use crate::style::parse_color;
 use crate::style::parse_text_color;
-use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
 use crate::tokens;
-use crate::utils::motion::ensure_motion_transitions;
 use crate::utils::take_packed;
 use rui_macros::component;
 
@@ -108,15 +108,6 @@ const HEAD_H_COMFORTABLE: f32 = 48.0;
 const ROW_H_DEFAULT: f32 = 40.0;
 const ROW_H_COMPACT: f32 = 32.0;
 const ROW_H_COMFORTABLE: f32 = 48.0;
-fn table_row_transitions() -> [TransitionEntry; 1] {
-    [TransitionEntry {
-        property: TransitionProperty::BackgroundColor,
-        duration_ms: 150.0,
-        delay_ms: 0.0,
-        timing: TimingFunction::Ease,
-    }]
-}
-
 fn table_footer_bg() -> [f32; 4] {
     parse_color("muted/50")
 }
@@ -141,20 +132,21 @@ fn apply_table_row_state(mut row: Element, selected: bool) -> Element {
 }
 
 fn wire_table_row_hover(mut row: Element, row_id: &str, selected: bool) -> Element {
-    ensure_motion_transitions(&mut row.style, &table_row_transitions());
     row.focus_id = Some(row_id.to_string());
     row.template_id = Some(row_id.to_string());
     if !selected {
         let hover_key = format!("{row_id}_hover");
         let hovered = use_signal(hover_key.as_str(), || false);
         let _ = hovered.peek();
+        // Paint from `{id}_hover` (exclusive `on_hover` bubble). Class `hover:bg-*`
+        // is the cell hit leaf, so `:hover` never lands on the row — first enter
+        // stayed rest, and switching dest-reset both rows (leave flashed then died).
         row.button_hover_paint = Some(ButtonHoverPaint {
-            variant: "ghost".into(),
+            variant: "table-row".into(),
             disabled: false,
-            hover_easing: "spring".into(),
+            hover_easing: "cubic".into(),
             text_color: None,
         });
-        let _ = ensure_class_list(&mut row, "hover:bg-muted/50");
         row = row.on_hover(move |h| {
             hovered.set_silent(h);
             mark_hover_paint_dirty();
@@ -472,11 +464,19 @@ pub fn Table(children: Option<Element>) -> Element {
 
     let mut inner: Element = vstack().w("100%").min_w(0.0).children(ordered).into();
     inner.set_attr("data-slot", "table");
+    table_container_wrap(inner)
+}
+
+/// ShadCN `relative w-full overflow-x-auto`. Y stays visible so the wrap is
+/// content-height (not a nested Y scrollport that flex-shrinks to a clip and
+/// dest-resets cell glyphs on the next chrome / hover frame).
+fn table_container_wrap(inner: Element) -> Element {
     let mut wrap: Element = r#box()
         .relative(true)
         .w("100%")
         .min_w(0.0)
-        .overflow("auto")
+        .flex_shrink(0.0)
+        .overflow_x("auto")
         .child(inner)
         .into();
     wrap.set_attr("rui_table", "1");
@@ -504,6 +504,21 @@ pub fn TableBody(children: Option<Element>) -> Element {
     mark_slot(el, SLOT_BODY)
 }
 
+/// Footer wrapper already paints `muted/50`. Child rows keep hover wiring, but
+/// rest fill matches the wrapper so hover/leave is a no-op and must not dest-reset
+/// (CLEAR of the same color punches the wrapper `border-t` / row `border-b`).
+fn stamp_footer_row_rest_fill(el: &mut Element) {
+    if is_table_row_slot(el) {
+        el.set_attr("data-table-footer-row", "1");
+        if el.attrs.get("data-state").map(String::as_str) != Some("selected") {
+            el.style.bg_color = table_footer_bg();
+        }
+    }
+    for child in &mut el.children {
+        stamp_footer_row_rest_fill(child);
+    }
+}
+
 /// `tfoot`：`bg-muted/50 border-t font-medium`。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
@@ -513,6 +528,7 @@ pub fn TableFooter(children: Option<Element>) -> Element {
     let mut styled = kids;
     for k in &mut styled {
         style_textish(k, TEXT_SM, 500.0, fg);
+        stamp_footer_row_rest_fill(k);
     }
     let mut el: Element = vstack()
         .w("100%")
@@ -1271,6 +1287,7 @@ impl From<TableBuilder> for Element {
                         )
                         .into();
                     head = head.min_w(0.0).justify_self_kw("stretch");
+                    head.set_attr("data-slot", "table-head");
                     head = apply_cell_align(head, col.align);
                 }
                 header_row = header_row.child(head);
@@ -1421,15 +1438,7 @@ impl From<TableBuilder> for Element {
 
             let mut inner: Element = vstack().w("100%").min_w(0.0).children(stack_kids).into();
             inner.set_attr("data-slot", "table");
-            let mut root: Element = r#box()
-                .relative(true)
-                .w("100%")
-                .min_w(0.0)
-                .overflow("auto")
-                .child(inner)
-                .into();
-            root.set_attr("rui_table", "1");
-            root.set_attr("data-slot", "table-container");
+            let mut root = table_container_wrap(inner);
             root.template_id = Some(id.clone());
             if let Some(ref style) = style {
                 root = style(crate::components::base::BaseComponentBuilder::new(root)).el;

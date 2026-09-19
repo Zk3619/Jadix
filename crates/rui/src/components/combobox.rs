@@ -59,9 +59,7 @@ use std::sync::OnceLock;
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::components::base::{author_class, paint_slot, SlotMap, SlotStyleFn};
 use crate::components::button::button;
-use crate::components::input::{
-    input, input_adornment_button, input_value_signal_key, lucide_named,
-};
+use crate::components::input::{input, input_adornment_button, input_value_signal_key};
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::select::SelectScrollSelected;
@@ -403,19 +401,15 @@ pub fn ComboboxInput(
         let clear_open = open;
         let clear_id = id.clone();
         let clear_store = input_store;
-        let mut clear_btn = input_adornment_button(
-            format!("{id}__combo_clear"),
-            lucide_named("x"),
-            false,
-            move || {
+        let mut clear_btn =
+            input_adornment_button(format!("{id}__combo_clear"), "x", false, move || {
                 clear_val.set(String::new());
                 commit_value(&clear_id, String::new());
                 clear_open.set(false);
                 use_signal("__rui_button_focus_id", String::new)
                     .set(crate::utils::text_field::input_focus_id(&clear_id));
                 use_signal("__rui_focus_visible", || false).set(true);
-            },
-        );
+            });
         clear_btn = clear_btn.reactive_sync(move |el, _| {
             let show = !clear_store.try_peek().unwrap_or_default().is_empty()
                 || !clear_val.try_peek().unwrap_or_default().is_empty();
@@ -444,7 +438,7 @@ pub fn ComboboxInput(
     let chev_id = id.clone();
     let chevron = input_adornment_button(
         format!("{id}__combo_chevron"),
-        lucide_named("chevron-down"),
+        "chevron-down",
         false,
         move || {
             let next = !o_chev.peek();

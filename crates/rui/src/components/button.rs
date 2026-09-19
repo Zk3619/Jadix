@@ -1114,6 +1114,31 @@ impl From<ButtonBuilder> for Element {
     }
 }
 
+/// Table row hover: muted/50 fill only. Ghost chrome would zero `border-b`.
+fn paint_table_row_hover_bg(
+    el: &mut Element,
+    layout_tree: &mut LayoutTree,
+    is_hovered: bool,
+    impact: &mut LayoutStatus,
+) {
+    let hover_bg = parse_color("muted/50");
+    // Footer rest is already muted/50 (wrapper + stamped row). Hovering the
+    // same fill must not dest-reset — CLEAR flashes the 1px seams.
+    let rest_bg = if el.attrs.get("data-table-footer-row").map(String::as_str) == Some("1") {
+        hover_bg
+    } else {
+        [0.0, 0.0, 0.0, 0.0]
+    };
+    let bg = if is_hovered { hover_bg } else { rest_bg };
+    if color4_near(el.style.bg_color, bg) {
+        return;
+    }
+    el.style.bg_color = bg;
+    *impact = impact.merge(LayoutStatus::StyleChanged);
+    crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
+    layout_tree.note_collect_skip_hash_bust_if_idle(el.collect_skip_live);
+}
+
 /// Class variants own bg/fg/link underline. Still join ButtonGroup radii and explicit caption fg.
 fn paint_button_join_and_link_underline(
     el: &mut Element,
@@ -1173,6 +1198,12 @@ fn paint_button_root_from_hover(
     is_focused: bool,
     impact: &mut LayoutStatus,
 ) {
+    if desc.variant == "table-row"
+        || el.attrs.get("data-slot").map(|s| s.as_str()) == Some("table-row")
+    {
+        paint_table_row_hover_bg(el, layout_tree, is_hovered, impact);
+        return;
+    }
     ensure_button_css_transition(el);
     let class_owns_colors = el.class_set.as_ref().is_some_and(ClassSet::has_hover_color);
     if class_owns_colors {
@@ -1448,15 +1479,22 @@ pub(crate) fn sync_button_hover_paint_subtree(
                     is_focused,
                     impact,
                 );
-                sync_button_focus_ring_shadow(
-                    node,
-                    layout_tree,
-                    desc.disabled,
-                    is_focused,
-                    &desc.variant,
-                    &fid,
-                    impact,
-                );
+                // Table rows only swap fill. Focus-ring / `border-ring` sync treats
+                // `border-b` as Button chrome and dest-resets every row — stacked
+                // tables then stamp the upper header's 「Status」 as 「Sta」.
+                if desc.variant != "table-row"
+                    && node.attrs.get("data-slot").map(String::as_str) != Some("table-row")
+                {
+                    sync_button_focus_ring_shadow(
+                        node,
+                        layout_tree,
+                        desc.disabled,
+                        is_focused,
+                        &desc.variant,
+                        &fid,
+                        impact,
+                    );
+                }
             }
         }
         let child_acc = crate::app::tree_hit::next_hit_scroll_acc(node, frame.scroll_acc);

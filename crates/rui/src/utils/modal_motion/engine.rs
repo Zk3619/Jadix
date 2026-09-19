@@ -829,14 +829,25 @@ fn seed_dialog_enter_anim(overlay: &mut Element, zoom: &mut Element) {
 }
 
 /// Rebuilds can drop the animation list. Restore names without resetting the mid pose
-/// (full [`seed_dialog_enter_anim`] would flash closed → open).
+/// (full [`seed_dialog_enter_anim`] would flash closed → open). A rebuild that
+/// landed at rest (opacity 1 / scale 1) has no mid to keep — re-seed or the
+/// first presented frame is already opaque.
 fn ensure_dialog_enter_anim(overlay: &mut Element, zoom: &mut Element) {
-    if !overlay
+    let overlay_missing = !overlay
         .style
         .animations
         .iter()
-        .any(|a| a.name == "fade-in-0")
+        .any(|a| a.name == "fade-in-0");
+    let zoom_missing = !zoom.style.animations.iter().any(|a| a.name == "zoom-in-90");
+    if overlay_missing
+        && zoom_missing
+        && overlay.style.opacity > 0.9
+        && (zoom.style.scale[0] - 1.0).abs() < 0.02
     {
+        seed_dialog_enter_anim(overlay, zoom);
+        return;
+    }
+    if overlay_missing {
         overlay.style.animations = vec![keyframes_anim_entry(
             "fade-in-0",
             DIALOG_ENTER_ANIM_MS,
@@ -844,7 +855,7 @@ fn ensure_dialog_enter_anim(overlay: &mut Element, zoom: &mut Element) {
             AnimationFillMode::Both,
         )];
     }
-    if !zoom.style.animations.iter().any(|a| a.name == "zoom-in-90") {
+    if zoom_missing {
         zoom.style.animations = dialog_enter_anim_entries();
     }
 }
@@ -884,6 +895,49 @@ fn seed_dialog_exit_anim(overlay: &mut Element, zoom: &mut Element) {
     overlay.style.animations = dialog_exit_overlay_anim();
     zoom.style.animations = dialog_exit_zoom_anim();
     reset_dialog_css_anim_snapshots(overlay, zoom);
+}
+
+fn dialog_has_exit_anim(overlay: &Element, zoom: &Element) -> bool {
+    overlay.style.animations.iter().any(|a| a.name == "fade-out-0")
+        && zoom.style.animations.iter().any(|a| a.name == "fade-out-0")
+        && zoom.style.animations.iter().any(|a| a.name == "zoom-out-90")
+}
+
+fn dialog_exit_visually_settled(overlay: &Element, zoom: &Element) -> bool {
+    overlay.style.opacity < 0.08 && zoom.style.opacity < 0.08
+}
+
+/// Rebuilds can drop the animation list after `needs_exit_anim` was consumed.
+/// Restore names from the current pose so flush does not treat "no keyframes"
+/// as finished (that dest-resets the scrim, then pops the card).
+fn ensure_dialog_exit_anim(overlay: &mut Element, zoom: &mut Element) {
+    if !overlay
+        .style
+        .animations
+        .iter()
+        .any(|a| a.name == "fade-out-0")
+    {
+        let keep = overlay.style.opacity.clamp(0.0, 1.0);
+        clear_motion(overlay);
+        overlay.style.opacity = if keep < 0.02 { 1.0 } else { keep };
+        overlay.style.animations = dialog_exit_overlay_anim();
+        overlay.animation_snapshot = Default::default();
+    }
+    if !zoom.style.animations.iter().any(|a| a.name == "zoom-out-90")
+        || !zoom.style.animations.iter().any(|a| a.name == "fade-out-0")
+    {
+        let keep_op = zoom.style.opacity.clamp(0.0, 1.0);
+        let keep_sc = zoom.style.scale;
+        clear_motion(zoom);
+        zoom.style.opacity = if keep_op < 0.02 { 1.0 } else { keep_op };
+        zoom.style.scale = if (keep_sc[0] - 1.0).abs() < 0.02 && keep_op < 0.02 {
+            [1.0, 1.0]
+        } else {
+            keep_sc
+        };
+        zoom.style.animations = dialog_exit_zoom_anim();
+        zoom.animation_snapshot = Default::default();
+    }
 }
 
 fn dialog_css_animating(overlay: &Element, zoom: &Element) -> bool {
@@ -1069,14 +1123,35 @@ fn apply_dialog_css_keyframe_motion(
         (needs_enter, needs_exit_anim, c.enter_active)
     };
 
-    if exiting && needs_exit_anim {
-        seed_dialog_exit_anim(overlay, zoom);
+    if exiting && (needs_exit_anim || !dialog_has_exit_anim(overlay, zoom)) {
+        // Sheet reseeds slide-out when a rebuild drops the transition. Dialog
+        // used to treat empty keyframes as "done" and unmount immediately —
+        // gallery AlertDialog then dest-resets the scrim, then pops the card.
+        if !needs_exit_anim && dialog_exit_visually_settled(overlay, zoom) {
+            overlay.style.animations.clear();
+            zoom.style.animations.clear();
+            finish_dialog_exit_presence(presence, modal_id);
+            return false;
+        }
+        if needs_exit_anim {
+            seed_dialog_exit_anim(overlay, zoom);
+        } else {
+            ensure_dialog_exit_anim(overlay, zoom);
+        }
         return true;
     }
 
     if exiting {
         let animating = dialog_css_animating(overlay, zoom);
         if !animating {
+            if !dialog_exit_visually_settled(overlay, zoom) {
+                // Hoist adopt can copy a finished enter snapshot onto exit names.
+                // Treating that as done dest-resets the scrim, then pops the card.
+                ensure_dialog_exit_anim(overlay, zoom);
+                overlay.animation_snapshot = Default::default();
+                zoom.animation_snapshot = Default::default();
+                return true;
+            }
             overlay.style.animations.clear();
             zoom.style.animations.clear();
             finish_dialog_exit_presence(presence, modal_id);
@@ -1590,6 +1665,10 @@ fn tick_hoisted_shell_css(el: &mut Element, dt: f32) -> bool {
     let scale = el.style.scale;
     let translate = el.style.translate;
     let translate_pct = el.style.translate_pct;
+    let was_run_active = crate::style::animation_run_active(&el.style, &el.animation_snapshot);
+    // Modal already caps `dt` (idle jump → 16ms). Keyframe `last_tick_ms` would
+    // still apply an 80–150ms first-open hitch as wall time and skip a 200ms fade.
+    el.animation_snapshot.clear_timeline_stamp();
     let ticked = tick_element_css(el, dt);
     let posed = (el.style.opacity - opacity).abs() > 1e-6
         || (el.style.scale[0] - scale[0]).abs() > 1e-6
@@ -1598,7 +1677,12 @@ fn tick_hoisted_shell_css(el: &mut Element, dt: f32) -> bool {
         || (el.style.translate[1] - translate[1]).abs() > 1e-6
         || (el.style.translate_pct[0] - translate_pct[0]).abs() > 1e-6
         || (el.style.translate_pct[1] - translate_pct[1]).abs() > 1e-6;
-    if ticked || posed {
+    // `tick_element_animations` returns false on Finished even though fill-mode
+    // just wrote the 100% sample. Ease-in fade-out's last 16ms may not move
+    // opacity past the posed epsilon — still dest-reset or PartialLoad freezes.
+    let finished_this_tick =
+        was_run_active && !crate::style::animation_run_active(&el.style, &el.animation_snapshot);
+    if ticked || posed || finished_this_tick {
         crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
         true
     } else {
@@ -1927,6 +2011,59 @@ mod tests {
                 runs.get(),
                 2,
                 "close must not notify mounted; that rebuild is the exit hitch"
+            );
+        });
+    }
+
+    #[test]
+    fn dialog_enter_reseeds_when_rebuild_lands_at_rest() {
+        create_root(|| {
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg-enter-reseed", &mut panel);
+            let handle = use_modal_presence("enter-reseed");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg-enter-reseed",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+
+            let mut fresh_overlay = Element::new();
+            fresh_overlay.template_id = Some("dlg-enter-reseed__modal_overlay".into());
+            fresh_overlay.style.opacity = 1.0;
+            let mut fresh_panel = Element::new();
+            attach_dialog_zoom_shell("dlg-enter-reseed", &mut fresh_panel);
+            fresh_panel.template_id = Some("dlg-enter-reseed__modal_panel".into());
+            root.children.clear();
+            root.children.push(fresh_overlay);
+            root.children.push(fresh_panel);
+
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            let overlay = find_template_id_mut(&mut root, "dlg-enter-reseed__modal_overlay").unwrap();
+            assert!(
+                overlay.style.opacity < 0.05,
+                "rebuild at rest must re-seed fade-in, not present opaque, got {}",
+                overlay.style.opacity
+            );
+            assert!(
+                overlay
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-in-0"),
+                "enter keyframes must be restored after rebuild"
             );
         });
     }
@@ -2713,6 +2850,145 @@ mod tests {
     }
 
     #[test]
+    fn dialog_enter_timeline_hitch_must_not_skip_fade() {
+        create_root(|| {
+            set_css_transition_virtual_timeline(true);
+            set_css_transition_timeline_ms(0.0);
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg-hitch", &mut panel);
+            let handle = use_modal_presence("enter-hitch");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg-hitch",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            assert!(tick_hoisted_modal_css(&mut root));
+            let opacity_before = find_template_id_mut(&mut root, "dlg-hitch__modal_overlay")
+                .unwrap()
+                .style
+                .opacity;
+            // First-open layout / caret WaitUntil: CSS timeline jumps 150ms while
+            // the modal stepper still reports one 16ms frame.
+            set_css_transition_timeline_ms(150.0);
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            assert!(tick_hoisted_modal_css(&mut root));
+            let overlay = find_template_id_mut(&mut root, "dlg-hitch__modal_overlay").unwrap();
+            let elapsed = overlay
+                .animation_snapshot
+                .runs
+                .iter()
+                .map(|r| r.elapsed_ms)
+                .fold(0.0_f32, f32::max);
+            assert!(
+                overlay.style.opacity < 0.45,
+                "150ms hitch must not seek the 200ms fade; before={opacity_before} after={}",
+                overlay.style.opacity
+            );
+            assert!(
+                elapsed < 50.0,
+                "modal tick must consume capped dt, not last_tick_ms wall; elapsed_ms={elapsed}"
+            );
+            assert!(
+                overlay
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-in-0"),
+                "enter keyframes must still be playing"
+            );
+            set_css_transition_virtual_timeline(false);
+        });
+    }
+
+    #[test]
+    fn dialog_exit_timeline_hitch_must_not_skip_fade() {
+        create_root(|| {
+            set_css_transition_virtual_timeline(true);
+            set_css_transition_timeline_ms(0.0);
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg-exit-hitch", &mut panel);
+            let handle = use_modal_presence("exit-hitch");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg-exit-hitch",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            for i in 0..40 {
+                set_css_transition_timeline_ms(i as f64 * (1000.0 / 60.0));
+                let _ = flush_modal_shell_motion_subtree(&mut root);
+                let _ = tick_hoisted_modal_css(&mut root);
+            }
+            sync_modal_presence(&handle, false);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            let t0 = 40.0 * (1000.0 / 60.0);
+            set_css_transition_timeline_ms(t0);
+            assert!(tick_hoisted_modal_css(&mut root));
+            let opacity_before = find_template_id_mut(&mut root, "dlg-exit-hitch__modal_overlay")
+                .unwrap()
+                .style
+                .opacity;
+            set_css_transition_timeline_ms(t0 + 150.0);
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            assert!(tick_hoisted_modal_css(&mut root));
+            assert!(
+                handle.cell.borrow().gate.is_mounted(),
+                "exit hitch must not finish the 200ms fade in one tick"
+            );
+            let overlay = find_template_id_mut(&mut root, "dlg-exit-hitch__modal_overlay").unwrap();
+            let elapsed = overlay
+                .animation_snapshot
+                .runs
+                .iter()
+                .map(|r| r.elapsed_ms)
+                .fold(0.0_f32, f32::max);
+            assert!(
+                overlay.style.opacity > 0.55,
+                "150ms hitch must not skip fade-out; before={opacity_before} after={}",
+                overlay.style.opacity
+            );
+            assert!(
+                elapsed < 50.0,
+                "exit tick must consume capped dt, not last_tick_ms wall; elapsed_ms={elapsed}"
+            );
+            assert!(
+                overlay
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-out-0"),
+                "exit keyframes must still be playing"
+            );
+            set_css_transition_virtual_timeline(false);
+        });
+    }
+
+    #[test]
     fn dialog_exit_seeds_fade_and_zoom_out() {
         create_root(|| {
             let mut root = Element::new();
@@ -2760,6 +3036,179 @@ mod tests {
             // Exit starts from the settled pose; the keyframes take it down from here.
             assert!((zoom.style.scale[0] - 1.0).abs() < 0.01);
             assert!((zoom.style.opacity - 1.0).abs() < 0.01);
+        });
+    }
+
+    /// Gallery AlertDialog Action/Cancel rebuilds overlay+zoom after the first
+    /// exit flush consumed `needs_exit_anim`. Without a reseed, flush treats
+    /// empty keyframes as "done" and unmounts — overlay dest-resets first,
+    /// then the card pops off (no fade / zoom-out).
+    #[test]
+    fn dialog_exit_reseeds_when_rebuild_drops_keyframes() {
+        create_root(|| {
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg-exit-reseed", &mut panel);
+            let handle = use_modal_presence("exit-reseed");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg-exit-reseed",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            for _ in 0..30 {
+                let _ = tick_hoisted_modal_css(&mut root);
+                let _ = flush_modal_shell_motion_subtree(&mut root);
+            }
+
+            sync_modal_presence(&handle, false);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            assert!(
+                handle.cell.borrow().gate.is_mounted(),
+                "first exit flush must keep the shell mounted"
+            );
+
+            let mut fresh_overlay = Element::new();
+            fresh_overlay.template_id = Some("dlg-exit-reseed__modal_overlay".into());
+            fresh_overlay.style.opacity = 1.0;
+            let mut fresh_panel = Element::new();
+            attach_dialog_zoom_shell("dlg-exit-reseed", &mut fresh_panel);
+            fresh_panel.template_id = Some("dlg-exit-reseed__modal_panel".into());
+            root.children.clear();
+            root.children.push(fresh_overlay);
+            root.children.push(fresh_panel);
+
+            assert!(
+                flush_modal_shell_motion_subtree(&mut root),
+                "rebuild after exit seed must re-seed, not finish"
+            );
+            assert!(
+                handle.cell.borrow().gate.is_mounted(),
+                "rebuild must not force-absent; that pops the scrim then the card"
+            );
+            let o_ptr = find_template_id_mut(&mut root, "dlg-exit-reseed__modal_overlay")
+                .unwrap() as *mut Element;
+            let z_ptr = find_template_id_mut(&mut root, "dlg-exit-reseed__modal_zoom")
+                .unwrap() as *mut Element;
+            let (overlay, zoom) = unsafe { (&*o_ptr, &*z_ptr) };
+            assert!(
+                overlay.style.opacity > 0.7,
+                "reseeded overlay must start from the open pose, got {}",
+                overlay.style.opacity
+            );
+            assert!(
+                overlay
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-out-0"),
+                "rebuild must re-seed overlay fade-out-0"
+            );
+            assert!(
+                zoom.style.animations.iter().any(|a| a.name == "fade-out-0"),
+                "rebuild must re-seed panel fade-out-0"
+            );
+            assert!(
+                zoom.style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "zoom-out-90"),
+                "rebuild must re-seed zoom-out-90 so the card does not pop"
+            );
+        });
+    }
+
+    fn mark_dialog_css_runs_finished(el: &mut Element) {
+        let n = el.style.animations.len().max(1);
+        let baseline = crate::style::AnimationBaseline::from_style(&el.style);
+        el.animation_snapshot.runs = (0..n)
+            .map(|_| crate::style::AnimationRunState {
+                elapsed_ms: 10_000.0,
+                baseline,
+                finished: true,
+                entry_fp: 0,
+            })
+            .collect();
+    }
+
+    #[test]
+    fn dialog_exit_must_not_finish_while_open_pose_has_stale_snapshot() {
+        create_root(|| {
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            let mut root = Element::new();
+            let mut overlay = Element::new();
+            let mut panel = Element::new();
+            attach_dialog_zoom_shell("dlg-exit-stale", &mut panel);
+            let handle = use_modal_presence("exit-stale");
+            sync_modal_presence(&handle, true);
+            apply_modal_shell_motion(
+                "dlg-exit-stale",
+                &mut overlay,
+                &mut panel,
+                ModalSurfaceMotion::DialogFade,
+                PresencePhase::Present,
+                &handle,
+                [0.0, 0.0],
+                false,
+                800.0,
+            );
+            root.children.push(overlay);
+            root.children.push(panel);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+            for _ in 0..30 {
+                let _ = tick_hoisted_modal_css(&mut root);
+                let _ = flush_modal_shell_motion_subtree(&mut root);
+            }
+
+            sync_modal_presence(&handle, false);
+            assert!(flush_modal_shell_motion_subtree(&mut root));
+
+            {
+                let o_ptr = find_template_id_mut(&mut root, "dlg-exit-stale__modal_overlay")
+                    .unwrap() as *mut Element;
+                let z_ptr = find_template_id_mut(&mut root, "dlg-exit-stale__modal_zoom")
+                    .unwrap() as *mut Element;
+                let (overlay, zoom) = unsafe { (&mut *o_ptr, &mut *z_ptr) };
+                overlay.style.opacity = 1.0;
+                zoom.style.opacity = 1.0;
+                zoom.style.scale = [1.0, 1.0];
+                mark_dialog_css_runs_finished(overlay);
+                mark_dialog_css_runs_finished(zoom);
+            }
+
+            assert!(
+                flush_modal_shell_motion_subtree(&mut root),
+                "stale finished snapshot at the open pose must revive exit, not finish"
+            );
+            assert!(
+                handle.cell.borrow().gate.is_mounted(),
+                "finished enter snapshot copied onto exit names must not force-absent"
+            );
+            let overlay = find_template_id_mut(&mut root, "dlg-exit-stale__modal_overlay").unwrap();
+            assert!(
+                overlay.style.opacity > 0.7,
+                "revived overlay must stay on the open pose, got {}",
+                overlay.style.opacity
+            );
+            assert!(
+                overlay
+                    .style
+                    .animations
+                    .iter()
+                    .any(|a| a.name == "fade-out-0"),
+                "revived exit must keep fade-out-0"
+            );
         });
     }
 

@@ -1184,6 +1184,97 @@ mod tests {
         );
     }
 
+    fn text_box(n: &crate::layout::layout_tree::TextLayoutInfo) -> [f32; 4] {
+        [n.x, n.y, n.width, n.height]
+    }
+
+    fn aabb_overlap(a: [f32; 4], b: [f32; 4], slack: f32) -> bool {
+        a[0] + slack < b[0] + b[2]
+            && b[0] + slack < a[0] + a[2]
+            && a[1] + slack < b[1] + b[3]
+            && b[1] + slack < a[1] + a[3]
+    }
+
+    fn contains_box(outer: [f32; 4], inner: [f32; 4], pad: f32) -> bool {
+        inner[0] + 0.5 >= outer[0] - pad
+            && inner[1] + 0.5 >= outer[1] - pad
+            && inner[0] + inner[2] <= outer[0] + outer[2] + pad + 0.5
+            && inner[1] + inner[3] <= outer[1] + outer[3] + pad + 0.5
+    }
+
+    /// Collect ink must sit in the caption / rule slots. A full-width root
+    /// `text_left` used to paint the caption at the Marker origin (叠在发丝线上)
+    /// and dest-reset then smeared the leftover glyphs.
+    #[test]
+    fn marker_collect_ink_stays_in_slots_not_root_origin() {
+        let default_el: Element = marker()
+            .icon(Element::new().text("⌕"))
+            .content("Explored 4 files")
+            .into();
+        let sep_el: Element = marker()
+            .variant("separator")
+            .icon(Element::new().text("⌕"))
+            .content("Explored 4 files")
+            .into();
+
+        for (label, marker_el) in [("default", default_el), ("separator", sep_el)] {
+            let mut root = Element::new()
+                .w(320.0)
+                .h(64.0)
+                .child(marker_el.w("100%"));
+            let mut tree = crate::layout::layout_tree::LayoutTree::new();
+            let result = tree.build_and_layout(&mut root, 320.0, 64.0, [-1.0, -1.0]);
+            let marker = root
+                .children
+                .iter()
+                .find(|c| slot_of(c) == Some(SLOT_ROOT))
+                .unwrap_or_else(|| panic!("{label}: marker root"));
+            let content = find_slot(marker, SLOT_CONTENT)
+                .unwrap_or_else(|| panic!("{label}: content slot"));
+            let icon = find_slot(marker, SLOT_ICON).unwrap_or_else(|| panic!("{label}: icon slot"));
+            let caption = result
+                .text_nodes
+                .iter()
+                .find(|n| n.text.contains("Explored 4 files"))
+                .unwrap_or_else(|| panic!("{label}: caption collect"));
+            let caption_box = text_box(caption);
+            assert!(
+                contains_box(content.layout_bounds, caption_box, 4.0),
+                "{label}: caption collect must sit in the content slot, not the Marker origin\n caption={caption_box:?} content={:?} marker={:?}",
+                content.layout_bounds,
+                marker.layout_bounds
+            );
+            assert!(
+                caption_box[0] + 0.5 >= icon.layout_bounds[0] + icon.layout_bounds[2] - 1.0,
+                "{label}: caption must start after the icon (渲染错位)\n caption={caption_box:?} icon={:?}",
+                icon.layout_bounds
+            );
+            if label == "separator" {
+                for rule in rules_of(marker) {
+                    let hair = result.instances.iter().find(|i| {
+                        i.rect_size[1] <= 4.0
+                            && i.rect_size[0] > 24.0
+                            && (i.rect_pos[0] - rule.layout_bounds[0]).abs() < 4.0
+                    });
+                    if let Some(h) = hair {
+                        let hb = [h.rect_pos[0], h.rect_pos[1], h.rect_size[0], h.rect_size[1]];
+                        assert!(
+                            !aabb_overlap(hb, caption_box, 1.0),
+                            "{label}: hairline overlaps caption (弄脏)\n hair={hb:?} caption={caption_box:?} rule={:?}",
+                            rule.layout_bounds
+                        );
+                        let cy = caption_box[1] + caption_box[3] * 0.5;
+                        let hy = hb[1] + hb[3] * 0.5;
+                        assert!(
+                            (hy - cy).abs() <= 8.0,
+                            "{label}: hairline Y {hy} must stay near caption center {cy} (渲染错位)\n hair={hb:?} caption={caption_box:?}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
     #[test]
     fn default_and_separator_keep_icon_content_gap() {
         fn gap_after_layout(variant: &str) -> f32 {

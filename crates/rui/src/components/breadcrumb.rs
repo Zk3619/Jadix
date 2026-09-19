@@ -62,6 +62,7 @@ use crate::utils::lucide::lucide_glyph;
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
 use rui_macros::component;
+use std::panic::Location;
 
 const ATTR_SLOT: &str = "data-slot";
 const SLOT_ROOT: &str = "breadcrumb";
@@ -107,17 +108,41 @@ fn lucide_icon(name: &str, size_px: f32) -> Element {
         .pointer_events("none")
 }
 
+/// Stable instance key for an omitted author `id`.
+///
+/// `Location` is per call site, so two `breadcrumb()` trails keep distinct hover
+/// signals, and a rebuild at the same site does not mint `btn-N`.
+fn breadcrumb_instance_key(loc: &'static Location<'static>) -> String {
+    format!(
+        "{}:{}:{}",
+        loc.file().replace('\\', "/"),
+        loc.line(),
+        loc.column()
+    )
+}
+
 /// Stable `focus_id` when callers omit `id` — rebuild must not mint `btn-N` (hover signal loss).
-fn breadcrumb_link_focus_id(id: &str, label: &str, disambiguator: Option<usize>) -> String {
+/// `instance` separates two trails that would otherwise share `{label}:{idx}`.
+fn breadcrumb_link_focus_id(
+    id: &str,
+    label: &str,
+    disambiguator: Option<usize>,
+    instance: Option<&str>,
+) -> String {
     if !id.trim().is_empty() {
         return id.trim().to_string();
     }
     let label = label.trim();
-    match (label.is_empty(), disambiguator) {
-        (true, Some(idx)) => format!("breadcrumb-link:{idx}"),
-        (true, None) => "breadcrumb-link".to_string(),
-        (false, Some(idx)) => format!("breadcrumb-link:{label}:{idx}"),
-        (false, None) => format!("breadcrumb-link:{label}"),
+    let instance = instance.map(str::trim).filter(|s| !s.is_empty());
+    match (label.is_empty(), disambiguator, instance) {
+        (true, Some(idx), Some(inst)) => format!("breadcrumb-link:{inst}:{idx}"),
+        (true, Some(idx), None) => format!("breadcrumb-link:{idx}"),
+        (true, None, Some(inst)) => format!("breadcrumb-link:{inst}"),
+        (true, None, None) => "breadcrumb-link".to_string(),
+        (false, Some(idx), Some(inst)) => format!("breadcrumb-link:{inst}:{label}:{idx}"),
+        (false, Some(idx), None) => format!("breadcrumb-link:{label}:{idx}"),
+        (false, None, Some(inst)) => format!("breadcrumb-link:{inst}:{label}"),
+        (false, None, None) => format!("breadcrumb-link:{label}"),
     }
 }
 
@@ -125,9 +150,10 @@ fn build_breadcrumb_link(
     id: &str,
     label: &str,
     disambiguator: Option<usize>,
+    instance: Option<&str>,
     mut on_click: Handler<()>,
 ) -> Element {
-    let btn_id = breadcrumb_link_focus_id(id, label, disambiguator);
+    let btn_id = breadcrumb_link_focus_id(id, label, disambiguator, instance);
     let muted = parse_text_color("muted-foreground");
     let mut btn = button(&btn_id)
         .variant("link")
@@ -245,7 +271,7 @@ pub fn BreadcrumbLink(
         .map(extract_text_leaf)
         .filter(|s| !s.is_empty())
         .unwrap_or_default();
-    build_breadcrumb_link(&id, &label, None, on_click)
+    build_breadcrumb_link(&id, &label, None, None, on_click)
 }
 
 /// 当前页：`aria-current="page"` · 不可导航。
@@ -380,14 +406,17 @@ impl From<BreadcrumbItemBuilder> for Element {
 
 pub struct BreadcrumbLinkBuilder {
     id: String,
+    instance_key: String,
     label: String,
     on_click: Handler<()>,
     chrome: SlotChrome,
 }
 
+#[track_caller]
 pub fn breadcrumb_link() -> BreadcrumbLinkBuilder {
     BreadcrumbLinkBuilder {
         id: String::new(),
+        instance_key: breadcrumb_instance_key(Location::caller()),
         label: String::new(),
         on_click: Handler::default(),
         chrome: SlotChrome::default(),
@@ -415,7 +444,18 @@ impl BreadcrumbLinkBuilder {
 
 impl From<BreadcrumbLinkBuilder> for Element {
     fn from(builder: BreadcrumbLinkBuilder) -> Self {
-        let el = build_breadcrumb_link(&builder.id, &builder.label, None, builder.on_click);
+        let instance = builder
+            .id
+            .trim()
+            .is_empty()
+            .then_some(builder.instance_key.as_str());
+        let el = build_breadcrumb_link(
+            &builder.id,
+            &builder.label,
+            None,
+            instance,
+            builder.on_click,
+        );
         builder.chrome.apply(el)
     }
 }
@@ -549,6 +589,7 @@ impl From<BreadcrumbListBuilder> for Element {
 /// Builder status (ADR-9 Side B).
 pub struct BreadcrumbBuilder {
     id: String,
+    instance_key: String,
     chrome: SlotChrome,
     list_chrome: SlotChrome,
     item_chrome: SlotChrome,
@@ -558,9 +599,11 @@ pub struct BreadcrumbBuilder {
 }
 
 /// Builder entry.
+#[track_caller]
 pub fn breadcrumb() -> BreadcrumbBuilder {
     BreadcrumbBuilder {
         id: String::new(),
+        instance_key: breadcrumb_instance_key(Location::caller()),
         chrome: SlotChrome::default(),
         list_chrome: SlotChrome::default(),
         item_chrome: SlotChrome::default(),
@@ -575,6 +618,9 @@ impl BreadcrumbBuilder {
 
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
+        if !self.id.trim().is_empty() {
+            self.instance_key = self.id.trim().to_string();
+        }
         self
     }
 
@@ -679,8 +725,13 @@ impl From<BreadcrumbBuilder> for Element {
                     on_click,
                     chrome,
                 } => {
-                    let link =
-                        chrome.apply(build_breadcrumb_link("", &label, Some(part_idx), on_click));
+                    let link = chrome.apply(build_breadcrumb_link(
+                        "",
+                        &label,
+                        Some(part_idx),
+                        Some(builder.instance_key.as_str()),
+                        on_click,
+                    ));
                     list_kids.push(builder.item_chrome.apply(BreadcrumbItem(
                         BreadcrumbItemProps {
                             children: Some(link),
@@ -799,7 +850,7 @@ mod tests {
         let muted = parse_text_color("muted-foreground");
         let fg = theme_fg("foreground");
         let (_h, mut el) = create_root(|| {
-            build_breadcrumb_link("bc-hover-home", "Home", None, Handler::default())
+            build_breadcrumb_link("bc-hover-home", "Home", None, None, Handler::default())
         });
         el.layout_bounds = [0.0, 0.0, 80.0, 24.0];
         for c in &mut el.children {
@@ -850,7 +901,7 @@ mod tests {
 
     #[test]
     fn breadcrumb_link_inline_button() {
-        let el = build_breadcrumb_link("", "Home", None, Handler::default());
+        let el = build_breadcrumb_link("", "Home", None, None, Handler::default());
         assert_eq!(
             el.focus_id.as_deref(),
             Some("breadcrumb-link:Home"),
@@ -899,7 +950,7 @@ mod tests {
 
     #[test]
     fn breadcrumb_link_and_page_typography_match() {
-        let link = build_breadcrumb_link("", "Settings", None, Handler::default());
+        let link = build_breadcrumb_link("", "Settings", None, None, Handler::default());
         let page = BreadcrumbPage(BreadcrumbPageProps {
             children: Some(Element::new().text("Profile")),
             base: None,
@@ -1009,34 +1060,96 @@ mod tests {
         );
     }
 
+    fn collect_link_focus_ids(el: &Element) -> Vec<String> {
+        let mut ids = Vec::new();
+        fn walk(el: &Element, ids: &mut Vec<String>) {
+            if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_LINK) {
+                if let Some(id) = el.focus_id.clone() {
+                    ids.push(id);
+                }
+            }
+            for c in &el.children {
+                walk(c, ids);
+            }
+        }
+        walk(el, &mut ids);
+        ids
+    }
+
+    fn hover_first_link_caption(el: &mut Element, label: &str) -> bool {
+        if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_LINK)
+            && el.children.iter().any(|c| c.text.as_deref() == Some(label))
+        {
+            if let Some(hover) = el.on_hover.clone() {
+                hover.borrow_mut()(true);
+            }
+            return true;
+        }
+        el.children
+            .iter_mut()
+            .any(|c| hover_first_link_caption(c, label))
+    }
+
     #[test]
     fn builder_link_ids_are_stable() {
-        let el: Element = breadcrumb()
-            .link("Home", || {})
-            .link("Docs", || {})
-            .page("Breadcrumb")
-            .into();
-        let list = el
-            .children
-            .iter()
-            .find(|c| c.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_LIST))
-            .expect("list");
-        let link_ids: Vec<_> = list
-            .children
-            .iter()
-            .filter_map(|item| {
-                item.children.first().and_then(|link| {
-                    (link.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_LINK))
-                        .then(|| link.focus_id.clone())
-                })
-            })
-            .collect();
+        fn trail() -> Element {
+            breadcrumb()
+                .link("Home", || {})
+                .link("Docs", || {})
+                .page("Breadcrumb")
+                .into()
+        }
+        let ids = collect_link_focus_ids(&trail());
+        assert_eq!(ids.len(), 2);
+        assert_ne!(
+            ids[0], ids[1],
+            "segments in one trail must not share hover id"
+        );
+        assert!(ids[0].contains("Home"));
+        assert!(ids[1].contains("Docs"));
         assert_eq!(
-            link_ids,
-            vec![
-                Some("breadcrumb-link:Home:0".to_string()),
-                Some("breadcrumb-link:Docs:1".to_string()),
-            ]
+            collect_link_focus_ids(&trail()),
+            ids,
+            "same call site must keep focus_id (hover signal must survive rebuild)"
+        );
+    }
+
+    #[test]
+    fn two_builder_homes_do_not_share_hover() {
+        use crate::core::reactivity::{create_root, use_signal};
+        use crate::primitives::r#box::vstack;
+
+        // Gallery 1e: Builder Home and Ellipsis Home are both part_idx 0 "Home".
+        let (_h, mut root) = create_root(|| {
+            Element::from(
+                vstack()
+                    .child(breadcrumb().link("Home", || {}).page("Breadcrumb"))
+                    .child(
+                        breadcrumb()
+                            .link("Home", || {})
+                            .ellipsis()
+                            .link("Settings", || {})
+                            .page("Profile"),
+                    ),
+            )
+        });
+
+        let ids = collect_link_focus_ids(&root);
+        let homes: Vec<_> = ids.into_iter().filter(|id| id.contains("Home")).collect();
+        assert_eq!(homes.len(), 2, "Builder Home + Ellipsis Home");
+        assert_ne!(
+            homes[0], homes[1],
+            "two trails' first Home must not share breadcrumb-link:Home:0"
+        );
+
+        assert!(hover_first_link_caption(&mut root, "Home"), "builder Home");
+        let hovered = use_signal(&format!("{}_hover", homes[0]), || false);
+        let other = use_signal(&format!("{}_hover", homes[1]), || false);
+        assert_eq!(hovered.try_peek(), Some(true), "hovered Home signal");
+        assert_ne!(
+            other.try_peek(),
+            Some(true),
+            "the other trail's Home must keep its own {{focus_id}}_hover"
         );
     }
 

@@ -11,9 +11,9 @@
 //! - Content: `flex h-max flex-col`
 //! - Item: `min-w-0 shrink-0`; `messageId`; optional `scrollAnchor`
 //! - Button: labeled jump control; inert (`opacity:0`, not focusable, no pointer events)
-//!   until there is content in that direction. Nested `data-stacking-context` keeps it
-//!   above message glyphs (page bands paint all text after all rects).
-//!   until there is content in that direction
+//!   until there is content in that direction. Absolute dock + stacking-context is a
+//!   later page-stack band: dest-reset leftover overlay ink, restore wrapping in the
+//!   hole, then paint Latest. First visible paint src-overs wrapping still in retain.
 //!
 //! ```text
 //! MessageScrollerProvider          // context · autoScroll · defaultScrollPosition
@@ -746,38 +746,25 @@ fn apply_button_active(
         || el.style.translate_pct[1].abs() > 0.01
         || pose_changed
         || !pe_matches
-        || el.focusable != active
-        || el.transition_snapshot.has_active_tweens();
+        || el.focusable != active;
 
     // Follow-after-layout re-runs this after the CSS tick. Writing the target
     // over `mid` every frame painted the end pose — enter/exit never showed.
-    // Snap idle opacity/transform *before* the new target so `tick` retargets
-    // from the current visual (hidden 0 / +8px). Button color tweens are often
-    // already active; `has_active_tweens()` must not skip this snap or
-    // `or_insert` starts opacity from the already-written end pose.
-    let motion_running = el
-        .transition_snapshot
-        .prop_tween_active(TransitionProperty::Opacity)
-        || el
-            .transition_snapshot
-            .prop_tween_active(TransitionProperty::Transform);
+    // Snap the current visual, write the specified target into the class
+    // restore snapshot, then tick t=0 so collect keeps the hide/enter `from`
+    // (opacity 0 / 1). Patch *before* tick: restore must re-specify the CSS
+    // target, not the used `from` (which would retarget the tween to rest).
     if pose_changed {
-        if !motion_running {
-            crate::utils::motion::snap_motion_baseline(el);
-        }
-        el.style.opacity = opacity;
-        el.style.scale = [scale, scale];
-        el.style.translate = [0.0, ty];
-        el.style.translate_pct = [0.0, 0.0];
-    } else if !motion_running && (el.style.opacity - opacity).abs() > 0.01 {
-        // Hide wrote 0 then a t=0 tick put `from` (1) back, and no later CSS
-        // frame ran — Latest stayed fully visible at the live edge.
         crate::utils::motion::snap_motion_baseline(el);
         el.style.opacity = opacity;
         el.style.scale = [scale, scale];
         el.style.translate = [0.0, ty];
         el.style.translate_pct = [0.0, 0.0];
+        crate::style::patch_class_set_base_motion(el);
+        let _ = el.tick_css_transitions(0.0);
     }
+    let hide_settle_dest =
+        !active && el.style.opacity < 0.05 && el.transition_snapshot.settled_this_tick();
     if el
         .transition_snapshot
         .prop_tween_active(TransitionProperty::Opacity)
@@ -803,7 +790,18 @@ fn apply_button_active(
         el.focusable = active;
     }
 
-    if will_change {
+    let motion_running = el
+        .transition_snapshot
+        .prop_tween_active(TransitionProperty::Opacity)
+        || el
+            .transition_snapshot
+            .prop_tween_active(TransitionProperty::Transform);
+    if pose_changed || hide_settle_dest {
+        LayoutStatus::StyleChanged
+    } else if motion_running {
+        // Mid-tween visual ≠ target. Dest-reset every follow frame punches the thread.
+        LayoutStatus::Clean
+    } else if will_change {
         LayoutStatus::StyleChanged
     } else {
         LayoutStatus::Clean
@@ -1179,10 +1177,9 @@ pub fn MessageScrollerButton(
             kids
         })
         .into();
-    el = el
-        .flex_shrink(0.0)
-        .box_shadow("0 4px 14px rgba(15, 23, 42, 0.18)");
+    el = el.flex_shrink(0.0);
     el.set_attr(ATTR_SLOT, SLOT_BUTTON);
+    el.set_attr("data-stacking-context", "1");
     el.set_attr(ATTR_DIRECTION, direction.as_str());
     el.set_attr(ATTR_ACTIVE, "false");
     el = el.opacity(0.0).pointer_events_none();
@@ -1191,6 +1188,16 @@ pub fn MessageScrollerButton(
     ensure_jump_motion_transitions(&mut el.style);
     el.focusable = false;
     el = apply_base(el, base_builder);
+    // Compact hairline — Toast `semantic_shadow` (10px blur) dest-reset a
+    // 20px halo through wrapping ("removed from the … you're already at").
+    el.style.shadow_color = tokens::shadow_rgba(tokens::Elevation::Sm);
+    el.style.shadow_blur = 2.0;
+    el.style.shadow_spread = 0.0;
+    el.style.shadow_offset = [0.0, 1.0];
+    // `button()` snapshots class chrome before this hide pose / transition.
+    // Warmup `pose_changed` is false (already `data-active=false`), so apply
+    // would not patch — restore would clone opacity 1 every chrome pass.
+    crate::style::patch_class_set_base_motion(&mut el);
     let sync_ctx = ctx.clone();
     el = el.reactive_sync(move |node, _layout_tree| apply_button_active(node, &sync_ctx, jump_dir));
 
@@ -1198,6 +1205,7 @@ pub fn MessageScrollerButton(
     // to share `translate_pct` with the hide Y-slide and clip through overflow:hidden
     // when the 50% inset does not apply (nested gallery ScrollArea / Card).
     let mut dock: Element = hstack().justify_center().items_center().child(el).into();
+    dock.set_attr("data-stacking-context", "1");
     dock = dock
         .absolute()
         .left(0.0)

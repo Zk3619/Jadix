@@ -241,6 +241,7 @@ fn build_input_adornment(id: &str, children: Vec<Element>) -> Element {
     let block_end = wire(block_end);
 
     let has_textarea = control_is_textarea(&controls);
+    let has_block = !block_start.is_empty() || !block_end.is_empty();
     let invalid = control_invalid(&controls);
     let focused = use_signal("__rui_button_focus_id", String::new).peek();
     let is_focused = control_fid.as_ref().is_some_and(|f| f == &focused);
@@ -251,6 +252,11 @@ fn build_input_adornment(id: &str, children: Vec<Element>) -> Element {
         .items_center()
         .gap("0")
         .flex_grow(1.0);
+    // Single-line shell is a definite 2.25rem. An auto-height row + `h:100%`
+    // control sized to the glyph strip and left a dead band (nested ring).
+    if !has_textarea && !has_block {
+        row = row.h("100%");
+    }
     for k in inline_start {
         row = row.child(k);
     }
@@ -261,7 +267,6 @@ fn build_input_adornment(id: &str, children: Vec<Element>) -> Element {
         row = row.child(k);
     }
 
-    let has_block = !block_start.is_empty() || !block_end.is_empty();
     let body: Element = if has_block {
         let mut col = vstack().w("100%").min_w("0").gap("0").items("stretch");
         for k in block_start {
@@ -299,7 +304,7 @@ fn build_input_adornment(id: &str, children: Vec<Element>) -> Element {
             .min_w("0")
             .h("2.25rem")
             .rounded("0.375rem")
-            .items_center()
+            .items("stretch")
             .overflow("hidden")
             .into()
     };
@@ -320,6 +325,9 @@ fn build_input_adornment(id: &str, children: Vec<Element>) -> Element {
     shell.set_attr(ATTR_SLOT, SLOT_ROOT);
     if let Some(ref fid) = control_fid {
         shell.set_attr("rui_ia_control_fid", fid.as_str());
+        // Group shell is the click/focus target. Addon / padding hits bubble
+        // `focus_id=None`; without this, `find_focus_id_at` on "https://" is Miss.
+        shell.focus_id = Some(fid.clone());
     }
     shell = shell.accesskit_role("group");
     if !id.trim().is_empty() {
@@ -395,38 +403,28 @@ fn sync_adornment_shell_chrome(el: &mut Element) -> crate::core::tree::LayoutSta
         }
     }
     if status != LayoutStatus::Clean {
-        // Shell Node dest-reset clears nested Input / Kbd pixels. Push those
-        // slots too so (after large→small sort) they redraw on top of the wipe.
-        crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
-        push_adornment_nested_paint_dirties(el);
+        if is_focused {
+            // Click-focus must dest-reset the whole shell so the Hard ring and
+            // caret present on top of skip-replayed idle pixels.
+            crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
+        } else {
+            // Blur: only the outset ring / 1px border change. Dest-reset of the
+            // content hole wipes placeholder + ⌘K and they flash on recapture.
+            let b = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
+            let inset = el.style.border_width.max(1.0) + 1.0;
+            let hole = [
+                b[0] + inset,
+                b[1] + inset,
+                (b[2] - 2.0 * inset).max(0.0),
+                (b[3] - 2.0 * inset).max(0.0),
+            ];
+            let (blur, spread) = crate::style::focus_ring_params(crate::style::focus_ring_style());
+            let pad = inset + blur.max(spread).max(1.0) + 3.0;
+            crate::app::damage::push_frame_halo_strips(hole, pad);
+            el.set_attr("rui_halo_dirty", "1");
+        }
     }
     status
-}
-
-/// Walk adornment children and dirty each collect slot the shell wipe covers.
-fn push_adornment_nested_paint_dirties(el: &Element) {
-    for child in &el.children {
-        push_adornment_nested_paint_dirties_walk(child);
-    }
-}
-
-fn push_adornment_nested_paint_dirties_walk(el: &Element) {
-    let slot = el.attrs.get("data-slot").map(String::as_str);
-    let nested_slot = matches!(
-        slot,
-        Some("input-adornment-addon")
-            | Some("input-adornment-text")
-            | Some("input-adornment-button")
-            | Some("input-adornment-control")
-            | Some("kbd")
-            | Some("kbd-group")
-    );
-    if el.input_paint_sync.is_some() || nested_slot {
-        crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
-    }
-    for child in &el.children {
-        push_adornment_nested_paint_dirties_walk(child);
-    }
 }
 
 // ---------------------------------------------------------------------------
