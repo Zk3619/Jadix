@@ -56,7 +56,7 @@ fn now_ms() -> i32 {
         .unwrap_or(0)
 }
 
-fn hwnd_of(window: &Window) -> Option<HWND> {
+fn hwnd_of(window: &dyn Window) -> Option<HWND> {
     super::window::hwnd(window)
 }
 
@@ -81,7 +81,7 @@ unsafe fn cancel_composition(hwnd: HWND) {
     let _ = unsafe { ImmReleaseContext(hwnd, himc) };
 }
 
-pub(crate) fn release_ui_control(window: &Window, cancel_comp: bool) {
+pub(crate) fn release_ui_control(window: &dyn Window, cancel_comp: bool) {
     clear_compose_session();
     let Some(hwnd) = hwnd_of(window) else {
         unsafe {
@@ -110,7 +110,7 @@ fn clear_compose_session() {
 }
 
 pub(crate) fn sync_focus_owner(
-    window: &Window,
+    window: &dyn Window,
     focus_id: Option<&str>,
     on_leave_field: impl FnOnce(&str),
 ) {
@@ -384,7 +384,7 @@ unsafe fn follow_scroll_y(app: HWND, compose_x: i32, y: i32, h: u32) {
 }
 
 /// Composing: Imm once + freeze IMR; scroll frames → HWND ΔY only (no X / no Imm).
-fn drive_composing(window: &Window, compose_x: i32, y: i32, w: u32, h: u32, scrolling: bool) {
+fn drive_composing(window: &dyn Window, compose_x: i32, y: i32, w: u32, h: u32, scrolling: bool) {
     let Some(hwnd) = hwnd_of(window) else {
         return;
     };
@@ -522,7 +522,7 @@ unsafe extern "system" fn ime_subclass_proc(
 
 /// Idle vs composing cursor drive. See `docs/engine/platform.md` P2 / `docs/ops/ime.md`.
 pub(crate) fn apply_ime_cursor_area(
-    window: &Window,
+    window: &dyn Window,
     area_x: f32,
     area_y: f32,
     area_w: f32,
@@ -564,12 +564,18 @@ pub(crate) fn apply_ime_cursor_area(
         return;
     }
     window.set_ime_cursor_area(
-        winit::dpi::LogicalPosition::new(area_x as f64, area_y as f64),
-        winit::dpi::LogicalSize::new(area_w.max(1.0) as f64, area_h.max(1.0) as f64),
+        winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(
+            area_x as f64,
+            area_y as f64,
+        )),
+        winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(
+            area_w.max(1.0) as f64,
+            area_h.max(1.0) as f64,
+        )),
     );
 }
 
-pub(crate) fn ime_disallow(window: &Window) {
+pub(crate) fn ime_disallow(window: &dyn Window) {
     release_ui_control(window, true);
     destroy_caret();
 }

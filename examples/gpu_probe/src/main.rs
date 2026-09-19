@@ -11,7 +11,7 @@ use std::sync::Arc;
 use winit::application::ApplicationHandler;
 use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
-use winit::window::{Window, WindowId};
+use winit::window::{Window, WindowAttributes, WindowId};
 
 fn block_on<F: std::future::Future>(future: F) -> F::Output {
     use std::pin::pin;
@@ -101,7 +101,7 @@ fn selected_backends() -> wgpu::Backends {
 }
 
 struct Probe {
-    window: Option<Arc<Window>>,
+    window: Option<Arc<dyn Window>>,
     gpu: Option<Gpu>,
     frames: u32,
     done: bool,
@@ -116,23 +116,21 @@ struct Gpu {
 }
 
 impl Probe {
-    fn finish_probe(&mut self, event_loop: &ActiveEventLoop, tag: &str) {
+    fn finish_probe(&mut self, event_loop: &dyn ActiveEventLoop, tag: &str) {
         stage(tag);
         self.done = true;
         event_loop.exit();
     }
-}
 
-impl ApplicationHandler for Probe {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {
+    fn start_if_needed(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.window.is_some() {
             return;
         }
         stage("start");
 
-        let window = Arc::new(
+        let window: Arc<dyn Window> = Arc::from(
             event_loop
-                .create_window(Window::default_attributes().with_title("gpu_probe"))
+                .create_window(WindowAttributes::default().with_title("gpu_probe"))
                 .expect("create window"),
         );
         stage("after window");
@@ -199,7 +197,7 @@ impl ApplicationHandler for Probe {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(caps.formats[0]);
-        let size = window.inner_size();
+        let size = window.surface_size();
         surface.configure(
             &device,
             &wgpu::SurfaceConfiguration {
@@ -224,8 +222,19 @@ impl ApplicationHandler for Probe {
             queue,
         });
     }
+}
 
-    fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+impl ApplicationHandler for Probe {
+    fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.start_if_needed(event_loop);
+    }
+
+    fn window_event(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        _id: WindowId,
+        event: WindowEvent,
+    ) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::RedrawRequested => {
@@ -277,7 +286,7 @@ impl ApplicationHandler for Probe {
         }
     }
 
-    fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
+    fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.done {
             return;
         }
@@ -295,11 +304,11 @@ impl ApplicationHandler for Probe {
 fn main() {
     let event_loop = EventLoop::new().expect("event loop");
     event_loop.set_control_flow(ControlFlow::Poll);
-    let mut app = Probe {
+    let app = Probe {
         window: None,
         gpu: None,
         frames: 0,
         done: false,
     };
-    event_loop.run_app(&mut app).expect("run");
+    event_loop.run_app(app).expect("run");
 }

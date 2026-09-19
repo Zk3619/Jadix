@@ -1,8 +1,10 @@
-//! OS-specific hooks.
+//! OS-specific hooks + event-loop host.
 //!
 //! Cross-platform window *options* stay on [`crate::app::WindowOptions`].
 //! Implementations: `desktop` defaults, `os` overrides (Windows DWM / PE stack,
-//! macOS Mach RSS, Linux `/proc`). Public path `crate::platform::*` is stable.
+//! macOS Mach RSS, Linux `/proc`, iOS / Android / Web), `host` for the winit
+//! event loop (HarmonyOS via `winit-ohos`; [`set_external_host`] for non-winit hosts).
+//! Public path `crate::platform::*` is stable.
 //!
 //! Architecture: `docs/engine/platform.md`.
 //!
@@ -19,48 +21,73 @@ use crate::app::WindowOptions;
 mod common;
 mod desktop;
 mod font_script;
-
-#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
+mod host;
 mod os;
 
 pub use common::UI_STACK_RESERVE;
 pub(crate) use font_script::SystemFontScript;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use host::run_winit_app;
+#[cfg(target_arch = "wasm32")]
+pub(crate) use host::spawn_winit_app;
+pub(crate) use host::{build_event_loop, ensure_winit_host};
+pub use host::{
+    compiled_host_kind, host_capabilities, host_kind, set_external_host, HostBackend,
+    HostCapabilities, HostError, HostKind,
+};
+pub(crate) use os::harmonyos::apply_window_options as apply_ohos_window_options;
+pub use os::harmonyos::{
+    install_harmonyos_host, install_ohos_content_rect, ohos_ability_installed, ohos_content_rect,
+    HarmonyOsHost, OhosContentRect,
+};
+
+#[cfg(target_os = "android")]
+pub use host::install_android_app;
+#[cfg(target_env = "ohos")]
+pub use host::install_ohos_app;
 
 /// Windows PE `/STACK` helpers for downstream binaries (`cfg(target_os = "windows")`).
 #[cfg(target_os = "windows")]
 pub use os::windows;
+
+#[cfg(not(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "ios",
+    target_os = "android",
+    target_arch = "wasm32",
+    target_env = "ohos",
+)))]
+use desktop as hooks;
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    target_os = "linux",
+    target_os = "ios",
+    target_os = "android",
+    target_arch = "wasm32",
+    target_env = "ohos",
+))]
+use os::current as hooks;
 
 pub(crate) fn decorate_window_attributes(
     attrs: WindowAttributes,
     options: &WindowOptions,
     composition_swapchain: bool,
 ) -> WindowAttributes {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::decorate_window_attributes(attrs, options, composition_swapchain)
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::decorate_window_attributes(attrs, options, composition_swapchain)
-    }
+    hooks::decorate_window_attributes(attrs, options, composition_swapchain)
 }
 
 pub(crate) fn apply_created_window(
-    window: &Window,
+    window: &dyn Window,
     options: &WindowOptions,
     composition_swapchain: bool,
 ) {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::apply_created_window(window, options, composition_swapchain);
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::apply_created_window(window, options, composition_swapchain);
-    }
+    hooks::apply_created_window(window, options, composition_swapchain);
 }
 
-pub(crate) fn try_init_custom_glass(window: &Window, options: &WindowOptions) -> bool {
+pub(crate) fn try_init_custom_glass(window: &dyn Window, options: &WindowOptions) -> bool {
     #[cfg(target_os = "windows")]
     {
         os::windows::glass::try_init_custom(window, options)
@@ -73,11 +100,11 @@ pub(crate) fn try_init_custom_glass(window: &Window, options: &WindowOptions) ->
 }
 
 #[cfg(all(windows, feature = "backend-dx12"))]
-pub(crate) fn custom_glass_surface_handle(window: &Window) -> Option<*mut std::ffi::c_void> {
+pub(crate) fn custom_glass_surface_handle(window: &dyn Window) -> Option<*mut std::ffi::c_void> {
     os::windows::glass::composition_surface_handle(window)
 }
 
-pub(crate) fn glass_detach(window: &Window) {
+pub(crate) fn glass_detach(window: &dyn Window) {
     #[cfg(target_os = "windows")]
     {
         os::windows::glass::detach_window(window);
@@ -88,7 +115,7 @@ pub(crate) fn glass_detach(window: &Window) {
     }
 }
 
-pub(crate) fn glass_on_focus(window: &Window, focused: bool) {
+pub(crate) fn glass_on_focus(window: &dyn Window, focused: bool) {
     #[cfg(target_os = "windows")]
     {
         os::windows::glass::on_focus(window, focused);
@@ -99,7 +126,7 @@ pub(crate) fn glass_on_focus(window: &Window, focused: bool) {
     }
 }
 
-pub(crate) fn glass_on_shown(window: &Window) {
+pub(crate) fn glass_on_shown(window: &dyn Window) {
     #[cfg(target_os = "windows")]
     {
         os::windows::glass::on_shown(window);
@@ -110,7 +137,7 @@ pub(crate) fn glass_on_shown(window: &Window) {
     }
 }
 
-pub(crate) fn glass_on_moved(window: &Window) {
+pub(crate) fn glass_on_moved(window: &dyn Window) {
     #[cfg(target_os = "windows")]
     {
         os::windows::glass::on_moved(window);
@@ -142,29 +169,15 @@ pub(crate) fn glass_on_os_theme(os_dark: bool) {
 }
 
 pub(crate) fn process_private_mb() -> f64 {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::process_private_mb()
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::process_private_mb()
-    }
+    hooks::process_private_mb()
 }
 
 pub(crate) fn system_scroll_lines() -> f32 {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::system_scroll_lines()
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::system_scroll_lines()
-    }
+    hooks::system_scroll_lines()
 }
 
 pub(crate) fn apply_ime_cursor_area(
-    window: &Window,
+    window: &dyn Window,
     area_x: f32,
     area_y: f32,
     area_w: f32,
@@ -174,104 +187,45 @@ pub(crate) fn apply_ime_cursor_area(
     composing: bool,
     field_in_overflow_clip: bool,
 ) {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::apply_ime_cursor_area(
-            window,
-            area_x,
-            area_y,
-            area_w,
-            area_h,
-            ui_scale,
-            scroll_acc,
-            composing,
-            field_in_overflow_clip,
-        );
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::apply_ime_cursor_area(
-            window,
-            area_x,
-            area_y,
-            area_w,
-            area_h,
-            ui_scale,
-            scroll_acc,
-            composing,
-            field_in_overflow_clip,
-        );
-    }
+    hooks::apply_ime_cursor_area(
+        window,
+        area_x,
+        area_y,
+        area_w,
+        area_h,
+        ui_scale,
+        scroll_acc,
+        composing,
+        field_in_overflow_clip,
+    );
 }
 
 pub(crate) fn sync_ime_focus_owner(
-    window: &Window,
+    window: &dyn Window,
     focus_id: Option<&str>,
     on_leave_field: impl FnOnce(&str),
 ) {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::sync_focus_owner(window, focus_id, on_leave_field);
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::sync_focus_owner(window, focus_id, on_leave_field);
-    }
+    hooks::sync_focus_owner(window, focus_id, on_leave_field);
 }
 
-pub(crate) fn ime_release_ui(window: &Window, cancel_comp: bool) {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::release_ui_control(window, cancel_comp);
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::release_ui_control(window, cancel_comp);
-    }
+pub(crate) fn ime_release_ui(window: &dyn Window, cancel_comp: bool) {
+    hooks::release_ui_control(window, cancel_comp);
 }
 
 pub(crate) fn ime_cancel_composition() {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::cancel_active_composition();
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::cancel_active_composition();
-    }
+    hooks::cancel_active_composition();
 }
 
 pub(crate) fn ime_end_composition_ui() {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::end_composition_ui();
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::end_composition_ui();
-    }
+    hooks::end_composition_ui();
 }
 
-pub(crate) fn ime_disallow(window: &Window) {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::ime_disallow(window);
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::ime_disallow(window);
-    }
+pub(crate) fn ime_disallow(window: &dyn Window) {
+    hooks::ime_disallow(window);
 }
 
 pub(crate) fn system_font_dirs() -> Vec<PathBuf> {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::system_font_dirs()
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::system_font_dirs()
-    }
+    hooks::system_font_dirs()
 }
 
 /// First existing `dir.join(file_name)` under [`system_font_dirs`].
@@ -286,99 +240,40 @@ pub(crate) fn resolve_system_font(file_name: &str) -> Option<PathBuf> {
 }
 
 pub(crate) fn eager_ui_font_files() -> &'static [&'static str] {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::eager_ui_font_files()
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::eager_ui_font_files()
-    }
+    hooks::eager_ui_font_files()
 }
 
 pub(crate) fn lazy_script_font_files(script: SystemFontScript) -> &'static [&'static str] {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::lazy_script_font_files(script)
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::lazy_script_font_files(script)
-    }
+    hooks::lazy_script_font_files(script)
 }
 
 pub(crate) fn clipboard_set_text(text: &str) {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::clipboard_set_text(text);
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::clipboard_set_text(text);
-    }
+    hooks::clipboard_set_text(text);
 }
 
 pub(crate) fn clipboard_get_text() -> Option<String> {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::clipboard_get_text()
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::clipboard_get_text()
-    }
+    hooks::clipboard_get_text()
 }
 
 pub(crate) fn edit_shortcut_modifiers(modifiers: &ModifiersState) -> bool {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::edit_shortcut_modifiers(modifiers)
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::edit_shortcut_modifiers(modifiers)
-    }
+    hooks::edit_shortcut_modifiers(modifiers)
 }
 
 /// GPU backends to try, in order (ADR-3). `RUI_GPU_BACKEND` moves one to the front.
 pub(crate) fn gpu_backend_candidates(
     compositor_alpha: bool,
 ) -> Vec<(wgpu::Backends, &'static str)> {
-    let order = {
-        #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-        {
-            os::current::gpu_backend_order(compositor_alpha)
-        }
-        #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-        {
-            desktop::gpu_backend_order(compositor_alpha)
-        }
-    };
-    desktop::with_requested_backend_front(order)
+    desktop::with_requested_backend_front(hooks::gpu_backend_order(compositor_alpha))
 }
 
 /// Enable ANSI on Windows consoles (no-op elsewhere). Safe to call repeatedly.
 pub(crate) fn enable_ansi_stderr() {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::enable_ansi_stderr();
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::enable_ansi_stderr();
-    }
+    hooks::enable_ansi_stderr();
 }
 
 /// Local wall-clock hour/minute/second, or `None` if the OS clock is unavailable.
 pub(crate) fn local_hms() -> Option<(u16, u16, u16)> {
-    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
-    {
-        os::current::local_hms()
-    }
-    #[cfg(not(any(target_os = "windows", target_os = "macos", target_os = "linux")))]
-    {
-        desktop::local_hms()
-    }
+    hooks::local_hms()
 }
 
 #[cfg(test)]
@@ -439,7 +334,7 @@ mod tests {
         use winit::keyboard::ModifiersState;
         let ctrl = super::edit_shortcut_modifiers(&ModifiersState::CONTROL);
         let super_key = super::edit_shortcut_modifiers(&ModifiersState::SUPER);
-        if cfg!(target_os = "macos") {
+        if cfg!(any(target_os = "macos", target_os = "ios")) {
             assert!(super_key && !ctrl);
         } else {
             assert!(ctrl && !super_key);
@@ -450,15 +345,21 @@ mod tests {
     fn gpu_backend_candidates_match_host() {
         let opaque = super::gpu_backend_candidates(false);
         assert!(!opaque.is_empty());
-        if cfg!(target_os = "macos") {
+        if cfg!(any(target_os = "macos", target_os = "ios")) {
             assert_eq!(opaque.first().map(|(_, n)| *n), Some("metal"));
+        } else if cfg!(target_arch = "wasm32") {
+            assert_eq!(opaque.first().map(|(_, n)| *n), Some("webgpu"));
+        } else if cfg!(target_os = "android") {
+            assert_eq!(opaque.first().map(|(_, n)| *n), Some("gl"));
         } else if cfg!(target_os = "windows") {
             assert_eq!(opaque.first().map(|(_, n)| *n), Some("gl"));
         }
 
         let compositor = super::gpu_backend_candidates(true);
-        if cfg!(target_os = "macos") {
+        if cfg!(any(target_os = "macos", target_os = "ios")) {
             assert_eq!(compositor.first().map(|(_, n)| *n), Some("metal"));
+        } else if cfg!(target_arch = "wasm32") {
+            assert_eq!(compositor.first().map(|(_, n)| *n), Some("webgpu"));
         } else if cfg!(target_os = "windows") {
             if cfg!(feature = "backend-vulkan") {
                 assert_eq!(compositor.first().map(|(_, n)| *n), Some("vulkan"));

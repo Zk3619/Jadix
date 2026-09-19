@@ -1,0 +1,18 @@
+[package]
+name = "harmonyos_host"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+description = "OpenHarmony Ability entry (gpui-template contract). Build with ohrs on target_env=ohos."
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+rui = { workspace = true }
+
+[target.'cfg(target_env = "ohos")'.dependencies]
+openharmony-ability = { workspace = true }
+openharmony-ability-derive = { workspace = true }
+log = { workspace = true }

@@ -3,7 +3,7 @@
 use winit::window::Window;
 
 pub(crate) fn apply_ime_cursor_area(
-    window: &Window,
+    window: &dyn Window,
     area_x: f32,
     area_y: f32,
     area_w: f32,
@@ -15,22 +15,28 @@ pub(crate) fn apply_ime_cursor_area(
 ) {
     let _ = (ui_scale, scroll_acc, composing, field_in_overflow_clip);
     window.set_ime_cursor_area(
-        winit::dpi::LogicalPosition::new(area_x as f64, area_y as f64),
-        winit::dpi::LogicalSize::new(area_w.max(1.0) as f64, area_h.max(1.0) as f64),
+        winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(
+            area_x as f64,
+            area_y as f64,
+        )),
+        winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(
+            area_w.max(1.0) as f64,
+            area_h.max(1.0) as f64,
+        )),
     );
 }
 
 pub(crate) fn sync_focus_owner(
-    _window: &Window,
+    _window: &dyn Window,
     _focus_id: Option<&str>,
     _on_leave_field: impl FnOnce(&str),
 ) {
 }
 
-pub(crate) fn release_ui_control(_window: &Window, _cancel_comp: bool) {}
+pub(crate) fn release_ui_control(_window: &dyn Window, _cancel_comp: bool) {}
 
 pub(crate) fn cancel_active_composition() {}
 
 pub(crate) fn end_composition_ui() {}
 
-pub(crate) fn ime_disallow(_window: &Window) {}
+pub(crate) fn ime_disallow(_window: &dyn Window) {}

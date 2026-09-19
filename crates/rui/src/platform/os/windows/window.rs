@@ -9,19 +9,20 @@ pub(crate) fn decorate_window_attributes(
     options: &WindowOptions,
     composition_swapchain: bool,
 ) -> WindowAttributes {
-    use winit::platform::windows::{CornerPreference, WindowAttributesExtWindows};
+    use winit::platform::windows::{CornerPreference, WindowAttributesWindows};
+    let mut win = WindowAttributesWindows::default();
     if !options.decorations {
-        attrs = attrs
+        win = win
             .with_undecorated_shadow(true)
             .with_corner_preference(CornerPreference::Round);
     }
     if options.windows_extends_dwm_frame() {
-        attrs = attrs.with_system_backdrop(backdrop_type(options.backdrop));
+        win = win.with_system_backdrop(backdrop_type(options.backdrop));
     }
     if composition_swapchain {
-        attrs = attrs.with_no_redirection_bitmap(true);
+        win = win.with_no_redirection_bitmap(true);
     }
-    attrs
+    attrs.with_platform_attributes(Box::new(win))
 }
 
 fn backdrop_type(kind: WindowBackdrop) -> winit::platform::windows::BackdropType {
@@ -43,7 +44,7 @@ fn backdrop_type(kind: WindowBackdrop) -> winit::platform::windows::BackdropType
 /// Vulkan/DXGI swapchain (`WS_EX_NOREDIRECTIONBITMAP`). DWM empty-region
 /// blur-behind is then skipped — it targets the redirection bitmap we disabled.
 pub(crate) fn apply_created_window(
-    window: &Window,
+    window: &dyn Window,
     options: &WindowOptions,
     composition_swapchain: bool,
 ) {
@@ -71,7 +72,7 @@ pub(crate) fn apply_created_window(
     }
 }
 
-pub(crate) fn hwnd(window: &Window) -> Option<windows_sys::Win32::Foundation::HWND> {
+pub(crate) fn hwnd(window: &dyn Window) -> Option<windows_sys::Win32::Foundation::HWND> {
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     let handle = window.window_handle().ok()?;

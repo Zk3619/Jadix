@@ -14,7 +14,7 @@ pub(crate) fn decorate_window_attributes(
 }
 
 pub(crate) fn apply_created_window(
-    window: &Window,
+    window: &dyn Window,
     options: &WindowOptions,
     composition_swapchain: bool,
 ) {

@@ -65,6 +65,8 @@ fn parse_requested_backend() -> Option<wgpu::Backends> {
         "dx12" | "d3d12" => Some(wgpu::Backends::DX12),
         "vulkan" | "vk" => Some(wgpu::Backends::VULKAN),
         "metal" => Some(wgpu::Backends::METAL),
+        "webgpu" | "browser" => Some(wgpu::Backends::BROWSER_WEBGPU),
+        "webgl" => Some(wgpu::Backends::GL),
         _ => None,
     }
 }

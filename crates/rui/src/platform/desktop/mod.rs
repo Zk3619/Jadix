@@ -21,13 +21,12 @@ pub(crate) use font_paths::{eager_ui_font_files, lazy_script_font_files, system_
 #[cfg_attr(target_os = "macos", allow(unused_imports))]
 pub(crate) use gpu::gpu_backend_order;
 pub(crate) use gpu::with_requested_backend_front;
-#[cfg(not(target_os = "windows"))]
+#[cfg_attr(target_os = "windows", allow(unused_imports))]
 pub(crate) use ime::{
     apply_ime_cursor_area, cancel_active_composition, end_composition_ui, ime_disallow,
     release_ui_control, sync_focus_owner,
 };
-#[cfg(not(target_os = "windows"))]
+#[cfg_attr(target_os = "windows", allow(unused_imports))]
 pub(crate) use memory::process_private_mb;
 pub(crate) use scroll::system_scroll_lines;
-#[cfg(not(target_os = "windows"))]
 pub(crate) use window::{apply_created_window, decorate_window_attributes};

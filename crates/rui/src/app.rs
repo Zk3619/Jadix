@@ -20,7 +20,7 @@ pub(super) enum RuiUserEvent {
     /// Drop a secondary window (custom chrome Close).
     CloseWindow { id: WindowId },
     #[cfg(feature = "a11y")]
-    AccessKit(accesskit_winit::Event),
+    AccessKit(crate::a11y::winit_adapter::Event),
     /// Request a clean event-loop exit (tray Quit / [`ui_bridge::request_exit`]).
     Exit,
 }
@@ -45,8 +45,8 @@ impl std::fmt::Debug for RuiUserEvent {
 }
 
 #[cfg(feature = "a11y")]
-impl From<accesskit_winit::Event> for RuiUserEvent {
-    fn from(e: accesskit_winit::Event) -> Self {
+impl From<crate::a11y::winit_adapter::Event> for RuiUserEvent {
+    fn from(e: crate::a11y::winit_adapter::Event) -> Self {
         RuiUserEvent::AccessKit(e)
     }
 }
@@ -198,9 +198,12 @@ struct App {
     /// Textarea bottom-right drag-to-resize height.
     textarea_resize_drag: Option<TextareaResizeDrag>,
     /// Primary touch finger id (winit `Touch.id`); secondary fingers feed pinch.
-    primary_touch_id: Option<u64>,
+    primary_touch_id: Option<winit::event::FingerId>,
     /// All active touch points for pinch (finger id → physical position).
-    active_touches: std::collections::HashMap<u64, winit::dpi::PhysicalPosition<f64>>,
+    active_touches: std::collections::HashMap<
+        winit::event::FingerId,
+        winit::dpi::PhysicalPosition<f64>,
+    >,
     /// Previous two-finger distance; `None` when not pinching.
     pinch_prev_dist: Option<f32>,
     /// Latest pinch scale factor (also mirrored to signal `__rui_pinch_scale`).
@@ -276,13 +279,14 @@ struct App {
     ime_os_blur_at: Option<std::time::Instant>,
     /// AccessKit adapters clone this; unused when feature `a11y` is off.
     #[cfg_attr(not(feature = "a11y"), allow(dead_code))]
-    event_loop_proxy: EventLoopProxy<RuiUserEvent>,
+    event_loop_proxy: EventLoopProxy,
     #[cfg(feature = "a11y")]
-    accesskit_adapter: Option<accesskit_winit::Adapter>,
+    accesskit_adapter: Option<crate::a11y::winit_adapter::Adapter>,
     /// Per-secondary-window AccessKit adapters (created before `set_visible`).
     #[cfg(feature = "a11y")]
     secondary_accesskit:
-        std::collections::HashMap<winit::window::WindowId, accesskit_winit::Adapter>,
+        std::collections::HashMap<winit::window::WindowId, crate::a11y::winit_adapter::Adapter>,
+    user_events: std::sync::mpsc::Receiver<RuiUserEvent>,
     /// Window whose HWND currently owns OS IME drive (`LAST_IME_FOCUS_ID` / Imm).
     ime_owner_window: Option<winit::window::WindowId>,
     custom_cursors: crate::style::CustomCursorCache,
@@ -300,6 +304,47 @@ pub fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
 
 /// 兼容：带创建期窗口选项启动。新代码请用 [`launch`] / [`app()`]`.mount`。
 pub fn run_with<F: FnMut() -> Element + 'static>(options: WindowOptions, app_builder: F) {
+    lifecycle::run(options, app_builder);
+}
+
+/// HarmonyOS / OpenHarmony entry (gpui-template `openharmony_app`).
+///
+/// ```ignore
+/// use openharmony_ability::OpenHarmonyApp;
+///
+/// #[openharmony_ability_derive::ability]
+/// fn openharmony_app(app: OpenHarmonyApp) {
+///     rui::run_ohos(app, rui::WindowOptions::default(), || ui! { <App/> });
+/// }
+/// ```
+///
+/// ArkTS side: `class EntryAbility extends NativeAbility { moduleName = "your_cdylib" }`.
+#[cfg(target_env = "ohos")]
+pub fn run_ohos<F: FnMut() -> Element + 'static>(
+    app: openharmony_ability::OpenHarmonyApp,
+    options: WindowOptions,
+    app_builder: F,
+) {
+    crate::platform::install_ohos_app(app);
+    lifecycle::run(options, app_builder);
+}
+
+/// Android `android_main` helper: install the activity, then start the winit loop.
+///
+/// ```ignore
+/// #[cfg(target_os = "android")]
+/// #[no_mangle]
+/// fn android_main(app: winit::platform::android::activity::AndroidApp) {
+///     rui::run_android(app, rui::WindowOptions::default(), || ui! { <App/> });
+/// }
+/// ```
+#[cfg(target_os = "android")]
+pub fn run_android<F: FnMut() -> Element + 'static>(
+    android_app: winit::platform::android::activity::AndroidApp,
+    options: WindowOptions,
+    app_builder: F,
+) {
+    crate::platform::install_android_app(android_app);
     lifecycle::run(options, app_builder);
 }
 

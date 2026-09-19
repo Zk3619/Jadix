@@ -13,7 +13,7 @@ use crate::app::WindowOptions;
 use winit::window::Window;
 
 #[cfg(feature = "backend-dx12")]
-fn is_os_dark(window: &Window) -> bool {
+fn is_os_dark(window: &dyn Window) -> bool {
     matches!(window.theme(), Some(winit::window::Theme::Dark))
 }
 
@@ -22,7 +22,7 @@ pub fn apply_accent(hwnd: windows_sys::Win32::Foundation::HWND, options: &Window
 }
 
 #[cfg(feature = "backend-dx12")]
-pub fn try_init_custom(window: &Window, options: &WindowOptions) -> bool {
+pub fn try_init_custom(window: &dyn Window, options: &WindowOptions) -> bool {
     if !options.compositor_alpha() {
         return false;
     }
@@ -36,7 +36,7 @@ pub fn try_init_custom(window: &Window, options: &WindowOptions) -> bool {
 }
 
 #[cfg(not(feature = "backend-dx12"))]
-pub fn try_init_custom(_window: &Window, _options: &WindowOptions) -> bool {
+pub fn try_init_custom(_window: &dyn Window, _options: &WindowOptions) -> bool {
     false
 }
 
@@ -51,12 +51,12 @@ pub fn has_host(_hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
 }
 
 #[cfg(feature = "backend-dx12")]
-pub fn composition_surface_handle(window: &Window) -> Option<*mut std::ffi::c_void> {
+pub fn composition_surface_handle(window: &dyn Window) -> Option<*mut std::ffi::c_void> {
     let hwnd = super::window::hwnd(window)?;
     dcomp::surface_handle(hwnd as isize)
 }
 
-pub fn detach_window(window: &Window) {
+pub fn detach_window(window: &dyn Window) {
     #[cfg(feature = "backend-dx12")]
     if let Some(hwnd) = super::window::hwnd(window) {
         dcomp::detach(hwnd as isize);
@@ -64,7 +64,7 @@ pub fn detach_window(window: &Window) {
     let _ = window;
 }
 
-pub fn on_focus(window: &Window, focused: bool) {
+pub fn on_focus(window: &dyn Window, focused: bool) {
     #[cfg(feature = "backend-dx12")]
     if let Some(hwnd) = super::window::hwnd(window) {
         dcomp::set_active(hwnd as isize, focused);
@@ -72,7 +72,7 @@ pub fn on_focus(window: &Window, focused: bool) {
     let _ = (window, focused);
 }
 
-pub fn on_shown(window: &Window) {
+pub fn on_shown(window: &dyn Window) {
     #[cfg(feature = "backend-dx12")]
     if let Some(hwnd) = super::window::hwnd(window) {
         dcomp::refresh(hwnd as isize);
@@ -80,7 +80,7 @@ pub fn on_shown(window: &Window) {
     let _ = window;
 }
 
-pub fn on_moved(window: &Window) {
+pub fn on_moved(window: &dyn Window) {
     #[cfg(feature = "backend-dx12")]
     if let Some(hwnd) = super::window::hwnd(window) {
         dcomp::on_moved(hwnd as isize);

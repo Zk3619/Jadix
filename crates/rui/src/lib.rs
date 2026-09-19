@@ -20,8 +20,9 @@ pub mod components;
 pub mod i18n;
 /// 可选运行时日志（`--features runtime-logging`）：控制台 + `RUI_LOG_FILE`。
 pub mod logging;
-/// OS hooks: desktop defaults + OS overrides (Windows DWM / PE stack, Unix metrics).
-/// 架构与重构方向见 `docs/engine/platform.md`。
+/// OS hooks + winit event-loop host (Windows / macOS / iOS / Android / Web;
+/// HarmonyOS via [`platform::set_external_host`]).
+/// 架构见 `docs/engine/platform.md`。
 pub mod platform;
 /// 默认应用入口：`use rui::prelude::*;`
 ///
@@ -530,6 +531,10 @@ pub use app::pointer_events::{EventPhase, MouseEvent, PointerEvent};
 pub use app::props::{
     children, merge_props, resolve_children, Children, ChildrenAccessor, MergeProps,
 };
+#[cfg(target_os = "android")]
+pub use app::run_android;
+#[cfg(target_env = "ohos")]
+pub use app::run_ohos;
 pub use app::{
     launch, mouse_content_pan_enabled, page_scroll_locked, parse_scroll_freeze, run, run_with,
     set_mouse_content_pan_enabled, set_page_scroll_locked, set_scroll_freeze, with_ui_build_stack,
