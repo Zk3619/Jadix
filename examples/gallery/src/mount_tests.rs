@@ -295,6 +295,89 @@ fn mouse_event_swallow_hit_path_excludes_pad() {
 }
 
 #[test]
+fn mouse_event_pad_hit_path_includes_pad_under_hint_label() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                    MouseEventShowcase(MouseEventShowcaseProps::default())
+                });
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
+                let pad = gallery_find_by_focus_id(&tree, "gal-mouse-pad").expect("gal-mouse-pad");
+                let b = pad.layout_bounds;
+                assert!(
+                    b[2] > 8.0 && b[3] > 8.0,
+                    "hit pad must have a box, got {b:?}"
+                );
+                let x = b[0] + b[2] * 0.5;
+                let y = b[1] + b[3] * 0.5;
+                let path = rui::app::pointer_events::hit_path(&tree, x, y);
+                let ids: Vec<&str> = path.iter().filter_map(|e| e.focus_id.as_deref()).collect();
+                assert!(
+                    ids.contains(&"gal-mouse-pad"),
+                    "sliding the pad (including the hint label) must hit gal-mouse-pad, got {ids:?}"
+                );
+                assert!(
+                    path.iter().any(|e| e.on_mousemove.is_some()),
+                    "hit path must carry the pad on_mousemove, ids={ids:?}"
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
+fn mouse_event_lca_center_click_increments_count() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                    MouseEventShowcase(MouseEventShowcaseProps::default())
+                });
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
+                let inner = gallery_find_by_focus_id(&tree, "gal-mouse-lca-target")
+                    .expect("gal-mouse-lca-target");
+                let b = inner.layout_bounds;
+                assert!(
+                    b[2] > 8.0 && b[3] > 8.0,
+                    "LCA target must have a box, got {b:?}"
+                );
+                let x = b[0] + b[2] * 0.5;
+                let y = b[1] + b[3] * 0.5;
+                let path = rui::app::pointer_events::hit_path(&tree, x, y);
+                let ids: Vec<&str> = path.iter().filter_map(|e| e.focus_id.as_deref()).collect();
+                assert!(
+                    ids.contains(&"gal-mouse-lca-target"),
+                    "clicking the blue target (including its caption) must hit gal-mouse-lca-target, got {ids:?}"
+                );
+                let click_path = rui::app::pointer_events::click_dispatch_path(&path, &path);
+                let (cb, _) =
+                    rui::app::pointer_events::resolve_click_from_path(&tree, &click_path);
+                (*cb.expect("LCA on_click on press/release path").borrow_mut())();
+                let lca = use_signal("gal_mouse_lca_clicks", || 0i32);
+                assert_eq!(
+                    lca.peek(),
+                    1,
+                    "clicking the LCA target center must increment click count"
+                );
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
 fn mouse_event_log_is_plain_definite_width_leaf() {
     run_on_gallery_build_stack(|| {
         rui::app::reactive::reset_registered_anchors();
@@ -1463,6 +1546,7 @@ fn headless_layout_all_sections_does_not_overflow() {
             create_effect(|| {
                 for key in [
                     "basics",
+                    "events",
                     "forms",
                     "overlays",
                     "data",
@@ -1478,6 +1562,60 @@ fn headless_layout_all_sections_does_not_overflow() {
                 }
             });
         });
+    });
+}
+
+fn gallery_section_scroll_id(key: &str) -> &'static str {
+    match key {
+        "events" => "scroll-events",
+        "forms" => "scroll-forms",
+        "overlays" => "scroll-overlays",
+        "draw" => "scroll-draw",
+        "data" => "scroll-data",
+        "navigation" => "scroll-navigation",
+        "layout" => "scroll-layout",
+        "text" => "scroll-text",
+        "theme" => "scroll-theme",
+        "about" => "scroll-about",
+        _ => "scroll-basics",
+    }
+}
+
+/// Page ScrollArea uses `overflow_x: auto`. Wrapping / 100% cards must not enable
+/// a horizontal thumb — the live Gallery bug after switching sidebar sections.
+#[test]
+fn gallery_section_pages_must_not_enable_x_scroll() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                for key in [
+                    "basics", "events", "forms", "overlays", "draw", "data", "navigation",
+                    "layout", "text", "theme", "about",
+                ] {
+                    rui::app::reactive::reset_registered_anchors();
+                    let rest = gallery_section_scroll_id(key);
+                    let mut tree = gallery_section_body(key);
+                    let mut layout = rui::core::tree::LayoutTree::new();
+                    for &(w, h) in &[(640.0, 700.0), (800.0, 700.0), (900.0, 700.0)] {
+                        let result = layout.build_and_layout(&mut tree, w, h, [-1.0, -1.0]);
+                        let (vp, max, content) = scroll_metrics_xy(&result, rest);
+                        assert!(
+                            max[0] < 0.5,
+                            "{key} at {w}x{h} must not enable horizontal scroll \
+                             (content_w={:.1} vp_w={:.1} max_x={:.1})",
+                            content[0],
+                            vp[2],
+                            max[0]
+                        );
+                    }
+                }
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
     });
 }
 
@@ -2063,6 +2201,67 @@ fn message_scroller_latest_button_stays_inside_chat_card() {
                         latest.clip_bounds
                     );
                 }
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
+fn gallery_subtree_has_text(el: &rui::core::tree::Element, needle: &str) -> bool {
+    if el.text.as_deref().is_some_and(|t| t.contains(needle)) {
+        return true;
+    }
+    el.children.iter().any(|c| gallery_subtree_has_text(c, needle))
+}
+
+fn gallery_find_slot_with_text<'a>(
+    el: &'a rui::core::tree::Element,
+    slot: &str,
+    needle: &str,
+) -> Option<&'a rui::core::tree::Element> {
+    if el.attrs.get("data-slot").map(String::as_str) == Some(slot)
+        && gallery_subtree_has_text(el, needle)
+    {
+        return Some(el);
+    }
+    el.children
+        .iter()
+        .find_map(|c| gallery_find_slot_with_text(c, slot, needle))
+}
+
+/// Live Attachment state bind must sit outside AttachmentGroup (`overflow-x: auto`),
+/// otherwise the chip is clipped and the idle/uploading/… buttons look like no-ops.
+#[test]
+fn attachment_live_state_chip_is_not_clipped_by_group() {
+    run_on_gallery_build_stack(|| {
+        rui::app::reactive::reset_registered_anchors();
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_handle, _) = create_root(|| {
+            create_effect(|| {
+                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                    AttachmentShowcase(AttachmentShowcaseProps::default())
+                });
+                let mut layout = rui::core::tree::LayoutTree::new();
+                let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
+                let group =
+                    gallery_find_slot(&tree, "attachment-group").expect("AttachmentGroup");
+                assert!(
+                    !gallery_subtree_has_text(group, "Reactive state:"),
+                    "live state chip must not live inside the overflow-x group"
+                );
+                let live = gallery_find_slot_with_text(&tree, "attachment", "Reactive state:")
+                    .expect("live Reactive state chip");
+                let b = live.layout_bounds;
+                assert!(
+                    b[2] > 80.0 && b[3] > 24.0,
+                    "live chip must have a real used box, got {b:?}"
+                );
+                assert!(
+                    b[0] >= 0.0 && b[0] + b[2] <= 720.0 + 1.0,
+                    "live chip must stay inside the card, not past the overflow clip; bounds={b:?}"
+                );
             });
         });
         rui::app::reactive::reset_registered_anchors();

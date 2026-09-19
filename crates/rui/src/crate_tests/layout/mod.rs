@@ -1,3 +1,4 @@
+mod avatar_group_overlap;
 mod avatar_group_scroll;
 mod box_model_contract;
 mod box_model_gallery_colors;

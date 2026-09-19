@@ -221,6 +221,9 @@ fn scroller_structure_changed_does_not_set_page_layout_flag() {
             collect.page_layout_changed,
             false,
             !dirty.is_empty(),
+            dirty
+                .iter()
+                .any(|d| matches!(d.kind, crate::app::damage::PaintDirtyKind::Region)),
         ),
         "Send must stay PartialLoad so Footer is not on the present path"
     );

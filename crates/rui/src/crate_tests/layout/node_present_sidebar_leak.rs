@@ -395,8 +395,254 @@ fn kbd_adornment_focus_is_not_page_geometry() {
             collect.page_layout_changed,
             false,
             true,
+            false,
         ),
         "focus must PartialLoad named nodes, not FullClear"
+    );
+}
+
+/// Click-focus: shell Hard ring + nested Input/Kbd must stay Node dirties (not Region).
+///
+/// Shell wipe clears nested pixels; nested slots must also be dirty and sort *after*
+/// the larger shell so caret / ⌘K / typed glyphs redraw on top. Region+coalesce ate
+/// the Input Node and left focus chrome + keystrokes invisible (placeholder flicker).
+#[test]
+fn kbd_adornment_focus_must_dirty_nested_slots_after_shell() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let _ = take_frame_paint_nodes();
+    use_signal(&input_value_signal_key(INPUT_ID), String::new).set(String::new());
+    use_signal("__rui_button_focus_id", String::new).set(String::new());
+
+    let mut root = leak_shell();
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    let _ = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(INPUT_ID));
+    sync_reactive_elements_subtree_ex(
+        &mut root,
+        &mut tree,
+        &mut impact,
+        1280.0,
+        800.0,
+        [0.0, 0.0],
+        false,
+        &mut ReactiveSyncCollect::default(),
+    );
+    sync_like_app(&mut root, &mut tree, &mut impact);
+    crate::renderer::restart_caret_blink();
+    let dirty = take_frame_paint_nodes();
+    let result = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+
+    let shell = find_slot(&root, "input-adornment").expect("adornment shell");
+    let input_el = find_input(&root).expect("Search Input");
+    let addon_el = find_slot(&root, "input-adornment-addon").expect("⌘K addon");
+    let shell_key = paint_element_key(shell);
+    let input_key = paint_element_key(input_el);
+    let addon_key = paint_element_key(addon_el);
+
+    assert!(
+        !dirty.iter().any(|d| d.kind == PaintDirtyKind::Region),
+        "adornment focus must not use Region (coalesce ate Input Node); dirty={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("{:?} {}", d.kind, fmt_rect(d.bounds)))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        dirty
+            .iter()
+            .any(|d| d.kind == PaintDirtyKind::Node && d.key == shell_key),
+        "shell Hard ring must push Node; dirty={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("{:?} key={}", d.kind, d.key))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        dirty
+            .iter()
+            .any(|d| d.kind == PaintDirtyKind::Node && d.key == input_key),
+        "nested Input must stay dirty after shell wipe; dirty={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("{:?} key={}", d.kind, d.key))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        dirty
+            .iter()
+            .any(|d| d.kind == PaintDirtyKind::Node && d.key == addon_key),
+        "⌘K addon must stay dirty after shell wipe; dirty={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("{:?} key={}", d.kind, d.key))
+            .collect::<Vec<_>>()
+    );
+
+    let shell_i = dirty.iter().position(|d| d.key == shell_key).unwrap();
+    let input_i = dirty.iter().position(|d| d.key == input_key).unwrap();
+    assert!(
+        shell_i < input_i,
+        "shell wipe must sort before Input redraw (got shell@{shell_i} input@{input_i})"
+    );
+
+    let shell_ring = result.instances.iter().any(|i| {
+        i.shadow_spread.abs() > 1.0 && i.shadow_color[3] > 0.05 && i.shadow_blur.abs() < 0.5
+    });
+    assert!(
+        shell_ring,
+        "click-focus must collect Hard-ring on the adornment shell"
+    );
+    assert!(
+        !result.input_chrome_instances.is_empty(),
+        "click-focus must collect caret chrome"
+    );
+
+    let capture =
+        node_present_capture_text_indices(&dirty, &result.text_nodes, &result.node_paints);
+    let captured: Vec<&str> = capture
+        .iter()
+        .filter_map(|&i| result.text_nodes.get(i).map(|n| n.text.as_str()))
+        .collect();
+    assert!(
+        captured.iter().any(|t| t.contains("Search")),
+        "focus present must recapture placeholder; captured={captured:?}"
+    );
+    assert!(
+        captured
+            .iter()
+            .any(|t| t.contains('⌘') || *t == "⌘K" || t.contains("Ctrl")),
+        "focus present must recapture ⌘K; captured={captured:?}"
+    );
+
+    // Transparent-fill shell used to fail opaque-nesting skip: Input dest-reset
+    // after the shell wipe punched the Hard ring (click looks unfocused).
+    let shell_dirty = dirty.iter().find(|d| d.key == shell_key).unwrap();
+    let input_dirty = dirty.iter().find(|d| d.key == input_key).unwrap();
+    assert!(
+        crate::app::draw_cull::paint_dirty_skips_node_dest_reset_covered(
+            input_dirty,
+            &dirty,
+            false,
+            &result.node_paints,
+            &result.instances,
+            1.0,
+        ),
+        "nested Input must skip dest-reset when adornment shell is dirty (else Input wipe punches Hard ring)"
+    );
+    let ring = hard_ring_aabb(&result, shell_key).expect("shell Hard ring AABB");
+    let ring_sample = [ring[0] + 1.0, ring[1] + ring[3] * 0.5];
+    if let Some((wipe, _)) = node_present_dest_reset_scaled(
+        input_dirty.key,
+        input_dirty.bounds,
+        &result.node_paints,
+        &result.instances,
+        &[],
+        1.0,
+        None,
+    ) {
+        // Skip means encode will not wipe — if we *did* wipe, ring must stay.
+        assert!(
+            !rect_contains_point(wipe, ring_sample[0], ring_sample[1])
+                || crate::app::draw_cull::paint_dirty_skips_node_dest_reset_covered(
+                    input_dirty,
+                    &dirty,
+                    false,
+                    &result.node_paints,
+                    &result.instances,
+                    1.0,
+                ),
+            "Input dest-reset must not punch shell Hard ring\n wipe={} ring={} sample={:?}",
+            fmt_rect(wipe),
+            fmt_rect(ring),
+            ring_sample
+        );
+    }
+    let _ = shell_dirty;
+}
+
+/// Typing while adornment-focused must keep an Input Node dirty (not Region-coalesced)
+/// and collect the typed glyphs — not only flash the placeholder.
+#[test]
+fn kbd_adornment_typing_must_keep_input_node_and_typed_glyphs() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let _ = take_frame_paint_nodes();
+    use_signal(&input_value_signal_key(INPUT_ID), String::new).set(String::new());
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(INPUT_ID));
+
+    let mut root = leak_shell();
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    let _ = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    sync_like_app(&mut root, &mut tree, &mut impact);
+    let _ = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    use_signal(&input_value_signal_key(INPUT_ID), String::new).set("你好".into());
+    impact = LayoutStatus::Clean;
+    sync_reactive_elements_subtree_ex(
+        &mut root,
+        &mut tree,
+        &mut impact,
+        1280.0,
+        800.0,
+        [0.0, 0.0],
+        false,
+        &mut ReactiveSyncCollect::default(),
+    );
+    sync_like_app(&mut root, &mut tree, &mut impact);
+    crate::renderer::restart_caret_blink();
+    let dirty = take_frame_paint_nodes();
+    let result = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+
+    let input_el = find_input(&root).expect("Search Input");
+    let input_key = paint_element_key(input_el);
+    assert!(
+        dirty
+            .iter()
+            .any(|d| d.kind == PaintDirtyKind::Node && d.key == input_key),
+        "typing must keep Input Node dirty (Region coalesce swallowed it); dirty={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("{:?} key={}", d.kind, d.key))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        !dirty.iter().any(|d| d.kind == PaintDirtyKind::Region),
+        "typing must not promote adornment to Region; dirty={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("{:?} {}", d.kind, fmt_rect(d.bounds)))
+            .collect::<Vec<_>>()
+    );
+    assert!(
+        result.text_nodes.iter().any(|n| n.text.contains('你') || n.text.contains("你好")),
+        "typed value must be in collect (not placeholder-only); texts={:?}",
+        result
+            .text_nodes
+            .iter()
+            .map(|n| n.text.as_str())
+            .collect::<Vec<_>>()
+    );
+    let capture =
+        node_present_capture_text_indices(&dirty, &result.text_nodes, &result.node_paints);
+    let captured: Vec<&str> = capture
+        .iter()
+        .filter_map(|&i| result.text_nodes.get(i).map(|n| n.text.as_str()))
+        .collect();
+    assert!(
+        captured
+            .iter()
+            .any(|t| t.contains('你') || t.contains("你好")),
+        "typing present must recapture typed glyphs; captured={captured:?}"
     );
 }
 
@@ -462,6 +708,7 @@ fn kbd_adornment_typing_must_not_capture_sidebar_or_wipe_spin() {
             collect.page_layout_changed,
             false,
             !dirty.is_empty(),
+            false,
         ),
         "typing+spin must PartialLoad; dirty={:?}",
         dirty
@@ -667,6 +914,82 @@ fn find_input_id<'a>(el: &'a Element, id: &str) -> Option<&'a Element> {
 
 /// Standalone Input Hard ring is blur=0 / spread=3. Dest-reset of the unfocused
 /// slot must still erase that outset, and must recapture the field's glyphs.
+///
+/// Gallery 图一/图二: click focus must show the Hard ring; caret blink dest-reset
+/// must not punch that outset (looks like default border / lost focus chrome).
+#[test]
+fn focused_input_caret_blink_must_keep_hard_ring() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let _ = take_frame_paint_nodes();
+    const ID: &str = "gal-like-caret-ring";
+    use_signal(&input_value_signal_key(ID), String::new).set(String::new());
+
+    let mut root = Element::new()
+        .w(400.0)
+        .h(80.0)
+        .bg([0.96, 0.96, 0.97, 1.0])
+        .child(input(ID).placeholder("Search…"));
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    let _ = tree.build_and_layout(&mut root, 400.0, 80.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(ID));
+    sync_forms(&mut root, &mut tree, &mut impact);
+    let focused = tree.build_and_layout(&mut root, 400.0, 80.0, [-1.0, -1.0]);
+
+    let input_el = find_input_id(&root, ID).expect("Input");
+    let key = paint_element_key(input_el);
+    let input_box = input_el.layout_bounds;
+    let ring = hard_ring_aabb(&focused, key).expect(
+        "focused Input must emit Hard-ring (click focus must not look like default border)",
+    );
+    assert!(
+        ring[0] <= input_box[0] - 1.5,
+        "Hard ring must outset the field\n ring={} input={}",
+        fmt_rect(ring),
+        fmt_rect(input_box)
+    );
+
+    let _ = take_frame_paint_nodes();
+    push_focused_text_edit_caret_damage(&root);
+    let dirties = take_frame_paint_nodes();
+    assert!(!dirties.is_empty(), "caret blink must dirty");
+    let prev_slots = last_present_visual_slots(
+        &focused.node_paints,
+        &focused.instances,
+        &[],
+        &focused.text_nodes,
+        &focused.input_chrome_instances,
+    );
+    let ring_sample = [ring[0] + 1.0, ring[1] + ring[3] * 0.5];
+    for d in &dirties {
+        let prev = prev_slots.iter().find(|(k, _)| *k == d.key).map(|(_, b)| *b);
+        let Some((wipe, _)) = node_present_dest_reset_scaled(
+            d.key,
+            d.bounds,
+            &focused.node_paints,
+            &focused.instances,
+            &[],
+            1.0,
+            prev,
+        ) else {
+            continue;
+        };
+        assert!(
+            !rect_contains_point(wipe, ring_sample[0], ring_sample[1]),
+            "caret blink dest-reset must not punch Hard ring\n wipe={} ring={} sample={:?} dirty={}\n prev={prev:?}",
+            fmt_rect(wipe),
+            fmt_rect(ring),
+            ring_sample,
+            fmt_rect(d.bounds),
+        );
+    }
+}
+
 #[test]
 fn standalone_input_unfocus_dest_reset_must_cover_hard_ring_and_glyphs() {
     let mut fs = font_loader::create_font_system();

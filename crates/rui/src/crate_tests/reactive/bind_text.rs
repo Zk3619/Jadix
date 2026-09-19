@@ -455,6 +455,57 @@ fn bind_miss_warns_when_unmounted() {
 }
 
 #[test]
+fn bind_prop_retries_when_appstate_borrowed() {
+    use crate::app::reactive::drain_deferred_view_remounts;
+    use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+    use crate::core::reactivity::create_root;
+
+    reset_registered_anchors();
+    clear_test_reconcile_root();
+    let sig = use_signal("__rui_test_bind_retry_borrow", || "a".to_string());
+    sig.set_silent("a".to_string());
+    let live = Rc::new(RefCell::new(Element::new()));
+    install_test_reconcile_root(Rc::clone(&live));
+    let (_owner, _) = create_root({
+        let live = Rc::clone(&live);
+        move || {
+            // `create_root` is not tracking; bind_prop only registers an effect
+            // while `is_tracking()` (same as `create_effect` / app_builder).
+            create_effect(move || {
+                let el = bind_text("bind:retry-borrow", move || sig.get());
+                *live.borrow_mut() = el;
+            });
+        }
+    });
+    drain_deferred_view_remounts();
+    assert_eq!(live.borrow().text.as_deref(), Some("a"));
+
+    {
+        let held = live.borrow_mut();
+        sig.set("b".to_string());
+        assert_eq!(
+            held.text.as_deref(),
+            Some("a"),
+            "try_update must miss while the live tree is borrowed"
+        );
+    }
+    assert_eq!(
+        live.borrow().text.as_deref(),
+        Some("a"),
+        "patch must wait for idle retry, not land on drop"
+    );
+    drain_deferred_view_remounts();
+    assert_eq!(
+        live.borrow().text.as_deref(),
+        Some("b"),
+        "idle retry after AppState drop must write the leaf"
+    );
+
+    clear_test_reconcile_root();
+    reset_registered_anchors();
+}
+
+#[test]
 fn bind_miss_hit_does_not_count() {
     use crate::app::reactive::{bind_miss_count, reset_bind_miss_count};
     use crate::app::test_support::resolve_bind_template_id;

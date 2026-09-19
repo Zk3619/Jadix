@@ -1252,6 +1252,220 @@ fn gallery_marker_pointer_storm_must_keep_spinning() {
     }
 }
 
+/// Gallery Marker: idle spin+shimmer must not src-over "Thinking..." twice.
+/// Spin circumcircle scissor / wipe that nips the caption, or nested-skipping the
+/// content dest-reset, leaves PartialLoad stacking glyph alpha (叠影变粗).
+#[cfg(feature = "bundled-lucide")]
+#[test]
+fn gallery_marker_spin_must_not_thicken_thinking_caption() {
+    use crate::app::draw_cull::{node_present_dest_reset_full, node_present_scissor_pad};
+
+    let _ = take_frame_paint_nodes();
+    crate::style::utility::set_frame_dt(1.0 / 60.0);
+
+    let mut glyph = crate::utils::build_named_icon_text_node("loader-circle", "\u{ea0e}");
+    apply_class_list(&mut glyph, "animate-spin");
+    let marker_el: Element = crate::components::marker()
+        .role("status")
+        .icon(glyph)
+        .content_with(|c| c.class("shimmer").text("Thinking..."))
+        .into();
+    let mut root = Element::new()
+        .w(320.0)
+        .h(64.0)
+        .bg([0.96, 0.96, 0.96, 1.0])
+        .child(marker_el);
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 320.0, 64.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+    let prev_slots = last_present_visual_slots(
+        &first.node_paints,
+        &first.instances,
+        &scale_textured_draws(&first.textured_draws, 1.0),
+        &first.text_nodes,
+        &first.input_chrome_instances,
+    );
+
+    crate::style::utility::set_frame_dt(0.08);
+    let mut impact = LayoutStatus::Clean;
+    for _ in 0..3 {
+        tick_active_css_transitions_subtree(
+            &mut root,
+            [0.0, 0.0],
+            "",
+            false,
+            320.0,
+            64.0,
+            [0.0, 0.0],
+            &mut tree,
+            &mut impact,
+        );
+        sync_class_variants_subtree(
+            &mut root,
+            [0.0, 0.0],
+            "",
+            false,
+            320.0,
+            64.0,
+            &mut tree,
+            &mut impact,
+        );
+    }
+    let mut dirty = take_frame_paint_nodes();
+    let later = tree.build_and_layout_fast(&mut root, 320.0, 64.0, [-1.0, -1.0], false, false);
+    let now_slots = last_present_visual_slots(
+        &later.node_paints,
+        &later.instances,
+        &scale_textured_draws(&later.textured_draws, 1.0),
+        &later.text_nodes,
+        &later.input_chrome_instances,
+    );
+    expand_paint_dirties_for_translated_slots(&mut dirty, &now_slots, &prev_slots);
+
+    let content = find_slot(&root, "marker-content").expect("content");
+    let spin = find_spin_el(&root).expect("spin");
+    let content_key = paint_element_key(content);
+    let spin_key = paint_element_key(spin);
+    let thinking: Vec<(usize, &_)> = later
+        .text_nodes
+        .iter()
+        .enumerate()
+        .filter(|(_, n)| n.text.contains("Thinking"))
+        .collect();
+    assert!(
+        !thinking.is_empty(),
+        "need Thinking... glyphon runs, got {:?}",
+        later
+            .text_nodes
+            .iter()
+            .map(|n| n.text.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    let content_dirty = dirty.iter().find(|d| d.key == content_key && d.kind == PaintDirtyKind::Node);
+    let spin_dirty = dirty
+        .iter()
+        .find(|d| d.key == spin_key && d.kind == PaintDirtyKind::Node)
+        .cloned()
+        .expect("spin must stay a Node dirty");
+
+    let dump = format!(
+        "dirties={:?}\n content_dirty={:?}\n spin={}\n thinking={:?}",
+        dirty
+            .iter()
+            .map(|d| format!("{:?} k{} {}", d.kind, d.key, fmt_rect(d.bounds)))
+            .collect::<Vec<_>>(),
+        content_dirty.map(|d| fmt_rect(d.bounds)),
+        fmt_rect(spin_dirty.bounds),
+        thinking
+            .iter()
+            .map(|(i, n)| format!("#{i} '{}' @[{:.1},{:.1} {:.1}x{:.1}]", n.text, n.x, n.y, n.width, n.height))
+            .collect::<Vec<_>>(),
+    );
+
+    if let Some(cd) = content_dirty {
+        assert!(
+            !paint_dirty_nested_in_larger_node(cd, &dirty),
+            "shimmer content dest-reset nested-skipped under a larger dirty — Thinking src-overs\n{dump}"
+        );
+        assert!(
+            !paint_dirty_skips_node_dest_reset(cd, &dirty, false),
+            "shimmer content dest-reset skipped — Thinking stacks in retain\n{dump}"
+        );
+        let prev = last_present_prev_for_dirty(PaintDirtyKind::Node, content_key, &prev_slots);
+        let reset = node_present_dest_reset_full(
+            content_key,
+            cd.bounds,
+            &later.node_paints,
+            &later.instances,
+            &scale_textured_draws(&later.textured_draws, 1.0),
+            &later.input_chrome_instances,
+            1.0,
+            prev,
+        );
+        assert!(
+            reset.is_some(),
+            "shimmer content must dest-reset (None leaves previous Thinking in PartialLoad)\n{dump}"
+        );
+    }
+
+    let clipped = node_present_clipped_capture_text(
+        &dirty,
+        &later.text_nodes,
+        &later.node_paints,
+    );
+    let thinking_clipped: Vec<_> = clipped
+        .iter()
+        .filter(|n| n.text.contains("Thinking"))
+        .collect();
+    assert!(
+        !thinking_clipped.is_empty(),
+        "Thinking must stay in the once-capture set with an owner clip\n{dump}"
+    );
+    for n in &thinking_clipped {
+        let clip = n.clip_bounds.expect("owner clip");
+        // Owner pad is on the content dirty — must not swallow the spin diamond.
+        assert!(
+            clip[0] + clip[2] > 24.0 && clip[0] < 24.0 + 63.0,
+            "Thinking owner clip must track the content dirty, not the spin scissor\n\
+             clip={}\n{dump}",
+            fmt_rect(clip),
+        );
+    }
+
+    let spin_scissor = node_present_scissor_logical(
+        PaintDirtyKind::Node,
+        spin_key,
+        spin_dirty.bounds,
+        &prev_slots,
+        &later.node_paints,
+        node_present_scissor_pad(PaintDirtyKind::Node),
+    );
+    let thinking_in_spin_scissor: Vec<_> = thinking
+        .iter()
+        .filter(|(_, n)| {
+            let cx = n.x + n.width * 0.5;
+            let cy = n.y + n.height * 0.5;
+            cx >= spin_scissor[0]
+                && cy >= spin_scissor[1]
+                && cx < spin_scissor[0] + spin_scissor[2]
+                && cy < spin_scissor[1] + spin_scissor[3]
+        })
+        .collect();
+    assert!(
+        thinking_in_spin_scissor.is_empty(),
+        "spin node-present scissor nips Thinking caption center — PartialLoad stacks glyphs\n\
+         scissor={}\n{dump}",
+        fmt_rect(spin_scissor),
+    );
+
+    let prev_spin = last_present_prev_for_dirty(PaintDirtyKind::Node, spin_key, &prev_slots);
+    if let Some(wipe) = node_present_dest_reset_full(
+        spin_key,
+        spin_dirty.bounds,
+        &later.node_paints,
+        &later.instances,
+        &scale_textured_draws(&later.textured_draws, 1.0),
+        &later.input_chrome_instances,
+        1.0,
+        prev_spin,
+    ) {
+        for (_, n) in &thinking {
+            let cx = n.x + n.width * 0.5;
+            let cy = n.y + n.height * 0.5;
+            assert!(
+                !(cx >= wipe.rect[0]
+                    && cy >= wipe.rect[1]
+                    && cx < wipe.rect[0] + wipe.rect[2]
+                    && cy < wipe.rect[1] + wipe.rect[3]),
+                "spin dest-reset must not punch Thinking caption center\n\
+                 wipe={}\n{dump}",
+                fmt_rect(wipe.rect),
+            );
+        }
+    }
+}
+
 /// MarkerIcon is `size-4` wrapping Icon `size-4`. Parent `NodePaint` ranges include
 /// the child's lucide texture. `same_box` matching both slots src-overs the spinner
 /// twice on PartialLoad — idle looks thicker than a FullClear scroll frame.

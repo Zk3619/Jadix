@@ -5,12 +5,13 @@ use crate::app::frame_stats::{last_skipped_siblings, reset_collect_skip_counters
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
 use crate::components::input_adornment::input_adornment;
 use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX};
 use crate::core::tree::{sync_reactive_elements_subtree, Element, LayoutStatus, LayoutTree};
 use crate::layout::collect_cache::collect_skip_allowed_for_frame;
 use crate::layout::layout_tree::{ATTR_PORTAL_KEY, PORTAL_LAYER_ID};
-use crate::primitives::r#box::hstack;
+use crate::primitives::r#box::{hstack, vstack};
 use crate::renderer::font_loader;
 use crate::style::sync_class_variants_subtree;
 use crate::text::install_shared_font_system;
@@ -1461,6 +1462,103 @@ fn focused_kbd_input_must_not_replay_unfocused_chrome() {
         focused.node_paints.iter().any(|p| p.chrome.0 < p.chrome.1),
         "some collect slot must own the caret chrome range so node-present can redraw it"
     );
+    // 图一: click focus must paint Hard ring on the adornment shell (not just
+    // border-color + caret — that looks like 图四 default).
+    let shell_ring = focused.instances.iter().any(|i| {
+        i.shadow_spread.abs() > 1.0 && i.shadow_color[3] > 0.05 && i.shadow_blur.abs() < 0.5
+    });
+    assert!(
+        shell_ring,
+        "图一: focused InputAdornment shell must emit Hard-ring (spread>1, blur≈0); \
+         got only caret / border without ring chrome"
+    );
+}
+
+/// Gallery 图二: focused Kbd Search stays focused while the page ScrollArea
+/// moves. Fingerprint skip on the scroll frame must not replay the unfocused
+/// DL (caret disappears until the next blink ON — 图三).
+#[test]
+fn focused_kbd_input_must_keep_caret_chrome_across_scroll() {
+    reset_collect_skip_counters();
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let id = "skip-kbd-scroll";
+    use_signal(&input_value_signal_key(id), String::new).set(String::new());
+    use_signal("__rui_button_focus_id", String::new).set(String::new());
+    use_signal(&scroll_offset_y_signal_key("kbd-scroll-main"), || 0.0_f32).set(0.0);
+
+    // Gallery Kbd Search lives *inside* the page ScrollArea. Scroll a few px so the
+    // field stays fully visible — clip-cull must not be the failure mode.
+    let mut root = Element::new().w(400.0).h(320.0).bg([0.94, 0.94, 0.95, 1.0]).child(
+        scroll_area("kbd-scroll-main")
+            .w("100%")
+            .h("100%")
+            .child(
+                vstack()
+                    .w("100%")
+                    .gap(12.0)
+                    .child(
+                        input_adornment()
+                            .child(input(id).placeholder("Search…").plain_chrome(true))
+                            .addon("inline-end", Element::new().text("⌘K")),
+                    )
+                    .child(Element::new().w("100%").h(480.0).bg([0.9, 0.9, 0.91, 1.0])),
+            ),
+    );
+
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
+    let _ = tree.build_and_layout(&mut root, 400.0, 320.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+
+    use_signal("__rui_button_focus_id", String::new).set(focus_id_for_input(id));
+    impact = LayoutStatus::Clean;
+    sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 400.0, 320.0, [0.0, 0.0]);
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
+    crate::renderer::restart_caret_blink();
+    let focused = tree.build_and_layout_fast(&mut root, 400.0, 320.0, [-1.0, -1.0], false, false);
+    assert!(
+        !focused.input_chrome_instances.is_empty(),
+        "precondition: focused Search must collect caret chrome (blink ON)"
+    );
+
+    // Page scroll while the field keeps focus (wheel / trackpad). 12px keeps the
+    // ~36px Search fully on-screen so empty chrome is skip/fingerprint, not cull.
+    use_signal(&scroll_offset_y_signal_key("kbd-scroll-main"), || 0.0_f32).set(12.0);
+    impact = LayoutStatus::Clean;
+    sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 400.0, 320.0, [0.0, 0.0]);
+    sync_text_edit_paint_subtree(&mut root, &mut tree, &mut impact);
+    crate::renderer::restart_caret_blink();
+    let after_scroll =
+        tree.build_and_layout_fast(&mut root, 400.0, 320.0, [-1.0, -1.0], false, false);
+    assert!(
+        after_scroll
+            .text_nodes
+            .iter()
+            .any(|n| n.style.input_caret.is_some()),
+        "scroll must keep input_caret on the focused leaf"
+    );
+    assert!(
+        !after_scroll.input_chrome_instances.is_empty(),
+        "图二: focused Search must keep caret chrome across scroll; \
+         fingerprint skip replayed an unfocused DL (no hairline)"
+    );
+    assert!(
+        after_scroll
+            .node_paints
+            .iter()
+            .any(|p| p.chrome.0 < p.chrome.1),
+        "some collect slot must still own the caret chrome range after scroll"
+    );
+    assert!(
+        after_scroll.instances.iter().any(|i| {
+            i.shadow_spread.abs() > 1.0 && i.shadow_color[3] > 0.05 && i.shadow_blur.abs() < 0.5
+        }),
+        "图二: focused adornment Hard ring must survive page scroll (not fall back to 图四 default)"
+    );
 }
 
 /// Portal overlay_split is a walk-time cursor, not part of the cached DL.
@@ -2078,3 +2176,377 @@ fn scroll_only_skip_replay_must_not_keep_hover_bg_after_pointer_miss() {
     );
 }
 
+/// Gallery Buttons use CVA `hover:bg-*`. Smooth-scroll chrome is freeze-path
+/// `tick_active` then collect — `on_hover` / `{id}_hover` lag one frame behind.
+/// Leave must restore rest fill on that same collect, not wait for settle.
+#[test]
+fn scroll_only_button_hover_enter_then_leave_must_restore_bg() {
+    use crate::components::button::{
+        button, button_chrome_for_variant, sync_button_hover_paint_subtree,
+    };
+    use crate::core::reactivity::create_root;
+    use crate::core::tree::LayoutStatus;
+    use crate::style::tick_active_css_transitions_subtree;
+
+    fn colors_near(a: [f32; 4], b: [f32; 4]) -> bool {
+        (0..4).all(|i| (a[i] - b[i]).abs() < 0.02)
+    }
+
+    reset_collect_skip_counters();
+    crate::style::set_theme_mode(crate::style::ThemeMode::Light);
+    let (rest_bg, _, _) = button_chrome_for_variant("default", 0.0);
+    let (hover_bg, _, _) = button_chrome_for_variant("default", 1.0);
+    let (_h, btn) = create_root(|| -> Element {
+        button("skip-btn-hover-leave")
+            .variant("default")
+            .text("Go")
+            .into()
+    });
+    let filler = Element::new()
+        .w(80.0)
+        .h(200.0)
+        .flex_shrink(0.0)
+        .bg([1.0, 0.0, 0.0, 1.0]);
+    let mut root = Element::new()
+        .flex_col()
+        .w(80.0)
+        .h(80.0)
+        .overflow_y("scroll")
+        .overflow_x("hidden")
+        .child(btn)
+        .child(filler);
+    root.focus_id = Some(format!(
+        "{SCROLL_VIEWPORT_FOCUS_PREFIX}btn-hover-leave-scroll"
+    ));
+
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 80.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 80.0, 80.0, [-1.0, -1.0], true, false);
+
+    let mouse = {
+        let b = root.children[0].layout_bounds;
+        [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5]
+    };
+    crate::app::tree_hit::clear_hover_tracking();
+    crate::app::tree_hit::apply_pointer_hover_reconcile(&root, mouse[0], mouse[1], false);
+    let mut impact = LayoutStatus::Clean;
+    sync_button_hover_paint_subtree(&mut root, &mut tree, &mut impact, 80.0, 80.0, [0.0, 0.0]);
+    tick_active_css_transitions_subtree(
+        &mut root,
+        mouse,
+        "",
+        false,
+        80.0,
+        80.0,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    assert_eq!(
+        root.children[0]
+            .class_set
+            .as_ref()
+            .and_then(|cs| cs.last_pointer_hover),
+        Some(true),
+        "stationary pointer over the button must enter hover"
+    );
+    assert!(
+        colors_near(root.children[0].style.bg_color, hover_bg),
+        "freeze hover enter must overlay button hover:bg, got {:?}",
+        root.children[0].style.bg_color
+    );
+    let hovered = tree.build_and_layout_fast(&mut root, 80.0, 80.0, mouse, true, false);
+    assert!(
+        instance_has_chip_color(&hovered, hover_bg),
+        "hovered button must collect hover:bg; instances={:?}",
+        hovered
+            .instances
+            .iter()
+            .map(|i| i.color)
+            .collect::<Vec<_>>()
+    );
+
+    // Production leave frame: `on_hover` (`{id}_hover`) and CSS `:hover` leave
+    // together before chrome — same mouse, immediate miss under still pointer.
+    root.scroll_offset[1] = 30.0;
+    use_signal(
+        &scroll_offset_y_signal_key("btn-hover-leave-scroll"),
+        || 0.0_f32,
+    )
+    .set_silent(30.0);
+    crate::app::tree_hit::apply_pointer_hover_reconcile(&root, mouse[0], mouse[1], true);
+    impact = LayoutStatus::Clean;
+    sync_button_hover_paint_subtree(&mut root, &mut tree, &mut impact, 80.0, 80.0, [0.0, 0.0]);
+    tick_active_css_transitions_subtree(
+        &mut root,
+        mouse,
+        "",
+        false,
+        80.0,
+        80.0,
+        [0.0, 0.0],
+        &mut tree,
+        &mut impact,
+    );
+    assert_eq!(
+        root.children[0]
+            .class_set
+            .as_ref()
+            .and_then(|cs| cs.last_pointer_hover),
+        Some(false),
+        "content sliding out from under a still pointer must leave button hover in chrome"
+    );
+    assert!(
+        colors_near(root.children[0].style.bg_color, rest_bg),
+        "freeze hover leave must restore button rest bg, got {:?}",
+        root.children[0].style.bg_color
+    );
+    let left = tree.build_and_layout_fast(&mut root, 80.0, 80.0, mouse, true, false);
+    assert!(
+        !instance_has_chip_color(&left, hover_bg),
+        "scroll_only skip-replay must not keep button hover:bg after pointer miss; instances={:?}",
+        left.instances.iter().map(|i| i.color).collect::<Vec<_>>()
+    );
+}
+
+/// Gallery Item `variant={sig.get()}` is paint-only. Clicking a still-hovered
+/// button keeps ViewportsOnly `reuse_idle`; idle ancestors must not skip-replay
+/// the previous variant until pointer-leave hash-busts the whole tree.
+#[test]
+fn scroll_only_must_recollect_item_variant_bind_without_pointer_leave() {
+    use crate::components::{apply_bound_item_variant, apply_item_paint, ItemSize, ItemVariant};
+    use crate::layout::collect_cache::invalidate_collect_paint_hash_path;
+
+    reset_collect_skip_counters();
+    let mut item = Element::new().w(200.0).h(40.0).flex_shrink(0.0);
+    assert_eq!(
+        apply_item_paint(&mut item, ItemVariant::Outline, ItemSize::Default),
+        LayoutStatus::StyleChanged
+    );
+    let outline_bg = item.style.bg_color;
+    let idle = Element::new()
+        .w(200.0)
+        .h(40.0)
+        .flex_shrink(0.0)
+        .bg([1.0, 0.0, 0.0, 1.0]);
+    let mut root = Element::new()
+        .flex_col()
+        .w(200.0)
+        .h(80.0)
+        .child(item)
+        .child(idle);
+
+    let mut tree = LayoutTree::new();
+    let rest = tree.build_and_layout(&mut root, 200.0, 80.0, [-1.0, -1.0]);
+    assert!(
+        instance_has_chip_color(&rest, outline_bg),
+        "outline Item must paint its background; instances={:?}",
+        rest.instances.iter().map(|i| i.color).collect::<Vec<_>>()
+    );
+
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 200.0, 80.0, [-1.0, -1.0], true, false);
+
+    assert_eq!(
+        apply_bound_item_variant(&mut root.children[0], "muted"),
+        LayoutStatus::StyleChanged
+    );
+    let muted_bg = root.children[0].style.bg_color;
+    assert!(
+        (0..4).any(|c| (muted_bg[c] - outline_bg[c]).abs() > 0.05),
+        "muted chrome must differ from outline"
+    );
+
+    let stale = tree.build_and_layout_fast(&mut root, 200.0, 80.0, [-1.0, -1.0], true, false);
+    assert!(
+        instance_has_chip_color(&stale, outline_bg),
+        "reuse_idle without a hash-path bust skip-replays outline; instances={:?}",
+        stale.instances.iter().map(|i| i.color).collect::<Vec<_>>()
+    );
+    assert!(
+        !instance_has_chip_color(&stale, muted_bg),
+        "muted must not appear until the bind hash path is invalidated"
+    );
+
+    invalidate_collect_paint_hash_path(&mut root, &[0]);
+    let fresh = tree.build_and_layout_fast(&mut root, 200.0, 80.0, [-1.0, -1.0], true, false);
+    assert!(
+        instance_has_chip_color(&fresh, muted_bg),
+        "bind StyleChanged must recollect Item variant without pointer leave; instances={:?}",
+        fresh.instances.iter().map(|i| i.color).collect::<Vec<_>>()
+    );
+    assert!(
+        !instance_has_chip_color(&fresh, outline_bg),
+        "outline fill must not remain after variant bind; instances={:?}",
+        fresh.instances.iter().map(|i| i.color).collect::<Vec<_>>()
+    );
+}
+
+/// Gallery Item outline→default: `border-transparent` must not emit a 1px SDF
+/// stroke, title stays `foreground`, and dest-reset must restore the rounded
+/// parent card (otherwise PartialLoad keeps the outline ring and darkens glyphs).
+#[test]
+fn item_outline_to_default_must_drop_border_and_keep_title_foreground() {
+    use crate::components::{apply_bound_item_variant, apply_item_paint, ItemSize, ItemVariant};
+    use crate::layout::collect_cache::invalidate_collect_paint_hash_path;
+    use crate::style::parse_text_color;
+
+    reset_collect_skip_counters();
+    let fg = parse_text_color("foreground");
+    let mut item = Element::new().w(200.0).h(48.0).flex_shrink(0.0).child(
+        Element::new()
+            .text("Reactive variant: outline")
+            .text_color(fg),
+    );
+    assert_eq!(
+        apply_item_paint(&mut item, ItemVariant::Outline, ItemSize::Default),
+        LayoutStatus::StyleChanged
+    );
+    let outline_bg = item.style.bg_color;
+    let outline_border = item.style.border_color;
+    assert!(outline_border[3] > 0.5, "outline border must be opaque");
+    // Distinct from Item outline `background` so leftover fill is not confused
+    // with the parent card.
+    let card_bg = [1.0, 0.0, 0.0, 1.0];
+    let mut root = Element::new()
+        .flex_col()
+        .w(220.0)
+        .h(80.0)
+        .bg(card_bg)
+        .rounded(8.0)
+        .child(item);
+
+    let mut tree = LayoutTree::new();
+    let rest = tree.build_and_layout(&mut root, 220.0, 80.0, [-1.0, -1.0]);
+    assert!(
+        instance_has_chip_color(&rest, outline_bg),
+        "outline Item must paint its background"
+    );
+    assert!(
+        rest.instances.iter().any(|i| {
+            i.rect_size[0] > 100.0
+                && i.rect_size[1] > 20.0
+                && i.border_width > 0.5
+                && i.border_color[3] > 0.5
+        }),
+        "outline Item must emit a visible 1px border; instances={:?}",
+        rest.instances
+            .iter()
+            .map(|i| (i.color, i.border_color, i.border_width))
+            .collect::<Vec<_>>()
+    );
+
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 220.0, 80.0, [-1.0, -1.0], true, false);
+
+    assert_eq!(
+        apply_bound_item_variant(&mut root.children[0], "default"),
+        LayoutStatus::StyleChanged
+    );
+    root.children[0].children[0].text = Some("Reactive variant: default".into());
+    // Production variant bind only names the Item path; descendants (title) must
+    // still rehash or skip-replay keeps "outline" glyphs stacked on the new frame.
+    invalidate_collect_paint_hash_path(&mut root, &[0]);
+    let fresh = tree.build_and_layout_fast(&mut root, 220.0, 80.0, [-1.0, -1.0], true, false);
+
+    assert!(
+        !instance_has_chip_color(&fresh, outline_bg),
+        "outline fill must not remain after default bind; instances={:?}",
+        fresh.instances.iter().map(|i| i.color).collect::<Vec<_>>()
+    );
+    let item_strokes: Vec<_> = fresh
+        .instances
+        .iter()
+        .filter(|i| i.rect_size[0] > 100.0 && i.rect_size[1] > 20.0 && i.border_width > 0.5)
+        .map(|i| (i.color, i.border_color, i.border_width))
+        .collect();
+    assert!(
+        item_strokes.is_empty(),
+        "default Item (border-transparent) must not emit a 1px SDF stroke; got {item_strokes:?}"
+    );
+    let title = fresh
+        .text_nodes
+        .iter()
+        .find(|t| t.text.contains("default"))
+        .expect("recollected title");
+    assert!(
+        !fresh.text_nodes.iter().any(|t| t.text.contains("outline")),
+        "stale 'outline' glyphs must not remain in the display list; got {:?}",
+        fresh
+            .text_nodes
+            .iter()
+            .map(|t| t.text.as_str())
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        title.style.color_resolved(),
+        fg,
+        "title must stay foreground after outline→default, got {:?}",
+        title.style.color_resolved()
+    );
+
+    let item_key = u64::from(root.children[0].layout_node.expect("item taffy"));
+    let item_bounds = root.children[0].layout_bounds;
+    let reset = crate::app::draw_cull::node_present_dest_reset_full(
+        item_key,
+        item_bounds,
+        &fresh.node_paints,
+        &fresh.instances,
+        &[],
+        &[],
+        1.0,
+        Some(item_bounds),
+    )
+    .expect(
+        "outline→default dest-reset must wipe the old ring and restore the parent card; \
+         None leaves outline pixels in PartialLoad retain",
+    );
+    assert!(
+        (reset.clear[0] - card_bg[0]).abs() < 0.06 && reset.clear[3] > 0.5
+            || reset.replay.1 > reset.replay.0,
+        "underlay restore must use the parent card; clear={:?} replay={:?}",
+        reset.clear,
+        reset.replay
+    );
+
+    let title_el = &root.children[0].children[0];
+    let title_key = u64::from(title_el.layout_node.expect("title taffy"));
+    let title_bounds = title_el.layout_bounds;
+    let item_dirty = crate::app::damage::PaintDirty {
+        key: item_key,
+        bounds: item_bounds,
+        kind: crate::app::damage::PaintDirtyKind::Node,
+    };
+    let title_dirty = crate::app::damage::PaintDirty {
+        key: title_key,
+        bounds: title_bounds,
+        kind: crate::app::damage::PaintDirtyKind::Node,
+    };
+    let dirties = [item_dirty, title_dirty];
+    assert!(
+        !crate::app::draw_cull::paint_dirty_skips_node_dest_reset_covered(
+            &title_dirty,
+            &dirties,
+            false,
+            &fresh.node_paints,
+            &fresh.instances,
+            1.0,
+        ),
+        "transparent default Item must not nested-skip the title dest-reset"
+    );
+    assert!(
+        crate::app::draw_cull::node_present_dest_reset_full(
+            title_key,
+            title_bounds,
+            &fresh.node_paints,
+            &fresh.instances,
+            &[],
+            &[],
+            1.0,
+            Some(title_bounds),
+        )
+        .is_some(),
+        "title dest-reset must wipe leftover outline glyphs on the parent card"
+    );
+}

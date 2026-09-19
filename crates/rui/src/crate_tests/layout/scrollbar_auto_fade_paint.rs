@@ -282,6 +282,7 @@ fn overlay_auto_fade_must_dest_reset_on_alpha_change_not_idle_rest() {
                     &hidden.node_paints,
                     &hidden.instances,
                     &[],
+                    &[],
                     1.0,
                     prev.iter().find(|(k, _)| *k == d.key).map(|(_, b)| *b),
                 );

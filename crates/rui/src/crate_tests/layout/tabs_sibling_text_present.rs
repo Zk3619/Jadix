@@ -266,6 +266,7 @@ fn equal_height_tab_switch_must_not_fullclear_or_wipe_8b_text() {
             collect.page_layout_changed,
             false,
             true,
+            false,
         ),
         "named tab panel must PartialLoad, not FullClear the 8b card"
     );

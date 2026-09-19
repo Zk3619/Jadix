@@ -742,6 +742,7 @@ fn dest_reset_rotated_overflow_covers_diamond_tip() {
                 &result.node_paints,
                 &result.instances,
                 &[],
+                &[],
                 crate::app::draw_cull::NODE_PRESENT_RESET_PAD_PHYSICAL,
                 1.0,
                 None,
