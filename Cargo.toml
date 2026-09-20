@@ -120,3 +120,21 @@ debug = false
 split-debuginfo = "off"
 strip = "symbols"
 panic = "abort"
+
+# Font parsing, shaping and rasterization are on the first-popup critical path.
+# Keep application/framework code debuggable while avoiding multi-frame font
+# initialization stalls in the default `cargo run` Gallery build.
+[profile.dev.package.cosmic-text]
+opt-level = 2
+
+[profile.dev.package.swash]
+opt-level = 2
+
+[profile.dev.package.skrifa]
+opt-level = 2
+
+[profile.dev.package.read-fonts]
+opt-level = 2
+
+[profile.dev.package.harfrust]
+opt-level = 2
