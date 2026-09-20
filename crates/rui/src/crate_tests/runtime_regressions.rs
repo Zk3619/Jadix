@@ -1,5 +1,101 @@
+#[test]
+fn nested_scroll_pins_fit_after_coverage_deduplication() {
+    let mut pins: Vec<_> = (0..30)
+        .map(|i| [100.0 + i as f32 * 2.0, 100.0, 1.0, 10.0])
+        .collect();
+    pins.push([100.0, 100.0, 80.0, 20.0]);
+    let cull = scroll_repair_rects_physical(&[], &pins, 1.0)
+        .expect("nested avatar slots must not force full viewport repaint");
+    assert_eq!(
+        cull.strips().collect::<Vec<_>>(),
+        vec![[100.0, 100.0, 80.0, 20.0]]
+    );
+}
+
 use crate::app::{damage::*, draw_cull::*};
 use crate::core::tree::{Element, LayoutStatus, LayoutTree};
+
+#[test]
+fn scroll_repairs_never_pad_into_header_or_blend_overlap_twice() {
+    let pin = [120.0, 64.0, 80.0, 30.0];
+    let cull =
+        scroll_repair_rects_physical(&[], &[pin, [140.0, 70.0, 90.0, 30.0], pin], 1.25).unwrap();
+    let rects: Vec<_> = cull.strips().collect();
+    assert!(
+        rects.iter().all(|r| r[1] >= 80.0),
+        "already-clipped repair must not enter header"
+    );
+    for (i, r) in rects.iter().enumerate() {
+        assert!(
+            rects[i + 1..]
+                .iter()
+                .all(|other| intersect_rects(*r, *other).is_none()),
+            "overlapping holes repaint translucent avatar/text twice"
+        );
+    }
+    // [150,80,100,38] + [175,87,113,38] - [175,87,75,31].
+    assert_eq!(rects.iter().map(|r| r[2] * r[3]).sum::<f32>(), 5769.0);
+}
+
+#[test]
+fn region_text_prepare_keeps_unchanged_hole_text_and_skips_distant_labels() {
+    let mut root = Element::new()
+        .w(300.0)
+        .h(300.0)
+        .flex_col()
+        .child(
+            Element::new()
+                .w(300.0)
+                .h(30.0)
+                .flex_shrink(0.0)
+                .text("Repair this caption"),
+        )
+        .child(Element::new().w(300.0).h(200.0).flex_shrink(0.0))
+        .child(
+            Element::new()
+                .w(300.0)
+                .h(30.0)
+                .flex_shrink(0.0)
+                .text("Idle distant caption"),
+        );
+    let mut tree = LayoutTree::new();
+    let frame = tree.build_and_layout(&mut root, 300.0, 300.0, [-1.0, -1.0]);
+    let texts = &frame.text_nodes;
+    let submit = page_stack_band_submit_text(
+        texts,
+        texts,
+        0,
+        texts.len(),
+        Some(CullRects::one([0.0, 0.0, 300.0, 32.0])),
+        false,
+    )
+    .expect("region needs unchanged glyphs");
+    assert_eq!(submit.len(), 1);
+    assert_eq!(submit[0].text, "Repair this caption");
+}
+
+#[test]
+fn stale_latest_dirty_uses_live_clip_even_after_large_scroll() {
+    use crate::layout::layout_tree::NodePaint;
+    // Captured from the actual header erase: dirty remained at its exit pose,
+    // while the same live node moved hundreds of pixels above the viewport.
+    let dirty = [485.0, 24.8, 86.0, 40.4];
+    let live = [490.0, -290.2, 76.0, 30.4];
+    let clip = [337.0, 60.0, 382.0, 0.0];
+    let paints = [NodePaint {
+        key: 4294967934, bounds: live, overlay: false, layered: true,
+        instance: (0, 0), textured: (0, 0), text: (0, 0), chrome: (0, 0),
+        paint_ops: (0, 0), rest: Some(live), overflow_clip: Some(clip),
+    }];
+    let key = paints[0].key;
+    assert_eq!(node_present_overflow_clip(key, dirty, &paints), Some(clip));
+    for kind in [PaintDirtyKind::Node, PaintDirtyKind::Region] {
+        assert_eq!(node_present_scissor_logical(kind, key, dirty, &[], &paints,
+            node_present_scissor_pad(kind)), [0.0; 4]);
+    }
+    assert!(node_present_reset_rect(key, dirty, &paints, &[], &[], &[],
+        NODE_PRESENT_RESET_PAD_PHYSICAL, 1.0, None).is_none());
+}
 
 #[test]
 fn latest_empty_ancestor_clip_must_not_become_unclipped() {

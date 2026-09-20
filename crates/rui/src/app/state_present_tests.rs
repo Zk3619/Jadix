@@ -5,6 +5,66 @@ use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 
 #[test]
 #[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+fn finalized_scroll_pin_clear_cannot_touch_header() {
+    let gpu = OffscreenGpu::new().expect("GPU adapter");
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("scroll pin header boundary"),
+        size: wgpu::Extent3d {
+            width: 320,
+            height: 200,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let pipeline =
+        RuiPipeline::from_format(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb, 320, 200);
+    pipeline.update_resolution(&gpu.queue, 320, 200);
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("scroll repair"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        let rects = scroll_repair_rects_physical(&[], &[[120.0, 64.0, 80.0, 32.0]], 1.0).unwrap();
+        for rect in rects.strips() {
+            let (x, y, w, h) = physical_xywh_to_scissor(rect, 320, 200).unwrap();
+            pass.set_scissor_rect(x, y, w, h);
+            draw_scissor_fill(&mut pass, &pipeline, &gpu.device, rect, wgpu::Color::WHITE);
+        }
+    }
+    let image = readback_texture(&gpu.device, &gpu.queue, &texture, 320, 200, encoder).unwrap();
+    assert!(
+        image
+            .pixels
+            .chunks_exact(4)
+            .take(320 * 64)
+            .all(|p| p[0] == 0),
+        "scroll repair erased header pixels"
+    );
+    assert_eq!(
+        image.pixel(150, 64).unwrap()[0],
+        255,
+        "first repaired row must be opaque, not an AA fringe"
+    );
+}
+
+#[test]
+#[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
 fn culled_latest_repair_must_preserve_header_pixels() {
     let gpu = OffscreenGpu::new().expect("GPU adapter");
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {

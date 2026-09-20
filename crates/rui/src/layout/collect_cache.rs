@@ -653,6 +653,31 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
     rec(root, reuse_idle, false);
 }
 
+pub(crate) fn invalidate_animation_shell_hashes(root: &mut Element) {
+    fn visit(el: &mut Element) -> bool {
+        let shell = el.template_id.as_deref().is_some_and(|id| {
+            id.ends_with("__modal_overlay")
+                || id.ends_with("__modal_panel")
+                || id.ends_with("__modal_zoom")
+                || id.ends_with("__floating_panel")
+        });
+        if shell {
+            el.collect_paint_hash = 0;
+            zero_collect_paint_hash_descendants(el);
+            return true;
+        }
+        let mut changed = false;
+        for child in &mut el.children {
+            changed |= visit(child);
+        }
+        if changed {
+            el.collect_paint_hash = 0;
+        }
+        changed
+    }
+    visit(root);
+}
+
 fn node_seeds_scroll_skip(el: &Element) -> bool {
     if el.contains_scroll_viewport {
         return true;
@@ -1642,6 +1667,34 @@ mod tests {
         assert!(
             !viewport.children[1].collect_skip_live,
             "idle column must not inherit live from a stacking sibling"
+        );
+    }
+
+    #[test]
+    fn animation_recollect_rehashes_shell_not_idle_page() {
+        let mut page = Element::new();
+        for i in 0..500 {
+            page.children.push(Element::new().text(format!("row {i}")));
+        }
+        let shell = Element::new()
+            .template_id("dialog__modal_zoom")
+            .child(Element::new().text("Animated caption"));
+        let mut root = Element::new().child(page).child(shell);
+        stamp_subtree_paint_hashes(&mut root, false);
+        let page_hash = root.children[0].collect_paint_hash;
+        let old = root.children[1].collect_paint_hash;
+        root.children[1].style.opacity = 0.0;
+        invalidate_animation_shell_hashes(&mut root);
+        STAMP_HASHED.with(|c| c.set(0));
+        stamp_subtree_paint_hashes(&mut root, true);
+        assert!(
+            STAMP_HASHED.with(|c| c.get()) <= 4,
+            "second collect must not rehash 500 idle rows"
+        );
+        assert_eq!(root.children[0].collect_paint_hash, page_hash);
+        assert_ne!(
+            root.children[1].collect_paint_hash, old,
+            "final transparent pose must invalidate"
         );
     }
 

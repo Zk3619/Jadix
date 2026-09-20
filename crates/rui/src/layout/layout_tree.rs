@@ -3976,13 +3976,30 @@ impl LayoutTree {
 
     /// Recollect changed animation paint using the already computed Taffy boxes.
     /// No layout/hoist or animation-clock advancement occurs here.
-    pub(crate) fn collect_animation_frame(&mut self, root:&mut Element, mouse_pos:[f32;2],
-        scrollbar_overlay_collect:bool)->RenderResult {
-        let root_node=self.root_node.expect("animation recollect requires layout");
-        self.collect_skip.hash_bust=true;
-        let mut cache=HashMap::new();
-        let mut cache_slot=Some(&mut cache);
-        self.finish_collect(root,root_node,mouse_pos,true,scrollbar_overlay_collect,&mut cache_slot,0.0,0.0,0.0)
+    pub(crate) fn collect_animation_frame(
+        &mut self,
+        root: &mut Element,
+        mouse_pos: [f32; 2],
+        scrollbar_overlay_collect: bool,
+    ) -> RenderResult {
+        let root_node = self.root_node.expect("animation recollect requires layout");
+        // Live animation paths already rehash themselves. Invalidate retained
+        // modal/floating shells as well for their final, now-inactive sample;
+        // leave unrelated page siblings' fingerprints reusable.
+        crate::layout::collect_cache::invalidate_animation_shell_hashes(root);
+        let mut cache = HashMap::new();
+        let mut cache_slot = Some(&mut cache);
+        self.finish_collect(
+            root,
+            root_node,
+            mouse_pos,
+            true,
+            scrollbar_overlay_collect,
+            &mut cache_slot,
+            0.0,
+            0.0,
+            0.0,
+        )
     }
 
     fn finish_collect(

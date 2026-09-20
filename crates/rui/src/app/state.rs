@@ -565,16 +565,6 @@ fn draw_cpu_sdf_instances<'a>(
     );
 }
 
-fn draw_scissor_clear<'a>(
-    pass: &mut wgpu::RenderPass<'a>,
-    pipeline: &'a RuiPipeline,
-    device: &wgpu::Device,
-    rect: [f32; 4],
-    clear: wgpu::Color,
-) {
-    draw_scissor_clear_ex(pass, pipeline, device, rect, clear, 0.0);
-}
-
 /// Dest-reset that must fill `rect` opaquely. The SDF shader expands +2px AA;
 /// drawing a quad the size of the scissor leaves a translucent fringe that
 /// cuts page captions as a white frame. Inflate the instance so the fringe
@@ -2051,12 +2041,14 @@ impl AppState {
         if self.overlay_restore_clear && self.last_overlay_boxes.is_empty() {
             self.overlay_occupied.take();
         }
-        let strip_n: usize = self
-            .scroll_strip_blit
-            .iter()
-            .map(|j| j.plan.exposed_strips().count())
-            .sum();
-        if strip_n.saturating_add(self.scroll_blit_pins.len()) > super::draw_cull::CULL_RECTS_CAP {
+        // Count actual disjoint coverage, not nested dirty-node records.
+        if super::draw_cull::scroll_repair_rects_physical(
+            &self.scroll_strip_blit,
+            &self.scroll_blit_pins,
+            self.ui_scale(),
+        )
+        .is_none()
+        {
             self.abort_scroll_strip_blit();
         }
     }
@@ -2357,7 +2349,11 @@ impl AppState {
             scissor_physical = self.damage_rect.and_then(|damage| {
                 super::damage::damage_to_scissor_physical(
                     damage,
-                    super::draw_cull::DAMAGE_CULL_PAD_LOGICAL,
+                    if self.scroll_layer_clear {
+                        0.0
+                    } else {
+                        super::draw_cull::DAMAGE_CULL_PAD_LOGICAL
+                    },
                     ui_scale,
                     self.config.width,
                     self.config.height,
@@ -2383,7 +2379,7 @@ impl AppState {
             scissor_physical = scissor_src.and_then(|damage| {
                 super::damage::damage_to_scissor_physical(
                     damage,
-                    super::draw_cull::DAMAGE_CULL_PAD_LOGICAL,
+                    0.0,
                     ui_scale,
                     self.config.width,
                     self.config.height,
@@ -2399,23 +2395,18 @@ impl AppState {
         let warm_retain = keep_retain && !self.present_retain.contents_valid();
         let draw_to_retain = keep_retain;
         let use_node_present = node_present && use_partial_damage;
-        let pad = super::draw_cull::DAMAGE_CULL_PAD_LOGICAL;
+        let pad = if self.scroll_layer_clear {
+            0.0
+        } else {
+            super::draw_cull::DAMAGE_CULL_PAD_LOGICAL
+        };
         let cull_phys = if use_partial_damage && !use_node_present {
             if !self.scroll_strip_blit.is_empty() {
-                let mut rects = Vec::new();
-                for job in &self.scroll_strip_blit {
-                    for s in job.plan.exposed_strips() {
-                        rects.push(super::draw_cull::damage_cull_rect_physical(
-                            s, pad, ui_scale,
-                        ));
-                    }
-                }
-                for pin in &self.scroll_blit_pins {
-                    rects.push(super::draw_cull::damage_cull_rect_physical(
-                        *pin, pad, ui_scale,
-                    ));
-                }
-                super::draw_cull::CullRects::from_rects(rects)
+                super::draw_cull::scroll_repair_rects_physical(
+                    &self.scroll_strip_blit,
+                    &self.scroll_blit_pins,
+                    ui_scale,
+                )
             } else if let Some(damage) = self.damage_rect {
                 Some(super::draw_cull::CullRects::one(
                     super::draw_cull::damage_cull_rect_physical(damage, pad, ui_scale),
@@ -2500,6 +2491,11 @@ impl AppState {
                     dirty.key,
                     super::damage::overlay_suffix_encode_bounds(dirty.bounds),
                 ));
+                continue;
+            }
+            // A rejected ancestor clip is final. A reset derived from an old
+            // animation pose must never replace it with an on-screen rectangle.
+            if scissor_logical[2] <= 0.0 || scissor_logical[3] <= 0.0 {
                 continue;
             }
             let page_inst = &scaled_instances[..overlay_inst_start.min(scaled_instances.len())];
@@ -5419,40 +5415,48 @@ impl AppState {
             && page_text_unchanged
             && gpu_present.use_partial_damage
             && !region_present;
-        // Never cull page glyphon except a real scroll-layer Clear. Never reuse a
-        // page-stack buffer on FullClear — that drew empty captions over a wiped RT.
-        // Glyph clip uses the unpadded scrolled viewport (1px AA), not the 16px SDF pad.
+        // Every cleared pixel needs both primitives and glyphs from this frame.
+        // FullClear prepares complete bands; partial repair uses the same holes
+        // for text and primitive submission.
         let page_text_cull = if self.scroll_layer_clear && gpu_present.use_partial_damage {
-            let pad = super::draw_cull::SCROLL_LAYER_TEXT_PAD_LOGICAL;
-            if !self.scroll_strip_blit.is_empty() {
-                let mut rects = Vec::new();
-                for job in &self.scroll_strip_blit {
-                    for s in job.plan.exposed_strips() {
-                        rects.push(super::draw_cull::padded_xywh(s, pad));
-                    }
+            // Prepare exactly the pixels reset below, including viewport-clear
+            // fallback and pins outside the scrolled viewport.
+            cull_phys.and_then(|c| {
+                super::draw_cull::CullRects::from_rects(c.strips().map(|r| {
+                    let s = ui_scale.max(1e-6);
+                    [r[0] / s, r[1] / s, r[2] / s, r[3] / s]
+                }))
+            })
+        } else if region_present && gpu_present.use_node_present {
+            // Region repair needs unchanged glyphs inside the cleared holes,
+            // not every caption on the page. Preserve all holes; an enclosing
+            // cull is safe here because encode still scissors each Region.
+            let mut bounds = None;
+            for dirty in &self.damage_nodes {
+                if !matches!(
+                    dirty.kind,
+                    super::damage::PaintDirtyKind::Region
+                        | super::damage::PaintDirtyKind::OverlayRestore
+                ) {
+                    continue;
                 }
-                for pin in &self.scroll_blit_pins {
-                    rects.push(super::draw_cull::padded_xywh(*pin, pad));
+                let hole = super::draw_cull::node_present_scissor_logical(
+                    dirty.kind,
+                    dirty.key,
+                    dirty.bounds,
+                    &self.last_present_node_bounds,
+                    &render_result.node_paints,
+                    0.0,
+                );
+                if hole[2] <= 0.0 || hole[3] <= 0.0 {
+                    continue;
                 }
-                super::draw_cull::CullRects::from_rects(rects).or_else(|| {
-                    self.damage_rect.map(|d| {
-                        super::draw_cull::CullRects::one(super::draw_cull::padded_xywh(d, pad))
-                    })
-                })
-            } else {
-                match (self.scroll_text_clip, self.scroll_text_clip_second) {
-                    (Some(a), Some(b)) => Some(super::draw_cull::CullRects::pair(
-                        super::draw_cull::padded_xywh(a, pad),
-                        super::draw_cull::padded_xywh(b, pad),
-                    )),
-                    (Some(a), None) => Some(super::draw_cull::CullRects::one(
-                        super::draw_cull::padded_xywh(a, pad),
-                    )),
-                    (None, _) => self.damage_rect.map(|d| {
-                        super::draw_cull::CullRects::one(super::draw_cull::padded_xywh(d, pad))
-                    }),
-                }
+                bounds = Some(match bounds {
+                    Some(previous) => super::damage::union_rects(previous, hole),
+                    None => hole,
+                });
             }
+            bounds.map(super::draw_cull::CullRects::one)
         } else {
             None
         };
@@ -6636,13 +6640,24 @@ impl AppState {
             if gpu_present.clear_damage && strip_copy_committed {
                 if let Some(cull) = cull_phys {
                     for rect in cull.strips() {
-                        draw_scissor_clear(
+                        let Some((x, y, w, h)) = super::damage::physical_xywh_to_scissor(
+                            rect,
+                            self.config.width,
+                            self.config.height,
+                        ) else {
+                            continue;
+                        };
+                        render_pass.set_scissor_rect(x, y, w, h);
+                        draw_scissor_fill(
                             &mut render_pass,
                             &self.pipeline,
                             &self.device,
                             rect,
                             clear_color,
                         );
+                    }
+                    if let Some((x, y, w, h)) = scissor_physical {
+                        render_pass.set_scissor_rect(x, y, w, h);
                     }
                 }
             }

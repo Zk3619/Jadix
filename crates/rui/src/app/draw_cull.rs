@@ -126,6 +126,32 @@ pub(crate) fn damage_cull_rect_physical(
     scale_xywh(padded_xywh(damage_logical, pad_logical), scale)
 }
 
+/// Final scroll repair coverage. Inputs already include each owner's paint
+/// outset and overflow clip: adding another generic pad leaks into the header.
+pub(crate) fn scroll_repair_rects_physical(
+    jobs: &[super::damage::ScrollStripBlitJob],
+    pins: &[[f32; 4]],
+    scale: f32,
+) -> Option<CullRects> {
+    let mut coverage: Vec<_> = jobs
+        .iter()
+        .flat_map(|j| j.plan.exposed_strips())
+        .chain(pins.iter().copied())
+        .collect();
+    // Parent repairs subsume their avatar/label descendants. Visit them first
+    // so contained children cannot fragment one hole beyond the GPU limit.
+    coverage.sort_by(|a, b| (b[2] * b[3]).total_cmp(&(a[2] * a[3])));
+    let mut rects = Vec::new();
+    for rect in coverage {
+        let r = scale_xywh(rect, scale);
+        let x = r[0].floor();
+        let y = r[1].floor();
+        let r = [x, y, (r[0] + r[2]).ceil() - x, (r[1] + r[3]).ceil() - y];
+        super::damage::push_disjoint_rect(&mut rects, r);
+    }
+    CullRects::from_rects(rects)
+}
+
 fn transform_is_identity(m: &[f32; 6]) -> bool {
     m.iter()
         .zip(MAT2D_IDENTITY.iter())
@@ -488,9 +514,6 @@ pub(crate) fn page_stack_band_submit_text<'a>(
         return None;
     }
     let slice = &curr[lo..hi];
-    if !partial_load {
-        return Some(Cow::Borrowed(slice));
-    }
     if let Some(clip) = scroll_clip {
         let clipped = clip_text_nodes_to_cull(slice, clip);
         return if clipped.is_empty() {
@@ -498,6 +521,9 @@ pub(crate) fn page_stack_band_submit_text<'a>(
         } else {
             Some(Cow::Owned(clipped))
         };
+    }
+    if !partial_load {
+        return Some(Cow::Borrowed(slice));
     }
     // Match by ink identity, not collect index. Send inserts a bubble in the
     // middle of the band; shifting later slots used to mark 布局 as "new".
@@ -659,14 +685,6 @@ fn matching_slots_own_halo(
         .fold(0.0, f32::max)
 }
 
-fn overflow_allowing_own_halo(clip: [f32; 4], halo: f32) -> [f32; 4] {
-    if halo <= 0.0 {
-        clip
-    } else {
-        padded_xywh(clip, halo)
-    }
-}
-
 /// Topmost opaque fill containing `x,y` (walk instances in reverse draw order).
 pub(crate) fn opaque_fill_color_at(
     instances: &[InstanceInput],
@@ -816,10 +834,14 @@ pub(crate) fn node_present_overflow_clip(
     dirty_bounds: [f32; 4],
     node_paints: &[NodePaint],
 ) -> Option<[f32; 4]> {
-    let has_keyed = paints_has_keyed_slot(dirty_key, dirty_bounds, node_paints);
+    // Geometry matching intentionally rejects recycled/remote draw slots, but
+    // must not discard the live owner's clip when a cached dirty pose is stale.
+    let has_keyed = node_paints.iter().any(|p| p.key == dirty_key);
     let mut acc: Option<[f32; 4]> = None;
     for p in node_paints {
-        if !slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed) {
+        if if has_keyed { p.key != dirty_key } else {
+            !slot_matches_dirty(dirty_key, dirty_bounds, p, false)
+        } {
             continue;
         }
         let Some(c) = p.overflow_clip else {
@@ -1084,7 +1106,7 @@ pub(crate) fn node_present_reset_rect(
         let overflow = node_present_overflow_clip(dirty_key, dirty_bounds, node_paints);
         return match overflow {
             Some(c) if !dest_reset_fills_overflow_clip(dirty_bounds, overflow) => {
-                intersect_rects(r, overflow_allowing_own_halo(scale_xywh(c, s), 0.0))
+                intersect_rects(r, scale_xywh(c, s))
             }
             _ => Some(r),
         };
@@ -1198,9 +1220,9 @@ pub(crate) fn node_present_reset_rect(
     acc.map(|r| padded_xywh(r, wipe_pad))
         .and_then(|r| match overflow {
             Some(c) => {
-                let halo =
-                    matching_slots_own_halo(dirty_key, dirty_bounds, node_paints, instances, s);
-                intersect_rects(r, overflow_allowing_own_halo(scale_xywh(c, s), halo))
+                // NodePaint stores the ancestor clip. A node's own shadow may
+                // escape its own overflow, but never its parent's viewport.
+                intersect_rects(r, scale_xywh(c, s))
             }
             None => Some(r),
         })
@@ -1500,12 +1522,8 @@ pub(crate) fn node_paint_visual_bounds_in(
         return acc;
     }
     if let Some(c) = p.overflow_clip {
-        if c[2] > 0.0 && c[3] > 0.0 {
-            let clip = overflow_allowing_own_halo(c, slot_own_outset_halo_pad(p, instances, 1.0));
-            if let Some(hit) = intersect_rects(acc, clip) {
-                acc = hit;
-            }
-        }
+        // Empty/disjoint clips mean no pixels were presented, not "unclipped".
+        acc = intersect_rects(acc, c).unwrap_or([0.0; 4]);
     }
     acc
 }
@@ -1911,7 +1929,7 @@ fn node_present_scissor_logical_ex(
         // label pixels as Latest exits, leaving faint text below "focus".
         // A keyed layer keeps its ancestor clip after promotion. The largest
         // fallback clip may belong to the outer page and include the header.
-        let keyed = paints_has_keyed_slot(dirty_key, dirty_bounds, node_paints);
+        let keyed = node_paints.iter().any(|p| p.key == dirty_key);
         let clip = if keyed {
             node_present_overflow_clip(dirty_key, dirty_bounds, node_paints)
         } else {
@@ -5548,6 +5566,43 @@ mod tests {
     }
 
     #[test]
+    fn ancestor_clip_caps_shadow_wipe_and_last_present() {
+        let mut fill = blank_instance(120.0, 102.0, 80.0, 30.0);
+        fill.color = [1.0; 4];
+        fill.shadow_color = [0.0, 0.0, 0.0, 0.25];
+        fill.shadow_blur = 8.0;
+        let mut p = slot(7, [120.0, 102.0, 80.0, 30.0], (0, 0));
+        p.instance = (0, 1);
+        p.overflow_clip = Some([0.0, 100.0, 400.0, 300.0]);
+        let prev = node_paint_visual_bounds(&p, &[fill], &[], &[], &[]);
+        assert!(
+            prev[1] >= 100.0,
+            "shadow must not invent pixels above viewport"
+        );
+        let wipe = node_present_reset_rect(
+            7,
+            p.bounds,
+            &[p],
+            &[fill],
+            &[],
+            &[],
+            NODE_PRESENT_RESET_PAD_PHYSICAL,
+            1.0,
+            Some(prev),
+        )
+        .unwrap();
+        assert!(wipe[1] >= 100.0, "shadow expansion must not erase header");
+        for clip in [[0.0; 4], [0.0, 250.0, 400.0, 100.0]] {
+            p.overflow_clip = Some(clip);
+            let hidden = node_paint_visual_bounds(&p, &[fill], &[], &[], &[]);
+            assert_eq!(
+                hidden, [0.0; 4],
+                "culled ink must not become last-present damage"
+            );
+        }
+    }
+
+    #[test]
     fn dest_reset_overflow_hidden_must_cover_own_outset_shadow() {
         // Gallery SidebarInset: overflow:hidden + Elevation::Md (blur 8, offset y 2).
         // Own chrome paints the halo outside overflow (Dialog/Drawer rule). Dest-reset
@@ -5571,7 +5626,8 @@ mod tests {
             text: (0, 0),
             chrome: (0, 0),
             paint_ops: (0, 0),
-            overflow_clip: Some(box_),
+            // collect records the parent clip, not this node's own overflow.
+            overflow_clip: None,
             layered: false,
             rest: None,
         };
