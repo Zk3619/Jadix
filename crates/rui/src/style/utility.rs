@@ -952,7 +952,7 @@ pub fn tick_active_css_transitions_subtree(
         {
             continue;
         }
-        if has_spin || has_css_anim || has_active_css || css_needs || el.collect_skip_live {
+        if crate::layout::collect_cache::node_paint_needs_frame(el) || css_needs {
             super::animation::note_page_css_needs_frame();
         }
         let defer_shell_css =
@@ -1072,7 +1072,11 @@ pub fn tick_active_css_transitions_subtree(
                     // keeps the previous hover/rest ink until settle.
                     // Opacity tween *complete* returns css_trans=false after writing 0;
                     // still dest-reset or Latest hide retains the last faded pill.
-                    crate::app::damage::push_frame_paint_element(el, scroll_acc);
+                    crate::app::damage::push_frame_paint_element_change(
+                        el,
+                        scroll_acc,
+                        before.opacity,
+                    );
                 }
                 if css_trans
                     || (el.style.scale[0] - before.scale[0]).abs() > 1e-5
@@ -1682,7 +1686,7 @@ fn sync_class_variants_subtree_inner(
             {
                 continue;
             }
-            if has_spin || has_css_anim || has_active_css || css_needs || el.collect_skip_live {
+            if crate::layout::collect_cache::node_paint_needs_frame(el) || css_needs {
                 super::animation::note_page_css_needs_frame();
             }
 
@@ -1865,7 +1869,11 @@ fn sync_class_variants_subtree_inner(
                             || hover_edge
                             || (el.style.opacity - before.opacity).abs() > 1e-5
                         {
-                            crate::app::damage::push_frame_paint_element(el, scroll_acc);
+                            crate::app::damage::push_frame_paint_element_change(
+                                el,
+                                scroll_acc,
+                                before.opacity,
+                            );
                         }
                         if css_trans
                             || (el.style.scale[0] - before.scale[0]).abs() > 1e-5

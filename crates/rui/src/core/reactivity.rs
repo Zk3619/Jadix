@@ -175,6 +175,7 @@ struct MemoState {
     owner: OwnerId,
     depth: u32,
     dirty: Cell<bool>,
+    verified_revision: Cell<u64>,
     /// Backing signal that memo readers subscribe to.
     signal: SignalId,
     /// Recompute: reads sources (tracked), writes backing signal via `set` without notifying
@@ -196,6 +197,10 @@ pub struct Runtime {
     named_signal_types: RefCell<HashMap<String, TypeId>>,
     effects: RefCell<HashMap<EffectId, EffectState>>,
     memos: RefCell<HashMap<MemoId, MemoState>>,
+    /// Backing signal -> producing memo, for pull validation through clean memo chains.
+    signal_memos: RefCell<HashMap<SignalId, MemoId>>,
+    /// Invalidates pull validation once per notifying write, not once per read.
+    memo_revision: Cell<u64>,
     /// signal → subscribed effects
     pub signal_subscribers: RefCell<HashMap<SignalId, HashSet<EffectId>>>,
     /// signal → memos that read it
@@ -248,6 +253,8 @@ impl Runtime {
             named_signal_types: RefCell::new(HashMap::new()),
             effects: RefCell::new(HashMap::new()),
             memos: RefCell::new(HashMap::new()),
+            signal_memos: RefCell::new(HashMap::new()),
+            memo_revision: Cell::new(1),
             signal_subscribers: RefCell::new(HashMap::new()),
             signal_memo_subscribers: RefCell::new(HashMap::new()),
             effect_deps: RefCell::new(HashMap::new()),
@@ -506,6 +513,7 @@ fn dispose_memo_inner(rt: &Runtime, id: MemoId) {
         return;
     };
     let deps = rt.memo_deps.borrow_mut().remove(&id).unwrap_or_default();
+    rt.signal_memos.borrow_mut().remove(&state.signal);
     for signal_id in deps {
         if let Some(set) = rt.signal_memo_subscribers.borrow_mut().get_mut(&signal_id) {
             set.remove(&id);
@@ -806,18 +814,56 @@ fn run_memo(rt: &Runtime, memo_id: MemoId) -> bool {
 
     if let Some(memo) = rt.memos.borrow().get(&memo_id) {
         memo.dirty.set(false);
+        memo.verified_revision.set(rt.memo_revision.get());
     }
 
     *rt.current_memo.borrow_mut() = prev_memo;
     *rt.current_owner.borrow_mut() = prev_owner;
     *rt.current_effect.borrow_mut() = prev_effect;
 
-    let _ = signal_id;
+    if changed {
+        // A pull inside batch must notify just like a queued recomputation. Do
+        // not flush here: the caller may still be collecting memo/effect deps.
+        let effects = rt
+            .signal_subscribers
+            .borrow()
+            .get(&signal_id)
+            .cloned()
+            .unwrap_or_default();
+        let running = *rt.current_effect.borrow();
+        for effect in effects {
+            if running != Some(effect) {
+                enqueue_pending_effect(rt, effect);
+            }
+        }
+        mark_memos_dirty_from_signal(rt, signal_id);
+    }
     changed
 }
 
 fn ensure_memo_fresh(rt: &Runtime, memo_id: MemoId) {
-    // Pull-based: if this memo is dirty, refresh it (and transitively its dirty memo deps via get).
+    if rt
+        .memos
+        .borrow()
+        .get(&memo_id)
+        .is_none_or(|m| !m.dirty.get() && m.verified_revision.get() == rt.memo_revision.get())
+    {
+        return;
+    }
+    // An upstream memo may be dirty while this memo is still clean. Validate
+    // producers first; their equality check decides whether we need to compute.
+    let producers: Vec<MemoId> = {
+        let deps = rt.memo_deps.borrow();
+        let producers = rt.signal_memos.borrow();
+        deps.get(&memo_id)
+            .into_iter()
+            .flatten()
+            .filter_map(|signal| producers.get(signal).copied())
+            .collect()
+    };
+    for producer in producers {
+        ensure_memo_fresh(rt, producer);
+    }
     let dirty = rt
         .memos
         .borrow()
@@ -826,6 +872,9 @@ fn ensure_memo_fresh(rt: &Runtime, memo_id: MemoId) {
         .unwrap_or(false);
     if dirty {
         let _ = run_memo(rt, memo_id);
+    }
+    if let Some(memo) = rt.memos.borrow().get(&memo_id) {
+        memo.verified_revision.set(rt.memo_revision.get());
     }
 }
 
@@ -875,24 +924,7 @@ fn flush_pending(rt: &Runtime) {
                     .unwrap_or(u32::MAX)
             });
             for memo_id in ordered {
-                let changed = run_memo(rt, memo_id);
-                if changed {
-                    // Notify effect subscribers of the memo's backing signal.
-                    let signal_id = rt.memos.borrow().get(&memo_id).map(|m| m.signal);
-                    if let Some(signal_id) = signal_id {
-                        let effects = rt
-                            .signal_subscribers
-                            .borrow()
-                            .get(&signal_id)
-                            .cloned()
-                            .unwrap_or_default();
-                        for effect_id in effects {
-                            enqueue_pending_effect(rt, effect_id);
-                        }
-                        // Downstream memos that read this memo's signal.
-                        mark_memos_dirty_from_signal(rt, signal_id);
-                    }
-                }
+                ensure_memo_fresh(rt, memo_id);
             }
             // More memos may have been enqueued; continue loop.
             if !rt.pending_memos.borrow().is_empty() {
@@ -965,6 +997,7 @@ fn enqueue_deferred_fn(rt: &Runtime, f: Box<dyn FnOnce()>) {
 }
 
 fn notify_signal_subscribers(rt: &Runtime, signal_id: SignalId) {
+    rt.memo_revision.set(rt.memo_revision.get().wrapping_add(1));
     mark_memos_dirty_from_signal(rt, signal_id);
 
     let effects = rt
@@ -1372,6 +1405,7 @@ pub fn clear_effects() {
         rt.effects.borrow_mut().clear();
         rt.effect_deps.borrow_mut().clear();
         rt.memos.borrow_mut().clear();
+        rt.signal_memos.borrow_mut().clear();
         rt.memo_deps.borrow_mut().clear();
         rt.signal_subscribers.borrow_mut().clear();
         rt.signal_memo_subscribers.borrow_mut().clear();
@@ -2207,6 +2241,7 @@ where
                 owner,
                 depth,
                 dirty: Cell::new(true),
+                verified_revision: Cell::new(0),
                 signal: signal_id,
                 compute: compute_rc,
             },
@@ -2215,6 +2250,7 @@ where
             node.memos.push(memo_id);
         }
 
+        rt.signal_memos.borrow_mut().insert(signal_id, memo_id);
         // First compute to establish deps.
         let _ = run_memo(&rt, memo_id);
 

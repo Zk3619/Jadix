@@ -641,8 +641,8 @@ fn fill_mode_forwards_holds_end_opacity() {
     }
     assert!(!animation_run_active(&style, &snap));
     assert!(
-        css_animation_needs_frame(&style, &snap),
-        "forwards keeps style.animations non-empty → frame-pump API stays true"
+        !css_animation_needs_frame(&style, &snap),
+        "forwards retains the end value without keeping the frame pump alive"
     );
     assert!(
         style.opacity < 0.05,

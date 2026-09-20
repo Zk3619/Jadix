@@ -8,7 +8,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use crate::core::reactivity::Signal;
+use crate::core::reactivity::{batch, Signal};
 
 use super::animatable::PropertyId;
 use super::element_style::{
@@ -309,11 +309,10 @@ impl Animation {
             let restart = g.finish_fired || g.cancelled;
             g.cancelled = false;
             g.cancel_fired = false;
-            let _ = g.cancelled_sig.try_set(false);
             g.play_state = AnimationPlayState::Running;
+            let was_finished = g.finish_fired;
             if g.finish_fired {
                 g.finish_fired = false;
-                let _ = g.finished.try_set(false);
             }
             if restart {
                 if g.playback_rate >= 0.0 {
@@ -323,6 +322,15 @@ impl Animation {
                     g.seek_ms = Some(if end.is_finite() { end } else { 0.0 });
                 }
             }
+            let cancelled = g.cancelled_sig;
+            let finished = g.finished;
+            drop(g);
+            batch(|| {
+                let _ = cancelled.try_set(false);
+                if was_finished {
+                    let _ = finished.try_set(false);
+                }
+            });
         }
     }
 
@@ -368,7 +376,8 @@ impl Animation {
             g.cancelled = true;
             g.play_state = AnimationPlayState::Paused;
             g.seek_ms = Some(0.0);
-            fire_cancel(&mut g);
+            drop(g);
+            fire_cancel(&p);
         }
     }
 
@@ -389,7 +398,8 @@ impl Animation {
         if let Some(p) = lookup(self.id) {
             let mut g = p.borrow_mut();
             g.play_state = AnimationPlayState::Paused;
-            fire_finish(&mut g);
+            drop(g);
+            fire_finish(&p);
         }
     }
 
@@ -403,11 +413,17 @@ impl Animation {
         if let Some(p) = lookup(self.id) {
             let mut g = p.borrow_mut();
             g.seek_ms = Some(ms.max(0.0));
+            g.current_time_ms = ms.max(0.0);
             g.cancelled = false;
             g.cancel_fired = false;
             g.finish_fired = false;
-            let _ = g.finished.try_set(false);
-            let _ = g.cancelled_sig.try_set(false);
+            let finished = g.finished;
+            let cancelled = g.cancelled_sig;
+            drop(g);
+            batch(|| {
+                let _ = finished.try_set(false);
+                let _ = cancelled.try_set(false);
+            });
         }
     }
 
@@ -551,24 +567,32 @@ fn lookup(id: u64) -> Option<Rc<RefCell<Playback>>> {
     PLAYBACK.with(|m| m.borrow().get(&id).cloned())
 }
 
-fn fire_finish(g: &mut Playback) {
+fn fire_finish(p: &Rc<RefCell<Playback>>) {
+    let mut g = p.borrow_mut();
     if g.finish_fired || g.cancelled {
         return;
     }
     g.finish_fired = true;
-    let _ = g.finished.try_set(true);
-    if let Some(cb) = g.on_finish.clone() {
+    let signal = g.finished;
+    let callback = g.on_finish.clone();
+    drop(g);
+    let _ = signal.try_set(true);
+    if let Some(cb) = callback {
         cb();
     }
 }
 
-fn fire_cancel(g: &mut Playback) {
+fn fire_cancel(p: &Rc<RefCell<Playback>>) {
+    let mut g = p.borrow_mut();
     if g.cancel_fired {
         return;
     }
     g.cancel_fired = true;
-    let _ = g.cancelled_sig.try_set(true);
-    if let Some(cb) = g.on_cancel.clone() {
+    let signal = g.cancelled_sig;
+    let callback = g.on_cancel.clone();
+    drop(g);
+    let _ = signal.try_set(true);
+    if let Some(cb) = callback {
         cb();
     }
 }
@@ -604,14 +628,28 @@ pub(crate) fn is_cancelled(id: u64) -> bool {
     lookup(id).is_some_and(|p| p.borrow().cancelled)
 }
 
+pub(crate) fn needs_frame(id: u64, run: Option<&super::animation::AnimationRunState>) -> bool {
+    lookup(id).is_some_and(|p| {
+        let g = p.borrow();
+        g.seek_ms.is_some()
+            || (!g.cancelled
+                && g.play_state == AnimationPlayState::Running
+                && g.playback_rate != 0.0
+                && !g.finish_fired
+                && !run.is_some_and(|r| r.finished))
+    })
+}
+
 pub(crate) fn observe_time(id: u64, elapsed_ms: f32, run_finished: bool) {
     let Some(p) = lookup(id) else {
         return;
     };
     let mut g = p.borrow_mut();
     g.current_time_ms = elapsed_ms;
-    if run_finished && !g.cancelled {
-        fire_finish(&mut g);
+    let finished = run_finished && !g.cancelled;
+    drop(g);
+    if finished {
+        fire_finish(&p);
     }
 }
 

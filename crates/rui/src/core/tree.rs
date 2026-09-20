@@ -4595,6 +4595,7 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
             if let Some(sync) = element.reactive_sync.clone() {
                 let before = element.layout_bounds;
                 let before_display = element.style.display;
+                let before_opacity = element.style.opacity;
                 let status = sync.run(element, layout_tree);
                 match status {
                     LayoutStatus::LayoutChanged => {
@@ -4650,7 +4651,11 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                         // Halo-only (InputAdornment blur): strips already queued —
                         // a second full-box Node wipe flashes placeholder + ⌘K.
                         if element.attrs.remove("rui_halo_dirty").is_none() {
-                            crate::app::damage::push_frame_paint_element(element, scroll_acc);
+                            crate::app::damage::push_frame_paint_element_change(
+                                element,
+                                scroll_acc,
+                                before_opacity,
+                            );
                         }
                         style_changed = true;
                     }

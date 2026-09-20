@@ -826,10 +826,13 @@ pub(crate) fn node_present_overflow_clip(
             continue;
         };
         if c[2] <= 0.0 || c[3] <= 0.0 {
-            continue;
+            // Some(empty) is the intersection of ancestor clips after this
+            // subtree has scrolled out. It must remain a hard rejection, not
+            // turn into None (unclipped) and permit a Region to clear the header.
+            return Some(c);
         }
         acc = Some(match acc {
-            Some(prev) => intersect_rects(prev, c).unwrap_or(prev),
+            Some(prev) => intersect_rects(prev, c).unwrap_or([0.0; 4]),
             None => c,
         });
     }
@@ -1631,6 +1634,230 @@ pub(crate) fn escalate_dirties_for_node_present(
     }
 }
 
+/// Finalize tiers before deciding Load/Clear or capturing any glyphs. A live
+/// slot does not imply that its previous pixels have a recoverable backdrop.
+pub(crate) fn restore_culled_dirty_clips(
+    root: &crate::core::tree::Element,
+    paints: &mut Vec<NodePaint>,
+    dirties: &[PaintDirty],
+) {
+    use crate::core::tree::{child_scroll_accumulation, overflow_clip_axes, visual_paint_aabb};
+    let mut missing: std::collections::HashSet<_> = dirties
+        .iter()
+        .filter(|d| matches!(d.kind, PaintDirtyKind::Node | PaintDirtyKind::Region))
+        .map(|d| d.key)
+        .collect();
+    for p in paints.iter() {
+        missing.remove(&p.key);
+    }
+    if missing.is_empty() {
+        return;
+    }
+    let mut stack = vec![(root, [0.0, 0.0], None::<[f32; 4]>, false)];
+    while let Some((el, mut scroll, mut clip, layered)) = stack.pop() {
+        if crate::layout::layout_tree::escapes_ancestor_overflow(el) {
+            scroll = [0.0, 0.0];
+            clip = None;
+        }
+        let layered = layered
+            || el.style.z_index != 0
+            || el.style.position == taffy::style::Position::Absolute;
+        let bounds = visual_paint_aabb(el, scroll);
+        if let Some(key) = el
+            .layout_node
+            .map(u64::from)
+            .filter(|key| missing.remove(key))
+        {
+            if let Some(clip) = clip {
+                // Metadata only: the culled subtree owns no submitted draws.
+                // Its retained ink still owes an erase bounded by its ancestors.
+                paints.push(NodePaint {
+                    key,
+                    bounds,
+                    overflow_clip: Some(clip),
+                    overlay: false,
+                    layered,
+                    instance: (0, 0),
+                    textured: (0, 0),
+                    text: (0, 0),
+                    chrome: (0, 0),
+                    paint_ops: (0, 0),
+                    rest: Some(bounds),
+                });
+            }
+            if missing.is_empty() {
+                break;
+            }
+        }
+        let (cx, cy) = overflow_clip_axes(el);
+        if cx || cy {
+            let mut c = clip.unwrap_or([-1.0e7, -1.0e7, 2.0e7, 2.0e7]);
+            for axis in 0..2 {
+                if (axis == 0 && cx) || (axis == 1 && cy) {
+                    let end = (c[axis] + c[axis + 2]).min(bounds[axis] + bounds[axis + 2]);
+                    c[axis] = c[axis].max(bounds[axis]);
+                    c[axis + 2] = (end - c[axis]).max(0.0);
+                }
+            }
+            clip = Some(c);
+        }
+        let scroll = child_scroll_accumulation(el, scroll);
+        for child in &el.children {
+            stack.push((child, scroll, clip, layered));
+        }
+    }
+}
+
+pub(crate) fn prepare_node_present_dirties(
+    dirties: &mut [PaintDirty],
+    node_paints: &[NodePaint],
+    last_present: &[(u64, [f32; 4])],
+    instances: &[InstanceInput],
+    textured: &[ScaledTexturedDraw],
+    chrome: &[InstanceInput],
+    ui_scale: f32,
+    overlay: Option<[f32; 4]>,
+) {
+    escalate_dirties_for_node_present(dirties, node_paints, last_present);
+    for dirty in dirties.iter_mut() {
+        if dirty.kind != PaintDirtyKind::Node
+            || paint_dirty_is_caret_overlay(dirty, node_paints, instances)
+        {
+            continue;
+        }
+        let prev = last_present_prev_for_dirty(dirty.kind, dirty.key, last_present);
+        if matching_slot_is_layered(dirty.key, dirty.bounds, node_paints) {
+            // A stacking layer is a composite, not an independently erasable
+            // text/fill node. Background glyph restoration followed by a global
+            // label flush interleaves Latest and its text children incorrectly.
+            // Rebuild the local hole in page-band order, including the last
+            // visible frame when the layer has just reached opacity zero.
+            let mut bounds = dirty.bounds;
+            if let Some(old) = prev {
+                bounds = union_xywh(bounds, old);
+            }
+            if let Some(rect) = node_present_reset_rect(
+                dirty.key,
+                dirty.bounds,
+                node_paints,
+                instances,
+                textured,
+                chrome,
+                NODE_PRESENT_RESET_PAD_PHYSICAL,
+                ui_scale,
+                prev,
+            ) {
+                let s = ui_scale.max(1e-6);
+                bounds = union_xywh(bounds, [rect[0] / s, rect[1] / s, rect[2] / s, rect[3] / s]);
+            }
+            // Rounded SDF coverage reaches beyond the nominal box even at
+            // low opacity, when the ordinary dest-ink test ignores the fill.
+            // Keep that fringe through the final transparent frame as well.
+            dirty.bounds = padded_xywh(bounds, 2.0 / ui_scale.max(1e-6));
+            dirty.kind = PaintDirtyKind::Region;
+            continue;
+        }
+        let src_over =
+            layered_src_over_skips_dest_reset(dirty.key, dirty.bounds, node_paints, prev);
+        if src_over && overlay.is_none() {
+            continue;
+        }
+        let reset = node_present_dest_reset_full(
+            dirty.key,
+            dirty.bounds,
+            node_paints,
+            instances,
+            textured,
+            chrome,
+            ui_scale,
+            prev,
+        );
+        let reset_rect = reset.as_ref().map(|r| r.rect).or_else(|| {
+            node_present_reset_rect(
+                dirty.key,
+                dirty.bounds,
+                node_paints,
+                instances,
+                textured,
+                chrome,
+                NODE_PRESENT_RESET_PAD_PHYSICAL,
+                ui_scale,
+                prev,
+            )
+        });
+        let s = ui_scale.max(1e-6);
+        let logical = reset_rect
+            .map(|r| [r[0] / s, r[1] / s, r[2] / s, r[3] / s])
+            .unwrap_or(dirty.bounds);
+        if overlay.is_some_and(|occ| intersect_rects(logical, occ).is_some()) {
+            // Portal AABBs include translucent shadows/AA. Treating the entire
+            // AABB as opaque preserves stale underlay at those pixels. Rebuild
+            // the local composite and replay the portal in the same hole.
+            dirty.kind = PaintDirtyKind::Region;
+            dirty.bounds = logical;
+            continue;
+        }
+        if src_over || reset.is_some() {
+            continue;
+        }
+        if let Some(rect) = reset_rect {
+            dirty.bounds = [rect[0] / s, rect[1] / s, rect[2] / s, rect[3] / s];
+            dirty.kind = PaintDirtyKind::Region;
+        }
+    }
+    // A concurrent in-flow caption must not be flushed after a Region that
+    // already composited an overlapping Latest layer. Promote connected dirty
+    // coverage too; unrelated nodes retain their independent Node fast path.
+    let mut regions: Vec<_> = dirties
+        .iter()
+        .filter(|d| {
+            matches!(
+                d.kind,
+                PaintDirtyKind::Region | PaintDirtyKind::OverlayRestore
+            )
+        })
+        .map(|d| d.bounds)
+        .collect();
+    let mut cursor = 0;
+    while cursor < regions.len() {
+        let region = regions[cursor];
+        cursor += 1;
+        for dirty in dirties.iter_mut() {
+            if dirty.kind != PaintDirtyKind::Node
+                || paint_dirty_is_caret_overlay(dirty, node_paints, instances)
+            {
+                continue;
+            }
+            let prev = last_present_prev_for_dirty(dirty.kind, dirty.key, last_present);
+            let candidate = prev
+                .map(|r| union_xywh(r, dirty.bounds))
+                .unwrap_or(dirty.bounds);
+            if intersect_rects(candidate, region).is_none() {
+                continue;
+            }
+            let mut bounds = candidate;
+            if let Some(rect) = node_present_reset_rect(
+                dirty.key,
+                dirty.bounds,
+                node_paints,
+                instances,
+                textured,
+                chrome,
+                NODE_PRESENT_RESET_PAD_PHYSICAL,
+                ui_scale,
+                prev,
+            ) {
+                let s = ui_scale.max(1e-6);
+                bounds = union_xywh(bounds, [rect[0] / s, rect[1] / s, rect[2] / s, rect[3] / s]);
+            }
+            dirty.kind = PaintDirtyKind::Region;
+            dirty.bounds = bounds;
+            regions.push(bounds);
+        }
+    }
+    super::damage::sort_paint_dirty_nodes(dirties);
+}
+
 /// `animate-spin` / rotate grows `NodePaint.bounds` to the circumcircle while `rest`
 /// stays the Taffy box. Nested dest-reset skip would let a larger hover dirty
 /// (page-wide CursorMoved on a `hover:scale` tile) omit that wipe — retain freezes.
@@ -1678,6 +1905,30 @@ fn node_present_scissor_logical_ex(
     scissor_pad: f32,
     occupancy_clip: bool,
 ) -> [f32; 4] {
+    if kind == PaintDirtyKind::Region {
+        // Region already contains prev/current coverage and replays every layer
+        // in order. Node occupancy shrinking would cut away the last translated
+        // label pixels as Latest exits, leaving faint text below "focus".
+        // A keyed layer keeps its ancestor clip after promotion. The largest
+        // fallback clip may belong to the outer page and include the header.
+        let keyed = paints_has_keyed_slot(dirty_key, dirty_bounds, node_paints);
+        let clip = if keyed {
+            node_present_overflow_clip(dirty_key, dirty_bounds, node_paints)
+        } else {
+            let prev = prev_slots
+                .iter()
+                .find(|(key, _)| *key == dirty_key)
+                .map(|(_, rect)| *rect);
+            if scrolled_out_top_into_title(dirty_bounds, prev, node_paints) {
+                return [0.0; 4];
+            }
+            fallback_overflow_clip_for_unmatched(dirty_bounds, node_paints)
+        };
+        return match clip {
+            Some(clip) => intersect_rects(dirty_bounds, clip).unwrap_or([0.0; 4]),
+            None => dirty_bounds,
+        };
+    }
     let prev_slot = prev_slots
         .iter()
         .find(|(k, _)| *k == dirty_key)
@@ -2547,6 +2798,22 @@ pub(crate) fn node_present_clipped_capture_text_wipes(
     node_paints: &[NodePaint],
     wipe_clips: &[(u64, [f32; 4])],
 ) -> Vec<TextLayoutInfo> {
+    node_present_clipped_capture_text_wipes_excluding_overlay(
+        dirty_nodes,
+        page_text,
+        node_paints,
+        wipe_clips,
+        None,
+    )
+}
+
+pub(crate) fn node_present_clipped_capture_text_wipes_excluding_overlay(
+    dirty_nodes: &[PaintDirty],
+    page_text: &[TextLayoutInfo],
+    node_paints: &[NodePaint],
+    wipe_clips: &[(u64, [f32; 4])],
+    overlay: Option<[f32; 4]>,
+) -> Vec<TextLayoutInfo> {
     node_present_capture_text_indices(dirty_nodes, page_text, node_paints)
         .into_iter()
         .filter_map(|i| {
@@ -2580,6 +2847,28 @@ pub(crate) fn node_present_clipped_capture_text_wipes(
             let mut cloned = n.clone();
             cloned.clip_bounds = Some(clip);
             Some(cloned)
+        })
+        .flat_map(|n| {
+            // Region replays restore the underlay before repainting the portal.
+            // Node replays must preserve it and clip glyphs just like primitives.
+            let region = dirty_nodes.iter().any(|d| {
+                matches!(
+                    d.kind,
+                    PaintDirtyKind::Region | PaintDirtyKind::OverlayRestore
+                ) && text_hits_damage(&n, d.bounds)
+            });
+            if region || overlay.is_none() {
+                return vec![n];
+            }
+            let clip = n.clip_bounds.expect("capture glyphs have owner clips");
+            super::damage::page_scissors_excluding_overlay(clip, overlay)
+                .into_iter()
+                .map(|clip| {
+                    let mut piece = n.clone();
+                    piece.clip_bounds = Some(clip);
+                    piece
+                })
+                .collect()
         })
         .collect()
 }

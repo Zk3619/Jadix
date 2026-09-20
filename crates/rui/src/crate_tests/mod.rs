@@ -8,5 +8,6 @@ mod golden;
 mod interaction;
 mod layout;
 mod reactive;
+mod runtime_regressions;
 mod style;
 mod text;

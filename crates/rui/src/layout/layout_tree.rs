@@ -2113,9 +2113,7 @@ pub struct OverlayPaintSplit {
     /// as [`Self::bands`], but within the page layer before the portal suffix).
     pub page_stack_bands: Vec<OverlayPaintBand>,
     marked: bool,
-    /// Nested overlay scrollbars (`z-index: 1000`) must not append to the same global
-    /// [`Self::page_stack_bands`] list — that mis-assigns glyphs vs rects once a nested
-    /// scroller (MessageScroller, table, …) enters the visit band.
+    /// Nested contexts split layered children while in-flow siblings share a band.
     page_stack_depth: u32,
 }
 
@@ -2135,13 +2133,6 @@ pub struct OverlayPaintBand {
     pub stamp_key: u64,
 }
 
-fn subtree_has_backdrop_blur(el: &Element) -> bool {
-    if el.style.backdrop_blur > 0.5 {
-        return true;
-    }
-    el.children.iter().any(subtree_has_backdrop_blur)
-}
-
 /// Nested stacking-context children that form their own CSS stacking level.
 /// In-flow `z-index: auto` siblings share the parent's band (sortable rows).
 fn child_opens_page_stack_band(el: &Element) -> bool {
@@ -2152,6 +2143,15 @@ fn child_opens_page_stack_band(el: &Element) -> bool {
         return true;
     }
     el.attrs.get("data-stacking-context").map(|s| s.as_str()) == Some("1")
+}
+
+/// Body portals are a separate top layer even when a page child has a larger
+/// authored z-index. Keep the contiguous portal suffix and hit order aligned.
+pub(crate) fn compare_sibling_paint_order(a: &Element, b: &Element) -> std::cmp::Ordering {
+    let portal = |el: &Element| el.template_id.as_deref() == Some(PORTAL_LAYER_ID);
+    portal(a)
+        .cmp(&portal(b))
+        .then(a.style.z_index.cmp(&b.style.z_index))
 }
 
 /// Resolved `[start, end)` ranges for drawing one overlay band.
@@ -3972,6 +3972,17 @@ impl LayoutTree {
             setup_ms,
             taffy_compute_ms,
         )
+    }
+
+    /// Recollect changed animation paint using the already computed Taffy boxes.
+    /// No layout/hoist or animation-clock advancement occurs here.
+    pub(crate) fn collect_animation_frame(&mut self, root:&mut Element, mouse_pos:[f32;2],
+        scrollbar_overlay_collect:bool)->RenderResult {
+        let root_node=self.root_node.expect("animation recollect requires layout");
+        self.collect_skip.hash_bust=true;
+        let mut cache=HashMap::new();
+        let mut cache_slot=Some(&mut cache);
+        self.finish_collect(root,root_node,mouse_pos,true,scrollbar_overlay_collect,&mut cache_slot,0.0,0.0,0.0)
     }
 
     fn finish_collect(
@@ -6834,18 +6845,9 @@ impl LayoutTree {
             .map(|s| s.as_str())
             == Some("1");
         let any_stacking = stacking_attr || any_z;
-        // `backdrop-filter` must split even inside an already-open page_stack
-        // (gallery sidebar / ScrollArea). Nested z-index alone must not
-        // (MessageScroller). Only walk the subtree when this node already
-        // z-orders children — O(children of stacking parents), not O(n²).
-        let nested_backdrop_split = overlay_split.page_stack_depth > 0
-            && !stacking_attr
-            && any_z
-            && subtree_has_backdrop_blur(element);
-        let record_page_stack_bands = !overlay_split.marked
-            && ((overlay_split.page_stack_depth == 0 && any_stacking)
-                || (overlay_split.page_stack_depth > 0 && stacking_attr)
-                || nested_backdrop_split);
+        // Nested z-order still needs rect/text interleaving. Otherwise an outer
+        // ScrollArea band batches lower glyphs after the higher sibling's fill.
+        let record_page_stack_bands = !overlay_split.marked && any_stacking;
         // Outermost stack parent bands every child (page + overlay bar). Nested
         // `data-stacking-context` (DragProvider under ScrollArea) must not turn
         // each in-flow row into its own glyphon band.
@@ -6935,10 +6937,7 @@ impl LayoutTree {
         let z_order = if any_z {
             let mut order: Vec<usize> = (0..element.children.len()).collect();
             order.sort_by(|&a, &b| {
-                element.children[a]
-                    .style
-                    .z_index
-                    .cmp(&element.children[b].style.z_index)
+                compare_sibling_paint_order(&element.children[a], &element.children[b])
                     .then(a.cmp(&b))
             });
             Some(order)
@@ -10139,10 +10138,11 @@ mod portal_hoist_tests {
     }
 
     #[test]
-    fn nested_overlay_z_index_does_not_append_page_stack_bands() {
+    fn nested_overlay_z_index_keeps_glyphs_before_both_scrollbars() {
         // Gallery: outer ScrollArea overlay bar (z=1000) already owns page_stack_bands.
-        // A nested scroller with its own overlay bar must not push more splits — that
-        // mis-assigns glyphs vs rects (background scrolls, text stays).
+        // The nested bar also needs a split: its fill must cover inner glyphs.
+        // Verify ownership on full and cached collects, rather than freezing a
+        // band count that incorrectly batches those glyphs above the bar.
         let nested_bar = Element::new()
             .w(8.0)
             .h(40.0)
@@ -10170,17 +10170,50 @@ mod portal_hoist_tests {
             .child(nested)
             .child(outer_bar);
         let mut tree = LayoutTree::new();
-        let result = tree.build_and_layout(&mut outer, 200.0, 120.0, [0.0, 0.0]);
-        assert_eq!(
-            result.overlay_split.page_stack_bands.len(),
-            2,
-            "nested overlay z-index must not append extra page_stack_bands, got {}",
-            result.overlay_split.page_stack_bands.len()
-        );
-        assert!(
-            result.text_nodes.iter().any(|t| t.text == "inner-glyph"),
-            "nested content glyphs must still collect"
-        );
+        for frame in 0..2 {
+            let result = if frame == 0 {
+                tree.build_and_layout(&mut outer, 200.0, 120.0, [0.0, 0.0])
+            } else {
+                tree.build_and_layout_fast(&mut outer, 200.0, 120.0, [0.0, 0.0], false, false)
+            };
+            let bands = result.overlay_split.page_stack_band_ranges();
+            let text_band = bands
+                .iter()
+                .position(|b| {
+                    result.text_nodes[b.text.0..b.text.1]
+                        .iter()
+                        .any(|t| t.text == "inner-glyph")
+                })
+                .expect("inner text");
+            for height in [40.0, 80.0] {
+                let bar_band = bands
+                    .iter()
+                    .position(|b| {
+                        result.instances[b.instance.0..b.instance.1]
+                            .iter()
+                            .any(|i| i.rect_size == [8.0, height] && i.color[3] > 0.1)
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "frame={frame} bar height={height}, bands={:?}, end={}, instances={:?}",
+                            bands
+                                .iter()
+                                .map(|b| (b.instance, b.text))
+                                .collect::<Vec<_>>(),
+                            result.overlay_split.instance_start,
+                            result
+                                .instances
+                                .iter()
+                                .map(|i| (i.rect_pos, i.rect_size, i.color))
+                                .collect::<Vec<_>>()
+                        )
+                    });
+                assert!(
+                    text_band < bar_band,
+                    "frame {frame}: text must precede scrollbar {height}"
+                );
+            }
+        }
     }
 
     #[test]

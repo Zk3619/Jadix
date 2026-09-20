@@ -433,7 +433,7 @@ fn node_has_collect_side_channel(el: &Element) -> bool {
 
 /// Same opt-in as [`crate::layout::layout_tree`] `collect_begin_walk`: outermost
 /// `data-stacking-context=1` or any direct child `z-index != 0` records
-/// `page_stack_bands`. Nested z-index without the attr does not (MessageScroller).
+/// `page_stack_bands`, including nested z-index contexts.
 /// Stamping those parents live still lets clean **siblings** fingerprint-replay.
 fn node_records_page_stack_bands(el: &Element) -> bool {
     if el.attrs.get("data-stacking-context").map(String::as_str) == Some("1") {
@@ -502,6 +502,11 @@ fn node_collect_is_live(el: &Element) -> bool {
     if el.text_style.input_caret.is_some() {
         return true;
     }
+    node_paint_needs_frame(el)
+}
+
+/// Local continuously sampled paint, excluding descendants and timer-driven carets.
+pub(crate) fn node_paint_needs_frame(el: &Element) -> bool {
     if el.attrs.get("rui_animate").is_some_and(|v| {
         matches!(
             v.as_str(),

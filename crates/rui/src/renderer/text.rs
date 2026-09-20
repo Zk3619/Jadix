@@ -291,6 +291,9 @@ fn log_color_font_capabilities(db: &glyphon::fontdb::Database) {
 }
 
 pub struct RuiTextRenderer {
+    /// Device-local shader/layout/pipeline cache. Atlases and draw vertices stay
+    /// per renderer so preparing an overlay cannot overwrite the page mesh.
+    gpu_cache: glyphon::Cache,
     /// Points at [`Self::owned_font_system`] or the primary window's FontSystem.
     /// `Copy` raw pointer so call sites can borrow atlas/cache disjointly via `unsafe { &mut *fs }`.
     pub(crate) font_system: *mut FontSystem,
@@ -330,7 +333,14 @@ impl RuiTextRenderer {
         log_color_font_capabilities(owned.db());
         log::debug!("RuiTextRenderer::new after color-font log");
         let ptr = &mut *owned as *mut FontSystem;
-        let out = Self::with_font_ptr(device, queue, config, ptr, Some(owned));
+        let out = Self::with_font_ptr(
+            device,
+            queue,
+            config,
+            ptr,
+            Some(owned),
+            glyphon::Cache::new(device),
+        );
         log::debug!("RuiTextRenderer::new done");
         out
     }
@@ -343,7 +353,32 @@ impl RuiTextRenderer {
         shared: *mut FontSystem,
     ) -> Self {
         debug_assert!(!shared.is_null());
-        Self::with_font_ptr(device, queue, config, shared, None)
+        Self::with_font_ptr(
+            device,
+            queue,
+            config,
+            shared,
+            None,
+            glyphon::Cache::new(device),
+        )
+    }
+
+    /// Same-device page/capture/overlay bands share expensive immutable GPU
+    /// resources. Callers using a different device must use the font-only API.
+    pub(crate) fn new_sharing_resources(
+        device: &Device,
+        queue: &Queue,
+        config: &SurfaceConfiguration,
+        source: &Self,
+    ) -> Self {
+        Self::with_font_ptr(
+            device,
+            queue,
+            config,
+            source.font_system,
+            None,
+            source.gpu_cache.clone(),
+        )
     }
 
     fn with_font_ptr(
@@ -352,11 +387,11 @@ impl RuiTextRenderer {
         config: &SurfaceConfiguration,
         font_system: *mut FontSystem,
         owned_font_system: Option<Box<FontSystem>>,
+        cache: glyphon::Cache,
     ) -> Self {
         log::debug!("with_font_ptr: SwashCache");
         let swash_cache = SwashCache::new();
         log::debug!("with_font_ptr: glyphon Cache");
-        let cache = glyphon::Cache::new(device);
         log::debug!("with_font_ptr: TextAtlas::new");
         let mut text_atlas = TextAtlas::new(device, queue, &cache, config.format);
         log::debug!("with_font_ptr: TextRenderer::new");
@@ -371,6 +406,7 @@ impl RuiTextRenderer {
         log::debug!("with_font_ptr: done");
 
         Self {
+            gpu_cache: cache,
             font_system,
             owned_font_system,
             swash_cache,

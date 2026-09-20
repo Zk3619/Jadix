@@ -1185,8 +1185,7 @@ pub fn tick_element_animations_ex_named(
 
 /// True while a finite `@keyframes` run is still playing.
 ///
-/// Prefer over [`css_animation_needs_frame`] for presence exit gates: the latter stays
-/// true whenever `style.animations` is non-empty, even after all runs have `finished`.
+/// Presence exit gates depend on active runs, not on a retained forwards fill.
 pub fn animation_run_active(style: &super::Style, snap: &AnimationSnapshot) -> bool {
     if style.animations.is_empty() {
         return false;
@@ -1207,7 +1206,16 @@ fn animation_sample_t(
 
 /// True when this element should keep the animation frame pump alive.
 pub fn css_animation_needs_frame(style: &super::Style, snap: &AnimationSnapshot) -> bool {
-    style.animations.iter().any(|e| e.needs_frame()) || snap.has_active(style)
+    style.animations.iter().enumerate().any(|(i, entry)| {
+        if let Some(id) = entry.playback_id {
+            return super::waapi::needs_frame(id, snap.runs.get(i));
+        }
+        entry.needs_frame()
+            && !snap
+                .runs
+                .get(i)
+                .is_some_and(|run| run.finished && run.entry_fp == animation_entry_fp(entry))
+    })
 }
 
 /// Recover the *specified* (cascade) value for `prop` from the single `Style` field.
@@ -3790,7 +3798,7 @@ mod tests {
     }
 
     #[test]
-    fn animation_run_active_false_while_css_animation_needs_frame_still_true() {
+    fn finished_animation_retains_fill_without_requesting_frames() {
         use crate::style::{AnimationFillMode, TimingFunction};
         let mut style = crate::style::Style::default();
         style.max_size.height = taffy::style::Dimension::length(48.0);
@@ -3805,8 +3813,8 @@ mod tests {
             let _ = tick_element_animations(&mut style, &mut snap, 0.016);
         }
         assert!(
-            css_animation_needs_frame(&style, &snap),
-            "list still non-empty → css_animation_needs_frame stays true"
+            !css_animation_needs_frame(&style, &snap),
+            "finished animation must not keep the frame pump alive"
         );
         assert!(
             !animation_run_active(&style, &snap),

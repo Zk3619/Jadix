@@ -100,6 +100,7 @@ pub(crate) fn forget_secondary(id: WindowId) -> Option<u64> {
         .ok()
         .flatten();
     if let Some(t) = token {
+        super::damage::clear_window_paint_nodes(WindowScope::Secondary(t));
         let _ = TOKEN_TO_WINDOW.try_with(|rev| {
             rev.borrow_mut().remove(&t);
         });

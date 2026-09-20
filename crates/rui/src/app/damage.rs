@@ -72,7 +72,7 @@ pub struct PaintDirty {
 }
 
 thread_local! {
-    static FRAME_PAINT_NODES: RefCell<Vec<PaintDirty>> = RefCell::new(Vec::new());
+    static FRAME_PAINT_NODES: RefCell<HashMap<super::window_scope::WindowScope, Vec<PaintDirty>>> = RefCell::new(HashMap::new());
 }
 
 fn bounds_key(bounds: [f32; 4]) -> u64 {
@@ -96,7 +96,8 @@ fn push_paint_dirty(key: u64, bounds: [f32; 4], kind: PaintDirtyKind) {
         return;
     }
     FRAME_PAINT_NODES.with(|slot| {
-        let mut slot = slot.borrow_mut();
+        let mut windows = slot.borrow_mut();
+        let slot = windows.entry(super::window_scope::active()).or_default();
         if let Some(existing) = slot.iter_mut().find(|d| d.key == key && d.kind == kind) {
             existing.bounds = union_rects(existing.bounds, bounds);
         } else {
@@ -112,10 +113,19 @@ fn push_paint_dirty(key: u64, bounds: [f32; 4], kind: PaintDirtyKind) {
 /// scissor in document space while ink is in visual space — dest-reset misses,
 /// PartialLoad stacks the previous offset (Marker labels after scroll).
 pub fn push_frame_paint_element(el: &Element, scroll_acc: [f32; 2]) {
+    push_frame_paint_element_change(el, scroll_acc, el.style.opacity);
+}
+
+/// A transparent result still owes an erase if this change replaced visible ink.
+pub(crate) fn push_frame_paint_element_change(
+    el: &Element,
+    scroll_acc: [f32; 2],
+    previous_opacity: f32,
+) {
     // Entering at opacity≈0 has no dest-ink. Dest-reset of the empty
     // fill+shadow AABB punches underlay. Hide-settle still dest-resets
     // the last faded box (`settled_this_tick`).
-    if skip_transparent_shown_dest_reset(el) {
+    if previous_opacity < 0.01 && skip_transparent_shown_dest_reset(el) {
         return;
     }
     let b = clamp_overlay_clip_box(el, crate::core::tree::visual_paint_aabb(el, scroll_acc));
@@ -348,7 +358,10 @@ pub fn sort_paint_dirty_nodes(nodes: &mut [PaintDirty]) {
 /// Take this frame's dirty nodes (order: restore, region, large→small page nodes, overlay).
 pub fn take_frame_paint_nodes() -> Vec<PaintDirty> {
     FRAME_PAINT_NODES.with(|slot| {
-        let mut nodes = slot.borrow_mut().split_off(0);
+        let mut nodes = slot
+            .borrow_mut()
+            .remove(&super::window_scope::active())
+            .unwrap_or_default();
         sort_paint_dirty_nodes(&mut nodes);
         nodes
     })
@@ -357,7 +370,11 @@ pub fn take_frame_paint_nodes() -> Vec<PaintDirty> {
 /// Drop queued paint nodes (page StructureChanged FullClear). Stale Taffy keys
 /// from the pre-rebuild tree must not dest-reset the sidebar footer after Send.
 pub fn clear_frame_paint_nodes() {
-    FRAME_PAINT_NODES.with(|slot| slot.borrow_mut().clear());
+    clear_window_paint_nodes(super::window_scope::active());
+}
+
+pub(crate) fn clear_window_paint_nodes(scope: super::window_scope::WindowScope) {
+    let _ = FRAME_PAINT_NODES.try_with(|slot| slot.borrow_mut().remove(&scope));
 }
 
 /// Legacy: first dirty node's bounds only. Prefer [`take_frame_paint_nodes`].
@@ -685,21 +702,46 @@ pub fn subtract_rect(outer: [f32; 4], hole: [f32; 4]) -> Vec<[f32; 4]> {
         .collect()
 }
 
-/// Page node-present scissor with overlay occupancy cut out. Multi-rect
-/// remainders (trigger pad around a dropdown) keep the largest AABB so dest-reset
-/// cannot punch overlay pixels. `None` = dirty is entirely inside the overlay.
+/// All disjoint visible parts of a page dirty. Every part must be submitted;
+/// choosing just one loses updates on the other side of an overlapping portal.
+pub fn page_scissors_excluding_overlay(
+    scissor: [f32; 4],
+    overlay_occupied: Option<[f32; 4]>,
+) -> Vec<[f32; 4]> {
+    if scissor[2] <= 0.0 || scissor[3] <= 0.0 {
+        return Vec::new();
+    }
+    match overlay_occupied.filter(|b| b[2] > 0.0 && b[3] > 0.0) {
+        Some(occ) => subtract_rect(scissor, occ),
+        None => vec![scissor],
+    }
+}
+
+/// Add coverage without overlapping any existing rectangle (one alpha replay per pixel).
+pub(crate) fn push_disjoint_rect(rects: &mut Vec<[f32; 4]>, rect: [f32; 4]) {
+    let mut pieces = vec![rect];
+    for existing in rects.iter() {
+        pieces = pieces
+            .into_iter()
+            .flat_map(|r| subtract_rect(r, *existing))
+            .collect();
+    }
+    rects.extend(pieces);
+}
+
+/// Compatibility query for a single visible part. Rendering must use
+/// [`page_scissors_excluding_overlay`] to preserve every visible part.
 pub fn page_scissor_excluding_overlay(
     scissor: [f32; 4],
     overlay_occupied: Option<[f32; 4]>,
 ) -> Option<[f32; 4]> {
-    let Some(occ) = overlay_occupied.filter(|b| b[2] > 0.0 && b[3] > 0.0) else {
-        return Some(scissor);
-    };
-    subtract_rect(scissor, occ).into_iter().max_by(|a, b| {
-        (a[2] * a[3])
-            .partial_cmp(&(b[2] * b[3]))
-            .unwrap_or(std::cmp::Ordering::Equal)
-    })
+    page_scissors_excluding_overlay(scissor, overlay_occupied)
+        .into_iter()
+        .max_by(|a, b| {
+            (a[2] * a[3])
+                .partial_cmp(&(b[2] * b[3]))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
 }
 
 /// Clicked AlertDialog trigger sits under the fullscreen scrim. Skipping dest-reset
@@ -714,7 +756,7 @@ pub fn page_node_present_occluded_by_overlay(
         dirty_bounds,
         super::draw_cull::node_present_scissor_pad(PaintDirtyKind::Node),
     );
-    page_scissor_excluding_overlay(scissor, overlay_occupied).is_none()
+    page_scissors_excluding_overlay(scissor, overlay_occupied).is_empty()
 }
 
 /// Overlap of a page node-present scissor with overlay occupancy.
@@ -1440,7 +1482,7 @@ pub fn paint_dirty_skips_node_dest_reset(
     !layered && paint_dirty_nested_in_larger_node(dirty, nodes)
 }
 
-/// Node dirty whose center sits in an OverlayRestore / Region hole.
+/// Node dirty fully covered by an OverlayRestore / Region hole.
 ///
 /// Cover overlays (AvatarGroup +N / Bubble +N) and Wave 49 Region islands punch
 /// overlapping underlay, then Restore/Region redraws the page prefix in tree
@@ -1454,18 +1496,14 @@ pub fn paint_dirty_covered_by_overlay_restore(dirty: &PaintDirty, nodes: &[Paint
     if dirty.bounds[2] <= 0.0 || dirty.bounds[3] <= 0.0 {
         return false;
     }
-    let area = dirty.bounds[2] * dirty.bounds[3];
-    let cx = dirty.bounds[0] + dirty.bounds[2] * 0.5;
-    let cy = dirty.bounds[1] + dirty.bounds[3] * 0.5;
     nodes.iter().any(|o| {
         matches!(
             o.kind,
             PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region
-        ) && o.bounds[2] * o.bounds[3] > area + 1.0
-            && cx >= o.bounds[0]
-            && cy >= o.bounds[1]
-            && cx < o.bounds[0] + o.bounds[2]
-            && cy < o.bounds[1] + o.bounds[3]
+        ) && o.bounds[0] <= dirty.bounds[0]
+            && o.bounds[1] <= dirty.bounds[1]
+            && o.bounds[0] + o.bounds[2] >= dirty.bounds[0] + dirty.bounds[2]
+            && o.bounds[1] + o.bounds[3] >= dirty.bounds[1] + dirty.bounds[3]
     })
 }
 

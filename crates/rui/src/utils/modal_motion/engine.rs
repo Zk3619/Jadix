@@ -1602,8 +1602,16 @@ pub(crate) fn tick_modal_enter_css_subtree(root: &mut Element) -> bool {
             let (overlay, panel) = unsafe { (&mut *overlay_ptr, &mut *panel_ptr) };
             // Write specified targets, then sample transitions so style holds mid (not the target).
             write_modal_shell_tick_targets(&shell, overlay, panel);
-            let _ = tick_element_css(overlay, 0.0);
-            let _ = tick_element_css(panel, 0.0);
+            // Flush only synchronizes targets/completion. Sampling here with
+            // dt=0 still advances the wall clock after an idle wait, and the
+            // post-hoist step would advance it a second time in the same frame.
+            // The bounded post-hoist sampler is the sole animation clock.
+            if overlay.style.animations.is_empty() {
+                let _ = overlay.tick_css_transitions_locked(0.0);
+            }
+            if panel.style.animations.is_empty() {
+                let _ = panel.tick_css_transitions_locked(0.0);
+            }
             needs_frame = true;
             if exiting {
                 if exit_visual_settled(overlay, panel, shell.motion) {
@@ -1740,13 +1748,7 @@ pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
             // could punch through an already-opaque scrim. Play from the seed pose
             // at one display frame so the first present is not blank and the rest
             // of the animation still runs. Exit never seeks enter elapsed.
-            let hold_seed = overlay.animation_snapshot.runs.is_empty()
-                && motion_el.animation_snapshot.runs.is_empty();
-            let step = if hold_seed && shell.motion != ModalSurfaceMotion::DialogFade {
-                0.0
-            } else {
-                dt
-            };
+            let step = dt;
             if tick_hoisted_shell_css(overlay, step) {
                 any = true;
             }

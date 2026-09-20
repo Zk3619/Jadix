@@ -180,8 +180,9 @@ pub struct PrepareTextOutput {
     pub shadow_new_bitmaps: Vec<ShadowNewBitmap>,
     pub shadow_tex_draws: Vec<ShadowTexDraw>,
     pub needs_warmup: bool,
-    /// Nodes existed but every TextArea was culled (common mid-resize). Atlas was **not**
-    /// wiped with an empty `prepare` — caller must not treat this as a successful prepare cache.
+    /// Nodes existed but every TextArea was culled. The drawable glyph mesh is
+    /// empty; shaped buffers and atlas storage remain reusable. Callers must not
+    /// treat this as a successful nonempty prepare cache or submit an old mesh.
     pub culled_skip_prepare: bool,
 }
 
@@ -3864,21 +3865,24 @@ pub fn prepare_text_frame_at(
     }
 
     let _t2 = std::time::Instant::now();
-    // Keep viewport in sync on resize even when every node is culled — but never
-    // `prepare([])` while nodes exist (wipes atlas → blank text until geometry drifts
-    // enough to bust text_cache_valid).
+    // Keep viewport in sync on resize even when every node is culled.
     text_renderer
         .viewport
         .update(queue, glyphon::Resolution { width, height });
 
     let text_area_count = text_areas.len();
     if text_area_count == 0 {
+        // A nonempty input can produce no visible glyphs after scrolling. Leaving
+        // the previous GPU batch intact replays pre-scroll Message captions (or
+        // subtree-capture-local glyphs) into unrelated node-present scissors.
+        // Empty prepare clears draw vertices, not the font/shaping/atlas caches.
+        text_renderer.prepare_resolution(device, queue, width, height, std::iter::empty());
         return PrepareTextOutput {
             underline_instances,
             caret_instances,
             shadow_new_bitmaps,
             shadow_tex_draws,
-            needs_warmup: true,
+            needs_warmup: !text_renderer.pending_warmup.is_empty(),
             culled_skip_prepare: true,
         };
     }

@@ -16,6 +16,80 @@ use crate::renderer::font_loader::{
 };
 use crate::utils::modal_motion::{flush_modal_shell_motion_subtree, tick_hoisted_modal_css};
 
+#[test]
+fn animation_recollect_uses_current_pose_without_layout_or_clock_step() {
+    let mut overlay=Element::new().fixed().inset(0.0).bg([0.0,0.0,0.0,0.5]);
+    overlay.set_attr("rui_portal","1");
+    overlay.template_id=Some("current-pose__modal_overlay".into());
+    let mut root=Element::new().w(320.0).h(200.0).child(overlay);
+    let mut tree=LayoutTree::new();
+    let _=tree.build_and_layout(&mut root,320.0,200.0,[-1.0,-1.0]);
+    let overlay=crate::core::tree::find_by_template_id_mut(&mut root,"current-pose__modal_overlay").unwrap();
+    overlay.style.opacity=0.4;
+    let frame=tree.collect_animation_frame(&mut root,[-1.0,-1.0],false);
+    assert_eq!(frame.prof.taffy_compute_ms,0.0);
+    assert!(frame.instances.iter().any(|i|(i.color[3]-0.2).abs()<0.001),"current fade must be in the submitted instances");
+    assert!(frame.overlay_split.bands.iter().any(|b|(b.underlay_opacity-0.4).abs()<0.001),"band opacity must match current pose");
+}
+
+#[test]
+fn portal_open_with_page_change_computes_new_content_and_centering() {
+    let mut root = Element::new()
+        .w(640.0)
+        .h(480.0)
+        .flex_row()
+        .child(Element::new().w(160.0).h(480.0).text("Sidebar"))
+        .child(Element::new().w(480.0).h(480.0).text("Existing page"));
+    let mut tree = LayoutTree::new();
+    let first = tree.build_and_layout(&mut root, 640.0, 480.0, [-1.0, -1.0]);
+    let before: Vec<_> = first
+        .text_nodes
+        .iter()
+        .map(|t| (t.text.clone(), t.x, t.y))
+        .collect();
+    root.children[1].children.push(Element::new().w(200.0).h(48.0).text("New route content"));
+    let mut portal = Element::new()
+        .fixed()
+        .left(220.0)
+        .top(80.0)
+        .w(280.0)
+        .h(180.0)
+        .bg([1.0; 4])
+        .text("First popup");
+    portal.set_attr("rui_portal", "1");
+    root.children[1].children.push(portal);
+    let opened = tree.build_and_layout_fast(
+        &mut root,
+        640.0,
+        480.0,
+        [-1.0, -1.0],
+        false,
+        false,
+    );
+    assert_eq!(
+        tree.last_compute_root, tree.root_node,
+        "portal membership cannot prove that the rest of the page is already laid out"
+    );
+    for (text, x, y) in before {
+        let now = opened
+            .text_nodes
+            .iter()
+            .find(|t| t.text == text)
+            .expect("page label");
+        assert_eq!((now.x, now.y), (x, y), "opening a portal moved page text");
+    }
+    assert!(
+        opened
+            .text_nodes
+            .iter()
+            .any(|t| t.text == "First popup" && t.x >= 200.0 && t.y >= 70.0),
+        "first popup must actually have its layout computed"
+    );
+    let added=opened.text_nodes.iter().find(|t|t.text=="New route content").expect("new page content must be collected");
+    assert!(added.width>0.0 && added.height>0.0 && added.x>=160.0,
+        "route content must be laid out even when the portal membership also changed");
+}
+
 fn has_tid(el: &Element, id: &str) -> bool {
     if el.template_id.as_deref() == Some(id) {
         return true;
@@ -84,12 +158,6 @@ fn dialog_first_vs_second_open_cpu_after_cjk_warm() {
     let mut layout = LayoutTree::new();
     layout_once(&live, &mut layout);
 
-    // Untimed warm-up: modal island registration + first portal hoist (not user-perceived latency).
-    open.set(true);
-    layout_once(&live, &mut layout);
-    open.set(false);
-    layout_once(&live, &mut layout);
-
     let t0 = Instant::now();
     open.set(true);
     layout_once(&live, &mut layout);
@@ -117,7 +185,7 @@ fn dialog_first_vs_second_open_cpu_after_cjk_warm() {
 
     assert!(
         first.as_millis() < 400,
-        "Dialog open CPU {first:?} after warm-up should stay under ~400ms (second={second:?}, cjk={cjk:?})"
+        "true first Dialog open CPU {first:?} should stay under ~400ms (second={second:?}, cjk={cjk:?})"
     );
     assert!(
         second.as_millis() < 400,

@@ -200,13 +200,13 @@ fn inherit_text_edit_focus_id<'a>(el: &'a Element, inherited: Option<&'a str>) -
 pub(super) fn hit_test_child_indices(el: &Element) -> Vec<usize> {
     // Topmost child wins.
     // Order rule:
-    // - higher z_index is always on top
+    // - body portal layer is above page children, regardless of authored z-index
+    // - higher z_index is on top within the same layer
     // - within same z_index, later DOM siblings are on top
     let mut order: Vec<usize> = (0..el.children.len()).collect();
     order.sort_by(|&a, &b| {
-        let za = el.children[a].style.z_index;
-        let zb = el.children[b].style.z_index;
-        za.cmp(&zb).then(a.cmp(&b))
+        crate::layout::layout_tree::compare_sibling_paint_order(&el.children[a], &el.children[b])
+            .then(a.cmp(&b))
     });
     order
 }
@@ -217,7 +217,20 @@ pub(super) fn children_share_same_z_index(el: &Element) -> bool {
         return true;
     };
     let z0 = first.style.z_index;
-    el.children.iter().all(|c| c.style.z_index == z0)
+    el.children.iter().enumerate().all(|(i, c)| {
+        c.style.z_index == z0
+            && (i + 1 == el.children.len()
+                || c.template_id.as_deref() != Some(crate::layout::layout_tree::PORTAL_LAYER_ID))
+    })
+}
+
+#[test]
+fn body_portal_hit_order_matches_paint_order_above_max_page_z() {
+    let portal = Element::new().template_id(crate::layout::layout_tree::PORTAL_LAYER_ID);
+    let page = Element::new().z_index(i32::MAX);
+    let root = Element::new().child(portal).child(page);
+    assert_eq!(hit_test_child_indices(&root), [1, 0]);
+    assert!(!children_share_same_z_index(&root));
 }
 
 enum HitPhase {

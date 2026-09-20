@@ -874,6 +874,8 @@ impl SecondaryWindowState {
 
         self.queue.submit(std::iter::once(encoder.finish()));
         self.queue.present(output);
+        // This window redraws its complete surface; consume only its own damage.
+        super::damage::clear_frame_paint_nodes();
 
         if prep.culled_skip_prepare || prep.needs_warmup || overlay_needs_warmup {
             self.window.request_redraw();
