@@ -165,11 +165,7 @@ pub(crate) fn direction_local_t(
         AnimationDirection::Alternate => iteration_index % 2 == 1,
         AnimationDirection::AlternateReverse => iteration_index % 2 == 0,
     };
-    if reverse {
-        1.0 - cycle_t
-    } else {
-        cycle_t
-    }
+    if reverse { 1.0 - cycle_t } else { cycle_t }
 }
 
 /// One spring step. Closed-form (Motion) rather than implicit Euler, so large
@@ -197,7 +193,11 @@ pub fn parse_spring_timing(s: &str) -> Option<TimingFunction> {
     }
     let inner = lower.strip_prefix("spring(")?.strip_suffix(')')?;
     let opts = super::generator::parse_spring_options(inner)?;
-    Some(opts.resolve().to_timing_function())
+    Some(if !opts.has_physics_keys() && opts.has_duration_keys() {
+        TimingFunction::SpringOptions(opts)
+    } else {
+        opts.resolve().to_timing_function()
+    })
 }
 
 #[cfg(test)]
@@ -256,17 +256,18 @@ mod tests {
         };
         assert!((stiffness - 90.0).abs() < 1e-3);
         assert!(parse_spring_timing("ease").is_none());
-        let TimingFunction::Spring {
-            stiffness: k2,
-            damping: d2,
-            ..
-        } = parse_spring_timing("spring(800ms, 0.25)").unwrap()
+        let TimingFunction::SpringOptions(opts) =
+            parse_spring_timing("spring(800ms, 0.25)").unwrap()
         else {
-            panic!("spring(800ms)");
+            panic!("duration spring");
         };
-        assert!(k2 > 10.0 && d2 > 1.0, "duration form must resolve physics");
-        assert!(parse_spring_timing("spring(visual 0.3)")
-            .unwrap()
-            .is_spring());
+        assert_eq!(opts.duration_ms, Some(800.0));
+        let physics = opts.resolve();
+        assert!(physics.stiffness > 10.0 && physics.damping > 1.0);
+        assert!(
+            parse_spring_timing("spring(visual 0.3)")
+                .unwrap()
+                .is_spring()
+        );
     }
 }

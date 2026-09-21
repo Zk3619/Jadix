@@ -1,7 +1,7 @@
 //! GPU differential tests: retained partial updates must match a fresh full draw.
 use super::*;
 use crate::app::{damage::*, draw_cull::*};
-use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
+use crate::renderer::offscreen::{OffscreenGpu, images_match, readback_texture};
 
 #[test]
 #[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
@@ -266,13 +266,88 @@ fn latest_fade_over_wrapping_text_matches_full_composite() {
             .take(12)
             .map(|(i, (a, b))| (i % 320, i / 320, a, b))
             .collect();
-        assert!(images_match(&partial,&full,2),"Latest frame={frame} alpha={alpha}: partial enter/exit composite differs from full draw; clip={clip:?} diffs={diffs:?}");
+        assert!(
+            images_match(&partial, &full, 2),
+            "Latest frame={frame} alpha={alpha}: partial enter/exit composite differs from full draw; clip={clip:?} diffs={diffs:?}"
+        );
         previous = last_present_visual_slots(
             &scene.node_paints,
             &scene.instances,
             &[],
             &scene.text_nodes,
             &[],
+        );
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+fn fractional_overlay_restore_recovers_every_cleared_glyph_row() {
+    let gpu = OffscreenGpu::new().expect("GPU adapter");
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        width: 320,
+        height: 200,
+        present_mode: wgpu::PresentMode::Fifo,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        view_formats: vec![],
+        desired_maximum_frame_latency: 1,
+    };
+    let pipeline = RuiPipeline::from_format(&gpu.device, config.format, 320, 200);
+    pipeline.update_resolution(&gpu.queue, 320, 200);
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Fractional Avatar restore"),
+        size: wgpu::Extent3d {
+            width: 320,
+            height: 200,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: config.format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let mut root = Element::new().w(320.0).h(200.0).relative().child(
+        Element::new()
+            .absolute()
+            .left(40.0)
+            .top(40.0)
+            .w(200.0)
+            .h(32.0)
+            .z_index(1)
+            .text("Fallback caption"),
+    );
+    let mut tree = LayoutTree::new();
+    let scene = tree.build_and_layout(&mut root, 320.0, 200.0, [-1.0, -1.0]);
+    draw_latest_scene_for_test(&gpu, &config, &pipeline, &texture, &scene, None);
+    let full = readback_texture(
+        &gpu.device,
+        &gpu.queue,
+        &texture,
+        320,
+        200,
+        gpu.device.create_command_encoder(&Default::default()),
+    )
+    .unwrap();
+    for edge in [44.2, 46.7, 51.2, 54.6, 60.3] {
+        let hole = [0.0, 0.0, 320.0, edge];
+        draw_latest_scene_for_test(&gpu, &config, &pipeline, &texture, &scene, Some(hole));
+        let repaired = readback_texture(
+            &gpu.device,
+            &gpu.queue,
+            &texture,
+            320,
+            200,
+            gpu.device.create_command_encoder(&Default::default()),
+        )
+        .unwrap();
+        assert!(
+            images_match(&full, &repaired, 2),
+            "fractional restore bottom={edge}: cleared glyph row was not restored"
         );
     }
 }
@@ -289,13 +364,32 @@ fn draw_latest_scene_for_test(
     let mut renderers = Vec::new();
     for band in &bands {
         let mut renderer = RuiTextRenderer::new(&gpu.device, &gpu.queue, config);
+        let source = &scene.text_nodes[band.text.0..band.text.1];
+        let text = match clip {
+            Some(hole) => clip_text_nodes_to_cull(
+                source,
+                region_repair_text_cull(
+                    &[PaintDirty {
+                        key: 0,
+                        bounds: hole,
+                        kind: PaintDirtyKind::OverlayRestore,
+                    }],
+                    &[],
+                    &[],
+                    1.0,
+                    320,
+                    200,
+                ),
+            ),
+            None => source.to_vec(),
+        };
         crate::renderer::prepare_text::prepare_text_frame_at(
             &mut renderer,
             &gpu.device,
             &gpu.queue,
             320,
             200,
-            &scene.text_nodes[band.text.0..band.text.1],
+            &text,
             1.0,
             false,
             &Default::default(),
@@ -629,9 +723,15 @@ fn check_partial_pixels(gpu: &OffscreenGpu, background: bool, portal: bool) {
             dirty[0].bounds
         } else {
             if reset.is_none() {
-                assert!(layered_src_over_skips_dest_reset(key,bounds,&current.node_paints,
-                    prev.iter().find(|(k, _)| *k == key).map(|(_, r)| *r)),
-                    "Node must have a backdrop unless this is its first visible paint: frame={frame}");
+                assert!(
+                    layered_src_over_skips_dest_reset(
+                        key,
+                        bounds,
+                        &current.node_paints,
+                        prev.iter().find(|(k, _)| *k == key).map(|(_, r)| *r)
+                    ),
+                    "Node must have a backdrop unless this is its first visible paint: frame={frame}"
+                );
             }
             reset.as_ref().map(|r| r.rect).unwrap_or_else(|| {
                 node_present_scissor_logical(
@@ -721,8 +821,10 @@ fn check_partial_pixels(gpu: &OffscreenGpu, background: bool, portal: bool) {
             .take(12)
             .map(|(i, (a, b))| ((i as u32 % W, i as u32 / W), a.to_vec(), b.to_vec()))
             .collect();
-        assert!(images_match(&partial,&full,2),
-            "retained/full pixels differ: background={background}, portal={portal}, frame={frame}, alpha={opacity}, hole={hole:?}, diffs={different:?}");
+        assert!(
+            images_match(&partial, &full, 2),
+            "retained/full pixels differ: background={background}, portal={portal}, frame={frame}, alpha={opacity}, hole={hole:?}, diffs={different:?}"
+        );
         prev = last_present_visual_slots(
             &current.node_paints,
             &current.instances,

@@ -5,9 +5,9 @@
 //! translate those ops by `GeomKey.scroll` instead of recollecting. FullClear GPU present
 //! still receives a complete list (replay, not omit) — see [`crate::app::damage`].
 
-use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 #[cfg(test)]
@@ -64,7 +64,7 @@ use taffy::prelude::NodeId;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::dimension::{CssAngle, CssDim};
 use crate::layout::layout_tree::{
-    PaintOp, TextLayoutInfo, ATTR_ESCAPE_OVERFLOW_CLIP, ATTR_HOISTED_PORTAL, PORTAL_LAYER_ID,
+    ATTR_ESCAPE_OVERFLOW_CLIP, ATTR_HOISTED_PORTAL, PORTAL_LAYER_ID, PaintOp, TextLayoutInfo,
 };
 use crate::renderer::{InstanceInput, TexturedDraw};
 use crate::style::{
@@ -423,7 +423,11 @@ pub(crate) fn geom_key(
 /// — present then draws all rects before all text (glyph bleed through the top
 /// card / empty overlay suffix).
 fn node_has_collect_side_channel(el: &Element) -> bool {
-    el.template_id.as_deref() == Some(PORTAL_LAYER_ID)
+    // A replayed display list does not contain scroll metrics. Keep viewport
+    // owners live so the next wheel frame can retain/copy their previous clip.
+    el.focus_id.as_deref().is_some_and(|id| {
+        id.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+    }) || el.template_id.as_deref() == Some(PORTAL_LAYER_ID)
         || el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
         || el.attrs.get("rui_portal").map(String::as_str) == Some("1")
         || el.attrs.contains_key(crate::utils::drag::ATTR_DRAG_OVERLAY)

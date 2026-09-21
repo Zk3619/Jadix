@@ -5,6 +5,50 @@ use crate::pages::*;
 use crate::shared::*;
 use rui::core::reactivity::{create_effect, create_root};
 
+#[test]
+fn generator_motion_tracks_have_independent_binding_targets() {
+    run_on_gallery_build_stack(|| {
+        let (_owner, _) = create_root(|| {
+            create_effect(|| {
+                let root = GeneratorShowcase(GeneratorShowcaseProps::default());
+                let mut stack = vec![&root];
+                let mut targets = std::collections::HashMap::new();
+                while let Some(el) = stack.pop() {
+                    if let Some(id) = el.template_id.as_deref() {
+                        if id.starts_with("gal_gen_tx:") {
+                            *targets.entry(id.to_string()).or_insert(0) += 1;
+                        }
+                    }
+                    stack.extend(el.children.iter());
+                }
+                for track in ["spring", "follow", "inert", "wave", "seq"] {
+                    assert_eq!(
+                        targets.get(&format!("gal_gen_tx:{track}")),
+                        Some(&1),
+                        "each driver must patch its own mounted ball; targets={targets:?}"
+                    );
+                }
+            });
+        });
+    });
+}
+
+#[test]
+fn generator_go_reset_caption_keeps_its_authored_width() {
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            create_effect(|| {
+                let root = GeneratorShowcase(GeneratorShowcaseProps::default());
+                let label = gallery_find_by_tid(&root, "gal_gen_css_go_lbl").unwrap();
+                assert!(
+                    !label.style.size.width.is_auto(),
+                    "Button caption conversion must retain fixed-size binding"
+                );
+            });
+        });
+    });
+}
+
 /// Headless tests build one page at a time (same trees as the live `<When>` arms).
 fn gallery_section_body(section: &str) -> rui::core::tree::Element {
     match section {
@@ -362,8 +406,7 @@ fn mouse_event_lca_center_click_increments_count() {
                     "clicking the blue target (including its caption) must hit gal-mouse-lca-target, got {ids:?}"
                 );
                 let click_path = rui::app::pointer_events::click_dispatch_path(&path, &path);
-                let (cb, _) =
-                    rui::app::pointer_events::resolve_click_from_path(&tree, &click_path);
+                let (cb, _) = rui::app::pointer_events::resolve_click_from_path(&tree, &click_path);
                 (*cb.expect("LCA on_click on press/release path").borrow_mut())();
                 let lca = use_signal("gal_mouse_lca_clicks", || 0i32);
                 assert_eq!(
@@ -1263,10 +1306,7 @@ fn data_section_table_texts_survive_skip_and_hover() {
                     }
                     let row = find_row(&tree).expect("inv-0 row");
                     let b = row.layout_bounds;
-                    (
-                        [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5],
-                        row.on_hover.clone(),
-                    )
+                    ([b[0] + b[2] * 0.5, b[1] + b[3] * 0.5], row.on_hover.clone())
                 };
                 if let Some(hover) = on_hover {
                     hover.borrow_mut()(true);
@@ -1293,14 +1333,8 @@ fn data_section_table_texts_survive_skip_and_hover() {
                     &mut layout,
                     &mut impact,
                 );
-                let hovered = layout.build_and_layout_fast(
-                    &mut tree,
-                    1280.0,
-                    800.0,
-                    mouse,
-                    true,
-                    false,
-                );
+                let hovered =
+                    layout.build_and_layout_fast(&mut tree, 1280.0, 800.0, mouse, true, false);
                 let t2 = texts(&hovered);
                 for needle in ["INV001", "Paid", "$250.00", "INV002"] {
                     assert!(
@@ -1716,8 +1750,17 @@ fn gallery_section_pages_must_not_enable_x_scroll() {
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 for key in [
-                    "basics", "events", "forms", "overlays", "draw", "data", "navigation",
-                    "layout", "text", "theme", "about",
+                    "basics",
+                    "events",
+                    "forms",
+                    "overlays",
+                    "draw",
+                    "data",
+                    "navigation",
+                    "layout",
+                    "text",
+                    "theme",
+                    "about",
                 ] {
                     rui::app::reactive::reset_registered_anchors();
                     let rest = gallery_section_scroll_id(key);
@@ -2334,7 +2377,9 @@ fn gallery_subtree_has_text(el: &rui::core::tree::Element, needle: &str) -> bool
     if el.text.as_deref().is_some_and(|t| t.contains(needle)) {
         return true;
     }
-    el.children.iter().any(|c| gallery_subtree_has_text(c, needle))
+    el.children
+        .iter()
+        .any(|c| gallery_subtree_has_text(c, needle))
 }
 
 fn gallery_find_slot_with_text<'a>(
@@ -2368,8 +2413,7 @@ fn attachment_live_state_chip_is_not_clipped_by_group() {
                 });
                 let mut layout = rui::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
-                let group =
-                    gallery_find_slot(&tree, "attachment-group").expect("AttachmentGroup");
+                let group = gallery_find_slot(&tree, "attachment-group").expect("AttachmentGroup");
                 assert!(
                     !gallery_subtree_has_text(group, "Reactive state:"),
                     "live state chip must not live inside the overflow-x group"

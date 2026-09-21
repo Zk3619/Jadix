@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 
-use crate::core::reactivity::{use_signal, Signal};
+use crate::core::reactivity::{Signal, use_signal};
 
 use super::element_style::TimingFunction;
 
@@ -290,8 +290,10 @@ impl Spring {
         if let Some(v) = opts.rest_delta {
             s.rest_delta = v;
         }
-        s.duration_resolved = duration_resolved;
-        if duration_resolved {
+        // visualDuration controls the main motion, not an arbitrary 800ms
+        // completion deadline. Its tail settles using the physical thresholds.
+        s.duration_resolved = duration_resolved && opts.visual_duration_s.is_none();
+        if s.duration_resolved {
             s.resolved_duration_ms = opts.duration_ms.or(Some(800.0));
         }
         s
@@ -830,7 +832,12 @@ pub fn parse_spring_options(inner: &str) -> Option<SpringOptions> {
             opts.damping = Some(*d);
             Some(opts)
         }
-        [SpringArg::Number(k), SpringArg::Number(d), SpringArg::Number(m), ..] => {
+        [
+            SpringArg::Number(k),
+            SpringArg::Number(d),
+            SpringArg::Number(m),
+            ..,
+        ] => {
             opts.stiffness = Some(*k);
             opts.damping = Some(*d);
             opts.mass = Some(*m);

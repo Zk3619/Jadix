@@ -1,7 +1,7 @@
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
 
-use crate::core::reactivity::{use_signal, Signal};
+use crate::core::reactivity::{Signal, use_signal};
 
 thread_local! {
     static CUBIC_TWEENS: RefCell<Vec<Weak<RefCell<CubicTweenState>>>> = const { RefCell::new(Vec::new()) };
@@ -223,9 +223,9 @@ use super::element_style::{
     AnimationIterationCount, AnimationPlayState, AnimationTimeline, BoxShadow, TimingFunction,
     TransitionEntry, TransitionProperty, UnitSlot,
 };
-use super::filter::{interpolate_filter_lists, FilterList};
+use super::filter::{FilterList, interpolate_filter_lists};
 use super::generator::{
-    tween_sample as generator_tween_sample, Spring, SpringPhysics, TweenOptions,
+    Spring, SpringPhysics, TweenOptions, tween_sample as generator_tween_sample,
 };
 use std::cell::Cell;
 use std::collections::HashMap;
@@ -748,7 +748,7 @@ fn baseline_matches(style: &super::Style, base: &AnimationBaseline) -> bool {
 }
 
 fn max_height_dim_matches(style: taffy::style::Dimension, base: taffy::style::Dimension) -> bool {
-    use crate::layout::{dim_kind, DimKind};
+    use crate::layout::{DimKind, dim_kind};
     match (dim_kind(style), dim_kind(base)) {
         (DimKind::Auto, DimKind::Auto) => true,
         (DimKind::Length(a), DimKind::Length(b)) => (a - b).abs() <= 1e-3,
@@ -898,7 +898,7 @@ pub fn tick_element_animations_ex_named(
     named: &[(String, f32)],
 ) -> bool {
     use super::element_style::AnimationPlayState;
-    use super::keyframes::{keyframe_coverage, lookup_keyframes, KeyframeBase};
+    use super::keyframes::{KeyframeBase, keyframe_coverage, lookup_keyframes};
 
     if style.animations.is_empty() {
         if let (Some(base), Some(written)) = (snap.base, snap.written) {
@@ -1250,7 +1250,7 @@ fn specified_clip_value(tween: &ClipPathTween, current: &ClipPath) -> ClipPath {
 /// without this guard `max-height: auto` reads back as `0`, and the tween then pins the
 /// box to zero height — turning a decorative `transition: all` into an invisible element.
 fn prop_is_interpolable(style: &super::Style, prop: TransitionProperty) -> bool {
-    use crate::layout::{dim_kind, lp_kind, lpa_kind, DimKind};
+    use crate::layout::{DimKind, dim_kind, lp_kind, lpa_kind};
     let keywords = style.interpolate_size.allows_keywords();
     let calc = |slot: UnitSlot| {
         style
@@ -1328,7 +1328,7 @@ fn pack4(a: f32, b: f32, c: f32, d: f32) -> ([f32; 8], u8) {
 
 fn dim_px_transition(style: &super::Style, d: taffy::style::Dimension, slot: UnitSlot) -> f32 {
     use crate::layout::dimension::{PercentAxis, UnitCtx};
-    use crate::layout::{dim_kind, DimKind};
+    use crate::layout::{DimKind, dim_kind};
     let height = matches!(
         slot,
         UnitSlot::Height | UnitSlot::MinHeight | UnitSlot::MaxHeight
@@ -1903,7 +1903,7 @@ fn is_color_transition_prop(prop: TransitionProperty) -> bool {
 
 /// Same interpolator as keyframes (`AnimatableValue::Color` → `lerp_text_rgba`).
 fn lerp_packed_color(from: &[f32; 8], to: &[f32; 8], t: f32) -> [f32; 8] {
-    use super::animatable::{interpolate, AnimatableValue};
+    use super::animatable::{AnimatableValue, interpolate};
     let a = AnimatableValue::Color([from[0], from[1], from[2], from[3]]);
     let b = AnimatableValue::Color([to[0], to[1], to[2], to[3]]);
     match interpolate(&a, &b, t) {
@@ -2052,6 +2052,9 @@ fn tween_sample(tween: &mut PropertyTween, now_ms: f64, dt_secs: f32) -> ([f32; 
     if prefers_reduced_motion() {
         return (tween.to, 1.0);
     }
+    if let TimingFunction::SpringOptions(opts) = tween.timing {
+        return tween_sample_configured_spring(tween, now_ms, opts);
+    }
     if let TimingFunction::Spring {
         stiffness,
         damping,
@@ -2068,6 +2071,28 @@ fn tween_sample(tween: &mut PropertyTween, now_ms: f64, dt_secs: f32) -> ([f32; 
         lerp_arr(&tween.from, &tween.to, eased, tween.components),
         linear_t,
     )
+}
+
+fn tween_sample_configured_spring(
+    tween: &mut PropertyTween,
+    now_ms: f64,
+    opts: super::generator::SpringOptions,
+) -> ([f32; 8], f32) {
+    let elapsed = duration_tween_elapsed_ms(tween, now_ms);
+    if elapsed < tween.delay_ms {
+        return (tween.from, 0.0);
+    }
+    let mut out = tween.from;
+    let mut done = true;
+    for i in 0..tween.components as usize {
+        let spring = tween.springs[i]
+            .get_or_insert_with(|| Spring::new(tween.from[i], tween.to[i], tween.vel[i], opts));
+        let sample = spring.next(elapsed - tween.delay_ms);
+        out[i] = sample.value;
+        tween.vel[i] = sample.velocity;
+        done &= sample.done;
+    }
+    (out, if done { 1.0 } else { 0.0 })
 }
 
 fn tween_sample_spring(
@@ -2755,8 +2780,8 @@ pub fn tick_element_transitions_locked(
 #[cfg(test)]
 mod css_transition_dt_tests {
     use super::*;
-    use crate::style::element_style::{TransitionEntry, TransitionProperty};
     use crate::style::TimingFunction;
+    use crate::style::element_style::{TransitionEntry, TransitionProperty};
 
     #[test]
     fn spring_transition_retargets_from_current_value() {
@@ -2822,6 +2847,23 @@ mod css_transition_dt_tests {
                 style.scale[0]
             );
         }
+    }
+
+    #[test]
+    fn duration_authored_css_spring_finishes_at_its_declared_time() {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        let mut el = crate::core::tree::Element::new().transition("transform spring(800ms, 0.35)");
+        let mut snap = TransitionSnapshot::default();
+        tick_element_transitions(&mut el.style, &mut snap, 0.0);
+        el.style.translate[0] = 196.0;
+        tick_element_transitions(&mut el.style, &mut snap, 0.0);
+        set_css_transition_timeline_ms(400.0);
+        assert!(tick_element_transitions(&mut el.style, &mut snap, 0.0));
+        set_css_transition_timeline_ms(800.0);
+        assert!(!tick_element_transitions(&mut el.style, &mut snap, 0.0));
+        assert_eq!(el.style.translate[0], 196.0);
+        set_css_transition_virtual_timeline(false);
     }
 
     #[test]
@@ -3764,8 +3806,8 @@ mod tests {
 
     #[test]
     fn max_height_keyframes_pin_min_height_zero_and_restore_on_clear() {
-        use crate::layout::dim_kind;
         use crate::layout::DimKind;
+        use crate::layout::dim_kind;
         use crate::style::{AnimationFillMode, TimingFunction};
         let mut style = crate::style::Style::default();
         style.max_size.height = taffy::style::Dimension::length(48.0);
@@ -3824,7 +3866,7 @@ mod tests {
 
     #[test]
     fn opacity_animation_preserves_auto_max_height() {
-        use crate::layout::{dim_kind, DimKind};
+        use crate::layout::{DimKind, dim_kind};
         use crate::style::{AnimationFillMode, TimingFunction};
         let mut style = crate::style::Style::default();
         style.size.height = taffy::style::Dimension::length(32.0);
@@ -4048,8 +4090,8 @@ mod tests {
     #[test]
     fn animation_composition_add_stacks_opacity() {
         use crate::style::{
-            register_keyframes, AnimationComposition, AnimationFillMode, KeyframeStop,
-            TimingFunction,
+            AnimationComposition, AnimationFillMode, KeyframeStop, TimingFunction,
+            register_keyframes,
         };
         register_keyframes(
             "anim6-hold-03",
@@ -4231,7 +4273,7 @@ mod tests {
     #[test]
     fn named_scroll_timeline_drives_descendant_animation() {
         use crate::core::tree::Element;
-        use crate::style::{push_named_timelines, AnimationFillMode, AnimationTimeline};
+        use crate::style::{AnimationFillMode, AnimationTimeline, push_named_timelines};
         use taffy::style::Overflow;
 
         let mut scroller = Element::new();
@@ -4287,8 +4329,8 @@ mod tests {
     fn calc_size_keyframes_animate_to_used_plus_n() {
         use crate::layout::dimension::parse_css_dim;
         use crate::style::{
-            register_keyframes, AnimatableValue, AnimationFillMode, KeyframeStop, PropertyId,
-            UsedLayout,
+            AnimatableValue, AnimationFillMode, KeyframeStop, PropertyId, UsedLayout,
+            register_keyframes,
         };
         register_keyframes(
             "calc-size-grow",
@@ -4328,8 +4370,8 @@ mod tests {
     #[test]
     fn clip_path_polygon_keyframes_lerp_vertices() {
         use crate::style::{
-            register_keyframes, AnimatableValue, AnimationFillMode, ClipCoord, ClipPath,
-            KeyframeStop, PropertyId,
+            AnimatableValue, AnimationFillMode, ClipCoord, ClipPath, KeyframeStop, PropertyId,
+            register_keyframes,
         };
         let from =
             crate::style::parse_clip_path("polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)").unwrap();

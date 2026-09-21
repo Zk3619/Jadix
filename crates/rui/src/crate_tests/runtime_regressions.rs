@@ -83,18 +83,47 @@ fn stale_latest_dirty_uses_live_clip_even_after_large_scroll() {
     let live = [490.0, -290.2, 76.0, 30.4];
     let clip = [337.0, 60.0, 382.0, 0.0];
     let paints = [NodePaint {
-        key: 4294967934, bounds: live, overlay: false, layered: true,
-        instance: (0, 0), textured: (0, 0), text: (0, 0), chrome: (0, 0),
-        paint_ops: (0, 0), rest: Some(live), overflow_clip: Some(clip),
+        key: 4294967934,
+        bounds: live,
+        overlay: false,
+        layered: true,
+        instance: (0, 0),
+        textured: (0, 0),
+        text: (0, 0),
+        chrome: (0, 0),
+        paint_ops: (0, 0),
+        rest: Some(live),
+        overflow_clip: Some(clip),
     }];
     let key = paints[0].key;
     assert_eq!(node_present_overflow_clip(key, dirty, &paints), Some(clip));
     for kind in [PaintDirtyKind::Node, PaintDirtyKind::Region] {
-        assert_eq!(node_present_scissor_logical(kind, key, dirty, &[], &paints,
-            node_present_scissor_pad(kind)), [0.0; 4]);
+        assert_eq!(
+            node_present_scissor_logical(
+                kind,
+                key,
+                dirty,
+                &[],
+                &paints,
+                node_present_scissor_pad(kind)
+            ),
+            [0.0; 4]
+        );
     }
-    assert!(node_present_reset_rect(key, dirty, &paints, &[], &[], &[],
-        NODE_PRESENT_RESET_PAD_PHYSICAL, 1.0, None).is_none());
+    assert!(
+        node_present_reset_rect(
+            key,
+            dirty,
+            &paints,
+            &[],
+            &[],
+            &[],
+            NODE_PRESENT_RESET_PAD_PHYSICAL,
+            1.0,
+            None
+        )
+        .is_none()
+    );
 }
 
 #[test]
@@ -304,8 +333,11 @@ fn latest_enter_and_exit_rebuild_one_ordered_composite() {
             1.0,
             None,
         );
-        assert_eq!(dirty[0].kind,PaintDirtyKind::Region,
-            "alpha={alpha}: translucent stacking chrome must composite background glyphs before its own fill/text");
+        assert_eq!(
+            dirty[0].kind,
+            PaintDirtyKind::Region,
+            "alpha={alpha}: translucent stacking chrome must composite background glyphs before its own fill/text"
+        );
         for (_, old) in prev.iter().filter(|(k, _)| *k == key) {
             let d = dirty[0].bounds;
             assert!(
@@ -371,8 +403,10 @@ fn latest_region_must_absorb_intersecting_live_text_update() {
         1.0,
         None,
     );
-    assert!(dirty.iter().all(|d|d.kind==PaintDirtyKind::Region),
-        "a live caption intersecting Latest must not flush through the later Node capture pass: {dirty:?}");
+    assert!(
+        dirty.iter().all(|d| d.kind == PaintDirtyKind::Region),
+        "a live caption intersecting Latest must not flush through the later Node capture pass: {dirty:?}"
+    );
 }
 
 #[test]
@@ -462,8 +496,10 @@ fn node_reset_miss_without_background_must_not_stay_node() {
         1.0,
         Some(bounds),
     );
-    assert!(reset.is_some() || dirties[0].kind != PaintDirtyKind::Node,
-        "existing slot has no recoverable backdrop, but stays Node with reset=None; next frame src-overs old ink");
+    assert!(
+        reset.is_some() || dirties[0].kind != PaintDirtyKind::Node,
+        "existing slot has no recoverable backdrop, but stays Node with reset=None; next frame src-overs old ink"
+    );
 }
 
 #[test]
@@ -602,9 +638,11 @@ fn node_glyph_capture_preserves_both_sides_of_portal() {
         2,
         "both exposed text fragments must be prepared"
     );
-    assert!(capture
-        .iter()
-        .all(|n| intersect_rects(n.clip_bounds.unwrap(), overlay).is_none()));
+    assert!(
+        capture
+            .iter()
+            .all(|n| intersect_rects(n.clip_bounds.unwrap(), overlay).is_none())
+    );
     assert!(capture.iter().any(|n| n.clip_bounds.unwrap()[0] < 80.0));
     assert!(capture.iter().any(|n| n.clip_bounds.unwrap()[0] >= 100.0));
     assert!(
@@ -672,8 +710,198 @@ fn overlapping_portal_repair_holes_replay_each_pixel_once() {
     push_disjoint_rect(&mut holes, [0.0, 0.0, 20.0, 20.0]);
     assert_eq!(holes.iter().map(|r| r[2] * r[3]).sum::<f32>(), 700.0);
     for (i, a) in holes.iter().enumerate() {
-        assert!(holes[i + 1..]
+        assert!(
+            holes[i + 1..]
+                .iter()
+                .all(|b| intersect_rects(*a, *b).is_none())
+        );
+    }
+}
+
+#[test]
+fn offscreen_animation_preserves_retained_page_without_preparing_labels() {
+    let nodes = [
+        PaintDirty {
+            key: 1,
+            bounds: [306.0, -4662.0, 250.0, 16.0],
+            kind: PaintDirtyKind::Region,
+        },
+        PaintDirty {
+            key: 2,
+            bounds: [306.0, 3177.4, 56.0, 56.0],
+            kind: PaintDirtyKind::Region,
+        },
+    ];
+    let viewport = [0.0, 0.0, 800.0, 600.0];
+    assert_eq!(
+        frame_clear_policy_for_nodes(true, false, &nodes, viewport),
+        FrameClearPolicy::PartialLoad
+    );
+    assert_eq!(
+        frame_clear_policy_for_nodes(true, true, &nodes, viewport),
+        FrameClearPolicy::FullClear
+    );
+    assert_eq!(
+        frame_clear_policy_for_nodes(false, false, &nodes, viewport),
+        FrameClearPolicy::FullClear
+    );
+    let mut root = Element::new()
+        .w(300.0)
+        .h(100.0)
+        .text("Visible avatar caption");
+    let mut tree = LayoutTree::new();
+    let frame = tree.build_and_layout(&mut root, 300.0, 100.0, [-1.0, -1.0]);
+    assert!(!frame.text_nodes.is_empty());
+    assert!(
+        page_stack_band_submit_text(
+            &frame.text_nodes,
+            &frame.text_nodes,
+            0,
+            frame.text_nodes.len(),
+            Some(region_repair_text_cull(&nodes, &[], &[], 1.0, 800, 600)),
+            false
+        )
+        .is_none()
+    );
+}
+
+#[test]
+fn closing_last_avatar_portal_restores_its_painted_halo() {
+    let stamp = [297.0, 75.6, 126.5, 32.75];
+    let visual = [277.0, 55.6, 166.5, 72.75];
+    assert_eq!(
+        overlay_restore_leftover_coverage(&[(7, stamp)], &[], Some(visual)),
+        vec![(0, visual)]
+    );
+    let sibling = (8, [500.0, 100.0, 120.0, 80.0]);
+    assert_eq!(
+        overlay_restore_leftover_coverage(&[(7, stamp), sibling], &[sibling], Some(visual)),
+        vec![(7, stamp)]
+    );
+}
+
+#[test]
+fn culled_metadata_without_history_does_not_reconstruct_a_backdrop() {
+    use crate::layout::layout_tree::NodePaint;
+    let bounds = [120.0, -250.0, 80.0, 32.0];
+    let paints = [NodePaint {
+        key: 7,
+        bounds,
+        overlay: false,
+        layered: true,
+        instance: (0, 0),
+        textured: (0, 0),
+        text: (0, 0),
+        chrome: (0, 0),
+        paint_ops: (0, 0),
+        rest: Some(bounds),
+        overflow_clip: Some([0.0, 60.0, 800.0, 540.0]),
+    }];
+    let mut dirty = [PaintDirty {
+        key: 7,
+        bounds,
+        kind: PaintDirtyKind::Node,
+    }];
+    prepare_node_present_dirties(&mut dirty, &paints, &[], &[], &[], &[], 1.0, None);
+    assert_eq!(dirty[0].kind, PaintDirtyKind::Node);
+    assert_eq!(dirty[0].bounds, bounds);
+    let previous = [(7, [120.0, 80.0, 80.0, 32.0])];
+    prepare_node_present_dirties(&mut dirty, &paints, &previous, &[], &[], &[], 1.0, None);
+    assert_eq!(
+        dirty[0].kind,
+        PaintDirtyKind::Region,
+        "previous visible pixels must still be restored"
+    );
+}
+
+#[test]
+fn repair_at_line_box_edge_keeps_glyph_coverage_without_widening_clip() {
+    let mut root = Element::new().w(200.0).h(20.0).text("Header caption");
+    let mut tree = LayoutTree::new();
+    let frame = tree.build_and_layout(&mut root, 200.0, 20.0, [-1.0, -1.0]);
+    let mut text = frame.text_nodes[0].clone();
+    text.clip_bounds = None;
+    let edge = text.y + text.height;
+    let hole = [text.x, edge, text.width, 1.0];
+    let repair = clip_text_nodes_to_rect(&[text.clone()], hole);
+    assert_eq!(
+        repair.len(),
+        1,
+        "raster fringe can occupy the first row past the line box"
+    );
+    assert_eq!(repair[0].clip_bounds, Some(hole));
+    text.clip_bounds = Some([text.x, text.y, text.width, text.height]);
+    assert!(
+        clip_text_nodes_to_rect(&[text], hole).is_empty(),
+        "an actual ancestor clip remains hard"
+    );
+}
+
+#[test]
+fn plain_input_blur_repairs_selection_not_only_ibeam() {
+    use crate::components::input::{
+        focus_id_for_input, input_selection_signal_key, input_value_signal_key,
+    };
+    use crate::core::reactivity::{create_root, use_signal};
+    create_root(|| {
+        let id = "plain-selection-blur-regression";
+        use_signal(&input_value_signal_key(id), String::new).set("1111111".into());
+        use_signal(&input_selection_signal_key(id), || None::<(usize, usize)>).set(Some((0, 7)));
+        let focus = use_signal("__rui_button_focus_id", String::new);
+        focus.set(focus_id_for_input(id));
+        let mut root: Element = crate::components::input::input(id)
+            .plain_chrome(true)
+            .into();
+        let mut tree = LayoutTree::new();
+        tree.build_and_layout(&mut root, 300.0, 40.0, [-1.0, -1.0]);
+        let mut status = LayoutStatus::Clean;
+        crate::components::internal::text_edit::sync_text_edit_paint_subtree(
+            &mut root,
+            &mut tree,
+            &mut status,
+        );
+        let _ = take_frame_paint_nodes();
+        focus.set(String::new());
+        crate::components::internal::text_edit::sync_text_edit_paint_subtree(
+            &mut root,
+            &mut tree,
+            &mut status,
+        );
+        assert!(
+            take_frame_paint_nodes()
+                .iter()
+                .any(|d| d.kind == PaintDirtyKind::Region && d.bounds[2] > 10.0),
+            "blur must erase retained selection highlight even when the caret blink is off"
+        );
+    });
+}
+
+#[test]
+fn cached_scroll_viewport_keeps_metrics_for_next_scroll_repair() {
+    let mut viewport = Element::new()
+        .w(300.0)
+        .h(120.0)
+        .overflow_y("scroll")
+        .child(Element::new().w(300.0).h(800.0));
+    viewport.focus_id = Some(crate::core::scroll_viewport::focus_id_for_scroll_viewport(
+        "metric-replay",
+    ));
+    let mut root = Element::new().w(300.0).h(120.0).child(viewport);
+    let mut tree = LayoutTree::new();
+    let initial = tree.build_and_layout(&mut root, 300.0, 120.0, [-1.0, -1.0]);
+    assert!(
+        initial
+            .scroll_metrics
             .iter()
-            .all(|b| intersect_rects(*a, *b).is_none()));
+            .any(|(id, ..)| id == "metric-replay")
+    );
+    for _ in 0..3 {
+        let next = tree.build_and_layout_fast(&mut root, 300.0, 120.0, [-1.0, -1.0], true, false);
+        assert!(
+            next.scroll_metrics
+                .iter()
+                .any(|(id, ..)| id == "metric-replay"),
+            "cached frame lost the viewport needed by scroll blit"
+        );
     }
 }

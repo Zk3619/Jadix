@@ -1,21 +1,20 @@
 //! 每帧 chrome sync（边框 / 焦点环 / 文本 / caret / 多行高度与滚入视口）。
 
-use super::strings::{compose_text_edit_strings, TextEditStringsInput};
+use super::strings::{TextEditStringsInput, compose_text_edit_strings};
 use crate::components::input::{
-    effective_invalid, input_caret_signal_key, input_clear_template_id,
+    InputType, effective_invalid, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
     input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id,
     input_selection_signal_key, input_text_template_id, input_value_signal_key,
     map_byte_index_to_masked, map_byte_range_to_masked, resolve_placeholder, set_adornment_visible,
-    InputType,
 };
 use crate::core::reactivity::use_signal;
-use crate::core::tree::{parse_color, parse_text_color, Element, InputPaintSync, LayoutStatus};
+use crate::core::tree::{Element, InputPaintSync, LayoutStatus, parse_color, parse_text_color};
 use crate::layout::layout_tree::LayoutTree;
 use crate::style::{
-    apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
-    focus_ring_destructive_color, focus_ring_params_for, focus_ring_shadow_matches_color,
-    InputCaretDraw, TRANSPARENT,
+    InputCaretDraw, TRANSPARENT, apply_focus_ring_shadow_color, focus_ring_border_color,
+    focus_ring_color, focus_ring_destructive_color, focus_ring_params_for,
+    focus_ring_shadow_matches_color,
 };
 use crate::tokens;
 use crate::utils::text_field::{
@@ -468,6 +467,31 @@ fn sync_one_text_edit_paint(
         };
 
         if text_el.text_style.input_caret != caret_draw {
+            let old = text_el.text_style.input_caret.as_ref();
+            let new = caret_draw.as_ref();
+            let selection_ink_changed = old.and_then(|c| c.selection)
+                != new.and_then(|c| c.selection)
+                || old.map(|c| &c.extra_selections) != new.map(|c| &c.extra_selections)
+                || old.and_then(|c| c.overwrite_highlight)
+                    != new.and_then(|c| c.overwrite_highlight);
+            if selection_ink_changed
+                && (old.is_some_and(|c| {
+                    c.selection.is_some()
+                        || !c.extra_selections.is_empty()
+                        || c.overwrite_highlight.is_some()
+                }) || new.is_some_and(|c| {
+                    c.selection.is_some()
+                        || !c.extra_selections.is_empty()
+                        || c.overwrite_highlight.is_some()
+                }))
+            {
+                // Selection is retained glyph/background ink, unlike the swapchain-only
+                // I-beam. Blurring a plain InputAdornment must repair the entire run.
+                crate::app::damage::push_frame_region_paint(
+                    crate::app::damage::paint_element_key(text_el),
+                    crate::core::tree::visual_paint_aabb(text_el, text_el.paint_scroll_acc),
+                );
+            }
             // Blur drops `input_caret` before the post-sync dirty walk. Pushing
             // after the clear no-ops, PartialLoad keeps the I-beam (光标残留).
             if caret_draw.is_none()
@@ -565,11 +589,7 @@ fn sync_one_text_edit_paint(
             let soft = desc.wrap_mode.soft_wrap();
             let avail = if soft {
                 let w = text_el.layout_bounds[2];
-                if w > 1.0 {
-                    w
-                } else {
-                    320.0
-                }
+                if w > 1.0 { w } else { 320.0 }
             } else {
                 10_000.0
             };
@@ -712,7 +732,7 @@ fn sync_one_text_edit_paint(
             };
             let ch_eff = content_h_text.max(text_h_layout);
             let _ = ch; // post-render metrics own content_h; do not raise the signal here —
-                        // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
+            // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
             if vh_eff > 1.0 && (vh - vh_eff).abs() > 0.5 {
                 use_signal(&vh_key, || 0.0_f32).set_silent(vh_eff);
             }
@@ -969,10 +989,7 @@ pub(crate) fn push_focused_text_edit_caret_damage(el: &Element) {
         for &ix in &caret.extra_carets {
             dirty = crate::app::damage::union_rects(dirty, caret_ibeam_damage_box(el, leaf, ix));
         }
-        crate::app::damage::push_frame_paint_key(
-            crate::app::damage::paint_element_key(el),
-            dirty,
-        );
+        crate::app::damage::push_frame_paint_key(crate::app::damage::paint_element_key(el), dirty);
         return;
     }
     for child in &el.children {
@@ -985,9 +1002,10 @@ fn caret_ibeam_damage_box(el: &Element, leaf: [f32; 4], byte_index: usize) -> [f
     let text = el.text.as_deref().unwrap_or("");
     let size = el.text_style.size_resolved();
     let weight = el.text_style.weight_resolved();
-    let line_height = el.text_style.line_height_px.unwrap_or_else(|| {
-        size * crate::style::tailwind_default_leading_scale(size)
-    });
+    let line_height = el
+        .text_style
+        .line_height_px
+        .unwrap_or_else(|| size * crate::style::tailwind_default_leading_scale(size));
     let caret_w = crate::utils::text_field::TEXT_EDIT_CARET_W;
     let caret_h = crate::utils::text_field::text_edit_caret_height_px(line_height, size);
     let pan = el.text_style.overflow.allows_caret_scroll();

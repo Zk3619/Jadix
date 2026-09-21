@@ -6,8 +6,8 @@ use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
 
 use crate::core::tree::{
-    find_in_tree, find_in_tree_mut, pointer_events_targets_children, pointer_events_targets_self,
-    CursorKind, CursorValue, Element, PointerEvents,
+    CursorKind, CursorValue, Element, PointerEvents, find_in_tree, find_in_tree_mut,
+    pointer_events_targets_children, pointer_events_targets_self,
 };
 use crate::layout::layout_tree::portal_hit_passthrough;
 
@@ -187,6 +187,15 @@ pub(crate) fn element_self_pointer_hit_with(
 /// Preserve `input:` / `textarea:` focus through inner scroll viewports (`scroll:`).
 #[inline]
 fn inherit_text_edit_focus_id<'a>(el: &'a Element, inherited: Option<&'a str>) -> Option<&'a str> {
+    if matches!(
+        el.attrs.get("data-slot").map(String::as_str),
+        Some("input-adornment-addon" | "input-adornment-text" | "input-adornment-button")
+    ) {
+        // The shell delegates focus, not editable text ownership. Otherwise a
+        // trailing Kbd "K" wins the reverse walk and drag-select measures the
+        // input value against the addon, selecting everything on a plain click.
+        return None;
+    }
     if let Some(id) = el.focus_id.as_deref() {
         if id.starts_with(crate::components::INPUT_FOCUS_PREFIX)
             || id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX)
@@ -1796,8 +1805,8 @@ pub(super) fn nudge_textarea_hscroll_for_drag(
     };
     use crate::style::WhiteSpace;
     use crate::utils::text_field::{
-        hard_line_body_at_y, nowrap_line_end_max_scroll_x, text_edit_line_box_px,
-        textarea_scroll_rest, textarea_scrollport_padding_x, TEXTAREA_SCROLLPORT_PAD_X,
+        TEXTAREA_SCROLLPORT_PAD_X, hard_line_body_at_y, nowrap_line_end_max_scroll_x,
+        text_edit_line_box_px, textarea_scroll_rest, textarea_scrollport_padding_x,
     };
 
     let Some((leaf_bounds, display, style, _)) =
@@ -3083,6 +3092,28 @@ mod textarea_text_hit_tests {
         let (_, text, _, _) =
             find_input_text_leaf_for_rest(&root, None, "pad-hit").expect("field leaf");
         assert_eq!(text, "hello world");
+    }
+
+    #[test]
+    fn input_adornment_keycap_is_not_the_editable_text_leaf() {
+        let mut root = input_like_tree_with_padding_and_adornment();
+        root.children.pop();
+        let mut keycap = Element::new().text("K");
+        keycap.layout_bounds = [176.0, 8.0, 20.0, 20.0];
+        let mut addon = Element::new().child(keycap);
+        addon.set_attr("data-slot", "input-adornment-addon");
+        addon.layout_bounds = [170.0, 0.0, 30.0, 36.0];
+        root.children.push(addon);
+        let (_, text, _, _) = find_input_text_leaf_for_rest(&root, None, "pad-hit").unwrap();
+        assert_eq!(
+            text, "hello world",
+            "focus delegation must not turn a keycap into input text"
+        );
+        let hit = find_input_text_at(&root, None, 24.0, 18.0, [0.0, 0.0]).unwrap();
+        assert_eq!(
+            hit.2, text,
+            "pointer-down and subsequent drag must measure the same run"
+        );
     }
 
     #[test]

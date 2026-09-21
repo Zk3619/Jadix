@@ -31,8 +31,8 @@ use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 
 use crate::core::tree::{Element, LayoutStatus};
 
@@ -210,11 +210,7 @@ fn element_paint_outset_pad(el: &Element, rot_pad: f32) -> f32 {
     }
     let outline = el.style.outline_width.max(0.0) + el.style.outline_offset.max(0.0);
     halo = halo.max(outline);
-    if halo <= 0.0 {
-        rot_pad
-    } else {
-        halo + rot_pad
-    }
+    if halo <= 0.0 { rot_pad } else { halo + rot_pad }
 }
 
 /// Expand pin / Taffy can report content height while `max-height` is the accordion clip.
@@ -663,6 +659,22 @@ pub fn overlay_restore_leftover_stamps(
         .collect()
 }
 
+/// The last portal's GPU footprint includes shadows outside its layout stamp.
+/// Once no portal remains, restore that footprint instead of leaving its halo
+/// in retain. With live siblings, preserve the existing per-key restore rule.
+pub(crate) fn overlay_restore_leftover_coverage(
+    previous: &[(u64, [f32; 4])],
+    current: &[(u64, [f32; 4])],
+    previous_visual: Option<[f32; 4]>,
+) -> Vec<(u64, [f32; 4])> {
+    if current.is_empty() {
+        if let Some(visual) = previous_visual.filter(|b| b[2] > 0.0 && b[3] > 0.0) {
+            return vec![(0, visual)];
+        }
+    }
+    overlay_restore_leftover_stamps(previous, current)
+}
+
 /// Overlay suffix is submitted once per present.
 ///
 /// Fade CSS (`push_frame_paint_element`) and portal membership each name an
@@ -1068,9 +1080,10 @@ pub fn overlay_mounted_replace_holes(
                     // AlertDialog footer hover src-overs the border/shadow thicker.
                     // Only expand when a sibling is the fullscreen scrim; padding a
                     // lone popover / nested Select would punch DatePicker captions.
-                    if cur_stamps.iter().any(|(k, b)| {
-                        *k != dirty_key && overlay_sibling_is_scrim_host(*b, hole)
-                    }) {
+                    if cur_stamps
+                        .iter()
+                        .any(|(k, b)| *k != dirty_key && overlay_sibling_is_scrim_host(*b, hole))
+                    {
                         // zoom-in-90 is same-footprint only because slack is 32px.
                         // Dest-reset of the rest card with PAGE while encode is
                         // opacity 0 looks like the dialog never opens.
@@ -2085,12 +2098,7 @@ pub fn clip_culled_scroll_blit_pins(
                 });
             }
             if delta[0].abs() >= 0.5 || delta[1].abs() >= 0.5 {
-                let dest = [
-                    prev[0] - delta[0],
-                    prev[1] - delta[1],
-                    prev[2],
-                    prev[3],
-                ];
+                let dest = [prev[0] - delta[0], prev[1] - delta[1], prev[2], prev[3]];
                 if let Some(hit) = intersect_rects(dest, *vp) {
                     acc = Some(match acc {
                         Some(a) => union_rects(a, hit),
@@ -2189,12 +2197,9 @@ pub fn frame_clear_policy_for_nodes(
     if nodes.iter().any(|n| damage_covers_full(viewport, n.bounds)) {
         return FrameClearPolicy::FullClear;
     }
-    if nodes
-        .iter()
-        .all(|n| intersect_rects(n.bounds, viewport).is_none())
-    {
-        return FrameClearPolicy::FullClear;
-    }
+    // Each node has an independently clipped encode path. If all animation
+    // damage is offscreen, Load preserves the complete retained frame and the
+    // node loop submits nothing; clearing here redraws every visible avatar.
     FrameClearPolicy::PartialLoad
 }
 
@@ -2342,11 +2347,7 @@ pub fn changed_viewport_scroll_deltas(
         let dy = f32::from_bits(off[1]) - f32::from_bits(old[1]);
         out.push((id.clone(), [dx, dy]));
     }
-    if out.is_empty() {
-        None
-    } else {
-        Some(out)
-    }
+    if out.is_empty() { None } else { Some(out) }
 }
 
 /// Viewport ids present last frame and gone this frame (pin last clip bounds).
@@ -3383,7 +3384,9 @@ mod tests {
         let halo_in_scissor = intersect_rects(card_halo, scissor)
             .expect("OK pad must overlap the elevated card chrome");
         assert!(
-            holes.iter().any(|h| damage_covers_full(halo_in_scissor, *h)),
+            holes
+                .iter()
+                .any(|h| damage_covers_full(halo_in_scissor, *h)),
             "button hover dest-reset must cover card chrome in the encode scissor or src-over stacks the halo; holes={holes:?} scissor={scissor:?}"
         );
         assert!(
@@ -3465,7 +3468,9 @@ mod tests {
         let halo_in_scissor = intersect_rects(card_halo, scissor)
             .expect("OK pad must overlap the elevated card chrome");
         assert!(
-            holes.iter().any(|h| damage_covers_full(halo_in_scissor, *h)),
+            holes
+                .iter()
+                .any(|h| damage_covers_full(halo_in_scissor, *h)),
             "runtime card-stamp button hover must dest-reset nearby chrome; holes={holes:?} scissor={scissor:?}"
         );
         assert!(
@@ -3536,7 +3541,9 @@ mod tests {
             "button hover dest-reset must stay on the chip, not pad(card); holes={holes:?}"
         );
         assert!(
-            !holes.iter().any(|h| intersect_rects(*h, far_scrim).is_some()),
+            !holes
+                .iter()
+                .any(|h| intersect_rects(*h, far_scrim).is_some()),
             "button hover must not PAGE-punch the far blur ring; holes={holes:?} far={far_scrim:?}"
         );
         assert!(
@@ -3579,8 +3586,8 @@ mod tests {
         let stamps = [(OVERLAY, vp), (STAGE, card)];
         let holes = overlay_mounted_replace_holes(&stamps, &stamps, STAGE, Some(zoom));
         let occ = overlay_encode_occupancy(STAGE, Some(zoom), &stamps, None);
-        let scissor = overlay_encode_scissor(Some(zoom), occ, None)
-            .expect("enter zoom must still encode");
+        let scissor =
+            overlay_encode_scissor(Some(zoom), occ, None).expect("enter zoom must still encode");
         let card_pad = crate::app::draw_cull::padded_xywh(card, 16.0);
         assert!(
             !holes.iter().any(|h| damage_covers_full(card_pad, *h)),
@@ -4143,13 +4150,15 @@ mod tests {
             "unstamped nested join dest-resets nothing — the expand measure AABB would punch DatePicker fill and page captions"
         );
         let unconstrained = [80.0, 360.0, 280.0, 800.0];
-        assert!(overlay_mounted_replace_holes(
-            &parent_only,
-            &parent_only,
-            NESTED_KEY,
-            Some(unconstrained)
-        )
-        .is_empty());
+        assert!(
+            overlay_mounted_replace_holes(
+                &parent_only,
+                &parent_only,
+                NESTED_KEY,
+                Some(unconstrained)
+            )
+            .is_empty()
+        );
         let leave =
             overlay_mounted_replace_holes(&parent_only, &parent_only, NESTED_KEY, Some(nested));
         assert!(leave.is_empty());
@@ -4870,11 +4879,11 @@ mod tests {
                 && d.bounds[1] <= card_cy
                 && card_cy < d.bounds[1] + d.bounds[3]
                 && d.bounds[2] * d.bounds[3] >= visible_card[2] * visible_card[3] * 0.4;
-        assert!(
-            !covers_card,
-            "clip-culled dest-reset wipes the visible 基础 card\n dirty={:?}",
-            d.bounds
-        );
+            assert!(
+                !covers_card,
+                "clip-culled dest-reset wipes the visible 基础 card\n dirty={:?}",
+                d.bounds
+            );
         }
         let vp = [0.0, 52.0, 400.0, 160.0];
         let think_prev = [8.0, 52.0, 200.0, 20.0];
@@ -5583,26 +5592,34 @@ mod tests {
             .allows(),
             "named paint is a pin hole, not an abort gate"
         );
-        assert!(!ScrollStripBlitPolicy {
-            retain_valid: false,
-            ..allow_policy()
-        }
-        .allows());
-        assert!(!ScrollStripBlitPolicy {
-            force_full_redraw: true,
-            ..allow_policy()
-        }
-        .allows());
-        assert!(!ScrollStripBlitPolicy {
-            gpu_partial: false,
-            ..allow_policy()
-        }
-        .allows());
-        assert!(!ScrollStripBlitPolicy {
-            enabled: false,
-            ..allow_policy()
-        }
-        .allows());
+        assert!(
+            !ScrollStripBlitPolicy {
+                retain_valid: false,
+                ..allow_policy()
+            }
+            .allows()
+        );
+        assert!(
+            !ScrollStripBlitPolicy {
+                force_full_redraw: true,
+                ..allow_policy()
+            }
+            .allows()
+        );
+        assert!(
+            !ScrollStripBlitPolicy {
+                gpu_partial: false,
+                ..allow_policy()
+            }
+            .allows()
+        );
+        assert!(
+            !ScrollStripBlitPolicy {
+                enabled: false,
+                ..allow_policy()
+            }
+            .allows()
+        );
     }
 
     #[test]
@@ -5739,13 +5756,15 @@ mod tests {
             rect_contains_rect(pin, [100.0, 116.0, 100.0, 84.0]),
             "pin must cover A's dest smear inside A∪B, got {pin:?}"
         );
-        assert!(overlapping_sibling_occupancy_pin(
-            [0.0, 0.0, 400.0, 600.0],
-            [0.0, 16.0],
-            [40.0, 80.0, 320.0, 400.0],
-            [0.0, 8.0],
-        )
-        .is_none());
+        assert!(
+            overlapping_sibling_occupancy_pin(
+                [0.0, 0.0, 400.0, 600.0],
+                [0.0, 16.0],
+                [40.0, 80.0, 320.0, 400.0],
+                [0.0, 8.0],
+            )
+            .is_none()
+        );
     }
 
     #[test]

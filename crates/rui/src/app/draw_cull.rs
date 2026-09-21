@@ -8,11 +8,11 @@ use std::collections::BTreeSet;
 
 use crate::layout::layout_tree::{NodePaint, TextLayoutInfo};
 use crate::renderer::{
-    aabb_of_centered_transform, aabbs_disjoint, InstanceInput, ScaledTexturedDraw,
+    InstanceInput, ScaledTexturedDraw, aabb_of_centered_transform, aabbs_disjoint,
 };
 use crate::style::transform::MAT2D_IDENTITY;
 
-use super::damage::{intersect_rects, PaintDirty, PaintDirtyKind};
+use super::damage::{PaintDirty, PaintDirtyKind, intersect_rects};
 
 /// Same pad as scissor (`AppState::DAMAGE_SCISSOR_PAD_LOGICAL`) so cull ≥ clip.
 pub(crate) const DAMAGE_CULL_PAD_LOGICAL: f32 = 16.0;
@@ -44,6 +44,14 @@ pub(crate) struct CullRects {
 }
 
 impl CullRects {
+    /// Explicitly empty repair coverage; None means no culling to callers.
+    pub(crate) const fn empty() -> Self {
+        Self {
+            rects: [[0.0; 4]; CULL_RECTS_CAP],
+            len: 0,
+        }
+    }
+
     pub(crate) fn one(a: [f32; 4]) -> Self {
         let mut s = Self {
             rects: [[0.0; 4]; CULL_RECTS_CAP],
@@ -83,11 +91,7 @@ impl CullRects {
                 return None;
             }
         }
-        if s.len == 0 {
-            None
-        } else {
-            Some(s)
-        }
+        if s.len == 0 { None } else { Some(s) }
     }
 
     pub(crate) fn strips(self) -> impl Iterator<Item = [f32; 4]> {
@@ -150,6 +154,58 @@ pub(crate) fn scroll_repair_rects_physical(
         super::damage::push_disjoint_rect(&mut rects, r);
     }
     CullRects::from_rects(rects)
+}
+
+/// Text preparation coverage for visible Region/OverlayRestore clears.
+/// Clip each hole before unioning: offscreen holes on opposite sides of the
+/// viewport must not cause every intervening label to be prepared again.
+pub(crate) fn region_repair_text_cull(
+    dirties: &[PaintDirty],
+    previous: &[(u64, [f32; 4])],
+    paints: &[NodePaint],
+    scale: f32,
+    width: u32,
+    height: u32,
+) -> CullRects {
+    let mut bounds = None;
+    let scale = scale.max(1e-6);
+    for dirty in dirties {
+        if !matches!(
+            dirty.kind,
+            PaintDirtyKind::Region | PaintDirtyKind::OverlayRestore
+        ) {
+            continue;
+        }
+        let hole = node_present_scissor_logical(
+            dirty.kind,
+            dirty.key,
+            dirty.bounds,
+            previous,
+            paints,
+            0.0,
+        );
+        let Some((x, y, w, h)) =
+            super::damage::damage_to_scissor_physical(hole, 0.0, scale, width, height)
+        else {
+            continue;
+        };
+        // Use the exact GPU scissor, not the fractional logical edge that
+        // glyphon's TextBounds would truncate one pixel earlier.
+        let hole = [
+            x as f32 / scale,
+            y as f32 / scale,
+            w as f32 / scale,
+            h as f32 / scale,
+        ];
+        // Keep one device pixel of raster context at the clip edge. Encode
+        // still uses the exact clear scissor, so this cannot restamp neighbors.
+        let hole = padded_xywh(hole, 1.0 / scale);
+        bounds = Some(match bounds {
+            Some(prev) => super::damage::union_rects(prev, hole),
+            None => hole,
+        });
+    }
+    bounds.map(CullRects::one).unwrap_or_else(CullRects::empty)
 }
 
 fn transform_is_identity(m: &[f32; 6]) -> bool {
@@ -329,7 +385,9 @@ pub(crate) fn text_hits_damage(n: &TextLayoutInfo, damage_logical: [f32; 4]) -> 
     if bounds[2] <= 0.0 || bounds[3] <= 0.0 {
         return false;
     }
-    !aabbs_disjoint(bounds, damage_logical)
+    // Raster coverage can extend one pixel beyond the layout line box.
+    // This only broadens candidate selection; the owner's hard clip is kept.
+    !aabbs_disjoint(padded_xywh(bounds, 1.0), damage_logical)
 }
 
 /// Label belongs to a hover-dirty widget when its **center** is inside the dirty box.
@@ -431,7 +489,7 @@ fn clip_text_node_to_rect(n: &TextLayoutInfo, clip: [f32; 4]) -> Option<TextLayo
     if hit[2] <= 0.0 || hit[3] <= 0.0 {
         return None;
     }
-    let ink = [n.x, n.y, n.width.max(0.0), n.height.max(0.0)];
+    let ink = padded_xywh([n.x, n.y, n.width.max(0.0), n.height.max(0.0)], 1.0);
     if aabbs_disjoint(ink, hit) {
         return None;
     }
@@ -839,7 +897,9 @@ pub(crate) fn node_present_overflow_clip(
     let has_keyed = node_paints.iter().any(|p| p.key == dirty_key);
     let mut acc: Option<[f32; 4]> = None;
     for p in node_paints {
-        if if has_keyed { p.key != dirty_key } else {
+        if if has_keyed {
+            p.key != dirty_key
+        } else {
             !slot_matches_dirty(dirty_key, dirty_bounds, p, false)
         } {
             continue;
@@ -1315,7 +1375,8 @@ fn is_nested_foreign_slot(parent: &NodePaint, child: &NodePaint) -> bool {
         // layout ancestor, not Latest's same-box wrap. Returning false here unioned
         // lucide+caption into the row last-present; idle spin then looked like the
         // row translated and dest-reset 「Oliver is typing...」 every tick.
-        if occupancy_descendant_slot(parent, child) && !slots_share_box_center(parent_box, child_box)
+        if occupancy_descendant_slot(parent, child)
+            && !slots_share_box_center(parent_box, child_box)
         {
             return true;
         }
@@ -1726,6 +1787,26 @@ pub(crate) fn restore_culled_dirty_clips(
     }
 }
 
+/// Metadata restored for a clipped-out owner is not a drawable slot. Without
+/// previous pixels there is no backdrop to reconstruct or sibling ink to scan.
+fn owner_is_only_culled_metadata(key: u64, paints: &[NodePaint]) -> bool {
+    let mut found = false;
+    for p in paints.iter().filter(|p| p.key == key) {
+        found = true;
+        if p.instance.0 != p.instance.1
+            || p.textured.0 != p.textured.1
+            || p.text.0 != p.text.1
+            || p.chrome.0 != p.chrome.1
+            || p.paint_ops.0 != p.paint_ops.1
+            || p.overflow_clip
+                .is_none_or(|clip| intersect_rects(p.bounds, clip).is_some())
+        {
+            return false;
+        }
+    }
+    found
+}
+
 pub(crate) fn prepare_node_present_dirties(
     dirties: &mut [PaintDirty],
     node_paints: &[NodePaint],
@@ -1744,6 +1825,9 @@ pub(crate) fn prepare_node_present_dirties(
             continue;
         }
         let prev = last_present_prev_for_dirty(dirty.kind, dirty.key, last_present);
+        if prev.is_none() && owner_is_only_culled_metadata(dirty.key, node_paints) {
+            continue;
+        }
         if matching_slot_is_layered(dirty.key, dirty.bounds, node_paints) {
             // A stacking layer is a composite, not an independently erasable
             // text/fill node. Background glyph restoration followed by a global
@@ -1847,6 +1931,9 @@ pub(crate) fn prepare_node_present_dirties(
                 continue;
             }
             let prev = last_present_prev_for_dirty(dirty.kind, dirty.key, last_present);
+            if prev.is_none() && owner_is_only_culled_metadata(dirty.key, node_paints) {
+                continue;
+            }
             let candidate = prev
                 .map(|r| union_xywh(r, dirty.bounds))
                 .unwrap_or(dirty.bounds);
@@ -2386,11 +2473,7 @@ fn shrink_aabb_to_exclude(wipe: [f32; 4], cut: [f32; 4]) -> [f32; 4] {
             &mut best_area,
         );
     }
-    if best_area < 0.0 {
-        wipe
-    } else {
-        best
-    }
+    if best_area < 0.0 { wipe } else { best }
 }
 
 /// Scroll blit cannot run node-present encode (`scroll_layer_clear`). Pin the same
@@ -3663,7 +3746,8 @@ mod tests {
             "Latest itself is the overlay slot"
         );
         assert!(
-            node_present_dest_reset_full(2, btn, &paints, &instances, &[], &[], 1.0, None).is_none(),
+            node_present_dest_reset_full(2, btn, &paints, &instances, &[], &[], 1.0, None)
+                .is_none(),
             "first visible Latest src-overs wrapping still in retain"
         );
         let fade =
@@ -4010,12 +4094,16 @@ mod tests {
             2,
             "spanning glyph must split into two strip clips"
         );
-        assert!(span_clips
-            .iter()
-            .any(|c| (c[1] - 92.0).abs() < 0.1 && (c[3] - 8.0).abs() < 0.1));
-        assert!(span_clips
-            .iter()
-            .any(|c| (c[0] - 188.0).abs() < 0.1 && (c[2] - 12.0).abs() < 0.1));
+        assert!(
+            span_clips
+                .iter()
+                .any(|c| (c[1] - 92.0).abs() < 0.1 && (c[3] - 8.0).abs() < 0.1)
+        );
+        assert!(
+            span_clips
+                .iter()
+                .any(|c| (c[0] - 188.0).abs() < 0.1 && (c[2] - 12.0).abs() < 0.1)
+        );
     }
 
     #[test]
@@ -4784,8 +4872,7 @@ mod tests {
         );
         let paint = crate::app::damage::intersect_rects(int_clip, scissor).expect("paint");
         assert!(
-            paint[0] >= scissor[0] - 0.01
-                && paint[0] + paint[2] <= scissor[0] + scissor[2] + 0.01,
+            paint[0] >= scissor[0] - 0.01 && paint[0] + paint[2] <= scissor[0] + scissor[2] + 0.01,
             "GPU scissor must keep the kernel from painting left of CLEAR (叠粗)\n paint={paint:?} scissor={scissor:?}"
         );
         for scale in [1.25_f32, 1.5, 1.75] {
@@ -7615,17 +7702,9 @@ mod tests {
         let halo = instance_paint_bounds(&instances[2]);
         let dirty = padded_xywh(btn, 32.0);
         let paints = [wrap_p, btn_p, bar_p];
-        let reset = node_present_dest_reset_full(
-            2,
-            dirty,
-            &paints,
-            &instances,
-            &[],
-            &[],
-            1.0,
-            Some(halo),
-        )
-        .expect("leftover Latest dest-resets so the fade cannot ghost");
+        let reset =
+            node_present_dest_reset_full(2, dirty, &paints, &instances, &[], &[], 1.0, Some(halo))
+                .expect("leftover Latest dest-resets so the fade cannot ghost");
         assert!(
             aabb_covers(reset.rect, btn) || intersect_rects(reset.rect, btn).is_some(),
             "wipe must still cover the leftover pill\n wipe={:?} btn={btn:?}",
@@ -7781,17 +7860,9 @@ mod tests {
         let halo = instance_paint_bounds(&instances[2]);
         let dirty = padded_xywh(btn, 16.0);
         let paints = [wrap_p, btn_p, bar_p];
-        let reset = node_present_dest_reset_full(
-            2,
-            dirty,
-            &paints,
-            &instances,
-            &[],
-            &[],
-            1.0,
-            Some(halo),
-        )
-        .expect("leftover Latest dest-resets so the fade cannot ghost");
+        let reset =
+            node_present_dest_reset_full(2, dirty, &paints, &instances, &[], &[], 1.0, Some(halo))
+                .expect("leftover Latest dest-resets so the fade cannot ghost");
         assert!(
             aabb_covers(reset.rect, halo) || reset.rect[1] + reset.rect[3] >= btn[1] + btn[3] + 4.0,
             "stacking-context wrapping must not occupancy-clip the halo\n wipe={:?} halo={halo:?} btn={btn:?}",

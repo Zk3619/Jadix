@@ -13,8 +13,8 @@ use taffy::prelude::*;
 use super::clip_path::ClipPath;
 use super::scroll_timeline::ScrollTimelineAxis;
 use crate::layout::dimension::{
-    dim_kind, dimension_to_lp, dimension_to_lpa, lp_kind, lpa_kind, CssDim, DimKind, PercentAxis,
-    UnitCtx,
+    CssDim, DimKind, PercentAxis, UnitCtx, dim_kind, dimension_to_lp, dimension_to_lpa, lp_kind,
+    lpa_kind,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -920,6 +920,8 @@ pub enum TimingFunction {
     /// CSS `linear()` piecewise stops (intern id; table in [`super::easing`]).
     LinearStops(u16),
     /// Native spring driver (`spring()` / `spring(stiffness, damping)`). Not CSS.
+    /// Preserve duration/visual-duration authoring for the native spring driver.
+    SpringOptions(super::generator::SpringOptions),
     Spring {
         stiffness: f32,
         damping: f32,
@@ -946,6 +948,10 @@ impl TimingFunction {
             Self::CubicBezier(x1, y1, x2, y2) => cubic_bezier_y_at_x(t, *x1, *y1, *x2, *y2),
             Self::Steps { n, jump } => super::easing::eval_steps(t, *n, *jump),
             Self::LinearStops(id) => super::easing::eval_linear_stops(*id, t),
+            Self::SpringOptions(opts) => {
+                let spring = super::generator::Spring::new(0.0, 1.0, 0.0, *opts);
+                spring.next(t * spring.calculated_duration_ms()).value
+            }
             Self::Spring {
                 stiffness,
                 damping,
@@ -955,7 +961,7 @@ impl TimingFunction {
     }
 
     pub fn is_spring(self) -> bool {
-        matches!(self, Self::Spring { .. })
+        matches!(self, Self::Spring { .. } | Self::SpringOptions(_))
     }
 
     /// react-spring / Framer-ish defaults (stiffness 170, damping 26, mass 1).

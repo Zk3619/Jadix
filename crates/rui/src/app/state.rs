@@ -12,32 +12,33 @@ use winit::window::Window;
 
 use crate::core::tree::{Element, LayoutProfileMs, LayoutTree};
 use crate::renderer::{
-    cpu_text::CpuTextProfiler, prepare_text_frame, scale_clip_polys_in_place, scale_instances,
-    scale_instances_in_place, scale_textured_draws, BackdropBlurPipeline, InstanceInput,
-    PresentRetainPipeline, RuiPipeline, RuiTextRenderer, ScaledTexturedDraw, TexturedInstanceInput,
-    TexturedQuadPipeline,
+    BackdropBlurPipeline, InstanceInput, PresentRetainPipeline, RuiPipeline, RuiTextRenderer,
+    ScaledTexturedDraw, TexturedInstanceInput, TexturedQuadPipeline, cpu_text::CpuTextProfiler,
+    prepare_text_frame, scale_clip_polys_in_place, scale_instances, scale_instances_in_place,
+    scale_textured_draws,
 };
 use crate::{
     components::{
         scrollbar::scrollbar_visibility_signal_key,
         scrollbar::{
+            ATTR_SCROLLBAR_TRACK_FADES, SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
             apply_scrollbar_visible_alpha, normalize_scrollbar_base_for_auto,
-            scrollbar_min_thumb_along_track, ATTR_SCROLLBAR_TRACK_FADES,
-            SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
+            scrollbar_min_thumb_along_track,
         },
     },
     core::reactivity::use_signal,
     core::scroll_viewport::{
-        scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
-        scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
-        scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
-        scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
+        SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_content_h_signal_key, scroll_content_w_signal_key,
+        scroll_offset_x_signal_key, scroll_offset_y_signal_key, scroll_overflow_x_signal_key,
+        scroll_overflow_y_signal_key, scroll_scrollbar_inset_x_signal_key,
+        scroll_scrollbar_inset_y_signal_key, scroll_viewport_h_signal_key,
+        scroll_viewport_w_signal_key,
     },
 };
 use std::collections::hash_map::Entry;
+use std::sync::OnceLock;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
 use std::time::Instant;
 use taffy::prelude::Dimension;
 
@@ -2240,27 +2241,17 @@ impl AppState {
         super::damage::sort_paint_dirty_nodes(&mut self.damage_nodes);
     }
 
-    fn push_overlay_restore_occupancy(&mut self) {
-        let Some(occ) = self.overlay_occupied else {
-            return;
-        };
-        self.push_overlay_restore_visual(0, occ);
-    }
-
     fn push_overlay_restore_leftovers(
         &mut self,
         prev_stamps: &[(u64, [f32; 4])],
         cur_stamps: &[(u64, [f32; 4])],
     ) {
-        let leftovers = super::damage::overlay_restore_leftover_stamps(prev_stamps, cur_stamps);
-        if leftovers.is_empty() {
-            if cur_stamps.is_empty() {
-                self.push_overlay_restore_occupancy();
-            }
-            return;
-        }
-        for (key, b) in leftovers {
-            self.push_overlay_restore_visual(key, b);
+        for (key, bounds) in super::damage::overlay_restore_leftover_coverage(
+            prev_stamps,
+            cur_stamps,
+            self.overlay_occupied,
+        ) {
+            self.push_overlay_restore_visual(key, bounds);
         }
     }
 
@@ -2395,11 +2386,6 @@ impl AppState {
         let warm_retain = keep_retain && !self.present_retain.contents_valid();
         let draw_to_retain = keep_retain;
         let use_node_present = node_present && use_partial_damage;
-        let pad = if self.scroll_layer_clear {
-            0.0
-        } else {
-            super::draw_cull::DAMAGE_CULL_PAD_LOGICAL
-        };
         let cull_phys = if use_partial_damage && !use_node_present {
             if !self.scroll_strip_blit.is_empty() {
                 super::draw_cull::scroll_repair_rects_physical(
@@ -2407,12 +2393,12 @@ impl AppState {
                     &self.scroll_blit_pins,
                     ui_scale,
                 )
-            } else if let Some(damage) = self.damage_rect {
-                Some(super::draw_cull::CullRects::one(
-                    super::draw_cull::damage_cull_rect_physical(damage, pad, ui_scale),
-                ))
             } else {
-                None
+                // The viewport-clear fallback uses the same integer coverage
+                // for clear, primitives and glyphs, including fractional DPI.
+                scissor_physical.map(|(x, y, w, h)| {
+                    super::draw_cull::CullRects::one([x as f32, y as f32, w as f32, h as f32])
+                })
             }
         } else {
             None
@@ -4930,7 +4916,9 @@ impl AppState {
             // current pose, not last frame's meshes paired with current damage
             // (which clears the scrim before drawing the old panel).
             render_result = self.layout_tree.collect_animation_frame(
-                &mut self.root_element, mouse_pos, scrollbar_overlay_collect,
+                &mut self.root_element,
+                mouse_pos,
+                scrollbar_overlay_collect,
             );
             acc_layout_prof(&render_result.prof);
         }
@@ -5428,35 +5416,14 @@ impl AppState {
                 }))
             })
         } else if region_present && gpu_present.use_node_present {
-            // Region repair needs unchanged glyphs inside the cleared holes,
-            // not every caption on the page. Preserve all holes; an enclosing
-            // cull is safe here because encode still scissors each Region.
-            let mut bounds = None;
-            for dirty in &self.damage_nodes {
-                if !matches!(
-                    dirty.kind,
-                    super::damage::PaintDirtyKind::Region
-                        | super::damage::PaintDirtyKind::OverlayRestore
-                ) {
-                    continue;
-                }
-                let hole = super::draw_cull::node_present_scissor_logical(
-                    dirty.kind,
-                    dirty.key,
-                    dirty.bounds,
-                    &self.last_present_node_bounds,
-                    &render_result.node_paints,
-                    0.0,
-                );
-                if hole[2] <= 0.0 || hole[3] <= 0.0 {
-                    continue;
-                }
-                bounds = Some(match bounds {
-                    Some(previous) => super::damage::union_rects(previous, hole),
-                    None => hole,
-                });
-            }
-            bounds.map(super::draw_cull::CullRects::one)
+            Some(super::draw_cull::region_repair_text_cull(
+                &self.damage_nodes,
+                &self.last_present_node_bounds,
+                &render_result.node_paints,
+                ui_scale,
+                self.config.width,
+                self.config.height,
+            ))
         } else {
             None
         };
@@ -7427,11 +7394,7 @@ fn update_scrollbar_element_self(
         } else {
             el.layout_bounds[3]
         };
-        if laid > 1.0 {
-            laid
-        } else {
-            main_available
-        }
+        if laid > 1.0 { laid } else { main_available }
     };
 
     match axis {
@@ -8350,7 +8313,7 @@ mod hot_reload_inject {
                 .template_id("examples/gallery/App:section_body")
                 .template_hash("old-nav")
                 .children(vec![
-                    Element::new().children(vec![Element::new().text("导航")])
+                    Element::new().children(vec![Element::new().text("导航")]),
                 ]);
             island.set_attr(
                 crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
@@ -8388,7 +8351,7 @@ mod hot_reload_inject {
                 .template_id("examples/gallery/App:section_body")
                 .template_hash("old-nav")
                 .children(vec![
-                    Element::new().children(vec![Element::new().text("导航")])
+                    Element::new().children(vec![Element::new().text("导航")]),
                 ]);
             island.set_attr(
                 crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
@@ -8501,10 +8464,12 @@ mod hot_reload_inject {
                 &["导航改"],
             );
 
-            let mut live = Element::new().children(vec![Element::new()
-                .template_id("examples/gallery/src/main.rs:100:9")
-                .template_hash("chrome")
-                .text("chrome")]);
+            let mut live = Element::new().children(vec![
+                Element::new()
+                    .template_id("examples/gallery/src/main.rs:100:9")
+                    .template_hash("chrome")
+                    .text("chrome"),
+            ]);
             apply_templates_to_tree(&mut live, std::slice::from_ref(&patch));
             assert_eq!(
                 live.children[0].text.as_deref(),
@@ -8515,11 +8480,13 @@ mod hot_reload_inject {
             let mut island = Element::new()
                 .template_id("examples/gallery/App:section_body")
                 .template_hash("compile-time-old")
-                .children(vec![Element::new()
-                    .focus_id("scroll:scroll-navigation")
-                    .children(vec![
-                        Element::new().children(vec![Element::new().text("导航")])
-                    ])]);
+                .children(vec![
+                    Element::new()
+                        .focus_id("scroll:scroll-navigation")
+                        .children(vec![
+                            Element::new().children(vec![Element::new().text("导航")]),
+                        ]),
+                ]);
             island.set_attr(
                 crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
                 "examples/gallery/src/main.rs:4334:21",
@@ -8536,7 +8503,7 @@ mod hot_reload_inject {
 
 #[cfg(test)]
 mod text_shadow_draw_slot_tests {
-    use super::{text_shadow_draw_slot, TextShadowDrawSlot};
+    use super::{TextShadowDrawSlot, text_shadow_draw_slot};
 
     #[test]
     fn page_stack_bands_require_per_band_shadow_slot() {

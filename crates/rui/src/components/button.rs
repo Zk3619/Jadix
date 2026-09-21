@@ -30,21 +30,21 @@
 use crate::components::base::SlotChrome;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{
-    parse_color, parse_text_color, ButtonHoverPaint, Element, IntoCssDim, IntoF32, IntoNodeBg,
-    IntoNodeSize, LayoutStatus,
+    ButtonHoverPaint, Element, IntoCssDim, IntoF32, IntoNodeBg, IntoNodeSize, LayoutStatus,
+    parse_color, parse_text_color,
 };
 use crate::layout::layout_tree::LayoutTree;
+use crate::primitives::r#box::{BoxBuilder, hstack};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
-use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
-    apply_focus_ring_shadow, apply_focus_ring_shadow_color, button_soft_semantic_chrome,
-    color_mix_over_background, ensure_class_list, extend_class_list, focus_ring_border_color,
-    focus_ring_color, focus_ring_destructive_color, focus_ring_shadow_matches_color, is_dark_theme,
-    lerp_paint_chrome, ClassSet, PaintChrome, SemanticTone, TimingFunction, TransitionEntry,
-    TransitionProperty, ATTR_SYNC_LABEL_FG,
+    ATTR_SYNC_LABEL_FG, ClassSet, PaintChrome, SemanticTone, TimingFunction, TransitionEntry,
+    TransitionProperty, apply_focus_ring_shadow, apply_focus_ring_shadow_color,
+    button_soft_semantic_chrome, color_mix_over_background, ensure_class_list, extend_class_list,
+    focus_ring_border_color, focus_ring_color, focus_ring_destructive_color,
+    focus_ring_shadow_matches_color, is_dark_theme, lerp_paint_chrome,
 };
 use crate::utils::take_packed;
-use crate::utils::text_node::{build_text_node, TextNodeConfig};
+use crate::utils::text_node::{TextNodeConfig, build_text_node};
 use rui_macros::component;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -107,11 +107,7 @@ fn ensure_button_css_transition(el: &mut Element) {
 }
 
 fn hover_t_from_bool(hovered: bool, disabled: bool) -> f32 {
-    if disabled || !hovered {
-        0.0
-    } else {
-        1.0
-    }
+    if disabled || !hovered { 0.0 } else { 1.0 }
 }
 
 /// `link` + explicit rest text color (such as Breadcrumb muted): hover cuts `foreground`.
@@ -1002,6 +998,24 @@ impl From<ButtonBuilder> for Element {
                 if child.style.flex_grow > 0.0 {
                     text_node = text_node.flex_grow(child.style.flex_grow);
                 }
+                // Rebuilding caption typography must preserve authored sizing.
+                // Dropping bind_text(...).w("100%") turned Go/Reset into an
+                // intrinsic-width change and reflowed the entire Gallery.
+                if !child.style.size.width.is_auto() {
+                    text_node.style.size.width = child.style.size.width;
+                }
+                for (slot, dim) in &child.style.unit_specs {
+                    if matches!(
+                        slot,
+                        crate::style::UnitSlot::Width | crate::style::UnitSlot::InlineSize
+                    ) {
+                        text_node
+                            .style
+                            .unit_specs
+                            .retain(|(existing, _)| existing != slot);
+                        text_node.style.unit_specs.push((*slot, dim.clone()));
+                    }
+                }
                 // CSS `text-overflow`: overflowing nowrap is start-aligned (ellipsis at
                 // inline-end). `text-align: center` on the caption would center a short
                 // truncated run in the full button — large left gap. Untruncated buttons
@@ -1519,7 +1533,7 @@ mod chrome_tests {
     use super::{button, button_chrome_for_variant};
     use crate::core::tree::{Element, LayoutStatus};
     use crate::style::color_mix_over_background;
-    use crate::style::{parse_color, parse_text_color, set_theme_mode, ThemeMode};
+    use crate::style::{ThemeMode, parse_color, parse_text_color, set_theme_mode};
 
     fn hex(c: [f32; 4]) -> String {
         format!(
@@ -1722,7 +1736,7 @@ mod chrome_tests {
     #[test]
     fn link_hover_underline_is_text_style() {
         use crate::core::reactivity::create_root;
-        use crate::style::{resolve_class_variants, VariantContext};
+        use crate::style::{VariantContext, resolve_class_variants};
 
         let (_h, mut el) =
             create_root(|| -> Element { button("t-link-ul").variant("link").text("Go").into() });
@@ -1878,7 +1892,7 @@ mod chrome_tests {
     #[test]
     fn ghost_hover_keeps_foreground() {
         use crate::core::reactivity::create_root;
-        use crate::style::{resolve_class_variants, VariantContext};
+        use crate::style::{VariantContext, resolve_class_variants};
         let (_h, mut el) = create_root(|| -> Element {
             button("t-btn-ghost-fg").variant("ghost").text("Go").into()
         });
@@ -1926,7 +1940,7 @@ mod chrome_tests {
     fn ghost_icon_child_keeps_foreground_after_class_resolve() {
         use super::button;
         use crate::core::reactivity::create_root;
-        use crate::style::{resolve_class_variants, VariantContext};
+        use crate::style::{VariantContext, resolve_class_variants};
         use crate::utils::text_node::build_lucide_icon_text_node;
         let fg = parse_text_color("foreground");
         let lucide_fg = |el: &Element| {

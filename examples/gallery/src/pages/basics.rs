@@ -1989,11 +1989,9 @@ pub(crate) fn AspectRatioShowcase() -> rui::core::tree::Element {
 pub(crate) fn RemoteAssetShowcase() -> rui::core::tree::Element {
     const REMOTE_PNG: &str = crate::shared::GALLERY_REMOTE_PNG;
     #[cfg(feature = "remote-asset")]
-    const HINT: &str =
-        "remote-asset：http(s) src 走 set_remote_asset_fetcher（本 Gallery 用进程内映射，无外网）。换 reqwest/ureq 即可接真 HTTP。";
+    const HINT: &str = "remote-asset：http(s) src 走 set_remote_asset_fetcher（本 Gallery 用进程内映射，无外网）。换 reqwest/ureq 即可接真 HTTP。";
     #[cfg(not(feature = "remote-asset"))]
-    const HINT: &str =
-        "默认拒绝 http(s) src。cargo run -p gallery --features remote-asset 并在 main 安装 fetcher。";
+    const HINT: &str = "默认拒绝 http(s) src。cargo run -p gallery --features remote-asset 并在 main 安装 fetcher。";
     ui! {
         <MyCard title="1g) Remote Image src（remote-asset）">
             <VStack w="100%" min_w="0" gap="0.75rem">
@@ -2171,9 +2169,11 @@ fn gen_track_travel_px() -> f32 {
 }
 
 fn gen_track_ball(x: rui::core::reactivity::Signal<f32>, bind_key: &str, tone: &str) -> Element {
+    let target_id = format!("gal_gen_tx:{bind_key}");
     let ball = {
         let el: Element = ui! {
             <Box
+                id={target_id}
                 w="1.75rem"
                 h="1.75rem"
                 class="rounded-full"
@@ -2232,15 +2232,20 @@ fn gen_css_chip(gone: Signal<bool>, timing: &str, tone: &str, caption: &str, key
     // Direct translate — do not `bind_class` (replaces ClassSet + clones Style).
     // Travel = track `14rem` − ball `1.75rem` (not a shorter `translate-x-40`).
     let travel = (14.0 - 1.75) * rui::layout::dimension::css_root_font_size_px();
-    let ball = rui::app::reactive::bind_prop(ball, bind, move || gone.get(), move |el, gone| {
-        let px = if gone { travel } else { 0.0 };
-        if (el.style.translate[0] - px).abs() <= f32::EPSILON {
-            LayoutStatus::Clean
-        } else {
-            el.style.translate[0] = px;
-            LayoutStatus::StyleChanged
-        }
-    });
+    let ball = rui::app::reactive::bind_prop(
+        ball,
+        bind,
+        move || gone.get(),
+        move |el, gone| {
+            let px = if gone { travel } else { 0.0 };
+            if (el.style.translate[0] - px).abs() <= f32::EPSILON {
+                LayoutStatus::Clean
+            } else {
+                el.style.translate[0] = px;
+                LayoutStatus::StyleChanged
+            }
+        },
+    );
     ui! {
         <VStack gap="0.35rem" items="start" shrink={0.0}>
             <Label font_weight="700" text_size="0.75rem">{ caption }</Label>
@@ -2251,11 +2256,39 @@ fn gen_css_chip(gone: Signal<bool>, timing: &str, tone: &str, caption: &str, key
     }
 }
 
+fn gen_stagger_bar(on: Signal<bool>, index: usize, tone: &str) -> Element {
+    let id = format!("gal-gen-stagger-{index}");
+    let bar = Element::new()
+        .template_id(id.clone())
+        .w("1.25rem")
+        .h("3.5rem")
+        .rounded("0.375rem")
+        .bg(tone)
+        .transform_origin("center bottom")
+        .transition(format!(
+            "transform 520ms spring(visual 0.28) {}ms",
+            index * 50
+        ));
+    rui::app::reactive::bind_prop(
+        bar,
+        id,
+        move || on.get(),
+        |el, on| {
+            let scale = if on { 1.0 } else { 0.75 / 3.5 };
+            if (el.style.scale[1] - scale).abs() < 1e-6 {
+                return LayoutStatus::Clean;
+            }
+            el.style.scale[1] = scale;
+            LayoutStatus::StyleChanged
+        },
+    )
+}
+
 /// Motion 生成器内核：CSS `spring()` 解析 + 标量 `animate` / follow / inertia / stagger / 序列。
 #[component]
 pub(crate) fn GeneratorShowcase() -> rui::core::tree::Element {
     use rui::style::{
-        use_animated, AnimatedNumber, InertiaOptions, RepeatMode, TimingFunction, ValueDriver,
+        AnimatedNumber, InertiaOptions, RepeatMode, TimingFunction, ValueDriver, use_animated,
     };
 
     let travel = gen_track_travel_px();
@@ -2379,50 +2412,22 @@ pub(crate) fn GeneratorShowcase() -> rui::core::tree::Element {
                     <HStack gap="0.5rem" items="center" wrap="wrap">
                         <Label font_weight="700" text_size="0.75rem">"stagger"</Label>
                         <Button size="sm" variant="outline" on_click={move || stagger_on.set(!stagger_on.get())}>
-                            { if stagger_on.get() { "Reset" } else { "Play" } }
+                            { rui::app::reactive::bind_text("gal_gen_stagger_label", move || {
+                                if stagger_on.get() { "Reset".into() } else { "Play".into() }
+                            }).w("3rem") }
                         </Button>
                     </HStack>
                     <HStack gap="0.4rem" items="end" h="4rem">
-                        <Box
-                            w="1.25rem"
-                            class="rounded-md"
-                            bg="primary"
-                            h={if stagger_on.get() { "3.5rem" } else { "0.75rem" }}
-                            transition="height 520ms spring(visual 0.28)"
-                        />
-                        <Box
-                            w="1.25rem"
-                            class="rounded-md"
-                            bg="chart-2"
-                            h={if stagger_on.get() { "3.5rem" } else { "0.75rem" }}
-                            transition="height 520ms spring(visual 0.28) 50ms"
-                        />
-                        <Box
-                            w="1.25rem"
-                            class="rounded-md"
-                            bg="chart-3"
-                            h={if stagger_on.get() { "3.5rem" } else { "0.75rem" }}
-                            transition="height 520ms spring(visual 0.28) 100ms"
-                        />
-                        <Box
-                            w="1.25rem"
-                            class="rounded-md"
-                            bg="chart-4"
-                            h={if stagger_on.get() { "3.5rem" } else { "0.75rem" }}
-                            transition="height 520ms spring(visual 0.28) 150ms"
-                        />
-                        <Box
-                            w="1.25rem"
-                            class="rounded-md"
-                            bg="chart-5"
-                            h={if stagger_on.get() { "3.5rem" } else { "0.75rem" }}
-                            transition="height 520ms spring(visual 0.28) 200ms"
-                        />
+                        { gen_stagger_bar(stagger_on, 0, "primary") }
+                        { gen_stagger_bar(stagger_on, 1, "chart-2") }
+                        { gen_stagger_bar(stagger_on, 2, "chart-3") }
+                        { gen_stagger_bar(stagger_on, 3, "chart-4") }
+                        { gen_stagger_bar(stagger_on, 4, "chart-5") }
                     </HStack>
                 </VStack>
             </VStack>
         </MyCard>
-    }
+    }.template_id("gal-generator-showcase")
 }
 
 /// WP-R.7：`format!(…, signal.get())` 走自动 bind_text；`#[component(reactive)]` 体不因 count 重跑。
