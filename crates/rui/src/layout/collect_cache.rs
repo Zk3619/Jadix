@@ -5,9 +5,9 @@
 //! translate those ops by `GeomKey.scroll` instead of recollecting. FullClear GPU present
 //! still receives a complete list (replay, not omit) — see [`crate::app::damage`].
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 
 #[cfg(test)]
@@ -64,7 +64,7 @@ use taffy::prelude::NodeId;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::dimension::{CssAngle, CssDim};
 use crate::layout::layout_tree::{
-    ATTR_ESCAPE_OVERFLOW_CLIP, ATTR_HOISTED_PORTAL, PORTAL_LAYER_ID, PaintOp, TextLayoutInfo,
+    PaintOp, TextLayoutInfo, ATTR_ESCAPE_OVERFLOW_CLIP, ATTR_HOISTED_PORTAL, PORTAL_LAYER_ID,
 };
 use crate::renderer::{InstanceInput, TexturedDraw};
 use crate::style::{
@@ -81,6 +81,7 @@ pub(crate) struct DlCursor {
     pub chrome: usize,
     pub clip_polys: usize,
     pub paint_ops: usize,
+    pub node_paints: usize,
 }
 
 impl DlCursor {
@@ -99,6 +100,7 @@ impl DlCursor {
             chrome: chrome.len(),
             clip_polys: clip_polys.len(),
             paint_ops: paint_ops.len(),
+            node_paints: crate::layout::layout_tree::node_paint_cursor(),
         }
     }
 }
@@ -179,6 +181,7 @@ pub(crate) struct CachedSubtree {
     chrome: Vec<InstanceInput>,
     clip_polys: Vec<GpuClipPoly>,
     paint_ops: Vec<PaintOp>,
+    node_paints: Vec<crate::layout::layout_tree::NodePaint>,
     extent: [f32; 2],
 }
 
@@ -267,6 +270,9 @@ impl CollectSkipState {
             return None;
         }
         if geom_eq(&cached.geom, &geom) {
+            replay_cached_node_paints(
+                cached, geom, [0.0; 2], instances, textured, text, chrome, paint_ops,
+            );
             splice_cached(
                 cached, instances, textured, text, chrome, clip_polys, paint_ops,
             );
@@ -294,6 +300,9 @@ impl CollectSkipState {
             self.patched = self.patched.saturating_add(1);
             return None;
         }
+        replay_cached_node_paints(
+            cached, geom, delta, instances, textured, text, chrome, paint_ops,
+        );
         splice_cached_translated(
             cached, delta, geom, instances, textured, text, chrome, clip_polys, paint_ops,
         );
@@ -1315,7 +1324,21 @@ fn capture_slice(
         start.instances as u32,
         start.textured as u32,
     );
+    let mut node_paints = crate::layout::layout_tree::cached_node_paints(start.node_paints);
+    for p in &mut node_paints {
+        for (range, base) in [
+            (&mut p.instance, start.instances),
+            (&mut p.textured, start.textured),
+            (&mut p.text, start.text),
+            (&mut p.chrome, start.chrome),
+            (&mut p.paint_ops, start.paint_ops),
+        ] {
+            range.0 -= base;
+            range.1 -= base;
+        }
+    }
     CachedSubtree {
+        node_paints,
         paint_hash,
         geom,
         instances: inst,
@@ -1341,6 +1364,47 @@ fn remap_ops(ops: &[PaintOp], inst_base: u32, tex_base: u32) -> Vec<PaintOp> {
             },
         })
         .collect()
+}
+
+fn replay_cached_node_paints(
+    cached: &CachedSubtree,
+    geom: GeomKey,
+    delta: [f32; 2],
+    instances: &[InstanceInput],
+    textured: &[TexturedDraw],
+    text: &[TextLayoutInfo],
+    chrome: &[InstanceInput],
+    paint_ops: &[PaintOp],
+) {
+    crate::layout::layout_tree::replay_node_paints(cached.node_paints.iter().copied().map(
+        |mut p| {
+            for (range, base) in [
+                (&mut p.instance, instances.len()),
+                (&mut p.textured, textured.len()),
+                (&mut p.text, text.len()),
+                (&mut p.chrome, chrome.len()),
+                (&mut p.paint_ops, paint_ops.len()),
+            ] {
+                range.0 += base;
+                range.1 += base;
+            }
+            p.bounds[0] += delta[0];
+            p.bounds[1] += delta[1];
+            if let Some(r) = &mut p.rest {
+                r[0] += delta[0];
+                r[1] += delta[1];
+            }
+            if let Some(r) = &mut p.overflow_clip {
+                if clip_is_parent([r[0], r[1]], [r[2], r[3]], &cached.geom) {
+                    p.overflow_clip = geom_clip_rect(&geom);
+                } else {
+                    r[0] += delta[0];
+                    r[1] += delta[1];
+                }
+            }
+            p
+        },
+    ));
 }
 
 fn splice_cached(

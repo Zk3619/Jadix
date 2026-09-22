@@ -672,7 +672,6 @@ pub fn combobox_content(
             .w("auto")
             .h("auto")
             .min_h(0.0)
-            .max_w("100%")
             .overflow_x("hidden")
             .overflow_y("hidden")
             .p("0.25rem")
@@ -1336,6 +1335,63 @@ mod tests {
     use crate::utils::popup::{
         mark_floating, ATTR_FLOATING, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_TRIGGER,
     };
+
+    #[test]
+    fn opened_menu_matches_trigger_width_in_portal() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use std::{cell::RefCell, rc::Rc};
+        reset_registered_anchors();
+        let live = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+        let (owner, _) = create_root(|| {
+            let open = use_signal("cb-width-open", || true);
+            let live = Rc::clone(&live);
+            crate::core::reactivity::create_effect(move || {
+                let field = combobox_scope(
+                    "cb-width-regression",
+                    Some(open),
+                    None,
+                    "Search",
+                    false,
+                    "",
+                    "",
+                    "",
+                    || {
+                        Element::new()
+                            .child(crate::style::with_class_list(
+                                ComboboxInput(ComboboxInputProps::default()),
+                                "w-full",
+                            ))
+                            .child(combobox_content(ComboboxContentOpts::default(), || {
+                                Element::new().text("Alpha")
+                            }))
+                    },
+                );
+                *live.borrow_mut() = Element::new().w(600.0).h(400.0).child(field);
+            });
+        });
+        drain_deferred_view_remounts();
+        {
+            let mut root = live.borrow_mut();
+            crate::layout::layout_tree::hoist_portal_subtrees(&mut root);
+            let mut tree = crate::layout::layout_tree::LayoutTree::new();
+            tree.build_and_layout(&mut root, 600.0, 400.0, [-1.0; 2]);
+            tree.build_and_layout_fast_ex(&mut root, 600.0, 400.0, [-1.0; 2], false, false, None);
+            let panel = crate::core::tree::find_in_tree(&root, |el| {
+                el.attrs.contains_key(ATTR_FLOATING_MATCH_TRIGGER)
+            })
+            .expect("open floating panel");
+            assert!(
+                panel.layout_bounds[2] >= 250.0,
+                "menu squeezed: {:?}",
+                panel.layout_bounds
+            );
+        }
+        clear_test_reconcile_root();
+        drop(owner);
+        reset_registered_anchors();
+    }
 
     #[test]
     fn combobox_class_overrides_default_16rem_shell() {

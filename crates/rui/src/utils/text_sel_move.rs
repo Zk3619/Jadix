@@ -38,6 +38,7 @@ struct Session {
     weight: u16,
     color: [u8; 4],
     line_height: f32,
+    painted_bounds: Option<[f32; 4]>,
 }
 
 #[derive(Clone, Debug)]
@@ -101,6 +102,7 @@ pub fn begin_potential(
             weight,
             color,
             line_height,
+            painted_bounds: None,
         });
     });
 }
@@ -206,6 +208,7 @@ pub fn on_release() -> ReleaseAction {
         let Some(st) = s.borrow_mut().take() else {
             return ReleaseAction::None;
         };
+        erase_ghost(st.painted_bounds);
         match st.phase {
             Phase::Potential => ReleaseAction::Click {
                 rest: st.rest,
@@ -227,7 +230,29 @@ pub fn on_release() -> ReleaseAction {
 }
 
 pub fn cancel() {
-    SESSION.with(|s| s.borrow_mut().take());
+    SESSION.with(|s| {
+        if let Some(st) = s.borrow_mut().take() {
+            erase_ghost(st.painted_bounds);
+        }
+    });
+}
+
+fn erase_ghost(bounds: Option<[f32; 4]>) {
+    if let Some([x, y, w, h]) = bounds {
+        crate::app::damage::push_frame_region_paint(0, [x - 2.0, y - 2.0, w + 4.0, h + 4.0]);
+    }
+}
+
+pub(crate) fn note_ghost_paint(bounds: [f32; 4]) {
+    SESSION.with(|s| {
+        if let Some(st) = s.borrow_mut().as_mut() {
+            if st.painted_bounds != Some(bounds) {
+                erase_ghost(st.painted_bounds);
+                erase_ghost(Some(bounds));
+                st.painted_bounds = Some(bounds);
+            }
+        }
+    });
 }
 
 pub fn drop_allowed(lo: usize, hi: usize, drop: usize, len: usize) -> bool {

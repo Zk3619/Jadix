@@ -483,7 +483,7 @@ pub(crate) fn sync_checkbox_checked_subtree(
                     }
                     // 与 Switch 一致：选中态切换必须 LayoutChanged，否则 StyleChanged 的局部 damage
                     // It is possible not to rerun glyphs/not to expand the dirty area, which appears as "black background without check mark".
-                    crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+                    crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
                     *impact = impact.merge(LayoutStatus::LayoutChanged);
                 }
             }

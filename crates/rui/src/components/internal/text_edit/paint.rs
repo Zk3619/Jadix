@@ -1,20 +1,21 @@
 //! 每帧 chrome sync（边框 / 焦点环 / 文本 / caret / 多行高度与滚入视口）。
 
-use super::strings::{TextEditStringsInput, compose_text_edit_strings};
+use super::strings::{compose_text_edit_strings, TextEditStringsInput};
 use crate::components::input::{
-    InputType, effective_invalid, input_caret_signal_key, input_clear_template_id,
+    effective_invalid, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
     input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id,
     input_selection_signal_key, input_text_template_id, input_value_signal_key,
     map_byte_index_to_masked, map_byte_range_to_masked, resolve_placeholder, set_adornment_visible,
+    InputType,
 };
 use crate::core::reactivity::use_signal;
-use crate::core::tree::{Element, InputPaintSync, LayoutStatus, parse_color, parse_text_color};
+use crate::core::tree::{parse_color, parse_text_color, Element, InputPaintSync, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::style::{
-    InputCaretDraw, TRANSPARENT, apply_focus_ring_shadow_color, focus_ring_border_color,
-    focus_ring_color, focus_ring_destructive_color, focus_ring_params_for,
-    focus_ring_shadow_matches_color,
+    apply_focus_ring_shadow_color, focus_ring_border_color, focus_ring_color,
+    focus_ring_destructive_color, focus_ring_params_for, focus_ring_shadow_matches_color,
+    InputCaretDraw, TRANSPARENT,
 };
 use crate::tokens;
 use crate::utils::text_field::{
@@ -73,10 +74,13 @@ pub(crate) fn sync_text_edit_paint_subtree_in_viewport(
     struct Frame {
         el: *mut Element,
         scroll_acc: [f32; 2],
+        path: Vec<usize>,
     }
+    let root_ptr = el as *mut Element;
     let mut stack = vec![Frame {
         el: el as *mut Element,
         scroll_acc,
+        path: Vec::new(),
     }];
     while let Some(frame) = stack.pop() {
         // SAFETY: exclusive paint-sync walk of `el`'s subtree.
@@ -87,14 +91,28 @@ pub(crate) fn sync_text_edit_paint_subtree_in_viewport(
             continue;
         }
         if let Some(desc) = node.input_paint_sync.clone() {
-            sync_one_text_edit_paint(node, &desc, layout_tree, impact);
+            let mut local = LayoutStatus::Clean;
+            sync_one_text_edit_paint(node, &desc, layout_tree, &mut local);
+            *impact = impact.merge(local);
+            if local != LayoutStatus::Clean {
+                // The field and its adornments are mutated without a reactive bind.
+                // Bust the same ancestor spine as bind_prop before idle replay.
+                crate::layout::collect_cache::invalidate_collect_paint_hash_path(
+                    unsafe { &mut *root_ptr },
+                    &frame.path,
+                );
+            }
         }
+        let node = unsafe { &mut *frame.el };
         let child_acc = crate::core::tree::child_scroll_accumulation(node, frame.scroll_acc);
         let n = node.children.len();
         for i in (0..n).rev() {
+            let mut path = frame.path.clone();
+            path.push(i);
             stack.push(Frame {
                 el: std::ptr::addr_of_mut!(node.children[i]),
                 scroll_acc: child_acc,
+                path,
             });
         }
     }
@@ -589,7 +607,11 @@ fn sync_one_text_edit_paint(
             let soft = desc.wrap_mode.soft_wrap();
             let avail = if soft {
                 let w = text_el.layout_bounds[2];
-                if w > 1.0 { w } else { 320.0 }
+                if w > 1.0 {
+                    w
+                } else {
+                    320.0
+                }
             } else {
                 10_000.0
             };
@@ -732,7 +754,7 @@ fn sync_one_text_edit_paint(
             };
             let ch_eff = content_h_text.max(text_h_layout);
             let _ = ch; // post-render metrics own content_h; do not raise the signal here —
-            // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
+                        // scrollbar prepass runs before layout collect and would desync thumb vs sy clamp.
             if vh_eff > 1.0 && (vh - vh_eff).abs() > 0.5 {
                 use_signal(&vh_key, || 0.0_f32).set_silent(vh_eff);
             }

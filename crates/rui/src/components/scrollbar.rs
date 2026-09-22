@@ -804,10 +804,27 @@ impl From<ScrollbarBuilder> for Element {
             match builder.orientation {
                 ScrollbarOrientation::Vertical => {
                     track = track.absolute().inset_inline_end(0.0).top(0.0).bottom(0.0);
+                    track.style.size.height = taffy::style::Dimension::auto();
+                    track.style.min_size.height = taffy::style::Dimension::length(0.0);
                 }
                 ScrollbarOrientation::Horizontal => {
                     track = track.absolute().left(0.0).right(0.0).bottom(0.0);
+                    track.style.size.width = taffy::style::Dimension::auto();
+                    track.style.min_size.width = taffy::style::Dimension::length(0.0);
                 }
+            }
+            // Explicit caller insets override overlay defaults.
+            if !builder.inset.left.is_auto() {
+                track.style.inset.left = builder.inset.left;
+            }
+            if !builder.inset.right.is_auto() {
+                track.style.inset.right = builder.inset.right;
+            }
+            if !builder.inset.top.is_auto() {
+                track.style.inset.top = builder.inset.top;
+            }
+            if !builder.inset.bottom.is_auto() {
+                track.style.inset.bottom = builder.inset.bottom;
             }
         }
         if let Some(end) = builder.inline_end {

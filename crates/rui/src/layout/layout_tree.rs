@@ -2045,7 +2045,6 @@ fn textarea_scrollport_content_size(
     ]
 }
 
-#[cfg(feature = "devtools")]
 fn next_scroll_acc_for_children(element: &Element, scroll_acc: [f32; 2]) -> [f32; 2] {
     let mut next = scroll_acc;
     let is_scroll_viewport = element
@@ -2224,6 +2223,18 @@ fn begin_node_paint_collect() {
 
 fn take_node_paints() -> Vec<NodePaint> {
     NODE_PAINTS.with(|s| std::mem::take(&mut *s.borrow_mut()))
+}
+
+pub(crate) fn node_paint_cursor() -> usize {
+    NODE_PAINTS.with(|s| s.borrow().len())
+}
+
+pub(crate) fn cached_node_paints(start: usize) -> Vec<NodePaint> {
+    NODE_PAINTS.with(|s| s.borrow()[start..].to_vec())
+}
+
+pub(crate) fn replay_node_paints(paints: impl IntoIterator<Item = NodePaint>) {
+    NODE_PAINTS.with(|s| s.borrow_mut().extend(paints));
 }
 
 fn record_node_paint(
@@ -3440,6 +3451,9 @@ impl LayoutTree {
 
     pub fn update_taffy_node_style(&mut self, element: &Element) {
         if let Some(node_id) = element.layout_node {
+            // Paint synchronizers also use this entry point without a bind path.
+            // The next idle stamp must observe their changed chrome/indicator.
+            self.collect_skip.hash_bust = true;
             let style = element.style.to_taffy_style_with_parent(
                 &self.unit_ctx_from_parent_layout(element),
                 self.parent_flex_direction(element),
@@ -4133,6 +4147,7 @@ impl LayoutTree {
             let prepared = crate::text::prepare(&g.text, g.size, g.weight, lh);
             let w = crate::text::intrinsic_width(&prepared).max(8.0);
             let h = lh * n_lines;
+            crate::utils::text_sel_move::note_ghost_paint([g.x, g.y, w, h]);
             let mut style = TextStyle::default();
             style.size = Some(g.size);
             style.weight = Some(g.weight);
@@ -4530,6 +4545,7 @@ impl LayoutTree {
             let Ok(child_nodes) = self.taffy.children(node) else {
                 continue;
             };
+            let child_scroll = next_scroll_acc_for_children(element, element.paint_scroll_acc);
             let pass = [
                 abs[0] + element.style.translate[0] + size[0] * element.style.translate_pct[0],
                 abs[1] + element.style.translate[1] + size[1] * element.style.translate_pct[1],
@@ -4541,6 +4557,13 @@ impl LayoutTree {
                 };
                 let child_abs = [pass[0] + cl.location.x, pass[1] + cl.location.y];
                 let child_size = [cl.size.width, cl.size.height];
+                // Cache replay moves pixels without collecting descendants again.
+                element.children[i].paint_scroll_acc =
+                    if escapes_ancestor_overflow(&element.children[i]) {
+                        [0.0, 0.0]
+                    } else {
+                        child_scroll
+                    };
                 if self.try_stamp_overlay_scrollbar_hit(
                     &mut element.children[i],
                     child_abs,

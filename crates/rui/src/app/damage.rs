@@ -669,10 +669,56 @@ pub(crate) fn overlay_restore_leftover_coverage(
 ) -> Vec<(u64, [f32; 4])> {
     if current.is_empty() {
         if let Some(visual) = previous_visual.filter(|b| b[2] > 0.0 && b[3] > 0.0) {
-            return vec![(0, visual)];
+            let mut coverage = vec![(0, visual)];
+            coverage.extend(previous.iter().filter_map(|(key, bounds)| {
+                let padded = overlay_pad_dest_reset_hole(*bounds);
+                let covered = visual[0] <= padded[0]
+                    && visual[1] <= padded[1]
+                    && visual[0] + visual[2] >= padded[0] + padded[2]
+                    && visual[1] + visual[3] >= padded[1] + padded[3];
+                (!covered).then_some((*key, padded))
+            }));
+            return coverage;
         }
     }
-    overlay_restore_leftover_stamps(previous, current)
+    previous
+        .iter()
+        .filter_map(|(key, bounds)| {
+            (bounds[2] > 0.0
+                && bounds[3] > 0.0
+                && overlay_stamp_box(current, *key) != Some(*bounds))
+            .then_some((*key, overlay_pad_dest_reset_hole(*bounds)))
+        })
+        .collect()
+}
+
+/// Replay coverage includes panel chrome even when the last visible child ink
+/// is smaller during an exit animation.
+pub(crate) fn overlay_replay_coverage(
+    stamps: &[(u64, [f32; 4])],
+    visual: Option<[f32; 4]>,
+) -> Option<[f32; 4]> {
+    stamps.iter().fold(visual, |coverage, (_, bounds)| {
+        let padded = super::draw_cull::padded_xywh(*bounds, 16.0);
+        Some(coverage.map_or(padded, |b| union_rects(b, padded)))
+    })
+}
+
+/// A retained overlay replay must restore every pixel in its encode scissor,
+/// including translucent shadows outside the portal's layout box.
+pub(crate) fn overlay_replay_restore_bounds(
+    key: u64,
+    dirty: [f32; 4],
+    stamps: &[(u64, [f32; 4])],
+    visual: Option<[f32; 4]>,
+) -> Option<[f32; 4]> {
+    let occupancy = overlay_encode_occupancy(
+        key,
+        Some(dirty),
+        stamps,
+        if stamps.len() <= 1 { visual } else { None },
+    );
+    overlay_encode_scissor(Some(dirty), occupancy, None)
 }
 
 /// Overlay suffix is submitted once per present.
@@ -915,7 +961,27 @@ pub fn overlay_membership_paint_stamps(
     prev: &[(u64, [f32; 4])],
     cur: &[(u64, [f32; 4])],
 ) -> Vec<(u64, [f32; 4])> {
-    overlay_added_portal_stamps(prev, cur)
+    cur.iter()
+        .copied()
+        .filter(|(key, bounds)| {
+            bounds[2] > 0.0
+                && bounds[3] > 0.0
+                && overlay_stamp_box(prev, *key).is_none_or(|old| old != *bounds)
+        })
+        .collect()
+}
+
+#[test]
+fn resized_parent_is_dirty_when_nested_menu_closes() {
+    let previous = [
+        (1, [100.0, 100.0, 280.0, 340.0]),
+        (2, [110.0, 330.0, 144.0, 200.0]),
+    ];
+    let current = [(1, [100.0, 100.0, 280.0, 368.0])];
+    assert_eq!(
+        overlay_membership_paint_stamps(&previous, &current),
+        current.to_vec()
+    );
 }
 
 /// Overlay dirties for a portal join / leave from layout boxes (geometry tests).
@@ -1249,6 +1315,21 @@ pub fn overlay_band_promote_dest_reset_siblings(
 
 /// Collapse Overlay dirties whose portal stamps share a footprint so Dialog
 /// overlay + stage cannot encode twice in one present (src-over stacks chrome).
+pub(crate) fn merge_overlay_replay_dirties(
+    dirties: &[(u64, [f32; 4])],
+    stamps: &[(u64, [f32; 4])],
+) -> Vec<(Vec<u64>, [f32; 4])> {
+    let mut merged: Vec<(u64, [f32; 4])> = Vec::new();
+    for &(key, bounds) in dirties {
+        if let Some((_, acc)) = merged.iter_mut().find(|(k, _)| *k == key) {
+            *acc = union_rects(*acc, bounds);
+        } else {
+            merged.push((key, bounds));
+        }
+    }
+    overlay_merge_same_footprint_dirties(&merged, stamps)
+}
+
 pub fn overlay_merge_same_footprint_dirties(
     dirties: &[(u64, [f32; 4])],
     stamps: &[(u64, [f32; 4])],
@@ -4656,6 +4737,76 @@ mod tests {
         assert!(u[3] >= overlay[3] - 0.5);
         assert!(u[0] <= overlay[0] + 0.5);
         assert!(u[1] <= overlay[1] + 0.5);
+    }
+
+    #[test]
+    fn faded_overlay_close_restores_panel_outside_remaining_child_ink() {
+        let panel = [306.0, 926.0, 300.0, 330.0];
+        let child_ink = [319.0, 1000.0, 274.0, 193.0];
+        let holes = overlay_restore_leftover_coverage(&[(7, panel)], &[], Some(child_ink));
+        assert!(holes.iter().any(|(_, b)| rect_contains_rect(*b, panel)));
+    }
+
+    #[test]
+    fn shrinking_or_removed_nested_overlay_restores_previous_shadow() {
+        let parent = (7, [570.0, 960.0, 280.0, 360.0]);
+        let menu = (8, [583.0, 977.0, 144.0, 200.0]);
+        let smaller_parent = (7, [570.0, 960.0, 280.0, 340.0]);
+        let holes = overlay_restore_leftover_coverage(&[parent, menu], &[smaller_parent], None);
+        assert!(
+            holes
+                .iter()
+                .any(|(k, b)| *k == 7 && rect_contains_rect(*b, [840.0, 1325.0, 1.0, 1.0]))
+        );
+        assert!(
+            holes
+                .iter()
+                .any(|(k, b)| *k == 8 && rect_contains_rect(*b, [730.0, 1178.0, 1.0, 1.0]))
+        );
+    }
+
+    #[test]
+    fn overlay_replay_keeps_chrome_outside_exit_child_ink() {
+        let stamps = [(7, [300.0, 900.0, 300.0, 330.0])];
+        let child = Some([319.0, 963.0, 274.0, 193.0]);
+        let hole = [300.0, 1180.0, 160.0, 50.0];
+        let coverage = overlay_replay_coverage(&stamps, child);
+        assert_eq!(overlay_page_punch_overlap(coverage, hole), Some(hole));
+    }
+
+    #[test]
+    fn nested_overlay_hover_restore_covers_encode_shadow() {
+        let parent = [306.0, 926.0, 300.0, 330.0];
+        let menu = [319.0, 983.0, 144.0, 200.0];
+        let stamps = [(7, parent), (8, menu)];
+        let dirty = menu;
+        let encode = overlay_encode_scissor(Some(dirty), Some(menu), None).unwrap();
+        let restore = overlay_replay_restore_bounds(8, dirty, &stamps, None).unwrap();
+        assert!(rect_contains_rect(restore, encode));
+    }
+
+    #[test]
+    fn merged_overlay_restore_covers_gaps_between_animation_dirties() {
+        let stamps = [
+            (7, [306.0, 926.0, 300.0, 310.0]),
+            (8, [319.0, 986.0, 144.0, 196.0]),
+        ];
+        let dirties = [(8, [299.0, 1026.0, 184.0, 177.0]), (8, stamps[1].1)];
+        let merged = merge_overlay_replay_dirties(&dirties, &stamps);
+        assert_eq!(merged.len(), 1);
+        let restore =
+            overlay_replay_restore_bounds(merged[0].0[0], merged[0].1, &stamps, None).unwrap();
+        let corner = [490.0, 980.0, 1.0, 1.0];
+        assert!(rect_contains_rect(restore, corner));
+        assert!(
+            !dirties.iter().any(|(key, dirty)| {
+                rect_contains_rect(
+                    overlay_replay_restore_bounds(*key, *dirty, &stamps, None).unwrap(),
+                    corner,
+                )
+            }),
+            "the old per-dirty restores miss the merged corner"
+        );
     }
 
     #[test]

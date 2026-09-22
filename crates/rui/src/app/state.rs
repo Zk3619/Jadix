@@ -12,33 +12,32 @@ use winit::window::Window;
 
 use crate::core::tree::{Element, LayoutProfileMs, LayoutTree};
 use crate::renderer::{
-    BackdropBlurPipeline, InstanceInput, PresentRetainPipeline, RuiPipeline, RuiTextRenderer,
-    ScaledTexturedDraw, TexturedInstanceInput, TexturedQuadPipeline, cpu_text::CpuTextProfiler,
-    prepare_text_frame, scale_clip_polys_in_place, scale_instances, scale_instances_in_place,
-    scale_textured_draws,
+    cpu_text::CpuTextProfiler, prepare_text_frame, scale_clip_polys_in_place, scale_instances,
+    scale_instances_in_place, scale_textured_draws, BackdropBlurPipeline, InstanceInput,
+    PresentRetainPipeline, RuiPipeline, RuiTextRenderer, ScaledTexturedDraw, TexturedInstanceInput,
+    TexturedQuadPipeline,
 };
 use crate::{
     components::{
         scrollbar::scrollbar_visibility_signal_key,
         scrollbar::{
-            ATTR_SCROLLBAR_TRACK_FADES, SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
             apply_scrollbar_visible_alpha, normalize_scrollbar_base_for_auto,
-            scrollbar_min_thumb_along_track,
+            scrollbar_min_thumb_along_track, ATTR_SCROLLBAR_TRACK_FADES,
+            SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
         },
     },
     core::reactivity::use_signal,
     core::scroll_viewport::{
-        SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_content_h_signal_key, scroll_content_w_signal_key,
-        scroll_offset_x_signal_key, scroll_offset_y_signal_key, scroll_overflow_x_signal_key,
-        scroll_overflow_y_signal_key, scroll_scrollbar_inset_x_signal_key,
-        scroll_scrollbar_inset_y_signal_key, scroll_viewport_h_signal_key,
-        scroll_viewport_w_signal_key,
+        scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
+        scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
+        scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
+        scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
     },
 };
 use std::collections::hash_map::Entry;
-use std::sync::OnceLock;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 use taffy::prelude::Dimension;
 
@@ -2109,6 +2108,18 @@ impl AppState {
         overlay_present: bool,
         overlay_visual: Option<[f32; 4]>,
     ) {
+        let cur_stamps = crate::layout::layout_tree::hoisted_portal_stamps(&self.root_element);
+        // Nested menu changes can resize an idle parent portal. Its new footprint
+        // needs its own restore even when the child already queued overlay damage.
+        for (key, bounds) in
+            super::damage::overlay_membership_paint_stamps(&self.last_overlay_stamps, &cur_stamps)
+        {
+            self.damage_nodes.push(super::damage::PaintDirty {
+                key,
+                bounds,
+                kind: super::damage::PaintDirtyKind::Overlay,
+            });
+        }
         let collect_overlay_dirty = self
             .damage_nodes
             .iter()
@@ -2116,7 +2127,6 @@ impl AppState {
         let prev_occ = self.overlay_occupied;
         let prev_stamps = self.last_overlay_stamps.clone();
         let had_occupancy = prev_occ.is_some();
-        let cur_stamps = crate::layout::layout_tree::hoisted_portal_stamps(&self.root_element);
         let cur_boxes: Vec<[f32; 4]> = cur_stamps.iter().map(|(_, b)| *b).collect();
         let cur = crate::layout::layout_tree::hoisted_portal_damage(&self.root_element);
         let prev = self.last_portal_layer_damage;
@@ -2231,6 +2241,20 @@ impl AppState {
                         bounds,
                         kind: super::damage::PaintDirtyKind::Overlay,
                     });
+                }
+            }
+        }
+        if !self.force_full_redraw && !self.scroll_layer_clear {
+            let replay_dirties: Vec<_> = self.damage_nodes.iter()
+                .filter(|d| d.kind == super::damage::PaintDirtyKind::Overlay)
+                .map(|d| (d.key, super::damage::overlay_suffix_encode_bounds(d.bounds)))
+                .collect();
+            for (keys, dirty) in super::damage::merge_overlay_replay_dirties(&replay_dirties, &cur_stamps) {
+                let key = keys.first().copied().unwrap_or(0);
+                if let Some(bounds) = super::damage::overlay_replay_restore_bounds(
+                    key, dirty, &cur_stamps, self.overlay_occupied,
+                ) {
+                    self.push_overlay_restore_visual(key, bounds);
                 }
             }
         }
@@ -2451,6 +2475,10 @@ impl AppState {
         // Physical integer rectangles: decomposing logical rectangles first
         // would round neighboring fractional edges onto the same device pixel.
         let mut page_punch_overlaps = Vec::new();
+        let overlay_replay_coverage = super::damage::overlay_replay_coverage(
+            &self.last_overlay_stamps,
+            self.overlay_occupied,
+        );
         for dirty in &self.damage_nodes {
             if super::damage::paint_dirty_covered_by_overlay_restore(dirty, &self.damage_nodes) {
                 // OverlayRestore already replayed page instances in tree order.
@@ -2509,6 +2537,7 @@ impl AppState {
                 dirty,
                 &self.damage_nodes,
                 node_paints,
+                page,
             ) {
                 // Wrapping under Latest: dest-reset would punch the pill and
                 // hole_text wrap-box would flush after the overlay slot.
@@ -2555,7 +2584,7 @@ impl AppState {
                 )
             } else {
                 if let Some(overlap) = super::damage::overlay_page_punch_overlap(
-                    self.overlay_occupied,
+                    overlay_replay_coverage,
                     scissor_logical,
                 ) {
                     if let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
@@ -2779,6 +2808,7 @@ impl AppState {
                                         Some(super::draw_cull::CullRects::one(reset.rect));
                                     self.draw_matching_node_paints(
                                         render_pass,
+                                        paint_ops,
                                         node_paints,
                                         scaled_instances,
                                         clip_polys,
@@ -2855,6 +2885,7 @@ impl AppState {
                             render_pass.set_scissor_rect(x, y, w, h);
                             self.draw_matching_node_paints(
                                 render_pass,
+                                paint_ops,
                                 node_paints,
                                 scaled_instances,
                                 clip_polys,
@@ -2900,14 +2931,6 @@ impl AppState {
         // scissor; a second underlay pass after capture_text stamps the thread
         // onto the label ("ek ls the" over "Latest"). Wrapping without CLEAR is
         // already in retain — dest-reset holes flush underlay before the pill.
-        let mut merged: Vec<(u64, [f32; 4])> = Vec::new();
-        for (k, b) in overlay_dirties {
-            if let Some((_, acc)) = merged.iter_mut().find(|(ek, _)| *ek == k) {
-                *acc = super::damage::union_rects(*acc, b);
-            } else {
-                merged.push((k, b));
-            }
-        }
         let remaining_keys: Vec<u64> = self.last_overlay_stamps.iter().map(|(k, _)| *k).collect();
         let dest_reset_holes: Vec<[f32; 4]> = self
             .damage_nodes
@@ -2930,8 +2953,9 @@ impl AppState {
             self.flush_node_present_page_glyphs(render_pass, ui_scale);
             pending_page_glyphs = false;
         }
-        let merged =
-            super::damage::overlay_merge_same_footprint_dirties(&merged, &self.last_overlay_stamps);
+        let merged = super::damage::merge_overlay_replay_dirties(
+            &overlay_dirties, &self.last_overlay_stamps,
+        );
         for (dirty_keys, dirty_bounds) in merged {
             let occupancy_key = dirty_keys.first().copied().unwrap_or(0);
             let occupancy = super::damage::overlay_encode_occupancy(
@@ -3259,6 +3283,7 @@ impl AppState {
     fn draw_matching_node_paints<'pass>(
         &'pass self,
         render_pass: &mut wgpu::RenderPass<'pass>,
+        paint_ops: &[crate::layout::layout_tree::PaintOp],
         node_paints: &[crate::layout::layout_tree::NodePaint],
         scaled_instances: &[InstanceInput],
         clip_polys: &[crate::style::GpuClipPoly],
@@ -3273,45 +3298,29 @@ impl AppState {
         include_chrome: bool,
     ) {
         for p in node_paints.iter().filter(|p| pred(p)) {
-            // `PaintOp` runs coalesce across siblings/ancestors. Drawing a slot's
-            // paint_ops range would submit neighbor quads into this scissor.
+            // Clip coalesced runs to this slot, preserving texture/rect order.
             let inst_lo = p.instance.0;
             let inst_hi = inst_cap.unwrap_or(p.instance.1).min(p.instance.1);
-            if include_fill && inst_lo < inst_hi {
-                // Prior slot may have been textured, or the previous dirty node
-                // ended on glyphon (TriangleStrip, strip_index_format None).
-                // Indexed SDF draws with the leftover Uint16 index buffer panic:
-                // "strip index format None must match index buffer format Uint16".
-                // Clip-poly SSBO is indexed by `instance_index`. Copy the range so
-                // GLES relative firstInstance still maps to this slot's polys, not
-                // `clip_polys[0]` (Default looked 1px smaller on hover).
-                // OverlayRestore caps at the page prefix so a containing page
-                // slot cannot submit overlay instances (that would restack the halo).
-                draw_sdf_range_with_clip(
-                    render_pass,
-                    &self.pipeline,
-                    &self.device,
-                    dummy,
-                    scaled_instances,
-                    clip_polys,
-                    inst_lo as u32,
-                    (inst_hi - inst_lo) as u32,
-                    cull,
-                );
-            }
             let tex_lo = p.textured.0;
             let tex_hi = tex_cap.unwrap_or(p.textured.1).min(p.textured.1);
-            if include_fill && tex_lo < tex_hi {
-                draw_packed_textured_runs(
-                    render_pass,
-                    &self.textured_pipeline,
-                    &self.textured_instance_buffer,
-                    &self.image_textures,
-                    scaled_tex,
-                    tex_lo,
-                    tex_hi,
-                    cull,
-                );
+            if include_fill {
+                for op in super::draw_cull::slot_paint_ops(paint_ops, (inst_lo, inst_hi), (tex_lo, tex_hi)) {
+                    match op {
+                        crate::layout::layout_tree::PaintOp::Rects { start, count } => {
+                            draw_sdf_range_with_clip(
+                                render_pass, &self.pipeline, &self.device, dummy,
+                                scaled_instances, clip_polys, start, count, cull,
+                            );
+                        }
+                        crate::layout::layout_tree::PaintOp::Textured { start, count } => {
+                            draw_packed_textured_runs(
+                                render_pass, &self.textured_pipeline, &self.textured_instance_buffer,
+                                &self.image_textures, scaled_tex, start as usize,
+                                (start + count) as usize, cull,
+                            );
+                        }
+                    }
+                }
             }
             if include_chrome && p.chrome.0 < p.chrome.1 && p.chrome.1 <= scaled_input_chrome.len()
             {
@@ -3735,9 +3744,6 @@ impl AppState {
         else {
             return crate::core::tree::LayoutStatus::Clean;
         };
-        let could_absorb =
-            super::reactive::bind_layout_absorbed_by_specified_ancestor(&self.root_element, &path);
-
         let (status, frame_status) = {
             let mut cursor = &mut self.root_element;
             for &index in &path {
@@ -3754,23 +3760,12 @@ impl AppState {
             // bind apply may flip child `display` / flex (Marker separator hairlines)
             // and the fast path no longer rebuilds Taffy on StructureChanged.
             //
-            // Play/Pause inside a `min_w` Button still reports leaf LayoutChanged
-            // (intrinsic glyph width). Promoting that to the frame status forces
-            // root `compute_layout` and hitch sibling CSS animations for one frame.
-            let absorbed =
-                matches!(status, crate::core::tree::LayoutStatus::LayoutChanged) && could_absorb;
-            let frame_status = if absorbed {
-                crate::core::tree::LayoutStatus::StyleChanged
-            } else {
-                status
-            };
+            // A fixed ancestor does not fix descendant text metrics. Recompute
+            // the leaf so longer captions do not wrap into their previous width.
+            let frame_status = status;
             crate::core::tree::collect_bind_layout_dirty(
                 cursor,
-                if absorbed {
-                    crate::core::tree::LayoutStatus::Clean
-                } else {
-                    status
-                },
+                status,
                 &mut self.pending_layout_dirty,
             );
             if matches!(frame_status, crate::core::tree::LayoutStatus::StyleChanged) {
@@ -3782,7 +3777,7 @@ impl AppState {
             (status, frame_status)
         };
         self.layout_status = Self::merge_layout_status(self.layout_status, frame_status);
-        if matches!(frame_status, crate::core::tree::LayoutStatus::StyleChanged) {
+        if frame_status != crate::core::tree::LayoutStatus::Clean {
             // ViewportsOnly `reuse_idle` would skip-replay idle ancestors (gallery
             // Item variant bind while the clicked button is still hovered).
             crate::layout::collect_cache::invalidate_collect_paint_hash_path(
@@ -5815,6 +5810,7 @@ impl AppState {
                         d,
                         &self.damage_nodes,
                         &render_result.node_paints,
+                        page_inst,
                     )
                     && node_needs_glyphs(d)
                     && !page_node_occluded(d)
@@ -7394,7 +7390,11 @@ fn update_scrollbar_element_self(
         } else {
             el.layout_bounds[3]
         };
-        if laid > 1.0 { laid } else { main_available }
+        if laid > 1.0 {
+            laid
+        } else {
+            main_available
+        }
     };
 
     match axis {
@@ -8313,7 +8313,7 @@ mod hot_reload_inject {
                 .template_id("examples/gallery/App:section_body")
                 .template_hash("old-nav")
                 .children(vec![
-                    Element::new().children(vec![Element::new().text("导航")]),
+                    Element::new().children(vec![Element::new().text("导航")])
                 ]);
             island.set_attr(
                 crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
@@ -8351,7 +8351,7 @@ mod hot_reload_inject {
                 .template_id("examples/gallery/App:section_body")
                 .template_hash("old-nav")
                 .children(vec![
-                    Element::new().children(vec![Element::new().text("导航")]),
+                    Element::new().children(vec![Element::new().text("导航")])
                 ]);
             island.set_attr(
                 crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
@@ -8464,12 +8464,10 @@ mod hot_reload_inject {
                 &["导航改"],
             );
 
-            let mut live = Element::new().children(vec![
-                Element::new()
-                    .template_id("examples/gallery/src/main.rs:100:9")
-                    .template_hash("chrome")
-                    .text("chrome"),
-            ]);
+            let mut live = Element::new().children(vec![Element::new()
+                .template_id("examples/gallery/src/main.rs:100:9")
+                .template_hash("chrome")
+                .text("chrome")]);
             apply_templates_to_tree(&mut live, std::slice::from_ref(&patch));
             assert_eq!(
                 live.children[0].text.as_deref(),
@@ -8480,13 +8478,11 @@ mod hot_reload_inject {
             let mut island = Element::new()
                 .template_id("examples/gallery/App:section_body")
                 .template_hash("compile-time-old")
-                .children(vec![
-                    Element::new()
-                        .focus_id("scroll:scroll-navigation")
-                        .children(vec![
-                            Element::new().children(vec![Element::new().text("导航")]),
-                        ]),
-                ]);
+                .children(vec![Element::new()
+                    .focus_id("scroll:scroll-navigation")
+                    .children(vec![
+                        Element::new().children(vec![Element::new().text("导航")])
+                    ])]);
             island.set_attr(
                 crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
                 "examples/gallery/src/main.rs:4334:21",
@@ -8503,7 +8499,7 @@ mod hot_reload_inject {
 
 #[cfg(test)]
 mod text_shadow_draw_slot_tests {
-    use super::{TextShadowDrawSlot, text_shadow_draw_slot};
+    use super::{text_shadow_draw_slot, TextShadowDrawSlot};
 
     #[test]
     fn page_stack_bands_require_per_band_shadow_slot() {

@@ -709,7 +709,7 @@ pub(crate) fn sync_radio_checked_subtree(
                             layout_tree.update_taffy_node_style(dot);
                         }
                     }
-                    crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+                    crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
                     *impact = impact.merge(LayoutStatus::StyleChanged);
                 }
             }

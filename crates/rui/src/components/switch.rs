@@ -234,7 +234,7 @@ fn find_thumb_mut(el: &mut Element) -> Option<&mut Element> {
 }
 
 fn push_switch_paint_damage(el: &Element) {
-    let b = el.layout_bounds;
+    let b = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return;
     }

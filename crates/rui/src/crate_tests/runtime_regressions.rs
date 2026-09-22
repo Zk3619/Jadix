@@ -110,20 +110,18 @@ fn stale_latest_dirty_uses_live_clip_even_after_large_scroll() {
             [0.0; 4]
         );
     }
-    assert!(
-        node_present_reset_rect(
-            key,
-            dirty,
-            &paints,
-            &[],
-            &[],
-            &[],
-            NODE_PRESENT_RESET_PAD_PHYSICAL,
-            1.0,
-            None
-        )
-        .is_none()
-    );
+    assert!(node_present_reset_rect(
+        key,
+        dirty,
+        &paints,
+        &[],
+        &[],
+        &[],
+        NODE_PRESENT_RESET_PAD_PHYSICAL,
+        1.0,
+        None
+    )
+    .is_none());
 }
 
 #[test]
@@ -638,11 +636,9 @@ fn node_glyph_capture_preserves_both_sides_of_portal() {
         2,
         "both exposed text fragments must be prepared"
     );
-    assert!(
-        capture
-            .iter()
-            .all(|n| intersect_rects(n.clip_bounds.unwrap(), overlay).is_none())
-    );
+    assert!(capture
+        .iter()
+        .all(|n| intersect_rects(n.clip_bounds.unwrap(), overlay).is_none()));
     assert!(capture.iter().any(|n| n.clip_bounds.unwrap()[0] < 80.0));
     assert!(capture.iter().any(|n| n.clip_bounds.unwrap()[0] >= 100.0));
     assert!(
@@ -710,11 +706,9 @@ fn overlapping_portal_repair_holes_replay_each_pixel_once() {
     push_disjoint_rect(&mut holes, [0.0, 0.0, 20.0, 20.0]);
     assert_eq!(holes.iter().map(|r| r[2] * r[3]).sum::<f32>(), 700.0);
     for (i, a) in holes.iter().enumerate() {
-        assert!(
-            holes[i + 1..]
-                .iter()
-                .all(|b| intersect_rects(*a, *b).is_none())
-        );
+        assert!(holes[i + 1..]
+            .iter()
+            .all(|b| intersect_rects(*a, *b).is_none()));
     }
 }
 
@@ -752,17 +746,15 @@ fn offscreen_animation_preserves_retained_page_without_preparing_labels() {
     let mut tree = LayoutTree::new();
     let frame = tree.build_and_layout(&mut root, 300.0, 100.0, [-1.0, -1.0]);
     assert!(!frame.text_nodes.is_empty());
-    assert!(
-        page_stack_band_submit_text(
-            &frame.text_nodes,
-            &frame.text_nodes,
-            0,
-            frame.text_nodes.len(),
-            Some(region_repair_text_cull(&nodes, &[], &[], 1.0, 800, 600)),
-            false
-        )
-        .is_none()
-    );
+    assert!(page_stack_band_submit_text(
+        &frame.text_nodes,
+        &frame.text_nodes,
+        0,
+        frame.text_nodes.len(),
+        Some(region_repair_text_cull(&nodes, &[], &[], 1.0, 800, 600)),
+        false
+    )
+    .is_none());
 }
 
 #[test]
@@ -889,12 +881,10 @@ fn cached_scroll_viewport_keeps_metrics_for_next_scroll_repair() {
     let mut root = Element::new().w(300.0).h(120.0).child(viewport);
     let mut tree = LayoutTree::new();
     let initial = tree.build_and_layout(&mut root, 300.0, 120.0, [-1.0, -1.0]);
-    assert!(
-        initial
-            .scroll_metrics
-            .iter()
-            .any(|(id, ..)| id == "metric-replay")
-    );
+    assert!(initial
+        .scroll_metrics
+        .iter()
+        .any(|(id, ..)| id == "metric-replay"));
     for _ in 0..3 {
         let next = tree.build_and_layout_fast(&mut root, 300.0, 120.0, [-1.0, -1.0], true, false);
         assert!(
@@ -904,4 +894,245 @@ fn cached_scroll_viewport_keeps_metrics_for_next_scroll_repair() {
             "cached frame lost the viewport needed by scroll blit"
         );
     }
+}
+#[test]
+fn paint_synced_input_refreshes_warmed_idle_cache() {
+    use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+    use crate::core::reactivity::use_signal;
+    use crate::core::tree::{Element, LayoutStatus};
+    use crate::layout::layout_tree::LayoutTree;
+    for multiline in [false, true] {
+        let id = if multiline {
+            "cache-textarea"
+        } else {
+            "cache-input"
+        };
+        let field: Element = if multiline {
+            crate::components::textarea::textarea(id)
+                .placeholder("placeholder")
+                .into()
+        } else {
+            crate::components::input::input(id)
+                .clearable(true)
+                .placeholder("placeholder")
+                .into()
+        };
+        let mut root = Element::new().w(320.0).h(160.0).child(field);
+        let mut tree = LayoutTree::new();
+        tree.build_and_layout(&mut root, 320.0, 160.0, [-1.0; 2]);
+        for _ in 0..3 {
+            sync_text_edit_paint_subtree(&mut root, &mut tree, &mut LayoutStatus::Clean);
+            tree.set_collect_skip_allowed(true);
+            tree.build_and_layout_fast(&mut root, 320.0, 160.0, [-1.0; 2], true, true);
+        }
+        use_signal(
+            &crate::utils::text_field::input_value_signal_key(id),
+            String::new,
+        )
+        .set("typed".into());
+        sync_text_edit_paint_subtree(&mut root, &mut tree, &mut LayoutStatus::Clean);
+        let result = tree.build_and_layout_fast(&mut root, 320.0, 160.0, [-1.0; 2], true, true);
+        assert!(
+            result.text_nodes.iter().any(|t| t.text == "typed"),
+            "paint sync must invalidate cached ancestor, multiline={multiline}"
+        );
+        assert!(!result.text_nodes.iter().any(|t| t.text == "placeholder"));
+    }
+}
+
+#[test]
+fn replay_preserves_descendant_paint_membership() {
+    use crate::core::tree::Element;
+    use crate::layout::layout_tree::LayoutTree;
+    let mut root = Element::new().w(300.0).h(100.0).child(
+        Element::new()
+            .w(240.0)
+            .h(80.0)
+            .child(Element::new().w(120.0).h(30.0).text("caption")),
+    );
+    let mut tree = LayoutTree::new();
+    tree.build_and_layout(&mut root, 300.0, 100.0, [-1.0; 2]);
+    tree.set_collect_skip_allowed(true);
+    let initial = tree.build_and_layout_fast(&mut root, 300.0, 100.0, [-1.0; 2], false, false);
+    let replay = tree.build_and_layout_fast(&mut root, 300.0, 100.0, [-1.0; 2], true, false);
+    assert!(tree.last_collect_skip_counts().0 > 0);
+    for p in &initial.node_paints {
+        assert!(
+            replay
+                .node_paints
+                .iter()
+                .any(|q| q.key == p.key && q.text == p.text),
+            "replay lost descendant paint slot: {p:?}"
+        );
+    }
+}
+
+#[test]
+fn scroll_replay_refreshes_descendant_paint_coordinates() {
+    let mut root = Element::new().w(300.0).h(100.0).overflow_y("scroll").child(
+        Element::new().w(240.0).h(180.0).flex_shrink(0.0)
+            .child(Element::new().w(180.0).h(50.0).mt(30.0)
+                .child(Element::new().w(120.0).h(30.0).text("caption"))),
+    );
+    let mut tree = LayoutTree::new();
+    tree.build_and_layout(&mut root, 300.0, 100.0, [-1.0; 2]);
+    tree.set_collect_skip_allowed(true);
+    tree.build_and_layout_fast(&mut root, 300.0, 100.0, [-1.0; 2], false, false);
+    root.scroll_offset = [0.0, 10.0];
+    tree.build_and_layout_fast(&mut root, 300.0, 100.0, [-1.0; 2], true, false);
+    assert!(tree.last_collect_skip_counts().0 > 0);
+    assert_eq!(root.children[0].children[0].children[0].paint_scroll_acc, [0.0, 10.0],
+        "damage after replay must use the same scroll coordinates as the replayed glyphs");
+}
+
+#[test]
+fn checked_sync_refreshes_cached_scrolled_control() {
+    use crate::core::reactivity::use_signal;
+    use crate::core::tree::{Element, LayoutStatus};
+    use crate::layout::layout_tree::LayoutTree;
+    let checked = use_signal("cache-checked", || false);
+    let mut root = Element::new()
+        .w(200.0)
+        .h(100.0)
+        .child(crate::components::checkbox::checkbox("cache-checked-box").checked_signal(checked));
+    let mut tree = LayoutTree::new();
+    tree.build_and_layout(&mut root, 200.0, 100.0, [-1.0; 2]);
+    tree.set_collect_skip_allowed(true);
+    let before = tree.build_and_layout_fast(&mut root, 200.0, 100.0, [-1.0; 2], true, true);
+    checked.set(true);
+    crate::components::checkbox::sync_checkbox_checked_subtree(
+        &mut root,
+        &mut tree,
+        &mut LayoutStatus::Clean,
+    );
+    let after = tree.build_and_layout_fast(&mut root, 200.0, 100.0, [-1.0; 2], true, true);
+    assert_ne!(
+        before.instances[0].color, after.instances[0].color,
+        "checked chrome must not replay unchecked cache"
+    );
+}
+
+#[test]
+fn textarea_horizontal_overlay_track_fills_live_width() {
+    use crate::core::tree::Element;
+    use crate::layout::layout_tree::LayoutTree;
+    let field: Element = crate::components::textarea::textarea("full-width-track")
+        .wrap("off")
+        .into();
+    let mut root = Element::new().w(360.0).h(150.0).child(field);
+    let mut tree = LayoutTree::new();
+    tree.build_and_layout(&mut root, 360.0, 150.0, [-1.0; 2]);
+    let track = crate::core::tree::find_in_tree(&root, |n| {
+        n.focus_id.as_deref().is_some_and(|id| {
+            id.starts_with(crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
+                && id.ends_with(":x")
+        })
+    })
+    .unwrap();
+    assert!(
+        track.layout_bounds[2] >= 340.0,
+        "horizontal track must fill the field, got {:?}",
+        track.layout_bounds
+    );
+}
+
+#[test]
+fn cancelled_selection_move_queues_ghost_erase() {
+    use crate::core::tree::Element;
+    use crate::layout::layout_tree::LayoutTree;
+    use crate::utils::text_sel_move::*;
+    begin_potential(
+        "ghost-erase",
+        (0, 4),
+        "text".into(),
+        2,
+        (0.0, 0.0),
+        14.0,
+        400,
+        [0, 0, 0, 255],
+        20.0,
+    );
+    tick_pointer((20.0, 20.0), Some(2), 4);
+    let mut root = Element::new().w(200.0).h(100.0);
+    let mut tree = LayoutTree::new();
+    let painted = tree.build_and_layout(&mut root, 200.0, 100.0, [-1.0; 2]);
+    let ghost = painted
+        .text_nodes
+        .iter()
+        .find(|t| t.template_id.as_deref() == Some("__rui_text_sel_move_ghost"))
+        .unwrap();
+    crate::app::damage::clear_frame_paint_nodes();
+    assert!(matches!(on_release(), ReleaseAction::KeepSelection));
+    let dirty = crate::app::damage::take_frame_paint_nodes();
+    assert!(
+        dirty.iter().any(|d| d.bounds[0] <= ghost.x
+            && d.bounds[1] <= ghost.y
+            && d.bounds[0] + d.bounds[2] >= ghost.x + ghost.width
+            && d.bounds[1] + d.bounds[3] >= ghost.y + ghost.height),
+        "release must erase unchanged selection ghost: {dirty:?}"
+    );
+}
+
+#[test]
+fn reactive_structure_invalidates_idle_ancestor_cache() {
+    use crate::core::reactivity::use_signal;
+    let changed = use_signal("structure-cache-change", || false);
+    let child = Element::new().w(100.0).h(30.0).reactive_sync(move |el, _| {
+        if changed.peek() && el.children.is_empty() {
+            el.children.push(Element::new().text("new child"));
+            LayoutStatus::StructureChanged
+        } else {
+            LayoutStatus::Clean
+        }
+    });
+    let mut root = Element::new().w(300.0).h(100.0).child(child);
+    let mut tree = LayoutTree::new();
+    tree.build_and_layout(&mut root, 300.0, 100.0, [-1.0; 2]);
+    tree.set_collect_skip_allowed(true);
+    tree.build_and_layout_fast(&mut root, 300.0, 100.0, [-1.0; 2], true, true);
+    changed.set(true);
+    crate::core::tree::sync_reactive_elements_subtree(
+        &mut root,
+        &mut tree,
+        &mut LayoutStatus::Clean,
+        300.0,
+        100.0,
+        [0.0; 2],
+    );
+    assert_eq!(
+        root.collect_paint_hash, 0,
+        "structure changes must invalidate cached ancestors"
+    );
+}
+
+#[test]
+fn scrolled_structure_damage_uses_visual_clip_bounds() {
+    let child = Element::new().reactive_sync(|el, _| {
+        el.children.push(Element::new().text("updated"));
+        LayoutStatus::StructureChanged
+    });
+    let mut root = Element::new().overflow_y("hidden").child(child);
+    root.layout_bounds = [10.0, 150.0, 200.0, 60.0];
+    root.children[0].layout_bounds = [10.0, 150.0, 100.0, 30.0];
+    let mut tree = LayoutTree::new();
+    crate::app::damage::clear_frame_paint_nodes();
+    crate::core::tree::sync_reactive_elements_subtree(
+        &mut root,
+        &mut tree,
+        &mut LayoutStatus::Clean,
+        400.0,
+        300.0,
+        [0.0, 100.0],
+    );
+    let damage = crate::app::damage::take_frame_paint_nodes();
+    assert!(
+        damage
+            .iter()
+            .all(|d| d.kind == crate::app::damage::PaintDirtyKind::Region),
+        "replaced children require region reconstruction, not a node capture: {damage:?}"
+    );
+    assert!(
+        damage.iter().any(|d| d.bounds == [10.0, 50.0, 200.0, 60.0]),
+        "structural erase must follow the scrolled clip: {damage:?}"
+    );
 }

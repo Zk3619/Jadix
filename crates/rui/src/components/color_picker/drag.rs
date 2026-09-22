@@ -31,6 +31,7 @@ thread_local! {
 }
 
 pub(super) fn begin_color_drag(drag: ColorDrag) {
+    PENDING_COLOR_DRAG.with(|p| p.set(None));
     let sid = drag.sv_id.clone().unwrap_or_else(|| "color_picker".into());
     crate::utils::pointer_drag::begin(
         crate::utils::pointer_drag::DragKind::ColorPicker,
@@ -42,6 +43,7 @@ pub(super) fn begin_color_drag(drag: ColorDrag) {
 }
 
 pub(super) fn end_color_drag() {
+    PENDING_COLOR_DRAG.with(|p| p.set(None));
     crate::utils::pointer_drag::clear();
     COLOR_DRAG.with(|d| *d.borrow_mut() = None);
     crate::app::release_pointer_capture();
@@ -114,6 +116,8 @@ pub(crate) fn tick_color_drag_from_tree(root: &crate::core::tree::Element, x: f3
 /// Pass it when the page / floating panel may have moved since pointer-down;
 /// frozen document-space y maps the pointer to V→0 (knob glued to the SV bottom).
 pub(crate) fn tick_color_drag_with_bounds(x: f32, y: f32, live_bounds: Option<[f32; 4]>) -> bool {
+    // A newer pointer event supersedes a sample queued by the previous render.
+    PENDING_COLOR_DRAG.with(|p| p.set(None));
     COLOR_DRAG.with(|d| {
         let Some(drag) = d.borrow().clone() else {
             return false;
@@ -123,8 +127,10 @@ pub(crate) fn tick_color_drag_with_bounds(x: f32, y: f32, live_bounds: Option<[f
                 drag.bounds.set(b);
             }
         }
-        apply_color_pointer(&drag, x, y);
-        sync_string_from_rgba(drag.out, drag.rgba.peek(), drag.fmt_sig.peek());
+        crate::core::reactivity::batch(|| {
+            apply_color_pointer(&drag, x, y);
+            sync_string_from_rgba(drag.out, drag.rgba.peek(), drag.fmt_sig.peek());
+        });
         true
     })
 }

@@ -5,16 +5,16 @@ use winit::event::KeyEvent;
 use crate::core::reactivity::Signal;
 
 pub use crate::layout::dimension::{
-    css_root_font_size_px, dim_kind, dim_length_px, dimension_to_lp, dimension_to_lpa, em, lp_kind,
-    lp_length_px, lpa_kind, lpa_length_px, px, rem, CssDim, CssRectPair, DimKind, IntoBorderWidths,
-    IntoCssDim, IntoCssRectPair, IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage,
-    IntoOpacity, PercentAxis, UnitCtx, CSS_ROOT_FONT_SIZE_PX,
+    CSS_ROOT_FONT_SIZE_PX, CssDim, CssRectPair, DimKind, IntoBorderWidths, IntoCssDim,
+    IntoCssRectPair, IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage, IntoOpacity,
+    PercentAxis, UnitCtx, css_root_font_size_px, dim_kind, dim_length_px, dimension_to_lp,
+    dimension_to_lpa, em, lp_kind, lp_length_px, lpa_kind, lpa_length_px, px, rem,
 };
 pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
 pub use crate::style::{
-    parse_color, parse_text_color, CursorKind, CursorValue, IntoAlignItems, IntoCursor,
-    IntoFlexWrap, IntoJustifyContent, IntoOverflow, IntoPaintColor, IntoTextColor, LineStyle,
-    TextAlignDeclaration, TextDecorationStyle, TextOverflow, TextStyle,
+    CursorKind, CursorValue, IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent,
+    IntoOverflow, IntoPaintColor, IntoTextColor, LineStyle, TextAlignDeclaration,
+    TextDecorationStyle, TextOverflow, TextStyle, parse_color, parse_text_color,
 };
 pub use crate::style::{Style, UnitSlot};
 
@@ -386,9 +386,9 @@ fn ensure_animation_slots(list: &mut Vec<crate::style::AnimationEntry>, n: usize
 /// Parse one or more CSS `animation` shorthand declarations (comma-separated).
 pub fn parse_animation_shorthand(value: &str) -> Vec<crate::style::AnimationEntry> {
     use crate::style::{
-        split_comma_list, split_ws_tokens, AnimationComposition, AnimationDirection,
-        AnimationEntry, AnimationFillMode, AnimationIterationCount, AnimationPlayState,
-        AnimationTimeline, TimingFunction,
+        AnimationComposition, AnimationDirection, AnimationEntry, AnimationFillMode,
+        AnimationIterationCount, AnimationPlayState, AnimationTimeline, TimingFunction,
+        split_comma_list, split_ws_tokens,
     };
     let mut out = Vec::new();
     for segment in split_comma_list(value) {
@@ -2846,7 +2846,7 @@ impl Element {
     /// Multiple entries separated by commas.
     pub fn transition(mut self, value: impl AsRef<str>) -> Self {
         use crate::style::{
-            split_comma_list, split_ws_tokens, TimingFunction, TransitionEntry, TransitionProperty,
+            TimingFunction, TransitionEntry, TransitionProperty, split_comma_list, split_ws_tokens,
         };
         self.style.transition.clear();
         for segment in split_comma_list(value.as_ref()) {
@@ -4362,26 +4362,24 @@ pub(crate) fn pointer_as_layout_box_xy(
 /// both axes — CSS scroll containers clip on both axes, and gallery `scroll:` shells
 /// must not leak hits into the sidebar.
 #[inline]
-    pub(crate) fn overflow_clip_axes(el: &Element) -> (bool, bool) {
-        let is_scroll_viewport = el.focus_id.as_deref().is_some_and(|f| {
-            f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
-        });
-        let (clip_x, clip_y) = overflow_clip_axes_from(
-            el.style.overflow.x,
-            el.style.overflow.y,
-            is_scroll_viewport,
-        );
-        // CSS scroll containers clip both axes. `overflow-x: auto` is Taffy Scroll, so
-        // the generic rule invents a Y clip. table-container is content-height — that
-        // Y clip dest-resets / culls invoice rows inside gallery `scroll-data`.
-        if !is_scroll_viewport
-            && matches!(el.style.overflow.y, taffy::style::Overflow::Visible)
-            && el.attrs.get("data-slot").map(|s| s.as_str()) == Some("table-container")
-        {
-            return (clip_x, false);
-        }
-        (clip_x, clip_y)
+pub(crate) fn overflow_clip_axes(el: &Element) -> (bool, bool) {
+    let is_scroll_viewport = el
+        .focus_id
+        .as_deref()
+        .is_some_and(|f| f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX));
+    let (clip_x, clip_y) =
+        overflow_clip_axes_from(el.style.overflow.x, el.style.overflow.y, is_scroll_viewport);
+    // CSS scroll containers clip both axes. `overflow-x: auto` is Taffy Scroll, so
+    // the generic rule invents a Y clip. table-container is content-height — that
+    // Y clip dest-resets / culls invoice rows inside gallery `scroll-data`.
+    if !is_scroll_viewport
+        && matches!(el.style.overflow.y, taffy::style::Overflow::Visible)
+        && el.attrs.get("data-slot").map(|s| s.as_str()) == Some("table-container")
+    {
+        return (clip_x, false);
     }
+    (clip_x, clip_y)
+}
 
 #[inline]
 pub(crate) fn overflow_clip_axes_from(
@@ -4395,11 +4393,7 @@ pub(crate) fn overflow_clip_axes_from(
     // CSS `overflow: auto` is stored as Taffy `Scroll`.
     let scrollport =
         is_scroll_viewport || matches!(overflow_x, Scroll) || matches!(overflow_y, Scroll);
-    if scrollport {
-        (true, true)
-    } else {
-        (ox, oy)
-    }
+    if scrollport { (true, true) } else { (ox, oy) }
 }
 
 /// Overflow / `scroll:` viewports clip hit-testing and class `:hover` to the layout border box.
@@ -4570,10 +4564,17 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
     while let Some((ptr, scroll_acc, in_portal, clip_bounds, path)) = stack.pop() {
         // Exclusive node borrow ends before any root-wide hash bust (overlapping
         // `&mut` through `root_ptr` would alias `ptr` when `path` reaches this node).
-        let (child_acc, in_portal, clip_bounds, child_count, style_changed) = {
+        let (child_acc, in_portal, clip_bounds, child_count, paint_changed) = {
             // SAFETY: exclusive subtree; children pointers are taken after this node's sync.
             let element = unsafe { &mut *ptr };
-            if element_is_offscreen(element, scroll_acc, viewport_w, viewport_h) {
+            // Reactive paint synchronizers can move a floating panel during the
+            // same frame as the pointer event. Its retained layout box may still
+            // contain the previous offscreen position, so skipping it here leaves
+            // controls such as the ColorPicker SV knob one frame behind. Run the
+            // small synchronizer once; ordinary subtree work remains culled.
+            if element_is_offscreen(element, scroll_acc, viewport_w, viewport_h)
+                && element.reactive_sync.is_none()
+            {
                 continue;
             }
             let in_portal = in_portal
@@ -4581,7 +4582,7 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                     == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
             let in_clip = clip_bounds.is_some() || element_clips_overflow(element);
             let clip_bounds = if element_clips_overflow(element) {
-                let b = element.layout_bounds;
+                let b = visual_paint_aabb(element, scroll_acc);
                 if b[2] > 0.0 && b[3] > 0.0 {
                     Some(b)
                 } else {
@@ -4590,13 +4591,14 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
             } else {
                 clip_bounds
             };
-            let mut style_changed = false;
+            let mut paint_changed = false;
             // Clone the Rc-backed descriptor so the callback may mutate its owning Element.
             if let Some(sync) = element.reactive_sync.clone() {
-                let before = element.layout_bounds;
+                let before = visual_paint_aabb(element, scroll_acc);
                 let before_display = element.style.display;
                 let before_opacity = element.style.opacity;
                 let status = sync.run(element, layout_tree);
+                paint_changed = status != LayoutStatus::Clean;
                 match status {
                     LayoutStatus::LayoutChanged => {
                         push_subtree_layout_nodes(element, &mut collect.layout_dirty);
@@ -4637,7 +4639,10 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                             let d = clip_bounds
                                 .unwrap_or_else(|| estimate_geom_damage(element, before));
                             if d[2] > 0.0 && d[3] > 0.0 {
-                                crate::app::damage::push_frame_paint_damage(d);
+                                crate::app::damage::push_frame_region_paint(
+                                    crate::app::damage::paint_element_key(element),
+                                    d,
+                                );
                             }
                         } else {
                             collect.page_layout_changed = true;
@@ -4657,7 +4662,6 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                                 before_opacity,
                             );
                         }
-                        style_changed = true;
                     }
                     LayoutStatus::Clean => {}
                 }
@@ -4670,10 +4674,10 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                 in_portal,
                 clip_bounds,
                 child_count,
-                style_changed,
+                paint_changed,
             )
         };
-        if style_changed {
+        if paint_changed {
             // ViewportsOnly `reuse_idle` would skip-replay idle ancestors (Gallery
             // InputAdornment Hard ring after scroll settle: placeholder flicker only).
             // Same spine bust as bind StyleChanged / Item variant.

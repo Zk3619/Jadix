@@ -263,6 +263,15 @@ fn sync_otp_slot_paint(
 
     let want_active = if is_active { "true" } else { "false" };
     if el.attrs.get("data-active").map(|s| s.as_str()) != Some(want_active) {
+        // Connected cells overlap the focus ring. Replay the local page region
+        // so removing a raised ring also restores the neighboring cell.
+        let [x, y, w, h] = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
+        if w > 0.0 && h > 0.0 {
+            crate::app::damage::push_frame_region_paint(
+                crate::app::damage::paint_element_key(el),
+                [x - 4.0, y - 4.0, w + 8.0, h + 8.0],
+            );
+        }
         el.set_attr("data-active", want_active);
         status = status.merge(LayoutStatus::StyleChanged);
     }
@@ -582,6 +591,7 @@ pub fn input_otp_scope(
         root = interactive(root)
             .focus_id(fid.clone())
             .focusable(true)
+            .focus_ring(false)
             .cursor("text")
             .on_click(move || {
                 use_signal("__rui_button_focus_id", String::new).set(fid.clone());
@@ -958,6 +968,67 @@ impl crate::core::tree::IntoElementList for InputOtpBuilder {
 mod tests {
     use super::*;
     use crate::core::reactivity::create_root;
+
+    #[test]
+    fn focus_move_restores_scrolled_slot_ring_and_neighbor() {
+        create_root(|| {
+            use crate::app::damage::{take_frame_paint_nodes, PaintDirtyKind};
+            let value = Signal::new("12".to_owned());
+            let active = Signal::new(0usize);
+            let focus = use_signal("__rui_button_focus_id", String::new);
+            focus.set("otp-ring-test".into());
+            let mut slot = Element::new();
+            slot.layout_bounds = [100.0, 700.0, 36.0, 36.0];
+            slot.paint_scroll_acc = [0.0, 600.0];
+            sync_otp_slot_paint(&mut slot, 0, 6, value, active, "otp-ring-test", false, false);
+            let _ = take_frame_paint_nodes();
+            active.set(1);
+            sync_otp_slot_paint(&mut slot, 0, 6, value, active, "otp-ring-test", false, false);
+            let dirty = take_frame_paint_nodes();
+            assert!(dirty.iter().any(|d| d.kind == PaintDirtyKind::Region
+                && d.bounds[0] <= 96.0 && d.bounds[1] <= 96.0
+                && d.bounds[0] + d.bounds[2] >= 140.0));
+        });
+    }
+
+    #[test]
+    fn typed_digit_is_collected_after_structure_sync() {
+        create_root(|| {
+            let value = use_signal("otp-collect-value", String::new);
+            let otp: Element = input_otp("otp-collect").value_signal(value).into();
+            let mut root = Element::new()
+                .w(400.0)
+                .h(100.0)
+                .overflow_y("hidden")
+                .child(otp);
+            let mut tree = crate::layout::layout_tree::LayoutTree::new();
+            tree.build_and_layout(&mut root, 400.0, 100.0, [-1.0; 2]);
+            tree.set_collect_skip_allowed(true);
+            tree.build_and_layout_fast(&mut root, 400.0, 100.0, [-1.0; 2], true, true);
+            value.set("1".into());
+            let mut collect = crate::core::tree::ReactiveSyncCollect::default();
+            crate::core::tree::sync_reactive_elements_subtree_ex(
+                &mut root,
+                &mut tree,
+                &mut LayoutStatus::Clean,
+                400.0,
+                100.0,
+                [0.0; 2],
+                false,
+                &mut collect,
+            );
+            let dirty = collect.layout_dirty.into_iter().collect();
+            tree.mark_dirty_nodes_in_tree(&root, &dirty);
+            let frame = tree.build_and_layout_fast(&mut root, 400.0, 100.0, [-1.0; 2], false, true);
+            assert!(
+                frame
+                    .text_nodes
+                    .iter()
+                    .any(|t| t.text == "1" && t.width > 0.0),
+                "new OTP glyph must be laid out and collected on its input frame"
+            );
+        });
+    }
 
     #[test]
     fn pattern_accepts_digits() {

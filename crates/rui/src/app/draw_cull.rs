@@ -14,6 +14,29 @@ use crate::style::transform::MAT2D_IDENTITY;
 
 use super::damage::{PaintDirty, PaintDirtyKind, intersect_rects};
 
+pub(crate) fn slot_paint_ops(
+    ops: &[crate::layout::layout_tree::PaintOp],
+    instances: (usize, usize),
+    textures: (usize, usize),
+) -> impl Iterator<Item = crate::layout::layout_tree::PaintOp> + '_ {
+    use crate::layout::layout_tree::PaintOp;
+    ops.iter().filter_map(move |op| {
+        let (start, count, range) = match *op {
+            PaintOp::Rects { start, count } => (start, count, instances),
+            PaintOp::Textured { start, count } => (start, count, textures),
+        };
+        let lo = (start as usize).max(range.0);
+        let hi = (start as usize + count as usize).min(range.1);
+        if lo >= hi {
+            return None;
+        }
+        Some(match op {
+            PaintOp::Rects { .. } => PaintOp::Rects { start: lo as u32, count: (hi - lo) as u32 },
+            PaintOp::Textured { .. } => PaintOp::Textured { start: lo as u32, count: (hi - lo) as u32 },
+        })
+    })
+}
+
 /// Same pad as scissor (`AppState::DAMAGE_SCISSOR_PAD_LOGICAL`) so cull ≥ clip.
 pub(crate) const DAMAGE_CULL_PAD_LOGICAL: f32 = 16.0;
 
@@ -2010,6 +2033,11 @@ fn node_present_scissor_logical_ex(
     scissor_pad: f32,
     occupancy_clip: bool,
 ) -> [f32; 4] {
+    // Restore replays the page and every intersecting portal in order. Sibling
+    // exclusion would leave old shadow pixels outside the reconstructed hole.
+    if kind == PaintDirtyKind::OverlayRestore {
+        return dirty_bounds;
+    }
     if kind == PaintDirtyKind::Region {
         // Region already contains prev/current coverage and replays every layer
         // in order. Node occupancy shrinking would cut away the last translated
@@ -2605,6 +2633,7 @@ pub(crate) fn skip_in_flow_under_layered_overlay(
     dirty: &PaintDirty,
     nodes: &[PaintDirty],
     node_paints: &[NodePaint],
+    instances: &[InstanceInput],
 ) -> bool {
     if dirty.kind != PaintDirtyKind::Node {
         return false;
@@ -2615,6 +2644,9 @@ pub(crate) fn skip_in_flow_under_layered_overlay(
     nodes.iter().any(|o| {
         o.kind == PaintDirtyKind::Node
             && o.key != dirty.key
+            // Carets are drawn after the retained page blit. They cannot own
+            // the page repaint that replaces the field's previous text.
+            && !paint_dirty_is_caret_overlay(o, node_paints, instances)
             && layered_overlay_slot_bounds(o.key, o.bounds, node_paints).is_some()
             && intersect_rects(dirty.bounds, o.bounds).is_some()
     })
@@ -3700,6 +3732,31 @@ mod tests {
     }
 
     #[test]
+    fn caret_dirty_must_not_suppress_textarea_repaint() {
+        let mut field = slot(1, [306.0, 1042.0, 2204.0, 100.0], (0, 1));
+        field.instance = (0, 1);
+        let mut leaf = slot(2, [319.0, 1051.0, 2178.0, 25.0], (0, 1));
+        leaf.layered = true;
+        leaf.instance = (1, 1);
+        let field_dirty = PaintDirty {
+            key: 1,
+            bounds: field.bounds,
+            kind: PaintDirtyKind::Node,
+        };
+        let caret_dirty = PaintDirty {
+            key: 2,
+            bounds: [342.0, 1051.0, 2.0, 22.0],
+            kind: PaintDirtyKind::Node,
+        };
+        assert!(!skip_in_flow_under_layered_overlay(
+            &field_dirty,
+            &[field_dirty, caret_dirty],
+            &[field, leaf],
+            &[blank_instance(306.0, 1042.0, 2204.0, 100.0)],
+        ));
+    }
+
+    #[test]
     fn latest_fade_and_wrap_dirty_must_not_stamp_thread_on_pill() {
         // Click-to-bottom / enter fade: wrapping dest-reset + hole_text flush
         // after Latest stamped "gh" / "as they stream" onto the translucent pill.
@@ -3738,11 +3795,11 @@ mod tests {
         };
         let dirties = [wrap_dirty, btn_dirty];
         assert!(
-            skip_in_flow_under_layered_overlay(&wrap_dirty, &dirties, &paints),
+            skip_in_flow_under_layered_overlay(&wrap_dirty, &dirties, &paints, &instances),
             "wrapping dest-reset under Latest must yield the overlap to the overlay slot"
         );
         assert!(
-            !skip_in_flow_under_layered_overlay(&btn_dirty, &dirties, &paints),
+            !skip_in_flow_under_layered_overlay(&btn_dirty, &dirties, &paints, &instances),
             "Latest itself is the overlay slot"
         );
         assert!(
@@ -7025,6 +7082,42 @@ mod tests {
             node_present_scissor_pad(PaintDirtyKind::OverlayRestore),
             0.0,
             "Restore dest-reset is already visual occupancy; extra pad leaves a white frame the overlay fill cannot cover"
+        );
+    }
+
+    #[test]
+    fn slot_paint_ops_keep_track_below_thumb_and_exclude_neighbors() {
+        use crate::layout::layout_tree::PaintOp;
+        let ops = [
+            PaintOp::Rects { start: 0, count: 4 },
+            PaintOp::Textured { start: 0, count: 2 },
+            PaintOp::Rects { start: 4, count: 3 },
+        ];
+        let clipped: Vec<_> = slot_paint_ops(&ops, (2, 5), (1, 2)).collect();
+        assert!(matches!(clipped.as_slice(), [
+            PaintOp::Rects { start: 2, count: 2 },
+            PaintOp::Textured { start: 1, count: 1 },
+            PaintOp::Rects { start: 4, count: 1 },
+        ]));
+    }
+
+    #[test]
+    fn overlay_restore_must_cover_intersecting_page_caption() {
+        let hole = [303.0, 990.0, 176.0, 232.0];
+        let caption = slot(8, [450.0, 1010.0, 300.0, 22.0], (0, 1));
+        let mut menu = slot(7, [319.0, 1006.0, 144.0, 200.0], (1, 2));
+        menu.overlay = true;
+        assert_eq!(
+            node_present_scissor_logical(
+                PaintDirtyKind::OverlayRestore,
+                7,
+                hole,
+                &[],
+                &[menu, caption],
+                0.0,
+            ),
+            hole,
+            "overlay restore reconstructs the caption and must retain the whole shadow hole"
         );
     }
 

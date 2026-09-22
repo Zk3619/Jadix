@@ -716,6 +716,31 @@ mod tests {
     }
 
     #[test]
+    fn newer_sv_pointer_supersedes_queued_render_sample() {
+        crate::core::reactivity::create_root(|| {
+            let sat = Signal::new(0.0f32);
+            let val = Signal::new(1.0f32);
+            begin_color_drag(ColorDrag {
+                kind: ColorDragKind::Sv,
+                bounds: Rc::new(Cell::new([0.0, 0.0, 100.0, 100.0])),
+                rgba: Signal::new(Rgba::opaque(255, 255, 255)),
+                hue: Signal::new(0.0), sat, val,
+                show_alpha: false,
+                out: Signal::new("#ffffff".into()),
+                fmt_sig: Signal::new(ColorFormat::Hex),
+                sv_id: Some("sv-newer-sample".into()),
+            });
+            queue_color_drag_apply(20.0, 20.0, None);
+            tick_color_drag_with_bounds(80.0, 70.0, None);
+            drain_color_drag_apply();
+            let result = [sat.peek(), val.peek()];
+            end_color_drag();
+            assert!((result[0] - 0.8).abs() < 0.001 && (result[1] - 0.3).abs() < 0.001,
+                "queued stale pointer replaced latest sample: {result:?}");
+        });
+    }
+
+    #[test]
     fn sv_pointer_uses_window_space_bounds() {
         let (_handle, _) = crate::core::reactivity::create_root(|| {
             let rgba = use_signal("sv_ptr_rgba", || Rgba::opaque(255, 255, 255));

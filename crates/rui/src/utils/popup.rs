@@ -465,6 +465,7 @@ struct FloatingPlace {
     width_auto: bool,
     /// Extra min-width (≥ `w` when matching trigger with a larger floor).
     min_w: f32,
+    anchor_edge_y: Option<f32>,
 }
 
 impl Default for FloatingPlace {
@@ -476,6 +477,7 @@ impl Default for FloatingPlace {
             max_h: 256.0,
             width_auto: false,
             min_w: 0.0,
+            anchor_edge_y: None,
         }
     }
 }
@@ -829,6 +831,9 @@ pub fn apply_stored_floating_place(el: &mut Element, id: &str) {
         place.set_silent(p);
     }
     // Always write so absolute panels never stay on `auto` insets.
+    if let Some(edge) = p.anchor_edge_y {
+        el.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, format!("{edge}"));
+    }
     let _ = write_floating_place(el, p);
 }
 
@@ -1061,6 +1066,7 @@ fn apply_floating_menus(
                 max_h: 0.0,
                 width_auto,
                 min_w: min_w.max(0.0),
+                anchor_edge_y: None,
             };
             if write_floating_place_ex(el, next, false) {
                 *changed = true;
@@ -1158,6 +1164,7 @@ fn apply_floating_menus(
                 max_h,
                 width_auto,
                 min_w: min_w.max(0.0),
+                anchor_edge_y: reverse_expand_edge_y(el),
             };
             let place_key = floating_place_signal_key(&id);
             let place = use_signal(place_key.as_str(), FloatingPlace::default);
@@ -1167,7 +1174,8 @@ fn apply_floating_menus(
                 || (cur.w - next.w).abs() > 0.5
                 || (cur.max_h - next.max_h).abs() > 0.5
                 || (cur.min_w - next.min_w).abs() > 0.5
-                || cur.width_auto != next.width_auto;
+                || cur.width_auto != next.width_auto
+                || cur.anchor_edge_y != next.anchor_edge_y;
             if signal_dirty {
                 place.set_silent(next);
             }
@@ -1397,6 +1405,7 @@ pub(crate) fn seed_floating_place_max_h_for_test(id: &str, max_h: f32) {
         max_h,
         width_auto: false,
         min_w: 0.0,
+        anchor_edge_y: None,
     };
     use_signal(
         floating_place_signal_key(id).as_str(),
@@ -1453,6 +1462,7 @@ mod tests {
             max_h: 120.0,
             width_auto: false,
             min_w: 0.0,
+            anchor_edge_y: None,
         };
         assert!(write_floating_place(&mut el, place));
         assert_eq!(el.style.overflow.y, taffy::style::Overflow::Hidden);
@@ -1487,6 +1497,7 @@ mod tests {
             max_h: 400.0,
             width_auto: false,
             min_w: 0.0,
+            anchor_edge_y: None,
         };
         let _ = write_floating_place(&mut el, place);
         match crate::layout::dim_kind(el.style.max_size.height) {
@@ -1512,6 +1523,7 @@ mod tests {
             max_h: 80.0,
             width_auto: false,
             min_w: 0.0,
+            anchor_edge_y: None,
         };
         let _ = write_floating_place(&mut el, place);
         assert!(
@@ -1534,6 +1546,7 @@ mod tests {
             max_h: 400.0,
             width_auto: false,
             min_w: 0.0,
+            anchor_edge_y: None,
         };
         let _ = write_floating_place(&mut el, place);
         match crate::layout::dim_kind(el.style.max_size.height) {
@@ -1805,6 +1818,7 @@ mod tests {
             max_h: 400.0,
             width_auto: false,
             min_w: 0.0,
+            anchor_edge_y: None,
         };
         assert!(write_floating_place(&mut el, place));
         assert!(
@@ -1830,6 +1844,7 @@ mod tests {
             max_h: 80.0,
             width_auto: true,
             min_w: 0.0,
+            anchor_edge_y: None,
         };
         assert!(write_floating_place(&mut el, small));
         let big = FloatingPlace {
@@ -1857,6 +1872,7 @@ mod tests {
             max_h: 400.0,
             width_auto: false,
             min_w: 0.0,
+            anchor_edge_y: None,
         };
         assert!(write_floating_place(&mut el, place));
         match crate::layout::dim_kind(el.style.size.height) {
@@ -1875,6 +1891,7 @@ mod tests {
             max_h: 200.0,
             width_auto: false,
             min_w: 0.0,
+            anchor_edge_y: None,
         };
         assert!(write_floating_place(&mut el, place));
         match crate::layout::dim_kind(el.style.min_size.height) {
@@ -1893,6 +1910,7 @@ mod tests {
             max_h: 200.0,
             width_auto: true,
             min_w: 120.0,
+            anchor_edge_y: None,
         };
         assert!(write_floating_place(&mut el, place));
         assert!(
@@ -2442,6 +2460,30 @@ mod tests {
             (top - (400.0 - FLOATING_TRIGGER_GAP - 220.0)).abs() < 0.5,
             "nested/inline select must follow the hoisted trigger, got {top}"
         );
+    }
+
+    #[test]
+    fn rebuilt_top_menu_preserves_anchor_while_shrinking() {
+        let mut trigger = Element::new().focus_id("t-rebuilt-top");
+        trigger.layout_bounds = [80.0, 500.0, 100.0, 32.0];
+        let mut panel = Element::new().absolute();
+        mark_floating(&mut panel, "rebuilt-top", "t-rebuilt-top", PopupPlacement::BottomStart);
+        panel.set_attr(ATTR_FLOATING_W, "100px");
+        panel.layout_bounds = [0.0, 0.0, 100.0, 200.0];
+        let mut root = Element::new().child(trigger).child(panel);
+        sync_floating_placement(&mut root, 800.0, 600.0);
+        let edge = reverse_expand_edge_y(&root.children[1]).unwrap();
+
+        let mut fresh = Element::new().absolute();
+        mark_floating(&mut fresh, "rebuilt-top", "t-rebuilt-top", PopupPlacement::BottomStart);
+        fresh.set_attr(ATTR_FLOATING_W, "100px");
+        fresh.layout_bounds = [0.0, 0.0, 100.0, 24.0];
+        apply_stored_floating_place(&mut fresh, "rebuilt-top");
+        assert_eq!(reverse_expand_edge_y(&fresh), Some(edge));
+        root.children[1] = fresh;
+        sync_floating_placement(&mut root, 800.0, 600.0);
+        let top = inset_length(root.children[1].style.inset.top).unwrap();
+        assert!((top + 24.0 - edge).abs() < 0.5, "top={top}, edge={edge}");
     }
 
     #[test]
