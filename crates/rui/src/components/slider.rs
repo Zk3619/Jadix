@@ -228,18 +228,27 @@ fn apply_thumb_shadow_t(thumb: &mut Element, t: f32) -> bool {
 }
 
 fn push_slider_thumb_paint_damage(root: &Element) {
-    let b = root.layout_bounds;
+    let b = crate::core::tree::visual_paint_aabb(root, root.paint_scroll_acc);
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return;
     }
     // 拇指阴影余量（紧凑阴影，pad 不必很大）
     let pad = 8.0;
-    crate::app::damage::push_frame_paint_damage([
-        b[0] - pad,
-        b[1] - pad,
-        b[2] + pad * 2.0,
-        b[3] + pad * 2.0,
-    ]);
+    let bounds = [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0];
+    if crate::app::damage::paint_kind_for_element(root)
+        == crate::app::damage::PaintDirtyKind::Overlay
+    {
+        let key = root
+            .paint_overlay_stamp
+            .filter(|key| *key != 0)
+            .unwrap_or_else(|| crate::layout::layout_tree::overlay_portal_stamp_key(root));
+        crate::app::damage::push_frame_overlay_damage(key, bounds);
+    } else {
+        crate::app::damage::push_frame_paint_key(
+            crate::app::damage::paint_element_key(root),
+            bounds,
+        );
+    }
 }
 
 fn norm01(v: f32, min: f32, max: f32) -> f32 {
@@ -531,7 +540,7 @@ impl From<SliderBuilder> for Element {
         let thumb = slots.paint(SLOT_THUMB, thumb);
 
         let hovered = Rc::new(Cell::new(false));
-        let _ = use_ui_transition_cubic(&slider_shadow_anim_key(&id), 0.0);
+        let shadow_tween = use_ui_transition_cubic(&slider_shadow_anim_key(&id), 0.0);
 
         let mut before: Element = if vertical {
             r#box().flex_grow(before_g).w("100%").into()
@@ -836,14 +845,18 @@ impl From<SliderBuilder> for Element {
                         }
                     }
                 }
-                let want = if thumb_shadow_elevated(sync_hover.get(), is_slider_dragging()) {
+                let dragging = crate::utils::pointer_drag::peek().is_some_and(|session| {
+                    session.kind == crate::utils::pointer_drag::DragKind::Slider
+                        && session.id == sync_id
+                });
+                let want = if !disabled && thumb_shadow_elevated(sync_hover.get(), dragging) {
                     1.0
                 } else {
                     0.0
                 };
-                let tween = use_ui_transition_cubic(&slider_shadow_anim_key(&sync_id), want);
-                tween.set(want);
-                let shadow_t = tween.peek().clamp(0.0, 1.0);
+                let target = if dragging { 1.0 } else { want };
+                shadow_tween.set(target);
+                let shadow_t = shadow_tween.peek().clamp(0.0, 1.0);
                 if apply_thumb_shadow_t(thumb, shadow_t) {
                     paint_changed = true;
                 }
@@ -879,6 +892,87 @@ mod tests {
     use crate::app::pointer_events::{dispatch_pointer, hit_path, PointerKind};
     use crate::app::test_support::sync_reactive_elements_subtree;
     use crate::core::tree::LayoutTree;
+
+    #[test]
+    fn owned_slider_first_hover_fades_from_rest() {
+        let (_owner, mut root) =
+            crate::core::reactivity::create_root(|| Element::from(slider("owned-hover-fade")));
+        root.on_hover.as_ref().unwrap().borrow_mut()(true);
+        let mut layout = LayoutTree::new();
+        sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+        let initial = find_slot_deep_mut(&mut root, SLOT_THUMB)
+            .unwrap()
+            .style
+            .shadow_blur;
+        assert_eq!(
+            initial, THUMB_SHADOW_REST.1,
+            "first hover must start at rest"
+        );
+        crate::style::tick_animations(0.075);
+        sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+        let middle = find_slot_deep_mut(&mut root, SLOT_THUMB)
+            .unwrap()
+            .style
+            .shadow_blur;
+        assert!(middle > initial && middle < THUMB_SHADOW_HOVER.1);
+        root.on_hover.as_ref().unwrap().borrow_mut()(false);
+        sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+        crate::style::tick_animations(0.075);
+        sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+        let leaving = find_slot_deep_mut(&mut root, SLOT_THUMB)
+            .unwrap()
+            .style
+            .shadow_blur;
+        assert!(leaving < middle && leaving > THUMB_SHADOW_REST.1);
+    }
+
+    #[test]
+    fn vertical_shadow_damage_is_scroll_adjusted_and_keyed() {
+        let mut root: Element = slider("vertical-damage").orientation("vertical").into();
+        root.layout_bounds = [80.0, 500.0, 20.0, 128.0];
+        root.paint_scroll_acc = [0.0, 400.0];
+        crate::app::damage::clear_frame_paint_nodes();
+        push_slider_thumb_paint_damage(&root);
+        let damage = crate::app::damage::take_frame_paint_nodes();
+        assert_eq!(damage.len(), 1);
+        assert_eq!(damage[0].key, crate::app::damage::paint_element_key(&root));
+        assert_eq!(damage[0].bounds, [72.0, 92.0, 36.0, 144.0]);
+        root.paint_overlay_stamp = Some(71);
+        push_slider_thumb_paint_damage(&root);
+        let damage = crate::app::damage::take_frame_paint_nodes();
+        assert_eq!(damage[0].key, 71);
+        assert_eq!(damage[0].kind, crate::app::damage::PaintDirtyKind::Overlay);
+    }
+
+    #[test]
+    fn dragging_slider_does_not_elevate_other_thumbs() {
+        clear_slider_drag_if_any();
+        let (_owner, mut root) = crate::core::reactivity::create_root(|| {
+            Element::new()
+                .child(Element::from(slider("drag-source")))
+                .child(Element::from(slider("drag-disabled").disabled(true)))
+                .child(Element::from(slider("drag-other")))
+        });
+        let mut layout = LayoutTree::new();
+        sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+        let mut event = PointerEvent::new(60.0, 10.0, winit::event::MouseButton::Left, 1);
+        event.phase = EventPhase::Target;
+        event.current_bounds = [0.0, 0.0, 120.0, 20.0];
+        root.children[0].on_mousedown.as_ref().unwrap().borrow_mut()(&event);
+        sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+        for _ in 0..3 {
+            crate::style::tick_animations(0.075);
+            sync_reactive_elements_subtree(&mut root, &mut layout, &mut LayoutStatus::Clean);
+        }
+        clear_slider_drag_if_any();
+        for sibling in &mut root.children[1..] {
+            let thumb = find_slot_deep_mut(sibling, SLOT_THUMB).unwrap();
+            assert_eq!(
+                thumb.style.shadow_blur, THUMB_SHADOW_REST.1,
+                "unrelated and disabled thumbs must stay at rest"
+            );
+        }
+    }
 
     fn has_slot(el: &Element, slot: &str) -> bool {
         crate::core::tree::any_in_tree(el, |n| {

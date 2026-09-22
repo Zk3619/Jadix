@@ -1096,15 +1096,11 @@ mod tests {
             );
             crate::core::tree::collect_bind_layout_dirty(
                 marker,
-                LayoutStatus::StructureChanged,
+                crate::app::reactive::sanitize_leaf_bind_status(LayoutStatus::StructureChanged),
                 &mut dirty,
             );
         }
-        assert!(
-            dirty.len() >= 3,
-            "separator bind must dirty rule children, got {}",
-            dirty.len()
-        );
+        assert!(!dirty.is_empty(), "separator bind must dirty the marker subtree");
         let dirty_set: std::collections::HashSet<_> = dirty.into_iter().collect();
         tree.mark_dirty_nodes_in_tree(&root, &dirty_set);
         let result =

@@ -709,6 +709,15 @@ pub fn apply_attachment_paint(
     let orientation_changed = prev_orientation != orientation;
 
     let mut taken = std::mem::take(el);
+    let identity = (
+        taken.template_id.clone(),
+        taken.focus_id.clone(),
+        taken.on_click.clone(),
+        taken.on_mousedown.clone(),
+        taken.on_mouseup.clone(),
+        taken.layout_node,
+        taken.layout_bounds,
+    );
     let kids = std::mem::take(&mut taken.children);
     let has_media = kids.iter().any(|k| slot_of(k) == Some(SLOT_MEDIA));
     let has_content = kids.iter().any(|k| slot_of(k) == Some(SLOT_CONTENT));
@@ -759,6 +768,13 @@ pub fn apply_attachment_paint(
     painted.set_attr(ATTR_STATE, state.as_str());
     painted.set_attr(ATTR_SIZE, size.as_str());
     painted.set_attr(ATTR_ORIENTATION, orientation.as_str());
+    painted.template_id = identity.0;
+    painted.focus_id = identity.1;
+    painted.on_click = identity.2;
+    painted.on_mousedown = identity.3;
+    painted.on_mouseup = identity.4;
+    painted.layout_node = identity.5;
+    painted.layout_bounds = identity.6;
     *el = painted;
 
     if let Some(_tone) = state.semantic_tone() {
@@ -1676,6 +1692,24 @@ mod tests {
             AttachmentMediaVariant::from("image"),
             AttachmentMediaVariant::Image
         );
+    }
+
+    #[test]
+    fn bound_state_keeps_mounted_identity_and_geometry() {
+        let mut el: Element = attachment().state("done").into();
+        el.template_id = Some("live-attachment".into());
+        el = el.w("100%");
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        tree.build_and_layout(&mut el, 400.0, 100.0, [-1.0, -1.0]);
+        let node = el.layout_node;
+        let bounds = el.layout_bounds;
+        for state in ["success", "warning", "done"] {
+            assert_ne!(apply_bound_attachment_state(&mut el, state), LayoutStatus::Clean);
+            assert_eq!(el.template_id.as_deref(), Some("live-attachment"));
+            assert_eq!(el.layout_node, node);
+            assert_eq!(el.layout_bounds, bounds);
+            assert_eq!(attachment_state_from_attrs(&el.attrs), AttachmentState::from(state));
+        }
     }
 
     #[test]

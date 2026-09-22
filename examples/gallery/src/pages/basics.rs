@@ -1220,7 +1220,7 @@ pub(crate) fn AttachmentShowcase() -> rui::core::tree::Element {
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "Dual style + semantic states (info/success/warning/destructive; error≡destructive) via semantic_chrome — same tone keys as Alert. Uploading/processing use loader-circle + animate-spin (1g). state bind repaints root + slots."
                 </Label>
-                <AttachmentGroup>
+                <AttachmentGroup w="100%" wrap="wrap" class="max-w-full" items="start">
                     <Attachment state="done" size="default" orientation="horizontal">
                         <AttachmentMedia variant="icon">
                             <Icon name="file-text" size="0.875rem" color="foreground" />
@@ -1305,30 +1305,30 @@ pub(crate) fn AttachmentShowcase() -> rui::core::tree::Element {
                             <Image texture="demo-checker" />
                         </AttachmentMedia>
                     </Attachment>
-                    <Attachment state={ att_state_live.get() } size="default" orientation="horizontal">
-                        <AttachmentMedia variant="icon">
-                            <Icon
-                                name={ if matches!(att_state_live.get().as_str(), "uploading" | "processing") {
-                                    "loader-circle".to_string()
-                                } else if att_state_live.get() == "destructive" {
-                                    "file-warning".to_string()
-                                } else {
-                                    "settings".to_string()
-                                } }
-                                size="0.875rem"
-                                class={ if matches!(att_state_live.get().as_str(), "uploading" | "processing") {
-                                    "animate-spin".to_string()
-                                } else {
-                                    String::new()
-                                } }
-                            />
-                        </AttachmentMedia>
-                        <AttachmentContent>
-                            <AttachmentTitle>{ format!("Reactive state: {}", att_state_live.get()) }</AttachmentTitle>
-                            <AttachmentDescription>"state={signal.get()} repaints border, media tint, title pulse."</AttachmentDescription>
-                        </AttachmentContent>
-                    </Attachment>
                 </AttachmentGroup>
+                <Attachment state={ att_state_live.get() } size="default" orientation="horizontal" w="100%" class="max-w-full" min_w="0">
+                    <AttachmentMedia variant="icon">
+                        <Icon
+                            name={ if matches!(att_state_live.get().as_str(), "uploading" | "processing") {
+                                "loader-circle".to_string()
+                            } else if att_state_live.get() == "destructive" {
+                                "file-warning".to_string()
+                            } else {
+                                "settings".to_string()
+                            } }
+                            size="0.875rem"
+                            class={ if matches!(att_state_live.get().as_str(), "uploading" | "processing") {
+                                "animate-spin".to_string()
+                            } else {
+                                String::new()
+                            } }
+                        />
+                    </AttachmentMedia>
+                    <AttachmentContent>
+                        <AttachmentTitle>{ format!("Reactive state: {}", att_state_live.get()) }</AttachmentTitle>
+                        <AttachmentDescription>"state={signal.get()} repaints border, media tint, title pulse."</AttachmentDescription>
+                    </AttachmentContent>
+                </Attachment>
                 <HStack w="100%" gap="0.5rem" wrap="wrap">
                     <Button size="sm" variant="outline" on_click={move || att_state_btn.set("idle".into())}>"idle"</Button>
                     <Button size="sm" variant="outline" on_click={move || att_state_btn.set("uploading".into())}>"uploading"</Button>

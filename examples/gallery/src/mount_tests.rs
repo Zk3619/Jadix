@@ -2412,23 +2412,41 @@ fn attachment_live_state_chip_is_not_clipped_by_group() {
                     AttachmentShowcase(AttachmentShowcaseProps::default())
                 });
                 let mut layout = rui::core::tree::LayoutTree::new();
-                let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
-                let group = gallery_find_slot(&tree, "attachment-group").expect("AttachmentGroup");
-                assert!(
-                    !gallery_subtree_has_text(group, "Reactive state:"),
-                    "live state chip must not live inside the overflow-x group"
-                );
-                let live = gallery_find_slot_with_text(&tree, "attachment", "Reactive state:")
-                    .expect("live Reactive state chip");
-                let b = live.layout_bounds;
-                assert!(
-                    b[2] > 80.0 && b[3] > 24.0,
-                    "live chip must have a real used box, got {b:?}"
-                );
-                assert!(
-                    b[0] >= 0.0 && b[0] + b[2] <= 720.0 + 1.0,
-                    "live chip must stay inside the card, not past the overflow clip; bounds={b:?}"
-                );
+                for width in [360.0, 720.0, 1100.0] {
+                    let _ = layout.build_and_layout(&mut tree, width, 1600.0, [0.0, 0.0]);
+                    let group =
+                        gallery_find_slot(&tree, "attachment-group").expect("AttachmentGroup");
+                    let first_y = group.children.first().unwrap().layout_bounds[1];
+                    assert!(
+                        group
+                            .children
+                            .iter()
+                            .any(|child| child.layout_bounds[1] > first_y + 1.0),
+                        "attachments must wrap at {width}px"
+                    );
+                    for child in &group.children {
+                        let bounds = child.layout_bounds;
+                        assert!(
+                            bounds[0] >= 0.0 && bounds[0] + bounds[2] <= width + 1.0,
+                            "attachment overflows {width}px: {bounds:?}"
+                        );
+                    }
+                    assert!(
+                        !gallery_subtree_has_text(group, "Reactive state:"),
+                        "live state chip must not live inside the overflow-x group"
+                    );
+                    let live = gallery_find_slot_with_text(&tree, "attachment", "Reactive state:")
+                        .expect("live Reactive state chip");
+                    let b = live.layout_bounds;
+                    assert!(
+                        b[2] > 80.0 && b[3] > 24.0,
+                        "live chip must have a real used box, got {b:?}"
+                    );
+                    assert!(
+                        b[0] >= 0.0 && b[0] + b[2] <= width + 1.0,
+                        "live chip must stay inside the card, not past the overflow clip; bounds={b:?}"
+                    );
+                }
             });
         });
         rui::app::reactive::reset_registered_anchors();
