@@ -1305,6 +1305,32 @@ mod tests {
                 .filter(|d| d.kind == PaintDirtyKind::Overlay)
                 .map(|d| d.key)
                 .collect();
+            // Exercise paint-only Fade frames with retained sibling caches enabled.
+            tree.set_collect_skip_allowed(true);
+            crate::style::utility::set_frame_dt(0.016);
+            for frame in 0..24 {
+                let _ = flush_floating_motion_subtree(&mut root);
+                let _ = tick_hoisted_floating_css(&mut root);
+                let painted = tree.collect_animation_frame(&mut root, [0.0, 0.0], false);
+                let opacity = find_hoisted_panel(&root).unwrap().style.opacity;
+                let sv = painted
+                    .textured_draws
+                    .iter()
+                    .find(|draw| draw.texture_key.starts_with("rui_cp_sv:gal-color:"))
+                    .expect("SV texture must be collected during Fade");
+                assert!(
+                    (sv.opacity - opacity).abs() < 0.001,
+                    "SV opacity lagged behind panel at frame {frame}: {} vs {opacity}",
+                    sv.opacity
+                );
+                if frame == 23 {
+                    assert!(
+                        sv.opacity > 0.999,
+                        "SV must not retain a translucent Fade sample"
+                    );
+                }
+            }
+            crate::style::utility::set_frame_dt(0.0);
             assert!(
                 has_any,
                 "clicking #3b82f6 trigger must hoist ColorPicker portal; overlay_start={overlay_start} inst={inst_len} overlay_depth={}",
@@ -1613,6 +1639,15 @@ mod tests {
     /// keep painting below that clip (leftover ink over the swatch grid).
     #[test]
     fn nested_format_select_exit_clips_labels_to_accordion() {
+        check_nested_format_select_exit(false);
+    }
+
+    #[test]
+    fn nested_format_select_upward_exit_keeps_bottom_anchored() {
+        check_nested_format_select_exit(true);
+    }
+
+    fn check_nested_format_select_exit(upward: bool) {
         use std::cell::RefCell;
         use std::rc::Rc;
 
@@ -1644,7 +1679,10 @@ mod tests {
             let live_e = Rc::clone(&live);
             create_effect(move || {
                 let picker: Element = color_picker("gal-color").default_value("#3b82f6").into();
-                *live_e.borrow_mut() = Element::new().w(800.0).h(600.0).child(picker);
+                *live_e.borrow_mut() = Element::new()
+                    .w(800.0)
+                    .h(if upward { 360.0 } else { 600.0 })
+                    .child(picker);
             });
         });
         drain_deferred_view_remounts();
@@ -1679,14 +1717,15 @@ mod tests {
             el.children.iter_mut().find_map(find_fmt_panel_mut)
         }
         fn present_pass(root: &mut Element) -> crate::layout::layout_tree::RenderResult {
+            let height = crate::layout::dim_length_px(root.style.size.height).unwrap();
             let _ = hoist_portal_subtrees(root);
             let mut tree = LayoutTree::new();
-            let mut out = tree.build_and_layout(root, 800.0, 600.0, [0.0, 0.0]);
-            if sync_floating_placement(root, 800.0, 600.0) {
+            let mut out = tree.build_and_layout(root, 800.0, height, [0.0, 0.0]);
+            if sync_floating_placement(root, 800.0, height) {
                 out = tree.build_and_layout_fast_ex(
                     root,
                     800.0,
-                    600.0,
+                    height,
                     [0.0, 0.0],
                     false,
                     false,
@@ -1701,7 +1740,7 @@ mod tests {
                 out = tree.build_and_layout_fast_ex(
                     root,
                     800.0,
-                    600.0,
+                    height,
                     [0.0, 0.0],
                     false,
                     false,
@@ -1753,6 +1792,16 @@ mod tests {
             );
         }
 
+        let before_exit = find_fmt_panel(&live.borrow()).unwrap().layout_bounds;
+        if upward {
+            assert!(
+                find_fmt_panel(&live.borrow())
+                    .unwrap()
+                    .attrs
+                    .contains_key(crate::utils::popup::ATTR_FLOATING_ANCHOR_EDGE_Y),
+                "fixture must open upward: {before_exit:?}"
+            );
+        }
         arm_underlay_close();
         assert!(
             try_dismiss_outside_press(),
@@ -1763,7 +1812,25 @@ mod tests {
         let (out, clip_bottom, dump) = {
             let mut root = live.borrow_mut();
             let _ = present_pass(&mut root);
-            {
+            if upward {
+                let mut previous = before_exit;
+                for frame in 0..10 {
+                    let b = find_fmt_panel(&root).unwrap().layout_bounds;
+                    assert!(
+                        (b[1] + b[3] - before_exit[1] - before_exit[3]).abs() < 1.0,
+                        "exit bottom jumped frame={frame}: before={before_exit:?} now={b:?}"
+                    );
+                    assert!(
+                        b[1] >= previous[1] - 0.5 && b[3] <= previous[3] + 0.5,
+                        "exit reversed frame={frame}: previous={previous:?} now={b:?}"
+                    );
+                    previous = b;
+                    crate::style::utility::set_frame_dt(0.016);
+                    let _ = present_pass(&mut root);
+                }
+                crate::style::utility::set_frame_dt(0.0);
+            }
+            if !upward {
                 let panel = find_fmt_panel_mut(&mut root).expect("format menu after dismiss");
                 for _ in 0..10 {
                     let _ = panel.tick_css_animations(0.016);
@@ -1822,7 +1889,9 @@ mod tests {
         let labels = ["HEX", "HEX8", "RGB", "RGBA", "HSL", "HSLA"];
         let mut saw_format = false;
         for t in &out.text_nodes {
-            if !labels.iter().any(|l| t.text == *l) {
+            if t.template_id.as_deref() == Some("gal-color:fmt:value")
+                || !labels.iter().any(|l| t.text == *l)
+            {
                 continue;
             }
             saw_format = true;

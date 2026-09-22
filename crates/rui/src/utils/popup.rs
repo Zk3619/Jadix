@@ -155,6 +155,8 @@ pub(crate) const ATTR_FLOATING_CONTENT_H: &str = "rui_floating_content_h";
 pub(crate) const ATTR_FLOATING_EXPAND_MEASURE: &str = "rui_floating_expand_measure";
 /// Trigger-facing edge y when the panel is placed above; accordion `top` tracks visual height from this.
 pub(crate) const ATTR_FLOATING_ANCHOR_EDGE_Y: &str = "rui_floating_anchor_edge_y";
+/// Presence is exiting, including the rebuild before exit keyframes are seeded.
+pub(crate) const ATTR_FLOATING_EXITING: &str = "rui_floating_exiting";
 /// Expand enter/exit baseline height (logical px). When set, accordion clips from this height
 /// instead of 0 so covered triggers (e.g. bubble reaction bar) continue downward/upward.
 /// Exit lands on this height (the in-flow pill), then the portal hides — not accordion-up to 0.
@@ -545,7 +547,8 @@ fn skip_placement_max_h(el: &Element) -> bool {
     // tree before MEASURE / keyframes). Writing viewport cap here is a 1-frame
     // fullscreen flash of the muted chrome. Raising a max-height that is still
     // shorter than CONTENT_H unclips that silhouette (enter from 0 / mid-exit).
-    height_keyframe_animation_active(el)
+    el.attrs.contains_key(ATTR_FLOATING_EXITING)
+        || height_keyframe_animation_active(el)
         || expand_measure_pending(el)
         || expand_from_h_set(el)
         || accordion_clip_shorter_than_content(el)
@@ -956,6 +959,15 @@ fn apply_floating_menus(
         return;
     };
 
+    // Exit owns its committed placement. A shrinking panel must never be flipped
+    // or assigned a different viewport cap, even before keyframes are seeded.
+    if el.attrs.contains_key(ATTR_FLOATING_EXITING) {
+        for c in &mut el.children {
+            apply_floating_menus(c, triggers, viewport, changed);
+        }
+        return;
+    }
+
     // Title-bar drag writes left/top as paint chrome. Re-running cursor placement
     // would remount-fight and flip/clamp the grab point away from the pointer.
     if crate::utils::anchored_overlay::floating_panel_drag_id().as_deref() == Some(id.as_str()) {
@@ -1130,8 +1142,12 @@ fn apply_floating_menus(
             // misread as `ty - gap`.
             let skip_reverse_glue = strategy_fixed && gap < 0.0;
             if !skip_reverse_glue {
-                let existing_edge = reverse_expand_edge_y(el);
                 let animating_h = height_keyframe_animation_active(el);
+                // A committed edge is only meaningful while the accordion is
+                // animating. Once the exit has settled, recompute it from the
+                // current trigger; otherwise a moved/rebuilt color-picker menu
+                // reuses the previous open's edge and shifts every later open.
+                let existing_edge = animating_h.then(|| reverse_expand_edge_y(el)).flatten();
                 let placed_above = existing_edge.is_some() || y + 0.5 < tb[1];
                 if placed_above {
                     let edge = existing_edge
@@ -1141,6 +1157,14 @@ fn apply_floating_menus(
                     // uses estimate.min(space_above); a stretched wrapper / viewport remainder
                     // slams `top` to the window margin (calendar month list floating over forms).
                     let mut visual_h = reverse_glue_visual_h(el, estimate_h, animating_h);
+                    // During exit, preserve the committed top edge and shrink toward
+                    // the trigger. Recomputing from the full content estimate causes
+                    // a downward jump followed by an upward collapse.
+                    if !expand_enter_animation_active(el) && height_keyframe_animation_active(el) {
+                        if let Some(top) = inset_length(el.style.inset.top) {
+                            visual_h = (edge - top).max(0.0);
+                        }
+                    }
                     // Idle Expand may write the place cap (16rem) onto max-height / CONTENT_H
                     // while the list is shorter. Exit must not grow past the already-glued
                     // silhouette — that slams `top` upward before accordion-up shrinks it.
@@ -1718,6 +1742,7 @@ mod tests {
         panel.set_attr(ATTR_FLOATING_MAX_H, "16rem");
         panel.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, "492");
         // Idle Expand writes the place cap onto max-height; that is a cap, not paint.
+        panel.set_attr(ATTR_FLOATING_GAP, "8");
         panel.style.max_size.height = Dimension::length(256.0);
         panel.style.inset.top = Element::into_margin_auto(236.0);
         panel.layout_bounds = [20.0, 236.0, 80.0, 192.0];
@@ -1765,6 +1790,43 @@ mod tests {
         );
     }
 
+    #[test]
+    fn settled_above_menu_recomputes_edge_after_trigger_moves() {
+        use taffy::style::Dimension;
+
+        let mut trigger = Element::new().focus_id("stale-edge-trigger");
+        trigger.layout_bounds = [20.0, 320.0, 80.0, 28.0];
+
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "stale-edge-menu",
+            "stale-edge-trigger",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "1");
+        panel.set_attr(ATTR_FLOATING_CONTENT_H, "96");
+        panel.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, "492");
+        panel.style.max_size.height = Dimension::length(96.0);
+        panel.style.inset.top = Element::into_margin_auto(396.0);
+        panel.layout_bounds = [20.0, 396.0, 80.0, 96.0];
+
+        let mut root = Element::new().child(trigger).child(panel);
+        assert!(sync_floating_placement(&mut root, 800.0, 360.0));
+        let menu = &root.children[1];
+        let top = inset_length(menu.style.inset.top).expect("top");
+        assert!(
+            (top - 220.0).abs() < 1.0,
+            "settled menu must follow moved trigger, got {top}"
+        );
+        assert_eq!(
+            menu.attrs
+                .get(ATTR_FLOATING_ANCHOR_EDGE_Y)
+                .map(String::as_str),
+            Some("316")
+        );
+    }
+
     /// Item-pick rebuilds the panel and drops accordion-up for a frame. Using
     /// `CONTENT_H` as visual height would slam `top` to the fully-open y (jump up)
     /// before the next motion seed glues it back.
@@ -1787,6 +1849,7 @@ mod tests {
         panel.set_attr(ATTR_FLOATING_MAX_H, "16rem");
         panel.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, "492");
         // Mid-collapse clip; layout_bounds still the unconstrained list.
+        panel.set_attr(ATTR_FLOATING_EXITING, "1");
         panel.style.max_size.height = Dimension::length(80.0);
         panel.style.inset.top = Element::into_margin_auto(412.0);
         panel.layout_bounds = [20.0, 412.0, 80.0, 192.0];
@@ -2467,7 +2530,12 @@ mod tests {
         let mut trigger = Element::new().focus_id("t-rebuilt-top");
         trigger.layout_bounds = [80.0, 500.0, 100.0, 32.0];
         let mut panel = Element::new().absolute();
-        mark_floating(&mut panel, "rebuilt-top", "t-rebuilt-top", PopupPlacement::BottomStart);
+        mark_floating(
+            &mut panel,
+            "rebuilt-top",
+            "t-rebuilt-top",
+            PopupPlacement::BottomStart,
+        );
         panel.set_attr(ATTR_FLOATING_W, "100px");
         panel.layout_bounds = [0.0, 0.0, 100.0, 200.0];
         let mut root = Element::new().child(trigger).child(panel);
@@ -2475,13 +2543,27 @@ mod tests {
         let edge = reverse_expand_edge_y(&root.children[1]).unwrap();
 
         let mut fresh = Element::new().absolute();
-        mark_floating(&mut fresh, "rebuilt-top", "t-rebuilt-top", PopupPlacement::BottomStart);
+        mark_floating(
+            &mut fresh,
+            "rebuilt-top",
+            "t-rebuilt-top",
+            PopupPlacement::BottomStart,
+        );
         fresh.set_attr(ATTR_FLOATING_W, "100px");
         fresh.layout_bounds = [0.0, 0.0, 100.0, 24.0];
         apply_stored_floating_place(&mut fresh, "rebuilt-top");
+        fresh.set_attr(ATTR_FLOATING_EXITING, "1");
+        fresh.style.animations = vec![crate::style::keyframes_anim_entry(
+            "accordion-up",
+            200.0,
+            crate::style::TimingFunction::EaseIn,
+            crate::style::AnimationFillMode::Both,
+        )];
+        fresh.style.max_size.height = taffy::style::Dimension::length(24.0);
         assert_eq!(reverse_expand_edge_y(&fresh), Some(edge));
         root.children[1] = fresh;
         sync_floating_placement(&mut root, 800.0, 600.0);
+        clamp_animated_max_h_to_place(&mut root.children[1], "rebuilt-top");
         let top = inset_length(root.children[1].style.inset.top).unwrap();
         assert!((top + 24.0 - edge).abs() < 0.5, "top={top}, edge={edge}");
     }

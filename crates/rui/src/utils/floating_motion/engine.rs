@@ -28,8 +28,8 @@ use crate::utils::panel_presence::{
 };
 use crate::utils::popup::{
     clamp_animated_max_h_to_place, peek_floating_place_max_h, ATTR_FLOATING_CONTENT_H,
-    ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W,
-    ATTR_FLOATING_EXPAND_MEASURE,
+    ATTR_FLOATING_EXITING, ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_EXPAND_FROM_H,
+    ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_EXPAND_MEASURE,
 };
 use crate::utils::presence::PresencePhase;
 use taffy::style::{Dimension, FlexWrap, Overflow};
@@ -1220,6 +1220,11 @@ pub(crate) fn apply_floating_panel_motion(
     register_floating_presence_cell(&presence.cell);
     let tid = panel_tid(overlay_id);
     panel.template_id = Some(tid);
+    if matches!(phase, PresencePhase::Exiting) {
+        panel.set_attr(ATTR_FLOATING_EXITING, "1");
+    } else {
+        panel.attrs.remove(ATTR_FLOATING_EXITING);
+    }
     let needs_frame = {
         let mut c = presence.cell.borrow_mut();
         let needs_enter = c.needs_enter;
