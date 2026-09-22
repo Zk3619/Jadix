@@ -183,6 +183,21 @@ pub(crate) fn subtree_declares_portal(el: &Element) -> bool {
     })
 }
 
+pub(crate) fn subtree_is_portal_only(el: &Element) -> bool {
+    if el.attrs.get("rui_portal").map(String::as_str) == Some("1")
+        || el.attrs.contains_key(ATTR_PORTAL_SLOT)
+        || el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
+        || el.paint_overlay_stamp.is_some_and(|stamp| stamp != 0)
+    {
+        return true;
+    }
+    el.text.is_none()
+        && el.image_texture.is_none()
+        && el.style.bg_color[3] == 0.0
+        && (el.layout_bounds[2] <= 0.0 || el.layout_bounds[3] <= 0.0)
+        && el.children.iter().all(subtree_is_portal_only)
+}
+
 /// Union of laid-out hoisted overlay boxes (logical px `[x,y,w,h]`).
 ///
 /// Used as PartialLoad scissor when a popover/tooltip/menu joins or leaves the portal layer.

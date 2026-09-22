@@ -3514,8 +3514,11 @@ impl AppState {
             crate::core::tree::visual_paint_aabb(old_subtree, old_subtree.paint_scroll_acc);
 
         let mut dirty = Vec::new();
-        let portal_island = crate::layout::layout_tree::subtree_declares_portal(old_subtree)
+        let declares_portal = crate::layout::layout_tree::subtree_declares_portal(old_subtree)
             || crate::layout::layout_tree::subtree_declares_portal(&new_fragment);
+        let portal_island = declares_portal
+            && crate::layout::layout_tree::subtree_is_portal_only(old_subtree)
+            && crate::layout::layout_tree::subtree_is_portal_only(&new_fragment);
         let status = Self::reconcile_elements(&mut new_fragment, old_subtree, &mut dirty);
         self.pending_layout_dirty.extend(dirty);
         // Nested portals (Dropdown/Menubar SubContent) are born under already-hoisted
@@ -3550,14 +3553,17 @@ impl AppState {
                 );
             }
         }
-        if portal_island || portal_moves > 0 {
+        if declares_portal || portal_moves > 0 {
             // Bubble +N expand / popover hoist: Taffy still rebuilds the portal layer,
             // but GPU FullClear of the gallery is the fullscreen flash.
             self.portal_membership_dirty = true;
-        } else if matches!(
-            status,
-            LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
-        ) {
+        }
+        if !portal_island
+            && matches!(
+                status,
+                LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
+            )
+        {
             // Nested island (Tabs panel / MessageScroller Send): Region Clear
             // clip ∩ (prev ∪ now) — not a Node dest-reset, not the clip itself.
             // Gallery Forms Tabs share the page ScrollArea with 8b ToggleGroup;
@@ -3773,6 +3779,19 @@ impl AppState {
                 // Key by Taffy id so node-present dest-reset / glyph capture match
                 // even when the label has no SDF fill (gallery MouseEvent log).
                 super::damage::push_frame_paint_element(cursor, cursor.paint_scroll_acc);
+            }
+            if matches!(
+                frame_status,
+                crate::core::tree::LayoutStatus::LayoutChanged
+                    | crate::core::tree::LayoutStatus::StructureChanged
+            ) {
+                if super::damage::paint_kind_for_element(cursor)
+                    == super::damage::PaintDirtyKind::Overlay
+                {
+                    super::damage::push_frame_paint_element(cursor, cursor.paint_scroll_acc);
+                } else {
+                    self.page_geom_dirty = true;
+                }
             }
             (status, frame_status)
         };

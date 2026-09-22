@@ -4604,9 +4604,7 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                         push_subtree_layout_nodes(element, &mut collect.layout_dirty);
                         if in_portal {
                             collect.portal_layout_changed = true;
-                            crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
-                                element, before,
-                            ));
+                            crate::app::damage::push_frame_paint_element(element, scroll_acc);
                         } else if layout_is_local_display_toggle(
                             before_display,
                             element.style.display,
@@ -4614,10 +4612,17 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                             // `display: none` ↔ shown is a local panel (TabsContent,
                             // Collapsible hide). Page FullClear was the Gallery 8b
                             // ToggleGroup one-frame text flash — not a product slot.
-                            crate::app::damage::push_frame_paint_key(
-                                crate::app::damage::paint_element_key(element),
-                                estimate_geom_damage(element, before),
-                            );
+                            if element.style.position == taffy::style::Position::Absolute {
+                                crate::app::damage::push_frame_paint_key(
+                                    crate::app::damage::paint_element_key(element),
+                                    estimate_geom_damage(element, before),
+                                );
+                            } else {
+                                crate::app::damage::push_frame_region_paint(
+                                    crate::app::damage::paint_element_key(element),
+                                    clip_bounds.unwrap_or([0.0, 0.0, viewport_w, viewport_h]),
+                                );
+                            }
                         } else {
                             collect.page_layout_changed = true;
                         }
@@ -4629,7 +4634,8 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                         // island-local: do not mark page geometry or the sidebar Footer is
                         // on the FullClear present path.
                         let portalish = in_portal
-                            || crate::layout::layout_tree::subtree_declares_portal(element);
+                            || (crate::layout::layout_tree::subtree_declares_portal(element)
+                                && crate::layout::layout_tree::subtree_is_portal_only(element));
                         if portalish {
                             collect.portal_layout_changed = true;
                             crate::app::damage::push_frame_paint_damage(estimate_geom_damage(

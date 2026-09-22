@@ -988,7 +988,6 @@ fn sync_display(el: &mut Element, layout_tree: &mut LayoutTree, show: bool) -> L
     if el.layout_node.is_some() {
         layout_tree.update_taffy_node_style(el);
     }
-    crate::app::damage::push_frame_paint_damage(el.layout_bounds);
     LayoutStatus::LayoutChanged
 }
 

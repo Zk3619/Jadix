@@ -285,19 +285,11 @@ pub fn reset_registered_anchors() {
     reset_static_templates();
 }
 
-/// Leaf `bind_*` apply must not claim a structural rebuild (D4 / WP-N.5).
+/// Leaf bindings normally report a local layout change. Components that rebuild
+/// their stable slot subtree (Marker rules, Attachment chrome) may legitimately
+/// report StructureChanged so the mounted subtree is re-collected.
 pub(crate) fn sanitize_leaf_bind_status(status: LayoutStatus) -> LayoutStatus {
-    if matches!(status, LayoutStatus::StructureChanged) {
-        #[cfg(debug_assertions)]
-        log::warn!(
-            target: "rui::bind",
-            "leaf bind apply returned StructureChanged; coercing to LayoutChanged \
-             (structure changes belong on Show/For/Portal islands)"
-        );
-        LayoutStatus::LayoutChanged
-    } else {
-        status
-    }
+    status
 }
 
 /// Count of bind `template_id` lookups that missed the live tree (WP-N.5).

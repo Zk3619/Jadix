@@ -1106,6 +1106,74 @@ fn reactive_structure_invalidates_idle_ancestor_cache() {
 }
 
 #[test]
+fn page_with_portal_descendant_is_not_an_overlay_only_island() {
+    let mut portal = Element::new();
+    portal.set_attr("rui_portal", "1");
+    let mut page = Element::new()
+        .child(Element::new().text("Forms"))
+        .child(portal);
+    page.layout_bounds = [200.0, 60.0, 700.0, 800.0];
+    assert!(crate::layout::layout_tree::subtree_declares_portal(&page));
+    assert!(!crate::layout::layout_tree::subtree_is_portal_only(&page));
+    assert!(crate::layout::layout_tree::subtree_is_portal_only(
+        &Element::new().child(page.children.pop().unwrap())
+    ));
+}
+
+#[test]
+fn hiding_flow_content_invalidates_moved_siblings() {
+    crate::app::damage::clear_frame_paint_nodes();
+    let child = Element::new().reactive_sync(|element, _| {
+        element.style.display = taffy::style::Display::None;
+        LayoutStatus::LayoutChanged
+    });
+    let mut root = Element::new()
+        .child(child)
+        .child(Element::new().text("Footer"));
+    root.layout_bounds = [0.0, 0.0, 300.0, 300.0];
+    root.children[0].layout_bounds = [0.0, 0.0, 300.0, 200.0];
+    let mut collect = crate::core::tree::ReactiveSyncCollect::default();
+    crate::core::tree::sync_reactive_elements_subtree_ex(
+        &mut root,
+        &mut LayoutTree::new(),
+        &mut LayoutStatus::Clean,
+        300.0,
+        300.0,
+        [0.0; 2],
+        false,
+        &mut collect,
+    );
+    let damage = crate::app::damage::take_frame_paint_nodes();
+    assert!(damage.iter().any(|dirty| dirty.bounds == [0.0, 0.0, 300.0, 300.0]),
+        "the footer's old position also needs erasing");
+}
+
+#[test]
+fn overlay_knob_layout_damage_keeps_overlay_identity() {
+    let mut knob_area = Element::new().reactive_sync(|_, _| LayoutStatus::LayoutChanged);
+    knob_area.layout_bounds = [40.0, 50.0, 192.0, 144.0];
+    knob_area.paint_overlay_stamp = Some(73);
+    crate::app::damage::clear_frame_paint_nodes();
+    let mut collect = crate::core::tree::ReactiveSyncCollect::default();
+    crate::core::tree::sync_reactive_elements_subtree_ex(
+        &mut knob_area,
+        &mut LayoutTree::new(),
+        &mut LayoutStatus::Clean,
+        400.0,
+        300.0,
+        [0.0; 2],
+        true,
+        &mut collect,
+    );
+    let damage = crate::app::damage::take_frame_paint_nodes();
+    assert!(collect.portal_layout_changed);
+    assert!(!collect.page_layout_changed);
+    assert_eq!(damage.len(), 1);
+    assert_eq!(damage[0].key, 73);
+    assert_eq!(damage[0].kind, crate::app::damage::PaintDirtyKind::Overlay);
+}
+
+#[test]
 fn scrolled_structure_damage_uses_visual_clip_bounds() {
     let child = Element::new().reactive_sync(|el, _| {
         el.children.push(Element::new().text("updated"));
