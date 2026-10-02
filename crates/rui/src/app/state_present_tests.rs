@@ -5,6 +5,50 @@ use crate::renderer::offscreen::{OffscreenGpu, images_match, readback_texture};
 
 #[test]
 #[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+fn fractional_overlay_restore_repaints_rounded_scissor_edge() {
+    let gpu = OffscreenGpu::new().expect("GPU adapter");
+    let pipeline = RuiPipeline::from_format(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb, 80, 80);
+    pipeline.update_resolution(&gpu.queue, 80, 80);
+    let mut root = Element::new().w(80.0).h(80.0).child(
+        Element::new().absolute().left(10.0).top(55.3).w(60.0).h(20.0).bg([0.0, 0.6, 0.0, 1.0]),
+    );
+    let mut scene = LayoutTree::new().build_and_layout(&mut root, 80.0, 80.0, [-1.0, -1.0]);
+    for instance in &mut scene.instances {
+        instance.clip_pos = [10.0, 55.3];
+        instance.clip_size = [60.0, 20.0];
+    }
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("fractional overlay restore"),
+        size: wgpu::Extent3d { width: 80, height: 80, depth_or_array_layers: 1 },
+        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let hole = [10.0, 50.0, 60.0, 5.2];
+    let (x, y, w, h) = damage_to_scissor_physical(hole, 0.0, 1.0, 80, 80).unwrap();
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view, depth_slice: None, resolve_target: None,
+                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
+            })], ..Default::default()
+        });
+        draw_cpu_sdf_instances(&mut pass, &pipeline, &gpu.device, pipeline.dummy_backdrop(), &scene.instances);
+        pass.set_scissor_rect(x, y, w, h);
+        let cull_rect = node_present_repair_cull_rect((x, y, w, h));
+        draw_scissor_fill(&mut pass, &pipeline, &gpu.device, cull_rect, wgpu::Color::WHITE);
+        draw_sdf_range_with_clip(&mut pass, &pipeline, &gpu.device, pipeline.dummy_backdrop(), &scene.instances, &[], 0, scene.instances.len() as u32, Some(CullRects::one(cull_rect)));
+    }
+    let partial = readback_texture(&gpu.device, &gpu.queue, &texture, 80, 80, encoder).unwrap();
+    let full = gpu.render_instances_readback(80, 80, wgpu::Color::WHITE, &scene.instances).unwrap();
+    assert!(images_match(&partial, &full, 2), "overlay restore left a white horizontal edge: partial={:?}, full={:?}", partial.pixel(40, 55), full.pixel(40, 55));
+}
+
+#[test]
+#[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
 fn finalized_scroll_pin_clear_cannot_touch_header() {
     let gpu = OffscreenGpu::new().expect("GPU adapter");
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
@@ -123,7 +167,7 @@ fn culled_latest_repair_must_preserve_header_pixels() {
         let mut tree = LayoutTree::new();
         let _ = tree.build_and_layout(&mut root, 320.0, 200.0, [-1.0, -1.0]);
         let key = paint_element_key(&root.children[1].children[0]);
-        let mut dirties = [PaintDirty {
+        let mut dirties = vec![PaintDirty {
             key,
             bounds: [120.0, 28.0, 80.0, 60.0],
             kind: PaintDirtyKind::Node,
@@ -207,7 +251,7 @@ fn latest_fade_over_wrapping_text_matches_full_composite() {
             taffy::style::LengthPercentageAuto::length(40.0 + (1.0 - alpha) * 8.0);
         let scene = tree.build_and_layout(&mut root, 320.0, 200.0, [-1.0, -1.0]);
         let key = paint_element_key(&root.children[1]);
-        let mut dirty = [PaintDirty {
+        let mut dirty = vec![PaintDirty {
             key,
             bounds: root.children[1].layout_bounds,
             kind: PaintDirtyKind::Node,
@@ -694,7 +738,7 @@ fn check_partial_pixels(gpu: &OffscreenGpu, background: bool, portal: bool) {
             tree.build_and_layout_fast(&mut root, W as f32, H as f32, [-1.0, -1.0], false, false);
         let key = paint_element_key(&root.children[0]);
         let bounds = root.children[0].layout_bounds;
-        let mut dirty = [PaintDirty {
+        let mut dirty = vec![PaintDirty {
             key,
             bounds,
             kind: PaintDirtyKind::Node,

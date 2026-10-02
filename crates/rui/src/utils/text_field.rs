@@ -348,7 +348,82 @@ pub fn text_edit_content_height_px_wrap(
     est.content_height.max(lh + ink)
 }
 
+/// 汉字（表意文字）。选区/光标按这块墨水上下留白，不按拉丁行盒。
+pub(crate) fn is_cjk_ideograph(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x2E80..=0x2EFF
+            | 0x2F00..=0x2FDF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x20000..=0x2A6DF
+            | 0x2A700..=0x2B73F
+            | 0x2B740..=0x2B81F
+            | 0x2B820..=0x2CEAF
+            | 0x2CEB0..=0x2EBEF
+            | 0x30000..=0x3134F
+    )
+}
+
+pub(crate) fn text_contains_cjk_ideograph(s: &str) -> bool {
+    s.chars().any(is_cjk_ideograph)
+}
+
+pub(crate) fn caret_touches_cjk_ideograph(text: &str, byte_ix: usize) -> bool {
+    let ix = text.floor_char_boundary(byte_ix.min(text.len()));
+    let prev = text[..ix].chars().next_back();
+    let next = text[ix..].chars().next();
+    prev.is_some_and(is_cjk_ideograph) || next.is_some_and(is_cjk_ideograph)
+}
+
+/// 在行盒内放一条选区/光标，使表意文字墨水上下留白相等，且不越出本行。
+///
+/// `ascent_em` / `descent_em` 与 cosmic 相同（相对基线、正值）。
+/// `ink_above_em` / `ink_below_em` 是字形边界，不是 hhea 盒子。
+pub(crate) fn chrome_band_around_ink(
+    line_height_px: f32,
+    font_size_px: f32,
+    ascent_em: f32,
+    descent_em: f32,
+    ink_above_em: f32,
+    ink_below_em: f32,
+) -> (f32, f32) {
+    let lh = line_height_px.max(1.0);
+    let fs = font_size_px.max(1.0);
+    let metrics_h = (ascent_em + descent_em) * fs;
+    let baseline = (lh - metrics_h) * 0.5 + ascent_em * fs;
+    let ink_top = baseline - ink_above_em * fs;
+    let ink_bot = baseline + ink_below_em * fs;
+    let gap_above = ink_top;
+    let gap_below = lh - ink_bot;
+    let pad = gap_above.min(gap_below);
+    if !pad.is_finite() || pad < 0.0 || ink_bot <= ink_top {
+        return (0.0, lh);
+    }
+    let y = (ink_top - pad).clamp(0.0, lh - 1.0);
+    let h = ((ink_bot - ink_top) + pad * 2.0).min(lh - y).max(1.0);
+    (y, h)
+}
+
+/// 当前 CJK 字体下，汉字选区/光标在行盒内的 `(dy, height)`。量不到字形时为 `None`。
+pub(crate) fn text_edit_cjk_chrome_band_px(
+    line_height_px: f32,
+    font_size_px: f32,
+) -> Option<(f32, f32)> {
+    let (ascent, descent, above, below) = crate::text::measure::ideograph_vertical_em()?;
+    Some(chrome_band_around_ink(
+        line_height_px,
+        font_size_px,
+        ascent,
+        descent,
+        above,
+        below,
+    ))
+}
+
 /// 光标高度：略高于行盒（+1px），行内居中；避免再抬到 lh+4 / 1.2×lh 显得顶满。
+/// 汉字旁的光标不用这条，见 [`text_edit_cjk_chrome_band_px`]。
 pub fn text_edit_caret_height_px(line_height_px: f32, font_size_px: f32) -> f32 {
     let lh = line_height_px.max(1.0);
     (lh + 1.0).max(font_size_px + 1.0).max(1.0)
@@ -552,6 +627,11 @@ pub fn input_preedit_signal_key(id: &str) -> String {
 }
 pub fn input_preedit_sel_signal_key(id: &str) -> String {
     format!("__rui_input_preedit_sel_{id}")
+}
+
+/// Preedit-local underline runs `(start, end, style)` from `GCS_COMPATTR`.
+pub fn input_preedit_marks_signal_key(id: &str) -> String {
+    format!("__rui_input_preedit_marks_{id}")
 }
 pub fn input_caret_signal_key(id: &str) -> String {
     format!("__rui_input_caret_{id}")
@@ -807,6 +887,7 @@ pub(crate) fn wipe_text_edit_named_slots(field_id: &str) {
         input_value_signal_key(field_id),
         input_preedit_signal_key(field_id),
         input_preedit_sel_signal_key(field_id),
+        input_preedit_marks_signal_key(field_id),
         input_caret_signal_key(field_id),
         input_selection_signal_key(field_id),
         input_extra_carets_signal_key(field_id),
@@ -967,6 +1048,57 @@ pub fn select_all_in_text_edit(focus_id: &str) -> bool {
 mod tests {
     use super::*;
     use crate::core::reactivity::create_root;
+
+    #[test]
+    fn cjk_chrome_band_pads_ideograph_equally() {
+        // Microsoft YaHei hhea + U+4E2D ink (font units / 2048).
+        let fs = 14.0_f32;
+        let lh = 21.0_f32;
+        let ascent = 2167.0 / 2048.0;
+        let descent = 536.0 / 2048.0;
+        let above = 1707.0 / 2048.0;
+        let below = 277.0 / 2048.0;
+        let (y, h) = chrome_band_around_ink(lh, fs, ascent, descent, above, below);
+        let baseline = (lh - (ascent + descent) * fs) * 0.5 + ascent * fs;
+        let ink_top = baseline - above * fs;
+        let ink_bot = baseline + below * fs;
+        let gap_above = ink_top - y;
+        let gap_below = (y + h) - ink_bot;
+        assert!(
+            (gap_above - gap_below).abs() < 0.05,
+            "gaps {gap_above} vs {gap_below} (y={y} h={h})"
+        );
+        assert!(y >= -0.01 && y + h <= lh + 0.01);
+        assert!(h < lh - 0.5, "band should trim the uneven side, h={h} lh={lh}");
+    }
+
+    #[test]
+    fn cjk_probe_band_is_symmetric_when_face_present() {
+        let Some((ascent, descent, above, below)) = crate::text::measure::ideograph_vertical_em()
+        else {
+            #[cfg(windows)]
+            if std::path::Path::new(r"C:\Windows\Fonts\msyh.ttc").is_file()
+                || std::path::Path::new(r"C:\Windows\Fonts\msyh.ttf").is_file()
+            {
+                panic!("YaHei is installed but U+4E2D ink was not measured");
+            }
+            return;
+        };
+        let fs = 14.0_f32;
+        let lh = 21.0_f32;
+        let (y, h) = chrome_band_around_ink(lh, fs, ascent, descent, above, below);
+        let baseline = (lh - (ascent + descent) * fs) * 0.5 + ascent * fs;
+        let ink_top = baseline - above * fs;
+        let ink_bot = baseline + below * fs;
+        let gap_above = ink_top - y;
+        let gap_below = (y + h) - ink_bot;
+        assert!(
+            (gap_above - gap_below).abs() < 0.05,
+            "probed gaps {gap_above} vs {gap_below} ascent={ascent} descent={descent} above={above} below={below}"
+        );
+        assert!(y >= -0.01 && y + h <= lh + 0.01);
+        assert!(h < lh - 0.5, "probed band should trim the line box, h={h}");
+    }
 
     #[test]
     fn focus_prefixes() {

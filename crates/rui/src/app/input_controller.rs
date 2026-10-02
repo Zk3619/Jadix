@@ -206,6 +206,8 @@ impl super::App {
                     return;
                 }
                 ime_active.set(true);
+                #[cfg(target_os = "windows")]
+                self.arm_windows_ime_subclass(window_id);
                 if ime_support::ime_diag_enabled() {
                     log::info!("RUI_IME_DIAG Enabled fid={}", fid);
                 }
@@ -241,6 +243,26 @@ impl super::App {
                 }
             }
             Ime::Preedit(s, cursor) => {
+                let (cursor_chars, attrs) = {
+                    #[cfg(target_os = "windows")]
+                    {
+                        crate::platform::windows::ime_composition_snap()
+                            .map(|snap| (Some(snap.cursor_chars), snap.attrs))
+                            .unwrap_or((None, Vec::new()))
+                    }
+                    #[cfg(not(target_os = "windows"))]
+                    {
+                        let _ = ();
+                        (None, Vec::new())
+                    }
+                };
+                let (cursor, marks) = ime_support::resolve_preedit_chrome(
+                    &s,
+                    cursor,
+                    ime_support::preedit_caret_unspecified(),
+                    cursor_chars,
+                    &attrs,
+                );
                 if let Some(rest) = text_edit_rest(&fid) {
                     let vk = crate::components::input::input_value_signal_key(rest);
                     let val_sig = crate::core::reactivity::use_signal(&vk, String::new);
@@ -303,6 +325,9 @@ impl super::App {
                     // 避免 Win 上 Preedit("") 紧接 Commit 时丢锚点。
                     pre.set(s.clone());
                     sel.set(cursor);
+                    let mk = crate::components::input::input_preedit_marks_signal_key(rest);
+                    crate::core::reactivity::use_signal(&mk, Vec::<(usize, usize, u8)>::new)
+                        .set(marks);
                     if !s.is_empty() {
                         text_sel.set(None);
                     }
@@ -397,6 +422,17 @@ impl super::App {
         self.request_ime_redraw(window_id);
     }
 
+    #[cfg(target_os = "windows")]
+    fn arm_windows_ime_subclass(&self, window_id: WindowId) {
+        if self.is_secondary_window(window_id) {
+            if let Some(sec) = self.secondaries.borrow().get(&window_id) {
+                crate::platform::windows::arm_ime_composition_watch(sec.window.as_ref());
+            }
+        } else if let Some(st) = (*self.state.borrow()).as_ref() {
+            crate::platform::windows::arm_ime_composition_watch(st.window.as_ref());
+        }
+    }
+
     fn refuse_ime_on_window(&mut self, window_id: WindowId) {
         if self.is_secondary_window(window_id) {
             if let Some(sec) = self.secondaries.borrow_mut().get_mut(&window_id) {
@@ -430,6 +466,8 @@ impl super::App {
         crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None).set(None);
         crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>).set(None);
         crate::core::reactivity::use_signal(&ak, || None::<usize>).set(None);
+        let mk = crate::components::input::input_preedit_marks_signal_key(rest);
+        crate::core::reactivity::use_signal(&mk, Vec::<(usize, usize, u8)>::new).set(Vec::new());
         ime_support::on_ime_composition_ended();
     }
 

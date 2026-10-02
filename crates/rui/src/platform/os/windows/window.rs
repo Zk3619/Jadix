@@ -5,7 +5,7 @@ use winit::window::{Window, WindowAttributes};
 use crate::app::{WindowBackdrop, WindowOptions};
 
 pub(crate) fn decorate_window_attributes(
-    mut attrs: WindowAttributes,
+    attrs: WindowAttributes,
     options: &WindowOptions,
     composition_swapchain: bool,
 ) -> WindowAttributes {

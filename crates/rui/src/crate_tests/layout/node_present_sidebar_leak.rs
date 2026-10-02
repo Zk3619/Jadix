@@ -21,6 +21,7 @@ use crate::app::draw_cull::{
 use crate::components::form::form_field;
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
 use crate::components::input_adornment::input_adornment;
+use crate::components::textarea::{textarea, textarea_focus_id};
 use crate::components::internal::text_edit::{
     push_focused_text_edit_caret_damage, sync_text_edit_paint_subtree_in_viewport,
 };
@@ -905,6 +906,324 @@ fn kbd_adornment_blur_must_not_flash_placeholder_or_kbd() {
         }
     }
     let _ = (leaf_key, shell_key);
+}
+
+fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+    if el.template_id.as_deref() == Some(tid) {
+        return Some(el);
+    }
+    el.children.iter().find_map(|c| find_tid(c, tid))
+}
+
+fn rect_has_point(r: [f32; 4], x: f32, y: f32) -> bool {
+    r[2] > 0.0
+        && r[3] > 0.0
+        && x >= r[0]
+        && y >= r[1]
+        && x < r[0] + r[2]
+        && y < r[1] + r[3]
+}
+
+/// Hard ring (spread ≥ 1, not inset). `shadow-xs` is blur 1 / spread 0 and stays.
+fn focus_ring_quads(result: &RenderResult) -> Vec<[f32; 4]> {
+    result
+        .instances
+        .iter()
+        .filter(|i| i.shadow_inset == 0.0 && i.shadow_color[3] > 0.2 && i.shadow_spread >= 1.0)
+        .map(instance_paint_bounds)
+        .filter(|b| b[2] > 1.0 && b[3] > 1.0)
+        .collect()
+}
+
+fn sync_adornment_frame(root: &mut Element, tree: &mut LayoutTree, impact: &mut LayoutStatus) {
+    sync_reactive_elements_subtree_ex(
+        root,
+        tree,
+        impact,
+        1280.0,
+        800.0,
+        [0.0, 0.0],
+        false,
+        &mut ReactiveSyncCollect::default(),
+    );
+    sync_focus_ring_subtree(root, tree, impact);
+    sync_class_variants_subtree(root, [0.0, 0.0], "", false, 1280.0, 800.0, tree, impact);
+    sync_text_edit_paint_subtree_in_viewport(root, tree, impact, 1280.0, 800.0, [0.0, 0.0]);
+}
+
+/// Gallery 2b: InputAdornment shell owns the Hard ring. Blur must erase the
+/// pixels that ring painted outside the border box. A content-hole dest-reset
+/// is the placeholder / addon flash, so the clear has to be the outset only.
+fn assert_adornment_blur_clears_ring(mut root: Element, focus: &str, shell_tid: &str) {
+    let mut tree = LayoutTree::new();
+    let mut impact;
+    let _ = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    use_signal("__rui_button_focus_id", String::new).set(focus.to_string());
+    impact = LayoutStatus::Clean;
+    sync_adornment_frame(&mut root, &mut tree, &mut impact);
+    let focused = tree.build_and_layout(&mut root, 1280.0, 800.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    let shell = find_tid(&root, shell_tid).unwrap_or_else(|| panic!("shell {shell_tid}"));
+    let shell_key = paint_element_key(shell);
+    let shell_paint = focused
+        .node_paints
+        .iter()
+        .find(|p| p.key == shell_key)
+        .unwrap_or_else(|| panic!("shell NodePaint {shell_tid}"));
+    let shell_box = {
+        let lo = shell_paint.instance.0.min(focused.instances.len());
+        let hi = shell_paint.instance.1.min(focused.instances.len());
+        focused.instances[lo..hi]
+            .iter()
+            .find(|i| i.shadow_spread >= 1.0)
+            .map(|i| [i.rect_pos[0], i.rect_pos[1], i.rect_size[0], i.rect_size[1]])
+            .unwrap_or_else(|| {
+                panic!(
+                    "{shell_tid} focused shell has no Hard ring\n spread={}",
+                    shell.style.shadow_spread
+                )
+            })
+    };
+    let rings = focus_ring_quads(&focused);
+    assert!(
+        !rings.is_empty(),
+        "{shell_tid} focused frame painted no Hard ring"
+    );
+    let samples: Vec<[f32; 2]> = rings
+        .iter()
+        .flat_map(|ring| {
+            let mid_x = ring[0] + ring[2] * 0.5;
+            let mid_y = ring[1] + ring[3] * 0.5;
+            [
+                [mid_x, ring[1] + 1.0],
+                [mid_x, ring[1] + ring[3] - 1.0],
+                [ring[0] + 1.0, mid_y],
+                [ring[0] + ring[2] - 1.0, mid_y],
+            ]
+        })
+        .filter(|p| !rect_has_point(shell_box, p[0], p[1]))
+        .collect();
+    assert!(
+        !samples.is_empty(),
+        "{shell_tid} ring quads do not extend outside the shell box\n box={} rings={}",
+        fmt_rect(shell_box),
+        rings
+            .iter()
+            .map(|r| fmt_rect(*r))
+            .collect::<Vec<_>>()
+            .join(" ")
+    );
+
+    use_signal("__rui_button_focus_id", String::new).set(String::new());
+    impact = LayoutStatus::Clean;
+    sync_adornment_frame(&mut root, &mut tree, &mut impact);
+    let shell = find_tid(&root, shell_tid).unwrap_or_else(|| panic!("shell {shell_tid}"));
+    assert!(
+        shell.style.shadow_spread.abs() <= 0.01,
+        "{shell_tid} blur must drop Hard spread (got {})",
+        shell.style.shadow_spread
+    );
+    let mut dirty = take_frame_paint_nodes();
+    // Blur is StyleChanged. The app takes the fast path and may skip-replay a
+    // cached quad; a full rebuild would hide that and drop the ring by accident.
+    tree.set_collect_skip_allowed(true);
+    let result =
+        tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [-1.0, -1.0], false, false);
+    let prev_slots = last_present_visual_slots(
+        &focused.node_paints,
+        &focused.instances,
+        &[],
+        &focused.text_nodes,
+        &focused.input_chrome_instances,
+    );
+    let now_slots = last_present_visual_slots(
+        &result.node_paints,
+        &result.instances,
+        &[],
+        &result.text_nodes,
+        &result.input_chrome_instances,
+    );
+    expand_paint_dirties_for_translated_slots(&mut dirty, &now_slots, &prev_slots);
+    crate::app::draw_cull::prepare_node_present_dirties(
+        &mut dirty,
+        &result.node_paints,
+        &prev_slots,
+        &result.instances,
+        &[],
+        &result.input_chrome_instances,
+        1.0,
+        None,
+    );
+
+    let still: Vec<String> = focus_ring_quads(&result)
+        .iter()
+        .map(|r| fmt_rect(*r))
+        .collect();
+    assert!(
+        still.is_empty(),
+        "{shell_tid} blur collect still paints a Hard ring: {still:?}"
+    );
+
+    let hole = [
+        shell_box[0] + shell_box[2] * 0.5,
+        shell_box[1] + shell_box[3] * 0.5,
+    ];
+    for d in &dirty {
+        if d.kind != PaintDirtyKind::Node {
+            continue;
+        }
+        let scissor = node_present_scissor_logical(
+            d.kind,
+            d.key,
+            d.bounds,
+            &prev_slots,
+            &result.node_paints,
+            NODE_SCISSOR_PAD,
+        );
+        assert!(
+            !rect_has_point(scissor, hole[0], hole[1]),
+            "{shell_tid} blur Node wipe covers the content hole (placeholder / addon flash)\n wipe={} hole={:?}",
+            fmt_rect(scissor),
+            hole
+        );
+    }
+
+    for sample in &samples {
+        let mut hit = false;
+        let mut notes = Vec::new();
+        for d in &dirty {
+            if d.kind == PaintDirtyKind::Overlay {
+                continue;
+            }
+            let scissor = node_present_scissor_logical(
+                d.kind,
+                d.key,
+                d.bounds,
+                &prev_slots,
+                &result.node_paints,
+                if d.kind == PaintDirtyKind::Node {
+                    NODE_SCISSOR_PAD
+                } else {
+                    0.0
+                },
+            );
+            let own = d.kind == PaintDirtyKind::Region
+                && crate::app::draw_cull::region_replays_own_chrome_only(
+                    d.key,
+                    d.bounds,
+                    &result.node_paints,
+                );
+            if rect_has_point(scissor, sample[0], sample[1]) && !own {
+                hit = true;
+                break;
+            }
+            notes.push(format!(
+                "{:?} key={} bounds={} scissor={} own_chrome={own}",
+                d.kind,
+                d.key,
+                fmt_rect(d.bounds),
+                fmt_rect(scissor)
+            ));
+        }
+        assert!(
+            hit,
+            "{shell_tid} blur leaves the focus ring at ({:.1},{:.1})\n box={} sample not in a clearing scissor\n{}",
+            sample[0],
+            sample[1],
+            fmt_rect(shell_box),
+            notes.join("\n")
+        );
+    }
+}
+
+#[test]
+fn adornment_blur_must_clear_the_input_focus_ring() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+    let _ = take_frame_paint_nodes();
+    const ID: &str = "ia-blur-in";
+    use_signal(&input_value_signal_key(ID), String::new).set(String::new());
+    // Collect reads the scroll: signal; the damage walk reads `scroll_offset`.
+    // A settled ScrollArea keeps both. Setting only the field puts the halo
+    // strips 40px off the painted ring.
+    use_signal(
+        &crate::core::scroll_viewport::scroll_offset_y_signal_key("ia-blur"),
+        || 0.0_f32,
+    )
+    .set(40.0);
+    let mut root = Element::new().w(520.0).h(360.0).overflow_y("scroll");
+    root.focus_id = Some("scroll:ia-blur".into());
+    root.scroll_offset = [0.0, 40.0];
+    root = root.children(vec![vstack()
+        .w("100%")
+        .gap("0.75rem")
+        .child(Element::new().h(100.0))
+        .child(
+            input_adornment()
+                .id("ia-shell-in")
+                .addon("inline-start", Element::new().text("https://"))
+                .child(input(ID).placeholder("example.com").plain_chrome(true))
+                .addon("inline-end", Element::new().text("go")),
+        )
+        // Gallery 2b stacks a textarea under the fields. Its scrollport is a
+        // large overflow clip below the input; the input's halo must still clear.
+        .child(
+            input_adornment()
+                .id("ia-shell-under")
+                .addon("block-start", Element::new().text("Message"))
+                .child(
+                    textarea("ia-blur-under")
+                        .placeholder("Ask")
+                        .rows(3)
+                        .resizable(false)
+                        .plain_chrome(true),
+                ),
+        )
+        .child(Element::new().h(400.0))
+        .into()]);
+    assert_adornment_blur_clears_ring(root, &focus_id_for_input(ID), "ia-shell-in");
+}
+
+#[test]
+fn adornment_blur_must_clear_the_textarea_focus_ring() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+    let _ = take_frame_paint_nodes();
+    const ID: &str = "ia-blur-ta";
+    use_signal(&input_value_signal_key(ID), String::new).set(String::new());
+    use_signal(
+        &crate::core::scroll_viewport::scroll_offset_y_signal_key("ia-blur-ta"),
+        || 0.0_f32,
+    )
+    .set(40.0);
+    let mut root = Element::new().w(520.0).h(360.0).overflow_y("scroll");
+    root.focus_id = Some("scroll:ia-blur-ta".into());
+    root.scroll_offset = [0.0, 40.0];
+    root = root.children(vec![vstack()
+        .w("100%")
+        .gap("0.75rem")
+        .child(Element::new().h(100.0))
+        .child(
+            input_adornment()
+                .id("ia-shell-ta")
+                .addon("block-start", Element::new().text("Message"))
+                .child(
+                    textarea(ID)
+                        .placeholder("Ask, Search or Chat…")
+                        .rows(3)
+                        .resizable(false)
+                        .plain_chrome(true),
+                )
+                .addon("block-end", Element::new().text("Send")),
+        )
+        .child(Element::new().h(400.0))
+        .into()]);
+    assert_adornment_blur_clears_ring(root, &textarea_focus_id(ID), "ia-shell-ta");
 }
 
 /// Caret blink dirties the I-beam. That dirty is a swapchain overlay — retain

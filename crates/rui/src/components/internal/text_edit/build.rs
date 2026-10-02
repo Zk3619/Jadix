@@ -5,7 +5,8 @@ use crate::components::input::{
     effective_invalid, input_adornment_button, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_number_dec_template_id, input_number_inc_template_id,
     input_number_step_button, input_number_steppers_column, input_overwrite_signal_key,
-    input_password_reveal_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key,
+    input_password_reveal_signal_key, input_preedit_marks_signal_key, input_preedit_sel_signal_key,
+    input_preedit_signal_key,
     input_reveal_template_id, input_selection_signal_key, input_text_template_id,
     input_type_signal_key, input_value_signal_key, map_byte_range_to_masked, resolve_placeholder,
     set_adornment_visible, InputType,
@@ -151,10 +152,12 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     };
 
     let extras = extra_carets_signal(&field_id).peek();
+    let preedit_marks = use_signal(&input_preedit_marks_signal_key(&field_id), Vec::<(usize, usize, u8)>::new).peek();
     let strings = compose_text_edit_strings(TextEditStringsInput {
         committed: &committed,
         preedit: &preedit,
         preedit_sel,
+        preedit_marks: &preedit_marks,
         ime_anchor,
         extras: &extras,
         committed_caret: caret_sig.peek(),
@@ -173,6 +176,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let extra_carets_draw = strings.extra_carets;
     let extra_selections_draw = strings.extra_selections;
     let extra_preedit_underlines = strings.extra_preedit_underlines;
+    let preedit_ul = strings.preedit_ul;
 
     let mut text_color = if show_placeholder {
         parse_text_color("muted-foreground")
@@ -368,6 +372,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             extra_carets: extra_carets_draw,
             extra_selections: extra_selections_draw,
             extra_preedit_underlines,
+            preedit_ul,
             drop_caret: false,
             caret_color: Some(caret_color),
             selection_foreground: Some(selection_foreground),

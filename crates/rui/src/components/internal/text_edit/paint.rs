@@ -4,7 +4,8 @@ use super::strings::{compose_text_edit_strings, TextEditStringsInput};
 use crate::components::input::{
     effective_invalid, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
-    input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id,
+    input_preedit_marks_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key,
+    input_reveal_template_id,
     input_selection_signal_key, input_text_template_id, input_value_signal_key,
     map_byte_index_to_masked, map_byte_range_to_masked, resolve_placeholder, set_adornment_visible,
     InputType,
@@ -169,10 +170,14 @@ fn sync_one_text_edit_paint(
     };
 
     let extras = extra_carets_signal(&desc.base_id).peek();
+    let preedit_marks =
+        use_signal(&input_preedit_marks_signal_key(&desc.base_id), Vec::<(usize, usize, u8)>::new)
+            .peek();
     let strings = compose_text_edit_strings(TextEditStringsInput {
         committed: &committed,
         preedit: &preedit,
         preedit_sel,
+        preedit_marks: &preedit_marks,
         ime_anchor,
         extras: &extras,
         committed_caret: caret_sig.peek(),
@@ -191,6 +196,7 @@ fn sync_one_text_edit_paint(
     let extra_carets_draw = strings.extra_carets;
     let extra_selections_draw = strings.extra_selections;
     let extra_preedit_underlines = strings.extra_preedit_underlines;
+    let preedit_ul = strings.preedit_ul;
 
     let mut text_color = if show_placeholder {
         parse_text_color("muted-foreground")
@@ -325,6 +331,10 @@ fn sync_one_text_edit_paint(
         return;
     }
 
+    // Nowrap leaf is as wide as the hard line. Selection Region-clears that box
+    // and does not replay glyphs; without the scrollport clip the hole runs
+    // into the next textarea (wrap=off selection wipes BiDi).
+    let scrollport_visual = multiline_scrollport_visual(el);
     let text_tid = input_text_template_id(&desc.base_id);
     let text_el = find_descendant_by_template_id_mut(el, &text_tid);
     let Some(text_el) = text_el else {
@@ -473,6 +483,11 @@ fn sync_one_text_edit_paint(
                 extra_carets: extras_draw.0,
                 extra_selections: extras_draw.1,
                 extra_preedit_underlines: extras_draw.2,
+                preedit_ul: if drop_caret {
+                    Vec::new()
+                } else {
+                    preedit_ul.clone()
+                },
                 selection_bg,
                 overwrite_highlight,
                 preedit_underline,
@@ -505,9 +520,14 @@ fn sync_one_text_edit_paint(
             {
                 // Selection is retained glyph/background ink, unlike the swapchain-only
                 // I-beam. Blurring a plain InputAdornment must repair the entire run.
+                let mut sel_bounds =
+                    crate::core::tree::visual_paint_aabb(text_el, text_el.paint_scroll_acc);
+                if let Some(clip) = scrollport_visual {
+                    sel_bounds = intersect_xywh(sel_bounds, clip).unwrap_or([0.0; 4]);
+                }
                 crate::app::damage::push_frame_region_paint(
                     crate::app::damage::paint_element_key(text_el),
-                    crate::core::tree::visual_paint_aabb(text_el, text_el.paint_scroll_acc),
+                    sel_bounds,
                 );
             }
             // Blur drops `input_caret` before the post-sync dirty walk. Pushing
@@ -990,6 +1010,26 @@ fn caret_scroll_anchor_x(
     }
 }
 
+fn multiline_scrollport_visual(el: &Element) -> Option<[f32; 4]> {
+    let vp = el.children.iter().find(|c| {
+        c.focus_id.as_deref().is_some_and(|f| {
+            f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+        })
+    })?;
+    let b = crate::core::tree::visual_paint_aabb(vp, vp.paint_scroll_acc);
+    (b[2] > 1.0 && b[3] > 1.0).then_some(b)
+}
+
+fn intersect_xywh(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
+    let x0 = a[0].max(b[0]);
+    let y0 = a[1].max(b[1]);
+    let x1 = (a[0] + a[2]).min(b[0] + b[2]);
+    let y1 = (a[1] + a[3]).min(b[1] + b[3]);
+    let w = x1 - x0;
+    let h = y1 - y0;
+    (w > 0.5 && h > 0.5).then_some([x0, y0, w, h])
+}
+
 fn push_text_edit_paint_dirty(el: &Element) {
     // Same visual space as collect (`layout_bounds − scroll`). Document Y after a
     // forms ScrollArea move dest-resets empty retain and leaves the previous
@@ -1033,6 +1073,12 @@ fn caret_ibeam_damage_box(el: &Element, leaf: [f32; 4], byte_index: usize) -> [f
     let pan = el.text_style.overflow.allows_caret_scroll();
     let soft_wrap = el.text_style.white_space == crate::style::WhiteSpace::Normal && !pan;
     let ix = text.floor_char_boundary(byte_index.min(text.len()));
+    let touch = crate::utils::text_field::caret_touches_cjk_ideograph(text, ix);
+    let cjk_band = if touch {
+        crate::utils::text_field::text_edit_cjk_chrome_band_px(line_height, size)
+    } else {
+        None
+    };
     let (line_i, prefix, line_w) = if soft_wrap {
         let ranges = crate::text::soft_visual_line_byte_ranges(
             text,
@@ -1079,14 +1125,18 @@ fn caret_ibeam_damage_box(el: &Element, leaf: [f32; 4], byte_index: usize) -> [f
     } else if !pan {
         caret_x = caret_x.min(origin_x + leaf[2] - caret_w).max(origin_x);
     }
-    let multi = line_i > 0 || text.contains('\n') || soft_wrap;
-    let line_origin_y = if multi {
-        leaf[1] + line_i as f32 * line_height
+    // Same origin as `push_input_chrome_instances`: glyphs start at the leaf top.
+    let line_origin_y = leaf[1] + line_i as f32 * line_height;
+    let (caret_y, caret_draw_h) = if touch {
+        if let Some((dy, h)) = cjk_band {
+            (line_origin_y + dy, h)
+        } else {
+            (line_origin_y + (line_height - caret_h) * 0.5, caret_h)
+        }
     } else {
-        leaf[1] + (leaf[3] - line_height).max(0.0) * 0.5
+        (line_origin_y + (line_height - caret_h) * 0.5, caret_h)
     };
-    let caret_y = line_origin_y + (line_height - caret_h) * 0.5;
-    [caret_x, caret_y, caret_w, caret_h.max(1.0)]
+    [caret_x, caret_y, caret_w, caret_draw_h.max(1.0)]
 }
 
 fn find_descendant_by_template_id_mut<'a>(

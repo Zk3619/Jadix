@@ -1639,15 +1639,356 @@ mod tests {
     /// keep painting below that clip (leftover ink over the swatch grid).
     #[test]
     fn nested_format_select_exit_clips_labels_to_accordion() {
-        check_nested_format_select_exit(false);
+        check_nested_format_select_exit(false, false);
+    }
+
+    #[test]
+    fn inline_format_select_close_leaves_no_painted_menu() {
+        check_inline_format_select(false);
+    }
+
+    #[test]
+    fn inline_format_select_upward_stays_next_to_trigger() {
+        check_inline_format_select(true);
+    }
+
+    /// 6 format rows fit in `max-h-16rem`. Opening above with room must not treat the
+    /// Expand accordion clip as a scroll viewport (that recenters HSLA and leaves a
+    /// leftover offset — items look "scrolled" after settle).
+    #[test]
+    fn inline_format_select_upward_must_not_scroll_when_content_fits() {
+        use std::{cell::RefCell, rc::Rc};
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::app::scroll_support::{
+            apply_pending_scroll_align, cancel_scroll_item_into_view,
+        };
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::core::scroll_viewport::scroll_offset_y_signal_key;
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+        use crate::utils::floating_motion::{
+            floating_motion_needs_relayout, flush_floating_motion_subtree,
+            mark_floating_panels_layout_dirty, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::sync_floating_placement;
+
+        fn click(root: &Element, id: &str) -> Rc<RefCell<dyn FnMut()>> {
+            let mut callback = None;
+            crate::core::tree::walk_elements(root, |el| {
+                if el.focus_id.as_deref() == Some(id) {
+                    callback = el.on_click.clone();
+                }
+            });
+            callback.expect("click target")
+        }
+        fn frame(root: &mut Element, tree: &mut LayoutTree) {
+            let height = crate::layout::dim_length_px(root.style.size.height).unwrap();
+            hoist_portal_subtrees(root);
+            // Mirror AppState present: layout (sync inside) → flush idle hug →
+            // relayout/sync again when Expand dirty. Old harness order (sync then
+            // flush) hid the place-CAP rewrite that undoes content hug.
+            let mut out = if tree.root_node.is_none() {
+                tree.build_and_layout(root, 800.0, height, [-1.0, -1.0])
+            } else {
+                tree.build_and_layout_fast_ex(root, 800.0, height, [-1.0, -1.0], false, false, None)
+            };
+            flush_floating_motion_subtree(root);
+            tick_hoisted_floating_css(root);
+            if floating_motion_needs_relayout()
+                || sync_floating_placement(root, 800.0, height)
+            {
+                mark_floating_panels_layout_dirty(root, tree);
+                out = tree.relayout_overlay_follow_and_collect(
+                    root, 800.0, height, [-1.0, -1.0], false, false,
+                );
+                flush_floating_motion_subtree(root);
+            }
+            let _ = out;
+            // Mirror AppState: apply Select `scroll_selected` against live metrics.
+            let rest = "inline-noscroll:fmt:menu_scroll";
+            let mut vp = None;
+            let mut content_h = 0.0_f32;
+            crate::core::tree::walk_elements(root, |el| {
+                if el.focus_id.as_deref()
+                    == Some(crate::core::scroll_viewport::focus_id_for_scroll_viewport(rest).as_str())
+                {
+                    vp = Some(el.layout_bounds);
+                }
+                if el
+                    .template_id
+                    .as_deref()
+                    .is_some_and(|t| t == "inline-noscroll:fmt__floating_panel")
+                {
+                    // Rows live under the scroll viewport; prefer CONTENT_H when set.
+                    if let Some(h) = el
+                        .attrs
+                        .get(crate::utils::popup::ATTR_FLOATING_CONTENT_H)
+                        .and_then(|s| s.parse::<f32>().ok())
+                        .filter(|h| *h > 0.5)
+                    {
+                        content_h = h;
+                    }
+                }
+            });
+            if let Some(bounds) = vp {
+                if content_h < 0.5 {
+                    content_h = bounds[3].max(1.0);
+                }
+                let _ = apply_pending_scroll_align(rest, bounds, bounds[2], content_h, None);
+            }
+        }
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+        cancel_scroll_item_into_view("inline-noscroll:fmt:menu_scroll");
+        let live = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+        let (owner, ()) = create_root(|| {
+            let live = Rc::clone(&live);
+            create_effect(move || {
+                // HSLA = last row; formerly scroll_selected(center) recentered wrongly
+                // under accordion / place-CAP stretch — keep HSLA to catch regressions.
+                let picker: Element = color_picker("inline-noscroll")
+                    .variant(ColorPickerVariant::Inline)
+                    .format(ColorFormat::Hsla)
+                    .into();
+                *live.borrow_mut() = Element::new().w(800.0).h(600.0).pt(200.0).child(picker);
+            });
+        });
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(0.016);
+        let mut tree = LayoutTree::new();
+        tree.set_collect_skip_allowed(true);
+        frame(&mut live.borrow_mut(), &mut tree);
+        let open_menu = click(&live.borrow(), "inline-noscroll:fmt:trigger");
+        open_menu.borrow_mut()();
+        drain_deferred_view_remounts();
+        for _ in 0..24 {
+            frame(&mut live.borrow_mut(), &mut tree);
+            let sy = crate::core::reactivity::use_signal(
+                &scroll_offset_y_signal_key("inline-noscroll:fmt:menu_scroll"),
+                || 0.0_f32,
+            )
+            .peek();
+            assert!(
+                sy.abs() <= 1.0,
+                "upward format menu must not scroll when 6 rows fit the place cap; sy={sy}"
+            );
+        }
+        // Settled: place CAP (16rem) must not stretch ScrollArea into a scrollable
+        // empty band — that is the inline-upward "items can scroll" bug vs floating.
+        let mut panel_h = None;
+        let mut content_attr = None;
+        let mut vp_h = None;
+        let mut scroll_content_h = None;
+        let rest = "inline-noscroll:fmt:menu_scroll";
+        let vp_fid = crate::core::scroll_viewport::focus_id_for_scroll_viewport(rest);
+        crate::core::tree::walk_elements(&live.borrow(), |el| {
+            if el.template_id.as_deref() == Some("inline-noscroll:fmt__floating_panel") {
+                panel_h = Some(el.layout_bounds[3]);
+                content_attr = el
+                    .attrs
+                    .get(crate::utils::popup::ATTR_FLOATING_CONTENT_H)
+                    .and_then(|s| s.parse::<f32>().ok());
+            }
+            if el.focus_id.as_deref() == Some(vp_fid.as_str()) {
+                vp_h = Some(el.layout_bounds[3]);
+                // Scroll content is the viewport's laid-out children extent.
+                scroll_content_h = Some(
+                    el.children
+                        .iter()
+                        .map(|c| c.layout_bounds[3])
+                        .fold(0.0_f32, f32::max),
+                );
+            }
+        });
+        let panel_h = panel_h.expect("format panel");
+        let content_attr = content_attr.expect("CONTENT_H");
+        let vp_h = vp_h.expect("menu scroll viewport");
+        let scroll_content_h = scroll_content_h.unwrap_or(0.0);
+        assert!(
+            content_attr < 240.0,
+            "6 format rows must not absorb the 16rem place CAP as CONTENT_H; content_h={content_attr}"
+        );
+        assert!(
+            (panel_h - content_attr).abs() <= 12.0,
+            "idle panel must hug content, not the place CAP: panel_h={panel_h} content_h={content_attr}"
+        );
+        let max_scroll = (scroll_content_h - vp_h).max(0.0);
+        assert!(
+            max_scroll <= 2.0,
+            "settled upward format menu must not be wheel-scrollable; max_scroll={max_scroll} vp={vp_h} scroll_content={scroll_content_h} panel={panel_h}"
+        );
+        crate::style::utility::set_frame_dt(0.0);
+        cancel_scroll_item_into_view("inline-noscroll:fmt:menu_scroll");
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    fn check_inline_format_select(upward: bool) {
+        use std::{cell::RefCell, rc::Rc};
+        use crate::app::portal_overlay::{clear_overlay_stack, try_dismiss_outside_press};
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, hoisted_portal_stamps, LayoutTree};
+        use crate::utils::floating_motion::{
+            drain_pending_floating_unmounts, floating_motion_needs_relayout,
+            flush_floating_motion_subtree, mark_floating_panels_layout_dirty,
+            tick_floating_presence, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::{arm_underlay_close, sync_floating_placement};
+
+        fn click(root: &Element, id: &str) -> Rc<RefCell<dyn FnMut()>> {
+            let mut callback = None;
+            crate::core::tree::walk_elements(root, |el| {
+                if el.focus_id.as_deref() == Some(id) {
+                    callback = el.on_click.clone();
+                }
+            });
+            callback.expect("click target")
+        }
+        fn frame(root: &mut Element, tree: &mut LayoutTree) -> crate::layout::layout_tree::RenderResult {
+            let height = crate::layout::dim_length_px(root.style.size.height).unwrap();
+            hoist_portal_subtrees(root);
+
+            let mut out = if tree.root_node.is_none() { tree.build_and_layout(root, 800.0, height, [-1.0, -1.0]) } else { tree.build_and_layout_fast_ex(root, 800.0, height, [-1.0, -1.0], false, false, None) };
+            if sync_floating_placement(root, 800.0, height) {
+                out = tree.relayout_overlay_follow_and_collect(root, 800.0, height, [-1.0, -1.0], false, false);
+            }
+            flush_floating_motion_subtree(root);
+            tick_hoisted_floating_css(root);
+            if floating_motion_needs_relayout() {
+                mark_floating_panels_layout_dirty(root, tree);
+                out = tree.relayout_overlay_follow_and_collect(root, 800.0, height, [-1.0, -1.0], false, false);
+            }
+            out
+        }
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+        let live = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+        let (owner, ()) = create_root(|| {
+            let live = Rc::clone(&live);
+            create_effect(move || {
+                let picker: Element = color_picker("inline-residue")
+                    .variant(ColorPickerVariant::Inline)
+                    .format(ColorFormat::Hsla)
+                    .into();
+                *live.borrow_mut() = Element::new().w(800.0).h(600.0)
+                    .pt(if upward { 200.0 } else { 0.0 }).child(picker);
+            });
+        });
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(0.016);
+        let mut tree = LayoutTree::new();
+        tree.set_collect_skip_allowed(true);
+        let baseline = frame(&mut live.borrow_mut(), &mut tree);
+        assert!(hoisted_portal_stamps(&live.borrow()).is_empty());
+        for cycle in 0..2 {
+            let open_menu = click(&live.borrow(), "inline-residue:fmt:trigger");
+            open_menu.borrow_mut()();
+            drain_deferred_view_remounts();
+            for frame_i in 0..20 {
+                frame(&mut live.borrow_mut(), &mut tree);
+                if upward {
+                    let mut trigger = None;
+                    let mut panel = None;
+                    crate::core::tree::walk_elements(&live.borrow(), |el| {
+                        if el.focus_id.as_deref() == Some("inline-residue:fmt:trigger") {
+                            trigger = Some(el.layout_bounds);
+                        }
+                        if el.template_id.as_deref()
+                            == Some("inline-residue:fmt__floating_panel")
+                        {
+                            let mh = crate::layout::dim_length_px(el.style.max_size.height)
+                                .unwrap_or(el.layout_bounds[3]);
+                            panel = Some((el.layout_bounds, mh, el.attrs.clone()));
+                        }
+                    });
+                    let Some(trigger) = trigger else { continue };
+                    let Some((bounds, mh, attrs)) = panel else { continue };
+                    if mh < 0.5 {
+                        continue;
+                    }
+                    assert!(
+                        attrs.contains_key(crate::utils::popup::ATTR_FLOATING_ANCHOR_EDGE_Y),
+                        "upward enter must seed anchor edge frame={frame_i}"
+                    );
+                    let gap = trigger[1] - bounds[1] - bounds[3].min(mh);
+                    assert!(
+                        (gap - crate::utils::popup::FLOATING_TRIGGER_GAP).abs() <= 1.5,
+                        "upward enter must stay glued every frame (no content-height gap then snap): frame={frame_i} gap={gap} mh={mh} trigger={trigger:?} panel={bounds:?}"
+                    );
+                }
+            }
+            assert!(!hoisted_portal_stamps(&live.borrow()).is_empty(), "menu must open");
+            if upward {
+                let mut trigger = None;
+                let mut panel = None;
+                crate::core::tree::walk_elements(&live.borrow(), |el| {
+                    if el.focus_id.as_deref() == Some("inline-residue:fmt:trigger") {
+                        trigger = Some(el.layout_bounds);
+                    }
+                    if el.template_id.as_deref() == Some("inline-residue:fmt__floating_panel") {
+                        panel = Some((el.layout_bounds, el.attrs.clone()));
+                    }
+                });
+                let trigger = trigger.expect("format trigger");
+                let (bounds, attrs) = panel.expect("format menu");
+                assert!(attrs.contains_key(crate::utils::popup::ATTR_FLOATING_ANCHOR_EDGE_Y));
+                let gap = trigger[1] - bounds[1] - bounds[3];
+                assert!((gap - crate::utils::popup::FLOATING_TRIGGER_GAP).abs() <= 1.0,
+                    "upward menu must stay next to trigger: gap={gap} trigger={trigger:?} panel={bounds:?} attrs={attrs:?}");
+            }
+            arm_underlay_close();
+            assert!(try_dismiss_outside_press());
+            drain_deferred_view_remounts();
+            for _ in 0..30 {
+                tick_floating_presence();
+                drain_pending_floating_unmounts();
+                drain_deferred_view_remounts();
+                let out = frame(&mut live.borrow_mut(), &mut tree);
+                if hoisted_portal_stamps(&live.borrow()).is_empty() {
+                    let start = out.overlay_split.instance_start.min(out.instances.len());
+                    assert!(out.instances[start..].iter().all(|i| i.color[3] < 0.01 && i.shadow_color[3] < 0.01 && i.border_color[3] < 0.01), "hidden menu still paints cached chrome after its stamp disappeared");
+                }
+            }
+            let closed = frame(&mut live.borrow_mut(), &mut tree);
+            assert!(hoisted_portal_stamps(&live.borrow()).is_empty(), "closed menu leaves an overlay stamp, cycle={cycle}");
+            assert_eq!(closed.instances.len(), baseline.instances.len(), "closed menu leaves painted chrome, cycle={cycle}");
+        }
+        crate::style::utility::set_frame_dt(0.0);
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
     }
 
     #[test]
     fn nested_format_select_upward_exit_keeps_bottom_anchored() {
-        check_nested_format_select_exit(true);
+        check_nested_format_select_exit(true, false);
     }
 
-    fn check_nested_format_select_exit(upward: bool) {
+    #[test]
+    fn nested_format_select_alpha_change_exit_tracks_trigger() {
+        check_nested_format_select_exit(true, true);
+    }
+
+    #[test]
+    fn nested_format_select_downward_alpha_change_exit_tracks_trigger() {
+        check_nested_format_select_exit(false, true);
+    }
+
+    fn check_nested_format_select_exit(upward: bool, change_format: bool) {
         use std::cell::RefCell;
         use std::rc::Rc;
 
@@ -1801,27 +2142,79 @@ mod tests {
                     .contains_key(crate::utils::popup::ATTR_FLOATING_ANCHOR_EDGE_Y),
                 "fixture must open upward: {before_exit:?}"
             );
+        } else {
+            assert!(
+                !find_fmt_panel(&live.borrow())
+                    .unwrap()
+                    .attrs
+                    .contains_key(crate::utils::popup::ATTR_FLOATING_ANCHOR_EDGE_Y),
+                "fixture must open downward: {before_exit:?}"
+            );
         }
-        arm_underlay_close();
-        assert!(
-            try_dismiss_outside_press(),
-            "outside press must dismiss the nested format Select"
-        );
+        if change_format {
+            let click = find_click(&live.borrow(), "gal-color:fmt:opt:hex8").unwrap();
+            click.borrow_mut()();
+        } else {
+            arm_underlay_close();
+            assert!(
+                try_dismiss_outside_press(),
+                "outside press must dismiss the nested format Select"
+            );
+        }
         drain_deferred_view_remounts();
 
         let (out, clip_bottom, dump) = {
             let mut root = live.borrow_mut();
             let _ = present_pass(&mut root);
-            if upward {
+            if upward || change_format {
                 let mut previous = before_exit;
                 for frame in 0..10 {
                     let b = find_fmt_panel(&root).unwrap().layout_bounds;
+                    let mut trigger_bounds = [0.0_f32; 4];
+                    let mut found_trigger = false;
+                    crate::core::tree::walk_elements(&root, |el| {
+                        if el.focus_id.as_deref() == Some("gal-color:fmt:trigger") {
+                            trigger_bounds = el.layout_bounds;
+                            found_trigger = true;
+                        }
+                    });
+                    let expect_edge = if upward {
+                        let mut edge = before_exit[1] + before_exit[3];
+                        if change_format && found_trigger {
+                            edge = trigger_bounds[1] - crate::utils::popup::FLOATING_TRIGGER_GAP;
+                        }
+                        edge
+                    } else {
+                        // Downward: panel top sticks to trigger bottom + gap.
+                        assert!(
+                            found_trigger,
+                            "format trigger must stay mounted during exit"
+                        );
+                        assert!(
+                            !find_fmt_panel(&root)
+                                .unwrap()
+                                .attrs
+                                .contains_key(crate::utils::popup::ATTR_FLOATING_ANCHOR_EDGE_Y),
+                            "downward exit must not flip above"
+                        );
+                        trigger_bounds[1]
+                            + trigger_bounds[3]
+                            + crate::utils::popup::FLOATING_TRIGGER_GAP
+                    };
+                    if upward {
+                        assert!(
+                            (b[1] + b[3] - expect_edge).abs() < 1.0,
+                            "exit bottom jumped frame={frame}: before={before_exit:?} now={b:?} edge={expect_edge}"
+                        );
+                    } else {
+                        assert!(
+                            (b[1] - expect_edge).abs() < 1.0,
+                            "exit top stuck at pre-alpha position frame={frame}: before={before_exit:?} now={b:?} expect_top={expect_edge} trigger={trigger_bounds:?}"
+                        );
+                    }
                     assert!(
-                        (b[1] + b[3] - before_exit[1] - before_exit[3]).abs() < 1.0,
-                        "exit bottom jumped frame={frame}: before={before_exit:?} now={b:?}"
-                    );
-                    assert!(
-                        b[1] >= previous[1] - 0.5 && b[3] <= previous[3] + 0.5,
+                        (change_format || !upward || b[1] >= previous[1] - 0.5)
+                            && b[3] <= previous[3] + 0.5,
                         "exit reversed frame={frame}: previous={previous:?} now={b:?}"
                     );
                     previous = b;
@@ -1830,7 +2223,7 @@ mod tests {
                 }
                 crate::style::utility::set_frame_dt(0.0);
             }
-            if !upward {
+            if !upward && !change_format {
                 let panel = find_fmt_panel_mut(&mut root).expect("format menu after dismiss");
                 for _ in 0..10 {
                     let _ = panel.tick_css_animations(0.016);

@@ -82,7 +82,8 @@ use winit::event::MouseButton;
 pub use crate::utils::text_field::{
     bind_controlled_value, input_caret_signal_key, input_extra_carets_signal_key,
     input_focus_id as focus_id_for_input, input_ime_anchor_signal_key, input_overwrite_signal_key,
-    input_password_reveal_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key,
+    input_password_reveal_signal_key, input_preedit_marks_signal_key, input_preedit_sel_signal_key,
+    input_preedit_signal_key,
     input_selection_signal_key, input_type_signal_key, input_value_signal_key, INPUT_FOCUS_PREFIX,
 };
 

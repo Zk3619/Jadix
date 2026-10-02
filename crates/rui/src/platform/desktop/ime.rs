@@ -14,7 +14,8 @@ pub(crate) fn apply_ime_cursor_area(
     field_in_overflow_clip: bool,
 ) {
     let _ = (ui_scale, scroll_acc, composing, field_in_overflow_clip);
-    window.set_ime_cursor_area(
+    request_ime_cursor_area(
+        window,
         winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(
             area_x as f64,
             area_y as f64,
@@ -24,6 +25,21 @@ pub(crate) fn apply_ime_cursor_area(
             area_h.max(1.0) as f64,
         )),
     );
+}
+
+fn request_ime_cursor_area(
+    window: &dyn Window,
+    position: winit::dpi::Position,
+    size: winit::dpi::Size,
+) {
+    if window
+        .ime_capabilities()
+        .is_some_and(|caps| caps.cursor_area())
+    {
+        let _ = window.request_ime_update(winit::window::ImeRequest::Update(
+            winit::window::ImeRequestData::default().with_cursor_area(position, size),
+        ));
+    }
 }
 
 pub(crate) fn sync_focus_owner(

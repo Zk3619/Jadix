@@ -7,6 +7,8 @@ pub(crate) struct TextEditStringsInput<'a> {
     pub committed: &'a str,
     pub preedit: &'a str,
     pub preedit_sel: Option<(usize, usize)>,
+    /// `(start, end, style)` in preedit bytes. Empty → one solid underline.
+    pub preedit_marks: &'a [(usize, usize, u8)],
     pub ime_anchor: Option<usize>,
     /// Extra Alt+click carets as `(caret, anchor)` in committed bytes.
     pub extras: &'a [(usize, usize)],
@@ -35,6 +37,8 @@ pub(crate) struct TextEditStrings {
     pub extra_carets: Vec<usize>,
     pub extra_selections: Vec<(usize, usize)>,
     pub extra_preedit_underlines: Vec<(usize, usize)>,
+    /// Display-text runs `(start, end, style)` for Japanese clause underlines.
+    pub preedit_ul: Vec<(usize, usize, u8)>,
 }
 
 pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> TextEditStrings {
@@ -140,6 +144,7 @@ pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> Text
     let mut extra_carets = Vec::new();
     let mut extra_selections = Vec::new();
     let mut extra_preedit_underlines = Vec::new();
+    let mut preedit_ul = Vec::new();
     let preedit_underline = if input.show_placeholder || input.preedit.is_empty() {
         for &(c, a) in input.extras {
             let caret_i = if input.mask {
@@ -185,6 +190,19 @@ pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> Text
             } else {
                 (start, end)
             };
+            for &(ps, pe, kind) in input.preedit_marks {
+                push_preedit_mark(
+                    &mut preedit_ul,
+                    start,
+                    input.preedit.len(),
+                    ps,
+                    pe,
+                    kind,
+                    input.mask,
+                    &real_display,
+                    &display_text,
+                );
+            }
             if Some((start, end)) == ime_range {
                 continue;
             }
@@ -214,6 +232,36 @@ pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> Text
         extra_carets,
         extra_selections,
         extra_preedit_underlines,
+        preedit_ul,
+    }
+}
+
+fn push_preedit_mark(
+    out: &mut Vec<(usize, usize, u8)>,
+    range_start: usize,
+    preedit_len: usize,
+    ps: usize,
+    pe: usize,
+    kind: u8,
+    mask: bool,
+    real: &str,
+    display: &str,
+) {
+    let ps = ps.min(preedit_len);
+    let pe = pe.min(preedit_len);
+    if ps >= pe {
+        return;
+    }
+    let ds = range_start + ps;
+    let de = range_start + pe;
+    if mask {
+        let a = map_byte_index_to_masked(real, ds, display);
+        let b = map_byte_index_to_masked(real, de, display);
+        if a < b {
+            out.push((a, b, kind));
+        }
+    } else if de <= real.len() {
+        out.push((ds, de, kind));
     }
 }
 
@@ -249,11 +297,36 @@ mod tests {
     }
 
     #[test]
+    fn unspecified_preedit_caret_sits_after_syllable() {
+        let committed = "가나";
+        let preedit = "스";
+        let anchor = committed.len();
+        let s = compose_text_edit_strings(TextEditStringsInput {
+            committed,
+            preedit,
+            preedit_sel: None,
+            preedit_marks: &[],
+            ime_anchor: Some(anchor),
+            extras: &[],
+            committed_caret: Some(anchor),
+            placeholder: "",
+            show_placeholder: false,
+            mask: false,
+            is_focused: true,
+            caret_override: None,
+        });
+        assert_eq!(s.real_display, format!("{committed}{preedit}"));
+        assert_eq!(s.caret_in_real, anchor + preedit.len());
+        assert_eq!(s.preedit_underline, Some((anchor, anchor + preedit.len())));
+    }
+
+    #[test]
     fn display_includes_preedit_caret_tracks_compose_end() {
         let s = compose_text_edit_strings(TextEditStringsInput {
             committed: "你好",
             preedit: "hao",
             preedit_sel: Some((0, 2)),
+            preedit_marks: &[],
             ime_anchor: Some(6),
             extras: &[],
             committed_caret: Some(6),
@@ -278,6 +351,7 @@ mod tests {
             committed: "ab",
             preedit: "X",
             preedit_sel: Some((0, 1)),
+            preedit_marks: &[],
             ime_anchor: Some(0),
             extras: &extras,
             committed_caret: Some(0),

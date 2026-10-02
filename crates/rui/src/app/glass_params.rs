@@ -227,6 +227,7 @@ pub fn aero_inactive_balances(color_balance: f32, blur_balance: f32) -> (f32, f3
 }
 
 /// Sprite-overlay Aero (WUC cannot host D2D Tint / Composite-PLUS).
+#[cfg(any(test, feature = "backend-dx12"))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AeroOverlay {
     /// RGB of the color wash.
@@ -238,12 +239,14 @@ pub struct AeroOverlay {
     pub reflection: f32,
 }
 
+#[cfg(any(test, feature = "backend-dx12"))]
 fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
     let t = t.clamp(0.0, 1.0);
     (a as f32 + (b as f32 - a as f32) * t).round() as u8
 }
 
 /// SOURCE-OVER veil over HostBackdrop frost. Keep it thin — a 0.6 sheet hides the blur.
+#[cfg(any(test, feature = "backend-dx12"))]
 pub fn aero_overlay(
     tint: GlassTint,
     glow: GlassTint,

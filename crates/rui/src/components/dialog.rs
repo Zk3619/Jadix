@@ -290,9 +290,13 @@ pub(crate) fn dialog_shell_panel(
         apply_dialog_shell_surface(card, hug_content)
     };
     card = panel_chrome.apply(card);
-    if let Some(slot) = content_slot {
-        card.set_attr("data-slot", slot);
-    }
+    let slot_name = content_slot.unwrap_or("dialog-content");
+    card.set_attr("data-slot", slot_name);
+    card = card.accesskit_role(if slot_name.contains("alert") {
+        "alertdialog"
+    } else {
+        "dialog"
+    });
     if let Some(size) = content_size {
         card.set_attr("data-size", size);
     }
@@ -565,7 +569,7 @@ pub fn DialogHeader(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn DialogTitle(children: Option<Element>) -> Element {
     let fg = parse_text_color("foreground");
-    match children {
+    let mut el = match children {
         Some(c) => c
             .w("100%")
             .min_w("0")
@@ -575,7 +579,9 @@ pub fn DialogTitle(children: Option<Element>) -> Element {
         None => Element::from(text("").size(18.0).weight(600.0).color(fg))
             .w("100%")
             .min_w("0"),
-    }
+    };
+    el.set_attr("data-slot", "dialog-title");
+    el.accesskit_role("heading")
 }
 
 /// Description copy.

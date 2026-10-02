@@ -595,16 +595,25 @@ fn remember_clip_height(presence: &FloatingPresenceHandle, el: &Element) {
     presence.cell.borrow_mut().clip_height = Some(h);
 }
 
-/// Hide the collapsing panel when accordion-up finished.
+/// Hide the collapsing panel when accordion-up finished — or when the clip is
+/// already a chrome-only hairline.
+///
 /// Must run **before** the post-tick layout/collect; opacity 0 after collect still paints.
 /// Mid-exit must keep opacity so the clip can finish (`from_h` cover overlays land on the
 /// trigger; menus without `from_h` run to 0). Cutting off at ~16px looked like a row snap.
+/// Below ~3px the Select fill+outline+shadow collapses to a white/gray streak that
+/// PartialLoad often fails to wipe from an inline ColorPicker (residue above 预设 /
+/// below the format row).
+const EXPAND_EXIT_HAIRLINE_H: f32 = 3.0;
+
 fn hide_expand_exit_sliver(
     panel: &mut Element,
     presence: &FloatingPresenceHandle,
     finish: bool,
 ) -> bool {
-    let done = finish || !animation_run_active(&panel.style, &panel.animation_snapshot);
+    let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
+    let hairline = mh > 0.0 && mh < EXPAND_EXIT_HAIRLINE_H;
+    let done = finish || !animation_run_active(&panel.style, &panel.animation_snapshot) || hairline;
     if !done {
         return false;
     }
@@ -617,7 +626,7 @@ fn hide_expand_exit_sliver(
         panel.style.animations.clear();
         changed = true;
     }
-    if crate::layout::dim_length_px(panel.style.max_size.height).is_none_or(|v| v > 0.5) {
+    if mh > 0.5 {
         panel.style.max_size.height = Dimension::length(0.0);
         changed = true;
     }
@@ -856,12 +865,25 @@ fn absorb_expand_intrinsic(panel: &mut Element, max_height_cap: Option<f32>) {
             Some(max) if max > 0.0 => h.min(max),
             _ => h,
         };
-        panel.used_layout.absorb_child_height(capped);
-        let stored = match max_height_cap {
-            Some(max) if max > 0.0 => panel.used_layout.anim_height().min(max),
-            _ => panel.used_layout.anim_height(),
-        };
-        panel.set_attr(ATTR_FLOATING_CONTENT_H, format!("{}", stored));
+        // ScrollArea `h:100%` under a place/author CAP stretches the panel to the CAP
+        // even when the list is shorter. Absorbing that stretch permanently inflates
+        // CONTENT_H (idle silhouette + write_floating_place clamp stay at CAP).
+        let prev = panel
+            .attrs
+            .get(ATTR_FLOATING_CONTENT_H)
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|x| *x > 0.5);
+        let skip_cap_stretch = max_height_cap.is_some_and(|cap| {
+            (capped - cap).abs() < 1.0 && prev.is_some_and(|p| p + 1.0 < cap)
+        });
+        if !skip_cap_stretch {
+            panel.used_layout.absorb_child_height(capped);
+            let stored = match max_height_cap {
+                Some(max) if max > 0.0 => panel.used_layout.anim_height().min(max),
+                _ => panel.used_layout.anim_height(),
+            };
+            panel.set_attr(ATTR_FLOATING_CONTENT_H, format!("{}", stored));
+        }
     }
     let w = panel.layout_bounds[2];
     if w > 1.0 {
@@ -2676,6 +2698,95 @@ mod tests {
                 panel.style.opacity < 0.01,
                 "sliver must be hidden before collect, got {}",
                 panel.style.opacity
+            );
+        });
+    }
+
+    #[test]
+    fn expand_exit_hides_chrome_hairline_before_animation_finishes() {
+        // Inline ColorPicker format Select: the last accordion frames are a 1–2px
+        // white/outline streak that PartialLoad leaves above 预设 after close.
+        create_root(|| {
+            let mut root = Element::new();
+            let mut panel = Element::new();
+            panel.layout_bounds = [0.0, 0.0, 100.0, 120.0];
+            let open = Signal::new(true);
+            let handle = use_floating_presence("exp-exit-hairline", FloatingMotionKind::Expand);
+            sync_floating_presence(&handle, true);
+            apply_floating_panel_motion(
+                "exp-exit-hairline",
+                &mut panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Present,
+                &handle,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            root.children.push(panel);
+            assert!(flush_floating_motion_subtree(&mut root));
+            let panel = find_template_id_mut(&mut root, "exp-exit-hairline__floating_panel").unwrap();
+            panel.layout_bounds[3] = 120.0;
+            let bounds = panel.layout_bounds;
+            panel.used_layout.stamp_border_box(bounds, false);
+            assert!(flush_floating_motion_subtree(&mut root));
+            {
+                let panel =
+                    find_template_id_mut(&mut root, "exp-exit-hairline__floating_panel").unwrap();
+                panel.style.animations.clear();
+                panel.animation_snapshot = Default::default();
+                handle.cell.borrow_mut().enter_active = false;
+                handle.cell.borrow_mut().needs_enter = false;
+                handle.cell.borrow_mut().measuring = false;
+                panel.style.max_size.height = Dimension::length(120.0);
+                panel.style.opacity = 1.0;
+            }
+
+            open.set(false);
+            sync_floating_presence(&handle, false);
+            let panel = find_template_id_mut(&mut root, "exp-exit-hairline__floating_panel").unwrap();
+            apply_floating_panel_motion(
+                "exp-exit-hairline",
+                panel,
+                FloatingMotionKind::Expand,
+                PresencePhase::Exiting,
+                &handle,
+                open,
+                OverlayKind::Menu,
+                OverlayMode::Stacked,
+                None,
+            );
+            assert!(flush_floating_motion_subtree(&mut root));
+            {
+                let panel =
+                    find_template_id_mut(&mut root, "exp-exit-hairline__floating_panel").unwrap();
+                assert!(
+                    panel
+                        .style
+                        .animations
+                        .iter()
+                        .any(|a| a.name == EXPAND_KEYS.up || a.name.starts_with("rui-expand-up-")),
+                    "exit must be accordion-up"
+                );
+                // Simulate the last hairline frames without waiting for the full ease-in.
+                panel.style.max_size.height = Dimension::length(2.0);
+                panel.animation_snapshot.sync_written_max_height(Dimension::length(2.0));
+            }
+            assert!(
+                tick_hoisted_floating_css(&mut root),
+                "hairline hide must request collect"
+            );
+            let panel = find_template_id_mut(&mut root, "exp-exit-hairline__floating_panel").unwrap();
+            assert!(
+                panel.style.opacity < 0.01,
+                "chrome hairline must hide before collect, got opacity={}",
+                panel.style.opacity
+            );
+            let mh = crate::layout::dim_length_px(panel.style.max_size.height).unwrap_or(0.0);
+            assert!(
+                mh < 0.5,
+                "hairline max-height must collapse to 0 for stamp restore, got {mh}"
             );
         });
     }

@@ -631,6 +631,12 @@ fn assemble_mounted_panel(
         opts.max_h.as_deref(),
         opts.width.as_deref(),
     );
+    // Stamp EXITING before apply_stored so a reverse-expand edge is restored, not
+    // cleared. Otherwise the first sync after dismiss flips the menu below the
+    // trigger (nested ColorPicker format Select exit jump).
+    if matches!(phase, crate::utils::presence::PresencePhase::Exiting) {
+        panel.set_attr(crate::utils::popup::ATTR_FLOATING_EXITING, "1");
+    }
     match &placement {
         Placement::Trigger { .. } | Placement::Point { .. } => {
             apply_stored_floating_place(&mut panel, id);

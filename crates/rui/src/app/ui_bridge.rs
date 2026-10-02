@@ -20,12 +20,7 @@ pub(super) fn install_proxy(proxy: EventLoopProxy, tx: Sender<RuiUserEvent>) {
     let _ = USER_TX.set(tx);
 }
 
-/// Borrow the installed event-loop proxy (used by multi-window / wake helpers).
-pub(super) fn proxy() -> Option<&'static EventLoopProxy> {
-    PROXY.get()
-}
-
-pub(super) fn send_user_event(event: RuiUserEvent) -> Result<(), String> {
+pub(crate) fn send_user_event(event: RuiUserEvent) -> Result<(), String> {
     let tx = USER_TX
         .get()
         .ok_or_else(|| "event loop proxy not installed (call rui::run first)".to_string())?;

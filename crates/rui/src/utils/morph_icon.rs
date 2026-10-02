@@ -359,6 +359,7 @@ fn resolve_input(el: &Element, src: &str) -> Option<IconInput> {
     fit_icon(&input, vb, 24.0).ok().map(IconInput::D)
 }
 
+#[cfg(all(test, feature = "bundled-lucide"))]
 fn rest_d_for(src: &str) -> String {
     icon_input_from_src(src)
         .and_then(|i| canonical_d(&i).ok())

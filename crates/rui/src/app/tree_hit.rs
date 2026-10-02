@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use winit::event::{ElementState, KeyEvent};
-use winit::keyboard::{Key, NamedKey};
 
 use crate::core::tree::{
     CursorKind, CursorValue, Element, PointerEvents, find_in_tree, find_in_tree_mut,
@@ -514,6 +513,7 @@ fn hit_enter_clipped(
 }
 
 /// Consistent with the string shown in [`crate::components::input`]: `preedit` is inserted at each live caret.
+#[cfg(test)]
 pub(super) fn input_display_text(
     committed: &str,
     preedit: &str,

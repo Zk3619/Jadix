@@ -4,9 +4,8 @@
 //! Element `accesskit_role` / `accesskit_name` attrs still compile without the feature.
 //!
 //! Runtime wiring ([`winit_adapter::Adapter`]) stays in [`crate::app::lifecycle`]; this
-//! module owns the pure tree/action mapping.
-
-pub mod winit_adapter;
+//! module owns the pure tree/action mapping. On Windows the adapter subclasses the
+//! HWND via `accesskit_windows`.
 //!
 //! **Boundary (WP-1.3 vs identity engineering):**
 //! - **In scope here:** Role/name/value/Action mapping; `Window`→`Document` content tree;
@@ -18,5 +17,6 @@ pub mod winit_adapter;
 //! Static Labels are **not** in Tab order; Narrator must use item navigation (see `a11y_smoke.md`).
 
 pub mod bridge;
+pub mod winit_adapter;
 
 pub use bridge::{dispatch_accesskit_action, tree_update_from_elements};

@@ -397,6 +397,10 @@ pub struct InputCaretDraw {
     pub preedit_underline: Option<(usize, usize)>,
     /// Extra carets' IME preedit underlines in display UTF-8 bytes.
     pub extra_preedit_underlines: Vec<(usize, usize)>,
+    /// Styled composition runs in display UTF-8 bytes: `(start, end, style)`.
+    /// `0` thin solid, `1` thick solid, `2` wavy. Empty keeps the single solid
+    /// [`Self::preedit_underline`].
+    pub preedit_ul: Vec<(usize, usize, u8)>,
     /// Draw the I-beam even when a selection highlight is present (selection-move drop caret).
     pub drop_caret: bool,
     /// I-beam fill. `None` uses the node's text color. Input/Textarea default this
@@ -421,6 +425,7 @@ impl Default for InputCaretDraw {
             overwrite_highlight: None,
             preedit_underline: None,
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,

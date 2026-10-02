@@ -5,6 +5,7 @@
 //! translate those ops by `GeomKey.scroll` instead of recollecting. FullClear GPU present
 //! still receives a complete list (replay, not omit) — see [`crate::app::damage`].
 
+#[cfg(test)]
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -452,13 +453,18 @@ fn node_records_page_stack_bands(el: &Element) -> bool {
     if el.attrs.get("data-stacking-context").map(String::as_str) == Some("1") {
         return true;
     }
-    el.children.iter().any(|c| c.style.z_index != 0)
+    el.children.iter().any(|c| {
+        c.style.z_index != 0 && !crate::layout::layout_tree::z_index_is_paint_order_only(c)
+    })
 }
 
 /// This node opens a later page-stack band (`layout_tree` `child_opens_page_stack_band`).
 /// Skipping it records one parent NodePaint and drops descendant slots that
 /// dest-reset / scroll-blit pins key by (absolute jump chrome).
 fn node_opens_stacking_band(el: &Element) -> bool {
+    if crate::layout::layout_tree::z_index_is_paint_order_only(el) {
+        return false;
+    }
     el.style.z_index != 0
         || el.style.position == taffy::style::Position::Absolute
         || el.style.position_fixed
@@ -466,12 +472,22 @@ fn node_opens_stacking_band(el: &Element) -> bool {
 }
 
 pub(crate) fn subtree_is_skippable(el: &Element) -> bool {
+    // Anim / caret only. Portal side-channels use `collect_skip_side_channel` so a
+    // page StyleChanged that zeros a shared ancestor (inline ColorPicker hue↔alpha)
+    // can still stamp-reuse neighbors — but collect must not skip-replay a portal
+    // host (overlay cursors are outside the fingerprint DL).
     if el.collect_skip_live {
+        return false;
+    }
+    if el.collect_skip_side_channel {
         return false;
     }
     // Wave 52: hash surgically zeroed by reconcile / Window FullClear — must
     // recollect. (Fresh nodes also start at 0; first stamp fills the cache.)
     if el.collect_paint_hash == 0 {
+        return false;
+    }
+    if el.collect_skip_has_scroll {
         return false;
     }
     if node_has_collect_side_channel(el) {
@@ -628,10 +644,15 @@ pub(crate) fn invalidate_collect_paint_hash_for_template(
 pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
     fn rec(el: &mut Element, reuse_idle: bool, ancestor_live: bool) -> u64 {
         let self_live = ancestor_live || node_collect_is_live(el);
+        // Portal / scroll-viewport **self** stays unskippable (fade opacity, scroll
+        // metrics). Their *ancestors* must remain reuse_idle-skippable when only a
+        // sibling paint-hash was busted — otherwise inline ColorPicker slider hover
+        // restamps the whole panel (SV + format Select portal + swatches).
         if reuse_idle
             && !self_live
             && !el.collect_skip_live
             && !el.collect_skip_has_scroll
+            && !node_has_collect_side_channel(el)
             && !node_is_scrollbar_chrome(el)
             && !node_is_out_of_flow_page_chrome(el)
             && el.collect_paint_hash != 0
@@ -642,10 +663,13 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
         STAMP_HASHED.with(|c| c.set(c.get().saturating_add(1)));
         let mut h = PaintHasher::new();
         hash_paint_self(el, &mut h);
-        // Side-channel bubbles UP so ancestors walk into portals / stacking parents.
-        // It must not flow DOWN (`self_live`): a z-index badge used to mark the whole
-        // gallery column live and force an 8ms stamp every ViewportsOnly frame.
-        let mut live = node_collect_is_live(el) || node_has_collect_side_channel(el);
+        // Anim/caret live bubbles UP so ancestors keep walking into spinners.
+        // Portal side-channel bubbles on `collect_skip_side_channel` only — it must
+        // not join `collect_skip_live`, or a leaf StyleChanged that zeros the shared
+        // parent force-restamps every neighbor that merely hosts a Select portal
+        // (inline ColorPicker SV + swatches next to format Select).
+        let mut live = node_collect_is_live(el);
+        let mut side = node_has_collect_side_channel(el);
         let mut scroll_pin = el.style.position_sticky
             || el.style.position_fixed
             || el.attrs.get(ATTR_ESCAPE_OVERFLOW_CLIP).map(String::as_str) == Some("1");
@@ -653,12 +677,14 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
         for child in &mut el.children {
             rec(child, reuse_idle, self_live).hash(&mut h);
             live |= child.collect_skip_live;
+            side |= child.collect_skip_side_channel;
             scroll_pin |= child.collect_skip_scroll_pin;
             has_scroll |= child.collect_skip_has_scroll;
         }
         let hash = h.finish();
         el.collect_paint_hash = hash;
         el.collect_skip_live = live || ancestor_live;
+        el.collect_skip_side_channel = side;
         el.collect_skip_scroll_pin = scroll_pin;
         el.collect_skip_has_scroll = has_scroll;
         hash
@@ -894,6 +920,7 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
             c.overwrite_highlight.hash(h);
             c.preedit_underline.hash(h);
             c.extra_preedit_underlines.hash(h);
+            c.preedit_ul.hash(h);
             c.drop_caret.hash(h);
             c.caret_color.hash(h);
             c.selection_bg.hash(h);
@@ -1735,6 +1762,79 @@ mod tests {
         assert!(
             !viewport.children[1].collect_skip_live,
             "idle column must not inherit live from a stacking sibling"
+        );
+    }
+
+    /// Inline ColorPicker sits beside Calendar / hosts a format Select portal under the
+    /// same page parent. Slider StyleChanged zeros that parent hash; portal side-channel
+    /// must not poison the neighbor into a full restamp (the hue↔alpha hover hitch).
+    #[test]
+    fn portal_sibling_style_changed_must_not_restamp_idle_neighbor() {
+        let mut portal = Element::new().text("select-menu");
+        portal.attrs.insert(ATTR_HOISTED_PORTAL.to_string(), "1".into());
+        let mut portal_host = Element::new().child(portal);
+        for i in 0..20 {
+            portal_host
+                .children
+                .push(Element::new().text(format!("menu-row{i}")));
+        }
+        let mut idle = Element::new();
+        for i in 0..80 {
+            idle.children.push(Element::new().text(format!("sv-cell{i}")));
+        }
+        let slider = Element::new().text("hue-thumb");
+        let mut row = Element::new()
+            .child(idle)
+            .child(slider)
+            .child(portal_host);
+        stamp_subtree_paint_hashes(&mut row, false);
+        assert!(
+            !row.children[0].collect_skip_live,
+            "idle SV neighbor must not inherit collect_skip_live from a portal sibling"
+        );
+        assert!(
+            !row.children[0].collect_skip_side_channel,
+            "idle SV neighbor must not inherit portal side-channel"
+        );
+        assert!(
+            row.children[2].collect_skip_side_channel,
+            "portal host must track side-channel for collect (overlay cursors)"
+        );
+        assert!(
+            !row.collect_skip_live,
+            "row must not be anim-live merely because a child hosts a portal"
+        );
+        assert!(
+            row.collect_skip_side_channel,
+            "row tracks portal side-channel without poisoning anim-live"
+        );
+        let idle_hash = row.children[0].collect_paint_hash;
+        let portal_host_hash = row.children[2].collect_paint_hash;
+
+        // Paint-only StyleChanged on the slider spine (same as reactive_sync path bust).
+        invalidate_collect_paint_hash_path(&mut row, &[1]);
+        STAMP_HASHED.with(|c| c.set(0));
+        stamp_subtree_paint_hashes(&mut row, true);
+        let hashed = STAMP_HASHED.with(|c| c.get());
+        assert!(
+            hashed <= 6,
+            "reuse_idle after sibling StyleChanged must not rehash idle SV / portal host body (hashed={hashed})"
+        );
+        assert_eq!(
+            row.children[0].collect_paint_hash, idle_hash,
+            "idle neighbor hash must be reused"
+        );
+        assert_eq!(
+            row.children[2].collect_paint_hash, portal_host_hash,
+            "portal host with stable paint must reuse its stamp"
+        );
+        assert!(
+            subtree_is_skippable(&row.children[0]),
+            "idle neighbor must stay collect-skippable after parent rehash"
+        );
+        assert!(
+            !subtree_is_skippable(&row.children[2]),
+            "portal host must remain unskippable for collect (side-channel cursors)"
         );
     }
 

@@ -13,8 +13,9 @@ use crate::components::scroll_area::scroll_area;
 use crate::components::scrollbar::{SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX};
 use crate::core::reactivity::{create_effect, create_root, use_signal};
 use crate::core::scroll_viewport::{
-    scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_y_signal_key,
-    scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
+    scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
+    scroll_offset_y_signal_key, scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
+    SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
 use crate::core::tree::{Element, LayoutTree};
 use crate::layout::layout_tree::RenderResult;
@@ -814,6 +815,114 @@ fn click_must_survive_inertial_scroll_under_stationary_pointer() {
                 cb.is_some(),
                 "still pointer must click the press target after engine scroll, down={down_ids:?} up={up_ids:?} click={:?}",
                 path_focus_ids(&click_path)
+            );
+        });
+    });
+}
+
+fn rect_covers(outer: [f32; 4], inner: [f32; 4]) -> bool {
+    outer[0] <= inner[0] + 1.5
+        && outer[1] <= inner[1] + 1.5
+        && outer[0] + outer[2] + 1.5 >= inner[0] + inner[2]
+        && outer[1] + outer[3] + 1.5 >= inner[1] + inner[3]
+}
+
+/// Gallery wrap=off: after the horizontal auto-bar fades, dest-reset must erase
+/// the track that was on screen. A wipe shrunk to the sliver outside the field
+/// leaves that rectangle in PartialLoad.
+#[test]
+fn horizontal_auto_hide_dest_reset_covers_the_painted_track() {
+    const REST: &str = "diag-h-fade";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let content = Element::new().w(640.0).h(24.0).bg([0.2, 0.2, 0.2, 1.0]);
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(220.0)
+                    .h(96.0)
+                    .rounded(6.0)
+                    .bg([1.0, 1.0, 1.0, 1.0])
+                    .overflow_x("auto")
+                    .overflow_y("hidden")
+                    .scrollbar_visibility("auto")
+                    .child(content),
+            );
+
+            let mut layout = LayoutTree::new();
+            let full = layout.build_and_layout(&mut root, 220.0, 96.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("scroll metrics");
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+            use_signal(&scroll_offset_x_signal_key(REST), || 0.0_f32).set(0.0);
+
+            let _ = take_frame_paint_nodes();
+            settle_cubic(REST, "x", 1.0);
+            layout.set_collect_skip_allowed(true);
+            let shown =
+                layout.build_and_layout_fast(&mut root, 220.0, 96.0, [-1.0, -1.0], true, true);
+            let track = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":x")
+                .expect("X track shown");
+            let thumb = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":x")
+                .expect("X thumb shown");
+            assert!(
+                track[2] > 40.0 && track[3] > 4.0,
+                "shown horizontal track must be a real bar, got {track:?}"
+            );
+            let _ = take_frame_paint_nodes();
+
+            settle_cubic(REST, "x", 0.0);
+            let hidden =
+                layout.build_and_layout_fast(&mut root, 220.0, 96.0, [-1.0, -1.0], true, true);
+            let hide_dirty = take_frame_paint_nodes();
+            let prev = crate::app::draw_cull::last_present_visual_slots(
+                &shown.node_paints,
+                &shown.instances,
+                &[],
+                &shown.text_nodes,
+                &[],
+            );
+            let mut covered_track = false;
+            let mut wipes = Vec::new();
+            for d in &hide_dirty {
+                if d.kind != crate::app::damage::PaintDirtyKind::Node {
+                    continue;
+                }
+                let Some(reset) = crate::app::draw_cull::node_present_dest_reset_full(
+                    d.key,
+                    d.bounds,
+                    &hidden.node_paints,
+                    &hidden.instances,
+                    &[],
+                    &[],
+                    1.0,
+                    prev.iter().find(|(k, _)| *k == d.key).map(|(_, b)| *b),
+                ) else {
+                    continue;
+                };
+                wipes.push((d.key, d.bounds, reset.rect, reset.clear, reset.replay));
+                if rect_covers(reset.rect, track) {
+                    covered_track = true;
+                    assert!(
+                        reset.clear[0] > 0.98 && reset.clear[1] > 0.98 && reset.clear[2] > 0.98,
+                        "hide clear must be the field fill, not the track\n clear={:?} track={track:?}",
+                        reset.clear
+                    );
+                }
+            }
+            assert!(
+                covered_track,
+                "horizontal hide dest-reset must cover the last painted track\n track={track:?} thumb={thumb:?} field={bounds:?}\n wipes={wipes:?}\n dirties={hide_dirty:?}"
+            );
+            let hidden_track_a = thumb_fill_alpha(&hidden, track);
+            assert!(
+                hidden_track_a < 0.05,
+                "settled hide must not keep painting the track, alpha={hidden_track_a} track={track:?}"
             );
         });
     });

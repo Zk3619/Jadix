@@ -5,21 +5,25 @@
 
 use winit::window::Window;
 
+use std::ptr::null_mut;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
 use std::sync::Mutex;
 
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
 use windows_sys::Win32::UI::Input::Ime::{
-    ImmGetContext, ImmGetDefaultIMEWnd, ImmNotifyIME, ImmReleaseContext, ImmSetCompositionWindow,
-    CFS_POINT, COMPOSITIONFORM, CPS_CANCEL, IMC_SETCOMPOSITIONWINDOW, IMECHARPOSITION,
-    IMR_QUERYCHARPOSITION, NI_COMPOSITIONSTR,
+    ImmGetCompositionStringW, ImmGetContext, ImmGetDefaultIMEWnd, ImmNotifyIME, ImmReleaseContext,
+    ImmSetCompositionWindow, CFS_POINT, COMPOSITIONFORM, CPS_CANCEL, GCS_COMPATTR, GCS_COMPSTR,
+    GCS_CURSORPOS, IMC_SETCOMPOSITIONWINDOW,
+    IMECHARPOSITION, IMR_QUERYCHARPOSITION, NI_COMPOSITIONSTR,
 };
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_LSHIFT, VK_RSHIFT, VK_SHIFT};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DestroyCaret, GetAncestor, GetClassNameW, GetClientRect, GetForegroundWindow, GetWindowRect,
-    IsWindow, SendMessageW, SetWindowPos, WindowFromPoint, GA_ROOT, HWND_TOP, SWP_NOACTIVATE,
-    SWP_NOSIZE, SWP_NOZORDER, WM_IME_CONTROL, WM_IME_REQUEST,
+    DefWindowProcW, DestroyCaret, GetAncestor, GetClassNameW, GetClientRect, GetForegroundWindow,
+    GetWindowRect, IsWindow, SendMessageW, SetWindowPos, WindowFromPoint, GA_ROOT, HWND_TOP,
+    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WM_IME_COMPOSITION, WM_IME_CONTROL, WM_IME_REQUEST,
+    WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
 };
 
 const SUBCLASS_ID: usize = 0x5255_4949; // 'RUII'
@@ -48,6 +52,87 @@ static LAST_RELOCATE_LOG_MS: AtomicI32 = AtomicI32::new(0);
 static TRACKED_IME_HWNDS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 static LAST_IME_FOCUS_ID: Mutex<String> = Mutex::new(String::new());
 static APP_HWND: AtomicIsize = AtomicIsize::new(0);
+/// Set for the duration of `WM_IME_COMPOSITION` when `GCS_CURSORPOS` is absent.
+/// Korean IME omits that flag; a NULL-buffer cursor query then returns 0.
+static PREEDIT_CARET_UNSPECIFIED: AtomicBool = AtomicBool::new(false);
+
+/// True while the in-flight composition message has no caret (`GCS_CURSORPOS` clear).
+pub(crate) fn ime_preedit_caret_unspecified() -> bool {
+    PREEDIT_CARET_UNSPECIFIED.load(Ordering::Relaxed)
+}
+
+/// Composition attributes and the real caret, captured for the in-flight
+/// `WM_IME_COMPOSITION`. winit reports the target clause as the preedit cursor;
+/// Japanese IME uses that clause for the thick underline, not the caret.
+#[derive(Clone, Debug)]
+pub(crate) struct ImeCompositionSnap {
+    /// `GCS_CURSORPOS` in characters. `None` when the flag is absent.
+    pub cursor_chars: Option<usize>,
+    /// `GCS_COMPATTR`, one byte per UTF-16 code unit.
+    pub attrs: Vec<u8>,
+}
+
+static COMP_SNAP: Mutex<Option<ImeCompositionSnap>> = Mutex::new(None);
+
+pub(crate) fn ime_composition_snap() -> Option<ImeCompositionSnap> {
+    COMP_SNAP.lock().ok().and_then(|g| g.clone())
+}
+
+fn clear_comp_snap() {
+    if let Ok(mut g) = COMP_SNAP.lock() {
+        *g = None;
+    }
+}
+
+unsafe fn capture_comp_snap(hwnd: HWND, cursor_missing: bool) {
+    let himc = unsafe { ImmGetContext(hwnd) };
+    if himc.is_null() {
+        clear_comp_snap();
+        return;
+    }
+    let attrs = unsafe { read_comp_bytes(himc, GCS_COMPATTR) }.unwrap_or_default();
+    let cursor_chars = if cursor_missing {
+        None
+    } else {
+        let cursor = unsafe { ImmGetCompositionStringW(himc, GCS_CURSORPOS, null_mut(), 0) };
+        (cursor >= 0).then_some(cursor as usize)
+    };
+    let _ = unsafe { ImmReleaseContext(hwnd, himc) };
+    if let Ok(mut g) = COMP_SNAP.lock() {
+        *g = Some(ImeCompositionSnap {
+            cursor_chars,
+            attrs,
+        });
+    }
+}
+
+unsafe fn read_comp_bytes(himc: windows_sys::Win32::UI::Input::Ime::HIMC, gcs: u32) -> Option<Vec<u8>> {
+    let size = unsafe { ImmGetCompositionStringW(himc, gcs, null_mut(), 0) };
+    if size <= 0 {
+        return Some(Vec::new());
+    }
+    let mut buf = vec![0u8; size as usize];
+    let wrote = unsafe {
+        ImmGetCompositionStringW(
+            himc,
+            gcs,
+            buf.as_mut_ptr() as *mut std::ffi::c_void,
+            size as _,
+        )
+    };
+    if wrote < 0 {
+        return None;
+    }
+    buf.truncate(wrote as usize);
+    Some(buf)
+}
+
+/// Install the IME subclass before the first `WM_IME_COMPOSITION` of a session.
+pub(crate) fn arm_ime_composition_watch(window: &dyn Window) {
+    if let Some(hwnd) = hwnd_of(window) {
+        ensure_subclass(hwnd);
+    }
+}
 
 fn now_ms() -> i32 {
     std::time::SystemTime::now()
@@ -469,6 +554,17 @@ fn ensure_subclass(hwnd: HWND) {
     }
 }
 
+/// winit returns 0 for `WM_KEY*` and never calls `DefWindowProc`.
+/// CJK IMEs toggle native / alphanumeric (中/英, 日/英, 한/영) on a lone Shift
+/// inside that default proc. Shift+arrow still reaches the editor; the IME
+/// ignores the toggle when another key was pressed while Shift was held.
+fn shift_reaches_ime(msg: u32, wparam: WPARAM) -> bool {
+    let shift = wparam == VK_SHIFT as WPARAM
+        || wparam == VK_LSHIFT as WPARAM
+        || wparam == VK_RSHIFT as WPARAM;
+    shift && matches!(msg, WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP)
+}
+
 unsafe extern "system" fn ime_subclass_proc(
     hwnd: HWND,
     msg: u32,
@@ -477,6 +573,27 @@ unsafe extern "system" fn ime_subclass_proc(
     _uid: usize,
     _data: usize,
 ) -> LRESULT {
+    if shift_reaches_ime(msg, wparam) {
+        unsafe {
+            DefWindowProcW(hwnd, msg, wparam, lparam);
+        }
+    }
+    if msg == WM_IME_COMPOSITION {
+        let flags = lparam as u32;
+        // Flag absent → Imm cursor query is 0, not "caret before the syllable".
+        let has_str = (flags & GCS_COMPSTR) != 0;
+        let unspecified = has_str && (flags & GCS_CURSORPOS) == 0;
+        PREEDIT_CARET_UNSPECIFIED.store(unspecified, Ordering::Relaxed);
+        if has_str {
+            unsafe { capture_comp_snap(hwnd, unspecified) };
+        } else {
+            clear_comp_snap();
+        }
+        let result = unsafe { DefSubclassProc(hwnd, msg, wparam, lparam) };
+        PREEDIT_CARET_UNSPECIFIED.store(false, Ordering::Relaxed);
+        clear_comp_snap();
+        return result;
+    }
     if msg == WM_IME_REQUEST && wparam == IMR_QUERYCHARPOSITION as WPARAM {
         let pos = lparam as *mut IMECHARPOSITION;
         if !pos.is_null() {
@@ -563,19 +680,43 @@ pub(crate) fn apply_ime_cursor_area(
     if last_idle_cursor_unchanged(compose_px, py, pw, ph) {
         return;
     }
-    window.set_ime_cursor_area(
-        winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(
-            area_x as f64,
-            area_y as f64,
-        )),
-        winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(
-            area_w.max(1.0) as f64,
-            area_h.max(1.0) as f64,
-        )),
-    );
+    // `Update` is a no-op until Enable advertised cursor-area (old `set_ime_cursor_area`).
+    if window
+        .ime_capabilities()
+        .is_some_and(|caps| caps.cursor_area())
+    {
+        let _ = window.request_ime_update(winit::window::ImeRequest::Update(
+            winit::window::ImeRequestData::default().with_cursor_area(
+                winit::dpi::Position::Logical(winit::dpi::LogicalPosition::new(
+                    area_x as f64,
+                    area_y as f64,
+                )),
+                winit::dpi::Size::Logical(winit::dpi::LogicalSize::new(
+                    area_w.max(1.0) as f64,
+                    area_h.max(1.0) as f64,
+                )),
+            ),
+        ));
+    }
 }
 
 pub(crate) fn ime_disallow(window: &dyn Window) {
     release_ui_control(window, true);
     destroy_caret();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lone_shift_reaches_the_ime() {
+        assert!(shift_reaches_ime(WM_KEYDOWN, VK_SHIFT as WPARAM));
+        assert!(shift_reaches_ime(WM_KEYUP, VK_LSHIFT as WPARAM));
+        assert!(shift_reaches_ime(WM_SYSKEYDOWN, VK_RSHIFT as WPARAM));
+        assert!(shift_reaches_ime(WM_SYSKEYUP, VK_SHIFT as WPARAM));
+        // Left arrow, and Shift on a character message, stay with the editor.
+        assert!(!shift_reaches_ime(WM_KEYDOWN, 0x25));
+        assert!(!shift_reaches_ime(0x0102, VK_SHIFT as WPARAM));
+    }
 }

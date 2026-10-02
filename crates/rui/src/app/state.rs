@@ -21,8 +21,9 @@ use crate::{
     components::{
         scrollbar::scrollbar_visibility_signal_key,
         scrollbar::{
-            apply_scrollbar_visible_alpha, normalize_scrollbar_base_for_auto,
-            scrollbar_min_thumb_along_track, ATTR_SCROLLBAR_TRACK_FADES,
+            apply_scrollbar_visible_alpha, horizontal_lane_side_inset,
+            normalize_scrollbar_base_for_auto, scrollbar_min_thumb_along_track,
+            vertical_scrollbar_occupies_lane, ATTR_H_LANE_INSET, ATTR_SCROLLBAR_TRACK_FADES,
             SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
         },
     },
@@ -31,7 +32,8 @@ use crate::{
         scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
         scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
         scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
-        scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
+        scroll_scrollbar_y_side_signal_key, scroll_viewport_h_signal_key,
+        scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
     },
 };
 use std::collections::hash_map::Entry;
@@ -52,6 +54,51 @@ static SCROLL_PREPASS_RECURSE_COUNT: AtomicUsize = AtomicUsize::new(0);
 static SCROLL_PREPASS_RECURSE_VIEWPORTS_ONLY: AtomicUsize = AtomicUsize::new(0);
 #[cfg(debug_assertions)]
 static SCROLL_PREPASS_RECURSE_FULL: AtomicUsize = AtomicUsize::new(0);
+#[cfg(debug_assertions)]
+static PRESENT_HOLE_CHROME: AtomicUsize = AtomicUsize::new(0);
+#[cfg(debug_assertions)]
+static PRESENT_HOLE_BAND: AtomicUsize = AtomicUsize::new(0);
+#[cfg(debug_assertions)]
+static PRESENT_SDF_BG: AtomicUsize = AtomicUsize::new(0);
+
+fn present_hole_counts() -> (usize, usize, usize) {
+    #[cfg(debug_assertions)]
+    {
+        (
+            PRESENT_HOLE_CHROME.load(Ordering::Relaxed),
+            PRESENT_HOLE_BAND.load(Ordering::Relaxed),
+            PRESENT_SDF_BG.load(Ordering::Relaxed),
+        )
+    }
+    #[cfg(not(debug_assertions))]
+    {
+        (0, 0, 0)
+    }
+}
+
+fn reset_present_hole_counts() {
+    #[cfg(debug_assertions)]
+    {
+        PRESENT_HOLE_CHROME.store(0, Ordering::Relaxed);
+        PRESENT_HOLE_BAND.store(0, Ordering::Relaxed);
+        PRESENT_SDF_BG.store(0, Ordering::Relaxed);
+    }
+}
+
+fn note_present_hole_chrome() {
+    #[cfg(debug_assertions)]
+    PRESENT_HOLE_CHROME.fetch_add(1, Ordering::Relaxed);
+}
+
+fn note_present_hole_band() {
+    #[cfg(debug_assertions)]
+    PRESENT_HOLE_BAND.fetch_add(1, Ordering::Relaxed);
+}
+
+fn note_present_sdf_bg() {
+    #[cfg(debug_assertions)]
+    PRESENT_SDF_BG.fetch_add(1, Ordering::Relaxed);
+}
 
 /// How much scroll-related work to do before layout each frame.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -469,6 +516,20 @@ fn instances_for_upload<'a>(
     }
 }
 
+fn instance_range_hits(
+    instances: &[InstanceInput],
+    start: u32,
+    count: u32,
+    cull: super::draw_cull::CullRects,
+) -> bool {
+    let start = start as usize;
+    let end = (start + count as usize).min(instances.len());
+    let start = start.min(end);
+    instances[start..end]
+        .iter()
+        .any(|inst| cull.hits_instance(inst))
+}
+
 fn draw_instance_range(
     pass: &mut wgpu::RenderPass<'_>,
     pipeline: &RuiPipeline,
@@ -518,6 +579,30 @@ fn draw_sdf_range_with_clip<'a>(
     if lo >= hi {
         return;
     }
+    if let Some(cull) = cull {
+        // Parent collect ranges include every descendant quad. Underlay restore
+        // of an absolute track used to upload each of those ops (forms page:
+        // 808 bind groups, ~170ms encode) and only then test the scissor.
+        let mut hit_inst = Vec::new();
+        let mut hit_poly = Vec::new();
+        for i in lo..hi {
+            if !cull.hits_instance(&instances[i]) {
+                continue;
+            }
+            hit_inst.push(instances[i]);
+            hit_poly.push(
+                clip_polys
+                    .get(i)
+                    .copied()
+                    .unwrap_or(crate::style::GpuClipPoly::NONE),
+            );
+        }
+        if hit_inst.is_empty() {
+            return;
+        }
+        draw_uploaded_sdf_with_clip(pass, pipeline, device, dummy, &hit_inst, &hit_poly, None);
+        return;
+    }
     let inst_slice = &instances[lo..hi];
     let mut polys: Vec<crate::style::GpuClipPoly> = if lo < clip_polys.len() {
         clip_polys[lo..hi.min(clip_polys.len())].to_vec()
@@ -527,16 +612,47 @@ fn draw_sdf_range_with_clip<'a>(
     while polys.len() < inst_slice.len() {
         polys.push(crate::style::GpuClipPoly::NONE);
     }
+    draw_uploaded_sdf_with_clip(pass, pipeline, device, dummy, inst_slice, &polys, None);
+}
+
+/// One clip-poly bind group for an already-gathered instance list.
+///
+/// Per-slot uploads in a thumb hole created a GL buffer and bind group for every
+/// ancestor whose box contains the thumb (inline hue/alpha). Painter order is
+/// preserved by the caller flushing before a texture that actually hits.
+fn draw_uploaded_sdf_with_clip<'a>(
+    pass: &mut wgpu::RenderPass<'a>,
+    pipeline: &'a RuiPipeline,
+    device: &wgpu::Device,
+    dummy: &'a wgpu::BindGroup,
+    instances: &[InstanceInput],
+    polys: &[crate::style::GpuClipPoly],
+    cull: Option<super::draw_cull::CullRects>,
+) {
+    if instances.is_empty() {
+        return;
+    }
+    let polys_owned = if polys.len() >= instances.len() {
+        polys[..instances.len()].to_vec()
+    } else {
+        let mut padded = polys.to_vec();
+        while padded.len() < instances.len() {
+            padded.push(crate::style::GpuClipPoly::NONE);
+        }
+        padded
+    };
+    note_present_sdf_bg();
     let inst_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Node present SDF range"),
-        contents: bytemuck::cast_slice(inst_slice),
+        contents: bytemuck::cast_slice(instances),
         usage: wgpu::BufferUsages::VERTEX,
     });
-    let (_clip_buf, _clip_bg) = pipeline.bind_sdf_with_clip_polys(pass, device, dummy, &polys);
+    let (_clip_buf, _clip_bg) =
+        pipeline.bind_sdf_with_clip_polys(pass, device, dummy, &polys_owned);
     pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
     pass.set_vertex_buffer(1, inst_buf.slice(..));
     pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-    draw_instance_range(pass, pipeline, inst_slice, 0, inst_slice.len() as u32, cull);
+    draw_instance_range(pass, pipeline, instances, 0, instances.len() as u32, cull);
 }
 
 fn draw_cpu_sdf_instances<'a>(
@@ -563,6 +679,12 @@ fn draw_cpu_sdf_instances<'a>(
         super::frame_stats::SceneKind::Underline,
         instances.len() as u32,
     );
+}
+
+/// Primitive repair must cover every pixel in the rounded GPU scissor.
+fn node_present_repair_cull_rect(scissor: (u32, u32, u32, u32)) -> [f32; 4] {
+    let (x, y, w, h) = scissor;
+    [x as f32, y as f32, w as f32, h as f32]
 }
 
 /// Dest-reset that must fill `rect` opaquely. The SDF shader expands +2px AA;
@@ -684,6 +806,15 @@ fn draw_paint_ops<'pass>(
     for op in &ops[lo..hi] {
         match *op {
             PaintOp::Rects { start, count } if count > 0 => {
+                // Bind is a GL pipeline switch. A thumb hole used to do it for every
+                // page op, then cull to zero draws (inline hue/alpha encode).
+                if let Some(damage) = cull {
+                    if !instances.is_empty()
+                        && !instance_range_hits(instances, start, count, damage)
+                    {
+                        continue;
+                    }
+                }
                 pipeline.bind_sdf(pass, true, backdrop);
                 pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, instance_buffer.slice(..));
@@ -2468,6 +2599,7 @@ impl AppState {
         prev_underline_instances: &[InstanceInput],
     ) {
         use super::damage::PaintDirtyKind;
+        reset_present_hole_counts();
         let dummy = self.pipeline.dummy_backdrop();
         let mut pending_page_glyphs = capture_text_ready;
         let pending_underlay_glyphs = capture_underlay_ready;
@@ -2600,7 +2732,19 @@ impl AppState {
                         );
                     }
                 }
-                vec![scissor_logical]
+                // Keep the shadow fringe in the hole. Occupancy includes that
+                // halo; cutting it clips the trigger hover and the punch
+                // src-overs the old shadow darker. Subtract only the panel
+                // box so menu rows are not cleared. The fringe is cleared
+                // with the trigger, then the portal is drawn once.
+                if dirty.kind == PaintDirtyKind::Region {
+                    super::damage::page_scissors_excluding_portal_boxes(
+                        scissor_logical,
+                        &self.last_overlay_stamps,
+                    )
+                } else {
+                    vec![scissor_logical]
+                }
             };
             for scissor_logical in scissors {
                 let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
@@ -2613,11 +2757,41 @@ impl AppState {
                     continue;
                 };
                 render_pass.set_scissor_rect(x, y, w, h);
-                let cull_rect =
-                    super::draw_cull::damage_cull_rect_physical(scissor_logical, 0.0, ui_scale);
+                // CLEAR touches the outward-rounded GPU scissor. Cull against
+                // those same pixels: the fractional logical hole can exclude a
+                // clipped page primitive covering its last row, leaving white
+                // residue after an accordion menu closes.
+                let cull_rect = node_present_repair_cull_rect((x, y, w, h));
                 let cull_phys = Some(super::draw_cull::CullRects::one(cull_rect));
                 match dirty.kind {
                     PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region => {
+                        // Textured-track thumb (inline hue/alpha): dest-reset finds no
+                        // opaque fill and escalates to Region. Page-band replay uploads
+                        // every descendant quad and runs glyphon. Own chrome + the ramp
+                        // is the hole. Floating sliders stay Overlay; solid Slider
+                        // dest-resets as Node.
+                        if dirty.kind == PaintDirtyKind::Region
+                            && super::draw_cull::region_replays_own_chrome_only(
+                                dirty.key,
+                                dirty.bounds,
+                                node_paints,
+                            )
+                        {
+                            note_present_hole_chrome();
+                            self.draw_own_chrome_region(
+                                render_pass,
+                                node_paints,
+                                scaled_instances,
+                                clip_polys,
+                                scaled_tex,
+                                dummy,
+                                scissor_logical,
+                                ui_scale,
+                                cull_phys,
+                            );
+                            continue;
+                        }
+                        note_present_hole_band();
                         // Reconstruct once from the same clear color and ordered
                         // page bands as FullClear, rather than sampling a top fill
                         // and submitting descendants a second time (alpha buildup).
@@ -2658,7 +2832,8 @@ impl AppState {
                                         cull_phys,
                                         false,
                                     );
-                                    if band.text.0 < band.text.1
+                                    if dirty.kind != PaintDirtyKind::Region
+                                        && band.text.0 < band.text.1
                                         && !page_band_skip_text.get(band_i).copied().unwrap_or(true)
                                     {
                                         if band_i == 0 {
@@ -2669,6 +2844,13 @@ impl AppState {
                                         }
                                     }
                                 }
+                                // Page `TextRenderer` holds every glyph on the
+                                // forms page. Recording it for a thumb hole is
+                                // the 150ms encode (prepare stays ~4ms; the
+                                // scissor does not shrink the command buffer).
+                                // Hole glyphs are in the capture renderer and
+                                // flushed once after chrome — drawing them here
+                                // as well src-overs the caption darker.
                                 continue;
                             }
                             if overlay_paint_start > 0 {
@@ -2724,7 +2906,7 @@ impl AppState {
                                 Some(cull_rect),
                             );
                         }
-                        if !skip_page_text {
+                        if dirty.kind != PaintDirtyKind::Region && !skip_page_text {
                             render_pass.set_scissor_rect(x, y, w, h);
                             self.text_renderer.render(render_pass);
                         }
@@ -2765,6 +2947,8 @@ impl AppState {
                                     reset_color,
                                 );
                                 if replay {
+                                    let wipe_cull =
+                                        Some(super::draw_cull::CullRects::one(reset.rect));
                                     draw_sdf_range_with_clip(
                                         render_pass,
                                         &self.pipeline,
@@ -2774,9 +2958,40 @@ impl AppState {
                                         clip_polys,
                                         reset.replay.0 as u32,
                                         (reset.replay.1 - reset.replay.0) as u32,
-                                        Some(super::draw_cull::CullRects::one(reset.rect)),
+                                        wipe_cull,
                                     );
                                     render_pass.set_scissor_rect(x, y, w, h);
+                                    // The underlay SDF and its ramp are one slot (slider
+                                    // track). CLEAR drops the texture; replaying only the
+                                    // SDF leaves a solid bite, and the thumb shadow then
+                                    // never covers the gradient on the equator.
+                                    if let Some(owner) = node_paints
+                                        .iter()
+                                        .filter(|p| {
+                                            !p.overlay
+                                                && p.instance.0 <= reset.replay.0
+                                                && reset.replay.0 < p.instance.1
+                                        })
+                                        .min_by_key(|p| {
+                                            p.instance.1.saturating_sub(p.instance.0)
+                                        })
+                                    {
+                                        let t0 = owner.textured.0;
+                                        let t1 = owner.textured.1.min(overlay_tex_start);
+                                        if t0 < t1 {
+                                            draw_packed_textured_runs(
+                                                render_pass,
+                                                &self.textured_pipeline,
+                                                &self.textured_instance_buffer,
+                                                &self.image_textures,
+                                                scaled_tex,
+                                                t0,
+                                                t1,
+                                                wipe_cull,
+                                            );
+                                            render_pass.set_scissor_rect(x, y, w, h);
+                                        }
+                                    }
                                 }
                             }
                             let has_keyed = super::damage::paint_dirty_has_keyed_slot(
@@ -2824,9 +3039,13 @@ impl AppState {
                                                     p.bounds,
                                                     has_keyed,
                                                 )
-                                                && super::damage::restore_page_behind_overlay(
-                                                    p.bounds,
+                                                && super::draw_cull::node_present_underlay_paint(
+                                                    dirty.key,
+                                                    dirty.bounds,
+                                                    p,
                                                     reset_logical,
+                                                    node_paints,
+                                                    scaled_instances,
                                                 )
                                         },
                                         restore_cull,
@@ -3278,6 +3497,101 @@ impl AppState {
         }
         let now = owned(current);
         draw_cpu_sdf_instances(render_pass, &self.pipeline, &self.device, dummy, &now);
+    }
+
+    /// Intersecting slots contribute their own fill and textures, not the
+    /// descendant instance range collect stores on the parent.
+    fn draw_own_chrome_region<'pass>(
+        &'pass self,
+        render_pass: &mut wgpu::RenderPass<'pass>,
+        node_paints: &[crate::layout::layout_tree::NodePaint],
+        scaled_instances: &[InstanceInput],
+        clip_polys: &[crate::style::GpuClipPoly],
+        scaled_tex: &'pass [crate::renderer::ScaledTexturedDraw],
+        dummy: &'pass wgpu::BindGroup,
+        scissor_logical: [f32; 4],
+        ui_scale: f32,
+        cull: Option<super::draw_cull::CullRects>,
+    ) {
+        let mut batch_inst: Vec<InstanceInput> = Vec::new();
+        let mut batch_poly: Vec<crate::style::GpuClipPoly> = Vec::new();
+        fn flush<'a>(
+            pass: &mut wgpu::RenderPass<'a>,
+            pipeline: &'a RuiPipeline,
+            device: &'a wgpu::Device,
+            dummy: &'a wgpu::BindGroup,
+            insts: &mut Vec<InstanceInput>,
+            polys: &mut Vec<crate::style::GpuClipPoly>,
+        ) {
+            if insts.is_empty() {
+                return;
+            }
+            draw_uploaded_sdf_with_clip(pass, pipeline, device, dummy, insts, polys, None);
+            insts.clear();
+            polys.clear();
+        }
+        for p in node_paints {
+            if p.overlay
+                || super::damage::intersect_rects(p.bounds, scissor_logical).is_none()
+            {
+                continue;
+            }
+            let (lo, hi) = super::draw_cull::slot_own_chrome_range(p, scaled_instances, ui_scale);
+            for i in lo..hi {
+                if let Some(c) = cull {
+                    if !c.hits_instance(&scaled_instances[i]) {
+                        continue;
+                    }
+                }
+                batch_inst.push(scaled_instances[i]);
+                batch_poly.push(
+                    clip_polys
+                        .get(i)
+                        .copied()
+                        .unwrap_or(crate::style::GpuClipPoly::NONE),
+                );
+            }
+            super::draw_cull::for_each_own_textured_run(
+                p,
+                node_paints,
+                scaled_tex.len(),
+                |start, end| {
+                    let hits = match cull {
+                        Some(c) => scaled_tex[start..end].iter().any(|d| c.hits_textured(d)),
+                        None => start < end,
+                    };
+                    if !hits {
+                        return;
+                    }
+                    flush(
+                        render_pass,
+                        &self.pipeline,
+                        &self.device,
+                        dummy,
+                        &mut batch_inst,
+                        &mut batch_poly,
+                    );
+                    draw_packed_textured_runs(
+                        render_pass,
+                        &self.textured_pipeline,
+                        &self.textured_instance_buffer,
+                        &self.image_textures,
+                        scaled_tex,
+                        start,
+                        end,
+                        cull,
+                    );
+                },
+            );
+        }
+        flush(
+            render_pass,
+            &self.pipeline,
+            &self.device,
+            dummy,
+            &mut batch_inst,
+            &mut batch_poly,
+        );
     }
 
     fn draw_matching_node_paints<'pass>(
@@ -5819,9 +6133,19 @@ impl AppState {
                 ui_scale,
             )
         };
+        let page_text_for_glyphs = &self.text_nodes[..overlay_text_start];
         let node_in_glyph_dirties = |d: &super::damage::PaintDirty| match d.kind {
-            super::damage::PaintDirtyKind::OverlayRestore
-            | super::damage::PaintDirtyKind::Region => false,
+            super::damage::PaintDirtyKind::OverlayRestore => false,
+            // Own-chrome regions skip the page glyphon run. Child captions in
+            // the hole (select trigger value) are covered by the fill unless
+            // this capture puts them back. Flush draws that capture once.
+            super::damage::PaintDirtyKind::Region => {
+                super::draw_cull::region_needs_glyph_capture(
+                    d,
+                    &render_result.node_paints,
+                    page_text_for_glyphs,
+                )
+            }
             super::damage::PaintDirtyKind::Node => {
                 !super::damage::paint_dirty_covered_by_overlay_restore(d, &self.damage_nodes)
                     && !skip_covered_nested(d)
@@ -6054,6 +6378,7 @@ impl AppState {
                         c.extra_selections.hash(&mut hasher);
                         c.overwrite_highlight.hash(&mut hasher);
                         c.selection_bg.hash(&mut hasher);
+                        c.preedit_ul.hash(&mut hasher);
                     }
                 }
             }
@@ -7090,8 +7415,9 @@ impl AppState {
 
             let total_ms = (draw_done - render_begin).as_secs_f32() * 1000.0;
             if total_ms >= 200.0 {
+                let (hole_chrome, hole_band, sdf_bg) = present_hole_counts();
                 log::warn!(
-                    "slow render {total_ms:.0}ms skip_present=false idle={idle_ms:.0} pre={:.1} layout={:.1} rebuild={:.1} taffy={:.1} collect={:.1} setup={:.1} passes={layout_passes} full={} portal={portal_moves} upload={:.1} fx={:.1} text={:.1} acquire={:.1} encode={:.1} submit={:.1} present={:.1} captures={capture_n} modal_css={}",
+                    "slow render {total_ms:.0}ms skip_present=false idle={idle_ms:.0} pre={:.1} layout={:.1} rebuild={:.1} taffy={:.1} collect={:.1} setup={:.1} passes={layout_passes} full={} portal={portal_moves} upload={:.1} fx={:.1} text={:.1} acquire={:.1} encode={:.1} submit={:.1} present={:.1} captures={capture_n} modal_css={} hole_chrome={hole_chrome} hole_band={hole_band} sdf_bg={sdf_bg}",
                     (pre_done - render_begin).as_secs_f32() * 1000.0,
                     (layout_done - pre_done).as_secs_f32() * 1000.0,
                     layout_prof_sum.rebuild_ms,
@@ -7353,8 +7679,25 @@ fn update_scrollbar_element_self(
     // - explicitly `never`, or
     // - `auto` but not scrollable (no hidden hit-slab reservation for non-scrollable axis).
     if !axis_allows || vis == "never" || (vis != "always" && !scrollable) {
-        el.style.size.width = Dimension::length(0.0);
-        el.style.size.height = Dimension::length(0.0);
+        // In-flow bars must drop both axes or the flex lane stays (horizontal
+        // track stays short of the vertical thickness). Overlay bars are
+        // absolute: zeroing the cross size moves the inset anchor onto the far
+        // edge. Collect then draws the bar outward from that point, and the
+        // fade dest-reset only covers the later in-box rect — the outside
+        // strip stays (wrap=off textarea, gray band under the field).
+        let overlay = el.attrs.get("rui_scrollbar_overlay").map(String::as_str) == Some("1");
+        if overlay && axis == "x" {
+            el.style.size.width = Dimension::length(0.0);
+            el.style.min_size.width = Dimension::length(0.0);
+        } else if overlay {
+            el.style.size.height = Dimension::length(0.0);
+            el.style.min_size.height = Dimension::length(0.0);
+        } else {
+            el.style.size.width = Dimension::length(0.0);
+            el.style.size.height = Dimension::length(0.0);
+            el.style.min_size.width = Dimension::length(0.0);
+            el.style.min_size.height = Dimension::length(0.0);
+        }
         el.style.border_width = 0.0;
         if let Some(thumb) = el.children.first_mut() {
             thumb.style.size.width = Dimension::length(0.0);
@@ -7383,6 +7726,41 @@ fn update_scrollbar_element_self(
     } else {
         inset_y.eq_ignore_ascii_case("outside")
     };
+    let y_vis = use_signal(&scrollbar_visibility_signal_key(&rest, "y"), || "auto".to_string())
+        .peek();
+    let y_lane = vertical_scrollbar_occupies_lane(allow_y, y_vis.trim(), vh, ch);
+    // Only the side facing the vertical bar. Replacing both insets with the
+    // shared edge pad moved textarea bars (left 4 → 2) on the first frame, and
+    // a collect-time stretch then painted outside the box the fade clears.
+    if axis == "x" && !this_inset_outside {
+        let y_side = use_signal(&scroll_scrollbar_y_side_signal_key(&rest), || {
+            "right".to_string()
+        })
+        .peek();
+        let on_left = y_side.trim().eq_ignore_ascii_case("left");
+        let current = inset_len_px(if on_left {
+            &el.style.inset.left
+        } else {
+            &el.style.inset.right
+        });
+        let authored = el
+            .attrs
+            .get(ATTR_H_LANE_INSET)
+            .and_then(|s| s.parse::<f32>().ok())
+            .unwrap_or_else(|| {
+                el.set_attr(ATTR_H_LANE_INSET, current.to_string());
+                current
+            });
+        let next = horizontal_lane_side_inset(authored, base_thickness, y_lane);
+        if (current - next).abs() > 0.5 {
+            let v = taffy::style::LengthPercentageAuto::length(next);
+            if on_left {
+                el.style.inset.left = v;
+            } else {
+                el.style.inset.right = v;
+            }
+        }
+    }
 
     // Keep constant cross-size; show/hide is paint-only cubic (collect), not size.
     // Hit testing uses `layout_bounds`, not multiplied alpha.
@@ -7409,7 +7787,11 @@ fn update_scrollbar_element_self(
         } else {
             el.layout_bounds[3]
         };
-        if laid > 1.0 {
+        // Last frame still included the vertical lane. Size the thumb to the
+        // released length now; Taffy catches the track box up on this layout.
+        if axis == "x" && !y_lane && main_available > laid + 0.5 {
+            main_available
+        } else if laid > 1.0 {
             laid
         } else {
             main_available

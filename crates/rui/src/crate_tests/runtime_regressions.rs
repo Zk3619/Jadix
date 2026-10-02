@@ -316,7 +316,7 @@ fn latest_enter_and_exit_rebuild_one_ordered_composite() {
         let button = &root.children[1];
         let key = paint_element_key(button);
         let bounds = crate::core::tree::visual_paint_aabb(button, [0.0, 0.0]);
-        let mut dirty = [PaintDirty {
+        let mut dirty = vec![PaintDirty {
             key,
             bounds,
             kind: PaintDirtyKind::Node,
@@ -418,7 +418,7 @@ fn region_escalation_must_happen_before_glyph_capture() {
     let result = tree.build_and_layout(&mut root, 200.0, 100.0, [-1.0, -1.0]);
     let key = u64::MAX;
     let bounds = [20.0, 0.0, 20.0, 20.0];
-    let mut dirties = [PaintDirty {
+    let mut dirties = vec![PaintDirty {
         key,
         bounds,
         kind: PaintDirtyKind::Node,
@@ -469,7 +469,7 @@ fn node_reset_miss_without_background_must_not_stay_node() {
     let child = &root.children[0];
     let key = paint_element_key(child);
     let bounds = child.layout_bounds;
-    let mut dirties = [PaintDirty {
+    let mut dirties = vec![PaintDirty {
         key,
         bounds,
         kind: PaintDirtyKind::Node,
@@ -789,7 +789,7 @@ fn culled_metadata_without_history_does_not_reconstruct_a_backdrop() {
         rest: Some(bounds),
         overflow_clip: Some([0.0, 60.0, 800.0, 540.0]),
     }];
-    let mut dirty = [PaintDirty {
+    let mut dirty = vec![PaintDirty {
         key: 7,
         bounds,
         kind: PaintDirtyKind::Node,
@@ -1174,7 +1174,7 @@ fn overlay_knob_layout_damage_keeps_overlay_identity() {
 }
 
 #[test]
-fn scrolled_structure_damage_uses_visual_clip_bounds() {
+fn scrolled_structure_damage_uses_the_element_visual_box() {
     let child = Element::new().reactive_sync(|el, _| {
         el.children.push(Element::new().text("updated"));
         LayoutStatus::StructureChanged
@@ -1200,7 +1200,7 @@ fn scrolled_structure_damage_uses_visual_clip_bounds() {
         "replaced children require region reconstruction, not a node capture: {damage:?}"
     );
     assert!(
-        damage.iter().any(|d| d.bounds == [10.0, 50.0, 200.0, 60.0]),
-        "structural erase must follow the scrolled clip: {damage:?}"
+        damage.iter().any(|d| d.bounds == [10.0, 50.0, 100.0, 30.0]),
+        "structural erase is the changed element in visual space, not the ancestor clip: {damage:?}"
     );
 }

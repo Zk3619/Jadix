@@ -2147,9 +2147,23 @@ pub struct OverlayPaintBand {
     pub stamp_key: u64,
 }
 
+/// `z-index` that only sorts sibling paint order. The cell stays in the parent's
+/// page-stack band and is not a layered dest-reset slot.
+///
+/// Grouped OTP sets this on the focused cell so its ring paints above the joined
+/// edge. Opening a band there swallows every later sibling (the other OTP group)
+/// into the active cell's composite; replaying that band paints the ring stroke
+/// off the caret and window-clears the joined borders.
+pub(crate) fn z_index_is_paint_order_only(el: &Element) -> bool {
+    el.attrs.get("rui_z_paint_only").map(|s| s.as_str()) == Some("1")
+}
+
 /// Nested stacking-context children that form their own CSS stacking level.
 /// In-flow `z-index: auto` siblings share the parent's band (sortable rows).
 fn child_opens_page_stack_band(el: &Element) -> bool {
+    if z_index_is_paint_order_only(el) {
+        return false;
+    }
     if el.style.z_index != 0
         || el.style.position == taffy::style::Position::Absolute
         || el.style.position_fixed
@@ -5027,8 +5041,12 @@ impl LayoutTree {
                     walk: None,
                     cache_start: crate::layout::collect_cache::DlCursor::default(),
                     cache_geom: crate::layout::collect_cache::GeomKey::default(),
-                    layered: frame.layered
-                        || child_opens_page_stack_band(&element.children[job.index]),
+                    layered: if z_index_is_paint_order_only(&element.children[job.index]) {
+                        false
+                    } else {
+                        frame.layered
+                            || child_opens_page_stack_band(&element.children[job.index])
+                    },
                     overlay_stamp: if walk.painted.is_body_portal_layer {
                         let k = overlay_portal_stamp_key(&element.children[job.index]);
                         (k != 0).then_some(k)
@@ -6893,7 +6911,14 @@ impl LayoutTree {
                 return CollectWalkStart::Done(own);
             }
         };
-        let any_z = element.children.iter().any(|c| c.style.z_index != 0);
+        // Paint-only z-index still sorts (`z_order` below) but must not open a
+        // page-stack band. A band on the focused OTP cell runs through the rest
+        // of the page.
+        let any_z = element
+            .children
+            .iter()
+            .any(|c| c.style.z_index != 0 && !z_index_is_paint_order_only(c));
+        let paint_order_z = element.children.iter().any(|c| c.style.z_index != 0);
         let stacking_attr = element
             .attrs
             .get("data-stacking-context")
@@ -6989,7 +7014,7 @@ impl LayoutTree {
             || painted.list_t[1].abs() > 0.05
             || parent_scales
             || parent_rotates;
-        let z_order = if any_z {
+        let z_order = if paint_order_z {
             let mut order: Vec<usize> = (0..element.children.len()).collect();
             order.sort_by(|&a, &b| {
                 compare_sibling_paint_order(&element.children[a], &element.children[b])
@@ -7662,15 +7687,44 @@ fn scrollbar_track_overlay_abs(
     let cross = SCROLLBAR_HIT_SLAB_CROSS.max(base_thickness).max(2.0);
     let thumb_cross = (cross - inset * 2.0).max(1.0);
 
-    // Prefer Taffy's placed box: overlay insets (or 100% flex lanes) already encode
-    // the VS Code overlap / outside L-join. Fall back to viewport metrics on first frame.
-    let (track_w, track_h) = if layout_w > 1.0 && layout_h > 1.0 {
-        (layout_w, layout_h)
+    // ViewportsOnly does not write track size back into Taffy. A prepass that
+    // collapsed the main axis leaves width (or height) at 0 while the cross
+    // axis is still the inset-anchored thickness. Paint that length from the
+    // live viewport. A zero *cross* size means the inset anchor is on the far
+    // edge — drawing outward from there hangs ink outside the field, and the
+    // fade dest-reset Region-clears sibling glyphs and focus rings.
+    let inset_px = |v: taffy::style::LengthPercentageAuto| {
+        crate::layout::lpa_length_px(v)
+            .filter(|px| px.is_finite())
+            .unwrap_or(0.0)
+            .max(0.0)
+    };
+    let zero_bar = (
+        [base_abs_x, base_abs_y, 0.0, 0.0],
+        [base_abs_x, base_abs_y, 0.0, 0.0],
+    );
+    let (track_w, track_h) = if axis == "x" && layout_w <= 1.0 && layout_h > 1.0 {
+        let Some(main) = crate::components::scrollbar::overlay_main_length_when_unlaid(
+            vw,
+            inset_px(track_el.style.inset.left),
+            inset_px(track_el.style.inset.right),
+        ) else {
+            return zero_bar;
+        };
+        (main, layout_h)
+    } else if axis != "x" && layout_h <= 1.0 && layout_w > 1.0 {
+        let Some(main) = crate::components::scrollbar::overlay_main_length_when_unlaid(
+            vh,
+            inset_px(track_el.style.inset.top),
+            inset_px(track_el.style.inset.bottom),
+        ) else {
+            return zero_bar;
+        };
+        (layout_w, main)
+    } else if layout_w <= 1.0 || layout_h <= 1.0 {
+        return zero_bar;
     } else {
-        match axis {
-            "x" => (vw.max(1.0), cross),
-            _ => (cross, vh.max(1.0)),
-        }
+        (layout_w, layout_h)
     };
     let track_rect = [base_abs_x, base_abs_y, track_w, track_h];
 
@@ -8201,6 +8255,40 @@ fn push_chrome_rect(
     );
 }
 
+/// `style`: `None` is the single solid line used for Chinese/Korean.
+/// `Some(0)` thin, `Some(1)` thick, `Some(2)` wavy (Windows Japanese clauses).
+fn push_preedit_underline(
+    out: &mut Vec<InstanceInput>,
+    clip: Option<[f32; 4]>,
+    x: f32,
+    y: f32,
+    w: f32,
+    style: Option<u8>,
+    legacy_h: f32,
+    color: [f32; 4],
+) {
+    if w <= 0.0 {
+        return;
+    }
+    match style {
+        Some(1) => push_chrome_rect(out, clip, x, y - 1.25, w, 2.5, color),
+        Some(2) => {
+            let period = 4.0_f32;
+            let amp = 1.15_f32;
+            let mut sx = 0.0_f32;
+            while sx < w {
+                let seg = (period * 0.5).min(w - sx).max(1.0);
+                let phase = (sx / period) * std::f32::consts::TAU;
+                let dy = amp * phase.sin();
+                push_chrome_rect(out, clip, x + sx, y + dy, seg.min(w - sx).max(1.0), 1.0, color);
+                sx += period * 0.5;
+            }
+        }
+        Some(_) => push_chrome_rect(out, clip, x, y, w, 1.0, color),
+        None => push_chrome_rect(out, clip, x, y, w, legacy_h, color),
+    }
+}
+
 fn push_input_chrome_instances(
     selection_out: &mut Vec<InstanceInput>,
     caret_out: &mut Vec<InstanceInput>,
@@ -8209,7 +8297,7 @@ fn push_input_chrome_instances(
     x: f32,
     y: f32,
     box_w: f32,
-    box_h: f32,
+    _box_h: f32,
     clip: Option<[f32; 4]>,
     opacity: f32,
 ) {
@@ -8250,22 +8338,25 @@ fn push_input_chrome_instances(
     } else {
         hard_lines.len().max(1)
     };
-    // Soft-wrap of one hard line still stacks visual rows — never center in the tall box.
+    // One visual row still lives in a leaf taller than the line (textarea bottom ink).
+    // Glyphs are painted from the leaf top; centering chrome in that leaf drops the
+    // highlight below the ideograph so 汉字 sit on the selection's top edge.
     let multi_line_layout = line_count > 1;
     let caret_h =
         crate::utils::text_field::text_edit_caret_height_px(line_height, style.size_resolved());
+    // Probe ideograph ink only when this field actually has 汉字. Latin-only
+    // inputs must not lazy-load a CJK face just to draw a caret.
+    let cjk_band = if crate::utils::text_field::text_contains_cjk_ideograph(text) {
+        crate::utils::text_field::text_edit_cjk_chrome_band_px(line_height, style.size_resolved())
+    } else {
+        None
+    };
     let sel_h = if multi_line_layout {
         line_height.max(1.0)
     } else {
         caret_h.min(line_height).max(1.0)
     };
-    let line_origin_y = |line_i: usize| -> f32 {
-        if multi_line_layout {
-            y + line_i as f32 * line_height
-        } else {
-            y + (box_h - line_height).max(0.0) * 0.5
-        }
-    };
+    let line_origin_y = |line_i: usize| -> f32 { y + line_i as f32 * line_height };
     let line_top_y = |line_i: usize| -> f32 { line_origin_y(line_i) };
     let caret_y = |line_i: usize| -> f32 { line_origin_y(line_i) + (line_height - caret_h) * 0.5 };
 
@@ -8332,6 +8423,15 @@ fn push_input_chrome_instances(
     }
 
     for (s, e) in sel_ranges {
+        let range_cjk = crate::utils::text_field::text_contains_cjk_ideograph(&text[s..e]);
+        let span_for = |line_i: usize, cjk: bool| -> (f32, f32) {
+            if cjk {
+                if let Some((dy, h)) = cjk_band {
+                    return (line_origin_y(line_i) + dy, h);
+                }
+            }
+            (line_top_y(line_i), sel_h)
+        };
         let bg = caret.selection_bg;
         let color = [
             bg[0] as f32 / 255.0,
@@ -8368,6 +8468,8 @@ fn push_input_chrome_instances(
                         hw.min((box_w - hx).max(0.0)).max(0.0)
                     };
                     if sel_w > 0.0 {
+                        let li = line_i.min(line_count.saturating_sub(1));
+                        let (sy, sh) = span_for(li, range_cjk);
                         push_chrome_rect(
                             selection_out,
                             clip,
@@ -8376,9 +8478,9 @@ fn push_input_chrome_instances(
                             } else {
                                 x + align_dx + hx.max(0.0)
                             },
-                            line_top_y(line_i.min(line_count.saturating_sub(1))),
+                            sy,
                             sel_w,
-                            sel_h,
+                            sh,
                             color,
                         );
                     }
@@ -8439,6 +8541,11 @@ fn push_input_chrome_instances(
                     (end_w - prefix_w).min(box_w - prefix_w).max(0.0)
                 };
                 if sel_w > 0.0 {
+                    let sample = line_body.get(from..to).unwrap_or("");
+                    let (sy, sh) = span_for(
+                        line_i,
+                        crate::utils::text_field::text_contains_cjk_ideograph(sample),
+                    );
                     push_chrome_rect(
                         selection_out,
                         clip,
@@ -8447,9 +8554,9 @@ fn push_input_chrome_instances(
                         } else {
                             x + align_dx + prefix_w.min(box_w)
                         },
-                        line_top_y(line_i),
+                        sy,
                         sel_w,
-                        sel_h,
+                        sh,
                         color,
                     );
                 }
@@ -8457,14 +8564,20 @@ fn push_input_chrome_instances(
         }
     }
 
-    let mut preedit_uls = Vec::with_capacity(
-        usize::from(caret.preedit_underline.is_some()) + caret.extra_preedit_underlines.len(),
-    );
-    if let Some(r) = caret.preedit_underline {
-        preedit_uls.push(r);
+    let mut preedit_uls: Vec<(usize, usize, Option<u8>)> = Vec::new();
+    if caret.preedit_ul.is_empty() {
+        if let Some(r) = caret.preedit_underline {
+            preedit_uls.push((r.0, r.1, None));
+        }
+        for &(sa, sb) in &caret.extra_preedit_underlines {
+            preedit_uls.push((sa, sb, None));
+        }
+    } else {
+        for &(sa, sb, style) in &caret.preedit_ul {
+            preedit_uls.push((sa, sb, Some(style)));
+        }
     }
-    preedit_uls.extend_from_slice(&caret.extra_preedit_underlines);
-    for (sa, sb) in preedit_uls {
+    for (sa, sb, ul_style) in preedit_uls {
         let mut s = sa.min(sb).min(text.len());
         let mut e = sa.max(sb).min(text.len());
         s = text.floor_char_boundary(s);
@@ -8521,17 +8634,19 @@ fn push_input_chrome_instances(
                     (end_w - prefix_w).min(box_w - prefix_w).max(0.0)
                 };
                 if ul_w > 0.0 {
+                    let ul_x = if pan {
+                        x + align_dx + prefix_w
+                    } else {
+                        x + align_dx + prefix_w.min(box_w)
+                    };
                     let ul_y = line_origin_y(line_i) + style.size_resolved() + PREEDIT_UL_GAP;
-                    push_chrome_rect(
+                    push_preedit_underline(
                         selection_out,
                         clip,
-                        if pan {
-                            x + align_dx + prefix_w
-                        } else {
-                            x + align_dx + prefix_w.min(box_w)
-                        },
+                        ul_x,
                         ul_y,
                         ul_w,
+                        ul_style,
                         PREEDIT_UL_H,
                         color,
                     );
@@ -8607,13 +8722,24 @@ fn push_input_chrome_instances(
             c[2] as f32 / 255.0,
             (c[3] as f32 / 255.0) * opacity,
         ];
+        let li = line_i.min(line_count.saturating_sub(1));
+        let (caret_draw_y, caret_draw_h) =
+            if crate::utils::text_field::caret_touches_cjk_ideograph(text, ix) {
+                if let Some((dy, h)) = cjk_band {
+                    (line_origin_y(li) + dy, h)
+                } else {
+                    (caret_y(li), caret_h)
+                }
+            } else {
+                (caret_y(li), caret_h)
+            };
         push_chrome_rect(
             caret_out,
             clip,
             caret_x,
-            caret_y(line_i.min(line_count.saturating_sub(1))),
+            caret_draw_y,
             caret_w,
-            caret_h,
+            caret_draw_h,
             color,
         );
     }
@@ -8708,6 +8834,7 @@ mod prepared_text_attach_tests {
             extra_carets: Vec::new(),
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -8735,6 +8862,65 @@ mod prepared_text_attach_tests {
                 r.rect_size[0]
             );
         }
+    }
+
+    /// A one-line textarea leaf is `line_height + ink_pad`. Glyphs start at the
+    /// leaf top; the highlight must too, or the ideograph sits on the bar's top edge.
+    #[test]
+    fn single_line_textarea_selection_tracks_glyph_top() {
+        let text = "啊啊啊啊啊啊aaaa";
+        let lh = 21.0_f32;
+        let size = 14.0_f32;
+        let y = 8.0_f32;
+        let box_h = lh + crate::utils::text_field::text_edit_ink_pad_px(size);
+        let mut style = TextStyle::default();
+        style.size = Some(size);
+        style.weight = Some(400);
+        style.line_height_px = Some(lh);
+        style.color = Some([0, 0, 0, 255]);
+        style.white_space = crate::style::WhiteSpace::Normal;
+        style.input_caret = Some(InputCaretDraw {
+            caret_byte_index: text.len(),
+            selection: Some((0, text.len())),
+            selection_bg: [0, 0, 0, 255],
+            overwrite_highlight: None,
+            preedit_underline: None,
+            extra_carets: Vec::new(),
+            extra_selections: Vec::new(),
+            extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
+            drop_caret: false,
+            caret_color: None,
+            selection_foreground: None,
+        });
+
+        let mut selection = Vec::new();
+        let mut chrome = Vec::new();
+        push_input_chrome_instances(
+            &mut selection,
+            &mut chrome,
+            text,
+            &style,
+            4.0,
+            y,
+            280.0,
+            box_h,
+            None,
+            1.0,
+        );
+        assert!(!selection.is_empty(), "selection chrome missing");
+        let sel_y = selection[0].rect_pos[1];
+        let band = crate::utils::text_field::text_edit_cjk_chrome_band_px(lh, size);
+        let expected = y + band.map(|(dy, _)| dy).unwrap_or(0.0);
+        let centered = y + (box_h - lh) * 0.5;
+        assert!(
+            (sel_y - expected).abs() < 0.51,
+            "selection must share the glyph line top (y={sel_y}, expected={expected}, centered={centered})"
+        );
+        assert!(
+            (expected - centered).abs() > 0.5,
+            "fixture must be taller than one line so centering would be visible"
+        );
     }
 
     /// RTL paragraph: selecting the trailing LTR island must highlight the visual
@@ -8767,6 +8953,7 @@ mod prepared_text_attach_tests {
             extra_carets: Vec::new(),
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: Some([255, 255, 255, 255]),
@@ -8816,6 +9003,7 @@ mod prepared_text_attach_tests {
             extra_carets: Vec::new(),
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -8868,6 +9056,7 @@ mod prepared_text_attach_tests {
             extra_carets: vec![3, 5],
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             selection_bg: [0; 4],
             overwrite_highlight: None,
             preedit_underline: None,
@@ -8936,6 +9125,7 @@ mod prepared_text_attach_tests {
             extra_carets: Vec::new(),
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -9036,6 +9226,7 @@ mod prepared_text_attach_tests {
             extra_carets: Vec::new(),
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -9095,6 +9286,7 @@ mod prepared_text_attach_tests {
             extra_carets: Vec::new(),
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -9161,6 +9353,7 @@ mod prepared_text_attach_tests {
             extra_carets: Vec::new(),
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -9199,6 +9392,7 @@ mod prepared_text_attach_tests {
             extra_carets: Vec::new(),
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -9252,6 +9446,7 @@ mod prepared_text_attach_tests {
             extra_carets: Vec::new(),
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -9320,6 +9515,7 @@ mod prepared_text_attach_tests {
             extra_carets: Vec::new(),
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -9533,6 +9729,7 @@ mod prepared_text_attach_tests {
             extra_carets: Vec::new(),
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,

@@ -979,8 +979,11 @@ pub(super) fn format_value_row(
         .match_trigger(false)
         .trigger_width("5.75rem")
         .menu_width("6.5rem")
-        .max_height("16rem")
-        .scroll_selected("center");
+        .max_height("16rem");
+    // 6 format rows always fit `16rem` — no scroll_selected. Centering HSLA during
+    // Expand accordion (or under a place-CAP-stretched ScrollArea) looks like the
+    // list "scrolled" after settle; floating ColorPicker often opens downward so
+    // the same chase is less visible.
     for (value, label) in FORMAT_OPTIONS {
         sel = sel.item(SelectItemData::new(value.as_str(), *label));
     }

@@ -176,8 +176,31 @@ pub(crate) fn set_ime_allowed_latched(
         return;
     }
     *latched = allowed;
-    window.set_ime_allowed(allowed);
-    if !allowed {
+    // Same payload as the removed `Window::set_ime_allowed` shim.
+    let request = if allowed {
+        let caps = winit::window::ImeCapabilities::new()
+            .with_hint_and_purpose()
+            .with_cursor_area();
+        let data = winit::window::ImeRequestData::default()
+            .with_hint_and_purpose(
+                winit::window::ImeHint::NONE,
+                winit::window::ImePurpose::Normal,
+            )
+            .with_cursor_area(
+                winit::dpi::LogicalPosition::new(0.0, 0.0).into(),
+                winit::dpi::LogicalSize::new(0.0, 0.0).into(),
+            );
+        winit::window::ImeRequest::Enable(winit::window::ImeEnableRequest::new(caps, data).unwrap())
+    } else {
+        winit::window::ImeRequest::Disable
+    };
+    let _ = window.request_ime_update(request);
+    if allowed {
+        // Subclass must exist before the first composition: Shift toggles
+        // 中/英 (日/英, 한/영) with no preedit on screen.
+        #[cfg(target_os = "windows")]
+        crate::platform::windows::arm_ime_composition_watch(window);
+    } else {
         crate::platform::ime_disallow(window);
     }
 }
@@ -478,6 +501,149 @@ pub(crate) fn apply_ime_cursor_area(
     );
 }
 
+/// Windows 韩文 IME 的 `WM_IME_COMPOSITION` 经常不带 `GCS_CURSORPOS`。
+/// winit 仍调用 `ImmGetCompositionString(GCS_CURSORPOS)`，缺标志时返回 0，
+/// 再编码成预编辑光标 `(0, 0)`。按这个光标绘制时，带下划线的组字会落在插入符右侧。
+///
+/// `caret_unspecified`：本条组字消息没有光标位。此时光标应在组字末尾（`None`），
+/// 而不是字节 0。IME 真的把光标放在组字开头时会带上 `GCS_CURSORPOS`，原样保留。
+pub(crate) fn map_preedit_cursor(
+    cursor: Option<(usize, usize)>,
+    caret_unspecified: bool,
+) -> Option<(usize, usize)> {
+    if caret_unspecified {
+        None
+    } else {
+        cursor
+    }
+}
+
+/// Windows `GCS_COMPATTR` values. Japanese IME uses these for clause underlines.
+const ATTR_INPUT: u8 = 0x00;
+const ATTR_TARGET_CONVERTED: u8 = 0x01;
+const ATTR_CONVERTED: u8 = 0x02;
+const ATTR_TARGET_NOTCONVERTED: u8 = 0x03;
+const ATTR_INPUT_ERROR: u8 = 0x04;
+const ATTR_FIXEDCONVERTED: u8 = 0x05;
+
+/// Thin solid: converted clauses that are not the target.
+pub const PREEDIT_UL_THIN: u8 = 0;
+/// Thick solid: the clause just submitted for conversion (target).
+pub const PREEDIT_UL_THICK: u8 = 1;
+/// Wavy: the character still being typed.
+pub const PREEDIT_UL_WAVY: u8 = 2;
+
+fn is_japanese_kana(c: char) -> bool {
+    matches!(
+        c,
+        '\u{3040}'..='\u{30FF}' | '\u{31F0}'..='\u{31FF}' | '\u{FF66}'..='\u{FF9D}'
+    )
+}
+
+fn preedit_attr_style(attr: u8) -> u8 {
+    match attr {
+        ATTR_TARGET_CONVERTED | ATTR_TARGET_NOTCONVERTED => PREEDIT_UL_THICK,
+        ATTR_CONVERTED | ATTR_FIXEDCONVERTED => PREEDIT_UL_THIN,
+        ATTR_INPUT | ATTR_INPUT_ERROR => PREEDIT_UL_WAVY,
+        _ => PREEDIT_UL_WAVY,
+    }
+}
+
+/// Clause underlines for a composition string.
+///
+/// Chinese / Korean stay a single solid line (empty result): their string is
+/// all `ATTR_INPUT` and not kana. Japanese kana, and any string that already
+/// has converted clauses, splits into thick / thin / wavy runs.
+pub(crate) fn preedit_underline_spans(text: &str, attrs: &[u8]) -> Vec<(usize, usize, u8)> {
+    if text.is_empty() || attrs.is_empty() {
+        return Vec::new();
+    }
+    let kana = text.chars().any(is_japanese_kana);
+    let clause = attrs.iter().any(|&a| {
+        matches!(
+            a,
+            ATTR_TARGET_CONVERTED | ATTR_TARGET_NOTCONVERTED | ATTR_CONVERTED | ATTR_FIXEDCONVERTED
+        )
+    });
+    if !kana && !clause {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    let mut byte = 0usize;
+    let mut attr_idx = 0usize;
+    let mut run_start = 0usize;
+    let mut run_style: Option<u8> = None;
+    for ch in text.chars() {
+        let attr = attrs.get(attr_idx).copied().unwrap_or(ATTR_INPUT);
+        let style = preedit_attr_style(attr);
+        if run_style != Some(style) {
+            if let Some(st) = run_style {
+                if byte > run_start {
+                    out.push((run_start, byte, st));
+                }
+            }
+            run_start = byte;
+            run_style = Some(style);
+        }
+        byte += ch.len_utf8();
+        attr_idx += ch.len_utf16();
+    }
+    if let Some(st) = run_style {
+        if byte > run_start {
+            out.push((run_start, byte, st));
+        }
+    }
+    out
+}
+
+/// Caret + underline runs for one `Ime::Preedit`.
+///
+/// `cursor_chars`: `None` when this event has no Windows composition snapshot
+/// (use winit's cursor). `Some(None)` when `GCS_CURSORPOS` is absent (caret at
+/// the end). `Some(Some(n))` is the real character index — not the target
+/// clause winit puts in the cursor range.
+pub(crate) fn resolve_preedit_chrome(
+    text: &str,
+    winit_cursor: Option<(usize, usize)>,
+    caret_unspecified: bool,
+    cursor_chars: Option<Option<usize>>,
+    attrs: &[u8],
+) -> (Option<(usize, usize)>, Vec<(usize, usize, u8)>) {
+    let caret = if let Some(cur) = cursor_chars {
+        match cur {
+            Some(n) => {
+                let b = text
+                    .chars()
+                    .take(n)
+                    .map(|c| c.len_utf8())
+                    .sum::<usize>()
+                    .min(text.len());
+                Some((b, b))
+            }
+            None => None,
+        }
+    } else {
+        map_preedit_cursor(winit_cursor, caret_unspecified)
+    };
+    let marks = if cursor_chars.is_some() {
+        preedit_underline_spans(text, attrs)
+    } else {
+        Vec::new()
+    };
+    (caret, marks)
+}
+
+pub(crate) fn preedit_caret_unspecified() -> bool {
+    #[cfg(target_os = "windows")]
+    {
+        crate::platform::windows::ime_preedit_caret_unspecified()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        false
+    }
+}
+
 /// Commit 插入：在 `anchor` 处写入 `insert`，返回新串与新 caret 字节下标。
 pub fn apply_ime_commit(value: &str, anchor: usize, insert: &str) -> (String, usize) {
     let mut a = anchor.min(value.len());
@@ -573,6 +739,54 @@ pub(crate) fn estimate_caret_x_in_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn missing_composition_caret_is_not_byte_zero() {
+        assert_eq!(map_preedit_cursor(Some((0, 0)), true), None);
+        assert_eq!(map_preedit_cursor(Some((0, 3)), true), None);
+        assert_eq!(map_preedit_cursor(Some((0, 0)), false), Some((0, 0)));
+        assert_eq!(map_preedit_cursor(Some((1, 4)), false), Some((1, 4)));
+        assert_eq!(map_preedit_cursor(None, false), None);
+    }
+
+    #[test]
+    fn japanese_target_clause_is_not_the_caret() {
+        // winit encodes the thick target clause as the cursor range. After the
+        // first character is converted, that range ends after it. The caret is
+        // GCS_CURSORPOS (here: end of the string still being typed).
+        let text = "あああ";
+        let winit_clause = Some((0, "あ".len()));
+        let attrs = [
+            ATTR_TARGET_CONVERTED,
+            ATTR_CONVERTED,
+            ATTR_INPUT,
+        ];
+        let (caret, marks) =
+            resolve_preedit_chrome(text, winit_clause, false, Some(Some(text.chars().count())), &attrs);
+        assert_eq!(caret, Some((text.len(), text.len())));
+        assert_eq!(
+            marks,
+            vec![
+                (0, "あ".len(), PREEDIT_UL_THICK),
+                ("あ".len(), "ああ".len(), PREEDIT_UL_THIN),
+                ("ああ".len(), text.len(), PREEDIT_UL_WAVY),
+            ]
+        );
+    }
+
+    #[test]
+    fn japanese_kana_being_typed_is_wavy() {
+        let text = "ああ";
+        let attrs = [ATTR_INPUT, ATTR_INPUT];
+        let marks = preedit_underline_spans(text, &attrs);
+        assert_eq!(marks, vec![(0, text.len(), PREEDIT_UL_WAVY)]);
+    }
+
+    #[test]
+    fn chinese_pinyin_keeps_a_single_solid_line() {
+        let marks = preedit_underline_spans("nihao", &[ATTR_INPUT; 5]);
+        assert!(marks.is_empty());
+    }
 
     #[test]
     fn text_edit_rest_input_and_textarea() {
@@ -812,6 +1026,7 @@ mod tests {
             extra_carets: Vec::new(),
             extra_selections: Vec::new(),
             extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
             drop_caret: false,
             caret_color: None,
             selection_foreground: None,
@@ -882,6 +1097,7 @@ mod tests {
                 extra_carets: Vec::new(),
                 extra_selections: Vec::new(),
                 extra_preedit_underlines: Vec::new(),
+            preedit_ul: Vec::new(),
                 drop_caret: false,
                 caret_color: None,
                 selection_foreground: None,

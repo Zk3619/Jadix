@@ -1249,6 +1249,7 @@ pub(crate) fn apply_shimmer_sweep(
 /// UAX#14 prewrap applied). Color-only spans stay `compatible()` for shaping, so
 /// we must not insert extra marks or per-span spacing — that split BiDi/WJ runs
 /// and dropped glyphs.
+#[cfg(test)]
 fn set_selection_colored_buffer_text(
     buffer: &mut glyphon::Buffer,
     text: &str,

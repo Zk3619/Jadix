@@ -746,6 +746,7 @@ fn collect_scroll_hit_walk(
 /// Occluders (modal underlay) that claim bounds stop sibling search even when they are
 /// not themselves scroll areas — otherwise gallery scrollbars under a dialog keep receiving
 /// hover / wheel.
+#[cfg(test)]
 pub(super) fn collect_scroll_chain_at(
     el: &Element,
     x: f32,

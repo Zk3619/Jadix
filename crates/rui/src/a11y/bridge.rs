@@ -91,7 +91,19 @@ fn parse_accesskit_role(raw: &str) -> Option<Role> {
         "combobox" | "combo_box" => Some(Role::ComboBox),
         "menu" => Some(Role::Menu),
         "menuitem" | "menu_item" => Some(Role::MenuItem),
+        "menuitemcheckbox" | "menu_item_checkbox" => Some(Role::MenuItemCheckBox),
+        "menuitemradio" | "menu_item_radio" => Some(Role::MenuItemRadio),
         "menubar" | "menu_bar" => Some(Role::MenuBar),
+        "table" => Some(Role::Table),
+        "row" => Some(Role::Row),
+        "rowgroup" | "row_group" => Some(Role::RowGroup),
+        "cell" => Some(Role::Cell),
+        "columnheader" | "column_header" => Some(Role::ColumnHeader),
+        "rowheader" | "row_header" => Some(Role::RowHeader),
+        "caption" => Some(Role::Caption),
+        "dialog" => Some(Role::Dialog),
+        "alertdialog" | "alert_dialog" => Some(Role::AlertDialog),
+        "heading" => Some(Role::Heading),
         "option" => Some(Role::ListBoxOption),
         "image" => Some(Role::Image),
         "paragraph" => Some(Role::Paragraph),
@@ -105,12 +117,37 @@ fn has_a11y_name_desc_live_attr(el: &Element) -> bool {
         .any(|k| el.attrs.contains_key(*k))
 }
 
+fn slot_name(el: &Element) -> Option<&str> {
+    el.attrs
+        .get("data-slot")
+        .map(|s| s.as_str())
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+/// Table / dialog / menu structure that must be a node even when it has no text of its own.
+fn structural_role(el: &Element) -> Option<Role> {
+    match slot_name(el) {
+        Some("table") => Some(Role::Table),
+        Some("table-row") => Some(Role::Row),
+        Some("table-header" | "table-body" | "table-footer") => Some(Role::RowGroup),
+        Some("table-cell") => Some(Role::Cell),
+        Some("table-head") => Some(Role::ColumnHeader),
+        Some("table-caption") => Some(Role::Caption),
+        Some("dialog-content") => Some(Role::Dialog),
+        Some("alert-dialog-content") => Some(Role::AlertDialog),
+        Some("dialog-title" | "alert-dialog-title") => Some(Role::Heading),
+        _ => None,
+    }
+}
+
 fn should_be_accesskit_node(el: &Element) -> bool {
     // Empty `focus_id` is not an identity (see `docs/element_identity.md` I-1); ignore it here.
     el.focus_id.as_deref().is_some_and(|s| !s.is_empty())
         || el.on_click.is_some()
         || el.text.is_some()
         || el.attrs.contains_key("accesskit_role")
+        || structural_role(el).is_some()
         || has_a11y_name_desc_live_attr(el)
         || el.switch_checked_sync.is_some()
         || el.checkbox_sync.is_some()
@@ -138,6 +175,16 @@ fn infer_role(el: &Element, fid: Option<&str>) -> Role {
         if let Some(role) = parse_accesskit_role(raw) {
             return role;
         }
+    }
+    if let Some(role) = structural_role(el) {
+        return role;
+    }
+    if el
+        .template_id
+        .as_deref()
+        .is_some_and(|id| id.ends_with("__modal_zoom"))
+    {
+        return Role::Dialog;
     }
     if el.switch_checked_sync.is_some() {
         Role::Switch
@@ -244,18 +291,30 @@ fn uses_name_from_contents(el: &Element) -> bool {
     if el.on_click.is_some() {
         return true;
     }
+    let role = el
+        .attrs
+        .get("accesskit_role")
+        .and_then(|r| parse_accesskit_role(r))
+        .or_else(|| structural_role(el));
     matches!(
-        el.attrs
-            .get("accesskit_role")
-            .and_then(|r| parse_accesskit_role(r)),
+        role,
         Some(
             Role::Button
                 | Role::MenuItem
+                | Role::MenuItemCheckBox
+                | Role::MenuItemRadio
                 | Role::ListBoxOption
                 | Role::Link
                 | Role::CheckBox
                 | Role::Switch
                 | Role::Tab
+                | Role::Cell
+                | Role::ColumnHeader
+                | Role::RowHeader
+                | Role::Caption
+                | Role::Heading
+                | Role::Table
+                | Role::Menu
         )
     )
 }
@@ -278,6 +337,7 @@ fn is_plain_text_name_leaf(el: &Element) -> bool {
     }
     if el.attrs.contains_key("accesskit_role")
         || el.attrs.contains_key("accesskit_id")
+        || structural_role(el).is_some()
         || has_a11y_name_desc_live_attr(el)
     {
         return false;
@@ -303,6 +363,7 @@ fn is_plain_text_name_leaf_or_empty(el: &Element) -> bool {
     el.on_click.is_none()
         && el.focus_id.as_deref().map_or(true, |s| s.is_empty())
         && !el.attrs.contains_key("accesskit_role")
+        && structural_role(el).is_none()
         && !has_a11y_name_desc_live_attr(el)
         && el.switch_checked_sync.is_none()
         && el.checkbox_sync.is_none()
@@ -319,6 +380,20 @@ fn resolve_accessible_text(el: &Element, role: Role) -> Option<String> {
         .filter(|t| !t.is_empty())
     {
         return Some(text.to_string());
+    }
+
+    // Containers name themselves via a title / caption child, not by joining every cell.
+    if matches!(
+        role,
+        Role::Table
+            | Role::Row
+            | Role::RowGroup
+            | Role::Menu
+            | Role::MenuBar
+            | Role::Dialog
+            | Role::AlertDialog
+    ) {
+        return None;
     }
 
     // Label: use own text; do not fold nested Checkbox check glyphs into the accessible name.
@@ -562,6 +637,169 @@ fn alloc_unique_node_id(
     (key, id)
 }
 
+fn is_menu_item_role(role: Role) -> bool {
+    matches!(
+        role,
+        Role::MenuItem | Role::MenuItemCheckBox | Role::MenuItemRadio
+    )
+}
+
+fn find_descendant_role(nodes: &[(NodeId, Node)], ids: &[NodeId], role: Role) -> Option<NodeId> {
+    for id in ids {
+        let Some((_, node)) = nodes.iter().find(|(nid, _)| nid == id) else {
+            continue;
+        };
+        if node.role() == role {
+            return Some(*id);
+        }
+        if let Some(found) = find_descendant_role(nodes, node.children(), role) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+fn tree_has_role(nodes: &[(NodeId, Node)], ids: &[NodeId], pred: &impl Fn(Role) -> bool) -> bool {
+    for id in ids {
+        let Some((_, node)) = nodes.iter().find(|(nid, _)| nid == id) else {
+            continue;
+        };
+        if pred(node.role()) || tree_has_role(nodes, node.children(), pred) {
+            return true;
+        }
+    }
+    false
+}
+
+fn push_synth_node(
+    path: &str,
+    suffix: &str,
+    role: Role,
+    label: Option<String>,
+    children: Vec<NodeId>,
+    nodes: &mut Vec<(NodeId, Node)>,
+    used: &mut std::collections::HashSet<u64>,
+) -> NodeId {
+    let key = format!("rui:synth:{path}:{suffix}");
+    let (_key, id) = alloc_unique_node_id(&key, path, used);
+    let mut node = Node::new(role);
+    if let Some(label) = label.filter(|s| !s.is_empty()) {
+        if role == Role::Label {
+            node.set_value(label);
+        } else {
+            node.set_label(label);
+        }
+    }
+    node.set_children(children);
+    nodes.push((id, node));
+    id
+}
+
+/// Table / menu / dialog containers whose walked children are not the roles AT expects
+/// get synthetic children built from the visible text.
+fn finish_container_children(
+    el: &Element,
+    role: Role,
+    path: &str,
+    child_ids: Vec<NodeId>,
+    nodes: &mut Vec<(NodeId, Node)>,
+    used: &mut std::collections::HashSet<u64>,
+) -> Vec<NodeId> {
+    match role {
+        Role::Table
+            if !tree_has_role(nodes, &child_ids, &|r| r == Role::Row) =>
+        {
+            let texts = text_leaves(el);
+            if texts.is_empty() {
+                return child_ids;
+            }
+            let cells: Vec<NodeId> = texts
+                .into_iter()
+                .enumerate()
+                .map(|(i, text)| {
+                    push_synth_node(
+                        path,
+                        &format!("cell{i}"),
+                        Role::Cell,
+                        Some(text),
+                        Vec::new(),
+                        nodes,
+                        used,
+                    )
+                })
+                .collect();
+            let row = push_synth_node(path, "row", Role::Row, None, cells, nodes, used);
+            let mut ids = child_ids;
+            ids.push(row);
+            ids
+        }
+        Role::Menu
+            if !tree_has_role(nodes, &child_ids, &is_menu_item_role) =>
+        {
+            let texts = text_leaves(el);
+            if texts.is_empty() {
+                return child_ids;
+            }
+            let mut ids = child_ids;
+            for (i, text) in texts.into_iter().enumerate() {
+                ids.push(push_synth_node(
+                    path,
+                    &format!("item{i}"),
+                    Role::MenuItem,
+                    Some(text),
+                    Vec::new(),
+                    nodes,
+                    used,
+                ));
+            }
+            ids
+        }
+        Role::Dialog | Role::AlertDialog
+            if find_descendant_role(nodes, &child_ids, Role::Heading).is_none() =>
+        {
+            let Some(title) = text_leaves(el).into_iter().next() else {
+                return child_ids;
+            };
+            let heading = push_synth_node(
+                path,
+                "title",
+                Role::Heading,
+                Some(title),
+                Vec::new(),
+                nodes,
+                used,
+            );
+            let mut ids = Vec::with_capacity(child_ids.len() + 1);
+            ids.push(heading);
+            ids.extend(child_ids);
+            ids
+        }
+        _ => child_ids,
+    }
+}
+
+fn text_leaves(el: &Element) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut stack: Vec<&Element> = vec![el];
+    while let Some(node) = stack.pop() {
+        if node.attrs.get("aria-hidden").map(String::as_str) == Some("true") {
+            continue;
+        }
+        if let Some(t) = node
+            .text
+            .as_deref()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+        {
+            if node.text_style.font_family.as_deref() != Some("lucide") {
+                out.push(t.to_string());
+            }
+        }
+        stack.extend(node.children.iter().rev());
+    }
+    out
+}
+
 fn walk_subtree(
     el: &Element,
     path: &str,
@@ -640,7 +878,22 @@ fn walk_subtree(
             let preferred = stable_node_key(frame.el, &frame.path);
             let (_key, id) = alloc_unique_node_id(&preferred, &frame.path, used);
             let mut node = build_node(frame.el, for_map);
-            node.set_children(frame.child_ids);
+            let child_ids = finish_container_children(
+                frame.el,
+                node.role(),
+                &frame.path,
+                frame.child_ids,
+                nodes,
+                used,
+            );
+            if matches!(node.role(), Role::Dialog | Role::AlertDialog)
+                && node.labelled_by().is_empty()
+            {
+                if let Some(title) = find_descendant_role(nodes, &child_ids, Role::Heading) {
+                    node.set_labelled_by(vec![title]);
+                }
+            }
+            node.set_children(child_ids);
             nodes.push((id, node));
             if let Some(parent) = stack.last_mut() {
                 parent.child_ids.push(id);
@@ -1337,5 +1590,204 @@ mod tests {
         assert_eq!(box_node.role(), Role::CheckBox);
         assert_eq!(box_node.labelled_by(), &[lid]);
         assert!(box_node.label().is_none());
+    }
+
+    fn slot(name: &str, el: Element) -> Element {
+        let mut el = el;
+        el.set_attr("data-slot", name);
+        el
+    }
+
+    #[test]
+    fn table_slots_are_rows_and_cells() {
+        let head = slot("table-head", Element::new().text("Name"));
+        let header_row = slot("table-row", Element::new().child(head));
+        let header = slot("table-header", Element::new().child(header_row));
+        let cell = slot("table-cell", Element::new().text("Ada"));
+        let body_row = slot("table-row", Element::new().child(cell));
+        let body = slot("table-body", Element::new().child(body_row));
+        let table = slot("table", Element::new().child(header).child(body));
+        let root = Element::new().child(table);
+        let update = tree_update_from_elements(&root, None);
+
+        let table_id = node_id_for_key("rui:path:0");
+        let table_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == table_id)
+            .map(|(_, n)| n)
+            .expect("table");
+        assert_eq!(table_node.role(), Role::Table);
+        assert_eq!(table_node.children().len(), 2);
+
+        let header_id = table_node.children()[0];
+        let header_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == header_id)
+            .map(|(_, n)| n)
+            .expect("header");
+        assert_eq!(header_node.role(), Role::RowGroup);
+        let row_id = header_node.children()[0];
+        let row = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == row_id)
+            .map(|(_, n)| n)
+            .expect("header row");
+        assert_eq!(row.role(), Role::Row);
+        let head_id = row.children()[0];
+        let head_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == head_id)
+            .map(|(_, n)| n)
+            .expect("column header");
+        assert_eq!(head_node.role(), Role::ColumnHeader);
+        assert_eq!(head_node.label(), Some("Name"));
+        // Caption folded into the header — not a second Label child.
+        assert!(head_node.children().is_empty());
+    }
+
+    #[test]
+    fn bare_table_gets_a_synthetic_row() {
+        let table = Element::new()
+            .accesskit_role("table")
+            .child(Element::new().text("Only"));
+        let root = Element::new().child(table);
+        let update = tree_update_from_elements(&root, None);
+        let table_id = node_id_for_key("rui:path:0");
+        let table_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == table_id)
+            .map(|(_, n)| n)
+            .expect("table");
+        assert_eq!(table_node.role(), Role::Table);
+        assert_eq!(table_node.children().len(), 1);
+        let row = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == table_node.children()[0])
+            .map(|(_, n)| n)
+            .expect("synthetic row");
+        assert_eq!(row.role(), Role::Row);
+        let cell = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == row.children()[0])
+            .map(|(_, n)| n)
+            .expect("synthetic cell");
+        assert_eq!(cell.role(), Role::Cell);
+        assert_eq!(cell.label(), Some("Only"));
+    }
+
+    #[test]
+    fn menu_checkbox_keeps_role_and_bare_menu_synthesizes_items() {
+        assert_eq!(
+            parse_accesskit_role("menuitemcheckbox"),
+            Some(Role::MenuItemCheckBox)
+        );
+        assert_eq!(
+            parse_accesskit_role("menuitemradio"),
+            Some(Role::MenuItemRadio)
+        );
+        assert_eq!(parse_accesskit_role("dialog"), Some(Role::Dialog));
+        assert_eq!(parse_accesskit_role("alertdialog"), Some(Role::AlertDialog));
+
+        let item = Element::new()
+            .accesskit_role("menuitemcheckbox")
+            .child(Element::new().text("Pinned"));
+        let menu = Element::new().accesskit_role("menu").child(item);
+        let root = Element::new().child(menu);
+        let update = tree_update_from_elements(&root, None);
+        let menu_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == node_id_for_key("rui:path:0"))
+            .map(|(_, n)| n)
+            .expect("menu");
+        assert_eq!(menu_node.role(), Role::Menu);
+        let item_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == menu_node.children()[0])
+            .map(|(_, n)| n)
+            .expect("item");
+        assert_eq!(item_node.role(), Role::MenuItemCheckBox);
+        assert_eq!(item_node.label(), Some("Pinned"));
+
+        let bare = Element::new()
+            .accesskit_role("menu")
+            .child(Element::new().text("Open"));
+        let bare_root = Element::new().child(bare);
+        let bare_update = tree_update_from_elements(&bare_root, None);
+        let bare_menu = bare_update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == node_id_for_key("rui:path:0"))
+            .map(|(_, n)| n)
+            .expect("bare menu");
+        assert_eq!(bare_menu.children().len(), 1);
+        let synth = bare_update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == bare_menu.children()[0])
+            .map(|(_, n)| n)
+            .expect("synthetic item");
+        assert_eq!(synth.role(), Role::MenuItem);
+        assert_eq!(synth.label(), Some("Open"));
+    }
+
+    #[test]
+    fn dialog_title_labels_the_dialog() {
+        let title = slot("dialog-title", Element::new().text("Confirm"));
+        let dialog = slot("dialog-content", Element::new().child(title));
+        let root = Element::new().child(dialog);
+        let update = tree_update_from_elements(&root, None);
+        let dialog_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == node_id_for_key("rui:path:0"))
+            .map(|(_, n)| n)
+            .expect("dialog");
+        assert_eq!(dialog_node.role(), Role::Dialog);
+        assert_eq!(dialog_node.children().len(), 1);
+        let title_id = dialog_node.children()[0];
+        let title_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == title_id)
+            .map(|(_, n)| n)
+            .expect("title");
+        assert_eq!(title_node.role(), Role::Heading);
+        assert_eq!(title_node.label(), Some("Confirm"));
+        assert_eq!(dialog_node.labelled_by(), &[title_id]);
+    }
+
+    #[test]
+    fn bare_dialog_gets_a_synthetic_title() {
+        let dialog = Element::new()
+            .accesskit_role("dialog")
+            .child(Element::new().text("Discard changes"));
+        let root = Element::new().child(dialog);
+        let update = tree_update_from_elements(&root, None);
+        let dialog_node = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == node_id_for_key("rui:path:0"))
+            .map(|(_, n)| n)
+            .expect("dialog");
+        assert_eq!(dialog_node.role(), Role::Dialog);
+        let title_id = dialog_node.labelled_by()[0];
+        assert_eq!(dialog_node.children()[0], title_id);
+        let title = update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == title_id)
+            .map(|(_, n)| n)
+            .expect("synthetic title");
+        assert_eq!(title.role(), Role::Heading);
+        assert_eq!(title.label(), Some("Discard changes"));
     }
 }

@@ -206,8 +206,6 @@ struct App {
     >,
     /// Previous two-finger distance; `None` when not pinching.
     pinch_prev_dist: Option<f32>,
-    /// Latest pinch scale factor (also mirrored to signal `__rui_pinch_scale`).
-    pinch_scale: f32,
     /// Long-press → ContextMenu path while primary button/touch is held.
     long_press: Option<LongPressTrack>,
     /// Last window that received pointer events (reset hover/click path on switch).
@@ -269,7 +267,7 @@ struct App {
     scroll_diag_last_log: std::collections::HashMap<String, std::time::Instant>,
     /// Wake the event loop for caret blink without continuous `request_redraw`.
     caret_wake_at: Option<std::time::Instant>,
-    /// Last value passed to `Window::set_ime_allowed` (avoid per-frame ImmAssociateContextEx).
+    /// Last IME enablement sent via `Window::request_ime_update` (avoid per-frame ImmAssociateContextEx).
     ime_allowed_latched: bool,
     /// Latest `WindowEvent::Focused` for the primary window. Used to stop IME HWND
     /// drive / re-enable while caret blink still redraws in the background.
@@ -395,10 +393,6 @@ pub fn on_file_drop(handler: impl FnMut(Vec<std::path::PathBuf>) + 'static) {
 
 pub(super) fn take_dropped_files() -> Vec<std::path::PathBuf> {
     DROPPED_FILES.with(|f| std::mem::take(&mut *f.borrow_mut()))
-}
-
-pub(super) fn push_dropped_file(path: std::path::PathBuf) {
-    DROPPED_FILES.with(|f| f.borrow_mut().push(path));
 }
 
 pub(super) fn fire_file_drop(paths: Vec<std::path::PathBuf>) {

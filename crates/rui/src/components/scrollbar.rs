@@ -381,8 +381,77 @@ pub struct ScrollbarBuilder {
 /// Along-track minimum thumb size (see [`scrollbar_min_thumb_along_track`]).
 pub const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
 
+/// Gap between an overlay track and the scroll-area edge (and the other bar).
+pub(crate) const SCROLLBAR_EDGE_PAD: f32 = 2.0;
+
+/// Authored lane-side inset, remembered before a hidden vertical bar shrinks it.
+pub(crate) const ATTR_H_LANE_INSET: &str = "rui_h_scrollbar_lane_inset";
+
+/// Whether the vertical bar is actually on screen.
+///
+/// Overflow *allowing* a bar is not enough: `auto` hides it when the content
+/// fits. An unmeasured viewport (`viewport_h <= 1`) keeps the build-time lane
+/// so the first frame does not flash a full-width horizontal bar.
+pub(crate) fn vertical_scrollbar_occupies_lane(
+    allow_y: bool,
+    visibility: &str,
+    viewport_h: f32,
+    content_h: f32,
+) -> bool {
+    if !allow_y {
+        return false;
+    }
+    let vis = visibility.trim();
+    if vis.eq_ignore_ascii_case("never") {
+        return false;
+    }
+    if vis.eq_ignore_ascii_case("always") {
+        return true;
+    }
+    if viewport_h <= 1.0 {
+        return true;
+    }
+    content_h > viewport_h + 0.5
+}
+
+/// Lane-side inset for an inside horizontal track.
+///
+/// `authored` is the inset from build time (ScrollArea `edge + thickness`, or a
+/// caller's own value such as a textarea's `right(10)`). Only this side changes.
+/// The other side stays as written, and the painted box stays the Taffy box —
+/// stretching it to `viewport_w` in collect put ink outside the fade dest-reset.
+pub(crate) fn horizontal_lane_side_inset(
+    authored: f32,
+    vertical_cross: f32,
+    lane_shown: bool,
+) -> f32 {
+    if lane_shown {
+        authored
+    } else {
+        (authored - vertical_cross.max(0.0)).max(SCROLLBAR_EDGE_PAD)
+    }
+}
+
+/// Main-axis length when Taffy has not laid that axis yet.
+///
+/// The cross axis must already be the inset-anchored thickness. A zero cross
+/// size means `bottom` / `right` sits on the far edge; inventing a bar there
+/// paints outside the field, and the fade dest-reset then Region-clears
+/// whatever that rect overlaps (sibling text, a neighbor focus ring).
+pub(crate) fn overlay_main_length_when_unlaid(
+    viewport_main: f32,
+    inset_start: f32,
+    inset_end: f32,
+) -> Option<f32> {
+    if viewport_main <= 1.0 {
+        return None;
+    }
+    Some((viewport_main - inset_start.max(0.0) - inset_end.max(0.0)).max(1.0))
+}
+
 /// L-join corner policy (Cursor / modern VS Code): the **vertical** bar owns the
-/// corner square; the **horizontal** overlay always stops before the vertical lane.
+/// corner square while it is actually shown. The horizontal overlay stops before
+/// that lane only then — a hidden vertical bar must not shorten the horizontal one.
 ///
 /// Returns main-axis padding for an **inside** (absolute) track:
 /// - vertical → `(top, bottom)` — full height, only container edge pad
@@ -1007,5 +1076,28 @@ mod overlay_main_inset_tests {
     fn outside_track_does_not_self_inset() {
         let (a, b) = scrollbar_overlay_main_insets("x", true, true, false, 2.0, 10.0);
         assert_eq!((a, b), (0.0, 0.0));
+    }
+
+    #[test]
+    fn horizontal_lane_side_keeps_the_other_inset() {
+        use super::{horizontal_lane_side_inset, vertical_scrollbar_occupies_lane};
+        assert!(!vertical_scrollbar_occupies_lane(true, "auto", 80.0, 40.0));
+        assert!(vertical_scrollbar_occupies_lane(true, "always", 80.0, 40.0));
+        assert!(vertical_scrollbar_occupies_lane(true, "auto", 0.0, 0.0));
+        // ScrollArea build: right = edge + 10. Hidden lane returns the edge only.
+        assert!((horizontal_lane_side_inset(12.0, 10.0, false) - 2.0).abs() < 0.01);
+        assert!((horizontal_lane_side_inset(12.0, 10.0, true) - 12.0).abs() < 0.01);
+        // Textarea authors left(4) / right(10) with an 8px bar. Only the lane side moves.
+        assert!((horizontal_lane_side_inset(10.0, 8.0, false) - 2.0).abs() < 0.01);
+        assert!((horizontal_lane_side_inset(10.0, 8.0, true) - 10.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn unlaid_main_axis_stays_inside_the_insets() {
+        use super::overlay_main_length_when_unlaid;
+        // Textarea viewport 240, left 4, right 2 once the vertical lane is gone.
+        assert!((overlay_main_length_when_unlaid(240.0, 4.0, 2.0).unwrap() - 234.0).abs() < 0.01);
+        // Unmeasured viewport must not invent a bar.
+        assert!(overlay_main_length_when_unlaid(0.0, 4.0, 2.0).is_none());
     }
 }

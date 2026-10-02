@@ -7,7 +7,7 @@ use accesskit::{Node, NodeId, Role, Tree, TreeId, TreeUpdate};
 use crate::a11y::winit_adapter::Adapter;
 use winit::{
     application::ApplicationHandler,
-    event::{ElementState, MouseButton, PointerKind, TouchPhase, WindowEvent},
+    event::{ElementState, MouseButton, PointerKind, WindowEvent},
     event_loop::{ActiveEventLoop, ControlFlow},
     keyboard::ModifiersState,
     window::{Window, WindowId},
@@ -213,25 +213,6 @@ impl super::App {
         } else {
             None
         }
-    }
-
-    fn update_pinch_scale(&mut self) {
-        let Some(dist) = Self::touch_pinch_distance(&self.active_touches) else {
-            return;
-        };
-        if let Some(prev) = self.pinch_prev_dist {
-            if prev > 1.0 {
-                let factor = (dist / prev).clamp(0.5, 2.0);
-                self.pinch_scale = (self.pinch_scale * factor).clamp(0.25, 4.0);
-                // Documented MVP signal: apps can read `__rui_pinch_scale` (no scroll zoom yet).
-                crate::core::reactivity::use_signal("__rui_pinch_scale", || 1.0_f32)
-                    .set(self.pinch_scale);
-                if let Some(state) = (*self.state.borrow()).as_ref() {
-                    state.window.request_redraw();
-                }
-            }
-        }
-        self.pinch_prev_dist = Some(dist);
     }
 
     fn sync_pointer_action_touches(&self) {
@@ -1227,7 +1208,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
     let (user_tx, user_rx) = std::sync::mpsc::channel();
     super::ui_bridge::install_proxy(event_loop_proxy.clone(), user_tx);
     event_loop.set_control_flow(ControlFlow::Wait);
-    let mut app = super::App {
+    let app = super::App {
         state: std::rc::Rc::new(std::cell::RefCell::new(None)),
         is_suspended: false,
         force_redraw_count: 0,
@@ -1256,7 +1237,6 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         primary_touch_id: None,
         active_touches: std::collections::HashMap::new(),
         pinch_prev_dist: None,
-        pinch_scale: 1.0,
         long_press: None,
         pointer_window: None,
         window_registry: super::multi_window::WindowRegistry::new(),

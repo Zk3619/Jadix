@@ -34,7 +34,9 @@
 //! - 独立外挂条见 [`crate::components::Scrollbar`]。
 
 use crate::components::base::BaseComponentBuilder;
-use crate::components::scrollbar::{scrollbar, ScrollbarBuilder, ScrollbarOrientation};
+use crate::components::scrollbar::{
+    scrollbar, ScrollbarBuilder, ScrollbarOrientation, SCROLLBAR_EDGE_PAD,
+};
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::activate_scroll_viewport;
 use crate::core::tree::{parse_color, Element, IntoCssDim, IntoF32};
@@ -55,7 +57,6 @@ pub use crate::core::scroll_viewport::{
     SCROLL_BEHAVIOR_JUMP, SCROLL_BEHAVIOR_SMOOTH, SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
 
-const SCROLLBAR_EDGE_PAD: f32 = 2.0;
 
 pub struct ScrollAreaBuilder {
     id: String,
@@ -620,6 +621,8 @@ impl From<ScrollAreaBuilder> for Element {
         if inset_outside_x {
             h_scroll = h_scroll.relative().flex_shrink(0.0).flex_grow(0.0);
         } else {
+            // Unmeasured default. The lane stays only while the vertical bar is
+            // actually shown; collect and the scrollbar prepass drop it otherwise.
             let (left, right) = crate::components::scrollbar::scrollbar_overlay_main_insets(
                 "x",
                 false,

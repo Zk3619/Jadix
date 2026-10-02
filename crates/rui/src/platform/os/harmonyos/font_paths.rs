@@ -1,5 +1,7 @@
 //! HarmonyOS / OpenHarmony system fonts.
 
+#![cfg_attr(not(target_env = "ohos"), allow(dead_code))]
+
 use std::path::PathBuf;
 
 use crate::platform::SystemFontScript;

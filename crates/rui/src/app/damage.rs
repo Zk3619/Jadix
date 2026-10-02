@@ -99,7 +99,14 @@ fn push_paint_dirty(key: u64, bounds: [f32; 4], kind: PaintDirtyKind) {
         let mut windows = slot.borrow_mut();
         let slot = windows.entry(super::window_scope::active()).or_default();
         if let Some(existing) = slot.iter_mut().find(|d| d.key == key && d.kind == kind) {
-            existing.bounds = union_rects(existing.bounds, bounds);
+            // Same-key union of two poses that do not overlap is a slot-wide
+            // column. Present then `draw_scissor_fill`s that column with the
+            // window clear (OTP focus on a scrolled forms page).
+            if paint_poses_separated(existing.bounds, bounds) {
+                slot.push(PaintDirty { key, bounds, kind });
+            } else {
+                existing.bounds = union_rects(existing.bounds, bounds);
+            }
         } else {
             slot.push(PaintDirty { key, bounds, kind });
         }
@@ -758,6 +765,34 @@ pub fn subtract_rect(outer: [f32; 4], hole: [f32; 4]) -> Vec<[f32; 4]> {
     out.into_iter()
         .filter(|r| r[2] > 0.0 && r[3] > 0.0)
         .collect()
+}
+
+/// Page hole minus each portal's **layout** box.
+///
+/// The occupied halo includes the outset shadow. Subtracting that halo cuts a
+/// trigger's hover fill where the shadow overlaps it, and the later portal
+/// replay src-overs the uncleared fringe so the shadow stacks darker. The
+/// opaque panel stays out of the clear; the fringe stays in so it can be
+/// rebuilt and the shadow drawn once.
+pub fn page_scissors_excluding_portal_boxes(
+    scissor: [f32; 4],
+    stamps: &[(u64, [f32; 4])],
+) -> Vec<[f32; 4]> {
+    if scissor[2] <= 0.0 || scissor[3] <= 0.0 {
+        return Vec::new();
+    }
+    let mut parts = vec![scissor];
+    for (_, box_) in stamps {
+        if box_[2] <= 0.0 || box_[3] <= 0.0 {
+            continue;
+        }
+        parts = parts
+            .into_iter()
+            .flat_map(|r| subtract_rect(r, *box_))
+            .filter(|r| r[2] > 0.5 && r[3] > 0.5)
+            .collect();
+    }
+    parts
 }
 
 /// All disjoint visible parts of a page dirty. Every part must be submitted;
@@ -2085,6 +2120,39 @@ pub fn expand_paint_dirties_for_translated_slots(
         if !node_present_slot_moved(prev, *now) {
             continue;
         }
+        // A scrolled 36px cell and its last visual pose do not overlap. The
+        // AABB is a column through every row between them; clear that and the
+        // window color stays (the forms-page dirty rectangle). Erase each pose.
+        if paint_poses_separated(prev, *now) {
+            let covers = |b: [f32; 4], pose: [f32; 4]| !paint_poses_separated(b, pose);
+            let mut saw_prev = false;
+            let mut saw_now = false;
+            for d in dirties.iter_mut() {
+                if d.key != *key || d.kind != PaintDirtyKind::Node {
+                    continue;
+                }
+                if covers(d.bounds, prev) && covers(d.bounds, *now) {
+                    d.bounds = *now;
+                }
+                saw_prev |= covers(d.bounds, prev);
+                saw_now |= covers(d.bounds, *now);
+            }
+            if !saw_prev {
+                dirties.push(PaintDirty {
+                    key: *key,
+                    bounds: prev,
+                    kind: PaintDirtyKind::Node,
+                });
+            }
+            if !saw_now {
+                dirties.push(PaintDirty {
+                    key: *key,
+                    bounds: *now,
+                    kind: PaintDirtyKind::Node,
+                });
+            }
+            continue;
+        }
         let bounds = union_rects(prev, *now);
         if let Some(existing) = dirties
             .iter_mut()
@@ -3014,6 +3082,16 @@ pub fn accumulate_paint_damage(damage_rect: &mut Option<[f32; 4]>, bounds: [f32;
     });
 }
 
+/// Two paint poses with a real gap between them. A 1px slop still counts as
+/// the same smear (sub-pixel scroll, 1px ring). A scrolled cell does not.
+pub fn paint_poses_separated(a: [f32; 4], b: [f32; 4]) -> bool {
+    if a[2] <= 0.5 || a[3] <= 0.5 || b[2] <= 0.5 || b[3] <= 0.5 {
+        return false;
+    }
+    let grow = |r: [f32; 4]| [r[0] - 1.0, r[1] - 1.0, r[2] + 2.0, r[3] + 2.0];
+    intersect_rects(grow(a), grow(b)).is_none()
+}
+
 /// Union two axis-aligned rects `[x, y, w, h]`.
 pub fn union_rects(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let ax2 = a[0] + a[2];
@@ -3070,6 +3148,32 @@ mod tests {
             paint_kind_for_element(&floating),
             PaintDirtyKind::Overlay,
             "Select/Popover fade chrome must not dest-reset as a page Node"
+        );
+    }
+
+    #[test]
+    fn trigger_hover_keeps_shadow_fringe_and_skips_menu_panel() {
+        // Trigger 32px. Menu panel starts 4px below. Md halo (blur 10 → SDF ~22)
+        // covers the trigger's lower half; the panel itself does not.
+        let trigger = [10.0, 40.0, 220.0, 32.0];
+        let halo = [4.0, 54.0, 232.0, 120.0];
+        let panel = [10.0, 76.0, 220.0, 96.0];
+        let cut_halo = page_scissors_excluding_overlay(trigger, Some(halo));
+        assert!(
+            cut_halo.iter().all(|r| r[1] + r[3] <= halo[1] + 0.5),
+            "halo subtract clips the hover fill, parts={cut_halo:?}"
+        );
+        let kept = page_scissors_excluding_portal_boxes(trigger, &[(1, panel)]);
+        assert_eq!(kept, vec![trigger]);
+        let into_panel = [10.0, 40.0, 220.0, 80.0];
+        let parts = page_scissors_excluding_portal_boxes(into_panel, &[(1, panel)]);
+        assert!(
+            parts.iter().all(|r| intersect_rects(*r, panel).is_none()),
+            "panel pixels must stay out of the page clear, parts={parts:?}"
+        );
+        assert!(
+            parts.iter().any(|r| r[3] > 30.0),
+            "shadow fringe on the trigger must remain, parts={parts:?}"
         );
     }
 
@@ -5482,6 +5586,19 @@ mod tests {
             (dirties[0].bounds[3] - 480.0).abs() < 0.5,
             "dest-reset prev∪now of a scrolled 400px card is a 480px strip over content below\n bounds={:?}",
             dirties[0].bounds
+        );
+        let prev_cell = [48.0, 400.0, 36.0, 36.0];
+        let now_cell = [48.0, 40.0, 36.0, 36.0];
+        let mut cells = Vec::new();
+        expand_paint_dirties_for_translated_slots(&mut cells, &[(3, now_cell)], &[(3, prev_cell)]);
+        let gap_y = 220.0;
+        assert!(
+            cells.iter().all(|d| gap_y < d.bounds[1] || gap_y > d.bounds[1] + d.bounds[3]),
+            "a scrolled OTP cell must not clear the column between poses\n {cells:?}"
+        );
+        assert!(
+            cells.len() >= 2,
+            "each pose is its own hole\n {cells:?}"
         );
     }
 

@@ -29,4 +29,15 @@ pub(crate) use ime::{
 #[cfg_attr(target_os = "windows", allow(unused_imports))]
 pub(crate) use memory::process_private_mb;
 pub(crate) use scroll::system_scroll_lines;
-pub(crate) use window::{apply_created_window, decorate_window_attributes};
+pub(crate) use window::apply_created_window;
+#[cfg_attr(
+    any(
+        target_os = "windows",
+        target_os = "ios",
+        target_os = "android",
+        target_arch = "wasm32",
+        target_env = "ohos",
+    ),
+    allow(unused_imports)
+)]
+pub(crate) use window::decorate_window_attributes;

@@ -105,7 +105,99 @@ enum LayoutFsSlot {
 pub fn invalidate_prepare_cache() {
     PREPARE_CACHE.with(|c| c.borrow_mut().clear());
     FIT_CACHE.with(|c| c.borrow_mut().clear());
+    IDEOGRAPH_EM.with(|c| c.set(None));
+    IDEOGRAPH_PROBED.with(|c| c.set(false));
     crate::text::visual_lines::invalidate_visual_line_cache();
+}
+
+/// Ascent, descent, ideograph ink above baseline, ink below baseline — all in ems.
+///
+/// `None` until the face that shapes U+4E2D is loaded. A miss is cached until
+/// [`invalidate_prepare_cache`] (CJK lazy-load clears it).
+pub(crate) fn ideograph_vertical_em() -> Option<(f32, f32, f32, f32)> {
+    if let Some(v) = IDEOGRAPH_EM.with(|c| c.get()) {
+        return Some((v.ascent, v.descent, v.ink_above, v.ink_below));
+    }
+    if IDEOGRAPH_PROBED.with(|c| c.get()) {
+        return None;
+    }
+    let found = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(probe_ideograph_em_inner))
+    {
+        Ok(v) => v,
+        Err(_) => return None,
+    };
+    IDEOGRAPH_PROBED.with(|c| c.set(true));
+    if let Some(v) = found {
+        IDEOGRAPH_EM.with(|c| c.set(Some(v)));
+        Some((v.ascent, v.descent, v.ink_above, v.ink_below))
+    } else {
+        None
+    }
+}
+
+fn probe_ideograph_em_inner() -> Option<IdeographEm> {
+    with_layout_font_system(|fs| {
+        ensure_coverage_for_text(fs, "\u{4E2D}");
+        let mut buffer = Buffer::new(fs, Metrics::new(16.0, 24.0));
+        buffer.set_size(Some(256.0), Some(48.0));
+        buffer.set_text("\u{4E2D}", &Attrs::new(), Shaping::Advanced, None);
+        buffer.shape_until_scroll(fs, false);
+        let (font_id, weight, glyph_id) = {
+            let run = buffer.layout_runs().next()?;
+            let glyph = run.glyphs.iter().find(|g| g.glyph_id != 0)?;
+            (glyph.font_id, glyph.font_weight, glyph.glyph_id)
+        };
+        let font = fs.get_font(font_id, weight)?;
+        let face_ref = font.as_swash();
+        // Same metrics cosmic stores on the shaped glyph (`FontRef::metrics`).
+        let metrics = face_ref.metrics(&[]);
+        let upem = f32::from(metrics.units_per_em);
+        if upem < 1.0 {
+            return None;
+        }
+        // TTC table offsets are from the start of the collection, so parse the
+        // whole file at the face whose directory sits at `face_ref.offset`.
+        let face = parse_face_at_swash_offset(face_ref.data, face_ref.offset)?;
+        let bbox = face.glyph_bounding_box(ttf_parser::GlyphId(glyph_id))?;
+        let ink_above = f32::from(bbox.y_max) / upem;
+        let ink_below = f32::from(bbox.y_min.min(0).unsigned_abs()) / upem;
+        if !(0.45..=1.35).contains(&ink_above) {
+            return None;
+        }
+        Some(IdeographEm {
+            ascent: metrics.ascent / upem,
+            descent: metrics.descent / upem,
+            ink_above,
+            ink_below,
+        })
+    })
+}
+
+/// `swash` keeps the whole file plus the table-directory offset. Collection
+/// offsets are file-relative, so a slice at that offset is not a font.
+fn parse_face_at_swash_offset(data: &[u8], offset: u32) -> Option<ttf_parser::Face<'_>> {
+    if let Some(count) = ttf_parser::fonts_in_collection(data) {
+        let index = ttc_face_index(data, offset, count)?;
+        return ttf_parser::Face::parse(data, index).ok();
+    }
+    if offset == 0 {
+        return ttf_parser::Face::parse(data, 0).ok();
+    }
+    let slice = data.get(offset as usize..)?;
+    ttf_parser::Face::parse(slice, 0).ok()
+}
+
+fn ttc_face_index(data: &[u8], offset: u32, count: u32) -> Option<u32> {
+    let count = count as usize;
+    for i in 0..count {
+        let at = 12 + i * 4;
+        let bytes = data.get(at..at + 4)?;
+        let face_off = u32::from_be_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        if face_off == offset {
+            return Some(i as u32);
+        }
+    }
+    None
 }
 
 /// Point layout measure at the renderer's [`FontSystem`] so fontdb / coverage stay single-sourced.
@@ -511,7 +603,22 @@ const FIT_CACHE_SOFT_MAX: usize = 1024;
 /// Keep entries touched in the last N frame ticks (egui-style generation GC).
 const FIT_CACHE_GEN_KEEP: u64 = 4;
 
+/// Ideograph vertical metrics in ems: `(ascent, descent, ink_above, ink_below)`.
+///
+/// Cosmic centers the font's ascent+descent box in the line. CJK hhea ascent is
+/// taller than the ideograph, so a full-line selection leaves unequal blank
+/// above and below 中. These ratios are the face actually used for U+4E2D.
+#[derive(Clone, Copy)]
+struct IdeographEm {
+    ascent: f32,
+    descent: f32,
+    ink_above: f32,
+    ink_below: f32,
+}
+
 thread_local! {
+    static IDEOGRAPH_EM: Cell<Option<IdeographEm>> = const { Cell::new(None) };
+    static IDEOGRAPH_PROBED: Cell<bool> = const { Cell::new(false) };
     static FIT_CACHE: RefCell<HashMap<FitKey, FitCacheEntry>> =
         RefCell::new(HashMap::new());
     static FIT_GEN: Cell<u64> = const { Cell::new(1) };

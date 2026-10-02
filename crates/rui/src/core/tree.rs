@@ -971,13 +971,19 @@ pub struct ElementInner {
     pub(crate) collect_extent_valid: bool,
     /// Bottom-up paint fingerprint for collect skip ([`crate::layout::collect_cache`]).
     pub(crate) collect_paint_hash: u64,
-    /// Some descendant (or self) must recollect every frame (spin / shimmer / CSS).
+    /// Some descendant (or self) must recollect every frame (spin / shimmer / caret).
+    /// Portal side-channels do **not** set this — see [`Self::collect_skip_side_channel`].
     pub(crate) collect_skip_live: bool,
     /// Sticky / fixed descendant: scroll-translate replay would move viewport-pinned paint.
     pub(crate) collect_skip_scroll_pin: bool,
     /// This node or a descendant is a scroll viewport / has a nonzero offset.
     /// Stamp reuse must still walk this path so `scroll_offset` fingerprints stay live.
     pub(crate) collect_skip_has_scroll: bool,
+    /// Portal / stacking side-channel on self or a descendant. Collect must not
+    /// skip-replay this node as a unit (overlay cursors live outside the DL), but
+    /// stamp `reuse_idle` may still reuse a stable paint hash when only a **sibling**
+    /// StyleChanged busted the parent (inline ColorPicker hue↔alpha).
+    pub(crate) collect_skip_side_channel: bool,
     /// Visual offset applied by `position: sticky` clamping (computed during layout collect).
     pub sticky_visual_offset: [f32; 2],
     /// Ancestor scroll passed to collect when this node last painted.
@@ -1107,6 +1113,7 @@ fn blank_inner() -> ElementInner {
         collect_skip_live: false,
         collect_skip_scroll_pin: false,
         collect_skip_has_scroll: false,
+        collect_skip_side_channel: false,
         sticky_visual_offset: [0.0, 0.0],
         paint_scroll_acc: [0.0, 0.0],
         paint_overlay_stamp: None,
@@ -4594,6 +4601,12 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
             let mut paint_changed = false;
             // Clone the Rc-backed descriptor so the callback may mutate its owning Element.
             if let Some(sync) = element.reactive_sync.clone() {
+                // Damage and in-callback paints must share this walk's scroll.
+                // `paint_scroll_acc` is still the previous collect. InputOTP
+                // pushes a focus hole from it, then StructureChanged pushes the
+                // live box under the same key; the union is a slot-wide column
+                // from the visual row down through the stale document position.
+                element.paint_scroll_acc = scroll_acc;
                 let before = visual_paint_aabb(element, scroll_acc);
                 let before_display = element.style.display;
                 let before_opacity = element.style.opacity;
@@ -4641,14 +4654,33 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                             crate::app::damage::push_frame_paint_damage(estimate_geom_damage(
                                 element, before,
                             ));
+                        } else if in_clip && element.attrs.remove("rui_halo_dirty").is_some() {
+                            // Focus-ring outset is already a Node dest-reset. A
+                            // layout-box Region window-clears and page-band-replays;
+                            // that composite paints the ring stroke off the cell
+                            // (grouped OTP type/delete). Layout still rebuilds below.
                         } else if in_clip {
-                            let d = clip_bounds
-                                .unwrap_or_else(|| estimate_geom_damage(element, before));
-                            if d[2] > 0.0 && d[3] > 0.0 {
-                                crate::app::damage::push_frame_region_paint(
-                                    crate::app::damage::paint_element_key(element),
-                                    d,
-                                );
+                            // Island, not the ancestor scrollport. InputOTP's caret is
+                            // StructureChanged on a 36px slot inside the page scroller.
+                            // Recording that scroller under the slot key clears every
+                            // other field and own-chrome redraws only the slot.
+                            // A list taller than the port still intersects down to the
+                            // visible island. An unlaid node keeps the clip.
+                            let own = estimate_geom_damage(element, before);
+                            let d = match clip_bounds {
+                                Some(clip) if own[2] > 0.5 && own[3] > 0.5 => {
+                                    intersect_damage(own, clip)
+                                }
+                                Some(clip) => Some(clip),
+                                None => Some(own),
+                            };
+                            if let Some(d) = d {
+                                if d[2] > 0.0 && d[3] > 0.0 {
+                                    crate::app::damage::push_frame_region_paint(
+                                        crate::app::damage::paint_element_key(element),
+                                        d,
+                                    );
+                                }
                             }
                         } else {
                             collect.page_layout_changed = true;
@@ -4723,6 +4755,16 @@ fn layout_is_local_display_toggle(before: Display, after: Display) -> bool {
 }
 
 /// Old layout box ∪ authored length size after sync (covers expand and collapse).
+fn intersect_damage(a: [f32; 4], b: [f32; 4]) -> Option<[f32; 4]> {
+    let x0 = a[0].max(b[0]);
+    let y0 = a[1].max(b[1]);
+    let x1 = (a[0] + a[2]).min(b[0] + b[2]);
+    let y1 = (a[1] + a[3]).min(b[1] + b[3]);
+    let w = x1 - x0;
+    let h = y1 - y0;
+    (w > 0.5 && h > 0.5).then_some([x0, y0, w, h])
+}
+
 fn estimate_geom_damage(el: &Element, before: [f32; 4]) -> [f32; 4] {
     let mut d = before;
     if let DimKind::Length(w) = dim_kind(el.style.size.width) {

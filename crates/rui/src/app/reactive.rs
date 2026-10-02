@@ -903,6 +903,7 @@ fn bind_text_width_is_specified(el: &Element) -> bool {
 ///
 /// Requires a definite inline size **and** a positive laid-out (or authored)
 /// height so wrap rows under `%` width cannot absorb and leave footer Y stale.
+#[cfg(test)]
 pub(crate) fn bind_layout_absorbed_by_specified_ancestor(root: &Element, path: &[usize]) -> bool {
     let mut el = root;
     for &i in path {
@@ -917,6 +918,7 @@ pub(crate) fn bind_layout_absorbed_by_specified_ancestor(root: &Element, path: &
     false
 }
 
+#[cfg(test)]
 fn element_absorbs_leaf_layout(el: &Element) -> bool {
     let definite_w = crate::layout::dim_length_px(el.style.size.width)
         .or_else(|| crate::layout::dim_length_px(el.style.min_size.width))
