@@ -17,8 +17,7 @@ pub(crate) use font_paths::{eager_ui_font_files, lazy_script_font_files, system_
 pub(crate) use ime::{
     apply_ime_cursor_area, arm_ime_composition_watch, cancel_active_composition,
     end_composition_ui, ime_composition_snap, ime_disallow, ime_preedit_caret_unspecified,
-    release_ui_control,
-    sync_focus_owner,
+    release_ui_control, sync_focus_owner, take_pending_ime_shift_compose_finish,
 };
 pub(crate) use process::process_private_mb;
 pub(crate) use scroll::system_scroll_lines;

@@ -190,6 +190,8 @@ impl super::App {
         let ime_active =
             crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false);
         let fid = focused.get();
+        // Lone Shift 中/英 may have left Imm/preedit without a Commit/Disabled.
+        ime_support::drain_pending_ime_shift_compose_finish(&fid);
         let password_focus = text_edit_rest(&fid)
             .map(|rest| input_type_for(rest).is_password())
             .unwrap_or(false);
@@ -553,6 +555,9 @@ impl super::App {
                     || false,
                 );
                 let fid = focused.get();
+                // Windows subclass arms this after DefWindowProc(lone Shift) while
+                // Imm still had GCS_COMPSTR — commit preedit so the underline leaves.
+                ime_support::drain_pending_ime_shift_compose_finish(&fid);
 
                 if allow_primary_tree
                     && event.state == ElementState::Pressed

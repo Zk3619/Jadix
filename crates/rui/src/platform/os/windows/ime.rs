@@ -14,8 +14,8 @@ use windows_sys::Win32::Graphics::Gdi::ClientToScreen;
 use windows_sys::Win32::UI::Input::Ime::{
     ImmGetCompositionStringW, ImmGetContext, ImmGetDefaultIMEWnd, ImmNotifyIME, ImmReleaseContext,
     ImmSetCompositionWindow, CFS_POINT, COMPOSITIONFORM, CPS_CANCEL, GCS_COMPATTR, GCS_COMPSTR,
-    GCS_CURSORPOS, IMC_SETCOMPOSITIONWINDOW,
-    IMECHARPOSITION, IMR_QUERYCHARPOSITION, NI_COMPOSITIONSTR,
+    GCS_CURSORPOS, IMC_SETCOMPOSITIONWINDOW, IMECHARPOSITION, IMR_QUERYCHARPOSITION,
+    NI_COMPOSITIONSTR,
 };
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_LSHIFT, VK_RSHIFT, VK_SHIFT};
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
@@ -55,6 +55,10 @@ static APP_HWND: AtomicIsize = AtomicIsize::new(0);
 /// Set for the duration of `WM_IME_COMPOSITION` when `GCS_CURSORPOS` is absent.
 /// Korean IME omits that flag; a NULL-buffer cursor query then returns 0.
 static PREEDIT_CARET_UNSPECIFIED: AtomicBool = AtomicBool::new(false);
+/// Lone Shift reached DefWindowProc while Imm still had a composition string.
+/// CJK IMEs often dismiss the candidate window and switch 中/英 without a winit
+/// `Preedit("")`/`Commit`/`Disabled` — app preedit underline would otherwise stick.
+static PENDING_SHIFT_COMPOSE_FINISH: AtomicBool = AtomicBool::new(false);
 
 /// True while the in-flight composition message has no caret (`GCS_CURSORPOS` clear).
 pub(crate) fn ime_preedit_caret_unspecified() -> bool {
@@ -565,6 +569,28 @@ fn shift_reaches_ime(msg: u32, wparam: WPARAM) -> bool {
     shift && matches!(msg, WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP)
 }
 
+/// Imm still owns an in-flight `GCS_COMPSTR` (preedit / reading string).
+unsafe fn imm_has_compstr(hwnd: HWND) -> bool {
+    let himc = unsafe { ImmGetContext(hwnd) };
+    if himc.is_null() {
+        return false;
+    }
+    let size = unsafe { ImmGetCompositionStringW(himc, GCS_COMPSTR, null_mut(), 0) };
+    let _ = unsafe { ImmReleaseContext(hwnd, himc) };
+    size > 0
+}
+
+/// After lone Shift reaches the IME: finish app compose when Imm had a string
+/// (zombie alphanumeric leave, or ENDCOMPOSITION that winit did not surface).
+fn shift_compose_finish_needed(had_compstr: bool) -> bool {
+    had_compstr
+}
+
+/// Drain the flag set by the IME subclass after a lone Shift language toggle.
+pub(crate) fn take_pending_ime_shift_compose_finish() -> bool {
+    PENDING_SHIFT_COMPOSE_FINISH.swap(false, Ordering::AcqRel)
+}
+
 unsafe extern "system" fn ime_subclass_proc(
     hwnd: HWND,
     msg: u32,
@@ -574,8 +600,15 @@ unsafe extern "system" fn ime_subclass_proc(
     _data: usize,
 ) -> LRESULT {
     if shift_reaches_ime(msg, wparam) {
+        let had_compstr = unsafe { imm_has_compstr(hwnd) };
         unsafe {
             DefWindowProcW(hwnd, msg, wparam, lparam);
+        }
+        // IME may hide the candidate and flip 中/英 while leaving GCS_COMPSTR
+        // (underline sticks). Or it may end Imm without a winit Commit/Disabled.
+        if shift_compose_finish_needed(had_compstr) {
+            PENDING_SHIFT_COMPOSE_FINISH.store(true, Ordering::Release);
+            crate::app::runtime::request_redraw_all();
         }
     }
     if msg == WM_IME_COMPOSITION {
@@ -718,5 +751,11 @@ mod tests {
         // Left arrow, and Shift on a character message, stay with the editor.
         assert!(!shift_reaches_ime(WM_KEYDOWN, 0x25));
         assert!(!shift_reaches_ime(0x0102, VK_SHIFT as WPARAM));
+    }
+
+    #[test]
+    fn lone_shift_with_compstr_requests_compose_finish() {
+        assert!(shift_compose_finish_needed(true));
+        assert!(!shift_compose_finish_needed(false));
     }
 }

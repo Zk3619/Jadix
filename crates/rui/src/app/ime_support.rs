@@ -344,6 +344,36 @@ pub(crate) fn preedit_without_syllable_separators(preedit: &str) -> String {
     preedit.chars().filter(|c| *c != '\'').collect()
 }
 
+/// CJK IME Shift (中/英 · 日/英 · 한/영) while composing: fold preedit into `value`
+/// and clear the underline. Windows often dismisses the candidate window on that
+/// toggle without a winit `Commit`/`Preedit("")`/`Disabled`, leaving a zombie
+/// composition underline on the last syllable.
+pub(crate) fn on_ime_alphanumeric_toggle(focus_id: &str) {
+    let Some(rest) = text_edit_rest(focus_id) else {
+        return;
+    };
+    let pk = crate::utils::text_field::input_preedit_signal_key(rest);
+    let pre = crate::core::reactivity::use_signal(&pk, String::new).peek();
+    if pre.is_empty() {
+        return;
+    }
+    finish_composition_preserve_text(focus_id);
+}
+
+/// Drain Windows lone-Shift compose-finish (see `take_pending_ime_shift_compose_finish`).
+pub(crate) fn drain_pending_ime_shift_compose_finish(focus_id: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        if crate::platform::windows::take_pending_ime_shift_compose_finish() {
+            on_ime_alphanumeric_toggle(focus_id);
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = focus_id;
+    }
+}
+
 /// In-app / OS force-end: fold in-flight preedit into `value` after dropping syllable
 /// separators (`'`), then cancel OS composition. Focus id unchanged.
 ///
@@ -417,9 +447,11 @@ pub(crate) fn clear_text_edit_compose_state(focus_id: &str) {
     let pk = crate::utils::text_field::input_preedit_signal_key(rest);
     let sk = crate::utils::text_field::input_preedit_sel_signal_key(rest);
     let ak = crate::utils::text_field::input_ime_anchor_signal_key(rest);
+    let mk = crate::utils::text_field::input_preedit_marks_signal_key(rest);
     crate::core::reactivity::use_signal(&pk, String::new).set(String::new());
     crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(None);
     crate::core::reactivity::use_signal(&ak, || None::<usize>).set(None);
+    crate::core::reactivity::use_signal(&mk, Vec::<(usize, usize, u8)>::new).set(Vec::new());
     crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false).set(false);
     on_ime_composition_ended();
 }
@@ -901,6 +933,68 @@ mod tests {
         assert_eq!(preedit_without_syllable_separators("shi'jie"), "shijie");
         assert_eq!(preedit_without_syllable_separators("你好"), "你好");
         assert_eq!(preedit_without_syllable_separators(""), "");
+    }
+
+    #[test]
+    fn alphanumeric_toggle_commits_preedit_and_clears_underline_marks() {
+        let (_owner, ()) = crate::core::reactivity::create_root(|| {
+            let rest = "ime_shift_commit";
+            let fid = format!("input:{rest}");
+            let vk = crate::utils::text_field::input_value_signal_key(rest);
+            let pk = crate::utils::text_field::input_preedit_signal_key(rest);
+            let mk = crate::utils::text_field::input_preedit_marks_signal_key(rest);
+            let ak = crate::utils::text_field::input_ime_anchor_signal_key(rest);
+            crate::core::reactivity::use_signal(&vk, String::new).set("4@qqq".into());
+            crate::core::reactivity::use_signal(&pk, String::new).set("q".into());
+            crate::core::reactivity::use_signal(&ak, || None::<usize>).set(Some("4@qqq".len()));
+            crate::core::reactivity::use_signal(&mk, Vec::<(usize, usize, u8)>::new)
+                .set(vec![(0, 1, 1)]);
+            crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false)
+                .set(true);
+            on_ime_alphanumeric_toggle(&fid);
+            assert_eq!(
+                crate::core::reactivity::use_signal(&vk, String::new).peek(),
+                "4@qqqq",
+                "Shift 中/英 must commit the in-flight preedit into value"
+            );
+            assert!(
+                crate::core::reactivity::use_signal(&pk, String::new)
+                    .peek()
+                    .is_empty(),
+                "preedit must clear so the underline leaves"
+            );
+            assert!(
+                crate::core::reactivity::use_signal(&mk, Vec::<(usize, usize, u8)>::new)
+                    .peek()
+                    .is_empty(),
+                "preedit underline marks must clear"
+            );
+            assert!(
+                !crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false)
+                    .peek(),
+                "IME active flag must clear after the toggle commit"
+            );
+            clear_ime_end_drain();
+        });
+    }
+
+    #[test]
+    fn alphanumeric_toggle_is_noop_without_preedit() {
+        let (_owner, ()) = crate::core::reactivity::create_root(|| {
+            let rest = "ime_shift_noop";
+            let fid = format!("input:{rest}");
+            let vk = crate::utils::text_field::input_value_signal_key(rest);
+            crate::core::reactivity::use_signal(&vk, String::new).set("hello".into());
+            on_ime_alphanumeric_toggle(&fid);
+            assert_eq!(
+                crate::core::reactivity::use_signal(&vk, String::new).peek(),
+                "hello"
+            );
+            assert!(
+                !ime_end_drain_active(),
+                "empty preedit must not CPS_CANCEL / end-drain"
+            );
+        });
     }
 
     #[test]
