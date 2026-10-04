@@ -621,12 +621,14 @@ impl From<ScrollAreaBuilder> for Element {
         if inset_outside_x {
             h_scroll = h_scroll.relative().flex_shrink(0.0).flex_grow(0.0);
         } else {
-            // Unmeasured default. The lane stays only while the vertical bar is
-            // actually shown; collect and the scrollbar prepass drop it otherwise.
+            // `auto`: edge pad only — overflow *allowing* a V bar must not bake a
+            // permanent H gutter (wrap=off / H-only). `always` may reserve the lane.
+            // Prepass adds `v_cross` when Y actually occupies the corner.
+            let bake_v_lane = show_v && vis == "always";
             let (left, right) = crate::components::scrollbar::scrollbar_overlay_main_insets(
                 "x",
                 false,
-                show_v,
+                bake_v_lane,
                 !v_right,
                 SCROLLBAR_EDGE_PAD,
                 cross_px,
@@ -755,7 +757,15 @@ impl From<ScrollAreaBuilder> for Element {
                 }
             }
             if show_h && !inset_outside_x {
-                if let Some(h) = h_opt.take() {
+                if let Some(mut h) = h_opt.take() {
+                    h.set_attr(
+                        crate::components::scrollbar::ATTR_H_LANE_INSET,
+                        SCROLLBAR_EDGE_PAD.to_string(),
+                    );
+                    h.set_attr(
+                        crate::components::scrollbar::ATTR_H_LANE_V_CROSS,
+                        cross_px.to_string(),
+                    );
                     outer = outer.child(h);
                 }
             }
@@ -766,7 +776,17 @@ impl From<ScrollAreaBuilder> for Element {
             if let Some(v) = v_opt.take() {
                 outer = outer.child(v);
             }
-            if let Some(h) = h_opt.take() {
+            if let Some(mut h) = h_opt.take() {
+                if show_h && !inset_outside_x {
+                    h.set_attr(
+                        crate::components::scrollbar::ATTR_H_LANE_INSET,
+                        SCROLLBAR_EDGE_PAD.to_string(),
+                    );
+                    h.set_attr(
+                        crate::components::scrollbar::ATTR_H_LANE_V_CROSS,
+                        cross_px.to_string(),
+                    );
+                }
                 outer = outer.child(h);
             }
             outer.template_id = Some(builder.id);

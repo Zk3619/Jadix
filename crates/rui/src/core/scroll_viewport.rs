@@ -503,6 +503,50 @@ impl super::tree::IntoElementList for ScrollViewportBuilder {
     }
 }
 
+/// `(bounds, max_scroll, content_size)` — shared by wheel cache and collect seed.
+pub(crate) type ScrollMetricsSample = ([f32; 4], [f32; 2], [f32; 2]);
+
+/// True when a fresh `max≈0` sample is a band/clip cull (or similar) over a known
+/// scrollable rest — not a real expand-to-fit. Used by wheel-cache merge, post-render
+/// signal publish, and same-frame overlay seed (thumb must not snap to track start).
+#[inline]
+pub(crate) fn is_stale_zero_max_sample(
+    fresh_max: [f32; 2],
+    fresh_bounds: [f32; 4],
+    fresh_content: [f32; 2],
+    prev: Option<&ScrollMetricsSample>,
+) -> bool {
+    if fresh_max[0] >= 0.5 || fresh_max[1] >= 0.5 {
+        return false;
+    }
+    let Some((prev_bounds, prev_max, prev_content)) = prev else {
+        return false;
+    };
+    if prev_max[0] < 0.5 && prev_max[1] < 0.5 {
+        return false;
+    }
+    const EPS: f32 = 0.5;
+    let y_was_scrollable = prev_max[1] > EPS;
+    let x_was_scrollable = prev_max[0] > EPS;
+    let grew_h = fresh_bounds[3] > prev_bounds[3] + EPS;
+    let grew_w = fresh_bounds[2] > prev_bounds[2] + EPS;
+    // Content did not collapse to the new viewport (cull samples drop content_h
+    // down to vh). Stretching with the viewport (`fresh >= prev`) is still a grow.
+    let content_kept_y = fresh_content[1] + EPS >= prev_content[1];
+    let content_kept_x = fresh_content[0] + EPS >= prev_content[0];
+    // Maximize/`scroll_only` can also collapse content_h to the new vh. If last
+    // frame's content already fits the grown viewport, accept max=0 so a nested
+    // MessageScroller leftover cannot keep the sidebar overlay lit.
+    let old_y_fits = prev_content[1] <= fresh_bounds[3] + EPS;
+    let old_x_fits = prev_content[0] <= fresh_bounds[2] + EPS;
+    if (y_was_scrollable && grew_h && (content_kept_y || old_y_fits))
+        || (x_was_scrollable && grew_w && (content_kept_x || old_x_fits))
+    {
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod scroll_behavior_tests {
     use super::*;
@@ -517,5 +561,22 @@ mod scroll_behavior_tests {
         assert!(scroll_behavior_is_smooth("smooth"));
         assert!(scroll_behavior_is_jump("jump"));
         assert!(!scroll_behavior_is_jump("nope"));
+    }
+
+    #[test]
+    fn stale_zero_max_detects_cull_not_expand_to_fit() {
+        let prev = ([0.0, 100.0, 320.0, 384.0], [0.0, 100.0], [320.0, 484.0]);
+        assert!(is_stale_zero_max_sample(
+            [0.0, 0.0],
+            [0.0, 80.0, 320.0, 384.0],
+            [320.0, 384.0],
+            Some(&prev),
+        ));
+        assert!(!is_stale_zero_max_sample(
+            [0.0, 0.0],
+            [0.0, 48.0, 208.0, 600.0],
+            [208.0, 500.0],
+            Some(&([0.0, 48.0, 208.0, 300.0], [0.0, 200.0], [208.0, 500.0])),
+        ));
     }
 }

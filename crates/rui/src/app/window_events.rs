@@ -3756,7 +3756,13 @@ impl super::App {
         // dragging or coalescing wheel delta. Auto-hide alpha is paint-only (overlay collect ×
         // live cubic) — Full+skip_flex during fade rewrote Taffy thumb size and the hit slab.
         // Smooth scroll moves thumbs via overlay collect (live offset signals).
-        let scrollbar_pass = if self.scrollbar_drag.is_some() || !self.scroll_accum.is_empty() {
+        // Metrics just published (or resized): Full must collapse auto Y and release the H
+        // lane — ViewportsOnly never touches track insets (wrap=off textarea gutter).
+        let scrollbar_pass = if self.scrollbar_drag.is_some()
+            || !self.scroll_accum.is_empty()
+            || self.scrollbar_geometry_pending
+        {
+            self.scrollbar_geometry_pending = false;
             ScrollbarUpdateMode::Full
         } else {
             ScrollbarUpdateMode::ViewportsOnly
@@ -4396,6 +4402,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         vh.set_silent(new_vh);
                         cw.set_silent(new_cw);
                         ch.set_silent(new_ch);
+                        // Prepass already ran this frame (often with stale/zero signals).
+                        // Schedule Full so lane/collapse catch up on the next redraw.
+                        self.scrollbar_geometry_pending = true;
                     }
                     if super::scroll_support::apply_pending_scroll_align(
                         rest,
@@ -4441,7 +4450,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     || modal_css_active
                     || page_css_active
                     || ui_anim_active;
-                if self.paint_clock_active {
+                if self.paint_clock_active || self.scrollbar_geometry_pending {
                     window.request_redraw();
                 } else if scrollbar_visibility_pending {
                     let earliest = self

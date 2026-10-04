@@ -384,14 +384,20 @@ pub const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
 /// Gap between an overlay track and the scroll-area edge (and the other bar).
 pub(crate) const SCROLLBAR_EDGE_PAD: f32 = 2.0;
 
-/// Authored lane-side inset, remembered before a hidden vertical bar shrinks it.
+/// Edge-only lane-side inset (no vertical thickness). Runtime adds `v_cross`
+/// when [`vertical_scrollbar_occupies_lane`] is true.
 pub(crate) const ATTR_H_LANE_INSET: &str = "rui_h_scrollbar_lane_inset";
 
-/// Whether the vertical bar is actually on screen.
+/// Vertical track cross size used when expanding the H bar's lane-side inset.
+pub(crate) const ATTR_H_LANE_V_CROSS: &str = "rui_h_scrollbar_v_cross";
+
+/// Whether the vertical bar is actually on screen (L-join owns the corner).
 ///
 /// Overflow *allowing* a bar is not enough: `auto` hides it when the content
-/// fits. An unmeasured viewport (`viewport_h <= 1`) keeps the build-time lane
-/// so the first frame does not flash a full-width horizontal bar.
+/// fits. An unmeasured viewport must **not** reserve the lane — baking a gutter
+/// for a bar that never appears (wrap=off textarea) left the H track short
+/// forever under ViewportsOnly. Prefer a one-frame H overshoot into the corner
+/// when Y later proves necessary over a permanent dead gutter.
 pub(crate) fn vertical_scrollbar_occupies_lane(
     allow_y: bool,
     visibility: &str,
@@ -409,26 +415,28 @@ pub(crate) fn vertical_scrollbar_occupies_lane(
         return true;
     }
     if viewport_h <= 1.0 {
-        return true;
+        return false;
     }
     content_h > viewport_h + 0.5
 }
 
 /// Lane-side inset for an inside horizontal track.
 ///
-/// `authored` is the inset from build time (ScrollArea `edge + thickness`, or a
-/// caller's own value such as a textarea's `right(10)`). Only this side changes.
-/// The other side stays as written, and the painted box stays the Taffy box —
-/// stretching it to `viewport_w` in collect put ink outside the fade dest-reset.
+/// `edge` is the non-lane inset from build time (`SCROLLBAR_EDGE_PAD`, or a
+/// caller's pad such as textarea `right(2)`). When the vertical bar occupies
+/// the corner, add `vertical_cross`. Only this side changes; the other side
+/// stays as written. The painted box stays the Taffy box — stretching it to
+/// `viewport_w` in collect put ink outside the fade dest-reset.
 pub(crate) fn horizontal_lane_side_inset(
-    authored: f32,
+    edge: f32,
     vertical_cross: f32,
     lane_shown: bool,
 ) -> f32 {
+    let edge = edge.max(0.0);
     if lane_shown {
-        authored
+        edge + vertical_cross.max(0.0)
     } else {
-        (authored - vertical_cross.max(0.0)).max(SCROLLBAR_EDGE_PAD)
+        edge
     }
 }
 
@@ -1083,13 +1091,15 @@ mod overlay_main_inset_tests {
         use super::{horizontal_lane_side_inset, vertical_scrollbar_occupies_lane};
         assert!(!vertical_scrollbar_occupies_lane(true, "auto", 80.0, 40.0));
         assert!(vertical_scrollbar_occupies_lane(true, "always", 80.0, 40.0));
-        assert!(vertical_scrollbar_occupies_lane(true, "auto", 0.0, 0.0));
-        // ScrollArea build: right = edge + 10. Hidden lane returns the edge only.
-        assert!((horizontal_lane_side_inset(12.0, 10.0, false) - 2.0).abs() < 0.01);
-        assert!((horizontal_lane_side_inset(12.0, 10.0, true) - 12.0).abs() < 0.01);
-        // Textarea authors left(4) / right(10) with an 8px bar. Only the lane side moves.
-        assert!((horizontal_lane_side_inset(10.0, 8.0, false) - 2.0).abs() < 0.01);
-        assert!((horizontal_lane_side_inset(10.0, 8.0, true) - 10.0).abs() < 0.01);
+        // Unmeasured auto must not reserve a gutter for a bar that may never show.
+        assert!(!vertical_scrollbar_occupies_lane(true, "auto", 0.0, 0.0));
+        assert!(vertical_scrollbar_occupies_lane(true, "auto", 80.0, 120.0));
+        // Edge baseline + v_cross when the vertical bar owns the corner.
+        assert!((horizontal_lane_side_inset(2.0, 10.0, false) - 2.0).abs() < 0.01);
+        assert!((horizontal_lane_side_inset(2.0, 10.0, true) - 12.0).abs() < 0.01);
+        // Textarea authors left(4) / right(2) with an 8px vertical bar.
+        assert!((horizontal_lane_side_inset(2.0, 8.0, false) - 2.0).abs() < 0.01);
+        assert!((horizontal_lane_side_inset(2.0, 8.0, true) - 10.0).abs() < 0.01);
     }
 
     #[test]

@@ -779,7 +779,8 @@ pub(crate) fn wheel_sticky_matches_deepest(sticky: &str, chain: &[String]) -> bo
     chain.first().map(String::as_str) == Some(sticky)
 }
 
-pub(crate) type ScrollMetricsEntry = ([f32; 4], [f32; 2], [f32; 2]);
+pub(crate) type ScrollMetricsEntry =
+    crate::core::scroll_viewport::ScrollMetricsSample;
 
 /// True when a freshly collected `max=0` is a clip/band-cull collapse, not a real
 /// "content now fits" state.
@@ -798,35 +799,12 @@ pub(crate) fn is_stale_zero_max_sample(
     fresh_content: [f32; 2],
     prev: Option<&ScrollMetricsEntry>,
 ) -> bool {
-    if fresh_max[0] >= 0.5 || fresh_max[1] >= 0.5 {
-        return false;
-    }
-    let Some((prev_bounds, prev_max, prev_content)) = prev else {
-        return false;
-    };
-    if prev_max[0] < 0.5 && prev_max[1] < 0.5 {
-        return false;
-    }
-    const EPS: f32 = 0.5;
-    let y_was_scrollable = prev_max[1] > EPS;
-    let x_was_scrollable = prev_max[0] > EPS;
-    let grew_h = fresh_bounds[3] > prev_bounds[3] + EPS;
-    let grew_w = fresh_bounds[2] > prev_bounds[2] + EPS;
-    // Content did not collapse to the new viewport (cull samples drop content_h
-    // down to vh). Stretching with the viewport (`fresh >= prev`) is still a grow.
-    let content_kept_y = fresh_content[1] + EPS >= prev_content[1];
-    let content_kept_x = fresh_content[0] + EPS >= prev_content[0];
-    // Maximize/`scroll_only` can also collapse content_h to the new vh. If last
-    // frame's content already fits the grown viewport, accept max=0 so a nested
-    // MessageScroller leftover cannot keep the sidebar overlay lit.
-    let old_y_fits = prev_content[1] <= fresh_bounds[3] + EPS;
-    let old_x_fits = prev_content[0] <= fresh_bounds[2] + EPS;
-    if (y_was_scrollable && grew_h && (content_kept_y || old_y_fits))
-        || (x_was_scrollable && grew_w && (content_kept_x || old_x_fits))
-    {
-        return false;
-    }
-    true
+    crate::core::scroll_viewport::is_stale_zero_max_sample(
+        fresh_max,
+        fresh_bounds,
+        fresh_content,
+        prev,
+    )
 }
 
 /// Replace cache from this frame's collect, but do not let a band-cull / clip-cull

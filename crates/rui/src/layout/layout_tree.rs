@@ -16,10 +16,10 @@ use crate::components::scrollbar::{
 };
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{
-    scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
-    scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
-    scroll_viewport_axis_offset, scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
-    SCROLL_VIEWPORT_FOCUS_PREFIX,
+    is_stale_zero_max_sample, scroll_content_h_signal_key, scroll_content_w_signal_key,
+    scroll_offset_x_signal_key, scroll_offset_y_signal_key, scroll_overflow_x_signal_key,
+    scroll_overflow_y_signal_key, scroll_viewport_axis_offset, scroll_viewport_h_signal_key,
+    scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
 use crate::core::tree::{Element, UnitCtx};
 use crate::renderer::{InstanceInput, TexturedDraw};
@@ -1682,6 +1682,11 @@ fn scroll_area_signals_cached<'a>(
 /// Viewport collect runs before its overlay-track sibling. Write this frame's Taffy
 /// metrics so overlay `can_scroll` does not keep last-frame overflow (short sidebar
 /// + maximize, or a nested MessageScroller leftover) and paint a tall rail track.
+///
+/// Must not overwrite a known-scrollable content size with a band/clip-cull
+/// `content≈viewport` sample: overlay thumb math runs in the same collect walk
+/// (post-render `is_stale_zero_max_sample` is too late) and would snap the thumb
+/// to the track start for one frame while `sy` is still mid-scroll.
 fn seed_scroll_signals_from_collect(
     cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,
     rest: &str,
@@ -1693,8 +1698,28 @@ fn seed_scroll_signals_from_collect(
     let Some(cache) = cache.as_mut() else {
         return;
     };
+    let fresh_bounds = [0.0, 0.0, vw.max(0.0), vh.max(0.0)];
+    let fresh_content = [cw.max(0.0), ch.max(0.0)];
+    let fresh_max = [
+        (fresh_content[0] - fresh_bounds[2]).max(0.0),
+        (fresh_content[1] - fresh_bounds[3]).max(0.0),
+    ];
     match cache.entry(rest.to_string()) {
         Entry::Occupied(mut o) => {
+            let prev = {
+                let e = o.get();
+                (
+                    [0.0, 0.0, e.vw.max(0.0), e.vh.max(0.0)],
+                    [(e.cw - e.vw).max(0.0), (e.ch - e.vh).max(0.0)],
+                    [e.cw.max(0.0), e.ch.max(0.0)],
+                )
+            };
+            if is_stale_zero_max_sample(fresh_max, fresh_bounds, fresh_content, Some(&prev)) {
+                // Keep prior viewport *and* content. Writing cull vw/vh while
+                // retaining ch (or the reverse) desyncs can_scroll / vh_vis and
+                // snaps the overlay thumb to the track start for this frame.
+                return;
+            }
             let e = o.get_mut();
             e.vw = vw;
             e.vh = vh;
@@ -1703,10 +1728,17 @@ fn seed_scroll_signals_from_collect(
         }
         Entry::Vacant(v) => {
             let mut sig = peek_scroll_area_meta(rest);
-            sig.vw = vw;
-            sig.vh = vh;
-            sig.cw = cw;
-            sig.ch = ch;
+            let prev = (
+                [0.0, 0.0, sig.vw.max(0.0), sig.vh.max(0.0)],
+                [(sig.cw - sig.vw).max(0.0), (sig.ch - sig.vh).max(0.0)],
+                [sig.cw.max(0.0), sig.ch.max(0.0)],
+            );
+            if !is_stale_zero_max_sample(fresh_max, fresh_bounds, fresh_content, Some(&prev)) {
+                sig.vw = vw;
+                sig.vh = vh;
+                sig.cw = cw;
+                sig.ch = ch;
+            }
             v.insert(sig);
         }
     }
@@ -3655,6 +3687,10 @@ impl LayoutTree {
         let relayout_ms = self.relayout_deferred_units_if_needed(root, root_node, available_space);
         let taffy_compute_ms = t_compute_begin.elapsed().as_secs_f32() * 1000.0 + relayout_ms;
 
+        // Floating sync reads `Element.layout_bounds` for triggers. Collect stamps
+        // those later — without a pre-stamp, a StructureChanged open sees 0×0
+        // triggers and leaves the panel at apply_stored (0,0) under Fade enter.
+        self.stamp_tree_layout_bounds_from_taffy(root);
         self.apply_floating_placement_before_collect(root, width, height);
 
         self.finish_collect(
@@ -3776,6 +3812,55 @@ impl LayoutTree {
             log::error!("taffy compute_layout_with_measure failed: {err:?}");
         }
         let _ = self.relayout_deferred_units_if_needed(root, compute_node, available_space);
+    }
+
+    /// Copy Taffy geometry onto `layout_bounds` before floating sync.
+    ///
+    /// Collect stamps again (and owns `paint_scroll_acc`). This walk only fills
+    /// `layout_bounds` / used-layout so `sync_floating_placement` can see trigger
+    /// boxes on the same frame as a StructureChanged open.
+    fn stamp_tree_layout_bounds_from_taffy(&self, root: &mut Element) {
+        let Some(root_node) = self.root_node.or(root.layout_node) else {
+            return;
+        };
+        let Ok(lay) = self.taffy.layout(root_node) else {
+            return;
+        };
+        root.layout_bounds = [0.0, 0.0, lay.size.width, lay.size.height];
+        crate::style::stamp_element_used_layout(root);
+        let mut stack: Vec<(*mut Element, NodeId, [f32; 2])> =
+            vec![(root as *mut Element, root_node, [0.0, 0.0])];
+        while let Some((ptr, node, abs)) = stack.pop() {
+            // SAFETY: exclusive walk of `root`'s subtree.
+            let element = unsafe { &mut *ptr };
+            let Ok(child_nodes) = self.taffy.children(node) else {
+                continue;
+            };
+            let pass = [
+                abs[0]
+                    + element.style.translate[0]
+                    + element.layout_bounds[2] * element.style.translate_pct[0],
+                abs[1]
+                    + element.style.translate[1]
+                    + element.layout_bounds[3] * element.style.translate_pct[1],
+            ];
+            let n = element.children.len().min(child_nodes.len());
+            for i in (0..n).rev() {
+                let Ok(cl) = self.taffy.layout(child_nodes[i]) else {
+                    continue;
+                };
+                let child_abs = [pass[0] + cl.location.x, pass[1] + cl.location.y];
+                let child_size = [cl.size.width, cl.size.height];
+                element.children[i].layout_bounds =
+                    [child_abs[0], child_abs[1], child_size[0], child_size[1]];
+                crate::style::stamp_element_used_layout(&mut element.children[i]);
+                stack.push((
+                    &mut element.children[i] as *mut Element,
+                    child_nodes[i],
+                    child_abs,
+                ));
+            }
+        }
     }
 
     /// `sync_floating_placement` writes left/top from trigger visual bounds.
@@ -3994,6 +4079,10 @@ impl LayoutTree {
             0.0
         };
 
+        // Same pre-stamp as `build_and_layout`: sync needs trigger boxes before collect.
+        if !scroll_only {
+            self.stamp_tree_layout_bounds_from_taffy(root);
+        }
         self.apply_floating_placement_before_collect(root, width, height);
 
         let mut scroll_signal_cache: HashMap<String, ScrollAreaSignalsCached> = HashMap::new();
@@ -4680,12 +4769,17 @@ impl LayoutTree {
         let Some(rest_axis) = fid.strip_prefix(SCROLLBAR_TRACK_FOCUS_PREFIX) else {
             return false;
         };
-        let is_overlay = overlay_collect
-            || element
-                .attrs
-                .get("rui_scrollbar_overlay")
-                .map(String::as_str)
-                == Some("1");
+        let overlay_rail = element
+            .attrs
+            .get("rui_scrollbar_overlay")
+            .map(String::as_str)
+            == Some("1")
+            || element.style.position == taffy::style::Position::Absolute;
+        // Match collect_paint_node: Absolute/`rui_scrollbar_overlay` rails need signal
+        // stamp whenever the scroll-signal cache is live (scroll_only / overlay), not
+        // only when the frame flag is set — else skip-replay keeps Taffy min-cap.
+        let is_overlay =
+            overlay_collect || (overlay_rail && scroll_signals_cache.is_some());
         if !is_overlay {
             return false;
         }
@@ -5183,51 +5277,63 @@ impl LayoutTree {
         #[cfg(not(feature = "devtools"))]
         let devtools_highlight_rect: Option<[f32; 4]> = None;
 
+        // Signal geometry for scrollbar tracks when:
+        // - frame flag `scrollbar_overlay_collect` (ViewportsOnly / drag), or
+        // - overlay rail + same-frame scroll cache (`scroll_only` / overlay collect).
+        // Wheel promotes prepass to Full while `scroll_only` skips compute_layout;
+        // Taffy then still holds the unscrolled min-cap leftover. Gating only on the
+        // frame flag painted that leftover for one frame (thumb → track start) while
+        // `sy` and page content stayed mid-scroll.
+        //
+        // Do **not** force signal geometry on Full+compute frames (cache is None):
+        // unset metrics would `zero_bar` over a live Taffy hit slab (`metrics_ready`).
+        // `scroll_area` uses Absolute without always stamping `rui_scrollbar_overlay`.
+        let overlay_rail = element
+            .attrs
+            .get("rui_scrollbar_overlay")
+            .map(String::as_str)
+            == Some("1")
+            || element.style.position == taffy::style::Position::Absolute;
+        let signal_track_geom = element.focus_id.as_deref().is_some_and(|fid| {
+            fid.starts_with(SCROLLBAR_TRACK_FOCUS_PREFIX)
+                && (scrollbar_overlay_collect
+                    || (overlay_rail && scroll_signals_cache.is_some()))
+        });
         let (abs_x, abs_y, lay_w, lay_h) = if let Some(r) = thumb_geometry_override {
             (r[0], r[1], r[2], r[3])
         } else if let Some(b) = devtools_highlight_rect {
             (b[0], b[1], b[2], b[3])
-        } else if scrollbar_overlay_collect {
-            if let Some(cache) = scroll_signals_cache.as_mut() {
-                if let Some(fid) = element.focus_id.as_deref() {
-                    if let Some(rest_axis) = fid.strip_prefix(SCROLLBAR_TRACK_FOCUS_PREFIX) {
-                        let (rest, axis) = rest_axis.rsplit_once(':').unwrap_or((rest_axis, "y"));
-                        let sig = scroll_area_signals_cached(rest, cache);
-                        let (t_rect, th_rect) = scrollbar_track_overlay_abs(
-                            element,
-                            base_abs_x,
-                            base_abs_y,
-                            layout.size.width,
-                            layout.size.height,
-                            axis,
-                            sig,
-                        );
-                        thumb_rect_for_child = Some(th_rect);
-                        (t_rect[0], t_rect[1], t_rect[2], t_rect[3])
-                    } else {
-                        (
-                            base_abs_x,
-                            base_abs_y,
-                            layout.size.width,
-                            layout.size.height,
-                        )
-                    }
-                } else {
-                    (
-                        base_abs_x,
-                        base_abs_y,
-                        layout.size.width,
-                        layout.size.height,
-                    )
-                }
-            } else {
-                (
+        } else if signal_track_geom {
+            let fid = element.focus_id.as_deref().expect("signal_track_geom");
+            let rest_axis = fid
+                .strip_prefix(SCROLLBAR_TRACK_FOCUS_PREFIX)
+                .expect("signal_track_geom track prefix");
+            let (rest, axis) = rest_axis.rsplit_once(':').unwrap_or((rest_axis, "y"));
+            let (t_rect, th_rect) = if let Some(cache) = scroll_signals_cache.as_mut() {
+                let sig = scroll_area_signals_cached(rest, cache);
+                scrollbar_track_overlay_abs(
+                    element,
                     base_abs_x,
                     base_abs_y,
                     layout.size.width,
                     layout.size.height,
+                    axis,
+                    sig,
                 )
-            }
+            } else {
+                let sig = peek_scroll_area_meta(rest);
+                scrollbar_track_overlay_abs(
+                    element,
+                    base_abs_x,
+                    base_abs_y,
+                    layout.size.width,
+                    layout.size.height,
+                    axis,
+                    &sig,
+                )
+            };
+            thumb_rect_for_child = Some(th_rect);
+            (t_rect[0], t_rect[1], t_rect[2], t_rect[3])
         } else {
             (
                 base_abs_x,
@@ -12269,5 +12375,85 @@ mod border_paint_tests {
         assert!(lum(bottom) > lum(top) + 0.35);
         let top_out = super::css_outset_tone(dark_teal, 0);
         assert!(lum(top_out) > lum(top) + 0.35);
+    }
+
+    #[test]
+    fn seed_keeps_prior_content_on_cull_zero_max() {
+        use super::{seed_scroll_signals_from_collect, ScrollAreaSignalsCached};
+        use std::collections::HashMap;
+
+        let mut map = HashMap::new();
+        map.insert(
+            "page".into(),
+            ScrollAreaSignalsCached {
+                vw: 320.0,
+                vh: 384.0,
+                cw: 320.0,
+                ch: 900.0,
+                sx: 0.0,
+                sy: 220.0,
+                overflow_x: "hidden".into(),
+                overflow_y: "auto".into(),
+                scrollbar_vis_x: "auto".into(),
+                scrollbar_vis_y: "always".into(),
+            },
+        );
+        let mut slot = Some(&mut map);
+        // Same viewport, content collapsed to vh — band/clip cull sample.
+        seed_scroll_signals_from_collect(&mut slot, "page", 320.0, 384.0, 320.0, 384.0);
+        let e = map.get("page").expect("seeded");
+        assert!(
+            e.ch > 800.0,
+            "cull seed must not collapse content_h (thumb would snap to start); ch={}",
+            e.ch
+        );
+        assert!(
+            (e.vh - 384.0).abs() < 0.1 && (e.vw - 320.0).abs() < 0.1,
+            "cull seed must not poison viewport while keeping content; vw={} vh={}",
+            e.vw,
+            e.vh
+        );
+        assert!(
+            (e.sy - 220.0).abs() < 0.1,
+            "seed must not touch scroll offset; sy={}",
+            e.sy
+        );
+    }
+
+    #[test]
+    fn seed_accepts_expand_viewport_until_content_fits() {
+        use super::{seed_scroll_signals_from_collect, ScrollAreaSignalsCached};
+        use std::collections::HashMap;
+
+        let mut map = HashMap::new();
+        map.insert(
+            "sidebar".into(),
+            ScrollAreaSignalsCached {
+                vw: 208.0,
+                vh: 300.0,
+                cw: 208.0,
+                ch: 500.0,
+                sx: 0.0,
+                sy: 180.0,
+                overflow_x: "hidden".into(),
+                overflow_y: "auto".into(),
+                scrollbar_vis_x: "auto".into(),
+                scrollbar_vis_y: "auto".into(),
+            },
+        );
+        let mut slot = Some(&mut map);
+        // Window taller: prior content fits — seed must publish the fit so the rail hides.
+        seed_scroll_signals_from_collect(&mut slot, "sidebar", 208.0, 600.0, 208.0, 500.0);
+        let e = map.get("sidebar").expect("seeded");
+        assert!(
+            (e.vh - 600.0).abs() < 0.1 && (e.ch - 500.0).abs() < 0.1,
+            "expand-to-fit must update viewport/content; got vh={} ch={}",
+            e.vh,
+            e.ch
+        );
+        assert!(
+            e.ch <= e.vh + 0.5,
+            "after expand-to-fit overlay must see non-overflow metrics"
+        );
     }
 }

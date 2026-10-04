@@ -87,6 +87,7 @@ mod state;
 #[cfg(test)]
 pub(crate) use state::{
     hoist_portal_subtrees_refreshing_scroll_flags, recompute_scroll_viewport_flags,
+    update_scrollbar_elements_for_test, ScrollbarUpdateMode,
 };
 #[cfg(feature = "devtools")]
 pub mod devtools;
@@ -193,6 +194,9 @@ struct App {
     last_click_pos: [f32; 2],
     click_count: u8,
     scrollbar_drag: Option<ScrollbarDragState>,
+    /// Post-render wrote new vw/vh/cw/ch. Next frame must run Full scrollbar prepass so
+    /// auto bars can collapse and release the H lane (ViewportsOnly skips track geometry).
+    scrollbar_geometry_pending: bool,
     /// Content pan over a scroll viewport (feeds `scroll_velocity` on release for inertia).
     content_scroll_drag: Option<scroll_support::ContentScrollDrag>,
     /// Textarea bottom-right drag-to-resize height.
