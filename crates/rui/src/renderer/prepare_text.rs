@@ -928,6 +928,39 @@ pub(crate) fn scroll_fast_skips_input_intrinsic_prepare(
     force_fast_mode && is_input_text && !has_caret && scroll_x.abs() < 0.5
 }
 
+/// Whether this glyph node should paint this frame.
+///
+/// `origin` / `clip` are visual (already scroll-adjusted). Caret pan stores
+/// `scroll_x` and the leaf clip in layout space, so the test rect adds
+/// `scroll_x` back. A dest-reset fragment is a clip tighter than the leaf and
+/// stays visual: adding `scroll_x` shoves the test rect off the left piece.
+/// That piece is then `preshape_only`, and a non-ASCII caption (关闭 + Latin)
+/// is warmed up a frame later than the piece that still intersects — the two
+/// scripts change one after the other.
+pub(crate) fn glyph_node_visible_this_frame(
+    origin: [f32; 2],
+    size: [f32; 2],
+    scroll_x: f32,
+    clip: Option<[f32; 4]>,
+    viewport: [f32; 4],
+) -> bool {
+    let w = size[0].max(0.0);
+    let h = size[1].max(0.0);
+    let cull_x = origin[0] + scroll_x.max(0.0);
+    let node_rect = [cull_x, origin[1], w, h];
+    if clip_rect_to_bounds(node_rect, clip)
+        .and_then(|c| clip_rect_to_bounds(c, Some(viewport)))
+        .is_some()
+    {
+        return true;
+    }
+    let Some(c) = clip else {
+        return false;
+    };
+    let tight = c[2] + 0.5 < w || c[3] + 0.5 < h;
+    tight && clip_rect_to_bounds(c, Some(viewport)).is_some()
+}
+
 fn clip_rect_to_bounds(rect: [f32; 4], clip: Option<[f32; 4]>) -> Option<[f32; 4]> {
     let Some(c) = clip else {
         return Some(rect);
@@ -2224,10 +2257,9 @@ pub fn prepare_text_frame_at(
         } else {
             scaled_h
         };
-        // `info.x` is already `render_x - scroll_x`. Culling against the shifted origin
-        // + viewport-sized leaf misses the clip after a caret pan (selection still paints
-        // → empty gray block). Restore the layout origin for visibility only.
-        let cull_x = x + st.scroll_x.max(0.0) * ui_scale;
+        // `info.x` is already `render_x - scroll_x`. Visibility adds `scroll_x`
+        // back for caret-pan clips; a tighter dest-reset fragment stays visual
+        // so one side of a mixed caption is not deferred a frame.
         let visibility_h = if !is_input_text_early {
             if let Some(c) = scaled_clip {
                 // Dest-reset recapture clip is the pill wipe. First-line strut
@@ -2246,10 +2278,20 @@ pub fn prepare_text_frame_at(
         } else {
             visibility_h
         };
-        let node_rect = [cull_x, y, scaled_w.max(0.0), visibility_h.max(0.0)];
-        let visible = clip_rect_to_bounds(node_rect, scaled_clip)
-            .and_then(|c| clip_rect_to_bounds(c, Some(viewport_clip)))
-            .is_some();
+        let scroll_x_px = st.scroll_x.max(0.0) * ui_scale;
+        let node_rect = [
+            x + scroll_x_px,
+            y,
+            scaled_w.max(0.0),
+            visibility_h.max(0.0),
+        ];
+        let visible = glyph_node_visible_this_frame(
+            [x, y],
+            [scaled_w.max(0.0), visibility_h.max(0.0)],
+            scroll_x_px,
+            scaled_clip,
+            viewport_clip,
+        );
         let preshape_only = if !visible {
             let margin = effective_margin;
             if margin <= 0.0 {
@@ -5431,5 +5473,42 @@ mod input_shaping_stability_tests {
             super::clip_rect_to_bounds([10.0, y, 40.0, ul_h], expanded).is_some(),
             "decoration clip expand must keep underline visible"
         );
+    }
+}
+
+#[cfg(test)]
+mod glyph_fragment_visibility_tests {
+    use super::glyph_node_visible_this_frame;
+
+    #[test]
+    fn scrolled_caption_split_keeps_both_scripts_visible() {
+        // Visual origin already subtracted scroll_x. The left (CJK) wipe ends
+        // before the scroll-restored leaf, so the leaf test drops it and the
+        // non-ASCII warmup draws it a frame after the Latin wipe.
+        let viewport = [0.0, 0.0, 800.0, 600.0];
+        let origin = [100.0, 10.0];
+        let size = [124.0, 21.0];
+        let scroll_x = 80.0;
+        let cjk = Some([100.0, 10.0, 36.0, 21.0]);
+        let latin = Some([136.0, 10.0, 88.0, 21.0]);
+        assert!(
+            glyph_node_visible_this_frame(origin, size, scroll_x, cjk, viewport),
+            "CJK wipe is on screen and must prepare with the Latin wipe"
+        );
+        assert!(glyph_node_visible_this_frame(
+            origin, size, scroll_x, latin, viewport
+        ));
+    }
+
+    #[test]
+    fn offscreen_caption_wipe_stays_deferred() {
+        let viewport = [0.0, 0.0, 800.0, 600.0];
+        assert!(!glyph_node_visible_this_frame(
+            [100.0, 10.0],
+            [124.0, 21.0],
+            0.0,
+            Some([900.0, 10.0, 20.0, 21.0]),
+            viewport,
+        ));
     }
 }

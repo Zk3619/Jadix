@@ -23,8 +23,9 @@ use crate::{
         scrollbar::{
             apply_scrollbar_visible_alpha, horizontal_lane_side_inset,
             normalize_scrollbar_base_for_auto, scrollbar_min_thumb_along_track,
-            vertical_scrollbar_occupies_lane, ATTR_H_LANE_INSET, ATTR_SCROLLBAR_TRACK_FADES,
-            SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
+            vertical_scrollbar_occupies_lane, ATTR_H_LANE_INSET, ATTR_H_LANE_V_CROSS,
+            ATTR_SCROLLBAR_TRACK_FADES, SCROLLBAR_EDGE_PAD, SCROLLBAR_THUMB_FOCUS_PREFIX,
+            SCROLLBAR_TRACK_FOCUS_PREFIX,
         },
     },
     core::reactivity::use_signal,
@@ -102,7 +103,7 @@ fn note_present_sdf_bg() {
 
 /// How much scroll-related work to do before layout each frame.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum ScrollbarUpdateMode {
+pub(crate) enum ScrollbarUpdateMode {
     /// Sync `scroll:` offsets + scrollbar track/thumb geometry and Taffy (springs, drag, smooth).
     Full,
     /// Only apply signal → `Element.scroll_offset` for `scroll:` viewports. Skips expensive
@@ -2601,21 +2602,31 @@ impl AppState {
         use super::damage::PaintDirtyKind;
         reset_present_hole_counts();
         let dummy = self.pipeline.dummy_backdrop();
-        let mut pending_page_glyphs = capture_text_ready;
+        let pending_page_glyphs = capture_text_ready;
         let pending_underlay_glyphs = capture_underlay_ready;
         let mut overlay_dirties: Vec<(u64, [f32; 4])> = Vec::new();
         // Physical integer rectangles: decomposing logical rectangles first
         // would round neighboring fractional edges onto the same device pixel.
         let mut page_punch_overlaps = Vec::new();
+        // Logical holes actually CLEARED for Node captions. Glyph flush must
+        // use these, not the paint box: the paint box includes the portal halo
+        // ring, and stamping glyphs there src-overs retained strokes (叠粗).
+        let mut node_glyph_holes: Vec<[f32; 4]> = Vec::new();
         let overlay_replay_coverage = super::damage::overlay_replay_coverage(
             &self.last_overlay_stamps,
             self.overlay_occupied,
         );
         for dirty in &self.damage_nodes {
-            if super::damage::paint_dirty_covered_by_overlay_restore(dirty, &self.damage_nodes) {
+            if super::damage::paint_dirty_covered_by_overlay_restore(
+                dirty,
+                &self.damage_nodes,
+                &self.last_overlay_stamps,
+            ) {
                 // OverlayRestore already replayed page instances in tree order.
                 // Per-face dest-reset of overlapping AvatarGroup chips would
-                // CLEAR later faces for one frame.
+                // CLEAR later faces for one frame. Triggers above a popover sit
+                // in the Restore pad but outside the panel stamp — those still
+                // dest-reset so hover clears the shadow fringe once.
                 continue;
             }
             let scissor_pad = super::draw_cull::node_present_scissor_pad(dirty.kind);
@@ -2709,43 +2720,57 @@ impl AppState {
                     scissor_logical = logical;
                 }
             };
-            let scissors = if dirty.kind == PaintDirtyKind::Node {
-                super::damage::page_scissors_excluding_overlay(
+            // Keep the shadow fringe in the hole. Occupancy includes that
+            // halo; cutting it clips the trigger hover fill and the later
+            // portal replay src-overs the uncleared fringe so the shadow
+            // stacks darker (AnchoredOverlay / Select under the trigger).
+            // Subtract only portal **layout** boxes — Node hover and Region
+            // share this path so button dest-reset clears the fringe once.
+            let mut scissors = if dirty.kind == PaintDirtyKind::Node
+                || dirty.kind == PaintDirtyKind::Region
+            {
+                super::damage::page_scissors_excluding_portal_boxes(
                     scissor_logical,
-                    self.overlay_occupied,
+                    &self.last_overlay_stamps,
                 )
             } else {
-                if let Some(overlap) = super::damage::overlay_page_punch_overlap(
+                vec![scissor_logical]
+            };
+            if dirty.kind == PaintDirtyKind::Node {
+                // Drop the gap halo ring from the CLEAR (keep portal shadow in
+                // retain). Still CLEAR the widget face — including where the
+                // halo AABB overlaps the trigger — so transition-colors can
+                // update. Do **not** Overlay-punch that face: every ~150ms
+                // transition tick would rebuild the popover (卡顿) and src-over
+                // the shadow onto freshly flushed glyphs (文字叠粗中间态).
+                scissors = super::damage::page_node_present_scissors_preserving_portal_halo(
+                    scissors,
+                    dirty.bounds,
                     overlay_replay_coverage,
-                    scissor_logical,
-                ) {
-                    if let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
-                        overlap,
-                        0.0,
-                        ui_scale,
-                        self.config.width,
-                        self.config.height,
+                    &self.last_overlay_stamps,
+                );
+            }
+            if super::damage::page_dirty_punches_overlay_after_clear(dirty.kind) {
+                for piece in &scissors {
+                    if let Some(overlap) = super::damage::overlay_page_punch_overlap(
+                        overlay_replay_coverage,
+                        *piece,
                     ) {
-                        super::damage::push_disjoint_rect(
-                            &mut page_punch_overlaps,
-                            [x as f32, y as f32, w as f32, h as f32],
-                        );
+                        if let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
+                            overlap,
+                            0.0,
+                            ui_scale,
+                            self.config.width,
+                            self.config.height,
+                        ) {
+                            super::damage::push_disjoint_rect(
+                                &mut page_punch_overlaps,
+                                [x as f32, y as f32, w as f32, h as f32],
+                            );
+                        }
                     }
                 }
-                // Keep the shadow fringe in the hole. Occupancy includes that
-                // halo; cutting it clips the trigger hover and the punch
-                // src-overs the old shadow darker. Subtract only the panel
-                // box so menu rows are not cleared. The fringe is cleared
-                // with the trigger, then the portal is drawn once.
-                if dirty.kind == PaintDirtyKind::Region {
-                    super::damage::page_scissors_excluding_portal_boxes(
-                        scissor_logical,
-                        &self.last_overlay_stamps,
-                    )
-                } else {
-                    vec![scissor_logical]
-                }
-            };
+            }
             for scissor_logical in scissors {
                 let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
                     scissor_logical,
@@ -2920,6 +2945,7 @@ impl AppState {
                             // Ancestor present already submitted this slot's ink.
                             continue;
                         }
+                        node_glyph_holes.push(scissor_logical);
                         if allow_primitives {
                             if let Some(reset) = node_dest_reset.as_ref() {
                                 // Keep this visible piece's scissor through CLEAR and
@@ -3165,13 +3191,10 @@ impl AppState {
             .collect();
         let closed_restore =
             super::damage::overlay_restore_is_closed_portal(&restore_keys, &remaining_keys);
-        // Dest-reset CLEARs first, then recapture, then I-beam. Glyphs after
-        // chrome stamped S onto the caret; tightening clip then left CLEAR white
-        // through the letter.
-        if pending_page_glyphs {
-            self.flush_node_present_page_glyphs(render_pass, ui_scale);
-            pending_page_glyphs = false;
-        }
+        // Dest-reset CLEARs first, then overlay suffix / punches, then page
+        // glyph recapture. Flushing glyphs before a Region punch lets translucent
+        // portal shadow src-over the caption (叠粗). Capture already skips
+        // stamps-occluded nodes, so late flush cannot stamp under the panel.
         let merged = super::damage::merge_overlay_replay_dirties(
             &overlay_dirties, &self.last_overlay_stamps,
         );
@@ -3235,12 +3258,14 @@ impl AppState {
                     &remaining_keys,
                     &dest_reset_holes,
                     ui_scale,
+                    None,
                 );
             }
         }
         // Replay only pixels whose page underlay was reconstructed. Unioning
         // separate holes, or redrawing a whole idle portal, accumulates alpha
-        // in untouched shadows and gaps between the holes.
+        // in untouched shadows and gaps between the holes. Node hover never
+        // contributes holes (halo-preserve above); these are Region/Restore.
         for hole in page_punch_overlaps {
             let Some((x, y, w, h)) = super::damage::physical_xywh_to_scissor(
                 hole,
@@ -3250,6 +3275,7 @@ impl AppState {
                 continue;
             };
             render_pass.set_scissor_rect(x, y, w, h);
+            let hole_cull = Some(super::draw_cull::CullRects::one(hole));
             self.draw_node_present_overlay(
                 render_pass,
                 paint_ops,
@@ -3266,10 +3292,11 @@ impl AppState {
                 &remaining_keys,
                 &[],
                 ui_scale,
+                hole_cull,
             );
         }
         if pending_page_glyphs {
-            self.flush_node_present_page_glyphs(render_pass, ui_scale);
+            self.flush_node_present_page_glyphs(render_pass, ui_scale, &node_glyph_holes);
         }
     }
 
@@ -3290,12 +3317,12 @@ impl AppState {
         remaining_stamp_keys: &[u64],
         dest_reset_holes: &[[f32; 4]],
         ui_scale: f32,
+        cull: Option<super::draw_cull::CullRects>,
     ) {
         // FullClear draws `band rects → band text → next band` so a higher menu
         // occludes lower glyphs. Flushing every overlay fill then every glyphon
         // renderer replays DatePicker calendar digits on top of the month menu
         // (looks like a missing background) and src-overs the parent halo again.
-        let _ = ui_scale;
         let overlay_band_keys: Vec<u64> = overlay_band_ranges.iter().map(|b| b.stamp_key).collect();
         let mut overlay_band_encode = super::damage::overlay_band_encode_flags(
             &overlay_band_keys,
@@ -3335,7 +3362,7 @@ impl AppState {
                         scaled_tex,
                         dummy,
                         scaled_instances,
-                        None,
+                        cull,
                     );
                 } else if inst_lo < inst_hi {
                     self.pipeline.bind_sdf(render_pass, true, dummy);
@@ -3351,7 +3378,7 @@ impl AppState {
                         scaled_instances,
                         inst_lo as u32,
                         (inst_hi - inst_lo) as u32,
-                        None,
+                        cull,
                     );
                     if tex_lo < tex_hi {
                         draw_packed_textured_runs(
@@ -3362,18 +3389,31 @@ impl AppState {
                             scaled_tex,
                             tex_lo,
                             tex_hi,
-                            None,
+                            cull,
                         );
                     }
                 }
             }
             if band.text.0 < band.text.1 {
-                if band_i == 0 {
-                    self.overlay_text_renderer.render(render_pass);
-                } else if let Some(r) = self.overlay_band_text_renderers.get(band_i - 1) {
-                    r.render(render_pass);
+                // Punch-path holes are physical; stamps are logical. Panel glyphs
+                // never sit in the trigger-face strip — skip glyphon there.
+                let skip_text = cull.is_some_and(|c| {
+                    self.last_overlay_stamps
+                        .iter()
+                        .find(|(k, _)| *k == band.stamp_key)
+                        .is_some_and(|(_, stamp)| {
+                            let phys = super::draw_cull::scale_xywh(*stamp, ui_scale);
+                            !c.hits_aabb(phys)
+                        })
+                });
+                if !skip_text {
+                    if band_i == 0 {
+                        self.overlay_text_renderer.render(render_pass);
+                    } else if let Some(r) = self.overlay_band_text_renderers.get(band_i - 1) {
+                        r.render(render_pass);
+                    }
+                    super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Text, 1);
                 }
-                super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Text, 1);
             }
         }
     }
@@ -3386,33 +3426,29 @@ impl AppState {
         &'pass self,
         render_pass: &mut wgpu::RenderPass<'pass>,
         ui_scale: f32,
+        node_cleared: &[[f32; 4]],
     ) {
         use super::damage::PaintDirtyKind;
         let mut union: Option<[f32; 4]> = None;
+        // Node holes are the scissors encode actually CLEARED. The paint box
+        // is larger (portal halo ring). Flushing the paint box lets glyphon's
+        // coverage kernel src-over retained strokes — the caption looks bold
+        // for the rest of `transition-colors`.
+        for hole in node_cleared {
+            if hole[2] <= 0.0 || hole[3] <= 0.0 {
+                continue;
+            }
+            union = Some(match union {
+                Some(prev) => super::damage::union_rects(prev, *hole),
+                None => *hole,
+            });
+        }
         for dirty in &self.damage_nodes {
             let pad = match dirty.kind {
-                PaintDirtyKind::Overlay => continue,
+                PaintDirtyKind::Overlay | PaintDirtyKind::Node => continue,
                 PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region => 2.0,
-                // Owner clip already limits glyphs. Do not use the 8px node scissor —
-                // that strip overlaps `gap-2` siblings and the sidebar rail.
-                PaintDirtyKind::Node => {
-                    if super::damage::page_node_present_occluded_by_overlay(
-                        dirty.bounds,
-                        self.overlay_occupied,
-                    ) {
-                        continue;
-                    }
-                    // GPU scissor is the CLEAR hole. Recapture TextBounds is
-                    // that hole + 1px kernel; painting the pad would 叠粗 S.
-                    0.0
-                }
             };
-            let padded = match dirty.kind {
-                PaintDirtyKind::Node => {
-                    super::draw_cull::dest_reset_wipe_scissor_logical(dirty.bounds, ui_scale)
-                }
-                _ => super::draw_cull::padded_xywh(dirty.bounds, pad),
-            };
+            let padded = super::draw_cull::padded_xywh(dirty.bounds, pad);
             union = Some(match union {
                 Some(prev) => super::damage::union_rects(prev, padded),
                 None => padded,
@@ -4695,8 +4731,10 @@ impl AppState {
             variant_mouse[1],
             scroll_paint_only || variant_mouse[0] < 0.0,
         );
-        // Button hover chrome: always sync — `{id}_hover` was just reconciled, including
-        // during `scroll_paint_only` (content sliding under a still pointer).
+        // Button / SidebarMenuButton hover chrome: always sync — `{id}_hover` was just
+        // reconciled, including during `scroll_paint_only` (main-pane smooth scroll under
+        // a still pointer on the rail). Gating sidebar here left enter/leave signals live
+        // but never wrote `sidebar-accent`, so nav items looked dead until scroll settled.
         crate::components::button::sync_button_hover_paint_subtree(
             &mut self.root_element,
             &mut self.layout_tree,
@@ -4704,6 +4742,11 @@ impl AppState {
             viewport_w,
             viewport_h,
             [0.0, 0.0],
+        );
+        crate::components::sidebar::sync_sidebar_menu_button_paint_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
         );
         if !scroll_paint_only {
             crate::components::command::sync_command_item_paint_subtree(
@@ -4742,11 +4785,6 @@ impl AppState {
                 &mut sync_impact,
             );
             crate::components::sidebar::sync_sidebar_rail_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut sync_impact,
-            );
-            crate::components::sidebar::sync_sidebar_menu_button_paint_subtree(
                 &mut self.root_element,
                 &mut self.layout_tree,
                 &mut sync_impact,
@@ -5689,7 +5727,7 @@ impl AppState {
             &mut render_result.node_paints,
             &self.damage_nodes,
         );
-        super::draw_cull::prepare_node_present_dirties(
+        super::draw_cull::prepare_node_present_dirties_ex(
             &mut self.damage_nodes,
             &render_result.node_paints,
             &self.last_present_node_bounds,
@@ -5698,6 +5736,7 @@ impl AppState {
             &scaled_input_chrome[..overlay_chrome_start.min(scaled_input_chrome.len())],
             ui_scale,
             self.overlay_occupied,
+            &self.last_overlay_stamps,
         );
         let region_present = self.damage_nodes.iter().any(|d| {
             matches!(
@@ -6025,7 +6064,25 @@ impl AppState {
         let mut overlay_band_shadows: Vec<Vec<crate::renderer::prepare_text::ShadowTexDraw>> =
             Vec::with_capacity(overlay_band_ranges.len());
         let mut overlay_needs_warmup = false;
+        let overlay_kinds: Vec<super::damage::PaintDirtyKind> =
+            self.damage_nodes.iter().map(|d| d.kind).collect();
+        let prepare_overlay_glyphs = super::damage::overlay_glyphon_prepare_needed(
+            gpu_present.use_node_present,
+            &overlay_kinds,
+        );
+        if !prepare_overlay_glyphs {
+            // Reuse the last portal mesh. Reshaping it on every trigger
+            // transition tick is the hover-switch hitch; the bands are not
+            // encoded on a page-node present.
+            for _ in &overlay_band_ranges {
+                overlay_band_underlines.push(Vec::new());
+                overlay_band_shadows.push(Vec::new());
+            }
+        }
         for (band_i, band) in overlay_band_ranges.iter().enumerate() {
+            if !prepare_overlay_glyphs {
+                continue;
+            }
             let text_lo = band.text.0;
             let text_hi = band.text.1;
             if text_lo >= text_hi {
@@ -6115,7 +6172,10 @@ impl AppState {
             )
         };
         let page_node_occluded = |d: &super::damage::PaintDirty| {
-            super::damage::page_node_present_occluded_by_overlay(d.bounds, self.overlay_occupied)
+            super::damage::page_node_present_occluded_by_overlay(
+                d.bounds,
+                &self.last_overlay_stamps,
+            )
         };
         let skip_covered_nested = |d: &super::damage::PaintDirty| {
             let layered = super::draw_cull::layered_overlay_slot_bounds(
@@ -6147,8 +6207,11 @@ impl AppState {
                 )
             }
             super::damage::PaintDirtyKind::Node => {
-                !super::damage::paint_dirty_covered_by_overlay_restore(d, &self.damage_nodes)
-                    && !skip_covered_nested(d)
+                !super::damage::paint_dirty_covered_by_overlay_restore(
+                    d,
+                    &self.damage_nodes,
+                    &self.last_overlay_stamps,
+                ) && !skip_covered_nested(d)
                     && !super::draw_cull::skip_in_flow_under_layered_overlay(
                         d,
                         &self.damage_nodes,
@@ -6257,7 +6320,7 @@ impl AppState {
                     page_text,
                     &render_result.node_paints,
                     &wipe_clips,
-                    self.overlay_occupied,
+                    &self.last_overlay_stamps,
                 );
             if hole_text.is_empty() {
                 false
@@ -7678,7 +7741,14 @@ fn update_scrollbar_element_self(
     // - axis overflow mode disallows scrollbars, or
     // - explicitly `never`, or
     // - `auto` but not scrollable (no hidden hit-slab reservation for non-scrollable axis).
-    if !axis_allows || vis == "never" || (vis != "always" && !scrollable) {
+    //
+    // Do **not** treat unset viewport signals as "not scrollable". Match page
+    // switches run Full prepass before post-render publishes vw/vh/cw/ch; collapsing
+    // here zeros the overlay track, and subsequent ViewportsOnly frames never
+    // restore hit geometry — later pages then have no bar on wheel or hover.
+    let metrics_ready = vw > 0.5 && vh > 0.5;
+    let collapse_auto = vis != "always" && !scrollable && metrics_ready;
+    if !axis_allows || vis == "never" || collapse_auto {
         // In-flow bars must drop both axes or the flex lane stays (horizontal
         // track stays short of the vertical thickness). Overlay bars are
         // absolute: zeroing the cross size moves the inset anchor onto the far
@@ -7743,15 +7813,27 @@ fn update_scrollbar_element_self(
         } else {
             &el.style.inset.right
         });
-        let authored = el
+        let v_cross = el
+            .attrs
+            .get(ATTR_H_LANE_V_CROSS)
+            .and_then(|s| s.parse::<f32>().ok())
+            .filter(|px| px.is_finite() && *px > 0.0)
+            .unwrap_or(base_thickness);
+        let edge = el
             .attrs
             .get(ATTR_H_LANE_INSET)
             .and_then(|s| s.parse::<f32>().ok())
             .unwrap_or_else(|| {
-                el.set_attr(ATTR_H_LANE_INSET, current.to_string());
-                current
+                // Legacy builds baked v_cross into the inset; recover the edge pad.
+                let edge = if current > SCROLLBAR_EDGE_PAD + 0.5 {
+                    (current - v_cross).max(SCROLLBAR_EDGE_PAD)
+                } else {
+                    current.max(0.0)
+                };
+                el.set_attr(ATTR_H_LANE_INSET, edge.to_string());
+                edge
             });
-        let next = horizontal_lane_side_inset(authored, base_thickness, y_lane);
+        let next = horizontal_lane_side_inset(edge, v_cross, y_lane);
         if (current - next).abs() > 0.5 {
             let v = taffy::style::LengthPercentageAuto::length(next);
             if on_left {
@@ -7943,6 +8025,17 @@ fn update_scrollbar_element_self(
     // Sync track style after all geometry mutations to avoid one-frame stale layout,
     // which is especially visible in nested smooth-scroll scenarios.
     layout_tree.update_taffy_node_style(el);
+}
+
+/// Test hook: same scrollbar prepass as `render` (`Full` / `ViewportsOnly`).
+#[cfg(test)]
+pub(crate) fn update_scrollbar_elements_for_test(
+    el: &mut Element,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    mode: ScrollbarUpdateMode,
+) {
+    let mut base = std::collections::HashMap::new();
+    update_scrollbar_elements(el, &mut base, layout_tree, mode, None);
 }
 
 fn update_scrollbar_elements(

@@ -795,6 +795,59 @@ pub fn page_scissors_excluding_portal_boxes(
     parts
 }
 
+/// Node present scissors after [`page_scissors_excluding_portal_boxes`].
+///
+/// Keeps the widget **layout** face (hover fill must update even when the portal
+/// halo AABB overlaps the trigger) but does **not** CLEAR the translucent halo
+/// ring in the gap below. Wiping that ring forced an Overlay punch-rebuild on
+/// every `transition-colors` tick (~150ms): switching triggers stuttered, and
+/// punching the face after glyph flush src-overed the shadow onto the caption
+/// (叠粗中间态). Encode must **not** Overlay-punch after this preserve.
+pub fn page_node_present_scissors_preserving_portal_halo(
+    pieces: Vec<[f32; 4]>,
+    widget_bounds: [f32; 4],
+    coverage: Option<[f32; 4]>,
+    stamps: &[(u64, [f32; 4])],
+) -> Vec<[f32; 4]> {
+    let Some(cov) = coverage.filter(|b| b[2] > 0.0 && b[3] > 0.0) else {
+        return pieces;
+    };
+    let mut halo_ring = vec![cov];
+    for (_, panel) in stamps {
+        if panel[2] <= 0.0 || panel[3] <= 0.0 {
+            continue;
+        }
+        halo_ring = halo_ring
+            .into_iter()
+            .flat_map(|r| subtract_rect(r, *panel))
+            .filter(|r| r[2] > 0.5 && r[3] > 0.5)
+            .collect();
+    }
+    if halo_ring.is_empty() {
+        return pieces;
+    }
+    let mut out = Vec::new();
+    for piece in pieces {
+        let mut kept = vec![piece];
+        for hole in &halo_ring {
+            kept = kept
+                .into_iter()
+                .flat_map(|r| subtract_rect(r, *hole))
+                .filter(|r| r[2] > 0.5 && r[3] > 0.5)
+                .collect();
+        }
+        for r in kept {
+            push_disjoint_rect(&mut out, r);
+        }
+        if let Some(core) = intersect_rects(piece, widget_bounds) {
+            if core[2] > 0.5 && core[3] > 0.5 {
+                push_disjoint_rect(&mut out, core);
+            }
+        }
+    }
+    out
+}
+
 /// All disjoint visible parts of a page dirty. Every part must be submitted;
 /// choosing just one loses updates on the other side of an overlapping portal.
 pub fn page_scissors_excluding_overlay(
@@ -837,19 +890,21 @@ pub fn page_scissor_excluding_overlay(
         })
 }
 
-/// Clicked AlertDialog trigger sits under the fullscreen scrim. Skipping dest-reset
-/// alone still lets node-present glyphon src-over that caption onto the retained
-/// scrim while overlay suffix scissors to the panel stamp. Capture and flush must
-/// use the same occupancy test.
+/// Clicked AlertDialog trigger sits under the fullscreen scrim stamp. Skipping
+/// dest-reset alone still lets node-present glyphon src-over that caption onto
+/// the retained scrim while overlay suffix scissors to the panel stamp. Capture
+/// and flush must use the same **layout-stamp** occupancy as Node dest-reset —
+/// the visual halo covers AnchoredOverlay triggers above the panel and would
+/// drop their glyphs (flicker) while the uncleared fringe stacks the shadow.
 pub fn page_node_present_occluded_by_overlay(
     dirty_bounds: [f32; 4],
-    overlay_occupied: Option<[f32; 4]>,
+    portal_stamps: &[(u64, [f32; 4])],
 ) -> bool {
     let scissor = super::draw_cull::padded_xywh(
         dirty_bounds,
         super::draw_cull::node_present_scissor_pad(PaintDirtyKind::Node),
     );
-    page_scissors_excluding_overlay(scissor, overlay_occupied).is_empty()
+    page_scissors_excluding_portal_boxes(scissor, portal_stamps).is_empty()
 }
 
 /// Overlap of a page node-present scissor with overlay occupancy.
@@ -861,6 +916,35 @@ pub fn overlay_page_punch_overlap(
     overlay_occupied
         .filter(|b| b[2] > 0.0 && b[3] > 0.0)
         .and_then(|occ| intersect_rects(occ, page_scissor))
+}
+
+/// Whether a page dirty's clear under portal coverage must Overlay-punch.
+///
+/// `Node` hover uses [`page_node_present_scissors_preserving_portal_halo`] and
+/// must stay page-local: punching would rebuild the popover on every
+/// `transition-colors` tick and stack shadow onto the trigger caption.
+#[inline]
+pub fn page_dirty_punches_overlay_after_clear(kind: PaintDirtyKind) -> bool {
+    !matches!(kind, PaintDirtyKind::Node)
+}
+
+/// Page-node hover (`transition-colors`) must not reshape portal glyphs.
+///
+/// While a popover is open, every button hover frame is a partial present.
+/// Preparing overlay glyphon anyway rewrites the whole panel mesh (~the hitch
+/// when moving between triggers) even though those bands are not encoded.
+/// Prepare only when this frame will actually draw overlay text.
+#[inline]
+pub fn overlay_glyphon_prepare_needed(node_present: bool, kinds: &[PaintDirtyKind]) -> bool {
+    if !node_present {
+        return true;
+    }
+    kinds.iter().any(|k| {
+        matches!(
+            k,
+            PaintDirtyKind::Overlay | PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region
+        )
+    })
 }
 
 /// True when dest-reset will punch occupancy: overlap exists and the page
@@ -1617,23 +1701,44 @@ pub fn paint_dirty_skips_node_dest_reset(
 /// overlapping underlay, then Restore/Region redraws the page prefix in tree
 /// order. A follow-up per-face Node dest-reset CLEARs that stacking (later face
 /// wiped by an earlier sibling) for one frame.
+///
+/// OverlayRestore holes are encode-padded (shadow ring). That pad often fully
+/// contains the AnchoredOverlay / Select trigger above the panel — especially
+/// after an exclusive peer dismiss queues leftover Restore. Skipping that Node
+/// leaves the hover fringe uncleared while the portal shadow src-overs darker.
+/// Region islands stay unconditional; Restore only swallows Nodes that sit under
+/// an opaque portal **layout** stamp (same test as Node present scissors).
 #[inline]
-pub fn paint_dirty_covered_by_overlay_restore(dirty: &PaintDirty, nodes: &[PaintDirty]) -> bool {
+pub fn paint_dirty_covered_by_overlay_restore(
+    dirty: &PaintDirty,
+    nodes: &[PaintDirty],
+    portal_stamps: &[(u64, [f32; 4])],
+) -> bool {
     if dirty.kind != PaintDirtyKind::Node {
         return false;
     }
     if dirty.bounds[2] <= 0.0 || dirty.bounds[3] <= 0.0 {
         return false;
     }
-    nodes.iter().any(|o| {
-        matches!(
-            o.kind,
-            PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region
-        ) && o.bounds[0] <= dirty.bounds[0]
-            && o.bounds[1] <= dirty.bounds[1]
-            && o.bounds[0] + o.bounds[2] >= dirty.bounds[0] + dirty.bounds[2]
-            && o.bounds[1] + o.bounds[3] >= dirty.bounds[1] + dirty.bounds[3]
-    })
+    let contains = |hole: [f32; 4]| {
+        hole[0] <= dirty.bounds[0]
+            && hole[1] <= dirty.bounds[1]
+            && hole[0] + hole[2] >= dirty.bounds[0] + dirty.bounds[2]
+            && hole[1] + hole[3] >= dirty.bounds[1] + dirty.bounds[3]
+    };
+    if nodes
+        .iter()
+        .any(|o| o.kind == PaintDirtyKind::Region && contains(o.bounds))
+    {
+        return true;
+    }
+    if !nodes
+        .iter()
+        .any(|o| o.kind == PaintDirtyKind::OverlayRestore && contains(o.bounds))
+    {
+        return false;
+    }
+    page_scissors_excluding_portal_boxes(dirty.bounds, portal_stamps).is_empty()
 }
 
 /// Overlay dest-reset hole: repaint page fills that sit behind it.
@@ -3163,8 +3268,15 @@ mod tests {
             cut_halo.iter().all(|r| r[1] + r[3] <= halo[1] + 0.5),
             "halo subtract clips the hover fill, parts={cut_halo:?}"
         );
+        // Button hover dest-resets as Node. Present must use layout-box subtract
+        // (same as Region) — halo subtract is what stacks the portal shadow darker
+        // and flickers the clipped hover fill under AnchoredOverlay.
         let kept = page_scissors_excluding_portal_boxes(trigger, &[(1, panel)]);
-        assert_eq!(kept, vec![trigger]);
+        assert_eq!(
+            kept,
+            vec![trigger],
+            "Node/Region present must keep the full trigger (incl. shadow fringe)"
+        );
         let into_panel = [10.0, 40.0, 220.0, 80.0];
         let parts = page_scissors_excluding_portal_boxes(into_panel, &[(1, panel)]);
         assert!(
@@ -3175,6 +3287,77 @@ mod tests {
             parts.iter().any(|r| r[3] > 30.0),
             "shadow fringe on the trigger must remain, parts={parts:?}"
         );
+        // Hover transition ticks must CLEAR the trigger face but leave the
+        // portal halo ring in retain — wiping it forced Overlay punch-replay
+        // every ~150ms transition-colors frame (卡顿 + 悬停中间态).
+        let coverage = overlay_replay_coverage(&[(1, panel)], Some(halo));
+        let hover_wipe = [10.0, 40.0, 220.0, 48.0];
+        let after_stamp =
+            page_scissors_excluding_portal_boxes(hover_wipe, &[(1, panel)]);
+        let preserved = page_node_present_scissors_preserving_portal_halo(
+            after_stamp,
+            trigger,
+            coverage,
+            &[(1, panel)],
+        );
+        assert!(
+            preserved
+                .iter()
+                .any(|r| intersect_rects(*r, trigger).is_some_and(|i| i[2] * i[3] > 100.0)),
+            "trigger face must still dest-reset for hover fill; preserved={preserved:?}"
+        );
+        let gap = [10.0, 72.0, 220.0, 4.0];
+        assert!(
+            preserved
+                .iter()
+                .all(|r| intersect_rects(*r, gap).map(|i| i[2] * i[3] < 1.0).unwrap_or(true)),
+            "gap halo ring must stay in retain; preserved={preserved:?}"
+        );
+        // Face under the halo still CLEARs (hover fill) and therefore overlaps
+        // coverage — but Node encode must not punch that overlap.
+        assert!(
+            preserved
+                .iter()
+                .any(|p| overlay_page_punch_overlap(coverage, *p).is_some()),
+            "fixture: face under halo intersects coverage; preserved={preserved:?}"
+        );
+        assert!(
+            !page_dirty_punches_overlay_after_clear(PaintDirtyKind::Node),
+            "Node hover must stay page-local after halo preserve"
+        );
+        assert!(
+            page_dirty_punches_overlay_after_clear(PaintDirtyKind::Region),
+            "Region clears under coverage still punch"
+        );
+        assert!(
+            page_dirty_punches_overlay_after_clear(PaintDirtyKind::OverlayRestore),
+            "Restore clears under coverage still punch"
+        );
+    }
+
+    #[test]
+    fn node_hover_must_not_prepare_overlay_glyphon() {
+        // Open AnchoredOverlay + button transition-colors: the frame's dirties
+        // are the trigger Node only. Reshaping the popover mesh every tick is
+        // the hover-switch hitch, and drawing that mesh onto the caption is
+        // the bold intermediate stroke.
+        assert!(
+            !overlay_glyphon_prepare_needed(true, &[PaintDirtyKind::Node]),
+            "page-node hover must reuse the portal glyphon mesh"
+        );
+        assert!(overlay_glyphon_prepare_needed(
+            true,
+            &[PaintDirtyKind::Node, PaintDirtyKind::Overlay]
+        ));
+        assert!(overlay_glyphon_prepare_needed(
+            true,
+            &[PaintDirtyKind::OverlayRestore]
+        ));
+        assert!(overlay_glyphon_prepare_needed(
+            true,
+            &[PaintDirtyKind::Region]
+        ));
+        assert!(overlay_glyphon_prepare_needed(false, &[PaintDirtyKind::Node]));
     }
 
     #[test]
@@ -3436,13 +3619,19 @@ mod tests {
             "dest-reset of the trigger would wipe scrim pixels and redraw the caption on top"
         );
         assert!(
-            page_node_present_occluded_by_overlay(trigger, Some(scrim)),
+            page_node_present_occluded_by_overlay(trigger, &[(1, scrim)]),
             "glyph capture/flush must skip the same trigger or the caption src-overs the scrim"
         );
         let neighbor = [200.0, 80.0, 96.0, 32.0];
         assert!(
-            !page_node_present_occluded_by_overlay(neighbor, Some([90.0, 140.0, 40.0, 160.0])),
-            "a dropdown occupancy that misses the trigger must still present its glyphs"
+            !page_node_present_occluded_by_overlay(neighbor, &[(1, [90.0, 140.0, 40.0, 160.0])]),
+            "a dropdown stamp that misses the trigger must still present its glyphs"
+        );
+        let panel = [10.0, 76.0, 220.0, 96.0];
+        let above = [10.0, 40.0, 220.0, 32.0];
+        assert!(
+            !page_node_present_occluded_by_overlay(above, &[(1, panel)]),
+            "popover layout stamp must not occlude the trigger above the panel"
         );
     }
 
@@ -4512,16 +4701,18 @@ mod tests {
             kind: PaintDirtyKind::Node,
         };
         let nodes = [restore, face_a, face_c];
+        // Faces sit inside the panel stamp (Restore pad == panel for this fixture).
+        let panel_stamp = [(9u64, restore.bounds)];
         assert!(
-            paint_dirty_covered_by_overlay_restore(&face_a, &nodes),
+            paint_dirty_covered_by_overlay_restore(&face_a, &nodes, &panel_stamp),
             "earlier overlapped face is inside the Restore hole"
         );
         assert!(
-            paint_dirty_covered_by_overlay_restore(&face_c, &nodes),
+            paint_dirty_covered_by_overlay_restore(&face_c, &nodes, &panel_stamp),
             "later overlapped face is inside the Restore hole"
         );
         assert!(
-            !paint_dirty_covered_by_overlay_restore(&restore, &nodes),
+            !paint_dirty_covered_by_overlay_restore(&restore, &nodes, &panel_stamp),
             "Restore itself is not a Node skip"
         );
         let beside = PaintDirty {
@@ -4530,7 +4721,7 @@ mod tests {
             kind: PaintDirtyKind::Node,
         };
         assert!(
-            !paint_dirty_covered_by_overlay_restore(&beside, &nodes),
+            !paint_dirty_covered_by_overlay_restore(&beside, &nodes, &panel_stamp),
             "faces outside the overlay hole still dest-reset"
         );
         let page = PaintDirty {
@@ -4539,7 +4730,7 @@ mod tests {
             kind: PaintDirtyKind::Node,
         };
         assert!(
-            !paint_dirty_covered_by_overlay_restore(&page, &nodes),
+            !paint_dirty_covered_by_overlay_restore(&page, &nodes, &panel_stamp),
             "larger page dest-reset is not swallowed by a small Restore hole"
         );
 
@@ -4551,12 +4742,89 @@ mod tests {
         };
         let region_nodes = [region, face_a, face_c];
         assert!(
-            paint_dirty_covered_by_overlay_restore(&face_a, &region_nodes),
+            paint_dirty_covered_by_overlay_restore(&face_a, &region_nodes, &[]),
             "Region group AABB must skip earlier face dest-reset"
         );
         assert!(
-            paint_dirty_covered_by_overlay_restore(&face_c, &region_nodes),
+            paint_dirty_covered_by_overlay_restore(&face_c, &region_nodes, &[]),
             "Region group AABB must skip later face dest-reset"
+        );
+    }
+
+    #[test]
+    fn node_hover_preserves_portal_halo_ring_without_overlay_punch() {
+        let trigger = [10.0, 40.0, 220.0, 32.0];
+        let panel = [10.0, 76.0, 220.0, 96.0];
+        let halo = [4.0, 54.0, 232.0, 120.0];
+        let coverage = overlay_replay_coverage(&[(1, panel)], Some(halo));
+        let wipe = [10.0, 40.0, 220.0, 48.0];
+        let pieces = page_scissors_excluding_portal_boxes(wipe, &[(1, panel)]);
+        let kept = page_node_present_scissors_preserving_portal_halo(
+            pieces,
+            trigger,
+            coverage,
+            &[(1, panel)],
+        );
+        let face = intersect_rects(kept.iter().copied().fold(trigger, union_rects), trigger)
+            .expect("trigger face coverage");
+        assert!(
+            face[2] * face[3] > trigger[2] * trigger[3] * 0.9,
+            "almost all of the trigger face must dest-reset; kept={kept:?}"
+        );
+        let gap_pixel = [100.0, 73.0, 1.0, 1.0];
+        assert!(
+            kept.iter().all(|r| intersect_rects(*r, gap_pixel).is_none()),
+            "gap halo pixel must not be CLEARed on hover; kept={kept:?}"
+        );
+        assert!(
+            kept.iter()
+                .any(|p| overlay_page_punch_overlap(coverage, *p).is_some()),
+            "fixture: cleared face intersects coverage"
+        );
+        assert!(!page_dirty_punches_overlay_after_clear(PaintDirtyKind::Node));
+    }
+
+    #[test]
+    fn exclusive_restore_pad_must_not_skip_trigger_above_panel() {
+        // Fade-replace / exclusive peer dismiss builds OverlayRestore from
+        // encode_scissor(visual halo) — pad(halo) fully contains the trigger
+        // sitting 4px above the panel. Old containment-only skip swallowed that
+        // Node; hover fringe stayed uncleared and the portal shadow stacked.
+        let panel = [10.0, 76.0, 220.0, 96.0];
+        let visual_halo = [4.0, 54.0, 232.0, 120.0];
+        let restore_pad = crate::app::draw_cull::padded_xywh(visual_halo, 16.0);
+        let trigger = PaintDirty {
+            key: 2,
+            bounds: [10.0, 40.0, 220.0, 32.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let restore = PaintDirty {
+            key: 9,
+            bounds: restore_pad,
+            kind: PaintDirtyKind::OverlayRestore,
+        };
+        let nodes = [restore, trigger];
+        assert!(
+            restore_pad[0] <= trigger.bounds[0]
+                && restore_pad[1] <= trigger.bounds[1]
+                && restore_pad[0] + restore_pad[2]
+                    >= trigger.bounds[0] + trigger.bounds[2]
+                && restore_pad[1] + restore_pad[3]
+                    >= trigger.bounds[1] + trigger.bounds[3],
+            "fixture: encode Restore pad must fully contain the trigger; pad={restore_pad:?}"
+        );
+        assert!(
+            !paint_dirty_covered_by_overlay_restore(&trigger, &nodes, &[(9, panel)]),
+            "trigger above the panel stamp must still dest-reset after exclusive Restore"
+        );
+        let chip = PaintDirty {
+            key: 3,
+            bounds: [20.0, 90.0, 40.0, 40.0],
+            kind: PaintDirtyKind::Node,
+        };
+        assert!(
+            paint_dirty_covered_by_overlay_restore(&chip, &[restore, chip], &[(9, panel)]),
+            "chips inside the panel stamp stay swallowed by Restore"
         );
     }
 

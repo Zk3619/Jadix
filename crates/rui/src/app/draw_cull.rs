@@ -780,6 +780,17 @@ pub(crate) fn region_replays_own_chrome_only(
     bounds: [f32; 4],
     node_paints: &[NodePaint],
 ) -> bool {
+    let has_keyed = paints_has_keyed_slot(key, bounds, node_paints);
+    // Fade omitted the quads. Own-chrome then draws nothing and PartialLoad
+    // keeps the last gray track. Page-band replay fills that hole with the
+    // content that was under the bar. A flat Node clear of the same box
+    // samples one row and erases the thumb.
+    let emits = node_paints.iter().any(|p| {
+        slot_matches_dirty(key, bounds, p, has_keyed) && slot_emits_paint(p)
+    });
+    if !emits {
+        return false;
+    }
     let has_nested_paint = node_paints.iter().any(|owner| {
         slot_matches_dirty(key, bounds, owner, true)
             && node_paints
@@ -1968,6 +1979,12 @@ fn owner_is_only_culled_metadata(key: u64, paints: &[NodePaint]) -> bool {
 /// gray dirty rectangle). Dest-reset replays the quad. Latest keeps Region:
 /// it owns glyphs and must composite the underlay first. A pose that has
 /// left the cell is not this case — that leftover is still a Region hole.
+///
+/// A layered slot with no current quads (overlay scrollbar settle-to-zero)
+/// must NOT take this path. Node dest-reset then flat-fills the track with
+/// one sampled row color and skips the thumb (`layered_src_over` has no
+/// last-present after the empty frame). The bar disappears. That hole is a
+/// Region whose page replay restores the content the bar covered.
 fn layered_cell_keeps_node_dest_reset(
     key: u64,
     bounds: [f32; 4],
@@ -1992,6 +2009,56 @@ fn layered_cell_keeps_node_dest_reset(
     })
 }
 
+/// How far `occ` extends past layout stamps. A full-window scrim is hundreds of
+/// px; panel shadows in this UI stay inside the blur (≤24). Cap the fringe so
+/// a scrim is not treated as shadow.
+fn portal_shadow_fringe_pad(occ: [f32; 4], stamps: &[(u64, [f32; 4])]) -> f32 {
+    let mut extent = 0.0_f32;
+    for (_, stamp) in stamps {
+        extent = extent.max((stamp[0] - occ[0]).max(0.0));
+        extent = extent.max((stamp[1] - occ[1]).max(0.0));
+        extent = extent
+            .max(((occ[0] + occ[2]) - (stamp[0] + stamp[2])).max(0.0));
+        extent = extent
+            .max(((occ[1] + occ[3]) - (stamp[1] + stamp[3])).max(0.0));
+    }
+    if extent > 48.0 {
+        32.0
+    } else {
+        extent.max(16.0)
+    }
+}
+
+/// Region-replay only when the widget pokes through a scrim, not when it merely
+/// sits in a panel's shadow.
+///
+/// Empty `stamps` keeps the old occupancy rule (callers that have not threaded
+/// layout boxes). With stamps, a hit covered by the shadow pad stays `Node`:
+/// halo-preserve clears the trigger face without reshaping the popover.
+pub(crate) fn portal_occupancy_requires_region(
+    logical: [f32; 4],
+    occ: [f32; 4],
+    stamps: &[(u64, [f32; 4])],
+) -> bool {
+    let Some(hit) = intersect_rects(logical, occ) else {
+        return false;
+    };
+    if stamps.is_empty() {
+        return true;
+    }
+    let pad = portal_shadow_fringe_pad(occ, stamps);
+    let mut rest = vec![hit];
+    for (_, stamp) in stamps {
+        let padded = padded_xywh(*stamp, pad);
+        rest = rest
+            .into_iter()
+            .flat_map(|r| super::damage::subtract_rect(r, padded))
+            .filter(|r| r[2] > 0.5 && r[3] > 0.5)
+            .collect();
+    }
+    !rest.is_empty()
+}
+
 pub(crate) fn prepare_node_present_dirties(
     dirties: &mut Vec<PaintDirty>,
     node_paints: &[NodePaint],
@@ -2001,6 +2068,37 @@ pub(crate) fn prepare_node_present_dirties(
     chrome: &[InstanceInput],
     ui_scale: f32,
     overlay: Option<[f32; 4]>,
+) {
+    prepare_node_present_dirties_ex(
+        dirties,
+        node_paints,
+        last_present,
+        instances,
+        textured,
+        chrome,
+        ui_scale,
+        overlay,
+        &[],
+    );
+}
+
+/// [`prepare_node_present_dirties`] with portal layout stamps.
+///
+/// `overlay` is the visual halo (shadow included). A trigger under an open
+/// popover intersects that halo every `transition-colors` tick. Escalating
+/// those frames to Region replays the popover and reshapes its glyphs — the
+/// hover-switch hitch — and src-overs the shadow onto the caption. Stamps
+/// let the fringe stay on the Node path (halo preserved, face still cleared).
+pub(crate) fn prepare_node_present_dirties_ex(
+    dirties: &mut Vec<PaintDirty>,
+    node_paints: &[NodePaint],
+    last_present: &[(u64, [f32; 4])],
+    instances: &[InstanceInput],
+    textured: &[ScaledTexturedDraw],
+    chrome: &[InstanceInput],
+    ui_scale: f32,
+    overlay: Option<[f32; 4]>,
+    portal_stamps: &[(u64, [f32; 4])],
 ) {
     escalate_dirties_for_node_present(dirties.as_mut_slice(), node_paints, last_present);
     let mut leftover_poses: Vec<PaintDirty> = Vec::new();
@@ -2098,10 +2196,13 @@ pub(crate) fn prepare_node_present_dirties(
         let logical = reset_rect
             .map(|r| [r[0] / s, r[1] / s, r[2] / s, r[3] / s])
             .unwrap_or(dirty.bounds);
-        if overlay.is_some_and(|occ| intersect_rects(logical, occ).is_some()) {
-            // Portal AABBs include translucent shadows/AA. Treating the entire
-            // AABB as opaque preserves stale underlay at those pixels. Rebuild
-            // the local composite and replay the portal in the same hole.
+        if overlay.is_some_and(|occ| {
+            portal_occupancy_requires_region(logical, occ, portal_stamps)
+        }) {
+            // Scrim (occupancy far outside the panel's shadow pad). A Node
+            // dest-reset would punch it. The shadow fringe of an anchored
+            // panel is not a scrim: Node halo-preserve clears the trigger
+            // face and leaves the fringe in retain.
             dirty.kind = PaintDirtyKind::Region;
             dirty.bounds = logical;
             continue;
@@ -3439,7 +3540,7 @@ pub(crate) fn node_present_clipped_capture_text_wipes(
         page_text,
         node_paints,
         wipe_clips,
-        None,
+        &[],
     )
 }
 
@@ -3448,7 +3549,7 @@ pub(crate) fn node_present_clipped_capture_text_wipes_excluding_overlay(
     page_text: &[TextLayoutInfo],
     node_paints: &[NodePaint],
     wipe_clips: &[(u64, [f32; 4])],
-    overlay: Option<[f32; 4]>,
+    portal_stamps: &[(u64, [f32; 4])],
 ) -> Vec<TextLayoutInfo> {
     node_present_capture_text_indices(dirty_nodes, page_text, node_paints)
         .into_iter()
@@ -3487,17 +3588,20 @@ pub(crate) fn node_present_clipped_capture_text_wipes_excluding_overlay(
         .flat_map(|n| {
             // Region replays restore the underlay before repainting the portal.
             // Node replays must preserve it and clip glyphs just like primitives.
+            // Subtract portal **layout** stamps (not the visual halo) so a trigger
+            // caption above AnchoredOverlay keeps its glyphs while panel pixels
+            // stay out of the page capture — same contract as Node dest-reset.
             let region = dirty_nodes.iter().any(|d| {
                 matches!(
                     d.kind,
                     PaintDirtyKind::Region | PaintDirtyKind::OverlayRestore
                 ) && text_hits_damage(&n, d.bounds)
             });
-            if region || overlay.is_none() {
+            if region || portal_stamps.is_empty() {
                 return vec![n];
             }
             let clip = n.clip_bounds.expect("capture glyphs have owner clips");
-            super::damage::page_scissors_excluding_overlay(clip, overlay)
+            super::damage::page_scissors_excluding_portal_boxes(clip, portal_stamps)
                 .into_iter()
                 .map(|clip| {
                     let mut piece = n.clone();
@@ -4116,6 +4220,89 @@ mod tests {
             dirties.iter().find(|d| d.key == 9).unwrap().kind,
             PaintDirtyKind::Node,
             "wide track must not be promoted into a page Region"
+        );
+    }
+
+    #[test]
+    fn trigger_in_popover_shadow_stays_node_not_region() {
+        // Panel sits above the trigger with a 4px gap. Shadow blur ~10 overlaps
+        // the button face. That intersection used to escalate every
+        // transition-colors tick to Region (popover reshape + shadow src-over).
+        let button = [100.0, 160.0, 160.0, 32.0];
+        let mut page = slot(1, [0.0, 0.0, 400.0, 400.0], (0, 0));
+        page.instance = (0, 1);
+        let mut trigger = slot(4, button, (0, 0));
+        trigger.instance = (1, 2);
+        let instances = [
+            blank_instance(0.0, 0.0, 400.0, 400.0),
+            blank_instance(button[0], button[1], button[2], button[3]),
+        ];
+        let stamp = (7u64, [100.0, 100.0, 180.0, 56.0]);
+        let occ = [88.0, 88.0, 204.0, 80.0];
+        assert!(
+            intersect_rects(button, occ).is_some(),
+            "fixture must overlap the shadow"
+        );
+        assert!(
+            intersect_rects(button, stamp.1).is_none(),
+            "fixture must not cover the panel box"
+        );
+        let mut dirties = vec![PaintDirty {
+            key: 4,
+            bounds: button,
+            kind: PaintDirtyKind::Node,
+        }];
+        prepare_node_present_dirties_ex(
+            &mut dirties,
+            &[page, trigger],
+            &[],
+            &instances,
+            &[],
+            &[],
+            1.0,
+            Some(occ),
+            &[stamp],
+        );
+        assert_eq!(
+            dirties[0].kind,
+            PaintDirtyKind::Node,
+            "shadow fringe must stay Node so hover does not replay the popover\n {dirties:?}"
+        );
+    }
+
+    #[test]
+    fn page_control_under_modal_scrim_still_region() {
+        let button = [20.0, 200.0, 140.0, 32.0];
+        let mut page = slot(1, [0.0, 0.0, 800.0, 600.0], (0, 0));
+        page.instance = (0, 1);
+        let mut trigger = slot(4, button, (0, 0));
+        trigger.instance = (1, 2);
+        let instances = [
+            blank_instance(0.0, 0.0, 800.0, 600.0),
+            blank_instance(button[0], button[1], button[2], button[3]),
+        ];
+        let stamp = (7u64, [400.0, 40.0, 120.0, 80.0]);
+        let scrim = [0.0, 0.0, 800.0, 600.0];
+        let mut dirties = vec![PaintDirty {
+            key: 4,
+            bounds: button,
+            kind: PaintDirtyKind::Node,
+        }];
+        prepare_node_present_dirties_ex(
+            &mut dirties,
+            &[page, trigger],
+            &[],
+            &instances,
+            &[],
+            &[],
+            1.0,
+            Some(scrim),
+            &[stamp],
+        );
+        assert_eq!(
+            dirties[0].kind,
+            PaintDirtyKind::Region,
+            "a control under the scrim, outside the panel shadow, must still rebuild\n {dirties:?}"
         );
     }
 
@@ -5914,7 +6101,7 @@ mod tests {
         let dirties: Vec<PaintDirty> = [dirty]
             .into_iter()
             .filter(|d| {
-                !crate::app::damage::page_node_present_occluded_by_overlay(d.bounds, Some(scrim))
+                !crate::app::damage::page_node_present_occluded_by_overlay(d.bounds, &[(1, scrim)])
             })
             .collect();
         let hidden = node_present_clipped_capture_text(&dirties, &page, &paints);
