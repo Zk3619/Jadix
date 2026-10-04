@@ -603,6 +603,36 @@ pub(crate) fn invalidate_collect_paint_hash_path(root: &mut Element, path: &[usi
     zero_collect_paint_hash_descendants(el);
 }
 
+/// Zero hashes from `root` down to each Taffy node so `reuse_idle` rehashes that
+/// spine only. A global `hash_bust` rehashed the whole gallery on every hover
+/// edge (trigger switch hitch). Returns false if any id is not in the tree.
+pub(crate) fn invalidate_collect_paint_hash_spines(
+    root: &mut Element,
+    nodes: &[taffy::prelude::NodeId],
+) -> bool {
+    fn rec(el: &mut Element, want: taffy::prelude::NodeId) -> bool {
+        if el.layout_node == Some(want) {
+            el.collect_paint_hash = 0;
+            zero_collect_paint_hash_descendants(el);
+            return true;
+        }
+        for child in &mut el.children {
+            if rec(child, want) {
+                el.collect_paint_hash = 0;
+                return true;
+            }
+        }
+        false
+    }
+    let mut all = true;
+    for &id in nodes {
+        if !rec(root, id) {
+            all = false;
+        }
+    }
+    all
+}
+
 fn zero_collect_paint_hash_descendants(el: &mut Element) {
     for child in &mut el.children {
         child.collect_paint_hash = 0;
@@ -1836,6 +1866,37 @@ mod tests {
             !subtree_is_skippable(&row.children[2]),
             "portal host must remain unskippable for collect (side-channel cursors)"
         );
+    }
+
+    #[test]
+    fn hover_spine_invalidation_does_not_restamp_idle_sibling() {
+        use crate::layout::layout_tree::LayoutTree;
+        let mut tree = LayoutTree::new();
+        let mut root = Element::new()
+            .w(240.0)
+            .h(40.0)
+            .child(Element::new().w(80.0).h(32.0).text("idle"))
+            .child(Element::new().w(80.0).h(32.0).text("hover"));
+        let _ = tree.build_and_layout(&mut root, 240.0, 40.0, [-1.0, -1.0]);
+        stamp_subtree_paint_hashes(&mut root, false);
+        let idle_hash = root.children[0].collect_paint_hash;
+        assert_ne!(idle_hash, 0);
+        let hover_id = root.children[1].layout_node.expect("hover leaf laid out");
+        assert!(invalidate_collect_paint_hash_spines(&mut root, &[hover_id]));
+        assert_eq!(
+            root.children[0].collect_paint_hash, idle_hash,
+            "invalidating the hover spine must not zero the idle sibling"
+        );
+        assert_eq!(root.collect_paint_hash, 0);
+        assert_eq!(root.children[1].collect_paint_hash, 0);
+        STAMP_HASHED.with(|c| c.set(0));
+        stamp_subtree_paint_hashes(&mut root, true);
+        let hashed = STAMP_HASHED.with(|c| c.get());
+        assert!(
+            hashed < 12,
+            "reuse_idle after a hover spine bust must not rehash the idle sibling (hashed={hashed})"
+        );
+        assert_eq!(root.children[0].collect_paint_hash, idle_hash);
     }
 
     #[test]

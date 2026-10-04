@@ -808,6 +808,14 @@ fn apply_size_attrs(
         if !w.eq_ignore_ascii_case("auto") {
             panel.set_attr(ATTR_FLOATING_W, w);
         }
+    } else if !match_trigger_width {
+        // Author shell already set a definite width (e.g. gallery `.w("16rem")`).
+        // Without stamping `rui_floating_w`, `match_trigger=0` coerces `width: auto`
+        // and reflows wrap height for a frame (intermittent stretch on open).
+        if let Some(px) = crate::layout::dim_length_px(panel.style.size.width).filter(|w| *w > 0.5)
+        {
+            panel.set_attr(ATTR_FLOATING_W, format!("{px}px"));
+        }
     }
     if let Some(h) = max_h.map(str::trim).filter(|s| !s.is_empty()) {
         panel.set_attr(ATTR_FLOATING_MAX_H, h);
@@ -1258,6 +1266,38 @@ mod tests {
             assert!(
                 find_attr(&panel, ATTR_FLOATING_W).is_none(),
                 "width=auto must not write rui_floating_w (sync would parse it as trigger px)"
+            );
+        });
+    }
+
+    #[test]
+    fn placement_preserves_author_definite_width_as_floating_w() {
+        create_root(|| {
+            let mut panel = Element::new().w(256.0).text("shell");
+            apply_placement(
+                &mut panel,
+                "ao-author-w",
+                &Placement::Trigger {
+                    focus_id: "btn".into(),
+                    placement: PopupPlacement::BottomStart,
+                    gap: FLOATING_TRIGGER_GAP,
+                    strategy: FloatingStrategy::Auto,
+                },
+                Signal::new(String::new()),
+                "",
+                false,
+                None,
+                None,
+            );
+            assert_eq!(find_attr(&panel, ATTR_FLOATING_MATCH_TRIGGER), Some("0"));
+            let w = find_attr(&panel, ATTR_FLOATING_W).expect("author width stamped");
+            let px: f32 = w
+                .trim_end_matches("px")
+                .parse()
+                .expect("px length");
+            assert!(
+                (px - 256.0).abs() < 0.5,
+                "shell .w(16rem) must stamp rui_floating_w, got {w}"
             );
         });
     }
@@ -1819,6 +1859,140 @@ mod tests {
                 "Absent must drop the portal after exit completes"
             );
         });
+        clear_overlay_stack();
+    }
+
+    /// Select / DatePicker open: panel must not collect a visible silhouette at the
+    /// portal origin (0,0) for one frame before trigger placement lands.
+    #[test]
+    fn trigger_first_open_must_not_flash_visible_panel_at_portal_origin() {
+        use crate::app::portal_overlay::{clear_overlay_stack, OverlayKind, OverlayMode};
+        use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree, ATTR_HOISTED_PORTAL};
+        use crate::utils::floating_motion::{
+            floating_motion_needs_relayout, flush_floating_motion_subtree,
+            mark_floating_panels_layout_dirty, tick_hoisted_floating_css,
+        };
+        use crate::utils::popup::{FLOATING_TRIGGER_GAP, PopupPlacement};
+
+        clear_overlay_stack();
+        let (_owner, mut root) = create_root(|| {
+            let open = Signal::new(true);
+            let presence = use_floating_presence("ao-origin-flash", FloatingMotionKind::Fade);
+            let opts = AnchoredOverlayContentOpts {
+                placement: Some(Placement::trigger(
+                    "ao-origin-flash-trigger",
+                    PopupPlacement::BottomStart,
+                    FLOATING_TRIGGER_GAP,
+                    FloatingStrategy::Auto,
+                )),
+                kind: OverlayKind::Popover,
+                motion: FloatingMotionKind::Fade,
+                mode: OverlayMode::Stacked,
+                match_trigger_width: false,
+                ..Default::default()
+            };
+            let trigger = Element::new()
+                .focus_id("ao-origin-flash-trigger")
+                .w(120.0)
+                .h(36.0)
+                .absolute()
+                .left(220.0)
+                .top(180.0)
+                .bg([0.2, 0.2, 0.25, 1.0])
+                .text("Trigger");
+            let mounted = assemble_panel(
+                "ao-origin-flash",
+                open,
+                Signal::new("ao-origin-flash-trigger".into()),
+                &presence,
+                &opts,
+                Element::new()
+                    .text("menu-body")
+                    .w(160.0)
+                    .h(120.0)
+                    .bg([1.0, 1.0, 1.0, 1.0]),
+            );
+            Element::new()
+                .w(800.0)
+                .h(600.0)
+                .relative()
+                .child(trigger)
+                .child(mounted)
+        });
+
+        let _ = hoist_portal_subtrees(&mut root);
+        let mut tree = LayoutTree::new();
+        let mut out = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+
+        fn find_panel<'a>(el: &'a Element) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some("ao-origin-flash__floating_panel") {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_panel)
+        }
+        fn find_fid<'a>(el: &'a Element, fid: &str) -> Option<&'a Element> {
+            if el.focus_id.as_deref() == Some(fid) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|c| find_fid(c, fid))
+        }
+        let panel_after_layout = find_panel(&root).expect("floating panel after layout");
+        let trigger = find_fid(&root, "ao-origin-flash-trigger").expect("trigger");
+        let left = crate::layout::lpa_length_px(panel_after_layout.style.inset.left);
+        let top = crate::layout::lpa_length_px(panel_after_layout.style.inset.top);
+        assert!(
+            trigger.layout_bounds[2] > 1.0 && trigger.layout_bounds[3] > 1.0,
+            "precondition: trigger must have layout bounds; got {:?}",
+            trigger.layout_bounds
+        );
+        assert!(
+            left.is_some_and(|x| x > 100.0) && top.is_some_and(|y| y > 100.0),
+            "sync inside build_and_layout must write trigger-relative insets before collect; left={left:?} top={top:?} bounds={:?} trigger={:?}",
+            panel_after_layout.layout_bounds,
+            trigger.layout_bounds
+        );
+
+        // App present: flush motion then optional follow / animation collect.
+        let _ = flush_floating_motion_subtree(&mut root);
+        let floating_css = tick_hoisted_floating_css(&mut root);
+        if floating_motion_needs_relayout() {
+            mark_floating_panels_layout_dirty(&root, &mut tree);
+            out = tree.relayout_overlay_follow_and_collect(
+                &mut root, 800.0, 600.0, [0.0, 0.0], false, false,
+            );
+        } else if floating_css {
+            out = tree.collect_animation_frame(&mut root, [0.0, 0.0], false);
+        }
+
+        let panel = find_panel(&root).expect("floating panel");
+        assert_eq!(
+            panel.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str),
+            Some("1"),
+            "panel must be hoisted"
+        );
+        let b = panel.layout_bounds;
+        assert!(
+            b[0] > 100.0 && b[1] > 100.0,
+            "first open layout must sit near the trigger, not portal origin; bounds={b:?} opacity={}",
+            panel.style.opacity
+        );
+        let visible_at_origin = out.instances.iter().any(|i| {
+            i.color[3] > 0.05
+                && i.rect_size[0] > 40.0
+                && i.rect_size[1] > 40.0
+                && i.rect_pos[0] < 40.0
+                && i.rect_pos[1] < 40.0
+        });
+        assert!(
+            !visible_at_origin,
+            "must not collect a visible panel silhouette at portal origin; opacity={} bounds={b:?} instances={:?}",
+            panel.style.opacity,
+            out.instances
+                .iter()
+                .filter(|i| i.color[3] > 0.05 && i.rect_size[0] > 20.0)
+                .map(|i| (i.rect_pos, i.rect_size, i.color[3]))
+                .collect::<Vec<_>>()
+        );
         clear_overlay_stack();
     }
 

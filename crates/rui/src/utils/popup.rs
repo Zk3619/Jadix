@@ -893,21 +893,15 @@ pub fn apply_stored_floating_place(el: &mut Element, id: &str) {
                 .map(|s| parse_len_vs_trigger(s, 0.0))
                 .unwrap_or(0.0);
         }
-        let strategy_fixed = el
-            .attrs
-            .get(ATTR_FLOATING_STRATEGY)
-            .map(|s| s.eq_ignore_ascii_case("fixed"))
-            .unwrap_or(false);
+        // No author cap → `max_h = 0` (style auto). A sentinel `4096` used to be
+        // written as `max-height: 4096px` before the first sync; percent-height
+        // children (or a one-frame flex stretch) then filled that band.
         p.max_h = el
             .attrs
             .get(ATTR_FLOATING_MAX_H)
             .or_else(|| el.attrs.get("rui_select_max_h"))
-            .map(|s| parse_css_px(s, 4096.0))
-            .unwrap_or(if strategy_fixed || expand_from_h_set(el) {
-                0.0
-            } else {
-                4096.0
-            });
+            .map(|s| parse_css_px(s, 0.0))
+            .unwrap_or(0.0);
         place.set_silent(p);
     }
     // Always write size so absolute panels are not 160×256 defaults. Drop only the
@@ -1170,19 +1164,21 @@ fn apply_floating_menus(
         );
         let attr_max_h = floating_attr_max_h(el);
         let estimate_h = floating_estimate_h(el);
+        // Content-auto before measure: use the trigger width (not a 32px stub) so
+        // start/end land on the first frame. Center still defers XY until measured —
+        // a trigger-wide center guess then jumps when the real width arrives
+        // (HoverCard / Tooltip jitter). Skipping XY for *all* unmeasured panels left
+        // `apply_stored` (0,0) under Fade enter (Select / DatePicker corner flash).
+        let size_unknown = width_auto && el.layout_bounds[2] <= 0.5 && el.layout_bounds[3] <= 0.5;
         let estimate_w = if width_auto {
             if el.layout_bounds[2] > 0.5 {
                 el.layout_bounds[2].max(menu_w)
             } else {
-                menu_w.max(32.0)
+                menu_w.max(tb[2]).max(1.0)
             }
         } else {
             menu_w.max(min_w).max(32.0)
         };
-        // Content-auto + no layout size yet: applying a 32×32 center guess then correcting
-        // after measure is the classic HoverCard / Tooltip open jitter. Size-mode only
-        // until bounds exist; XY lands in one shot on the next sync.
-        let size_unknown = width_auto && el.layout_bounds[2] <= 0.5 && el.layout_bounds[3] <= 0.5;
         let gap = el
             .attrs
             .get(ATTR_FLOATING_GAP)
@@ -1198,7 +1194,11 @@ fn apply_floating_menus(
             .get(ATTR_FLOATING_STRATEGY)
             .map(|s| s.eq_ignore_ascii_case("fixed"))
             .unwrap_or(false);
-        if size_unknown {
+        let center_align = matches!(
+            preferred,
+            PopupPlacement::BottomCenter | PopupPlacement::TopCenter
+        );
+        if size_unknown && center_align {
             let next = FloatingPlace {
                 x: 0.0,
                 y: 0.0,
@@ -2003,6 +2003,23 @@ mod tests {
                 "placement must not retarget accordion max-height to the viewport cap; mh={h}"
             );
         }
+    }
+
+    #[test]
+    fn apply_stored_floating_place_seeds_unbounded_max_h_without_attr() {
+        use crate::core::reactivity::{create_effect, create_root};
+        let (_h, _) = create_root(|| {
+            create_effect(|| {
+                let mut el = Element::new().absolute().w(160.0);
+                el.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+                el.set_attr(ATTR_FLOATING_MIN_W, "0");
+                apply_stored_floating_place(&mut el, "ao-seed-max-h");
+                assert!(
+                    el.style.max_size.height.is_auto(),
+                    "no rui_floating_max_h must seed style max-height auto, not a 4096px band"
+                );
+            });
+        });
     }
 
     #[test]
@@ -2980,6 +2997,44 @@ mod tests {
         clamp_animated_max_h_to_place(&mut root.children[1], "rebuilt-top");
         let top = inset_length(root.children[1].style.inset.top).unwrap();
         assert!((top + 24.0 - edge).abs() < 0.5, "top={top}, edge={edge}");
+    }
+
+    #[test]
+    fn sync_floating_places_unmeasured_content_auto_on_first_open() {
+        // DatePicker / content-auto: panel layout_bounds still 0×0 on the first sync
+        // (collect stamps later). Must still write trigger-relative XY — not leave
+        // apply_stored (0,0) under Fade enter.
+        let mut trigger = Element::new().focus_id("t-unmeasured");
+        trigger.layout_bounds = [220.0, 180.0, 120.0, 36.0];
+        let mut panel = Element::new().absolute();
+        mark_floating(
+            &mut panel,
+            "unmeasured-menu",
+            "t-unmeasured",
+            PopupPlacement::BottomStart,
+        );
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+        panel.set_attr(ATTR_FLOATING_MIN_W, "0");
+        apply_stored_floating_place(&mut panel, "unmeasured-menu");
+        assert_eq!(
+            inset_length(panel.style.inset.left),
+            Some(0.0),
+            "precondition: stored seed starts at origin"
+        );
+        // Unmeasured — the old size_unknown path skipped XY here.
+        panel.layout_bounds = [0.0, 0.0, 0.0, 0.0];
+        let mut root = Element::new().child(trigger).child(panel);
+        assert!(sync_floating_placement(&mut root, 800.0, 600.0));
+        let left = inset_length(root.children[1].style.inset.left).expect("left");
+        let top = inset_length(root.children[1].style.inset.top).expect("top");
+        assert!(
+            (left - 220.0).abs() < 0.5,
+            "first sync must place X on the trigger; left={left}"
+        );
+        assert!(
+            (top - (180.0 + 36.0 + FLOATING_TRIGGER_GAP)).abs() < 0.5,
+            "first sync must place Y below the trigger; top={top}"
+        );
     }
 
     #[test]

@@ -46,7 +46,7 @@ use crate::components::select::{select, SelectItemData};
 use crate::components::separator::separator;
 use crate::components::slider::slider;
 use crate::core::reactivity::{create_effect, use_signal, with_child_owner, Signal};
-use crate::core::tree::{parse_color, parse_text_color, CursorKind, Element, LayoutStatus};
+use crate::core::tree::{parse_text_color, CursorKind, Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{hstack, r#box, vstack};
@@ -1108,6 +1108,61 @@ mod tests {
         assert!(
             find_trigger_size(&el, 20.0),
             "color_picker .style must land on data-slot=color-picker-trigger"
+        );
+    }
+
+    #[test]
+    fn color_picker_trigger_uses_outline_button_hover_classes() {
+        use crate::core::reactivity::create_root;
+        use crate::style::ClassSet;
+        let (_h, el): (_, Element) = create_root(|| {
+            let id = "cp-trig-hover";
+            let rgba = use_signal("cp-trig-hover__cp_rgba", || Rgba::opaque(59, 130, 246));
+            let hue = use_signal("cp-trig-hover__cp_hue", || 210.0f32);
+            let sat = use_signal("cp-trig-hover__cp_sat", || 0.76f32);
+            let val = use_signal("cp-trig-hover__cp_val", || 0.96f32);
+            let fmt_sig = use_signal("cp-trig-hover__cp_fmt", || ColorFormat::Hex);
+            let fmt_str = use_signal("cp-trig-hover__cp_fmt_str", || "hex".to_string());
+            let out = use_signal("cp-trig-hover__value", || "#3b82f6".to_string());
+            let open = use_signal("cp-trig-hover__open", || false);
+            build_color_picker_view(
+                ColorPickerRenderProps {
+                    id: id.into(),
+                    variant: ColorPickerVariant::Default,
+                    format: ColorFormat::Hex,
+                    show_alpha: true,
+                    disabled: false,
+                },
+                open,
+                out,
+                rgba,
+                hue,
+                sat,
+                val,
+                fmt_sig,
+                fmt_str,
+                &SlotMap::default(),
+            )
+        });
+        fn find_outline_trigger(el: &Element) -> Option<(bool, Option<String>)> {
+            let is_trig =
+                el.attrs.get(ATTR_CP_SLOT).map(String::as_str) == Some("color-picker-trigger");
+            if is_trig {
+                let has_hover = el
+                    .class_set
+                    .as_ref()
+                    .is_some_and(ClassSet::has_hover_color);
+                return Some((has_hover, el.focus_id.clone()));
+            }
+            el.children.iter().find_map(find_outline_trigger)
+        }
+        let Some((has_hover, fid)) = find_outline_trigger(&el) else {
+            panic!("missing data-slot=color-picker-trigger");
+        };
+        assert!(
+            has_hover && fid.as_deref() == Some("cp-trig-hover:trigger"),
+            "ColorPicker trigger must be Button outline with hover color classes, not a static interactive row\n\
+             has_hover={has_hover} focus_id={fid:?}"
         );
     }
 

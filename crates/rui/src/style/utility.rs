@@ -888,6 +888,7 @@ pub fn tick_active_css_transitions_subtree(
     }];
     let hit_nodes =
         crate::app::pointer_events::pointer_hit_node_set(el, mouse_pos[0], mouse_pos[1]);
+    let mut paint_hash_spines: Vec<taffy::prelude::NodeId> = Vec::new();
     while let Some(frame) = stack.pop() {
         // SAFETY: exclusive subtree walk of the `el` passed to this function.
         let el = unsafe { &mut *frame.ptr };
@@ -1089,8 +1090,14 @@ pub fn tick_active_css_transitions_subtree(
                     // `collect_skip_live` skips the bust when a spinner ancestor
                     // marked the leaf live last stamp, and `reuse_idle` then
                     // skip-replays the hovered bake until scroll settles.
-                    layout_tree
-                        .note_collect_skip_hash_bust_if_idle(el.collect_skip_live && !hover_edge);
+                    // Zero that spine only — a global hash bust rehashes the
+                    // gallery on every trigger enter/leave.
+                    queue_paint_hash_spine(
+                        &mut paint_hash_spines,
+                        layout_tree,
+                        el,
+                        el.collect_skip_live && !hover_edge,
+                    );
                 }
                 // Padding/margin/size tweens must request flex recompute. StyleChanged alone
                 // is treated as scroll-only paint and leaves geometry stuck at the hover size.
@@ -1136,6 +1143,7 @@ pub fn tick_active_css_transitions_subtree(
             });
         }
     }
+    apply_paint_hash_spines(el, layout_tree, &paint_hash_spines);
 }
 
 /// True when pointer geometry would change any utility-class `:hover` sample.
@@ -1637,6 +1645,7 @@ fn sync_class_variants_subtree_inner(
         child_named: Vec::new(),
         child_scroll_progress: 0.0,
     }];
+    let mut paint_hash_spines: Vec<taffy::prelude::NodeId> = Vec::new();
     while let Some(mut frame) = stack.pop() {
         let ptr = frame.ptr;
         if !frame.started {
@@ -1885,9 +1894,14 @@ fn sync_class_variants_subtree_inner(
                         {
                             // ViewportsOnly `reuse_idle` skips idle wrappers. First
                             // hover:scale / hover:underline / hover:text frame is not
-                            // `collect_skip_live` yet — without this bust, skip-replays
-                            // the rest Bake (lost enlarge, Link/Breadcrumb hover chrome).
-                            layout_tree.note_collect_skip_hash_bust_if_idle(
+                            // `collect_skip_live` yet — without a spine invalidate,
+                            // skip-replays the rest Bake (lost enlarge, Link/Breadcrumb
+                            // hover chrome). Zero that spine only; a global bust
+                            // rehashes the gallery on every trigger switch.
+                            queue_paint_hash_spine(
+                                &mut paint_hash_spines,
+                                layout_tree,
+                                el,
                                 el.collect_skip_live && !hover_edge,
                             );
                         }
@@ -2019,6 +2033,37 @@ fn sync_class_variants_subtree_inner(
             child_named: Vec::new(),
             child_scroll_progress: 0.0,
         });
+    }
+    apply_paint_hash_spines(el, layout_tree, &paint_hash_spines);
+}
+
+/// Idle hover/CSS edges must rehash the dirty spine, not the whole gallery.
+fn queue_paint_hash_spine(
+    spines: &mut Vec<taffy::prelude::NodeId>,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    el: &Element,
+    already_live: bool,
+) {
+    if already_live {
+        return;
+    }
+    if let Some(id) = el.layout_node {
+        spines.push(id);
+    } else {
+        layout_tree.note_collect_skip_hash_bust_if_idle(false);
+    }
+}
+
+fn apply_paint_hash_spines(
+    root: &mut Element,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    spines: &[taffy::prelude::NodeId],
+) {
+    if spines.is_empty() {
+        return;
+    }
+    if !crate::layout::collect_cache::invalidate_collect_paint_hash_spines(root, spines) {
+        layout_tree.note_collect_skip_hash_bust_if_idle(false);
     }
 }
 

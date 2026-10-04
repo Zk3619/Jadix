@@ -472,7 +472,9 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
                 "inside".to_string()
             })
             .set("inside".to_string());
-            let hbar: Element = scrollbar(&format!("__rui_h_scrollbar_{rest}"))
+            // Edge pad only — do not bake the vertical thickness into `right`.
+            // Runtime adds the L-join lane when Y actually occupies the corner.
+            let mut hbar: Element = scrollbar(&format!("__rui_h_scrollbar_{rest}"))
                 .target(rest.to_string())
                 .orientation(ScrollbarOrientation::Horizontal)
                 .visibility("auto")
@@ -480,9 +482,14 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
                 .overlay(true)
                 .z_index(1000)
                 .left(4.0)
-                .right(10.0)
+                .right(crate::components::scrollbar::SCROLLBAR_EDGE_PAD)
                 .bottom(2.0)
                 .into();
+            hbar.set_attr(
+                crate::components::scrollbar::ATTR_H_LANE_INSET,
+                crate::components::scrollbar::SCROLLBAR_EDGE_PAD.to_string(),
+            );
+            hbar.set_attr(crate::components::scrollbar::ATTR_H_LANE_V_CROSS, "8");
             el = el.child(hbar);
         }
     }

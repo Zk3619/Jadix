@@ -33,7 +33,7 @@
 //!
 //! ## 注意
 //! - **必填稳定 `id`**（多实例非受控）；空 → `__rui_input_otp_rt_N`。
-//! - `focus_id` 为 `input-otp:{id}`；键盘落在根上。
+//! - `focus_id` 为 `input-otp:{id}`；键盘落在根上；根壳 `w(fit-content)` 贴合槽位行（避免列布局 stretch 成整行焦点盒）。
 //! - 默认仅接受 ASCII 数字；`pattern="alnum"` 可字母数字。
 //! - `<InputOTP*>` 走通用 PascalCase → `*Props`；RSX `maxLength` 由宏映到 `max_length`。
 
@@ -703,7 +703,15 @@ pub fn input_otp_scope(
         if kids.is_empty() {
             kids = take_fragment(build_default_slots(max_length, None));
         }
-        let mut row = hstack().items_center().gap("0.5rem").w("auto").min_w("0");
+        // `w("auto")` + column `align-items: stretch` fills the parent cross axis
+        // (gallery VStack / card). The focusable shell then owns a full-width AABB
+        // while slots only paint on the left —「聚焦是整行」. `fit-content` hugs via
+        // `apply_content_keyword_cross_axis_hug` (same as Item / attachment).
+        let mut row = hstack()
+            .items_center()
+            .gap("0.5rem")
+            .w("fit-content")
+            .min_w("0");
         for k in kids {
             row = row.child(k);
         }
@@ -1106,6 +1114,7 @@ impl crate::core::tree::IntoElementList for InputOtpBuilder {
 mod tests {
     use super::*;
     use crate::core::reactivity::create_root;
+    use crate::primitives::r#box::vstack;
 
     #[test]
     fn focus_move_restores_scrolled_slot_ring_and_neighbor() {
@@ -1405,6 +1414,170 @@ mod tests {
                 border.clip_pos,
                 border.clip_size
             );
+        });
+    }
+
+    /// Gallery RSX OTP: focus must dest-reset the active slot's visual box, not
+    /// the whole `input-otp` row. A row-wide clear looks like a gray focus frame
+    /// around every cell (截图「聚焦是整行」).
+    #[test]
+    fn rsx_focus_wipe_stays_on_the_active_slot_visual_not_the_row() {
+        create_root(|| {
+            use crate::app::damage::{
+                clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind,
+            };
+            let focus = use_signal("__rui_button_focus_id", String::new);
+            focus.set(String::new());
+            // Gallery RSX shape: two groups of three + separator (builder path).
+            let otp: Element = input_otp("gal-otp-rsx-focus")
+                .max_length(6)
+                .separator_at(3)
+                .into();
+            let mut root = Element::new()
+                .w(520.0)
+                .h(120.0)
+                .overflow_y("scroll")
+                .child(
+                    Element::new()
+                        .w("100%")
+                        .p(16.0)
+                        .bg([0.95, 0.95, 0.95, 1.0])
+                        .child(otp),
+                );
+            root.focus_id = Some("scroll:gal-otp-rsx-focus".into());
+            root.scroll_offset = [0.0, 0.0];
+            let mut tree = crate::layout::layout_tree::LayoutTree::new();
+            tree.build_and_layout(&mut root, 520.0, 120.0, [-1.0; 2]);
+            tree.set_collect_skip_allowed(true);
+            let idle = tree.build_and_layout_fast(&mut root, 520.0, 120.0, [-1.0; 2], true, true);
+            let last_present = crate::app::draw_cull::last_present_visual_slots(
+                &idle.node_paints,
+                &idle.instances,
+                &[],
+                &idle.text_nodes,
+                &idle.input_chrome_instances,
+            );
+            clear_frame_paint_nodes();
+            focus.set(input_otp_focus_id("gal-otp-rsx-focus"));
+            let mut collect = crate::core::tree::ReactiveSyncCollect::default();
+            crate::core::tree::sync_reactive_elements_subtree_ex(
+                &mut root,
+                &mut tree,
+                &mut LayoutStatus::Clean,
+                520.0,
+                120.0,
+                [0.0; 2],
+                false,
+                &mut collect,
+            );
+            let layout_dirty: std::collections::HashSet<_> =
+                collect.layout_dirty.into_iter().collect();
+            tree.mark_dirty_nodes_in_tree(&root, &layout_dirty);
+            let mut dirty = take_frame_paint_nodes();
+            let frame =
+                tree.build_and_layout_fast(&mut root, 520.0, 120.0, [-1.0; 2], false, true);
+            crate::app::draw_cull::prepare_node_present_dirties(
+                &mut dirty,
+                &frame.node_paints,
+                &last_present,
+                &frame.instances,
+                &[],
+                &[],
+                1.0,
+                None,
+            );
+            let slots = slot_boxes(&root);
+            assert!(slots.len() >= 6, "rsx otp slots: {slots:?}");
+            let active = slots[0].1;
+            let row_w: f32 = {
+                let left = slots.iter().map(|(_, b)| b[0]).fold(f32::INFINITY, f32::min);
+                let right = slots
+                    .iter()
+                    .map(|(_, b)| b[0] + b[2])
+                    .fold(f32::NEG_INFINITY, f32::max);
+                right - left
+            };
+            assert!(
+                row_w > active[2] * 2.5,
+                "fixture row must be wider than one slot: row={row_w} slot={}",
+                active[2]
+            );
+            assert!(
+                dirty.iter().all(|d| d.kind != PaintDirtyKind::Region),
+                "focus must not window-clear a Region around the row: {dirty:?}"
+            );
+            let rings: Vec<_> = frame
+                .instances
+                .iter()
+                .filter(|i| i.shadow_spread >= 1.0 && i.shadow_color[3] > 0.2)
+                .map(|i| [i.rect_pos[0], i.rect_pos[1], i.rect_size[0], i.rect_size[1]])
+                .collect();
+            assert_eq!(
+                rings.len(),
+                1,
+                "focus must paint one Hard ring on the active slot, not the row: {rings:?}"
+            );
+            assert!(
+                rings[0][2] <= active[2] + 4.0 && rings[0][3] <= active[3] + 4.0,
+                "Hard ring quad is the whole row, not the active slot\n ring={:?} active={active:?}",
+                rings[0]
+            );
+            for d in &dirty {
+                if d.kind == PaintDirtyKind::Overlay {
+                    continue;
+                }
+                assert!(
+                    d.bounds[2] <= active[2] + 24.0 && d.bounds[3] <= active[3] + 24.0,
+                    "focus dirty spans the row, not the active visual slot\n dirty={d:?} active={active:?} row_w={row_w}"
+                );
+                let scissor = crate::app::draw_cull::node_present_scissor_logical(
+                    d.kind,
+                    d.key,
+                    d.bounds,
+                    &last_present,
+                    &frame.node_paints,
+                    8.0,
+                );
+                if scissor[2] <= 0.5 || scissor[3] <= 0.5 {
+                    continue;
+                }
+                assert!(
+                    scissor[2] <= active[2] + 32.0 && scissor[3] <= active[3] + 32.0,
+                    "focus scissor is the whole row\n scissor={scissor:?} active={active:?} dirty={d:?}"
+                );
+                let prev = crate::app::draw_cull::last_present_prev_for_dirty(
+                    d.kind,
+                    d.key,
+                    &last_present,
+                );
+                if let Some(reset) = crate::app::draw_cull::node_present_dest_reset_full(
+                    d.key,
+                    d.bounds,
+                    &frame.node_paints,
+                    &frame.instances,
+                    &[],
+                    &[],
+                    1.0,
+                    prev,
+                ) {
+                    let wipe = [
+                        reset.rect[0],
+                        reset.rect[1],
+                        reset.rect[2],
+                        reset.rect[3],
+                    ];
+                    assert!(
+                        wipe[2] <= active[2] + 24.0 && wipe[3] <= active[3] + 24.0,
+                        "focus dest-reset wipe is the whole row\n wipe={wipe:?} active={active:?} dirty={d:?}"
+                    );
+                    for (index, bounds) in slots.iter().skip(1) {
+                        assert!(
+                            !center_in(wipe, *bounds),
+                            "focus wipe clears slot {index} (整行)\n wipe={wipe:?} slot={bounds:?}"
+                        );
+                    }
+                }
+            }
         });
     }
 
@@ -3054,6 +3227,61 @@ mod tests {
                     );
                 }
             }
+        });
+    }
+
+    /// Gallery nests OTP in a column (`VStack` / `align-items: stretch`). With
+    /// `w("auto")` the focusable root fills the cross axis — a full-width AABB
+    /// while the slots only occupy the left. Anything that paints or dirties
+    /// that box (a11y focus rect, accidental root ring, row-wide wipe) looks
+    /// like「聚焦是整行」instead of the active slot's visual range.
+    #[test]
+    fn focusable_root_hugs_slot_row_not_parent_cross_axis() {
+        create_root(|| {
+            let otp: Element = input_otp("otp-hug-row")
+                .max_length(6)
+                .separator_at(3)
+                .into();
+            let mut root = vstack()
+                .w(480.0)
+                .p(16.0)
+                .child(otp)
+                .into();
+            let mut tree = crate::layout::layout_tree::LayoutTree::new();
+            tree.build_and_layout(&mut root, 480.0, 120.0, [-1.0; 2]);
+            fn find_root(el: &Element) -> Option<&Element> {
+                if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_ROOT) {
+                    return Some(el);
+                }
+                el.children.iter().find_map(find_root)
+            }
+            let otp_root = find_root(&root).expect("otp root");
+            let slots = slot_boxes(&root);
+            assert!(slots.len() >= 6, "slots={slots:?}");
+            let left = slots.iter().map(|(_, b)| b[0]).fold(f32::INFINITY, f32::min);
+            let right = slots
+                .iter()
+                .map(|(_, b)| b[0] + b[2])
+                .fold(f32::NEG_INFINITY, f32::max);
+            let top = slots.iter().map(|(_, b)| b[1]).fold(f32::INFINITY, f32::min);
+            let bottom = slots
+                .iter()
+                .map(|(_, b)| b[1] + b[3])
+                .fold(f32::NEG_INFINITY, f32::max);
+            let visual = [left, top, right - left, bottom - top];
+            let shell = otp_root.layout_bounds;
+            assert!(
+                shell[2] <= visual[2] + 8.0,
+                "focusable OTP root stretches to the column width (整行), not the slot row\n shell={shell:?} visual_row={visual:?} parent_w=480"
+            );
+            assert!(
+                shell[3] <= visual[3] + 8.0,
+                "focusable OTP root is taller than the slot row\n shell={shell:?} visual_row={visual:?}"
+            );
+            assert!(
+                (shell[0] - visual[0]).abs() <= 2.0 && (shell[1] - visual[1]).abs() <= 2.0,
+                "focusable OTP root origin drifts from the slot row\n shell={shell:?} visual_row={visual:?}"
+            );
         });
     }
 }

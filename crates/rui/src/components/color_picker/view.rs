@@ -254,45 +254,32 @@ pub(super) fn trigger_label(text: &str) -> Element {
     )
 }
 
+/// Same shell as DatePicker: `Button variant="outline"` so hover/focus chrome
+/// comes from the shared button CVA (`hover:bg-accent`), not a static bordered
+/// `interactive` row that never retargets on pointer enter.
 pub(super) fn picker_trigger(id: &str, leading: Element, main: Element, disabled: bool) -> Element {
-    let mut border = parse_color("input");
-    let mut bg = parse_color("transparent");
-    if disabled {
-        border[3] *= 0.5;
-        bg[3] *= 0.5;
-    }
-    let mut row: Element = hstack()
-        .h("2.25rem")
-        .w("100%")
-        .min_w("0")
-        .rounded("0.375rem")
-        .px("0.75rem")
-        .gap("0.5rem")
-        .items_center()
-        .bg(bg)
-        .border(border, 1.0)
-        .shadow(
-            crate::tokens::shadow_rgba(crate::tokens::Elevation::Xs),
-            1.0,
-        )
-        .into();
-    row = row.child(leading).child(Element::from(
+    let trigger_fid = trigger_focus_id(id);
+    let label = Element::from(
         hstack()
             .flex_grow(1.0)
             .min_w("0")
             .items_center()
             .child(main),
-    ));
-    let cursor = if disabled {
-        row.cursor_not_allowed()
-    } else {
-        row.cursor_kind(CursorKind::Pointer)
-    };
-    let trigger_fid = trigger_focus_id(id);
-    let mut out: Element = interactive(cursor)
-        .focus_id(trigger_fid.as_str())
-        .focusable(!disabled)
+    );
+    let mut out: Element = button(&trigger_fid)
+        .variant("outline")
+        .size("default")
+        .disabled(disabled)
+        .child(leading)
+        .child(label)
         .into();
+    out = out
+        .justify("start")
+        .items_center()
+        .w("100%")
+        .min_w("0")
+        .gap("0.5rem")
+        .px("0.75rem");
     out.template_id = Some(trigger_fid);
     out.set_attr(ATTR_CP_SLOT, "color-picker-trigger");
     out

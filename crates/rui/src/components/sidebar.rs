@@ -1062,10 +1062,15 @@ fn sidebar_menu_button_size(el: &Element) -> SidebarMenuButtonSize {
         .unwrap_or_default()
 }
 
-fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], size_px: f32) {
+/// Returns `true` when any text leaf's resolved color changed.
+fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], size_px: f32) -> bool {
+    let mut changed = false;
     crate::core::tree::walk_elements_mut(el, |el| {
         if el.text.is_none() {
             return;
+        }
+        if el.text_style.color_resolved() != fg {
+            changed = true;
         }
         el.text_style.color = Some(fg);
         // Stamp inherit-lock attrs. Chrome writes color/weight/size without going through
@@ -1097,6 +1102,7 @@ fn paint_sidebar_menu_button_fg(el: &mut Element, fg: [u8; 4], size_px: f32) {
             el.text_style.line_height_specified = false;
         }
     });
+    changed
 }
 
 fn set_sidebar_menu_button_ring(el: &mut Element, color: [f32; 4], spread: f32) {
@@ -1116,7 +1122,7 @@ fn set_sidebar_menu_button_ring(el: &mut Element, color: [f32; 4], spread: f32) 
 
 fn apply_sidebar_menu_button_chrome(
     el: &mut Element,
-    layout_tree: Option<&mut LayoutTree>,
+    mut layout_tree: Option<&mut LayoutTree>,
     variant: SidebarMenuButtonVariant,
     is_active: bool,
     is_hovered: bool,
@@ -1147,7 +1153,7 @@ fn apply_sidebar_menu_button_chrome(
     let mut status = LayoutStatus::Clean;
     if el.style.bg_color != want_bg {
         el.style.bg_color = want_bg;
-        if let Some(lt) = layout_tree {
+        if let Some(lt) = layout_tree.as_mut() {
             lt.update_taffy_node_style(el);
         }
         status = LayoutStatus::StyleChanged;
@@ -1178,7 +1184,22 @@ fn apply_sidebar_menu_button_chrome(
         status = status.merge(LayoutStatus::StyleChanged);
     }
 
-    paint_sidebar_menu_button_fg(el, want_fg, size_px);
+    if paint_sidebar_menu_button_fg(el, want_fg, size_px) {
+        status = status.merge(LayoutStatus::StyleChanged);
+    }
+
+    // Same contract as Button hover paint: named PartialLoad dest-reset + bust
+    // ViewportsOnly `reuse_idle` so an idle gallery rail cannot skip-replay the
+    // previous rest bake after a paint-only accent write.
+    if status != LayoutStatus::Clean {
+        if let Some(lt) = layout_tree {
+            let b = el.layout_bounds;
+            if b[2] > 0.0 && b[3] > 0.0 {
+                crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
+            }
+            lt.note_collect_skip_hash_bust_if_idle(el.collect_skip_live);
+        }
+    }
     status
 }
 
@@ -1194,19 +1215,7 @@ pub(crate) fn sync_sidebar_menu_button_paint_subtree(
         }
         let variant = sidebar_menu_button_variant(el);
         let is_active = sidebar_menu_button_active(el);
-        let is_hovered = el
-            .focus_id
-            .as_deref()
-            .map(|fid| {
-                let key = format!("{fid}_hover");
-                let sig = use_signal(key.as_str(), || false);
-                if sig.is_alive() {
-                    sig.peek()
-                } else {
-                    false
-                }
-            })
-            .unwrap_or(false);
+        let is_hovered = sidebar_menu_button_hovered(el);
         *impact = impact.merge(apply_sidebar_menu_button_chrome(
             el,
             Some(layout_tree),
@@ -1257,7 +1266,10 @@ fn paint_menu_button(
     el.set_attr("data-active", if is_active { "true" } else { "false" });
     el.set_attr("data-size", size.as_str());
     el.set_attr("data-variant", variant.as_str());
-    let _ = apply_sidebar_menu_button_chrome(&mut el, None, variant, is_active, false);
+    // Rebuild under an existing hover must not flash rest chrome; paint sync peeks
+    // the same signal, but idle frames between rebuild and sync would otherwise flicker.
+    let is_hovered = sidebar_menu_button_hovered(&el);
+    let _ = apply_sidebar_menu_button_chrome(&mut el, None, variant, is_active, is_hovered);
     el
 }
 
@@ -1346,7 +1358,21 @@ pub fn apply_bound_sidebar_menu_button_active(el: &mut Element, active: bool) ->
     }
     el.set_attr("data-active", want);
     let variant = sidebar_menu_button_variant(el);
-    apply_sidebar_menu_button_chrome(el, None, variant, active, false)
+    // Keep live `{focus_id}_hover` — forcing `is_hovered=false` here wiped accent
+    // chrome whenever page/active bindings updated under a still pointer.
+    let is_hovered = sidebar_menu_button_hovered(el);
+    apply_sidebar_menu_button_chrome(el, None, variant, active, is_hovered)
+}
+
+fn sidebar_menu_button_hovered(el: &Element) -> bool {
+    el.focus_id
+        .as_deref()
+        .map(|fid| {
+            let key = format!("{fid}_hover");
+            let sig = use_signal(key.as_str(), || false);
+            sig.is_alive() && sig.peek()
+        })
+        .unwrap_or(false)
 }
 
 // ── RSX parts ─────────────────────────────────────────────────────────────────
@@ -3067,6 +3093,157 @@ mod tests {
         assert!(
             el.on_hover.is_some(),
             "SidebarMenuButton must wire on_hover for sync paint"
+        );
+    }
+
+    #[test]
+    fn menu_button_paint_sync_applies_hover_accent_from_signal() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+        let (_h, mut el): (_, Element) = create_root(|| {
+            sidebar_menu_button("nav-hover-sync").text("Hover").into()
+        });
+        use_signal("nav-hover-sync_hover", || false).set(true);
+        let mut tree = LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        super::sync_sidebar_menu_button_paint_subtree(&mut el, &mut tree, &mut impact);
+        let want = parse_color("sidebar-accent");
+        assert_eq!(
+            el.style.bg_color, want,
+            "paint sync must write sidebar-accent while `{{id}}_hover` is true"
+        );
+        assert_eq!(impact, LayoutStatus::StyleChanged);
+    }
+
+    #[test]
+    fn bound_active_update_must_not_wipe_live_hover_chrome() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+        let (_h, mut el): (_, Element) = create_root(|| {
+            sidebar_menu_button("nav-hover-active").text("Item").into()
+        });
+        use_signal("nav-hover-active_hover", || false).set(true);
+        let mut tree = LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        super::sync_sidebar_menu_button_paint_subtree(&mut el, &mut tree, &mut impact);
+        let before = el.style.bg_color;
+        let _ = super::apply_bound_sidebar_menu_button_active(&mut el, true);
+        assert_eq!(el.attrs.get("data-active").map(String::as_str), Some("true"));
+        assert_eq!(
+            el.style.bg_color, before,
+            "isActive bind must keep accent while the pointer is still hovering"
+        );
+        assert_eq!(
+            before,
+            parse_color("sidebar-accent"),
+            "precondition: hover sync must have applied accent"
+        );
+    }
+
+    /// Gallery rail is an idle sibling while the inset page scrolls / settles.
+    /// Hover chrome is paint-only — without Button-parity damage + skip-hash bust,
+    /// ViewportsOnly `reuse_idle` skip-replays the rest bake and accent never shows
+    /// (basics page → hover 「指针事件」).
+    #[test]
+    fn menu_button_hover_must_collect_accent_under_idle_sidebar_skip() {
+        use crate::app::damage::take_frame_paint_nodes;
+        use crate::app::frame_stats::reset_collect_skip_counters;
+        use crate::core::reactivity::create_root;
+        use crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX;
+        use crate::core::tree::LayoutTree;
+
+        reset_collect_skip_counters();
+        let _ = take_frame_paint_nodes();
+        let accent = parse_color("sidebar-accent");
+
+        let (_h, mut root): (_, Element) = create_root(|| {
+            let basics: Element = sidebar_menu_button("gal-nav-basics")
+                .text("基础")
+                .is_active(true)
+                .into();
+            let events: Element = sidebar_menu_button("gal-nav-events")
+                .text("指针事件")
+                .into();
+            let rail = Element::new()
+                .flex_col()
+                .w(160.0)
+                .h(200.0)
+                .flex_shrink(0.0)
+                .bg(parse_color("sidebar"))
+                .child(basics)
+                .child(events);
+            let rows = Element::new().flex_col().w(200.0).children((0..8).map(|i| {
+                Element::new()
+                    .w(200.0)
+                    .h(40.0)
+                    .flex_shrink(0.0)
+                    .child(Element::new().text(format!("Row{i}")))
+            }));
+            let mut page = Element::new()
+                .w(200.0)
+                .h(200.0)
+                .overflow_y("scroll")
+                .overflow_x("hidden")
+                .child(rows);
+            page.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}gal-nav-hover-skip"));
+            Element::new()
+                .flex_row()
+                .w(360.0)
+                .h(200.0)
+                .child(rail)
+                .child(page)
+        });
+
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 360.0, 200.0, [-1.0, -1.0]);
+        tree.set_collect_skip_allowed(true);
+        let _ = tree.build_and_layout_fast(&mut root, 360.0, 200.0, [-1.0, -1.0], true, false);
+
+        // Freeze an idle-rail fingerprint, then scroll the page (gallery main pane).
+        root.children[1].scroll_offset[1] = 40.0;
+        use_signal(
+            &crate::core::scroll_viewport::scroll_offset_y_signal_key("gal-nav-hover-skip"),
+            || 0.0_f32,
+        )
+        .set_silent(40.0);
+        let _ = tree.build_and_layout_fast(&mut root, 360.0, 200.0, [-1.0, -1.0], true, false);
+        let (skipped_before, _) = tree.last_collect_skip_counts();
+        assert!(
+            skipped_before >= 1,
+            "precondition: idle rail must be skip-replayed while the page scrolls (skipped={skipped_before})"
+        );
+
+        let _ = take_frame_paint_nodes();
+        use_signal("gal-nav-events_hover", || false).set(true);
+        let mut impact = LayoutStatus::Clean;
+        super::sync_sidebar_menu_button_paint_subtree(&mut root, &mut tree, &mut impact);
+        assert_eq!(impact, LayoutStatus::StyleChanged);
+        let dirties = take_frame_paint_nodes();
+        assert!(
+            !dirties.is_empty(),
+            "hover chrome must queue named paint damage (Button parity); got {dirties:?}"
+        );
+
+        let events = root.children[0].children[1].style.bg_color;
+        assert_eq!(
+            events, accent,
+            "sync must write sidebar-accent onto the hovered idle nav item"
+        );
+
+        let after = tree.build_and_layout_fast(&mut root, 360.0, 200.0, [-1.0, -1.0], true, false);
+        let has_accent = after.instances.iter().any(|i| {
+            i.rect_size[0] > 20.0
+                && i.rect_size[1] > 10.0
+                && (0..4).all(|c| (i.color[c] - accent[c]).abs() < 0.06)
+        });
+        assert!(
+            has_accent,
+            "idle-rail skip-replay must not keep rest bake after hover accent; instances={:?}",
+            after
+                .instances
+                .iter()
+                .map(|i| i.color)
+                .collect::<Vec<_>>()
         );
     }
 }
