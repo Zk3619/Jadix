@@ -17,7 +17,7 @@ fn region_overlap_must_not_suppress_uncovered_node_pixels() {
         kind: PaintDirtyKind::Region,
     };
     assert!(
-        !paint_dirty_covered_by_overlay_restore(&node, &[region, node]),
+        !paint_dirty_covered_by_overlay_restore(&node, &[region, node], &[]),
         "node x=100..106 lies outside Region's zero-pad scissor and still needs paint"
     );
     let exact_region = PaintDirty {
@@ -25,7 +25,7 @@ fn region_overlap_must_not_suppress_uncovered_node_pixels() {
         ..node
     };
     assert!(
-        paint_dirty_covered_by_overlay_restore(&node, &[exact_region, node]),
+        paint_dirty_covered_by_overlay_restore(&node, &[exact_region, node], &[]),
         "an equal-sized Region already replayed the whole node"
     );
 }

@@ -119,13 +119,13 @@ fn horizontal_bar_spans_full_width_when_vertical_bar_is_hidden() {
                     .scrollbar_visibility("auto")
                     .child(Element::new().w(480.0).h(24.0).bg([0.8, 0.8, 0.8, 1.0])),
             );
-            // Prepass contract: drop only the lane-side inset, then Taffy places the bar.
+            // Auto build starts at edge pad; with Y fitting, lane stays released.
             // Collect must paint that box — not a viewport-width stretch past it.
             {
                 let h = find_track_mut(&mut root, "x").expect("x track");
-                let authored = crate::layout::lpa_length_px(h.style.inset.right).unwrap_or(0.0);
+                let edge = crate::layout::lpa_length_px(h.style.inset.right).unwrap_or(0.0);
                 let next =
-                    horizontal_lane_side_inset(authored, SCROLLBAR_DEFAULT_CROSS_PX, false);
+                    horizontal_lane_side_inset(edge, SCROLLBAR_DEFAULT_CROSS_PX, false);
                 h.style.inset.right = taffy::style::LengthPercentageAuto::length(next);
             }
             let mut layout = LayoutTree::new();

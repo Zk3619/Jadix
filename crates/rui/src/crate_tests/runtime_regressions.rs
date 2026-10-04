@@ -629,7 +629,7 @@ fn node_glyph_capture_preserves_both_sides_of_portal() {
         &result.text_nodes,
         &result.node_paints,
         &[],
-        Some(overlay),
+        &[(1, overlay)],
     );
     assert_eq!(
         capture.len(),

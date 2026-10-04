@@ -189,3 +189,81 @@ fn measure_uses_normalized_weight_so_captions_fit() {
         );
     }
 }
+
+/// Mixed captions must stay one paint line whose box covers glyphon ink.
+///
+/// Measure shapes CJK per character (Advanced) and Latin as a Basic run, then
+/// sums them. Paint shapes the whole string Advanced. If the sum is short, the
+/// button box ends near the script boundary: hover dest-reset updates 关闭 and
+/// leaves "Builder Trigger" on the previous frame's pixels.
+#[test]
+fn mixed_cjk_latin_caption_box_covers_advanced_ink() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let label = "关闭 Builder Trigger";
+    let mut root = Element::new().w(800.0).h(160.0).child(Element::from(
+        button("mix-cap")
+            .variant("outline")
+            .size("sm")
+            .child(Element::new().text(label)),
+    ));
+    let mut tree = LayoutTree::new();
+    let result = tree.build_and_layout(&mut root, 800.0, 160.0, [-1.0, -1.0]);
+    assert_eq!(result.text_nodes.len(), 1, "one caption leaf");
+    let n = &result.text_nodes[0];
+    assert_eq!(n.text, label);
+    assert_eq!(
+        n.style.white_space,
+        crate::style::WhiteSpace::Nowrap,
+        "button captions are nowrap"
+    );
+
+    let prepared = n.prepared.as_ref().expect("prepared");
+    let intrinsic = intrinsic_width(prepared);
+    let metrics = crate::text::layout(prepared, n.width.max(1.0));
+    assert_eq!(metrics.line_count, 1, "layout wrapped the mixed caption");
+
+    let family = best_font_family(&fs);
+    let norm = resolve_face_weight(fs.db(), family, 500).attrs_weight;
+    let mut buf = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
+    buf.set_size(Some(16_384.0), None);
+    buf.set_wrap(glyphon::Wrap::None);
+    buf.set_text(
+        label,
+        &glyphon::Attrs::new()
+            .family(family)
+            .weight(glyphon::fontdb::Weight(norm)),
+        glyphon::Shaping::Advanced,
+        None,
+    );
+    buf.shape_until_scroll(&mut fs, false);
+    let runs = buf.layout_runs().count();
+    let mut ink = 0.0_f32;
+    let mut cjk_end = 0.0_f32;
+    let mut latin_start = f32::MAX;
+    for run in buf.layout_runs() {
+        for g in run.glyphs.iter() {
+            ink = ink.max(g.x + g.w);
+            let ch = label[g.start..g.end].chars().next().unwrap_or('\0');
+            if ('\u{4E00}'..='\u{9FFF}').contains(&ch) {
+                cjk_end = cjk_end.max(g.x + g.w);
+            } else if ch.is_ascii_alphabetic() {
+                latin_start = latin_start.min(g.x);
+            }
+        }
+    }
+    assert_eq!(runs, 1, "Advanced nowrap paint must be one line");
+    assert!(
+        cjk_end > 0.0 && latin_start.is_finite() && cjk_end <= latin_start + 8.0,
+        "CJK and Latin must share one line (cjk_end={cjk_end:.2} latin_start={latin_start:.2})"
+    );
+    assert!(
+        n.width + 0.5 >= ink,
+        "caption box {:.2} must cover Advanced ink {:.2} (intrinsic {:.2}); otherwise hover clears only the CJK side",
+        n.width,
+        ink,
+        intrinsic
+    );
+}

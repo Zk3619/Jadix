@@ -199,3 +199,156 @@ fn overlay_collect_skip_must_move_painted_thumb_with_scroll() {
         });
     });
 }
+
+/// Wheel frames promote scrollbar prepass to `Full` while `scroll_only` skips
+/// `compute_layout`. Collect used to gate signal geometry on `overlay_collect` only,
+/// so the rail painted Taffy leftover (min-cap at the unscrolled top) for one frame
+/// — thumb jumps to track start while `sy` / page content stay mid-scroll. Drag kept
+/// `overlay_collect` via `active_drag_rest`; wheel did not.
+#[test]
+fn overlay_thumb_stays_mid_when_full_scroll_only_skips_overlay_flag() {
+    const REST: &str = "diag-thumb-full-scroll-only";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let content = Element::new()
+                .flex_col()
+                .w("100%")
+                .gap(4.0)
+                .children((0..24).map(|i| {
+                    Element::new()
+                        .w("100%")
+                        .h(28.0)
+                        .bg([0.9, 0.9, 0.9, 1.0])
+                        .template_id(format!("row-{i}"))
+                }));
+
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(220.0)
+                    .h(120.0)
+                    .overflow_y("auto")
+                    .overflow_x("hidden")
+                    .scrollbar_visibility("always")
+                    .child(content),
+            );
+
+            let mut layout = LayoutTree::new();
+            let full = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("scroll metrics");
+            assert!(
+                content_size[1] > bounds[3] + 40.0,
+                "precondition: overflowed content"
+            );
+
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+            use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set(120.0);
+
+            // ViewportsOnly + overlay: live signal geometry (healthy reference).
+            let overlay =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let track = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y")
+                .expect("Y track");
+            let thumb_ref = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .expect("Y thumb overlay");
+            let y_ref = thumb_paint_y(&overlay, thumb_ref).expect("painted overlay thumb");
+            assert!(
+                y_ref > track[1] + 12.0,
+                "precondition: overlay mid-scroll thumb; y={y_ref} track={track:?}"
+            );
+
+            // Wheel-shaped frame: scroll_only (no compute_layout) + Full collect without
+            // overlay_collect. Taffy still holds the sy=0 leftover from the first Full.
+            let wheeled =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, false);
+            let thumb = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .expect("Y thumb after Full scroll_only");
+            let y = thumb_paint_y(&wheeled, thumb).expect("painted thumb");
+            assert!(
+                (y - y_ref).abs() < 2.0,
+                "wheel Full+scroll_only must keep signal thumb mid-track, not Taffy leftover at start; \
+                 y={y} y_ref={y_ref} track={track:?} thumb={thumb:?}"
+            );
+            assert!(
+                y > track[1] + 12.0,
+                "thumb must not sit at track start while sy=120; y={y} track={track:?} thumb={thumb:?}"
+            );
+        });
+    });
+}
+
+/// Mid-scroll overlay seed used to overwrite content_h with a cull `ch≈vh` sample
+/// in the same collect walk (post-render stale-zero is too late). Thumb t→0 for one
+/// frame, then recovers when the next seed/signal is healthy.
+#[test]
+fn overlay_thumb_stays_mid_track_when_content_signal_stays_overflowed() {
+    const REST: &str = "diag-thumb-seed-cull";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let content = Element::new()
+                .flex_col()
+                .w("100%")
+                .gap(4.0)
+                .children((0..24).map(|i| {
+                    Element::new()
+                        .w("100%")
+                        .h(28.0)
+                        .bg([0.9, 0.9, 0.9, 1.0])
+                        .template_id(format!("row-{i}"))
+                }));
+
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(220.0)
+                    .h(120.0)
+                    .overflow_y("auto")
+                    .overflow_x("hidden")
+                    .scrollbar_visibility("always")
+                    .child(content),
+            );
+
+            let mut layout = LayoutTree::new();
+            let full = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("scroll metrics");
+            assert!(
+                content_size[1] > bounds[3] + 40.0,
+                "precondition: overflowed content"
+            );
+
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+            use_signal(&scroll_offset_y_signal_key(REST), || 0.0_f32).set(120.0);
+
+            let scrolled =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let track = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y")
+                .expect("Y track");
+            let thumb = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .expect("Y thumb mid-scroll");
+            let y = thumb_paint_y(&scrolled, thumb).expect("painted thumb");
+            let track_top = track[1];
+            let track_bottom = track[1] + track[3];
+            assert!(
+                y > track_top + 12.0,
+                "thumb must not sit at track start while sy=120; y={y} track={track:?} thumb={thumb:?}"
+            );
+            assert!(
+                y + thumb[3] < track_bottom - 4.0,
+                "thumb must remain on-track; y={y} thumb_h={} track={track:?}",
+                thumb[3]
+            );
+        });
+    });
+}

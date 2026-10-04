@@ -927,3 +927,284 @@ fn horizontal_auto_hide_dest_reset_covers_the_painted_track() {
         });
     });
 }
+
+/// Page-switch Full prepass runs while the new rest's vw/vh signals are still 0.
+/// Collapsing the overlay track then leaves ViewportsOnly unable to restore a
+/// hit slab — wheel/hover never light the bar on later pages.
+#[test]
+fn full_prepass_must_not_collapse_overlay_track_before_metrics() {
+    const REST: &str = "diag-switch-collapse";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let content = Element::new()
+                .flex_col()
+                .w("100%")
+                .gap(4.0)
+                .children((0..16).map(|i| {
+                    Element::new()
+                        .w("100%")
+                        .h(24.0)
+                        .bg([0.9, 0.9, 0.9, 1.0])
+                        .template_id(format!("row-{i}"))
+                }));
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(220.0)
+                    .h(120.0)
+                    .overflow_y("auto")
+                    .overflow_x("hidden")
+                    .scrollbar_visibility("auto")
+                    .child(content),
+            );
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            // New rest: signals unset (page switch before post-render).
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(0.0);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(0.0);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(0.0);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(0.0);
+            crate::app::update_scrollbar_elements_for_test(
+                &mut root,
+                &mut layout,
+                crate::app::ScrollbarUpdateMode::Full,
+            );
+            let _ = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            let track_after_zero =
+                find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y").expect("track");
+            assert!(
+                track_after_zero[2] > 2.0 && track_after_zero[3] > 40.0,
+                "unset metrics must not collapse the overlay hit slab\n track={track_after_zero:?}"
+            );
+
+            let full = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("metrics");
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+            crate::app::update_scrollbar_elements_for_test(
+                &mut root,
+                &mut layout,
+                crate::app::ScrollbarUpdateMode::ViewportsOnly,
+            );
+            settle_cubic(REST, "y", 1.0);
+            let shown =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let track = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y").expect("track");
+            let thumb = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y").expect("thumb");
+            let a = thumb_fill_alpha(&shown, thumb);
+            let path = hit_path(&root, track[0] + track[2] * 0.5, track[1] + track[3] * 0.5);
+            let hit = crate::app::pointer_events::path_deepest_focus_id(&path);
+            assert!(
+                track[3] > 40.0 && a > 0.85 && hit.is_some_and(|id| id.contains("scrollbar")),
+                "after metrics arrive, ViewportsOnly must keep a hittable painted bar\n\
+                 track={track:?} thumb={thumb:?} a={a} hit={hit:?}"
+            );
+        });
+    });
+}
+
+/// H-only `auto`: build must not bake a Y gutter, and unmeasured Full must not
+/// invent one. ViewportsOnly after metrics stays at the edge pad (no second Full).
+#[test]
+fn auto_h_only_must_not_reserve_vertical_lane_gutter() {
+    const REST: &str = "diag-h-lane-release";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(240.0)
+                    .h(80.0)
+                    .overflow_x("auto")
+                    .overflow_y("auto")
+                    .scrollbar_visibility("auto")
+                    .child(Element::new().w(480.0).h(24.0).bg([0.8, 0.8, 0.8, 1.0])),
+            );
+            let mut layout = LayoutTree::new();
+            let _ = layout.build_and_layout(&mut root, 240.0, 80.0, [-1.0, -1.0]);
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(0.0);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(0.0);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(0.0);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(0.0);
+            crate::app::update_scrollbar_elements_for_test(
+                &mut root,
+                &mut layout,
+                crate::app::ScrollbarUpdateMode::Full,
+            );
+            let _ = layout.build_and_layout(&mut root, 240.0, 80.0, [-1.0, -1.0]);
+            let h_zero =
+                find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":x").expect("h track");
+            let h_right_zero = h_zero[0] + h_zero[2];
+            assert!(
+                h_right_zero > 240.0 - 6.0 && h_right_zero <= 240.0 + 0.5,
+                "unmeasured auto must not reserve a Y gutter\n h={h_zero:?} right={h_right_zero}"
+            );
+
+            let full = layout.build_and_layout(&mut root, 240.0, 80.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("metrics");
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+
+            crate::app::update_scrollbar_elements_for_test(
+                &mut root,
+                &mut layout,
+                crate::app::ScrollbarUpdateMode::ViewportsOnly,
+            );
+            let _ = layout.build_and_layout(&mut root, 240.0, 80.0, [-1.0, -1.0]);
+            let h = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":x").expect("h track");
+            let h_right = h[0] + h[2];
+            assert!(
+                h_right > 240.0 - 6.0 && h_right <= 240.0 + 0.5,
+                "H-only after metrics must keep H at the edge pad\n h={h:?} right={h_right}"
+            );
+
+            crate::app::update_scrollbar_elements_for_test(
+                &mut root,
+                &mut layout,
+                crate::app::ScrollbarUpdateMode::Full,
+            );
+            let _ = layout.build_and_layout(&mut root, 240.0, 80.0, [-1.0, -1.0]);
+            let v = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y").expect("y track");
+            assert!(
+                v[2] < 1.0 || v[3] < 1.0,
+                "Y must collapse when content fits vertically: v={v:?}"
+            );
+        });
+    });
+}
+
+/// Overlay auto-bar is absolute + z-index, so hide is a page-stack slot with
+/// no quads. Own-chrome replay draws nothing and PartialLoad keeps the gray
+/// track. A Node flat-fill of that box samples one content row and drops the
+/// thumb on the next show. Page replay has to restore the covered content.
+#[test]
+fn overlay_auto_hide_must_replay_underlay_not_flat_fill() {
+    const REST: &str = "diag-auto-fade-region";
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let content = Element::new()
+                .flex_col()
+                .w("100%")
+                .gap(4.0)
+                .children((0..16).map(|i| {
+                    Element::new()
+                        .w("100%")
+                        .h(24.0)
+                        .bg([0.2, 0.45, 0.9, 1.0])
+                        .template_id(format!("row-{i}"))
+                }));
+
+            let mut root = Element::from(
+                scroll_area(REST)
+                    .w(220.0)
+                    .h(120.0)
+                    .bg([1.0, 1.0, 1.0, 1.0])
+                    .overflow_y("auto")
+                    .overflow_x("hidden")
+                    .scrollbar_visibility("auto")
+                    .child(content),
+            );
+
+            let mut layout = LayoutTree::new();
+            let full = layout.build_and_layout(&mut root, 220.0, 120.0, [-1.0, -1.0]);
+            let (_id, bounds, _max, content_size) = full
+                .scroll_metrics
+                .iter()
+                .find(|(id, ..)| id == REST)
+                .expect("scroll metrics");
+            use_signal(&scroll_viewport_w_signal_key(REST), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(REST), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(REST), || 0.0_f32).set(content_size[0]);
+            use_signal(&scroll_content_h_signal_key(REST), || 0.0_f32).set(content_size[1]);
+
+            let _ = take_frame_paint_nodes();
+            settle_cubic(REST, "y", 1.0);
+            layout.set_collect_skip_allowed(true);
+            let shown =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let thumb = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .expect("Y thumb shown");
+            let track = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y")
+                .expect("Y track shown");
+            let _ = take_frame_paint_nodes();
+
+            settle_cubic(REST, "y", 0.0);
+            let hidden =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let mut hide_dirty = take_frame_paint_nodes();
+            let prev = crate::app::draw_cull::last_present_visual_slots(
+                &shown.node_paints,
+                &shown.instances,
+                &[],
+                &shown.text_nodes,
+                &[],
+            );
+            let layered: Vec<_> = hidden
+                .node_paints
+                .iter()
+                .filter(|p| p.layered)
+                .map(|p| (p.key, p.bounds, p.instance))
+                .collect();
+            let before = hide_dirty.clone();
+            crate::app::draw_cull::prepare_node_present_dirties(
+                &mut hide_dirty,
+                &hidden.node_paints,
+                &prev,
+                &hidden.instances,
+                &[],
+                &[],
+                1.0,
+                None,
+            );
+            let mut covered_track = false;
+            let mut covered_thumb = false;
+            for d in &hide_dirty {
+                assert_eq!(
+                    d.kind,
+                    crate::app::damage::PaintDirtyKind::Region,
+                    "hidden bar must page-replay, not flat-fill\n dirty={d:?}\n before={before:?}\n layered={layered:?}"
+                );
+                assert!(
+                    !crate::app::draw_cull::region_replays_own_chrome_only(
+                        d.key,
+                        d.bounds,
+                        &hidden.node_paints,
+                    ),
+                    "omitted quads must not take own-chrome (that draws nothing)\n dirty={d:?}"
+                );
+                if rect_covers(d.bounds, track) {
+                    covered_track = true;
+                }
+                if rect_covers(d.bounds, thumb) {
+                    covered_thumb = true;
+                }
+            }
+            assert!(
+                covered_track && covered_thumb,
+                "hide replay must cover the last painted bar\n track={track:?} thumb={thumb:?}\n dirties={hide_dirty:?}"
+            );
+
+            let _ = take_frame_paint_nodes();
+            settle_cubic(REST, "y", 1.0);
+            let again =
+                layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
+            let again_thumb = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
+                .expect("thumb on reshow");
+            let again_a = thumb_fill_alpha(&again, again_thumb);
+            assert!(
+                again_a > 0.9,
+                "reshow must paint the thumb, alpha={again_a} bounds={again_thumb:?}"
+            );
+        });
+    });
+}

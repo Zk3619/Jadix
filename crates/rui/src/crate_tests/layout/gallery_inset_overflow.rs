@@ -535,6 +535,220 @@ fn match_when_reactive_page_switch_must_not_paint_window_h_bar() {
     reset_registered_anchors();
 }
 
+fn tall_page_body() -> Element {
+    vstack()
+        .w("100%")
+        .children((0..24).map(|i| {
+            Element::new()
+                .w("100%")
+                .h(40.0)
+                .bg([0.2, 0.45, 0.9, 1.0])
+                .template_id(format!("tall-row-{i}"))
+        }))
+        .into()
+}
+
+fn find_y_track(el: &Element, rest: &str) -> Option<[f32; 4]> {
+    let want = format!("{SCROLLBAR_TRACK_FOCUS_PREFIX}{rest}:y");
+    fn walk(el: &Element, want: &str) -> Option<[f32; 4]> {
+        if el.focus_id.as_deref() == Some(want) {
+            return Some(el.layout_bounds);
+        }
+        el.children.iter().find_map(|c| walk(c, want))
+    }
+    walk(el, &want)
+}
+
+fn find_y_thumb(el: &Element, rest: &str) -> Option<[f32; 4]> {
+    let want = format!(
+        "{}{rest}:y",
+        crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX
+    );
+    fn walk(el: &Element, want: &str) -> Option<[f32; 4]> {
+        if el.focus_id.as_deref() == Some(want) {
+            return Some(el.layout_bounds);
+        }
+        el.children.iter().find_map(|c| walk(c, want))
+    }
+    walk(el, &want)
+}
+
+fn thumb_alpha(
+    result: &crate::core::tree::RenderResult,
+    thumb: [f32; 4],
+) -> f32 {
+    result
+        .instances
+        .iter()
+        .filter(|i| {
+            (i.rect_pos[0] - thumb[0]).abs() < 3.0
+                && (i.rect_pos[1] - thumb[1]).abs() < 3.0
+                && i.rect_size[0] > 1.0
+        })
+        .map(|i| i.color[3])
+        .fold(0.0_f32, f32::max)
+}
+
+fn sync_scroll_signals_from_metrics(
+    result: &crate::core::tree::RenderResult,
+    rest: &str,
+) {
+    use crate::core::scroll_viewport::{
+        scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_viewport_h_signal_key,
+        scroll_viewport_w_signal_key,
+    };
+    let (_, bounds, _, content) = result
+        .scroll_metrics
+        .iter()
+        .find(|(id, ..)| id == rest)
+        .expect("scroll metrics");
+    use_signal(&scroll_viewport_w_signal_key(rest), || 0.0_f32).set(bounds[2]);
+    use_signal(&scroll_viewport_h_signal_key(rest), || 0.0_f32).set(bounds[3]);
+    use_signal(&scroll_content_w_signal_key(rest), || 0.0_f32).set(content[0]);
+    use_signal(&scroll_content_h_signal_key(rest), || 0.0_f32).set(content[1]);
+}
+
+fn settle_auto_y(rest: &str, target: f32) {
+    use crate::style::{tick_animations, use_ui_transition_cubic};
+    let tw = use_ui_transition_cubic(&format!("scrollbar_spring_{rest}:y"), 0.0);
+    tw.set(target);
+    tick_animations(0.08);
+    tick_animations(0.08);
+}
+
+/// Live Gallery: Match reuses the section_body island across sidebar pages.
+/// After the switch, ViewportsOnly + overlay collect must still mount a live
+/// Y track for the *new* rest and paint it when the auto cubic is shown.
+/// A leftover collapsed track / stale rest focus_id leaves later pages with
+/// no bar on wheel or hover.
+#[test]
+fn match_when_page_switch_must_paint_overlay_y_bar() {
+    reset_registered_anchors();
+    clear_test_reconcile_root();
+
+    let live = Rc::new(RefCell::new(Element::new()));
+    install_test_reconcile_root(Rc::clone(&live));
+    const ISLAND: &str = "examples/gallery/App:section_body_ybar";
+    const W: f32 = 1000.0;
+    const H: f32 = 500.0;
+
+    mark_next_effect_as_ui_root();
+    let (_owner, section) = create_root(|| {
+        let section = use_signal("gal_nav_section_ybar", || "a".to_string());
+        create_effect({
+            let section = section.clone();
+            let live = Rc::clone(&live);
+            move || {
+                let sec = section.clone();
+                let body = match_when_reactive(ISLAND, move || match sec.get().as_str() {
+                    "b" => page_scroll("scroll-b", tall_page_body()),
+                    _ => page_scroll("scroll-a", tall_page_body()),
+                });
+                *live.borrow_mut() = gallery_inset_shell(body);
+            }
+        });
+        section
+    });
+
+    let mut layout = LayoutTree::new();
+    {
+        let mut root = live.borrow_mut();
+        let first = layout.build_and_layout(&mut root, W, H, [-1.0, -1.0]);
+        let (_, _, max_y, content) = first
+            .scroll_metrics
+            .iter()
+            .find(|(id, ..)| id == "scroll-a")
+            .map(|(_, b, m, c)| (*b, m[0], m[1], *c))
+            .expect("scroll-a");
+        assert!(
+            max_y > 8.0 && content[1] > H,
+            "setup: page A must overflow y (max_y={max_y} content_h={})",
+            content[1]
+        );
+        sync_scroll_signals_from_metrics(&first, "scroll-a");
+        settle_auto_y("scroll-a", 1.0);
+        let shown = layout.build_and_layout_fast(&mut root, W, H, [-1.0, -1.0], true, true);
+        let thumb = find_y_thumb(&root, "scroll-a").expect("Y thumb on first page");
+        let a = thumb_alpha(&shown, thumb);
+        assert!(
+            a > 0.85 && thumb[3] > 20.0,
+            "setup: first page must paint Y thumb (a={a} thumb={thumb:?})"
+        );
+    }
+
+    section.set("b".to_string());
+
+    {
+        let mut root = live.borrow_mut();
+        // Live route Match that FullClears also runs Full scrollbar prepass **before**
+        // post-render publishes the new rest's vw/vh/ch. Zero signals must not collapse
+        // the overlay track — ViewportsOnly never restores hit geometry afterward.
+        crate::app::update_scrollbar_elements_for_test(
+            &mut root,
+            &mut layout,
+            crate::app::ScrollbarUpdateMode::Full,
+        );
+        let second = layout.build_and_layout(&mut root, W, H, [-1.0, -1.0]);
+        let metric = second
+            .scroll_metrics
+            .iter()
+            .find(|(id, ..)| id == "scroll-b");
+        let Some((_, bounds, max, content)) = metric else {
+            panic!(
+                "after switch, scroll-b metrics missing; have {:?}",
+                second
+                    .scroll_metrics
+                    .iter()
+                    .map(|(id, ..)| id.clone())
+                    .collect::<Vec<_>>()
+            );
+        };
+        assert!(
+            max[1] > 8.0,
+            "page B must overflow y after Match switch (max_y={} content={:?} vp={:?})",
+            max[1],
+            content,
+            bounds
+        );
+        sync_scroll_signals_from_metrics(&second, "scroll-b");
+        crate::app::update_scrollbar_elements_for_test(
+            &mut root,
+            &mut layout,
+            crate::app::ScrollbarUpdateMode::ViewportsOnly,
+        );
+        settle_auto_y("scroll-b", 1.0);
+        let shown = layout.build_and_layout_fast(&mut root, W, H, [-1.0, -1.0], true, true);
+        let track = find_y_track(&root, "scroll-b");
+        let thumb = find_y_thumb(&root, "scroll-b");
+        let a = thumb.map(|t| thumb_alpha(&shown, t)).unwrap_or(0.0);
+        let old_track = find_y_track(&root, "scroll-a");
+        let edge_hit = track.and_then(|t| {
+            let path = crate::app::pointer_events::hit_path(
+                &root,
+                t[0] + t[2] * 0.5,
+                t[1] + t[3] * 0.5,
+            );
+            crate::app::pointer_events::path_deepest_focus_id(&path).map(str::to_string)
+        });
+        assert!(
+            track.is_some_and(|t| t[2] > 2.0 && t[3] > 40.0)
+                && thumb.is_some_and(|t| t[3] > 8.0)
+                && a > 0.85
+                && edge_hit
+                    .as_deref()
+                    .is_some_and(|id| id.contains("scrollbar") && id.contains("scroll-b")),
+            "after Match page switch, new rest must keep a hittable Y bar that paints\n\
+             track={track:?} thumb={thumb:?} alpha={a} edge_hit={edge_hit:?}\n\
+             leftover_old_track={old_track:?}\n\
+             metrics_b={:?}",
+            (bounds, max, content)
+        );
+    }
+
+    clear_test_reconcile_root();
+    reset_registered_anchors();
+}
+
 fn data_active(el: &Element) -> Option<&str> {
     el.attrs.get("data-active").map(String::as_str)
 }
