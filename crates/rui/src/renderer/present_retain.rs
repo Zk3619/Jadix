@@ -481,6 +481,46 @@ mod tests {
         }
     }
 
+    #[test]
+    fn simple_fill_vertex_color_decode_matches_small_sdf_and_alpha_blend() {
+        let Some(gpu) = OffscreenGpu::new() else {
+            return;
+        };
+        for alpha in [1.0, 0.5] {
+            let mut big = solid_inst(64.0, 64.0, 0.0, 0.0);
+            big.rect_pos = [4.0, 4.0];
+            big.color = [0.15, 0.4, 0.8, alpha];
+            let mut small = big;
+            small.rect_pos = [80.0, 4.0];
+            small.rect_size = [24.0, 24.0];
+            let img = gpu
+                .render_instances_readback(112, 72, wgpu::Color::WHITE, &[big, small])
+                .expect("color readback");
+            let big_pixel = img.pixel(24, 24).unwrap();
+            let small_pixel = img.pixel(92, 16).unwrap();
+            assert!(
+                big_pixel
+                    .iter()
+                    .zip(small_pixel)
+                    .all(|(a, b)| a.abs_diff(b) <= 1),
+                "vertex decode and fragment decode must agree: {big_pixel:?} vs {small_pixel:?}"
+            );
+            if alpha == 1.0 {
+                for (channel, expected) in big_pixel[..3].iter().zip([38_u8, 102, 204]) {
+                    assert!(
+                        channel.abs_diff(expected) <= 1,
+                        "display sRGB must round-trip once"
+                    );
+                }
+            }
+            assert_eq!(
+                img.pixel(110, 70),
+                Some([255; 4]),
+                "paint stays inside its geometry"
+            );
+        }
+    }
+
     fn time_sdf_ms(
         gpu: &OffscreenGpu,
         w: u32,

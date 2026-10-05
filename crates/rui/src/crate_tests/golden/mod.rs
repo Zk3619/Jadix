@@ -16,14 +16,14 @@ use crate::components::{
 };
 use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
-use crate::renderer::offscreen::{assert_matches_golden, render_element_scene};
+use crate::renderer::offscreen::{assert_matches_golden_linear, render_element_scene};
 use crate::style::{parse_color, set_theme_mode, ThemeMode};
 use std::sync::Mutex;
 
 /// Serialize offscreen GPU device creation (WARP crashes under parallel `request_device`).
 static GOLDEN_GPU_LOCK: Mutex<()> = Mutex::new(());
 
-/// AA / WARP slack for rounded-rect edges (no glyph AA in these scenes).
+/// AA / WARP slack in linear coverage (no glyph AA in these scenes).
 const GOLDEN_TOLERANCE: u8 = 16;
 
 fn clear_background() -> wgpu::Color {
@@ -46,7 +46,7 @@ fn assert_scene(name: &str, root: &mut Element, w: u32, h: u32) {
         );
         return;
     };
-    assert_matches_golden(name, &img, GOLDEN_TOLERANCE);
+    assert_matches_golden_linear(name, &img, GOLDEN_TOLERANCE);
 }
 
 #[test]

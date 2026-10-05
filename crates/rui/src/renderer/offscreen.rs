@@ -296,6 +296,70 @@ pub fn golden_path(name: &str) -> std::path::PathBuf {
 /// Set `RUI_UPDATE_GOLDEN=1` to (re)write the golden instead of asserting; a missing golden is
 /// always written so the first run of a new case bootstraps itself.
 pub fn assert_matches_golden(name: &str, image: &RgbaImage, tolerance: u8) {
+    assert_matches_golden_with(name, image, tolerance, images_match);
+}
+
+/// Compare chrome coverage in linear light, where the GPU blends it. sRGB
+/// encoding magnifies tiny derivative differences on dark rounded edges.
+pub fn assert_matches_golden_linear(name: &str, image: &RgbaImage, tolerance: u8) {
+    assert_matches_golden_with(name, image, tolerance, images_match_linear);
+}
+
+fn images_match_linear(a: &RgbaImage, b: &RgbaImage, tolerance: u8) -> bool {
+    if a.width != b.width || a.height != b.height || a.pixels.len() != b.pixels.len() {
+        return false;
+    }
+    a.pixels
+        .chunks_exact(4)
+        .zip(b.pixels.chunks_exact(4))
+        .enumerate()
+        .all(|(i, (expected, actual))| {
+            if expected[3].abs_diff(actual[3]) > tolerance {
+                return false;
+            }
+            if expected[..3]
+                .iter()
+                .zip(&actual[..3])
+                .all(|(a, b)| a.abs_diff(*b) <= tolerance)
+            {
+                return true;
+            }
+            // Linear coverage tolerance only applies at a high-contrast edge in
+            // the reference. Uniform fills retain the original sRGB color check.
+            let x = i as u32 % a.width;
+            let y = i as u32 / a.width;
+            let edge = (y.saturating_sub(1)..=(y + 1).min(a.height - 1)).any(|ny| {
+                (x.saturating_sub(1)..=(x + 1).min(a.width - 1)).any(|nx| {
+                    let neighbor = &a.pixels[((ny * a.width + nx) * 4) as usize..][..3];
+                    expected[..3]
+                        .iter()
+                        .zip(neighbor)
+                        .any(|(a, b)| a.abs_diff(*b) >= 64)
+                })
+            });
+            if !edge {
+                return false;
+            }
+            let rgb = |p: &[u8]| {
+                crate::style::linearize_display_srgb([
+                    p[0] as f32 / 255.0,
+                    p[1] as f32 / 255.0,
+                    p[2] as f32 / 255.0,
+                ])
+            };
+            rgb(expected)
+                .iter()
+                .zip(rgb(actual))
+                .all(|(a, b)| (a - b).abs() * 255.0 <= tolerance as f32)
+        })
+}
+
+fn assert_matches_golden_with(
+    name: &str,
+    image: &RgbaImage,
+    tolerance: u8,
+    matches: fn(&RgbaImage, &RgbaImage, u8) -> bool,
+) {
     let path = golden_path(name);
     let update = std::env::var("RUI_UPDATE_GOLDEN").is_ok();
 
@@ -312,7 +376,7 @@ pub fn assert_matches_golden(name: &str, image: &RgbaImage, tolerance: u8) {
         panic!("golden `{name}` is corrupt; re-record with RUI_UPDATE_GOLDEN=1")
     });
     assert!(
-        images_match(&expected, image, tolerance),
+        matches(&expected, image, tolerance),
         "golden `{name}` mismatch ({}x{} vs {}x{}); re-record with RUI_UPDATE_GOLDEN=1",
         expected.width,
         expected.height,
@@ -324,6 +388,26 @@ pub fn assert_matches_golden(name: &str, image: &RgbaImage, tolerance: u8) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn linear_golden_tolerance_tracks_coverage_without_hiding_color_or_geometry_changes() {
+        let pixel = |rgb, alpha| RgbaImage {
+            width: 1,
+            height: 1,
+            pixels: vec![rgb, rgb, rgb, alpha],
+        };
+        let edge = |rgb| RgbaImage {
+            width: 2,
+            height: 1,
+            pixels: vec![rgb, rgb, rgb, 255, 255, 255, 255, 255],
+        };
+        assert!(images_match_linear(&edge(43), &edge(73), 16));
+        assert!(!images_match_linear(&pixel(0, 255), &pixel(40, 255), 16));
+        assert!(!images_match_linear(&pixel(255, 255), &pixel(225, 255), 16));
+        assert!(!images_match_linear(&edge(0), &edge(128), 16));
+        assert!(!images_match_linear(&pixel(43, 255), &pixel(43, 200), 16));
+        assert!(!images_match_linear(&edge(43), &edge(44), 0));
+    }
 
     #[test]
     fn golden_encode_decode_roundtrip() {

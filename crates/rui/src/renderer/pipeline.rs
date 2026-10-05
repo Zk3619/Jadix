@@ -6,6 +6,7 @@ use wgpu::util::DeviceExt;
 pub struct Globals {
     pub resolution: [f32; 2],
     pub premultiply: f32,
+    /// Shader clip-enable flag; zero for the default unclipped bind group.
     pub _pad: f32,
 }
 
@@ -221,6 +222,7 @@ pub struct RuiPipeline {
     dummy_backdrop_bg: wgpu::BindGroup,
     _dummy_backdrop_tex: wgpu::Texture,
     _dummy_backdrop_sampler: wgpu::Sampler,
+    globals_clip_poly_buffer: wgpu::Buffer,
     clip_poly_buffer: wgpu::Buffer,
     clip_poly_none_buffer: wgpu::Buffer,
     clip_poly_capacity: usize,
@@ -274,6 +276,16 @@ impl RuiPipeline {
             usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
         });
 
+        let globals_clip_poly_buffer =
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Globals with polygon clips"),
+                contents: bytemuck::cast_slice(&[Globals {
+                    _pad: 1.0,
+                    ..Globals::new(config.width as f32, config.height as f32, premultiply)
+                }]),
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            });
+
         let clip_none = crate::style::GpuClipPoly::NONE;
         let clip_poly_none_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Clip poly NONE"),
@@ -299,7 +311,7 @@ impl RuiPipeline {
         let bind_group_clip_poly = Self::make_bind_group(
             device,
             &bind_group_layout,
-            &globals_buffer,
+            &globals_clip_poly_buffer,
             &clip_poly_buffer,
         );
         let render_pipeline =
@@ -351,6 +363,7 @@ impl RuiPipeline {
             dummy_backdrop_bg,
             _dummy_backdrop_tex: dummy_backdrop_tex,
             _dummy_backdrop_sampler: dummy_backdrop_sampler,
+            globals_clip_poly_buffer,
             clip_poly_buffer,
             clip_poly_none_buffer,
             clip_poly_capacity: 1,
@@ -554,7 +567,7 @@ impl RuiPipeline {
             self.bind_group_clip_poly = Self::make_bind_group(
                 device,
                 &self.bind_group_layout,
-                &self.globals_buffer,
+                &self.globals_clip_poly_buffer,
                 &self.clip_poly_buffer,
             );
         } else {
@@ -590,7 +603,7 @@ impl RuiPipeline {
             let bind_group_clip_poly = Self::make_bind_group(
                 device,
                 &self.bind_group_layout,
-                &self.globals_buffer,
+                &self.globals_clip_poly_buffer,
                 &self.clip_poly_buffer,
             );
             let render_pipeline = Self::make_render_pipeline(
@@ -690,7 +703,12 @@ impl RuiPipeline {
             contents: bytemuck::cast_slice(&data),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
-        let bg = Self::make_bind_group(device, &self.bind_group_layout, &self.globals_buffer, &buf);
+        let bg = Self::make_bind_group(
+            device,
+            &self.bind_group_layout,
+            &self.globals_clip_poly_buffer,
+            &buf,
+        );
         pass.set_pipeline(&self.render_pipeline);
         pass.set_bind_group(0, &bg, &[]);
         pass.set_bind_group(1, backdrop, &[]);
@@ -700,6 +718,14 @@ impl RuiPipeline {
     pub fn update_resolution(&self, queue: &wgpu::Queue, width: u32, height: u32) {
         let globals = Globals::new(width as f32, height as f32, self.premultiply);
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::cast_slice(&[globals]));
+        queue.write_buffer(
+            &self.globals_clip_poly_buffer,
+            0,
+            bytemuck::cast_slice(&[Globals {
+                _pad: 1.0,
+                ..globals
+            }]),
+        );
     }
 }
 

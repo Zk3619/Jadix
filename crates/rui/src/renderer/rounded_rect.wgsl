@@ -24,28 +24,31 @@ struct InstanceInput {
 
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
-    @location(0) rect_size: vec2<f32>,
-    @location(1) color: vec4<f32>,
-    @location(2) border_color: vec4<f32>,
-    @location(3) radii: vec4<f32>,
-    @location(4) border_width: f32,
-    @location(5) shadow_color: vec4<f32>,
-    @location(6) shadow_offset: vec2<f32>,
-    @location(7) shadow_blur: f32,
-    @location(8) shadow_spread: f32,
-    @location(9) shadow_inset: f32,
+    // Instance constants have no spatial interpolation. Keeping them flat also
+    // lets the driver make the simple-fill branch uniform across the primitive.
+    @location(0) @interpolate(flat) rect_size: vec2<f32>,
+    @location(1) @interpolate(flat) color: vec4<f32>,
+    @location(2) @interpolate(flat) border_color: vec4<f32>,
+    @location(3) @interpolate(flat) radii: vec4<f32>,
+    @location(4) @interpolate(flat) border_width: f32,
+    @location(5) @interpolate(flat) shadow_color: vec4<f32>,
+    @location(6) @interpolate(flat) shadow_offset: vec2<f32>,
+    @location(7) @interpolate(flat) shadow_blur: f32,
+    @location(8) @interpolate(flat) shadow_spread: f32,
+    @location(9) @interpolate(flat) shadow_inset: f32,
     @location(10) p: vec2<f32>, // local point relative to rect center (unrotated)
-    @location(11) clip_pos: vec2<f32>,
-    @location(12) clip_size: vec2<f32>,
+    @location(11) @interpolate(flat) clip_pos: vec2<f32>,
+    @location(12) @interpolate(flat) clip_size: vec2<f32>,
     @location(13) frag_px: vec2<f32>,
-    /// x = packed `border_extra`; y = instance index for `clip_polys[]`; z = backdrop_blur.
+    /// x = border_extra; y = clip index; z = backdrop blur; w = world-clip / fast-fill flags.
     /// Must stay ≤ location 14 (`max_inter_stage_shader_variables` is 0..=14).
-    @location(14) @interpolate(flat) extra_and_id: vec3<f32>,
+    @location(14) @interpolate(flat) extra_and_id: vec4<f32>,
 };
 
 struct Globals {
     resolution: vec2<f32>,
     premultiply: f32,
+    clip_poly_enabled: f32,
 };
 
 @group(0) @binding(0)
@@ -148,7 +151,13 @@ fn vs_main(
     out.clip_position = vec4<f32>(x, y, 0.0, 1.0);
     out.p = local;
     out.rect_size = instance.rect_size;
-    out.color = instance.color;
+    // Simple fill color is constant per instance. Decode sRGB here rather than
+    // running three pow() calls for every pixel of each full-window background.
+    var fill_color = instance.color;
+    if (simple_fill && instance.rect_size.x > 32.0 && instance.rect_size.y > 32.0) {
+        fill_color = vec4<f32>(linearize_srgb_rgb(instance.color.rgb), instance.color.a);
+    }
+    out.color = fill_color;
     out.border_color = instance.border_color;
     out.radii = instance.radii;
     out.border_width = instance.border_width;
@@ -162,10 +171,15 @@ fn vs_main(
     out.clip_pos = instance.clip_pos - center;
     out.clip_size = instance.clip_size_and_extra.xy;
     out.frag_px = physical_pos;
-    out.extra_and_id = vec3<f32>(
+    // Bind groups distinguish unclipped draws from polygon-clipped draws.
+    // The flag comes from the uniform; storage stays fragment-only on GLES.
+    let has_world_clip = globals.clip_poly_enabled > 0.5;
+    let fast_fill = simple_fill && instance.rect_size.x > 32.0 && instance.rect_size.y > 32.0;
+    out.extra_and_id = vec4<f32>(
         instance.clip_size_and_extra.z,
         f32(instance_idx),
         instance.clip_size_and_extra.w,
+        select(0.0, 1.0, has_world_clip) + select(0.0, 2.0, fast_fill),
     );
 
     return out;
@@ -631,15 +645,10 @@ fn clip_layer_contains(p: vec2<f32>, count: u32, fill: u32, pts: array<vec2<f32>
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let b = in.rect_size * 0.5;
     // Large axis-aligned fills skip SDF; overflow still uses clip_poly + clip_pos.
-    let simple_fill = in.radii.x <= 0.0 && in.radii.y <= 0.0 && in.radii.z <= 0.0 && in.radii.w <= 0.0
-        && in.border_width <= 0.0
-        && in.shadow_color.a <= 0.001
-        && in.extra_and_id.z <= 0.5
-        && in.extra_and_id.x < 0.5
-        && b.x > 16.0
-        && b.y > 16.0;
+    let flags = u32(in.extra_and_id.w);
+    let simple_fill = (flags & 2u) != 0u;
     // World overflow / clip-path (rotated descendants, restrict shells).
-    if (!clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) {
+    if ((flags & 1u) != 0u && !clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) {
         discard;
     }
     if (simple_fill) {
@@ -650,7 +659,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
                 discard;
             }
         }
-        var rgb = linearize_srgb_rgb(in.color.rgb);
+        var rgb = in.color.rgb;
         if (globals.premultiply > 0.5) {
             rgb = rgb * in.color.a;
         }
