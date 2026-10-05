@@ -37,8 +37,8 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::r#box::{BoxBuilder, hstack};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::style::{
-    ATTR_SYNC_LABEL_FG, ClassSet, PaintChrome, SemanticTone, TimingFunction, TransitionEntry,
-    TransitionProperty, apply_focus_ring_shadow, apply_focus_ring_shadow_color,
+    ATTR_SYNC_LABEL_FG, ClassSet, PaintChrome, SemanticTone,
+    apply_focus_ring_shadow, apply_focus_ring_shadow_color,
     button_soft_semantic_chrome, color_mix_over_background, ensure_class_list, extend_class_list,
     focus_ring_border_color, focus_ring_color, focus_ring_destructive_color,
     focus_ring_shadow_matches_color, is_dark_theme, lerp_paint_chrome,
@@ -79,30 +79,6 @@ fn button_ring_fallback(variant: &str) -> [f32; 4] {
         focus_ring_destructive_color()
     } else {
         focus_ring_color()
-    }
-}
-
-/// CSS hover chrome duration (short to `transition-colors`).
-const BUTTON_HOVER_TRANSITION_MS: f32 = 150.0;
-
-fn ensure_button_css_transition(el: &mut Element) {
-    let timing = TimingFunction::CubicBezier(0.4, 0.0, 0.2, 1.0);
-    for prop in [
-        TransitionProperty::BackgroundColor,
-        TransitionProperty::BorderColor,
-        TransitionProperty::BoxShadow,
-    ] {
-        if let Some(entry) = el.style.transition.iter_mut().find(|e| e.property == prop) {
-            entry.duration_ms = BUTTON_HOVER_TRANSITION_MS;
-            entry.timing = timing;
-        } else {
-            el.style.transition.push(TransitionEntry {
-                property: prop,
-                duration_ms: BUTTON_HOVER_TRANSITION_MS,
-                delay_ms: 0.0,
-                timing,
-            });
-        }
     }
 }
 
@@ -1076,7 +1052,6 @@ impl From<ButtonBuilder> for Element {
         let mut on_click = builder.on_click;
         let disabled = builder.disabled;
         let focus_id = builder.id.clone();
-        ensure_button_css_transition(&mut el);
 
         let mut el: Element = interactive(el)
             .focus_id(builder.id)
@@ -1218,7 +1193,6 @@ fn paint_button_root_from_hover(
         paint_table_row_hover_bg(el, layout_tree, is_hovered, impact);
         return;
     }
-    ensure_button_css_transition(el);
     let class_owns_colors = el.class_set.as_ref().is_some_and(ClassSet::has_hover_color);
     if class_owns_colors {
         paint_button_join_and_link_underline(el, layout_tree, desc, is_hovered, impact);

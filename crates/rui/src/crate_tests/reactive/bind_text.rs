@@ -6,6 +6,36 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[test]
+fn bound_button_caption_survives_tracked_parent_rebuild() {
+    reset_registered_anchors();
+    let rebuild = use_signal("caption-rebuild", || 0_u32);
+    rebuild.set_silent(0);
+    let mounted = Rc::new(RefCell::new(None::<Element>));
+    let target = mounted.clone();
+    let effect = create_effect(move || {
+        let _ = rebuild.get();
+        let mut next: Element = crate::components::button::button("caption-rebuild-button")
+            .child(bind_text("caption-rebuild-leaf", || "Open Trigger".into()))
+            .into();
+        if let Some(old) = target.borrow_mut().as_mut() {
+            reconcile_elements(&mut next, old);
+        }
+        *target.borrow_mut() = Some(next);
+    });
+    for i in 1..=8 {
+        rebuild.set(i);
+        assert_eq!(
+            mounted.borrow().as_ref().unwrap().children[0].text.as_deref(),
+            Some("Open Trigger"),
+            "a live caption must not disappear when its parent rebuilds"
+        );
+    }
+    dispose_effect(effect);
+    drop(mounted);
+    reset_registered_anchors();
+}
+
+#[test]
 fn bind_text_sets_initial_value_without_tracking() {
     reset_registered_anchors();
     let el = bind_text("bind:init", || "hello".to_string());

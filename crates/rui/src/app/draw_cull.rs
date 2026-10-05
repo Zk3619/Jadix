@@ -3737,12 +3737,26 @@ fn glyph_in_dirty_slot(
     node_paints: &[NodePaint],
 ) -> bool {
     let has_keyed = paints_has_keyed_slot(dirty.key, dirty.bounds, node_paints);
+    let Some(n) = page_text.get(i) else {
+        return false;
+    };
     node_paints.iter().any(|p| {
-        slot_matches_dirty(dirty.key, dirty.bounds, p, has_keyed) && {
-            let lo = p.text.0.min(page_text.len());
-            let hi = p.text.1.min(page_text.len());
-            i >= lo && i < hi
+        if !slot_matches_dirty(dirty.key, dirty.bounds, p, has_keyed) {
+            return false;
         }
+        let lo = p.text.0.min(page_text.len());
+        let hi = p.text.1.min(page_text.len());
+        if i < lo || i >= hi {
+            return false;
+        }
+        // A recycled key can temporarily point at an ancestor slot whose text
+        // range still spans several children. Membership alone would flush an
+        // unchanged sibling into retain. Keep the range fast path for normal
+        // slots, but require the glyph to hit the actual dirty box when the
+        // matched slot is materially broader than that box.
+        let dirty_area = (dirty.bounds[2] * dirty.bounds[3]).max(0.0);
+        let slot_area = (p.bounds[2] * p.bounds[3]).max(0.0);
+        slot_area <= dirty_area * 2.0 + 1.0 || text_hits_damage(n, dirty.bounds)
     })
 }
 
@@ -3759,10 +3773,10 @@ fn glyph_belongs_to_dirty(
         }
         PaintDirtyKind::Overlay => false,
         PaintDirtyKind::Node => {
-            // Collect-slot membership only — including layered jump chrome.
-            // Underlay wrapping runs that merely intersect the shadow pad used
-            // to join this set and flush *after* the overlay slot, stamping the
-            // thread on top of Latest.
+            // Prefer collect-slot ownership, including layered jump chrome.
+            // A recycled broad slot additionally requires the glyph to hit the
+            // dirty box; otherwise an unchanged sibling would flush after the
+            // overlay slot and stamp its text into retain.
             glyph_in_dirty_slot(i, dirty, page_text, node_paints)
         }
     }
@@ -9238,5 +9252,36 @@ mod tests {
             "in-flow Node capture stays membership-only, got {captured:?}"
         );
         assert!(!node_present_restore_underlay(2, dirty.bounds, &[input_p]));
+    }
+
+    #[test]
+    fn recycled_key_must_not_capture_neighbor_text_from_broad_parent_slot() {
+        // A tracked rebuild can reuse the parent's NodeId for a smaller trigger.
+        // The parent NodePaint range still contains both captions; membership
+        // alone would recapture the unchanged sibling and src-over it in retain.
+        let trigger = sample_text("打开 Trigger", 8.0);
+        let sibling = sample_text("静态说明", 160.0);
+        let parent = NodePaint {
+            key: 42,
+            bounds: [0.0, 0.0, 240.0, 32.0],
+            overlay: false,
+            instance: (0, 0),
+            textured: (0, 0),
+            text: (0, 2),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: None,
+            layered: false,
+            rest: None,
+        };
+        let dirty = PaintDirty {
+            key: 42,
+            bounds: [0.0, 0.0, 80.0, 32.0],
+            kind: PaintDirtyKind::Node,
+        };
+
+        let captured = node_present_glyphs_for_dirty(&dirty, &[trigger, sibling], &[parent]);
+
+        assert_eq!(captured, BTreeSet::from([0]));
     }
 }

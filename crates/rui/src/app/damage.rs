@@ -558,6 +558,19 @@ pub fn overlay_pixels_need_full_clear(
     overlay_present && overlay_box.is_none()
 }
 
+/// A missing box can only require a window clear when there is no retained
+/// overlay footprint to restore locally. During close/reopen animation the
+/// previous footprint is the repair region; clearing the window drops the
+/// trigger and page into a visible flash.
+#[inline]
+pub fn overlay_requires_full_clear(
+    overlay_present: bool,
+    overlay_box: Option<[f32; 4]>,
+    had_occupancy: bool,
+) -> bool {
+    overlay_pixels_need_full_clear(overlay_present, overlay_box) && !had_occupancy
+}
+
 /// Overlay leftover pixels in `present_retain` that this frame will not cover.
 ///
 /// Expand-from-chip **shrinks** the painted box while the portal is still mounted.
@@ -945,6 +958,20 @@ pub fn overlay_glyphon_prepare_needed(node_present: bool, kinds: &[PaintDirtyKin
             PaintDirtyKind::Overlay | PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region
         )
     })
+}
+
+#[inline]
+pub fn node_present_skips_page_stack_glyphon(
+    node_present: bool,
+    region_present: bool,
+) -> bool {
+    // Node Present clears only local holes and flushes the current glyphs from
+    // `capture_text_renderer` after primitive replay. Preparing the page-band
+    // mesh as well submits the same trigger caption twice when its text/style
+    // changed, which makes unchanged glyphs flicker during rapid toggles. Any
+    // page text change outside a local Node capture promotes the frame out of
+    // Node Present, so the capture is the sole text source on this path.
+    node_present && !region_present
 }
 
 /// True when dest-reset will punch occupancy: overlap exists and the page
@@ -3336,14 +3363,34 @@ mod tests {
     }
 
     #[test]
-    fn node_hover_must_not_prepare_overlay_glyphon() {
+    fn node_present_uses_capture_text_mesh_only() {
+        assert!(node_present_skips_page_stack_glyphon(true, false),
+            "Node Present capture must remain the only text submission source for changed captions");
+        assert!(!node_present_skips_page_stack_glyphon(false, false));
+        assert!(!node_present_skips_page_stack_glyphon(true, true));
+    }
+
+    #[test]
+    fn node_present_caption_change_must_not_submit_page_and_capture_glyphs_twice() {
+        // A button caption is part of the Node capture after its face is cleared.
+        // Submitting the changed page band as well draws the same glyphon run a
+        // second time in the same scissor and makes unchanged neighboring text
+        // appear to flicker while rapidly toggling the trigger.
+        assert!(
+            node_present_skips_page_stack_glyphon(true, false),
+            "Node Present must have one text submission source even when a trigger caption changed"
+        );
+    }
+
+    #[test]
+    fn page_caption_change_must_not_prepare_overlay_glyphon() {
         // Open AnchoredOverlay + button transition-colors: the frame's dirties
         // are the trigger Node only. Reshaping the popover mesh every tick is
         // the hover-switch hitch, and drawing that mesh onto the caption is
         // the bold intermediate stroke.
         assert!(
             !overlay_glyphon_prepare_needed(true, &[PaintDirtyKind::Node]),
-            "page-node hover must reuse the portal glyphon mesh"
+            "page-node damage, including a changed trigger caption, must reuse the portal glyphon mesh"
         );
         assert!(overlay_glyphon_prepare_needed(
             true,
@@ -5098,6 +5145,13 @@ mod tests {
             Some([90.0, 190.0, 160.0, 48.0])
         ));
         assert!(!overlay_pixels_need_full_clear(false, None));
+    }
+
+    #[test]
+    fn retained_overlay_missing_box_restores_locally_during_reopen() {
+        assert!(overlay_requires_full_clear(true, None, false));
+        assert!(!overlay_requires_full_clear(true, None, true));
+        assert!(!overlay_requires_full_clear(true, Some([90.0, 190.0, 160.0, 48.0]), true));
     }
 
     #[test]

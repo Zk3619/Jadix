@@ -2286,7 +2286,7 @@ impl AppState {
             same_footprint,
         );
         if overlay_present
-            && super::damage::overlay_pixels_need_full_clear(overlay_present, cur)
+            && super::damage::overlay_requires_full_clear(overlay_present, cur, had_occupancy)
             && !measuring
             && !self.force_full_redraw
         {
@@ -3790,6 +3790,8 @@ impl AppState {
 
         // First tracked mount replaces the private bootstrap root. Skip reconcile: there is no
         // user state to preserve, and walking an empty shell is pure overhead on every cold start.
+        let mut button_caption_only = false;
+        let mut portal_only_structure = false;
         let status = if initial_mount {
             use crate::core::tree::LayoutStatus;
             LayoutStatus::StructureChanged
@@ -3797,6 +3799,8 @@ impl AppState {
             let mut dirty = Vec::new();
             let status =
                 Self::reconcile_elements(&mut root_element, &mut self.root_element, &mut dirty);
+            button_caption_only = Self::button_caption_only_change(&root_element, &self.root_element);
+            portal_only_structure = Self::portal_only_structure_change(&root_element, &self.root_element);
             self.pending_layout_dirty.extend(dirty);
             status
         };
@@ -3817,7 +3821,10 @@ impl AppState {
             status,
             crate::core::tree::LayoutStatus::StructureChanged
                 | crate::core::tree::LayoutStatus::LayoutChanged
-        ) {
+        ) && !(status == crate::core::tree::LayoutStatus::LayoutChanged
+            && button_caption_only)
+            && !portal_only_structure
+        {
             self.mark_full_redraw();
         }
     }
@@ -3862,6 +3869,15 @@ impl AppState {
         let island_key = super::damage::paint_element_key(old_subtree);
         let island_box =
             crate::core::tree::visual_paint_aabb(old_subtree, old_subtree.paint_scroll_acc);
+        let button_caption_only =
+            Self::button_caption_only_change(&new_fragment, old_subtree);
+        let has_button_caption_change =
+            Self::has_button_caption_change(&new_fragment, old_subtree);
+        let portal_only_change =
+            Self::portal_only_structure_change(&new_fragment, old_subtree);
+        let portal_button_damage = portal_only_change
+            .then(|| Self::portal_button_caption_damage(&new_fragment, old_subtree))
+            .flatten();
 
         let mut dirty = Vec::new();
         let declares_portal = crate::layout::layout_tree::subtree_declares_portal(old_subtree)
@@ -3908,7 +3924,15 @@ impl AppState {
             // but GPU FullClear of the gallery is the fullscreen flash.
             self.portal_membership_dirty = true;
         }
+        if let Some((button_key, button_bounds)) = portal_button_damage {
+            // The trigger is the page-facing part of a mixed portal island. Its caption may
+            // change at the same time as the portal host is inserted/removed, but that must not
+            // promote the whole island to a Region clear. Portal membership damage owns the
+            // floating panel; this key owns only the trigger's retained pixels.
+            super::damage::push_frame_paint_key(button_key, button_bounds);
+        }
         if !portal_island
+            && !portal_only_change
             && matches!(
                 status,
                 LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
@@ -3930,15 +3954,28 @@ impl AppState {
             {
                 let (lw, lh) = self.logical_size();
                 let viewport = [0.0, 0.0, lw, lh];
-                if super::damage::region_is_page_route_tier(d, viewport) {
+                if super::damage::region_is_page_route_tier(d, viewport)
+                    && !button_caption_only
+                    && !has_button_caption_change
+                {
                     self.page_geom_dirty = true;
                     self.mark_full_redraw();
                 } else {
                     super::damage::push_frame_region_paint(island_key, d);
                 }
-            } else if clip_bounds.is_none() {
+            } else if clip_bounds.is_none() && !button_caption_only && !has_button_caption_change {
                 self.page_geom_dirty = true;
                 self.mark_full_redraw();
+            } else if button_caption_only || has_button_caption_change {
+                let now_box = crate::core::tree::find_in_tree(&self.root_element, |n| {
+                    n.template_id
+                        .as_deref()
+                        .is_some_and(|tid| normalize_anchor_template_id(tid) == want)
+                })
+                .map(|el| crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc))
+                .unwrap_or(island_box);
+                let damage = super::damage::union_rects(island_box, now_box);
+                super::damage::push_frame_paint_key(island_key, damage);
             }
         }
         Some(status)
@@ -3949,6 +3986,132 @@ impl AppState {
         incoming: crate::core::tree::LayoutStatus,
     ) -> crate::core::tree::LayoutStatus {
         base.merge(incoming)
+    }
+
+    /// A button's plain caption can change its intrinsic text width while remaining inside the
+    /// same mounted subtree. That change needs the button's layout node revisited, but it does
+    /// not invalidate the retained page surface. Keep this classification structural: any style,
+    /// image, child-count, or identity change escapes the local path.
+    fn button_caption_only_change(new_root: &Element, old_root: &Element) -> bool {
+        fn walk(new_el: &Element, old_el: &Element, in_button: bool, changed: &mut bool) -> bool {
+            if new_el.template_id != old_el.template_id
+                || new_el.style != old_el.style
+                || new_el.text_style != old_el.text_style
+                || new_el.image_texture != old_el.image_texture
+                || new_el.children.len() != old_el.children.len()
+            {
+                return false;
+            }
+            let in_button = in_button || new_el.button_hover_paint.is_some();
+            if new_el.text != old_el.text {
+                if !in_button {
+                    return false;
+                }
+                *changed = true;
+            }
+            new_el
+                .children
+                .iter()
+                .zip(&old_el.children)
+                .all(|(new_child, old_child)| walk(new_child, old_child, in_button, changed))
+        }
+        let mut changed = false;
+        walk(new_root, old_root, false, &mut changed) && changed
+    }
+
+    fn has_button_caption_change(new_root: &Element, old_root: &Element) -> bool {
+        fn walk(new_el: &Element, old_el: &Element, in_button: bool) -> bool {
+            let in_button = in_button || new_el.button_hover_paint.is_some();
+            if in_button && new_el.text != old_el.text {
+                return true;
+            }
+            new_el
+                .children
+                .iter()
+                .zip(&old_el.children)
+                .any(|(new_child, old_child)| walk(new_child, old_child, in_button))
+        }
+        walk(new_root, old_root, false)
+    }
+
+    fn portal_button_caption_damage(
+        new_root: &Element,
+        old_root: &Element,
+    ) -> Option<(u64, [f32; 4])> {
+        fn walk(
+            new_el: &Element,
+            old_el: &Element,
+            in_button: bool,
+        ) -> (bool, Option<(u64, [f32; 4])>) {
+            let is_button = in_button || new_el.button_hover_paint.is_some();
+            let mut changed = is_button && new_el.text != old_el.text;
+            let mut descendant_damage = None;
+            for (new_child, old_child) in new_el
+                .children
+                .iter()
+                .filter(|child| !crate::layout::layout_tree::subtree_declares_portal(child))
+                .zip(
+                    old_el
+                        .children
+                        .iter()
+                        .filter(|child| !crate::layout::layout_tree::subtree_declares_portal(child)),
+                )
+            {
+                let (child_changed, child_damage) = walk(new_child, old_child, is_button);
+                changed |= child_changed;
+                descendant_damage = child_damage.or(descendant_damage);
+            }
+            if changed && new_el.button_hover_paint.is_some() {
+                return (true, Some((
+                    super::damage::paint_element_key(new_el),
+                    super::damage::union_rects(
+                        crate::core::tree::visual_paint_aabb(new_el, new_el.paint_scroll_acc),
+                        crate::core::tree::visual_paint_aabb(old_el, old_el.paint_scroll_acc),
+                    ),
+                )));
+            }
+            (changed, descendant_damage)
+        }
+        walk(new_root, old_root, false).1
+    }
+
+    /// Root rebuilds can change a portal's mounted children while the page tree stays intact.
+    /// Reconcile reports that as StructureChanged, but scheduling a window clear here makes the
+    /// later portal-only damage path ineffective. Compare the non-portal projection so portal
+    /// insertion/removal is handled by portal membership damage instead.
+    fn portal_only_structure_change(new_root: &Element, old_root: &Element) -> bool {
+        fn walk(new_el: &Element, old_el: &Element, in_button: bool) -> bool {
+            let in_button = in_button || new_el.button_hover_paint.is_some();
+            if new_el.template_id != old_el.template_id
+                || new_el.style != old_el.style
+                || new_el.text_style != old_el.text_style
+                || new_el.image_texture != old_el.image_texture
+                || (!in_button && new_el.text != old_el.text)
+            {
+                return false;
+            }
+            let new_non_portal: Vec<&Element> = new_el
+                .children
+                .iter()
+                .filter(|child| !crate::layout::layout_tree::subtree_declares_portal(child))
+                .collect();
+            let old_non_portal: Vec<&Element> = old_el
+                .children
+                .iter()
+                .filter(|child| !crate::layout::layout_tree::subtree_declares_portal(child))
+                .collect();
+            new_non_portal.len() == old_non_portal.len()
+                && new_non_portal
+                    .iter()
+                    .zip(old_non_portal)
+                    .all(|(new_child, old_child)| walk(new_child, old_child, in_button))
+        }
+        if !crate::layout::layout_tree::subtree_declares_portal(new_root)
+            && !crate::layout::layout_tree::subtree_declares_portal(old_root)
+        {
+            return false;
+        }
+        walk(new_root, old_root, false)
     }
 
     fn reconcile_elements(
@@ -4100,6 +4263,14 @@ impl AppState {
         else {
             return crate::core::tree::LayoutStatus::Clean;
         };
+        let button_damage = Self::button_ancestor_damage(&self.root_element, &path);
+        let button_caption = button_damage.is_some();
+        if let Some((key, bounds)) = button_damage {
+            // Capture the old button footprint before the caption changes. The new footprint is
+            // collected after layout; the two records union so shrinking captions erase stale
+            // outline/background pixels as well as the glyphs.
+            super::damage::push_frame_paint_key(key, bounds);
+        }
         let (status, frame_status) = {
             let mut cursor = &mut self.root_element;
             for &index in &path {
@@ -4139,6 +4310,12 @@ impl AppState {
                     == super::damage::PaintDirtyKind::Overlay
                 {
                     super::damage::push_frame_paint_element(cursor, cursor.paint_scroll_acc);
+                } else if button_caption {
+                    // A button caption may change its intrinsic width, but the damage is still
+                    // local to the button. Escalating this leaf to page geometry makes every
+                    // rapid click clear the retained page and drops the live hover target for a
+                    // frame, which is the visible caption flicker.
+                    super::damage::push_frame_paint_element(cursor, cursor.paint_scroll_acc);
                 } else {
                     self.page_geom_dirty = true;
                 }
@@ -4156,6 +4333,41 @@ impl AppState {
         }
         self.template_paths.insert(template_id.to_string(), path);
         status
+    }
+
+    fn path_has_button_ancestor(root: &Element, path: &[usize]) -> bool {
+        let mut node = root;
+        for &index in path {
+            if node.button_hover_paint.is_some() {
+                return true;
+            }
+            let Some(next) = node.children.get(index) else {
+                return false;
+            };
+            node = next;
+        }
+        node.button_hover_paint.is_some()
+    }
+
+    fn button_ancestor_damage(root: &Element, path: &[usize]) -> Option<(u64, [f32; 4])> {
+        let mut node = root;
+        let mut found = None;
+        for &index in path {
+            if node.button_hover_paint.is_some() {
+                found = Some((
+                    crate::app::damage::paint_element_key(node),
+                    crate::core::tree::visual_paint_aabb(node, node.paint_scroll_acc),
+                ));
+            }
+            node = node.children.get(index)?;
+        }
+        if node.button_hover_paint.is_some() {
+            found = Some((
+                crate::app::damage::paint_element_key(node),
+                crate::core::tree::visual_paint_aabb(node, node.paint_scroll_acc),
+            ));
+        }
+        found
     }
 
     /// Resolve a cached or DFS `template_id` path. Miss records [`super::reactive::note_bind_miss`].
@@ -5754,10 +5966,10 @@ impl AppState {
         let cull_phys = gpu_present.cull_phys;
         let page_stack_band_ranges = overlay_split.page_stack_band_ranges();
         let has_page_stack_bands = !page_stack_band_ranges.is_empty();
-        // Overlay glyphs use `overlay_text_renderer`. Page/page-stack glyphon stays
-        // complete unless this is a scroll-layer Clear (pixels in the scissor were wiped).
-        // Overlay PartialLoad used to filter page_stack bands to the chip box, then
-        // `clear_page_stack_band_glyphon` → gallery bubbles: gray shells, no captions.
+        // Overlay glyphs use `overlay_text_renderer`. Full and Region presents prepare the
+        // page/page-stack glyphon mesh here. Node Present is different: it clears only local
+        // holes, so its page captions are restored by `capture_text_renderer` after primitive
+        // replay; preparing the page mesh as well would submit overlapping glyphs twice.
         let page_text_unchanged = self.last_text_ui_scale.to_bits() == ui_scale.to_bits()
             && self.last_text_surface_size == [self.config.width, self.config.height]
             && Self::text_nodes_equal(
@@ -5820,7 +6032,10 @@ impl AppState {
             let mut underlines = Vec::with_capacity(page_stack_band_ranges.len());
             let mut shadow_bands = Vec::with_capacity(page_stack_band_ranges.len());
             page_stack_skip_glyphon = vec![false; page_stack_band_ranges.len()];
-            if gpu_present.use_node_present && !region_present {
+            if super::damage::node_present_skips_page_stack_glyphon(
+                gpu_present.use_node_present,
+                region_present,
+            ) {
                 // Node present draws capture glyphs only. Preparing page-stack here
                 // replaced the last complete mesh; a later Load `render()` of that
                 // mixed buffer stamped sidebar captions into retain after Send.
@@ -9042,6 +9257,98 @@ mod template_path_tests {
         assert!(!AppState::template_path_matches(&root, &[1, 0], "a"));
         // Shrunk subtree.
         assert!(!AppState::template_path_matches(&root, &[9], "a"));
+    }
+}
+
+#[cfg(test)]
+mod button_caption_damage_tests {
+    use super::AppState;
+    use crate::components::button::button;
+    use crate::core::tree::Element;
+
+    #[test]
+    fn caption_layout_change_stays_local_to_button() {
+        let root = Element::new().child(
+            Element::from(button("trigger").text("Open"))
+                .child(Element::new().template_id("trigger-caption")),
+        );
+        assert!(AppState::path_has_button_ancestor(&root, &[0, 0]));
+        assert!(!AppState::path_has_button_ancestor(&root, &[]));
+    }
+
+    #[test]
+    fn conditional_button_caption_change_is_local_layout_only() {
+        let old: Element = button("trigger").text("打开 RSX Trigger").into();
+        let new: Element = button("trigger").text("关闭 RSX Trigger").into();
+        assert!(AppState::button_caption_only_change(&new, &old));
+        let old_page = Element::new().child(old);
+        let new_page = Element::new().child(new);
+        assert!(AppState::button_caption_only_change(&new_page, &old_page));
+
+        let old_other = Element::new().child(Element::new().text("Open"));
+        let new_other = Element::new().child(Element::new().text("Close"));
+        assert!(!AppState::button_caption_only_change(&new_other, &old_other));
+
+        let old_structural: Element = button("trigger").text("Open").into();
+        let mut new_structural: Element = button("trigger").text("Close").into();
+        new_structural.children.push(Element::new());
+        assert!(!AppState::button_caption_only_change(
+            &new_structural,
+            &old_structural
+        ));
+        assert!(AppState::has_button_caption_change(
+            &new_structural,
+            &old_structural
+        ));
+    }
+
+    #[test]
+    fn portal_only_structure_change_does_not_schedule_window_clear() {
+        let page_old: Element = crate::components::button::button("trigger")
+            .text("Open")
+            .into();
+        let page_new: Element = crate::components::button::button("trigger")
+            .text("Close")
+            .into();
+        let mut old_portal = Element::new().template_id("panel").text("old");
+        old_portal.set_attr("rui_portal", "1");
+        let mut new_portal = Element::new().template_id("panel").text("new");
+        new_portal.set_attr("rui_portal", "1");
+        let old = Element::new().child(page_old).child(old_portal);
+        let new = Element::new().child(page_new).child(new_portal);
+        assert!(AppState::portal_only_structure_change(&new, &old));
+
+        let changed_page = Element::new()
+            .child(Element::new().template_id("page").text("changed"))
+            .child({
+                let mut panel = Element::new().template_id("panel").text("new");
+                panel.set_attr("rui_portal", "1");
+                panel
+            });
+        assert!(!AppState::portal_only_structure_change(&changed_page, &old));
+    }
+
+    #[test]
+    fn mixed_portal_caption_change_targets_trigger_only() {
+        let mut old_button: Element = crate::components::button::button("trigger")
+            .text("Open")
+            .into();
+        let mut new_button: Element = crate::components::button::button("trigger")
+            .text("Close")
+            .into();
+        old_button.layout_bounds = [10.0, 20.0, 80.0, 24.0];
+        new_button.layout_bounds = [10.0, 20.0, 92.0, 24.0];
+        let mut old_panel = Element::new().template_id("panel").text("old");
+        old_panel.set_attr("rui_portal", "1");
+        let mut new_panel = Element::new().template_id("panel").text("new");
+        new_panel.set_attr("rui_portal", "1");
+        let old = Element::new().child(old_button).child(old_panel);
+        let new = Element::new().child(new_button).child(new_panel);
+
+        let damage = AppState::portal_button_caption_damage(&new, &old)
+            .expect("caption change must produce trigger damage");
+        assert_ne!(damage.0, 0);
+        assert!(damage.1[2] > 0.0 && damage.1[3] > 0.0);
     }
 }
 

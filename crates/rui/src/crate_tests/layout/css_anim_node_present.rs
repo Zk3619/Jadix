@@ -22,7 +22,7 @@ use crate::app::draw_cull::{
     node_paint_visual_bounds, node_present_clipped_capture_text,
     node_present_clipped_capture_text_wipes, node_present_dest_reset_full,
     node_present_dest_reset_scaled, node_present_glyph_clip_logical, node_present_scissor_logical,
-    node_present_scissor_pad, skip_covered_nested_node_present, slot_visual_exceeds_rest,
+    node_present_scissor_pad, slot_visual_exceeds_rest,
 };
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX};
@@ -42,6 +42,43 @@ use crate::style::class_variant_hover_needs_frame;
 
 fn fmt_rect(r: [f32; 4]) -> String {
     format!("[{:.1},{:.1} {:.1}x{:.1}]", r[0], r[1], r[2], r[3])
+}
+
+#[test]
+fn trigger_buttons_hover_must_match_on_full_and_fast_frames() {
+    use crate::components::button::{button, sync_button_hover_paint_subtree};
+    use crate::core::reactivity::create_root;
+
+    set_css_transition_virtual_timeline(true);
+    set_css_transition_timeline_ms(0.0);
+    crate::style::set_theme_mode(crate::style::ThemeMode::Light);
+    let make = || {
+        Element::new().flex_col().w(240.0).h(120.0).gap(12.0)
+            .child(Element::from(button("trigger-full-a").size("sm").text("Open RSX Trigger")))
+            .child(Element::from(button("trigger-full-b").variant("outline").size("sm").text("Open Builder Trigger")))
+    };
+    let (_owner, (mut full, mut fast)) = create_root(|| (make(), make()));
+    let mut full_tree = LayoutTree::new();
+    let mut fast_tree = LayoutTree::new();
+    let _ = full_tree.build_and_layout(&mut full, 240.0, 120.0, [-1.0, -1.0]);
+    let _ = fast_tree.build_and_layout(&mut fast, 240.0, 120.0, [-1.0, -1.0]);
+    for step in 0..24 {
+        set_css_transition_timeline_ms(step as f64 * 8.0);
+        let mouse = if step % 3 == 2 { [-1.0, -1.0] } else {
+            let b = full.children[step % 3].layout_bounds;
+            [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5]
+        };
+        let mut impact = LayoutStatus::Clean;
+        sync_button_hover_paint_subtree(&mut full, &mut full_tree, &mut impact, 240.0, 120.0, [0.0, 0.0]);
+        sync_class_variants_subtree(&mut full, mouse, "", false, 240.0, 120.0, &mut full_tree, &mut impact);
+        sync_button_hover_paint_subtree(&mut fast, &mut fast_tree, &mut impact, 240.0, 120.0, [0.0, 0.0]);
+        tick_active_css_transitions_subtree(&mut fast, mouse, "", false, 240.0, 120.0, [0.0, 0.0], &mut fast_tree, &mut impact);
+        for i in 0..2 {
+            assert_eq!(full.children[i].style.bg_color, fast.children[i].style.bg_color,
+                "trigger {i}, pointer step {step}: frame selection must not change hover paint");
+        }
+    }
+    set_css_transition_virtual_timeline(false);
 }
 
 #[test]
