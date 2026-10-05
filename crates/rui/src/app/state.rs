@@ -101,6 +101,24 @@ fn note_present_sdf_bg() {
     PRESENT_SDF_BG.fetch_add(1, Ordering::Relaxed);
 }
 
+/// TextBounds clips prepared runs; the pass scissor also has to restrict them
+/// to pixels whose underlay was repaired. Retained coverage must stay intact.
+fn draw_captured_page_glyphs<'pass>(
+    renderer: &'pass RuiTextRenderer,
+    pass: &mut wgpu::RenderPass<'pass>,
+    width: u32,
+    height: u32,
+    cleared: &[[f32; 4]],
+) {
+    for rect in super::draw_cull::capture_glyph_scissors_physical(cleared, width, height) {
+        let (x, y, w, h) = super::damage::physical_xywh_to_scissor(rect, width, height)
+            .expect("capture scissors are clamped integer rectangles");
+        pass.set_scissor_rect(x, y, w, h);
+        renderer.render(pass);
+        super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Text, 1);
+    }
+}
+
 /// How much scroll-related work to do before layout each frame.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ScrollbarUpdateMode {
@@ -2608,9 +2626,8 @@ impl AppState {
         // Physical integer rectangles: decomposing logical rectangles first
         // would round neighboring fractional edges onto the same device pixel.
         let mut page_punch_overlaps = Vec::new();
-        // Logical holes actually CLEARED for Node captions. Glyph flush must
-        // use these, not the paint box: the paint box includes the portal halo
-        // ring, and stamping glyphs there src-overs retained strokes (叠粗).
+        // Physical scissors actually repaired for captured page glyphs. Track
+        // Region repairs as well as Node repairs, and deduplicate after rounding.
         let mut node_glyph_holes: Vec<[f32; 4]> = Vec::new();
         let overlay_replay_coverage = super::damage::overlay_replay_coverage(
             &self.last_overlay_stamps,
@@ -2733,6 +2750,16 @@ impl AppState {
                     scissor_logical,
                     &self.last_overlay_stamps,
                 )
+            } else if dirty.kind == PaintDirtyKind::OverlayRestore {
+                // The padded halo contains the trigger. Clearing that caption
+                // every fade tick and letting the shadow land on it flickers
+                // the Latin suffix, which does not move between 打开 and 关闭.
+                super::draw_cull::scissors_keeping_stable_page_captions(
+                    vec![scissor_logical],
+                    node_paints,
+                    &self.last_overlay_stamps,
+                    self.overlay_occupied,
+                )
             } else {
                 vec![scissor_logical]
             };
@@ -2747,6 +2774,16 @@ impl AppState {
                     scissors,
                     dirty.bounds,
                     overlay_replay_coverage,
+                    &self.last_overlay_stamps,
+                );
+                // The shadow edge splits this clear through the caption. The fill
+                // still has to cover both scripts; capture draws that line once
+                // after the shadow. Carving it out froze the fill, and a later
+                // page-color patch flashed every glyph.
+                scissors = super::draw_cull::node_scissors_keeping_unchanged_captions(
+                    scissors,
+                    node_paints,
+                    &self.damage_nodes,
                     &self.last_overlay_stamps,
                 );
             }
@@ -2803,6 +2840,7 @@ impl AppState {
                             )
                         {
                             note_present_hole_chrome();
+                            node_glyph_holes.push(cull_rect);
                             self.draw_own_chrome_region(
                                 render_pass,
                                 node_paints,
@@ -2827,6 +2865,9 @@ impl AppState {
                             cull_rect,
                             clear_color,
                         );
+                        if dirty.kind == PaintDirtyKind::Region {
+                            node_glyph_holes.push(cull_rect);
+                        }
                         if allow_primitives {
                             if !page_bands.is_empty() {
                                 for (band_i, band) in page_bands.iter().enumerate() {
@@ -2945,8 +2986,8 @@ impl AppState {
                             // Ancestor present already submitted this slot's ink.
                             continue;
                         }
-                        node_glyph_holes.push(scissor_logical);
                         if allow_primitives {
+                            node_glyph_holes.push(cull_rect);
                             if let Some(reset) = node_dest_reset.as_ref() {
                                 // Keep this visible piece's scissor through CLEAR and
                                 // replay. Widening to reset.rect punches the portal.
@@ -3215,18 +3256,29 @@ impl AppState {
             else {
                 continue;
             };
-            let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
-                scissor_logical,
-                0.0,
-                ui_scale,
-                self.config.width,
-                self.config.height,
-            ) else {
-                continue;
-            };
+            // Same caption hole as OverlayRestore. Drawing the shadow through
+            // the stable suffix src-overs it once per opacity tick.
+            let suffix_logical = super::draw_cull::scissors_keeping_stable_page_captions(
+                vec![scissor_logical],
+                node_paints,
+                &self.last_overlay_stamps,
+                occupancy,
+            );
             // Holes need *all* overlay bands, including idle siblings above
             // this dirty portal. Reserve them for the complete replay below.
-            let mut pieces = vec![[x as f32, y as f32, w as f32, h as f32]];
+            let mut pieces = Vec::new();
+            for logical in suffix_logical {
+                let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
+                    logical,
+                    0.0,
+                    ui_scale,
+                    self.config.width,
+                    self.config.height,
+                ) else {
+                    continue;
+                };
+                pieces.push([x as f32, y as f32, w as f32, h as f32]);
+            }
             for hole in &page_punch_overlaps {
                 pieces = pieces
                     .into_iter()
@@ -3296,7 +3348,10 @@ impl AppState {
             );
         }
         if pending_page_glyphs {
-            self.flush_node_present_page_glyphs(render_pass, ui_scale, &node_glyph_holes);
+            self.flush_node_present_page_glyphs(
+                render_pass,
+                &node_glyph_holes,
+            );
         }
     }
 
@@ -3418,55 +3473,19 @@ impl AppState {
         }
     }
 
-    /// Draw the prepared capture buffer once, scissored to the page-dirty union.
-    ///
-    /// Glyphs are already clipped to their owning dirty box in prepare. Drawing the
-    /// same buffer under every node scissor would src-over neighbor captions into retain.
+    /// Draw captured glyphs inside the disjoint physical repair scissors.
     fn flush_node_present_page_glyphs<'pass>(
         &'pass self,
         render_pass: &mut wgpu::RenderPass<'pass>,
-        ui_scale: f32,
         node_cleared: &[[f32; 4]],
     ) {
-        use super::damage::PaintDirtyKind;
-        let mut union: Option<[f32; 4]> = None;
-        // Node holes are the scissors encode actually CLEARED. The paint box
-        // is larger (portal halo ring). Flushing the paint box lets glyphon's
-        // coverage kernel src-over retained strokes — the caption looks bold
-        // for the rest of `transition-colors`.
-        for hole in node_cleared {
-            if hole[2] <= 0.0 || hole[3] <= 0.0 {
-                continue;
-            }
-            union = Some(match union {
-                Some(prev) => super::damage::union_rects(prev, *hole),
-                None => *hole,
-            });
-        }
-        for dirty in &self.damage_nodes {
-            let pad = match dirty.kind {
-                PaintDirtyKind::Overlay | PaintDirtyKind::Node => continue,
-                PaintDirtyKind::OverlayRestore | PaintDirtyKind::Region => 2.0,
-            };
-            let padded = super::draw_cull::padded_xywh(dirty.bounds, pad);
-            union = Some(match union {
-                Some(prev) => super::damage::union_rects(prev, padded),
-                None => padded,
-            });
-        }
-        if let Some(bounds) = union {
-            if let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
-                bounds,
-                0.0,
-                ui_scale,
-                self.config.width,
-                self.config.height,
-            ) {
-                render_pass.set_scissor_rect(x, y, w, h);
-            }
-        }
-        self.capture_text_renderer.render(render_pass);
-        super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Text, 1);
+        draw_captured_page_glyphs(
+            &self.capture_text_renderer,
+            render_pass,
+            self.config.width,
+            self.config.height,
+            node_cleared,
+        );
     }
 
     /// CSS underlines live in `prepare_text_frame`, not `NodePaint`. Full present
@@ -6075,9 +6094,23 @@ impl AppState {
                         text_hi,
                         page_text_cull,
                         gpu_present.use_partial_damage && !region_present,
-                    ) else {
+                    )
+                    .map(|runs| {
+                        super::draw_cull::page_submit_excluding_live_node_capture(
+                            runs.into_owned(),
+                            &self.text_nodes[..overlay_text_start],
+                            &self.damage_nodes,
+                            &render_result.node_paints,
+                            &self.last_overlay_stamps,
+                            self.overlay_occupied,
+                            gpu_present.use_node_present,
+                        )
+                    })
+                    .filter(|runs| !runs.is_empty()) else {
                         // Unchanged runs (sidebar after Send) or outside the scrolled viewport.
                         // Keep last glyphon GPU buffer; do not submit it on Load retain.
+                        // A caption owned by node capture is dropped here so the Latin
+                        // suffix is not src-overed a second time on a trigger toggle.
                         page_stack_skip_glyphon[band_i] = true;
                         underlines.push(Vec::new());
                         shadow_bands.push(Vec::new());
@@ -6188,7 +6221,20 @@ impl AppState {
                 overlay_text_start,
                 page_text_cull,
                 gpu_present.use_partial_damage && !region_present,
-            ) {
+            )
+            .map(|runs| {
+                super::draw_cull::page_submit_excluding_live_node_capture(
+                    runs.into_owned(),
+                    &self.text_nodes[..overlay_text_start],
+                    &self.damage_nodes,
+                    &render_result.node_paints,
+                    &self.last_overlay_stamps,
+                    self.overlay_occupied,
+                    gpu_present.use_node_present,
+                )
+            })
+            .filter(|runs| !runs.is_empty())
+            {
                 None => {
                     skip_page_glyphon = true;
                     (
@@ -6444,6 +6490,9 @@ impl AppState {
             super::damage::PaintDirtyKind::Overlay => false,
         };
         let mut capture_underlay_ready = false;
+        // Fade ticks must not redraw a caption the Restore scissor left in
+        // retain. Flushing it after the shadow blends coverage against the
+        // animating shadow, so the unchanged Latin suffix flickers.
         let capture_text_ready = if gpu_present.use_node_present
             && self.damage_nodes.iter().any(node_in_glyph_dirties)
         {
@@ -6529,14 +6578,17 @@ impl AppState {
                 );
                 capture_underlay_ready = !prep.culled_skip_prepare;
             }
-            let hole_text =
+            let hole_text = if glyph_dirties.is_empty() {
+                Vec::new()
+            } else {
                 super::draw_cull::node_present_clipped_capture_text_wipes_excluding_overlay(
                     &glyph_dirties,
                     page_text,
                     &render_result.node_paints,
                     &wipe_clips,
                     &self.last_overlay_stamps,
-                );
+                )
+            };
             if hole_text.is_empty() {
                 false
             } else {

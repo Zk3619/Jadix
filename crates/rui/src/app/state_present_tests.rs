@@ -3,6 +3,139 @@ use super::*;
 use crate::app::{damage::*, draw_cull::*};
 use crate::renderer::offscreen::{OffscreenGpu, images_match, readback_texture};
 
+/// A node capture contains the whole caption, even when the actual repair has
+/// separate holes. Retained antialiased edges must never be blended again.
+#[test]
+#[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+fn trigger_capture_only_repaints_cleared_pixels() {
+    let gpu = OffscreenGpu::new().expect("GPU adapter");
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        width: 320,
+        height: 200,
+        present_mode: wgpu::PresentMode::Fifo,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        view_formats: vec![],
+        desired_maximum_frame_latency: 1,
+    };
+    let pipeline = RuiPipeline::from_format(&gpu.device, config.format, 320, 200);
+    pipeline.update_resolution(&gpu.queue, 320, 200);
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("trigger capture retain"),
+        size: wgpu::Extent3d {
+            width: 320,
+            height: 200,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: config.format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let mut renderer = RuiTextRenderer::new(&gpu.device, &gpu.queue, &config);
+    for (label, color, clear) in [
+        ("关闭 RSX Trigger", [255, 255, 255, 255], wgpu::Color::BLACK),
+        ("关闭 Builder Trigger", [0, 0, 0, 255], wgpu::Color::WHITE),
+    ] {
+        let mut root = Element::new().w(320.0).h(200.0).child(
+            Element::new()
+                .absolute()
+                .left(18.25)
+                .top(46.25)
+                .text(label)
+                .text_size(16.0)
+                .text_color(color),
+        );
+        let scene = LayoutTree::new().build_and_layout(&mut root, 320.0, 200.0, [-1.0, -1.0]);
+        let prep = crate::renderer::prepare_text::prepare_text_frame_at(
+            &mut renderer,
+            &gpu.device,
+            &gpu.queue,
+            320,
+            200,
+            &scene.text_nodes,
+            1.0,
+            false,
+            &Default::default(),
+            &Default::default(),
+        );
+        assert!(!prep.culled_skip_prepare);
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(clear),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            renderer.render(&mut pass);
+        }
+        let full = readback_texture(&gpu.device, &gpu.queue, &texture, 320, 200, encoder).unwrap();
+        assert!(
+            full.pixels
+                .chunks_exact(4)
+                .any(|p| p[0] != (clear.r * 255.0) as u8),
+            "fixture needs glyph ink"
+        );
+        // Two repairs overlap by a device pixel after outward rounding. The
+        // rest of the caption is retained, as on a split portal-halo repair.
+        let logical = [[18.25, 46.25, 21.0, 25.0], [39.25, 46.25, 18.0, 25.0]];
+        let cleared: Vec<_> = logical
+            .into_iter()
+            .map(|r| {
+                let (x, y, w, h) = damage_to_scissor_physical(r, 0.0, 1.0, 320, 200).unwrap();
+                [x as f32, y as f32, w as f32, h as f32]
+            })
+            .collect();
+        for frame in 0..3 {
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Load,
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                for rect in &cleared {
+                    let (x, y, w, h) = physical_xywh_to_scissor(*rect, 320, 200).unwrap();
+                    pass.set_scissor_rect(x, y, w, h);
+                    draw_scissor_fill(&mut pass, &pipeline, &gpu.device, *rect, clear);
+                }
+                draw_captured_page_glyphs(&renderer, &mut pass, 320, 200, &cleared);
+            }
+            let partial =
+                readback_texture(&gpu.device, &gpu.queue, &texture, 320, 200, encoder).unwrap();
+            let changed = partial
+                .pixels
+                .chunks_exact(4)
+                .zip(full.pixels.chunks_exact(4))
+                .filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2))
+                .count();
+            assert_eq!(
+                changed, 0,
+                "{label} frame {frame}: retained glyph edges changed brightness"
+            );
+        }
+    }
+}
+
 #[test]
 #[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
 fn fractional_overlay_restore_repaints_rounded_scissor_edge() {
@@ -730,7 +863,7 @@ fn check_partial_pixels(gpu: &OffscreenGpu, background: bool, portal: bool) {
             );
         }
     }
-    gpu.queue.submit(Some(encoder.finish()));
+    let mut retained_before = readback_texture(&gpu.device, &gpu.queue, &texture, W, H, encoder).unwrap();
     for (frame, opacity) in [0.2, 0.65, 0.0, 0.45].into_iter().enumerate() {
         root.children[0].style.bg_color = [0.0, 0.0, 1.0, opacity];
         tree.set_collect_skip_allowed(false);
@@ -853,9 +986,22 @@ fn check_partial_pixels(gpu: &OffscreenGpu, background: bool, portal: bool) {
         let partial = readback_texture(&gpu.device, &gpu.queue, &texture, W, H, encoder).unwrap();
         let mut full_instances = current.instances.clone();
         full_instances.extend(overlay_inst);
-        let full = gpu
+        let mut full = gpu
             .render_instances_readback(W, H, clear, &full_instances)
             .unwrap();
+        if dirty[0].kind == PaintDirtyKind::Node {
+            // Node page updates intentionally preserve a static portal's
+            // occupied pixels, including its captured underlay. Compare the
+            // repaired page with full draw and protected pixels with retain.
+            if let Some(occupied) = occupancy {
+                let (x, y, w, h) = damage_to_scissor_physical(occupied, 0.0, 1.0, W, H).unwrap();
+                for row in y..y + h {
+                    let start = ((row * W + x) * 4) as usize;
+                    let end = start + (w * 4) as usize;
+                    full.pixels[start..end].copy_from_slice(&retained_before.pixels[start..end]);
+                }
+            }
+        }
         let different: Vec<_> = partial
             .pixels
             .chunks_exact(4)
@@ -869,6 +1015,7 @@ fn check_partial_pixels(gpu: &OffscreenGpu, background: bool, portal: bool) {
             images_match(&partial, &full, 2),
             "retained/full pixels differ: background={background}, portal={portal}, frame={frame}, alpha={opacity}, hole={hole:?}, diffs={different:?}"
         );
+        retained_before = partial;
         prev = last_present_visual_slots(
             &current.node_paints,
             &current.instances,
@@ -876,5 +1023,56 @@ fn check_partial_pixels(gpu: &OffscreenGpu, background: bool, portal: bool) {
             &current.text_nodes,
             &[],
         );
+    }
+}
+
+/// Instance clip flags must preserve both polygon layers and rounded clips.
+#[test]
+#[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+fn sdf_vertex_clip_flags_preserve_every_world_clip_channel() {
+    let gpu = OffscreenGpu::new().expect("GPU adapter");
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let pipeline = RuiPipeline::from_format(&gpu.device, format, 96, 64);
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("world clip flags"),
+        size: wgpu::Extent3d { width: 96, height: 64, depth_or_array_layers: 1 },
+        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+        format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let mut root = Element::new().w(96.0).h(64.0).bg([1.0, 0.0, 0.0, 1.0]);
+    let scene = LayoutTree::new().build_and_layout(&mut root, 96.0, 64.0, [-1.0, -1.0]);
+    let mut clipped = scene.instances[0];
+    clipped.color = [0.0, 0.0, 1.0, 1.0];
+    let instances = [scene.instances[0], clipped];
+    for channel in 0..4 {
+        let mut clip = crate::style::GpuClipPoly::NONE;
+        let points = [[32.0, 8.0], [64.0, 8.0], [64.0, 56.0], [32.0, 56.0]];
+        match channel {
+            0 => { clip.count = 4; clip.pts[..4].copy_from_slice(&points); }
+            1 => { clip.count2 = 4; clip.pts2[..4].copy_from_slice(&points); }
+            2 => { clip.round_rect = [32.0, 8.0, 32.0, 48.0]; clip.round_radii = [8.0; 4]; }
+            _ => { clip.round_rect2 = [32.0, 8.0, 32.0, 48.0]; clip.round_radii2 = [8.0; 4]; }
+        }
+        let clips = [crate::style::GpuClipPoly::NONE, clip];
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view, depth_slice: None, resolve_target: None,
+                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
+                })], ..Default::default()
+            });
+            draw_sdf_range_with_clip(&mut pass, &pipeline, &gpu.device, pipeline.dummy_backdrop(),
+                &instances, &clips, 0, 2, None);
+        }
+        let image = readback_texture(&gpu.device, &gpu.queue, &texture, 96, 64, encoder).unwrap();
+        assert_eq!(image.pixel(48, 32), Some([0, 0, 255, 255]), "clip channel {channel} must paint its interior");
+        assert_eq!(image.pixel(16, 32), Some([255, 0, 0, 255]), "clip channel {channel} must preserve unclipped predecessor");
+        assert_eq!(image.pixel(72, 32), Some([255, 0, 0, 255]), "clip channel {channel} must reject exterior");
+        if channel >= 2 {
+            assert_eq!(image.pixel(33, 9), Some([255, 0, 0, 255]), "rounded clip corner must remain curved");
+        }
     }
 }

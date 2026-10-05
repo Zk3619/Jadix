@@ -12,7 +12,7 @@ use crate::renderer::{
 };
 use crate::style::transform::MAT2D_IDENTITY;
 
-use super::damage::{PaintDirty, PaintDirtyKind, intersect_rects};
+use crate::app::damage::{PaintDirty, PaintDirtyKind, intersect_rects};
 
 pub(crate) fn slot_paint_ops(
     ops: &[crate::layout::layout_tree::PaintOp],
@@ -142,7 +142,7 @@ pub(crate) fn scale_xywh(rect: [f32; 4], scale: f32) -> [f32; 4] {
 /// Final scroll repair coverage. Inputs already include each owner's paint
 /// outset and overflow clip: adding another generic pad leaks into the header.
 pub(crate) fn scroll_repair_rects_physical(
-    jobs: &[super::damage::ScrollStripBlitJob],
+    jobs: &[crate::app::damage::ScrollStripBlitJob],
     pins: &[[f32; 4]],
     scale: f32,
 ) -> Option<CullRects> {
@@ -160,7 +160,7 @@ pub(crate) fn scroll_repair_rects_physical(
         let x = r[0].floor();
         let y = r[1].floor();
         let r = [x, y, (r[0] + r[2]).ceil() - x, (r[1] + r[3]).ceil() - y];
-        super::damage::push_disjoint_rect(&mut rects, r);
+        crate::app::damage::push_disjoint_rect(&mut rects, r);
     }
     CullRects::from_rects(rects)
 }
@@ -194,7 +194,7 @@ pub(crate) fn region_repair_text_cull(
             0.0,
         );
         let Some((x, y, w, h)) =
-            super::damage::damage_to_scissor_physical(hole, 0.0, scale, width, height)
+            crate::app::damage::damage_to_scissor_physical(hole, 0.0, scale, width, height)
         else {
             continue;
         };
@@ -210,7 +210,7 @@ pub(crate) fn region_repair_text_cull(
         // still uses the exact clear scissor, so this cannot restamp neighbors.
         let hole = padded_xywh(hole, 1.0 / scale);
         bounds = Some(match bounds {
-            Some(prev) => super::damage::union_rects(prev, hole),
+            Some(prev) => crate::app::damage::union_rects(prev, hole),
             None => hole,
         });
     }
@@ -288,11 +288,11 @@ pub(crate) fn instance_paint_bounds(i: &InstanceInput) -> [f32; 4] {
 /// Those pixels live in the swapchain overlay after retain blit — dest-reset
 /// of this dirty would CLEAR Search and recapture a hairline slice (竖条).
 pub(crate) fn paint_dirty_is_caret_overlay(
-    dirty: &super::damage::PaintDirty,
+    dirty: &crate::app::damage::PaintDirty,
     node_paints: &[NodePaint],
     instances: &[InstanceInput],
 ) -> bool {
-    if dirty.kind != super::damage::PaintDirtyKind::Node {
+    if dirty.kind != crate::app::damage::PaintDirtyKind::Node {
         return false;
     }
     let w = dirty.bounds[2];
@@ -410,7 +410,7 @@ pub(crate) fn text_hits_damage(n: &TextLayoutInfo, damage_logical: [f32; 4]) -> 
 /// same horizontal band (`glyph_belongs_to_dirty` is collect-slot only).
 #[allow(dead_code)]
 pub(crate) fn text_owned_by_node_dirty(n: &TextLayoutInfo, dirty_logical: [f32; 4]) -> bool {
-    super::damage::text_center_in_dirty([n.x, n.y, n.width, n.height], dirty_logical)
+    crate::app::damage::text_center_in_dirty([n.x, n.y, n.width, n.height], dirty_logical)
 }
 
 /// Contiguous instance ranges inside `start..start+count` that hit `cull`.
@@ -628,6 +628,426 @@ pub(crate) fn page_stack_band_needs_glyphon(
     partial_load: bool,
 ) -> bool {
     page_stack_band_submit_text(prev, curr, lo, hi, scroll_clip, partial_load).is_some()
+}
+
+fn same_page_text_ink(a: &TextLayoutInfo, b: &TextLayoutInfo) -> bool {
+    const POS: f32 = 0.02;
+    const SIZE: f32 = 0.5;
+    a.text == b.text
+        && (a.x - b.x).abs() <= POS
+        && (a.y - b.y).abs() <= POS
+        && (a.width - b.width).abs() <= SIZE
+        && (a.height - b.height).abs() <= SIZE
+}
+
+/// Page text that stays in retain during OverlayRestore.
+///
+/// The padded halo contains a trigger caption that sticks out of the shadow.
+/// Encode no longer clears that ink. Page glyphon must not redraw it either:
+/// that pass runs before the shadow and would src-over the retained glyphs.
+/// Ink fully inside the shadow is still cleared, so it stays on the page mesh.
+/// Panel chips sit inside the stamp and stay on the page mesh.
+pub(crate) fn overlay_restore_fringe_text(
+    page_text: &[TextLayoutInfo],
+    dirties: &[PaintDirty],
+    stamps: &[(u64, [f32; 4])],
+    shadow: Option<[f32; 4]>,
+) -> Vec<TextLayoutInfo> {
+    let restores: Vec<[f32; 4]> = dirties
+        .iter()
+        .filter(|d| {
+            d.kind == PaintDirtyKind::OverlayRestore && d.bounds[2] > 0.5 && d.bounds[3] > 0.5
+        })
+        .map(|d| d.bounds)
+        .collect();
+    if restores.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for n in page_text {
+        let ink = [n.x, n.y, n.width.max(0.0), n.height.max(0.0)];
+        if ink[2] <= 0.5 || ink[3] <= 0.5 {
+            continue;
+        }
+        if !restores.iter().any(|r| !aabbs_disjoint(ink, *r)) {
+            continue;
+        }
+        // Inside the portal layout box the panel covers the ink. Page replay
+        // draws that before the overlay. Flushing it afterwards paints the
+        // chip on top of the panel.
+        if stamps.iter().any(|(_, stamp)| {
+            stamp[2] > 0.5
+                && stamp[3] > 0.5
+                && crate::app::damage::rect_contains_rect(*stamp, ink)
+        }) {
+            continue;
+        }
+        if let Some(shadow) = shadow {
+            if shadow[2] > 0.5
+                && shadow[3] > 0.5
+                && crate::app::damage::rect_contains_rect(shadow, ink)
+            {
+                continue;
+            }
+        }
+        // One clip for the whole line. Subtracting a stamp that does not
+        // touch the ink splits nothing; subtracting one that cuts the line
+        // would hand CJK and Latin to different prepares, and the non-ASCII
+        // side waits a frame.
+        let clip = padded_xywh(ink, NODE_PRESENT_GLYPH_CLIP_PAD);
+        let clips = if stamps.iter().any(|(_, stamp)| !aabbs_disjoint(ink, *stamp)) {
+            crate::app::damage::page_scissors_excluding_portal_boxes(clip, stamps)
+        } else {
+            vec![clip]
+        };
+        for clip in clips {
+            if clip[2] <= 0.5 || clip[3] <= 0.5 || aabbs_disjoint(clip, ink) {
+                continue;
+            }
+            let mut cloned = n.clone();
+            cloned.clip_bounds = Some(clip);
+            out.push(cloned);
+        }
+    }
+    out
+}
+
+/// Logical coverage used by the caption/restore planning tests. GPU encode
+/// records its actual repair scissors and deduplicates in physical pixels.
+#[cfg(test)]
+pub(crate) fn glyph_flush_logical_pieces(
+    node_holes: &[[f32; 4]],
+    dirties: &[PaintDirty],
+    paints: &[NodePaint],
+    stamps: &[(u64, [f32; 4])],
+    shadow: Option<[f32; 4]>,
+) -> Vec<[f32; 4]> {
+    let mut pieces = Vec::new();
+    for hole in node_holes {
+        if hole[2] > 0.0 && hole[3] > 0.0 {
+            crate::app::damage::push_disjoint_rect(&mut pieces, *hole);
+        }
+    }
+    for dirty in dirties {
+        let pad = match dirty.kind {
+            PaintDirtyKind::Region | PaintDirtyKind::OverlayRestore => 2.0,
+            PaintDirtyKind::Overlay | PaintDirtyKind::Node => continue,
+        };
+        let padded = padded_xywh(dirty.bounds, pad);
+        let parts = if dirty.kind == PaintDirtyKind::OverlayRestore {
+            scissors_keeping_stable_page_captions(vec![padded], paints, stamps, shadow)
+        } else {
+            vec![padded]
+        };
+        for part in parts {
+            crate::app::damage::push_disjoint_rect(&mut pieces, part);
+        }
+    }
+    pieces
+}
+
+/// Glyphon respects the render-pass scissor. Round/clamp first, then subtract
+/// overlaps: neighboring fractional repairs can share a device-pixel column.
+/// An AABB union or a full-target scissor would repaint untouched glyph edges.
+pub(crate) fn capture_glyph_scissors_physical(
+    repaired: &[[f32; 4]],
+    width: u32,
+    height: u32,
+) -> Vec<[f32; 4]> {
+    let mut pieces = Vec::new();
+    for rect in repaired {
+        if let Some((x, y, w, h)) =
+            crate::app::damage::physical_xywh_to_scissor(*rect, width, height)
+        {
+            crate::app::damage::push_disjoint_rect(
+                &mut pieces, [x as f32, y as f32, w as f32, h as f32],
+            );
+        }
+    }
+    pieces
+}
+
+/// OverlayRestore / overlay-suffix scissors with stable page captions removed.
+///
+/// `打开` and `关闭` share one suffix box. The padded portal halo still contains
+/// that box, so a fade tick CLEARs it and the shadow is src-overed on top.
+/// Redrawing the line afterwards blends glyph coverage against that animating
+/// shadow, so the unchanged Latin flickers. Leaf caption faces that stick out
+/// of the shadow stay in retain. Text fully inside the shadow, the gap under
+/// the trigger, and the panel itself stay in the scissor.
+pub(crate) fn scissors_keeping_stable_page_captions(
+    pieces: Vec<[f32; 4]>,
+    paints: &[NodePaint],
+    stamps: &[(u64, [f32; 4])],
+    shadow: Option<[f32; 4]>,
+) -> Vec<[f32; 4]> {
+    if pieces.is_empty() || stamps.is_empty() {
+        return pieces;
+    }
+    let mut faces = Vec::new();
+    for paint in paints {
+        if paint.overlay || paint.text.0 >= paint.text.1 {
+            continue;
+        }
+        let face = paint.bounds;
+        if face[2] <= 0.5 || face[3] <= 0.5 {
+            continue;
+        }
+        if let Some(shadow) = shadow {
+            if shadow[2] > 0.5
+                && shadow[3] > 0.5
+                && crate::app::damage::rect_contains_rect(shadow, face)
+            {
+                // A lone label under the halo stays in the clear so the shadow
+                // can rebuild on it. A caption sitting on a page trigger does
+                // not: the halo AABB covers it during fade, and clearing it
+                // wipes both scripts on every opacity tick.
+                let on_trigger = paints.iter().any(|other| {
+                    other.key != paint.key
+                        && !other.overlay
+                        && crate::app::damage::rect_contains_rect(other.bounds, face)
+                        && other.bounds[2] * other.bounds[3] > face[2] * face[3] + 1.0
+                        && stamps.iter().all(|(_, stamp)| {
+                            stamp[2] > 0.5
+                                && stamp[3] > 0.5
+                                && intersect_rects(other.bounds, *stamp).is_none()
+                                && !crate::app::damage::rect_contains_rect(other.bounds, *stamp)
+                        })
+                });
+                if !on_trigger {
+                    continue;
+                }
+            }
+        }
+        let outside = stamps.iter().all(|(_, stamp)| {
+            stamp[2] > 0.5
+                && stamp[3] > 0.5
+                && intersect_rects(face, *stamp).is_none()
+                && !crate::app::damage::rect_contains_rect(face, *stamp)
+        });
+        if outside {
+            faces.push(face);
+        }
+    }
+    // The button paint contains the caption paint. Subtracting the button
+    // would also freeze its fill. The caption leaf is the stable ink.
+    let mut leaves = Vec::new();
+    for i in 0..faces.len() {
+        let face = faces[i];
+        let nested = (0..faces.len()).any(|j| {
+            i != j
+                && crate::app::damage::rect_contains_rect(face, faces[j])
+                && face[2] * face[3] > faces[j][2] * faces[j][3] + 1.0
+        });
+        if !nested {
+            leaves.push(face);
+        }
+    }
+    let mut parts = pieces;
+    for face in leaves {
+        let hole = padded_xywh(face, NODE_PRESENT_GLYPH_CLIP_PAD);
+        parts = parts
+            .into_iter()
+            .flat_map(|rect| crate::app::damage::subtract_rect(rect, hole))
+            .filter(|rect| rect[2] > 0.5 && rect[3] > 0.5)
+            .collect();
+    }
+    parts
+}
+
+/// Hover / focus / `:active` keeps the button Node-dirty while the pointer
+/// stays on the trigger. The dest-reset is split on the shadow edge and runs
+/// through the caption. That fill has to land under the glyphs; carving the
+/// line out froze it, and the click then painted the page color into the hole.
+/// Capture puts the glyphs back as one run after the shadow.
+pub(crate) fn node_scissors_keeping_unchanged_captions(
+    pieces: Vec<[f32; 4]>,
+    _paints: &[NodePaint],
+    _dirties: &[PaintDirty],
+    _stamps: &[(u64, [f32; 4])],
+) -> Vec<[f32; 4]> {
+    pieces
+}
+
+/// Caption leaves outside the portal stamp while a portal is fading.
+///
+/// `dirty_key`: `Some(false)` keeps leaves whose text did not change,
+/// `Some(true)` keeps leaves whose text did change, `None` keeps both.
+fn trigger_caption_leaves(
+    paints: &[NodePaint],
+    dirties: &[PaintDirty],
+    stamps: &[(u64, [f32; 4])],
+    dirty_key: Option<bool>,
+) -> Vec<[f32; 4]> {
+    if stamps.is_empty()
+        || !dirties
+            .iter()
+            .any(|d| d.kind == PaintDirtyKind::OverlayRestore)
+    {
+        return Vec::new();
+    }
+    let mut faces = Vec::new();
+    for paint in paints {
+        if paint.overlay || paint.text.0 >= paint.text.1 {
+            continue;
+        }
+        let face = paint.bounds;
+        if face[2] <= 0.5 || face[3] <= 0.5 {
+            continue;
+        }
+        let key_dirty = dirties
+            .iter()
+            .any(|d| d.kind == PaintDirtyKind::Node && d.key == paint.key);
+        match dirty_key {
+            Some(want) if key_dirty != want => continue,
+            _ => {}
+        }
+        let outside = stamps.iter().all(|(_, stamp)| {
+            stamp[2] > 0.5
+                && stamp[3] > 0.5
+                && intersect_rects(face, *stamp).is_none()
+                && !crate::app::damage::rect_contains_rect(face, *stamp)
+        });
+        if outside {
+            faces.push(face);
+        }
+    }
+    let mut leaves = Vec::new();
+    for i in 0..faces.len() {
+        let face = faces[i];
+        let nested = (0..faces.len()).any(|j| {
+            i != j
+                && crate::app::damage::rect_contains_rect(face, faces[j])
+                && face[2] * face[3] > faces[j][2] * faces[j][3] + 1.0
+        });
+        if !nested {
+            leaves.push(face);
+        }
+    }
+    leaves
+}
+
+fn unchanged_caption_leaves(
+    paints: &[NodePaint],
+    dirties: &[PaintDirty],
+    stamps: &[(u64, [f32; 4])],
+) -> Vec<[f32; 4]> {
+    trigger_caption_leaves(paints, dirties, stamps, Some(false))
+}
+
+/// Smallest text face that owns `index` and sits outside the portal stamp.
+fn trigger_caption_leaf_box(
+    index: usize,
+    paints: &[NodePaint],
+    stamps: &[(u64, [f32; 4])],
+) -> Option<[f32; 4]> {
+    if stamps.is_empty() {
+        return None;
+    }
+    paints
+        .iter()
+        .filter(|p| {
+            !p.overlay
+                && p.text.0 <= index
+                && index < p.text.1
+                && p.bounds[2] > 0.5
+                && p.bounds[3] > 0.5
+                && stamps.iter().all(|(_, stamp)| {
+                    stamp[2] > 0.5
+                        && stamp[3] > 0.5
+                        && intersect_rects(p.bounds, *stamp).is_none()
+                        && !crate::app::damage::rect_contains_rect(p.bounds, *stamp)
+                })
+        })
+        .min_by(|a, b| {
+            let area = |p: &NodePaint| p.bounds[2] * p.bounds[3];
+            area(a)
+                .partial_cmp(&area(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .map(|p| p.bounds)
+}
+
+fn unchanged_caption_glyph(
+    index: usize,
+    dirties: &[PaintDirty],
+    paints: &[NodePaint],
+    stamps: &[(u64, [f32; 4])],
+) -> bool {
+    let leaves = unchanged_caption_leaves(paints, dirties, stamps);
+    if leaves.is_empty() {
+        return false;
+    }
+    let Some(leaf) = paints
+        .iter()
+        .filter(|p| !p.overlay && p.text.0 <= index && index < p.text.1)
+        .min_by(|a, b| {
+            let area = |p: &NodePaint| p.bounds[2] * p.bounds[3];
+            area(a)
+                .partial_cmp(&area(b))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        })
+    else {
+        return false;
+    };
+    if !leaves.iter().any(|face| *face == leaf.bounds) {
+        return false;
+    }
+    // The button dest-reset covers this leaf and wipes the glyphs. Skipping
+    // capture leaves the line blank until the next string change.
+    !dirties.iter().any(|d| {
+        d.kind == PaintDirtyKind::Node && intersect_rects(d.bounds, leaf.bounds).is_some()
+    })
+}
+
+/// Drop page-glyphon runs that this frame's node capture will also draw.
+///
+/// A trigger toggle changes only the CJK prefix (`打开`/`关闭`) and also opens
+/// or closes the popover. OverlayRestore replays the page mesh inside a hole
+/// that contains the button, and node capture flushes that same caption after
+/// chrome. The second src-over is the Latin suffix flicker. Ownership is the
+/// collect slot capture uses (`node_present_glyphs_for_dirty`), and only when
+/// capture actually flushes: a FullClear has no capture pass, and a chip under
+/// the panel stamp is replayed by Restore alone.
+pub(crate) fn page_submit_excluding_live_node_capture(
+    runs: Vec<TextLayoutInfo>,
+    page_text: &[TextLayoutInfo],
+    dirties: &[PaintDirty],
+    paints: &[NodePaint],
+    stamps: &[(u64, [f32; 4])],
+    shadow: Option<[f32; 4]>,
+    capture_flushes: bool,
+) -> Vec<TextLayoutInfo> {
+    if !capture_flushes || runs.is_empty() || dirties.is_empty() || page_text.is_empty() {
+        return runs;
+    }
+    let fringe = overlay_restore_fringe_text(page_text, dirties, stamps, shadow);
+    let mut owned = BTreeSet::new();
+    for dirty in dirties {
+        if dirty.kind != PaintDirtyKind::Node {
+            continue;
+        }
+        if crate::app::damage::paint_dirty_covered_by_overlay_restore(dirty, dirties, stamps)
+            || crate::app::damage::page_node_present_occluded_by_overlay(dirty.bounds, stamps)
+        {
+            continue;
+        }
+        owned.extend(node_present_glyphs_for_dirty(dirty, page_text, paints));
+    }
+    if owned.is_empty() && fringe.is_empty() {
+        return runs;
+    }
+    runs.into_iter()
+        .filter(|run| {
+            let node_owned = owned.iter().any(|i| {
+                page_text
+                    .get(*i)
+                    .is_some_and(|painted| same_page_text_ink(painted, run))
+            });
+            let fringe_owned = fringe.iter().any(|painted| same_page_text_ink(painted, run));
+            !node_owned && !fringe_owned
+        })
+        .collect()
 }
 
 /// Compact chrome / underline / caret uploads to hits only.
@@ -912,7 +1332,7 @@ pub(crate) fn opaque_fill_color_at_skipping(
 }
 
 fn paints_has_keyed_slot(dirty_key: u64, dirty_bounds: [f32; 4], paints: &[NodePaint]) -> bool {
-    super::damage::paint_dirty_has_keyed_slot(
+    crate::app::damage::paint_dirty_has_keyed_slot(
         dirty_key,
         dirty_bounds,
         paints.iter().map(|q| (q.key, q.bounds)),
@@ -925,7 +1345,7 @@ fn slot_matches_dirty(
     p: &NodePaint,
     has_keyed: bool,
 ) -> bool {
-    super::damage::paint_dirty_matches_present_slot(
+    crate::app::damage::paint_dirty_matches_present_slot(
         dirty_key,
         dirty_bounds,
         p.key,
@@ -1476,12 +1896,12 @@ fn slot_range_nested(child: (usize, usize), parent: (usize, usize)) -> bool {
 
 fn slot_ranges_covered_by(inner: &NodePaint, outer: &NodePaint) -> bool {
     let mut any = false;
-    for (ir, or) in [
+    for (channel, (ir, or)) in [
         (inner.instance, outer.instance),
         (inner.textured, outer.textured),
         (inner.text, outer.text),
         (inner.chrome, outer.chrome),
-    ] {
+    ].into_iter().enumerate() {
         if ir.1 <= ir.0 {
             continue;
         }
@@ -1489,7 +1909,10 @@ fn slot_ranges_covered_by(inner: &NodePaint, outer: &NodePaint) -> bool {
             // I-beam chrome is collected on the text leaf, not duplicated on the
             // wrap. Treating that as "not nested" made the wrap own the caret
             // last-present; blur then dest-reset the wrap and flashed ⌘K / Kbd.
-            continue;
+            if channel == 3 {
+                continue;
+            }
+            return false;
         }
         any = true;
         if !slot_range_nested(ir, or) {
@@ -1503,6 +1926,11 @@ fn slots_share_box_center(a: [f32; 4], b: [f32; 4]) -> bool {
     let ca = rect_center(a);
     let cb = rect_center(b);
     (ca[0] - cb[0]).abs() <= 2.0 && (ca[1] - cb[1]).abs() <= 2.0
+}
+
+fn slot_paint_ranges_overlap(a: &NodePaint, b: &NodePaint) -> bool {
+    [(a.instance, b.instance), (a.textured, b.textured), (a.text, b.text), (a.chrome, b.chrome)]
+        .into_iter().any(|(a, b)| a.0 < b.1 && b.0 < a.1)
 }
 
 fn is_nested_foreign_slot(parent: &NodePaint, child: &NodePaint) -> bool {
@@ -1550,7 +1978,9 @@ fn is_nested_foreign_slot(parent: &NodePaint, child: &NodePaint) -> bool {
             return false;
         }
         if !aabb_contains(parent_box, child_box) {
-            return true;
+            // A smaller equal-span leaf cannot own its containing wrapper.
+            // Keep this relation directional, including transformed overflow.
+            return !aabb_contains(child_box, parent_box);
         }
         if occupancy_descendant_slot(parent, child) {
             return true;
@@ -1859,7 +2289,7 @@ pub(crate) fn escalate_dirties_for_node_present(
         let found_current = node_paints.iter().any(|p| !p.overlay && p.key == dirty.key);
         let had_previous = last_present.iter().any(|(k, _)| *k == dirty.key);
         let next =
-            super::damage::escalate_node_dest_reset_kind(dirty.kind, found_current, had_previous);
+            crate::app::damage::escalate_node_dest_reset_kind(dirty.kind, found_current, had_previous);
         if next == PaintDirtyKind::Region {
             // Clip-culled overflow widgets keep Node dest-reset (overflow clip).
             // A box that has already left the scroller into the title bar has
@@ -1999,7 +2429,7 @@ fn layered_cell_keeps_node_dest_reset(
         return false;
     }
     if let Some(prev) = last_present_prev_for_dirty(PaintDirtyKind::Node, key, last_present) {
-        if super::damage::paint_poses_separated(prev, bounds) {
+        if crate::app::damage::paint_poses_separated(prev, bounds) {
             return false;
         }
     }
@@ -2052,7 +2482,7 @@ pub(crate) fn portal_occupancy_requires_region(
         let padded = padded_xywh(*stamp, pad);
         rest = rest
             .into_iter()
-            .flat_map(|r| super::damage::subtract_rect(r, padded))
+            .flat_map(|r| crate::app::damage::subtract_rect(r, padded))
             .filter(|r| r[2] > 0.5 && r[3] > 0.5)
             .collect();
     }
@@ -2119,7 +2549,12 @@ pub(crate) fn prepare_node_present_dirties_ex(
                 node_paints,
                 instances,
                 last_present,
-            ) {
+            ) && (layered_src_over_skips_dest_reset(dirty.key, dirty.bounds, node_paints, prev)
+                || node_present_dest_reset_full(dirty.key, dirty.bounds, node_paints,
+                    instances, textured, chrome, ui_scale, prev).is_some()) {
+                // A text-free stacking cell is independently erasable only
+                // when its underlay can actually be reconstructed. Transparent
+                // roots need the normal local Region composite, just like text.
                 continue;
             }
             // A stacking layer is a composite, not an independently erasable
@@ -2131,7 +2566,7 @@ pub(crate) fn prepare_node_present_dirties_ex(
             // hole. Unioning it paints a column of window clear between them.
             let mut bounds = dirty.bounds;
             let local_prev =
-                prev.filter(|old| !super::damage::paint_poses_separated(*old, dirty.bounds));
+                prev.filter(|old| !crate::app::damage::paint_poses_separated(*old, dirty.bounds));
             if let Some(old) = prev {
                 if local_prev.is_none() {
                     leftover_poses.push(PaintDirty {
@@ -2255,7 +2690,7 @@ pub(crate) fn prepare_node_present_dirties_ex(
                 continue;
             }
             let candidate = prev
-                .filter(|r| !super::damage::paint_poses_separated(*r, dirty.bounds))
+                .filter(|r| !crate::app::damage::paint_poses_separated(*r, dirty.bounds))
                 .map(|r| union_xywh(r, dirty.bounds))
                 .unwrap_or(dirty.bounds);
             if intersect_rects(candidate, region).is_none() {
@@ -2281,7 +2716,7 @@ pub(crate) fn prepare_node_present_dirties_ex(
             regions.push(bounds);
         }
     }
-    super::damage::sort_paint_dirty_nodes(dirties);
+    crate::app::damage::sort_paint_dirty_nodes(dirties);
 }
 
 /// `animate-spin` / rotate grows `NodePaint.bounds` to the circumcircle while `rest`
@@ -2680,8 +3115,7 @@ fn peer_edge_halo_fringe(rest_host: [f32; 4], occ: [f32; 4], hit: [f32; 4], scal
         // Same rule on a vertical group. A form_field label is shorter than
         // the input, so it still shrinks and the gap(4) glyphs stay.
         let wr = rest_host[2] / occ[2].max(1.0);
-        let hr = rest_host[3] / occ[3].max(1.0);
-        if !(0.6..=1.6).contains(&wr) || !(0.6..=1.6).contains(&hr) {
+        if !(0.6..=1.6).contains(&wr) || (rest_host[3] - occ[3]).abs() > 2.5 * scale.max(1.0) {
             return false;
         }
         let span = rest_host[2].min(occ[2]).max(1.0) * 0.5;
@@ -2943,7 +3377,19 @@ fn clip_rect_against_foreign_siblings(
     let Some(host) = host else {
         return rect;
     };
-    let rest_host = rest_host.unwrap_or(host);
+    let mut rest_host = rest_host.unwrap_or(host);
+    // A leaf and its paint-less wrapper share one draw span. Its layout
+    // occupancy is the wrapper's box, even when the leaf's glyph line starts
+    // lower. Use that box to distinguish an overlapping underlay from a peer.
+    for p in node_paints {
+        if node_paints.iter().any(|m| {
+            slot_matches_dirty(dirty_key, dirty_bounds, m, has_keyed)
+                && slot_ranges_covered_by(m, p)
+                && slot_ranges_covered_by(p, m)
+        }) {
+            rest_host = union_xywh(rest_host, scale_xywh(node_paint_occupancy(p), s));
+        }
+    }
     let host_layered = node_paints
         .iter()
         .any(|p| slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed) && p.layered);
@@ -2956,7 +3402,10 @@ fn clip_rect_against_foreign_siblings(
         }
         let related = node_paints.iter().any(|m| {
             slot_matches_dirty(dirty_key, dirty_bounds, m, has_keyed)
-                && (slot_ranges_covered_by(m, p) || slot_ranges_covered_by(p, m))
+                // A capture leaf can share a texture with an ancestor whose
+                // other channels include unrelated chrome. It is not a peer
+                // to carve out of that texture's repair scissor.
+                && slot_paint_ranges_overlap(m, p)
         });
         if related {
             continue;
@@ -3004,8 +3453,8 @@ fn clip_rect_against_foreign_siblings(
             // sibling (reaction chip over content). Rest-overlapping rounded
             // chips (AvatarGroup A/B/C) must not: AABB dest-reset of the later
             // circle punches the earlier disk's crescent.
-            if !super::damage::is_rest_stack_chip(rest_host)
-                || !super::damage::is_rest_stack_chip(occ)
+            if !crate::app::damage::is_rest_stack_chip(rest_host)
+                || !crate::app::damage::is_rest_stack_chip(occ)
             {
                 continue;
             }
@@ -3347,6 +3796,9 @@ pub(crate) fn node_present_dest_reset_full(
     };
     let behind = &instances[idx];
     if !instance_aabb_clear_unsafe(behind) {
+        // Reset restores only the underlay. draw_matching_node_paints then
+        // paints the dirty slot once, including its rounded fill and focus ring.
+        // Replaying own chrome here composites translucent edges twice.
         return Some(NodePresentDestReset {
             rect,
             clear: behind.color,
@@ -3554,6 +4006,12 @@ pub(crate) fn node_present_clipped_capture_text_wipes_excluding_overlay(
     node_present_capture_text_indices(dirty_nodes, page_text, node_paints)
         .into_iter()
         .filter_map(|i| {
+            // Hover on the trigger dirties the button, which owns this caption.
+            // Recapturing it while the portal shadow animates flickers the
+            // suffix that did not change. The text leaf's own dirty still captures.
+            if unchanged_caption_glyph(i, dirty_nodes, node_paints, portal_stamps) {
+                return None;
+            }
             let n = page_text.get(i)?;
             // Wrapping that sits under Latest is recaptured by the underlay
             // glyphon (hide) or left in retain (opaque src-over). Including it
@@ -3568,8 +4026,17 @@ pub(crate) fn node_present_clipped_capture_text_wipes_excluding_overlay(
             ) {
                 return None;
             }
-            let owner =
+            let mut owner =
                 owner_clip_for_glyph(i, n, dirty_nodes, page_text, node_paints, wipe_clips)?;
+            // The button wipe grows with the focus ring. Unioning that into the
+            // caption clip moves glyphon's integer clip and every glyph snaps.
+            if let Some(leaf) = trigger_caption_leaf_box(i, node_paints, portal_stamps) {
+                if let Some(hit) =
+                    intersect_rects(owner, padded_xywh(leaf, NODE_PRESENT_GLYPH_CLIP_PAD))
+                {
+                    owner = hit;
+                }
+            }
             // Placeholder ellipsis scissors to the leaf. I-beam at byte 0 sits on
             // that left edge (Search「S」). Intersecting the dest-reset hole with
             // the leaf puts glyphon's hard clip on the stem — CLEAR stays white.
@@ -3601,7 +4068,7 @@ pub(crate) fn node_present_clipped_capture_text_wipes_excluding_overlay(
                 return vec![n];
             }
             let clip = n.clip_bounds.expect("capture glyphs have owner clips");
-            super::damage::page_scissors_excluding_portal_boxes(clip, portal_stamps)
+            crate::app::damage::page_scissors_excluding_portal_boxes(clip, portal_stamps)
                 .into_iter()
                 .map(|clip| {
                     let mut piece = n.clone();
@@ -4326,7 +4793,13 @@ mod tests {
         cell.layered = true;
         cell.instance = (0, 1);
         cell.rest = Some(cell.bounds);
-        let instances = [blank_instance(48.0, 80.0, 36.0, 36.0)];
+        let mut page = slot(1, [0.0, 0.0, 320.0, 480.0], (0, 0));
+        page.instance = (0, 1);
+        cell.instance = (1, 2);
+        let instances = [
+            blank_instance(0.0, 0.0, 320.0, 480.0),
+            blank_instance(48.0, 80.0, 36.0, 36.0),
+        ];
         let mut dirties = vec![PaintDirty {
             key: 3,
             bounds: cell.bounds,
@@ -4334,7 +4807,7 @@ mod tests {
         }];
         prepare_node_present_dirties(
             &mut dirties,
-            &[cell],
+            &[page, cell],
             &[(3, [48.0, 80.0, 36.0, 36.0])],
             &instances,
             &[],
@@ -4905,6 +5378,93 @@ mod tests {
         }
     }
 
+    /// Click toggles the caption via `bind_text`, which also dirties the button.
+    /// Reset restores the page; the matching node draw restores the rounded
+    /// button exactly once before its caption. A caption-only dirty instead
+    /// needs the button as an underlay replay.
+    #[test]
+    fn click_rounded_button_dest_reset_keeps_caption_on_button_fill() {
+        let page = [0.0, 0.0, 800.0, 600.0];
+        let button = [10.0, 40.0, 220.0, 32.0];
+        let mut page_fill = blank_instance(page[0], page[1], page[2], page[3]);
+        page_fill.color = [0.98, 0.98, 0.97, 1.0];
+        let mut button_fill = blank_instance(button[0], button[1], button[2], button[3]);
+        button_fill.color = [0.12, 0.18, 0.55, 1.0];
+        button_fill.radii = [6.0; 4];
+        let mut page_p = slot(1, page, (0, 0));
+        page_p.instance = (0, 1);
+        let mut button_p = slot(2, button, (0, 1));
+        button_p.instance = (1, 2);
+        let instances = [page_fill, button_fill];
+        let paints = [page_p, button_p];
+        let reset = node_present_dest_reset_full(
+            2,
+            button,
+            &paints,
+            &instances,
+            &[],
+            &[],
+            1.0,
+            Some(button),
+        )
+        .expect("caption click dest-resets the button");
+        let cx = button[0] + button[2] * 0.5;
+        let cy = button[1] + button[3] * 0.5;
+        let lum = |c: [f32; 4]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
+        assert_eq!(reset.replay, (0, 0), "own chrome is drawn by the dirty slot");
+        assert_eq!(reset.clear, page_fill.color);
+        let own = slot_paint_ops(
+            &[crate::layout::layout_tree::PaintOp::Rects { start: 0, count: 2 }],
+            button_p.instance,
+            button_p.textured,
+        ).collect::<Vec<_>>();
+        assert!(matches!(own.as_slice(), [crate::layout::layout_tree::PaintOp::Rects { start: 1, count: 1 }]));
+        let visible = if button_p.instance.1 > button_p.instance.0 {
+            (button_p.instance.0..button_p.instance.1)
+                .rev()
+                .find_map(|i| {
+                    let inst = &instances[i];
+                    let [x, y] = inst.rect_pos;
+                    let [w, h] = inst.rect_size;
+                    (inst.color[3] > 0.95 && cx >= x && cy >= y && cx < x + w && cy < y + h)
+                        .then_some(inst.color)
+                })
+                .unwrap_or(reset.clear)
+        } else {
+            reset.clear
+        };
+        let page_lum = lum(page_fill.color);
+        let button_lum = lum(button_fill.color);
+        assert!(
+            lum(visible) < page_lum - 0.25 && (lum(visible) - button_lum).abs() < 0.05,
+            "click must keep the caption on the button fill, not the lighter page; \
+             visible={visible:?} replay={:?} clear={:?}",
+            reset.replay,
+            reset.clear
+        );
+
+        let caption = [18.0, 46.0, 140.0, 20.0];
+        let mut text_p = slot(4, caption, (0, 1));
+        text_p.instance = (2, 2);
+        let paints = [page_p, button_p, text_p];
+        let text_reset = node_present_dest_reset_full(
+            4,
+            caption,
+            &paints,
+            &instances,
+            &[],
+            &[],
+            1.0,
+            Some(caption),
+        )
+        .expect("text leaf still dest-resets when the button is not dirty");
+        assert!(
+            text_reset.replay.0 <= 1 && text_reset.replay.1 > 1,
+            "text-only wipe must still replay the rounded button, got {:?}",
+            text_reset.replay
+        );
+    }
+
     #[test]
     fn layered_clip_must_not_cut_overlay_rail_against_full_width_jump_dock() {
         // Latest dock is a full-width empty bar. Occupancy clip against it used
@@ -5199,6 +5759,564 @@ mod tests {
         let full = page_stack_band_submit_text(&prev, &curr, 0, 4, None, false)
             .expect("FullClear still owns the whole band");
         assert_eq!(full.len(), 4);
+    }
+
+    #[test]
+    fn toggle_caption_is_not_submitted_twice_with_its_stable_suffix() {
+        // Rapid click: "打开 RSX Trigger" → "关闭 RSX Trigger". The Latin suffix
+        // does not change. The button is a live Node dirty (capture draws the
+        // whole line) and the popover Restore hole also contains that line.
+        // Page glyphon must not submit it again.
+        let mut caption = sample_text("关闭 RSX Trigger", 18.0);
+        caption.y = 46.0;
+        caption.width = 140.0;
+        caption.height = 20.0;
+        let mut heading = sample_text("Trigger · Builder", 10.0);
+        heading.y = 120.0;
+        heading.width = 120.0;
+        heading.height = 16.0;
+        let trigger = PaintDirty {
+            key: 2,
+            bounds: [10.0, 40.0, 160.0, 32.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let panel = [10.0, 76.0, 220.0, 96.0];
+        let restore = PaintDirty {
+            key: 9,
+            bounds: [0.0, 30.0, 250.0, 160.0],
+            kind: PaintDirtyKind::OverlayRestore,
+        };
+        let page = vec![caption.clone(), heading.clone()];
+        let paints = vec![slot(2, trigger.bounds, (0, 1))];
+        let kept = page_submit_excluding_live_node_capture(
+            vec![caption.clone(), heading.clone()],
+            &page,
+            &[restore, trigger],
+            &paints,
+            &[(9, panel)],
+            None,
+            true,
+        );
+        assert!(
+            kept.iter().all(|n| n.text != "关闭 RSX Trigger"),
+            "capture owns the toggled caption; a second page draw flickers the suffix, got {:?}",
+            kept.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+        );
+        assert!(
+            kept.iter().any(|n| n.text == "Trigger · Builder"),
+            "unchanged heading outside the button must stay in the page mesh"
+        );
+        let full = page_submit_excluding_live_node_capture(
+            vec![caption.clone(), heading],
+            &page,
+            &[restore, trigger],
+            &paints,
+            &[(9, panel)],
+            None,
+            false,
+        );
+        assert!(
+            full.iter().any(|n| n.text == "关闭 RSX Trigger"),
+            "FullClear has no capture flush; dropping the caption blanks it"
+        );
+        let mut sibling = sample_text("icon", 20.0);
+        sibling.y = 48.0;
+        sibling.width = 100.0;
+        sibling.height = 20.0;
+        let with_sibling = vec![caption, sibling.clone()];
+        let sibling_kept = page_submit_excluding_live_node_capture(
+            with_sibling.clone(),
+            &with_sibling,
+            &[restore, trigger],
+            &paints,
+            &[(9, panel)],
+            None,
+            true,
+        );
+        assert!(
+            sibling_kept.iter().all(|n| n.text != "icon"),
+            "restore cleared the icon; the page mesh would draw it under the shadow"
+        );
+        assert!(
+            overlay_restore_fringe_text(&with_sibling, &[restore, trigger], &[(9, panel)], None)
+                .iter()
+                .any(|n| n.text == "icon"),
+            "the icon sits outside the panel stamp, so page glyphon must not redraw it"
+        );
+        let chip_text = {
+            let mut t = sample_text("chip", 24.0);
+            t.y = 96.0;
+            t.width = 32.0;
+            t.height = 16.0;
+            t
+        };
+        let chip = PaintDirty {
+            key: 3,
+            bounds: [20.0, 90.0, 40.0, 28.0],
+            kind: PaintDirtyKind::Node,
+        };
+        let chip_page = vec![chip_text.clone()];
+        let swallowed = page_submit_excluding_live_node_capture(
+            vec![chip_text],
+            &chip_page,
+            &[restore, chip],
+            &[slot(3, chip.bounds, (0, 1))],
+            &[(9, panel)],
+            None,
+            true,
+        );
+        assert!(
+            swallowed.iter().any(|n| n.text == "chip"),
+            "a Node dirty inside the panel stamp is not captured; Restore must still draw it"
+        );
+    }
+
+    #[test]
+    fn toggle_caption_fade_restore_leaves_suffix_in_retain() {
+        // Fade tick: the button is not a Node dirty. OverlayRestore's padded
+        // halo still contains the trigger. Clearing that line and flushing it
+        // after the shadow blends the Latin coverage against the animating
+        // shadow, so "RSX Trigger" flickers even though its box did not move.
+        // Page glyphon must not redraw it either (that draw is under the shadow).
+        let mut caption = sample_text("关闭 RSX Trigger", 18.0);
+        caption.y = 46.0;
+        caption.width = 140.0;
+        caption.height = 20.0;
+        let mut chip = sample_text("chip", 24.0);
+        chip.y = 96.0;
+        chip.width = 32.0;
+        chip.height = 16.0;
+        let panel = [10.0, 76.0, 220.0, 96.0];
+        let halo = [4.0, 54.0, 232.0, 120.0];
+        let restore_bounds = padded_xywh(halo, 16.0);
+        let restore = PaintDirty {
+            key: 9,
+            bounds: restore_bounds,
+            kind: PaintDirtyKind::OverlayRestore,
+        };
+        let page = vec![caption.clone(), chip.clone()];
+        let stamps = [(9u64, panel)];
+        let mut button_paint = slot(2, [10.0, 40.0, 220.0, 32.0], (0, 1));
+        button_paint.text = (0, 1);
+        let mut caption_paint = slot(
+            4,
+            [caption.x, caption.y, caption.width, caption.height],
+            (1, 2),
+        );
+        caption_paint.text = (1, 2);
+        let cleared = scissors_keeping_stable_page_captions(
+            vec![restore_bounds],
+            &[button_paint, caption_paint],
+            &stamps,
+            Some(halo),
+        );
+        let latin_x = caption.x + caption.width - 8.0;
+        let latin_y = caption.y + caption.height * 0.5;
+        let cjk_x = caption.x + 4.0;
+        let hits = |r: &[f32; 4], x: f32, y: f32| {
+            x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
+        };
+        assert!(
+            cleared.iter().all(|r| !hits(r, latin_x, latin_y) && !hits(r, cjk_x, latin_y)),
+            "fade clear/shadow must leave both scripts in retain, scissors={cleared:?}"
+        );
+        assert!(
+            cleared.iter().any(|r| hits(r, 100.0, 73.0)),
+            "the gap between trigger and panel must still be rebuilt"
+        );
+        let page_draw = page_submit_excluding_live_node_capture(
+            page.clone(),
+            &page,
+            &[restore],
+            &[button_paint, caption_paint],
+            &stamps,
+            Some(halo),
+            true,
+        );
+        assert!(
+            page_draw.iter().all(|n| n.text != caption.text),
+            "page glyphon runs before the shadow and would flicker the suffix, got {:?}",
+            page_draw.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+        );
+        assert!(
+            page_draw.iter().any(|n| n.text == "chip"),
+            "Restore still has to draw the panel chip"
+        );
+        let mut under = sample_text("under", 300.0);
+        under.y = 80.0;
+        under.width = 40.0;
+        under.height = 16.0;
+        let wide_shadow = [280.0, 60.0, 80.0, 50.0];
+        let wide_restore = PaintDirty {
+            key: 9,
+            bounds: [0.0, 0.0, 400.0, 200.0],
+            kind: PaintDirtyKind::OverlayRestore,
+        };
+        let under_page = vec![under.clone()];
+        let under_draw = page_submit_excluding_live_node_capture(
+            under_page.clone(),
+            &under_page,
+            &[wide_restore],
+            &[],
+            &stamps,
+            Some(wide_shadow),
+            true,
+        );
+        assert!(
+            under_draw.iter().any(|n| n.text == "under"),
+            "text fully inside the shadow is still cleared, so the page mesh must redraw it"
+        );
+    }
+
+    #[test]
+    fn hover_during_overlay_fade_keeps_unchanged_suffix() {
+        // Pointer stays on the trigger. Hover/focus transition dirties the
+        // button, not the caption leaf. OverlayRestore is the open/close fade.
+        let trigger = [10.0, 40.0, 220.0, 32.0];
+        let caption = [18.0, 46.0, 140.0, 20.0];
+        let panel = [10.0, 76.0, 220.0, 96.0];
+        let halo = [4.0, 54.0, 232.0, 120.0];
+        let stamps = [(9u64, panel)];
+        let coverage = crate::app::damage::overlay_replay_coverage(&stamps, Some(halo));
+        let wipe = [10.0, 40.0, 220.0, 48.0];
+        let pieces = crate::app::damage::page_scissors_excluding_portal_boxes(wipe, &stamps);
+        let face = crate::app::damage::page_node_present_scissors_preserving_portal_halo(
+            pieces,
+            trigger,
+            coverage,
+            &stamps,
+        );
+        let button = PaintDirty {
+            key: 2,
+            bounds: trigger,
+            kind: PaintDirtyKind::Node,
+        };
+        let restore = PaintDirty {
+            key: 9,
+            bounds: padded_xywh(halo, 16.0),
+            kind: PaintDirtyKind::OverlayRestore,
+        };
+        let mut button_paint = slot(2, trigger, (0, 1));
+        button_paint.text = (0, 1);
+        let mut caption_paint = slot(4, caption, (0, 1));
+        caption_paint.text = (0, 1);
+        let paints = [button_paint, caption_paint];
+        let hover_dirties = [restore, button];
+        // Encode clears this face. Carving the caption out freezes the fill
+        // under every glyph while hover/active/focus keeps easing, then the
+        // click paints the page color into that hole — the whole line flashes.
+        let cleared = node_scissors_keeping_unchanged_captions(
+            face,
+            &paints,
+            &hover_dirties,
+            &stamps,
+        );
+        let hits = |r: &[f32; 4], x: f32, y: f32| {
+            x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
+        };
+        let latin_x = caption[0] + caption[2] - 8.0;
+        let latin_y = caption[1] + caption[3] * 0.5;
+        let cjk_x = caption[0] + 4.0;
+        assert!(
+            cleared.iter().any(|r| hits(r, latin_x, latin_y))
+                && cleared.iter().any(|r| hits(r, cjk_x, latin_y)),
+            "hover fill must repaint under both scripts, scissors={cleared:?}"
+        );
+        assert!(
+            cleared.iter().any(|r| hits(r, 14.0, 42.0)),
+            "button fill around the caption must still transition, scissors={cleared:?}"
+        );
+        assert!(
+            cleared.iter().all(|r| !hits(r, 100.0, 73.0)),
+            "gap halo pixel must stay uncleared"
+        );
+        let mut line = sample_text("关闭 Builder Trigger", caption[0]);
+        line.y = caption[1];
+        line.width = caption[2];
+        line.height = caption[3];
+        let hover_capture = node_present_clipped_capture_text_wipes_excluding_overlay(
+            &hover_dirties,
+            &[line.clone()],
+            &paints,
+            &[(button.key, trigger)],
+            &stamps,
+        );
+        assert_eq!(
+            hover_capture.len(),
+            1,
+            "the wiped caption must come back as one run, got {:?}",
+            hover_capture
+                .iter()
+                .map(|n| n.text.as_str())
+                .collect::<Vec<_>>()
+        );
+        let clip = hover_capture[0].clip_bounds.expect("caption clip");
+        assert!(
+            hits(&clip, latin_x, latin_y) && hits(&clip, cjk_x, latin_y),
+            "one clip must cover both scripts, got {clip:?}"
+        );
+        let ring = [4.0_f32, 34.0, 232.0, 44.0];
+        let ring_capture = node_present_clipped_capture_text_wipes_excluding_overlay(
+            &hover_dirties,
+            &[line.clone()],
+            &paints,
+            &[(button.key, ring)],
+            &stamps,
+        );
+        assert_eq!(
+            ring_capture.first().and_then(|n| n.clip_bounds),
+            Some(clip),
+            "a growing focus ring must not move the caption clip"
+        );
+        let text_dirty = PaintDirty {
+            key: 4,
+            bounds: caption,
+            kind: PaintDirtyKind::Node,
+        };
+        let click_dirties = [restore, button, text_dirty];
+        let click_clear = node_scissors_keeping_unchanged_captions(
+            crate::app::damage::page_node_present_scissors_preserving_portal_halo(
+                crate::app::damage::page_scissors_excluding_portal_boxes(wipe, &stamps),
+                trigger,
+                coverage,
+                &stamps,
+            ),
+            &paints,
+            &click_dirties,
+            &stamps,
+        );
+        assert!(
+            click_clear.iter().any(|r| hits(r, latin_x, latin_y))
+                && click_clear.iter().any(|r| hits(r, cjk_x, latin_y)),
+            "the click must repaint the button under both scripts, scissors={click_clear:?}"
+        );
+        let click_capture = node_present_clipped_capture_text_wipes_excluding_overlay(
+            &click_dirties,
+            &[line.clone()],
+            &paints,
+            &[(button.key, trigger), (text_dirty.key, caption)],
+            &stamps,
+        );
+        assert_eq!(
+            click_capture.len(),
+            1,
+            "the changed caption is one run, got {:?}",
+            click_capture
+                .iter()
+                .map(|n| n.text.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            click_capture[0].clip_bounds,
+            Some(clip),
+            "click and hover must clip the line to the same box"
+        );
+    }
+
+    #[test]
+    fn keyboard_toggle_flush_stays_inside_the_caption() {
+        // Space/Enter toggles the label and the popover. The button is not
+        // hovered, so the only Node hole is the caption. The flush scissor
+        // must be that hole: the portal halo covers both scripts and the gap,
+        // and the coverage kernel then src-overs the whole line every tick.
+        let caption = [18.0, 46.0, 140.0, 20.0];
+        let button = [10.0, 40.0, 220.0, 32.0];
+        let panel = [10.0, 76.0, 220.0, 96.0];
+        let halo = [4.0, 54.0, 232.0, 120.0];
+        let restore = PaintDirty {
+            key: 9,
+            bounds: padded_xywh(halo, 16.0),
+            kind: PaintDirtyKind::OverlayRestore,
+        };
+        let mut button_paint = slot(2, button, (0, 1));
+        button_paint.text = (0, 1);
+        let mut caption_paint = slot(4, caption, (1, 2));
+        caption_paint.text = (1, 2);
+        let pieces = glyph_flush_logical_pieces(
+            &[caption],
+            &[restore],
+            &[button_paint, caption_paint],
+            &[(9u64, panel)],
+            Some(halo),
+        );
+        let hits = |r: &[f32; 4], x: f32, y: f32| {
+            x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
+        };
+        let latin_x = caption[0] + caption[2] - 8.0;
+        let mid_y = caption[1] + caption[3] * 0.5;
+        let cjk_x = caption[0] + 4.0;
+        assert!(
+            pieces.iter().any(|r| hits(r, latin_x, mid_y) && hits(r, cjk_x, mid_y)),
+            "one flush piece must cover both scripts, pieces={pieces:?}"
+        );
+        assert!(
+            pieces
+                .iter()
+                .all(|r| !(hits(r, latin_x, mid_y) && hits(r, 100.0, 73.0))),
+            "the caption scissor must not be the portal halo, pieces={pieces:?}"
+        );
+        assert!(
+            pieces
+                .iter()
+                .all(|r| !(hits(r, latin_x, mid_y) && hits(r, 14.0, 42.0))),
+            "button chrome outside the caption stays in retain, pieces={pieces:?}"
+        );
+        let region = PaintDirty {
+            key: 3,
+            bounds: [20.0, 90.0, 40.0, 28.0],
+            kind: PaintDirtyKind::Region,
+        };
+        let with_region = glyph_flush_logical_pieces(&[], &[region], &[], &[], None);
+        assert!(
+            with_region.iter().any(|r| hits(r, 30.0, 100.0)),
+            "a Region clear still has to flush the glyphs it captured"
+        );
+    }
+
+    #[test]
+    fn keyboard_toggle_flush_never_blends_a_pixel_twice() {
+        // Space/Enter dirties the caption and the fading popover. Separate
+        // repair rectangles must stay disjoint after physical rounding so
+        // the same antialiased edge is never blended twice.
+        let caption = [18.0, 46.0, 140.0, 20.0];
+        let button = [10.0, 40.0, 220.0, 32.0];
+        let panel = [10.0, 76.0, 220.0, 96.0];
+        let halo = [4.0, 54.0, 232.0, 120.0];
+        let restore = PaintDirty {
+            key: 9,
+            bounds: padded_xywh(halo, 16.0),
+            kind: PaintDirtyKind::OverlayRestore,
+        };
+        let mut button_paint = slot(2, button, (0, 1));
+        button_paint.text = (0, 1);
+        let mut caption_paint = slot(4, caption, (1, 2));
+        caption_paint.text = (1, 2);
+        let pieces = glyph_flush_logical_pieces(
+            &[caption],
+            &[restore],
+            &[button_paint, caption_paint],
+            &[(9u64, panel)],
+            Some(halo),
+        );
+        assert!(
+            pieces.len() > 1,
+            "precondition: the caption hole and the portal fringe are separate scissors, pieces={pieces:?}"
+        );
+        let physical: Vec<_> = pieces.iter().filter_map(|r| {
+            crate::app::damage::damage_to_scissor_physical(*r, 0.0, 1.25, 400, 250)
+                .map(|(x, y, w, h)| [x as f32, y as f32, w as f32, h as f32])
+        }).collect();
+        let scissors = capture_glyph_scissors_physical(&physical, 400, 250);
+        for (i, a) in scissors.iter().enumerate() {
+            for b in &scissors[i + 1..] {
+                assert!(intersect_rects(*a, *b).is_none(), "shared glyph pixels: {a:?} {b:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn fade_shadow_over_caption_must_not_clear_the_line() {
+        // Popup Md halo (blur 10, outset ~23px) plus the enter slide covers the
+        // trigger caption. Leaving that face in the restore clear wipes both
+        // scripts on every opacity tick.
+        let caption = [18.0, 46.0, 140.0, 20.0];
+        let button = [10.0, 40.0, 220.0, 32.0];
+        let panel = [10.0, 76.0, 220.0, 96.0];
+        let halo = [0.0, 40.0, 240.0, 160.0];
+        assert!(
+            crate::app::damage::rect_contains_rect(halo, caption),
+            "precondition: the animated halo contains the caption"
+        );
+        let mut button_paint = slot(2, button, (0, 1));
+        button_paint.text = (0, 1);
+        let mut caption_paint = slot(4, caption, (0, 1));
+        caption_paint.text = (0, 1);
+        let cleared = scissors_keeping_stable_page_captions(
+            vec![padded_xywh(halo, 16.0)],
+            &[button_paint, caption_paint],
+            &[(9u64, panel)],
+            Some(halo),
+        );
+        let latin_x = caption[0] + caption[2] - 8.0;
+        let latin_y = caption[1] + caption[3] * 0.5;
+        let cjk_x = caption[0] + 4.0;
+        let hits = |r: &[f32; 4], x: f32, y: f32| {
+            x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
+        };
+        assert!(
+            cleared
+                .iter()
+                .all(|r| !hits(r, latin_x, latin_y) && !hits(r, cjk_x, latin_y)),
+            "restore/shadow must not clear a trigger caption, scissors={cleared:?}"
+        );
+        assert!(
+            cleared.iter().any(|r| hits(r, 100.0, 90.0)),
+            "panel pixels still have to be rebuilt"
+        );
+    }
+
+    #[test]
+    fn fade_overlay_keeps_stable_suffix_out_of_the_clear() {
+        // 打开 and 关闭 share this suffix box. The restore pad contains it, so
+        // the old clear wiped "RSX Trigger" on every opacity tick.
+        let caption = [18.0, 46.0, 140.0, 20.0];
+        let button = [10.0, 40.0, 220.0, 32.0];
+        let panel = [10.0, 76.0, 220.0, 96.0];
+        let halo = [4.0, 54.0, 232.0, 120.0];
+        let restore = padded_xywh(halo, 16.0);
+        let latin_x = caption[0] + caption[2] - 8.0;
+        let latin_y = caption[1] + caption[3] * 0.5;
+        let mut button_paint = slot(2, button, (0, 1));
+        button_paint.text = (0, 1);
+        let mut caption_paint = slot(4, caption, (1, 2));
+        caption_paint.text = (1, 2);
+        let stamps = [(9u64, panel)];
+        let cleared = scissors_keeping_stable_page_captions(
+            vec![restore],
+            &[button_paint, caption_paint],
+            &stamps,
+            Some(halo),
+        );
+        let hits = |r: &[f32; 4], x: f32, y: f32| {
+            x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
+        };
+        assert!(
+            cleared.iter().all(|r| !hits(r, latin_x, latin_y)),
+            "fade clear/shadow must leave the stable suffix, scissors={cleared:?}"
+        );
+        assert!(
+            cleared.iter().any(|r| hits(r, 100.0, 73.0)),
+            "the gap between trigger and panel must still be rebuilt, scissors={cleared:?}"
+        );
+        let chip = [24.0, 96.0, 32.0, 16.0];
+        let mut chip_paint = slot(3, chip, (2, 3));
+        chip_paint.text = (2, 3);
+        let with_chip = scissors_keeping_stable_page_captions(
+            vec![restore],
+            &[button_paint, caption_paint, chip_paint],
+            &stamps,
+            Some(halo),
+        );
+        // A label that sits entirely in the shadow, and is not the trigger
+        // caption, must still be cleared. Punching it would leave a bright hole.
+        let beside = [300.0, 80.0, 40.0, 16.0];
+        let wide_shadow = [280.0, 60.0, 80.0, 50.0];
+        let mut beside_paint = slot(8, beside, (3, 4));
+        beside_paint.text = (3, 4);
+        let with_beside = scissors_keeping_stable_page_captions(
+            vec![[0.0, 0.0, 400.0, 200.0]],
+            &[beside_paint],
+            &stamps,
+            Some(wide_shadow),
+        );
+        assert!(
+            with_beside.iter().any(|r| hits(r, 310.0, 88.0)),
+            "text fully inside the shadow stays in the scissor, scissors={with_beside:?}"
+        );
+        assert!(
+            with_chip.iter().any(|r| hits(r, 30.0, 100.0)),
+            "a chip inside the panel stamp stays in the restore scissor"
+        );
     }
 
     #[test]
@@ -6868,14 +7986,16 @@ mod tests {
             !crate::app::damage::node_present_slot_moved(rest_bar, hover_bar),
             "parent last-present must not grow with child hover:scale Bake\n rest={rest_bar:?} hover={hover_bar:?}"
         );
+        // Equal-span ink belongs to the leaf. Recording it on the wrapping
+        // chip as well would dirty two slots for one transformed bake.
         let rest_chip = rest_slots
             .iter()
-            .find(|(k, _)| *k == 2)
+            .find(|(k, _)| *k == 3)
             .map(|(_, b)| *b)
             .expect("chip rest");
         let hover_chip = hover_slots
             .iter()
-            .find(|(k, _)| *k == 2)
+            .find(|(k, _)| *k == 3)
             .map(|(_, b)| *b)
             .expect("chip hover");
         assert!(
