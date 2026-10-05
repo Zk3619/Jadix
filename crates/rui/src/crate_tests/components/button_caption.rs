@@ -267,3 +267,96 @@ fn mixed_cjk_latin_caption_box_covers_advanced_ink() {
         intrinsic
     );
 }
+
+/// Rapid toggle swaps `打开` / `关闭` and the Latin suffix must not be a second
+/// paint region. StyleChanged records only the current box. If that box misses
+/// the previous suffix and the slot is not treated as moved, Load keeps the
+/// old "Trigger" pixels for a frame.
+#[test]
+fn toggle_prefix_clear_covers_previous_suffix() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    fn placed(label: &str) -> (crate::core::tree::Element, [f32; 4], [f32; 4], f32, f32) {
+        let mut root = Element::new().w(800.0).h(160.0).child(Element::from(
+            button("mix-cap")
+                .variant("outline")
+                .size("sm")
+                .child(Element::new().text(label)),
+        ));
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 800.0, 160.0, [-1.0, -1.0]);
+        let n = result
+            .text_nodes
+            .iter()
+            .find(|n| n.text == label)
+            .expect("caption");
+        let button = root.children[0].layout_bounds;
+        let text_box = [n.x, n.y, n.width, n.height];
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        let family = best_font_family(&fs);
+        let norm = resolve_face_weight(fs.db(), family, 500).attrs_weight;
+        let mut buf = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
+        buf.set_size(Some(16_384.0), None);
+        buf.set_wrap(glyphon::Wrap::None);
+        buf.set_text(
+            label,
+            &glyphon::Attrs::new()
+                .family(family)
+                .weight(glyphon::fontdb::Weight(norm)),
+            glyphon::Shaping::Advanced,
+            None,
+        );
+        buf.shape_until_scroll(&mut fs, false);
+        let mut latin_start = f32::MAX;
+        let mut latin_end = 0.0_f32;
+        for run in buf.layout_runs() {
+            for g in run.glyphs.iter() {
+                let ch = label[g.start..g.end].chars().next().unwrap_or('\0');
+                if ch.is_ascii_alphabetic() {
+                    latin_start = latin_start.min(g.x);
+                    latin_end = latin_end.max(g.x + g.w);
+                }
+            }
+        }
+        (root, button, text_box, n.x + latin_start, n.x + latin_end)
+    }
+
+    for (open_s, close_s) in [
+        ("打开 Builder Trigger", "关闭 Builder Trigger"),
+        ("打开 RSX Trigger", "关闭 RSX Trigger"),
+    ] {
+        let (open_root, open_btn, open_text, open_latin0, open_latin1) = placed(open_s);
+        let (_close_root, close_btn, close_text, close_latin0, close_latin1) = placed(close_s);
+        let open_leaf = open_root
+            .children
+            .iter()
+            .find_map(|el| find_text_leaf(el, open_s))
+            .expect("open leaf");
+        let needs = crate::app::reactive::bind_text_metric_needs_layout(open_leaf, open_s, close_s);
+        let needs_back =
+            crate::app::reactive::bind_text_metric_needs_layout(open_leaf, close_s, open_s);
+        let text_moved =
+            crate::app::damage::node_present_slot_moved(open_text, close_text);
+        let btn_moved = crate::app::damage::node_present_slot_moved(open_btn, close_btn);
+        let old_suffix = [open_latin0, open_text[1], (open_latin1 - open_latin0).max(0.0), open_text[3]];
+        let new_suffix = [close_latin0, close_text[1], (close_latin1 - close_latin0).max(0.0), close_text[3]];
+        let clear_is_new_text = crate::app::damage::rect_contains_rect(close_text, old_suffix);
+        let clear_is_new_btn = crate::app::damage::rect_contains_rect(close_btn, old_suffix);
+        let dx = (open_latin0 - close_latin0).abs();
+        assert!(
+            dx <= 0.5 && open_text == close_text,
+            "{open_s:?} → {close_s:?} must keep one suffix box (dx={dx:.2} open={open_text:?} close={close_text:?} needs={needs}/{needs_back})"
+        );
+        let _ = (old_suffix, new_suffix, text_moved, btn_moved, clear_is_new_text, clear_is_new_btn);
+    }
+}
+
+fn find_text_leaf<'a>(el: &'a Element, text: &str) -> Option<&'a Element> {
+    if el.text.as_deref() == Some(text) {
+        return Some(el);
+    }
+    el.children.iter().find_map(|c| find_text_leaf(c, text))
+}

@@ -768,7 +768,9 @@ fn closing_last_avatar_portal_restores_its_painted_halo() {
     let sibling = (8, [500.0, 100.0, 120.0, 80.0]);
     assert_eq!(
         overlay_restore_leftover_coverage(&[(7, stamp), sibling], &[sibling], Some(visual)),
-        vec![(7, stamp)]
+        // Per-key restore must cover the same 16px halo as overlay encode.
+        // The remaining sibling must neither suppress this hole nor be restored.
+        vec![(7, [281.0, 59.6, 158.5, 64.75])]
     );
 }
 

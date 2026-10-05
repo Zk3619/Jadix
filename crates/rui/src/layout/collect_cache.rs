@@ -1754,10 +1754,14 @@ mod tests {
     fn overflow_hidden_is_skippable_for_exact_replay() {
         let mut el = el_with_child();
         el.style.overflow.x = taffy::style::Overflow::Hidden;
+        assert!(!subtree_is_skippable(&el), "a fresh node has no valid cached display list");
+        stamp_subtree_paint_hashes(&mut el, false);
         assert!(
             subtree_is_skippable(&el),
             "overflow-hidden may exact-replay; translate is refused separately"
         );
+        el.collect_paint_hash = 0;
+        assert!(!subtree_is_skippable(&el), "an invalidated overflow node must recollect");
     }
 
     #[test]

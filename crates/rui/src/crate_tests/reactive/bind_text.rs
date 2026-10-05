@@ -560,17 +560,80 @@ fn bind_miss_hit_does_not_count() {
 }
 
 #[test]
-fn leaf_bind_structure_changed_coerces_to_layout() {
-    use crate::app::reactive::sanitize_leaf_bind_status;
-
+fn bound_slot_structure_change_keeps_identity_and_recollects_children() {
+    use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+    use crate::layout::layout_tree::LayoutTree;
+    reset_registered_anchors();
+    let count = crate::core::reactivity::Signal::new(1_usize);
+    let live = Rc::new(RefCell::new(Element::new()));
+    install_test_reconcile_root(live.clone());
+    let builds = Rc::new(Cell::new(0));
+    let reported = Rc::new(Cell::new(LayoutStatus::Clean));
+    let effect = create_effect({
+        let live = live.clone();
+        let builds = builds.clone();
+        let reported = reported.clone();
+        move || {
+            builds.set(builds.get() + 1);
+            *live.borrow_mut() = bind_prop(
+                Element::new().w(100.0).h(50.0),
+                "bind:structural-slot",
+                move || count.get(),
+                {
+                    let reported = reported.clone();
+                    move |el, n| {
+                        el.children = (0..n)
+                            .map(|i| {
+                                Element::new()
+                                    .w(12.0)
+                                    .h(12.0)
+                                    .bg([0.8, 0.2, 0.1, 1.0])
+                                    .template_id(format!("bound-child-{i}"))
+                            })
+                            .collect();
+                        reported.set(LayoutStatus::StructureChanged);
+                        LayoutStatus::StructureChanged
+                    }
+                },
+            );
+        }
+    });
+    crate::app::reactive::drain_deferred_view_remounts();
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut live.borrow_mut(), 100.0, 50.0, [-1.0, -1.0]);
+    let node = live.borrow().layout_node;
+    count.set(2);
     assert_eq!(
-        sanitize_leaf_bind_status(LayoutStatus::StructureChanged),
-        LayoutStatus::LayoutChanged
+        builds.get(),
+        1,
+        "leaf changes must not rebuild the author component"
     );
     assert_eq!(
-        sanitize_leaf_bind_status(LayoutStatus::StyleChanged),
-        LayoutStatus::StyleChanged
+        live.borrow().layout_node,
+        node,
+        "mounted slot identity stays stable"
     );
+    assert_eq!(live.borrow().children.len(), 2);
+    assert_eq!(reported.get(), LayoutStatus::StructureChanged);
+    assert_eq!(
+        crate::app::reactive::sanitize_leaf_bind_status(reported.get()),
+        LayoutStatus::StructureChanged
+    );
+    let drawn = tree.build_and_layout(&mut live.borrow_mut(), 100.0, 50.0, [-1.0, -1.0]);
+    assert_eq!(
+        drawn.instances.len(),
+        2,
+        "new child must enter the display list"
+    );
+    count.set(0);
+    let empty = tree.build_and_layout(&mut live.borrow_mut(), 100.0, 50.0, [-1.0, -1.0]);
+    assert!(
+        empty.instances.is_empty(),
+        "removed children must leave the display list"
+    );
+    clear_test_reconcile_root();
+    dispose_effect(effect);
+    reset_registered_anchors();
 }
 
 #[test]

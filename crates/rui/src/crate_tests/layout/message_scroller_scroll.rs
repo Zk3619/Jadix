@@ -653,6 +653,9 @@ fn message_scroller_jump_slot_survives_fingerprint_skip() {
                 [0.0, 0.0],
             );
             let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            // Cache replay is tested at a presented pose, not the alpha-zero
+            // first-enter seed (which correctly contributes no painted bounds).
+            settle_latest_jump_pose(&mut root);
             tree.set_collect_skip_allowed(true);
             let _ = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], false, false);
             let skipped =

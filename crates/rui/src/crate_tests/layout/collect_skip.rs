@@ -1947,8 +1947,8 @@ fn paint_only_skip_must_not_freeze_drag_overlay() {
         "page sibling must still fingerprint-replay; only the drag overlay stays live"
     );
     assert!(
-        root.children[1].collect_skip_live,
-        "drag overlay must stamp collect_skip_live so ancestors walk into it"
+        root.children[1].collect_skip_side_channel && !root.children[1].collect_skip_live,
+        "drag overlay must recollect its side channel without making idle descendants live"
     );
     let _ = drag_chip_instance(&skipped);
 
@@ -2064,8 +2064,8 @@ fn paint_only_skip_must_not_drop_page_stack_bands() {
         "left sibling must still fingerprint-replay; only the stacking parent stays live"
     );
     assert!(
-        root.children[1].collect_skip_live,
-        "data-stacking-context must stamp collect_skip_live so ancestors walk into the pile"
+        root.children[1].collect_skip_side_channel && !root.children[1].collect_skip_live,
+        "stacking bands must recollect without making idle descendants live"
     );
 }
 
@@ -2088,8 +2088,8 @@ fn paint_only_skip_must_not_drop_z_index_page_stack_bands() {
         "left sibling must still fingerprint-replay; only the z-index parent stays live"
     );
     assert!(
-        root.children[1].collect_skip_live,
-        "direct z-index children must stamp collect_skip_live (toast pile without stacking attr)"
+        root.children[1].collect_skip_side_channel && !root.children[1].collect_skip_live,
+        "z-index stacking bands must recollect without making idle descendants live"
     );
 }
 

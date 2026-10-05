@@ -1950,7 +1950,7 @@ mod chrome_tests {
     }
 
     #[test]
-    fn ghost_lucide_title_chrome_emits_textured_draws() {
+    fn ghost_lucide_title_chrome_emits_icon_paint() {
         use super::button;
         use crate::core::reactivity::create_root;
         use crate::layout::layout_tree::LayoutTree;
@@ -1964,6 +1964,7 @@ mod chrome_tests {
         });
         let mut tree = LayoutTree::new();
         let result = tree.build_and_layout(&mut el, 48.0, 32.0, [0.0, 0.0]);
+        #[cfg(feature = "bundled-lucide")]
         assert!(
             result
                 .textured_draws
@@ -1976,6 +1977,14 @@ mod chrome_tests {
                 .iter()
                 .map(|d| d.texture_key.as_str())
                 .collect::<Vec<_>>()
+        );
+        #[cfg(not(feature = "bundled-lucide"))]
+        assert!(
+            result
+                .text_nodes
+                .iter()
+                .any(|n| n.style.font_family.as_deref() == Some("lucide") && !n.text.is_empty()),
+            "without bundled Lucide paths the same title icon must paint through the Lucide font"
         );
     }
 
