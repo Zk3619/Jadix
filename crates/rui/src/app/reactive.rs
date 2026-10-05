@@ -1780,6 +1780,8 @@ phase={:<8}  stop={}  prevent={}",
         let a = log_at(410.0, 82.0);
         let b = log_at(411.7, 82.9);
         assert_eq!(a.len(), b.len(), "padded fields must keep byte length");
+        // Font initialization is a first-use cost, not a mousemove cost.
+        assert!(!bind_text_metric_needs_layout(&el, &a, &b));
         let t0 = std::time::Instant::now();
         let mut needs_any = false;
         for i in 0..80 {

@@ -83,12 +83,15 @@ struct PrepareKey {
     size_q: u16,
     line_height_q: u16,
     weight: u16,
-    family_tag: u8,
+    family_hash: u64,
 }
 
 thread_local! {
     static PREPARE_CACHE: RefCell<HashMap<PrepareKey, PreparedText>> =
         RefCell::new(HashMap::new());
+    // Basic ASCII shaping has independent per-character advances (no kerning
+    // or ligatures). Reuse those exact advances for changing numeric readouts.
+    static ASCII_ADVANCES: RefCell<HashMap<PrepareKey, [f32; 95]>> = RefCell::new(HashMap::new());
     static LAYOUT_FONT_SYSTEM: RefCell<LayoutFsSlot> = const { RefCell::new(LayoutFsSlot::Empty) };
 }
 
@@ -104,6 +107,7 @@ enum LayoutFsSlot {
 /// Drop cached segment widths after fonts are (lazily) added so measure/render stay aligned.
 pub fn invalidate_prepare_cache() {
     PREPARE_CACHE.with(|c| c.borrow_mut().clear());
+    ASCII_ADVANCES.with(|c| c.borrow_mut().clear());
     FIT_CACHE.with(|c| c.borrow_mut().clear());
     IDEOGRAPH_EM.with(|c| c.set(None));
     IDEOGRAPH_PROBED.with(|c| c.set(false));
@@ -291,6 +295,24 @@ fn quantize(v: f32) -> u16 {
     (v * 10.0).clamp(0.0, u16::MAX as f32) as u16
 }
 
+fn prepare_key(
+    text: &str,
+    size: f32,
+    weight: u16,
+    line_height: f32,
+    family: Family<'_>,
+) -> PrepareKey {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    family.hash(&mut hasher);
+    PrepareKey {
+        text_hash: hash_text(text),
+        size_q: quantize(size),
+        line_height_q: quantize(line_height),
+        weight,
+        family_hash: hasher.finish(),
+    }
+}
+
 fn is_cjk(c: char) -> bool {
     matches!(
         c,
@@ -378,15 +400,79 @@ fn measure_run_width(
         other => other,
     };
     let weight = crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
+    measure_resolved_run_width(font_system, text, size, line_height, weight, family)
+}
+
+fn ascii_advances(
+    font_system: &mut FontSystem,
+    size: f32,
+    line_height: f32,
+    weight: u16,
+    family: Family<'_>,
+) -> [f32; 95] {
+    let key = prepare_key("", size, weight, line_height, family);
+    let cached = ASCII_ADVANCES.with(|c| c.borrow().get(&key).copied());
+    let advances = cached.unwrap_or_else(|| {
+        let alphabet: String = (32_u8..=126).map(char::from).collect();
+        let mut buffer = Buffer::new(font_system, Metrics::new(size, line_height));
+        buffer.set_size(Some(16_384.0), Some(line_height * 2.0));
+        buffer.set_text(
+            &alphabet,
+            &Attrs::new()
+                .family(family)
+                .weight(glyphon::fontdb::Weight(weight)),
+            Shaping::Basic,
+            None,
+        );
+        buffer.shape_until_scroll(font_system, false);
+        let mut table = [0.0; 95];
+        for run in buffer.layout_runs() {
+            for glyph in run.glyphs {
+                table[glyph.start] = glyph.w;
+            }
+        }
+        ASCII_ADVANCES.with(|c| {
+            let mut cache = c.borrow_mut();
+            if cache.len() > 128 {
+                cache.clear();
+            }
+            cache.insert(key, table);
+        });
+        table
+    });
+    advances
+}
+
+fn ascii_metrics_cacheable(size: f32, line_height: f32) -> bool {
+    size.is_finite() && size > 0.0 && line_height.is_finite() && line_height > 0.0
+}
+
+fn measure_resolved_run_width(
+    font_system: &mut FontSystem,
+    text: &str,
+    size: f32,
+    line_height: f32,
+    weight: u16,
+    family: Family<'_>,
+) -> f32 {
+    if text.is_empty() || text == "\n" {
+        return 0.0;
+    }
+    let heuristic = heuristic_segment_width(text, size, weight);
+    if font_system.db().faces().next().is_none() {
+        return heuristic;
+    }
+    if ascii_metrics_cacheable(size, line_height)
+        && text.bytes().all(|b| (32..=126).contains(&b))
+    {
+        let advances = ascii_advances(font_system, size, line_height, weight, family);
+        return text.bytes().map(|b| advances[(b - 32) as usize]).sum();
+    }
     let shaping = if text.is_ascii() {
         Shaping::Basic
     } else {
         Shaping::Advanced
     };
-    let heuristic = heuristic_segment_width(text, size, weight);
-    if font_system.db().faces().next().is_none() {
-        return heuristic;
-    }
     ensure_coverage_for_text(font_system, text);
     if crate::renderer::emoji_detect::text_contains_emoji(text)
         && crate::renderer::emoji_layout::custom_glyph_layout_enabled()
@@ -505,21 +591,7 @@ pub fn prepare_with_family(
     line_height: f32,
     family: Family<'_>,
 ) -> PreparedText {
-    let family_tag = match family {
-        Family::Serif => 1,
-        Family::SansSerif => 2,
-        Family::Monospace => 3,
-        Family::Cursive => 4,
-        Family::Fantasy => 5,
-        Family::Name(_) => 6,
-    };
-    let key = PrepareKey {
-        text_hash: hash_text(text),
-        size_q: quantize(size),
-        line_height_q: quantize(line_height),
-        weight,
-        family_tag,
-    };
+    let key = prepare_key(text, size, weight, line_height, family);
     if let Some(hit) = PREPARE_CACHE.with(|c| c.borrow().get(&key).cloned()) {
         return hit;
     }
@@ -528,8 +600,40 @@ pub fn prepare_with_family(
     let mut segments = Vec::with_capacity(parts.len());
     let mut max_seg = 0.0_f32;
     with_layout_font_system(|font_system| {
+        // Resolve once per paragraph, not once for every whitespace/number
+        // segment in a changing readout.
+        let family = match family {
+            Family::SansSerif => crate::renderer::text_hit::best_font_family(font_system),
+            other => other,
+        };
+        let weight =
+            crate::utils::font::normalize_weight_for_family(font_system.db(), family, weight);
+        // Fetch the shared advance table once, avoiding a cache lookup and
+        // copying 95 advances for every whitespace segment.
+        let advances = if ascii_metrics_cacheable(size, line_height)
+            && text.bytes().all(|b| (32..=126).contains(&b) || b == b'\n')
+            && font_system.db().faces().next().is_some()
+        {
+            Some(ascii_advances(
+                font_system,
+                size,
+                line_height,
+                weight,
+                family,
+            ))
+        } else {
+            None
+        };
         for (seg, break_after) in parts {
-            let width = measure_run_width(font_system, &seg, size, line_height, weight, family);
+            let width = if let Some(advances) = &advances {
+                if seg == "\n" {
+                    0.0
+                } else {
+                    seg.bytes().map(|b| advances[(b - 32) as usize]).sum()
+                }
+            } else {
+                measure_resolved_run_width(font_system, &seg, size, line_height, weight, family)
+            };
             max_seg = max_seg.max(width);
             segments.push(PreparedSegment {
                 text: seg,
@@ -1163,6 +1267,63 @@ pub fn measure_leaf(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ascii_measure_keeps_existing_zero_line_height_contract() {
+        invalidate_prepare_cache();
+        let prepared = prepare("numeric 42", 16.0, 400, 0.0);
+        assert!(prepared.max_segment_width.is_finite());
+        assert!(prepared.max_segment_width > 0.0);
+        assert!(ASCII_ADVANCES.with(|c| c.borrow().is_empty()),
+            "invalid shaping metrics must not enter the character-advance cache");
+    }
+
+    #[test]
+    fn ascii_advance_cache_matches_basic_shaping_and_separates_fonts() {
+        invalidate_prepare_cache();
+        with_layout_font_system(|fs| {
+            for family in [Family::SansSerif, Family::Monospace, Family::Serif] {
+                let family = if family == Family::SansSerif {
+                    crate::renderer::text_hit::best_font_family(fs)
+                } else {
+                    family
+                };
+                for (size, weight) in [(12.0, 400), (16.0, 600)] {
+                    let weight =
+                        crate::utils::font::normalize_weight_for_family(fs.db(), family, weight);
+                    for text in ["AVATAR", "111.7", "589.2", "   padded 42", "()!@#$%&*+-=/"] {
+                        let actual = measure_run_width(fs, text, size, size * 1.5, weight, family);
+                        let mut buffer = Buffer::new(fs, Metrics::new(size, size * 1.5));
+                        buffer.set_size(Some(16_384.0), Some(size * 3.0));
+                        buffer.set_text(
+                            text,
+                            &Attrs::new()
+                                .family(family)
+                                .weight(glyphon::fontdb::Weight(weight)),
+                            Shaping::Basic,
+                            None,
+                        );
+                        buffer.shape_until_scroll(fs, false);
+                        let expected = buffer
+                            .layout_runs()
+                            .map(|r| r.line_w)
+                            .fold(0.0_f32, f32::max);
+                        assert!((actual - expected).abs() < 0.01,
+                            "{text:?} family={family:?} size={size}: cached={actual}, shaped={expected}");
+                    }
+                }
+            }
+        });
+        assert_ne!(
+            prepare_key("WWW", 12.0, 400, 18.0, Family::Name("Segoe UI")).family_hash,
+            prepare_key("WWW", 12.0, 400, 18.0, Family::Name("Consolas")).family_hash
+        );
+        invalidate_prepare_cache();
+        assert!(
+            ASCII_ADVANCES.with(|c| c.borrow().is_empty()),
+            "font changes invalidate character metrics too"
+        );
+    }
 
     #[test]
     fn measure_leaf_nowrap_ignores_narrow_avail() {
