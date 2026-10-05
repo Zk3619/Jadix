@@ -1370,20 +1370,31 @@ mod tests {
         assert_eq!(find_attr(&root, ATTR_HOISTED_PORTAL), Some("1"));
 
         let mut tree = LayoutTree::new();
-        let result = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+        let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+        let mut panel_bounds = None;
+        crate::core::tree::walk_elements(&root, |el| {
+            if el.text.as_deref() == Some("wave2-panel") {
+                panel_bounds = Some(el.layout_bounds);
+            }
+        });
+        let bounds = panel_bounds.expect("first-open portal panel is mounted");
         assert!(
-            result.overlay_split.instance_start < result.instances.len(),
-            "first open must layout overlay rects, not skip as paint-only"
+            (bounds[2] - 320.0).abs() < 0.5 && (bounds[3] - 200.0).abs() < 0.5,
+            "alpha-zero enter must still lay out the panel: {bounds:?}"
         );
-        let split = result
-            .overlay_split
-            .instance_start
-            .min(result.instances.len());
+        // Verify paint at a deterministic visible pose without a wall-clock sleep.
+        crate::core::tree::walk_elements_mut(&mut root, |el| {
+            if el.template_id.as_deref() == Some("vm-w2-first__modal_zoom") {
+                el.style.opacity = 0.5;
+                el.style.scale = [1.0, 1.0];
+            }
+        });
+        let visible = tree.build_and_layout_fast(&mut root, 800.0, 600.0, [0.0, 0.0], false, false);
         assert!(
-            result.instances[split..]
+            visible.text_nodes[visible.overlay_split.text_start..]
                 .iter()
-                .any(|i| i.rect_size[0] > 1.0 && i.rect_size[1] > 1.0),
-            "portal panel must have non-zero laid-out bounds on first open"
+                .any(|n| n.text == "wave2-panel" && n.width > 1.0 && n.height > 1.0),
+            "the laid-out portal panel must paint once its enter opacity is visible"
         );
         clear_overlay_stack();
     }

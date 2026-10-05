@@ -11493,6 +11493,7 @@ mod portal_hoist_tests {
             .rounded(8.0)
             .border_style("solid")
             .border_width(1.0)
+            .border_color([0.2, 0.2, 0.2, 1.0])
             .shadow([0.0, 0.0, 0.0, 0.16], 16.0)
             .overflow_y("hidden")
             .child(Element::new().text("Dialog title"));
@@ -11682,6 +11683,18 @@ mod portal_hoist_tests {
         });
         assert!(hoist_portal_subtrees(&mut host) >= 2);
         let _ = flush_modal_shell_motion_subtree(&mut host);
+
+        // Pin a visible mid-enter pose. At t=0 chrome is deliberately omitted
+        // by the alpha-zero collect gate. Product shadow tokens are not the
+        // geometry contract this capture test is checking.
+        crate::core::tree::walk_elements_mut(&mut host, |el| {
+            if el.template_id.as_deref() == Some("gal-dialog__modal_zoom") {
+                el.style.opacity = 0.5;
+                el.style.scale = [0.95, 0.95];
+                el.style.shadow_color = [0.0, 0.0, 0.0, 0.16];
+                el.style.shadow_blur = 16.0;
+            }
+        });
 
         let mut tree = LayoutTree::new();
         let zooming = tree.build_and_layout(&mut host, 800.0, 600.0, [-1.0, -1.0]);

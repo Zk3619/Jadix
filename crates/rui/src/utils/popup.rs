@@ -1280,10 +1280,9 @@ fn apply_floating_menus(
                 let committed_above = reverse_expand_edge_y(el);
                 let placed_above = committed_above.is_some() || y + 0.5 < tb[1];
                 if placed_above {
-                    let edge = match committed_above {
-                        Some(edge) if !entering => edge,
-                        _ => (tb[1] - gap).max(FLOATING_VIEWPORT_MARGIN),
-                    };
+                    // Keep the chosen side, but follow the live trigger. Exit
+                    // has its own branch above and preserves the current height.
+                    let edge = (tb[1] - gap).max(FLOATING_VIEWPORT_MARGIN);
                     el.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, format!("{edge}"));
                     // Glue the trigger-facing edge to the *painted* height. `compute_anchored_placement`
                     // uses estimate.min(space_above); a stretched wrapper / viewport remainder
@@ -1294,7 +1293,7 @@ fn apply_floating_menus(
                     // a downward jump followed by an upward collapse.
                     if !entering && height_keyframe_animation_active(el) {
                         if let Some(top) = inset_length(el.style.inset.top) {
-                            visual_h = (edge - top).max(0.0);
+                            visual_h = (committed_above.unwrap_or(edge) - top).max(0.0);
                         }
                     }
                     // Idle Expand may write the place cap (16rem) onto max-height / CONTENT_H
@@ -1302,7 +1301,7 @@ fn apply_floating_menus(
                     // silhouette — that slams `top` upward before accordion-up shrinks it.
                     if !entering {
                         if let Some(top) = inset_length(el.style.inset.top) {
-                            let glued = (edge - top).max(0.0);
+                            let glued = (committed_above.unwrap_or(edge) - top).max(0.0);
                             if glued > 0.5 {
                                 visual_h = visual_h.min(glued);
                             }
@@ -1826,6 +1825,7 @@ mod tests {
         panel.layout_bounds = [0.0, 0.0, 80.0, 20.0];
         // Rebuild often drops CONTENT_H; clip 20 would flip below (y=536) without a frozen edge.
         panel.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, "492");
+        panel.set_attr(ATTR_FLOATING_GAP, "8");
         panel.style.max_size.height = Dimension::length(20.0);
         panel.style.animations = vec![keyframes_anim_entry(
             "accordion-up",
@@ -1911,6 +1911,7 @@ mod tests {
         panel.set_attr(ATTR_FLOATING_CONTENT_H, "256");
         panel.set_attr(ATTR_FLOATING_MAX_H, "16rem");
         panel.set_attr(ATTR_FLOATING_ANCHOR_EDGE_Y, "492");
+        panel.set_attr(ATTR_FLOATING_GAP, "8");
         panel.style.max_size.height = Dimension::length(256.0);
         panel.style.inset.top = Element::into_margin_auto(300.0);
         panel.layout_bounds = [20.0, 300.0, 80.0, 256.0];
@@ -2982,8 +2983,10 @@ mod tests {
         );
         fresh.set_attr(ATTR_FLOATING_W, "100px");
         fresh.layout_bounds = [0.0, 0.0, 100.0, 24.0];
-        apply_stored_floating_place(&mut fresh, "rebuilt-top");
         fresh.set_attr(ATTR_FLOATING_EXITING, "1");
+        // Same order as assemble_mounted_panel: restore the exit pose, rather
+        // than seed a new open (which intentionally drops the old above edge).
+        apply_stored_floating_place(&mut fresh, "rebuilt-top");
         fresh.style.animations = vec![crate::style::keyframes_anim_entry(
             "accordion-up",
             200.0,
