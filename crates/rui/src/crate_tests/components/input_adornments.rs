@@ -1,8 +1,6 @@
 //! Input clearable + password_toggle adornments.
 
-use crate::app::damage::{
-    expand_paint_dirties_for_translated_slots, take_frame_paint_nodes,
-};
+use crate::app::damage::{expand_paint_dirties_for_translated_slots, take_frame_paint_nodes};
 use crate::app::draw_cull::node_present_dest_reset_full;
 use crate::components::input::{
     focus_id_for_input, input, input_password_reveal_signal_key, input_value_signal_key, InputType,

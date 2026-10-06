@@ -25,7 +25,9 @@ fn bound_button_caption_survives_tracked_parent_rebuild() {
     for i in 1..=8 {
         rebuild.set(i);
         assert_eq!(
-            mounted.borrow().as_ref().unwrap().children[0].text.as_deref(),
+            mounted.borrow().as_ref().unwrap().children[0]
+                .text
+                .as_deref(),
             Some("Open Trigger"),
             "a live caption must not disappear when its parent rebuilds"
         );

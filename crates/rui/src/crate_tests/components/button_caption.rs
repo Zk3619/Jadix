@@ -338,11 +338,20 @@ fn toggle_prefix_clear_covers_previous_suffix() {
         let needs = crate::app::reactive::bind_text_metric_needs_layout(open_leaf, open_s, close_s);
         let needs_back =
             crate::app::reactive::bind_text_metric_needs_layout(open_leaf, close_s, open_s);
-        let text_moved =
-            crate::app::damage::node_present_slot_moved(open_text, close_text);
+        let text_moved = crate::app::damage::node_present_slot_moved(open_text, close_text);
         let btn_moved = crate::app::damage::node_present_slot_moved(open_btn, close_btn);
-        let old_suffix = [open_latin0, open_text[1], (open_latin1 - open_latin0).max(0.0), open_text[3]];
-        let new_suffix = [close_latin0, close_text[1], (close_latin1 - close_latin0).max(0.0), close_text[3]];
+        let old_suffix = [
+            open_latin0,
+            open_text[1],
+            (open_latin1 - open_latin0).max(0.0),
+            open_text[3],
+        ];
+        let new_suffix = [
+            close_latin0,
+            close_text[1],
+            (close_latin1 - close_latin0).max(0.0),
+            close_text[3],
+        ];
         let clear_is_new_text = crate::app::damage::rect_contains_rect(close_text, old_suffix);
         let clear_is_new_btn = crate::app::damage::rect_contains_rect(close_btn, old_suffix);
         let dx = (open_latin0 - close_latin0).abs();
@@ -350,7 +359,14 @@ fn toggle_prefix_clear_covers_previous_suffix() {
             dx <= 0.5 && open_text == close_text,
             "{open_s:?} → {close_s:?} must keep one suffix box (dx={dx:.2} open={open_text:?} close={close_text:?} needs={needs}/{needs_back})"
         );
-        let _ = (old_suffix, new_suffix, text_moved, btn_moved, clear_is_new_text, clear_is_new_btn);
+        let _ = (
+            old_suffix,
+            new_suffix,
+            text_moved,
+            btn_moved,
+            clear_is_new_text,
+            clear_is_new_btn,
+        );
     }
 }
 

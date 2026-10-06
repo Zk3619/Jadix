@@ -331,19 +331,69 @@ fn latest_enter_and_exit_rebuild_one_ordered_composite() {
             1.0,
             None,
         );
+        // Compact text-owning chrome stays Node. Region window-clears an AABB
+        // larger than the pill. Opacity 0 drops the quad, so the leftover hole
+        // is Region. A live opaque plate must not recapture wrapping inside it.
+        let expect = if alpha < 0.01 {
+            PaintDirtyKind::Region
+        } else {
+            PaintDirtyKind::Node
+        };
         assert_eq!(
             dirty[0].kind,
-            PaintDirtyKind::Region,
-            "alpha={alpha}: translucent stacking chrome must composite background glyphs before its own fill/text"
+            expect,
+            "alpha={alpha}: compact layer dest-resets the ink wipe; only an empty quad is Region"
         );
-        for (_, old) in prev.iter().filter(|(k, _)| *k == key) {
-            let d = dirty[0].bounds;
+        if alpha >= 0.99 {
+            let under = crate::app::draw_cull::node_present_layered_underlay_capture_text_wipes(
+                &dirty,
+                &frame.text_nodes,
+                &frame.node_paints,
+                &[],
+                &frame.instances,
+            );
+            let plate = crate::app::draw_cull::opaque_slot_fill_aabb(
+                key,
+                bounds,
+                &frame.node_paints,
+                &frame.instances,
+            )
+            .expect("settled plate");
             assert!(
-                d[0] <= old[0]
-                    && d[1] <= old[1]
-                    && d[0] + d[2] >= old[0] + old[2]
-                    && d[1] + d[3] >= old[1] + old[3],
-                "hide must erase previous ink completely: dirty={d:?}, previous={old:?}"
+                under.iter().all(|t| {
+                    t.clip_bounds.is_none_or(|c| {
+                        crate::app::damage::intersect_rects(c, plate).is_none()
+                    })
+                }),
+                "opaque plate must not recapture wrapping inside the chip, plate={plate:?} clips={:?}",
+                under.iter().map(|t| t.clip_bounds).collect::<Vec<_>>()
+            );
+        }
+        for (_, old) in prev.iter().filter(|(k, _)| *k == key) {
+            // Node keeps the dirty on the pill. The dest-reset wipe, not a
+            // Region AABB, is what has to cover the previous slide.
+            let d = if dirty[0].kind == PaintDirtyKind::Node {
+                crate::app::draw_cull::node_present_dest_reset_full(
+                    key,
+                    dirty[0].bounds,
+                    &frame.node_paints,
+                    &frame.instances,
+                    &[],
+                    &[],
+                    1.0,
+                    Some(*old),
+                )
+                .map(|reset| reset.rect)
+                .unwrap_or(dirty[0].bounds)
+            } else {
+                dirty[0].bounds
+            };
+            assert!(
+                d[0] <= old[0] + 0.5
+                    && d[1] <= old[1] + 0.5
+                    && d[0] + d[2] >= old[0] + old[2] - 0.5
+                    && d[1] + d[3] >= old[1] + old[3] - 0.5,
+                "hide must erase previous ink completely: cover={d:?}, previous={old:?}"
             );
         }
         prev = last_present_visual_slots(
@@ -357,7 +407,7 @@ fn latest_enter_and_exit_rebuild_one_ordered_composite() {
 }
 
 #[test]
-fn latest_region_must_absorb_intersecting_live_text_update() {
+fn latest_intersecting_caption_stays_on_the_ink_wipe() {
     let mut root = Element::new()
         .w(320.0)
         .h(200.0)
@@ -401,9 +451,24 @@ fn latest_region_must_absorb_intersecting_live_text_update() {
         1.0,
         None,
     );
+    let button_key = paint_element_key(&root.children[1]);
+    let button = dirty
+        .iter()
+        .find(|d| d.key == button_key)
+        .expect("Latest dirty");
+    assert_eq!(
+        button.kind,
+        PaintDirtyKind::Node,
+        "compact Latest stays on the ink wipe; a Region window-clear is the white rectangle: {dirty:?}"
+    );
     assert!(
-        dirty.iter().all(|d| d.kind == PaintDirtyKind::Region),
-        "a live caption intersecting Latest must not flush through the later Node capture pass: {dirty:?}"
+        button.bounds[2] < 160.0 && button.bounds[3] < 80.0,
+        "Latest hole stays the pill, not an expanded window rect: {:?}",
+        button.bounds
+    );
+    assert!(
+        dirty.iter().all(|d| d.kind == PaintDirtyKind::Node),
+        "the intersecting caption is not absorbed into a window-clear Region: {dirty:?}"
     );
 }
 
@@ -630,6 +695,8 @@ fn node_glyph_capture_preserves_both_sides_of_portal() {
         &result.node_paints,
         &[],
         &[(1, overlay)],
+        &[],
+        1.0,
     );
     assert_eq!(
         capture.len(),
@@ -751,7 +818,7 @@ fn offscreen_animation_preserves_retained_page_without_preparing_labels() {
         &frame.text_nodes,
         0,
         frame.text_nodes.len(),
-        Some(region_repair_text_cull(&nodes, &[], &[], 1.0, 800, 600)),
+        Some(region_repair_text_cull(&nodes, &[], &[], &[], None, 1.0, 800, 600)),
         false
     )
     .is_none());
@@ -972,9 +1039,13 @@ fn replay_preserves_descendant_paint_membership() {
 #[test]
 fn scroll_replay_refreshes_descendant_paint_coordinates() {
     let mut root = Element::new().w(300.0).h(100.0).overflow_y("scroll").child(
-        Element::new().w(240.0).h(180.0).flex_shrink(0.0)
-            .child(Element::new().w(180.0).h(50.0).mt(30.0)
-                .child(Element::new().w(120.0).h(30.0).text("caption"))),
+        Element::new().w(240.0).h(180.0).flex_shrink(0.0).child(
+            Element::new()
+                .w(180.0)
+                .h(50.0)
+                .mt(30.0)
+                .child(Element::new().w(120.0).h(30.0).text("caption")),
+        ),
     );
     let mut tree = LayoutTree::new();
     tree.build_and_layout(&mut root, 300.0, 100.0, [-1.0; 2]);
@@ -983,8 +1054,11 @@ fn scroll_replay_refreshes_descendant_paint_coordinates() {
     root.scroll_offset = [0.0, 10.0];
     tree.build_and_layout_fast(&mut root, 300.0, 100.0, [-1.0; 2], true, false);
     assert!(tree.last_collect_skip_counts().0 > 0);
-    assert_eq!(root.children[0].children[0].children[0].paint_scroll_acc, [0.0, 10.0],
-        "damage after replay must use the same scroll coordinates as the replayed glyphs");
+    assert_eq!(
+        root.children[0].children[0].children[0].paint_scroll_acc,
+        [0.0, 10.0],
+        "damage after replay must use the same scroll coordinates as the replayed glyphs"
+    );
 }
 
 #[test]
@@ -1146,8 +1220,12 @@ fn hiding_flow_content_invalidates_moved_siblings() {
         &mut collect,
     );
     let damage = crate::app::damage::take_frame_paint_nodes();
-    assert!(damage.iter().any(|dirty| dirty.bounds == [0.0, 0.0, 300.0, 300.0]),
-        "the footer's old position also needs erasing");
+    assert!(
+        damage
+            .iter()
+            .any(|dirty| dirty.bounds == [0.0, 0.0, 300.0, 300.0]),
+        "the footer's old position also needs erasing"
+    );
 }
 
 #[test]

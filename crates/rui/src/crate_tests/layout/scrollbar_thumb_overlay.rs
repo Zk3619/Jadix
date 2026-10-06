@@ -253,8 +253,8 @@ fn overlay_thumb_stays_mid_when_full_scroll_only_skips_overlay_flag() {
             // ViewportsOnly + overlay: live signal geometry (healthy reference).
             let overlay =
                 layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
-            let track = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y")
-                .expect("Y track");
+            let track =
+                find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y").expect("Y track");
             let thumb_ref = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
                 .expect("Y thumb overlay");
             let y_ref = thumb_paint_y(&overlay, thumb_ref).expect("painted overlay thumb");
@@ -333,8 +333,8 @@ fn overlay_thumb_stays_mid_track_when_content_signal_stays_overflowed() {
 
             let scrolled =
                 layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
-            let track = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y")
-                .expect("Y track");
+            let track =
+                find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y").expect("Y track");
             let thumb = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
                 .expect("Y thumb mid-scroll");
             let y = thumb_paint_y(&scrolled, thumb).expect("painted thumb");

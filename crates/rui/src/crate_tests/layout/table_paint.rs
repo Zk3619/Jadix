@@ -135,13 +135,7 @@ fn invoice_cell(text_s: &str, col_w: Option<&str>, align: Option<&str>) -> Eleme
     })
 }
 
-fn invoice_body_row4(
-    id: &str,
-    invoice: &str,
-    status: &str,
-    method: &str,
-    amount: &str,
-) -> Element {
+fn invoice_body_row4(id: &str, invoice: &str, status: &str, method: &str, amount: &str) -> Element {
     TableRow(TableRowProps {
         id: id.into(),
         selected: Some(false),
@@ -340,10 +334,8 @@ fn assert_invoice_glyphs_not_clip_culled(when: &str, result: &RenderResult) {
             node.height
         );
         if let Some(c) = node.clip_bounds {
-            let hit = crate::app::damage::intersect_rects(
-                [node.x, node.y, node.width, node.height],
-                c,
-            );
+            let hit =
+                crate::app::damage::intersect_rects([node.x, node.y, node.width, node.height], c);
             assert!(
                 hit.is_some_and(|h| h[2] > 1.0 && h[3] > 1.0),
                 "{when}: `{needle}` clip-culled; glyph=[{},{},{},{}] clip={c:?}",
@@ -762,7 +754,16 @@ fn nested_scroll_table_texts_survive_chrome_skip_and_hover() {
     let _ = take_frame_paint_nodes();
     let mut impact = LayoutStatus::Clean;
     sync_button_hover_paint_subtree(&mut root, &mut tree, &mut impact, VW, VH, [0.0, 0.0]);
-    sync_class_variants_subtree(&mut root, [-1.0, -1.0], "", false, VW, VH, &mut tree, &mut impact);
+    sync_class_variants_subtree(
+        &mut root,
+        [-1.0, -1.0],
+        "",
+        false,
+        VW,
+        VH,
+        &mut tree,
+        &mut impact,
+    );
     tick_active_css_transitions_subtree(
         &mut root,
         [-1.0, -1.0],
@@ -783,11 +784,8 @@ fn nested_scroll_table_texts_survive_chrome_skip_and_hover() {
 
     let dirties = take_frame_paint_nodes();
     if !dirties.is_empty() {
-        let captured = node_present_capture_text_indices(
-            &dirties,
-            &skipped.text_nodes,
-            &skipped.node_paints,
-        );
+        let captured =
+            node_present_capture_text_indices(&dirties, &skipped.text_nodes, &skipped.node_paints);
         let captured_texts: Vec<&str> = captured
             .iter()
             .filter_map(|&i| skipped.text_nodes.get(i).map(|n| n.text.as_str()))
@@ -841,8 +839,11 @@ fn nested_scroll_table_texts_survive_chrome_skip_and_hover() {
         !hover_dirties.is_empty(),
         "row hover must push node-present dirty"
     );
-    let captured =
-        node_present_capture_text_indices(&hover_dirties, &hovered.text_nodes, &hovered.node_paints);
+    let captured = node_present_capture_text_indices(
+        &hover_dirties,
+        &hovered.text_nodes,
+        &hovered.node_paints,
+    );
     let captured_texts: Vec<&str> = captured
         .iter()
         .filter_map(|&i| hovered.text_nodes.get(i).map(|n| n.text.as_str()))
@@ -1122,10 +1123,7 @@ fn data_table_header_button_hover_must_not_punch_header_seams() {
             .expect("header row");
         (header_row.layout_bounds, row_bottom_border(header_row))
     };
-    assert!(
-        header_border_b > 0.5,
-        "header row must have border-b"
-    );
+    assert!(header_border_b > 0.5, "header row must have border-b");
     let top_seam = [hb[0], hb[1], hb[2], 1.0];
     let bottom_seam = [hb[0], hb[1] + hb[3] - 1.0, hb[2], 1.0];
 
@@ -1253,7 +1251,10 @@ fn data_table_row_hover_must_not_stamp_invoice_status_as_sta() {
         .iter()
         .find(|n| n.text == "0:0")
         .expect("data_table cell 0:0");
-    let mouse = [cell00.x + cell00.width * 0.5, cell00.y + cell00.height * 0.5];
+    let mouse = [
+        cell00.x + cell00.width * 0.5,
+        cell00.y + cell00.height * 0.5,
+    ];
     assert!(
         mouse[1] > method_box[1] + method_box[3] + 8.0,
         "data_table cell must sit below invoice Method; mouse={mouse:?} method={method_box:?}"
@@ -1282,7 +1283,8 @@ fn data_table_row_hover_must_not_stamp_invoice_status_as_sta() {
     }
 
     let hovered = tree.build_and_layout_fast(&mut *root, VW, VH, mouse, true, false);
-    let captured = node_present_capture_text_indices(&dirties, &hovered.text_nodes, &hovered.node_paints);
+    let captured =
+        node_present_capture_text_indices(&dirties, &hovered.text_nodes, &hovered.node_paints);
     let captured_texts: Vec<&str> = captured
         .iter()
         .filter_map(|&i| hovered.text_nodes.get(i).map(|n| n.text.as_str()))

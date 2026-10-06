@@ -573,10 +573,7 @@ fn find_y_thumb(el: &Element, rest: &str) -> Option<[f32; 4]> {
     walk(el, &want)
 }
 
-fn thumb_alpha(
-    result: &crate::core::tree::RenderResult,
-    thumb: [f32; 4],
-) -> f32 {
+fn thumb_alpha(result: &crate::core::tree::RenderResult, thumb: [f32; 4]) -> f32 {
     result
         .instances
         .iter()
@@ -589,10 +586,7 @@ fn thumb_alpha(
         .fold(0.0_f32, f32::max)
 }
 
-fn sync_scroll_signals_from_metrics(
-    result: &crate::core::tree::RenderResult,
-    rest: &str,
-) {
+fn sync_scroll_signals_from_metrics(result: &crate::core::tree::RenderResult, rest: &str) {
     use crate::core::scroll_viewport::{
         scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_viewport_h_signal_key,
         scroll_viewport_w_signal_key,
@@ -723,11 +717,8 @@ fn match_when_page_switch_must_paint_overlay_y_bar() {
         let a = thumb.map(|t| thumb_alpha(&shown, t)).unwrap_or(0.0);
         let old_track = find_y_track(&root, "scroll-a");
         let edge_hit = track.and_then(|t| {
-            let path = crate::app::pointer_events::hit_path(
-                &root,
-                t[0] + t[2] * 0.5,
-                t[1] + t[3] * 0.5,
-            );
+            let path =
+                crate::app::pointer_events::hit_path(&root, t[0] + t[2] * 0.5, t[1] + t[3] * 0.5);
             crate::app::pointer_events::path_deepest_focus_id(&path).map(str::to_string)
         });
         assert!(

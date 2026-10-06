@@ -1472,10 +1472,21 @@ fn message_scroller_latest_enter_halo_must_wipe_and_hide_must_restore_thread() {
                         &enter_mid.text_nodes,
                         &enter_mid.node_paints,
                         &[(mid_dirty.key, wipe_clip)],
+                        &[],
                     );
                 assert!(
                     !underlay.is_empty(),
                     "enter fade dest-reset must restore wrapping in the wipe or AABB CLEAR is a white ring"
+                );
+                let plate = enter_mid.instances[btn_paint.instance.0..btn_paint.instance.1]
+                    .iter()
+                    .find(|inst| inst.color[3] > 0.5 && inst.rect_size[0] > 8.0)
+                    .expect("jump chip fill");
+                assert!(
+                    plate.color[3] > 0.95,
+                    "entrance opacity must not punch the occluding plate, or the line shows through, alpha={} opacity={}",
+                    plate.color[3],
+                    btn.style.opacity
                 );
             }
 
@@ -1585,6 +1596,7 @@ fn message_scroller_latest_enter_halo_must_wipe_and_hide_must_restore_thread() {
                 &hidden.text_nodes,
                 &hidden.node_paints,
                 &[(hide_dirty.key, wipe_clip)],
+                &[],
             );
             assert!(
                 !underlay.is_empty(),
@@ -1744,6 +1756,7 @@ fn gallery_latest_hide_must_restore_wrapping_under_dest_reset() {
                 &hidden.text_nodes,
                 &hidden.node_paints,
                 &[(hide_dirty.key, wipe_clip)],
+                &[],
             );
             let captured = underlay.iter().find(|t| {
                 t.text.contains("Got it. Stay at the")
@@ -2022,6 +2035,7 @@ fn assert_latest_wipe_restores_wrap(
             &result.text_nodes,
             &result.node_paints,
             &[(d.key, wipe_clip)],
+            &[],
         );
         let captured = underlay
             .iter()
@@ -2274,22 +2288,45 @@ fn red_latest_scroll_entry_exit_keeps_button_background_instance() {
             let mut tree = LayoutTree::new();
             let mut impact = LayoutStatus::Clean;
             for _ in 0..4 {
-                sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 320.0, 384.0, [0.0, 0.0]);
+                sync_reactive_elements_subtree(
+                    &mut root,
+                    &mut tree,
+                    &mut impact,
+                    320.0,
+                    384.0,
+                    [0.0, 0.0],
+                );
                 let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
                 sync_message_scroller_follow_after_layout(&mut root, &mut tree);
             }
             tree.set_collect_skip_allowed(true);
             let _ = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
-            use_signal(&scroll_offset_y_signal_key("ms-layout-test:viewport"), || 0.0_f32).set_silent(0.0);
+            use_signal(
+                &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent(0.0);
             let _ = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
             crate::style::set_css_transition_timeline_ms(80.0);
-            let _ = find_slot_ms_mut(&mut root, "message-scroller-button").unwrap().tick_css_transitions(0.0);
-            let shown = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
+            let _ = find_slot_ms_mut(&mut root, "message-scroller-button")
+                .unwrap()
+                .tick_css_transitions(0.0);
+            let shown =
+                tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
             let btn = find_slot(&root, "message-scroller-button").expect("button");
             let key = u64::from(btn.layout_node.expect("button taffy"));
-            let paint = shown.node_paints.iter().find(|p| p.key == key).expect("button paint");
+            let paint = shown
+                .node_paints
+                .iter()
+                .find(|p| p.key == key)
+                .expect("button paint");
             let instances = &shown.instances[paint.instance.0..paint.instance.1];
-            assert!(instances.iter().any(|i| i.color[3] > 0.01 && i.rect_size[0] < 100.0), "button background must be collected: {instances:?}");
+            assert!(
+                instances
+                    .iter()
+                    .any(|i| i.color[3] > 0.01 && i.rect_size[0] < 100.0),
+                "button background must be collected: {instances:?}"
+            );
         });
     });
     crate::style::set_css_transition_virtual_timeline(false);
@@ -2325,11 +2362,18 @@ fn red_latest_small_scroll_present_damage_stays_local() {
                 || 0.0_f32,
             )
             .peek();
-            assert!(max_y > 0.0, "fixture must scroll: content={content_h} viewport={viewport_h}");
-            assert!((at_end - max_y).abs() < 1.0, "fixture must seed at live edge: offset={at_end} max={max_y}");
+            assert!(
+                max_y > 0.0,
+                "fixture must scroll: content={content_h} viewport={viewport_h}"
+            );
+            assert!(
+                (at_end - max_y).abs() < 1.0,
+                "fixture must seed at live edge: offset={at_end} max={max_y}"
+            );
 
             tree.set_collect_skip_allowed(true);
-            let baseline = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
+            let baseline =
+                tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
             let baseline_present = crate::app::draw_cull::last_present_visual_slots(
                 &baseline.node_paints,
                 &baseline.instances,
@@ -2338,15 +2382,24 @@ fn red_latest_small_scroll_present_damage_stays_local() {
                 &[],
             );
             crate::app::damage::clear_frame_paint_nodes();
-            use_signal(&scroll_offset_y_signal_key("ms-layout-test:viewport"), || 0.0_f32)
-                .set_silent((max_y - 16.0).max(0.0));
+            use_signal(
+                &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent((max_y - 16.0).max(0.0));
             production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
             let btn_key = {
                 let btn = find_slot(&root, "message-scroller-button").expect("button");
                 u64::from(btn.layout_node.expect("button taffy"))
             };
-            let viewport_key = u64::from(find_slot(&root, "message-scroller-viewport").unwrap().layout_node.unwrap());
-            let shown = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
+            let viewport_key = u64::from(
+                find_slot(&root, "message-scroller-viewport")
+                    .unwrap()
+                    .layout_node
+                    .unwrap(),
+            );
+            let shown =
+                tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
             sync_message_scroller_follow_after_layout(&mut root, &mut tree);
             let entry_dirties = crate::app::damage::take_frame_paint_nodes();
             let paints = shown.node_paints.clone();
@@ -2364,10 +2417,15 @@ fn red_latest_small_scroll_present_damage_stays_local() {
                 &baseline_present,
             );
             assert!(
-                !paints.iter().any(|p| p.key == btn_key && p.bounds[2] > 300.0),
+                !paints
+                    .iter()
+                    .any(|p| p.key == btn_key && p.bounds[2] > 300.0),
                 "button paint must stay pill-sized: {paints:?}"
             );
-            assert!(!entry_dirties.iter().any(|d| d.key == viewport_key), "small scroll must not dirty the full viewport: {entry_dirties:?}");
+            assert!(
+                !entry_dirties.iter().any(|d| d.key == viewport_key),
+                "small scroll must not dirty the full viewport: {entry_dirties:?}"
+            );
             for d in expanded_entry.iter().filter(|d| d.key == btn_key) {
                 if let Some(reset) = crate::app::draw_cull::node_present_dest_reset_full(
                     d.key,
@@ -2377,9 +2435,15 @@ fn red_latest_small_scroll_present_damage_stays_local() {
                     &[],
                     &[],
                     1.0,
-                    baseline_present.iter().find(|(k, _)| *k == btn_key).map(|(_, b)| *b),
+                    baseline_present
+                        .iter()
+                        .find(|(k, _)| *k == btn_key)
+                        .map(|(_, b)| *b),
                 ) {
-                    assert!(reset.rect[2] < 160.0 && reset.rect[3] < 96.0, "button reset must stay local: dirty={d:?} reset={reset:?}");
+                    assert!(
+                        reset.rect[2] < 160.0 && reset.rect[3] < 96.0,
+                        "button reset must stay local: dirty={d:?} reset={reset:?}"
+                    );
                 }
             }
 
@@ -2397,45 +2461,82 @@ fn red_latest_small_scroll_present_damage_stays_local() {
             let mid_reset = mid_dirties
                 .iter()
                 .filter(|d| d.key == btn_key)
-                .filter_map(|d| crate::app::draw_cull::node_present_dest_reset_full(
-                    d.key,
-                    d.bounds,
-                    &mid.node_paints,
-                    &mid.instances,
-                    &[],
-                    &[],
-                    1.0,
-                    baseline_present.iter().find(|(k, _)| *k == btn_key).map(|(_, b)| *b),
-                ))
+                .filter_map(|d| {
+                    crate::app::draw_cull::node_present_dest_reset_full(
+                        d.key,
+                        d.bounds,
+                        &mid.node_paints,
+                        &mid.instances,
+                        &[],
+                        &[],
+                        1.0,
+                        baseline_present
+                            .iter()
+                            .find(|(k, _)| *k == btn_key)
+                            .map(|(_, b)| *b),
+                    )
+                })
                 .collect::<Vec<_>>();
-            assert!(!mid_dirties.iter().any(|d| d.key == viewport_key), "mid enter must not dirty viewport: {mid_dirties:?}");
-            assert!(mid_reset.iter().all(|r| r.rect[2] < 160.0 && r.rect[3] < 96.0), "mid enter reset must stay local: {mid_reset:?}");
+            assert!(
+                !mid_dirties.iter().any(|d| d.key == viewport_key),
+                "mid enter must not dirty viewport: {mid_dirties:?}"
+            );
+            assert!(
+                mid_reset
+                    .iter()
+                    .all(|r| r.rect[2] < 160.0 && r.rect[3] < 96.0),
+                "mid enter reset must stay local: {mid_reset:?}"
+            );
 
-            use_signal(&scroll_offset_y_signal_key("ms-layout-test:viewport"), || 0.0_f32).set_silent(max_y);
+            use_signal(
+                &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent(max_y);
             crate::style::set_css_transition_timeline_ms(200.0);
             crate::app::damage::clear_frame_paint_nodes();
             production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
-            let hide = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
+            let hide =
+                tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
             sync_message_scroller_follow_after_layout(&mut root, &mut tree);
             let exit_dirties = crate::app::damage::take_frame_paint_nodes();
-            let exit_opacity = find_slot(&root, "message-scroller-button").expect("button").style.opacity;
+            let exit_opacity = find_slot(&root, "message-scroller-button")
+                .expect("button")
+                .style
+                .opacity;
             let exit_reset = exit_dirties
                 .iter()
                 .filter(|d| d.key == btn_key)
-                .filter_map(|d| crate::app::draw_cull::node_present_dest_reset_full(
-                    d.key,
-                    d.bounds,
-                    &hide.node_paints,
-                    &hide.instances,
-                    &[],
-                    &[],
-                    1.0,
-                    baseline_present.iter().find(|(k, _)| *k == btn_key).map(|(_, b)| *b),
-                ))
+                .filter_map(|d| {
+                    crate::app::draw_cull::node_present_dest_reset_full(
+                        d.key,
+                        d.bounds,
+                        &hide.node_paints,
+                        &hide.instances,
+                        &[],
+                        &[],
+                        1.0,
+                        baseline_present
+                            .iter()
+                            .find(|(k, _)| *k == btn_key)
+                            .map(|(_, b)| *b),
+                    )
+                })
                 .collect::<Vec<_>>();
-            assert!(exit_opacity > 0.08 && exit_opacity < 0.92, "exit must still be a fade frame: {exit_opacity}");
-            assert!(!exit_dirties.iter().any(|d| d.key == viewport_key), "exit must not dirty viewport: {exit_dirties:?}");
-            assert!(exit_reset.iter().all(|r| r.rect[2] < 160.0 && r.rect[3] < 96.0), "exit reset must stay local: {exit_reset:?}");
+            assert!(
+                exit_opacity > 0.08 && exit_opacity < 0.92,
+                "exit must still be a fade frame: {exit_opacity}"
+            );
+            assert!(
+                !exit_dirties.iter().any(|d| d.key == viewport_key),
+                "exit must not dirty viewport: {exit_dirties:?}"
+            );
+            assert!(
+                exit_reset
+                    .iter()
+                    .all(|r| r.rect[2] < 160.0 && r.rect[3] < 96.0),
+                "exit reset must stay local: {exit_reset:?}"
+            );
         });
     });
     crate::style::set_css_transition_virtual_timeline(false);
@@ -5027,4 +5128,1133 @@ fn maximize_must_not_paint_sidebar_scrollbar_from_message_scroller() {
 
     clear_test_reconcile_root();
     reset_registered_anchors();
+}
+
+/// A wrap line that crosses the pill is painted on top of Latest when its
+/// glyphon submission is the chip fill's band or any later one (rects, then
+/// every run in that band) or when node-present flushes it after the plate.
+fn wrap_lines_drawn_with_jump_plate(
+    root: &Element,
+    scene: &crate::layout::layout_tree::RenderResult,
+    viewport_id: &str,
+) -> (String, Vec<String>) {
+    let btn = find_slot(root, "message-scroller-button").expect("jump button");
+    let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
+    let pill = crate::core::tree::visual_paint_aabb(btn, btn.paint_scroll_acc);
+    let ranges = scene.overlay_split.page_stack_band_ranges();
+    let btn_paint = scene
+        .node_paints
+        .iter()
+        .find(|p| p.key == btn_key)
+        .expect("button slot");
+    let fill_idx = scene.instances[btn_paint.instance.0..btn_paint.instance.1]
+        .iter()
+        .enumerate()
+        .find(|(_, inst)| inst.color[3] > 0.5 && inst.rect_size[0] > 8.0)
+        .map(|(i, _)| btn_paint.instance.0 + i);
+    let fill_band = fill_idx.and_then(|idx| {
+        ranges
+            .iter()
+            .position(|r| r.instance.0 <= idx && idx < r.instance.1)
+    });
+    // Draw uses paint ops, not the instance-index band. A `Rects` run that
+    // starts before the dock band and is extended across it paints the chip
+    // fill, then that same band's glyphon (the wrap line) lands on Latest.
+    let fill_op = fill_idx.and_then(|idx| {
+        scene.paint_ops.iter().position(|op| match op {
+            crate::layout::layout_tree::PaintOp::Rects { start, count } => {
+                let s = *start as usize;
+                s <= idx && idx < s + *count as usize
+            }
+            _ => false,
+        })
+    });
+    let op_band = fill_op.and_then(|oi| {
+        ranges
+            .iter()
+            .position(|r| r.paint_ops.0 <= oi && oi < r.paint_ops.1)
+    });
+    let draw_band = op_band.or(fill_band);
+    let mut report = format!(
+        "viewport={viewport_id} opacity={} pill={pill:?} fill_idx={fill_idx:?} fill_band={fill_band:?} fill_op={fill_op:?} op_band={op_band:?} bands={} btn_text={:?}\n",
+        btn.style.opacity,
+        ranges.len(),
+        btn_paint.text
+    );
+    for (bi, r) in ranges.iter().enumerate() {
+        let snippets: Vec<_> = scene.text_nodes[r.text.0..r.text.1]
+            .iter()
+            .map(|t| {
+                let s = t.text.chars().take(20).collect::<String>();
+                format!("{s}@({:.0},{:.0})", t.x, t.y)
+            })
+            .collect();
+        report.push_str(&format!(
+            "  band {bi} inst {:?} text {:?} :: {snippets:?}\n",
+            r.instance, r.text
+        ));
+    }
+    let mut bleed = Vec::new();
+    let mut hits = 0u32;
+    for (ti, t) in scene.text_nodes.iter().enumerate() {
+        if t.text == "Latest" || t.text.chars().count() < 8 {
+            continue;
+        }
+        let Some(prepared) = t.prepared.as_ref() else {
+            continue;
+        };
+        let lines = crate::text::measure::layout_lines(prepared, t.width.max(1.0));
+        let lh = prepared.line_height.max(1.0);
+        let mut hits_pill = false;
+        for (li, line) in lines.iter().enumerate() {
+            let line_box = [t.x, t.y + li as f32 * lh, line.width.max(1.0), lh];
+            if crate::app::damage::intersect_rects(line_box, pill).is_some() {
+                hits_pill = true;
+                hits += 1;
+                report.push_str(&format!(
+                    "  line hit ti={ti} li={li} {:?} box={line_box:?}\n",
+                    line.text.chars().take(32).collect::<String>()
+                ));
+            }
+        }
+        if !hits_pill {
+            continue;
+        }
+        let text_band = ranges
+            .iter()
+            .position(|r| r.text.0 <= ti && ti < r.text.1);
+        report.push_str(&format!(
+            "  wrap ti={ti} band={text_band:?} y={:.1} h={:.1} clip={:?}\n",
+            t.y, t.height, t.clip_bounds
+        ));
+        if draw_band.is_none() || text_band.is_none_or(|b| draw_band.is_some_and(|f| b >= f)) {
+            bleed.push(format!(
+                "wrap band {text_band:?} is not strictly before the chip draw band {draw_band:?} (instance {fill_band:?}, paint-op {op_band:?})"
+            ));
+        }
+        let plate = crate::app::draw_cull::opaque_slot_fill_aabb(
+            btn_key,
+            pill,
+            &scene.node_paints,
+            &scene.instances,
+        );
+        report.push_str(&format!("  plate={plate:?}\n"));
+        for (li, line) in lines.iter().enumerate() {
+            let line_box = [t.x, t.y + li as f32 * lh, line.width.max(1.0), lh];
+            let Some(hit) = crate::app::damage::intersect_rects(line_box, pill) else {
+                continue;
+            };
+            let cx = hit[0] + hit[2] * 0.5;
+            let cy = hit[1] + hit[3] * 0.5;
+            let covered = plate.is_some_and(|p| {
+                cx >= p[0] && cy >= p[1] && cx <= p[0] + p[2] && cy <= p[1] + p[3]
+            });
+            if !covered {
+                bleed.push(format!(
+                    "line center ({cx:.1},{cy:.1}) is inside the pill but not the opaque fill {plate:?}"
+                ));
+            }
+        }
+        if btn_paint.text.0 <= ti && ti < btn_paint.text.1 {
+            bleed.push(format!("wrap ti={ti} is inside the button slot text range"));
+        }
+    }
+    if hits == 0 {
+        bleed.push("no wrap line crosses the pill".into());
+    }
+    crate::app::damage::clear_frame_paint_nodes();
+    crate::app::damage::push_frame_paint_element(btn, btn.paint_scroll_acc);
+    let dirties = crate::app::damage::take_frame_paint_nodes();
+    let hole = crate::app::draw_cull::node_present_clipped_capture_text_wipes(
+        &dirties,
+        &scene.text_nodes,
+        &scene.node_paints,
+        &[],
+    );
+    for t in &hole {
+        if t.text == "Latest" || t.text.chars().count() < 8 {
+            continue;
+        }
+        let crosses = t
+            .clip_bounds
+            .is_none_or(|c| crate::app::damage::intersect_rects(c, pill).is_some());
+        if crosses {
+            bleed.push(format!(
+                "post-pill capture {}",
+                t.text.chars().take(24).collect::<String>()
+            ));
+        }
+    }
+    report.push_str(&format!(
+        "  hole={:?}\n",
+        hole.iter()
+            .map(|t| t.text.chars().take(20).collect::<String>())
+            .collect::<Vec<_>>()
+    ));
+    (report, bleed)
+}
+
+/// Gallery nests MessageScroller under a page ScrollArea. The flat tree keeps
+/// the wrap line in an earlier band; this is the tree the screenshots come
+/// from, with the pill at rest.
+#[test]
+fn message_scroller_nested_label_wrap_stays_under_settled_pill() {
+    crate::style::set_css_transition_virtual_timeline(true);
+    crate::style::set_css_transition_timeline_ms(0.0);
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            {
+                let mut root = gallery_like_message_scroller_with_jump();
+                let mut tree = LayoutTree::new();
+                let mut impact = LayoutStatus::Clean;
+                const W: f32 = 400.0;
+                const H: f32 = 800.0;
+                for _ in 0..4 {
+                    sync_reactive_elements_subtree(
+                        &mut root, &mut tree, &mut impact, W, H, [0.0, 0.0],
+                    );
+                    crate::style::sync_class_variants_subtree(
+                        &mut root,
+                        [-1.0e9, -1.0e9],
+                        "",
+                        false,
+                        W,
+                        H,
+                        &mut tree,
+                        &mut impact,
+                    );
+                    let _ = tree.build_and_layout(&mut root, W, H, [-1.0, -1.0]);
+                    sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+                }
+                let max_y = use_signal(
+                    &scroll_content_h_signal_key("ms-gallery-jump:viewport"),
+                    || 0.0_f32,
+                )
+                .peek()
+                    - use_signal(
+                        &scroll_viewport_h_signal_key("ms-gallery-jump:viewport"),
+                        || 0.0_f32,
+                    )
+                    .peek();
+                use_signal(
+                    &scroll_offset_y_signal_key("ms-gallery-jump:viewport"),
+                    || 0.0_f32,
+                )
+                .set_silent((max_y - 48.0).max(0.0));
+                sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, W, H, [0.0, 0.0]);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+                settle_latest_jump_pose(&mut root);
+                let scene = tree.build_and_layout(&mut root, W, H, [-1.0, -1.0]);
+                let (report, bleed) =
+                    wrap_lines_drawn_with_jump_plate(&root, &scene, "ms-gallery-jump:viewport");
+                assert!(
+                    report.contains("plate="),
+                    "geometry report missing the opaque fill\n{report}"
+                );
+                assert!(
+                    bleed.is_empty(),
+                    "settled nested gallery draws the wrap line with the chip\n{bleed:?}\n{report}"
+                );
+            }
+            {
+                let mut root = gallery_label_wrap_under_jump_root();
+                let mut tree = LayoutTree::new();
+                let mut impact = LayoutStatus::Clean;
+                for _ in 0..4 {
+                    production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+                    let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                    sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+                }
+                let max_y = use_signal(
+                    &scroll_content_h_signal_key("ms-gallery-label-wrap:viewport"),
+                    || 0.0_f32,
+                )
+                .peek()
+                    - use_signal(
+                        &scroll_viewport_h_signal_key("ms-gallery-label-wrap:viewport"),
+                        || 0.0_f32,
+                    )
+                    .peek();
+                use_signal(
+                    &scroll_offset_y_signal_key("ms-gallery-label-wrap:viewport"),
+                    || 0.0_f32,
+                )
+                .set_silent((max_y - 48.0).max(0.0));
+                production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+                settle_latest_jump_pose(&mut root);
+                let scene = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                let (report, bleed) = wrap_lines_drawn_with_jump_plate(
+                    &root,
+                    &scene,
+                    "ms-gallery-label-wrap:viewport",
+                );
+                assert!(
+                    bleed.is_empty(),
+                    "settled label wrap draws the line with the chip\n{bleed:?}\n{report}"
+                );
+            }
+        });
+    });
+    crate::style::set_css_transition_virtual_timeline(false);
+}
+
+fn line_crosses_plate(t: &crate::layout::layout_tree::TextLayoutInfo, plate: [f32; 4]) -> bool {
+    if t.text == "Latest" || t.text.chars().count() < 8 {
+        return false;
+    }
+    let Some(prepared) = t.prepared.as_ref() else {
+        return false;
+    };
+    let lines = crate::text::measure::layout_lines(prepared, t.width.max(1.0));
+    let lh = prepared.line_height.max(1.0);
+    lines.iter().enumerate().any(|(li, line)| {
+        let line_box = [t.x, t.y + li as f32 * lh, line.width.max(1.0), lh];
+        crate::app::damage::intersect_rects(line_box, plate).is_some()
+    })
+}
+
+fn plate_channel_delta(
+    a: &crate::renderer::offscreen::RgbaImage,
+    b: &crate::renderer::offscreen::RgbaImage,
+    plate: [f32; 4],
+) -> u32 {
+    let x0 = (plate[0] + 1.0).ceil() as i32;
+    let y0 = (plate[1] + 1.0).ceil() as i32;
+    let x1 = (plate[0] + plate[2] - 1.0).floor() as i32;
+    let y1 = (plate[1] + plate[3] - 1.0).floor() as i32;
+    if x1 <= x0 || y1 <= y0 {
+        return 0;
+    }
+    let mut n = 0u32;
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let (Some(pa), Some(pb)) = (a.pixel(x as u32, y as u32), b.pixel(x as u32, y as u32))
+            else {
+                continue;
+            };
+            if pa.iter().zip(pb).any(|(c, d)| c.abs_diff(d) > 30) {
+                n += 1;
+            }
+        }
+    }
+    n
+}
+
+/// Band-order composite (rects, then that band's glyphs) versus the same
+/// composite with the crossing paragraph omitted. A difference inside the
+/// opaque plate means the wrap line is visible on the chip.
+fn draw_pill_instance_range<'a>(
+    pass: &mut wgpu::RenderPass<'a>,
+    pipeline: &'a crate::renderer::RuiPipeline,
+    buffers: &'a [wgpu::Buffer],
+    draws: &'a [(usize, u32)],
+    lo: usize,
+    hi: usize,
+) {
+    for &(buf_i, count) in &draws[lo..hi] {
+        pipeline.bind_sdf(pass, false, pipeline.dummy_backdrop());
+        pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+        pass.set_vertex_buffer(1, buffers[buf_i].slice(..));
+        pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+        pass.draw_indexed(0..pipeline.num_indices, 0, 0..count);
+    }
+}
+
+fn jump_plate_band_images(
+    gpu: &crate::renderer::offscreen::OffscreenGpu,
+    scene: &crate::layout::layout_tree::RenderResult,
+    plate: [f32; 4],
+    omit_crossing: bool,
+    rects_then_text: bool,
+) -> crate::renderer::offscreen::RgbaImage {
+    use crate::layout::layout_tree::PaintOp;
+    use crate::renderer::text::RuiTextRenderer;
+    use wgpu::util::DeviceExt;
+
+    const W: u32 = 320;
+    const H: u32 = 384;
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format,
+        width: W,
+        height: H,
+        present_mode: wgpu::PresentMode::Fifo,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        view_formats: vec![],
+        desired_maximum_frame_latency: 1,
+    };
+    let pipeline = crate::renderer::RuiPipeline::from_format(&gpu.device, format, W, H);
+    pipeline.update_resolution(&gpu.queue, W, H);
+    let bands = scene.overlay_split.page_stack_band_ranges();
+    let mut renderers = Vec::new();
+    for band in &bands {
+        let mut renderer = RuiTextRenderer::new(&gpu.device, &gpu.queue, &config);
+        let text: Vec<_> = scene.text_nodes[band.text.0..band.text.1]
+            .iter()
+            .filter(|t| !(omit_crossing && line_crosses_plate(t, plate)))
+            .cloned()
+            .collect();
+        crate::renderer::prepare_text::prepare_text_frame_at(
+            &mut renderer,
+            &gpu.device,
+            &gpu.queue,
+            W,
+            H,
+            &text,
+            1.0,
+            false,
+            &Default::default(),
+            &Default::default(),
+        );
+        renderers.push(renderer);
+    }
+    let mut buffers: Vec<wgpu::Buffer> = Vec::new();
+    let mut draws: Vec<(usize, u32)> = Vec::new();
+    let push_slice = |buffers: &mut Vec<wgpu::Buffer>,
+                      draws: &mut Vec<(usize, u32)>,
+                      instances: &[crate::renderer::InstanceInput]| {
+        if instances.is_empty() {
+            return;
+        }
+        let buf = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("pill-band-instances"),
+                contents: bytemuck::cast_slice(instances),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        let count = instances.len() as u32;
+        buffers.push(buf);
+        draws.push((buffers.len() - 1, count));
+    };
+    let mut band_draw_end = Vec::with_capacity(bands.len());
+    for band in &bands {
+        if band.paint_ops.0 < band.paint_ops.1 {
+            for op in &scene.paint_ops[band.paint_ops.0..band.paint_ops.1] {
+                if let PaintOp::Rects { start, count } = *op {
+                    if count == 0 {
+                        continue;
+                    }
+                    let s = start as usize;
+                    let e = s + count as usize;
+                    push_slice(&mut buffers, &mut draws, &scene.instances[s..e]);
+                }
+            }
+        } else if band.instance.0 < band.instance.1 {
+            push_slice(
+                &mut buffers,
+                &mut draws,
+                &scene.instances[band.instance.0..band.instance.1],
+            );
+        }
+        band_draw_end.push(draws.len());
+    }
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("latest-pill-composite"),
+        size: wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("latest pill composite"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        if rects_then_text {
+            draw_pill_instance_range(&mut pass, &pipeline, &buffers, &draws, 0, draws.len());
+            for renderer in &renderers {
+                renderer.render(&mut pass);
+            }
+        } else {
+            let mut lo = 0usize;
+            for (end, renderer) in band_draw_end.iter().zip(&renderers) {
+                draw_pill_instance_range(&mut pass, &pipeline, &buffers, &draws, lo, *end);
+                renderer.render(&mut pass);
+                lo = *end;
+            }
+        }
+    }
+    crate::renderer::offscreen::readback_texture(&gpu.device, &gpu.queue, &texture, W, H, encoder)
+        .expect("pill composite readback")
+}
+
+fn plate_then_glyphs(
+    gpu: &crate::renderer::offscreen::OffscreenGpu,
+    scene: &crate::layout::layout_tree::RenderResult,
+    btn_key: u64,
+    text: &[crate::layout::layout_tree::TextLayoutInfo],
+) -> crate::renderer::offscreen::RgbaImage {
+    use crate::renderer::text::RuiTextRenderer;
+    use wgpu::util::DeviceExt;
+
+    const W: u32 = 320;
+    const H: u32 = 384;
+    let format = wgpu::TextureFormat::Rgba8UnormSrgb;
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format,
+        width: W,
+        height: H,
+        present_mode: wgpu::PresentMode::Fifo,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        view_formats: vec![],
+        desired_maximum_frame_latency: 1,
+    };
+    let pipeline = crate::renderer::RuiPipeline::from_format(&gpu.device, format, W, H);
+    pipeline.update_resolution(&gpu.queue, W, H);
+    let slot = scene
+        .node_paints
+        .iter()
+        .find(|p| p.key == btn_key)
+        .expect("button paint");
+    let instances = &scene.instances[slot.instance.0..slot.instance.1];
+    let buf = gpu
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("pill-slot-instances"),
+            contents: bytemuck::cast_slice(instances),
+            usage: wgpu::BufferUsages::VERTEX,
+        });
+    let draws = [(0usize, instances.len() as u32)];
+    let buffers = [buf];
+    let mut renderer = RuiTextRenderer::new(&gpu.device, &gpu.queue, &config);
+    crate::renderer::prepare_text::prepare_text_frame_at(
+        &mut renderer,
+        &gpu.device,
+        &gpu.queue,
+        W,
+        H,
+        text,
+        1.0,
+        false,
+        &Default::default(),
+        &Default::default(),
+    );
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("pill-then-glyphs"),
+        size: wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("plate then glyphs"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        draw_pill_instance_range(&mut pass, &pipeline, &buffers, &draws, 0, draws.len());
+        renderer.render(&mut pass);
+    }
+    crate::renderer::offscreen::readback_texture(&gpu.device, &gpu.queue, &texture, W, H, encoder)
+        .expect("plate-then-glyphs readback")
+}
+
+#[test]
+fn message_scroller_latest_pill_pixels_hide_wrapping_line() {
+    crate::style::set_css_transition_virtual_timeline(true);
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let Some(gpu) = crate::renderer::offscreen::OffscreenGpu::new() else {
+                eprintln!("no GPU adapter; pill pixel check skipped");
+                return;
+            };
+            for settle in [false, true] {
+                crate::style::set_css_transition_timeline_ms(0.0);
+                let mut root = gallery_wrap_under_jump_root();
+                let mut tree = LayoutTree::new();
+                let mut impact = LayoutStatus::Clean;
+                for _ in 0..4 {
+                    production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+                    let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                    sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+                }
+                let max_y = use_signal(
+                    &scroll_content_h_signal_key("ms-gallery-wrap:viewport"),
+                    || 0.0_f32,
+                )
+                .peek()
+                    - use_signal(
+                        &scroll_viewport_h_signal_key("ms-gallery-wrap:viewport"),
+                        || 0.0_f32,
+                    )
+                    .peek();
+                use_signal(
+                    &scroll_offset_y_signal_key("ms-gallery-wrap:viewport"),
+                    || 0.0_f32,
+                )
+                .set_silent((max_y - 48.0).max(0.0));
+                if settle {
+                    production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+                    sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+                    settle_latest_jump_pose(&mut root);
+                } else {
+                    crate::style::set_css_transition_timeline_ms(0.0);
+                    production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+                    sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+                    let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                    crate::style::set_css_transition_timeline_ms(80.0);
+                    production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+                    sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+                }
+                let scene = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+                let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
+                let pill = crate::core::tree::visual_paint_aabb(btn, btn.paint_scroll_acc);
+                let plate = crate::app::draw_cull::opaque_slot_fill_aabb(
+                    btn_key,
+                    pill,
+                    &scene.node_paints,
+                    &scene.instances,
+                )
+                .expect("opaque plate");
+                let crossing: Vec<String> = scene
+                    .text_nodes
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, t)| line_crosses_plate(t, plate))
+                    .map(|(i, t)| {
+                        format!(
+                            "ti={i} y={:.1} h={:.1} clip={:?} {:?}",
+                            t.y,
+                            t.height,
+                            t.clip_bounds,
+                            t.text.chars().take(40).collect::<String>()
+                        )
+                    })
+                    .collect();
+                assert!(
+                    !crossing.is_empty(),
+                    "settle={settle} wrap line must cross the opaque plate or the pixel check is vacuous"
+                );
+                let bare =
+                    jump_plate_band_images(&gpu, &scene, plate, true, false);
+                let ordered =
+                    jump_plate_band_images(&gpu, &scene, plate, false, false);
+                let rects_then_text =
+                    jump_plate_band_images(&gpu, &scene, plate, false, true);
+                let sanity = plate_channel_delta(&rects_then_text, &bare, plate);
+                let band_delta = plate_channel_delta(&ordered, &bare, plate);
+                let dark = |img: &crate::renderer::offscreen::RgbaImage| {
+                    img.pixels.chunks_exact(4).filter(|p| p[0] < 80 && p[1] < 80 && p[2] < 80).count()
+                };
+                assert!(
+                    sanity > 8,
+                    "settle={settle} drawing every glyph after every rect did not change the plate interior (plate={plate:?} sanity={sanity} dark rects={} bare={} ordered={} crossing={crossing:?}). The wrap line is not in this composite."
+                    , dark(&rects_then_text), dark(&bare), dark(&ordered)
+                );
+                assert!(
+                    band_delta <= 8,
+                    "settle={settle} page-stack band order leaves the wrap line on the chip (delta={band_delta} plate={plate:?})"
+                );
+                crate::app::damage::clear_frame_paint_nodes();
+                crate::app::damage::push_frame_paint_element(btn, btn.paint_scroll_acc);
+                let mut dirties = crate::app::damage::take_frame_paint_nodes();
+                if let Some(vp) = find_slot(&root, "message-scroller-viewport") {
+                    if let Some(key) = vp.layout_node.map(u64::from) {
+                        dirties.push(crate::app::damage::PaintDirty {
+                            key,
+                            bounds: crate::core::tree::visual_paint_aabb(vp, vp.paint_scroll_acc),
+                            kind: crate::app::damage::PaintDirtyKind::Region,
+                        });
+                    }
+                }
+                crate::app::draw_cull::prepare_node_present_dirties_ex(
+                    &mut dirties,
+                    &scene.node_paints,
+                    &[],
+                    &scene.instances,
+                    &[],
+                    &[],
+                    1.0,
+                    None,
+                    &[],
+                );
+                let wipes: Vec<(u64, [f32; 4])> = dirties
+                    .iter()
+                    .filter_map(|d| {
+                        let reset = crate::app::draw_cull::node_present_dest_reset_full(
+                            d.key,
+                            d.bounds,
+                            &scene.node_paints,
+                            &scene.instances,
+                            &[],
+                            &[],
+                            1.0,
+                            None,
+                        )?;
+                        Some((
+                            d.key,
+                            crate::app::draw_cull::node_present_glyph_clip_logical(
+                                d,
+                                Some(reset.rect),
+                                1.0,
+                            ),
+                        ))
+                    })
+                    .collect();
+                let mut flush =
+                    crate::app::draw_cull::node_present_layered_underlay_capture_text_wipes(
+                        &dirties,
+                        &scene.text_nodes,
+                        &scene.node_paints,
+                        &wipes,
+                        &scene.instances,
+                    );
+                flush.extend(
+                    crate::app::draw_cull::node_present_clipped_capture_text_wipes_excluding_overlay(
+                        &dirties,
+                        &scene.text_nodes,
+                        &scene.node_paints,
+                        &wipes,
+                        &[],
+                        &scene.instances,
+                        1.0,
+                    ),
+                );
+                // The hole flush owns "Latest". Only foreign runs (the wrapping
+                // paragraph) are a bug when they change pixels inside the plate.
+                let foreign: Vec<_> = flush
+                    .iter()
+                    .filter(|t| t.text.chars().count() > 16)
+                    .cloned()
+                    .collect();
+                let own: Vec<_> = flush
+                    .iter()
+                    .filter(|t| t.text.chars().count() <= 16)
+                    .cloned()
+                    .collect();
+                let with_own = plate_then_glyphs(&gpu, &scene, btn_key, &own);
+                let with_foreign = plate_then_glyphs(&gpu, &scene, btn_key, &flush);
+                let flush_delta = plate_channel_delta(&with_foreign, &with_own, plate);
+                let foreign_dbg: Vec<String> = foreign
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "clip={:?} {:?}",
+                            t.clip_bounds,
+                            t.text.chars().take(28).collect::<String>()
+                        )
+                    })
+                    .collect();
+                assert!(
+                    flush_delta <= 8,
+                    "settle={settle} foreign glyphs after the plate draw the wrap line (delta={flush_delta} plate={plate:?} foreign={foreign_dbg:?})"
+                );
+                // Scroll repair is a viewport Region with no button Node dirty.
+                // That replay draws the plate, then flushes every glyph in the
+                // viewport — the path that leaves the line on Latest after enter.
+                let region_only: Vec<_> = dirties
+                    .iter()
+                    .filter(|d| d.kind == crate::app::damage::PaintDirtyKind::Region)
+                    .copied()
+                    .collect();
+                let region_hole =
+                    crate::app::draw_cull::node_present_clipped_capture_text_wipes_excluding_overlay(
+                        &region_only,
+                        &scene.text_nodes,
+                        &scene.node_paints,
+                        &[],
+                        &[],
+                        &scene.instances,
+                        1.0,
+                    );
+                let region_foreign: Vec<_> = region_hole
+                    .iter()
+                    .filter(|t| t.text.chars().count() > 16)
+                    .cloned()
+                    .collect();
+                let region_own: Vec<_> = region_hole
+                    .iter()
+                    .filter(|t| t.text.chars().count() <= 16)
+                    .cloned()
+                    .collect();
+                let region_with_own = plate_then_glyphs(&gpu, &scene, btn_key, &region_own);
+                let region_with_foreign =
+                    plate_then_glyphs(&gpu, &scene, btn_key, &region_hole);
+                let region_delta =
+                    plate_channel_delta(&region_with_foreign, &region_with_own, plate);
+                let region_dbg: Vec<String> = region_foreign
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "clip={:?} {:?}",
+                            t.clip_bounds,
+                            t.text.chars().take(28).collect::<String>()
+                        )
+                    })
+                    .collect();
+                assert!(
+                    region_delta <= 8,
+                    "settle={settle} viewport Region flush draws the wrap line on the plate (delta={region_delta} plate={plate:?} foreign={region_dbg:?})"
+                );
+            }
+        });
+    });
+    crate::style::set_css_transition_virtual_timeline(false);
+}
+
+/// Wrapping line that crosses the jump pill must be painted in an earlier
+/// page-stack band than the chip fill, and must not be in the post-pill glyph
+/// capture. Same-band glyphon (rects then every run) and a post-pill flush both
+/// draw the line on top of the opaque chip.
+#[test]
+fn message_scroller_latest_pill_must_not_share_band_with_wrapping_line() {
+    crate::style::set_css_transition_virtual_timeline(true);
+    crate::style::set_css_transition_timeline_ms(0.0);
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut root = gallery_wrap_under_jump_root();
+            let mut tree = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            for _ in 0..4 {
+                production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+                let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            }
+            let max_y = use_signal(
+                &scroll_content_h_signal_key("ms-gallery-wrap:viewport"),
+                || 0.0_f32,
+            )
+            .peek()
+                - use_signal(
+                    &scroll_viewport_h_signal_key("ms-gallery-wrap:viewport"),
+                    || 0.0_f32,
+                )
+                .peek();
+            // Just off the live edge: the last wrap line still crosses the pill.
+            use_signal(
+                &scroll_offset_y_signal_key("ms-gallery-wrap:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent((max_y - 48.0).max(0.0));
+            crate::style::set_css_transition_timeline_ms(0.0);
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let enter_early = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            let early_present = crate::app::draw_cull::last_present_visual_slots(
+                &enter_early.node_paints,
+                &enter_early.instances,
+                &[],
+                &enter_early.text_nodes,
+                &[],
+            );
+            crate::style::set_css_transition_timeline_ms(80.0);
+            crate::app::damage::clear_frame_paint_nodes();
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let enter_dirties = crate::app::damage::take_frame_paint_nodes();
+            let enter_mid = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+            let btn = find_slot(&root, "message-scroller-button").expect("jump button");
+            let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
+            let pill = crate::core::tree::visual_paint_aabb(btn, btn.paint_scroll_acc);
+            let ranges = enter_mid.overlay_split.page_stack_band_ranges();
+            let btn_paint = enter_mid
+                .node_paints
+                .iter()
+                .find(|p| p.key == btn_key)
+                .expect("button slot");
+            let fill_idx = enter_mid.instances[btn_paint.instance.0..btn_paint.instance.1]
+                .iter()
+                .enumerate()
+                .find(|(_, inst)| inst.color[3] > 0.5 && inst.rect_size[0] > 8.0)
+                .map(|(i, _)| btn_paint.instance.0 + i)
+                .expect("opaque chip fill");
+            let fill_band = ranges
+                .iter()
+                .position(|r| r.instance.0 <= fill_idx && fill_idx < r.instance.1)
+                .expect("fill band");
+            let mut report = format!(
+                "opacity={} pill={pill:?} fill_idx={fill_idx} fill_band={fill_band} bands={}\n",
+                btn.style.opacity,
+                ranges.len()
+            );
+            for (bi, r) in ranges.iter().enumerate() {
+                let snippets: Vec<_> = enter_mid.text_nodes[r.text.0..r.text.1]
+                    .iter()
+                    .map(|t| {
+                        let s = t.text.chars().take(24).collect::<String>();
+                        format!("{s}@({:.0},{:.0})", t.x, t.y)
+                    })
+                    .collect();
+                report.push_str(&format!(
+                    "  band {bi} inst {:?} text {:?} :: {snippets:?}\n",
+                    r.instance, r.text
+                ));
+            }
+            let mut bleed = Vec::new();
+            for (ti, t) in enter_mid.text_nodes.iter().enumerate() {
+                if t.text == "Latest" || t.text.chars().count() < 8 {
+                    continue;
+                }
+                let Some(prepared) = t.prepared.as_ref() else {
+                    continue;
+                };
+                let lines = crate::text::measure::layout_lines(prepared, t.width.max(1.0));
+                let lh = prepared.line_height.max(1.0);
+                let mut hits_pill = false;
+                for (li, line) in lines.iter().enumerate() {
+                    let line_box = [t.x, t.y + li as f32 * lh, line.width.max(1.0), lh];
+                    if crate::app::damage::intersect_rects(line_box, pill).is_some() {
+                        hits_pill = true;
+                        report.push_str(&format!(
+                            "  line hit ti={ti} li={li} {:?} box={line_box:?}\n",
+                            line.text
+                        ));
+                    }
+                }
+                if !hits_pill {
+                    continue;
+                }
+                let text_band = ranges
+                    .iter()
+                    .position(|r| r.text.0 <= ti && ti < r.text.1);
+                report.push_str(&format!(
+                    "  wrap ti={ti} band={text_band:?} y={:.1} h={:.1} clip={:?} text={:?}\n",
+                    t.y,
+                    t.height,
+                    t.clip_bounds,
+                    t.text.chars().take(48).collect::<String>()
+                ));
+                if text_band.is_some_and(|b| b >= fill_band) {
+                    bleed.push(format!("same-or-later band {text_band:?}"));
+                }
+            }
+            let prev_early = early_present
+                .iter()
+                .find(|(k, _)| *k == btn_key)
+                .map(|(_, b)| *b);
+            let mut dirties = enter_dirties;
+            if !dirties.iter().any(|d| d.key == btn_key) {
+                crate::app::damage::clear_frame_paint_nodes();
+                crate::app::damage::push_frame_paint_element(btn, btn.paint_scroll_acc);
+                dirties.extend(crate::app::damage::take_frame_paint_nodes());
+            }
+            report.push_str(&format!("  dirties={dirties:?}\n  prev={prev_early:?}\n"));
+            let wipes: Vec<(u64, [f32; 4])> = dirties
+                .iter()
+                .filter_map(|d| {
+                    let reset = crate::app::draw_cull::node_present_dest_reset_full(
+                        d.key,
+                        d.bounds,
+                        &enter_mid.node_paints,
+                        &enter_mid.instances,
+                        &[],
+                        &[],
+                        1.0,
+                        if d.key == btn_key { prev_early } else { None },
+                    )?;
+                    Some((
+                        d.key,
+                        crate::app::draw_cull::node_present_glyph_clip_logical(
+                            d,
+                            Some(reset.rect),
+                            1.0,
+                        ),
+                    ))
+                })
+                .collect();
+            let hole = crate::app::draw_cull::node_present_clipped_capture_text_wipes(
+                &dirties,
+                &enter_mid.text_nodes,
+                &enter_mid.node_paints,
+                &wipes,
+            );
+            let under = crate::app::draw_cull::node_present_layered_underlay_capture_text_wipes(
+                &dirties,
+                &enter_mid.text_nodes,
+                &enter_mid.node_paints,
+                &wipes,
+                &enter_mid.instances,
+            );
+            report.push_str(&format!(
+                "  wipes={wipes:?}\n  hole={:?}\n  underlay={:?}\n",
+                hole.iter()
+                    .map(|t| {
+                        format!(
+                            "{} clip={:?}",
+                            t.text.chars().take(28).collect::<String>(),
+                            t.clip_bounds
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                under
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{} clip={:?}",
+                            t.text.chars().take(28).collect::<String>(),
+                            t.clip_bounds
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            ));
+            for t in &hole {
+                if t.text != "Latest" && t.text.chars().count() > 8 {
+                    let crosses = t.clip_bounds.is_some_and(|c| {
+                        crate::app::damage::intersect_rects(c, pill).is_some()
+                    });
+                    if crosses {
+                        bleed.push(format!(
+                            "post-pill capture {}",
+                            t.text.chars().take(24).collect::<String>()
+                        ));
+                    }
+                }
+            }
+            let plate = dirties.iter().find_map(|d| {
+                crate::app::draw_cull::opaque_slot_fill_aabb(
+                    d.key,
+                    d.bounds,
+                    &enter_mid.node_paints,
+                    &enter_mid.instances,
+                )
+            });
+            let plate = plate.expect("opaque jump plate");
+            report.push_str(&format!("  plate={plate:?}\n"));
+            for t in &under {
+                if let Some(clip) = t.clip_bounds {
+                    if crate::app::damage::intersect_rects(clip, plate).is_some() {
+                        bleed.push(format!(
+                            "underlay clip covers the plate {}",
+                            t.text.chars().take(24).collect::<String>()
+                        ));
+                    }
+                }
+            }
+            // Scroll damage is a viewport Region plus the button. Region replay
+            // draws rects, then the shared glyph flush runs after the plate.
+            // A wrap line in that flush is the thread on Latest.
+            let mut escalated = dirties.clone();
+            if let Some(vp) = find_slot(&root, "message-scroller-viewport") {
+                if let Some(key) = vp.layout_node.map(u64::from) {
+                    escalated.push(crate::app::damage::PaintDirty {
+                        key,
+                        bounds: crate::core::tree::visual_paint_aabb(vp, vp.paint_scroll_acc),
+                        kind: crate::app::damage::PaintDirtyKind::Region,
+                    });
+                }
+            }
+            crate::app::draw_cull::prepare_node_present_dirties_ex(
+                &mut escalated,
+                &enter_mid.node_paints,
+                &early_present,
+                &enter_mid.instances,
+                &[],
+                &[],
+                1.0,
+                None,
+                &[],
+            );
+            report.push_str(&format!("  escalated={escalated:?}\n"));
+            let esc_wipes: Vec<(u64, [f32; 4])> = escalated
+                .iter()
+                .filter_map(|d| {
+                    let reset = crate::app::draw_cull::node_present_dest_reset_full(
+                        d.key,
+                        d.bounds,
+                        &enter_mid.node_paints,
+                        &enter_mid.instances,
+                        &[],
+                        &[],
+                        1.0,
+                        if d.key == btn_key { prev_early } else { None },
+                    )?;
+                    Some((
+                        d.key,
+                        crate::app::draw_cull::node_present_glyph_clip_logical(
+                            d,
+                            Some(reset.rect),
+                            1.0,
+                        ),
+                    ))
+                })
+                .collect();
+            let esc_hole = crate::app::draw_cull::node_present_clipped_capture_text_wipes_excluding_overlay(
+                &escalated,
+                &enter_mid.text_nodes,
+                &enter_mid.node_paints,
+                &esc_wipes,
+                &[],
+                &enter_mid.instances,
+                1.0,
+            );
+            report.push_str(&format!(
+                "  esc_hole={:?}\n",
+                esc_hole
+                    .iter()
+                    .map(|t| {
+                        format!(
+                            "{} clip={:?}",
+                            t.text.chars().take(28).collect::<String>(),
+                            t.clip_bounds
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            ));
+            for t in &esc_hole {
+                if t.text == "Latest" || t.text.chars().count() <= 8 {
+                    continue;
+                }
+                let hits_plate = t.clip_bounds.is_none_or(|c| {
+                    crate::app::damage::intersect_rects(c, plate).is_some()
+                });
+                if hits_plate {
+                    bleed.push(format!(
+                        "post-escalation flush covers the plate {}",
+                        t.text.chars().take(24).collect::<String>()
+                    ));
+                }
+            }
+            assert!(
+                report.contains("line hit"),
+                "precondition: a wrap line must cross the pill or the check is vacuous\n{report}"
+            );
+            assert!(
+                bleed.is_empty(),
+                "wrapping line is drawn with the chip\n{bleed:?}\n{report}"
+            );
+        });
+    });
+    crate::style::set_css_transition_virtual_timeline(false);
 }

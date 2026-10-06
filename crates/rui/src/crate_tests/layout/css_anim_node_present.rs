@@ -8,15 +8,10 @@
 
 use crate::app::damage::{
     clip_culled_scroll_blit_pins, expand_paint_dirties_for_clip_culled_slots,
-    expand_paint_dirties_for_translated_slots,
-    intersect_rects, paint_dirty_has_keyed_slot,
+    expand_paint_dirties_for_translated_slots, intersect_rects, paint_dirty_has_keyed_slot,
     paint_dirty_matches_present_slot, paint_dirty_nested_in_larger_node,
     paint_dirty_skips_node_dest_reset, paint_element_key, take_frame_paint_nodes, PaintDirtyKind,
 };
-use crate::app::frame_stats::reset_collect_skip_counters;
-use crate::components::bubble::{bubble, bubble_content};
-use crate::components::marker::marker;
-use crate::components::message::message;
 use crate::app::draw_cull::{
     escalate_dirties_for_node_present, last_present_prev_for_dirty, last_present_visual_slots,
     node_paint_visual_bounds, node_present_clipped_capture_text,
@@ -24,6 +19,12 @@ use crate::app::draw_cull::{
     node_present_dest_reset_scaled, node_present_glyph_clip_logical, node_present_scissor_logical,
     node_present_scissor_pad, slot_visual_exceeds_rest,
 };
+#[cfg(feature = "bundled-lucide")]
+use crate::app::draw_cull::skip_covered_nested_node_present;
+use crate::app::frame_stats::reset_collect_skip_counters;
+use crate::components::bubble::{bubble, bubble_content};
+use crate::components::marker::marker;
+use crate::components::message::message;
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX};
 use crate::core::tree::{visual_paint_aabb, Element, LayoutStatus, LayoutTree};
@@ -53,9 +54,20 @@ fn trigger_buttons_hover_must_match_on_full_and_fast_frames() {
     set_css_transition_timeline_ms(0.0);
     crate::style::set_theme_mode(crate::style::ThemeMode::Light);
     let make = || {
-        Element::new().flex_col().w(240.0).h(120.0).gap(12.0)
-            .child(Element::from(button("trigger-full-a").size("sm").text("Open RSX Trigger")))
-            .child(Element::from(button("trigger-full-b").variant("outline").size("sm").text("Open Builder Trigger")))
+        Element::new()
+            .flex_col()
+            .w(240.0)
+            .h(120.0)
+            .gap(12.0)
+            .child(Element::from(
+                button("trigger-full-a").size("sm").text("Open RSX Trigger"),
+            ))
+            .child(Element::from(
+                button("trigger-full-b")
+                    .variant("outline")
+                    .size("sm")
+                    .text("Open Builder Trigger"),
+            ))
     };
     let (_owner, (mut full, mut fast)) = create_root(|| (make(), make()));
     let mut full_tree = LayoutTree::new();
@@ -64,18 +76,55 @@ fn trigger_buttons_hover_must_match_on_full_and_fast_frames() {
     let _ = fast_tree.build_and_layout(&mut fast, 240.0, 120.0, [-1.0, -1.0]);
     for step in 0..24 {
         set_css_transition_timeline_ms(step as f64 * 8.0);
-        let mouse = if step % 3 == 2 { [-1.0, -1.0] } else {
+        let mouse = if step % 3 == 2 {
+            [-1.0, -1.0]
+        } else {
             let b = full.children[step % 3].layout_bounds;
             [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5]
         };
         let mut impact = LayoutStatus::Clean;
-        sync_button_hover_paint_subtree(&mut full, &mut full_tree, &mut impact, 240.0, 120.0, [0.0, 0.0]);
-        sync_class_variants_subtree(&mut full, mouse, "", false, 240.0, 120.0, &mut full_tree, &mut impact);
-        sync_button_hover_paint_subtree(&mut fast, &mut fast_tree, &mut impact, 240.0, 120.0, [0.0, 0.0]);
-        tick_active_css_transitions_subtree(&mut fast, mouse, "", false, 240.0, 120.0, [0.0, 0.0], &mut fast_tree, &mut impact);
+        sync_button_hover_paint_subtree(
+            &mut full,
+            &mut full_tree,
+            &mut impact,
+            240.0,
+            120.0,
+            [0.0, 0.0],
+        );
+        sync_class_variants_subtree(
+            &mut full,
+            mouse,
+            "",
+            false,
+            240.0,
+            120.0,
+            &mut full_tree,
+            &mut impact,
+        );
+        sync_button_hover_paint_subtree(
+            &mut fast,
+            &mut fast_tree,
+            &mut impact,
+            240.0,
+            120.0,
+            [0.0, 0.0],
+        );
+        tick_active_css_transitions_subtree(
+            &mut fast,
+            mouse,
+            "",
+            false,
+            240.0,
+            120.0,
+            [0.0, 0.0],
+            &mut fast_tree,
+            &mut impact,
+        );
         for i in 0..2 {
-            assert_eq!(full.children[i].style.bg_color, fast.children[i].style.bg_color,
-                "trigger {i}, pointer step {step}: frame selection must not change hover paint");
+            assert_eq!(
+                full.children[i].style.bg_color, fast.children[i].style.bg_color,
+                "trigger {i}, pointer step {step}: frame selection must not change hover paint"
+            );
         }
     }
     set_css_transition_virtual_timeline(false);
@@ -1656,9 +1705,7 @@ fn message_status_shimmer_capture_must_keep_full_oliver_is_typing() {
             &later.node_paints,
             &wipe_clips,
         );
-        let captured = capture
-            .iter()
-            .find(|n| n.text.contains("Oliver is typing"));
+        let captured = capture.iter().find(|n| n.text.contains("Oliver is typing"));
         let wipe_diag: Vec<String> = present_dirties
             .iter()
             .filter_map(|d| {
@@ -3292,7 +3339,8 @@ fn culled_shimmer_must_not_punch_live_edge_message_scroller_or_title() {
         "fixture: MessageScroller title must sit at the live edge after Marker scrolls out\n{dump}"
     );
 
-    let phantom_dirty = |d: &crate::app::damage::PaintDirty, paints: &[crate::layout::layout_tree::NodePaint]| {
+    let phantom_dirty = |d: &crate::app::damage::PaintDirty,
+                         paints: &[crate::layout::layout_tree::NodePaint]| {
         let culled = !paints.iter().any(|p| !p.overlay && p.key == d.key);
         let above = d.bounds[1] + d.bounds[3] <= body_b[1] + 1.0;
         culled || above
@@ -3678,13 +3726,9 @@ fn straddling_marker_must_not_stamp_live_edge_message_scroller() {
         .flex_shrink(0.0)
         .child(Element::new().text("1c-ms) MessageScroller (ShadCN conversation scroller)"));
     ms_title.set_attr("data-slot", "ms-title");
-    let mut ms_desc = Element::new()
-        .w(400.0)
-        .h(36.0)
-        .flex_shrink(0.0)
-        .child(Element::new().text(
-            "Official chat card: New Chat header, muted-user bubbles (align=end)",
-        ));
+    let mut ms_desc = Element::new().w(400.0).h(36.0).flex_shrink(0.0).child(
+        Element::new().text("Official chat card: New Chat header, muted-user bubbles (align=end)"),
+    );
     ms_desc.set_attr("data-slot", "ms-desc");
 
     let column = Element::new()
@@ -3835,9 +3879,10 @@ fn straddling_marker_must_not_stamp_live_edge_message_scroller() {
         "fixture: Marker card must still straddle the clip (bottom in view)\n{dump}"
     );
     assert!(
-        collected.text_nodes.iter().all(|n| {
-            !n.text.contains("Thinking") || n.y + n.height <= body_b[1] + 1.0
-        }),
+        collected
+            .text_nodes
+            .iter()
+            .all(|n| { !n.text.contains("Thinking") || n.y + n.height <= body_b[1] + 1.0 }),
         "fixture: Thinking glyphs must have left the live edge (top of Marker culled)\n{dump}"
     );
     assert!(
@@ -4252,7 +4297,8 @@ fn scrolled_out_message_bubble_must_not_stamp_live_edge_message_scroller() {
         );
         let at_live = collected.text_nodes.iter().any(|n| {
             (n.text.contains("On it") || n.text.contains("Delivered") || n.text.trim() == "B")
-                && n.text.contains(old.text.split_whitespace().next().unwrap_or(""))
+                && n.text
+                    .contains(old.text.split_whitespace().next().unwrap_or(""))
                 && (n.y - ms_cy).abs() < 16.0
         });
         assert!(
@@ -4275,13 +4321,18 @@ fn scrolled_out_message_bubble_must_not_stamp_live_edge_message_scroller() {
         if intersect_rects(*prev, ms_box).is_none() && (prev_cy - ms_cy).abs() > 18.0 {
             continue;
         }
-        let named = dirty.iter().any(|d| d.key == *key && d.kind != PaintDirtyKind::Overlay);
+        let named = dirty
+            .iter()
+            .any(|d| d.key == *key && d.kind != PaintDirtyKind::Overlay);
         assert!(
             named,
             "clip-culled message last-present at the live edge must be dest-reset (else Delivered/On it stay in retain)\n key={key} prev={}\n{dump}",
             fmt_rect(*prev)
         );
-        let d = dirty.iter().find(|d| d.key == *key).expect("named vanished");
+        let d = dirty
+            .iter()
+            .find(|d| d.key == *key)
+            .expect("named vanished");
         let (wipe, _) = node_present_dest_reset_scaled(
             d.key,
             d.bounds,
@@ -4924,8 +4975,8 @@ fn message_status_shimmer_must_show_full_oliver_is_typing() {
         .child(status_shimmer_marker());
     let mut stand_tree = LayoutTree::new();
     let stand = stand_tree.build_and_layout(&mut standalone, 448.0, 64.0, [-1.0, -1.0]);
-    let stand_caption = caption_named(&stand.text_nodes, "Oliver is typing")
-        .expect("standalone caption");
+    let stand_caption =
+        caption_named(&stand.text_nodes, "Oliver is typing").expect("standalone caption");
     let stand_w = stand_caption.width;
 
     let heading = Element::new().text("Status (Marker inside Message)");
@@ -5038,10 +5089,7 @@ fn message_status_shimmer_must_show_full_oliver_is_typing() {
                 1.0,
                 prev,
             ) {
-                wipe_clips.push((
-                    d.key,
-                    node_present_glyph_clip_logical(d, Some(wipe), 1.0),
-                ));
+                wipe_clips.push((d.key, node_present_glyph_clip_logical(d, Some(wipe), 1.0)));
             }
         }
         let capture = node_present_clipped_capture_text_wipes(

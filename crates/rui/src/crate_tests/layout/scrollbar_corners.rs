@@ -124,8 +124,7 @@ fn horizontal_bar_spans_full_width_when_vertical_bar_is_hidden() {
             {
                 let h = find_track_mut(&mut root, "x").expect("x track");
                 let edge = crate::layout::lpa_length_px(h.style.inset.right).unwrap_or(0.0);
-                let next =
-                    horizontal_lane_side_inset(edge, SCROLLBAR_DEFAULT_CROSS_PX, false);
+                let next = horizontal_lane_side_inset(edge, SCROLLBAR_DEFAULT_CROSS_PX, false);
                 h.style.inset.right = taffy::style::LengthPercentageAuto::length(next);
             }
             let mut layout = LayoutTree::new();
@@ -166,8 +165,7 @@ fn overlay_collect_keeps_l_join_when_both_bars_show() {
             );
             let mut layout = LayoutTree::new();
             let _ = layout.build_and_layout(&mut root, 200.0, 120.0, [-1.0, -1.0]);
-            let _ =
-                layout.build_and_layout_fast(&mut root, 200.0, 120.0, [-1.0, -1.0], true, true);
+            let _ = layout.build_and_layout_fast(&mut root, 200.0, 120.0, [-1.0, -1.0], true, true);
             let h = find_track(&root, "x").expect("x track").layout_bounds;
             let v = find_track(&root, "y").expect("y track").layout_bounds;
             assert_l_join(h, v, "overlay");

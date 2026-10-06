@@ -2827,8 +2827,7 @@ fn straddling_card_internals_must_not_paint_at_rest_y() {
         .map(|n| format!("{:?} y={:.1}", n.text, n.y))
         .collect();
     let dump = format!(
-        "scroll={scroll_y:.1} think_rest={think_rest_y:.1} skipped={:?}\n texts={texts:?}"
-        ,
+        "scroll={scroll_y:.1} think_rest={think_rest_y:.1} skipped={:?}\n texts={texts:?}",
         tree.last_collect_skip_counts()
     );
 

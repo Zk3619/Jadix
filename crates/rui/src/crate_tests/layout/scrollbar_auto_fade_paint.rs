@@ -994,8 +994,10 @@ fn full_prepass_must_not_collapse_overlay_track_before_metrics() {
             settle_cubic(REST, "y", 1.0);
             let shown =
                 layout.build_and_layout_fast(&mut root, 220.0, 120.0, [-1.0, -1.0], true, true);
-            let track = find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y").expect("track");
-            let thumb = find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y").expect("thumb");
+            let track =
+                find_focus_bounds(&root, SCROLLBAR_TRACK_FOCUS_PREFIX, ":y").expect("track");
+            let thumb =
+                find_focus_bounds(&root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y").expect("thumb");
             let a = thumb_fill_alpha(&shown, thumb);
             let path = hit_path(&root, track[0] + track[2] * 0.5, track[1] + track[3] * 0.5);
             let hit = crate::app::pointer_events::path_deepest_focus_id(&path);

@@ -21,7 +21,6 @@ use crate::app::draw_cull::{
 use crate::components::form::form_field;
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
 use crate::components::input_adornment::input_adornment;
-use crate::components::textarea::{textarea, textarea_focus_id};
 use crate::components::internal::text_edit::{
     push_focused_text_edit_caret_damage, sync_text_edit_paint_subtree_in_viewport,
 };
@@ -29,6 +28,7 @@ use crate::components::sidebar::{
     sidebar, sidebar_provider_scope, SidebarInset, SidebarInsetProps, SidebarMenuButton,
     SidebarMenuButtonProps,
 };
+use crate::components::textarea::{textarea, textarea_focus_id};
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{
     sync_reactive_elements_subtree_ex, Element, LayoutStatus, LayoutTree, ReactiveSyncCollect,
@@ -916,12 +916,7 @@ fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
 }
 
 fn rect_has_point(r: [f32; 4], x: f32, y: f32) -> bool {
-    r[2] > 0.0
-        && r[3] > 0.0
-        && x >= r[0]
-        && y >= r[1]
-        && x < r[0] + r[2]
-        && y < r[1] + r[3]
+    r[2] > 0.0 && r[3] > 0.0 && x >= r[0] && y >= r[1] && x < r[0] + r[2] && y < r[1] + r[3]
 }
 
 /// Hard ring (spread ≥ 1, not inset). `shadow-xs` is blur 1 / spread 0 and stays.
@@ -1030,8 +1025,7 @@ fn assert_adornment_blur_clears_ring(mut root: Element, focus: &str, shell_tid: 
     // Blur is StyleChanged. The app takes the fast path and may skip-replay a
     // cached quad; a full rebuild would hide that and drop the ring by accident.
     tree.set_collect_skip_allowed(true);
-    let result =
-        tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [-1.0, -1.0], false, false);
+    let result = tree.build_and_layout_fast(&mut root, 1280.0, 800.0, [-1.0, -1.0], false, false);
     let prev_slots = last_present_visual_slots(
         &focused.node_paints,
         &focused.instances,
