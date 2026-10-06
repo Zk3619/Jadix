@@ -31,8 +31,8 @@ use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::OnceLock;
 
 use crate::core::tree::{Element, LayoutStatus};
 
@@ -217,7 +217,11 @@ fn element_paint_outset_pad(el: &Element, rot_pad: f32) -> f32 {
     }
     let outline = el.style.outline_width.max(0.0) + el.style.outline_offset.max(0.0);
     halo = halo.max(outline);
-    if halo <= 0.0 { rot_pad } else { halo + rot_pad }
+    if halo <= 0.0 {
+        rot_pad
+    } else {
+        halo + rot_pad
+    }
 }
 
 /// Expand pin / Taffy can report content height while `max-height` is the accordion clip.
@@ -961,10 +965,7 @@ pub fn overlay_glyphon_prepare_needed(node_present: bool, kinds: &[PaintDirtyKin
 }
 
 #[inline]
-pub fn node_present_skips_page_stack_glyphon(
-    node_present: bool,
-    region_present: bool,
-) -> bool {
+pub fn node_present_skips_page_stack_glyphon(node_present: bool, region_present: bool) -> bool {
     // Node Present clears only local holes and flushes the current glyphs from
     // `capture_text_renderer` after primitive replay. Preparing the page-band
     // mesh as well submits the same trigger caption twice when its text/style
@@ -1057,18 +1058,19 @@ fn overlay_stamp_slack() -> f32 {
     super::draw_cull::node_present_scissor_pad(PaintDirtyKind::Overlay) * 2.0
 }
 
-/// Expand pin reports content height while occupancy is the accordion clip stamp.
-/// Same `x` / `y` / `w` — only height grew. Foreign leftover occupancy (DatePicker
-/// vs ColorPicker) shares neither origin nor width.
+/// Expand pin reports content size while occupancy is the clip stamp.
+/// Same origin — height (accordion) or width (AvatarGroup `max-width`) grew.
+/// A face past that clip must not widen the encode scissor: own chrome is not
+/// clipped by its own overflow, so the extra strip paints the border and the
+/// overflow face, and restore only covers the stamp.
+/// Foreign leftover occupancy (DatePicker vs ColorPicker) does not share origin.
 fn overlay_dirty_is_expand_overflow(dirty: [f32; 4], occupancy: [f32; 4], slack: f32) -> bool {
     if !overlay_box_extends_beyond(dirty, occupancy, slack)
         || overlay_box_extends_beyond(occupancy, dirty, slack)
     {
         return false;
     }
-    (dirty[0] - occupancy[0]).abs() <= slack
-        && (dirty[1] - occupancy[1]).abs() <= slack
-        && (dirty[2] - occupancy[2]).abs() <= slack
+    (dirty[0] - occupancy[0]).abs() <= slack && (dirty[1] - occupancy[1]).abs() <= slack
 }
 
 /// Layout box of the portal stamp `key`.
@@ -2638,7 +2640,11 @@ pub fn changed_viewport_scroll_deltas(
         let dy = f32::from_bits(off[1]) - f32::from_bits(old[1]);
         out.push((id.clone(), [dx, dy]));
     }
-    if out.is_empty() { None } else { Some(out) }
+    if out.is_empty() {
+        None
+    } else {
+        Some(out)
+    }
 }
 
 /// Viewport ids present last frame and gone this frame (pin last clip bounds).
@@ -3329,8 +3335,7 @@ mod tests {
         // every ~150ms transition-colors frame (卡顿 + 悬停中间态).
         let coverage = overlay_replay_coverage(&[(1, panel)], Some(halo));
         let hover_wipe = [10.0, 40.0, 220.0, 48.0];
-        let after_stamp =
-            page_scissors_excluding_portal_boxes(hover_wipe, &[(1, panel)]);
+        let after_stamp = page_scissors_excluding_portal_boxes(hover_wipe, &[(1, panel)]);
         let preserved = page_node_present_scissors_preserving_portal_halo(
             after_stamp,
             trigger,
@@ -3345,9 +3350,9 @@ mod tests {
         );
         let gap = [10.0, 72.0, 220.0, 4.0];
         assert!(
-            preserved
-                .iter()
-                .all(|r| intersect_rects(*r, gap).map(|i| i[2] * i[3] < 1.0).unwrap_or(true)),
+            preserved.iter().all(|r| intersect_rects(*r, gap)
+                .map(|i| i[2] * i[3] < 1.0)
+                .unwrap_or(true)),
             "gap halo ring must stay in retain; preserved={preserved:?}"
         );
         // Face under the halo still CLEARs (hover fill) and therefore overlaps
@@ -3374,8 +3379,10 @@ mod tests {
 
     #[test]
     fn node_present_uses_capture_text_mesh_only() {
-        assert!(node_present_skips_page_stack_glyphon(true, false),
-            "Node Present capture must remain the only text submission source for changed captions");
+        assert!(
+            node_present_skips_page_stack_glyphon(true, false),
+            "Node Present capture must remain the only text submission source for changed captions"
+        );
         assert!(!node_present_skips_page_stack_glyphon(false, false));
         assert!(!node_present_skips_page_stack_glyphon(true, true));
     }
@@ -3414,7 +3421,10 @@ mod tests {
             true,
             &[PaintDirtyKind::Region]
         ));
-        assert!(overlay_glyphon_prepare_needed(false, &[PaintDirtyKind::Node]));
+        assert!(overlay_glyphon_prepare_needed(
+            false,
+            &[PaintDirtyKind::Node]
+        ));
     }
 
     #[test]
@@ -3736,6 +3746,33 @@ mod tests {
         assert!(
             scissor[3] < 120.0,
             "overflow dirty must not reopen the measured height as a transparent hole; scissor={scissor:?}"
+        );
+    }
+
+    #[test]
+    fn expand_width_overflow_dirty_does_not_widen_encode_past_stamp() {
+        // AvatarGroup exit: max-width clamps the stamp, but the last face's
+        // Overlay dirty still sits at the expanded x. Unioning it paints F and
+        // the unclipped right border; restore only covers the stamp.
+        let stamp = [16.0, 54.0, 120.0, 40.0];
+        let face_f = [200.0, 58.0, 32.0, 32.0];
+        let wide = union_rects(stamp, face_f);
+        let scissor = overlay_encode_scissor(Some(wide), Some(stamp), None)
+            .expect("clip stamp stays in the encode scissor");
+        let hits = |r: [f32; 4], x: f32, y: f32| {
+            x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
+        };
+        assert!(
+            hits(scissor, 40.0, 70.0),
+            "the clamped pill must still encode, scissor={scissor:?}"
+        );
+        assert!(
+            !hits(scissor, 210.0, 70.0),
+            "overflow face must not widen the scissor past the stamp, scissor={scissor:?}"
+        );
+        assert!(
+            hits(scissor, 40.0, 46.0),
+            "the stamp halo pad still covers the top shadow, scissor={scissor:?}"
         );
     }
 
@@ -4581,15 +4618,13 @@ mod tests {
             "unstamped nested join dest-resets nothing — the expand measure AABB would punch DatePicker fill and page captions"
         );
         let unconstrained = [80.0, 360.0, 280.0, 800.0];
-        assert!(
-            overlay_mounted_replace_holes(
-                &parent_only,
-                &parent_only,
-                NESTED_KEY,
-                Some(unconstrained)
-            )
-            .is_empty()
-        );
+        assert!(overlay_mounted_replace_holes(
+            &parent_only,
+            &parent_only,
+            NESTED_KEY,
+            Some(unconstrained)
+        )
+        .is_empty());
         let leave =
             overlay_mounted_replace_holes(&parent_only, &parent_only, NESTED_KEY, Some(nested));
         assert!(leave.is_empty());
@@ -4830,7 +4865,8 @@ mod tests {
         );
         let gap_pixel = [100.0, 73.0, 1.0, 1.0];
         assert!(
-            kept.iter().all(|r| intersect_rects(*r, gap_pixel).is_none()),
+            kept.iter()
+                .all(|r| intersect_rects(*r, gap_pixel).is_none()),
             "gap halo pixel must not be CLEARed on hover; kept={kept:?}"
         );
         assert!(
@@ -4838,7 +4874,9 @@ mod tests {
                 .any(|p| overlay_page_punch_overlap(coverage, *p).is_some()),
             "fixture: cleared face intersects coverage"
         );
-        assert!(!page_dirty_punches_overlay_after_clear(PaintDirtyKind::Node));
+        assert!(!page_dirty_punches_overlay_after_clear(
+            PaintDirtyKind::Node
+        ));
     }
 
     #[test]
@@ -4864,10 +4902,8 @@ mod tests {
         assert!(
             restore_pad[0] <= trigger.bounds[0]
                 && restore_pad[1] <= trigger.bounds[1]
-                && restore_pad[0] + restore_pad[2]
-                    >= trigger.bounds[0] + trigger.bounds[2]
-                && restore_pad[1] + restore_pad[3]
-                    >= trigger.bounds[1] + trigger.bounds[3],
+                && restore_pad[0] + restore_pad[2] >= trigger.bounds[0] + trigger.bounds[2]
+                && restore_pad[1] + restore_pad[3] >= trigger.bounds[1] + trigger.bounds[3],
             "fixture: encode Restore pad must fully contain the trigger; pad={restore_pad:?}"
         );
         assert!(
@@ -5161,7 +5197,11 @@ mod tests {
     fn retained_overlay_missing_box_restores_locally_during_reopen() {
         assert!(overlay_requires_full_clear(true, None, false));
         assert!(!overlay_requires_full_clear(true, None, true));
-        assert!(!overlay_requires_full_clear(true, Some([90.0, 190.0, 160.0, 48.0]), true));
+        assert!(!overlay_requires_full_clear(
+            true,
+            Some([90.0, 190.0, 160.0, 48.0]),
+            true
+        ));
     }
 
     #[test]
@@ -5189,16 +5229,12 @@ mod tests {
         let menu = (8, [583.0, 977.0, 144.0, 200.0]);
         let smaller_parent = (7, [570.0, 960.0, 280.0, 340.0]);
         let holes = overlay_restore_leftover_coverage(&[parent, menu], &[smaller_parent], None);
-        assert!(
-            holes
-                .iter()
-                .any(|(k, b)| *k == 7 && rect_contains_rect(*b, [840.0, 1325.0, 1.0, 1.0]))
-        );
-        assert!(
-            holes
-                .iter()
-                .any(|(k, b)| *k == 8 && rect_contains_rect(*b, [730.0, 1178.0, 1.0, 1.0]))
-        );
+        assert!(holes
+            .iter()
+            .any(|(k, b)| *k == 7 && rect_contains_rect(*b, [840.0, 1325.0, 1.0, 1.0])));
+        assert!(holes
+            .iter()
+            .any(|(k, b)| *k == 8 && rect_contains_rect(*b, [730.0, 1178.0, 1.0, 1.0])));
     }
 
     #[test]
@@ -5925,13 +5961,12 @@ mod tests {
         expand_paint_dirties_for_translated_slots(&mut cells, &[(3, now_cell)], &[(3, prev_cell)]);
         let gap_y = 220.0;
         assert!(
-            cells.iter().all(|d| gap_y < d.bounds[1] || gap_y > d.bounds[1] + d.bounds[3]),
+            cells
+                .iter()
+                .all(|d| gap_y < d.bounds[1] || gap_y > d.bounds[1] + d.bounds[3]),
             "a scrolled OTP cell must not clear the column between poses\n {cells:?}"
         );
-        assert!(
-            cells.len() >= 2,
-            "each pose is its own hole\n {cells:?}"
-        );
+        assert!(cells.len() >= 2, "each pose is its own hole\n {cells:?}");
     }
 
     #[test]
@@ -6192,34 +6227,26 @@ mod tests {
             .allows(),
             "named paint is a pin hole, not an abort gate"
         );
-        assert!(
-            !ScrollStripBlitPolicy {
-                retain_valid: false,
-                ..allow_policy()
-            }
-            .allows()
-        );
-        assert!(
-            !ScrollStripBlitPolicy {
-                force_full_redraw: true,
-                ..allow_policy()
-            }
-            .allows()
-        );
-        assert!(
-            !ScrollStripBlitPolicy {
-                gpu_partial: false,
-                ..allow_policy()
-            }
-            .allows()
-        );
-        assert!(
-            !ScrollStripBlitPolicy {
-                enabled: false,
-                ..allow_policy()
-            }
-            .allows()
-        );
+        assert!(!ScrollStripBlitPolicy {
+            retain_valid: false,
+            ..allow_policy()
+        }
+        .allows());
+        assert!(!ScrollStripBlitPolicy {
+            force_full_redraw: true,
+            ..allow_policy()
+        }
+        .allows());
+        assert!(!ScrollStripBlitPolicy {
+            gpu_partial: false,
+            ..allow_policy()
+        }
+        .allows());
+        assert!(!ScrollStripBlitPolicy {
+            enabled: false,
+            ..allow_policy()
+        }
+        .allows());
     }
 
     #[test]
@@ -6367,15 +6394,13 @@ mod tests {
             rect_contains_rect(pin, [100.0, 116.0, 100.0, 84.0]),
             "pin must cover A's dest smear inside A∪B, got {pin:?}"
         );
-        assert!(
-            overlapping_sibling_occupancy_pin(
-                [0.0, 0.0, 400.0, 600.0],
-                [0.0, 16.0],
-                [40.0, 80.0, 320.0, 400.0],
-                [0.0, 8.0],
-            )
-            .is_none()
-        );
+        assert!(overlapping_sibling_occupancy_pin(
+            [0.0, 0.0, 400.0, 600.0],
+            [0.0, 16.0],
+            [40.0, 80.0, 320.0, 400.0],
+            [0.0, 8.0],
+        )
+        .is_none());
     }
 
     #[test]

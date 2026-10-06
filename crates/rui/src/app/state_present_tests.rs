@@ -1,7 +1,7 @@
 //! GPU differential tests: retained partial updates must match a fresh full draw.
 use super::*;
 use crate::app::{damage::*, draw_cull::*};
-use crate::renderer::offscreen::{OffscreenGpu, images_match, readback_texture};
+use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 
 /// A node capture contains the whole caption, even when the actual repair has
 /// separate holes. Retained antialiased edges must never be blended again.
@@ -140,10 +140,17 @@ fn trigger_capture_only_repaints_cleared_pixels() {
 #[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
 fn fractional_overlay_restore_repaints_rounded_scissor_edge() {
     let gpu = OffscreenGpu::new().expect("GPU adapter");
-    let pipeline = RuiPipeline::from_format(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb, 80, 80);
+    let pipeline =
+        RuiPipeline::from_format(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb, 80, 80);
     pipeline.update_resolution(&gpu.queue, 80, 80);
     let mut root = Element::new().w(80.0).h(80.0).child(
-        Element::new().absolute().left(10.0).top(55.3).w(60.0).h(20.0).bg([0.0, 0.6, 0.0, 1.0]),
+        Element::new()
+            .absolute()
+            .left(10.0)
+            .top(55.3)
+            .w(60.0)
+            .h(20.0)
+            .bg([0.0, 0.6, 0.0, 1.0]),
     );
     let mut scene = LayoutTree::new().build_and_layout(&mut root, 80.0, 80.0, [-1.0, -1.0]);
     for instance in &mut scene.instances {
@@ -152,8 +159,14 @@ fn fractional_overlay_restore_repaints_rounded_scissor_edge() {
     }
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("fractional overlay restore"),
-        size: wgpu::Extent3d { width: 80, height: 80, depth_or_array_layers: 1 },
-        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+        size: wgpu::Extent3d {
+            width: 80,
+            height: 80,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
         format: wgpu::TextureFormat::Rgba8UnormSrgb,
         usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
@@ -165,19 +178,54 @@ fn fractional_overlay_restore_repaints_rounded_scissor_edge() {
     {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: &view, depth_slice: None, resolve_target: None,
-                ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
-            })], ..Default::default()
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
         });
-        draw_cpu_sdf_instances(&mut pass, &pipeline, &gpu.device, pipeline.dummy_backdrop(), &scene.instances);
+        draw_cpu_sdf_instances(
+            &mut pass,
+            &pipeline,
+            &gpu.device,
+            pipeline.dummy_backdrop(),
+            &scene.instances,
+        );
         pass.set_scissor_rect(x, y, w, h);
         let cull_rect = node_present_repair_cull_rect((x, y, w, h));
-        draw_scissor_fill(&mut pass, &pipeline, &gpu.device, cull_rect, wgpu::Color::WHITE);
-        draw_sdf_range_with_clip(&mut pass, &pipeline, &gpu.device, pipeline.dummy_backdrop(), &scene.instances, &[], 0, scene.instances.len() as u32, Some(CullRects::one(cull_rect)));
+        draw_scissor_fill(
+            &mut pass,
+            &pipeline,
+            &gpu.device,
+            cull_rect,
+            wgpu::Color::WHITE,
+        );
+        draw_sdf_range_with_clip(
+            &mut pass,
+            &pipeline,
+            &gpu.device,
+            pipeline.dummy_backdrop(),
+            &scene.instances,
+            &[],
+            0,
+            scene.instances.len() as u32,
+            Some(CullRects::one(cull_rect)),
+        );
     }
     let partial = readback_texture(&gpu.device, &gpu.queue, &texture, 80, 80, encoder).unwrap();
-    let full = gpu.render_instances_readback(80, 80, wgpu::Color::WHITE, &scene.instances).unwrap();
-    assert!(images_match(&partial, &full, 2), "overlay restore left a white horizontal edge: partial={:?}, full={:?}", partial.pixel(40, 55), full.pixel(40, 55));
+    let full = gpu
+        .render_instances_readback(80, 80, wgpu::Color::WHITE, &scene.instances)
+        .unwrap();
+    assert!(
+        images_match(&partial, &full, 2),
+        "overlay restore left a white horizontal edge: partial={:?}, full={:?}",
+        partial.pixel(40, 55),
+        full.pixel(40, 55)
+    );
 }
 
 #[test]
@@ -412,7 +460,11 @@ fn latest_fade_over_wrapping_text_matches_full_composite() {
             ))
         };
         if frame > 0 {
-            assert_eq!(dirty[0].kind, PaintDirtyKind::Region);
+            assert_eq!(
+                dirty[0].kind,
+                PaintDirtyKind::Node,
+                "compact Latest fade dest-resets the ink wipe"
+            );
         }
         draw_latest_scene_for_test(&gpu, &config, &pipeline, &texture, &scene, clip);
         let partial = readback_texture(
@@ -553,6 +605,8 @@ fn draw_latest_scene_for_test(
                     }],
                     &[],
                     &[],
+                    &[],
+                    None,
                     1.0,
                     320,
                     200,
@@ -863,7 +917,8 @@ fn check_partial_pixels(gpu: &OffscreenGpu, background: bool, portal: bool) {
             );
         }
     }
-    let mut retained_before = readback_texture(&gpu.device, &gpu.queue, &texture, W, H, encoder).unwrap();
+    let mut retained_before =
+        readback_texture(&gpu.device, &gpu.queue, &texture, W, H, encoder).unwrap();
     for (frame, opacity) in [0.2, 0.65, 0.0, 0.45].into_iter().enumerate() {
         root.children[0].style.bg_color = [0.0, 0.0, 1.0, opacity];
         tree.set_collect_skip_allowed(false);
@@ -1035,9 +1090,16 @@ fn sdf_vertex_clip_flags_preserve_every_world_clip_channel() {
     let pipeline = RuiPipeline::from_format(&gpu.device, format, 96, 64);
     let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
         label: Some("world clip flags"),
-        size: wgpu::Extent3d { width: 96, height: 64, depth_or_array_layers: 1 },
-        mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
-        format, usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        size: wgpu::Extent3d {
+            width: 96,
+            height: 64,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
         view_formats: &[],
     });
     let view = texture.create_view(&Default::default());
@@ -1050,29 +1112,72 @@ fn sdf_vertex_clip_flags_preserve_every_world_clip_channel() {
         let mut clip = crate::style::GpuClipPoly::NONE;
         let points = [[32.0, 8.0], [64.0, 8.0], [64.0, 56.0], [32.0, 56.0]];
         match channel {
-            0 => { clip.count = 4; clip.pts[..4].copy_from_slice(&points); }
-            1 => { clip.count2 = 4; clip.pts2[..4].copy_from_slice(&points); }
-            2 => { clip.round_rect = [32.0, 8.0, 32.0, 48.0]; clip.round_radii = [8.0; 4]; }
-            _ => { clip.round_rect2 = [32.0, 8.0, 32.0, 48.0]; clip.round_radii2 = [8.0; 4]; }
+            0 => {
+                clip.count = 4;
+                clip.pts[..4].copy_from_slice(&points);
+            }
+            1 => {
+                clip.count2 = 4;
+                clip.pts2[..4].copy_from_slice(&points);
+            }
+            2 => {
+                clip.round_rect = [32.0, 8.0, 32.0, 48.0];
+                clip.round_radii = [8.0; 4];
+            }
+            _ => {
+                clip.round_rect2 = [32.0, 8.0, 32.0, 48.0];
+                clip.round_radii2 = [8.0; 4];
+            }
         }
         let clips = [crate::style::GpuClipPoly::NONE, clip];
         let mut encoder = gpu.device.create_command_encoder(&Default::default());
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view, depth_slice: None, resolve_target: None,
-                    ops: wgpu::Operations { load: wgpu::LoadOp::Clear(wgpu::Color::WHITE), store: wgpu::StoreOp::Store },
-                })], ..Default::default()
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
             });
-            draw_sdf_range_with_clip(&mut pass, &pipeline, &gpu.device, pipeline.dummy_backdrop(),
-                &instances, &clips, 0, 2, None);
+            draw_sdf_range_with_clip(
+                &mut pass,
+                &pipeline,
+                &gpu.device,
+                pipeline.dummy_backdrop(),
+                &instances,
+                &clips,
+                0,
+                2,
+                None,
+            );
         }
         let image = readback_texture(&gpu.device, &gpu.queue, &texture, 96, 64, encoder).unwrap();
-        assert_eq!(image.pixel(48, 32), Some([0, 0, 255, 255]), "clip channel {channel} must paint its interior");
-        assert_eq!(image.pixel(16, 32), Some([255, 0, 0, 255]), "clip channel {channel} must preserve unclipped predecessor");
-        assert_eq!(image.pixel(72, 32), Some([255, 0, 0, 255]), "clip channel {channel} must reject exterior");
+        assert_eq!(
+            image.pixel(48, 32),
+            Some([0, 0, 255, 255]),
+            "clip channel {channel} must paint its interior"
+        );
+        assert_eq!(
+            image.pixel(16, 32),
+            Some([255, 0, 0, 255]),
+            "clip channel {channel} must preserve unclipped predecessor"
+        );
+        assert_eq!(
+            image.pixel(72, 32),
+            Some([255, 0, 0, 255]),
+            "clip channel {channel} must reject exterior"
+        );
         if channel >= 2 {
-            assert_eq!(image.pixel(33, 9), Some([255, 0, 0, 255]), "rounded clip corner must remain curved");
+            assert_eq!(
+                image.pixel(33, 9),
+                Some([255, 0, 0, 255]),
+                "rounded clip corner must remain curved"
+            );
         }
     }
 }

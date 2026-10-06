@@ -8,11 +8,11 @@ use std::collections::BTreeSet;
 
 use crate::layout::layout_tree::{NodePaint, TextLayoutInfo};
 use crate::renderer::{
-    InstanceInput, ScaledTexturedDraw, aabb_of_centered_transform, aabbs_disjoint,
+    aabb_of_centered_transform, aabbs_disjoint, InstanceInput, ScaledTexturedDraw,
 };
 use crate::style::transform::MAT2D_IDENTITY;
 
-use crate::app::damage::{PaintDirty, PaintDirtyKind, intersect_rects};
+use crate::app::damage::{intersect_rects, PaintDirty, PaintDirtyKind};
 
 pub(crate) fn slot_paint_ops(
     ops: &[crate::layout::layout_tree::PaintOp],
@@ -31,8 +31,14 @@ pub(crate) fn slot_paint_ops(
             return None;
         }
         Some(match op {
-            PaintOp::Rects { .. } => PaintOp::Rects { start: lo as u32, count: (hi - lo) as u32 },
-            PaintOp::Textured { .. } => PaintOp::Textured { start: lo as u32, count: (hi - lo) as u32 },
+            PaintOp::Rects { .. } => PaintOp::Rects {
+                start: lo as u32,
+                count: (hi - lo) as u32,
+            },
+            PaintOp::Textured { .. } => PaintOp::Textured {
+                start: lo as u32,
+                count: (hi - lo) as u32,
+            },
         })
     })
 }
@@ -109,7 +115,11 @@ impl CullRects {
                 return None;
             }
         }
-        if s.len == 0 { None } else { Some(s) }
+        if s.len == 0 {
+            None
+        } else {
+            Some(s)
+        }
     }
 
     pub(crate) fn strips(self) -> impl Iterator<Item = [f32; 4]> {
@@ -172,11 +182,14 @@ pub(crate) fn region_repair_text_cull(
     dirties: &[PaintDirty],
     previous: &[(u64, [f32; 4])],
     paints: &[NodePaint],
+    stamps: &[(u64, [f32; 4])],
+    shadow: Option<[f32; 4]>,
     scale: f32,
     width: u32,
     height: u32,
 ) -> CullRects {
     let mut bounds = None;
+    let mut pieces = Vec::new();
     let scale = scale.max(1e-6);
     for dirty in dirties {
         if !matches!(
@@ -209,12 +222,33 @@ pub(crate) fn region_repair_text_cull(
         // Keep one device pixel of raster context at the clip edge. Encode
         // still uses the exact clear scissor, so this cannot restamp neighbors.
         let hole = padded_xywh(hole, 1.0 / scale);
-        bounds = Some(match bounds {
-            Some(prev) => crate::app::damage::union_rects(prev, hole),
-            None => hole,
-        });
+        if dirty.kind == PaintDirtyKind::OverlayRestore {
+            // Same scissors as the clear. Unioning the raw halo pulls the
+            // neighbor caption back into the prepare and src-overs a slice.
+            let shadow = shadow.or(Some(dirty.bounds));
+            for piece in scissors_keeping_stable_page_captions(vec![hole], paints, stamps, shadow) {
+                crate::app::damage::push_disjoint_rect(&mut pieces, piece);
+            }
+        } else {
+            bounds = Some(match bounds {
+                Some(prev) => crate::app::damage::union_rects(prev, hole),
+                None => hole,
+            });
+        }
     }
-    bounds.map(CullRects::one).unwrap_or_else(CullRects::empty)
+    if let Some(region) = bounds {
+        pieces.insert(0, region);
+    }
+    if pieces.is_empty() {
+        return CullRects::empty();
+    }
+    CullRects::from_rects(pieces.iter().copied()).unwrap_or_else(|| {
+        let union = pieces
+            .into_iter()
+            .reduce(crate::app::damage::union_rects)
+            .unwrap_or([0.0; 4]);
+        CullRects::one(union)
+    })
 }
 
 fn transform_is_identity(m: &[f32; 6]) -> bool {
@@ -723,9 +757,7 @@ pub(crate) fn overlay_restore_fringe_text(
         // draws that before the overlay. Flushing it afterwards paints the
         // chip on top of the panel.
         if stamps.iter().any(|(_, stamp)| {
-            stamp[2] > 0.5
-                && stamp[3] > 0.5
-                && crate::app::damage::rect_contains_rect(*stamp, ink)
+            stamp[2] > 0.5 && stamp[3] > 0.5 && crate::app::damage::rect_contains_rect(*stamp, ink)
         }) {
             continue;
         }
@@ -807,7 +839,8 @@ pub(crate) fn capture_glyph_scissors_physical(
             crate::app::damage::physical_xywh_to_scissor(*rect, width, height)
         {
             crate::app::damage::push_disjoint_rect(
-                &mut pieces, [x as f32, y as f32, w as f32, h as f32],
+                &mut pieces,
+                [x as f32, y as f32, w as f32, h as f32],
             );
         }
     }
@@ -900,6 +933,155 @@ pub(crate) fn scissors_keeping_stable_page_captions(
             .collect();
     }
     parts
+}
+
+/// A line that only grazes the portal (AvatarGroup caption above +N) stays in
+/// the halo clear so the top shadow can paint. Those glyphs are replayed after
+/// the overlay; carving the line out of the scissor also drops that shadow.
+pub(crate) fn grazing_caption_replay_runs(
+    paints: &[NodePaint],
+    stamps: &[(u64, [f32; 4])],
+    texts: &[TextLayoutInfo],
+    cleared: &[[f32; 4]],
+) -> Vec<TextLayoutInfo> {
+    if cleared.is_empty() || texts.is_empty() {
+        return Vec::new();
+    }
+    let mut runs = Vec::new();
+    for paint in paints {
+        if paint.overlay || paint.text.0 >= paint.text.1 {
+            continue;
+        }
+        let face = paint.bounds;
+        if face[2] <= 0.5 || face[3] <= 0.5 || face[3] > 72.0 {
+            continue;
+        }
+        let live = |s: &[f32; 4]| s[2] > 0.5 && s[3] > 0.5;
+        let grazes = if stamps.is_empty() {
+            cleared.iter().any(|hole| live(hole) && intersect_rects(face, *hole).is_some())
+        } else {
+            stamps.iter().any(|(_, stamp)| {
+                live(stamp)
+                    && intersect_rects(face, *stamp).is_some()
+                    && !crate::app::damage::rect_contains_rect(face, *stamp)
+                    && !crate::app::damage::rect_contains_rect(*stamp, face)
+            })
+        };
+        if !grazes {
+            continue;
+        }
+        let lo = paint.text.0.min(texts.len());
+        let hi = paint.text.1.min(texts.len());
+        for node in &texts[lo..hi] {
+            let mut best: Option<TextLayoutInfo> = None;
+            for hole in cleared {
+                let Some(clipped) = clip_text_node_to_scroll_rect(node, *hole) else {
+                    continue;
+                };
+                let wider = best.as_ref().is_none_or(|prev| {
+                    clipped.clip_bounds.map(|c| c[2]) > prev.clip_bounds.map(|c| c[2])
+                });
+                if wider {
+                    best = Some(clipped);
+                }
+            }
+            if let Some(best) = best {
+                runs.push(best);
+            }
+        }
+    }
+    runs
+}
+
+/// Cleared overlay / restore pixels that a grazing caption must be drawn back
+/// into, after the shadow. Overlay encode wins when the portal is still up so
+/// the replay sits on the halo; a close with no encode replays the restore hole.
+pub(crate) fn overlay_grazing_caption_replay(
+    dirties: &[PaintDirty],
+    paints: &[NodePaint],
+    stamps: &[(u64, [f32; 4])],
+    occupied: Option<[f32; 4]>,
+    texts: &[TextLayoutInfo],
+) -> (Vec<TextLayoutInfo>, Vec<[f32; 4]>) {
+    let mut overlay_holes = Vec::new();
+    if !stamps.is_empty() {
+        let overlay_dirties: Vec<(u64, [f32; 4])> = dirties
+            .iter()
+            .filter(|d| d.kind == PaintDirtyKind::Overlay)
+            .map(|d| (d.key, d.bounds))
+            .collect();
+        for (keys, bounds) in
+            crate::app::damage::merge_overlay_replay_dirties(&overlay_dirties, stamps)
+        {
+            let key = keys.first().copied().unwrap_or(0);
+            let occupancy = crate::app::damage::overlay_encode_occupancy(
+                key,
+                Some(bounds),
+                stamps,
+                if stamps.len() <= 1 { occupied } else { None },
+            );
+            let Some(scissor) =
+                crate::app::damage::overlay_encode_scissor(Some(bounds), occupancy, None)
+            else {
+                continue;
+            };
+            overlay_holes.extend(scissors_keeping_stable_page_captions(
+                vec![scissor],
+                paints,
+                stamps,
+                occupancy,
+            ));
+        }
+    }
+    let cleared = if !overlay_holes.is_empty() {
+        overlay_holes
+    } else {
+        let mut restore_holes = Vec::new();
+        for dirty in dirties {
+            if dirty.kind != PaintDirtyKind::OverlayRestore
+                || dirty.bounds[2] <= 0.5
+                || dirty.bounds[3] <= 0.5
+            {
+                continue;
+            }
+            restore_holes.extend(scissors_keeping_stable_page_captions(
+                vec![dirty.bounds],
+                paints,
+                stamps,
+                occupied.or(Some(dirty.bounds)),
+            ));
+        }
+        restore_holes
+    };
+    let runs = grazing_caption_replay_runs(paints, stamps, texts, &cleared);
+    let flush = runs
+        .iter()
+        .filter_map(|n| n.clip_bounds)
+        .flat_map(|clip| {
+            cleared
+                .iter()
+                .filter_map(move |hole| intersect_rects(clip, *hole))
+        })
+        .filter(|r| r[2] > 0.5 && r[3] > 0.5)
+        .collect();
+    (runs, flush)
+}
+
+/// Page glyphon is submitted before the overlay suffix. Grazing captions are
+/// drawn once, from the capture mesh, after the shadow.
+pub(crate) fn page_runs_excluding_caption_replay(
+    mut runs: Vec<TextLayoutInfo>,
+    replay: &[TextLayoutInfo],
+) -> Vec<TextLayoutInfo> {
+    if replay.is_empty() {
+        return runs;
+    }
+    runs.retain(|n| {
+        !replay.iter().any(|r| {
+            r.text == n.text && (r.x - n.x).abs() < 0.5 && (r.y - n.y).abs() < 0.5
+        })
+    });
+    runs
 }
 
 /// Hover / focus / `:active` keeps the button Node-dirty while the pointer
@@ -1042,9 +1224,9 @@ fn unchanged_caption_glyph(
     }
     // The button dest-reset covers this leaf and wipes the glyphs. Skipping
     // capture leaves the line blank until the next string change.
-    !dirties.iter().any(|d| {
-        d.kind == PaintDirtyKind::Node && intersect_rects(d.bounds, leaf.bounds).is_some()
-    })
+    !dirties
+        .iter()
+        .any(|d| d.kind == PaintDirtyKind::Node && intersect_rects(d.bounds, leaf.bounds).is_some())
 }
 
 /// Drop page-glyphon runs that this frame's node capture will also draw.
@@ -1100,8 +1282,7 @@ pub(crate) fn page_submit_excluding_live_node_capture(
                     paint.bounds,
                     [n.x, n.y, n.width.max(0.0), n.height.max(0.0)],
                 )
-                && paint.bounds[2] * paint.bounds[3]
-                    > n.width.max(0.0) * n.height.max(0.0) + 1.0
+                && paint.bounds[2] * paint.bounds[3] > n.width.max(0.0) * n.height.max(0.0) + 1.0
         })
     };
     if owned.is_empty() && fringe.is_empty() {
@@ -1279,25 +1460,21 @@ pub(crate) fn region_replays_own_chrome_only(
     // keeps the last gray track. Page-band replay fills that hole with the
     // content that was under the bar. A flat Node clear of the same box
     // samples one row and erases the thumb.
-    let emits = node_paints.iter().any(|p| {
-        slot_matches_dirty(key, bounds, p, has_keyed) && slot_emits_paint(p)
-    });
+    let emits = node_paints
+        .iter()
+        .any(|p| slot_matches_dirty(key, bounds, p, has_keyed) && slot_emits_paint(p));
     if !emits {
         return false;
     }
     let has_nested_paint = node_paints.iter().any(|owner| {
         slot_matches_dirty(key, bounds, owner, true)
-            && node_paints
-                .iter()
-                .any(|child| {
-                    is_nested_foreign_slot(owner, child)
-                        && ((child.instance.1 > child.instance.0
-                            && child.instance != owner.instance)
-                            || (child.textured.1 > child.textured.0
-                                && child.textured != owner.textured)
-                            || (child.chrome.1 > child.chrome.0
-                                && child.chrome != owner.chrome))
-                })
+            && node_paints.iter().any(|child| {
+                is_nested_foreign_slot(owner, child)
+                    && ((child.instance.1 > child.instance.0 && child.instance != owner.instance)
+                        || (child.textured.1 > child.textured.0
+                            && child.textured != owner.textured)
+                        || (child.chrome.1 > child.chrome.0 && child.chrome != owner.chrome))
+            })
     });
     let keyed = node_paints.iter().any(|p| p.key == key);
     // A caret stroke inside a cell. Own-chrome src-overs the cell fill
@@ -1662,10 +1839,7 @@ fn scrolled_out_top_into_title(
             if outer[2] * outer[3] <= c[2] * c[3] + 1.0 {
                 return false;
             }
-            cx >= outer[0]
-                && cy >= outer[1]
-                && cx < outer[0] + outer[2]
-                && cy < outer[1] + outer[3]
+            cx >= outer[0] && cy >= outer[1] && cx < outer[0] + outer[2] && cy < outer[1] + outer[3]
         });
         if inside_larger_clip {
             return false;
@@ -1975,7 +2149,10 @@ fn slot_ranges_covered_by(inner: &NodePaint, outer: &NodePaint) -> bool {
         (inner.textured, outer.textured),
         (inner.text, outer.text),
         (inner.chrome, outer.chrome),
-    ].into_iter().enumerate() {
+    ]
+    .into_iter()
+    .enumerate()
+    {
         if ir.1 <= ir.0 {
             continue;
         }
@@ -2003,8 +2180,14 @@ fn slots_share_box_center(a: [f32; 4], b: [f32; 4]) -> bool {
 }
 
 fn slot_paint_ranges_overlap(a: &NodePaint, b: &NodePaint) -> bool {
-    [(a.instance, b.instance), (a.textured, b.textured), (a.text, b.text), (a.chrome, b.chrome)]
-        .into_iter().any(|(a, b)| a.0 < b.1 && b.0 < a.1)
+    [
+        (a.instance, b.instance),
+        (a.textured, b.textured),
+        (a.text, b.text),
+        (a.chrome, b.chrome),
+    ]
+    .into_iter()
+    .any(|(a, b)| a.0 < b.1 && b.0 < a.1)
 }
 
 fn is_nested_foreign_slot(parent: &NodePaint, child: &NodePaint) -> bool {
@@ -2362,8 +2545,11 @@ pub(crate) fn escalate_dirties_for_node_present(
         }
         let found_current = node_paints.iter().any(|p| !p.overlay && p.key == dirty.key);
         let had_previous = last_present.iter().any(|(k, _)| *k == dirty.key);
-        let next =
-            crate::app::damage::escalate_node_dest_reset_kind(dirty.kind, found_current, had_previous);
+        let next = crate::app::damage::escalate_node_dest_reset_kind(
+            dirty.kind,
+            found_current,
+            had_previous,
+        );
         if next == PaintDirtyKind::Region {
             // Clip-culled overflow widgets keep Node dest-reset (overflow clip).
             // A box that has already left the scroller into the title bar has
@@ -2478,17 +2664,18 @@ fn owner_is_only_culled_metadata(key: u64, paints: &[NodePaint]) -> bool {
     found
 }
 
-/// In-flow cell (OTP slot): own SDF, no child text, pose still on the cell.
-/// Promoting it to Region window-clears the halo AABB (`clear_color` ≈ the
-/// gray dirty rectangle). Dest-reset replays the quad. Latest keeps Region:
-/// it owns glyphs and must composite the underlay first. A pose that has
-/// left the cell is not this case — that leftover is still a Region hole.
+/// Compact layered overlay (Latest). Promoting it to Region window-clears the
+/// halo AABB with `clear_color` — the enter white rectangle. A tall stacking
+/// context that owns descendant text still takes that path: its box is the
+/// page, not a hole. The pill stays Node when the hole can be reconstructed
+/// (first paint src-overs retain; later frames dest-reset only the ink).
+/// Wrapping in that wipe is the underlay of the same hole, drawn before the
+/// pill. A pose that has left the cell is still a Region hole.
 ///
 /// A layered slot with no current quads (overlay scrollbar settle-to-zero)
 /// must NOT take this path. Node dest-reset then flat-fills the track with
-/// one sampled row color and skips the thumb (`layered_src_over` has no
-/// last-present after the empty frame). The bar disappears. That hole is a
-/// Region whose page replay restores the content the bar covered.
+/// one sampled row color and skips the thumb. That hole is a Region whose
+/// page replay restores the content the bar covered.
 fn layered_cell_keeps_node_dest_reset(
     key: u64,
     bounds: [f32; 4],
@@ -2499,17 +2686,27 @@ fn layered_cell_keeps_node_dest_reset(
     if !matching_slot_is_layered(key, bounds, node_paints) {
         return false;
     }
-    if node_dirty_has_text(key, bounds, node_paints) {
-        return false;
-    }
     if let Some(prev) = last_present_prev_for_dirty(PaintDirtyKind::Node, key, last_present) {
         if crate::app::damage::paint_poses_separated(prev, bounds) {
             return false;
         }
     }
+    // Viewport-sized stacking bands keep Region. A short pill that owns its
+    // label does not: window-clearing that AABB is the white rectangle.
+    if node_dirty_has_text(key, bounds, node_paints) {
+        let Some(slot) = layered_overlay_slot_bounds(key, bounds, node_paints) else {
+            return false;
+        };
+        if slot[3] > 56.0 {
+            return false;
+        }
+    }
     let has_keyed = paints_has_keyed_slot(key, bounds, node_paints);
     node_paints.iter().any(|p| {
-        slot_matches_dirty(key, bounds, p, has_keyed) && slot_has_sdf_dest_ink(p, instances)
+        slot_matches_dirty(key, bounds, p, has_keyed)
+            && (slot_has_sdf_dest_ink(p, instances)
+                || p.text.0 < p.text.1
+                || p.textured.0 < p.textured.1)
     })
 }
 
@@ -2521,10 +2718,8 @@ fn portal_shadow_fringe_pad(occ: [f32; 4], stamps: &[(u64, [f32; 4])]) -> f32 {
     for (_, stamp) in stamps {
         extent = extent.max((stamp[0] - occ[0]).max(0.0));
         extent = extent.max((stamp[1] - occ[1]).max(0.0));
-        extent = extent
-            .max(((occ[0] + occ[2]) - (stamp[0] + stamp[2])).max(0.0));
-        extent = extent
-            .max(((occ[1] + occ[3]) - (stamp[1] + stamp[3])).max(0.0));
+        extent = extent.max(((occ[0] + occ[2]) - (stamp[0] + stamp[2])).max(0.0));
+        extent = extent.max(((occ[1] + occ[3]) - (stamp[1] + stamp[3])).max(0.0));
     }
     if extent > 48.0 {
         32.0
@@ -2624,20 +2819,25 @@ pub(crate) fn prepare_node_present_dirties_ex(
                 instances,
                 last_present,
             ) && (layered_src_over_skips_dest_reset(dirty.key, dirty.bounds, node_paints, prev)
-                || node_present_dest_reset_full(dirty.key, dirty.bounds, node_paints,
-                    instances, textured, chrome, ui_scale, prev).is_some()) {
-                // A text-free stacking cell is independently erasable only
-                // when its underlay can actually be reconstructed. Transparent
-                // roots need the normal local Region composite, just like text.
+                || node_present_dest_reset_full(
+                    dirty.key,
+                    dirty.bounds,
+                    node_paints,
+                    instances,
+                    textured,
+                    chrome,
+                    ui_scale,
+                    prev,
+                )
+                .is_some())
+            {
+                // Underlay can be reconstructed (src-over or dest-reset). Stay
+                // Node so the clear is the ink wipe, not a window-colored AABB.
                 continue;
             }
-            // A stacking layer is a composite, not an independently erasable
-            // text/fill node. Background glyph restoration followed by a global
-            // label flush interleaves Latest and its text children incorrectly.
-            // Rebuild the local hole in page-band order, including the last
-            // visible frame when the layer has just reached opacity zero.
-            // A last-present pose that no longer touches this box is its own
-            // hole. Unioning it paints a column of window clear between them.
+            // No reconstructable hole: empty quads, or a last pose that no
+            // longer touches this box. Region replays the page. Unioning a
+            // separated pose into this box paints a column of window clear.
             let mut bounds = dirty.bounds;
             let local_prev =
                 prev.filter(|old| !crate::app::damage::paint_poses_separated(*old, dirty.bounds));
@@ -2705,9 +2905,8 @@ pub(crate) fn prepare_node_present_dirties_ex(
         let logical = reset_rect
             .map(|r| [r[0] / s, r[1] / s, r[2] / s, r[3] / s])
             .unwrap_or(dirty.bounds);
-        if overlay.is_some_and(|occ| {
-            portal_occupancy_requires_region(logical, occ, portal_stamps)
-        }) {
+        if overlay.is_some_and(|occ| portal_occupancy_requires_region(logical, occ, portal_stamps))
+        {
             // Scrim (occupancy far outside the panel's shadow pad). A Node
             // dest-reset would punch it. The shadow fringe of an anchored
             // panel is not a scrim: Node halo-preserve clears the trigger
@@ -2735,9 +2934,7 @@ pub(crate) fn prepare_node_present_dirties_ex(
         .iter()
         .filter(|d| match d.kind {
             PaintDirtyKind::OverlayRestore => true,
-            PaintDirtyKind::Region => {
-                !region_replays_own_chrome_only(d.key, d.bounds, node_paints)
-            }
+            PaintDirtyKind::Region => !region_replays_own_chrome_only(d.key, d.bounds, node_paints),
             _ => false,
         })
         .map(|d| d.bounds)
@@ -3338,9 +3535,7 @@ fn instance_is_focus_ring(i: &InstanceInput) -> bool {
     if i.shadow_spread >= 1.0 {
         return true;
     }
-    i.shadow_blur >= 2.0
-        && i.shadow_offset[0].abs() < 0.01
-        && i.shadow_offset[1].abs() < 0.01
+    i.shadow_blur >= 2.0 && i.shadow_offset[0].abs() < 0.01 && i.shadow_offset[1].abs() < 0.01
 }
 
 fn paint_instances_carry_focus_ring(paint: &NodePaint, instances: &[InstanceInput]) -> bool {
@@ -3625,7 +3820,11 @@ fn shrink_aabb_to_exclude(wipe: [f32; 4], cut: [f32; 4]) -> [f32; 4] {
             &mut best_area,
         );
     }
-    if best_area < 0.0 { wipe } else { best }
+    if best_area < 0.0 {
+        wipe
+    } else {
+        best
+    }
 }
 
 /// Scroll blit cannot run node-present encode (`scroll_layer_clear`). Pin the same
@@ -4067,7 +4266,92 @@ pub(crate) fn node_present_clipped_capture_text_wipes(
         node_paints,
         wipe_clips,
         &[],
+        &[],
+        1.0,
     )
+}
+
+/// Logical AABB of one opaque fill. `instances` are physical when `ui_scale != 1`
+/// (`scale_instances` scales position, size, and transform translation).
+fn logical_opaque_fill_aabb(inst: &InstanceInput, ui_scale: f32) -> Option<[f32; 4]> {
+    let scale = ui_scale.max(1e-6);
+    if inst.color[3] <= 0.95 || inst.rect_size[0] <= 8.0 * scale || inst.rect_size[1] <= 8.0 * scale
+    {
+        return None;
+    }
+    let local = [
+        inst.rect_pos[0] / scale,
+        inst.rect_pos[1] / scale,
+        inst.rect_size[0] / scale,
+        inst.rect_size[1] / scale,
+    ];
+    let mut transform = inst.transform;
+    transform[4] /= scale;
+    transform[5] /= scale;
+    Some(if !transform_is_identity(&transform) {
+        aabb_of_centered_transform(local, &transform)
+    } else {
+        local
+    })
+}
+
+/// Hole-flush TextBounds minus opaque plates this glyph does not belong to.
+///
+/// A viewport Region replays page fills (the jump plate included) and then
+/// flushes every glyph that hits the region. The owner clip is the viewport, so
+/// the wrapping line is submitted after the plate and draws through Latest.
+/// The plate's own label stays; the thread is restored only where the fill
+/// does not cover it.
+fn clip_minus_foreign_opaque_plates(
+    glyph_index: usize,
+    clip: [f32; 4],
+    page_text: &[TextLayoutInfo],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+    ui_scale: f32,
+) -> Vec<[f32; 4]> {
+    if instances.is_empty() || clip[2] <= 0.5 || clip[3] <= 0.5 {
+        return vec![clip];
+    }
+    let mut clips = vec![clip];
+    for paint in node_paints {
+        if !paint.layered || paint.overlay {
+            continue;
+        }
+        let lo = paint.text.0.min(page_text.len());
+        let hi = paint.text.1.min(page_text.len());
+        if glyph_index >= lo && glyph_index < hi {
+            continue;
+        }
+        let inst_lo = paint.instance.0.min(instances.len());
+        let inst_hi = paint.instance.1.min(instances.len());
+        let mut plate: Option<[f32; 4]> = None;
+        for inst in &instances[inst_lo..inst_hi] {
+            let Some(bounds) = logical_opaque_fill_aabb(inst, ui_scale) else {
+                continue;
+            };
+            plate = Some(match plate {
+                Some(prev) => union_xywh(prev, bounds),
+                None => bounds,
+            });
+        }
+        let Some(plate) = plate else {
+            continue;
+        };
+        let mut next = Vec::new();
+        for piece in clips {
+            next.extend(
+                crate::app::damage::subtract_rect(piece, plate)
+                    .into_iter()
+                    .filter(|r| r[2] > 0.5 && r[3] > 0.5),
+            );
+        }
+        clips = next;
+        if clips.is_empty() {
+            break;
+        }
+    }
+    clips
 }
 
 pub(crate) fn node_present_clipped_capture_text_wipes_excluding_overlay(
@@ -4076,6 +4360,8 @@ pub(crate) fn node_present_clipped_capture_text_wipes_excluding_overlay(
     node_paints: &[NodePaint],
     wipe_clips: &[(u64, [f32; 4])],
     portal_stamps: &[(u64, [f32; 4])],
+    instances: &[InstanceInput],
+    ui_scale: f32,
 ) -> Vec<TextLayoutInfo> {
     node_present_capture_text_indices(dirty_nodes, page_text, node_paints)
         .into_iter()
@@ -4124,9 +4410,9 @@ pub(crate) fn node_present_clipped_capture_text_wipes_excluding_overlay(
             };
             let mut cloned = n.clone();
             cloned.clip_bounds = Some(clip);
-            Some(cloned)
+            Some((i, cloned))
         })
-        .flat_map(|n| {
+        .flat_map(|(glyph_index, n)| {
             // Region replays restore the underlay before repainting the portal.
             // Node replays must preserve it and clip glyphs just like primitives.
             // Subtract portal **layout** stamps (not the visual halo) so a trigger
@@ -4138,18 +4424,38 @@ pub(crate) fn node_present_clipped_capture_text_wipes_excluding_overlay(
                     PaintDirtyKind::Region | PaintDirtyKind::OverlayRestore
                 ) && text_hits_damage(&n, d.bounds)
             });
-            if region || portal_stamps.is_empty() {
-                return vec![n];
+            let pieces: Vec<TextLayoutInfo> = if region || portal_stamps.is_empty() {
+                vec![n]
+            } else {
+                let clip = n.clip_bounds.expect("capture glyphs have owner clips");
+                crate::app::damage::page_scissors_excluding_portal_boxes(clip, portal_stamps)
+                    .into_iter()
+                    .map(|clip| {
+                        let mut piece = n.clone();
+                        piece.clip_bounds = Some(clip);
+                        piece
+                    })
+                    .collect()
+            };
+            let mut out = Vec::new();
+            for piece in pieces {
+                let Some(clip) = piece.clip_bounds else {
+                    continue;
+                };
+                for part in clip_minus_foreign_opaque_plates(
+                    glyph_index,
+                    clip,
+                    page_text,
+                    node_paints,
+                    instances,
+                    ui_scale,
+                ) {
+                    let mut kept = piece.clone();
+                    kept.clip_bounds = Some(part);
+                    out.push(kept);
+                }
             }
-            let clip = n.clip_bounds.expect("capture glyphs have owner clips");
-            crate::app::damage::page_scissors_excluding_portal_boxes(clip, portal_stamps)
-                .into_iter()
-                .map(|clip| {
-                    let mut piece = n.clone();
-                    piece.clip_bounds = Some(clip);
-                    piece
-                })
-                .collect()
+            out
         })
         .collect()
 }
@@ -4473,18 +4779,67 @@ pub(crate) fn node_present_layered_underlay_capture_text(
     page_text: &[TextLayoutInfo],
     node_paints: &[NodePaint],
 ) -> Vec<TextLayoutInfo> {
-    node_present_layered_underlay_capture_text_wipes(dirty_nodes, page_text, node_paints, &[])
+    node_present_layered_underlay_capture_text_wipes(
+        dirty_nodes,
+        page_text,
+        node_paints,
+        &[],
+        &[],
+    )
+}
+
+/// Fill box of a live opaque layered plate, without its shadow halo.
+///
+/// Underlay TextBounds must not include this rect. Glyphon stamps every glyph
+/// inside TextBounds, and a later piece's underlay `render` ignores the GPU
+/// scissor, so a clip that covers the chip redraws the wrapping line on top of
+/// the plate ("es is the" through Latest).
+pub(crate) fn opaque_slot_fill_aabb(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+) -> Option<[f32; 4]> {
+    if instances.is_empty() {
+        return None;
+    }
+    let has_keyed = paints_has_keyed_slot(dirty_key, dirty_bounds, node_paints);
+    let mut acc: Option<[f32; 4]> = None;
+    for paint in node_paints {
+        if !slot_matches_dirty(dirty_key, dirty_bounds, paint, has_keyed) || !paint.layered {
+            continue;
+        }
+        let lo = paint.instance.0.min(instances.len());
+        let hi = paint.instance.1.min(instances.len());
+        for inst in &instances[lo..hi] {
+            if inst.color[3] <= 0.95 || inst.rect_size[0] <= 8.0 || inst.rect_size[1] <= 8.0 {
+                continue;
+            }
+            let local = [inst.rect_pos[0], inst.rect_pos[1], inst.rect_size[0], inst.rect_size[1]];
+            let bounds = if !transform_is_identity(&inst.transform) {
+                aabb_of_centered_transform(local, &inst.transform)
+            } else {
+                local
+            };
+            acc = Some(match acc {
+                Some(prev) => union_xywh(prev, bounds),
+                None => bounds,
+            });
+        }
+    }
+    acc
 }
 
 /// Same as [`node_present_layered_underlay_capture_text`], but TextBounds is the
-/// dest-reset wipe (CLEAR). Hide-settle last-present halo is in that wipe when
-/// dest-reset unions prev; the overlay collect box must not become wrap-box
-/// TextBounds ("ek ls the" over Latest).
+/// dest-reset wipe (CLEAR) minus any live opaque plate. Hide-settle last-present
+/// halo is in that wipe when dest-reset unions prev; the overlay collect box
+/// must not become wrap-box TextBounds ("ek ls the" over Latest).
 pub(crate) fn node_present_layered_underlay_capture_text_wipes(
     dirty_nodes: &[PaintDirty],
     page_text: &[TextLayoutInfo],
     node_paints: &[NodePaint],
     wipe_rects: &[(u64, [f32; 4])],
+    instances: &[InstanceInput],
 ) -> Vec<TextLayoutInfo> {
     let mut out = Vec::new();
     let mut seen = BTreeSet::new();
@@ -4510,10 +4865,30 @@ pub(crate) fn node_present_layered_underlay_capture_text_wipes(
             if hit[2] <= 0.5 || hit[3] <= 0.5 {
                 continue;
             }
-            let mut cloned = n.clone();
-            cloned.clip_bounds = Some(hit);
+            // The plate occludes. Remainder clips are the trail the fill does
+            // not cover. A clip of the chip interior is the line on Latest.
+            let clips = match opaque_slot_fill_aabb(
+                dirty.key,
+                dirty.bounds,
+                node_paints,
+                instances,
+            ) {
+                Some(plate) => crate::app::damage::subtract_rect(hit, plate)
+                    .into_iter()
+                    .filter(|r| r[2] > 0.5 && r[3] > 0.5)
+                    .collect::<Vec<_>>(),
+                None => vec![hit],
+            };
+            if clips.is_empty() {
+                seen.insert(i);
+                continue;
+            }
+            for clip in clips {
+                let mut cloned = n.clone();
+                cloned.clip_bounds = Some(clip);
+                out.push(cloned);
+            }
             seen.insert(i);
-            out.push(cloned);
         }
     }
     out
@@ -4755,16 +5130,7 @@ mod tests {
                 kind: PaintDirtyKind::Node,
             },
         ];
-        prepare_node_present_dirties(
-            &mut dirties,
-            &paints,
-            &[],
-            &instances,
-            &[],
-            &[],
-            1.0,
-            None,
-        );
+        prepare_node_present_dirties(&mut dirties, &paints, &[], &instances, &[], &[], 1.0, None);
         let thumb_dirty = dirties.iter().find(|d| d.key == 7).unwrap();
         assert!(
             region_replays_own_chrome_only(7, thumb_dirty.bounds, &paints),
@@ -4925,15 +5291,13 @@ mod tests {
         );
         let gap_y = 250.0;
         assert!(
-            dirties.iter().all(|d| {
-                gap_y < d.bounds[1] || gap_y > d.bounds[1] + d.bounds[3]
-            }),
+            dirties
+                .iter()
+                .all(|d| { gap_y < d.bounds[1] || gap_y > d.bounds[1] + d.bounds[3] }),
             "gap between the live cell and its last pose was cleared\n {dirties:?}"
         );
         assert!(
-            dirties
-                .iter()
-                .any(|d| (d.bounds[1] - stale[1]).abs() < 1.0),
+            dirties.iter().any(|d| (d.bounds[1] - stale[1]).abs() < 1.0),
             "the leftover pose was not erased\n {dirties:?}"
         );
     }
@@ -4957,7 +5321,11 @@ mod tests {
             kind: PaintDirtyKind::Region,
         };
         assert!(region_replays_own_chrome_only(1, dirty.bounds, &paints));
-        assert!(region_needs_glyph_capture(&dirty, &paints, &[label.clone()]));
+        assert!(region_needs_glyph_capture(
+            &dirty,
+            &paints,
+            &[label.clone()]
+        ));
         // Collect records the caption inside the trigger's own text range, so
         // own-chrome is false. The Region clear still has to recapture it.
         let mut owned = slot(3, [0.0, 0.0, 240.0, 32.0], (0, 1));
@@ -4972,11 +5340,7 @@ mod tests {
             owned_dirty.bounds,
             &[owned]
         ));
-        assert!(region_needs_glyph_capture(
-            &owned_dirty,
-            &[owned],
-            &[label]
-        ));
+        assert!(region_needs_glyph_capture(&owned_dirty, &[owned], &[label]));
         let mut thumb = slot(7, [10.0, 40.0, 16.0, 16.0], (0, 0));
         thumb.instance = (0, 1);
         let thumb_dirty = PaintDirty {
@@ -5159,6 +5523,7 @@ mod tests {
             &[wrap.clone()],
             &[latest],
             &[(9, hole)],
+            &[],
         );
         assert!(
             underlay
@@ -5184,6 +5549,142 @@ mod tests {
             clip[2] < wrap.width - 8.0 && clip[3] < 80.0,
             "glyphon TextBounds must stay the wipe or wrapping stamps onto Latest\n clip={clip:?} hole={hole:?} wrap_w={}",
             wrap.width
+        );
+    }
+
+    #[test]
+    fn latest_enter_stays_on_the_ink_wipe() {
+        // The pill owns glyphs. It used to become Region and window-clear the
+        // expanded AABB (the white rectangle). Enter stays Node: no leftover
+        // src-overs retain; a later frame dest-resets only the ink, and
+        // wrapping in that wipe is the underlay drawn before the pill.
+        let btn = [110.0, 228.0, 88.0, 32.0];
+        let slid = [110.0, 236.0, 84.0, 30.0];
+        let mut card = blank_instance(0.0, 0.0, 320.0, 384.0);
+        card.color = [1.0, 1.0, 1.0, 1.0];
+        let mut fill = blank_instance(btn[0], btn[1], btn[2], btn[3]);
+        fill.color = [1.0, 1.0, 1.0, 0.45];
+        fill.radii = [16.0; 4];
+        fill.border_width = 1.0;
+        fill.border_color = [0.1, 0.1, 0.1, 0.4];
+        let mut wrap = sample_text("messages as they stream", 16.0);
+        wrap.y = 232.0;
+        wrap.width = 280.0;
+        wrap.height = 18.0;
+        wrap.paint_origin = [16.0, 232.0];
+        let mut latest = sample_text("Latest", 128.0);
+        latest.y = 236.0;
+        latest.width = 40.0;
+        latest.height = 16.0;
+        latest.paint_origin = [128.0, 236.0];
+        let mut thread = slot(1, [16.0, 200.0, 280.0, 80.0], (0, 1));
+        thread.instance = (0, 1);
+        let mut pill = slot(2, btn, (1, 2));
+        pill.layered = true;
+        pill.instance = (1, 2);
+        let paints = [thread, pill];
+        let instances = [card, fill];
+        let text = [wrap, latest];
+
+        let mut first = vec![PaintDirty {
+            key: 2,
+            bounds: btn,
+            kind: PaintDirtyKind::Node,
+        }];
+        prepare_node_present_dirties(&mut first, &paints, &[], &instances, &[], &[], 1.0, None);
+        assert_eq!(
+            first[0].kind,
+            PaintDirtyKind::Node,
+            "first visible Latest src-overs retain; a Region clear is the white rectangle"
+        );
+        assert!(
+            (first[0].bounds[2] - btn[2]).abs() < 0.5 && (first[0].bounds[3] - btn[3]).abs() < 0.5,
+            "first paint must not grow the dirty into a window hole, got {:?}",
+            first[0].bounds
+        );
+
+        let mut mid = vec![PaintDirty {
+            key: 2,
+            bounds: btn,
+            kind: PaintDirtyKind::Node,
+        }];
+        prepare_node_present_dirties(
+            &mut mid,
+            &paints,
+            &[(2, slid)],
+            &instances,
+            &[],
+            &[],
+            1.0,
+            None,
+        );
+        assert_eq!(
+            mid[0].kind,
+            PaintDirtyKind::Node,
+            "fade with leftover ink dest-resets the pill, not a Region window clear"
+        );
+        let reset =
+            node_present_dest_reset_full(2, btn, &paints, &instances, &[], &[], 1.0, Some(slid))
+                .expect("ink wipe");
+        assert!(
+            reset.rect[2] < btn[2] + 48.0 && reset.rect[3] < btn[3] + 48.0,
+            "wipe stays on the pill+slide, not an expanded window rect, got {:?}",
+            reset.rect
+        );
+        let scale = 1.0_f32;
+        let wipe_logical = [
+            reset.rect[0] / scale,
+            reset.rect[1] / scale,
+            reset.rect[2] / scale,
+            reset.rect[3] / scale,
+        ];
+        let underlay = node_present_layered_underlay_capture_text_wipes(
+            &mid,
+            &text,
+            &paints,
+            &[(2, wipe_logical)],
+            &[],
+        );
+        assert!(
+            underlay.iter().any(|t| t.text.contains("stream")),
+            "wrapping inside the ink wipe is that hole's underlay"
+        );
+        assert!(
+            underlay.iter().all(|t| t.text != "Latest"),
+            "the label is the overlay, drawn after the pill"
+        );
+        let clip = underlay[0].clip_bounds.expect("wipe clip");
+        assert!(
+            clip[2] < 160.0 && clip[3] < 80.0,
+            "underlay TextBounds is the wipe, clip={clip:?}"
+        );
+    }
+
+    #[test]
+    fn text_free_region_does_not_steal_page_glyphs() {
+        let mut wrap = sample_text("messages as they stream", 290.0);
+        wrap.y = 40.0;
+        wrap.width = 40.0;
+        wrap.height = 18.0;
+        wrap.paint_origin = [290.0, 40.0];
+        let mut bar = slot(3, [300.0, 8.0, 8.0, 120.0], (0, 0));
+        bar.layered = true;
+        bar.instance = (0, 1);
+        let dirty = PaintDirty {
+            key: 3,
+            bounds: [296.0, 8.0, 16.0, 120.0],
+            kind: PaintDirtyKind::Region,
+        };
+        let underlay =
+            node_present_layered_underlay_capture_text(&[dirty], &[wrap.clone()], &[bar]);
+        assert!(
+            underlay.is_empty(),
+            "scrollbar-style Region must not take the Latest underlay path"
+        );
+        let page = node_present_clipped_capture_text_wipes(&[dirty], &[wrap], &[bar], &[]);
+        assert!(
+            page.iter().any(|t| t.text.contains("stream")),
+            "text-free Region must keep neighboring glyphs on the page flush"
         );
     }
 
@@ -5280,6 +5781,7 @@ mod tests {
             &[wrap.clone(), latest_label.clone()],
             &paints,
             &[(2, btn)],
+            &[],
         );
         assert!(
             underlay.iter().any(|t| t.text == wrap.text),
@@ -5370,6 +5872,7 @@ mod tests {
             &[wrap.clone()],
             &[latest],
             &[(9, hole)],
+            &[],
         );
         let captured = underlay
             .iter()
@@ -5426,6 +5929,7 @@ mod tests {
             &[caption, latest, composer],
             &[pill],
             &[(9, hole)],
+            &[],
         );
         assert!(
             underlay.iter().all(|t| t.text != "Latest"
@@ -5485,14 +5989,22 @@ mod tests {
         let cx = button[0] + button[2] * 0.5;
         let cy = button[1] + button[3] * 0.5;
         let lum = |c: [f32; 4]| 0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2];
-        assert_eq!(reset.replay, (0, 0), "own chrome is drawn by the dirty slot");
+        assert_eq!(
+            reset.replay,
+            (0, 0),
+            "own chrome is drawn by the dirty slot"
+        );
         assert_eq!(reset.clear, page_fill.color);
         let own = slot_paint_ops(
             &[crate::layout::layout_tree::PaintOp::Rects { start: 0, count: 2 }],
             button_p.instance,
             button_p.textured,
-        ).collect::<Vec<_>>();
-        assert!(matches!(own.as_slice(), [crate::layout::layout_tree::PaintOp::Rects { start: 1, count: 1 }]));
+        )
+        .collect::<Vec<_>>();
+        assert!(matches!(
+            own.as_slice(),
+            [crate::layout::layout_tree::PaintOp::Rects { start: 1, count: 1 }]
+        ));
         let visible = if button_p.instance.1 > button_p.instance.0 {
             (button_p.instance.0..button_p.instance.1)
                 .rev()
@@ -5581,7 +6093,8 @@ mod tests {
         let mut thumb_p = slot(2, thumb, (0, 0));
         thumb_p.layered = true;
         thumb_p.rest = Some(thumb);
-        let wipe = clip_rect_against_layered_siblings(track, track_p.key, track, &[track_p, thumb_p], 1.0);
+        let wipe =
+            clip_rect_against_layered_siblings(track, track_p.key, track, &[track_p, thumb_p], 1.0);
         assert!(
             wipe[0] <= track[0] + 0.5
                 && wipe[1] <= track[1] + 0.5
@@ -5652,10 +6165,8 @@ mod tests {
         message.width = 120.0;
         message.height = 20.0;
 
-        let clipped = clip_text_nodes_to_cull(
-            &[message],
-            CullRects::one([220.0, 110.0, 80.0, 10.0]),
-        );
+        let clipped =
+            clip_text_nodes_to_cull(&[message], CullRects::one([220.0, 110.0, 80.0, 10.0]));
         let bounds = clipped
             .first()
             .and_then(|node| node.clip_bounds)
@@ -5739,16 +6250,12 @@ mod tests {
             2,
             "spanning glyph must split into two strip clips"
         );
-        assert!(
-            span_clips
-                .iter()
-                .any(|c| (c[1] - 92.0).abs() < 0.1 && (c[3] - 8.0).abs() < 0.1)
-        );
-        assert!(
-            span_clips
-                .iter()
-                .any(|c| (c[0] - 188.0).abs() < 0.1 && (c[2] - 12.0).abs() < 0.1)
-        );
+        assert!(span_clips
+            .iter()
+            .any(|c| (c[1] - 92.0).abs() < 0.1 && (c[3] - 8.0).abs() < 0.1));
+        assert!(span_clips
+            .iter()
+            .any(|c| (c[0] - 188.0).abs() < 0.1 && (c[2] - 12.0).abs() < 0.1));
     }
 
     #[test]
@@ -6052,7 +6559,9 @@ mod tests {
             x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
         };
         assert!(
-            cleared.iter().all(|r| !hits(r, latin_x, latin_y) && !hits(r, cjk_x, latin_y)),
+            cleared
+                .iter()
+                .all(|r| !hits(r, latin_x, latin_y) && !hits(r, cjk_x, latin_y)),
             "fade clear/shadow must leave both scripts in retain, scissors={cleared:?}"
         );
         assert!(
@@ -6071,7 +6580,10 @@ mod tests {
         assert!(
             page_draw.iter().all(|n| n.text != caption.text),
             "page glyphon runs before the shadow and would flicker the suffix, got {:?}",
-            page_draw.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+            page_draw
+                .iter()
+                .map(|n| n.text.as_str())
+                .collect::<Vec<_>>()
         );
         assert!(
             page_draw.iter().any(|n| n.text == "chip"),
@@ -6116,10 +6628,7 @@ mod tests {
         let wipe = [10.0, 40.0, 220.0, 48.0];
         let pieces = crate::app::damage::page_scissors_excluding_portal_boxes(wipe, &stamps);
         let face = crate::app::damage::page_node_present_scissors_preserving_portal_halo(
-            pieces,
-            trigger,
-            coverage,
-            &stamps,
+            pieces, trigger, coverage, &stamps,
         );
         let button = PaintDirty {
             key: 2,
@@ -6140,12 +6649,8 @@ mod tests {
         // Encode clears this face. Carving the caption out freezes the fill
         // under every glyph while hover/active/focus keeps easing, then the
         // click paints the page color into that hole — the whole line flashes.
-        let cleared = node_scissors_keeping_unchanged_captions(
-            face,
-            &paints,
-            &hover_dirties,
-            &stamps,
-        );
+        let cleared =
+            node_scissors_keeping_unchanged_captions(face, &paints, &hover_dirties, &stamps);
         let hits = |r: &[f32; 4], x: f32, y: f32| {
             x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
         };
@@ -6175,6 +6680,8 @@ mod tests {
             &paints,
             &[(button.key, trigger)],
             &stamps,
+            &[],
+            1.0,
         );
         assert_eq!(
             hover_capture.len(),
@@ -6197,6 +6704,8 @@ mod tests {
             &paints,
             &[(button.key, ring)],
             &stamps,
+            &[],
+            1.0,
         );
         assert_eq!(
             ring_capture.first().and_then(|n| n.clip_bounds),
@@ -6231,6 +6740,8 @@ mod tests {
             &paints,
             &[(button.key, trigger), (text_dirty.key, caption)],
             &stamps,
+            &[],
+            1.0,
         );
         assert_eq!(
             click_capture.len(),
@@ -6281,7 +6792,9 @@ mod tests {
         let mid_y = caption[1] + caption[3] * 0.5;
         let cjk_x = caption[0] + 4.0;
         assert!(
-            pieces.iter().any(|r| hits(r, latin_x, mid_y) && hits(r, cjk_x, mid_y)),
+            pieces
+                .iter()
+                .any(|r| hits(r, latin_x, mid_y) && hits(r, cjk_x, mid_y)),
             "one flush piece must cover both scripts, pieces={pieces:?}"
         );
         assert!(
@@ -6337,14 +6850,20 @@ mod tests {
             pieces.len() > 1,
             "precondition: the caption hole and the portal fringe are separate scissors, pieces={pieces:?}"
         );
-        let physical: Vec<_> = pieces.iter().filter_map(|r| {
-            crate::app::damage::damage_to_scissor_physical(*r, 0.0, 1.25, 400, 250)
-                .map(|(x, y, w, h)| [x as f32, y as f32, w as f32, h as f32])
-        }).collect();
+        let physical: Vec<_> = pieces
+            .iter()
+            .filter_map(|r| {
+                crate::app::damage::damage_to_scissor_physical(*r, 0.0, 1.25, 400, 250)
+                    .map(|(x, y, w, h)| [x as f32, y as f32, w as f32, h as f32])
+            })
+            .collect();
         let scissors = capture_glyph_scissors_physical(&physical, 400, 250);
         for (i, a) in scissors.iter().enumerate() {
             for b in &scissors[i + 1..] {
-                assert!(intersect_rects(*a, *b).is_none(), "shared glyph pixels: {a:?} {b:?}");
+                assert!(
+                    intersect_rects(*a, *b).is_none(),
+                    "shared glyph pixels: {a:?} {b:?}"
+                );
             }
         }
     }
@@ -6387,6 +6906,67 @@ mod tests {
         assert!(
             cleared.iter().any(|r| hits(r, 100.0, 90.0)),
             "panel pixels still have to be rebuilt"
+        );
+    }
+
+    #[test]
+    fn avatar_expand_halo_keeps_neighbor_caption() {
+        // The +N pill grazes the label above it. The top shadow lives in that
+        // line, so the clear must keep those pixels. Glyphs are replayed after
+        // the overlay; the tail outside the halo stays in retain.
+        let caption = [16.0, 40.0, 420.0, 18.0];
+        let stamp = [16.0, 54.0, 220.0, 40.0];
+        let halo = [-4.0, 34.0, 268.0, 80.0];
+        let encode = padded_xywh(halo, 16.0);
+        let mut caption_paint = slot(4, caption, (0, 1));
+        caption_paint.text = (0, 1);
+        let cleared = scissors_keeping_stable_page_captions(
+            vec![encode],
+            &[caption_paint],
+            &[(9u64, stamp)],
+            Some(halo),
+        );
+        let hits = |r: [f32; 4], x: f32, y: f32| {
+            x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
+        };
+        assert!(
+            encode[0] <= 80.0
+                && 80.0 < encode[0] + encode[2]
+                && encode[1] <= 46.0
+                && 46.0 < encode[1] + encode[3],
+            "precondition: encode pad covers the caption"
+        );
+        assert!(
+            cleared.iter().any(|r| hits(*r, 80.0, 46.0)),
+            "top shadow sits in the caption line and must stay in the clear, scissors={cleared:?}"
+        );
+        assert!(
+            cleared.iter().any(|r| hits(*r, 80.0, 72.0)),
+            "pill pixels still clear, scissors={cleared:?}"
+        );
+        assert!(
+            cleared.iter().all(|r| !hits(*r, 400.0, 46.0)),
+            "caption tail outside the halo stays in retain, scissors={cleared:?}"
+        );
+        let mut line = sample_text("悬停 / 点击 +N", caption[0]);
+        line.y = caption[1];
+        line.width = caption[2];
+        line.height = caption[3];
+        let replay = grazing_caption_replay_runs(&[caption_paint], &[(9u64, stamp)], &[line], &cleared);
+        assert!(
+            replay.iter().any(|n| {
+                n.clip_bounds
+                    .is_some_and(|c| hits(c, 80.0, 46.0) && c[3] >= caption[3] - 1.0)
+            }),
+            "replay keeps the full line so the glyph is not dropped, got {:?}",
+            replay.iter().map(|n| n.clip_bounds).collect::<Vec<_>>()
+        );
+        assert!(
+            replay
+                .iter()
+                .all(|n| n.clip_bounds.is_none_or(|c| !hits(c, 400.0, 46.0))),
+            "replay must not src-over the uncleared tail, got {:?}",
+            replay.iter().map(|n| n.clip_bounds).collect::<Vec<_>>()
         );
     }
 
@@ -8706,10 +9286,7 @@ mod tests {
         fill.radii = [6.0; 4];
         let mut caption = paint_slot(1, label, Some(label), (0, 0));
         caption.text = (0, 1);
-        let paints = [
-            caption,
-            paint_slot(2, visual, Some(rest), (1, 2)),
-        ];
+        let paints = [caption, paint_slot(2, visual, Some(rest), (1, 2))];
         let (wipe, _) = node_present_dest_reset_scaled(
             2,
             visual,
@@ -9289,11 +9866,14 @@ mod tests {
             PaintOp::Rects { start: 4, count: 3 },
         ];
         let clipped: Vec<_> = slot_paint_ops(&ops, (2, 5), (1, 2)).collect();
-        assert!(matches!(clipped.as_slice(), [
-            PaintOp::Rects { start: 2, count: 2 },
-            PaintOp::Textured { start: 1, count: 1 },
-            PaintOp::Rects { start: 4, count: 1 },
-        ]));
+        assert!(matches!(
+            clipped.as_slice(),
+            [
+                PaintOp::Rects { start: 2, count: 2 },
+                PaintOp::Textured { start: 1, count: 1 },
+                PaintOp::Rects { start: 4, count: 1 },
+            ]
+        ));
     }
 
     #[test]
