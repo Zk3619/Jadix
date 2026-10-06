@@ -2279,12 +2279,7 @@ pub fn prepare_text_frame_at(
             visibility_h
         };
         let scroll_x_px = st.scroll_x.max(0.0) * ui_scale;
-        let node_rect = [
-            x + scroll_x_px,
-            y,
-            scaled_w.max(0.0),
-            visibility_h.max(0.0),
-        ];
+        let node_rect = [x + scroll_x_px, y, scaled_w.max(0.0), visibility_h.max(0.0)];
         let visible = glyph_node_visible_this_frame(
             [x, y],
             [scaled_w.max(0.0), visibility_h.max(0.0)],

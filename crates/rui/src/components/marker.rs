@@ -1100,7 +1100,10 @@ mod tests {
                 &mut dirty,
             );
         }
-        assert!(!dirty.is_empty(), "separator bind must dirty the marker subtree");
+        assert!(
+            !dirty.is_empty(),
+            "separator bind must dirty the marker subtree"
+        );
         let dirty_set: std::collections::HashSet<_> = dirty.into_iter().collect();
         tree.mark_dirty_nodes_in_tree(&root, &dirty_set);
         let result =
@@ -1214,10 +1217,7 @@ mod tests {
             .into();
 
         for (label, marker_el) in [("default", default_el), ("separator", sep_el)] {
-            let mut root = Element::new()
-                .w(320.0)
-                .h(64.0)
-                .child(marker_el.w("100%"));
+            let mut root = Element::new().w(320.0).h(64.0).child(marker_el.w("100%"));
             let mut tree = crate::layout::layout_tree::LayoutTree::new();
             let result = tree.build_and_layout(&mut root, 320.0, 64.0, [-1.0, -1.0]);
             let marker = root
@@ -1225,8 +1225,8 @@ mod tests {
                 .iter()
                 .find(|c| slot_of(c) == Some(SLOT_ROOT))
                 .unwrap_or_else(|| panic!("{label}: marker root"));
-            let content = find_slot(marker, SLOT_CONTENT)
-                .unwrap_or_else(|| panic!("{label}: content slot"));
+            let content =
+                find_slot(marker, SLOT_CONTENT).unwrap_or_else(|| panic!("{label}: content slot"));
             let icon = find_slot(marker, SLOT_ICON).unwrap_or_else(|| panic!("{label}: icon slot"));
             let caption = result
                 .text_nodes

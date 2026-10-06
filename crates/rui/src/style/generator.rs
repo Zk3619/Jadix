@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::collections::VecDeque;
 use std::rc::{Rc, Weak};
 
-use crate::core::reactivity::{Signal, use_signal};
+use crate::core::reactivity::{use_signal, Signal};
 
 use super::element_style::TimingFunction;
 
@@ -832,12 +832,7 @@ pub fn parse_spring_options(inner: &str) -> Option<SpringOptions> {
             opts.damping = Some(*d);
             Some(opts)
         }
-        [
-            SpringArg::Number(k),
-            SpringArg::Number(d),
-            SpringArg::Number(m),
-            ..,
-        ] => {
+        [SpringArg::Number(k), SpringArg::Number(d), SpringArg::Number(m), ..] => {
             opts.stiffness = Some(*k);
             opts.damping = Some(*d);
             opts.mass = Some(*m);

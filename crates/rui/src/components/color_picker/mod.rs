@@ -724,7 +724,9 @@ mod tests {
                 kind: ColorDragKind::Sv,
                 bounds: Rc::new(Cell::new([0.0, 0.0, 100.0, 100.0])),
                 rgba: Signal::new(Rgba::opaque(255, 255, 255)),
-                hue: Signal::new(0.0), sat, val,
+                hue: Signal::new(0.0),
+                sat,
+                val,
                 show_alpha: false,
                 out: Signal::new("#ffffff".into()),
                 fmt_sig: Signal::new(ColorFormat::Hex),
@@ -735,8 +737,10 @@ mod tests {
             drain_color_drag_apply();
             let result = [sat.peek(), val.peek()];
             end_color_drag();
-            assert!((result[0] - 0.8).abs() < 0.001 && (result[1] - 0.3).abs() < 0.001,
-                "queued stale pointer replaced latest sample: {result:?}");
+            assert!(
+                (result[0] - 0.8).abs() < 0.001 && (result[1] - 0.3).abs() < 0.001,
+                "queued stale pointer replaced latest sample: {result:?}"
+            );
         });
     }
 
@@ -1148,10 +1152,7 @@ mod tests {
             let is_trig =
                 el.attrs.get(ATTR_CP_SLOT).map(String::as_str) == Some("color-picker-trigger");
             if is_trig {
-                let has_hover = el
-                    .class_set
-                    .as_ref()
-                    .is_some_and(ClassSet::has_hover_color);
+                let has_hover = el.class_set.as_ref().is_some_and(ClassSet::has_hover_color);
                 return Some((has_hover, el.focus_id.clone()));
             }
             el.children.iter().find_map(find_outline_trigger)
@@ -1712,7 +1713,6 @@ mod tests {
     /// leftover offset — items look "scrolled" after settle).
     #[test]
     fn inline_format_select_upward_must_not_scroll_when_content_fits() {
-        use std::{cell::RefCell, rc::Rc};
         use crate::app::portal_overlay::clear_overlay_stack;
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
@@ -1727,6 +1727,7 @@ mod tests {
             mark_floating_panels_layout_dirty, tick_hoisted_floating_css,
         };
         use crate::utils::popup::sync_floating_placement;
+        use std::{cell::RefCell, rc::Rc};
 
         fn click(root: &Element, id: &str) -> Rc<RefCell<dyn FnMut()>> {
             let mut callback = None;
@@ -1750,12 +1751,15 @@ mod tests {
             };
             flush_floating_motion_subtree(root);
             tick_hoisted_floating_css(root);
-            if floating_motion_needs_relayout()
-                || sync_floating_placement(root, 800.0, height)
-            {
+            if floating_motion_needs_relayout() || sync_floating_placement(root, 800.0, height) {
                 mark_floating_panels_layout_dirty(root, tree);
                 out = tree.relayout_overlay_follow_and_collect(
-                    root, 800.0, height, [-1.0, -1.0], false, false,
+                    root,
+                    800.0,
+                    height,
+                    [-1.0, -1.0],
+                    false,
+                    false,
                 );
                 flush_floating_motion_subtree(root);
             }
@@ -1766,7 +1770,9 @@ mod tests {
             let mut content_h = 0.0_f32;
             crate::core::tree::walk_elements(root, |el| {
                 if el.focus_id.as_deref()
-                    == Some(crate::core::scroll_viewport::focus_id_for_scroll_viewport(rest).as_str())
+                    == Some(
+                        crate::core::scroll_viewport::focus_id_for_scroll_viewport(rest).as_str(),
+                    )
                 {
                     vp = Some(el.layout_bounds);
                 }
@@ -1886,18 +1892,20 @@ mod tests {
     }
 
     fn check_inline_format_select(upward: bool) {
-        use std::{cell::RefCell, rc::Rc};
         use crate::app::portal_overlay::{clear_overlay_stack, try_dismiss_outside_press};
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
         use crate::core::reactivity::{create_effect, create_root};
-        use crate::layout::layout_tree::{hoist_portal_subtrees, hoisted_portal_stamps, LayoutTree};
+        use crate::layout::layout_tree::{
+            hoist_portal_subtrees, hoisted_portal_stamps, LayoutTree,
+        };
         use crate::utils::floating_motion::{
             drain_pending_floating_unmounts, floating_motion_needs_relayout,
             flush_floating_motion_subtree, mark_floating_panels_layout_dirty,
             tick_floating_presence, tick_hoisted_floating_css,
         };
         use crate::utils::popup::{arm_underlay_close, sync_floating_placement};
+        use std::{cell::RefCell, rc::Rc};
 
         fn click(root: &Element, id: &str) -> Rc<RefCell<dyn FnMut()>> {
             let mut callback = None;
@@ -1908,19 +1916,40 @@ mod tests {
             });
             callback.expect("click target")
         }
-        fn frame(root: &mut Element, tree: &mut LayoutTree) -> crate::layout::layout_tree::RenderResult {
+        fn frame(
+            root: &mut Element,
+            tree: &mut LayoutTree,
+        ) -> crate::layout::layout_tree::RenderResult {
             let height = crate::layout::dim_length_px(root.style.size.height).unwrap();
             hoist_portal_subtrees(root);
 
-            let mut out = if tree.root_node.is_none() { tree.build_and_layout(root, 800.0, height, [-1.0, -1.0]) } else { tree.build_and_layout_fast_ex(root, 800.0, height, [-1.0, -1.0], false, false, None) };
+            let mut out = if tree.root_node.is_none() {
+                tree.build_and_layout(root, 800.0, height, [-1.0, -1.0])
+            } else {
+                tree.build_and_layout_fast_ex(root, 800.0, height, [-1.0, -1.0], false, false, None)
+            };
             if sync_floating_placement(root, 800.0, height) {
-                out = tree.relayout_overlay_follow_and_collect(root, 800.0, height, [-1.0, -1.0], false, false);
+                out = tree.relayout_overlay_follow_and_collect(
+                    root,
+                    800.0,
+                    height,
+                    [-1.0, -1.0],
+                    false,
+                    false,
+                );
             }
             flush_floating_motion_subtree(root);
             tick_hoisted_floating_css(root);
             if floating_motion_needs_relayout() {
                 mark_floating_panels_layout_dirty(root, tree);
-                out = tree.relayout_overlay_follow_and_collect(root, 800.0, height, [-1.0, -1.0], false, false);
+                out = tree.relayout_overlay_follow_and_collect(
+                    root,
+                    800.0,
+                    height,
+                    [-1.0, -1.0],
+                    false,
+                    false,
+                );
             }
             out
         }
@@ -1937,8 +1966,11 @@ mod tests {
                     .variant(ColorPickerVariant::Inline)
                     .format(ColorFormat::Hsla)
                     .into();
-                *live.borrow_mut() = Element::new().w(800.0).h(600.0)
-                    .pt(if upward { 200.0 } else { 0.0 }).child(picker);
+                *live.borrow_mut() = Element::new()
+                    .w(800.0)
+                    .h(600.0)
+                    .pt(if upward { 200.0 } else { 0.0 })
+                    .child(picker);
             });
         });
         drain_deferred_view_remounts();
@@ -1960,16 +1992,16 @@ mod tests {
                         if el.focus_id.as_deref() == Some("inline-residue:fmt:trigger") {
                             trigger = Some(el.layout_bounds);
                         }
-                        if el.template_id.as_deref()
-                            == Some("inline-residue:fmt__floating_panel")
-                        {
+                        if el.template_id.as_deref() == Some("inline-residue:fmt__floating_panel") {
                             let mh = crate::layout::dim_length_px(el.style.max_size.height)
                                 .unwrap_or(el.layout_bounds[3]);
                             panel = Some((el.layout_bounds, mh, el.attrs.clone()));
                         }
                     });
                     let Some(trigger) = trigger else { continue };
-                    let Some((bounds, mh, attrs)) = panel else { continue };
+                    let Some((bounds, mh, attrs)) = panel else {
+                        continue;
+                    };
                     if mh < 0.5 {
                         continue;
                     }
@@ -1984,7 +2016,10 @@ mod tests {
                     );
                 }
             }
-            assert!(!hoisted_portal_stamps(&live.borrow()).is_empty(), "menu must open");
+            assert!(
+                !hoisted_portal_stamps(&live.borrow()).is_empty(),
+                "menu must open"
+            );
             if upward {
                 let mut trigger = None;
                 let mut panel = None;
@@ -2013,12 +2048,24 @@ mod tests {
                 let out = frame(&mut live.borrow_mut(), &mut tree);
                 if hoisted_portal_stamps(&live.borrow()).is_empty() {
                     let start = out.overlay_split.instance_start.min(out.instances.len());
-                    assert!(out.instances[start..].iter().all(|i| i.color[3] < 0.01 && i.shadow_color[3] < 0.01 && i.border_color[3] < 0.01), "hidden menu still paints cached chrome after its stamp disappeared");
+                    assert!(
+                        out.instances[start..].iter().all(|i| i.color[3] < 0.01
+                            && i.shadow_color[3] < 0.01
+                            && i.border_color[3] < 0.01),
+                        "hidden menu still paints cached chrome after its stamp disappeared"
+                    );
                 }
             }
             let closed = frame(&mut live.borrow_mut(), &mut tree);
-            assert!(hoisted_portal_stamps(&live.borrow()).is_empty(), "closed menu leaves an overlay stamp, cycle={cycle}");
-            assert_eq!(closed.instances.len(), baseline.instances.len(), "closed menu leaves painted chrome, cycle={cycle}");
+            assert!(
+                hoisted_portal_stamps(&live.borrow()).is_empty(),
+                "closed menu leaves an overlay stamp, cycle={cycle}"
+            );
+            assert_eq!(
+                closed.instances.len(),
+                baseline.instances.len(),
+                "closed menu leaves painted chrome, cycle={cycle}"
+            );
         }
         crate::style::utility::set_frame_dt(0.0);
         clear_test_reconcile_root();

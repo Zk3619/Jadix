@@ -1730,7 +1730,10 @@ mod tests {
         let bounds = el.layout_bounds;
         let width_spec = el.style.unit_specs.clone();
         for state in ["success", "warning", "done"] {
-            assert_ne!(apply_bound_attachment_state(&mut el, state), LayoutStatus::Clean);
+            assert_ne!(
+                apply_bound_attachment_state(&mut el, state),
+                LayoutStatus::Clean
+            );
             assert_eq!(el.template_id.as_deref(), Some("live-attachment"));
             assert_eq!(el.layout_node, node);
             assert_eq!(el.layout_bounds, bounds);
@@ -1738,7 +1741,10 @@ mod tests {
                 el.style.unit_specs, width_spec,
                 "state repaint must preserve the consumer's w-full style"
             );
-            assert_eq!(attachment_state_from_attrs(&el.attrs), AttachmentState::from(state));
+            assert_eq!(
+                attachment_state_from_attrs(&el.attrs),
+                AttachmentState::from(state)
+            );
         }
     }
 

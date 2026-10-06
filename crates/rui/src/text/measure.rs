@@ -125,11 +125,11 @@ pub(crate) fn ideograph_vertical_em() -> Option<(f32, f32, f32, f32)> {
     if IDEOGRAPH_PROBED.with(|c| c.get()) {
         return None;
     }
-    let found = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(probe_ideograph_em_inner))
-    {
-        Ok(v) => v,
-        Err(_) => return None,
-    };
+    let found =
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(probe_ideograph_em_inner)) {
+            Ok(v) => v,
+            Err(_) => return None,
+        };
     IDEOGRAPH_PROBED.with(|c| c.set(true));
     if let Some(v) = found {
         IDEOGRAPH_EM.with(|c| c.set(Some(v)));
@@ -462,9 +462,7 @@ fn measure_resolved_run_width(
     if font_system.db().faces().next().is_none() {
         return heuristic;
     }
-    if ascii_metrics_cacheable(size, line_height)
-        && text.bytes().all(|b| (32..=126).contains(&b))
-    {
+    if ascii_metrics_cacheable(size, line_height) && text.bytes().all(|b| (32..=126).contains(&b)) {
         let advances = ascii_advances(font_system, size, line_height, weight, family);
         return text.bytes().map(|b| advances[(b - 32) as usize]).sum();
     }
@@ -1274,8 +1272,10 @@ mod tests {
         let prepared = prepare("numeric 42", 16.0, 400, 0.0);
         assert!(prepared.max_segment_width.is_finite());
         assert!(prepared.max_segment_width > 0.0);
-        assert!(ASCII_ADVANCES.with(|c| c.borrow().is_empty()),
-            "invalid shaping metrics must not enter the character-advance cache");
+        assert!(
+            ASCII_ADVANCES.with(|c| c.borrow().is_empty()),
+            "invalid shaping metrics must not enter the character-advance cache"
+        );
     }
 
     #[test]

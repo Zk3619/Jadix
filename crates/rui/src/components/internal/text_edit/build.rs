@@ -6,10 +6,9 @@ use crate::components::input::{
     input_ime_anchor_signal_key, input_number_dec_template_id, input_number_inc_template_id,
     input_number_step_button, input_number_steppers_column, input_overwrite_signal_key,
     input_password_reveal_signal_key, input_preedit_marks_signal_key, input_preedit_sel_signal_key,
-    input_preedit_signal_key,
-    input_reveal_template_id, input_selection_signal_key, input_text_template_id,
-    input_type_signal_key, input_value_signal_key, map_byte_range_to_masked, resolve_placeholder,
-    set_adornment_visible, InputType,
+    input_preedit_signal_key, input_reveal_template_id, input_selection_signal_key,
+    input_text_template_id, input_type_signal_key, input_value_signal_key,
+    map_byte_range_to_masked, resolve_placeholder, set_adornment_visible, InputType,
 };
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_color, parse_text_color, Element, TextEditPaintSync};
@@ -152,7 +151,11 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     };
 
     let extras = extra_carets_signal(&field_id).peek();
-    let preedit_marks = use_signal(&input_preedit_marks_signal_key(&field_id), Vec::<(usize, usize, u8)>::new).peek();
+    let preedit_marks = use_signal(
+        &input_preedit_marks_signal_key(&field_id),
+        Vec::<(usize, usize, u8)>::new,
+    )
+    .peek();
     let strings = compose_text_edit_strings(TextEditStringsInput {
         committed: &committed,
         preedit: &preedit,

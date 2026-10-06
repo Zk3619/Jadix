@@ -779,8 +779,7 @@ pub(crate) fn wheel_sticky_matches_deepest(sticky: &str, chain: &[String]) -> bo
     chain.first().map(String::as_str) == Some(sticky)
 }
 
-pub(crate) type ScrollMetricsEntry =
-    crate::core::scroll_viewport::ScrollMetricsSample;
+pub(crate) type ScrollMetricsEntry = crate::core::scroll_viewport::ScrollMetricsSample;
 
 /// True when a freshly collected `max=0` is a clip/band-cull collapse, not a real
 /// "content now fits" state.

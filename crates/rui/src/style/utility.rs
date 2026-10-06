@@ -2339,7 +2339,12 @@ fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -
         }
         KnownUtility::Rounded(len) => {
             let r = tw_px(len);
-            if el.style.radii.iter().all(|x| (*x - r).abs() <= f32::EPSILON) {
+            if el
+                .style
+                .radii
+                .iter()
+                .all(|x| (*x - r).abs() <= f32::EPSILON)
+            {
                 LayoutStatus::Clean
             } else {
                 el.style.radii = [r, r, r, r];

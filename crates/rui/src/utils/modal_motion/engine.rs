@@ -898,9 +898,17 @@ fn seed_dialog_exit_anim(overlay: &mut Element, zoom: &mut Element) {
 }
 
 fn dialog_has_exit_anim(overlay: &Element, zoom: &Element) -> bool {
-    overlay.style.animations.iter().any(|a| a.name == "fade-out-0")
+    overlay
+        .style
+        .animations
+        .iter()
+        .any(|a| a.name == "fade-out-0")
         && zoom.style.animations.iter().any(|a| a.name == "fade-out-0")
-        && zoom.style.animations.iter().any(|a| a.name == "zoom-out-90")
+        && zoom
+            .style
+            .animations
+            .iter()
+            .any(|a| a.name == "zoom-out-90")
 }
 
 fn dialog_exit_visually_settled(overlay: &Element, zoom: &Element) -> bool {
@@ -923,7 +931,11 @@ fn ensure_dialog_exit_anim(overlay: &mut Element, zoom: &mut Element) {
         overlay.style.animations = dialog_exit_overlay_anim();
         overlay.animation_snapshot = Default::default();
     }
-    if !zoom.style.animations.iter().any(|a| a.name == "zoom-out-90")
+    if !zoom
+        .style
+        .animations
+        .iter()
+        .any(|a| a.name == "zoom-out-90")
         || !zoom.style.animations.iter().any(|a| a.name == "fade-out-0")
     {
         let keep_op = zoom.style.opacity.clamp(0.0, 1.0);
@@ -2053,7 +2065,8 @@ mod tests {
             root.children.push(fresh_panel);
 
             assert!(flush_modal_shell_motion_subtree(&mut root));
-            let overlay = find_template_id_mut(&mut root, "dlg-enter-reseed__modal_overlay").unwrap();
+            let overlay =
+                find_template_id_mut(&mut root, "dlg-enter-reseed__modal_overlay").unwrap();
             assert!(
                 overlay.style.opacity < 0.05,
                 "rebuild at rest must re-seed fade-in, not present opaque, got {}",
@@ -3099,10 +3112,10 @@ mod tests {
                 handle.cell.borrow().gate.is_mounted(),
                 "rebuild must not force-absent; that pops the scrim then the card"
             );
-            let o_ptr = find_template_id_mut(&mut root, "dlg-exit-reseed__modal_overlay")
-                .unwrap() as *mut Element;
-            let z_ptr = find_template_id_mut(&mut root, "dlg-exit-reseed__modal_zoom")
-                .unwrap() as *mut Element;
+            let o_ptr = find_template_id_mut(&mut root, "dlg-exit-reseed__modal_overlay").unwrap()
+                as *mut Element;
+            let z_ptr = find_template_id_mut(&mut root, "dlg-exit-reseed__modal_zoom").unwrap()
+                as *mut Element;
             let (overlay, zoom) = unsafe { (&*o_ptr, &*z_ptr) };
             assert!(
                 overlay.style.opacity > 0.7,
@@ -3179,8 +3192,8 @@ mod tests {
             {
                 let o_ptr = find_template_id_mut(&mut root, "dlg-exit-stale__modal_overlay")
                     .unwrap() as *mut Element;
-                let z_ptr = find_template_id_mut(&mut root, "dlg-exit-stale__modal_zoom")
-                    .unwrap() as *mut Element;
+                let z_ptr = find_template_id_mut(&mut root, "dlg-exit-stale__modal_zoom").unwrap()
+                    as *mut Element;
                 let (overlay, zoom) = unsafe { (&mut *o_ptr, &mut *z_ptr) };
                 overlay.style.opacity = 1.0;
                 zoom.style.opacity = 1.0;

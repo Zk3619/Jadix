@@ -235,12 +235,7 @@ fn push_slot_ring_node(el: &Element, pad: f32) -> bool {
     }
     crate::app::damage::push_frame_paint_key(
         crate::app::damage::paint_element_key(el),
-        [
-            b[0] - pad,
-            b[1] - pad,
-            b[2] + pad * 2.0,
-            b[3] + pad * 2.0,
-        ],
+        [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0],
     );
     true
 }
@@ -921,14 +916,7 @@ pub fn InputOTPSlot(index: Option<i32>, children: Option<Element>) -> Element {
     let sync_fid = fid;
     cell = cell.reactive_sync(move |el, _| {
         sync_otp_slot_paint(
-            el,
-            index,
-            max_length,
-            value_sig,
-            active_sig,
-            &sync_fid,
-            disabled,
-            invalid,
+            el, index, max_length, value_sig, active_sig, &sync_fid, disabled, invalid,
         )
     });
 
@@ -1127,10 +1115,28 @@ mod tests {
             let mut slot = Element::new();
             slot.layout_bounds = [100.0, 700.0, 36.0, 36.0];
             slot.paint_scroll_acc = [0.0, 600.0];
-            sync_otp_slot_paint(&mut slot, 0, 6, value, active, "otp-ring-test", false, false);
+            sync_otp_slot_paint(
+                &mut slot,
+                0,
+                6,
+                value,
+                active,
+                "otp-ring-test",
+                false,
+                false,
+            );
             let _ = take_frame_paint_nodes();
             active.set(1);
-            sync_otp_slot_paint(&mut slot, 0, 6, value, active, "otp-ring-test", false, false);
+            sync_otp_slot_paint(
+                &mut slot,
+                0,
+                6,
+                value,
+                active,
+                "otp-ring-test",
+                false,
+                false,
+            );
             let dirty = take_frame_paint_nodes();
             assert!(
                 dirty.iter().any(|d| d.kind == PaintDirtyKind::Node
@@ -1150,7 +1156,9 @@ mod tests {
     #[test]
     fn grouped_focus_repaint_stays_inside_the_active_slot() {
         create_root(|| {
-            use crate::app::damage::{clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind};
+            use crate::app::damage::{
+                clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind,
+            };
             let focus = use_signal("__rui_button_focus_id", String::new);
             focus.set(String::new());
             let otp: Element = input_otp("otp-group-hole").separator_at(3).into();
@@ -1208,7 +1216,8 @@ mod tests {
                 false,
                 &mut collect,
             );
-            let layout_dirty: std::collections::HashSet<_> = collect.layout_dirty.into_iter().collect();
+            let layout_dirty: std::collections::HashSet<_> =
+                collect.layout_dirty.into_iter().collect();
             tree.mark_dirty_nodes_in_tree(&root, &layout_dirty);
             let dirty = take_frame_paint_nodes();
             let holes: Vec<_> = dirty.iter().map(|d| d.bounds).collect();
@@ -1281,7 +1290,15 @@ mod tests {
                         && y + h > slot[1] - 8.0;
                     overlaps && (w > active[2] + 16.0 || h > active[3] + 16.0)
                 })
-                .map(|inst| (inst.rect_pos, inst.rect_size, inst.color, inst.shadow_blur, inst.shadow_spread))
+                .map(|inst| {
+                    (
+                        inst.rect_pos,
+                        inst.rect_size,
+                        inst.color,
+                        inst.shadow_blur,
+                        inst.shadow_spread,
+                    )
+                })
                 .collect();
             assert!(
                 fat.is_empty(),
@@ -1309,10 +1326,17 @@ mod tests {
                     && b[1] >= slot_now[1] - 1.0
                     && b[0] + b[2] <= slot_now[0] + slot_now[2] + 1.0
                     && b[1] + b[3] <= slot_now[1] + slot_now[3] + 1.0;
-                assert!(inside, "caret left the active slot: caret={b:?} slot={slot_now:?}");
+                assert!(
+                    inside,
+                    "caret left the active slot: caret={b:?} slot={slot_now:?}"
+                );
             }
             let scissor = holes.iter().copied().fold([0.0; 4], |acc, r| {
-                if acc[2] <= 0.0 { r } else { crate::app::damage::union_rects(acc, r) }
+                if acc[2] <= 0.0 {
+                    r
+                } else {
+                    crate::app::damage::union_rects(acc, r)
+                }
             });
             let border = frame
                 .instances
@@ -1331,7 +1355,9 @@ mod tests {
                 .position(|inst| covers_slot(inst, vis(slot_now)))
                 .unwrap();
             let bands = frame.overlay_split.page_stack_band_ranges();
-            let in_page_band = bands.iter().any(|b| idx >= b.instance.0 && idx < b.instance.1)
+            let in_page_band = bands
+                .iter()
+                .any(|b| idx >= b.instance.0 && idx < b.instance.1)
                 || (bands.is_empty() && idx < frame.overlay_split.instance_start);
             let in_paint_op = bands.iter().any(|b| {
                 frame.paint_ops[b.paint_ops.0..b.paint_ops.1]
@@ -1392,13 +1418,23 @@ mod tests {
                 border.rect_pos,
                 border.rect_size
             );
-            let restored = dirty.iter().filter(|d| d.kind == PaintDirtyKind::Node).any(|d| {
-                frame.node_paints.iter().filter(|p| p.key == d.key).any(|p| {
-                    let (lo, hi) =
-                        crate::app::draw_cull::slot_own_chrome_range(p, &frame.instances, 1.0);
-                    (lo..hi).any(|i| covers_slot(&frame.instances[i], vis(slot_now)))
-                })
-            });
+            let restored = dirty
+                .iter()
+                .filter(|d| d.kind == PaintDirtyKind::Node)
+                .any(|d| {
+                    frame
+                        .node_paints
+                        .iter()
+                        .filter(|p| p.key == d.key)
+                        .any(|p| {
+                            let (lo, hi) = crate::app::draw_cull::slot_own_chrome_range(
+                                p,
+                                &frame.instances,
+                                1.0,
+                            );
+                            (lo..hi).any(|i| covers_slot(&frame.instances[i], vis(slot_now)))
+                        })
+                });
             assert!(
                 restored,
                 "focus dest-reset does not redraw the focused slot\n dirty={dirty:?}"
@@ -1433,17 +1469,13 @@ mod tests {
                 .max_length(6)
                 .separator_at(3)
                 .into();
-            let mut root = Element::new()
-                .w(520.0)
-                .h(120.0)
-                .overflow_y("scroll")
-                .child(
-                    Element::new()
-                        .w("100%")
-                        .p(16.0)
-                        .bg([0.95, 0.95, 0.95, 1.0])
-                        .child(otp),
-                );
+            let mut root = Element::new().w(520.0).h(120.0).overflow_y("scroll").child(
+                Element::new()
+                    .w("100%")
+                    .p(16.0)
+                    .bg([0.95, 0.95, 0.95, 1.0])
+                    .child(otp),
+            );
             root.focus_id = Some("scroll:gal-otp-rsx-focus".into());
             root.scroll_offset = [0.0, 0.0];
             let mut tree = crate::layout::layout_tree::LayoutTree::new();
@@ -1474,8 +1506,7 @@ mod tests {
                 collect.layout_dirty.into_iter().collect();
             tree.mark_dirty_nodes_in_tree(&root, &layout_dirty);
             let mut dirty = take_frame_paint_nodes();
-            let frame =
-                tree.build_and_layout_fast(&mut root, 520.0, 120.0, [-1.0; 2], false, true);
+            let frame = tree.build_and_layout_fast(&mut root, 520.0, 120.0, [-1.0; 2], false, true);
             crate::app::draw_cull::prepare_node_present_dirties(
                 &mut dirty,
                 &frame.node_paints,
@@ -1490,7 +1521,10 @@ mod tests {
             assert!(slots.len() >= 6, "rsx otp slots: {slots:?}");
             let active = slots[0].1;
             let row_w: f32 = {
-                let left = slots.iter().map(|(_, b)| b[0]).fold(f32::INFINITY, f32::min);
+                let left = slots
+                    .iter()
+                    .map(|(_, b)| b[0])
+                    .fold(f32::INFINITY, f32::min);
                 let right = slots
                     .iter()
                     .map(|(_, b)| b[0] + b[2])
@@ -1560,12 +1594,7 @@ mod tests {
                     1.0,
                     prev,
                 ) {
-                    let wipe = [
-                        reset.rect[0],
-                        reset.rect[1],
-                        reset.rect[2],
-                        reset.rect[3],
-                    ];
+                    let wipe = [reset.rect[0], reset.rect[1], reset.rect[2], reset.rect[3]];
                     assert!(
                         wipe[2] <= active[2] + 24.0 && wipe[3] <= active[3] + 24.0,
                         "focus dest-reset wipe is the whole row\n wipe={wipe:?} active={active:?} dirty={d:?}"
@@ -1584,7 +1613,9 @@ mod tests {
     #[test]
     fn focus_inside_page_scroll_dirties_the_slot_not_the_viewport() {
         create_root(|| {
-            use crate::app::damage::{clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind};
+            use crate::app::damage::{
+                clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind,
+            };
             let focus = use_signal("__rui_button_focus_id", String::new);
             focus.set(String::new());
             let otp: Element = input_otp("otp-page-hole").into();
@@ -1619,7 +1650,9 @@ mod tests {
                 "focus inside a page scroll must not window-clear a region: {dirty:?}"
             );
             assert!(
-                dirty.iter().any(|d| d.kind == PaintDirtyKind::Node && d.bounds[2] > 0.0 && d.bounds[3] > 0.0),
+                dirty.iter().any(|d| d.kind == PaintDirtyKind::Node
+                    && d.bounds[2] > 0.0
+                    && d.bounds[3] > 0.0),
                 "active slot still needs a local dest-reset: {dirty:?}"
             );
             assert!(
@@ -1876,7 +1909,9 @@ mod tests {
                 "entering slot's focus ring is outside the dirty hole\n ring={new_ring:?} holes={holes:?}"
             );
             assert!(
-                holes.iter().all(|h| h[3] <= boxes[2].1[3] + ring_pad * 2.0 + 4.0),
+                holes
+                    .iter()
+                    .all(|h| h[3] <= boxes[2].1[3] + ring_pad * 2.0 + 4.0),
                 "active move cleared a column, not the ring\n holes={holes:?}"
             );
             for index in [0usize, 1, 4, 5] {
@@ -2021,7 +2056,9 @@ mod tests {
     #[test]
     fn delete_must_not_clip_the_focused_slot_right_ring() {
         create_root(|| {
-            use crate::app::damage::{clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind};
+            use crate::app::damage::{
+                clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind,
+            };
             OTP_CARET_FORCE.with(|c| c.set(Some(true)));
             let value = use_signal("otp-delete-ring-value", String::new);
             let focus = use_signal("__rui_button_focus_id", String::new);
@@ -2058,8 +2095,7 @@ mod tests {
                 collect.layout_dirty.into_iter().collect();
             tree.mark_dirty_nodes_in_tree(&root, &layout_dirty);
             let _ = take_frame_paint_nodes();
-            let before =
-                tree.build_and_layout_fast(&mut root, 480.0, 80.0, [-1.0; 2], false, true);
+            let before = tree.build_and_layout_fast(&mut root, 480.0, 80.0, [-1.0; 2], false, true);
             let last_present = crate::app::draw_cull::last_present_visual_slots(
                 &before.node_paints,
                 &before.instances,
@@ -2190,7 +2226,9 @@ mod tests {
     #[test]
     fn typed_group_keeps_the_ring_right_edge_and_clears_the_old_one() {
         create_root(|| {
-            use crate::app::damage::{clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind};
+            use crate::app::damage::{
+                clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind,
+            };
             let value = use_signal("otp-right-edge-value", String::new);
             let focus = use_signal("__rui_button_focus_id", String::new);
             focus.set(String::new());
@@ -2345,8 +2383,8 @@ mod tests {
     fn empty_first_slot_ring_is_one_composite_and_blink_does_not_restack_it() {
         create_root(|| {
             use crate::app::damage::{
-                clear_frame_paint_nodes, paint_dirty_has_keyed_slot, paint_dirty_matches_present_slot,
-                take_frame_paint_nodes,
+                clear_frame_paint_nodes, paint_dirty_has_keyed_slot,
+                paint_dirty_matches_present_slot, take_frame_paint_nodes,
             };
             use crate::layout::layout_tree::PaintOp;
             OTP_CARET_FORCE.with(|c| c.set(Some(true)));
@@ -2493,10 +2531,7 @@ mod tests {
                         }
                         if hit(p.instance) {
                             n += 1;
-                            why.push_str(&format!(
-                                "underlay key={} inst={:?} ",
-                                p.key, p.instance
-                            ));
+                            why.push_str(&format!("underlay key={} inst={:?} ", p.key, p.instance));
                         }
                     }
                 }
@@ -2533,7 +2568,8 @@ mod tests {
                 .collect();
             let total: usize = hits.iter().map(|(_, _, n, _)| n).sum();
             assert_eq!(
-                total, 1,
+                total,
+                1,
                 "empty first slot src-overs the ring\n draws={total} hits={hits:?} caret_kids={}",
                 find_slot(&root, 0).map(|s| s.children.len()).unwrap_or(0)
             );
@@ -2575,9 +2611,7 @@ mod tests {
                 None,
             );
             OTP_CARET_FORCE.with(|c| c.set(None));
-            let slot_box = find_slot(&root, 0)
-                .map(|s| s.layout_bounds)
-                .expect("slot");
+            let slot_box = find_slot(&root, 0).map(|s| s.layout_bounds).expect("slot");
             assert!(
                 !blink_prepared.is_empty(),
                 "hiding the caret must dirty the stroke"
@@ -2633,8 +2667,8 @@ mod tests {
     fn focus_ring_is_painted_once_and_blur_clears_it() {
         create_root(|| {
             use crate::app::damage::{
-                clear_frame_paint_nodes, paint_dirty_has_keyed_slot, paint_dirty_matches_present_slot,
-                take_frame_paint_nodes, PaintDirtyKind,
+                clear_frame_paint_nodes, paint_dirty_has_keyed_slot,
+                paint_dirty_matches_present_slot, take_frame_paint_nodes, PaintDirtyKind,
             };
             use crate::layout::layout_tree::PaintOp;
             let value = use_signal("otp-darken-value", String::new);
@@ -2707,7 +2741,8 @@ mod tests {
                     .collect::<Vec<_>>()
             );
             let ring_idx = ring_idxs[0];
-            let ring_paint = crate::app::draw_cull::instance_paint_bounds(&frame.instances[ring_idx]);
+            let ring_paint =
+                crate::app::draw_cull::instance_paint_bounds(&frame.instances[ring_idx]);
             let draws_index = |dirty: &crate::app::damage::PaintDirty,
                                paints: &[crate::layout::layout_tree::NodePaint],
                                instances: &[crate::renderer::pipeline::InstanceInput],
@@ -2909,7 +2944,8 @@ mod tests {
                 collect.layout_dirty.into_iter().collect();
             tree.mark_dirty_nodes_in_tree(&root, &layout_dirty);
             let mut prepared = take_frame_paint_nodes();
-            let blurred = tree.build_and_layout_fast(&mut root, 480.0, 80.0, [-1.0; 2], false, true);
+            let blurred =
+                tree.build_and_layout_fast(&mut root, 480.0, 80.0, [-1.0; 2], false, true);
             crate::app::draw_cull::prepare_node_present_dirties(
                 &mut prepared,
                 &blurred.node_paints,
@@ -2934,7 +2970,12 @@ mod tests {
                 .instances
                 .iter()
                 .position(|inst| {
-                    let b = [inst.rect_pos[0], inst.rect_pos[1], inst.rect_size[0], inst.rect_size[1]];
+                    let b = [
+                        inst.rect_pos[0],
+                        inst.rect_pos[1],
+                        inst.rect_size[0],
+                        inst.rect_size[1],
+                    ];
                     center_in(b, active) && inst.color[3] > 0.05 && inst.color[3] < 0.9
                 })
                 .expect("translucent slot fill");
@@ -2983,7 +3024,9 @@ mod tests {
     #[test]
     fn typed_digit_focus_redraw_is_the_slot_ring_not_a_page_band_clear() {
         create_root(|| {
-            use crate::app::damage::{clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind};
+            use crate::app::damage::{
+                clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind,
+            };
             let value = use_signal("otp-type-ring-value", String::new);
             let focus = use_signal("__rui_button_focus_id", String::new);
             focus.set(String::new());
@@ -3058,7 +3101,14 @@ mod tests {
                 .instances
                 .iter()
                 .filter(|inst| inst.shadow_spread >= 2.0)
-                .map(|inst| (inst.rect_pos, inst.rect_size, inst.shadow_spread, inst.border_color))
+                .map(|inst| {
+                    (
+                        inst.rect_pos,
+                        inst.rect_size,
+                        inst.shadow_spread,
+                        inst.border_color,
+                    )
+                })
                 .collect();
             assert_eq!(
                 rings.len(),
@@ -3166,7 +3216,12 @@ mod tests {
                         .iter()
                         .any(|inst| {
                             center_in(
-                                [inst.rect_pos[0], inst.rect_pos[1], inst.rect_size[0], inst.rect_size[1]],
+                                [
+                                    inst.rect_pos[0],
+                                    inst.rect_pos[1],
+                                    inst.rect_size[0],
+                                    inst.rect_size[1],
+                                ],
                                 *bounds,
                             )
                         });
@@ -3210,12 +3265,7 @@ mod tests {
                 ) else {
                     continue;
                 };
-                let wipe = [
-                    reset.rect[0],
-                    reset.rect[1],
-                    reset.rect[2],
-                    reset.rect[3],
-                ];
+                let wipe = [reset.rect[0], reset.rect[1], reset.rect[2], reset.rect[3]];
                 assert!(
                     wipe[2] <= active[2] + 24.0 && wipe[3] <= active[3] + 24.0,
                     "focus dest-reset wipe is wider than the slot ring\n wipe={wipe:?} active={active:?} dirty={d:?}"
@@ -3242,11 +3292,7 @@ mod tests {
                 .max_length(6)
                 .separator_at(3)
                 .into();
-            let mut root = vstack()
-                .w(480.0)
-                .p(16.0)
-                .child(otp)
-                .into();
+            let mut root = vstack().w(480.0).p(16.0).child(otp).into();
             let mut tree = crate::layout::layout_tree::LayoutTree::new();
             tree.build_and_layout(&mut root, 480.0, 120.0, [-1.0; 2]);
             fn find_root(el: &Element) -> Option<&Element> {
@@ -3258,12 +3304,18 @@ mod tests {
             let otp_root = find_root(&root).expect("otp root");
             let slots = slot_boxes(&root);
             assert!(slots.len() >= 6, "slots={slots:?}");
-            let left = slots.iter().map(|(_, b)| b[0]).fold(f32::INFINITY, f32::min);
+            let left = slots
+                .iter()
+                .map(|(_, b)| b[0])
+                .fold(f32::INFINITY, f32::min);
             let right = slots
                 .iter()
                 .map(|(_, b)| b[0] + b[2])
                 .fold(f32::NEG_INFINITY, f32::max);
-            let top = slots.iter().map(|(_, b)| b[1]).fold(f32::INFINITY, f32::min);
+            let top = slots
+                .iter()
+                .map(|(_, b)| b[1])
+                .fold(f32::INFINITY, f32::min);
             let bottom = slots
                 .iter()
                 .map(|(_, b)| b[1] + b[3])

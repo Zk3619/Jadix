@@ -40,12 +40,19 @@ fn backend_candidates() -> Vec<(wgpu::Backends, &'static str)> {
     ]
 }
 
-pub(super) fn try_acquire(window: &Arc<dyn Window>, chrome: &WindowOptions) -> Option<CompositorGpu> {
+pub(super) fn try_acquire(
+    window: &Arc<dyn Window>,
+    chrome: &WindowOptions,
+) -> Option<CompositorGpu> {
     crate::utils::block_on::block_on(try_acquire_async(window, chrome))
 }
 
-async fn try_acquire_async(window: &Arc<dyn Window>, chrome: &WindowOptions) -> Option<CompositorGpu> {
-    if chrome.compositor_alpha() && crate::platform::try_init_custom_glass(window.as_ref(), chrome) {
+async fn try_acquire_async(
+    window: &Arc<dyn Window>,
+    chrome: &WindowOptions,
+) -> Option<CompositorGpu> {
+    if chrome.compositor_alpha() && crate::platform::try_init_custom_glass(window.as_ref(), chrome)
+    {
         if let Some(gpu) = try_acquire_dcomp(window).await {
             return Some(gpu);
         }

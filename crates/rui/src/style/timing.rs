@@ -165,7 +165,11 @@ pub(crate) fn direction_local_t(
         AnimationDirection::Alternate => iteration_index % 2 == 1,
         AnimationDirection::AlternateReverse => iteration_index % 2 == 0,
     };
-    if reverse { 1.0 - cycle_t } else { cycle_t }
+    if reverse {
+        1.0 - cycle_t
+    } else {
+        cycle_t
+    }
 }
 
 /// One spring step. Closed-form (Motion) rather than implicit Euler, so large
@@ -264,10 +268,8 @@ mod tests {
         assert_eq!(opts.duration_ms, Some(800.0));
         let physics = opts.resolve();
         assert!(physics.stiffness > 10.0 && physics.damping > 1.0);
-        assert!(
-            parse_spring_timing("spring(visual 0.3)")
-                .unwrap()
-                .is_spring()
-        );
+        assert!(parse_spring_timing("spring(visual 0.3)")
+            .unwrap()
+            .is_spring());
     }
 }

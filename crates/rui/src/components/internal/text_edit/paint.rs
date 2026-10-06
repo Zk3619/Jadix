@@ -5,10 +5,9 @@ use crate::components::input::{
     effective_invalid, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
     input_preedit_marks_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key,
-    input_reveal_template_id,
-    input_selection_signal_key, input_text_template_id, input_value_signal_key,
-    map_byte_index_to_masked, map_byte_range_to_masked, resolve_placeholder, set_adornment_visible,
-    InputType,
+    input_reveal_template_id, input_selection_signal_key, input_text_template_id,
+    input_value_signal_key, map_byte_index_to_masked, map_byte_range_to_masked,
+    resolve_placeholder, set_adornment_visible, InputType,
 };
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{parse_color, parse_text_color, Element, InputPaintSync, LayoutStatus};
@@ -170,9 +169,11 @@ fn sync_one_text_edit_paint(
     };
 
     let extras = extra_carets_signal(&desc.base_id).peek();
-    let preedit_marks =
-        use_signal(&input_preedit_marks_signal_key(&desc.base_id), Vec::<(usize, usize, u8)>::new)
-            .peek();
+    let preedit_marks = use_signal(
+        &input_preedit_marks_signal_key(&desc.base_id),
+        Vec::<(usize, usize, u8)>::new,
+    )
+    .peek();
     let strings = compose_text_edit_strings(TextEditStringsInput {
         committed: &committed,
         preedit: &preedit,

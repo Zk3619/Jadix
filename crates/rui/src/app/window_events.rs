@@ -356,7 +356,11 @@ impl super::App {
         super::tree_hit::pointer_hits_focus_paint(root, focused, x, y, [0.0, 0.0])
     }
 
-    pub(super) fn handle_secondary_redraw(&mut self, id: WindowId, event_loop: &dyn ActiveEventLoop) {
+    pub(super) fn handle_secondary_redraw(
+        &mut self,
+        id: WindowId,
+        event_loop: &dyn ActiveEventLoop,
+    ) {
         super::window_scope::force_secondary_id(id);
         super::input_controller::clear_text_edit_frame_mutated();
         let suspended = self.is_suspended;
@@ -3184,7 +3188,11 @@ impl super::App {
         false
     }
 
-    pub(super) fn handle_redraw_requested(&mut self, id: WindowId, event_loop: &dyn ActiveEventLoop) {
+    pub(super) fn handle_redraw_requested(
+        &mut self,
+        id: WindowId,
+        event_loop: &dyn ActiveEventLoop,
+    ) {
         self.flush_pending_cursor_moved(id, event_loop);
         let _scope = super::window_scope::enter_primary();
         crate::app::reactive::drain_deferred_view_remounts();

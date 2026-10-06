@@ -57,7 +57,6 @@ pub use crate::core::scroll_viewport::{
     SCROLL_BEHAVIOR_JUMP, SCROLL_BEHAVIOR_SMOOTH, SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
 
-
 pub struct ScrollAreaBuilder {
     id: String,
     base: BaseComponentBuilder,

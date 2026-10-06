@@ -445,7 +445,11 @@ impl super::App {
                 );
             }
         } else if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-            ime_support::set_ime_allowed_latched(st.window.as_ref(), false, &mut self.ime_allowed_latched);
+            ime_support::set_ime_allowed_latched(
+                st.window.as_ref(),
+                false,
+                &mut self.ime_allowed_latched,
+            );
         }
     }
 

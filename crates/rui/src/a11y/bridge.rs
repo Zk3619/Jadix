@@ -706,9 +706,7 @@ fn finish_container_children(
     used: &mut std::collections::HashSet<u64>,
 ) -> Vec<NodeId> {
     match role {
-        Role::Table
-            if !tree_has_role(nodes, &child_ids, &|r| r == Role::Row) =>
-        {
+        Role::Table if !tree_has_role(nodes, &child_ids, &|r| r == Role::Row) => {
             let texts = text_leaves(el);
             if texts.is_empty() {
                 return child_ids;
@@ -733,9 +731,7 @@ fn finish_container_children(
             ids.push(row);
             ids
         }
-        Role::Menu
-            if !tree_has_role(nodes, &child_ids, &is_menu_item_role) =>
-        {
+        Role::Menu if !tree_has_role(nodes, &child_ids, &is_menu_item_role) => {
             let texts = text_leaves(el);
             if texts.is_empty() {
                 return child_ids;

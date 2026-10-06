@@ -788,13 +788,14 @@ mod tests {
         // GCS_CURSORPOS (here: end of the string still being typed).
         let text = "あああ";
         let winit_clause = Some((0, "あ".len()));
-        let attrs = [
-            ATTR_TARGET_CONVERTED,
-            ATTR_CONVERTED,
-            ATTR_INPUT,
-        ];
-        let (caret, marks) =
-            resolve_preedit_chrome(text, winit_clause, false, Some(Some(text.chars().count())), &attrs);
+        let attrs = [ATTR_TARGET_CONVERTED, ATTR_CONVERTED, ATTR_INPUT];
+        let (caret, marks) = resolve_preedit_chrome(
+            text,
+            winit_clause,
+            false,
+            Some(Some(text.chars().count())),
+            &attrs,
+        );
         assert_eq!(caret, Some((text.len(), text.len())));
         assert_eq!(
             marks,
@@ -970,8 +971,10 @@ mod tests {
                 "preedit underline marks must clear"
             );
             assert!(
-                !crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false)
-                    .peek(),
+                !crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || {
+                    false
+                })
+                .peek(),
                 "IME active flag must clear after the toggle commit"
             );
             clear_ime_end_drain();
@@ -1191,7 +1194,7 @@ mod tests {
                 extra_carets: Vec::new(),
                 extra_selections: Vec::new(),
                 extra_preedit_underlines: Vec::new(),
-            preedit_ul: Vec::new(),
+                preedit_ul: Vec::new(),
                 drop_caret: false,
                 caret_color: None,
                 selection_foreground: None,

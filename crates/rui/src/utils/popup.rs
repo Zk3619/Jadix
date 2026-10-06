@@ -824,8 +824,7 @@ fn write_floating_place_ex(el: &mut Element, place: FloatingPlace, write_xy: boo
             if let Some(content) = floating_content_h(el) {
                 mh = mh.min(content);
             }
-            if dimension_length(el.style.max_size.height).is_none_or(|v| (v - mh).abs() > 0.5)
-            {
+            if dimension_length(el.style.max_size.height).is_none_or(|v| (v - mh).abs() > 0.5) {
                 el.style.max_size.height = taffy::style::Dimension::length(mh);
                 changed = true;
             }
@@ -1043,8 +1042,8 @@ fn apply_floating_menus(
     // Exit owns its side and height cap, but its trigger can still move when an
     // ancestor changes size (e.g. ColorPicker adds/removes its alpha row).
     if el.attrs.contains_key(ATTR_FLOATING_EXITING) {
-        if let Some(tb) = floating_trigger_of(el)
-            .and_then(|fid| floating_trigger_bounds(triggers, &fid))
+        if let Some(tb) =
+            floating_trigger_of(el).and_then(|fid| floating_trigger_bounds(triggers, &fid))
         {
             let gap = el
                 .attrs
@@ -1052,7 +1051,10 @@ fn apply_floating_menus(
                 .and_then(|s| s.parse::<f32>().ok())
                 .unwrap_or(FLOATING_TRIGGER_GAP)
                 .clamp(-64.0, 64.0);
-            let place = use_signal(floating_place_signal_key(&id).as_str(), FloatingPlace::default);
+            let place = use_signal(
+                floating_place_signal_key(&id).as_str(),
+                FloatingPlace::default,
+            );
             if let Some(old_edge) = reverse_expand_edge_y(el) {
                 // Above: keep the trigger-facing bottom edge glued.
                 let edge = tb[1] - gap;
@@ -1071,8 +1073,7 @@ fn apply_floating_menus(
             } else {
                 // Below: keep the top glued to the trigger bottom (+ gap).
                 let edge = tb[1] + tb[3] + gap;
-                let old_top =
-                    inset_length(el.style.inset.top).unwrap_or(el.layout_bounds[1]);
+                let old_top = inset_length(el.style.inset.top).unwrap_or(el.layout_bounds[1]);
                 let delta = edge - old_top;
                 if delta.abs() > 0.5 {
                     el.style.inset.top = Element::into_margin_auto(edge);
@@ -2892,7 +2893,12 @@ mod tests {
         let mut trigger = Element::new().focus_id("moving-exit-trigger");
         trigger.layout_bounds = [80.0, 320.0, 100.0, 32.0];
         let mut panel = Element::new().absolute();
-        mark_floating(&mut panel, "moving-exit", "moving-exit-trigger", PopupPlacement::BottomStart);
+        mark_floating(
+            &mut panel,
+            "moving-exit",
+            "moving-exit-trigger",
+            PopupPlacement::BottomStart,
+        );
         panel.layout_bounds = [0.0, 0.0, 100.0, 152.0];
         let mut root = Element::new().child(trigger).child(panel);
         sync_floating_placement(&mut root, 800.0, 360.0);
@@ -2909,8 +2915,10 @@ mod tests {
             sync_floating_placement(&mut root, 800.0, 360.0);
             let menu = &root.children[1];
             let edge = reverse_expand_edge_y(menu).expect("must stay above");
-            assert!((edge - (trigger_y - FLOATING_TRIGGER_GAP)).abs() < 0.5,
-                "exit anchor must follow trigger: edge={edge}, trigger={trigger_y}");
+            assert!(
+                (edge - (trigger_y - FLOATING_TRIGGER_GAP)).abs() < 0.5,
+                "exit anchor must follow trigger: edge={edge}, trigger={trigger_y}"
+            );
             assert!((inset_length(menu.style.inset.top).unwrap() + height - edge).abs() < 0.5);
             assert_eq!(dimension_length(menu.style.max_size.height), Some(height));
         }

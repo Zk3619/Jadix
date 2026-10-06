@@ -5,8 +5,8 @@ use std::rc::Rc;
 use winit::event::{ElementState, KeyEvent};
 
 use crate::core::tree::{
-    CursorKind, CursorValue, Element, PointerEvents, find_in_tree, find_in_tree_mut,
-    pointer_events_targets_children, pointer_events_targets_self,
+    find_in_tree, find_in_tree_mut, pointer_events_targets_children, pointer_events_targets_self,
+    CursorKind, CursorValue, Element, PointerEvents,
 };
 use crate::layout::layout_tree::portal_hit_passthrough;
 
@@ -1805,8 +1805,8 @@ pub(super) fn nudge_textarea_hscroll_for_drag(
     };
     use crate::style::WhiteSpace;
     use crate::utils::text_field::{
-        TEXTAREA_SCROLLPORT_PAD_X, hard_line_body_at_y, nowrap_line_end_max_scroll_x,
-        text_edit_line_box_px, textarea_scroll_rest, textarea_scrollport_padding_x,
+        hard_line_body_at_y, nowrap_line_end_max_scroll_x, text_edit_line_box_px,
+        textarea_scroll_rest, textarea_scrollport_padding_x, TEXTAREA_SCROLLPORT_PAD_X,
     };
 
     let Some((leaf_bounds, display, style, _)) =

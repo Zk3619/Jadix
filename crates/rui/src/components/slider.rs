@@ -246,7 +246,11 @@ fn push_slider_thumb_paint_damage(root: &Element) {
     // 后留下轨道像素盖住阴影。
     let pad = thumb
         .map(|t| {
-            let border = t.style.resolved_border_widths().into_iter().fold(0.0, f32::max);
+            let border = t
+                .style
+                .resolved_border_widths()
+                .into_iter()
+                .fold(0.0, f32::max);
             crate::app::draw_cull::sdf_outset_shadow_pad(
                 t.style.shadow_blur,
                 t.style.shadow_spread,
@@ -997,7 +1001,8 @@ mod tests {
             "{label} trailing halo clipped: thumb={b:?} scissor={scissor:?}"
         );
         assert!(
-            wipe[origin] <= b[origin] - pad + 1.0 && wipe[origin] + wipe[span] >= extent + pad - 1.0,
+            wipe[origin] <= b[origin] - pad + 1.0
+                && wipe[origin] + wipe[span] >= extent + pad - 1.0,
             "{label} dest-reset still cut: thumb={b:?} wipe={wipe:?}"
         );
         assert!(
@@ -1080,38 +1085,21 @@ mod tests {
         for (i, child) in root.children.iter_mut().enumerate() {
             child.layout_bounds = [40.0, 100.0 + i as f32 * 28.0, 220.0, 20.0];
             if let Some(thumb) = find_slot_deep_mut(child, SLOT_THUMB) {
-                thumb.layout_bounds = [
-                    140.0,
-                    100.0 + i as f32 * 28.0,
-                    THUMB_PX,
-                    THUMB_PX,
-                ];
+                thumb.layout_bounds = [140.0, 100.0 + i as f32 * 28.0, THUMB_PX, THUMB_PX];
             }
         }
         let mut layout = LayoutTree::new();
         let mut impact = LayoutStatus::Clean;
         sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
 
-        root.children[0]
-            .on_hover
-            .as_ref()
-            .unwrap()
-            .borrow_mut()(true);
+        root.children[0].on_hover.as_ref().unwrap().borrow_mut()(true);
         impact = LayoutStatus::Clean;
         sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
         assert_eq!(impact, LayoutStatus::StyleChanged);
 
         // Switch hover hue → alpha (leave + enter).
-        root.children[0]
-            .on_hover
-            .as_ref()
-            .unwrap()
-            .borrow_mut()(false);
-        root.children[1]
-            .on_hover
-            .as_ref()
-            .unwrap()
-            .borrow_mut()(true);
+        root.children[0].on_hover.as_ref().unwrap().borrow_mut()(false);
+        root.children[1].on_hover.as_ref().unwrap().borrow_mut()(true);
         impact = LayoutStatus::Clean;
         sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
         assert_eq!(
@@ -1176,33 +1164,16 @@ mod tests {
             child.layout_bounds = [40.0, 100.0 + i as f32 * 28.0, 220.0, 20.0];
             child.paint_scroll_acc = [0.0, 0.0];
             if let Some(thumb) = find_slot_deep_mut(child, SLOT_THUMB) {
-                thumb.layout_bounds = [
-                    140.0,
-                    100.0 + i as f32 * 28.0,
-                    THUMB_PX,
-                    THUMB_PX,
-                ];
+                thumb.layout_bounds = [140.0, 100.0 + i as f32 * 28.0, THUMB_PX, THUMB_PX];
             }
         }
-        root.children[0]
-            .on_hover
-            .as_ref()
-            .unwrap()
-            .borrow_mut()(true);
+        root.children[0].on_hover.as_ref().unwrap().borrow_mut()(true);
         let mut layout = LayoutTree::new();
         crate::app::damage::clear_frame_paint_nodes();
         let mut impact = LayoutStatus::Clean;
         sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
-        root.children[0]
-            .on_hover
-            .as_ref()
-            .unwrap()
-            .borrow_mut()(false);
-        root.children[1]
-            .on_hover
-            .as_ref()
-            .unwrap()
-            .borrow_mut()(true);
+        root.children[0].on_hover.as_ref().unwrap().borrow_mut()(false);
+        root.children[1].on_hover.as_ref().unwrap().borrow_mut()(true);
         crate::app::damage::clear_frame_paint_nodes();
         impact = LayoutStatus::Clean;
         sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
@@ -1264,33 +1235,16 @@ mod tests {
             child.layout_bounds = [40.0, 100.0 + i as f32 * 28.0, 220.0, 20.0];
             child.paint_scroll_acc = [0.0, 0.0];
             if let Some(thumb) = find_slot_deep_mut(child, SLOT_THUMB) {
-                thumb.layout_bounds = [
-                    40.0 + 100.0,
-                    100.0 + i as f32 * 28.0,
-                    THUMB_PX,
-                    THUMB_PX,
-                ];
+                thumb.layout_bounds = [40.0 + 100.0, 100.0 + i as f32 * 28.0, THUMB_PX, THUMB_PX];
             }
         }
-        root.children[0]
-            .on_hover
-            .as_ref()
-            .unwrap()
-            .borrow_mut()(true);
+        root.children[0].on_hover.as_ref().unwrap().borrow_mut()(true);
 
         let mut layout = LayoutTree::new();
         let mut impact = LayoutStatus::Clean;
         sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
-        root.children[0]
-            .on_hover
-            .as_ref()
-            .unwrap()
-            .borrow_mut()(false);
-        root.children[1]
-            .on_hover
-            .as_ref()
-            .unwrap()
-            .borrow_mut()(true);
+        root.children[0].on_hover.as_ref().unwrap().borrow_mut()(false);
+        root.children[1].on_hover.as_ref().unwrap().borrow_mut()(true);
         crate::app::damage::clear_frame_paint_nodes();
         impact = LayoutStatus::Clean;
         sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
@@ -1387,18 +1341,36 @@ mod tests {
         use crate::layout::{lp_length_px, lpa_length_px};
 
         let horizontal: Element = slider("shadow-pad-h").into();
-        assert_eq!(lp_length_px(horizontal.style.padding.left), Some(THUMB_SHADOW_PAD));
-        assert_eq!(lp_length_px(horizontal.style.padding.right), Some(THUMB_SHADOW_PAD));
-        assert_eq!(lp_length_px(horizontal.style.padding.top), Some(THUMB_SHADOW_PAD));
-        assert_eq!(lp_length_px(horizontal.style.padding.bottom), Some(THUMB_SHADOW_PAD));
+        assert_eq!(
+            lp_length_px(horizontal.style.padding.left),
+            Some(THUMB_SHADOW_PAD)
+        );
+        assert_eq!(
+            lp_length_px(horizontal.style.padding.right),
+            Some(THUMB_SHADOW_PAD)
+        );
+        assert_eq!(
+            lp_length_px(horizontal.style.padding.top),
+            Some(THUMB_SHADOW_PAD)
+        );
+        assert_eq!(
+            lp_length_px(horizontal.style.padding.bottom),
+            Some(THUMB_SHADOW_PAD)
+        );
         // Cross-axis must grow: otherwise T/B halo is clipped flush to the thumb.
         assert_eq!(
             crate::layout::dim_length_px(horizontal.style.size.height),
             Some(ROOT_CROSS)
         );
         let h_track = &horizontal.children[0];
-        assert_eq!(lpa_length_px(h_track.style.inset.left), Some(THUMB_SHADOW_PAD));
-        assert_eq!(lpa_length_px(h_track.style.inset.right), Some(THUMB_SHADOW_PAD));
+        assert_eq!(
+            lpa_length_px(h_track.style.inset.left),
+            Some(THUMB_SHADOW_PAD)
+        );
+        assert_eq!(
+            lpa_length_px(h_track.style.inset.right),
+            Some(THUMB_SHADOW_PAD)
+        );
         assert_eq!(
             lpa_length_px(h_track.style.inset.top),
             Some(THUMB_SHADOW_PAD + TRACK_INSET)
@@ -1407,17 +1379,35 @@ mod tests {
         assert_eq!(horizontal.children[1].style.z_index, 0);
 
         let vertical: Element = slider("shadow-pad-v").orientation("vertical").into();
-        assert_eq!(lp_length_px(vertical.style.padding.top), Some(THUMB_SHADOW_PAD));
-        assert_eq!(lp_length_px(vertical.style.padding.bottom), Some(THUMB_SHADOW_PAD));
-        assert_eq!(lp_length_px(vertical.style.padding.left), Some(THUMB_SHADOW_PAD));
-        assert_eq!(lp_length_px(vertical.style.padding.right), Some(THUMB_SHADOW_PAD));
+        assert_eq!(
+            lp_length_px(vertical.style.padding.top),
+            Some(THUMB_SHADOW_PAD)
+        );
+        assert_eq!(
+            lp_length_px(vertical.style.padding.bottom),
+            Some(THUMB_SHADOW_PAD)
+        );
+        assert_eq!(
+            lp_length_px(vertical.style.padding.left),
+            Some(THUMB_SHADOW_PAD)
+        );
+        assert_eq!(
+            lp_length_px(vertical.style.padding.right),
+            Some(THUMB_SHADOW_PAD)
+        );
         assert_eq!(
             crate::layout::dim_length_px(vertical.style.size.width),
             Some(ROOT_CROSS)
         );
         let v_track = &vertical.children[0];
-        assert_eq!(lpa_length_px(v_track.style.inset.top), Some(THUMB_SHADOW_PAD));
-        assert_eq!(lpa_length_px(v_track.style.inset.bottom), Some(THUMB_SHADOW_PAD));
+        assert_eq!(
+            lpa_length_px(v_track.style.inset.top),
+            Some(THUMB_SHADOW_PAD)
+        );
+        assert_eq!(
+            lpa_length_px(v_track.style.inset.bottom),
+            Some(THUMB_SHADOW_PAD)
+        );
         assert_eq!(
             lpa_length_px(v_track.style.inset.left),
             Some(THUMB_SHADOW_PAD + TRACK_INSET)

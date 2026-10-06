@@ -1069,7 +1069,10 @@ mod tests {
             "gaps {gap_above} vs {gap_below} (y={y} h={h})"
         );
         assert!(y >= -0.01 && y + h <= lh + 0.01);
-        assert!(h < lh - 0.5, "band should trim the uneven side, h={h} lh={lh}");
+        assert!(
+            h < lh - 0.5,
+            "band should trim the uneven side, h={h} lh={lh}"
+        );
     }
 
     #[test]

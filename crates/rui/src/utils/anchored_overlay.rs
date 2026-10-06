@@ -1291,10 +1291,7 @@ mod tests {
             );
             assert_eq!(find_attr(&panel, ATTR_FLOATING_MATCH_TRIGGER), Some("0"));
             let w = find_attr(&panel, ATTR_FLOATING_W).expect("author width stamped");
-            let px: f32 = w
-                .trim_end_matches("px")
-                .parse()
-                .expect("px length");
+            let px: f32 = w.trim_end_matches("px").parse().expect("px length");
             assert!(
                 (px - 256.0).abs() < 0.5,
                 "shell .w(16rem) must stamp rui_floating_w, got {w}"
@@ -1872,7 +1869,7 @@ mod tests {
             floating_motion_needs_relayout, flush_floating_motion_subtree,
             mark_floating_panels_layout_dirty, tick_hoisted_floating_css,
         };
-        use crate::utils::popup::{FLOATING_TRIGGER_GAP, PopupPlacement};
+        use crate::utils::popup::{PopupPlacement, FLOATING_TRIGGER_GAP};
 
         clear_overlay_stack();
         let (_owner, mut root) = create_root(|| {
@@ -1958,7 +1955,12 @@ mod tests {
         if floating_motion_needs_relayout() {
             mark_floating_panels_layout_dirty(&root, &mut tree);
             out = tree.relayout_overlay_follow_and_collect(
-                &mut root, 800.0, 600.0, [0.0, 0.0], false, false,
+                &mut root,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+                false,
+                false,
             );
         } else if floating_css {
             out = tree.collect_animation_frame(&mut root, [0.0, 0.0], false);

@@ -28,17 +28,18 @@ struct ChannelActionHandler {
 
 impl ActionHandler for ChannelActionHandler {
     fn do_action(&mut self, request: ActionRequest) {
-        let _ = crate::app::ui_bridge::send_user_event(crate::app::RuiUserEvent::AccessKit(Event {
-            window_id: self.window_id,
-            window_event: AdapterWindowEvent::ActionRequested(request),
-        }));
+        let _ =
+            crate::app::ui_bridge::send_user_event(crate::app::RuiUserEvent::AccessKit(Event {
+                window_id: self.window_id,
+                window_event: AdapterWindowEvent::ActionRequested(request),
+            }));
     }
 }
 
 #[cfg(windows)]
 mod platform {
     use super::{ActivationHandler, ChannelActionHandler, TreeUpdate, Window};
-    use accesskit_windows::{HWND, SubclassingAdapter};
+    use accesskit_windows::{SubclassingAdapter, HWND};
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     pub struct PlatformAdapter {

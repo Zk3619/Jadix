@@ -546,7 +546,8 @@ pub fn close_window() {
             let Some(id) = super::window_scope::active_window_id() else {
                 return;
             };
-            if let Err(e) = super::ui_bridge::send_user_event(super::RuiUserEvent::CloseWindow { id })
+            if let Err(e) =
+                super::ui_bridge::send_user_event(super::RuiUserEvent::CloseWindow { id })
             {
                 log::warn!("close_window: {e}");
             }

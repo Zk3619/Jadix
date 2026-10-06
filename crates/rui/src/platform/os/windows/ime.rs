@@ -110,7 +110,10 @@ unsafe fn capture_comp_snap(hwnd: HWND, cursor_missing: bool) {
     }
 }
 
-unsafe fn read_comp_bytes(himc: windows_sys::Win32::UI::Input::Ime::HIMC, gcs: u32) -> Option<Vec<u8>> {
+unsafe fn read_comp_bytes(
+    himc: windows_sys::Win32::UI::Input::Ime::HIMC,
+    gcs: u32,
+) -> Option<Vec<u8>> {
     let size = unsafe { ImmGetCompositionStringW(himc, gcs, null_mut(), 0) };
     if size <= 0 {
         return Some(Vec::new());

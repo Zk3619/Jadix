@@ -873,9 +873,8 @@ fn absorb_expand_intrinsic(panel: &mut Element, max_height_cap: Option<f32>) {
             .get(ATTR_FLOATING_CONTENT_H)
             .and_then(|s| s.parse::<f32>().ok())
             .filter(|x| *x > 0.5);
-        let skip_cap_stretch = max_height_cap.is_some_and(|cap| {
-            (capped - cap).abs() < 1.0 && prev.is_some_and(|p| p + 1.0 < cap)
-        });
+        let skip_cap_stretch = max_height_cap
+            .is_some_and(|cap| (capped - cap).abs() < 1.0 && prev.is_some_and(|p| p + 1.0 < cap));
         if !skip_cap_stretch {
             panel.used_layout.absorb_child_height(capped);
             let stored = match max_height_cap {
@@ -2726,7 +2725,8 @@ mod tests {
             );
             root.children.push(panel);
             assert!(flush_floating_motion_subtree(&mut root));
-            let panel = find_template_id_mut(&mut root, "exp-exit-hairline__floating_panel").unwrap();
+            let panel =
+                find_template_id_mut(&mut root, "exp-exit-hairline__floating_panel").unwrap();
             panel.layout_bounds[3] = 120.0;
             let bounds = panel.layout_bounds;
             panel.used_layout.stamp_border_box(bounds, false);
@@ -2745,7 +2745,8 @@ mod tests {
 
             open.set(false);
             sync_floating_presence(&handle, false);
-            let panel = find_template_id_mut(&mut root, "exp-exit-hairline__floating_panel").unwrap();
+            let panel =
+                find_template_id_mut(&mut root, "exp-exit-hairline__floating_panel").unwrap();
             apply_floating_panel_motion(
                 "exp-exit-hairline",
                 panel,
@@ -2771,13 +2772,16 @@ mod tests {
                 );
                 // Simulate the last hairline frames without waiting for the full ease-in.
                 panel.style.max_size.height = Dimension::length(2.0);
-                panel.animation_snapshot.sync_written_max_height(Dimension::length(2.0));
+                panel
+                    .animation_snapshot
+                    .sync_written_max_height(Dimension::length(2.0));
             }
             assert!(
                 tick_hoisted_floating_css(&mut root),
                 "hairline hide must request collect"
             );
-            let panel = find_template_id_mut(&mut root, "exp-exit-hairline__floating_panel").unwrap();
+            let panel =
+                find_template_id_mut(&mut root, "exp-exit-hairline__floating_panel").unwrap();
             assert!(
                 panel.style.opacity < 0.01,
                 "chrome hairline must hide before collect, got opacity={}",

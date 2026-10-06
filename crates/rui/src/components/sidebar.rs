@@ -3100,9 +3100,8 @@ mod tests {
     fn menu_button_paint_sync_applies_hover_accent_from_signal() {
         use crate::core::reactivity::create_root;
         use crate::core::tree::LayoutTree;
-        let (_h, mut el): (_, Element) = create_root(|| {
-            sidebar_menu_button("nav-hover-sync").text("Hover").into()
-        });
+        let (_h, mut el): (_, Element) =
+            create_root(|| sidebar_menu_button("nav-hover-sync").text("Hover").into());
         use_signal("nav-hover-sync_hover", || false).set(true);
         let mut tree = LayoutTree::new();
         let mut impact = LayoutStatus::Clean;
@@ -3119,16 +3118,18 @@ mod tests {
     fn bound_active_update_must_not_wipe_live_hover_chrome() {
         use crate::core::reactivity::create_root;
         use crate::core::tree::LayoutTree;
-        let (_h, mut el): (_, Element) = create_root(|| {
-            sidebar_menu_button("nav-hover-active").text("Item").into()
-        });
+        let (_h, mut el): (_, Element) =
+            create_root(|| sidebar_menu_button("nav-hover-active").text("Item").into());
         use_signal("nav-hover-active_hover", || false).set(true);
         let mut tree = LayoutTree::new();
         let mut impact = LayoutStatus::Clean;
         super::sync_sidebar_menu_button_paint_subtree(&mut el, &mut tree, &mut impact);
         let before = el.style.bg_color;
         let _ = super::apply_bound_sidebar_menu_button_active(&mut el, true);
-        assert_eq!(el.attrs.get("data-active").map(String::as_str), Some("true"));
+        assert_eq!(
+            el.attrs.get("data-active").map(String::as_str),
+            Some("true")
+        );
         assert_eq!(
             el.style.bg_color, before,
             "isActive bind must keep accent while the pointer is still hovering"
@@ -3239,11 +3240,7 @@ mod tests {
         assert!(
             has_accent,
             "idle-rail skip-replay must not keep rest bake after hover accent; instances={:?}",
-            after
-                .instances
-                .iter()
-                .map(|i| i.color)
-                .collect::<Vec<_>>()
+            after.instances.iter().map(|i| i.color).collect::<Vec<_>>()
         );
     }
 }

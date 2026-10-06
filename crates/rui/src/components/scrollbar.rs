@@ -427,11 +427,7 @@ pub(crate) fn vertical_scrollbar_occupies_lane(
 /// the corner, add `vertical_cross`. Only this side changes; the other side
 /// stays as written. The painted box stays the Taffy box — stretching it to
 /// `viewport_w` in collect put ink outside the fade dest-reset.
-pub(crate) fn horizontal_lane_side_inset(
-    edge: f32,
-    vertical_cross: f32,
-    lane_shown: bool,
-) -> f32 {
+pub(crate) fn horizontal_lane_side_inset(edge: f32, vertical_cross: f32, lane_shown: bool) -> f32 {
     let edge = edge.max(0.0);
     if lane_shown {
         edge + vertical_cross.max(0.0)

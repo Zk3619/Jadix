@@ -1873,11 +1873,15 @@ mod tests {
         reset_registered_anchors();
     }
 
-    fn card_chrome_instances(instances: &[crate::renderer::InstanceInput]) -> Vec<(usize, [f32; 2], f32, f32)> {
+    fn card_chrome_instances(
+        instances: &[crate::renderer::InstanceInput],
+    ) -> Vec<(usize, [f32; 2], f32, f32)> {
         instances
             .iter()
             .enumerate()
-            .filter(|(_, i)| i.rect_size[0] > 180.0 && (i.shadow_blur > 4.0 || i.border_width > 0.4))
+            .filter(|(_, i)| {
+                i.rect_size[0] > 180.0 && (i.shadow_blur > 4.0 || i.border_width > 0.4)
+            })
             .map(|(idx, i)| (idx, i.rect_size, i.shadow_blur, i.border_width))
             .collect()
     }
@@ -1896,7 +1900,9 @@ mod tests {
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
         use crate::core::reactivity::{create_effect, create_root};
-        use crate::layout::layout_tree::{hoist_portal_subtrees, hoisted_portal_stamps, LayoutTree};
+        use crate::layout::layout_tree::{
+            hoist_portal_subtrees, hoisted_portal_stamps, LayoutTree,
+        };
         use crate::utils::modal_motion::{
             drain_pending_modal_unmounts, flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
         };
@@ -1934,9 +1940,7 @@ mod tests {
                                     ..Default::default()
                                 }))
                                 .child(AlertDialogAction(AlertDialogActionProps {
-                                    children: Some(
-                                        button("ad_hover_stack__ok").text("OK").into(),
-                                    ),
+                                    children: Some(button("ad_hover_stack__ok").text("OK").into()),
                                     base: None,
                                     ..Default::default()
                                 }))
@@ -2054,7 +2058,9 @@ mod tests {
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
         use crate::core::reactivity::{create_effect, create_root};
-        use crate::layout::layout_tree::{hoist_portal_subtrees, hoisted_portal_stamps, LayoutTree};
+        use crate::layout::layout_tree::{
+            hoist_portal_subtrees, hoisted_portal_stamps, LayoutTree,
+        };
         use crate::utils::modal_motion::{
             drain_pending_modal_unmounts, flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
         };

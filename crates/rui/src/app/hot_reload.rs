@@ -1,3 +1,5 @@
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
+use super::RuiUserEvent;
 #[cfg(all(any(debug_assertions, test), feature = "hot-reload"))]
 use serde::Deserialize;
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
@@ -12,8 +14,6 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver};
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
 use std::sync::Arc;
-#[cfg(all(debug_assertions, feature = "hot-reload"))]
-use super::RuiUserEvent;
 
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
 const DEFAULT_ADDR: &str = "127.0.0.1:39091";

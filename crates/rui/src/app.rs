@@ -204,10 +204,8 @@ struct App {
     /// Primary touch finger id (winit `Touch.id`); secondary fingers feed pinch.
     primary_touch_id: Option<winit::event::FingerId>,
     /// All active touch points for pinch (finger id → physical position).
-    active_touches: std::collections::HashMap<
-        winit::event::FingerId,
-        winit::dpi::PhysicalPosition<f64>,
-    >,
+    active_touches:
+        std::collections::HashMap<winit::event::FingerId, winit::dpi::PhysicalPosition<f64>>,
     /// Previous two-finger distance; `None` when not pinching.
     pinch_prev_dist: Option<f32>,
     /// Long-press → ContextMenu path while primary button/touch is held.

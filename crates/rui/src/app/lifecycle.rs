@@ -2,9 +2,9 @@ use std::sync::Arc;
 use std::time::Instant;
 
 #[cfg(feature = "a11y")]
-use accesskit::{Node, NodeId, Role, Tree, TreeId, TreeUpdate};
-#[cfg(feature = "a11y")]
 use crate::a11y::winit_adapter::Adapter;
+#[cfg(feature = "a11y")]
+use accesskit::{Node, NodeId, Role, Tree, TreeId, TreeUpdate};
 use winit::{
     application::ApplicationHandler,
     event::{ElementState, MouseButton, PointerKind, WindowEvent},
@@ -224,7 +224,12 @@ impl super::App {
         let pts: Vec<(u64, [f32; 2])> = self
             .active_touches
             .iter()
-            .map(|(&id, p)| (id.into_raw() as u64, [p.x as f32 / scale, p.y as f32 / scale]))
+            .map(|(&id, p)| {
+                (
+                    id.into_raw() as u64,
+                    [p.x as f32 / scale, p.y as f32 / scale],
+                )
+            })
             .collect();
         for &(id, pos) in &pts {
             if Some(id) != self.primary_touch_id.map(|f| f.into_raw() as u64) {
@@ -360,7 +365,10 @@ impl super::App {
                     self.event_loop_proxy.clone(),
                 ));
                 super::window_chrome::apply_created_window(window.as_ref(), &options, composition);
-                super::window_lifecycle::emit_created(window.as_ref(), options.persistence_label(false));
+                super::window_lifecycle::emit_created(
+                    window.as_ref(),
+                    options.persistence_label(false),
+                );
                 let placeholder = crate::core::tree::Element::new().w("100%").h("100%");
 
                 let secondary = if wants_glass {
@@ -398,7 +406,11 @@ impl super::App {
                                     self.event_loop_proxy.clone(),
                                 ));
                             }
-                            super::window_chrome::apply_created_window(window.as_ref(), &options, false);
+                            super::window_chrome::apply_created_window(
+                                window.as_ref(),
+                                &options,
+                                false,
+                            );
                             super::window_lifecycle::emit_created(
                                 window.as_ref(),
                                 options.persistence_label(false),
@@ -636,7 +648,11 @@ impl super::App {
                 .borrow()
                 .as_ref()
                 .is_some_and(|s| s.composition_swapchain);
-            super::window_chrome::apply_created_window(window.as_ref(), &self.window_options, composition);
+            super::window_chrome::apply_created_window(
+                window.as_ref(),
+                &self.window_options,
+                composition,
+            );
         }
     }
 }
@@ -953,7 +969,9 @@ impl ApplicationHandler for super::App {
                 }
                 self.shutdown_renderer();
             }
-            WindowEvent::PointerMoved { position, source, .. } => {
+            WindowEvent::PointerMoved {
+                position, source, ..
+            } => {
                 if matches!(PointerKind::from(source), PointerKind::Touch(_)) {
                     // Touch motion is handled with PointerButton / FingerId below.
                 }
@@ -987,7 +1005,8 @@ impl ApplicationHandler for super::App {
                             }
                             if self.active_touches.len() >= 2 {
                                 self.content_scroll_drag = None;
-                                self.pinch_prev_dist = Self::touch_pinch_distance(&self.active_touches);
+                                self.pinch_prev_dist =
+                                    Self::touch_pinch_distance(&self.active_touches);
                             }
                             self.sync_pointer_action_touches();
                         }
@@ -1008,7 +1027,10 @@ impl ApplicationHandler for super::App {
                     }
                 }
                 let Some(button) = button.mouse_button() else {
-                    if matches!(element_state, ElementState::Pressed | ElementState::Released) {
+                    if matches!(
+                        element_state,
+                        ElementState::Pressed | ElementState::Released
+                    ) {
                         let mapped = MouseButton::Left;
                         if self.is_secondary_window(id) {
                             self.handle_secondary_mouse_button(id, element_state, mapped);
