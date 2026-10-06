@@ -2584,6 +2584,16 @@ pub struct ScrollStripBlitJob {
     pub plan: ScrollStripBlit,
 }
 
+/// Whether a failed strip copy leaves the retained scroll pixels as the frame's
+/// drawing surface. A full-clear frame must still render the page immediately.
+pub fn should_retain_unmoved_scroll(
+    use_partial_damage: bool,
+    has_scroll_blit: bool,
+    strip_copy_committed: bool,
+) -> bool {
+    use_partial_damage && has_scroll_blit && !strip_copy_committed
+}
+
 /// Conservative present gates in front of [`plan_scroll_strip_blit`].
 ///
 /// Overlay / named paint are **pin holes**, not abort gates (fields kept so
@@ -6210,6 +6220,17 @@ mod tests {
             }
             .allows()
         );
+    }
+
+    #[test]
+    fn failed_strip_copy_does_not_skip_page_on_full_clear() {
+        assert!(
+            !should_retain_unmoved_scroll(false, true, false),
+            "full-clear fallback must render the page even when a strip copy failed"
+        );
+        assert!(should_retain_unmoved_scroll(true, true, false));
+        assert!(!should_retain_unmoved_scroll(true, false, false));
+        assert!(!should_retain_unmoved_scroll(true, true, true));
     }
 
     #[test]

@@ -4610,6 +4610,14 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                 let before = visual_paint_aabb(element, scroll_acc);
                 let before_display = element.style.display;
                 let before_opacity = element.style.opacity;
+                let is_scroll_viewport = element
+                    .focus_id
+                    .as_deref()
+                    .is_some_and(|id| {
+                        id.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+                    });
+                let before_style = is_scroll_viewport.then(|| element.style.clone());
+                let before_scroll_offset = element.scroll_offset;
                 let status = sync.run(element, layout_tree);
                 paint_changed = status != LayoutStatus::Clean;
                 match status {
@@ -4693,7 +4701,16 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                         // previous ink in PartialLoad (in-page stacking chrome hide/hover).
                         // Halo-only (InputAdornment blur): strips already queued —
                         // a second full-box Node wipe flashes placeholder + ⌘K.
-                        if element.attrs.remove("rui_halo_dirty").is_none() {
+                        // A scroll viewport also reports StyleChanged while its reactive
+                        // synchronizer only advances `scroll_offset` and bookkeeping
+                        // attributes. The scroll-layer clear/blit path owns that movement;
+                        // emitting the viewport's full visual box here clears sibling page
+                        // text and creates the white rectangle seen during Latest entry.
+                        let scroll_only = is_scroll_viewport
+                            && element.scroll_offset != before_scroll_offset
+                            && before_style.as_ref().is_some_and(|style| *style == element.style);
+                        let halo_dirty = element.attrs.remove("rui_halo_dirty").is_some();
+                        if !scroll_only && !halo_dirty {
                             crate::app::damage::push_frame_paint_element_change(
                                 element,
                                 scroll_acc,

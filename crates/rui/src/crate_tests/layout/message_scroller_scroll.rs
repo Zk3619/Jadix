@@ -1227,6 +1227,16 @@ fn message_scroller_latest_enter_t0_must_not_punch_thread_and_hide_must_fade() {
             production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
             sync_message_scroller_follow_after_layout(&mut root, &mut tree);
             let enter_dirties = crate::app::damage::take_frame_paint_nodes();
+            let viewport_key = u64::from(
+                find_slot(&root, "message-scroller-viewport")
+                    .expect("message viewport")
+                    .layout_node
+                    .expect("viewport taffy"),
+            );
+            assert!(
+                enter_dirties.iter().all(|dirty| dirty.key != viewport_key),
+                "scroll-only sync must not emit a full-viewport paint record: {enter_dirties:?}"
+            );
             let enter0 = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
             let btn = find_slot(&root, "message-scroller-button").expect("jump button");
             let btn_key = u64::from(btn.layout_node.expect("jump taffy"));
@@ -2249,6 +2259,183 @@ fn message_scroller_latest_must_collect_on_scroll_only_leave_live_edge() {
                 "scroll_only collect must not skip-replay opacity-0 Latest; got {} text runs",
                 shown.text_nodes.len()
             );
+        });
+    });
+    crate::style::set_css_transition_virtual_timeline(false);
+}
+
+#[test]
+fn red_latest_scroll_entry_exit_keeps_button_background_instance() {
+    crate::style::set_css_transition_virtual_timeline(true);
+    crate::style::set_css_transition_timeline_ms(0.0);
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut root = tall_message_scroller_root();
+            let mut tree = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            for _ in 0..4 {
+                sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 320.0, 384.0, [0.0, 0.0]);
+                let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            }
+            tree.set_collect_skip_allowed(true);
+            let _ = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
+            use_signal(&scroll_offset_y_signal_key("ms-layout-test:viewport"), || 0.0_f32).set_silent(0.0);
+            let _ = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
+            crate::style::set_css_transition_timeline_ms(80.0);
+            let _ = find_slot_ms_mut(&mut root, "message-scroller-button").unwrap().tick_css_transitions(0.0);
+            let shown = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
+            let btn = find_slot(&root, "message-scroller-button").expect("button");
+            let key = u64::from(btn.layout_node.expect("button taffy"));
+            let paint = shown.node_paints.iter().find(|p| p.key == key).expect("button paint");
+            let instances = &shown.instances[paint.instance.0..paint.instance.1];
+            assert!(instances.iter().any(|i| i.color[3] > 0.01 && i.rect_size[0] < 100.0), "button background must be collected: {instances:?}");
+        });
+    });
+    crate::style::set_css_transition_virtual_timeline(false);
+}
+
+#[test]
+fn red_latest_small_scroll_present_damage_stays_local() {
+    crate::style::set_css_transition_virtual_timeline(true);
+    crate::style::set_css_transition_timeline_ms(0.0);
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let mut root = tall_message_scroller_root();
+            let mut tree = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            for _ in 0..5 {
+                production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+                let _ = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            }
+            let content_h = use_signal(
+                &scroll_content_h_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .peek();
+            let viewport_h = use_signal(
+                &scroll_viewport_h_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .peek();
+            let max_y = (content_h - viewport_h).max(0.0);
+            let at_end = use_signal(
+                &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .peek();
+            assert!(max_y > 0.0, "fixture must scroll: content={content_h} viewport={viewport_h}");
+            assert!((at_end - max_y).abs() < 1.0, "fixture must seed at live edge: offset={at_end} max={max_y}");
+
+            tree.set_collect_skip_allowed(true);
+            let baseline = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
+            let baseline_present = crate::app::draw_cull::last_present_visual_slots(
+                &baseline.node_paints,
+                &baseline.instances,
+                &[],
+                &baseline.text_nodes,
+                &[],
+            );
+            crate::app::damage::clear_frame_paint_nodes();
+            use_signal(&scroll_offset_y_signal_key("ms-layout-test:viewport"), || 0.0_f32)
+                .set_silent((max_y - 16.0).max(0.0));
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            let btn_key = {
+                let btn = find_slot(&root, "message-scroller-button").expect("button");
+                u64::from(btn.layout_node.expect("button taffy"))
+            };
+            let viewport_key = u64::from(find_slot(&root, "message-scroller-viewport").unwrap().layout_node.unwrap());
+            let shown = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let entry_dirties = crate::app::damage::take_frame_paint_nodes();
+            let paints = shown.node_paints.clone();
+            let shown_present = crate::app::draw_cull::last_present_visual_slots(
+                &shown.node_paints,
+                &shown.instances,
+                &[],
+                &shown.text_nodes,
+                &[],
+            );
+            let mut expanded_entry = entry_dirties.clone();
+            crate::app::damage::expand_paint_dirties_for_translated_slots(
+                &mut expanded_entry,
+                &shown_present,
+                &baseline_present,
+            );
+            assert!(
+                !paints.iter().any(|p| p.key == btn_key && p.bounds[2] > 300.0),
+                "button paint must stay pill-sized: {paints:?}"
+            );
+            assert!(!entry_dirties.iter().any(|d| d.key == viewport_key), "small scroll must not dirty the full viewport: {entry_dirties:?}");
+            for d in expanded_entry.iter().filter(|d| d.key == btn_key) {
+                if let Some(reset) = crate::app::draw_cull::node_present_dest_reset_full(
+                    d.key,
+                    d.bounds,
+                    &shown.node_paints,
+                    &shown.instances,
+                    &[],
+                    &[],
+                    1.0,
+                    baseline_present.iter().find(|(k, _)| *k == btn_key).map(|(_, b)| *b),
+                ) {
+                    assert!(reset.rect[2] < 160.0 && reset.rect[3] < 96.0, "button reset must stay local: dirty={d:?} reset={reset:?}");
+                }
+            }
+
+            // Keep the first visible animation frame in the same retained/present
+            // path as production. The bug only showed up after the button had
+            // non-zero opacity, so t=0 alone cannot validate the reset boundary.
+            crate::style::set_css_transition_timeline_ms(80.0);
+            crate::app::damage::clear_frame_paint_nodes();
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            let mid = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let mid_dirties = crate::app::damage::take_frame_paint_nodes();
+            let mid_button = find_slot(&root, "message-scroller-button").expect("button");
+            assert!(mid_button.style.opacity > 0.08 && mid_button.style.opacity < 0.92);
+            let mid_reset = mid_dirties
+                .iter()
+                .filter(|d| d.key == btn_key)
+                .filter_map(|d| crate::app::draw_cull::node_present_dest_reset_full(
+                    d.key,
+                    d.bounds,
+                    &mid.node_paints,
+                    &mid.instances,
+                    &[],
+                    &[],
+                    1.0,
+                    baseline_present.iter().find(|(k, _)| *k == btn_key).map(|(_, b)| *b),
+                ))
+                .collect::<Vec<_>>();
+            assert!(!mid_dirties.iter().any(|d| d.key == viewport_key), "mid enter must not dirty viewport: {mid_dirties:?}");
+            assert!(mid_reset.iter().all(|r| r.rect[2] < 160.0 && r.rect[3] < 96.0), "mid enter reset must stay local: {mid_reset:?}");
+
+            use_signal(&scroll_offset_y_signal_key("ms-layout-test:viewport"), || 0.0_f32).set_silent(max_y);
+            crate::style::set_css_transition_timeline_ms(200.0);
+            crate::app::damage::clear_frame_paint_nodes();
+            production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+            let hide = tree.build_and_layout_fast(&mut root, 320.0, 384.0, [-1.0, -1.0], true, true);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            let exit_dirties = crate::app::damage::take_frame_paint_nodes();
+            let exit_opacity = find_slot(&root, "message-scroller-button").expect("button").style.opacity;
+            let exit_reset = exit_dirties
+                .iter()
+                .filter(|d| d.key == btn_key)
+                .filter_map(|d| crate::app::draw_cull::node_present_dest_reset_full(
+                    d.key,
+                    d.bounds,
+                    &hide.node_paints,
+                    &hide.instances,
+                    &[],
+                    &[],
+                    1.0,
+                    baseline_present.iter().find(|(k, _)| *k == btn_key).map(|(_, b)| *b),
+                ))
+                .collect::<Vec<_>>();
+            assert!(exit_opacity > 0.08 && exit_opacity < 0.92, "exit must still be a fade frame: {exit_opacity}");
+            assert!(!exit_dirties.iter().any(|d| d.key == viewport_key), "exit must not dirty viewport: {exit_dirties:?}");
+            assert!(exit_reset.iter().all(|r| r.rect[2] < 160.0 && r.rect[3] < 96.0), "exit reset must stay local: {exit_reset:?}");
         });
     });
     crate::style::set_css_transition_virtual_timeline(false);

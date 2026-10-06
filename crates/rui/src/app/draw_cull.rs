@@ -535,12 +535,59 @@ pub(crate) fn clip_text_nodes_to_strips(
     }
 }
 
+/// Scroll-layer text is rendered inside a pass whose scissor is the exposed
+/// strip. Keep the complete line in glyphon's TextBounds: clipping its top or
+/// bottom here makes glyphon discard the covered half of a glyph before the GPU
+/// scissor gets a chance to constrain the repair.
+fn clip_text_node_to_scroll_rect(n: &TextLayoutInfo, clip: [f32; 4]) -> Option<TextLayoutInfo> {
+    if !text_hits_damage(n, clip) {
+        return None;
+    }
+    let emoji = crate::renderer::emoji_detect::text_contains_emoji(&n.text);
+    let scaled = (n.paint_scale - 1.0).abs() > 1e-4;
+    if emoji && scaled && n.clip_bounds.is_none() {
+        let (pw, ph) = crate::renderer::emoji_layout::emoji_visible_paint_size(
+            n.width,
+            n.height,
+            n.style.size_resolved(),
+        );
+        let ink = [
+            n.x,
+            n.y,
+            (pw * n.paint_scale).max(0.0),
+            (ph * n.paint_scale).max(0.0),
+        ];
+        return (!aabbs_disjoint(ink, clip)).then(|| n.clone());
+    }
+
+    let base = n
+        .clip_bounds
+        .unwrap_or([n.x, n.y, n.width.max(0.0), n.height.max(0.0)]);
+    if aabbs_disjoint(base, clip) {
+        return None;
+    }
+    let x0 = base[0].max(clip[0]);
+    let x1 = (base[0] + base[2]).min(clip[0] + clip[2]);
+    let width = (x1 - x0).max(0.0);
+    if width <= 0.0 || base[3] <= 0.0 {
+        return None;
+    }
+    let mut cloned = n.clone();
+    cloned.clip_bounds = Some([x0, base[1], width, base[3]]);
+    Some(cloned)
+}
+
 pub(crate) fn clip_text_nodes_to_cull(
     nodes: &[TextLayoutInfo],
     cull: CullRects,
 ) -> Vec<TextLayoutInfo> {
-    let strips: Vec<[f32; 4]> = cull.strips().collect();
-    clip_text_nodes_to_strips(nodes, &strips)
+    cull.strips()
+        .flat_map(|strip| {
+            nodes
+                .iter()
+                .filter_map(move |node| clip_text_node_to_scroll_rect(node, strip))
+        })
+        .collect()
 }
 
 fn approx_f32(a: f32, b: f32, eps: f32) -> bool {
@@ -1021,7 +1068,6 @@ pub(crate) fn page_submit_excluding_live_node_capture(
     if !capture_flushes || runs.is_empty() || dirties.is_empty() || page_text.is_empty() {
         return runs;
     }
-    let fringe = overlay_restore_fringe_text(page_text, dirties, stamps, shadow);
     let mut owned = BTreeSet::new();
     for dirty in dirties {
         if dirty.kind != PaintDirtyKind::Node {
@@ -1034,6 +1080,30 @@ pub(crate) fn page_submit_excluding_live_node_capture(
         }
         owned.extend(node_present_glyphs_for_dirty(dirty, page_text, paints));
     }
+    let fringe = overlay_restore_fringe_text(page_text, dirties, stamps, shadow);
+    // A fade frame still needs to suppress an unchanged caption that is nested
+    // in the trigger while its shadow remains active. Once the overlay closes,
+    // Restore has no shadow pass after page glyphon, so neighboring text must
+    // stay submitted even when the restore fringe intersects it.
+    let fringe_is_trigger_caption = |n: &TextLayoutInfo| {
+        let Some(index) = page_text
+            .iter()
+            .position(|candidate| same_page_text_ink(candidate, n))
+        else {
+            return false;
+        };
+        paints.iter().any(|paint| {
+            !paint.overlay
+                && paint.text.0 <= index
+                && index < paint.text.1
+                && crate::app::damage::rect_contains_rect(
+                    paint.bounds,
+                    [n.x, n.y, n.width.max(0.0), n.height.max(0.0)],
+                )
+                && paint.bounds[2] * paint.bounds[3]
+                    > n.width.max(0.0) * n.height.max(0.0) + 1.0
+        })
+    };
     if owned.is_empty() && fringe.is_empty() {
         return runs;
     }
@@ -1044,7 +1114,11 @@ pub(crate) fn page_submit_excluding_live_node_capture(
                     .get(*i)
                     .is_some_and(|painted| same_page_text_ink(painted, run))
             });
-            let fringe_owned = fringe.iter().any(|painted| same_page_text_ink(painted, run));
+            let fringe_owned = fringe.iter().any(|painted| {
+                same_page_text_ink(painted, run)
+                    && (!owned.is_empty()
+                        || (shadow.is_some() && fringe_is_trigger_caption(painted)))
+            });
             !node_owned && !fringe_owned
         })
         .collect()
@@ -1081,7 +1155,7 @@ fn instance_has_outset_shadow(i: &InstanceInput) -> bool {
 /// Visible fill, border, or outset shadow — pixels dest-reset must erase.
 /// Opacity animations (`animate-pulse`) paint below the opaque threshold; they
 /// still src-over and must wipe last-present or the rounded AABB ghosts a frame.
-fn instance_has_dest_ink(i: &InstanceInput) -> bool {
+pub(crate) fn instance_has_dest_ink(i: &InstanceInput) -> bool {
     i.color[3] > 0.05
         || (i.border_width > 0.0 && i.border_color[3] > 0.05)
         || instance_has_outset_shadow(i)
@@ -5571,6 +5645,28 @@ mod tests {
         );
     }
 
+    #[test]
+    fn scroll_strip_keeps_full_glyph_line_vertical_coverage() {
+        let mut message = sample_text("message", 240.0);
+        message.y = 100.0;
+        message.width = 120.0;
+        message.height = 20.0;
+
+        let clipped = clip_text_nodes_to_cull(
+            &[message],
+            CullRects::one([220.0, 110.0, 80.0, 10.0]),
+        );
+        let bounds = clipped
+            .first()
+            .and_then(|node| node.clip_bounds)
+            .expect("the exposed strip must prepare the intersecting message");
+
+        assert_eq!(bounds[0], 240.0);
+        assert_eq!(bounds[2], 60.0);
+        assert_eq!(bounds[1], 100.0);
+        assert_eq!(bounds[3], 20.0);
+    }
+
     /// Nested Select accordion occupancy is the stamp. Overlay glyphon ignores the
     /// wgpu scissor used for chrome, so labels below the clip survive as leftover ink.
     #[test]
@@ -5868,6 +5964,45 @@ mod tests {
         assert!(
             swallowed.iter().any(|n| n.text == "chip"),
             "a Node dirty inside the panel stamp is not captured; Restore must still draw it"
+        );
+    }
+
+    #[test]
+    fn overlay_restore_without_node_capture_keeps_neighbor_text() {
+        // Closing the reaction popover can be OverlayRestore-only. The restore
+        // hole intersects the next bubble's line, but no capture renderer owns
+        // that page text. It must remain in the page glyphon submission.
+        let mut ghost = sample_text(
+            "Ghost bubbles work for assistant text without a frame.",
+            0.0,
+        );
+        ghost.y = 76.0;
+        ghost.width = 334.0;
+        ghost.height = 20.0;
+        let restore = PaintDirty {
+            key: 9,
+            bounds: [139.0, 68.0, 48.0, 28.0],
+            kind: PaintDirtyKind::OverlayRestore,
+        };
+        let panel = [(9u64, [139.0, 68.0, 48.0, 28.0])];
+        let ancestor = slot(1, [0.0, 0.0, 400.0, 120.0], (0, 1));
+        let kept = page_submit_excluding_live_node_capture(
+            vec![ghost.clone()],
+            &[ghost],
+            &[restore],
+            &[ancestor],
+            &panel,
+            None,
+            true,
+        );
+        assert_eq!(
+            kept.len(),
+            1,
+            "OverlayRestore without capture must not drop the neighboring line"
+        );
+        assert_eq!(
+            kept[0].text,
+            "Ghost bubbles work for assistant text without a frame."
         );
     }
 

@@ -708,6 +708,31 @@ pub fn apply_attachment_paint(
     let size_changed = prev_size != size;
     let orientation_changed = prev_orientation != orientation;
 
+    // A state-only repaint does not change the attachment tree or its layout.
+    // Mutating the mounted root in place preserves consumer-applied styles
+    // (for example `w-full`) and all mount-time identity automatically.
+    if already_painted && !size_changed && !orientation_changed {
+        el.set_attr(ATTR_ATTACHMENT_STATE, state.as_str());
+        el.set_attr(ATTR_STATE, state.as_str());
+        if state.semantic_tone().is_some() {
+            apply_semantic_chrome_respecting_overrides(el, &attachment_chrome(state));
+        } else {
+            let mut taken = std::mem::take(el);
+            taken = taken
+                .bg(parse_color("card"))
+                .border_style(if state.uses_dashed_border() {
+                    "dashed"
+                } else {
+                    "solid"
+                })
+                .border_width(1.0)
+                .border_color(parse_color("border"));
+            *el = taken;
+        }
+        repaint_attachment_descendants(el, state, size, orientation);
+        return LayoutStatus::StyleChanged;
+    }
+
     let mut taken = std::mem::take(el);
     let identity = (
         taken.template_id.clone(),
@@ -1703,11 +1728,16 @@ mod tests {
         tree.build_and_layout(&mut el, 400.0, 100.0, [-1.0, -1.0]);
         let node = el.layout_node;
         let bounds = el.layout_bounds;
+        let width_spec = el.style.unit_specs.clone();
         for state in ["success", "warning", "done"] {
             assert_ne!(apply_bound_attachment_state(&mut el, state), LayoutStatus::Clean);
             assert_eq!(el.template_id.as_deref(), Some("live-attachment"));
             assert_eq!(el.layout_node, node);
             assert_eq!(el.layout_bounds, bounds);
+            assert_eq!(
+                el.style.unit_specs, width_spec,
+                "state repaint must preserve the consumer's w-full style"
+            );
             assert_eq!(attachment_state_from_attrs(&el.attrs), AttachmentState::from(state));
         }
     }
