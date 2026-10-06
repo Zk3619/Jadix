@@ -5,16 +5,16 @@ use winit::event::KeyEvent;
 use crate::core::reactivity::Signal;
 
 pub use crate::layout::dimension::{
-    CSS_ROOT_FONT_SIZE_PX, CssDim, CssRectPair, DimKind, IntoBorderWidths, IntoCssDim,
-    IntoCssRectPair, IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage, IntoOpacity,
-    PercentAxis, UnitCtx, css_root_font_size_px, dim_kind, dim_length_px, dimension_to_lp,
-    dimension_to_lpa, em, lp_kind, lp_length_px, lpa_kind, lpa_length_px, px, rem,
+    css_root_font_size_px, dim_kind, dim_length_px, dimension_to_lp, dimension_to_lpa, em, lp_kind,
+    lp_length_px, lpa_kind, lpa_length_px, px, rem, CssDim, CssRectPair, DimKind, IntoBorderWidths,
+    IntoCssDim, IntoCssRectPair, IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage,
+    IntoOpacity, PercentAxis, UnitCtx, CSS_ROOT_FONT_SIZE_PX,
 };
 pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
 pub use crate::style::{
-    CursorKind, CursorValue, IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent,
-    IntoOverflow, IntoPaintColor, IntoTextColor, LineStyle, TextAlignDeclaration,
-    TextDecorationStyle, TextOverflow, TextStyle, parse_color, parse_text_color,
+    parse_color, parse_text_color, CursorKind, CursorValue, IntoAlignItems, IntoCursor,
+    IntoFlexWrap, IntoJustifyContent, IntoOverflow, IntoPaintColor, IntoTextColor, LineStyle,
+    TextAlignDeclaration, TextDecorationStyle, TextOverflow, TextStyle,
 };
 pub use crate::style::{Style, UnitSlot};
 
@@ -386,9 +386,9 @@ fn ensure_animation_slots(list: &mut Vec<crate::style::AnimationEntry>, n: usize
 /// Parse one or more CSS `animation` shorthand declarations (comma-separated).
 pub fn parse_animation_shorthand(value: &str) -> Vec<crate::style::AnimationEntry> {
     use crate::style::{
-        AnimationComposition, AnimationDirection, AnimationEntry, AnimationFillMode,
-        AnimationIterationCount, AnimationPlayState, AnimationTimeline, TimingFunction,
-        split_comma_list, split_ws_tokens,
+        split_comma_list, split_ws_tokens, AnimationComposition, AnimationDirection,
+        AnimationEntry, AnimationFillMode, AnimationIterationCount, AnimationPlayState,
+        AnimationTimeline, TimingFunction,
     };
     let mut out = Vec::new();
     for segment in split_comma_list(value) {
@@ -2853,7 +2853,7 @@ impl Element {
     /// Multiple entries separated by commas.
     pub fn transition(mut self, value: impl AsRef<str>) -> Self {
         use crate::style::{
-            TimingFunction, TransitionEntry, TransitionProperty, split_comma_list, split_ws_tokens,
+            split_comma_list, split_ws_tokens, TimingFunction, TransitionEntry, TransitionProperty,
         };
         self.style.transition.clear();
         for segment in split_comma_list(value.as_ref()) {
@@ -4400,7 +4400,11 @@ pub(crate) fn overflow_clip_axes_from(
     // CSS `overflow: auto` is stored as Taffy `Scroll`.
     let scrollport =
         is_scroll_viewport || matches!(overflow_x, Scroll) || matches!(overflow_y, Scroll);
-    if scrollport { (true, true) } else { (ox, oy) }
+    if scrollport {
+        (true, true)
+    } else {
+        (ox, oy)
+    }
 }
 
 /// Overflow / `scroll:` viewports clip hit-testing and class `:hover` to the layout border box.
@@ -4610,12 +4614,9 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                 let before = visual_paint_aabb(element, scroll_acc);
                 let before_display = element.style.display;
                 let before_opacity = element.style.opacity;
-                let is_scroll_viewport = element
-                    .focus_id
-                    .as_deref()
-                    .is_some_and(|id| {
-                        id.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
-                    });
+                let is_scroll_viewport = element.focus_id.as_deref().is_some_and(|id| {
+                    id.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+                });
                 let before_style = is_scroll_viewport.then(|| element.style.clone());
                 let before_scroll_offset = element.scroll_offset;
                 let status = sync.run(element, layout_tree);
@@ -4708,7 +4709,9 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                         // text and creates the white rectangle seen during Latest entry.
                         let scroll_only = is_scroll_viewport
                             && element.scroll_offset != before_scroll_offset
-                            && before_style.as_ref().is_some_and(|style| *style == element.style);
+                            && before_style
+                                .as_ref()
+                                .is_some_and(|style| *style == element.style);
                         let halo_dirty = element.attrs.remove("rui_halo_dirty").is_some();
                         if !scroll_only && !halo_dirty {
                             crate::app::damage::push_frame_paint_element_change(

@@ -1177,9 +1177,8 @@ pub fn MessageScrollerButton(
             kids
         })
         .into();
-    el = el.flex_shrink(0.0);
+    el = el.flex_shrink(0.0).relative();
     el.set_attr(ATTR_SLOT, SLOT_BUTTON);
-    el.set_attr("data-stacking-context", "1");
     el.set_attr(ATTR_DIRECTION, direction.as_str());
     el.set_attr(ATTR_ACTIVE, "false");
     el = el.opacity(0.0).pointer_events_none();
@@ -1205,7 +1204,6 @@ pub fn MessageScrollerButton(
     // to share `translate_pct` with the hide Y-slide and clip through overflow:hidden
     // when the 50% inset does not apply (nested gallery ScrollArea / Card).
     let mut dock: Element = hstack().justify_center().items_center().child(el).into();
-    dock.set_attr("data-stacking-context", "1");
     dock = dock
         .absolute()
         .left(0.0)

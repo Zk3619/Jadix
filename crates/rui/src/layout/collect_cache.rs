@@ -1754,14 +1754,20 @@ mod tests {
     fn overflow_hidden_is_skippable_for_exact_replay() {
         let mut el = el_with_child();
         el.style.overflow.x = taffy::style::Overflow::Hidden;
-        assert!(!subtree_is_skippable(&el), "a fresh node has no valid cached display list");
+        assert!(
+            !subtree_is_skippable(&el),
+            "a fresh node has no valid cached display list"
+        );
         stamp_subtree_paint_hashes(&mut el, false);
         assert!(
             subtree_is_skippable(&el),
             "overflow-hidden may exact-replay; translate is refused separately"
         );
         el.collect_paint_hash = 0;
-        assert!(!subtree_is_skippable(&el), "an invalidated overflow node must recollect");
+        assert!(
+            !subtree_is_skippable(&el),
+            "an invalidated overflow node must recollect"
+        );
     }
 
     #[test]
@@ -1805,7 +1811,9 @@ mod tests {
     #[test]
     fn portal_sibling_style_changed_must_not_restamp_idle_neighbor() {
         let mut portal = Element::new().text("select-menu");
-        portal.attrs.insert(ATTR_HOISTED_PORTAL.to_string(), "1".into());
+        portal
+            .attrs
+            .insert(ATTR_HOISTED_PORTAL.to_string(), "1".into());
         let mut portal_host = Element::new().child(portal);
         for i in 0..20 {
             portal_host
@@ -1814,13 +1822,11 @@ mod tests {
         }
         let mut idle = Element::new();
         for i in 0..80 {
-            idle.children.push(Element::new().text(format!("sv-cell{i}")));
+            idle.children
+                .push(Element::new().text(format!("sv-cell{i}")));
         }
         let slider = Element::new().text("hue-thumb");
-        let mut row = Element::new()
-            .child(idle)
-            .child(slider)
-            .child(portal_host);
+        let mut row = Element::new().child(idle).child(slider).child(portal_host);
         stamp_subtree_paint_hashes(&mut row, false);
         assert!(
             !row.children[0].collect_skip_live,

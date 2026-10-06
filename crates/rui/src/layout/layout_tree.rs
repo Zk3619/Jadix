@@ -4778,8 +4778,7 @@ impl LayoutTree {
         // Match collect_paint_node: Absolute/`rui_scrollbar_overlay` rails need signal
         // stamp whenever the scroll-signal cache is live (scroll_only / overlay), not
         // only when the frame flag is set — else skip-replay keeps Taffy min-cap.
-        let is_overlay =
-            overlay_collect || (overlay_rail && scroll_signals_cache.is_some());
+        let is_overlay = overlay_collect || (overlay_rail && scroll_signals_cache.is_some());
         if !is_overlay {
             return false;
         }
@@ -5138,8 +5137,7 @@ impl LayoutTree {
                     layered: if z_index_is_paint_order_only(&element.children[job.index]) {
                         false
                     } else {
-                        frame.layered
-                            || child_opens_page_stack_band(&element.children[job.index])
+                        frame.layered || child_opens_page_stack_band(&element.children[job.index])
                     },
                     overlay_stamp: if walk.painted.is_body_portal_layer {
                         let k = overlay_portal_stamp_key(&element.children[job.index]);
@@ -5296,8 +5294,7 @@ impl LayoutTree {
             || element.style.position == taffy::style::Position::Absolute;
         let signal_track_geom = element.focus_id.as_deref().is_some_and(|fid| {
             fid.starts_with(SCROLLBAR_TRACK_FOCUS_PREFIX)
-                && (scrollbar_overlay_collect
-                    || (overlay_rail && scroll_signals_cache.is_some()))
+                && (scrollbar_overlay_collect || (overlay_rail && scroll_signals_cache.is_some()))
         });
         let (abs_x, abs_y, lay_w, lay_h) = if let Some(r) = thumb_geometry_override {
             (r[0], r[1], r[2], r[3])
@@ -5808,6 +5805,10 @@ impl LayoutTree {
             element,
             representative_border_color(&element.style),
         );
+        // The jump chip is a page-stack occluder on a wrapping line. Entrance
+        // opacity fades the label and icon. Folding it into this plate lets
+        // the line show through the chip.
+        let plate_opacity = jump_chip_plate_opacity(element, paint_bg, opacity);
         // ShadCN `border-transparent` keeps a 1px width for layout. Width-only
         // `has_border` still pushed an SDF stroke (gallery Item outline→default
         // left a 1px ring and darkened title AA against that instance).
@@ -5820,7 +5821,7 @@ impl LayoutTree {
         let sdf_border_color = if use_border_strips {
             [0.0, 0.0, 0.0, 0.0]
         } else {
-            mul_color_alpha(paint_border, opacity)
+            mul_color_alpha(paint_border, plate_opacity)
         };
         let sdf_border_extra = {
             let bs = if use_border_strips || !visible_border {
@@ -5911,7 +5912,7 @@ impl LayoutTree {
                     InstanceInput {
                         rect_pos: [render_rect[0], render_rect[1]],
                         rect_size: [render_rect[2], render_rect[3]],
-                        color: mul_color_alpha(paint_bg, opacity),
+                        color: mul_color_alpha(paint_bg, plate_opacity),
                         border_color: sdf_border_color,
                         radii: resolved_radii,
                         border_width: sdf_border_w,
@@ -6268,6 +6269,12 @@ impl LayoutTree {
                 break 'text_emit;
             }
             let mut text_style = element.text_style.as_ref().clone();
+            // Glyph runs bake opacity into the color (glyphon has no quad opacity).
+            // Lucide rasters the same color into a texture and the quad also
+            // multiplies `opacity`. Entrance then fades the arrow twice, so it
+            // vanishes while "Latest" (glyphon, one multiply) is still visible.
+            // Raster the icon at its own color; the quad carries node opacity.
+            let icon_raster_color = text_style.color_resolved();
             if opacity < 1.0 - f32::EPSILON {
                 let mut c = text_style.color_resolved();
                 let a = ((f32::from(c[3]) * opacity).round() as u16).min(255) as u8;
@@ -6366,7 +6373,7 @@ impl LayoutTree {
                         crate::utils::lucide_animated::ensure_animated_icon_texture(
                             element,
                             side,
-                            text_style.color_resolved(),
+                            icon_raster_color,
                             2.0,
                         )
                     {
@@ -6390,7 +6397,7 @@ impl LayoutTree {
                     if let Some((tex_key, _)) = crate::utils::morph_icon::ensure_morph_icon_texture(
                         element,
                         side,
-                        text_style.color_resolved(),
+                        icon_raster_color,
                         2.0,
                     ) {
                         textured_draws.push(
@@ -6419,7 +6426,7 @@ impl LayoutTree {
                             icon_name,
                             glyph,
                             side,
-                            text_style.color_resolved(),
+                            icon_raster_color,
                             2.0,
                         )
                     {
@@ -6458,7 +6465,7 @@ impl LayoutTree {
                                     Some(icon_name),
                                     glyph,
                                     side,
-                                    text_style.color_resolved(),
+                                    icon_raster_color,
                                     2.0,
                                 )
                             {
@@ -7889,6 +7896,19 @@ fn scrollbar_track_overlay_abs(
     (track_rect, thumb_rect)
 }
 
+/// Opaque jump-chip plate. Label and icon still use element opacity.
+fn jump_chip_plate_opacity(element: &Element, paint_bg: [f32; 4], opacity: f32) -> f32 {
+    let jump = element
+        .attrs
+        .get("data-slot")
+        .is_some_and(|slot| slot == "message-scroller-button");
+    if jump && paint_bg[3] >= 0.99 && opacity >= 0.01 {
+        1.0
+    } else {
+        opacity
+    }
+}
+
 #[inline]
 fn mul_color_alpha(mut color: [f32; 4], opacity: f32) -> [f32; 4] {
     color[3] *= opacity;
@@ -8386,7 +8406,15 @@ fn push_preedit_underline(
                 let seg = (period * 0.5).min(w - sx).max(1.0);
                 let phase = (sx / period) * std::f32::consts::TAU;
                 let dy = amp * phase.sin();
-                push_chrome_rect(out, clip, x + sx, y + dy, seg.min(w - sx).max(1.0), 1.0, color);
+                push_chrome_rect(
+                    out,
+                    clip,
+                    x + sx,
+                    y + dy,
+                    seg.min(w - sx).max(1.0),
+                    1.0,
+                    color,
+                );
                 sx += period * 0.5;
             }
         }
@@ -11206,6 +11234,48 @@ mod portal_hoist_tests {
                 .iter()
                 .all(|t| t.style.font_family.as_deref() != Some("lucide")),
             "must not also emit glyphon lucide (double-draw thickens strokes)"
+        );
+    }
+
+    #[cfg(feature = "bundled-lucide")]
+    #[test]
+    fn lucide_opacity_fades_quad_without_rebaking_alpha() {
+        // Latest entrance: the arrow is a texture, the label is glyphon.
+        // Baking opacity into the raster and multiplying the quad again dropped
+        // the arrow while "Latest" was still visible.
+        let glyph = crate::utils::lucide_glyph("arrow-down").expect("glyph");
+        let icon = || {
+            crate::utils::build_named_icon_text_node("arrow-down", glyph.clone())
+                .text_size(16.0)
+                .w(16.0)
+                .h(16.0)
+                .text_color([20, 20, 20, 255])
+        };
+        let mut opaque = Element::new().w(32.0).h(32.0).child(icon());
+        let mut faded_icon = icon();
+        faded_icon.style.opacity = 0.4;
+        let mut faded = Element::new().w(32.0).h(32.0).child(faded_icon);
+        let mut tree = LayoutTree::new();
+        let solid = tree.build_and_layout(&mut opaque, 32.0, 32.0, [0.0, 0.0]);
+        let mid = tree.build_and_layout(&mut faded, 32.0, 32.0, [0.0, 0.0]);
+        let solid_draw = solid
+            .textured_draws
+            .iter()
+            .find(|d| d.texture_key.starts_with("rui_lucide_"))
+            .expect("opaque arrow texture");
+        let faded_draw = mid
+            .textured_draws
+            .iter()
+            .find(|d| d.texture_key.starts_with("rui_lucide_"))
+            .expect("faded arrow texture");
+        assert_eq!(
+            solid_draw.texture_key, faded_draw.texture_key,
+            "opacity must not mint a new raster; the quad fades"
+        );
+        assert!(
+            (faded_draw.opacity - 0.4).abs() < 0.02,
+            "quad opacity carries the fade once, got {}",
+            faded_draw.opacity
         );
     }
 
