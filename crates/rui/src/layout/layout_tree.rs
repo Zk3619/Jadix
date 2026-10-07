@@ -5271,6 +5271,16 @@ impl LayoutTree {
         let base_abs_x = abs_offset[0] + layout.location.x;
         let base_abs_y = abs_offset[1] + layout.location.y;
 
+        // `display: none` generates no box. Taffy still returns the node from
+        // `children()` with a 0×0 layout; walking it and shaping text at
+        // `width.max(1)` wraps one glyph per line, and overflow:visible stamps
+        // that column across later siblings (hidden questionnaire steps, the
+        // inactive error caption).
+        if element.style.display == Display::None {
+            stamp_clip_polys(clip_polys, instances.len(), parent_clip_poly);
+            return CollectPaintOutcome::Done([base_abs_x, base_abs_y]);
+        }
+
         let mut thumb_rect_for_child: Option<[f32; 4]> = None;
 
         #[cfg(feature = "devtools")]
@@ -5451,9 +5461,9 @@ impl LayoutTree {
         // Include ancestor scale (CarouselStack: scale lives on the shell; children stay at 1).
         let paint_sx = (ancestor_scale[0] * scale_x).clamp(0.01, 8.0);
         let paint_sy = (ancestor_scale[1] * scale_y).clamp(0.01, 8.0);
-        // ButtonGroup owns each shared edge exactly once. Use the same ownership
-        // box for submitted chrome instances that damage and retained paint use;
-        // otherwise a replay of the previous segment can overwrite its neighbour.
+        // OTP slots widen this box by 1px toward the previous cell. Joined
+        // ButtonGroup leaves it on the layout box and drops the shared stroke
+        // in the shader instead of sliding the rect.
         let [chrome_x, chrome_y, chrome_w, chrome_h] =
             crate::components::button_group::group_paint_bounds(
                 element,
@@ -5798,8 +5808,7 @@ impl LayoutTree {
         let border_w = border_widths.into_iter().fold(0.0_f32, f32::max);
         let use_border_strips = border_w > 0.0
             && !element.style.border_is_uniform()
-            // 有圆角时 strip 路径把 radii 钉成 0，ButtonGroup 端段会丢圆角；改走 SDF
-            //（零宽侧仍会画一笔，叠在前一段共享边上，观感与 ShadCN border-l-0 一致）。
+            // Rounded corners cannot use the strip path (it zeros radii).
             && !element.style.radii.iter().any(|r| *r > 0.5);
         let paint_bg = crate::components::scrollbar::auto_scrollbar_restore_base_alpha(
             element,
@@ -6303,6 +6312,12 @@ impl LayoutTree {
             } else {
                 0.0
             };
+            // A 0-wide line box is not a 1px wrap width. `max(1)` turns that
+            // collapse into one glyph per line (`wrap_ink_h` records the fake
+            // height) and overflow:visible paints the column over siblings.
+            if lay_w <= 0.0 {
+                break 'text_emit;
+            }
             let (text_x0, text_y0, text_w, text_h) = {
                 let (x, y, w, h) = if scaled_paint {
                     // vis_* = layout box scaled about center; width/height stay layout for shaping.

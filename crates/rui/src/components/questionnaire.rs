@@ -2626,6 +2626,80 @@ mod tests {
     }
 
     #[test]
+    fn question_text_keeps_line_width() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+        use crate::renderer::font_loader;
+        use crate::text::install_shared_font_system;
+
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        install_shared_font_system(&mut fs);
+        let (_owner, mut root): (_, Element) = create_root(|| {
+            let q: Element = questionnaire("q-width")
+                .shortcuts(QuestionnaireShortcuts::Letters)
+                .question("direction", "What should the agent build next?", |q| {
+                    q.description("Choose a direction or describe another task.")
+                        .choice_with(
+                            "tool-calls",
+                            "Tool call timeline",
+                            "Show what the agent ran and what came back.",
+                        )
+                })
+                .question("signals", "What should every progress update include?", |q| {
+                    q.description("Select all that apply, or skip this question.")
+                        .choice("progress", "Progress")
+                })
+                .into();
+            Element::new()
+                .w(448.0)
+                .flex_col()
+                .child(Element::new().w("100%").max_w("28rem").min_w(0.0).flex_col().child(q))
+        });
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut root, 448.0, 900.0, [-1.0, -1.0]);
+        let mut impact = crate::core::tree::LayoutStatus::Clean;
+        crate::core::tree::sync_reactive_elements_subtree(
+            &mut root,
+            &mut tree,
+            &mut impact,
+            448.0,
+            900.0,
+            [0.0, 0.0],
+        );
+        let painted = tree.build_and_layout(&mut root, 448.0, 900.0, [-1.0, -1.0]);
+        let column: Vec<_> = painted
+            .text_nodes
+            .iter()
+            .filter(|t| !t.text.is_empty() && (t.width < 1.0 || t.height > 200.0))
+            .map(|t| format!("{:?} w={:.1} h={:.1} y={:.1}", t.text, t.width, t.height, t.y))
+            .collect();
+        let title = painted
+            .text_nodes
+            .iter()
+            .find(|t| t.text.contains("What should the agent"));
+        assert!(
+            column.is_empty(),
+            "hidden steps must not shape a glyph column:\n{}",
+            column.join("\n")
+        );
+        let title = title.expect("visible title");
+        assert!(
+            title.width > 120.0 && title.height < 40.0,
+            "visible title should stay one line, got w={} h={}",
+            title.width,
+            title.height
+        );
+        assert!(
+            painted
+                .text_nodes
+                .iter()
+                .all(|t| !t.text.contains("progress update")),
+            "inactive question must not be painted"
+        );
+    }
+
+    #[test]
     fn builder_title_style() {
         use crate::core::reactivity::create_root;
         let (_owner, el): (_, Element) = create_root(|| {

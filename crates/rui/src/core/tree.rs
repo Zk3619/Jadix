@@ -4530,6 +4530,9 @@ pub(crate) struct ReactiveSyncCollect {
     /// `LayoutChanged` or overlay `StructureChanged` under the portal layer / a
     /// `rui_portal` subtree (bubble +N expand) — not a page FullClear.
     pub portal_layout_changed: bool,
+    /// `display: none` → shown while the leaf still has no visual box.
+    /// The ancestor clip is the scrollport; damage the laid-out box after layout.
+    pub display_reveal_keys: Vec<u64>,
 }
 
 /// Run generic component-owned reactive synchronizers for the mounted tree.
@@ -4640,10 +4643,29 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                                     estimate_geom_damage(element, before),
                                 );
                             } else {
-                                crate::app::damage::push_frame_region_paint(
-                                    crate::app::damage::paint_element_key(element),
-                                    clip_bounds.unwrap_or([0.0, 0.0, viewport_w, viewport_h]),
-                                );
+                                // Island, not the ancestor scrollport. QuestionnaireError
+                                // sits in the forms ScrollArea; that clip is the whole page.
+                                // Recording it under the error leaf clears every caption
+                                // above. A box that is already shown is damaged now. A
+                                // reveal still has a 0×0 box — layout fills it, then
+                                // [`push_display_reveal_regions`] names that box.
+                                let own = estimate_geom_damage(element, before);
+                                if own[2] > 0.5 && own[3] > 0.5 {
+                                    let d = match clip_bounds {
+                                        Some(clip) => intersect_damage(own, clip).unwrap_or(own),
+                                        None => own,
+                                    };
+                                    if d[2] > 0.5 && d[3] > 0.5 {
+                                        crate::app::damage::push_frame_region_paint(
+                                            crate::app::damage::paint_element_key(element),
+                                            d,
+                                        );
+                                    }
+                                } else if element.layout_node.is_some() {
+                                    collect.display_reveal_keys.push(
+                                        crate::app::damage::paint_element_key(element),
+                                    );
+                                }
                             }
                         } else {
                             collect.page_layout_changed = true;
@@ -4759,6 +4781,26 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
             ));
         }
     }
+}
+
+/// After layout, damage each `display: none` → shown leaf at its real box.
+///
+/// Sync cannot see that box (the leaf was 0×0). The ancestor overflow clip is
+/// the scrollport and must not be the clear.
+pub(crate) fn push_display_reveal_regions(root: &Element, keys: &[u64]) {
+    if keys.is_empty() {
+        return;
+    }
+    walk_elements(root, |el| {
+        let key = crate::app::damage::paint_element_key(el);
+        if !keys.contains(&key) {
+            return;
+        }
+        let b = visual_paint_aabb(el, el.paint_scroll_acc);
+        if b[2] > 0.5 && b[3] > 0.5 {
+            crate::app::damage::push_frame_region_paint(key, b);
+        }
+    });
 }
 
 fn push_subtree_layout_nodes(el: &Element, out: &mut Vec<NodeId>) {

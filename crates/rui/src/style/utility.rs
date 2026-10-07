@@ -647,10 +647,18 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
     // snapshot is often taken *before* that join, so restore would flash full
     // `rounded-md` on shared edges (then chrome repairs next frame). Keep the live
     // join radii across the restore.
-    let join_chrome = el
-        .attrs
-        .contains_key("rui_button_group_edge")
-        .then(|| (el.style.radii, el.style.translate, el.style.z_index));
+    // Also keep the live border width. The class snapshot is taken before join
+    // and still has the chip's 1px stroke; restoring it paints a per-item SDF
+    // ring on top of the group frame.
+    let join_chrome = el.attrs.contains_key("rui_button_group_edge").then(|| {
+        (
+            el.style.radii,
+            el.style.translate,
+            el.style.z_index,
+            el.style.border_width,
+            el.style.border_width_sides,
+        )
+    });
 
     {
         let inner = &mut *el.inner;
@@ -682,7 +690,7 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
     for util in apply {
         impact = impact.merge(apply_known_utility_ex(el, &util, false));
     }
-    if let Some((r, t, z)) = join_chrome {
+    if let Some((r, t, z, bw, sides)) = join_chrome {
         if el.style.radii != r {
             el.style.radii = r;
             impact = impact.merge(LayoutStatus::StyleChanged);
@@ -693,6 +701,11 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
         }
         if el.style.z_index != z {
             el.style.z_index = z;
+            impact = impact.merge(LayoutStatus::StyleChanged);
+        }
+        if el.style.border_width != bw || el.style.border_width_sides != sides {
+            el.style.border_width = bw;
+            el.style.border_width_sides = sides;
             impact = impact.merge(LayoutStatus::StyleChanged);
         }
     }
