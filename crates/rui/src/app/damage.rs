@@ -3532,17 +3532,20 @@ mod tests {
     }
 
     #[test]
-    fn button_group_first_hover_dirty_preserves_next_shared_edge() {
+    fn button_group_joined_damage_box_matches_layout() {
         let _ = take_frame_paint_nodes();
         let mut el = Element::new();
         el.layout_bounds = [10.0, 20.0, 100.0, 30.0];
-        el.set_attr("rui_button_group_nudge_next", "x");
+        el.set_attr(crate::components::button_group::ATTR_GROUP_EDGE, "middle");
 
         push_frame_paint_element(&el, [0.0, 0.0]);
         let dirties = take_frame_paint_nodes();
         assert_eq!(dirties.len(), 1, "expected one dirty node, got {dirties:?}");
         let b = dirties[0].bounds;
-        assert_eq!(b, [10.0, 20.0, 99.0, 30.0]);
+        assert_eq!(
+            b, [10.0, 20.0, 100.0, 30.0],
+            "a joined fill must dirty its layout box; shrinking it splits the group frame"
+        );
     }
 
     #[test]

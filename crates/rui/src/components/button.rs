@@ -1223,10 +1223,19 @@ fn paint_button_root_from_hover(
         }
         c
     });
-    let target_bw = if border.is_some() { 1.0_f32 } else { 0.0_f32 };
-    let root_color_ok = match border {
-        Some(b_color) => color4_near(el.style.border_color, b_color),
-        None => true,
+    // Joined items stay borderless. The group frame is the stroke; writing 1px
+    // here and letting chrome undo it still fails this check every frame.
+    let joined = el
+        .attrs
+        .contains_key(crate::components::button_group::ATTR_GROUP_EDGE);
+    let target_bw = if joined || border.is_none() { 0.0_f32 } else { 1.0_f32 };
+    let root_color_ok = if joined {
+        true
+    } else {
+        match border {
+            Some(b_color) => color4_near(el.style.border_color, b_color),
+            None => true,
+        }
     };
     let root_ok =
         color4_near(el.style.bg_color, bg) && el.style.border_width == target_bw && root_color_ok;
@@ -1267,14 +1276,18 @@ fn paint_button_root_from_hover(
 
     // Write the target color every frame; `tick_element_transitions` is then inserted back into mid (same caliber as Carousel/Toast).
     el.style.bg_color = bg;
-    match border {
-        Some(b_color) => {
-            el.style.border_color = b_color;
-            el.style.set_uniform_border_width(1.0);
-        }
-        None => {
-            el.style.border_width = 0.0;
-            el.style.border_width_sides = None;
+    if joined {
+        el.style.set_uniform_border_width(0.0);
+    } else {
+        match border {
+            Some(b_color) => {
+                el.style.border_color = b_color;
+                el.style.set_uniform_border_width(1.0);
+            }
+            None => {
+                el.style.border_width = 0.0;
+                el.style.border_width_sides = None;
+            }
         }
     }
     // ButtonGroup conjoined: write back the border and then fillet it/draw the overlapping mark.

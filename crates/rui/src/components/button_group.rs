@@ -5,7 +5,7 @@
 //!
 //! ```text
 //! ButtonGroup                    // role=group · flex · orientation
-//! ├── Button / … // Merge adjacent fillets · Overlap edges during drawing (uniform borders go to SDF)
+//! ├── Button / … // Fill only · outer corners follow the group frame
 //! ├── ButtonGroupText // Copy slot in the group (flex shell + copy sub-node)
 //! └── ButtonGroupSeparator //Separating line within the group (default vertical line)
 //! ```
@@ -35,11 +35,12 @@
 //! ## Notes
 //! - **Presentational**: empty `id` omits `template_id` (WP-2.8).
 //! - `ui!` 多子节点会包 fragment；根会 [`take_packed`] 拆开再按方向排。
-//! - Rounded corners/shared edges: align ShadCN for a one-piece look, but **do not write -1px into the layout** (vertical group `-mt` will eat it
-//!   The height of the container, the next section of title will be stacked; if you stack `z-index` again, it will cover the lower layer). Adjacent segments only draw boxes
-//!   Widen the shared edge by 1px** (the far edge is still in layout position). Panning the entire frame will also take away the other side of the middle item.
-//!   The subsequent Separator/third item will reveal double lines. `ButtonGroupSeparator` still has `-1px` caulking on both sides.
-//!   Hover must go through [`apply_button_group_join_chrome`] to refill the corners after writing the color.
+//! - One control, one stroke. The group draws the perimeter. Items paint fill only
+//!   (an inset SDF stroke is mixed with that item's own fill, so a pressed chip's
+//!   seam looks heavier than its neighbor's). Internal seams are the same 1px
+//!   strip, whether or not the author placed a separator. Hover must go through
+//!   [`apply_button_group_join_chrome`] so a color write cannot put the per-item
+//!   stroke back.
 //! - `<ButtonGroup>` / Text / Separator takes the general PascalCase → `*Props` (same as Pagination, no special scope is required).
 
 use crate::components::base::{packed_children, SlotChrome};
@@ -66,9 +67,24 @@ const EDGE_END: &str = "end";
 const EDGE_ONLY: &str = "only";
 
 /// Drawtime widens toward shared edges (without entering Taffy). `x` = left +1px, `y` = top +1px.
+///
+/// OTP slots still use this. Joined groups do not: an inset stroke plus a 1px
+/// shift draws a second line beside the neighbor.
 pub(crate) const ATTR_PAINT_NUDGE: &str = "rui_button_group_nudge";
-/// Marker for a directly adjacent segment that paints into this node's far edge.
-pub(crate) const ATTR_PAINT_NUDGE_NEXT: &str = "rui_button_group_nudge_next";
+/// Fill-corner radius (px) after the group takes the perimeter stroke.
+const ATTR_GROUP_RADIUS: &str = "rui_button_group_radius";
+/// Paint the seam after the fills without opening a stacking band.
+const ATTR_Z_PAINT_ONLY: &str = "rui_z_paint_only";
+
+/// Perimeter stroke width. The item fill radius is the outer radius minus this,
+/// so the fill follows the inner curve of the group border.
+const JOIN_BORDER_PX: f32 = 1.0;
+
+/// Color and outer radius of the single frame around a joined group.
+pub(crate) struct JoinFrame {
+    pub color: [f32; 4],
+    pub radius: f32,
+}
 
 /// ShadCN Button default rounded corners `rounded-md` ≈ 0.375rem.
 const JOIN_RADIUS_PX: f32 = 0.375 * 16.0;
@@ -151,10 +167,10 @@ fn join_radii(edge: &str, vertical: bool, r: f32) -> [f32; 4] {
     }
 }
 
-/// Clear the overlapped edges (negative margin / z-index / translate) of the old version of the layout and maintain a uniform border.
+/// Clear leftover negative margin / z-index / translate and the per-item stroke.
 ///
-/// Draw overlap mark [`ATTR_PAINT_NUDGE`] written by [`mark_join_segment`]; do not change attr here,
-/// This will prevent the "End after the separator" from being marked as overlapped when hovering over chrome.
+/// The group owns the perimeter. Hover writes a 1px border back onto the button;
+/// leaving it there mixes that stroke with this item's fill.
 fn overlap_shared_edge(el: &mut Element) {
     if el.style.translate != [0.0, 0.0] {
         el.style.translate = [0.0, 0.0];
@@ -162,20 +178,7 @@ fn overlap_shared_edge(el: &mut Element) {
     el.style.set_css_dim(UnitSlot::MarginL, CssDim::Px(0.0));
     el.style.set_css_dim(UnitSlot::MarginT, CssDim::Px(0.0));
     el.style.z_index = 0;
-
-    if el.style.border_width_sides.is_some() {
-        let w = el
-            .style
-            .resolved_border_widths()
-            .into_iter()
-            .fold(0.0_f32, f32::max)
-            .max(el.style.border_width);
-        if w > 0.5 {
-            el.style.set_uniform_border_width(w);
-        } else {
-            el.style.border_width_sides = None;
-        }
-    }
+    el.style.set_uniform_border_width(0.0);
 }
 
 /// Drawing of conjoined segments: extends 1px toward the shared edge (origin moved left/up, size widened), with the far side still in the layout position.
@@ -206,20 +209,12 @@ pub(crate) fn expand_paint_nudge(el: &Element, bounds: [f32; 4]) -> [f32; 4] {
     ]
 }
 
-/// Resolve visual ownership for a conjoined segment's shared edges.
+/// Visual box for chrome that opts into [`ATTR_PAINT_NUDGE`] (OTP slots).
 ///
-/// The segment nudged toward the previous one owns the near edge. The segment
-/// before it therefore stops one pixel before its far edge; otherwise a
-/// node-present replay of that segment overwrites the retained border painted
-/// by its neighbour.
+/// Joined groups leave this box alone. Their perimeter is the group's border,
+/// not a second stroke grown out of the item.
 pub(crate) fn group_paint_bounds(el: &Element, bounds: [f32; 4]) -> [f32; 4] {
-    let mut bounds = expand_paint_nudge(el, bounds);
-    match el.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str) {
-        Some("x") => bounds[2] = (bounds[2] - 1.0).max(0.0),
-        Some("y") => bounds[3] = (bounds[3] - 1.0).max(0.0),
-        _ => {}
-    }
-    bounds
+    expand_paint_nudge(el, bounds)
 }
 
 /// Use the same ownership box for hover damage as for retained node paint.
@@ -227,7 +222,22 @@ pub(crate) fn group_damage_bounds(el: &Element, bounds: [f32; 4]) -> [f32; 4] {
     group_paint_bounds(el, bounds)
 }
 
-/// Rewrite fillets and shared edges by group tag (shared after assembly + Button hover color writing).
+fn positive_radius(el: &Element) -> f32 {
+    let m = el
+        .style
+        .radii
+        .iter()
+        .copied()
+        .filter(|v| *v > 0.0)
+        .fold(0.0_f32, f32::max);
+    if m > 0.0 {
+        m
+    } else {
+        JOIN_RADIUS_PX
+    }
+}
+
+/// Rewrite fillets and drop the per-item stroke (after assembly and after Button hover).
 pub(crate) fn apply_button_group_join_chrome(el: &mut Element) {
     let Some(edge) = el.attrs.get(ATTR_GROUP_EDGE).cloned() else {
         return;
@@ -237,19 +247,18 @@ pub(crate) fn apply_button_group_join_chrome(el: &mut Element) {
         .get(ATTR_GROUP_ORIENTATION)
         .map(|s| ButtonGroupOrientation::parse(s).is_vertical())
         .unwrap_or(false);
-    let r = {
-        let m = el
-            .style
-            .radii
-            .iter()
-            .copied()
-            .filter(|v| *v > 0.0)
-            .fold(0.0_f32, f32::max);
-        if m > 0.0 {
-            m
-        } else {
-            JOIN_RADIUS_PX
-        }
+    let stored = el
+        .attrs
+        .get(ATTR_GROUP_RADIUS)
+        .and_then(|s| s.parse::<f32>().ok());
+    let r = if let Some(v) = stored {
+        v.max(0.0)
+    } else {
+        // Standalone chrome (hover before the attr exists): inset once and remember it.
+        // Reading the live radii again would shrink a pixel on every call.
+        let fill = (positive_radius(el) - JOIN_BORDER_PX).max(0.0);
+        el.set_attr(ATTR_GROUP_RADIUS, format!("{fill}"));
+        fill
     };
     el.style.radii = join_radii(edge.as_str(), vertical, r);
     overlap_shared_edge(el);
@@ -259,50 +268,78 @@ fn mark_join_segment(
     el: &mut Element,
     edge: &str,
     orientation: ButtonGroupOrientation,
-    overlap_prev: bool,
+    fill_r: f32,
 ) {
     el.set_attr(ATTR_GROUP_EDGE, edge);
     el.set_attr(ATTR_GROUP_ORIENTATION, orientation.as_str());
+    el.set_attr(ATTR_GROUP_RADIUS, format!("{fill_r}"));
     el.attrs.remove("rui_button_group_prev_join");
-    el.attrs.remove(ATTR_PAINT_NUDGE_NEXT);
-    if overlap_prev && matches!(edge, EDGE_MIDDLE | EDGE_END) {
-        el.set_attr(
-            ATTR_PAINT_NUDGE,
-            if orientation.is_vertical() { "y" } else { "x" },
-        );
-    } else {
-        el.attrs.remove(ATTR_PAINT_NUDGE);
-    }
+    el.attrs.remove(ATTR_PAINT_NUDGE);
     apply_button_group_join_chrome(el);
 }
 
-/// Separator embeds borders on both sides: 1px line + -1px margin on both sides (aligned to ShadCN).
-fn nest_group_separator(el: &mut Element, orientation: ButtonGroupOrientation) {
+/// 1px seam. Solid fill, no layout border — a 1px border-box plus a 1px stroke
+/// collapses the content box and Taffy can grow the line to 2px.
+/// Painted after the items (`z` + paint-only) so both sides of a pressed chip
+/// cover the same strip; tree order would let the chip tint only the leading seam.
+fn paint_seam(el: &mut Element, color: [f32; 4]) {
     let zero_min = taffy::style::Dimension::length(0.0);
-    if orientation.is_vertical() {
-        el.style.set_css_dim(UnitSlot::MarginT, CssDim::Px(-1.0));
-        el.style.set_css_dim(UnitSlot::MarginB, CssDim::Px(-1.0));
-        el.style.set_css_dim(UnitSlot::MarginL, CssDim::Px(0.0));
-        el.style.set_css_dim(UnitSlot::MarginR, CssDim::Px(0.0));
-    } else {
-        el.style.set_css_dim(UnitSlot::MarginL, CssDim::Px(-1.0));
-        el.style.set_css_dim(UnitSlot::MarginR, CssDim::Px(-1.0));
-        el.style.set_css_dim(UnitSlot::MarginT, CssDim::Px(0.0));
-        el.style.set_css_dim(UnitSlot::MarginB, CssDim::Px(0.0));
-    }
+    el.style.set_css_dim(UnitSlot::MarginT, CssDim::Px(0.0));
+    el.style.set_css_dim(UnitSlot::MarginB, CssDim::Px(0.0));
+    el.style.set_css_dim(UnitSlot::MarginL, CssDim::Px(0.0));
+    el.style.set_css_dim(UnitSlot::MarginR, CssDim::Px(0.0));
     el.style.min_size.width = zero_min;
     el.style.min_size.height = zero_min;
     el.style.translate = [0.0, 0.0];
+    el.style.bg_color = color;
+    el.style.set_uniform_border_width(0.0);
+    el.style.radii = [0.0; 4];
+    el.style.z_index = 1;
+    el.set_attr(ATTR_Z_PAINT_ONLY, "1");
 }
 
-/// Apply fused rounded corners / shared-edge paint nudge (ToggleGroup `spacing=0` reuses this).
-pub(crate) fn apply_button_group_join(kids: &mut [Element], orientation: ButtonGroupOrientation) {
-    apply_group_join(kids, orientation);
+fn join_divider(vertical_group: bool, color: [f32; 4]) -> Element {
+    let mut el = ButtonGroupSeparator(ButtonGroupSeparatorProps {
+        orientation: Some(if vertical_group {
+            "horizontal".into()
+        } else {
+            "vertical".into()
+        }),
+        children: None,
+        base: None,
+        ..Default::default()
+    });
+    paint_seam(&mut el, color);
+    el
 }
 
-fn apply_group_join(kids: &mut [Element], orientation: ButtonGroupOrientation) {
+/// Put the perimeter on `el`. Children stay in the content box, so they do not
+/// cover the stroke the way a later sibling covers a shared edge.
+pub(crate) fn paint_join_frame(el: &mut Element, frame: &JoinFrame) {
+    // Default `border_style` is `none`, and `resolved_border_widths` then
+    // reports 0: layout would not inset and the stroke would not be drawn.
+    el.style.border_style = crate::style::LineStyle::Solid;
+    el.style.border_color = frame.color;
+    el.style.border_color_sides = None;
+    el.style.set_uniform_border_width(JOIN_BORDER_PX);
+    el.style.radii = [frame.radius; 4];
+}
+
+/// Fuse corners and, when any segment had a stroke, return the frame to paint
+/// on the group. ToggleGroup `spacing=0` reuses this.
+pub(crate) fn apply_button_group_join(
+    kids: &mut Vec<Element>,
+    orientation: ButtonGroupOrientation,
+) -> Option<JoinFrame> {
+    apply_group_join(kids, orientation)
+}
+
+fn apply_group_join(
+    kids: &mut Vec<Element>,
+    orientation: ButtonGroupOrientation,
+) -> Option<JoinFrame> {
     for kid in kids.iter_mut() {
-        kid.attrs.remove(ATTR_PAINT_NUDGE_NEXT);
+        kid.attrs.remove(ATTR_PAINT_NUDGE);
     }
     let segment_idx: Vec<usize> = kids
         .iter()
@@ -311,8 +348,24 @@ fn apply_group_join(kids: &mut [Element], orientation: ButtonGroupOrientation) {
         .collect();
     let n = segment_idx.len();
     if n == 0 {
-        return;
+        return None;
     }
+    let frame = segment_idx.iter().find_map(|&i| {
+        let el = &kids[i];
+        if el.style.border_width > 0.5 && el.style.border_color[3] > 0.01 {
+            let radius = segment_idx
+                .iter()
+                .map(|&j| positive_radius(&kids[j]))
+                .fold(0.0_f32, f32::max);
+            Some(JoinFrame {
+                color: el.style.border_color,
+                radius,
+            })
+        } else {
+            None
+        }
+    });
+    let vertical = orientation.is_vertical();
     for (k, &i) in segment_idx.iter().enumerate() {
         let edge = if n == 1 {
             EDGE_ONLY
@@ -323,21 +376,35 @@ fn apply_group_join(kids: &mut [Element], orientation: ButtonGroupOrientation) {
         } else {
             EDGE_MIDDLE
         };
-        // The overlapping edges are only drawn adjacent to the previous conjoined segment; the -1px caulk of the separator is responsible for this when clamping a Separator.
-        let overlap_prev = k > 0 && i == segment_idx[k - 1] + 1;
-        mark_join_segment(&mut kids[i], edge, orientation, overlap_prev);
-        if overlap_prev {
-            kids[segment_idx[k - 1]].set_attr(
-                ATTR_PAINT_NUDGE_NEXT,
-                if orientation.is_vertical() { "y" } else { "x" },
-            );
-        }
+        let fill_r = if let Some(frame) = &frame {
+            (frame.radius - JOIN_BORDER_PX).max(0.0)
+        } else {
+            positive_radius(&kids[i])
+        };
+        mark_join_segment(&mut kids[i], edge, orientation, fill_r);
     }
-    for kid in kids.iter_mut() {
-        if is_separator_slot(kid) {
-            nest_group_separator(kid, orientation);
+    let Some(frame) = frame else {
+        return None;
+    };
+    // Rebuild so adjacent segments gain one strip. An author separator already
+    // is that strip — don't stack a second line beside it.
+    let mut rebuilt = Vec::with_capacity(kids.len() + n);
+    let mut prev_segment = false;
+    for (i, mut kid) in kids.drain(..).enumerate() {
+        let is_seg = segment_idx.binary_search(&i).is_ok();
+        if is_seg && prev_segment {
+            rebuilt.push(join_divider(vertical, frame.color));
         }
+        if is_separator_slot(&kid) {
+            paint_seam(&mut kid, frame.color);
+            prev_segment = false;
+        } else {
+            prev_segment = is_seg;
+        }
+        rebuilt.push(kid);
     }
+    *kids = rebuilt;
+    Some(frame)
 }
 
 fn build_button_group(
@@ -346,17 +413,25 @@ fn build_button_group(
     children: Vec<Element>,
 ) -> Element {
     let mut kids = children;
-    apply_group_join(&mut kids, orientation);
+    let frame = apply_group_join(&mut kids, orientation);
 
     let mut row = if orientation.is_vertical() {
         vstack().w("auto").min_w(0.0).items("stretch").gap(0.0)
     } else {
         hstack().w("auto").min_w(0.0).items("stretch").gap(0.0)
     };
+    // Hug the buttons. A stretched auto box was invisible before; a perimeter
+    // stroke would otherwise frame the whole parent track.
+    if frame.is_some() {
+        row = row.align_self_kw("start");
+    }
     for k in kids {
         row = row.child(k);
     }
     let mut el: Element = row.into();
+    if let Some(frame) = frame {
+        paint_join_frame(&mut el, &frame);
+    }
     el.set_attr(ATTR_SLOT, SLOT_ROOT);
     el.set_attr("data-orientation", orientation.as_str());
     el = el.accesskit_role("group");
@@ -451,7 +526,7 @@ pub fn ButtonGroupSeparator(orientation: Option<String>, children: Option<Elemen
         if vertical { "vertical" } else { "horizontal" },
     );
     // self-stretch: The vertical lines in the horizontal group fill the row height; the horizontal lines in the vertical group fill the column width.
-    // Don't use `h/w: 100%`; leave it to align-self: stretch. Negative margins are written by `nest_group_separator`.
+    // Don't use `h/w: 100%`; leave it to align-self: stretch. Margins stay 0 (`nest_group_separator`).
     if vertical {
         el = el
             .h("auto")
@@ -671,6 +746,17 @@ mod tests {
     use super::*;
     use crate::components::button::button;
 
+    fn segments(el: &Element) -> Vec<&Element> {
+        el.children
+            .iter()
+            .filter(|c| c.attrs.contains_key(ATTR_GROUP_EDGE))
+            .collect()
+    }
+
+    fn fill_radius() -> f32 {
+        JOIN_RADIUS_PX - 1.0
+    }
+
     #[test]
     fn root_slot_role_and_orientation() {
         let el = ButtonGroup(ButtonGroupProps {
@@ -692,9 +778,11 @@ mod tests {
         let a: Element = button("a").variant("outline").text("A").into();
         let b: Element = button("b").variant("outline").text("B").into();
         let el: Element = button_group().child(a).child(b).into();
-        assert_eq!(el.children.len(), 2);
-        let first = &el.children[0];
-        let second = &el.children[1];
+        let segs = segments(&el);
+        assert_eq!(segs.len(), 2);
+        assert_eq!(el.children.len(), 3, "one seam strip between the two fills");
+        let first = segs[0];
+        let second = segs[1];
         assert_eq!(
             first.attrs.get(ATTR_GROUP_EDGE).map(String::as_str),
             Some(EDGE_START)
@@ -703,30 +791,28 @@ mod tests {
             second.attrs.get(ATTR_GROUP_EDGE).map(String::as_str),
             Some(EDGE_END)
         );
+        let r = fill_radius();
         // CSS [TL, TR, BR, BL]: start = left corners; end = right corners.
-        assert_eq!(
-            first.style.radii,
-            [JOIN_RADIUS_PX, 0.0, 0.0, JOIN_RADIUS_PX]
-        );
-        assert_eq!(
-            second.style.radii,
-            [0.0, JOIN_RADIUS_PX, JOIN_RADIUS_PX, 0.0]
+        // Fill radius is the frame radius minus the 1px perimeter.
+        assert_eq!(first.style.radii, [r, 0.0, 0.0, r]);
+        assert_eq!(second.style.radii, [0.0, r, r, 0.0]);
+        assert!(
+            first.style.border_width < 0.01 && second.style.border_width < 0.01,
+            "joined items paint fill only; the group owns the stroke"
         );
         assert!(
-            second.style.border_is_uniform(),
-            "joined end must keep uniform border for SDF radii"
+            (el.style.border_width - 1.0).abs() < 0.01,
+            "group perimeter is the single 1px stroke"
         );
-        assert_eq!(
-            second.attrs.get(ATTR_PAINT_NUDGE).map(String::as_str),
-            Some("x"),
-            "shared edge should overlap via paint nudge, not layout margin"
-        );
+        assert_eq!(el.style.radii, [JOIN_RADIUS_PX; 4]);
+        assert!(second.attrs.get(ATTR_PAINT_NUDGE).is_none());
         assert_eq!(
             second.style.margin.left,
             taffy::style::LengthPercentageAuto::length(0.0)
         );
         assert_eq!(second.style.z_index, 0);
         assert_eq!(second.style.translate, [0.0, 0.0]);
+        assert_eq!(el.children[1].style.z_index, 1, "seam paints after both fills");
     }
 
     #[test]
@@ -752,7 +838,7 @@ mod tests {
             .separator()
             .button("Cut", || {})
             .into();
-        assert_eq!(el.children.len(), 3);
+        assert_eq!(el.children.len(), 3, "author separator is the seam; no extra strip");
         let a = &el.children[0];
         let sep = &el.children[1];
         let b = &el.children[2];
@@ -770,25 +856,25 @@ mod tests {
             Some(EDGE_END),
             "button after separator must still join as end"
         );
+        let r = fill_radius();
         // Start: left round only; End: right round only (facing sides square → no pill gap).
-        assert_eq!(a.style.radii, [JOIN_RADIUS_PX, 0.0, 0.0, JOIN_RADIUS_PX]);
-        assert_eq!(b.style.radii, [0.0, JOIN_RADIUS_PX, JOIN_RADIUS_PX, 0.0]);
-        // End 在 Separator 之后：布局叠边交给 sep，按钮不再绘制偏移（否则会盖住 1px 线）。
-        assert!(
-            b.attrs.get(ATTR_PAINT_NUDGE).is_none(),
-            "segment after separator must not paint-nudge"
-        );
+        assert_eq!(a.style.radii, [r, 0.0, 0.0, r]);
+        assert_eq!(b.style.radii, [0.0, r, r, 0.0]);
+        assert!(a.style.border_width < 0.01 && b.style.border_width < 0.01);
+        assert!((el.style.border_width - 1.0).abs() < 0.01);
+        assert!(a.attrs.get(ATTR_PAINT_NUDGE).is_none());
+        assert!(b.attrs.get(ATTR_PAINT_NUDGE).is_none());
         assert_eq!(
             b.style.margin.left,
             taffy::style::LengthPercentageAuto::length(0.0)
         );
         assert_eq!(
             sep.style.margin.left,
-            taffy::style::LengthPercentageAuto::length(-1.0)
+            taffy::style::LengthPercentageAuto::length(0.0)
         );
         assert_eq!(
             sep.style.margin.right,
-            taffy::style::LengthPercentageAuto::length(-1.0)
+            taffy::style::LengthPercentageAuto::length(0.0)
         );
         assert_eq!(b.style.translate, [0.0, 0.0]);
     }
@@ -811,48 +897,31 @@ mod tests {
             Element::from(button("del").variant("outline").text("Delete")),
         ];
         let el = build_button_group("", ButtonGroupOrientation::Horizontal, kids);
-        assert_eq!(el.children.len(), 4);
+        let segs = segments(&el);
+        assert_eq!(segs.len(), 3);
         assert_eq!(
-            el.children[0]
-                .attrs
-                .get(ATTR_GROUP_EDGE)
-                .map(String::as_str),
+            el.children.len(),
+            5,
+            "Archive|Open get one strip; the author separator is the Open|Delete seam"
+        );
+        assert_eq!(
+            segs[0].attrs.get(ATTR_GROUP_EDGE).map(String::as_str),
             Some(EDGE_START)
         );
         assert_eq!(
-            el.children[1]
-                .attrs
-                .get(ATTR_GROUP_EDGE)
-                .map(String::as_str),
+            segs[1].attrs.get(ATTR_GROUP_EDGE).map(String::as_str),
             Some(EDGE_MIDDLE),
             "Open must be middle (square right), not end"
         );
-        assert!(el.children[2].attrs.get(ATTR_GROUP_EDGE).is_none());
         assert_eq!(
-            el.children[3]
-                .attrs
-                .get(ATTR_GROUP_EDGE)
-                .map(String::as_str),
+            segs[2].attrs.get(ATTR_GROUP_EDGE).map(String::as_str),
             Some(EDGE_END)
         );
-        // Middle: no rounding; End: right only — facing sides stay square across the sep.
-        assert_eq!(el.children[1].style.radii, [0.0; 4]);
-        assert_eq!(
-            el.children[3].style.radii,
-            [0.0, JOIN_RADIUS_PX, JOIN_RADIUS_PX, 0.0]
-        );
-        assert_eq!(
-            el.children[1]
-                .attrs
-                .get(ATTR_PAINT_NUDGE)
-                .map(String::as_str),
-            Some("x"),
-            "Open sits adjacent to Archive"
-        );
-        assert!(
-            el.children[3].attrs.get(ATTR_PAINT_NUDGE).is_none(),
-            "Delete follows separator — no paint nudge"
-        );
+        let r = fill_radius();
+        assert_eq!(segs[1].style.radii, [0.0; 4]);
+        assert_eq!(segs[2].style.radii, [0.0, r, r, 0.0]);
+        assert!(segs.iter().all(|s| s.style.border_width < 0.01));
+        assert!((el.style.border_width - 1.0).abs() < 0.01);
     }
 
     #[test]
@@ -886,8 +955,8 @@ mod tests {
             let b = &group.children[2];
             let seam = b.layout_bounds[0] - (a.layout_bounds[0] + a.layout_bounds[2]);
             assert!(
-                seam < 0.75,
-                "Paste|Cut layout seam should nest via separator -1px margins, got {seam}"
+                seam > 0.5 && seam < 2.0,
+                "Paste|Cut seam should be the 1px separator, not a collapsed overlap or a multi-pixel gap, got {seam}"
             );
         });
     }
@@ -907,37 +976,30 @@ mod tests {
             let mut layout = LayoutTree::new();
             let _ = layout.build_and_layout(&mut root, 600.0, 80.0, [-1.0, -1.0]);
             let group = &root.children[0];
-            assert_eq!(group.children.len(), 3);
-            let a = &group.children[0];
-            let b = &group.children[1];
-            let c = &group.children[2];
+            let segs = segments(group);
+            assert_eq!(segs.len(), 3);
+            assert_eq!(group.children.len(), 5);
+            let a = segs[0];
+            let b = segs[1];
+            let c = segs[2];
             let seam_ab = b.layout_bounds[0] - (a.layout_bounds[0] + a.layout_bounds[2]);
             let seam_bc = c.layout_bounds[0] - (b.layout_bounds[0] + b.layout_bounds[2]);
             assert!(
-                seam_ab.abs() < 0.75,
-                "Copy|Paste layout boxes should abut (paint-nudge overlap), got {seam_ab}"
+                seam_ab > 0.5 && seam_ab < 2.0,
+                "Copy|Paste seam should be one 1px strip, got {seam_ab}"
             );
             assert!(
-                seam_bc.abs() < 0.75,
-                "Paste|Cut layout boxes should abut (paint-nudge overlap), got {seam_bc}"
+                (seam_bc - seam_ab).abs() < 0.25,
+                "Paste|Cut seam must match Copy|Paste, got ab={seam_ab} bc={seam_bc}"
             );
-            assert_eq!(b.attrs.get(ATTR_PAINT_NUDGE).map(String::as_str), Some("x"));
-            assert_eq!(
-                c.attrs.get(ATTR_PAINT_NUDGE).map(String::as_str),
-                Some("x"),
-                "third segment also grows 1px toward previous; far edge stays at layout"
-            );
-            assert_eq!(
-                a.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str),
-                Some("x")
-            );
-            assert_eq!(
-                b.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str),
-                Some("x")
-            );
-            assert_eq!(c.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str), None);
-            assert_eq!(button_group_paint_nudge(b), [-1.0, 0.0]);
-            assert_eq!(button_group_paint_nudge(c), [-1.0, 0.0]);
+            assert!(segs.iter().all(|s| s.style.border_width < 0.01));
+            assert!((group.style.border_width - 1.0).abs() < 0.01);
+            assert!(a.attrs.get(ATTR_PAINT_NUDGE).is_none());
+            assert!(b.attrs.get(ATTR_PAINT_NUDGE).is_none());
+            assert!(c.attrs.get(ATTR_PAINT_NUDGE).is_none());
+            assert_eq!(group_paint_bounds(a, a.layout_bounds), a.layout_bounds);
+            assert_eq!(group_paint_bounds(b, b.layout_bounds), b.layout_bounds);
+            assert_eq!(group_paint_bounds(c, c.layout_bounds), c.layout_bounds);
             assert_eq!(
                 b.style.margin.left,
                 taffy::style::LengthPercentageAuto::length(0.0)
@@ -983,26 +1045,22 @@ mod tests {
             let mut layout = LayoutTree::new();
             let _ = layout.build_and_layout(&mut root, 600.0, 80.0, [-1.0, -1.0]);
             let group = &root.children[0];
-            assert_eq!(
-                group.children.len(),
-                3,
-                "VStack pack must unpack to 3 buttons"
-            );
-            let a = &group.children[0];
-            let b = &group.children[1];
-            let c = &group.children[2];
+            let segs = segments(group);
+            assert_eq!(segs.len(), 3, "VStack pack must unpack to 3 buttons");
+            let a = segs[0];
+            let b = segs[1];
+            let c = segs[2];
             let seam_ab = b.layout_bounds[0] - (a.layout_bounds[0] + a.layout_bounds[2]);
             let seam_bc = c.layout_bounds[0] - (b.layout_bounds[0] + b.layout_bounds[2]);
             assert!(
-                seam_ab.abs() < 0.75,
-                "RSX Copy|Paste layout boxes should abut, got {seam_ab}"
+                seam_ab > 0.5 && seam_ab < 2.0,
+                "RSX Copy|Paste seam should be one 1px strip, got {seam_ab}"
             );
             assert!(
-                seam_bc.abs() < 0.75,
-                "RSX Paste|Cut layout boxes should abut, got {seam_bc}"
+                (seam_bc - seam_ab).abs() < 0.25,
+                "RSX Paste|Cut seam must match Copy|Paste, got ab={seam_ab} bc={seam_bc}"
             );
-            assert_eq!(b.attrs.get(ATTR_PAINT_NUDGE).map(String::as_str), Some("x"));
-            assert_eq!(c.attrs.get(ATTR_PAINT_NUDGE).map(String::as_str), Some("x"));
+            assert!(segs.iter().all(|s| s.style.border_width < 0.01));
         });
     }
 
@@ -1022,76 +1080,72 @@ mod tests {
             let mut layout = LayoutTree::new();
             let result = layout.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
             let group = &root.children[0];
-            assert_eq!(group.children.len(), 3);
-            let a = &group.children[0];
-            let b = &group.children[1];
-            let c = &group.children[2];
+            let segs = segments(group);
+            assert_eq!(segs.len(), 3);
+            let a = segs[0];
+            let b = segs[1];
+            let c = segs[2];
             let seam_ab = b.layout_bounds[1] - (a.layout_bounds[1] + a.layout_bounds[3]);
             let seam_bc = c.layout_bounds[1] - (b.layout_bounds[1] + b.layout_bounds[3]);
             assert!(
-                seam_ab.abs() < 0.75,
-                "Top|Middle layout boxes should abut (paint-nudge overlap), got {seam_ab}"
+                seam_ab > 0.5 && seam_ab < 2.0,
+                "Top|Middle seam should be one 1px strip, got {seam_ab}"
             );
             assert!(
-                seam_bc.abs() < 0.75,
-                "Middle|Bottom layout boxes should abut (paint-nudge overlap), got {seam_bc}"
+                (seam_bc - seam_ab).abs() < 0.25,
+                "Middle|Bottom seam must match Top|Middle, got ab={seam_ab} bc={seam_bc}"
             );
-            assert_eq!(b.attrs.get(ATTR_PAINT_NUDGE).map(String::as_str), Some("y"));
-            assert_eq!(
-                c.attrs.get(ATTR_PAINT_NUDGE).map(String::as_str),
-                Some("y"),
-                "third vertical segment grows 1px toward previous; far edge stays at layout"
-            );
-            assert_eq!(
-                a.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str),
-                Some("y")
-            );
-            assert_eq!(
-                b.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str),
-                Some("y")
-            );
-            assert_eq!(c.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str), None);
-            assert_eq!(button_group_paint_nudge(b), [0.0, -1.0]);
-            assert_eq!(button_group_paint_nudge(c), [0.0, -1.0]);
+            assert!(segs.iter().all(|s| s.style.border_width < 0.01));
+            assert_eq!(button_group_paint_nudge(b), [0.0, 0.0]);
+            assert_eq!(button_group_paint_nudge(c), [0.0, 0.0]);
             let b_bounds = b.layout_bounds;
             assert!(
                 result.node_paints.iter().any(|paint| {
                     (paint.bounds[0] - b_bounds[0]).abs() < 0.01
-                        && (paint.bounds[1] - (b_bounds[1] - 1.0)).abs() < 0.01
+                        && (paint.bounds[1] - b_bounds[1]).abs() < 0.01
                         && (paint.bounds[2] - b_bounds[2]).abs() < 0.01
                         && (paint.bounds[3] - b_bounds[3]).abs() < 0.01
                 }),
-                "retained paint bounds must stop before the next segment's shared edge; paints={:?}, layout={b_bounds:?}",
+                "retained paint bounds stay on the layout box; paints={:?}, layout={b_bounds:?}",
                 result.node_paints.iter().map(|paint| paint.bounds).collect::<Vec<_>>()
             );
-            let first_bounds = a.layout_bounds;
+            let group_bounds = group.layout_bounds;
             assert!(
                 result.instances.iter().any(|instance| {
-                    (instance.rect_pos[0] - first_bounds[0]).abs() < 0.01
-                        && (instance.rect_pos[1] - first_bounds[1]).abs() < 0.01
-                        && (instance.rect_size[0] - first_bounds[2]).abs() < 0.01
-                        && (instance.rect_size[1] - (first_bounds[3] - 1.0)).abs() < 0.01
+                    (instance.rect_pos[0] - group_bounds[0]).abs() < 0.01
+                        && (instance.rect_pos[1] - group_bounds[1]).abs() < 0.01
+                        && (instance.rect_size[0] - group_bounds[2]).abs() < 0.01
+                        && (instance.rect_size[1] - group_bounds[3]).abs() < 0.01
+                        && instance.border_width > 0.5
                 }),
-                "the first segment must stop before its far shared edge; instances={:?}",
+                "the group draws the only perimeter stroke; bounds={:?} instances={:?}",
+                group.layout_bounds,
                 result
                     .instances
                     .iter()
-                    .map(|instance| (instance.rect_pos, instance.rect_size))
+                    .map(|instance| {
+                        (
+                            instance.rect_pos,
+                            instance.rect_size,
+                            instance.border_width,
+                        )
+                    })
                     .collect::<Vec<_>>()
             );
             let middle_bounds = b.layout_bounds;
             assert!(
                 result.instances.iter().any(|instance| {
                     (instance.rect_pos[0] - middle_bounds[0]).abs() < 0.01
-                        && (instance.rect_pos[1] - (middle_bounds[1] - 1.0)).abs() < 0.01
+                        && (instance.rect_pos[1] - middle_bounds[1]).abs() < 0.01
                         && (instance.rect_size[0] - middle_bounds[2]).abs() < 0.01
                         && (instance.rect_size[1] - middle_bounds[3]).abs() < 0.01
+                        && instance.border_width < 0.01
                 }),
-                "the middle segment must own only its near shared edge; instances={:?}",
+                "the middle segment is fill only, so a pressed bg cannot recolor one seam; instances={:?}",
                 result
                     .instances
                     .iter()
-                    .map(|instance| (instance.rect_pos, instance.rect_size))
+                    .map(|instance| (instance.rect_pos, instance.rect_size, instance.border_width))
                     .collect::<Vec<_>>()
             );
             assert_eq!(c.style.z_index, 0);
@@ -1100,6 +1154,126 @@ mod tests {
             assert!(
                 last_bottom <= group_bottom + 0.5,
                 "vertical group must contain Bottom (got last={last_bottom} group={group_bottom}); negative margin used to collapse height and overlay the next Gallery label"
+            );
+        });
+    }
+
+    #[test]
+    fn joined_hover_at_125_dpi_replays_the_seam_the_scissor_eats() {
+        use crate::app::damage::damage_to_scissor_physical;
+        use crate::app::draw_cull::{
+            last_present_visual_slots, node_present_replays_shared_seam, node_present_reset_rect,
+        };
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+
+        let (_handle, _) = create_root(|| {
+            let mut root = Element::new().w(200.0).h(200.0).child(Element::from(
+                button_group()
+                    .orientation("vertical")
+                    .child(button("t").variant("outline").text("Top"))
+                    .child(button("m").variant("outline").text("Middle"))
+                    .child(button("b").variant("outline").text("Bottom")),
+            ));
+            let mut layout = LayoutTree::new();
+            let result = layout.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+            let group = &root.children[0];
+            let segs = segments(group);
+            let top = segs[0];
+            let middle = segs[1];
+            let seam = &group.children[1];
+            let key = u64::from(top.layout_node.expect("top layout node"));
+            let bounds = top.layout_bounds;
+            let seam_box = seam.layout_bounds;
+            let slots = last_present_visual_slots(
+                &result.node_paints,
+                &result.instances,
+                &[],
+                &result.text_nodes,
+                &[],
+            );
+            let prev = slots.iter().find(|(k, _)| *k == key).map(|(_, b)| *b);
+            let scale = 1.25_f32;
+            let wipe = node_present_reset_rect(
+                key,
+                bounds,
+                &result.node_paints,
+                &result.instances,
+                &[],
+                &[],
+                0.0,
+                scale,
+                prev,
+            )
+            .expect("joined hover has a dest-reset");
+            let logical = [
+                wipe[0] / scale,
+                wipe[1] / scale,
+                wipe[2] / scale,
+                wipe[3] / scale,
+            ];
+            let (x, y, w, h) = damage_to_scissor_physical(logical, 0.0, scale, 800, 600)
+                .expect("scissor");
+            let hole = [
+                x as f32 / scale,
+                y as f32 / scale,
+                w as f32 / scale,
+                h as f32 / scale,
+            ];
+            let overlap_y = (hole[1] + hole[3]).min(seam_box[1] + seam_box[3])
+                - hole[1].max(seam_box[1]);
+            assert!(
+                overlap_y > 0.25,
+                "125% DPI ceil must eat the Top|Middle seam (that is the bug)\n hole={hole:?} seam={seam_box:?} logical={logical:?}"
+            );
+            let seam_key = u64::from(seam.layout_node.expect("seam layout node"));
+            let seam_paint = result
+                .node_paints
+                .iter()
+                .find(|p| p.key == seam_key)
+                .expect("seam slot");
+            assert!(
+                node_present_replays_shared_seam(
+                    key,
+                    bounds,
+                    seam_paint,
+                    hole,
+                    &result.node_paints,
+                ),
+                "the eaten seam must be drawn again after the hover fill"
+            );
+            let middle_key = u64::from(middle.layout_node.expect("middle layout node"));
+            let middle_paint = result
+                .node_paints
+                .iter()
+                .find(|p| p.key == middle_key)
+                .expect("middle slot");
+            assert!(
+                !node_present_replays_shared_seam(
+                    key,
+                    bounds,
+                    middle_paint,
+                    hole,
+                    &result.node_paints,
+                ),
+                "the next item is not a hairline seam"
+            );
+            let lower = &group.children[3];
+            let lower_key = u64::from(lower.layout_node.expect("lower seam"));
+            let lower_paint = result
+                .node_paints
+                .iter()
+                .find(|p| p.key == lower_key)
+                .expect("lower seam slot");
+            assert!(
+                !node_present_replays_shared_seam(
+                    key,
+                    bounds,
+                    lower_paint,
+                    hole,
+                    &result.node_paints,
+                ),
+                "Middle|Bottom must stay out of Top's hover hole"
             );
         });
     }
@@ -1133,8 +1307,12 @@ mod tests {
             Some("x"),
             "join chrome must keep paint nudge after set_uniform"
         );
-        assert!(kid.style.border_is_uniform());
-        assert_eq!(kid.style.radii, [0.0, JOIN_RADIUS_PX, JOIN_RADIUS_PX, 0.0]);
+        assert!(
+            kid.style.border_width < 0.01,
+            "hover must not put the per-item stroke back"
+        );
+        let r = fill_radius();
+        assert_eq!(kid.style.radii, [0.0, r, r, 0.0]);
     }
 
     #[test]

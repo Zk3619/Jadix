@@ -5,7 +5,7 @@
 //!
 //! In ShadCN the chips stay **visually independent** (default `spacing=2`). This crate adds a
 //! **joined** layout (`spacing=0`) that reuses [`button_group`](super::button_group) fused
-//! corners / shared-edge paint so the group can look like a ButtonGroup.
+//! corners / shared-edge stroke so the group can look like a ButtonGroup.
 //!
 //! ```text
 //! ToggleGroup                       // role=group · flex · type / orientation / spacing
@@ -53,7 +53,8 @@ use std::sync::OnceLock;
 
 use crate::components::base::SlotChrome;
 use crate::components::button_group::{
-    apply_button_group_join, apply_button_group_join_chrome, ButtonGroupOrientation,
+    apply_button_group_join, apply_button_group_join_chrome, paint_join_frame,
+    ButtonGroupOrientation,
 };
 use crate::components::toggle::{toggle_hover_classes, toggle_size_pad};
 use crate::core::reactivity::{
@@ -642,12 +643,16 @@ pub fn toggle_group_scope(
                 value_single.set(fixed);
             }
         }
-        if use_button_group_join {
-            apply_button_group_join(&mut kids, orientation.to_button_group());
+        let frame = if use_button_group_join {
+            let frame = apply_button_group_join(&mut kids, orientation.to_button_group());
             for kid in kids.iter_mut() {
                 patch_class_set_base_radii(kid);
             }
-        } else if segmented {
+            frame
+        } else {
+            None
+        };
+        if !use_button_group_join && segmented {
             apply_segmented_radii(&mut kids);
         }
 
@@ -671,11 +676,17 @@ pub fn toggle_group_scope(
                 .rounded("0.375rem")
                 .bg(parse_color("muted"))
                 .border(parse_color("input"), 1.0);
+        } else if frame.is_some() {
+            // Hug the chips so the frame is the control, not the parent track.
+            row = row.align_self_kw("start");
         }
         for k in kids {
             row = row.child(k);
         }
         let mut el: Element = row.into();
+        if let Some(frame) = frame.as_ref() {
+            paint_join_frame(&mut el, frame);
+        }
         el.set_attr(ATTR_SLOT, SLOT_ROOT);
         el.set_attr("data-variant", variant.as_str());
         el.set_attr("data-size", size.as_str());
@@ -733,12 +744,13 @@ fn sync_toggle_group_pressed(
 ) -> crate::core::tree::LayoutStatus {
     let mut changed = false;
     let count = root.children.iter().filter(|c| is_toggle_item(c)).count();
-    let border_w = if outline && !segmented { 1.0 } else { 0.0 };
     let mut item_index = 0usize;
     for option in root.children.iter_mut() {
         if !is_toggle_item(option) {
             continue;
         }
+        // Joined chips stay borderless. Writing 1px here and clearing it in chrome
+        // marks StyleChanged every frame.
         let Some(value) = option.attrs.get(ATTR_VALUE).cloned() else {
             item_index += 1;
             continue;
@@ -747,6 +759,12 @@ fn sync_toggle_group_pressed(
             current_multi.iter().any(|v| v == &value)
         } else {
             current_single == value
+        };
+        let joined = option.attrs.contains_key("rui_button_group_edge");
+        let border_w = if joined || !outline || segmented {
+            0.0
+        } else {
+            1.0
         };
         let (want_bg, want_border, want_fg) =
             toggle_chip_colors(pressed, disabled, outline, segmented);
@@ -1267,53 +1285,31 @@ mod tests {
             .into();
         assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_ROOT));
         assert_eq!(el.attrs.get("data-spacing").map(String::as_str), Some("0"));
+        let segs: Vec<&Element> = el
+            .children
+            .iter()
+            .filter(|c| c.attrs.contains_key("rui_button_group_edge"))
+            .collect();
+        assert_eq!(segs.len(), 3);
+        assert_eq!(el.children.len(), 5, "two seam strips between three fills");
         assert_eq!(
-            el.children[0]
-                .attrs
-                .get("rui_button_group_edge")
-                .map(String::as_str),
+            segs[0].attrs.get("rui_button_group_edge").map(String::as_str),
             Some("start")
         );
         assert_eq!(
-            el.children[1]
-                .attrs
-                .get("rui_button_group_edge")
-                .map(String::as_str),
+            segs[1].attrs.get("rui_button_group_edge").map(String::as_str),
             Some("middle")
         );
         assert_eq!(
-            el.children[2]
-                .attrs
-                .get("rui_button_group_edge")
-                .map(String::as_str),
+            segs[2].attrs.get("rui_button_group_edge").map(String::as_str),
             Some("end")
         );
-        assert_eq!(
-            el.children[0]
-                .attrs
-                .get("rui_button_group_nudge_next")
-                .map(String::as_str),
-            Some("x")
-        );
-        assert_eq!(
-            el.children[1]
-                .attrs
-                .get("rui_button_group_nudge_next")
-                .map(String::as_str),
-            Some("x")
-        );
-        assert_eq!(
-            el.children[2]
-                .attrs
-                .get("rui_button_group_nudge_next")
-                .map(String::as_str),
-            None
-        );
+        assert!(segs.iter().all(|s| s.style.border_width < 0.01));
+        assert!((el.style.border_width - 1.0).abs() < 0.01);
     }
 
     #[test]
     fn joined_vertical_inner_corners_stay_square_on_hover() {
-        use crate::components::button_group::ATTR_PAINT_NUDGE;
         use crate::core::reactivity::create_root;
         use crate::core::tree::LayoutTree;
 
@@ -1330,14 +1326,20 @@ mod tests {
                 ])
                 .into()
         });
-        assert_eq!(el.children.len(), 3);
-        let r = el.children[0].style.radii[0];
+        let seg_idx: Vec<usize> = el
+            .children
+            .iter()
+            .enumerate()
+            .filter_map(|(i, c)| c.attrs.contains_key("rui_button_group_edge").then_some(i))
+            .collect();
+        assert_eq!(seg_idx.len(), 3);
+        let r = el.children[seg_idx[0]].style.radii[0];
         assert!(r > 0.0, "start chip keeps outer rounds");
-        assert_eq!(el.children[0].style.radii, [r, r, 0.0, 0.0]);
-        assert_eq!(el.children[1].style.radii, [0.0, 0.0, 0.0, 0.0]);
-        assert_eq!(el.children[2].style.radii, [0.0, 0.0, r, r]);
+        assert_eq!(el.children[seg_idx[0]].style.radii, [r, r, 0.0, 0.0]);
+        assert_eq!(el.children[seg_idx[1]].style.radii, [0.0, 0.0, 0.0, 0.0]);
+        assert_eq!(el.children[seg_idx[2]].style.radii, [0.0, 0.0, r, r]);
         assert_eq!(
-            el.children[1]
+            el.children[seg_idx[1]]
                 .class_set
                 .as_ref()
                 .and_then(|cs| cs.base_style.as_ref())
@@ -1345,22 +1347,10 @@ mod tests {
             Some([0.0, 0.0, 0.0, 0.0]),
             "join radii must be in the class restore snapshot"
         );
-        assert_eq!(
-            el.children[1]
-                .attrs
-                .get(ATTR_PAINT_NUDGE)
-                .map(String::as_str),
-            Some("y")
-        );
-        assert_eq!(
-            el.children[2]
-                .attrs
-                .get(ATTR_PAINT_NUDGE)
-                .map(String::as_str),
-            Some("y")
-        );
+        assert!(el.children[seg_idx[1]].style.border_width < 0.01);
+        assert!((el.style.border_width - 1.0).abs() < 0.01);
 
-        for i in 0..3 {
+        for &i in &seg_idx {
             let join = el.children[i].style.radii;
             let attrs = el.children[i].attrs.clone();
             let _ = crate::style::resolve_class_variants(
@@ -1375,23 +1365,32 @@ mod tests {
                 el.children[i].style.radii, join,
                 "item {i} inner corners must not flash rounded-md on hover restore"
             );
+            assert!(
+                el.children[i].style.border_width < 0.01,
+                "item {i} class restore must not put the per-item stroke back"
+            );
         }
 
         let mut layout = LayoutTree::new();
         let mut root = Element::new().w(200.0).h(200.0).child(el);
         let _ = layout.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
         let group = &root.children[0];
-        let a = &group.children[0];
-        let b = &group.children[1];
-        let c = &group.children[2];
+        let segs: Vec<&Element> = group
+            .children
+            .iter()
+            .filter(|c| c.attrs.contains_key("rui_button_group_edge"))
+            .collect();
+        let a = segs[0];
+        let b = segs[1];
+        let c = segs[2];
         let seam_ab = b.layout_bounds[1] - (a.layout_bounds[1] + a.layout_bounds[3]);
         let seam_bc = c.layout_bounds[1] - (b.layout_bounds[1] + b.layout_bounds[3]);
         assert!(
-            seam_ab.abs() < 0.75,
-            "Top|Middle layout boxes should abut, got {seam_ab}"
+            seam_ab > 0.5 && seam_ab < 2.0,
+            "Top|Middle seam should be one 1px strip, got {seam_ab}"
         );
         assert!(
-            (seam_bc - seam_ab).abs() < 0.75,
+            (seam_bc - seam_ab).abs() < 0.25,
             "Middle|Bottom seam must match Top|Middle (got ab={seam_ab} bc={seam_bc})"
         );
     }
