@@ -2852,6 +2852,28 @@ impl AppState {
                     &self.damage_nodes,
                     &self.last_overlay_stamps,
                 );
+                // Dest-reset above replaced the 8px pad with the border box.
+                // `text-underline-offset` paints outside that box; without this
+                // union, hover clips the line until scroll FullClear.
+                let deco_key = dirty.key;
+                let deco_bounds = dirty.bounds;
+                scissors = scissors
+                    .into_iter()
+                    .map(|piece| {
+                        if super::damage::intersect_rects(piece, deco_bounds).is_none() {
+                            return piece;
+                        }
+                        super::draw_cull::expand_scissor_for_text_decoration(
+                            piece,
+                            deco_key,
+                            deco_bounds,
+                            node_paints,
+                            &self.text_nodes,
+                            prev_underline_instances,
+                            ui_scale,
+                        )
+                    })
+                    .collect();
             }
             if super::damage::page_dirty_punches_overlay_after_clear(dirty.kind) {
                 for piece in &scissors {
@@ -3287,6 +3309,36 @@ impl AppState {
                                 true,
                                 false,
                             );
+                            // Device-pixel ceil of this hole eats the 1px seam on
+                            // the shared edge. The fill was just drawn over it;
+                            // put the strip back on top.
+                            if node_dest_reset.is_some() {
+                                render_pass.set_scissor_rect(x, y, w, h);
+                                self.draw_matching_node_paints(
+                                    render_pass,
+                                    paint_ops,
+                                    node_paints,
+                                    scaled_instances,
+                                    clip_polys,
+                                    scaled_tex,
+                                    scaled_input_chrome,
+                                    dummy,
+                                    |p| {
+                                        super::draw_cull::node_present_replays_shared_seam(
+                                            dirty.key,
+                                            dirty.bounds,
+                                            p,
+                                            repair_logical,
+                                            node_paints,
+                                        )
+                                    },
+                                    Some(super::draw_cull::CullRects::one(cull_rect)),
+                                    None,
+                                    None,
+                                    true,
+                                    false,
+                                );
+                            }
                             // I-beam is drawn after retain→swapchain blit, not into retain.
                             self.draw_node_present_underlines(
                                 render_pass,
@@ -5282,7 +5334,8 @@ impl AppState {
         let has_region = self
             .damage_nodes
             .iter()
-            .any(|d| matches!(d.kind, super::damage::PaintDirtyKind::Region));
+            .any(|d| matches!(d.kind, super::damage::PaintDirtyKind::Region))
+            || !sync_collect.display_reveal_keys.is_empty();
         let has_named = !self.damage_nodes.is_empty();
         // One gate for sync_impact **and** pre_chrome. A later pre_chrome
         // `mark_full_redraw` used to undo named-node PartialLoad (Input + spin).
@@ -6070,6 +6123,10 @@ impl AppState {
                     ui_scale,
                 )
             };
+        crate::core::tree::push_display_reveal_regions(
+            &self.root_element,
+            &sync_collect.display_reveal_keys,
+        );
         self.damage_nodes
             .extend(super::damage::take_frame_paint_nodes());
         self.apply_portal_overlay_damage(overlay_present, overlay_visual);
@@ -6769,6 +6826,7 @@ impl AppState {
                     &render_result.node_paints,
                     &wipe_clips,
                     page_inst,
+                    ui_scale,
                 )
             } else {
                 Vec::new()

@@ -675,7 +675,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         }
     }
 
-    // Unpack border_extra: style + shape*16 + round(param*100)*256 (stable subtract, not fmod)
+    // Unpack border_extra: style + shape*16 + round(param*100)*256.
     let packed = in.extra_and_id.x;
     let param_enc = floor(packed / 256.0);
     let rem = packed - param_enc * 256.0;
@@ -687,7 +687,11 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     let d = sd_shaped_box(in.p, b, in.radii, shape_type, shape_param);
 
     // Screen-space AA: fixed 1px fails under rotate/skew (derivatives stretch).
-    let aa = max(fwidth(d), 0.75);
+    // Clamp to the vertex AA pad. Unbounded fwidth(d) on Intel iGPUs (DXIL
+    // derivatives after the clip discard) becomes tens of pixels, so alpha_bg
+    // is a ramp across the pill: thread text shows through Latest and glyphs
+    // look cut in half. Discrete GPUs keep fwidth ≈ 1px.
+    let aa = clamp(fwidth(d), 0.75, 2.0);
 
     // Compute alpha for the inner rect body
     let alpha_bg = 1.0 - smoothstep(-aa, aa, d);

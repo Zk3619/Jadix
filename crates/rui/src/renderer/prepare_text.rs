@@ -2118,6 +2118,70 @@ fn expand_clip_for_text_decoration(
     Some([c[0], y, c[2], h])
 }
 
+/// Logical AABB of the decoration quads [`prepare_text_frame`] will emit.
+///
+/// Positive `text-underline-offset` places the line below the layout box.
+/// Callers that scissor to that box (node-present dest-reset) must cover this
+/// rect or the line is clipped until a full redraw.
+pub(crate) fn text_decoration_ink_logical(n: &TextLayoutInfo, ui_scale: f32) -> Option<[f32; 4]> {
+    let under = n.style.underline_resolved();
+    let over = n.style.overline_resolved();
+    if !under && !over {
+        return None;
+    }
+    let scale = if ui_scale.is_finite() && ui_scale > 0.0 {
+        ui_scale
+    } else {
+        1.0
+    };
+    let ps = if n.paint_scale.is_finite() && n.paint_scale > 0.0 {
+        n.paint_scale
+    } else {
+        1.0
+    };
+    let text_size = n.style.size_resolved() * scale;
+    let ul_h = if n.style.decoration_thickness_resolved() > 0.0 {
+        n.style.decoration_thickness_resolved() * scale
+    } else {
+        (text_size * 0.07).max(1.0)
+    } * ps;
+    let offset = n.style.underline_offset_resolved();
+    let box_y = n.y * scale;
+    let box_h = n.height * scale;
+    let mut y0 = box_y;
+    let mut y1 = box_y + box_h * ps;
+    let extend = |line_y: f32, y0: &mut f32, y1: &mut f32| {
+        let (top, bot) = match n.style.decoration_style_resolved() {
+            TextDecorationStyle::Double => {
+                let gap = (ul_h * 0.8).max(1.0);
+                (line_y - gap, line_y + gap + ul_h)
+            }
+            TextDecorationStyle::Wavy => {
+                let amp = (ul_h * 0.75).max(1.0);
+                (line_y - amp, line_y + amp + ul_h)
+            }
+            _ => (line_y, line_y + ul_h),
+        };
+        *y0 = y0.min(top - 1.0);
+        *y1 = y1.max(bot + 1.0);
+    };
+    if under {
+        extend(
+            underline_line_y(box_y, box_h, ul_h, offset, scale, ps),
+            &mut y0,
+            &mut y1,
+        );
+    }
+    if over {
+        extend(box_y + offset * scale * ps, &mut y0, &mut y1);
+    }
+    let h = ((y1 - y0) / scale).max(0.0);
+    if n.width <= 0.0 || h <= 0.0 {
+        return None;
+    }
+    Some([n.x, y0 / scale, n.width, h])
+}
+
 /// 排版文本、构建下划线 `InstanceInput`，并调用 glyphon `prepare`。
 pub fn prepare_text_frame(
     text_renderer: &mut RuiTextRenderer,
@@ -5467,6 +5531,38 @@ mod input_shaping_stability_tests {
         assert!(
             super::clip_rect_to_bounds([10.0, y, 40.0, ul_h], expanded).is_some(),
             "decoration clip expand must keep underline visible"
+        );
+    }
+
+    #[test]
+    fn decoration_ink_extends_below_the_layout_box() {
+        let mut n = crate::layout::layout_tree::TextLayoutInfo {
+            text: "Home".into(),
+            shape_suffix: None,
+            spans: None,
+            template_id: None,
+            x: 10.0,
+            y: 10.0,
+            width: 40.0,
+            height: 20.0,
+            clip_bounds: None,
+            style: crate::style::TextStyle::default(),
+            prepared: None,
+            glyph_fx: None,
+            shimmer: None,
+            paint_scale: 1.0,
+            paint_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
+            paint_origin: [30.0, 20.0],
+            glyph_raster: crate::renderer::GlyphRasterMode::Coverage,
+        };
+        n.style.underline = Some(true);
+        n.style.underline_offset = Some(4.0);
+        n.style.size = Some(14.0);
+        let ink = super::text_decoration_ink_logical(&n, 1.0).expect("ink");
+        let box_bottom = n.y + n.height;
+        assert!(
+            ink[1] + ink[3] > box_bottom + 3.0,
+            "offset 4px must leave the layout box (ink={ink:?} bottom={box_bottom})"
         );
     }
 }
