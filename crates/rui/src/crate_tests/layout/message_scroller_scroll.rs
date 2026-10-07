@@ -1473,6 +1473,7 @@ fn message_scroller_latest_enter_halo_must_wipe_and_hide_must_restore_thread() {
                         &enter_mid.node_paints,
                         &[(mid_dirty.key, wipe_clip)],
                         &[],
+                        1.0,
                     );
                 assert!(
                     !underlay.is_empty(),
@@ -1597,6 +1598,7 @@ fn message_scroller_latest_enter_halo_must_wipe_and_hide_must_restore_thread() {
                 &hidden.node_paints,
                 &[(hide_dirty.key, wipe_clip)],
                 &[],
+                1.0,
             );
             assert!(
                 !underlay.is_empty(),
@@ -1757,6 +1759,7 @@ fn gallery_latest_hide_must_restore_wrapping_under_dest_reset() {
                 &hidden.node_paints,
                 &[(hide_dirty.key, wipe_clip)],
                 &[],
+                1.0,
             );
             let captured = underlay.iter().find(|t| {
                 t.text.contains("Got it. Stay at the")
@@ -2036,6 +2039,7 @@ fn assert_latest_wipe_restores_wrap(
             &result.node_paints,
             &[(d.key, wipe_clip)],
             &[],
+            1.0,
         );
         let captured = underlay
             .iter()
@@ -5840,6 +5844,7 @@ fn message_scroller_latest_pill_pixels_hide_wrapping_line() {
                         &scene.node_paints,
                         &wipes,
                         &scene.instances,
+                        1.0,
                     );
                 flush.extend(
                     crate::app::draw_cull::node_present_clipped_capture_text_wipes_excluding_overlay(
@@ -6106,6 +6111,7 @@ fn message_scroller_latest_pill_must_not_share_band_with_wrapping_line() {
                 &enter_mid.node_paints,
                 &wipes,
                 &enter_mid.instances,
+                1.0,
             );
             report.push_str(&format!(
                 "  wipes={wipes:?}\n  hole={:?}\n  underlay={:?}\n",

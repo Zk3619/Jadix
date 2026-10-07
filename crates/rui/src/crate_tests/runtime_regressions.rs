@@ -351,6 +351,7 @@ fn latest_enter_and_exit_rebuild_one_ordered_composite() {
                 &frame.node_paints,
                 &[],
                 &frame.instances,
+                1.0,
             );
             let plate = crate::app::draw_cull::opaque_slot_fill_aabb(
                 key,

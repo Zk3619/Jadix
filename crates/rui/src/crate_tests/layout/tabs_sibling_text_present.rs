@@ -400,6 +400,123 @@ fn display_none_toggle_without_product_slot_must_not_page_fullclear() {
         ),
         "local display toggle must PartialLoad"
     );
+    let dirties = take_frame_paint_nodes();
+    assert!(
+        dirties.iter().any(|d| {
+            d.kind == PaintDirtyKind::Region && d.bounds[3] > 8.0 && d.bounds[3] <= 48.0
+        }),
+        "hide must clear the 40px panel, got {dirties:?}"
+    );
+    assert!(
+        dirties.iter().all(|d| d.bounds[3] < 100.0),
+        "hide must not clear the viewport, got {dirties:?}"
+    );
+}
+
+/// Unanswered Next: the error leaf goes `display: none` → flex inside the forms
+/// ScrollArea. The clear is that line, not the scrollport (which still holds the
+/// cards above the questionnaire).
+#[test]
+fn display_reveal_inside_clip_dirties_the_leaf_not_the_scrollport() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    use taffy::style::Display;
+
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+
+    let show = Rc::new(Cell::new(false));
+    let show_sync = show.clone();
+    let mut error = Element::new().text("Please provide an answer.");
+    error = error.reactive_sync(move |el, _lt| {
+        let want = if show_sync.get() {
+            Display::Flex
+        } else {
+            Display::None
+        };
+        if el.style.display == want {
+            return LayoutStatus::Clean;
+        }
+        el.style.display = want;
+        LayoutStatus::LayoutChanged
+    });
+    let label = Element::new().text("Email").w(200.0).h(24.0);
+    let mut root = Element::from(
+        vstack()
+            .w(480.0)
+            .h(400.0)
+            .child(label)
+            .child(error),
+    );
+    root.style.overflow.x = taffy::style::Overflow::Hidden;
+    root.style.overflow.y = taffy::style::Overflow::Hidden;
+
+    let mut tree = LayoutTree::new();
+    let mut impact0 = LayoutStatus::Clean;
+    let mut collect0 = ReactiveSyncCollect::default();
+    sync_reactive_elements_subtree_ex(
+        &mut root,
+        &mut tree,
+        &mut impact0,
+        640.0,
+        720.0,
+        [0.0, 0.0],
+        false,
+        &mut collect0,
+    );
+    let _ = tree.build_and_layout(&mut root, 640.0, 720.0, [-1.0, -1.0]);
+    let _ = take_frame_paint_nodes();
+
+    show.set(true);
+    let mut impact = LayoutStatus::Clean;
+    let mut collect = ReactiveSyncCollect::default();
+    sync_reactive_elements_subtree_ex(
+        &mut root,
+        &mut tree,
+        &mut impact,
+        640.0,
+        720.0,
+        [0.0, 0.0],
+        false,
+        &mut collect,
+    );
+    assert_eq!(impact, LayoutStatus::LayoutChanged);
+    assert!(
+        !collect.page_layout_changed,
+        "revealing the error must not page-FullClear"
+    );
+    assert!(
+        !collect.display_reveal_keys.is_empty(),
+        "a 0×0 reveal must wait for layout, not the scrollport"
+    );
+    let premature = take_frame_paint_nodes();
+    assert!(
+        premature
+            .iter()
+            .all(|d| d.bounds[2] * d.bounds[3] < 480.0 * 80.0),
+        "sync must not queue the scrollport, got {premature:?}"
+    );
+
+    let _ = tree.build_and_layout(&mut root, 640.0, 720.0, [-1.0, -1.0]);
+    crate::core::tree::push_display_reveal_regions(&root, &collect.display_reveal_keys);
+    let dirties = take_frame_paint_nodes();
+    assert!(
+        dirties.iter().any(|d| {
+            d.kind == PaintDirtyKind::Region && d.bounds[3] > 8.0 && d.bounds[3] < 48.0
+        }),
+        "reveal must clear the error line, got {dirties:?}"
+    );
+    assert!(
+        dirties
+            .iter()
+            .all(|d| d.bounds[1] > 8.0 || d.bounds[3] < 48.0),
+        "reveal must not cover the label above the error, got {dirties:?}"
+    );
+    assert!(
+        dirties.iter().all(|d| d.bounds[3] < 80.0),
+        "reveal must not clear the 400px scrollport, got {dirties:?}"
+    );
 }
 
 #[test]

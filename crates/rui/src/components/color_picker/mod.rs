@@ -1459,6 +1459,305 @@ mod tests {
     }
 
     #[test]
+    fn color_picker_open_clear_leaves_the_title_prefix_blank() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use crate::app::damage::{
+            overlay_membership_paint_stamps, overlay_replay_restore_bounds, take_frame_paint_nodes,
+            PaintDirty, PaintDirtyKind,
+        };
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::core::tree::{sync_reactive_elements_subtree_ex, LayoutStatus, ReactiveSyncCollect};
+        use crate::layout::layout_tree::{hoisted_portal_stamps, LayoutTree};
+        use crate::primitives::r#box::{hstack, vstack};
+        use crate::renderer::font_loader;
+        use crate::text::install_shared_font_system;
+        use crate::utils::floating_motion::{flush_floating_motion_subtree, tick_hoisted_floating_css};
+        use crate::utils::popup::sync_floating_placement;
+
+        let mut fs = font_loader::create_font_system();
+        font_loader::apply_default_families(fs.db_mut());
+        install_shared_font_system(&mut fs);
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        clear_test_reconcile_root();
+        let _ = take_frame_paint_nodes();
+
+        const TITLE: &str = "2c) Inline Calendar · ColorPicker stays under the popover";
+        let live: Rc<RefCell<Element>> = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+        let (owner, ()) = create_root(|| {
+            let live_e = Rc::clone(&live);
+            create_effect(move || {
+                let picker: Element = color_picker("open-diag").default_value("#3b82f6").into();
+                let page = Element::new().w(800.0).h(600.0).overflow("hidden").child(
+                    vstack()
+                        .w(720.0)
+                        .gap("0.5rem")
+                        .child(hstack().w("100%").child(Element::new().flex_grow(1.0)).child(picker))
+                        .child(Element::new().w("100%").text(TITLE).text_size(16.0)),
+                );
+                *live_e.borrow_mut() = page;
+            });
+        });
+        drain_deferred_view_remounts();
+
+        let mut tree = LayoutTree::new();
+        {
+            let mut root = live.borrow_mut();
+            let mut impact = LayoutStatus::Clean;
+            let mut collect = ReactiveSyncCollect::default();
+            sync_reactive_elements_subtree_ex(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+                false,
+                &mut collect,
+            );
+            let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+        }
+        let _ = take_frame_paint_nodes();
+        let before_anchor = {
+            let root = live.borrow();
+            fn find_view<'a>(el: &'a Element) -> Option<&'a Element> {
+                if el
+                    .template_id
+                    .as_deref()
+                    .is_some_and(|t| t.contains("open-diag") && t.ends_with("__view"))
+                {
+                    return Some(el);
+                }
+                el.children.iter().find_map(find_view)
+            }
+            find_view(&root).map(|el| {
+                (
+                    el.layout_bounds,
+                    crate::layout::layout_tree::subtree_is_portal_only(el),
+                    crate::layout::layout_tree::subtree_declares_portal(el),
+                )
+            })
+        };
+
+        fn find_click(el: &Element) -> Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>> {
+            if el.focus_id.as_deref() == Some("open-diag:trigger") {
+                return el.on_click.clone();
+            }
+            el.children.iter().find_map(find_click)
+        }
+        fn find_trigger<'a>(el: &'a Element) -> Option<&'a Element> {
+            if el.focus_id.as_deref() == Some("open-diag:trigger") {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_trigger)
+        }
+        let click = {
+            let tree = live.borrow();
+            find_click(&tree).expect("trigger")
+        };
+        click.borrow_mut()();
+        drain_deferred_view_remounts();
+
+        let mut impact = LayoutStatus::Clean;
+        let mut collect = ReactiveSyncCollect::default();
+        let pre = {
+            let mut root = live.borrow_mut();
+            sync_reactive_elements_subtree_ex(
+                &mut root,
+                &mut tree,
+                &mut impact,
+                800.0,
+                600.0,
+                [0.0, 0.0],
+                false,
+                &mut collect,
+            );
+            let mouse = find_trigger(&root).map(|el| {
+                let b = el.layout_bounds;
+                [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5]
+            });
+            if let Some(mouse) = mouse {
+                crate::style::sync_class_variants_subtree(
+                    &mut root,
+                    mouse,
+                    "open-diag:trigger",
+                    false,
+                    800.0,
+                    600.0,
+                    &mut tree,
+                    &mut impact,
+                );
+            }
+            take_frame_paint_nodes()
+        };
+
+        let (post, stamps, paints, texts, title_box, panel, trigger_box) = {
+            let mut root = live.borrow_mut();
+            let _ = crate::layout::layout_tree::hoist_portal_subtrees(&mut root);
+            let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+            if sync_floating_placement(&mut root, 800.0, 600.0) {
+                let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+            }
+            let _ = flush_floating_motion_subtree(&mut root);
+            let _ = tick_hoisted_floating_css(&mut root);
+            let painted = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+            let post = take_frame_paint_nodes();
+            let stamps = hoisted_portal_stamps(&root);
+            let title = painted
+                .text_nodes
+                .iter()
+                .find(|n| n.text == TITLE)
+                .map(|n| [n.x, n.y, n.width, n.height])
+                .unwrap_or([0.0; 4]);
+            let panel = stamps.first().map(|(_, b)| *b).unwrap_or([0.0; 4]);
+            let trigger_box = find_trigger(&root).map(|el| el.layout_bounds).unwrap_or([0.0; 4]);
+            (
+                post,
+                stamps,
+                painted.node_paints,
+                painted.text_nodes,
+                title,
+                panel,
+                trigger_box,
+            )
+        };
+
+        let mut dirties: Vec<PaintDirty> = pre;
+        dirties.extend(post);
+        for (key, bounds) in overlay_membership_paint_stamps(&[], &stamps) {
+            dirties.push(PaintDirty {
+                key,
+                bounds,
+                kind: PaintDirtyKind::Overlay,
+            });
+        }
+        let overlay_dirties: Vec<_> = dirties
+            .iter()
+            .filter(|d| d.kind == PaintDirtyKind::Overlay)
+            .copied()
+            .collect();
+        for d in &overlay_dirties {
+            if let Some(bounds) =
+                overlay_replay_restore_bounds(d.key, d.bounds, &stamps, Some(panel))
+            {
+                dirties.push(PaintDirty {
+                    key: d.key,
+                    bounds,
+                    kind: PaintDirtyKind::OverlayRestore,
+                });
+            }
+        }
+        crate::app::draw_cull::prepare_node_present_dirties_ex(
+            &mut dirties,
+            &paints,
+            &[],
+            &[],
+            &[],
+            &[],
+            1.0,
+            Some(panel),
+            &stamps,
+        );
+
+        let mut clears = Vec::new();
+        for dirty in &dirties {
+            let pieces = match dirty.kind {
+                PaintDirtyKind::Node | PaintDirtyKind::Region => {
+                    crate::app::damage::page_scissors_excluding_portal_boxes(dirty.bounds, &stamps)
+                }
+                PaintDirtyKind::OverlayRestore => {
+                    crate::app::draw_cull::scissors_keeping_stable_page_captions(
+                        vec![dirty.bounds],
+                        &paints,
+                        &stamps,
+                        Some(panel),
+                    )
+                }
+                PaintDirtyKind::Overlay => continue,
+            };
+            for piece in pieces {
+                clears.push((dirty.kind, piece));
+            }
+        }
+        let (replay, _) = crate::app::draw_cull::overlay_grazing_caption_replay(
+            &dirties,
+            &paints,
+            &stamps,
+            Some(panel),
+            &texts,
+        );
+        let hits = |r: [f32; 4], x: f32, y: f32| {
+            x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
+        };
+        let title_y = title_box[1] + title_box[3] * 0.5;
+        let prefix_x = (panel[0] - 80.0).max(title_box[0] + 4.0);
+        let page = crate::app::draw_cull::page_runs_excluding_caption_replay(texts.clone(), &replay);
+        let covers = |c: [f32; 4], x: f32, y: f32| hits(c, x, y);
+        let prefix_kept = page.iter().any(|n| {
+            n.text == TITLE
+                && covers(
+                    n.clip_bounds
+                        .unwrap_or([n.x, n.y, n.width.max(0.0), n.height.max(0.0)]),
+                    prefix_x,
+                    title_y,
+                )
+        });
+        let button_cx = trigger_box[0] + trigger_box[2] * 0.5;
+        let button_cy = trigger_box[1] + trigger_box[3] * 0.5;
+        let swatch_x = trigger_box[0] + 8.0;
+        let punched = |x: f32| {
+            clears.iter().any(|(kind, r)| {
+                *kind == PaintDirtyKind::OverlayRestore && hits(*r, x, button_cy)
+            })
+        };
+        let report = format!(
+            "before_anchor={before_anchor:?}\n\
+             title={title_box:?} panel={panel:?} trigger={trigger_box:?}\n\
+             dirties={:?}\nclears={clears:?}\nreplay={:?}\npage={:?}\n\
+             prefix=({prefix_x:.1},{title_y:.1}) kept={prefix_kept} center_punched={} swatch_punched={}",
+            dirties
+                .iter()
+                .map(|d| format!("{:?} {}", d.kind, format!("[{:.0},{:.0} {:.0}x{:.0}]", d.bounds[0], d.bounds[1], d.bounds[2], d.bounds[3])))
+                .collect::<Vec<_>>(),
+            replay.iter().map(|n| (n.text.as_str(), n.clip_bounds)).collect::<Vec<_>>(),
+            page.iter().filter(|n| n.text == TITLE).map(|n| n.clip_bounds).collect::<Vec<_>>(),
+            punched(button_cx),
+            punched(swatch_x),
+        );
+        assert!(
+            title_box[2] > 8.0 && panel[2] > 8.0,
+            "scene did not lay out\n{report}"
+        );
+        assert!(
+            prefix_kept,
+            "title prefix left of the popover must stay in the page mesh\n{report}"
+        );
+        assert!(
+            !punched(button_cx) && !punched(swatch_x),
+            "overlay restore punches the trigger\n{report}"
+        );
+        let hairline = clears.iter().any(|(kind, r)| {
+            *kind == PaintDirtyKind::OverlayRestore
+                && (r[2] < 8.0 || r[3] < 8.0)
+                && r[2].max(r[3]) > 32.0
+        });
+        assert!(!hairline, "overlay restore leaves a hairline clear\n{report}");
+
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
+    }
+
+    #[test]
     fn nested_format_select_first_open_seeds_enter_and_encodes() {
         use std::cell::RefCell;
         use std::rc::Rc;

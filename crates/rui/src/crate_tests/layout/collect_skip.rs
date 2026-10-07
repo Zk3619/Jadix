@@ -2192,6 +2192,161 @@ fn scroll_only_must_recollect_link_hover_underline_and_fg() {
     );
 }
 
+/// Hover node-present replaces the scissor with the border-box dest-reset.
+/// Breadcrumb `underline-offset` paints below that box, so the line is clipped
+/// until a scroll FullClear. The decoration hole must contain it, and leave
+/// must still cover the previous quad.
+#[test]
+fn breadcrumb_hover_underline_escapes_border_box_until_decoration_hole() {
+    use crate::app::draw_cull::{expand_scissor_for_text_decoration, node_present_reset_rect};
+    use crate::app::tree_hit::clear_hover_tracking;
+    use crate::components::breadcrumb::breadcrumb;
+    use crate::components::button::sync_button_hover_paint_subtree;
+    use crate::core::reactivity::create_root;
+    use crate::renderer::prepare_text::text_decoration_ink_logical;
+    use crate::renderer::InstanceInput;
+    use bytemuck::Zeroable;
+
+    clear_hover_tracking();
+    let (_h, mut root) = create_root(|| {
+        Element::new().w(320.0).h(80.0).child(
+            breadcrumb()
+                .link("Home", || {})
+                .link("Docs", || {})
+                .page("Current"),
+        )
+    });
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 320.0, 80.0, [-1.0, -1.0]);
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, 320.0, 80.0, [-1.0, -1.0], false, false);
+
+    fn find_link<'a>(el: &'a Element, label: &str) -> Option<&'a Element> {
+        if el.attrs.get("data-slot").map(String::as_str) == Some("breadcrumb-link")
+            && el.children.iter().any(|c| c.text.as_deref() == Some(label))
+        {
+            return Some(el);
+        }
+        el.children.iter().find_map(|c| find_link(c, label))
+    }
+    let mouse = {
+        let link = find_link(&root, "Home").expect("Home link");
+        let b = link.layout_bounds;
+        [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5]
+    };
+    if let Some(hover) = find_link(&root, "Home").and_then(|l| l.on_hover.clone()) {
+        hover.borrow_mut()(true);
+    }
+    let mut impact = LayoutStatus::Clean;
+    sync_button_hover_paint_subtree(&mut root, &mut tree, &mut impact, 320.0, 80.0, [0.0, 0.0]);
+    sync_class_variants_subtree(
+        &mut root,
+        mouse,
+        "",
+        false,
+        320.0,
+        80.0,
+        &mut tree,
+        &mut impact,
+    );
+    let frame = tree.build_and_layout_fast(&mut root, 320.0, 80.0, mouse, false, false);
+    let idx = frame
+        .text_nodes
+        .iter()
+        .position(|t| t.text == "Home")
+        .expect("Home text");
+    let home = &frame.text_nodes[idx];
+    assert!(
+        home.style.underline_resolved(),
+        "hover collect must carry underline"
+    );
+    let ink = text_decoration_ink_logical(home, 1.0).expect("decoration ink");
+    let link_bounds = find_link(&root, "Home").expect("link").layout_bounds;
+    let slot = frame
+        .node_paints
+        .iter()
+        .find(|p| {
+            (p.bounds[0] - link_bounds[0]).abs() < 2.0
+                && (p.bounds[1] - link_bounds[1]).abs() < 2.0
+                && (p.bounds[2] - link_bounds[2]).abs() < 2.0
+                && (p.bounds[3] - link_bounds[3]).abs() < 2.0
+        })
+        .expect("button slot");
+    let textured: &[crate::renderer::ScaledTexturedDraw] = &[];
+    let hole = node_present_reset_rect(
+        slot.key,
+        slot.bounds,
+        &frame.node_paints,
+        &frame.instances,
+        textured,
+        &frame.input_chrome_instances,
+        3.0,
+        1.0,
+        None,
+    )
+    .unwrap_or(slot.bounds);
+    let ink_bottom = ink[1] + ink[3];
+    let hole_bottom = hole[1] + hole[3];
+    assert!(
+        ink_bottom > hole_bottom + 0.5,
+        "underline must stick out of the border-box wipe ink={ink:?} hole={hole:?} text_box=[{}, {}, {}, {}] offset={}",
+        home.x,
+        home.y,
+        home.width,
+        home.height,
+        home.style.underline_offset_resolved()
+    );
+    let expanded = expand_scissor_for_text_decoration(
+        hole,
+        slot.key,
+        slot.bounds,
+        &frame.node_paints,
+        &frame.text_nodes,
+        &[],
+        1.0,
+    );
+    assert!(
+        ink_bottom <= expanded[1] + expanded[3] + 0.5,
+        "decoration hole must cover the underline ink={ink:?} expanded={expanded:?}"
+    );
+
+    let mut left = frame.text_nodes.clone();
+    left[idx].style.underline = Some(false);
+    let mut prev = InstanceInput::zeroed();
+    prev.rect_pos = [ink[0], ink[1]];
+    prev.rect_size = [ink[2], ink[3]];
+    let leave = expand_scissor_for_text_decoration(
+        hole,
+        slot.key,
+        slot.bounds,
+        &frame.node_paints,
+        &left,
+        &[prev],
+        1.0,
+    );
+    assert!(
+        ink_bottom <= leave[1] + leave[3] + 0.5,
+        "leave must still cover the previous underline leave={leave:?}"
+    );
+
+    let mut far = prev;
+    far.rect_pos[1] = slot.bounds[1] + slot.bounds[3] + 40.0;
+    let isolated = expand_scissor_for_text_decoration(
+        hole,
+        slot.key,
+        slot.bounds,
+        &frame.node_paints,
+        &left,
+        &[far],
+        1.0,
+    );
+    assert!(
+        (isolated[1] + isolated[3] - hole_bottom).abs() < 0.5,
+        "a line 40px below belongs to the next row, not this slot isolated={isolated:?} hole={hole:?}"
+    );
+    clear_hover_tracking();
+}
+
 fn instance_has_chip_color(
     result: &crate::layout::layout_tree::RenderResult,
     color: [f32; 4],
