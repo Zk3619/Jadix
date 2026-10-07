@@ -847,6 +847,52 @@ pub(crate) fn capture_glyph_scissors_physical(
     pieces
 }
 
+/// Late page glyphs must never cover a portal painted earlier in the pass.
+/// Subtract after outward rounding so fractional layout edges cannot reopen a
+/// device-pixel row in the panel when the final GPU scissor is rounded again.
+pub(crate) fn capture_glyph_scissors_excluding_portals_physical(
+    repaired: &[[f32; 4]],
+    portals: &[[f32; 4]],
+    width: u32,
+    height: u32,
+) -> Vec<[f32; 4]> {
+    let mut pieces = capture_glyph_scissors_physical(repaired, width, height);
+    // The repair itself is an outward-rounded clear, but a portal only owns
+    // pixels fully covered by its fractional layout rect. Keeping the partial
+    // edge pixels in the page replay preserves the underlay beneath the portal's
+    // antialiased boundary; excluding the outward-rounded edge leaves a white
+    // line where CLEAR removed the retained page glyphs before the portal blend.
+    for portal in capture_glyph_portal_coverage_physical(portals, width, height) {
+        pieces = pieces
+            .into_iter()
+            .flat_map(|piece| crate::app::damage::subtract_rect(piece, portal))
+            .collect();
+    }
+    pieces
+}
+
+fn capture_glyph_portal_coverage_physical(
+    portals: &[[f32; 4]],
+    width: u32,
+    height: u32,
+) -> Vec<[f32; 4]> {
+    let mut pieces = Vec::new();
+    for [x, y, w, h] in portals {
+        if !x.is_finite() || !y.is_finite() || !w.is_finite() || !h.is_finite() {
+            continue;
+        }
+        let x0 = x.max(0.0).ceil();
+        let y0 = y.max(0.0).ceil();
+        let x1 = (x + w).min(width as f32).floor();
+        let y1 = (y + h).min(height as f32).floor();
+        if x1 <= x0 || y1 <= y0 {
+            continue;
+        }
+        crate::app::damage::push_disjoint_rect(&mut pieces, [x0, y0, x1 - x0, y1 - y0]);
+    }
+    pieces
+}
+
 /// OverlayRestore / overlay-suffix scissors with stable page captions removed.
 ///
 /// `打开` and `关闭` share one suffix box. The padded portal halo still contains
@@ -936,7 +982,7 @@ pub(crate) fn scissors_keeping_stable_page_captions(
 }
 
 /// A line that only grazes the portal (AvatarGroup caption above +N) stays in
-/// the halo clear so the top shadow can paint. Those glyphs are replayed after
+/// the halo clear so the top shadow can paint. Those glyphs are replayed before
 /// the overlay; carving the line out of the scissor also drops that shadow.
 pub(crate) fn grazing_caption_replay_runs(
     paints: &[NodePaint],
@@ -948,6 +994,7 @@ pub(crate) fn grazing_caption_replay_runs(
         return Vec::new();
     }
     let mut runs = Vec::new();
+    let mut selected = BTreeSet::new();
     for paint in paints {
         if paint.overlay || paint.text.0 >= paint.text.1 {
             continue;
@@ -958,7 +1005,9 @@ pub(crate) fn grazing_caption_replay_runs(
         }
         let live = |s: &[f32; 4]| s[2] > 0.5 && s[3] > 0.5;
         let grazes = if stamps.is_empty() {
-            cleared.iter().any(|hole| live(hole) && intersect_rects(face, *hole).is_some())
+            cleared
+                .iter()
+                .any(|hole| live(hole) && intersect_rects(face, *hole).is_some())
         } else {
             stamps.iter().any(|(_, stamp)| {
                 live(stamp)
@@ -972,20 +1021,38 @@ pub(crate) fn grazing_caption_replay_runs(
         }
         let lo = paint.text.0.min(texts.len());
         let hi = paint.text.1.min(texts.len());
-        for node in &texts[lo..hi] {
-            let mut best: Option<TextLayoutInfo> = None;
+        for index in lo..hi {
+            if selected.contains(&index) {
+                continue;
+            }
+            let node = &texts[index];
+            let mut repair: Option<TextLayoutInfo> = None;
             for hole in cleared {
                 let Some(clipped) = clip_text_node_to_scroll_rect(node, *hole) else {
                     continue;
                 };
-                let wider = best.as_ref().is_none_or(|prev| {
-                    clipped.clip_bounds.map(|c| c[2]) > prev.clip_bounds.map(|c| c[2])
-                });
-                if wider {
-                    best = Some(clipped);
+                if let Some(piece) = clipped.clip_bounds {
+                    if let Some(current) = repair.as_mut() {
+                        if let Some(existing) = current.clip_bounds.as_mut() {
+                            let right = (existing[0] + existing[2]).max(piece[0] + piece[2]);
+                            existing[0] = existing[0].min(piece[0]);
+                            existing[2] = (right - existing[0]).max(0.0);
+                        }
+                    } else {
+                        repair = Some(clipped);
+                    }
                 }
             }
-            if let Some(best) = best {
+            if let Some(repair) = repair {
+                selected.insert(index);
+                let mut best = repair;
+                // glyphon floors TextBounds edges. The clear scissor is
+                // outward-rounded, so keep one logical pixel of coverage on
+                // the far edges; the render-pass scissor still limits replay
+                // to the repaired pixels.
+                if let Some(clip) = best.clip_bounds {
+                    best.clip_bounds = Some(padded_xywh(clip, NODE_PRESENT_GLYPH_CLIP_PAD));
+                }
                 runs.push(best);
             }
         }
@@ -994,8 +1061,8 @@ pub(crate) fn grazing_caption_replay_runs(
 }
 
 /// Cleared overlay / restore pixels that a grazing caption must be drawn back
-/// into, after the shadow. Overlay encode wins when the portal is still up so
-/// the replay sits on the halo; a close with no encode replays the restore hole.
+/// into before the overlay. A live portal can shrink while its previous wider
+/// footprint is restored, so both kinds of clear contribute to caption repair.
 pub(crate) fn overlay_grazing_caption_replay(
     dirties: &[PaintDirty],
     paints: &[NodePaint],
@@ -1033,26 +1100,21 @@ pub(crate) fn overlay_grazing_caption_replay(
             ));
         }
     }
-    let cleared = if !overlay_holes.is_empty() {
-        overlay_holes
-    } else {
-        let mut restore_holes = Vec::new();
-        for dirty in dirties {
-            if dirty.kind != PaintDirtyKind::OverlayRestore
-                || dirty.bounds[2] <= 0.5
-                || dirty.bounds[3] <= 0.5
-            {
-                continue;
-            }
-            restore_holes.extend(scissors_keeping_stable_page_captions(
-                vec![dirty.bounds],
-                paints,
-                stamps,
-                occupied.or(Some(dirty.bounds)),
-            ));
+    let mut cleared = overlay_holes;
+    for dirty in dirties {
+        if dirty.kind != PaintDirtyKind::OverlayRestore
+            || dirty.bounds[2] <= 0.5
+            || dirty.bounds[3] <= 0.5
+        {
+            continue;
         }
-        restore_holes
-    };
+        cleared.extend(scissors_keeping_stable_page_captions(
+            vec![dirty.bounds],
+            paints,
+            stamps,
+            occupied.or(Some(dirty.bounds)),
+        ));
+    }
     let runs = grazing_caption_replay_runs(paints, stamps, texts, &cleared);
     let flush = runs
         .iter()
@@ -1068,7 +1130,7 @@ pub(crate) fn overlay_grazing_caption_replay(
 }
 
 /// Page glyphon is submitted before the overlay suffix. Grazing captions are
-/// drawn once, from the capture mesh, after the shadow.
+/// drawn once, from the capture mesh, before the overlay shadow.
 pub(crate) fn page_runs_excluding_caption_replay(
     mut runs: Vec<TextLayoutInfo>,
     replay: &[TextLayoutInfo],
@@ -1077,9 +1139,9 @@ pub(crate) fn page_runs_excluding_caption_replay(
         return runs;
     }
     runs.retain(|n| {
-        !replay.iter().any(|r| {
-            r.text == n.text && (r.x - n.x).abs() < 0.5 && (r.y - n.y).abs() < 0.5
-        })
+        !replay
+            .iter()
+            .any(|r| r.text == n.text && (r.x - n.x).abs() < 0.5 && (r.y - n.y).abs() < 0.5)
     });
     runs
 }
@@ -3458,6 +3520,7 @@ fn overlaps_foreign_layered_bar(
 fn peer_fringe_restore_only(
     dirty_key: u64,
     dirty_bounds: [f32; 4],
+    hole: [f32; 4],
     node_paints: &[NodePaint],
 ) -> bool {
     if matching_slot_is_layered(dirty_key, dirty_bounds, node_paints) {
@@ -3467,7 +3530,23 @@ fn peer_fringe_restore_only(
         return false;
     }
     paints_has_keyed_slot(dirty_key, dirty_bounds, node_paints)
-        && peer_halo_fringe_needs_restore(dirty_key, dirty_bounds, node_paints)
+        && peer_halo_fringe_needs_restore_in_hole(dirty_key, dirty_bounds, hole, node_paints)
+}
+
+/// Adjacent in-flow chrome must be reconstructed in scene order, together with
+/// the dirty slot. Testing the damage box misses the AA rows that dest-reset
+/// clears outside it. A focus ring remains a separate overlay over its peers.
+pub(crate) fn node_present_replays_peer_chrome(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    hole: [f32; 4],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+) -> bool {
+    peer_fringe_restore_only(dirty_key, dirty_bounds, hole, node_paints)
+        && !node_paints
+            .iter()
+            .any(|p| p.key == dirty_key && paint_instances_carry_focus_ring(p, instances))
 }
 
 /// Which foreign slot to redraw into a dest-reset hole.
@@ -3511,7 +3590,7 @@ pub(crate) fn node_present_underlay_paint(
     if underlay_range_covers_dirty_slot(dirty_key, dirty_bounds, paint, node_paints) {
         return false;
     }
-    if !peer_fringe_restore_only(dirty_key, dirty_bounds, node_paints) {
+    if !peer_fringe_restore_only(dirty_key, dirty_bounds, hole, node_paints) {
         return true;
     }
     let Some(rest_host) = matching_rest_host(dirty_key, dirty_bounds, node_paints) else {
@@ -3575,6 +3654,15 @@ fn peer_halo_fringe_needs_restore(
     dirty_bounds: [f32; 4],
     node_paints: &[NodePaint],
 ) -> bool {
+    peer_halo_fringe_needs_restore_in_hole(dirty_key, dirty_bounds, dirty_bounds, node_paints)
+}
+
+fn peer_halo_fringe_needs_restore_in_hole(
+    dirty_key: u64,
+    dirty_bounds: [f32; 4],
+    hole: [f32; 4],
+    node_paints: &[NodePaint],
+) -> bool {
     let Some(rest_host) = matching_rest_host(dirty_key, dirty_bounds, node_paints) else {
         return false;
     };
@@ -3587,7 +3675,7 @@ fn peer_halo_fringe_needs_restore(
             return false;
         }
         let occ = node_paint_occupancy(p);
-        let Some(hit) = intersect_rects(dirty_bounds, occ) else {
+        let Some(hit) = intersect_rects(hole, occ) else {
             return false;
         };
         peer_edge_halo_fringe(rest_host, occ, hit, 1.0)
@@ -4779,13 +4867,7 @@ pub(crate) fn node_present_layered_underlay_capture_text(
     page_text: &[TextLayoutInfo],
     node_paints: &[NodePaint],
 ) -> Vec<TextLayoutInfo> {
-    node_present_layered_underlay_capture_text_wipes(
-        dirty_nodes,
-        page_text,
-        node_paints,
-        &[],
-        &[],
-    )
+    node_present_layered_underlay_capture_text_wipes(dirty_nodes, page_text, node_paints, &[], &[])
 }
 
 /// Fill box of a live opaque layered plate, without its shadow halo.
@@ -4815,7 +4897,12 @@ pub(crate) fn opaque_slot_fill_aabb(
             if inst.color[3] <= 0.95 || inst.rect_size[0] <= 8.0 || inst.rect_size[1] <= 8.0 {
                 continue;
             }
-            let local = [inst.rect_pos[0], inst.rect_pos[1], inst.rect_size[0], inst.rect_size[1]];
+            let local = [
+                inst.rect_pos[0],
+                inst.rect_pos[1],
+                inst.rect_size[0],
+                inst.rect_size[1],
+            ];
             let bounds = if !transform_is_identity(&inst.transform) {
                 aabb_of_centered_transform(local, &inst.transform)
             } else {
@@ -4867,12 +4954,8 @@ pub(crate) fn node_present_layered_underlay_capture_text_wipes(
             }
             // The plate occludes. Remainder clips are the trail the fill does
             // not cover. A clip of the chip interior is the line on Latest.
-            let clips = match opaque_slot_fill_aabb(
-                dirty.key,
-                dirty.bounds,
-                node_paints,
-                instances,
-            ) {
+            let clips = match opaque_slot_fill_aabb(dirty.key, dirty.bounds, node_paints, instances)
+            {
                 Some(plate) => crate::app::damage::subtract_rect(hit, plate)
                     .into_iter()
                     .filter(|r| r[2] > 0.5 && r[3] > 0.5)
@@ -6952,7 +7035,8 @@ mod tests {
         line.y = caption[1];
         line.width = caption[2];
         line.height = caption[3];
-        let replay = grazing_caption_replay_runs(&[caption_paint], &[(9u64, stamp)], &[line], &cleared);
+        let replay =
+            grazing_caption_replay_runs(&[caption_paint], &[(9u64, stamp)], &[line], &cleared);
         assert!(
             replay.iter().any(|n| {
                 n.clip_bounds
@@ -6967,6 +7051,86 @@ mod tests {
                 .all(|n| n.clip_bounds.is_none_or(|c| !hits(c, 400.0, 46.0))),
             "replay must not src-over the uncleared tail, got {:?}",
             replay.iter().map(|n| n.clip_bounds).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn grazing_caption_replay_keeps_disjoint_restore_and_live_halo_pieces() {
+        let mut line = sample_text("expand_placement / expand_class", 16.25);
+        line.y = 30.25;
+        line.width = 280.0;
+        line.height = 32.0;
+        let paint = slot(4, [16.25, 30.25, 280.0, 32.0], (0, 1));
+        let cleared = [[8.25, 39.25, 170.0, 24.0], [248.25, 39.25, 18.0, 24.0]];
+        let replay = grazing_caption_replay_runs(
+            &[paint],
+            &[(9, [7.25, 55.25, 140.0, 40.0])],
+            &[line],
+            &cleared,
+        );
+        assert_eq!(
+            replay.len(),
+            1,
+            "one source must repair all cleared pieces without repeated blending"
+        );
+        let clip = replay[0].clip_bounds.unwrap();
+        assert!(
+            clip[0] <= 248.25 && clip[0] + clip[2] >= 266.25,
+            "the narrow previous-footprint restore must retain glyphs too: {clip:?}"
+        );
+    }
+
+    #[test]
+    fn grazing_caption_replay_deduplicates_shared_parent_and_leaf_text() {
+        let line = sample_text("原地向下盖住展开", 8.0);
+        let mut parent = slot(1, [0.0, 0.0, 120.0, 20.0], (0, 1));
+        let mut leaf = slot(2, [0.0, 0.0, 120.0, 20.0], (0, 1));
+        parent.text = (0, 1);
+        leaf.text = (0, 1);
+        let cleared = [[0.0, 0.0, 120.0, 20.0]];
+        let replay = grazing_caption_replay_runs(
+            &[parent, leaf],
+            &[(9u64, [50.0, 10.0, 80.0, 40.0])],
+            &[line],
+            &cleared,
+        );
+        assert_eq!(
+            replay.len(),
+            1,
+            "the same TextLayoutInfo must have one late replay source, got {:?}",
+            replay.iter().map(|n| n.text.as_str()).collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn capture_glyph_scissors_exclude_current_portal_pixels() {
+        let pieces = capture_glyph_scissors_excluding_portals_physical(
+            &[[0.0, 0.0, 100.0, 30.0]],
+            &[[40.0, 0.0, 20.0, 30.0]],
+            100,
+            30,
+        );
+        assert_eq!(
+            pieces,
+            vec![[0.0, 0.0, 40.0, 30.0], [60.0, 0.0, 40.0, 30.0]]
+        );
+    }
+
+    #[test]
+    fn capture_glyph_scissors_keep_fractional_portal_edge_pixels() {
+        let pieces = capture_glyph_scissors_excluding_portals_physical(
+            &[[0.0, 0.0, 100.0, 100.0]],
+            &[[16.25, 51.35, 220.0, 20.2]],
+            100,
+            100,
+        );
+        assert!(
+            pieces.iter().any(|r| r[1] == 0.0 && r[3] == 52.0),
+            "the partially covered top edge must remain available for underlay replay: {pieces:?}"
+        );
+        assert!(
+            pieces.iter().any(|r| r[1] == 71.0),
+            "the partially covered bottom edge must remain available for underlay replay: {pieces:?}"
         );
     }
 

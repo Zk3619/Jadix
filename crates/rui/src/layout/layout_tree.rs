@@ -2318,7 +2318,10 @@ fn record_node_paint(
     } else {
         scroll_acc
     };
-    let b = crate::core::tree::visual_paint_aabb(el, paint_scroll);
+    let b = crate::components::button_group::group_paint_bounds(
+        el,
+        crate::core::tree::visual_paint_aabb(el, paint_scroll),
+    );
     if b[2] <= 0.0 && b[3] <= 0.0 {
         return;
     }
@@ -5392,7 +5395,6 @@ impl LayoutTree {
         if crate::components::scrollbar::auto_scrollbar_needs_node_present(element) {
             crate::app::damage::push_frame_paint_element(element, scroll_for_render);
         }
-        let paint_nudge = crate::components::button_group::button_group_paint_nudge(element);
         let offset_motion = crate::style::offset_path::sample(&element.style, [lay_w, lay_h]);
         // 布局原点（文字 / 子节点 / overflow clip）。连体叠边只扩 chrome，不平移整框。
         let mut render_x = abs_x - scroll_for_render[0]
@@ -5449,12 +5451,14 @@ impl LayoutTree {
         // Include ancestor scale (CarouselStack: scale lives on the shell; children stay at 1).
         let paint_sx = (ancestor_scale[0] * scale_x).clamp(0.01, 8.0);
         let paint_sy = (ancestor_scale[1] * scale_y).clamp(0.01, 8.0);
-        // ButtonGroup：向共享边加宽 1px，远侧边仍落在布局盒上（避免中间项整框平移后
-        // 与 Separator / 下一项并成 2px 线）。
-        let chrome_x = render_x + paint_nudge[0];
-        let chrome_y = render_y + paint_nudge[1];
-        let chrome_w = (lay_w - paint_nudge[0]).max(0.0);
-        let chrome_h = (lay_h - paint_nudge[1]).max(0.0);
+        // ButtonGroup owns each shared edge exactly once. Use the same ownership
+        // box for submitted chrome instances that damage and retained paint use;
+        // otherwise a replay of the previous segment can overwrite its neighbour.
+        let [chrome_x, chrome_y, chrome_w, chrome_h] =
+            crate::components::button_group::group_paint_bounds(
+                element,
+                [render_x, render_y, lay_w, lay_h],
+            );
         // Bake CSS independent `scale` into the instance rect about `transform-origin`
         // so placement matches `visual_paint_aabb` (hover / leave). Center origin is
         // the old `(size-scaled)*0.5` inset. Passing `style.scale` again in the SDF

@@ -135,7 +135,10 @@ pub(crate) fn push_frame_paint_element_change(
     if previous_opacity < 0.01 && skip_transparent_shown_dest_reset(el) {
         return;
     }
-    let b = clamp_overlay_clip_box(el, crate::core::tree::visual_paint_aabb(el, scroll_acc));
+    let b = crate::components::button_group::group_damage_bounds(
+        el,
+        clamp_overlay_clip_box(el, crate::core::tree::visual_paint_aabb(el, scroll_acc)),
+    );
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return;
     }
@@ -3512,6 +3515,34 @@ mod tests {
                 && (b[3] - 30.0).abs() < 0.01,
             "no-halo node must dirty the visual layout box, not vertex-AA pad, got {b:?}"
         );
+    }
+
+    #[test]
+    fn button_group_hover_dirty_includes_shared_edge_paint_nudge() {
+        let _ = take_frame_paint_nodes();
+        let mut el = Element::new();
+        el.layout_bounds = [10.0, 20.0, 100.0, 30.0];
+        el.set_attr("rui_button_group_nudge", "x");
+
+        push_frame_paint_element(&el, [0.0, 0.0]);
+        let dirties = take_frame_paint_nodes();
+        assert_eq!(dirties.len(), 1, "expected one dirty node, got {dirties:?}");
+        let b = dirties[0].bounds;
+        assert_eq!(b, [9.0, 20.0, 101.0, 30.0]);
+    }
+
+    #[test]
+    fn button_group_first_hover_dirty_preserves_next_shared_edge() {
+        let _ = take_frame_paint_nodes();
+        let mut el = Element::new();
+        el.layout_bounds = [10.0, 20.0, 100.0, 30.0];
+        el.set_attr("rui_button_group_nudge_next", "x");
+
+        push_frame_paint_element(&el, [0.0, 0.0]);
+        let dirties = take_frame_paint_nodes();
+        assert_eq!(dirties.len(), 1, "expected one dirty node, got {dirties:?}");
+        let b = dirties[0].bounds;
+        assert_eq!(b, [10.0, 20.0, 99.0, 30.0]);
     }
 
     #[test]

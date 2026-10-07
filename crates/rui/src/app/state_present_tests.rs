@@ -3,6 +3,887 @@ use super::*;
 use crate::app::{damage::*, draw_cull::*};
 use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 
+#[test]
+#[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+fn avatar_interrupted_expand_restores_caption_each_frame() {
+    use crate as rui;
+    use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+    use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+    use crate::core::reactivity::{create_effect, create_root, isolate_reads};
+    use crate::layout::layout_tree::{hoist_portal_subtrees, hoisted_portal_stamps};
+    use crate::utils::floating_motion::{
+        drain_pending_floating_unmounts, flush_floating_motion_subtree,
+        mark_floating_panels_layout_dirty, tick_floating_presence, tick_hoisted_floating_css,
+    };
+    use crate::utils::popup::sync_floating_placement;
+    use std::{cell::RefCell, rc::Rc};
+
+    crate::app::portal_overlay::clear_overlay_stack();
+    reset_registered_anchors();
+    clear_test_reconcile_root();
+    let live = Rc::new(RefCell::new(Element::new()));
+    install_test_reconcile_root(Rc::clone(&live));
+    let (owner, ()) = create_root(|| {
+        let live = Rc::clone(&live);
+        create_effect(move || {
+            *live.borrow_mut() = isolate_reads(|| {
+                use crate::components::*;
+                let group = crate::ui! {
+                    <AvatarGroup>
+                        <Avatar><AvatarFallback>"A"</AvatarFallback></Avatar>
+                        <Avatar><AvatarFallback>"B"</AvatarFallback></Avatar>
+                        <Avatar><AvatarFallback>"C"</AvatarFallback></Avatar>
+                        <AvatarGroupCount>
+                            "+3"
+                            <Avatar><AvatarFallback>"D"</AvatarFallback></Avatar>
+                            <Avatar><AvatarFallback>"E"</AvatarFallback></Avatar>
+                            <Avatar><AvatarFallback>"F"</AvatarFallback></Avatar>
+                        </AvatarGroupCount>
+                    </AvatarGroup>
+                };
+                let mut caption = Element::new().w(280.0).h(32.0).text_size(11.2)
+                .text("悬停 / 点击 +N：原地向下盖住展开（expand_placement / expand_class / max_visible 可配）");
+                caption.text_style.color = Some([100, 100, 100, 255]);
+                Element::new()
+                    .w(320.0)
+                    .h(200.0)
+                    .child(
+                        Element::new()
+                            .absolute()
+                            .left(16.25)
+                            .top(30.25)
+                            .w(280.0)
+                            .h(32.0)
+                            .child(caption),
+                    )
+                    .child(
+                        Element::new()
+                            .absolute()
+                            .left(16.25)
+                            .top(64.25)
+                            .w(280.0)
+                            .child(group.w(104.0).min_w(104.0)),
+                    )
+            });
+        });
+    });
+    drain_deferred_view_remounts();
+    fn find_count(el: &Element) -> Option<Rc<RefCell<dyn FnMut()>>> {
+        if el.attrs.get("data-slot").map(String::as_str) == Some("avatar-group-count") {
+            if let Some(click) = &el.on_click {
+                return Some(Rc::clone(click));
+            }
+        }
+        el.children.iter().find_map(find_count)
+    }
+    let gpu = OffscreenGpu::new().expect("GPU adapter");
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        width: 320,
+        height: 200,
+        present_mode: wgpu::PresentMode::Fifo,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        view_formats: vec![],
+        desired_maximum_frame_latency: 1,
+    };
+    let pipeline = RuiPipeline::from_format(&gpu.device, config.format, 320, 200);
+    pipeline.update_resolution(&gpu.queue, 320, 200);
+    let make_target = || {
+        gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Interrupted AvatarGroup animation"),
+            size: wgpu::Extent3d {
+                width: 320,
+                height: 200,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    };
+    let retained = make_target();
+    let reference = make_target();
+    let mut tree = LayoutTree::new();
+    let mut previous: Vec<(u64, [f32; 4])> = Vec::new();
+    let mut previous_visual = None;
+    clear_frame_paint_nodes();
+    for frame in 0..24 {
+        if frame == 1 {
+            let click = find_count(&live.borrow()).expect("+N click");
+            click.borrow_mut()();
+        }
+        if frame == 3 {
+            assert!(
+                previous.iter().any(|(_, b)| b[2] > 122.0 && b[2] < 230.0),
+                "must close during expansion, before full width: {previous:?}"
+            );
+            assert!(crate::components::avatar::dismiss_avatar_group_expands_on_scroll());
+        }
+        tick_floating_presence();
+        drain_pending_floating_unmounts();
+        drain_deferred_view_remounts();
+        crate::style::utility::set_frame_dt(0.016);
+        let (scene, stamps) = {
+            let mut root = live.borrow_mut();
+            hoist_portal_subtrees(&mut root);
+            let mut scene = tree.build_and_layout(&mut root, 320.0, 200.0, [-1.0, -1.0]);
+            if sync_floating_placement(&mut root, 320.0, 200.0) {
+                scene = tree.build_and_layout_fast_ex(
+                    &mut root,
+                    320.0,
+                    200.0,
+                    [-1.0, -1.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            let motion = flush_floating_motion_subtree(&mut root);
+            let ticking = tick_hoisted_floating_css(&mut root);
+            if motion || ticking {
+                mark_floating_panels_layout_dirty(&mut root, &mut tree);
+                scene = tree.build_and_layout_fast_ex(
+                    &mut root,
+                    320.0,
+                    200.0,
+                    [-1.0, -1.0],
+                    false,
+                    false,
+                    None,
+                );
+            }
+            (scene, hoisted_portal_stamps(&root))
+        };
+        let visual = AppState::overlay_visual_bounds_logical(
+            &scene.instances[scene.overlay_split.instance_start..],
+            &[],
+            &scene.text_nodes[scene.overlay_split.text_start..],
+            &[],
+            1.0,
+        );
+        let mut dirties: Vec<_> = take_frame_paint_nodes()
+            .into_iter()
+            .filter(|d| d.kind == PaintDirtyKind::Overlay)
+            .collect();
+        for (key, stamp) in overlay_membership_paint_stamps(&previous, &stamps) {
+            dirties.push(PaintDirty {
+                key,
+                bounds: stamp,
+                kind: PaintDirtyKind::Overlay,
+            });
+        }
+        let overlay_dirties = dirties.clone();
+        for dirty in &overlay_dirties {
+            for hole in
+                overlay_mounted_replace_holes(&previous, &stamps, dirty.key, Some(dirty.bounds))
+            {
+                dirties.push(PaintDirty {
+                    key: dirty.key,
+                    bounds: hole,
+                    kind: PaintDirtyKind::OverlayRestore,
+                });
+            }
+        }
+        let replay: Vec<_> = overlay_dirties
+            .iter()
+            .map(|d| (d.key, overlay_suffix_encode_bounds(d.bounds)))
+            .collect();
+        for (keys, bounds) in merge_overlay_replay_dirties(&replay, &stamps) {
+            let key = keys[0];
+            if let Some(hole) = overlay_replay_restore_bounds(key, bounds, &stamps, visual) {
+                dirties.push(PaintDirty {
+                    key,
+                    bounds: hole,
+                    kind: PaintDirtyKind::OverlayRestore,
+                });
+            }
+        }
+        for (key, hole) in overlay_restore_leftover_coverage(&previous, &stamps, previous_visual) {
+            dirties.push(PaintDirty {
+                key,
+                bounds: hole,
+                kind: PaintDirtyKind::OverlayRestore,
+            });
+        }
+        let (runs, flush) = overlay_grazing_caption_replay(
+            &dirties,
+            &scene.node_paints,
+            &stamps,
+            visual,
+            &scene.text_nodes,
+        );
+        if frame == 2 {
+            assert!(
+                !stamps.is_empty(),
+                "test must interrupt a visible entering portal"
+            );
+        }
+        let mut holes = Vec::new();
+        let mut overlay_holes = Vec::new();
+        let mut clear_rects: Vec<_> = dirties
+            .iter()
+            .filter(|d| d.kind == PaintDirtyKind::OverlayRestore)
+            .map(|d| (false, d.bounds, visual.or(Some(d.bounds))))
+            .collect();
+        for (keys, bounds) in merge_overlay_replay_dirties(&replay, &stamps) {
+            let occupancy = overlay_encode_occupancy(keys[0], Some(bounds), &stamps, visual);
+            if let Some(hole) = overlay_encode_scissor(Some(bounds), occupancy, None) {
+                clear_rects.push((true, hole, occupancy));
+            }
+        }
+        for (is_overlay, hole, shadow) in clear_rects {
+            let pieces = scissors_keeping_stable_page_captions(
+                vec![hole],
+                &scene.node_paints,
+                &stamps,
+                shadow,
+            );
+            for piece in pieces {
+                let (x, y, w, h) = damage_to_scissor_physical(piece, 0.0, 1.0, 320, 200).unwrap();
+                let physical = [x as f32, y as f32, w as f32, h as f32];
+                if is_overlay {
+                    push_disjoint_rect(&mut overlay_holes, physical);
+                } else {
+                    push_disjoint_rect(&mut holes, physical);
+                }
+            }
+        }
+        let page_end = scene.overlay_split.text_start.min(scene.text_nodes.len());
+        let page = &scene.text_nodes[..page_end];
+        let make_renderer = |text: &[crate::layout::layout_tree::TextLayoutInfo]| {
+            let mut renderer = RuiTextRenderer::new(&gpu.device, &gpu.queue, &config);
+            crate::renderer::prepare_text::prepare_text_frame_at(
+                &mut renderer,
+                &gpu.device,
+                &gpu.queue,
+                320,
+                200,
+                text,
+                1.0,
+                false,
+                &Default::default(),
+                &Default::default(),
+            );
+            renderer
+        };
+        let repair = make_renderer(&runs);
+        let page_renderer = make_renderer(&clip_text_nodes_to_cull(
+            &page_runs_excluding_caption_replay(page.to_vec(), &runs),
+            CullRects::from_rects(holes.iter().copied()).unwrap_or(CullRects::empty()),
+        ));
+        let full_page = make_renderer(page);
+        let overlay = make_renderer(&scene.text_nodes[page_end..]);
+        let draw = |target: &wgpu::Texture, full: bool| {
+            let view = target.create_view(&Default::default());
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: if full {
+                                wgpu::LoadOp::Clear(wgpu::Color::WHITE)
+                            } else {
+                                wgpu::LoadOp::Load
+                            },
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                let page_holes = if full {
+                    vec![[0.0, 0.0, 320.0, 200.0]]
+                } else {
+                    holes.clone()
+                };
+                for hole in &page_holes {
+                    let (x, y, w, h) =
+                        damage_to_scissor_physical(*hole, 0.0, 1.0, 320, 200).unwrap();
+                    pass.set_scissor_rect(x, y, w, h);
+                    if !full {
+                        draw_scissor_fill(
+                            &mut pass,
+                            &pipeline,
+                            &gpu.device,
+                            *hole,
+                            wgpu::Color::WHITE,
+                        );
+                    }
+                    draw_sdf_range_with_clip(
+                        &mut pass,
+                        &pipeline,
+                        &gpu.device,
+                        pipeline.dummy_backdrop(),
+                        &scene.instances,
+                        &scene.clip_polys,
+                        0,
+                        scene.overlay_split.instance_start as u32,
+                        None,
+                    );
+                    if full {
+                        full_page.render(&mut pass);
+                    } else {
+                        page_renderer.render(&mut pass);
+                    }
+                }
+                if !full {
+                    let physical_flush: Vec<_> = flush
+                        .iter()
+                        .filter_map(|h| {
+                            damage_to_scissor_physical(*h, 0.0, 1.0, 320, 200)
+                                .map(|(x, y, w, h)| [x as f32, y as f32, w as f32, h as f32])
+                        })
+                        .collect();
+                    draw_captured_page_glyphs(&repair, &mut pass, 320, 200, &physical_flush, &[]);
+                }
+                for hole in &overlay_holes {
+                    let (x, y, w, h) =
+                        damage_to_scissor_physical(*hole, 0.0, 1.0, 320, 200).unwrap();
+                    pass.set_scissor_rect(x, y, w, h);
+                    draw_sdf_range_with_clip(
+                        &mut pass,
+                        &pipeline,
+                        &gpu.device,
+                        pipeline.dummy_backdrop(),
+                        &scene.instances,
+                        &scene.clip_polys,
+                        scene.overlay_split.instance_start as u32,
+                        (scene.instances.len() - scene.overlay_split.instance_start) as u32,
+                        None,
+                    );
+                    overlay.render(&mut pass);
+                }
+            }
+            gpu.queue.submit(Some(encoder.finish()));
+        };
+        draw(&retained, frame == 0);
+        draw(&reference, true);
+        let read = |target| {
+            readback_texture(
+                &gpu.device,
+                &gpu.queue,
+                target,
+                320,
+                200,
+                gpu.device.create_command_encoder(&Default::default()),
+            )
+            .unwrap()
+        };
+        let actual = read(&retained);
+        let expected = read(&reference);
+        let diffs: Vec<_> = actual
+            .pixels
+            .chunks_exact(4)
+            .zip(expected.pixels.chunks_exact(4))
+            .enumerate()
+            .filter(|(i, (a, b))| i / 320 < 62 && a.iter().zip(*b).any(|(x, y)| x.abs_diff(*y) > 2))
+            .take(12)
+            .map(|(i, (a, b))| (i % 320, i / 320, a, b))
+            .collect();
+        assert!(diffs.is_empty(), "interrupted avatar frame={frame}: caption differs; stamps={stamps:?} holes={holes:?} flush={flush:?} runs={:?} diffs={diffs:?}",runs.iter().map(|n|(&n.text,n.clip_bounds)).collect::<Vec<_>>());
+        previous = stamps;
+        previous_visual = visual;
+    }
+    assert!(
+        previous.is_empty(),
+        "exit must finish within the driven frames"
+    );
+    crate::style::utility::set_frame_dt(0.0);
+    clear_test_reconcile_root();
+    drop(live);
+    owner.dispose();
+    crate::app::portal_overlay::clear_overlay_stack();
+    reset_registered_anchors();
+}
+
+#[test]
+#[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+fn avatar_caption_open_close_matches_full_composite() {
+    avatar_caption_composite(false);
+}
+
+#[test]
+#[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+fn avatar_shrinking_overlay_restore_matches_full_composite() {
+    avatar_caption_composite(true);
+}
+
+fn avatar_caption_composite(shrink: bool) {
+    let gpu = OffscreenGpu::new().expect("GPU adapter");
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        width: 320,
+        height: 200,
+        present_mode: wgpu::PresentMode::Fifo,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        view_formats: vec![],
+        desired_maximum_frame_latency: 1,
+    };
+    let pipeline = RuiPipeline::from_format(&gpu.device, config.format, 320, 200);
+    pipeline.update_resolution(&gpu.queue, 320, 200);
+    let make_target = || {
+        gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Avatar caption composite"),
+            size: wgpu::Extent3d {
+                width: 320,
+                height: 200,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    };
+    let retained = make_target();
+    let reference = make_target();
+    // Both the caption wrapper and its leaf own the same text range, as in
+    // the gallery. Its last rows overlap the expanded avatar panel.
+    let mut root = Element::new().w(320.0).h(200.0).child(
+        Element::new()
+            .absolute()
+            .left(16.0)
+            .top(40.0)
+            .w(280.0)
+            .h(28.0)
+            .child(
+                Element::new()
+                    .w(280.0)
+                    .h(28.0)
+                    .text_size(18.0)
+                    .text(if shrink {
+                        "原地向下 expand_placement"
+                    } else {
+                        "原地向下盖住展开 expand_placement"
+                    }),
+            ),
+    );
+    root.children[0].children[0].text_style.color = Some([0, 0, 0, 255]);
+    let scene = LayoutTree::new().build_and_layout(&mut root, 320.0, 200.0, [-1.0, -1.0]);
+    let stamp = [16.0, 54.0, 220.0, 40.0];
+    let hole = [0.0, 30.0, 280.0, 90.0];
+    let mut panel_root = Element::new().w(320.0).h(200.0).child(
+        Element::new()
+            .absolute()
+            .left(stamp[0])
+            .top(stamp[1])
+            .w(stamp[2])
+            .h(stamp[3])
+            .bg([1.0; 4]),
+    );
+    let panel = LayoutTree::new().build_and_layout(&mut panel_root, 320.0, 200.0, [-1.0, -1.0]);
+    let draw = |target: &wgpu::Texture,
+                panel: &crate::layout::layout_tree::RenderResult,
+                open: bool,
+                clear: bool,
+                caption: Option<&RuiTextRenderer>,
+                flush: &[[f32; 4]]| {
+        let view = target.create_view(&Default::default());
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            if clear {
+                let (x, y, w, h) = damage_to_scissor_physical(hole, 0.0, 1.0, 320, 200).unwrap();
+                pass.set_scissor_rect(x, y, w, h);
+                draw_scissor_fill(&mut pass, &pipeline, &gpu.device, hole, wgpu::Color::WHITE);
+            }
+            if let Some(caption) = caption {
+                let physical_flush: Vec<[f32; 4]> = flush
+                    .iter()
+                    .filter_map(|logical| {
+                        damage_to_scissor_physical(*logical, 0.0, 1.0, 320, 200)
+                            .map(|(x, y, w, h)| [x as f32, y as f32, w as f32, h as f32])
+                    })
+                    .collect();
+                draw_captured_page_glyphs(caption, &mut pass, 320, 200, &physical_flush, &[]);
+            }
+            if open {
+                // Production resets the scissor for each overlay suffix piece;
+                // the last disjoint caption repair must not clip the panel.
+                pass.set_scissor_rect(0, 0, 320, 200);
+                draw_sdf_range_with_clip(
+                    &mut pass,
+                    &pipeline,
+                    &gpu.device,
+                    pipeline.dummy_backdrop(),
+                    &panel.instances,
+                    &panel.clip_polys,
+                    0,
+                    panel.instances.len() as u32,
+                    None,
+                );
+            }
+        }
+        gpu.queue.submit(Some(encoder.finish()));
+    };
+    draw_latest_scene_for_test(&gpu, &config, &pipeline, &retained, &scene, None);
+    let mut caption = RuiTextRenderer::new(&gpu.device, &gpu.queue, &config);
+    for (frame, open) in [true, true, false, true, false].into_iter().enumerate() {
+        let shrinking = shrink && open && frame > 0;
+        let live_stamp = if shrinking {
+            [16.0, 54.0, 118.0, 40.0]
+        } else {
+            stamp
+        };
+        let stamps = if open { vec![(9, live_stamp)] } else { vec![] };
+        let live_hole = if shrinking {
+            [0.0, 30.0, 160.0, 90.0]
+        } else {
+            hole
+        };
+        let dirty = PaintDirty {
+            key: 9,
+            bounds: live_hole,
+            kind: if open {
+                PaintDirtyKind::Overlay
+            } else {
+                PaintDirtyKind::OverlayRestore
+            },
+        };
+        // ExpandStacked's closing animation still encodes the smaller live
+        // portal while OverlayRestore clears its previous, wider footprint.
+        // Production drops this caption from the ordinary page/capture mesh
+        // once it is selected for grazing replay, so that replay must repair
+        // both clear regions, including the strip past the live panel.
+        let mut dirties = vec![dirty];
+        if shrinking {
+            dirties.push(PaintDirty {
+                key: 9,
+                bounds: hole,
+                kind: PaintDirtyKind::OverlayRestore,
+            });
+        }
+        let (runs, flush) = overlay_grazing_caption_replay(
+            &dirties,
+            &scene.node_paints,
+            &stamps,
+            Some(live_hole),
+            &scene.text_nodes,
+        );
+        assert!(
+            !runs.is_empty(),
+            "fixture must exercise grazing caption replay"
+        );
+        crate::renderer::prepare_text::prepare_text_frame_at(
+            &mut caption,
+            &gpu.device,
+            &gpu.queue,
+            320,
+            200,
+            &runs,
+            1.0,
+            false,
+            &Default::default(),
+            &Default::default(),
+        );
+        let mut shrinking_panel_root = Element::new().w(320.0).h(200.0).child(
+            Element::new()
+                .absolute()
+                .left(live_stamp[0])
+                .top(live_stamp[1])
+                .w(live_stamp[2])
+                .h(live_stamp[3])
+                .bg([1.0; 4]),
+        );
+        let shrinking_panel = LayoutTree::new().build_and_layout(
+            &mut shrinking_panel_root,
+            320.0,
+            200.0,
+            [-1.0, -1.0],
+        );
+        let live_panel = if shrinking { &shrinking_panel } else { &panel };
+        draw(&retained, live_panel, open, true, Some(&caption), &flush);
+        draw_latest_scene_for_test(&gpu, &config, &pipeline, &reference, &scene, None);
+        draw(&reference, live_panel, open, false, None, &[]);
+        let read = |t| {
+            readback_texture(
+                &gpu.device,
+                &gpu.queue,
+                t,
+                320,
+                200,
+                gpu.device.create_command_encoder(&Default::default()),
+            )
+            .unwrap()
+        };
+        let actual = read(&retained);
+        let expected = read(&reference);
+        if shrinking {
+            assert!(
+                expected
+                    .pixels
+                    .chunks_exact(4)
+                    .enumerate()
+                    .any(|(i, p)| i % 320 > 180
+                        && i % 320 < 270
+                        && i / 320 >= 40
+                        && i / 320 < 68
+                        && p[0] < 200),
+                "fixture must contain visible caption ink beyond the shrinking portal"
+            );
+        }
+        if !images_match(&actual, &expected, 2) {
+            let mut mismatches = 0usize;
+            let mut bounds = [320u32, 200u32, 0u32, 0u32];
+            let mut first = None;
+            for (index, (a, b)) in actual
+                .pixels
+                .chunks_exact(4)
+                .zip(expected.pixels.chunks_exact(4))
+                .enumerate()
+            {
+                if a.iter().zip(b).any(|(x, y)| x.abs_diff(*y) > 2) {
+                    mismatches += 1;
+                    let x = (index as u32) % 320;
+                    let y = (index as u32) / 320;
+                    bounds[0] = bounds[0].min(x);
+                    bounds[1] = bounds[1].min(y);
+                    bounds[2] = bounds[2].max(x + 1);
+                    bounds[3] = bounds[3].max(y + 1);
+                    first.get_or_insert((x, y, a.to_vec(), b.to_vec()));
+                }
+            }
+            panic!(
+                "avatar caption frame={frame} open={open}: repeated or occluding page glyphs; runs={}, mismatches={}, bounds={bounds:?}, first={first:?}",
+                runs.len(),
+                mismatches
+            );
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+fn avatar_wrapped_caption_edge_open_close_matches_full_composite() {
+    let gpu = OffscreenGpu::new().expect("GPU adapter");
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        width: 320,
+        height: 200,
+        present_mode: wgpu::PresentMode::Fifo,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        view_formats: vec![],
+        desired_maximum_frame_latency: 1,
+    };
+    let pipeline = RuiPipeline::from_format(&gpu.device, config.format, 320, 200);
+    pipeline.update_resolution(&gpu.queue, 320, 200);
+    let make_target = || {
+        gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("Avatar wrapped caption composite"),
+            size: wgpu::Extent3d {
+                width: 320,
+                height: 200,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    };
+    let retained = make_target();
+    let reference = make_target();
+    let text = "悬停 / 点击 +N：原地向下盖住展开";
+    let mut root = Element::new().w(320.0).h(200.0).child(
+        Element::new()
+            .absolute()
+            .left(16.0)
+            .top(44.25)
+            .w(280.0)
+            .h(20.0)
+            .child(Element::new().w(280.0).h(20.0).text_size(18.0).text(text)),
+    );
+    let scene = LayoutTree::new().build_and_layout(&mut root, 320.0, 200.0, [-1.0, -1.0]);
+    let stamp = [16.25, 51.35, 220.0, 20.2];
+    let hole = overlay_encode_scissor(Some(stamp), Some(stamp), None).unwrap();
+    let mut panel_root = Element::new().w(320.0).h(200.0).child(
+        Element::new()
+            .absolute()
+            .left(stamp[0])
+            .top(stamp[1])
+            .w(stamp[2])
+            .h(stamp[3])
+            .bg([1.0; 4]),
+    );
+    let panel = LayoutTree::new().build_and_layout(&mut panel_root, 320.0, 200.0, [-1.0, -1.0]);
+    let draw = |target: &wgpu::Texture,
+                open: bool,
+                clear: bool,
+                caption: Option<&RuiTextRenderer>,
+                flush: &[[f32; 4]]| {
+        let view = target.create_view(&Default::default());
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            if clear {
+                // Open encoding clears the padded overlay suffix; closing
+                // OverlayRestore clears the raw visual bounds.
+                let clear_rect = if open { hole } else { stamp };
+                let (x, y, w, h) =
+                    damage_to_scissor_physical(clear_rect, 0.0, 1.0, 320, 200).unwrap();
+                pass.set_scissor_rect(x, y, w, h);
+                draw_scissor_fill(
+                    &mut pass,
+                    &pipeline,
+                    &gpu.device,
+                    clear_rect,
+                    wgpu::Color::WHITE,
+                );
+            }
+            if let Some(caption) = caption {
+                let physical_flush: Vec<[f32; 4]> = flush
+                    .iter()
+                    .filter_map(|logical| {
+                        damage_to_scissor_physical(*logical, 0.0, 1.0, 320, 200)
+                            .map(|(x, y, w, h)| [x as f32, y as f32, w as f32, h as f32])
+                    })
+                    .collect();
+                draw_captured_page_glyphs(caption, &mut pass, 320, 200, &physical_flush, &[]);
+            }
+            if open {
+                draw_sdf_range_with_clip(
+                    &mut pass,
+                    &pipeline,
+                    &gpu.device,
+                    pipeline.dummy_backdrop(),
+                    &panel.instances,
+                    &panel.clip_polys,
+                    0,
+                    panel.instances.len() as u32,
+                    None,
+                );
+            }
+        }
+        gpu.queue.submit(Some(encoder.finish()));
+    };
+    draw_latest_scene_for_test(&gpu, &config, &pipeline, &retained, &scene, None);
+    let mut caption = RuiTextRenderer::new(&gpu.device, &gpu.queue, &config);
+    for (frame, open) in [true, true, false, true, false].into_iter().enumerate() {
+        let stamps = if open { vec![(9, stamp)] } else { vec![] };
+        let dirty = PaintDirty {
+            key: 9,
+            bounds: stamp,
+            kind: if open {
+                PaintDirtyKind::Overlay
+            } else {
+                PaintDirtyKind::OverlayRestore
+            },
+        };
+        let (runs, flush) = overlay_grazing_caption_replay(
+            &[dirty],
+            &scene.node_paints,
+            &stamps,
+            Some(stamp),
+            &scene.text_nodes,
+        );
+        assert!(
+            !runs.is_empty(),
+            "wrapped caption must be replayed: paints={:?}, text={:?}",
+            scene
+                .node_paints
+                .iter()
+                .map(|p| (p.bounds, p.text, p.overlay))
+                .collect::<Vec<_>>(),
+            scene
+                .text_nodes
+                .iter()
+                .map(|n| (n.x, n.y, n.width, n.height, n.text.clone()))
+                .collect::<Vec<_>>()
+        );
+        crate::renderer::prepare_text::prepare_text_frame_at(
+            &mut caption,
+            &gpu.device,
+            &gpu.queue,
+            320,
+            200,
+            &runs,
+            1.0,
+            false,
+            &Default::default(),
+            &Default::default(),
+        );
+        draw(&retained, open, true, Some(&caption), &flush);
+        draw_latest_scene_for_test(&gpu, &config, &pipeline, &reference, &scene, None);
+        draw(&reference, open, false, None, &[]);
+        let read = |target| {
+            readback_texture(
+                &gpu.device,
+                &gpu.queue,
+                target,
+                320,
+                200,
+                gpu.device.create_command_encoder(&Default::default()),
+            )
+            .unwrap()
+        };
+        let actual = read(&retained);
+        let expected = read(&reference);
+        if !images_match(&actual, &expected, 2) {
+            let mut mismatches = 0usize;
+            let mut bounds = [320u32, 200u32, 0u32, 0u32];
+            let mut first = None;
+            for (index, (a, b)) in actual
+                .pixels
+                .chunks_exact(4)
+                .zip(expected.pixels.chunks_exact(4))
+                .enumerate()
+            {
+                if a.iter().zip(b).any(|(x, y)| x.abs_diff(*y) > 2) {
+                    mismatches += 1;
+                    let x = (index as u32) % 320;
+                    let y = (index as u32) / 320;
+                    bounds[0] = bounds[0].min(x);
+                    bounds[1] = bounds[1].min(y);
+                    bounds[2] = bounds[2].max(x + 1);
+                    bounds[3] = bounds[3].max(y + 1);
+                    first.get_or_insert((x, y, a.to_vec(), b.to_vec()));
+                }
+            }
+            panic!(
+                "wrapped avatar caption frame={frame} open={open} differs: runs={:?}, flush={flush:?}, mismatches={mismatches}, bounds={bounds:?}, first={first:?}",
+                runs.iter().map(|n| n.clip_bounds).collect::<Vec<_>>()
+            );
+        }
+    }
+}
+
 /// A node capture contains the whole caption, even when the actual repair has
 /// separate holes. Retained antialiased edges must never be blended again.
 #[test]
@@ -118,7 +999,7 @@ fn trigger_capture_only_repaints_cleared_pixels() {
                     pass.set_scissor_rect(x, y, w, h);
                     draw_scissor_fill(&mut pass, &pipeline, &gpu.device, *rect, clear);
                 }
-                draw_captured_page_glyphs(&renderer, &mut pass, 320, 200, &cleared);
+                draw_captured_page_glyphs(&renderer, &mut pass, 320, 200, &cleared, &[]);
             }
             let partial =
                 readback_texture(&gpu.device, &gpu.queue, &texture, 320, 200, encoder).unwrap();
@@ -591,6 +1472,42 @@ fn draw_latest_scene_for_test(
 ) {
     let bands = scene.overlay_split.page_stack_band_ranges();
     let mut renderers = Vec::new();
+    if bands.is_empty() {
+        let mut renderer = RuiTextRenderer::new(&gpu.device, &gpu.queue, config);
+        let text = match clip {
+            Some(hole) => clip_text_nodes_to_cull(
+                &scene.text_nodes,
+                region_repair_text_cull(
+                    &[PaintDirty {
+                        key: 0,
+                        bounds: hole,
+                        kind: PaintDirtyKind::OverlayRestore,
+                    }],
+                    &[],
+                    &[],
+                    &[],
+                    None,
+                    1.0,
+                    320,
+                    200,
+                ),
+            ),
+            None => scene.text_nodes.clone(),
+        };
+        crate::renderer::prepare_text::prepare_text_frame_at(
+            &mut renderer,
+            &gpu.device,
+            &gpu.queue,
+            320,
+            200,
+            &text,
+            1.0,
+            false,
+            &Default::default(),
+            &Default::default(),
+        );
+        renderers.push(renderer);
+    }
     for band in &bands {
         let mut renderer = RuiTextRenderer::new(&gpu.device, &gpu.queue, config);
         let source = &scene.text_nodes[band.text.0..band.text.1];
@@ -653,7 +1570,7 @@ fn draw_latest_scene_for_test(
             pass.set_scissor_rect(x, y, w, h);
             draw_scissor_fill(&mut pass, pipeline, &gpu.device, clip, wgpu::Color::WHITE);
         }
-        for (band, renderer) in bands.iter().zip(&renderers) {
+        if bands.is_empty() {
             draw_sdf_range_with_clip(
                 &mut pass,
                 pipeline,
@@ -661,11 +1578,26 @@ fn draw_latest_scene_for_test(
                 pipeline.dummy_backdrop(),
                 &scene.instances,
                 &scene.clip_polys,
-                band.instance.0 as u32,
-                (band.instance.1 - band.instance.0) as u32,
+                0,
+                scene.instances.len() as u32,
                 None,
             );
-            renderer.render(&mut pass);
+            renderers[0].render(&mut pass);
+        } else {
+            for (band, renderer) in bands.iter().zip(&renderers) {
+                draw_sdf_range_with_clip(
+                    &mut pass,
+                    pipeline,
+                    &gpu.device,
+                    pipeline.dummy_backdrop(),
+                    &scene.instances,
+                    &scene.clip_polys,
+                    band.instance.0 as u32,
+                    (band.instance.1 - band.instance.0) as u32,
+                    None,
+                );
+                renderer.render(&mut pass);
+            }
         }
     }
     gpu.queue.submit(Some(encoder.finish()));
@@ -817,6 +1749,307 @@ fn draw_message_capture_for_test(
         renderer.render(&mut pass);
     }
     readback_texture(&gpu.device, &gpu.queue, &texture, 320, 200, encoder).unwrap()
+}
+
+#[test]
+#[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+fn button_group_hover_first_then_second_matches_full_composite() {
+    let gpu = OffscreenGpu::new().expect("GPU adapter");
+    for toggle in [false, true] {
+        for orientation in ["vertical", "horizontal"] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                check_group_hover_matches_full_composite(&gpu, toggle, orientation, scale);
+            }
+        }
+    }
+}
+
+fn check_group_hover_matches_full_composite(
+    gpu: &OffscreenGpu,
+    toggle: bool,
+    orientation: &str,
+    scale: f32,
+) {
+    use crate::components::button::{button, sync_button_hover_paint_subtree};
+    use crate::components::button_group::button_group;
+    use crate::components::toggle_group::toggle_group;
+    use crate::core::reactivity::create_root;
+    use crate::core::tree::LayoutStatus;
+    use crate::renderer::scale_instances;
+
+    const W: u32 = 400;
+    const H: u32 = 240;
+    let logical_w = W as f32 / scale;
+    let logical_h = H as f32 / scale;
+    crate::style::set_theme_mode(crate::style::ThemeMode::Light);
+    let (_handle, group) = create_root(|| {
+        let group = if toggle {
+            Element::from(
+                toggle_group("retained-toggle-group")
+                    .variant("outline")
+                    .orientation(orientation)
+                    .spacing(0)
+                    .options([("top", "Top"), ("middle", "Middle"), ("bottom", "Bottom")]),
+            )
+        } else {
+            Element::from(
+                button_group()
+                    .orientation(orientation)
+                    .child(button("retained-group-top").variant("outline").text("Top"))
+                    .child(
+                        button("retained-group-middle")
+                            .variant("outline")
+                            .text("Middle"),
+                    )
+                    .child(
+                        button("retained-group-bottom")
+                            .variant("outline")
+                            .text("Bottom"),
+                    ),
+            )
+        };
+        if orientation == "vertical" {
+            group.w(160.0)
+        } else {
+            group
+        }
+    });
+    let mut root = Element::new()
+        .w(logical_w)
+        .h(logical_h)
+        .bg([1.0; 4])
+        .child(group);
+    let mut tree = LayoutTree::new();
+    let initial = tree.build_and_layout(&mut root, logical_w, logical_h, [-1.0; 2]);
+    tree.set_collect_skip_allowed(true);
+    let _ = tree.build_and_layout_fast(&mut root, logical_w, logical_h, [-1.0; 2], true, false);
+    clear_frame_paint_nodes();
+    crate::app::tree_hit::clear_hover_tracking();
+    let initial_instances = scale_instances(&initial.instances, scale);
+    let pipeline = RuiPipeline::from_format(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb, W, H);
+    pipeline.update_resolution(&gpu.queue, W, H);
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("group hover retained differential"),
+        size: wgpu::Extent3d {
+            width: W,
+            height: H,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+        view_formats: &[],
+    });
+    let view = texture.create_view(&Default::default());
+    let mut encoder = gpu.device.create_command_encoder(&Default::default());
+    {
+        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: &view,
+                depth_slice: None,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            ..Default::default()
+        });
+        draw_cpu_sdf_instances(
+            &mut pass,
+            &pipeline,
+            &gpu.device,
+            pipeline.dummy_backdrop(),
+            &initial_instances,
+        );
+    }
+    let _ = readback_texture(&gpu.device, &gpu.queue, &texture, W, H, encoder).unwrap();
+    let mut prev = last_present_visual_slots(
+        &initial.node_paints,
+        &initial.instances,
+        &[],
+        &initial.text_nodes,
+        &[],
+    );
+    for index in [Some(0), Some(1), Some(2), Some(0), None] {
+        let mouse = index
+            .map(|i| {
+                let b = root.children[0].children[i].layout_bounds;
+                [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5]
+            })
+            .unwrap_or([-1.0; 2]);
+        clear_frame_paint_nodes();
+        crate::app::tree_hit::apply_pointer_hover_reconcile(&root, mouse[0], mouse[1], true);
+        let mut impact = LayoutStatus::Clean;
+        sync_button_hover_paint_subtree(
+            &mut root,
+            &mut tree,
+            &mut impact,
+            logical_w,
+            logical_h,
+            [0.0; 2],
+        );
+        crate::style::tick_active_css_transitions_subtree(
+            &mut root,
+            mouse,
+            "",
+            false,
+            logical_w,
+            logical_h,
+            [0.0; 2],
+            &mut tree,
+            &mut impact,
+        );
+        let current =
+            tree.build_and_layout_fast(&mut root, logical_w, logical_h, mouse, true, false);
+        let current_instances = scale_instances(&current.instances, scale);
+        let mut dirties = take_frame_paint_nodes();
+        assert!(!dirties.is_empty(), "hover must produce real paint damage");
+        prepare_node_present_dirties(
+            &mut dirties,
+            &current.node_paints,
+            &prev,
+            &current_instances,
+            &[],
+            &[],
+            scale,
+            None,
+        );
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        let mut resets = Vec::new();
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            for dirty in &dirties {
+                assert_eq!(dirty.kind, PaintDirtyKind::Node);
+                let reset = node_present_dest_reset_full(
+                    dirty.key,
+                    dirty.bounds,
+                    &current.node_paints,
+                    &current_instances,
+                    &[],
+                    &[],
+                    scale,
+                    prev.iter().find(|(k, _)| *k == dirty.key).map(|(_, r)| *r),
+                )
+                .expect("opaque root backdrop");
+                resets.push((dirty.key, dirty.bounds, reset.rect));
+                // Dest-reset already returns physical bounds, as in production.
+                let (x, y, w, h) = damage_to_scissor_physical(reset.rect, 0.0, 1.0, W, H).unwrap();
+                pass.set_scissor_rect(x, y, w, h);
+                let cull = node_present_repair_cull_rect((x, y, w, h));
+                let hole = cull.map(|v| v / scale);
+                let [r, g, b, a] = reset.clear;
+                draw_scissor_fill(
+                    &mut pass,
+                    &pipeline,
+                    &gpu.device,
+                    cull,
+                    wgpu::Color {
+                        r: r as f64,
+                        g: g as f64,
+                        b: b as f64,
+                        a: a as f64,
+                    },
+                );
+                {
+                    let (start, end) = reset.replay;
+                    draw_sdf_range_with_clip(
+                        &mut pass,
+                        &pipeline,
+                        &gpu.device,
+                        pipeline.dummy_backdrop(),
+                        &current_instances,
+                        &current.clip_polys,
+                        start as u32,
+                        (end - start) as u32,
+                        Some(CullRects::one(cull)),
+                    );
+                }
+                let restore =
+                    node_present_restore_underlay(dirty.key, dirty.bounds, &current.node_paints);
+                let replay_peers = node_present_replays_peer_chrome(
+                    dirty.key,
+                    dirty.bounds,
+                    hole,
+                    &current.node_paints,
+                    &current_instances,
+                );
+                // Joined chrome is replayed in scene order; overlay underlays stay separate.
+                for own_pass in [false, true] {
+                    for p in &current.node_paints {
+                        let own =
+                            paint_dirty_matches_slot(dirty.key, dirty.bounds, p.key, p.bounds);
+                        let underlay = (restore || replay_peers)
+                            && !p.overlay
+                            && !own
+                            && node_present_underlay_paint(
+                                dirty.key,
+                                dirty.bounds,
+                                p,
+                                hole,
+                                &current.node_paints,
+                                &current_instances,
+                            );
+                        if (own_pass && (own || (replay_peers && underlay)))
+                            || (!own_pass && !replay_peers && underlay)
+                        {
+                            let (start, end) = p.instance;
+                            draw_sdf_range_with_clip(
+                                &mut pass,
+                                &pipeline,
+                                &gpu.device,
+                                pipeline.dummy_backdrop(),
+                                &current_instances,
+                                &current.clip_polys,
+                                start as u32,
+                                (end - start) as u32,
+                                underlay.then_some(CullRects::one(cull)),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+        let partial = readback_texture(&gpu.device, &gpu.queue, &texture, W, H, encoder).unwrap();
+        let full = gpu
+            .render_instances_readback(W, H, wgpu::Color::WHITE, &current_instances)
+            .unwrap();
+        let diffs: Vec<_> = partial
+            .pixels
+            .chunks_exact(4)
+            .zip(full.pixels.chunks_exact(4))
+            .enumerate()
+            .filter(|(_, (a, b))| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 2))
+            .take(12)
+            .map(|(i, (a, b))| ((i as u32 % W, i as u32 / W), a.to_vec(), b.to_vec()))
+            .collect();
+        assert!(
+            images_match(&partial, &full, 2),
+            "toggle={toggle}, orientation={orientation}, scale={scale}, hover={index:?}, resets={resets:?}, diffs={diffs:?}"
+        );
+        prev = last_present_visual_slots(
+            &current.node_paints,
+            &current.instances,
+            &[],
+            &current.text_nodes,
+            &[],
+        );
+    }
+    crate::app::tree_hit::clear_hover_tracking();
+    clear_frame_paint_nodes();
 }
 
 #[test]

@@ -67,6 +67,8 @@ const EDGE_ONLY: &str = "only";
 
 /// Drawtime widens toward shared edges (without entering Taffy). `x` = left +1px, `y` = top +1px.
 pub(crate) const ATTR_PAINT_NUDGE: &str = "rui_button_group_nudge";
+/// Marker for a directly adjacent segment that paints into this node's far edge.
+pub(crate) const ATTR_PAINT_NUDGE_NEXT: &str = "rui_button_group_nudge_next";
 
 /// ShadCN Button default rounded corners `rounded-md` ≈ 0.375rem.
 const JOIN_RADIUS_PX: f32 = 0.375 * 16.0;
@@ -187,6 +189,44 @@ pub(crate) fn button_group_paint_nudge(el: &Element) -> [f32; 2] {
     }
 }
 
+/// Expand a visual paint box to include the shared edge that the group chrome
+/// draws outside the Taffy layout box. The same box must be used for damage and
+/// retained-node matching; otherwise the dest reset erases the seam while the
+/// node scissor clips the replacement paint back to the unnudged box.
+pub(crate) fn expand_paint_nudge(el: &Element, bounds: [f32; 4]) -> [f32; 4] {
+    let [dx, dy] = button_group_paint_nudge(el);
+    if dx == 0.0 && dy == 0.0 {
+        return bounds;
+    }
+    [
+        bounds[0] + dx,
+        bounds[1] + dy,
+        (bounds[2] - dx).max(0.0),
+        (bounds[3] - dy).max(0.0),
+    ]
+}
+
+/// Resolve visual ownership for a conjoined segment's shared edges.
+///
+/// The segment nudged toward the previous one owns the near edge. The segment
+/// before it therefore stops one pixel before its far edge; otherwise a
+/// node-present replay of that segment overwrites the retained border painted
+/// by its neighbour.
+pub(crate) fn group_paint_bounds(el: &Element, bounds: [f32; 4]) -> [f32; 4] {
+    let mut bounds = expand_paint_nudge(el, bounds);
+    match el.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str) {
+        Some("x") => bounds[2] = (bounds[2] - 1.0).max(0.0),
+        Some("y") => bounds[3] = (bounds[3] - 1.0).max(0.0),
+        _ => {}
+    }
+    bounds
+}
+
+/// Use the same ownership box for hover damage as for retained node paint.
+pub(crate) fn group_damage_bounds(el: &Element, bounds: [f32; 4]) -> [f32; 4] {
+    group_paint_bounds(el, bounds)
+}
+
 /// Rewrite fillets and shared edges by group tag (shared after assembly + Button hover color writing).
 pub(crate) fn apply_button_group_join_chrome(el: &mut Element) {
     let Some(edge) = el.attrs.get(ATTR_GROUP_EDGE).cloned() else {
@@ -224,6 +264,7 @@ fn mark_join_segment(
     el.set_attr(ATTR_GROUP_EDGE, edge);
     el.set_attr(ATTR_GROUP_ORIENTATION, orientation.as_str());
     el.attrs.remove("rui_button_group_prev_join");
+    el.attrs.remove(ATTR_PAINT_NUDGE_NEXT);
     if overlap_prev && matches!(edge, EDGE_MIDDLE | EDGE_END) {
         el.set_attr(
             ATTR_PAINT_NUDGE,
@@ -260,6 +301,9 @@ pub(crate) fn apply_button_group_join(kids: &mut [Element], orientation: ButtonG
 }
 
 fn apply_group_join(kids: &mut [Element], orientation: ButtonGroupOrientation) {
+    for kid in kids.iter_mut() {
+        kid.attrs.remove(ATTR_PAINT_NUDGE_NEXT);
+    }
     let segment_idx: Vec<usize> = kids
         .iter()
         .enumerate()
@@ -282,6 +326,12 @@ fn apply_group_join(kids: &mut [Element], orientation: ButtonGroupOrientation) {
         // The overlapping edges are only drawn adjacent to the previous conjoined segment; the -1px caulk of the separator is responsible for this when clamping a Separator.
         let overlap_prev = k > 0 && i == segment_idx[k - 1] + 1;
         mark_join_segment(&mut kids[i], edge, orientation, overlap_prev);
+        if overlap_prev {
+            kids[segment_idx[k - 1]].set_attr(
+                ATTR_PAINT_NUDGE_NEXT,
+                if orientation.is_vertical() { "y" } else { "x" },
+            );
+        }
     }
     for kid in kids.iter_mut() {
         if is_separator_slot(kid) {
@@ -877,6 +927,15 @@ mod tests {
                 Some("x"),
                 "third segment also grows 1px toward previous; far edge stays at layout"
             );
+            assert_eq!(
+                a.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str),
+                Some("x")
+            );
+            assert_eq!(
+                b.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str),
+                Some("x")
+            );
+            assert_eq!(c.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str), None);
             assert_eq!(button_group_paint_nudge(b), [-1.0, 0.0]);
             assert_eq!(button_group_paint_nudge(c), [-1.0, 0.0]);
             assert_eq!(
@@ -961,7 +1020,7 @@ mod tests {
                     .child(button("b").variant("outline").text("Bottom")),
             ));
             let mut layout = LayoutTree::new();
-            let _ = layout.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
+            let result = layout.build_and_layout(&mut root, 200.0, 200.0, [-1.0, -1.0]);
             let group = &root.children[0];
             assert_eq!(group.children.len(), 3);
             let a = &group.children[0];
@@ -983,8 +1042,58 @@ mod tests {
                 Some("y"),
                 "third vertical segment grows 1px toward previous; far edge stays at layout"
             );
+            assert_eq!(
+                a.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str),
+                Some("y")
+            );
+            assert_eq!(
+                b.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str),
+                Some("y")
+            );
+            assert_eq!(c.attrs.get(ATTR_PAINT_NUDGE_NEXT).map(String::as_str), None);
             assert_eq!(button_group_paint_nudge(b), [0.0, -1.0]);
             assert_eq!(button_group_paint_nudge(c), [0.0, -1.0]);
+            let b_bounds = b.layout_bounds;
+            assert!(
+                result.node_paints.iter().any(|paint| {
+                    (paint.bounds[0] - b_bounds[0]).abs() < 0.01
+                        && (paint.bounds[1] - (b_bounds[1] - 1.0)).abs() < 0.01
+                        && (paint.bounds[2] - b_bounds[2]).abs() < 0.01
+                        && (paint.bounds[3] - b_bounds[3]).abs() < 0.01
+                }),
+                "retained paint bounds must stop before the next segment's shared edge; paints={:?}, layout={b_bounds:?}",
+                result.node_paints.iter().map(|paint| paint.bounds).collect::<Vec<_>>()
+            );
+            let first_bounds = a.layout_bounds;
+            assert!(
+                result.instances.iter().any(|instance| {
+                    (instance.rect_pos[0] - first_bounds[0]).abs() < 0.01
+                        && (instance.rect_pos[1] - first_bounds[1]).abs() < 0.01
+                        && (instance.rect_size[0] - first_bounds[2]).abs() < 0.01
+                        && (instance.rect_size[1] - (first_bounds[3] - 1.0)).abs() < 0.01
+                }),
+                "the first segment must stop before its far shared edge; instances={:?}",
+                result
+                    .instances
+                    .iter()
+                    .map(|instance| (instance.rect_pos, instance.rect_size))
+                    .collect::<Vec<_>>()
+            );
+            let middle_bounds = b.layout_bounds;
+            assert!(
+                result.instances.iter().any(|instance| {
+                    (instance.rect_pos[0] - middle_bounds[0]).abs() < 0.01
+                        && (instance.rect_pos[1] - (middle_bounds[1] - 1.0)).abs() < 0.01
+                        && (instance.rect_size[0] - middle_bounds[2]).abs() < 0.01
+                        && (instance.rect_size[1] - middle_bounds[3]).abs() < 0.01
+                }),
+                "the middle segment must own only its near shared edge; instances={:?}",
+                result
+                    .instances
+                    .iter()
+                    .map(|instance| (instance.rect_pos, instance.rect_size))
+                    .collect::<Vec<_>>()
+            );
             assert_eq!(c.style.z_index, 0);
             let group_bottom = group.layout_bounds[1] + group.layout_bounds[3];
             let last_bottom = c.layout_bounds[1] + c.layout_bounds[3];

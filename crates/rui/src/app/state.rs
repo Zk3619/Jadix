@@ -109,8 +109,11 @@ fn draw_captured_page_glyphs<'pass>(
     width: u32,
     height: u32,
     cleared: &[[f32; 4]],
+    portals: &[[f32; 4]],
 ) {
-    for rect in super::draw_cull::capture_glyph_scissors_physical(cleared, width, height) {
+    for rect in super::draw_cull::capture_glyph_scissors_excluding_portals_physical(
+        cleared, portals, width, height,
+    ) {
         let (x, y, w, h) = super::damage::physical_xywh_to_scissor(rect, width, height)
             .expect("capture scissors are clamped integer rectangles");
         pass.set_scissor_rect(x, y, w, h);
@@ -412,7 +415,23 @@ fn current_underline_layer(
     page_stack_flat: &[InstanceInput],
     page_underlines: &[InstanceInput],
     last_presented: &[InstanceInput],
+    node_capture: Option<(&[InstanceInput], &[[f32; 4]])>,
 ) -> Vec<InstanceInput> {
+    if let Some((captured, refreshed)) = node_capture {
+        let mut out: Vec<_> = last_presented
+            .iter()
+            .copied()
+            .filter(|line| {
+                let cx = line.rect_pos[0] + line.rect_size[0] * 0.5;
+                let cy = line.rect_pos[1] + line.rect_size[1] * 0.5;
+                !refreshed.iter().any(|r| {
+                    cx >= r[0] && cx < r[0] + r[2] && cy >= r[1] && cy < r[1] + r[3]
+                })
+            })
+            .collect();
+        out.extend_from_slice(captured);
+        return out;
+    }
     if has_page_stack_bands {
         if page_stack_flat.is_empty() && reuse_page_stack {
             last_presented.to_vec()
@@ -422,6 +441,32 @@ fn current_underline_layer(
     } else {
         page_underlines.to_vec()
     }
+}
+
+/// Include decorations outside the glyph box when replacing a captured caption.
+fn captured_text_decoration_bounds(
+    n: &crate::layout::layout_tree::TextLayoutInfo,
+    ui_scale: f32,
+) -> [f32; 4] {
+    let paint_scale = if n.paint_scale.is_finite() && n.paint_scale > 0.0 {
+        n.paint_scale
+    } else {
+        1.0
+    };
+    let scale = ui_scale * paint_scale;
+    let thickness = n
+        .style
+        .decoration_thickness
+        .filter(|v| *v > 0.0)
+        .unwrap_or_else(|| (n.style.size_resolved() * ui_scale * 0.07).max(1.0))
+        * paint_scale;
+    let offset = n.style.underline_offset_resolved() * scale;
+    [
+        n.x * ui_scale,
+        n.y * ui_scale - thickness - (-offset).max(0.0),
+        n.width * scale,
+        n.height * scale + offset.abs() + thickness * 3.0,
+    ]
 }
 
 /// Draw CSS `text-shadow` bitmaps. Must run **after** the band's opaque fills and
@@ -3087,11 +3132,27 @@ impl AppState {
                                     .filter(|p| !p.overlay)
                                     .map(|p| (p.key, p.bounds)),
                             );
-                            if super::draw_cull::node_present_restore_underlay(
-                                dirty.key,
-                                dirty.bounds,
-                                node_paints,
-                            ) {
+                            let repair_logical = [
+                                cull_rect[0] / ui_scale.max(1e-6),
+                                cull_rect[1] / ui_scale.max(1e-6),
+                                cull_rect[2] / ui_scale.max(1e-6),
+                                cull_rect[3] / ui_scale.max(1e-6),
+                            ];
+                            let replay_peers = node_dest_reset.is_some()
+                                && super::draw_cull::node_present_replays_peer_chrome(
+                                    dirty.key,
+                                    dirty.bounds,
+                                    repair_logical,
+                                    node_paints,
+                                    scaled_instances,
+                                );
+                            if !replay_peers
+                                && super::draw_cull::node_present_restore_underlay(
+                                    dirty.key,
+                                    dirty.bounds,
+                                    node_paints,
+                                )
+                            {
                                 // Stacking overlay dest-reset punched in-flow fills
                                 // (rounded bubble under a jump pill). Rebuild them
                                 // in the CLEAR hole only — the 8px node scissor
@@ -3183,8 +3244,14 @@ impl AppState {
                             }
                             let overlay_cull = node_dest_reset
                                 .as_ref()
-                                .filter(|_| layered)
-                                .map(|r| super::draw_cull::CullRects::one(r.rect));
+                                .filter(|_| layered || replay_peers)
+                                .map(|r| {
+                                    super::draw_cull::CullRects::one(if replay_peers {
+                                        cull_rect
+                                    } else {
+                                        r.rect
+                                    })
+                                });
                             // Glyphon may set its own scissor while restoring text.
                             render_pass.set_scissor_rect(x, y, w, h);
                             self.draw_matching_node_paints(
@@ -3198,13 +3265,21 @@ impl AppState {
                                 dummy,
                                 |p| {
                                     !p.overlay
-                                        && super::damage::paint_dirty_matches_present_slot(
+                                        && (super::damage::paint_dirty_matches_present_slot(
                                             dirty.key,
                                             dirty.bounds,
                                             p.key,
                                             p.bounds,
                                             has_keyed,
-                                        )
+                                        ) || (replay_peers
+                                            && super::draw_cull::node_present_underlay_paint(
+                                                dirty.key,
+                                                dirty.bounds,
+                                                p,
+                                                repair_logical,
+                                                node_paints,
+                                                scaled_instances,
+                                            )))
                                 },
                                 overlay_cull,
                                 None,
@@ -3226,6 +3301,36 @@ impl AppState {
                     }
                 }
             }
+        }
+        // A live overlay is composited after the page repair. Replay grazing
+        // captions before that overlay so fractional/antialiased portal edges
+        // blend over the retained page text instead of painting the text on top
+        // of the panel. Closed restores have no live portal and stay in the
+        // existing late flush below, after the page bands are rebuilt.
+        let caption_replayed_before_overlay =
+            !caption_glyph_holes.is_empty() && !self.last_overlay_stamps.is_empty();
+        if caption_replayed_before_overlay {
+            let physical: Vec<[f32; 4]> = caption_glyph_holes
+                .iter()
+                .filter_map(|logical| {
+                    super::damage::damage_to_scissor_physical(
+                        *logical,
+                        0.0,
+                        ui_scale,
+                        self.config.width,
+                        self.config.height,
+                    )
+                    .map(|(x, y, w, h)| [x as f32, y as f32, w as f32, h as f32])
+                })
+                .collect();
+            draw_captured_page_glyphs(
+                &self.capture_text_renderer,
+                render_pass,
+                self.config.width,
+                self.config.height,
+                &physical,
+                &[],
+            );
         }
         // Overlay suffix after Restore/Node dest-reset. Same portal key encodes
         // once (fade CSS + membership). Different keys keep separate scissors so
@@ -3366,22 +3471,26 @@ impl AppState {
                 hole_cull,
             );
         }
-        if pending_page_glyphs || !caption_glyph_holes.is_empty() {
+        if pending_page_glyphs
+            || (!caption_replayed_before_overlay && !caption_glyph_holes.is_empty())
+        {
             let mut holes = node_glyph_holes;
-            for logical in caption_glyph_holes {
-                let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
-                    *logical,
-                    0.0,
-                    ui_scale,
-                    self.config.width,
-                    self.config.height,
-                ) else {
-                    continue;
-                };
-                holes.push([x as f32, y as f32, w as f32, h as f32]);
+            if !caption_replayed_before_overlay {
+                for logical in caption_glyph_holes {
+                    let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
+                        *logical,
+                        0.0,
+                        ui_scale,
+                        self.config.width,
+                        self.config.height,
+                    ) else {
+                        continue;
+                    };
+                    holes.push([x as f32, y as f32, w as f32, h as f32]);
+                }
             }
             if !holes.is_empty() {
-                self.flush_node_present_page_glyphs(render_pass, &holes);
+                self.flush_node_present_page_glyphs(render_pass, &holes, ui_scale);
             }
         }
     }
@@ -3509,13 +3618,20 @@ impl AppState {
         &'pass self,
         render_pass: &mut wgpu::RenderPass<'pass>,
         node_cleared: &[[f32; 4]],
+        ui_scale: f32,
     ) {
+        let portals: Vec<_> = self
+            .last_overlay_stamps
+            .iter()
+            .map(|(_, stamp)| super::draw_cull::scale_xywh(*stamp, ui_scale))
+            .collect();
         draw_captured_page_glyphs(
             &self.capture_text_renderer,
             render_pass,
             self.config.width,
             self.config.height,
             node_cleared,
+            &portals,
         );
     }
 
@@ -6085,6 +6201,42 @@ impl AppState {
             overlay_present,
             page_text_unchanged,
         );
+        let local_node_text = super::damage::node_present_skips_page_stack_glyphon(
+            gpu_present.use_node_present,
+            region_present,
+        );
+        // Node capture prepares the changed captions instead of the page bands.
+        // Keep their decoration output too, including the old extent on leave.
+        let previous_decoration_bounds: Vec<_> = if local_node_text {
+            self.last_text_nodes_cache
+                .iter()
+                .filter(|n| {
+                    n.style.underline_resolved()
+                        || n.style.overline_resolved()
+                        || n.style.line_through_resolved()
+                })
+                .map(|n| (n.x, n.y, captured_text_decoration_bounds(n, ui_scale)))
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut captured_underlines = Vec::new();
+        let mut captured_decoration_bounds = Vec::new();
+        let mut record_capture_decorations =
+            |text: &[crate::layout::layout_tree::TextLayoutInfo], lines: Vec<InstanceInput>| {
+                if !local_node_text {
+                    return;
+                }
+                captured_underlines.extend(lines);
+                for n in text {
+                    captured_decoration_bounds.push(captured_text_decoration_bounds(n, ui_scale));
+                    for &(x, y, bounds) in &previous_decoration_bounds {
+                        if (n.x - x).abs() < 0.02 && (n.y - y).abs() < 0.02 {
+                            captured_decoration_bounds.push(bounds);
+                        }
+                    }
+                }
+            };
         let shadow_cached_keys: std::collections::HashSet<u64> =
             self.shadow_tex_cache.keys().copied().collect();
         let mut page_stack_band_underlines: Vec<Vec<InstanceInput>> = Vec::new();
@@ -6105,10 +6257,7 @@ impl AppState {
             let mut underlines = Vec::with_capacity(page_stack_band_ranges.len());
             let mut shadow_bands = Vec::with_capacity(page_stack_band_ranges.len());
             page_stack_skip_glyphon = vec![false; page_stack_band_ranges.len()];
-            if super::damage::node_present_skips_page_stack_glyphon(
-                gpu_present.use_node_present,
-                region_present,
-            ) {
+            if local_node_text {
                 // Node present draws capture glyphs only. Preparing page-stack here
                 // replaced the last complete mesh; a later Load `render()` of that
                 // mixed buffer stamped sidebar captions into retain after Send.
@@ -6639,6 +6788,9 @@ impl AppState {
                     &self.shadow_rect_cache,
                 );
                 capture_underlay_ready = !prep.culled_skip_prepare;
+                if capture_underlay_ready {
+                    record_capture_decorations(&underlay_text, prep.underline_instances);
+                }
             }
             let mut hole_text = if glyph_dirties.is_empty() {
                 Vec::new()
@@ -6653,6 +6805,12 @@ impl AppState {
                     ui_scale,
                 )
             };
+            // A trigger/ancestor capture can own this same line. Grazing replay
+            // is its single late submission source for this frame.
+            hole_text = super::draw_cull::page_runs_excluding_caption_replay(
+                hole_text,
+                &caption_replay_runs,
+            );
             hole_text.extend(caption_replay_runs.iter().cloned());
             if hole_text.is_empty() {
                 false
@@ -6670,37 +6828,42 @@ impl AppState {
                     &shadow_keys,
                     &self.shadow_rect_cache,
                 );
-                !prep.culled_skip_prepare
+                if !prep.culled_skip_prepare {
+                    record_capture_decorations(&hole_text, prep.underline_instances);
+                    true
+                } else {
+                    false
+                }
             }
         } else {
             false
         };
-        let caption_flush: Vec<[f32; 4]> = if caption_replay_runs.is_empty()
-            || !gpu_present.use_node_present
-        {
-            Vec::new()
-        } else if capture_text_ready {
-            caption_glyph_holes.clone()
-        } else {
-            let shadow_keys: std::collections::HashSet<u64> =
-                self.shadow_tex_cache.keys().copied().collect();
-            let prep = prepare_text_frame(
-                &mut self.capture_text_renderer,
-                &self.device,
-                &self.queue,
-                &self.config,
-                &caption_replay_runs,
-                ui_scale,
-                text_fast,
-                &shadow_keys,
-                &self.shadow_rect_cache,
-            );
-            if prep.culled_skip_prepare {
+        let caption_flush: Vec<[f32; 4]> =
+            if caption_replay_runs.is_empty() || !gpu_present.use_node_present {
                 Vec::new()
-            } else {
+            } else if capture_text_ready {
                 caption_glyph_holes.clone()
-            }
-        };
+            } else {
+                let shadow_keys: std::collections::HashSet<u64> =
+                    self.shadow_tex_cache.keys().copied().collect();
+                let prep = prepare_text_frame(
+                    &mut self.capture_text_renderer,
+                    &self.device,
+                    &self.queue,
+                    &self.config,
+                    &caption_replay_runs,
+                    ui_scale,
+                    text_fast,
+                    &shadow_keys,
+                    &self.shadow_rect_cache,
+                );
+                if prep.culled_skip_prepare {
+                    Vec::new()
+                } else {
+                    record_capture_decorations(&caption_replay_runs, prep.underline_instances);
+                    caption_glyph_holes.clone()
+                }
+            };
         if crate::core::texture_stats::texture_stats_enabled()
             && !Self::is_bootstrap_root(&self.root_element)
         {
@@ -6728,6 +6891,7 @@ impl AppState {
             &page_stack_underline_flat,
             &underline_instances,
             &prev_presented_underlines,
+            local_node_text.then_some((&captured_underlines, &captured_decoration_bounds)),
         );
 
         // Skip swapchain acquire/submit/present when this redraw produced the same GPU content
@@ -6751,7 +6915,7 @@ impl AppState {
             }
             hash_present_underline_layers(
                 &mut hasher,
-                &underline_instances,
+                &presented_underlines,
                 &page_stack_band_underlines,
                 &overlay_band_underlines,
             );
@@ -9626,15 +9790,202 @@ mod present_fingerprint_tests {
     fn page_stack_reuse_keeps_last_presented_underlines() {
         let line = InstanceInput::zeroed();
         let last = vec![line];
-        let reused = super::current_underline_layer(true, true, &[], &[], &last);
+        let reused = super::current_underline_layer(true, true, &[], &[], &last, None);
         assert_eq!(reused.len(), 1);
-        let left = super::current_underline_layer(true, false, &[], &[], &last);
+        let left = super::current_underline_layer(true, false, &[], &[], &last, None);
         assert!(
             left.is_empty(),
             "leave (not reuse) must drop decorations so node present can erase"
         );
-        let hovered = super::current_underline_layer(true, false, &[line], &[], &[]);
+        let hovered = super::current_underline_layer(true, false, &[line], &[], &[], None);
         assert_eq!(hovered.len(), 1);
+    }
+
+    #[test]
+    fn node_capture_replaces_only_refreshed_decorations() {
+        let mut changed = InstanceInput::zeroed();
+        changed.rect_pos = [10.0, 20.0];
+        changed.rect_size = [30.0, 1.0];
+        let mut neighbor = changed;
+        neighbor.rect_pos[0] = 100.0;
+        let bounds = [[10.0, 0.0, 30.0, 24.0]];
+        let previous = [changed, neighbor];
+        let left =
+            super::current_underline_layer(true, false, &[], &[], &previous, Some((&[], &bounds)));
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].rect_pos, neighbor.rect_pos);
+        let hovered = super::current_underline_layer(
+            true,
+            false,
+            &[],
+            &[],
+            &previous,
+            Some((&[changed], &bounds)),
+        );
+        assert_eq!(
+            hovered.len(),
+            2,
+            "refresh must not duplicate old decorations"
+        );
+        assert_ne!(fp(&hovered, &[], false), fp(&left, &[], false));
+    }
+
+    #[test]
+    #[ignore = "requires GPU adapter; run with --ignored --nocapture"]
+    fn breadcrumb_node_capture_draws_hover_underline_and_clears_on_leave() {
+        use crate::app::damage::{clear_frame_paint_nodes, take_frame_paint_nodes};
+        use crate::app::draw_cull::node_present_clipped_capture_text;
+        use crate::app::tree_hit::{apply_pointer_hover_reconcile, clear_hover_tracking};
+        use crate::components::breadcrumb::breadcrumb;
+        use crate::components::button::sync_button_hover_paint_subtree;
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::{Element, LayoutStatus};
+        use crate::layout::layout_tree::LayoutTree;
+        use crate::renderer::{offscreen::OffscreenGpu, prepare_text_frame, RuiTextRenderer};
+        use crate::style::sync_class_variants_subtree;
+
+        const W: u32 = 400;
+        const H: u32 = 120;
+        let gpu = OffscreenGpu::new().expect("GPU adapter");
+        crate::style::set_theme_mode(crate::style::ThemeMode::Light);
+        for scale in [1.0, 1.5] {
+            clear_hover_tracking();
+            let (_handle, mut root) = create_root(|| {
+                Element::new()
+                    .w(W as f32 / scale)
+                    .h(H as f32 / scale)
+                    .child(
+                        breadcrumb()
+                            .link("Home", || {})
+                            .link("Components", || {})
+                            .page("Breadcrumb"),
+                    )
+            });
+            let mut tree = LayoutTree::new();
+            let initial =
+                tree.build_and_layout(&mut root, W as f32 / scale, H as f32 / scale, [-1.0; 2]);
+            tree.set_collect_skip_allowed(true);
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                width: W,
+                height: H,
+                present_mode: wgpu::PresentMode::Fifo,
+                desired_maximum_frame_latency: 2,
+                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                view_formats: vec![],
+                color_space: Default::default(),
+            };
+            let mut renderer = RuiTextRenderer::new(&gpu.device, &gpu.queue, &config);
+            let mut previous = Vec::new();
+            for target in ["Home", "Components", "Breadcrumb", "Home", ""] {
+                let mouse = initial
+                    .text_nodes
+                    .iter()
+                    .find(|n| n.text == target)
+                    .map(|n| [n.x + n.width * 0.5, n.y + n.height * 0.5])
+                    .unwrap_or([-1.0; 2]);
+                clear_frame_paint_nodes();
+                apply_pointer_hover_reconcile(&root, mouse[0], mouse[1], true);
+                let mut impact = LayoutStatus::Clean;
+                sync_button_hover_paint_subtree(
+                    &mut root,
+                    &mut tree,
+                    &mut impact,
+                    W as f32 / scale,
+                    H as f32 / scale,
+                    [0.0; 2],
+                );
+                sync_class_variants_subtree(
+                    &mut root,
+                    mouse,
+                    "",
+                    false,
+                    W as f32 / scale,
+                    H as f32 / scale,
+                    &mut tree,
+                    &mut impact,
+                );
+                let frame = tree.build_and_layout_fast(
+                    &mut root,
+                    W as f32 / scale,
+                    H as f32 / scale,
+                    mouse,
+                    true,
+                    false,
+                );
+                let dirty = take_frame_paint_nodes();
+                let captured = node_present_clipped_capture_text(
+                    &dirty,
+                    &frame.text_nodes,
+                    &frame.node_paints,
+                );
+                let prep = prepare_text_frame(
+                    &mut renderer,
+                    &gpu.device,
+                    &gpu.queue,
+                    &config,
+                    &captured,
+                    scale,
+                    false,
+                    &Default::default(),
+                    &Default::default(),
+                );
+                let bounds: Vec<_> = captured
+                    .iter()
+                    .map(|n| super::captured_text_decoration_bounds(n, scale))
+                    .collect();
+                let layer = super::current_underline_layer(
+                    true,
+                    false,
+                    &[],
+                    &[],
+                    &previous,
+                    Some((&prep.underline_instances, &bounds)),
+                );
+                let hovered_link = target == "Home" || target == "Components";
+                assert_eq!(
+                    layer.len(),
+                    usize::from(hovered_link),
+                    "target={target} scale={scale} captured={:?} bounds={bounds:?}",
+                    captured
+                        .iter()
+                        .map(|n| (
+                            &n.text,
+                            n.x,
+                            n.y,
+                            n.width,
+                            n.height,
+                            n.style.underline_resolved()
+                        ))
+                        .collect::<Vec<_>>()
+                );
+                assert!(
+                    !frame
+                        .text_nodes
+                        .iter()
+                        .find(|n| n.text == "Breadcrumb")
+                        .unwrap()
+                        .style
+                        .underline_resolved(),
+                    "current page stays undecorated"
+                );
+                let image = gpu
+                    .render_instances_readback(W, H, wgpu::Color::WHITE, &layer)
+                    .expect("underline pixels");
+                let dark = (0..H)
+                    .flat_map(|y| (0..W).map(move |x| (x, y)))
+                    .filter(|&(x, y)| image.pixel(x, y).unwrap()[0] < 220)
+                    .count();
+                assert_eq!(
+                    dark > 10,
+                    hovered_link,
+                    "visible underline target={target} scale={scale}"
+                );
+                previous = layer;
+            }
+        }
+        clear_hover_tracking();
     }
 }
 

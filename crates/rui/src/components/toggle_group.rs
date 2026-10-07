@@ -1288,6 +1288,27 @@ mod tests {
                 .map(String::as_str),
             Some("end")
         );
+        assert_eq!(
+            el.children[0]
+                .attrs
+                .get("rui_button_group_nudge_next")
+                .map(String::as_str),
+            Some("x")
+        );
+        assert_eq!(
+            el.children[1]
+                .attrs
+                .get("rui_button_group_nudge_next")
+                .map(String::as_str),
+            Some("x")
+        );
+        assert_eq!(
+            el.children[2]
+                .attrs
+                .get("rui_button_group_nudge_next")
+                .map(String::as_str),
+            None
+        );
     }
 
     #[test]
