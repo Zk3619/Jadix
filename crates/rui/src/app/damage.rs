@@ -71,6 +71,29 @@ pub struct PaintDirty {
     pub kind: PaintDirtyKind,
 }
 
+/// Portal changes rebuild the affected composite in z order. Lower-layer node
+/// bounds must never carve holes into an upper layer's shadow.
+pub(crate) fn portal_composite_damage(
+    nodes: &[PaintDirty],
+    occupied: Option<[f32; 4]>,
+) -> Option<[f32; 4]> {
+    if !nodes.iter().any(|node| {
+        matches!(
+            node.kind,
+            PaintDirtyKind::Overlay | PaintDirtyKind::OverlayRestore
+        ) || occupied.is_some_and(|portal| intersect_rects(node.bounds, portal).is_some())
+    }) {
+        return None;
+    }
+    nodes
+        .iter()
+        .filter_map(|node| {
+            (node.bounds[2] > 0.0 && node.bounds[3] > 0.0)
+                .then(|| super::draw_cull::padded_xywh(node.bounds, OVERLAY_RESTORE_PAD_LOGICAL))
+        })
+        .reduce(union_rects)
+}
+
 thread_local! {
     static FRAME_PAINT_NODES: RefCell<HashMap<super::window_scope::WindowScope, Vec<PaintDirty>>> = RefCell::new(HashMap::new());
 }
@@ -710,12 +733,72 @@ pub(crate) fn overlay_restore_leftover_coverage(
     }
     previous
         .iter()
-        .filter_map(|(key, bounds)| {
-            (bounds[2] > 0.0
-                && bounds[3] > 0.0
-                && overlay_stamp_box(current, *key) != Some(*bounds))
-            .then_some((*key, overlay_pad_dest_reset_hole(*bounds)))
+        .flat_map(|(key, bounds)| {
+            if bounds[2] <= 0.0 || bounds[3] <= 0.0 {
+                return Vec::new();
+            }
+            if overlay_stamp_box(current, *key) == Some(*bounds) {
+                // Stamp already matches. Painted ink can still hang below the
+                // max-height clamp (one portal's own visual, not a sibling union).
+                // Restore only that overflow — wiping the visual itself blanks the
+                // live panel when this frame has no overlay redraw.
+                return single_portal_paint_overflow(
+                    *key,
+                    *bounds,
+                    previous.len(),
+                    previous_visual,
+                );
+            }
+            // Layout stamp + the 16px encode pad stops short of the SDF halo
+            // (`blur * 2 + border + 2`). Expand-up then never revisits that
+            // fringe, so the calendar keeps the old menu. A recorded visual
+            // that is this stamp's own halo is the pixels that were painted.
+            // A single portal's visual may be the unclamped content box, far
+            // past the 32px halo slack; that ink is still this portal.
+            let visual = previous_visual.filter(|b| b[2] > 0.0 && b[3] > 0.0);
+            let hole = match visual {
+                Some(visual)
+                    if overlay_visual_is_stamp_halo(*bounds, visual)
+                        || (previous.len() == 1
+                            && !overlay_box_extends_beyond(
+                                *bounds,
+                                visual,
+                                overlay_stamp_slack(),
+                            )) =>
+                {
+                    union_rects(overlay_pad_dest_reset_hole(*bounds), visual)
+                }
+                _ => super::draw_cull::padded_xywh(*bounds, OVERLAY_RESTORE_PAD_LOGICAL),
+            };
+            vec![(*key, hole)]
         })
+        .collect()
+}
+
+/// Ink of a lone portal that sits outside its clamped stamp. Sibling occupancy
+/// is not this portal's paint.
+fn single_portal_paint_overflow(
+    key: u64,
+    stamp: [f32; 4],
+    previous_len: usize,
+    previous_visual: Option<[f32; 4]>,
+) -> Vec<(u64, [f32; 4])> {
+    if previous_len != 1 {
+        return Vec::new();
+    }
+    let Some(visual) = previous_visual.filter(|b| b[2] > 0.0 && b[3] > 0.0) else {
+        return Vec::new();
+    };
+    if overlay_box_extends_beyond(stamp, visual, overlay_stamp_slack())
+        || !overlay_box_extends_beyond(visual, stamp, overlay_stamp_slack())
+    {
+        return Vec::new();
+    }
+    let live = super::draw_cull::padded_xywh(stamp, OVERLAY_RESTORE_PAD_LOGICAL);
+    subtract_rect(visual, live)
+        .into_iter()
+        .filter(|rect| rect[2] > 0.5 && rect[3] > 0.5)
+        .map(|rect| (key, rect))
         .collect()
 }
 
@@ -5255,6 +5338,71 @@ mod tests {
         let child_ink = [319.0, 1000.0, 274.0, 193.0];
         let holes = overlay_restore_leftover_coverage(&[(7, panel)], &[], Some(child_ink));
         assert!(holes.iter().any(|(_, b)| rect_contains_rect(*b, panel)));
+    }
+
+    #[test]
+    fn shrinking_menu_restore_covers_shader_halo_past_encode_pad() {
+        // popup_shadow Md: shader ext is blur*2 + border + 2 ≈ 23px. The 16px
+        // encode pad leaves that fringe in retain (the line under a closed menu).
+        let previous = [100.0, 80.0, 140.0, 180.0];
+        let live = [100.0, 80.0, 140.0, 40.0];
+        let visual = super::super::draw_cull::padded_xywh(previous, 22.0);
+        let holes = overlay_restore_leftover_coverage(&[(1, previous)], &[(1, live)], Some(visual));
+        let smear = [
+            previous[0] + previous[2] * 0.5,
+            previous[1] + previous[3] + 20.0,
+        ];
+        let covers = |holes: &[(u64, [f32; 4])]| {
+            holes.iter().any(|(_, b)| {
+                smear[0] >= b[0]
+                    && smear[1] >= b[1]
+                    && smear[0] < b[0] + b[2]
+                    && smear[1] < b[1] + b[3]
+            })
+        };
+        assert!(
+            covers(&holes),
+            "expand-up must erase the painted halo, not only the layout box + 16px; holes={holes:?}"
+        );
+        let unrecorded = overlay_restore_leftover_coverage(&[(1, previous)], &[(1, live)], None);
+        assert!(
+            covers(&unrecorded),
+            "a stamp with no recorded visual still has to cover the shader halo; holes={unrecorded:?}"
+        );
+    }
+
+    #[test]
+    fn single_portal_unclamped_visual_is_restored_past_the_stamp() {
+        // max-height clamps the stamp. The painted box can still be the content
+        // height, so the bottom shadow sits far below the 32px halo slack.
+        let stamp = [100.0, 80.0, 140.0, 40.0];
+        let visual = [100.0, 80.0, 140.0, 220.0];
+        let shrunk = overlay_restore_leftover_coverage(&[(1, visual)], &[(1, stamp)], Some(visual));
+        let below = [170.0, 80.0 + 180.0];
+        let covers = |holes: &[(u64, [f32; 4])], y: f32| {
+            holes.iter().any(|(_, b)| {
+                below[0] >= b[0] && y >= b[1] && below[0] < b[0] + b[2] && y < b[1] + b[3]
+            })
+        };
+        assert!(
+            covers(&shrunk, below[1]),
+            "a lone portal must restore paint taller than its stamp; holes={shrunk:?}"
+        );
+        let settled = overlay_restore_leftover_coverage(&[(1, stamp)], &[(1, stamp)], Some(visual));
+        assert!(
+            covers(&settled, 80.0 + 40.0 + 24.0 + 8.0),
+            "stable stamp must still clear ink below the restore pad; holes={settled:?}"
+        );
+        let sibling = [400.0, 80.0, 80.0, 40.0];
+        let nested = overlay_restore_leftover_coverage(
+            &[(1, stamp), (2, sibling)],
+            &[(1, stamp), (2, sibling)],
+            Some(visual),
+        );
+        assert!(
+            nested.is_empty(),
+            "a sibling union is not this stamp's overflow; holes={nested:?}"
+        );
     }
 
     #[test]

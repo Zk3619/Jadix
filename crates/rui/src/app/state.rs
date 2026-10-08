@@ -2376,41 +2376,6 @@ impl AppState {
             needs_restore,
             same_footprint,
         );
-        // A nested portal is composited over an already retained parent panel.
-        // During its enter/exit animation the child shadow and the parent's
-        // hover chrome share pixels, so a local retain replay can leave a stale
-        // fringe or draw the trigger caption twice. Rebuild the frame while
-        // that nested portal is changing; the next settled frame returns to
-        // the normal partial-damage path.
-        let nested_overlay_transition = (prev_stamps.len() > 1 || cur_stamps.len() > 1)
-            && (membership || prev != cur || collect_overlay_dirty);
-        if nested_overlay_transition
-            && !self.force_full_redraw
-            && !self.scroll_layer_clear
-        {
-            self.mark_full_redraw();
-            self.overlay_restore_clear = false;
-            self.overlay_occupied = current_paint;
-        }
-        // The last fade frame can leave the anchor's border under the portal
-        // halo one shade darker than a fresh composite. Once the portal has no
-        // remaining visual occupancy, rebuild the page and trigger together so
-        // the close frame cannot retain that stale fringe.
-        if needs_restore
-            && cur_stamps.is_empty()
-            && !overlay_present
-            && !self.force_full_redraw
-            && !self.scroll_layer_clear
-        {
-            self.mark_full_redraw();
-        }
-        // The first visible portal frame also paints its shadow over the
-        // trigger halo. Rebuild the page once at that boundary so the shadow
-        // is composited over a fresh trigger instead of the retained baseline.
-        if overlay_present && !had_occupancy && !self.force_full_redraw && !self.scroll_layer_clear
-        {
-            self.mark_full_redraw();
-        }
         if overlay_present
             && super::damage::overlay_requires_full_clear(overlay_present, cur, had_occupancy)
             && !measuring
@@ -2622,8 +2587,14 @@ impl AppState {
     fn plan_gpu_present(&self, ui_scale: f32) -> GpuPresentPlan {
         let (logical_w, logical_h) = self.logical_size();
         let viewport_logical = [0.0, 0.0, logical_w, logical_h];
-        let node_present = !self.scroll_layer_clear && !self.damage_nodes.is_empty();
-        let mut logical_policy = if node_present {
+        let portal_region = if self.scroll_layer_clear {
+            None
+        } else {
+            super::damage::portal_composite_damage(&self.damage_nodes, self.overlay_occupied)
+        };
+        let has_node_damage = !self.scroll_layer_clear && !self.damage_nodes.is_empty();
+        let node_present = has_node_damage && portal_region.is_none();
+        let mut logical_policy = if has_node_damage {
             super::damage::frame_clear_policy_for_nodes(
                 self.has_presented_frame,
                 self.force_full_redraw,
@@ -2640,10 +2611,10 @@ impl AppState {
         };
         let mut scissor_physical = None;
         if !node_present && matches!(logical_policy, super::damage::FrameClearPolicy::PartialLoad) {
-            scissor_physical = self.damage_rect.and_then(|damage| {
+            scissor_physical = portal_region.or(self.damage_rect).and_then(|damage| {
                 super::damage::damage_to_scissor_physical(
                     damage,
-                    if self.scroll_layer_clear {
+                    if self.scroll_layer_clear || portal_region.is_some() {
                         0.0
                     } else {
                         super::draw_cull::DAMAGE_CULL_PAD_LOGICAL
@@ -2713,7 +2684,8 @@ impl AppState {
             warm_retain,
             draw_to_retain,
             cull_phys,
-            clear_damage: use_partial_damage && self.scroll_layer_clear,
+            clear_damage: use_partial_damage
+                && (self.scroll_layer_clear || portal_region.is_some()),
             use_node_present,
         }
     }
@@ -2898,11 +2870,17 @@ impl AppState {
                 // The padded halo contains the trigger. Clearing that caption
                 // every fade tick and letting the shadow land on it flickers
                 // the Latin suffix, which does not move between 打开 and 关闭.
+                // The live occupancy is the shrunk panel during expand-up; the
+                // hole still covers the previous footprint. Captions in the
+                // vacated strip have to be cleared with that hole.
                 super::draw_cull::scissors_keeping_stable_page_captions(
                     vec![scissor_logical],
                     node_paints,
                     &self.last_overlay_stamps,
-                    self.overlay_occupied.or(Some(dirty.bounds)),
+                    Some(super::draw_cull::overlay_restore_caption_shadow(
+                        dirty.bounds,
+                        self.overlay_occupied,
+                    )),
                 )
             } else {
                 vec![scissor_logical]
@@ -6320,13 +6298,15 @@ impl AppState {
             self.overlay_occupied,
             &self.last_overlay_stamps,
         );
-        let region_present = self.damage_nodes.iter().any(|d| {
-            matches!(
-                d.kind,
-                super::damage::PaintDirtyKind::Region
-                    | super::damage::PaintDirtyKind::OverlayRestore
-            )
-        });
+        let region_present =
+            super::damage::portal_composite_damage(&self.damage_nodes, self.overlay_occupied).is_some()
+            || self.damage_nodes.iter().any(|d| {
+                matches!(
+                    d.kind,
+                    super::damage::PaintDirtyKind::Region
+                        | super::damage::PaintDirtyKind::OverlayRestore
+                )
+            });
         // A source-over clear quad cannot replace transparent destination alpha.
         // Preserve compositor transparency with a real attachment Clear.
         if region_present && self.compositor_alpha {
@@ -6355,7 +6335,10 @@ impl AppState {
         // Every cleared pixel needs both primitives and glyphs from this frame.
         // FullClear prepares complete bands; partial repair uses the same holes
         // for text and primitive submission.
-        let page_text_cull = if self.scroll_layer_clear && gpu_present.use_partial_damage {
+        let page_text_cull = if !gpu_present.use_node_present
+            && gpu_present.clear_damage
+            && gpu_present.use_partial_damage
+        {
             // Prepare exactly the pixels reset below, including viewport-clear
             // fallback and pins outside the scrolled viewport.
             cull_phys.and_then(|c| {
@@ -6388,7 +6371,7 @@ impl AppState {
         // scissor Clear or a culled page-glyphon prepare (empty gallery shells).
         let retain_page_pixels = super::damage::overlay_partial_load_retains_page(
             gpu_present.use_partial_damage,
-            self.scroll_layer_clear || self.overlay_restore_clear,
+            gpu_present.clear_damage || self.overlay_restore_clear,
             overlay_present,
             page_text_unchanged,
         );

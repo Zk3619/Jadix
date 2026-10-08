@@ -3,19 +3,38 @@ use super::*;
 use crate::app::{damage::*, draw_cull::*};
 use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 
+#[path = "state_textarea_present_tests.rs"]
+mod textarea_present_tests;
+
+#[cfg(target_os = "windows")]
+#[path = "state_drag_present_tests.rs"]
+mod drag_present_tests;
+
 /// Exercise the production frame planner, reactive portal remounts and native
 /// presentation, rather than reconstructing node-present calls in a test.
 #[cfg(target_os = "windows")]
 #[test]
 #[ignore = "requires a native Windows GPU surface; run explicitly with --ignored --nocapture"]
 fn color_picker_native_frames_keep_page_and_hover_stable() {
+    native_popup_frames(false);
+}
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "requires a native Windows GPU surface; run explicitly with --ignored --nocapture"]
+fn calendar_select_native_frames_have_no_shadow_residue() {
+    native_popup_frames(true);
+}
+
+#[cfg(target_os = "windows")]
+fn native_popup_frames(calendar: bool) {
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
     use winit::event_loop::{ActiveEventLoop, EventLoop};
     use winit::platform::windows::EventLoopBuilderExtWindows;
     use winit::window::{WindowAttributes, WindowId};
 
-    struct Harness;
+    struct Harness(bool);
     impl ApplicationHandler for Harness {
         fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
             let window: Arc<dyn Window> = Arc::from(
@@ -28,7 +47,7 @@ fn color_picker_native_frames_keep_page_and_hover_stable() {
                     )
                     .expect("hidden test window"),
             );
-            run_color_picker_native_frames(window);
+            run_color_picker_native_frames(window, self.0);
             event_loop.exit();
         }
         fn window_event(&mut self, _: &dyn ActiveEventLoop, _: WindowId, _: WindowEvent) {}
@@ -38,12 +57,12 @@ fn color_picker_native_frames_keep_page_and_hover_stable() {
     builder
         .build()
         .expect("test event loop")
-        .run_app(Harness)
+        .run_app(Harness(calendar))
         .unwrap();
 }
 
 #[cfg(target_os = "windows")]
-fn run_color_picker_native_frames(window: Arc<dyn Window>) {
+fn run_color_picker_native_frames(window: Arc<dyn Window>, calendar: bool) {
     use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
     use crate::app::runtime::{clear_app_runtime, set_app_runtime, AppRuntime};
     use crate::core::reactivity::{create_effect, create_root};
@@ -106,7 +125,9 @@ fn run_color_picker_native_frames(window: Arc<dyn Window>) {
                 pixel.swap(0, 2);
             }
         }
-        if std::env::var_os("RUI_NATIVE_CP_PARTIAL_ONLY").is_none() {
+        if std::env::var_os("RUI_NATIVE_CP_PARTIAL_ONLY").is_none()
+            && focus_suffix(&s.root_element, "native-cal:cap_y:trigger").is_none()
+        {
             // Freeze both clocks: zero frame dt alone still advances CSS from
             // elapsed wall time while GPU readback is running.
             crate::style::utility::set_frame_dt(0.0);
@@ -255,7 +276,12 @@ fn run_color_picker_native_frames(window: Arc<dyn Window>) {
         let live = Rc::clone(&state);
         crate::core::reactivity::mark_next_effect_as_ui_root();
         create_effect(move || {
-            let picker: Element = if std::env::var_os("RUI_NATIVE_CP_DATE").is_some() {
+            let picker: Element = if calendar {
+                crate::components::calendar("native-cal")
+                    .caption_layout(crate::components::CalendarCaption::Dropdown)
+                    .default_value("2026-10-08")
+                    .into()
+            } else if std::env::var_os("RUI_NATIVE_CP_DATE").is_some() {
                 let mut date = crate::components::date_picker("native-cp");
                 if std::env::var_os("RUI_NATIVE_CP_DATE_DROPDOWN").is_some() {
                     date = date.caption_layout(crate::components::CalendarCaption::Dropdown);
@@ -266,69 +292,126 @@ fn run_color_picker_native_frames(window: Arc<dyn Window>) {
                     .show_alpha(false)
                     .into()
             };
-            let root = Element::new()
-                .w("100%")
-                .h("100%")
-                // Real page chrome beneath the fading panel: a flat clear
-                // backdrop misses strips left at borders and calendar rows.
-                .children((0..8).map(|row| {
-                    Element::new()
-                        .absolute()
-                        .left(0.0)
-                        .top(100.0 + row as f32 * 44.0)
-                        .w(560.0)
-                        .h(40.0)
-                        .bg(if row % 2 == 0 {
-                            [0.96, 0.96, 0.96, 1.0]
-                        } else {
-                            [1.0, 1.0, 1.0, 1.0]
-                        })
-                        .border([0.9, 0.9, 0.9, 1.0], 1.0)
-                        .rounded(4.0)
-                }))
-                .child(
-                    Element::new()
-                        .absolute()
-                        .left(0.0)
-                        .top(0.0)
-                        .w(600.0)
-                        .h(28.0)
-                        .text("Color · date/time 周围文字必须保持稳定")
-                        .text_size(20.0),
-                )
-                .child(
+            let root = if calendar {
+                Element::new().w("100%").h("100%").child(
                     Element::new()
                         .absolute()
                         .left(100.0)
                         .top(44.0)
                         .child(picker),
                 )
-                .child(
-                    Element::new()
-                        .absolute()
-                        .left(0.0)
-                        .top(212.0)
-                        .w(600.0)
-                        .h(28.0)
-                        .text("Calendar · ColorPicker 标题：打开 / 关闭")
-                        .text_size(20.0),
-                )
-                .child(
-                    Element::new()
-                        .absolute()
-                        .left(0.0)
-                        .top(242.0)
-                        .w(600.0)
-                        .h(24.0)
-                        .text("内置 Calendar / 时间选择，预设颜色与输入框")
-                        .text_size(12.0),
-                );
+            } else {
+                Element::new()
+                    .w("100%")
+                    .h("100%")
+                    // Real page chrome beneath the fading panel: a flat clear
+                    // backdrop misses strips left at borders and calendar rows.
+                    .children((0..8).map(|row| {
+                        Element::new()
+                            .absolute()
+                            .left(0.0)
+                            .top(100.0 + row as f32 * 44.0)
+                            .w(560.0)
+                            .h(40.0)
+                            .bg(if row % 2 == 0 {
+                                [0.96, 0.96, 0.96, 1.0]
+                            } else {
+                                [1.0, 1.0, 1.0, 1.0]
+                            })
+                            .border([0.9, 0.9, 0.9, 1.0], 1.0)
+                            .rounded(4.0)
+                    }))
+                    .child(
+                        Element::new()
+                            .absolute()
+                            .left(0.0)
+                            .top(0.0)
+                            .w(600.0)
+                            .h(28.0)
+                            .text("Color · date/time 周围文字必须保持稳定")
+                            .text_size(20.0),
+                    )
+                    .child(
+                        Element::new()
+                            .absolute()
+                            .left(100.0)
+                            .top(44.0)
+                            .child(picker),
+                    )
+                    .child(
+                        Element::new()
+                            .absolute()
+                            .left(0.0)
+                            .top(212.0)
+                            .w(600.0)
+                            .h(28.0)
+                            .text("Calendar · ColorPicker 标题：打开 / 关闭")
+                            .text_size(20.0),
+                    )
+                    .child(
+                        Element::new()
+                            .absolute()
+                            .left(0.0)
+                            .top(242.0)
+                            .w(600.0)
+                            .h(24.0)
+                            .text("内置 Calendar / 时间选择，预设颜色与输入框")
+                            .text_size(12.0),
+                    )
+            };
             live.borrow_mut().as_mut().unwrap().rebuild_ui(root);
         });
     });
     crate::style::utility::set_frame_dt(0.016);
     for _ in 0..4 {
         frame(&state, [-1.0, -1.0]);
+    }
+    if calendar {
+        let suffix = ":cap_y:trigger";
+        let mouse = {
+            let s = state.borrow();
+            let b = focus_suffix(&s.as_ref().unwrap().root_element, suffix)
+                .unwrap()
+                .layout_bounds;
+            [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5]
+        };
+        for _ in 0..16 {
+            frame(&state, mouse);
+        }
+        let mut failures = Vec::new();
+        for opening in [true, false] {
+            let click = {
+                let s = state.borrow();
+                focus_suffix(&s.as_ref().unwrap().root_element, suffix)
+                    .and_then(|el| el.on_click.clone())
+                    .unwrap()
+            };
+            click.borrow_mut()();
+            for tick in 0..24 {
+                let image = frame(&state, mouse);
+                snapshot(&image, &format!("calendar-{opening}-{tick}-partial"));
+                if tick == 23 {
+                    let full = full_composite(&state, mouse);
+                    let scale = state.borrow().as_ref().unwrap().ui_scale();
+                    let changed = changed_outside_threshold(&image, &full, &[], scale, 20);
+                    snapshot(&full, &format!("calendar-{opening}-{tick}-full"));
+                    if changed > 0 {
+                        failures.push((opening, tick, changed));
+                    }
+                }
+            }
+        }
+        clear_app_runtime();
+        owner.dispose();
+        crate::style::utility::set_frame_dt(0.0);
+        crate::style::set_css_transition_virtual_timeline(false);
+        crate::app::portal_overlay::clear_overlay_stack();
+        reset_registered_anchors();
+        assert!(
+            failures.is_empty(),
+            "calendar select differs from full composite: {failures:?}"
+        );
+        return;
     }
     let (mouse, scale) = {
         let s = state.borrow();
@@ -457,19 +540,12 @@ fn run_color_picker_native_frames(window: Arc<dyn Window>) {
                     .expect("DatePicker year trigger close")
             };
             year_close.borrow_mut()();
-            // Fade exits run for 200ms and may be seeded one frame after the
-            // click; keep sampling past the nominal duration before checking
-            // the settled parent panel.
+            // Nested Select expand-up is 200ms and may be seeded one frame
+            // after the click; keep sampling past that before the parent settles.
             for tick in 0..24 {
                 let image = frame(&state, year_mouse);
                 let full = full_composite(&state, year_mouse);
-                let same_frame = changed_outside_threshold(
-                    &image,
-                    &full,
-                    &[],
-                    nested_scale,
-                    20,
-                );
+                let same_frame = changed_outside_threshold(&image, &full, &[], nested_scale, 20);
                 assert_eq!(
                     same_frame, 0,
                     "nested year menu closing retained frame differs from full composite at tick {tick}: {same_frame}"

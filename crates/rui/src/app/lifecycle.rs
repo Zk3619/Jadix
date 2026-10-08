@@ -1230,7 +1230,20 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
     let (user_tx, user_rx) = std::sync::mpsc::channel();
     super::ui_bridge::install_proxy(event_loop_proxy.clone(), user_tx);
     event_loop.set_control_flow(ControlFlow::Wait);
-    let app = super::App {
+    let app = create_app(window_options, app_builder, event_loop_proxy, user_rx);
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::platform::run_winit_app(event_loop, app);
+    #[cfg(target_arch = "wasm32")]
+    crate::platform::spawn_winit_app(event_loop, app);
+}
+
+pub(super) fn create_app(
+    window_options: super::WindowOptions,
+    app_builder: impl FnMut() -> Element + 'static,
+    event_loop_proxy: winit::event_loop::EventLoopProxy,
+    user_rx: std::sync::mpsc::Receiver<super::RuiUserEvent>,
+) -> super::App {
+    super::App {
         state: std::rc::Rc::new(std::cell::RefCell::new(None)),
         is_suspended: false,
         force_redraw_count: 0,
@@ -1300,18 +1313,6 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         window_options,
         #[cfg(debug_assertions)]
         hot_reload: super::hot_reload::HotReloadState::new(),
-    };
-    #[cfg(not(any(target_arch = "wasm32", target_env = "ohos")))]
-    {
-        crate::platform::run_winit_app(event_loop, app);
-    }
-    #[cfg(target_env = "ohos")]
-    {
-        crate::platform::run_winit_app(event_loop, app);
-    }
-    #[cfg(target_arch = "wasm32")]
-    {
-        crate::platform::spawn_winit_app(event_loop, app);
     }
 }
 

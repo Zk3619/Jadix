@@ -5872,6 +5872,10 @@ impl LayoutTree {
             && paint_visible[2] > 0.0
             && paint_visible[3] > 0.0
         {
+            // Taffy can report content height while `max-height` is the accordion
+            // clip. The stamp is already clamped; unclamped chrome paints a second
+            // shadow below the visible card. Own overflow must not clip that shadow.
+            let render_rect = overflow_clip_layout_border(element, render_rect);
             let resolved_radii =
                 resolve_corner_radii(element.style.radii, render_rect[2], render_rect[3]);
             let need_fill_instance =

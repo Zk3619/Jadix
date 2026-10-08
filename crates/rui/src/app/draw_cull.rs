@@ -365,7 +365,15 @@ fn chrome_reset_bounds(i: &InstanceInput) -> [f32; 4] {
 fn instance_fill_bounds(i: &InstanceInput) -> [f32; 4] {
     let bounds = [i.rect_pos[0], i.rect_pos[1], i.rect_size[0], i.rect_size[1]];
     if transform_is_identity(&i.transform) {
-        bounds
+        if i.clip_size[0] >= 0.0 && i.clip_size[1] >= 0.0 {
+            intersect_rects(
+                bounds,
+                [i.clip_pos[0], i.clip_pos[1], i.clip_size[0], i.clip_size[1]],
+            )
+            .unwrap_or([0.0; 4])
+        } else {
+            bounds
+        }
     } else {
         aabb_of_centered_transform(bounds, &i.transform)
     }
@@ -407,10 +415,18 @@ pub(crate) fn text_paint_bounds(n: &TextLayoutInfo) -> [f32; 4] {
     let extra = n.style.shadow_blur.max(0.0)
         + n.style.shadow_offset[0].abs()
         + n.style.shadow_offset[1].abs();
+    // Single-line edits shift the glyph origin while retaining the viewport
+    // width. Include the panned run so selection recoloring can recapture its
+    // visible tail even when the origin is far outside the field.
+    let pan = if n.style.overflow.allows_caret_scroll() {
+        n.style.scroll_x.max(0.0)
+    } else {
+        0.0
+    };
     let mut bounds = [
         n.x - extra,
         n.y - extra,
-        (n.width + extra * 2.0).max(0.0),
+        (n.width + pan + extra * 2.0).max(0.0),
         (n.height + extra * 2.0).max(0.0),
     ];
     if n.paint_scale != 1.0 || !transform_is_identity(&n.paint_transform) {
@@ -990,6 +1006,39 @@ fn page_trigger_box_for_face(
         .map(|paint| paint.bounds)
 }
 
+/// Page text in the column the menu is leaving. Expand-up keeps the live stamp
+/// at the trigger and the old footprint below it. A calendar row there does not
+/// intersect the live stamp, so the trigger carve would slice the retained menu
+/// into bands. The trigger caption sits above the stamp and is not this ink.
+fn face_is_vacated_menu_ink(face: [f32; 4], stamps: &[(u64, [f32; 4])]) -> bool {
+    let cx = face[0] + face[2] * 0.5;
+    let cy = face[1] + face[3] * 0.5;
+    let in_column = stamps.iter().any(|(_, stamp)| {
+        stamp[2] > 0.5
+            && stamp[3] > 0.5
+            && cy >= stamp[1]
+            && cx >= stamp[0]
+            && cx < stamp[0] + stamp[2]
+    });
+    let on_stamp = stamps.iter().any(|(_, stamp)| {
+        stamp[2] > 0.5 && stamp[3] > 0.5 && intersect_rects(face, *stamp).is_some()
+    });
+    in_column && !on_stamp
+}
+
+/// Coverage for [`scissors_keeping_stable_page_captions`] on an OverlayRestore hole.
+///
+/// `hole` is the footprint being erased (previous ∪ current). `live` is the panel
+/// still on screen. Expand-up makes `live` shorter than `hole`. Captions in that
+/// vacated strip sit inside `hole` only; using `live` alone leaves the old menu
+/// pixels in retain after the panel has shrunk.
+pub(crate) fn overlay_restore_caption_shadow(hole: [f32; 4], live: Option<[f32; 4]>) -> [f32; 4] {
+    match live {
+        Some(live) => crate::app::damage::union_rects(hole, live),
+        None => hole,
+    }
+}
+
 /// OverlayRestore / overlay-suffix scissors with stable page captions removed.
 ///
 /// `打开` and `关闭` share one suffix box. The padded portal halo still contains
@@ -1048,6 +1097,11 @@ pub(crate) fn scissors_keeping_stable_page_captions(
                 }
             }
         }
+        // Vacated rows stay in the scissor so Restore replays the page there
+        // and the overlay draw is not cut into the bands between them.
+        if face_is_vacated_menu_ink(face, stamps) {
+            continue;
+        }
         let outside = stamps.iter().all(|(_, stamp)| {
             stamp[2] > 0.5
                 && stamp[3] > 0.5
@@ -1084,11 +1138,23 @@ pub(crate) fn scissors_keeping_stable_page_captions(
             .filter(|rect| rect[2] > 0.5 && rect[3] > 0.5)
             .collect();
     }
-    // subtract_rect leaves a 2–4px cap where the halo sticks out past the
-    // trigger. That cap is cleared to the page color and the shadow quad
-    // does not cover it, so it stays as a horizontal line and flashes on
-    // every fade tick.
-    parts.retain(|rect| rect[2] >= 8.0 && rect[3] >= 8.0);
+    // A 2–4px cap past the trigger sits outside the live shadow. Clearing it
+    // paints the page color where the shadow quad does not land, so it flashes
+    // as a line on every fade tick — drop those.
+    // A thin strip inside `shadow` but outside every live stamp is expand-up
+    // paint the panel just left. Nothing redraws it; dropping it leaves the
+    // menu fringe on the calendar.
+    parts.retain(|rect| {
+        if rect[2] >= 8.0 && rect[3] >= 8.0 {
+            return true;
+        }
+        let in_shadow =
+            shadow.is_some_and(|s| s[2] > 0.5 && s[3] > 0.5 && intersect_rects(*rect, s).is_some());
+        in_shadow
+            && !stamps.iter().any(|(_, stamp)| {
+                stamp[2] > 0.5 && stamp[3] > 0.5 && intersect_rects(*rect, *stamp).is_some()
+            })
+    });
     parts
 }
 
@@ -1102,6 +1168,20 @@ pub(crate) fn region_scissors_keeping_stable_page_captions(
     stamps: &[(u64, [f32; 4])],
     shadow: Option<[f32; 4]>,
 ) -> Vec<[f32; 4]> {
+    // Translated slots need their complete old/new repair area. A portal
+    // elsewhere also must not make ordinary page repairs preserve captions.
+    let moving = paints.iter().any(|p| {
+        p.key == dirty.key && !p.overlay && p.rest.is_some_and(|rest| rest != p.bounds)
+    });
+    let near_portal = pieces.iter().any(|piece| {
+        shadow.is_some_and(|bounds| intersect_rects(*piece, bounds).is_some())
+            || stamps
+                .iter()
+                .any(|(_, bounds)| intersect_rects(*piece, *bounds).is_some())
+    });
+    if moving || !near_portal {
+        return pieces;
+    }
     let mut kept = scissors_keeping_stable_page_captions(pieces.clone(), paints, stamps, shadow);
     let mut changed: Vec<_> = dirties
         .iter()
@@ -1363,10 +1443,9 @@ pub(crate) fn page_runs_excluding_caption_replay(
         }
         // Keep all four sides and disjoint gaps, including wrapped rows below
         // the halo. A horizontal-only split dropped those rows on full redraw.
-        let mut pieces =
-            vec![n.clip_bounds.unwrap_or_else(|| {
-                padded_xywh([n.x, n.y, n.width.max(0.0), n.height.max(0.0)], 1.0)
-            })];
+        let mut pieces = vec![n
+            .clip_bounds
+            .unwrap_or_else(|| padded_xywh([n.x, n.y, n.width.max(0.0), n.height.max(0.0)], 1.0))];
         for repaired in matching {
             let Some(clip) = repaired.clip_bounds else {
                 pieces.clear();
@@ -3500,8 +3579,7 @@ fn text_decoration_hole_logical(
         let lo = p.text.0.min(text.len());
         let hi = p.text.1.min(text.len());
         for n in &text[lo..hi] {
-            let Some(ink) =
-                crate::renderer::prepare_text::text_decoration_ink_logical(n, ui_scale)
+            let Some(ink) = crate::renderer::prepare_text::text_decoration_ink_logical(n, ui_scale)
             else {
                 continue;
             };
@@ -3616,7 +3694,12 @@ pub(crate) fn node_present_restore_underlay(
                 && !p.overlay
                 && p.bounds[2] > 0.5
                 && p.bounds[3] > 0.5
-                && intersect_rects(p.bounds, dirty_bounds).is_some()
+                && intersect_rects(p.bounds, dirty_bounds)
+                    .and_then(|hit| match p.overflow_clip {
+                        Some(clip) => intersect_rects(hit, clip),
+                        None => Some(hit),
+                    })
+                    .is_some()
         })
 }
 
@@ -3905,7 +3988,12 @@ fn overlaps_foreign_layered_bar(
                 && p.bounds[2] > 0.5
                 && p.bounds[3] > 0.5
                 && p.bounds[3] <= dirty_bounds[3] * 3.0 + 24.0
-                && intersect_rects(p.bounds, dirty_bounds).is_some()
+                && intersect_rects(p.bounds, dirty_bounds)
+                    .and_then(|hit| match p.overflow_clip {
+                        Some(clip) => intersect_rects(hit, clip),
+                        None => Some(hit),
+                    })
+                    .is_some()
                 && !layered_bar_belongs_to_dirty_slot(dirty_key, dirty_bounds, p, node_paints)
         })
 }
@@ -4170,7 +4258,15 @@ fn clip_rect_against_foreign_siblings(
             continue;
         }
         let fb = scale_xywh(p.bounds, s);
-        let occ = scale_xywh(node_paint_occupancy(p), s);
+        let mut occ = node_paint_occupancy(p);
+        // Scrolled text can extend across peers while only painting inside its viewport.
+        if let Some(clip) = p.overflow_clip {
+            let Some(visible) = intersect_rects(occ, clip) else {
+                continue;
+            };
+            occ = visible;
+        }
+        let occ = scale_xywh(occ, s);
         if aabb_contains(fb, host) {
             continue;
         }
@@ -4771,11 +4867,22 @@ fn logical_opaque_fill_aabb(inst: &InstanceInput, ui_scale: f32) -> Option<[f32;
     let mut transform = inst.transform;
     transform[4] /= scale;
     transform[5] /= scale;
-    Some(if !transform_is_identity(&transform) {
+    let bounds = if !transform_is_identity(&transform) {
         aabb_of_centered_transform(local, &transform)
     } else {
         local
-    })
+    };
+    if inst.clip_size[0] >= 0.0 && inst.clip_size[1] >= 0.0 {
+        let clip = [
+            inst.clip_pos[0] / scale,
+            inst.clip_pos[1] / scale,
+            inst.clip_size[0] / scale,
+            inst.clip_size[1] / scale,
+        ];
+        intersect_rects(bounds, clip)
+    } else {
+        Some(bounds)
+    }
 }
 
 /// Hole-flush TextBounds minus opaque plates this glyph does not belong to.
@@ -4803,7 +4910,9 @@ fn clip_minus_foreign_opaque_plates(
         }
         let lo = paint.text.0.min(page_text.len());
         let hi = paint.text.1.min(page_text.len());
-        if glyph_index >= lo && glyph_index < hi {
+        // Text ranges follow the collected stacking order. An earlier sibling's
+        // opaque fill cannot occlude a glyph in a later (higher) page band.
+        if glyph_index >= lo && glyph_index < hi || hi <= glyph_index {
             continue;
         }
         let inst_lo = paint.instance.0.min(instances.len());
@@ -4837,6 +4946,12 @@ fn clip_minus_foreign_opaque_plates(
         return clips;
     };
     let origin = [n.x, n.y];
+    let preceding_instances = node_paints
+        .iter()
+        .filter(|p| !p.overlay && range_contains_index(p.text, glyph_index))
+        .map(|p| p.instance.0)
+        .max()
+        .unwrap_or(0);
     for paint in node_paints {
         if paint.overlay {
             continue;
@@ -4848,7 +4963,34 @@ fn clip_minus_foreign_opaque_plates(
         }
         let inst_lo = paint.instance.0.min(instances.len());
         let inst_hi = paint.instance.1.min(instances.len());
-        for inst in &instances[inst_lo..inst_hi] {
+        for (offset, inst) in instances[inst_lo..inst_hi].iter().enumerate() {
+            // Aggregate ancestor ranges also contain earlier sibling fills.
+            // Only fills collected after this glyph's owner can cover it.
+            if inst_lo + offset < preceding_instances {
+                continue;
+            }
+            // Ancestor backgrounds precede their glyphs even when scrolling moves
+            // the glyph origin outside the background's visible bounds. A higher
+            // ancestor's aggregate instance range includes those same backgrounds.
+            if node_paints.iter().any(|owner| {
+                !owner.overlay
+                    && range_contains_index(owner.text, glyph_index)
+                    && range_contains_index(
+                        slot_own_chrome_range(owner, instances, ui_scale),
+                        inst_lo + offset,
+                    )
+            }) {
+                continue;
+            }
+            // A selection fill owns this run even when it starts after the glyph origin.
+            if n.style.input_caret.is_some()
+                && node_paints.iter().any(|owner| {
+                    owner.text == (glyph_index, glyph_index + 1)
+                        && range_contains_index(owner.instance, inst_lo + offset)
+                })
+            {
+                continue;
+            }
             let Some(plate) = logical_opaque_fill_aabb(inst, ui_scale) else {
                 continue;
             };
@@ -4924,12 +5066,20 @@ pub(crate) fn node_present_clipped_capture_text_wipes_excluding_overlay(
             // the leaf puts glyphon's hard clip on the stem — CLEAR stays white.
             // Inflate overflow by the coverage kernel only; GPU flush scissor is
             // still the unpadded hole, so the kernel cannot src-over S (叠粗).
-            let clip = match n.clip_bounds {
+            let mut clip = match n.clip_bounds {
                 Some(existing) => {
                     intersect_rects(padded_xywh(existing, NODE_PRESENT_GLYPH_CLIP_PAD), owner)?
                 }
                 None => owner,
             };
+            // The coverage kernel may cross a leaf edge, but must stay inside
+            // the owning scrollport. Otherwise partial redraw leaks long text
+            // into the fixed padding while a full draw correctly clips it.
+            for paint in node_paints.iter().filter(|p| p.text == (i, i + 1)) {
+                if let Some(overflow) = paint.overflow_clip {
+                    clip = intersect_rects(clip, overflow)?;
+                }
+            }
             let mut cloned = n.clone();
             cloned.clip_bounds = Some(clip);
             Some((i, cloned))
@@ -5221,6 +5371,12 @@ fn text_wrap_extent(n: &TextLayoutInfo) -> [f32; 4] {
 }
 
 fn glyph_hits_layered_hole(n: &TextLayoutInfo, hole: [f32; 4]) -> bool {
+    // A nowrap run already has its full measured height. The wrapping fallback
+    // below invents extra lines beneath it and can classify a selected input as
+    // underlay for its scrollbar, dropping the selection's normal glyph capture.
+    if n.style.white_space == crate::style::WhiteSpace::Nowrap {
+        return text_hits_damage(n, hole);
+    }
     // Clip is a glyphon scissor, not the ink box. Intersecting first would
     // drop wrap lines that sit in the Latest wipe but outside a first-line
     // / viewport-shrunk `text_paint_bounds`.
@@ -6020,6 +6176,149 @@ mod tests {
     }
 
     #[test]
+    fn panned_input_tail_stays_in_selection_repaint() {
+        let mut text = sample_text("long input tail", -300.0);
+        text.width = 120.0;
+        text.style.overflow = crate::style::TextOverflow::editable_single_line();
+        text.style.scroll_x = 400.0;
+        text.clip_bounds = Some([100.0, 0.0, 120.0, 16.0]);
+        assert_eq!(text_paint_bounds(&text), [100.0, 0.0, 120.0, 16.0]);
+        assert!(text_hits_damage(&text, [100.0, 0.0, 120.0, 16.0]));
+    }
+
+    #[test]
+    fn selection_capture_kernel_stays_inside_text_scrollport() {
+        let viewport = [12.0, 0.0, 176.0, 16.0];
+        let mut text = sample_text("long overflow", -300.0);
+        text.width = 600.0;
+        text.clip_bounds = Some(viewport);
+        let mut paint = slot(71, [-300.0, 0.0, 600.0, 16.0], (0, 1));
+        paint.overflow_clip = Some(viewport);
+        let dirty = PaintDirty {
+            key: 71,
+            bounds: viewport,
+            kind: PaintDirtyKind::Region,
+        };
+        let captured = node_present_clipped_capture_text_wipes(&[dirty], &[text], &[paint], &[]);
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].clip_bounds, Some(viewport));
+    }
+
+    #[test]
+    fn opaque_fill_occlusion_respects_world_clip_at_ui_scale() {
+        for scale in [1.0, 1.5, 2.0] {
+            let mut fill = blank_instance(0.0, 0.0, 200.0 * scale, 20.0 * scale);
+            fill.color = [0.0, 0.0, 0.0, 1.0];
+            fill.transform[4] = 100.0 * scale;
+            fill.clip_pos = [120.0 * scale, 0.0];
+            fill.clip_size = [40.0 * scale, 20.0 * scale];
+            assert_eq!(
+                logical_opaque_fill_aabb(&fill, scale),
+                Some([120.0, 0.0, 40.0, 20.0])
+            );
+            fill.clip_pos[0] = 320.0 * scale;
+            assert_eq!(logical_opaque_fill_aabb(&fill, scale), None);
+        }
+    }
+
+    #[test]
+    fn lower_layer_fill_does_not_occlude_higher_glyph_capture() {
+        let lower_bounds = [140.0, 0.0, 60.0, 20.0];
+        let upper_bounds = [110.0, 0.0, 60.0, 20.0];
+        let mut lower = slot(1, lower_bounds, (0, 1));
+        lower.layered = true;
+        lower.instance = (0, 1);
+        let mut upper = slot(2, upper_bounds, (1, 2));
+        upper.layered = true;
+        upper.instance = (1, 2);
+        let mut ancestor = slot(3, [0.0, 0.0, 240.0, 40.0], (0, 2));
+        ancestor.instance = (0, 2);
+        let mut fills = [
+            blank_instance(140.0, 0.0, 60.0, 20.0),
+            blank_instance(110.0, 0.0, 60.0, 20.0),
+        ];
+        for fill in &mut fills {
+            fill.color = [1.0; 4];
+        }
+        let text = [sample_text("B", 140.0), sample_text("A", 110.0)];
+        let paints = [lower, upper, ancestor];
+        assert_eq!(
+            clip_minus_foreign_opaque_plates(1, upper_bounds, &text, &paints, &fills, 1.0),
+            vec![upper_bounds],
+            "lower B must not cut the higher A, including through ancestor ranges"
+        );
+        assert_eq!(
+            clip_minus_foreign_opaque_plates(0, lower_bounds, &text, &paints, &fills, 1.0),
+            vec![[170.0, 0.0, 30.0, 20.0]],
+            "higher A must still cover the lower B"
+        );
+    }
+
+    #[test]
+    fn unrelated_portal_does_not_preserve_moving_page_slot() {
+        let bounds = [100.0, 0.0, 176.0, 80.0];
+        let dirty = PaintDirty {
+            key: 1,
+            bounds,
+            kind: PaintDirtyKind::Region,
+        };
+        for portal in [[86.0, 422.0, 264.0, 168.0], [100.0, 40.0, 100.0, 100.0]] {
+            let mut paint = slot(1, [200.0, 0.0, 76.0, 80.0], (0, 1));
+            // The distant portal must also be harmless without a translation.
+            paint.rest = (portal[1] < 100.0).then_some(bounds);
+            let stamps = [(2, portal)];
+            assert_eq!(
+                region_scissors_keeping_stable_page_captions(
+                    vec![bounds],
+                    &dirty,
+                    &[dirty],
+                    &[paint],
+                    &stamps,
+                    Some(portal),
+                ),
+                vec![bounds],
+                "drag must clear the previous pose even while another portal stays mounted"
+            );
+        }
+    }
+
+    #[test]
+    fn clipped_neighbor_selection_fill_does_not_occlude_retained_glyphs() {
+        let mut neighbor = sample_text("retained selection first line", 20.0);
+        neighbor.width = 200.0;
+        neighbor.style.input_caret = Some(crate::style::InputCaretDraw {
+            selection: Some((0, 20)),
+            ..Default::default()
+        });
+        let mut selected = sample_text("long nowrap selected line", -300.0);
+        selected.width = 1000.0;
+        selected.style.input_caret = neighbor.style.input_caret.clone();
+        selected.clip_bounds = Some([300.0, 0.0, 200.0, 60.0]);
+        let a = slot(11, [20.0, 0.0, 200.0, 60.0], (0, 1));
+        let mut b = slot(12, [-300.0, 0.0, 1000.0, 60.0], (1, 2));
+        b.instance = (0, 1);
+        b.layered = true;
+        b.overflow_clip = selected.clip_bounds;
+        let mut fill = blank_instance(-300.0, 0.0, 1000.0, 20.0);
+        fill.color = [0.0, 0.0, 0.0, 1.0];
+        fill.clip_pos = [300.0, 0.0];
+        fill.clip_size = [200.0, 60.0];
+        let clips = clip_minus_foreign_opaque_plates(
+            0,
+            [20.0, 0.0, 200.0, 20.0],
+            &[neighbor, selected],
+            &[a, b],
+            &[fill],
+            1.0,
+        );
+        assert_eq!(
+            clips,
+            vec![[20.0, 0.0, 200.0, 20.0]],
+            "offscreen selection fill must not erase neighbor glyphs"
+        );
+    }
+
+    #[test]
     fn layered_underlay_must_recapture_wrap_lines_below_first_strut() {
         // Gallery `<Label>` under Latest: collect height is the first-line
         // strut; later wrap lines live in clip_bounds. Hide-settle dest-reset
@@ -6118,20 +6417,128 @@ mod tests {
         latest.y = 218.0;
         latest.width = 40.0;
         latest.height = 16.0;
-        let label = clip_minus_foreign_opaque_plates(
-            0,
-            viewport,
-            &[latest],
-            &[scroller],
-            &[fill],
-            1.0,
-        );
+        let label =
+            clip_minus_foreign_opaque_plates(0, viewport, &[latest], &[scroller], &[fill], 1.0);
         assert!(
             label
                 .iter()
                 .any(|c| crate::app::damage::intersect_rects(*c, plate).is_some()),
             "Latest starts on the chip; punching that fill would drop the label"
         );
+    }
+
+    #[test]
+    fn panned_edit_glyphs_are_not_occluded_by_their_ancestor_background() {
+        let clip = [300.0, 20.0, 200.0, 24.0];
+        let mut text = sample_text("long selected nowrap text", -600.0);
+        text.y = 20.0;
+        text.width = 1100.0;
+        text.clip_bounds = Some(clip);
+        text.style.input_caret = Some(crate::style::InputCaretDraw {
+            selection: Some((0, text.text.len())),
+            ..Default::default()
+        });
+        let mut background = blank_instance(0.0, 0.0, 600.0, 100.0);
+        background.color = [1.0; 4];
+        let mut selection = blank_instance(-600.0, 20.0, 1100.0, 24.0);
+        selection.color = [0.0, 0.0, 0.0, 1.0];
+        selection.clip_pos = [clip[0], clip[1]];
+        selection.clip_size = [clip[2], clip[3]];
+        let mut ancestor = slot(1, [0.0, 0.0, 600.0, 100.0], (0, 2));
+        ancestor.instance = (0, 2);
+        let mut leaf = slot(2, [-600.0, 20.0, 1100.0, 24.0], (0, 1));
+        leaf.instance = (1, 2);
+        let mut root = slot(3, [0.0, 0.0, 600.0, 400.0], (0, 2));
+        root.instance = (0, 2);
+        assert_eq!(
+            clip_minus_foreign_opaque_plates(
+                0,
+                clip,
+                &[text, sample_text("neighbor", 20.0)],
+                &[root, ancestor, leaf],
+                &[background, selection],
+                1.0,
+            ),
+            vec![clip],
+            "ancestor background must stay behind panned selected glyphs"
+        );
+    }
+
+    #[test]
+    fn nowrap_selection_capture_survives_scrollbar_enter() {
+        // Replay the Gallery failure: a horizontally panned, selected run and
+        // an unrelated scrollbar fade dirty arrive in the same node present.
+        let mut text = sample_text("wrap=off scrolls horizontally (no clip).", 362.55566);
+        text.y = 309.0;
+        text.width = 730.44434;
+        text.height = 25.0;
+        text.clip_bounds = Some([863.0, 301.0, 230.0, 119.0]);
+        text.style.white_space = crate::style::WhiteSpace::Nowrap;
+        text.style.input_caret = Some(crate::style::InputCaretDraw {
+            selection: Some((0, text.text.len())),
+            ..Default::default()
+        });
+        assert!(glyph_hits_layered_hole(&text, [863.0, 309.0, 230.0, 25.0]));
+        let mut leaf = slot(1, [text.x, text.y, text.width, text.height], (0, 1));
+        leaf.layered = true;
+        leaf.overflow_clip = text.clip_bounds;
+        let mut bar = slot(2, [855.0, 410.0, 248.0, 8.0], (1, 1));
+        bar.layered = true;
+        let dirties = [
+            PaintDirty {
+                key: 2,
+                bounds: bar.bounds,
+                kind: PaintDirtyKind::Node,
+            },
+            PaintDirty {
+                key: 1,
+                bounds: [1091.0, 308.5, 2.0, 22.0],
+                kind: PaintDirtyKind::Node,
+            },
+        ];
+        let captured = node_present_clipped_capture_text_wipes_excluding_overlay(
+            &dirties,
+            &[text],
+            &[leaf, bar],
+            &[
+                (1, [863.0, 307.0, 230.0, 28.0]),
+                (2, [855.0, 410.0, 248.0, 8.0]),
+            ],
+            &[],
+            &[],
+            1.0,
+        );
+        assert_eq!(
+            captured.len(),
+            1,
+            "scrollbar below the single line must not remove its selection recolor capture"
+        );
+        assert_eq!(captured[0].clip_bounds, Some([863.0, 307.0, 230.0, 28.0]));
+    }
+
+    #[test]
+    fn selection_fill_does_not_occlude_its_own_edit_glyphs() {
+        let clip = [16.0, 0.0, 200.0, 72.0];
+        let mut text = sample_text("some selected text", 16.0);
+        text.style.input_caret = Some(crate::style::InputCaretDraw {
+            selection: Some((5, 13)),
+            ..Default::default()
+        });
+        let mut fill = blank_instance(80.0, 0.0, 100.0, 24.0);
+        fill.color = [0.0, 0.0, 0.0, 1.0];
+        let mut leaf = slot(2, clip, (0, 1));
+        leaf.text = (0, 1);
+        let mut ancestor = slot(1, [0.0, 0.0, 240.0, 100.0], (0, 1));
+        ancestor.text = (0, 2);
+        let parts = clip_minus_foreign_opaque_plates(
+            0,
+            clip,
+            &[text, sample_text("neighbor", 220.0)],
+            &[ancestor, leaf],
+            &[fill],
+            1.0,
+        );
+        assert_eq!(parts, vec![clip], "selection must preserve selected glyphs");
     }
 
     #[test]
@@ -7455,6 +7862,143 @@ mod tests {
     }
 
     #[test]
+    fn menu_side_shadow_is_not_carved_by_neighboring_calendar_cells() {
+        let shadow = [78.0, 58.0, 184.0, 224.0];
+        for height in [180.0, 36.0] {
+            let stamp = [100.0, 80.0, 140.0, height];
+            let region = crate::app::damage::portal_composite_damage(
+                &[
+                    PaintDirty {
+                        key: 9,
+                        bounds: stamp,
+                        kind: PaintDirtyKind::Overlay,
+                    },
+                    PaintDirty {
+                        key: 9,
+                        bounds: shadow,
+                        kind: PaintDirtyKind::OverlayRestore,
+                    },
+                    PaintDirty {
+                        key: 4,
+                        bounds: [240.0, 194.0, 32.0, 32.0],
+                        kind: PaintDirtyKind::Node,
+                    },
+                ],
+                Some(shadow),
+            )
+            .expect("portal changes require a composite region");
+            assert!(
+                crate::app::damage::rect_contains_rect(region, shadow),
+                "lower-z calendar cells must not carve the portal composite: {region:?}"
+            );
+        }
+        let day = PaintDirty {
+            key: 4,
+            bounds: [240.0, 194.0, 32.0, 32.0],
+            kind: PaintDirtyKind::Node,
+        };
+        assert!(crate::app::damage::portal_composite_damage(&[day], Some(shadow)).is_some());
+        assert!(crate::app::damage::portal_composite_damage(&[day], None).is_none());
+        assert!(crate::app::damage::portal_composite_damage(
+            &[day],
+            Some([400.0, 58.0, 100.0, 224.0]),
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn shrinking_menu_restore_clears_captions_in_the_vacated_strip() {
+        // Select expand-up: the restore hole is the previous menu, the live
+        // occupancy is the shorter panel. A calendar/page caption in the strip
+        // the menu just left must be cleared. Passing only the live box carves
+        // that caption out, and the last close frame never revisits it.
+        let previous = [100.0, 80.0, 140.0, 180.0];
+        let live = [100.0, 80.0, 140.0, 36.0];
+        let day = [112.0, 200.0, 32.0, 32.0];
+        let mut day_paint = slot(4, day, (0, 1));
+        day_paint.text = (0, 1);
+        let shadow = overlay_restore_caption_shadow(previous, Some(live));
+        let cleared = scissors_keeping_stable_page_captions(
+            vec![previous],
+            &[day_paint],
+            &[(9u64, live)],
+            Some(shadow),
+        );
+        let cx = day[0] + day[2] * 0.5;
+        let cy = day[1] + day[3] * 0.5;
+        let hits = |r: &[f32; 4], x: f32, y: f32| {
+            x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
+        };
+        assert!(
+            cleared.iter().any(|r| hits(r, cx, cy)),
+            "vacated caption must be cleared with the old menu, scissors={cleared:?}"
+        );
+        assert!(
+            crate::app::damage::rect_contains_rect(shadow, previous),
+            "shadow must cover the previous menu, not only the live panel"
+        );
+    }
+
+    #[test]
+    fn closing_menu_does_not_carve_calendar_rows_out_of_the_hole() {
+        // A week row contains the day and misses the shrunk stamp, so it looks
+        // like the stable trigger. Carving it leaves the old menu in bands.
+        let previous = [100.0, 80.0, 140.0, 180.0];
+        let live = [100.0, 80.0, 140.0, 36.0];
+        let week = [40.0, 190.0, 320.0, 40.0];
+        let day = [112.0, 194.0, 32.0, 32.0];
+        let mut week_paint = slot(3, week, (0, 0));
+        week_paint.text = (0, 0);
+        let mut day_paint = slot(4, day, (0, 1));
+        day_paint.text = (0, 1);
+        let shadow = overlay_restore_caption_shadow(previous, Some(live));
+        let cleared = scissors_keeping_stable_page_captions(
+            vec![previous],
+            &[week_paint, day_paint],
+            &[(9u64, live)],
+            Some(shadow),
+        );
+        let hits = |r: &[f32; 4], x: f32, y: f32| {
+            x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
+        };
+        assert!(
+            cleared.iter().any(|r| hits(r, 170.0, 210.0)),
+            "calendar row inside the old menu must be cleared, scissors={cleared:?}"
+        );
+        assert!(
+            cleared.iter().any(|r| hits(r, 170.0, 100.0)),
+            "the live menu body must stay one piece, scissors={cleared:?}"
+        );
+    }
+
+    #[test]
+    fn vacated_shadow_fringe_stays_in_the_restore_scissor() {
+        // Day cells carve the old menu. The leftover under them is a <8px
+        // shadow cap. It is inside the hole and outside the live panel, so
+        // the overlay will not repaint it.
+        let hole = [100.0, 80.0, 140.0, 200.0];
+        let live = [100.0, 80.0, 140.0, 36.0];
+        let day = [100.0, 200.0, 140.0, 74.0];
+        let mut day_paint = slot(4, day, (0, 1));
+        day_paint.text = (0, 1);
+        let cleared = scissors_keeping_stable_page_captions(
+            vec![hole],
+            &[day_paint],
+            &[(9u64, live)],
+            Some(hole),
+        );
+        let x = hole[0] + hole[2] * 0.5;
+        let y = hole[1] + hole[3] - 3.0;
+        let hits = |r: &[f32; 4], x: f32, y: f32| {
+            x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
+        };
+        assert!(
+            cleared.iter().any(|r| hits(r, x, y)),
+            "vacated shadow cap must be cleared, scissors={cleared:?}"
+        );
+    }
+
+    #[test]
     fn fade_shadow_over_caption_must_not_clear_the_line() {
         // Popup Md halo (blur 10, outset ~23px) plus the enter slide covers the
         // trigger caption. Leaving that face in the restore clear wipes both
@@ -7651,7 +8195,8 @@ mod tests {
             x >= c[0] && x < c[0] + c[2] && 50.0 >= c[1] && 50.0 < c[1] + c[3]
         };
         assert!(
-            page.iter().any(|n| n.clip_bounds.is_some_and(|c| hits(c, 40.0))),
+            page.iter()
+                .any(|n| n.clip_bounds.is_some_and(|c| hits(c, 40.0))),
             "prefix stays in the page mesh, got {:?}",
             page.iter().map(|n| n.clip_bounds).collect::<Vec<_>>()
         );
@@ -7662,7 +8207,8 @@ mod tests {
             page.iter().map(|n| n.clip_bounds).collect::<Vec<_>>()
         );
         assert!(
-            page.iter().any(|n| n.clip_bounds.is_some_and(|c| hits(c, 700.0))),
+            page.iter()
+                .any(|n| n.clip_bounds.is_some_and(|c| hits(c, 700.0))),
             "tail past the popover stays in the page mesh, got {:?}",
             page.iter().map(|n| n.clip_bounds).collect::<Vec<_>>()
         );
