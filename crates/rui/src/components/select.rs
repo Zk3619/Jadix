@@ -441,11 +441,9 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         )),
         kind: OverlayKind::Menu,
         lock_page_scroll: Some(true),
-        // Select menus may be nested inside a retained popover (for example
-        // the year selector inside DatePicker). Fade keeps the parent panel's
-        // geometry stable while the child portal enters/exits, avoiding a
-        // retained shadow fringe and duplicate hover paint at the anchor.
-        motion: FloatingMotionKind::Fade,
+        // DropdownMenu 同款展开。DatePicker / ColorPicker 面板自身用 Fade；
+        // 嵌在里面的 Select（年份、格式）不要跟着改成淡入淡出。
+        motion: FloatingMotionKind::Expand,
         mode: OverlayMode::Stacked,
         match_trigger_width: match_trigger,
         max_h: max_height.clone(),

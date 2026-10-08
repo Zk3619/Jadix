@@ -5056,6 +5056,15 @@ fn expand_node(
                         .unwrap_or_else(|| {
                             quote! { rui::app::portal_overlay::OverlayMode::Stacked }
                         });
+                    let mode = get_attr("pinned")
+                        .map(|e| quote! {
+                            if #e {
+                                rui::app::portal_overlay::OverlayMode::Pinned
+                            } else {
+                                rui::app::portal_overlay::OverlayMode::Stacked
+                            }
+                        })
+                        .unwrap_or(mode);
                     let match_trigger = get_attr("match_trigger_width")
                         .or_else(|| get_attr("matchTriggerWidth"))
                         .map(|e| quote! { (#e) })

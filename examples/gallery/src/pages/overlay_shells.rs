@@ -111,6 +111,7 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
                 { Element::from(
                     anchored_overlay("gal-ao-point-b")
                         .open(open)
+                        .pinned(true)
                         .placement(Placement::Point { pos, gap: 0.0 })
                         .kind(OverlayKind::Popover)
                         .child(move || {
@@ -123,7 +124,6 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
                                         items="center"
                                         justify="between"
                                         p="0.35rem 0.5rem"
-                                        bg="muted"
                                         rounded="0.375rem"
                                         cursor="grab"
                                     >
@@ -301,7 +301,7 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
                 </Label>
                 { point_stage }
                 <AnchoredOverlay id="gal-ao-point-rsx" openSignal={point_open}>
-                    <AnchoredOverlayContent placement="point" pos={point_pos} kind="popover">
+                    <AnchoredOverlayContent placement="point" pos={point_pos} kind="popover" pinned={true}>
                         { {
                             let header = drag_handle(
                                 "gal-ao-point-rsx",
@@ -312,7 +312,6 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
                                         items="center"
                                         justify="between"
                                         p="0.35rem 0.5rem"
-                                        bg="muted"
                                         rounded="0.375rem"
                                         cursor="grab"
                                     >
@@ -621,6 +620,16 @@ fn presence_demo_card(title: &str, body: &str) -> Element {
     })
 }
 
+const PRESENCE_FADE_MS: u64 = 320;
+
+fn presence_fade_card(title: &str, body: &str, exiting: bool) -> Element {
+    // A newly mounted card needs explicit keyframes; transition has no previous pose.
+    let animation = if exiting { "fade-out-0" } else { "fade-in-0" };
+    presence_demo_card(title, body)
+        .opacity(if exiting { 1.0 } else { 0.0 })
+        .animation(format!("{animation} {PRESENCE_FADE_MS}ms ease both"))
+}
+
 #[component]
 pub(crate) fn PresenceShowcase() -> Element {
     let instant_open = use_signal("gal_pres_instant_open", || false);
@@ -647,30 +656,27 @@ pub(crate) fn PresenceShowcase() -> Element {
         }
     };
 
-    let presence_rsx = presence("gal-pres-exit-rsx", presence_open, 320, move || {
-        let exiting = !presence_open.peek();
-        let mut card = presence_demo_card(
-            "presence() · RSX",
-            "仍挂载至 exit_ms；作者用 opacity 播退场。",
-        );
-        card = card
-            .opacity(if exiting { 0.0 } else { 1.0 })
-            .transition("opacity 320ms ease");
-        card
-    });
+    let presence_rsx = presence(
+        "gal-pres-exit-rsx",
+        presence_open,
+        PRESENCE_FADE_MS,
+        move || {
+            presence_fade_card(
+                "presence() · RSX",
+                "入场淡入；关闭后淡出，动画结束再卸载。",
+                !presence_open.peek(),
+            )
+        },
+    );
 
     let presence_b = {
         let open = presence_open;
-        let panel = presence("gal-pres-exit-b", open, 320, move || {
-            let exiting = !open.peek();
-            let mut card = presence_demo_card(
+        let panel = presence("gal-pres-exit-b", open, PRESENCE_FADE_MS, move || {
+            presence_fade_card(
                 "presence() · Builder",
-                "open=false 后仍挂载 320ms；opacity 过渡模拟退场。",
-            );
-            card = card
-                .opacity(if exiting { 0.0 } else { 1.0 })
-                .transition("opacity 320ms ease");
-            card
+                "入场淡入；open=false 后淡出 320ms 再卸载。",
+                !open.peek(),
+            )
         });
         ui! {
             <HStack gap="0.5rem" items="center" wrap="wrap">
@@ -726,6 +732,77 @@ pub(crate) fn PresenceShowcase() -> Element {
                 { presence_b }
             </VStack>
         </MyCard>
+    }
+}
+
+#[cfg(test)]
+mod presence_motion_tests {
+    use super::*;
+
+    fn tick(card: &mut Element, time_ms: f64, dt: f32) {
+        rui::style::set_css_transition_timeline_ms(time_ms);
+        let inner = &mut card.inner;
+        rui::style::tick_element_animations_ex(
+            &mut inner.style,
+            &mut inner.text_style,
+            &inner.used_layout,
+            &mut inner.animation_snapshot,
+            dt,
+        );
+        rui::style::tick_element_transitions_with_text(
+            &mut inner.style,
+            &mut inner.text_style,
+            &mut inner.transition_snapshot,
+            inner.animation_snapshot.lock(),
+            dt,
+        );
+    }
+
+    #[test]
+    fn presence_cards_fade_in_and_out_across_frames() {
+        rui::style::set_css_transition_virtual_timeline(true);
+        let (owner, _) = rui::core::reactivity::create_root(|| {
+            for scope in ["gal-pres-exit-rsx", "gal-pres-exit-b"] {
+                let tid = rui::utils::presence::presence_template_id(scope);
+                let mut card = presence_fade_card(scope, "", false).template_id(tid.clone());
+                card.layout_bounds = [20.0, 20.0, 192.0, 80.0];
+                tick(&mut card, 0.0, 0.0);
+                assert!(
+                    card.style.opacity < 0.01,
+                    "{scope}: enter must start transparent"
+                );
+                tick(&mut card, 160.0, 0.16);
+                assert!(
+                    card.style.opacity > 0.05 && card.style.opacity < 0.95,
+                    "{scope}: enter must have an intermediate opacity, got {}",
+                    card.style.opacity
+                );
+                tick(&mut card, 320.0, 0.16);
+                assert!(card.style.opacity > 0.99, "{scope}: enter must end opaque");
+
+                let mut exiting = presence_fade_card(scope, "", true).template_id(tid);
+                exiting.layout_bounds = card.layout_bounds;
+                rui::utils::keyed_overlay::preserve_keyed_motion_on_reconcile(&mut exiting, &card);
+                tick(&mut exiting, 320.0, 0.0);
+                assert!(
+                    exiting.style.opacity > 0.99,
+                    "{scope}: exit must start opaque"
+                );
+                tick(&mut exiting, 480.0, 0.16);
+                assert!(
+                    exiting.style.opacity > 0.05 && exiting.style.opacity < 0.95,
+                    "{scope}: exit must visibly fade before unmount, got {}",
+                    exiting.style.opacity
+                );
+                tick(&mut exiting, 640.0, 0.16);
+                assert!(
+                    exiting.style.opacity < 0.01,
+                    "{scope}: exit must end transparent"
+                );
+            }
+        });
+        owner.dispose();
+        rui::style::set_css_transition_virtual_timeline(false);
     }
 }
 

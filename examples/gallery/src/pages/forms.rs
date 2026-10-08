@@ -600,7 +600,8 @@ pub(crate) fn ToggleControlsShowcase() -> rui::core::tree::Element {
                     </Label>
                 </HStack>
 
-                <HStack
+                <Checkbox
+                    id="gallery_terms_card"
                     gap="0.5rem"
                     items="start"
                     p="1rem"
@@ -608,8 +609,8 @@ pub(crate) fn ToggleControlsShowcase() -> rui::core::tree::Element {
                     rounded="0.5rem"
                     border_width={1.0}
                     border_color="border"
+                    class="hover:bg-muted/50"
                 >
-                    <Checkbox id="gallery_terms_card" />
                     <VStack gap="0.25rem" min_w="0">
                         <Label for="gallery_terms_card" text_size="0.875rem" font_weight="500">
                             "Enable notifications"
@@ -618,7 +619,7 @@ pub(crate) fn ToggleControlsShowcase() -> rui::core::tree::Element {
                             "You can enable or disable notifications at any time."
                         </Label>
                     </VStack>
-                </HStack>
+                </Checkbox>
 
                 <Separator />
 
@@ -972,10 +973,11 @@ pub(crate) fn TextareaComboboxShowcase() -> Element {
                         />
                     </VStack>
                     <VStack gap="0.35rem" w="16rem" min_w="0" max_w="100%">
-                        <Label font_weight="700" text_size="0.75rem">"wrap=\"char\""</Label>
+                        <Label font_weight="700" text_size="0.75rem">"wrap=\"char\" · 失焦保留选区"</Label>
                         <Textarea
                             id="gal-ta-wrap-char"
                             wrap="char"
+                            selection_on_blur="retain"
                             rows={5}
                             resizable={false}
                             value={wrap_char}
@@ -1001,6 +1003,13 @@ pub(crate) fn TextareaComboboxShowcase() -> Element {
                             value={wrap_bidi}
                         />
                     </VStack>
+                </HStack>
+                <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                    "选字后点击其他输入框：默认立即清除选区；保留模式显示淡色选区。"
+                </Label>
+                <HStack w="100%" min_w="0" gap="1rem" wrap="wrap">
+                    <Input id="gal-input-blur-clear" w="16rem" placeholder="失焦清除选区（默认）" />
+                    <Input id="gal-input-blur-retain" w="16rem" placeholder="失焦保留淡色选区" selection_on_blur="retain" />
                 </HStack>
                                 <Combobox id="gal-combo" value={combo} placeholder="搜索城市…" clearable={true}>
                     <ComboboxInput class="w-full" />

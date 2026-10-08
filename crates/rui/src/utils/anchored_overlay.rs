@@ -252,6 +252,7 @@ pub struct AnchoredOverlayBuilder {
     placement: Option<Placement>,
     kind: Option<OverlayKind>,
     motion: Option<FloatingMotionKind>,
+    mode: OverlayMode,
     match_trigger_width: bool,
     max_h: Option<String>,
     width: Option<String>,
@@ -271,6 +272,7 @@ pub fn anchored_overlay(id: impl Into<String>) -> AnchoredOverlayBuilder {
         placement: None,
         kind: None,
         motion: None,
+        mode: OverlayMode::Stacked,
         match_trigger_width: false,
         max_h: None,
         width: None,
@@ -302,6 +304,17 @@ impl AnchoredOverlayBuilder {
 
     pub fn motion(mut self, motion: FloatingMotionKind) -> Self {
         self.motion = Some(motion);
+        self
+    }
+
+    /// Resident surface: outside presses and Esc do not dismiss it. `open`
+    /// still controls mounting and lets author close buttons start the exit.
+    pub fn pinned(mut self, pinned: bool) -> Self {
+        self.mode = if pinned {
+            OverlayMode::Pinned
+        } else {
+            OverlayMode::Stacked
+        };
         self
     }
 
@@ -363,7 +376,7 @@ impl AnchoredOverlayBuilder {
                 gap: 0.0,
                 kind: self.kind.unwrap_or(OverlayKind::Popover),
                 motion: self.motion.unwrap_or(FloatingMotionKind::Fade),
-                mode: OverlayMode::Stacked,
+                mode: self.mode,
                 match_trigger_width: self.match_trigger_width,
                 max_h: self.max_h,
                 width: self.width,
@@ -462,6 +475,15 @@ impl AnchoredOverlayContentOpts {
     pub fn mode(mut self, mode: OverlayMode) -> Self {
         self.mode = mode;
         self
+    }
+
+    /// Resident surface; only the author's `open` updates close it.
+    pub fn pinned(self, pinned: bool) -> Self {
+        self.mode(if pinned {
+            OverlayMode::Pinned
+        } else {
+            OverlayMode::Stacked
+        })
     }
 
     pub fn match_trigger_width(mut self, yes: bool) -> Self {
@@ -1345,6 +1367,65 @@ mod tests {
                 "Unanchored must not set placement (sync would move author inset)"
             );
         });
+    }
+
+    #[test]
+    fn pinned_point_toggle_closes_once_without_outside_press_reopening() {
+        clear_overlay_stack();
+        create_root(|| {
+            let open = Signal::new(true);
+            let presence = use_floating_presence("ao-point-toggle", FloatingMotionKind::Fade);
+            let opts = AnchoredOverlayContentOpts::default()
+                .placement(Placement::Point {
+                    pos: Signal::new([120.0, 80.0]),
+                    gap: 0.0,
+                })
+                .kind(OverlayKind::Popover)
+                .pinned(true);
+            assert_eq!(
+                anchored_overlay("point-builder").pinned(true).mode,
+                opts.mode
+            );
+            assert_eq!(
+                anchored_overlay("point-builder")
+                    .pinned(true)
+                    .pinned(false)
+                    .mode,
+                OverlayMode::Stacked
+            );
+            let mut panel = assemble_panel(
+                "ao-point-toggle",
+                open,
+                Signal::new("unused-default".into()),
+                &presence,
+                &opts,
+                Element::new().w(100.0).h(60.0),
+            );
+            assert_eq!(find_attr(&panel, ATTR_FLOATING_POINT), Some("120,80"));
+            panel.set_attr(crate::layout::layout_tree::ATTR_HOISTED_PORTAL, "1");
+            let mut button = Element::new()
+                .focus_id("point-toggle-button")
+                .on_click(move || open.set(!open.peek()));
+            button.layout_bounds = [0.0, 0.0, 100.0, 30.0];
+            let mut root = Element::new().child(button).child(panel);
+            root.layout_bounds = [0.0, 0.0, 640.0, 480.0];
+            let path = crate::app::pointer_events::hit_path(&root, 20.0, 15.0);
+            crate::utils::popup::arm_underlay_close();
+            assert!(!crate::app::portal_overlay::try_close_top());
+            if !crate::utils::popup::path_hits_floating_trigger(&root, &path) {
+                crate::app::portal_overlay::try_dismiss_outside_press();
+            }
+            assert!(
+                open.peek(),
+                "toggle pointer-down must not dismiss the Point panel"
+            );
+            let (click, _) = crate::app::pointer_events::resolve_click_from_path(&root, &path);
+            click.expect("toggle callback").borrow_mut()();
+            assert!(!open.peek(), "pointer-up must close, not reopen");
+            assert!(!crate::app::portal_overlay::try_dismiss_outside_press());
+            assert!(!open.peek(), "close must stay closed after outside-dismiss");
+        });
+        clear_overlay_stack();
     }
 
     #[test]

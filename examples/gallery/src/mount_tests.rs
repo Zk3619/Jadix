@@ -6,6 +6,50 @@ use crate::shared::*;
 use rui::core::reactivity::{create_effect, create_root};
 
 #[test]
+fn anchored_overlay_pinned_attribute_matches_builder_dismiss_behavior() {
+    run_on_gallery_build_stack(|| {
+        for builder in [false, true] {
+            for pinned in [false, true] {
+                rui::app::portal_overlay::clear_overlay_stack();
+                rui::app::reactive::reset_registered_anchors();
+                let (owner, _) = create_root(|| {
+                    let open = Signal::new(true);
+                    let pos = Signal::new([120.0, 80.0]);
+                    let kept = std::rc::Rc::new(std::cell::RefCell::new(None));
+                    let kept_effect = kept.clone();
+                    create_effect(move || {
+                        let tree = if builder {
+                            rui::utils::anchored_overlay::anchored_overlay("pinned-builder-check")
+                                .open(open).pinned(pinned)
+                                .placement(rui::utils::anchored_overlay::Placement::point(pos, 0.0))
+                                .child(|| Element::new().w(100.0).h(60.0))
+                        } else {
+                            ui! {
+                                <AnchoredOverlay id="pinned-rsx-check" openSignal={open}>
+                                    <AnchoredOverlayContent placement="point" pos={pos} pinned={pinned}>
+                                        <VStack w="100px" h="60px" />
+                                    </AnchoredOverlayContent>
+                                </AnchoredOverlay>
+                            }
+                        };
+                        *kept_effect.borrow_mut() = Some(tree);
+                    });
+                    rui::utils::popup::arm_underlay_close();
+                    assert_eq!(rui::app::portal_overlay::try_dismiss_outside_press(), !pinned,
+                        "builder={builder}, pinned={pinned}");
+                    assert_eq!(open.peek(), pinned);
+                    open.set(false);
+                    assert!(!open.peek(), "author close must work for a resident panel");
+                });
+                owner.dispose();
+            }
+        }
+        rui::app::portal_overlay::clear_overlay_stack();
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
 fn generator_motion_tracks_have_independent_binding_targets() {
     run_on_gallery_build_stack(|| {
         let (_owner, _) = create_root(|| {
