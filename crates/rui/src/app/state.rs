@@ -424,9 +424,9 @@ fn current_underline_layer(
             .filter(|line| {
                 let cx = line.rect_pos[0] + line.rect_size[0] * 0.5;
                 let cy = line.rect_pos[1] + line.rect_size[1] * 0.5;
-                !refreshed.iter().any(|r| {
-                    cx >= r[0] && cx < r[0] + r[2] && cy >= r[1] && cy < r[1] + r[3]
-                })
+                !refreshed
+                    .iter()
+                    .any(|r| cx >= r[0] && cx < r[0] + r[2] && cy >= r[1] && cy < r[1] + r[3])
             })
             .collect();
         out.extend_from_slice(captured);
@@ -763,6 +763,34 @@ fn draw_scissor_fill<'a>(
     clear: wgpu::Color,
 ) {
     draw_scissor_clear_ex(pass, pipeline, device, rect, clear, 8.0);
+}
+
+/// Attachment clears use linear RGB; SDF instances use display sRGB. Convert
+/// before drawing a repair so it matches the pixels produced by FullClear.
+fn draw_scissor_surface_clear<'a>(
+    pass: &mut wgpu::RenderPass<'a>,
+    pipeline: &'a RuiPipeline,
+    device: &wgpu::Device,
+    rect: [f32; 4],
+    clear: wgpu::Color,
+) {
+    let rgb = crate::style::encode_linear_srgb_to_display_srgb([
+        clear.r as f32,
+        clear.g as f32,
+        clear.b as f32,
+    ]);
+    draw_scissor_fill(
+        pass,
+        pipeline,
+        device,
+        rect,
+        wgpu::Color {
+            r: rgb[0] as f64,
+            g: rgb[1] as f64,
+            b: rgb[2] as f64,
+            a: clear.a,
+        },
+    );
 }
 
 /// I-beam / extra carets. Drawn on the swapchain after retain blit so blink
@@ -2348,6 +2376,41 @@ impl AppState {
             needs_restore,
             same_footprint,
         );
+        // A nested portal is composited over an already retained parent panel.
+        // During its enter/exit animation the child shadow and the parent's
+        // hover chrome share pixels, so a local retain replay can leave a stale
+        // fringe or draw the trigger caption twice. Rebuild the frame while
+        // that nested portal is changing; the next settled frame returns to
+        // the normal partial-damage path.
+        let nested_overlay_transition = (prev_stamps.len() > 1 || cur_stamps.len() > 1)
+            && (membership || prev != cur || collect_overlay_dirty);
+        if nested_overlay_transition
+            && !self.force_full_redraw
+            && !self.scroll_layer_clear
+        {
+            self.mark_full_redraw();
+            self.overlay_restore_clear = false;
+            self.overlay_occupied = current_paint;
+        }
+        // The last fade frame can leave the anchor's border under the portal
+        // halo one shade darker than a fresh composite. Once the portal has no
+        // remaining visual occupancy, rebuild the page and trigger together so
+        // the close frame cannot retain that stale fringe.
+        if needs_restore
+            && cur_stamps.is_empty()
+            && !overlay_present
+            && !self.force_full_redraw
+            && !self.scroll_layer_clear
+        {
+            self.mark_full_redraw();
+        }
+        // The first visible portal frame also paints its shadow over the
+        // trigger halo. Rebuild the page once at that boundary so the shadow
+        // is composited over a fresh trigger instead of the retained baseline.
+        if overlay_present && !had_occupancy && !self.force_full_redraw && !self.scroll_layer_clear
+        {
+            self.mark_full_redraw();
+        }
         if overlay_present
             && super::damage::overlay_requires_full_clear(overlay_present, cur, had_occupancy)
             && !measuring
@@ -2810,25 +2873,40 @@ impl AppState {
             // stacks darker (AnchoredOverlay / Select under the trigger).
             // Subtract only portal **layout** boxes — Node hover and Region
             // share this path so button dest-reset clears the fringe once.
-            let mut scissors =
-                if dirty.kind == PaintDirtyKind::Node || dirty.kind == PaintDirtyKind::Region {
-                    super::damage::page_scissors_excluding_portal_boxes(
-                        scissor_logical,
-                        &self.last_overlay_stamps,
-                    )
-                } else if dirty.kind == PaintDirtyKind::OverlayRestore {
-                    // The padded halo contains the trigger. Clearing that caption
-                    // every fade tick and letting the shadow land on it flickers
-                    // the Latin suffix, which does not move between 打开 and 关闭.
-                    super::draw_cull::scissors_keeping_stable_page_captions(
-                        vec![scissor_logical],
+            let mut scissors = if dirty.kind == PaintDirtyKind::Node
+                || dirty.kind == PaintDirtyKind::Region
+            {
+                let pieces = super::damage::page_scissors_excluding_portal_boxes(
+                    scissor_logical,
+                    &self.last_overlay_stamps,
+                );
+                if dirty.kind == PaintDirtyKind::Region && !self.last_overlay_stamps.is_empty() {
+                    // A Region can subsume a changed trigger Node. Preserve
+                    // idle controls while repairing that Node's current fill.
+                    super::draw_cull::region_scissors_keeping_stable_page_captions(
+                        pieces,
+                        dirty,
+                        &self.damage_nodes,
                         node_paints,
                         &self.last_overlay_stamps,
-                        self.overlay_occupied.or(Some(dirty.bounds)),
+                        self.overlay_occupied,
                     )
                 } else {
-                    vec![scissor_logical]
-                };
+                    pieces
+                }
+            } else if dirty.kind == PaintDirtyKind::OverlayRestore {
+                // The padded halo contains the trigger. Clearing that caption
+                // every fade tick and letting the shadow land on it flickers
+                // the Latin suffix, which does not move between 打开 and 关闭.
+                super::draw_cull::scissors_keeping_stable_page_captions(
+                    vec![scissor_logical],
+                    node_paints,
+                    &self.last_overlay_stamps,
+                    self.overlay_occupied.or(Some(dirty.bounds)),
+                )
+            } else {
+                vec![scissor_logical]
+            };
             if dirty.kind == PaintDirtyKind::Node {
                 // Drop the gap halo ring from the CLEAR (keep portal shadow in
                 // retain). Still CLEAR the widget face — including where the
@@ -2945,7 +3023,7 @@ impl AppState {
                         // Reconstruct once from the same clear color and ordered
                         // page bands as FullClear, rather than sampling a top fill
                         // and submitting descendants a second time (alpha buildup).
-                        draw_scissor_fill(
+                        draw_scissor_surface_clear(
                             render_pass,
                             &self.pipeline,
                             &self.device,
@@ -3361,8 +3439,8 @@ impl AppState {
         // existing late flush below, after the page bands are rebuilt.
         let caption_replayed_before_overlay =
             !caption_glyph_holes.is_empty() && !self.last_overlay_stamps.is_empty();
-        if caption_replayed_before_overlay {
-            let physical: Vec<[f32; 4]> = caption_glyph_holes
+        let caption_physical: Vec<[f32; 4]> = if caption_replayed_before_overlay {
+            caption_glyph_holes
                 .iter()
                 .filter_map(|logical| {
                     super::damage::damage_to_scissor_physical(
@@ -3374,13 +3452,17 @@ impl AppState {
                     )
                     .map(|(x, y, w, h)| [x as f32, y as f32, w as f32, h as f32])
                 })
-                .collect();
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if caption_replayed_before_overlay {
             draw_captured_page_glyphs(
                 &self.capture_text_renderer,
                 render_pass,
                 self.config.width,
                 self.config.height,
-                &physical,
+                &caption_physical,
                 &[],
             );
         }
@@ -3527,6 +3609,14 @@ impl AppState {
             || (!caption_replayed_before_overlay && !caption_glyph_holes.is_empty())
         {
             let mut holes = node_glyph_holes;
+            // The shared capture mesh was already flushed before the portal
+            // shadow. An overlapping late repair must not blend it again.
+            holes = super::draw_cull::capture_glyph_scissors_after_replay_physical(
+                &holes,
+                &caption_physical,
+                self.config.width,
+                self.config.height,
+            );
             if !caption_replayed_before_overlay {
                 for logical in caption_glyph_holes {
                     let Some((x, y, w, h)) = super::damage::damage_to_scissor_physical(
@@ -4077,6 +4167,44 @@ impl AppState {
         // *different* node earlier in DFS and replace the wrong subtree — e.g. sibling buttons +
         // `<Show>` vanishing intermittently.
         let want = normalize_anchor_template_id(anchor_id);
+        // A newly mounted reactive anchor has no collect stamp or geometry yet.
+        // Determine its portal owner from the live ancestry, before replacing it;
+        // otherwise a nested alpha/format slot is mistaken for a page remount.
+        let mut portal_owner = None;
+        let mut in_portal = false;
+        if let Some(path) = crate::core::tree::find_path_in_tree(&self.root_element, |n| {
+            n.template_id
+                .as_deref()
+                .is_some_and(|tid| normalize_anchor_template_id(tid) == want)
+        }) {
+            let mut node = &self.root_element;
+            for index in std::iter::once(None).chain(path.into_iter().map(Some)) {
+                if let Some(index) = index {
+                    node = &node.children[index];
+                }
+                let is_surface = node.attrs.get("rui_portal").map(String::as_str) == Some("1")
+                    || node
+                        .attrs
+                        .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
+                        .map(String::as_str)
+                        == Some("1");
+                in_portal |= is_surface
+                    || node.template_id.as_deref()
+                        == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+                if is_surface {
+                    let key = crate::layout::layout_tree::overlay_portal_stamp_key(node);
+                    let bounds = self
+                        .last_overlay_stamps
+                        .iter()
+                        .find(|(stamp, _)| *stamp == key)
+                        .map(|(_, bounds)| *bounds)
+                        .unwrap_or_else(|| {
+                            crate::core::tree::visual_paint_aabb(node, node.paint_scroll_acc)
+                        });
+                    portal_owner = Some((key, bounds));
+                }
+            }
+        }
         let island_ptr = crate::core::tree::find_in_tree(&self.root_element, |n| {
             n.template_id
                 .as_deref()
@@ -4149,10 +4277,15 @@ impl AppState {
                 );
             }
         }
-        if declares_portal || portal_moves > 0 {
+        if declares_portal || portal_moves > 0 || (in_portal && status != LayoutStatus::Clean) {
             // Bubble +N expand / popover hoist: Taffy still rebuilds the portal layer,
             // but GPU FullClear of the gallery is the fullscreen flash.
             self.portal_membership_dirty = true;
+        }
+        if status != LayoutStatus::Clean {
+            if let Some((key, bounds)) = portal_owner {
+                super::damage::push_frame_overlay_damage(key, bounds);
+            }
         }
         if let Some((button_key, button_bounds)) = portal_button_damage {
             // The trigger is the page-facing part of a mixed portal island. Its caption may
@@ -4161,7 +4294,8 @@ impl AppState {
             // floating panel; this key owns only the trigger's retained pixels.
             super::damage::push_frame_paint_key(button_key, button_bounds);
         }
-        if !portal_island
+        if !in_portal
+            && !portal_island
             && !portal_only_change
             && matches!(
                 status,
@@ -6301,14 +6435,20 @@ impl AppState {
             Vec::new();
         let mut page_stack_skip_glyphon: Vec<bool> = Vec::new();
         let mut skip_page_glyphon = false;
-        let (caption_replay_runs, caption_glyph_holes) =
+        // Only node present executes the caption repair pass. Full draws must
+        // keep complete page runs instead of cutting holes for an absent pass.
+        let (caption_replay_runs, caption_glyph_holes) = if gpu_present.use_node_present {
             super::draw_cull::overlay_grazing_caption_replay(
                 &self.damage_nodes,
                 &render_result.node_paints,
                 &self.last_overlay_stamps,
                 self.overlay_occupied,
                 &self.text_nodes[..overlay_text_start],
-            );
+                ui_scale,
+            )
+        } else {
+            (Vec::new(), Vec::new())
+        };
         let (underline_instances, caret_instances, shadow_tex_draws) = if has_page_stack_bands {
             self.ensure_page_stack_band_text_renderers(page_stack_band_ranges.len());
             let mut underlines = Vec::with_capacity(page_stack_band_ranges.len());
@@ -7602,7 +7742,7 @@ impl AppState {
                             continue;
                         };
                         render_pass.set_scissor_rect(x, y, w, h);
-                        draw_scissor_fill(
+                        draw_scissor_surface_clear(
                             &mut render_pass,
                             &self.pipeline,
                             &self.device,

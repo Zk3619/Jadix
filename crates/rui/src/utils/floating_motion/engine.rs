@@ -1485,7 +1485,9 @@ pub(crate) fn tick_hoisted_floating_css(root: &mut Element) -> bool {
                 any = true;
                 continue;
             };
-            if tick_element_css(panel, {
+            let was_run_active =
+                crate::style::animation_run_active(&panel.style, &panel.animation_snapshot);
+            let ticked = tick_element_css(panel, {
                 let hold = {
                     let mut c = handle.cell.borrow_mut();
                     let hold = c.hold_enter_css_dt;
@@ -1497,7 +1499,14 @@ pub(crate) fn tick_hoisted_floating_css(root: &mut Element) -> bool {
                 } else {
                     dt
                 }
-            }) {
+            });
+            // A finished keyframe writes its final pose but returns false. The
+            // post-layout collector must still submit that pose and restore the
+            // retained backdrop, or fade-out leaves its penultimate image until
+            // the presence gate unmounts the panel on the next frame.
+            let finished_this_tick = was_run_active
+                && !crate::style::animation_run_active(&panel.style, &panel.animation_snapshot);
+            if ticked || finished_this_tick {
                 any = true;
                 if shell.kind == FloatingMotionKind::Expand {
                     // Accordion max-height / width-clip are Taffy geometry.

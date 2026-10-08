@@ -291,6 +291,9 @@ pub fn SelectTrigger(size: Option<String>, children: Option<Element>) -> Element
                 disarm_underlay_close();
             }
             open.set(next);
+            if !next {
+                crate::utils::roving::focus_id_only(trigger_id.clone());
+            }
         })
         .child(inner)
         .child(icon)
@@ -438,7 +441,11 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         )),
         kind: OverlayKind::Menu,
         lock_page_scroll: Some(true),
-        motion: FloatingMotionKind::Expand,
+        // Select menus may be nested inside a retained popover (for example
+        // the year selector inside DatePicker). Fade keeps the parent panel's
+        // geometry stable while the child portal enters/exits, avoiding a
+        // retained shadow fringe and duplicate hover paint at the anchor.
+        motion: FloatingMotionKind::Fade,
         mode: OverlayMode::Stacked,
         match_trigger_width: match_trigger,
         max_h: max_height.clone(),
@@ -606,6 +613,7 @@ pub fn SelectItem(
     register_label(ctx.labels, &value, &label_text);
 
     let open = ctx.open;
+    let trigger_fid = ctx.trigger_fid;
     let val_sig = ctx.value;
     let selected = val_sig.peek() == value;
     let align = SelectItemAlign::parse(align.as_deref().unwrap_or("start"));
@@ -618,6 +626,10 @@ pub fn SelectItem(
         }
         open.set(false);
         val_sig.set(ov.clone());
+        // The menu is a hoisted portal. Restore the trigger as the active
+        // focus target before its exit frame is reconciled so a hovered
+        // trigger is painted exactly once after the menu disappears.
+        crate::utils::roving::focus_id_only(trigger_fid.peek());
     });
     row.set_attr("rui_select_item", value.as_str());
     row.accesskit_role("option")
@@ -1176,6 +1188,7 @@ fn build_data_item_row(
     let ov = item.value.clone();
     let bid = format!("{select_id}:opt:{}", item.value);
     let disabled = item.disabled;
+    let trigger_fid = use_select().map(|ctx| ctx.trigger_fid);
 
     let mut row = select_item_row(
         &bid,
@@ -1189,6 +1202,9 @@ fn build_data_item_row(
             }
             open.set(false);
             val.set(ov.clone());
+            if let Some(trigger_fid) = trigger_fid {
+                crate::utils::roving::focus_id_only(trigger_fid.peek());
+            }
         },
     );
     row.set_attr("rui_select_item", item.value.as_str());

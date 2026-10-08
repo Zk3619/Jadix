@@ -242,6 +242,11 @@ impl PresentRetainPipeline {
         self.retain.as_ref().map(|r| &r.view)
     }
 
+    #[cfg(test)]
+    pub(crate) fn color_texture_for_test(&self) -> Option<&wgpu::Texture> {
+        self.retain.as_ref().map(|r| &r.texture)
+    }
+
     /// Copy the still-visible overlap to its new origin via scratch (may overlap).
     /// Returns `false` when the retain buffer is missing or the rects leave the texture.
     pub fn copy_scroll_strip(

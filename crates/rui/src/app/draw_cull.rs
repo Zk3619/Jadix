@@ -611,6 +611,52 @@ fn clip_text_node_to_scroll_rect(n: &TextLayoutInfo, clip: [f32; 4]) -> Option<T
     Some(cloned)
 }
 
+/// Horizontal replay of a grazing caption. Scroll-strip capture intentionally
+/// keeps the full ancestor clip vertically, but overlay replay must not carry
+/// a full-page `clip_bounds` height into the late caption pass.
+fn clip_text_node_to_grazing_rect(n: &TextLayoutInfo, clip: [f32; 4]) -> Option<TextLayoutInfo> {
+    if !text_hits_damage(n, clip) {
+        return None;
+    }
+    let emoji = crate::renderer::emoji_detect::text_contains_emoji(&n.text);
+    let scaled = (n.paint_scale - 1.0).abs() > 1e-4;
+    if emoji && scaled && n.clip_bounds.is_none() {
+        let (pw, ph) = crate::renderer::emoji_layout::emoji_visible_paint_size(
+            n.width,
+            n.height,
+            n.style.size_resolved(),
+        );
+        let ink = [
+            n.x,
+            n.y,
+            (pw * n.paint_scale).max(0.0),
+            (ph * n.paint_scale).max(0.0),
+        ];
+        return (!aabbs_disjoint(ink, clip)).then(|| n.clone());
+    }
+    let ancestor = n
+        .clip_bounds
+        .unwrap_or([n.x, n.y, n.width.max(0.0), n.height.max(0.0)]);
+    let line = [n.x, n.y, n.width.max(0.0), n.height.max(0.0)];
+    if aabbs_disjoint(ancestor, clip) || aabbs_disjoint(line, clip) {
+        return None;
+    }
+    let x0 = line[0].max(ancestor[0]).max(clip[0]);
+    let x1 = (line[0] + line[2])
+        .min(ancestor[0] + ancestor[2])
+        .min(clip[0] + clip[2]);
+    let width = (x1 - x0).max(0.0);
+    let y0 = line[1].max(ancestor[1]);
+    let y1 = (line[1] + line[3]).min(ancestor[1] + ancestor[3]);
+    let height = (y1 - y0).max(0.0);
+    if width <= 0.0 || height <= 0.0 {
+        return None;
+    }
+    let mut cloned = n.clone();
+    cloned.clip_bounds = Some([x0, y0, width, height]);
+    Some(cloned)
+}
+
 pub(crate) fn clip_text_nodes_to_cull(
     nodes: &[TextLayoutInfo],
     cull: CullRects,
@@ -847,6 +893,25 @@ pub(crate) fn capture_glyph_scissors_physical(
     pieces
 }
 
+/// Subtract replayed pixels from the late page-glyph capture after both sets
+/// have been rounded to physical scissors. This keeps one source of coverage
+/// for every device pixel when the two captures overlap.
+pub(crate) fn capture_glyph_scissors_after_replay_physical(
+    repaired: &[[f32; 4]],
+    replayed: &[[f32; 4]],
+    width: u32,
+    height: u32,
+) -> Vec<[f32; 4]> {
+    let mut pieces = capture_glyph_scissors_physical(repaired, width, height);
+    for replay in capture_glyph_scissors_physical(replayed, width, height) {
+        pieces = pieces
+            .into_iter()
+            .flat_map(|piece| crate::app::damage::subtract_rect(piece, replay))
+            .collect();
+    }
+    pieces
+}
+
 /// Late page glyphs must never cover a portal painted earlier in the pass.
 /// Subtract after outward rounding so fractional layout edges cannot reopen a
 /// device-pixel row in the panel when the final GPU scissor is rounded again.
@@ -1027,6 +1092,44 @@ pub(crate) fn scissors_keeping_stable_page_captions(
     parts
 }
 
+/// Region repairs may subsume a changed button Node. Preserve idle captions,
+/// but keep the changed control in the clear so its hover/active fill updates.
+pub(crate) fn region_scissors_keeping_stable_page_captions(
+    pieces: Vec<[f32; 4]>,
+    dirty: &PaintDirty,
+    dirties: &[PaintDirty],
+    paints: &[NodePaint],
+    stamps: &[(u64, [f32; 4])],
+    shadow: Option<[f32; 4]>,
+) -> Vec<[f32; 4]> {
+    let mut kept = scissors_keeping_stable_page_captions(pieces.clone(), paints, stamps, shadow);
+    let mut changed: Vec<_> = dirties
+        .iter()
+        .filter(|d| d.kind == PaintDirtyKind::Node)
+        .map(|d| padded_xywh(d.bounds, 2.0))
+        .collect();
+    changed.extend(
+        paints
+            .iter()
+            .filter(|p| {
+                p.key == dirty.key
+                    && !p.overlay
+                    && stamps
+                        .iter()
+                        .all(|(_, stamp)| intersect_rects(p.bounds, *stamp).is_none())
+            })
+            .map(|p| padded_xywh(p.bounds, 2.0)),
+    );
+    for bounds in changed {
+        for piece in &pieces {
+            if let Some(hit) = intersect_rects(*piece, bounds) {
+                crate::app::damage::push_disjoint_rect(&mut kept, hit);
+            }
+        }
+    }
+    kept
+}
+
 /// A line that only grazes the portal (AvatarGroup caption above +N) stays in
 /// the halo clear so the top shadow can paint. Those glyphs are replayed before
 /// the overlay; carving the line out of the scissor also drops that shadow.
@@ -1074,7 +1177,7 @@ pub(crate) fn grazing_caption_replay_runs(
             let node = &texts[index];
             let mut repair: Option<TextLayoutInfo> = None;
             for hole in cleared {
-                let Some(clipped) = clip_text_node_to_scroll_rect(node, *hole) else {
+                let Some(clipped) = clip_text_node_to_grazing_rect(node, *hole) else {
                     continue;
                 };
                 if let Some(piece) = clipped.clip_bounds {
@@ -1115,6 +1218,7 @@ pub(crate) fn overlay_grazing_caption_replay(
     stamps: &[(u64, [f32; 4])],
     occupied: Option<[f32; 4]>,
     texts: &[TextLayoutInfo],
+    ui_scale: f32,
 ) -> (Vec<TextLayoutInfo>, Vec<[f32; 4]>) {
     let mut overlay_holes = Vec::new();
     if !stamps.is_empty() {
@@ -1167,15 +1271,19 @@ pub(crate) fn overlay_grazing_caption_replay(
     // page piece that actually meets that halo; a distant button does not.
     let halo_pieces = cleared.clone();
     for dirty in dirties {
-        let page_clear = matches!(
-            dirty.kind,
-            PaintDirtyKind::Region | PaintDirtyKind::Node
-        );
+        let page_clear = matches!(dirty.kind, PaintDirtyKind::Region | PaintDirtyKind::Node);
         if !page_clear || dirty.bounds[2] <= 0.5 || dirty.bounds[3] <= 0.5 {
             continue;
         }
-        for piece in crate::app::damage::page_scissors_excluding_portal_boxes(dirty.bounds, stamps)
-        {
+        let pieces = crate::app::damage::page_scissors_excluding_portal_boxes(dirty.bounds, stamps);
+        let pieces = if dirty.kind == PaintDirtyKind::Region {
+            region_scissors_keeping_stable_page_captions(
+                pieces, dirty, dirties, paints, stamps, occupied,
+            )
+        } else {
+            pieces
+        };
+        for piece in pieces {
             if piece[2] <= 0.5 || piece[3] <= 0.5 {
                 continue;
             }
@@ -1187,17 +1295,50 @@ pub(crate) fn overlay_grazing_caption_replay(
             }
         }
     }
-    let runs = grazing_caption_replay_runs(paints, stamps, texts, &cleared);
-    let flush = runs
-        .iter()
-        .filter_map(|n| n.clip_bounds)
-        .flat_map(|clip| {
-            cleared
-                .iter()
-                .filter_map(move |hole| intersect_rects(clip, *hole))
+    let candidates = grazing_caption_replay_runs(paints, stamps, texts, &cleared);
+    // Padding belongs to preparation, not to pixel ownership. Replaying that
+    // pad (or the retained gap between two repairs) blends glyph edges twice.
+    // Split at device-pixel clear boundaries, shared with the page mesh.
+    let scale = ui_scale.max(0.001);
+    let cleared: Vec<_> = cleared
+        .into_iter()
+        .map(|r| {
+            let left = (r[0] * scale).floor() / scale;
+            let top = (r[1] * scale).floor() / scale;
+            let right = ((r[0] + r[2]) * scale).ceil() / scale;
+            let bottom = ((r[1] + r[3]) * scale).ceil() / scale;
+            [left, top, right - left, bottom - top]
         })
-        .filter(|r| r[2] > 0.5 && r[3] > 0.5)
         .collect();
+    let mut runs = Vec::new();
+    let mut flush = Vec::new();
+    for node in candidates {
+        let Some(clip) = node.clip_bounds else {
+            continue;
+        };
+        let mut pieces = Vec::new();
+        for hole in &cleared {
+            if let Some(hit) = intersect_rects(clip, *hole) {
+                // Glyphon floors both edges. Use its snapped bounds for every
+                // owner so a fractional split cannot leave a white seam.
+                if let Some(hit) = crate::renderer::prepare_text::integerize_clip_rect([
+                    hit[0] * scale,
+                    hit[1] * scale,
+                    hit[2] * scale,
+                    hit[3] * scale,
+                ]) {
+                    crate::app::damage::push_disjoint_rect(&mut pieces, hit);
+                }
+            }
+        }
+        for piece in pieces {
+            let clip = piece.map(|v| v / scale);
+            let mut repaired = node.clone();
+            repaired.clip_bounds = Some(clip);
+            runs.push(repaired);
+            crate::app::damage::push_disjoint_rect(&mut flush, clip);
+        }
+    }
     (runs, flush)
 }
 
@@ -1212,42 +1353,34 @@ pub(crate) fn page_runs_excluding_caption_replay(
     }
     let mut out = Vec::with_capacity(runs.len());
     for n in runs {
-        let Some(replayed) = replay.iter().find(|r| {
-            r.text == n.text && (r.x - n.x).abs() < 0.5 && (r.y - n.y).abs() < 0.5
-        }) else {
+        let matching: Vec<_> = replay
+            .iter()
+            .filter(|r| r.text == n.text && (r.x - n.x).abs() < 0.5 && (r.y - n.y).abs() < 0.5)
+            .collect();
+        if matching.is_empty() {
             out.push(n);
             continue;
-        };
-        // Replay owns only the halo fringe. Dropping the whole run left the
-        // card title as "orPic" on a full present, and the AvatarGroup tail
-        // beside +N would go with it. Keep the ink on either side of that clip.
-        let Some(clip) = replayed.clip_bounds else {
-            continue;
-        };
-        let line_left = n.x;
-        let line_right = n.x + n.width.max(0.0);
-        let clip_left = clip[0];
-        let clip_right = clip[0] + clip[2];
-        let mut push_side = |side: [f32; 4]| {
-            let bounds = match n.clip_bounds {
-                Some(existing) => match intersect_rects(existing, side) {
-                    Some(hit) => hit,
-                    None => return,
-                },
-                None => side,
+        }
+        // Keep all four sides and disjoint gaps, including wrapped rows below
+        // the halo. A horizontal-only split dropped those rows on full redraw.
+        let mut pieces =
+            vec![n.clip_bounds.unwrap_or_else(|| {
+                padded_xywh([n.x, n.y, n.width.max(0.0), n.height.max(0.0)], 1.0)
+            })];
+        for repaired in matching {
+            let Some(clip) = repaired.clip_bounds else {
+                pieces.clear();
+                break;
             };
-            if bounds[2] <= 0.5 || bounds[3] <= 0.5 {
-                return;
-            }
+            pieces = pieces
+                .into_iter()
+                .flat_map(|piece| crate::app::damage::subtract_rect(piece, clip))
+                .collect();
+        }
+        for bounds in pieces {
             let mut kept = n.clone();
             kept.clip_bounds = Some(bounds);
             out.push(kept);
-        };
-        if line_left < clip_left - 0.5 {
-            push_side([line_left, n.y, clip_left - line_left, n.height.max(0.0)]);
-        }
-        if line_right > clip_right + 0.5 {
-            push_side([clip_right, n.y, line_right - clip_right, n.height.max(0.0)]);
         }
     }
     out
@@ -1393,9 +1526,13 @@ fn unchanged_caption_glyph(
     }
     // The button dest-reset covers this leaf and wipes the glyphs. Skipping
     // capture leaves the line blank until the next string change.
-    !dirties
-        .iter()
-        .any(|d| d.kind == PaintDirtyKind::Node && intersect_rects(d.bounds, leaf.bounds).is_some())
+    !dirties.iter().any(|d| {
+        (d.kind == PaintDirtyKind::Node && intersect_rects(d.bounds, leaf.bounds).is_some())
+            || (d.kind == PaintDirtyKind::Region
+                && paints
+                    .iter()
+                    .any(|p| p.key == d.key && !p.overlay && p.text.0 <= index && index < p.text.1))
+    })
 }
 
 /// Drop page-glyphon runs that this frame's node capture will also draw.
@@ -7365,6 +7502,35 @@ mod tests {
     }
 
     #[test]
+    fn region_repair_beside_open_portal_keeps_stable_trigger_out_of_clear() {
+        // Opening ColorPicker can classify the trigger row as a Region dirty.
+        // Rebuilding that unchanged row from the capture mesh makes the trigger
+        // flicker and exposes a one-pixel caption seam beside the entering panel.
+        let trigger = [606.0, 0.0, 114.0, 38.0];
+        let panel = [512.0, 42.0, 280.0, 360.0];
+        let region = [614.0, 0.0, 106.0, 38.0];
+        let mut trigger_paint = slot(2, trigger, (0, 1));
+        trigger_paint.text = (0, 1);
+        let cleared = scissors_keeping_stable_page_captions(
+            vec![region],
+            &[trigger_paint],
+            &[(9u64, panel)],
+            None,
+        );
+        let center = [trigger[0] + trigger[2] * 0.5, trigger[1] + trigger[3] * 0.5];
+        let hits = |r: &[f32; 4]| {
+            center[0] >= r[0]
+                && center[0] < r[0] + r[2]
+                && center[1] >= r[1]
+                && center[1] < r[1] + r[3]
+        };
+        assert!(
+            cleared.iter().all(|r| !hits(r)),
+            "stable trigger must not be cleared by the portal-open Region repair: {cleared:?}"
+        );
+    }
+
+    #[test]
     fn region_beside_popover_replays_the_grazed_line_prefix() {
         // The page region beside an open ColorPicker clears the card title.
         // Replaying only the halo fringe kept "orPic" and left the prefix blank.
@@ -7387,12 +7553,13 @@ mod tests {
             bounds: region,
             kind: PaintDirtyKind::Region,
         };
-        let (replay, _) = overlay_grazing_caption_replay(
+        let (replay, flush) = overlay_grazing_caption_replay(
             &[overlay, region_dirty],
             &[title],
             &[(9u64, stamp)],
             Some(stamp),
             &[line],
+            1.0,
         );
         let hits = |c: [f32; 4], x: f32, y: f32| {
             x >= c[0] && x < c[0] + c[2] && y >= c[1] && y < c[1] + c[3]
@@ -7410,6 +7577,61 @@ mod tests {
                 .iter()
                 .all(|n| n.clip_bounds.is_none_or(|c| !hits(c, 900.0, y))),
             "replay must not cover pixels outside the cleared region"
+        );
+        assert!(
+            replay.iter().all(|n| {
+                n.clip_bounds.is_none_or(|clip| {
+                    flush.iter().any(|f| {
+                        f[0] <= clip[0]
+                            && f[1] <= clip[1]
+                            && f[0] + f[2] >= clip[0] + clip[2]
+                            && f[1] + f[3] >= clip[1] + clip[3]
+                    })
+                })
+            }),
+            "caption flush must cover the padded replay clip: {flush:?}"
+        );
+    }
+
+    #[test]
+    fn region_repair_reopens_changed_trigger_but_keeps_idle_caption_out() {
+        let idle = [18.0, 46.0, 96.0, 20.0];
+        let trigger = [132.0, 46.0, 92.0, 30.0];
+        let region = [8.0, 30.0, 280.0, 100.0];
+        let paints = [slot(1, idle, (0, 1)), slot(2, trigger, (1, 2))];
+        let dirties = [
+            PaintDirty {
+                key: 9,
+                bounds: region,
+                kind: PaintDirtyKind::Region,
+            },
+            PaintDirty {
+                key: 2,
+                bounds: trigger,
+                kind: PaintDirtyKind::Node,
+            },
+        ];
+        let kept = region_scissors_keeping_stable_page_captions(
+            vec![region],
+            &dirties[0],
+            &dirties,
+            &paints,
+            &[(7, [8.0, 90.0, 80.0, 20.0])],
+            None,
+        );
+        let hits = |rect: [f32; 4], point: [f32; 2]| {
+            point[0] >= rect[0]
+                && point[0] < rect[0] + rect[2]
+                && point[1] >= rect[1]
+                && point[1] < rect[1] + rect[3]
+        };
+        assert!(
+            kept.iter().any(|r| hits(*r, [150.0, 55.0])),
+            "changed trigger must remain in the region clear: {kept:?}"
+        );
+        assert!(
+            kept.iter().all(|r| !hits(*r, [30.0, 55.0])),
+            "idle caption must stay out of the clear: {kept:?}"
         );
     }
 
@@ -7531,6 +7753,35 @@ mod tests {
         assert!(
             clip[0] <= 248.25 && clip[0] + clip[2] >= 266.25,
             "the narrow previous-footprint restore must retain glyphs too: {clip:?}"
+        );
+    }
+
+    #[test]
+    fn grazing_caption_replay_does_not_inherit_full_viewport_clip_height() {
+        // A collected text node commonly carries the page/scrollport clip.
+        // Replay must keep the complete glyph line horizontally, while its
+        // vertical extent stays bounded by that line. Inheriting a 600px
+        // viewport clip makes ColorPicker title repairs touch unrelated rows.
+        let mut line = sample_text("Calendar · ColorPicker", 0.0);
+        line.y = 46.0;
+        line.width = 720.0;
+        line.height = 24.0;
+        line.clip_bounds = Some([0.0, 0.0, 800.0, 600.0]);
+        let paint = slot(4, [0.0, 46.0, 720.0, 24.0], (0, 1));
+        let replay = grazing_caption_replay_runs(
+            &[paint],
+            &[(9u64, [512.0, 42.0, 280.0, 360.0])],
+            &[line],
+            &[[476.0, 39.0, 352.0, 399.0]],
+        );
+        let clip = replay
+            .first()
+            .and_then(|n| n.clip_bounds)
+            .expect("title must be replayed");
+        assert!(clip[3] <= 26.0, "replay escaped the text line: {clip:?}");
+        assert!(
+            clip[1] >= 45.0,
+            "replay started above the text line: {clip:?}"
         );
     }
 

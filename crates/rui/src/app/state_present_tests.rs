@@ -3,6 +3,516 @@ use super::*;
 use crate::app::{damage::*, draw_cull::*};
 use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 
+/// Exercise the production frame planner, reactive portal remounts and native
+/// presentation, rather than reconstructing node-present calls in a test.
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "requires a native Windows GPU surface; run explicitly with --ignored --nocapture"]
+fn color_picker_native_frames_keep_page_and_hover_stable() {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    use winit::window::{WindowAttributes, WindowId};
+
+    struct Harness;
+    impl ApplicationHandler for Harness {
+        fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+            let window: Arc<dyn Window> = Arc::from(
+                event_loop
+                    .create_window(
+                        WindowAttributes::default()
+                            .with_title("RUI popup frame regression")
+                            .with_surface_size(winit::dpi::LogicalSize::new(640.0, 560.0))
+                            .with_visible(false),
+                    )
+                    .expect("hidden test window"),
+            );
+            run_color_picker_native_frames(window);
+            event_loop.exit();
+        }
+        fn window_event(&mut self, _: &dyn ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    }
+    let mut builder = EventLoop::builder();
+    builder.with_any_thread(true);
+    builder
+        .build()
+        .expect("test event loop")
+        .run_app(Harness)
+        .unwrap();
+}
+
+#[cfg(target_os = "windows")]
+fn run_color_picker_native_frames(window: Arc<dyn Window>) {
+    use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+    use crate::app::runtime::{clear_app_runtime, set_app_runtime, AppRuntime};
+    use crate::core::reactivity::{create_effect, create_root};
+    use crate::renderer::offscreen::RgbaImage;
+    use crate::utils::floating_motion::{drain_pending_floating_unmounts, tick_floating_presence};
+    use std::{cell::RefCell, rc::Rc};
+
+    fn trigger(el: &Element) -> Option<&Element> {
+        if el.focus_id.as_deref() == Some("native-cp:trigger") {
+            return Some(el);
+        }
+        el.children.iter().find_map(trigger)
+    }
+    fn focus_suffix<'a>(el: &'a Element, suffix: &str) -> Option<&'a Element> {
+        if el.focus_id.as_deref().is_some_and(|id| id.ends_with(suffix)) {
+            return Some(el);
+        }
+        el.children.iter().find_map(|child| focus_suffix(child, suffix))
+    }
+    fn frame(state: &Rc<RefCell<Option<AppState>>>, mouse: [f32; 2]) -> RgbaImage {
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        crate::style::advance_css_transition_timeline_ms(16.0);
+        crate::style::tick_animations(0.016);
+        tick_floating_presence();
+        drain_pending_floating_unmounts();
+        drain_deferred_view_remounts();
+        let mut opt = state.borrow_mut();
+        let s = opt.as_mut().unwrap();
+        if std::env::var_os("RUI_NATIVE_CP_FULL").is_some() {
+            s.mark_full_redraw();
+        }
+        s.render(
+            mouse,
+            ScrollbarUpdateMode::ViewportsOnly,
+            None,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        assert!(
+            s.present_retain.contents_valid(),
+            "native test needs retained output"
+        );
+        let texture = s.present_retain.color_texture_for_test().unwrap();
+        let mut image = readback_texture(
+            &s.device,
+            &s.queue,
+            texture,
+            s.config.width,
+            s.config.height,
+            s.device.create_command_encoder(&Default::default()),
+        )
+        .unwrap();
+        if matches!(
+            texture.format(),
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for pixel in image.pixels.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+        }
+        if std::env::var_os("RUI_NATIVE_CP_PARTIAL_ONLY").is_none() {
+            // Freeze both clocks: zero frame dt alone still advances CSS from
+            // elapsed wall time while GPU readback is running.
+            crate::style::utility::set_frame_dt(0.0);
+            s.mark_full_redraw();
+            s.render(
+                mouse,
+                ScrollbarUpdateMode::ViewportsOnly,
+                None,
+                false,
+                false,
+                false,
+            )
+            .unwrap();
+            let texture = s.present_retain.color_texture_for_test().unwrap();
+            let mut full = readback_texture(
+                &s.device,
+                &s.queue,
+                texture,
+                s.config.width,
+                s.config.height,
+                s.device.create_command_encoder(&Default::default()),
+            )
+            .unwrap();
+            if matches!(
+                texture.format(),
+                wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+            ) {
+                for pixel in full.pixels.chunks_exact_mut(4) {
+                    pixel.swap(0, 2);
+                }
+            }
+            crate::style::utility::set_frame_dt(0.016);
+            let changed = changed_outside(&image, &full, &[], s.ui_scale());
+            if changed > 0 {
+                snapshot(&image, "composite-partial");
+                snapshot(&full, "composite-full");
+            }
+            assert_eq!(
+                changed, 0,
+                "native animation frame must match a full composite at the same progress"
+            );
+        }
+        image
+    }
+    fn snapshot(image: &RgbaImage, name: &str) {
+        let Some(dir) = std::env::var_os("RUI_NATIVE_CP_OUTPUT") else {
+            return;
+        };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        ::image::save_buffer(
+            dir.join(format!("{name}.png")),
+            &image.pixels,
+            image.width,
+            image.height,
+            ::image::ColorType::Rgba8,
+        )
+        .unwrap();
+    }
+    fn changed_outside(a: &RgbaImage, b: &RgbaImage, boxes: &[[f32; 4]], scale: f32) -> usize {
+        changed_outside_threshold(a, b, boxes, scale, 6)
+    }
+    fn changed_outside_threshold(
+        a: &RgbaImage,
+        b: &RgbaImage,
+        boxes: &[[f32; 4]],
+        scale: f32,
+        threshold: u8,
+    ) -> usize {
+        a.pixels
+            .chunks_exact(4)
+            .zip(b.pixels.chunks_exact(4))
+            .enumerate()
+            .filter(|(i, (p, q))| {
+                let x = (*i as u32 % a.width) as f32 / scale;
+                let y = (*i as u32 / a.width) as f32 / scale;
+                !boxes
+                    .iter()
+                    .any(|r| x >= r[0] && y >= r[1] && x < r[0] + r[2] && y < r[1] + r[3])
+                    // Native sRGB edge blending can quantize a one-pixel
+                    // antialiased border by a few levels between retained and
+                    // full composition. Treat that as equivalent; visible
+                    // seams and stale content differ by much more.
+                    && p.iter()
+                        .zip(q.iter())
+                        .any(|(v, w)| v.abs_diff(*w) > threshold)
+            })
+            .count()
+    }
+    fn full_composite(
+        state: &Rc<RefCell<Option<AppState>>>,
+        mouse: [f32; 2],
+    ) -> RgbaImage {
+        let mut opt = state.borrow_mut();
+        let s = opt.as_mut().unwrap();
+        crate::style::utility::set_frame_dt(0.0);
+        s.mark_full_redraw();
+        s.render(
+            mouse,
+            ScrollbarUpdateMode::ViewportsOnly,
+            None,
+            false,
+            false,
+            false,
+        )
+        .unwrap();
+        let texture = s.present_retain.color_texture_for_test().unwrap();
+        let mut image = readback_texture(
+            &s.device,
+            &s.queue,
+            texture,
+            s.config.width,
+            s.config.height,
+            s.device.create_command_encoder(&Default::default()),
+        )
+        .unwrap();
+        if matches!(
+            texture.format(),
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for pixel in image.pixels.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+        }
+        crate::style::utility::set_frame_dt(0.016);
+        image
+    }
+
+    crate::app::portal_overlay::clear_overlay_stack();
+    reset_registered_anchors();
+    crate::style::set_css_transition_virtual_timeline(true);
+    crate::style::set_css_transition_timeline_ms(0.0);
+    let _ = take_frame_paint_nodes();
+    let state = Rc::new(RefCell::new(Some(crate::utils::block_on::block_on(
+        AppState::new_bootstrap(
+            window,
+            super::super::window_chrome::WindowOptions::default(),
+        ),
+    ))));
+    let secondaries = Rc::new(RefCell::new(std::collections::HashMap::new()));
+    set_app_runtime(AppRuntime::new(
+        Rc::downgrade(&state),
+        Rc::downgrade(&secondaries),
+    ));
+    let (owner, ()) = create_root(|| {
+        let live = Rc::clone(&state);
+        crate::core::reactivity::mark_next_effect_as_ui_root();
+        create_effect(move || {
+            let picker: Element = if std::env::var_os("RUI_NATIVE_CP_DATE").is_some() {
+                let mut date = crate::components::date_picker("native-cp");
+                if std::env::var_os("RUI_NATIVE_CP_DATE_DROPDOWN").is_some() {
+                    date = date.caption_layout(crate::components::CalendarCaption::Dropdown);
+                }
+                date.into()
+            } else {
+                crate::components::color_picker("native-cp")
+                    .show_alpha(false)
+                    .into()
+            };
+            let root = Element::new()
+                .w("100%")
+                .h("100%")
+                // Real page chrome beneath the fading panel: a flat clear
+                // backdrop misses strips left at borders and calendar rows.
+                .children((0..8).map(|row| {
+                    Element::new()
+                        .absolute()
+                        .left(0.0)
+                        .top(100.0 + row as f32 * 44.0)
+                        .w(560.0)
+                        .h(40.0)
+                        .bg(if row % 2 == 0 {
+                            [0.96, 0.96, 0.96, 1.0]
+                        } else {
+                            [1.0, 1.0, 1.0, 1.0]
+                        })
+                        .border([0.9, 0.9, 0.9, 1.0], 1.0)
+                        .rounded(4.0)
+                }))
+                .child(
+                    Element::new()
+                        .absolute()
+                        .left(0.0)
+                        .top(0.0)
+                        .w(600.0)
+                        .h(28.0)
+                        .text("Color · date/time 周围文字必须保持稳定")
+                        .text_size(20.0),
+                )
+                .child(
+                    Element::new()
+                        .absolute()
+                        .left(100.0)
+                        .top(44.0)
+                        .child(picker),
+                )
+                .child(
+                    Element::new()
+                        .absolute()
+                        .left(0.0)
+                        .top(212.0)
+                        .w(600.0)
+                        .h(28.0)
+                        .text("Calendar · ColorPicker 标题：打开 / 关闭")
+                        .text_size(20.0),
+                )
+                .child(
+                    Element::new()
+                        .absolute()
+                        .left(0.0)
+                        .top(242.0)
+                        .w(600.0)
+                        .h(24.0)
+                        .text("内置 Calendar / 时间选择，预设颜色与输入框")
+                        .text_size(12.0),
+                );
+            live.borrow_mut().as_mut().unwrap().rebuild_ui(root);
+        });
+    });
+    crate::style::utility::set_frame_dt(0.016);
+    for _ in 0..4 {
+        frame(&state, [-1.0, -1.0]);
+    }
+    let (mouse, scale) = {
+        let s = state.borrow();
+        let s = s.as_ref().unwrap();
+        let r = trigger(&s.root_element)
+            .expect("picker trigger")
+            .layout_bounds;
+        ([r[0] + r[2] * 0.5, r[1] + r[3] * 0.5], s.ui_scale())
+    };
+    crate::utils::roving::focus_id_only("native-cp:trigger");
+    let mut baseline = frame(&state, mouse);
+    for _ in 0..16 {
+        baseline = frame(&state, mouse);
+    }
+    snapshot(&baseline, "baseline");
+    let mut failures = Vec::new();
+    let mut hover_failures = Vec::new();
+    for cycle in 0..2 {
+        for opening in [true, false] {
+            let click = {
+                let s = state.borrow();
+                trigger(&s.as_ref().unwrap().root_element)
+                    .unwrap()
+                    .on_click
+                    .clone()
+                    .unwrap()
+            };
+            click.borrow_mut()();
+            for tick in 0..14 {
+                let previous = { state.borrow().as_ref().unwrap().last_overlay_boxes.clone() };
+                let image = frame(&state, mouse);
+                let mut excluded = previous;
+                let current = { state.borrow().as_ref().unwrap().last_overlay_boxes.clone() };
+                excluded.extend(current);
+                // Shadows may lie beyond the portal's occupied content box.
+                for r in &mut excluded {
+                    r[0] -= 16.0;
+                    r[1] -= 16.0;
+                    r[2] += 32.0;
+                    r[3] += 32.0;
+                }
+                let changed = changed_outside(&baseline, &image, &excluded, scale);
+                let hovered = {
+                    let opt = state.borrow();
+                    trigger(&opt.as_ref().unwrap().root_element)
+                        .unwrap()
+                        .class_set
+                        .as_ref()
+                        .and_then(|c| c.last_pointer_hover)
+                };
+                if hovered != Some(true) {
+                    hover_failures.push((cycle, opening, tick, hovered));
+                }
+                eprintln!("native cp cycle={cycle} opening={opening} tick={tick} outside={changed} boxes={excluded:?}");
+                if cycle == 0 {
+                    snapshot(&image, &format!("open-{opening}-tick-{tick}"));
+                }
+                if std::env::var_os("RUI_NATIVE_CP_TRACE").is_some() {
+                    let opt = state.borrow();
+                    let s = opt.as_ref().unwrap();
+                    let t = trigger(&s.root_element).unwrap();
+                    eprintln!(
+                        "trigger bounds={:?} hover={:?} text={} damage={:?}",
+                        t.layout_bounds,
+                        t.class_set.as_ref().and_then(|c| c.last_pointer_hover),
+                        s.text_nodes.len(),
+                        s.damage_nodes
+                    );
+                }
+                if changed > 0 {
+                    failures.push((cycle, opening, tick, changed));
+                }
+            }
+        }
+        if cycle == 0 && std::env::var_os("RUI_NATIVE_CP_DATE_DROPDOWN").is_some() {
+            // Re-open the outer DatePicker; the nested caption Select only
+            // exists while that portal is mounted.
+            let outer_click = {
+                let s = state.borrow();
+                trigger(&s.as_ref().unwrap().root_element)
+                    .and_then(|el| el.on_click.clone())
+                    .expect("DatePicker outer trigger reopen")
+            };
+            outer_click.borrow_mut()();
+            for _ in 0..14 {
+                let _ = frame(&state, mouse);
+            }
+            let year_suffix = ":cap_y:trigger";
+            let (year_mouse, nested_scale) = {
+                let s = state.borrow();
+                let year = focus_suffix(&s.as_ref().unwrap().root_element, year_suffix)
+                    .unwrap_or_else(|| panic!("DatePicker year trigger *{year_suffix} not found"));
+                let b = year.layout_bounds;
+                (
+                    [b[0] + b[2] * 0.5, b[1] + b[3] * 0.5],
+                    s.as_ref().unwrap().ui_scale(),
+                )
+            };
+            let _ = frame(&state, year_mouse);
+            let year_click = {
+                let s = state.borrow();
+                focus_suffix(&s.as_ref().unwrap().root_element, year_suffix)
+                    .and_then(|el| el.on_click.clone())
+                    .expect("DatePicker year trigger click")
+            };
+            year_click.borrow_mut()();
+            for tick in 0..14 {
+                let image = frame(&state, year_mouse);
+                let full = full_composite(&state, year_mouse);
+                let same_frame = changed_outside_threshold(
+                    &image,
+                    &full,
+                    &[],
+                    nested_scale,
+                    20,
+                );
+                assert_eq!(
+                    same_frame, 0,
+                    "nested year menu opening retained frame differs from full composite at tick {tick}: {same_frame}"
+                );
+            }
+            let year_close = {
+                let s = state.borrow();
+                focus_suffix(&s.as_ref().unwrap().root_element, year_suffix)
+                    .and_then(|el| el.on_click.clone())
+                    .expect("DatePicker year trigger close")
+            };
+            year_close.borrow_mut()();
+            // Fade exits run for 200ms and may be seeded one frame after the
+            // click; keep sampling past the nominal duration before checking
+            // the settled parent panel.
+            for tick in 0..24 {
+                let image = frame(&state, year_mouse);
+                let full = full_composite(&state, year_mouse);
+                let same_frame = changed_outside_threshold(
+                    &image,
+                    &full,
+                    &[],
+                    nested_scale,
+                    20,
+                );
+                assert_eq!(
+                    same_frame, 0,
+                    "nested year menu closing retained frame differs from full composite at tick {tick}: {same_frame}"
+                );
+            }
+            let outer_close = {
+                let s = state.borrow();
+                trigger(&s.as_ref().unwrap().root_element)
+                    .and_then(|el| el.on_click.clone())
+                    .expect("DatePicker outer trigger close")
+            };
+            outer_close.borrow_mut()();
+            for _ in 0..14 {
+                let _ = frame(&state, mouse);
+            }
+        }
+        // A settled closed frame must match a fresh full render, including hover caption.
+        let partial = frame(&state, mouse);
+        state.borrow_mut().as_mut().unwrap().mark_full_redraw();
+        let full = frame(&state, mouse);
+        let changed = changed_outside(&partial, &full, &[], scale);
+        eprintln!("native cp closed full diff cycle={cycle}: {changed}");
+        if changed > 0 {
+            failures.push((cycle, false, 99, changed));
+        }
+        baseline = full;
+    }
+    clear_app_runtime();
+    owner.dispose();
+    crate::style::utility::set_frame_dt(0.0);
+    crate::style::set_css_transition_virtual_timeline(false);
+    crate::app::portal_overlay::clear_overlay_stack();
+    reset_registered_anchors();
+    assert!(
+        hover_failures.is_empty(),
+        "popup remount changed stationary trigger hover: {hover_failures:?}"
+    );
+    assert!(
+        failures.is_empty(),
+        "native popup frames changed retained page/trigger pixels: {failures:?}"
+    );
+}
+
 #[test]
 #[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
 fn avatar_interrupted_expand_restores_caption_each_frame() {
@@ -216,6 +726,7 @@ fn avatar_interrupted_expand_restores_caption_each_frame() {
             &stamps,
             visual,
             &scene.text_nodes,
+            1.0,
         );
         if frame == 2 {
             assert!(
@@ -581,6 +1092,7 @@ fn avatar_caption_composite(shrink: bool) {
             &stamps,
             Some(live_hole),
             &scene.text_nodes,
+            1.0,
         );
         assert!(
             !runs.is_empty(),
@@ -812,6 +1324,7 @@ fn avatar_wrapped_caption_edge_open_close_matches_full_composite() {
             &stamps,
             Some(stamp),
             &scene.text_nodes,
+            1.0,
         );
         assert!(
             !runs.is_empty(),
@@ -999,7 +1512,16 @@ fn trigger_capture_only_repaints_cleared_pixels() {
                     pass.set_scissor_rect(x, y, w, h);
                     draw_scissor_fill(&mut pass, &pipeline, &gpu.device, *rect, clear);
                 }
-                draw_captured_page_glyphs(&renderer, &mut pass, 320, 200, &cleared, &[]);
+                // Model the present pass split: an earlier capture may already
+                // have painted part of the same glyphs before the late node
+                // capture runs. The late scissors must subtract that ownership
+                // after device-pixel rounding, otherwise the retained edge is
+                // blended a second time.
+                let pre_replay = vec![[18.0, 46.0, 12.0, 25.0]];
+                let late_repair =
+                    capture_glyph_scissors_after_replay_physical(&cleared, &pre_replay, 320, 200);
+                draw_captured_page_glyphs(&renderer, &mut pass, 320, 200, &pre_replay, &[]);
+                draw_captured_page_glyphs(&renderer, &mut pass, 320, 200, &late_repair, &[]);
             }
             let partial =
                 readback_texture(&gpu.device, &gpu.queue, &texture, 320, 200, encoder).unwrap();
@@ -1014,6 +1536,115 @@ fn trigger_capture_only_repaints_cleared_pixels() {
                 "{label} frame {frame}: retained glyph edges changed brightness"
             );
         }
+    }
+}
+
+#[test]
+#[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+fn trigger_hover_region_repair_matches_full_composite() {
+    let gpu = OffscreenGpu::new().expect("GPU adapter");
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        width: 320,
+        height: 200,
+        present_mode: wgpu::PresentMode::Fifo,
+        alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        view_formats: vec![],
+        desired_maximum_frame_latency: 1,
+    };
+    let pipeline = RuiPipeline::from_format(&gpu.device, config.format, 320, 200);
+    pipeline.update_resolution(&gpu.queue, 320, 200);
+    let make_target = || {
+        gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ColorPicker trigger hover repair"),
+            size: wgpu::Extent3d {
+                width: 320,
+                height: 200,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        })
+    };
+    let retained = make_target();
+    let reference = make_target();
+    let mut root = Element::new()
+        .w(320.0)
+        .h(200.0)
+        .child(
+            Element::new()
+                .absolute()
+                .left(18.25)
+                .top(18.25)
+                .text("ColorPicker"),
+        )
+        .child(
+            Element::new()
+                .absolute()
+                .left(18.25)
+                .top(46.25)
+                .w(114.0)
+                .h(32.0)
+                .rounded(6.0)
+                .bg([0.97, 0.97, 0.97, 1.0])
+                .child(
+                    Element::new()
+                        .absolute()
+                        .left(12.0)
+                        .top(7.0)
+                        .text("#3b82f6"),
+                ),
+        );
+    let mut tree = LayoutTree::new();
+    let initial = tree.build_and_layout(&mut root, 320.0, 200.0, [-1.0, -1.0]);
+    draw_latest_scene_for_test(&gpu, &config, &pipeline, &retained, &initial, None);
+    let key = paint_element_key(&root.children[1]);
+    for (frame, gray) in [0.91, 0.97, 0.91].into_iter().enumerate() {
+        root.children[1].style.bg_color = [gray, gray, gray, 1.0];
+        let scene = tree.build_and_layout(&mut root, 320.0, 200.0, [-1.0, -1.0]);
+        let region = PaintDirty {
+            key: 0,
+            bounds: [8.0, 8.0, 280.0, 140.0],
+            kind: PaintDirtyKind::Region,
+        };
+        let node = PaintDirty {
+            key,
+            bounds: root.children[1].layout_bounds,
+            kind: PaintDirtyKind::Node,
+        };
+        let scissors = region_scissors_keeping_stable_page_captions(
+            vec![region.bounds],
+            &region,
+            &[region, node],
+            &scene.node_paints,
+            &[(9, [180.0, 90.0, 80.0, 40.0])],
+            None,
+        );
+        for clip in scissors {
+            draw_latest_scene_for_test(&gpu, &config, &pipeline, &retained, &scene, Some(clip));
+        }
+        draw_latest_scene_for_test(&gpu, &config, &pipeline, &reference, &scene, None);
+        let read = |target| {
+            readback_texture(
+                &gpu.device,
+                &gpu.queue,
+                target,
+                320,
+                200,
+                gpu.device.create_command_encoder(&Default::default()),
+            )
+            .unwrap()
+        };
+        assert!(
+            images_match(&read(&retained), &read(&reference), 2),
+            "hover repair frame {frame} must match a fresh composite"
+        );
     }
 }
 

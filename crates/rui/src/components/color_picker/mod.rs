@@ -1692,6 +1692,7 @@ mod tests {
             &stamps,
             Some(panel),
             &texts,
+            1.0,
         );
         let hits = |r: [f32; 4], x: f32, y: f32| {
             x >= r[0] && x < r[0] + r[2] && y >= r[1] && y < r[1] + r[3]
@@ -1734,6 +1735,12 @@ mod tests {
         assert!(
             title_box[2] > 8.0 && panel[2] > 8.0,
             "scene did not lay out\n{report}"
+        );
+        assert!(
+            replay
+                .iter()
+                .all(|n| n.clip_bounds.is_none_or(|c| c[3] <= title_box[3] + 2.0)),
+            "caption replay must stay within the title line, not the full viewport\n{report}"
         );
         assert!(
             prefix_kept,
