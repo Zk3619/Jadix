@@ -1,6 +1,6 @@
 //! 每帧 chrome sync（边框 / 焦点环 / 文本 / caret / 多行高度与滚入视口）。
 
-use super::strings::{compose_text_edit_strings, TextEditStringsInput};
+use super::strings::{compose_text_edit_strings, finish_selection_draw, TextEditStringsInput};
 use crate::components::input::{
     effective_invalid, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
@@ -128,6 +128,9 @@ fn sync_one_text_edit_paint(
     let focused = use_signal(focus_key, String::new);
     let fid = focus_id_for_text_edit(&desc.base_id, desc.multiline);
     let is_focused = focused.peek() == fid && !desc.disabled;
+    if !is_focused && desc.selection_on_blur == crate::utils::text_field::SelectionOnBlur::Clear {
+        crate::utils::text_field::clear_blurred_selection(&desc.base_id);
+    }
 
     let mut committed = use_signal(&input_value_signal_key(&desc.base_id), String::new).peek();
     if let Some(updated) = pull_controlled_into_store(&desc.base_id, &committed, is_focused) {
@@ -409,7 +412,9 @@ fn sync_one_text_edit_paint(
             }
         }
 
-        let caret_draw = if is_focused {
+        let caret_draw = if is_focused
+            || desc.selection_on_blur == crate::utils::text_field::SelectionOnBlur::Retain
+        {
             let selection_bg = desc
                 .selection_bg
                 .unwrap_or_else(InputCaretDraw::default_selection_bg);
@@ -459,7 +464,8 @@ fn sync_one_text_edit_paint(
                 };
                 drop_caret = true;
             }
-            if !drop_caret
+            if is_focused
+                && !drop_caret
                 && text_el
                     .text_style
                     .input_caret
@@ -499,6 +505,8 @@ fn sync_one_text_edit_paint(
         } else {
             None
         };
+        let caret_draw =
+            finish_selection_draw(caret_draw, is_focused, desc.selection_on_blur, text_color);
 
         if text_el.text_style.input_caret != caret_draw {
             let old = text_el.text_style.input_caret.as_ref();
@@ -507,7 +515,10 @@ fn sync_one_text_edit_paint(
                 != new.and_then(|c| c.selection)
                 || old.map(|c| &c.extra_selections) != new.map(|c| &c.extra_selections)
                 || old.and_then(|c| c.overwrite_highlight)
-                    != new.and_then(|c| c.overwrite_highlight);
+                    != new.and_then(|c| c.overwrite_highlight)
+                || old.map(|c| c.selection_bg) != new.map(|c| c.selection_bg)
+                || old.and_then(|c| c.selection_foreground)
+                    != new.and_then(|c| c.selection_foreground);
             if selection_ink_changed
                 && (old.is_some_and(|c| {
                     c.selection.is_some()
@@ -533,7 +544,7 @@ fn sync_one_text_edit_paint(
             }
             // Blur drops `input_caret` before the post-sync dirty walk. Pushing
             // after the clear no-ops, PartialLoad keeps the I-beam (光标残留).
-            if caret_draw.is_none()
+            if (!is_focused || caret_draw.is_none())
                 && text_el.text_style.input_caret.is_some()
                 && crate::renderer::caret_blink_visible()
             {
@@ -550,7 +561,11 @@ fn sync_one_text_edit_paint(
             // Unfocused / empty placeholder: caret scroll is idle. Skip `text::prepare`
             // (gallery forms has ~10 on-screen Inputs — shaping every chrome frame caused
             // hitch while Textarea multiline never entered this path).
-            if !is_focused || show_placeholder {
+            if !is_focused
+                && desc.selection_on_blur == crate::utils::text_field::SelectionOnBlur::Retain
+            {
+                current
+            } else if !is_focused || show_placeholder {
                 if current.abs() > 0.05 {
                     sx_sig.set(0.0);
                 }
@@ -664,7 +679,7 @@ fn sync_one_text_edit_paint(
             let prepared =
                 crate::text::prepare(&display_text, desc.text_size_px, desc.font_weight, line_box);
             let ink_w = crate::text::intrinsic_width(&prepared).max(1.0);
-            let content_w = ink_w + crate::utils::text_field::TEXTAREA_SCROLLPORT_PAD_X;
+            let content_w = ink_w + crate::utils::text_field::TEXT_EDIT_CARET_W;
             let cur_w = crate::layout::dim_length_px(text_el.style.size.width).unwrap_or(-1.0);
             if (cur_w - content_w).abs() > 0.5 {
                 text_el.style.size.width = taffy::style::Dimension::length(content_w);

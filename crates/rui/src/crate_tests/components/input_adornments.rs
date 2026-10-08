@@ -235,6 +235,7 @@ fn string_bool_props_mount_adornments_like_rsx() {
         value: None,
         truncate: None,
         text_overflow: None,
+        selection_on_blur: None,
         undo_enabled: None,
         max_undo_entries: None,
         max_undo_memory: None,

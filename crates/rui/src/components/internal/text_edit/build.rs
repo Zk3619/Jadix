@@ -1,6 +1,6 @@
 //! 树装配：单行 hstack chrome / 多行 scroll + 可选 resize 斜线手柄。
 
-use super::strings::{compose_text_edit_strings, TextEditStringsInput};
+use super::strings::{compose_text_edit_strings, finish_selection_draw, TextEditStringsInput};
 use crate::components::input::{
     effective_invalid, input_adornment_button, input_caret_signal_key, input_clear_template_id,
     input_ime_anchor_signal_key, input_number_dec_template_id, input_number_inc_template_id,
@@ -57,6 +57,7 @@ pub(crate) struct TextEditBuildParams {
     pub selection_bg: Option<[u8; 4]>,
     /// Selected glyph color. `None` → [`InputCaretDraw::default_selection_foreground`].
     pub selection_foreground: Option<[u8; 4]>,
+    pub selection_on_blur: crate::utils::text_field::SelectionOnBlur,
     pub undo: crate::utils::text_edit_history::TextUndoConfig,
     /// L1 Input/Textarea: drop undo on unmount. L3 CodeEditor: `false` (session lives in
     /// [`crate::utils::document_registry::DocumentRegistry`] until `unregister`).
@@ -89,6 +90,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         caret_color: caret_color_override,
         selection_bg: selection_bg_override,
         selection_foreground: selection_foreground_override,
+        selection_on_blur,
         undo,
         drop_undo_on_unmount,
     } = params;
@@ -113,6 +115,15 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
 
     let fid = focus_id_for_text_edit(&field_id, multiline);
     let is_focused = focused.peek() == fid && !disabled;
+
+    // Clear on focus change even when the old field is offscreen. Silent writes
+    // avoid a root rebuild during event dispatch; lifecycle releases the effect.
+    crate::utils::text_field::install_selection_on_blur(
+        &field_id,
+        fid.clone(),
+        selection_on_blur,
+        disabled,
+    );
 
     let value_sig = use_signal(&input_value_signal_key(&field_id), String::new);
     let preedit_sig = use_signal(&input_preedit_signal_key(&field_id), String::new);
@@ -319,7 +330,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             // Grow with the longest hard line so overflow-x can scroll (never clip).
             let prepared = crate::text::prepare(&display_text, text_size_px, font_weight, line_box);
             let ink_w = crate::text::intrinsic_width(&prepared).max(1.0);
-            let content_w = ink_w + crate::utils::text_field::TEXTAREA_SCROLLPORT_PAD_X;
+            let content_w = ink_w + crate::utils::text_field::TEXT_EDIT_CARET_W;
             text_el = text_el.w(content_w).min_w("100%");
         }
     } else {
@@ -328,7 +339,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         text_el = text_el.h(line_box);
     }
 
-    if is_focused {
+    if is_focused || selection_on_blur == crate::utils::text_field::SelectionOnBlur::Retain {
         let selection_bg =
             selection_bg_override.unwrap_or_else(InputCaretDraw::default_selection_bg);
         let selection_foreground = selection_foreground_override
@@ -381,6 +392,12 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             selection_foreground: Some(selection_foreground),
         });
     }
+    text_el.text_style.input_caret = finish_selection_draw(
+        text_el.text_style.input_caret.take(),
+        is_focused,
+        selection_on_blur,
+        text_color,
+    );
 
     let text_region: Element = if multiline {
         // Absolute fill of chrome so the clip/scrollport always matches the field box.
@@ -398,9 +415,14 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .h("100%")
             .flex_col()
             .flex_items("start")
-            .px("0.75rem")
             .py("0.5rem")
             .child(text_el);
+        if wrap_mode.soft_wrap() {
+            region = region.px("0.75rem");
+        } else {
+            // Keep inline padding stationary while the text pans inside it.
+            region = region.left("0.75rem").right("0.75rem").w("auto");
+        }
         let ox = if wrap_mode.soft_wrap() {
             // Soft-wrap: no horizontal overflow of ink; hidden (not clip) on x is fine.
             "hidden"
@@ -416,11 +438,10 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     } else {
         hstack()
             .flex_grow(1.0)
-            .min_w("0")
+            .min_w(crate::utils::text_field::TEXT_EDIT_CARET_W)
             .items_center()
-            // Clip on the padded chrome, not this region: leaf-edge scissor cuts glyph
-            // bearings and the caret when panned to either end.
-            .overflow("visible")
+            .overflow_x("hidden")
+            .overflow_y("visible")
             .child(text_el)
             .into()
     };
@@ -671,6 +692,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         caret_color: caret_color_override,
         selection_bg: selection_bg_override,
         selection_foreground: selection_foreground_override,
+        selection_on_blur,
     };
 
     let id_for_click = fid.clone();

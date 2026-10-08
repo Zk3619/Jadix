@@ -578,6 +578,7 @@ pub struct InputBuilder {
     selection_background: Option<[u8; 4]>,
     /// Selected glyph color. `None` → theme token `selection-foreground`.
     selection_foreground: Option<[u8; 4]>,
+    selection_on_blur: crate::utils::text_field::SelectionOnBlur,
     /// 内嵌于 InputAdornment / Command：无自身边框与焦点环。
     plain_chrome: bool,
     chrome: SlotChrome,
@@ -601,6 +602,7 @@ pub fn Input(
     value: Option<Signal<String>>,
     truncate: bool,
     text_overflow: Option<String>,
+    selection_on_blur: Option<String>,
     undo_enabled: Option<bool>,
     max_undo_entries: Option<u32>,
     max_undo_memory: Option<u32>,
@@ -617,6 +619,9 @@ pub fn Input(
         .password_toggle(password_toggle)
         .number_steppers(number_steppers);
     let _ = (truncate, text_overflow);
+    if let Some(policy) = selection_on_blur {
+        builder = builder.selection_on_blur(policy);
+    }
     if let Some(t) = input_type {
         builder = builder.input_type(t);
     }
@@ -710,6 +715,7 @@ pub fn input(id: &str) -> InputBuilder {
         caret_color: None,
         selection_background: None,
         selection_foreground: None,
+        selection_on_blur: crate::utils::text_field::SelectionOnBlur::Clear,
         plain_chrome: false,
         chrome: SlotChrome::default(),
         #[cfg(feature = "text-undo")]
@@ -867,6 +873,15 @@ impl InputBuilder {
     /// `selection-background`).
     pub fn selection_foreground(mut self, color: impl crate::style::IntoTextColor) -> Self {
         self.selection_foreground = Some(color.into_text_color());
+        self
+    }
+
+    /// `clear` (default) clears on blur; `retain` keeps a muted selection.
+    pub fn selection_on_blur(
+        mut self,
+        policy: impl Into<crate::utils::text_field::SelectionOnBlur>,
+    ) -> Self {
+        self.selection_on_blur = policy.into();
         self
     }
     /// Focus-ring thickness in logical px (Hard spread / Soft blur). Overrides the theme default.
@@ -1103,6 +1118,7 @@ impl From<InputBuilder> for Element {
             caret_color: builder.caret_color,
             selection_bg: builder.selection_background,
             selection_foreground: builder.selection_foreground,
+            selection_on_blur: builder.selection_on_blur,
             single_line_container: Some(builder.container),
             multiline: false,
             rows: 1,

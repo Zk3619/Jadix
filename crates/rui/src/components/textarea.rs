@@ -30,7 +30,7 @@ use crate::core::tree::Element;
 use crate::utils::text_field::TextareaWrapMode;
 use rui_macros::component;
 
-pub use crate::utils::text_field::{textarea_focus_id, TEXTAREA_FOCUS_PREFIX};
+pub use crate::utils::text_field::{textarea_focus_id, SelectionOnBlur, TEXTAREA_FOCUS_PREFIX};
 
 const DEFAULT_TEXT_SIZE_PX: f32 = 0.875 * 16.0;
 const DEFAULT_FONT_WEIGHT: u16 = 400;
@@ -52,6 +52,7 @@ pub fn textarea(id: &str) -> TextareaBuilder {
         caret_color: None,
         selection_background: None,
         selection_foreground: None,
+        selection_on_blur: SelectionOnBlur::Clear,
         ring_width: None,
         ring_color: None,
         chrome: SlotChrome::default(),
@@ -74,6 +75,7 @@ pub struct TextareaBuilder {
     caret_color: Option<[u8; 4]>,
     selection_background: Option<[u8; 4]>,
     selection_foreground: Option<[u8; 4]>,
+    selection_on_blur: SelectionOnBlur,
     ring_width: Option<f32>,
     ring_color: Option<[f32; 4]>,
     chrome: SlotChrome,
@@ -178,6 +180,12 @@ impl TextareaBuilder {
         self
     }
 
+    /// `clear` (default) clears on blur; `retain` keeps a muted selection.
+    pub fn selection_on_blur(mut self, policy: impl Into<SelectionOnBlur>) -> Self {
+        self.selection_on_blur = policy.into();
+        self
+    }
+
     /// Focus-ring thickness in logical px. Overrides the theme default.
     pub fn ring_width(mut self, width: impl crate::core::tree::IntoF32) -> Self {
         self.ring_width = Some(width.into_f32().max(0.0));
@@ -207,6 +215,7 @@ impl From<TextareaBuilder> for Element {
             caret_color,
             selection_background,
             selection_foreground,
+            selection_on_blur,
             ring_width,
             ring_color,
             chrome,
@@ -253,6 +262,7 @@ impl From<TextareaBuilder> for Element {
             caret_color,
             selection_bg: selection_background,
             selection_foreground,
+            selection_on_blur,
             undo: {
                 #[cfg(feature = "text-undo")]
                 {
@@ -286,6 +296,7 @@ pub fn Textarea(
     resizable: Option<bool>,
     resize_max_h: Option<f32>,
     wrap: Option<String>,
+    selection_on_blur: Option<String>,
     value: Option<Signal<String>>,
     undo_enabled: Option<bool>,
     max_undo_entries: Option<u32>,
@@ -309,6 +320,9 @@ pub fn Textarea(
     }
     if let Some(w) = wrap {
         b = b.wrap(w);
+    }
+    if let Some(policy) = selection_on_blur {
+        b = b.selection_on_blur(policy);
     }
     if let Some(sig) = value {
         b = b.value_signal(sig);

@@ -23,6 +23,127 @@ fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
 }
 
 #[test]
+fn text_fields_clear_selection_on_blur_before_refocus() {
+    use crate::utils::text_field::{focus_id_for_text_edit, input_selection_signal_key};
+    let focus = use_signal("__rui_button_focus_id", String::new);
+    let (_owner, _) = crate::core::reactivity::create_root(|| {
+        for multiline in [false, true] {
+            let id = if multiline { "blur-ta" } else { "blur-input" };
+            focus.set(focus_id_for_text_edit(id, multiline));
+            let selection = use_signal(&input_selection_signal_key(id), || None::<(usize, usize)>);
+            let _el: Element = if multiline {
+                textarea(id).into()
+            } else {
+                input(id).into()
+            };
+            selection.set(Some((0, 4)));
+            focus.set("textarea:other".into());
+            assert_eq!(selection.peek(), None, "blur must clear {id} immediately");
+            focus.set(focus_id_for_text_edit(id, multiline));
+            assert_eq!(
+                selection.peek(),
+                None,
+                "refocus must not resurrect {id}'s selection"
+            );
+        }
+    });
+}
+
+#[test]
+fn changing_blur_policy_replaces_the_focus_subscription() {
+    let id = "blur-policy-rebuild";
+    let focus = use_signal("__rui_button_focus_id", String::new);
+    focus.set(focus_id_for_input(id));
+    let _owner = crate::core::reactivity::create_root(|| {
+        let _clear: Element = input(id).into();
+        let _retain: Element = input(id).selection_on_blur("retain").into();
+        let selection = use_signal(
+            &crate::utils::text_field::input_selection_signal_key(id),
+            || None::<(usize, usize)>,
+        );
+        selection.set(Some((0, 4)));
+        focus.set("input:policy-other".into());
+        assert_eq!(
+            selection.peek(),
+            Some((0, 4)),
+            "old clear subscription must be released"
+        );
+    });
+}
+
+#[test]
+fn text_fields_retain_muted_selection_and_scroll_on_blur() {
+    use crate::utils::text_field::{focus_id_for_text_edit, input_selection_signal_key};
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+    let focus = use_signal("__rui_button_focus_id", String::new);
+    for multiline in [false, true] {
+        let id = if multiline {
+            "retain-ta"
+        } else {
+            "retain-input"
+        };
+        use_signal(&input_value_signal_key(id), String::new).set("long selected text ".repeat(20));
+        focus.set(focus_id_for_text_edit(id, multiline));
+        let selection = use_signal(&input_selection_signal_key(id), || None::<(usize, usize)>);
+        selection.set(Some((0, 18)));
+        let mut el: Element = if multiline {
+            textarea(id).wrap("off").selection_on_blur("retain").into()
+        } else {
+            input(id).selection_on_blur("retain").into()
+        };
+        let mut tree = LayoutTree::new();
+        let _ = tree.build_and_layout(&mut el, 240.0, 120.0, [-1.0, -1.0]);
+        let mut impact = LayoutStatus::Clean;
+        sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+        let leaf = find_tid(&el, &input_text_template_id(id)).unwrap();
+        let active = leaf.text_style.input_caret.clone().unwrap();
+        let scroll_x = leaf.text_style.scroll_x;
+        focus.set("textarea:other-retain".into());
+        sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+        assert_eq!(selection.peek(), Some((0, 18)));
+        let leaf = find_tid(&el, &input_text_template_id(id)).unwrap();
+        let inactive = leaf.text_style.input_caret.as_ref().unwrap();
+        assert_eq!(inactive.selection, active.selection);
+        assert!(inactive.selection_bg[3] < active.selection_bg[3]);
+        assert_eq!(
+            inactive.selection_foreground,
+            Some(leaf.text_style.color_resolved())
+        );
+        assert_eq!(inactive.caret_color, Some([0; 4]));
+        assert_eq!(leaf.text_style.scroll_x, scroll_x);
+        let rebuilt: Element = if multiline {
+            textarea(id).wrap("off").selection_on_blur("retain").into()
+        } else {
+            input(id).selection_on_blur("retain").into()
+        };
+        assert_eq!(
+            find_tid(&rebuilt, &input_text_template_id(id))
+                .unwrap()
+                .text_style
+                .input_caret
+                .as_ref()
+                .unwrap()
+                .selection_bg,
+            inactive.selection_bg
+        );
+        focus.set(focus_id_for_text_edit(id, multiline));
+        sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+        assert_eq!(
+            find_tid(&el, &input_text_template_id(id))
+                .unwrap()
+                .text_style
+                .input_caret
+                .as_ref()
+                .unwrap()
+                .selection_bg,
+            active.selection_bg
+        );
+    }
+}
+
+#[test]
 fn focused_end_caret_input_prepares_once_per_paint() {
     let mut fs = font_loader::create_font_system();
     font_loader::apply_default_families(fs.db_mut());

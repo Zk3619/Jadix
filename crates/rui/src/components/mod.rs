@@ -371,6 +371,7 @@ pub use input::{
     input_selection_signal_key, input_type_signal_key, input_value_signal_key, Input, InputBuilder,
     InputProps, InputType, IME_ACTIVE_SIGNAL, INPUT_FOCUS_PREFIX,
 };
+pub use crate::utils::text_field::SelectionOnBlur;
 pub use input_adornment::{
     input_adornment, input_adornment_addon, input_adornment_text, InputAdornment,
     InputAdornmentAddon, InputAdornmentAddonBuilder, InputAdornmentAddonProps, InputAdornmentAlign,

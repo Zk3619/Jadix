@@ -56,6 +56,65 @@ pub use crate::text::visual_lines::WrapMode;
 /// Historical alias — prefer [`WrapMode`].
 pub type TextareaWrapMode = WrapMode;
 
+/// Selection behavior when an Input or Textarea loses focus.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SelectionOnBlur {
+    #[default]
+    Clear,
+    Retain,
+}
+
+impl From<&str> for SelectionOnBlur {
+    fn from(value: &str) -> Self {
+        if value.trim().eq_ignore_ascii_case("retain") {
+            Self::Retain
+        } else {
+            Self::Clear
+        }
+    }
+}
+
+impl From<String> for SelectionOnBlur {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+pub(crate) fn clear_blurred_selection(field_id: &str) {
+    use_signal(&input_selection_signal_key(field_id), || {
+        None::<(usize, usize)>
+    })
+    .set_silent(None);
+    extra_carets_signal(field_id).set_silent(Vec::new());
+    latest_caret_signal(field_id).set_silent(None);
+}
+
+pub(crate) fn install_selection_on_blur(
+    field_id: &str,
+    focus_id: String,
+    policy: SelectionOnBlur,
+    disabled: bool,
+) {
+    let slot = use_signal(&format!("__rui_selection_blur_effect_{field_id}"), || {
+        None::<crate::core::reactivity::EffectId>
+    });
+    if let Some(old) = slot.peek() {
+        crate::core::reactivity::dispose_effect(old);
+    }
+    let effect = if policy == SelectionOnBlur::Clear {
+        let field = field_id.to_string();
+        let focused = use_signal("__rui_button_focus_id", String::new);
+        Some(crate::core::reactivity::create_effect(move || {
+            if focused.get() != focus_id || disabled {
+                clear_blurred_selection(&field);
+            }
+        }))
+    } else {
+        None
+    };
+    slot.set_silent(effect);
+}
+
 /// 右下角 resize grip 的 `focus_id` 前缀。
 pub const TEXTAREA_RESIZE_FOCUS_PREFIX: &str = "textarea-resize:";
 
@@ -76,7 +135,7 @@ fn length_percentage_px(v: &taffy::style::LengthPercentage) -> f32 {
         .unwrap_or(0.0)
 }
 
-/// Horizontal padding inside the textarea scrollport (matches `.px("0.75rem")` on the region).
+/// Horizontal inset of the textarea text region.
 pub const TEXTAREA_SCROLLPORT_PAD_X: f32 = 0.75 * 16.0;
 
 /// Scrollport horizontal padding from style, falling back to layout gap text leaf ↔ region box.
@@ -106,12 +165,6 @@ pub fn textarea_scrollport_padding_x(
             pad_right = (region_right - child_right).max(0.0);
         }
         break;
-    }
-    if pad_left < 0.5 {
-        pad_left = TEXTAREA_SCROLLPORT_PAD_X;
-    }
-    if pad_right < 0.5 {
-        pad_right = TEXTAREA_SCROLLPORT_PAD_X;
     }
     (pad_left, pad_right)
 }
@@ -240,8 +293,8 @@ pub fn textarea_scroll_content_w(
         let layout_w = child.layout_bounds[2];
         let child_w = if layout_w > 0.5 { layout_w } else { style_w };
         if child_w > 0.0 {
-            // Leaf sits in the padded content box (`px` on the region). Trailing pad is
-            // already baked into wrap=off `leaf_w = ink + TEXTAREA_SCROLLPORT_PAD_X`.
+            // Wrap=off leaf contains ink + caret width; inline padding is outside
+            // the viewport, so neither end of it contributes to the scroll range.
             let origin_x = if child.layout_bounds[2] > 0.5 {
                 (child.layout_bounds[0] - region_abs_x).max(0.0)
             } else {
@@ -875,6 +928,13 @@ pub(crate) fn attach_text_edit_field_lifecycle(
             crate::utils::text_edit_history::reset(&fid);
         }
         unbind_controlled_value(&fid);
+        let blur_key = format!("__rui_selection_blur_effect_{fid}");
+        if let Some(effect) =
+            use_signal(&blur_key, || None::<crate::core::reactivity::EffectId>).peek()
+        {
+            crate::core::reactivity::dispose_effect(effect);
+        }
+        crate::core::reactivity::remove_named_signal(&blur_key);
         crate::core::reactivity::remove_named_signal(&live_key);
     })
 }
@@ -902,6 +962,7 @@ pub(crate) fn wipe_text_edit_named_slots(field_id: &str) {
         textarea_wrap_width_signal_key(field_id),
         textarea_wrap_mode_signal_key(field_id),
         format!("__rui_input_lifecycle_hook_{field_id}"),
+        format!("__rui_selection_blur_effect_{field_id}"),
     ];
     for key in keys {
         crate::core::reactivity::remove_named_signal(&key);

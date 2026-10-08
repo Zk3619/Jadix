@@ -129,6 +129,7 @@ impl From<CodeEditorBuilder> for Element {
             caret_color: None,
             selection_bg: None,
             selection_foreground: None,
+            selection_on_blur: crate::utils::text_field::SelectionOnBlur::Retain,
             undo: {
                 #[cfg(feature = "text-undo")]
                 {

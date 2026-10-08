@@ -2,6 +2,33 @@
 
 use crate::components::input::{map_byte_index_to_masked, map_byte_range_to_masked, mask_password};
 
+pub(super) fn finish_selection_draw(
+    draw: Option<crate::style::InputCaretDraw>,
+    focused: bool,
+    policy: crate::utils::text_field::SelectionOnBlur,
+    text_color: [u8; 4],
+) -> Option<crate::style::InputCaretDraw> {
+    if focused {
+        return draw;
+    }
+    let mut draw = draw?;
+    if policy != crate::utils::text_field::SelectionOnBlur::Retain
+        || (draw.selection.is_none() && draw.extra_selections.is_empty())
+    {
+        return None;
+    }
+    draw.selection_bg[3] = (draw.selection_bg[3] as f32 * 0.25).round() as u8;
+    draw.selection_foreground = Some(text_color);
+    draw.caret_color = Some([0; 4]);
+    draw.extra_carets.clear();
+    draw.overwrite_highlight = None;
+    draw.drop_caret = false;
+    draw.preedit_underline = None;
+    draw.extra_preedit_underlines.clear();
+    draw.preedit_ul.clear();
+    Some(draw)
+}
+
 /// Per-frame (or build-time) store signals for a text field.
 pub(crate) struct TextEditStringsInput<'a> {
     pub committed: &'a str,

@@ -834,11 +834,16 @@ fn closing_last_avatar_portal_restores_its_painted_halo() {
         vec![(0, visual)]
     );
     let sibling = (8, [500.0, 100.0, 120.0, 80.0]);
-    assert_eq!(
-        overlay_restore_leftover_coverage(&[(7, stamp), sibling], &[sibling], Some(visual)),
-        // Per-key restore must cover the same 16px halo as overlay encode.
-        // The remaining sibling must neither suppress this hole nor be restored.
-        vec![(7, [281.0, 59.6, 158.5, 64.75])]
+    let holes = overlay_restore_leftover_coverage(&[(7, stamp), sibling], &[sibling], Some(visual));
+    assert_eq!(holes.iter().map(|(k, _)| *k).collect::<Vec<_>>(), vec![7]);
+    let hole = holes[0].1;
+    assert!(
+        rect_contains_rect(hole, visual),
+        "closed stamp must restore its painted halo, not the 16px encode pad; hole={hole:?}"
+    );
+    assert!(
+        intersect_rects(hole, sibling.1).is_none(),
+        "remaining sibling must not be part of the closed stamp's hole; hole={hole:?}"
     );
 }
 

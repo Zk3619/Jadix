@@ -399,6 +399,8 @@ impl super::App {
 
                     let input_drag_fid = input_drag.as_ref().map(|(_, _, fid, _)| fid.clone());
                     if let Some((rest, caret_ix, focus_id, line_sel)) = input_drag {
+                        let was_focused =
+                            use_signal("__rui_button_focus_id", String::new).peek() == focus_id;
                         use_signal("__rui_button_focus_id", String::new).set(focus_id);
                         let ck = crate::components::input::input_caret_signal_key(&rest);
                         let sk = crate::components::input::input_selection_signal_key(&rest);
@@ -442,8 +444,15 @@ impl super::App {
                                 crate::renderer::restart_caret_blink();
                             }
                         } else {
-                            crate::utils::text_field::clear_extra_carets(&rest);
-                            let can_move = line_sel.is_none()
+                            let restore_selection = !was_focused
+                                && line_sel.is_none()
+                                && pre_empty
+                                && sel_range.is_some();
+                            if !restore_selection {
+                                crate::utils::text_field::clear_extra_carets(&rest);
+                            }
+                            let can_move = was_focused
+                                && line_sel.is_none()
                                 && pre_empty
                                 && !password
                                 && sel_range
@@ -491,6 +500,9 @@ impl super::App {
                                     lh,
                                 );
                                 self.input_drag_anchor = caret_ix;
+                            } else if restore_selection {
+                                self.input_drag_anchor = caret_ix;
+                                crate::renderer::restart_caret_blink();
                             } else if let Some((lo, hi)) = line_sel {
                                 use_signal(&ck, || None::<usize>).set(Some(hi));
                                 use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
@@ -503,8 +515,10 @@ impl super::App {
                                 self.input_drag_anchor = caret_ix;
                                 crate::renderer::restart_caret_blink();
                             }
-                            self.input_drag_rest = Some(rest);
-                            crate::utils::text_field::set_text_drag_select_active(true);
+                            self.input_drag_rest = (!restore_selection).then_some(rest);
+                            crate::utils::text_field::set_text_drag_select_active(
+                                !restore_selection,
+                            );
                         }
                         self.label_drag_key = None;
                         self.left_button_down = true;

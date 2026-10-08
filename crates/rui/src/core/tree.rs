@@ -543,6 +543,7 @@ pub struct TextEditPaintSync {
     pub selection_bg: Option<[u8; 4]>,
     /// Selected glyph color (CSS `::selection { color }`). `None` → theme token `selection-foreground`.
     pub selection_foreground: Option<[u8; 4]>,
+    pub selection_on_blur: crate::utils::text_field::SelectionOnBlur,
 }
 
 /// 兼容旧名：与 [`TextEditPaintSync`] 相同。

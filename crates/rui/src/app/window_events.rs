@@ -2428,6 +2428,10 @@ impl super::App {
 
             let input_drag_fid = input_drag.as_ref().map(|(_, _, fid, _)| fid.clone());
             if let Some((rest, caret_ix, focus_id, line_sel)) = input_drag {
+                let was_focused =
+                    crate::core::reactivity::use_signal("__rui_button_focus_id", String::new)
+                        .peek()
+                        == focus_id;
                 let is_textarea_drag =
                     focus_id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX);
                 // Hit-tested caret placement: ensure DOM focus even if `on_click` was consumed
@@ -2477,8 +2481,13 @@ impl super::App {
                         crate::renderer::restart_caret_blink();
                     }
                 } else {
-                    crate::utils::text_field::clear_extra_carets(&rest);
-                    let can_move = line_sel.is_none()
+                    let restore_selection =
+                        !was_focused && line_sel.is_none() && pre_empty && sel_range.is_some();
+                    if !restore_selection {
+                        crate::utils::text_field::clear_extra_carets(&rest);
+                    }
+                    let can_move = was_focused
+                        && line_sel.is_none()
                         && pre_empty
                         && !password
                         && sel_range.is_some_and(|(lo, hi)| caret_ix >= lo && caret_ix <= hi);
@@ -2524,6 +2533,11 @@ impl super::App {
                             lh,
                         );
                         self.input_drag_anchor = caret_ix;
+                    } else if restore_selection {
+                        // A retained blur selection is restored on the first
+                        // refocus click; do not collapse it into a caret.
+                        self.input_drag_anchor = caret_ix;
+                        crate::renderer::restart_caret_blink();
                     } else if let Some((lo, hi)) = line_sel {
                         crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(hi));
                         crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
@@ -2538,8 +2552,8 @@ impl super::App {
                         self.input_drag_anchor = caret_ix;
                         crate::renderer::restart_caret_blink();
                     }
-                    self.input_drag_rest = Some(rest.clone());
-                    crate::utils::text_field::set_text_drag_select_active(true);
+                    self.input_drag_rest = (!restore_selection).then(|| rest.clone());
+                    crate::utils::text_field::set_text_drag_select_active(!restore_selection);
                 }
                 if is_textarea_drag {
                     let scroll_rest = crate::utils::text_field::textarea_scroll_rest(&rest);

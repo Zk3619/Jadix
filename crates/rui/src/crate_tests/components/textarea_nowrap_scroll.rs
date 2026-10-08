@@ -77,6 +77,12 @@ fn wrap_off_textarea_reports_horizontal_max_scroll_from_leaf_width() {
         content[0],
         bounds[2]
     );
+    let field = &root.children[0];
+    assert!(bounds[0] >= field.layout_bounds[0] + TEXTAREA_SCROLLPORT_PAD_X);
+    assert!(
+        bounds[0] + bounds[2]
+            <= field.layout_bounds[0] + field.layout_bounds[2] - TEXTAREA_SCROLLPORT_PAD_X
+    );
 }
 
 #[test]
@@ -118,7 +124,7 @@ fn wrap_off_paint_sync_caps_caret_scroll_at_current_line_end() {
     sync_text_edit_paint_subtree(&mut root.children[0], &mut tree, &mut impact);
 
     let sx = use_signal(&scroll_offset_x_signal_key(&rest), || 0.0_f32).peek();
-    let pad_left = TEXTAREA_SCROLLPORT_PAD_X;
+    let pad_left = 0.0;
     let line_end_x = crate::text::measure_prefix_advance(long, size, 400, lh);
     let cap = pad_left + line_end_x;
     let want = ensure_caret_visible_scroll_x(cap, cap, vw, 0.0);
@@ -175,7 +181,7 @@ fn wrap_off_textarea_h_bar_must_not_reserve_y_gutter_when_y_fits() {
                 content[1],
                 bounds[3]
             );
-            let field_right = bounds[0] + bounds[2];
+            let field_right = root.children[0].layout_bounds[0] + root.children[0].layout_bounds[2];
             let assert_h_at_edge = |root: &Element, label: &str| {
                 let h = find_track_bounds(root, "x").expect("h track");
                 let h_right = h[0] + h[2];
