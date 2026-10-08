@@ -17,6 +17,9 @@ use crate::core::tree::{pointer_events_targets_children, Element};
 
 use super::tree_hit;
 
+/// Composite option boxes forward activation without becoming accessible labels.
+pub(crate) const ATTR_ACTIVATE_FOR: &str = "data-rui-activate-for";
+
 thread_local! {
     static LAST_POINTER_CLIENT: Cell<[f32; 2]> = const { Cell::new([-1.0, -1.0]) };
     static LAST_HOVER_TARGET_BOUNDS: Cell<[f32; 4]> = const { Cell::new([0.0; 4]) };
@@ -264,6 +267,7 @@ impl HitPathEntry {
             label_for: el
                 .attrs
                 .get(crate::components::label::ATTR_LABEL_FOR)
+                .or_else(|| el.attrs.get(ATTR_ACTIVATE_FOR))
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
             on_mousedown: el.on_mousedown.clone(),

@@ -171,6 +171,20 @@ fn apply_label_for(el: &mut Element, for_id: &str) {
     if for_id.is_empty() {
         return;
     }
+    // A text-only label owns its caption, not the width of a longer sibling
+    // description. Container labels and explicitly authored widths remain boxes.
+    if el.children.is_empty()
+        && el.text.as_deref().is_some_and(|text| !text.is_empty())
+        && el.style.size.width == taffy::style::Dimension::auto()
+        && !el.style.unit_specs.iter().any(|(slot, _)| {
+            matches!(
+                slot,
+                crate::style::UnitSlot::Width | crate::style::UnitSlot::InlineSize
+            )
+        })
+    {
+        *el = std::mem::take(el).w("fit-content");
+    }
     el.attrs
         .insert(ATTR_LABEL_FOR.to_string(), for_id.to_string());
     if el
@@ -673,6 +687,36 @@ mod tests {
             el.attrs.get("accesskit_id").map(|s| s.as_str()),
             Some("lbl:for:input:email")
         );
+    }
+
+    #[test]
+    fn linked_label_explicit_width_and_container_keep_their_click_box() {
+        for mut el in [
+            Element::from(label("").text("Title").w(240.0).for_target("terms")),
+            Element::from(
+                label("")
+                    .child(
+                        Element::new()
+                            .flex_col()
+                            .child(Element::new().text("Title"))
+                            .child(Element::new().text("Description")),
+                    )
+                    .for_target("terms"),
+            ),
+        ] {
+            let mut root = Element::new()
+                .flex_col()
+                .w(240.0)
+                .h(100.0)
+                .child(std::mem::take(&mut el));
+            crate::layout::layout_tree::LayoutTree::new().build_and_layout(
+                &mut root,
+                240.0,
+                100.0,
+                [-1.0, -1.0],
+            );
+            assert_eq!(root.children[0].layout_bounds[2], 240.0);
+        }
     }
 
     #[test]
