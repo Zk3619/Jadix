@@ -45,3 +45,12 @@ development-docs/
 # CI definitions (ignored by the blanket `*` above without this)
 !.github/
 !.github/**
+
+# Re-exclude temps that `!crates/**` / `!examples/**` would otherwise track.
+**/.tmp/
+**/*.log
+**/*.tmp
+**/*.cache
+**/tmp/
+**/tmp_*/
+**/*.diff
