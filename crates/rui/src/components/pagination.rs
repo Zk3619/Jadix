@@ -1800,6 +1800,172 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "i18n")]
+    fn default_navigation_and_jumper_labels_follow_locale_and_overlays() {
+        crate::i18n::with_lock(|| {
+            let (_handle, ()) = crate::core::reactivity::create_root(|| {
+                for (locale, previous, next, go) in [
+                    ("en-US", "Previous", "Next", "Go"),
+                    ("zh-CN", "上一页", "下一页", "前往"),
+                ] {
+                    crate::i18n::set_locale(locale);
+                    let defaults = pagination("pg-locale");
+                    assert_eq!(defaults.previous_text, previous);
+                    assert_eq!(defaults.next_text, next);
+                    assert_eq!(defaults.jumper_button_text, go);
+                    let prev = PaginationPrevious(PaginationPreviousProps {
+                        id: "pg-locale-prev".into(),
+                        ..Default::default()
+                    });
+                    let next_el = PaginationNext(PaginationNextProps {
+                        id: "pg-locale-next".into(),
+                        ..Default::default()
+                    });
+                    assert!(
+                        crate::core::tree::find_in_tree(&prev, |el| el.text.as_deref()
+                            == Some(previous))
+                        .is_some()
+                    );
+                    assert!(
+                        crate::core::tree::find_in_tree(&next_el, |el| el.text.as_deref()
+                            == Some(next))
+                        .is_some()
+                    );
+                }
+                crate::i18n::add_toml(
+                    "zh-CN",
+                    "[rui.pagination]\nprevious = '往前'\nnext = '往后'\ngo = '跳转'",
+                )
+                .unwrap();
+                let defaults = pagination("pg-overlay");
+                assert_eq!(defaults.previous_text, "往前");
+                assert_eq!(defaults.next_text, "往后");
+                assert_eq!(defaults.jumper_button_text, "跳转");
+                let custom = PaginationPrevious(PaginationPreviousProps {
+                    text: Some("Custom".into()),
+                    ..Default::default()
+                });
+                assert!(
+                    crate::core::tree::find_in_tree(&custom, |el| el.text.as_deref()
+                        == Some("Custom"))
+                    .is_some()
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn navigation_hover_does_not_restart_when_page_changes() {
+        use crate::core::reactivity::create_root;
+        use crate::style::sync_class_variants_subtree;
+        use crate::style::{
+            set_css_transition_max_step_ms, set_css_transition_timeline_ms,
+            set_css_transition_virtual_timeline,
+        };
+
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_max_step_ms(Some(1000.0));
+        let (_handle, ()) = create_root(|| {
+            let page = use_signal("pagination_hover_page", || 5usize);
+            let paint = || {
+                paint_builder_content(
+                    "pg-hover",
+                    page.peek(),
+                    12,
+                    PaginationRangeOpts::new(1, 1, 1),
+                    "上一页",
+                    "下一页",
+                    false,
+                    None,
+                    page,
+                    None,
+                    &PaginationPartChrome::default(),
+                )
+            };
+            for slot in [SLOT_PREV, SLOT_NEXT] {
+                set_css_transition_timeline_ms(0.0);
+                let mut old = paint();
+                let mut tree = LayoutTree::new();
+                tree.build_and_layout(&mut old, 800.0, 120.0, [-1.0, -1.0]);
+                let find = |root: &Element| {
+                    crate::core::tree::find_in_tree(root, |el| {
+                        el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot)
+                    })
+                    .expect("navigation button")
+                    .layout_bounds
+                };
+                let [x, y, w, h] = find(&old);
+                let mouse = [x + w * 0.5, y + h * 0.5];
+                let mut impact = LayoutStatus::Clean;
+                sync_class_variants_subtree(
+                    &mut old,
+                    [-1.0, -1.0],
+                    "",
+                    false,
+                    800.0,
+                    120.0,
+                    &mut tree,
+                    &mut impact,
+                );
+                let button = crate::core::tree::find_in_tree(&old, |el| {
+                    el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot)
+                })
+                .unwrap();
+                button.on_hover.as_ref().unwrap().borrow_mut()(true);
+                sync_class_variants_subtree(
+                    &mut old,
+                    mouse,
+                    "",
+                    false,
+                    800.0,
+                    120.0,
+                    &mut tree,
+                    &mut impact,
+                );
+                set_css_transition_timeline_ms(200.0);
+                sync_class_variants_subtree(
+                    &mut old,
+                    mouse,
+                    "",
+                    false,
+                    800.0,
+                    120.0,
+                    &mut tree,
+                    &mut impact,
+                );
+                let button = crate::core::tree::find_in_tree(&old, |el| {
+                    el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot)
+                })
+                .unwrap();
+                let hovered_bg = button.style.bg_color;
+                assert!(hovered_bg[3] > 0.9, "hover must settle before clicking");
+                button.on_click.as_ref().unwrap().borrow_mut()();
+                let mut next = paint();
+                let status = crate::app::test_support::reconcile_elements(&mut next, &mut old);
+                assert_eq!(
+                    status,
+                    LayoutStatus::StructureChanged,
+                    "paging replaces page identities and must exercise the rebuild path"
+                );
+                tree.build_and_layout(&mut next, 800.0, 120.0, mouse);
+                crate::app::tree_hit::sync_pointer_chrome_after_layout(
+                    &mut next, &mut tree, mouse, 800.0, 120.0,
+                );
+                let button = crate::core::tree::find_in_tree(&next, |el| {
+                    el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot)
+                })
+                .unwrap();
+                assert_eq!(
+                    button.style.bg_color, hovered_bg,
+                    "{slot}: unchanged hover must survive the first frame after paging"
+                );
+            }
+        });
+        set_css_transition_max_step_ms(None);
+        set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
     fn builder_content_wires_prev_next_and_updates_page() {
         let page = use_signal("pagination_builder_nav_page", || 5usize);
         let el = paint_builder_content(

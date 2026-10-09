@@ -5234,10 +5234,9 @@ impl AppState {
             matches!(sync_impact, crate::core::tree::LayoutStatus::LayoutChanged)
                 && sync_collect.portal_layout_changed
                 && !sync_collect.page_layout_changed;
-        // Class-variant `:hover` uses last-frame layout_bounds. After a **page**
-        // StructureChanged (or while the Inspector dock is about to insert/remove),
-        // those bounds still cover the pre-rebuild geometry — dozens of nodes falsely
-        // report hovered and flash together.
+        // Class-variant `:hover` uses layout_bounds. After a page structure change
+        // or a pending Inspector rebuild, wait for fresh geometry before hover sync.
+        // A sentinel pointer here caused a leave/enter flash on every pagination click.
         // Overlay-only StructureChanged (bubble +N / popover hoist) must NOT do this:
         // a sentinel mouse forces every card to leave, unions paint damage to the
         // viewport, and FullClears even after skip_full_clear_for_portal_structure.
@@ -5250,7 +5249,7 @@ impl AppState {
         {
             self.portal_membership_dirty = true;
         }
-        let variant_mouse = {
+        let defer_pointer_chrome = {
             let structure_dirty = super::damage::page_structure_rebuild(
                 matches!(
                     pre_chrome_layout_status,
@@ -5259,7 +5258,7 @@ impl AppState {
                 self.portal_membership_dirty,
                 self.page_geom_dirty,
             );
-            // Only suppress class-hover while the dock is open *and* waiting for sync.
+            // Defer class-hover while the dock is open and waiting for sync.
             // `is_enabled()` alone (feature on, panel closed) must not pin the mouse to a
             // sentinel — that interacted badly with layout-page CSS transitions.
             #[cfg(feature = "devtools")]
@@ -5269,38 +5268,42 @@ impl AppState {
                     != crate::app::devtools::DevToolsState::last_sync_gen();
             #[cfg(not(feature = "devtools"))]
             let panel_pending = false;
-            if structure_dirty || panel_pending {
-                [-1.0e9_f32, -1.0e9_f32]
-            } else {
-                mouse_pos
-            }
+            structure_dirty || panel_pending
         };
+        let variant_mouse = mouse_pos;
         // `on_hover` / `{id}_hover` must leave (and enter) with CSS `:hover` on this
         // chrome frame — same `variant_mouse`, before Button / class paint. Post-render
         // reconcile is then an idempotent Rc-refresh after layout.
-        crate::app::tree_hit::apply_pointer_hover_reconcile(
-            &self.root_element,
-            variant_mouse[0],
-            variant_mouse[1],
-            scroll_paint_only || variant_mouse[0] < 0.0,
-        );
-        // Button / SidebarMenuButton hover chrome: always sync — `{id}_hover` was just
-        // reconciled, including during `scroll_paint_only` (main-pane smooth scroll under
-        // a still pointer on the rail). Gating sidebar here left enter/leave signals live
-        // but never wrote `sidebar-accent`, so nav items looked dead until scroll settled.
-        crate::components::button::sync_button_hover_paint_subtree(
-            &mut self.root_element,
-            &mut self.layout_tree,
-            &mut sync_impact,
-            viewport_w,
-            viewport_h,
-            [0.0, 0.0],
-        );
-        crate::components::sidebar::sync_sidebar_menu_button_paint_subtree(
-            &mut self.root_element,
-            &mut self.layout_tree,
-            &mut sync_impact,
-        );
+        if !defer_pointer_chrome {
+            crate::app::tree_hit::apply_pointer_hover_reconcile(
+                &self.root_element,
+                variant_mouse[0],
+                variant_mouse[1],
+                scroll_paint_only || variant_mouse[0] < 0.0,
+            );
+            // Button / SidebarMenuButton hover chrome: always sync — `{id}_hover` was just
+            // reconciled, including during `scroll_paint_only` (main-pane smooth scroll under
+            // a still pointer on the rail). Gating sidebar here left enter/leave signals live
+            // but never wrote `sidebar-accent`, so nav items looked dead until scroll settled.
+            crate::components::button::sync_button_hover_paint_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+                viewport_w,
+                viewport_h,
+                [0.0, 0.0],
+            );
+            crate::components::sidebar::sync_sidebar_menu_button_paint_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+            crate::components::tree_view::sync_tree_view_hover_paint_subtree(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                &mut sync_impact,
+            );
+        }
         if !scroll_paint_only {
             crate::components::command::sync_command_item_paint_subtree(
                 &mut self.root_element,
@@ -5361,7 +5364,7 @@ impl AppState {
                 &mut sync_impact,
             );
         }
-        {
+        if !defer_pointer_chrome {
             let focused =
                 crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
             let dark = crate::style::is_dark_theme();
@@ -5772,6 +5775,82 @@ impl AppState {
             )
         };
         acc_layout_prof(&render_result.prof);
+        if crate::utils::collapse_panel::seed_measured_collapse_panels(
+            &mut self.root_element,
+            &mut self.layout_tree,
+        ) {
+            render_result = self.layout_tree.build_and_layout_fast_ex(
+                &mut self.root_element,
+                logical_w,
+                logical_h,
+                mouse_pos,
+                false,
+                scrollbar_overlay_collect,
+                None,
+            );
+            acc_layout_prof(&render_result.prof);
+            self.damage_nodes
+                .extend(super::damage::take_frame_paint_nodes());
+        }
+        if defer_pointer_chrome {
+            let hover_impact = crate::app::tree_hit::sync_pointer_chrome_after_layout(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                mouse_pos,
+                logical_w,
+                logical_h,
+            );
+            // The first collect establishes hit geometry. Recollect only when hover
+            // changed paint; CSS geometry variants also need a fresh layout pass.
+            match hover_impact {
+                LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged => {
+                    render_result = self.layout_tree.build_and_layout_fast_ex(
+                        &mut self.root_element,
+                        logical_w,
+                        logical_h,
+                        mouse_pos,
+                        false,
+                        scrollbar_overlay_collect,
+                        None,
+                    );
+                    acc_layout_prof(&render_result.prof);
+                }
+                LayoutStatus::StyleChanged => {
+                    render_result = self.layout_tree.collect_animation_frame(
+                        &mut self.root_element,
+                        mouse_pos,
+                        scrollbar_overlay_collect,
+                    );
+                    acc_layout_prof(&render_result.prof);
+                }
+                LayoutStatus::Clean => {}
+            }
+            self.damage_nodes
+                .extend(super::damage::take_frame_paint_nodes());
+        }
+        crate::utils::collapse_panel::flush_collapse_layout_damage(&mut self.root_element);
+        self.damage_nodes.extend(super::damage::take_frame_paint_nodes());
+        // Collapse height animations move rows under a stationary pointer. Reconcile
+        // component hover against the final layout, rather than painting yesterday's hit.
+        if defer_pointer_chrome || !scroll_only {
+            let pointer_impact = crate::app::tree_hit::sync_pointer_component_chrome_after_layout(
+                &mut self.root_element,
+                &mut self.layout_tree,
+                mouse_pos,
+                logical_w,
+                logical_h,
+            );
+            if pointer_impact != LayoutStatus::Clean {
+                render_result = self.layout_tree.collect_animation_frame(
+                    &mut self.root_element,
+                    mouse_pos,
+                    scrollbar_overlay_collect,
+                );
+                acc_layout_prof(&render_result.prof);
+                self.damage_nodes
+                    .extend(super::damage::take_frame_paint_nodes());
+            }
+        }
         if !scroll_paint_only {
             let mut overflow_impact = crate::core::tree::LayoutStatus::Clean;
             crate::components::bubble::sync_bubble_reactions_subtree(
@@ -6297,14 +6376,15 @@ impl AppState {
             &self.last_overlay_stamps,
         );
         let region_present =
-            super::damage::portal_composite_damage(&self.damage_nodes, self.overlay_occupied).is_some()
-            || self.damage_nodes.iter().any(|d| {
-                matches!(
-                    d.kind,
-                    super::damage::PaintDirtyKind::Region
-                        | super::damage::PaintDirtyKind::OverlayRestore
-                )
-            });
+            super::damage::portal_composite_damage(&self.damage_nodes, self.overlay_occupied)
+                .is_some()
+                || self.damage_nodes.iter().any(|d| {
+                    matches!(
+                        d.kind,
+                        super::damage::PaintDirtyKind::Region
+                            | super::damage::PaintDirtyKind::OverlayRestore
+                    )
+                });
         // A source-over clear quad cannot replace transparent destination alpha.
         // Preserve compositor transparency with a real attachment Clear.
         if region_present && self.compositor_alpha {

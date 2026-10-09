@@ -422,6 +422,8 @@ pub fn detect_script_needs(text: &str) -> ScriptNeeds {
                 | 0x4E00..=0x9FFF
                 | 0xF900..=0xFAFF
                 | 0xFF00..=0xFFEF
+                // Emoji object placeholders are shaped with a hidden 1em CJK glyph.
+                | 0xFFFC
                 | 0x20000..=0x2CEAF
         ) {
             needs.cjk = true;

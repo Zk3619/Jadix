@@ -419,6 +419,11 @@ impl SecondaryWindowState {
             logical_h,
             [0.0, 0.0],
         );
+        crate::components::tree_view::sync_tree_view_hover_paint_subtree(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            &mut sync_impact,
+        );
 
         let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
 
@@ -482,7 +487,7 @@ impl SecondaryWindowState {
                 ),
         );
 
-        let render_result = if use_full {
+        let mut render_result = if use_full {
             self.layout_tree.build_and_layout(
                 &mut self.root_element,
                 logical_w,
@@ -500,6 +505,31 @@ impl SecondaryWindowState {
             )
         };
 
+        if crate::utils::collapse_panel::seed_measured_collapse_panels(
+            &mut self.root_element,
+            &mut self.layout_tree,
+        ) {
+            render_result = self.layout_tree.build_and_layout_fast(
+                &mut self.root_element,
+                logical_w,
+                logical_h,
+                mouse_pos,
+                false,
+                false,
+            );
+        }
+        let pointer_impact = crate::app::tree_hit::sync_pointer_component_chrome_after_layout(
+            &mut self.root_element,
+            &mut self.layout_tree,
+            mouse_pos,
+            logical_w,
+            logical_h,
+        );
+        if pointer_impact != LayoutStatus::Clean {
+            render_result =
+                self.layout_tree
+                    .collect_animation_frame(&mut self.root_element, mouse_pos, false);
+        }
         self.has_input_caret = render_result
             .text_nodes
             .iter()

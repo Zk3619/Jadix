@@ -33,7 +33,7 @@ enum TextSegment {
     Emoji { text: String, start: usize },
 }
 
-/// CJK `一` slot — ~1em advance; must not be whitespace (see [`emoji_layout::EMOJI_LAYOUT_SLOT`]).
+/// Embedded object slot — ~1em advance; must not be whitespace (see [`emoji_layout::EMOJI_LAYOUT_SLOT`]).
 const EMOJI_LAYOUT_SLOT: char = emoji_layout::EMOJI_LAYOUT_SLOT;
 
 /// Replace each emoji grapheme with a single-width slot so layout advance matches the
@@ -97,7 +97,15 @@ fn buffer_joined_text(buffer: &glyphon::Buffer) -> String {
         if i > 0 {
             out.push('\n');
         }
-        out.push_str(line.text());
+        for (byte, ch) in line.text().char_indices() {
+            out.push(
+                if line.attrs_list().get_span(byte).metadata == emoji_layout::EMOJI_SLOT_METADATA {
+                    EMOJI_LAYOUT_SLOT
+                } else {
+                    ch
+                },
+            );
+        }
     }
     out
 }
@@ -570,7 +578,7 @@ fn correct_bidi_ink_spill(
             .unwrap_or_else(|| glyphon::AttrsOwned::new(&glyphon::Attrs::new()));
         let aligns: Vec<_> = buffer.lines.iter().map(|l| l.align()).collect();
         buffer.set_wrap(glyphon::Wrap::None);
-        // fit.shape_text may already contain emoji slots (`一`) — keep them invisible.
+        // fit.shape_text may already contain emoji object slots — keep them invisible.
         set_shaped_buffer_text(
             buffer,
             font_system,
@@ -1412,8 +1420,8 @@ fn set_shaped_buffer_text(
     selection: &[((usize, usize), [u8; 4])],
 ) {
     // UAX#14 fit.shape_text / emoji-only chips may already contain EMOJI_LAYOUT_SLOT
-    // (`一`). That string has no emoji codepoints, so `hide_emoji_font_glyphs` is often
-    // false — still must paint slots invisible or the ideograph stroke shows as a
+    // (U+FFFC). That string has no emoji codepoints, so `hide_emoji_font_glyphs` is often
+    // false — still must paint slots invisible or the shaping glyph shows as a
     // horizontal line through Twemoji quads (gallery bubble reactions).
     if text.contains(EMOJI_LAYOUT_SLOT) {
         emoji_layout::set_buffer_with_emoji_slots_colored(
@@ -4577,7 +4585,7 @@ mod shape_cache_key_tests {
         let layout = plan_emoji_layout_text("👍");
         assert!(
             layout.contains(EMOJI_LAYOUT_SLOT),
-            "chip layout is the CJK slot, not the original emoji"
+            "chip layout is the object slot, not the original emoji"
         );
         super::set_shaped_buffer_text(
             &mut buffer,

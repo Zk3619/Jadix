@@ -246,6 +246,12 @@ impl super::App {
 
     /// After 500ms hold without >8px move, fire the same path as right-click once.
     pub(super) fn try_fire_long_press(&mut self) {
+        // Drag activation can precede the long-press movement threshold. A slow
+        // live drag must not synthesize a context click at the press position.
+        if crate::utils::drag::is_active() {
+            self.long_press = None;
+            return;
+        }
         let Some(lp) = self.long_press.as_mut() else {
             return;
         };

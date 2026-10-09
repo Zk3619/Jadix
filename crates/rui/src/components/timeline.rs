@@ -24,10 +24,10 @@
 //! // A · RSX / tags (camelCase: activeItem, activeItemSignal, defaultActive,
 //! // bulletSize, lineSize)
 //! ui! {
-//!     <Timeline activeItem={step} bulletSize={20} lineSize={2}>
+//!     <Timeline activeItem={step} bulletSize={32} lineSize={2}>
 //!         <TimelineItem>
 //!             <TimelineItemBullet>
-//!                 <Icon name="shopping-cart" size="10px" />
+//!                 <Icon name="shopping-cart" />
 //!             </TimelineItemBullet>
 //!             <TimelineItemTitle>"Order placed"</TimelineItemTitle>
 //!             <TimelineItemDescription>"We received your order."</TimelineItemDescription>
@@ -46,7 +46,7 @@
 //! Element::from(
 //!     timeline()
 //!         .active_item_signal(step)
-//!         .bullet_size(20.0)
+//!         .bullet_size(32.0)
 //!         .line_size(2.0)
 //!         .item(("Order placed", "We received your order."))
 //!         .item(
@@ -99,17 +99,17 @@ const SLOT_TITLE: &str = "timeline-item-title";
 const SLOT_DESCRIPTION: &str = "timeline-item-description";
 const SLOT_SEPARATOR: &str = "timeline-item-separator";
 
-/// Default disc diameter (solid-ui uses 16; RUI bumps for legible Lucide glyphs).
-const DEFAULT_BULLET_PX: f32 = 20.0;
+/// Default disc diameter, with room for a legible Lucide glyph and inset.
+const DEFAULT_BULLET_PX: f32 = 32.0;
 /// solid-ui default `lineSize`.
 const DEFAULT_LINE_PX: f32 = 2.0;
-/// Icon inside the disc as a fraction of [`DEFAULT_BULLET_PX`] (≈14px at default).
-const BULLET_GLYPH_RATIO: f32 = 0.7;
+/// Icon inside the disc as a fraction of its diameter (≈21px at default).
+const BULLET_GLYPH_RATIO: f32 = 0.65;
 const BULLET_GLYPH_MIN_PX: f32 = 10.0;
 /// `pb-8` between items.
 const ITEM_PB: &str = "2rem";
-/// Gap from disc to copy (`pl-8` minus half a default disc ≈ 1rem).
-const BODY_GAP: &str = "1rem";
+/// Keep the larger disc close enough to its event copy to read as one row.
+const BODY_GAP: &str = "0.75rem";
 const TITLE_SIZE_PX: f32 = 16.0;
 const TITLE_WEIGHT: u16 = 600;
 const DESC_SIZE_PX: f32 = 14.0;
@@ -380,29 +380,32 @@ fn paint_item(
         line_size,
     ));
 
-    let mut rail = vstack().w(bullet_size).items_center().flex_shrink(0.0);
-    rail = rail.child(disc);
+    // Equal flexible segments center the disc against the whole text block.
+    // The fixed tail matches the body's bottom padding, keeping row spacing
+    // out of the centering calculation and connectors continuous when text wraps.
+    let before =
+        paint_separator(bullet_on, line_size).opacity(if spec.index == 0 { 0.0 } else { 1.0 });
+    let after = paint_separator(line_on, line_size).opacity(if is_last { 0.0 } else { 1.0 });
+    let mut rail = vstack()
+        .w(bullet_size)
+        .items_center()
+        .flex_shrink(0.0)
+        .child(before)
+        .child(disc)
+        .child(after);
     if !is_last {
-        let mut line: Element = r#box()
-            .w(line_size)
-            .flex_grow(1.0)
-            .min_h("1rem")
-            .rounded_full()
-            .into();
-        line = line.bg(if line_on {
-            parse_color("primary")
-        } else {
-            parse_color("border")
-        });
-        line.set_attr(ATTR_SLOT, SLOT_SEPARATOR);
-        line.set_attr(ATTR_STATE, if line_on { "active" } else { "inactive" });
-        rail = rail.child(line);
+        rail = rail.child(
+            paint_separator(line_on, line_size)
+                .h(ITEM_PB)
+                .flex_grow(0.0),
+        );
     }
 
     let mut body = vstack()
-        .gap("0.25rem")
+        .gap("0.5rem")
         .min_w(0.0)
         .flex_grow(1.0)
+        .justify_center()
         .pb(if is_last { "0" } else { ITEM_PB });
     body = body.child(spec.title_slot.apply(paint_title(&spec.title)));
     if !spec.description.trim().is_empty() {
@@ -424,6 +427,21 @@ fn paint_item(
     el.set_attr(ATTR_STATE, if bullet_on { "active" } else { "inactive" });
     el = el.accesskit_role("listitem");
     spec.chrome.apply(el)
+}
+
+fn paint_separator(active: bool, line_size: f32) -> Element {
+    let mut line: Element = r#box()
+        .w(line_size)
+        .h(0.0)
+        .min_h(0.0)
+        .flex_grow(1.0)
+        .flex_shrink(0.0)
+        .into();
+    line = line.bg(parse_color(if active { "primary" } else { "border" }));
+    line.set_attr(ATTR_SLOT, SLOT_SEPARATOR);
+    line.set_attr(ATTR_STATE, if active { "active" } else { "inactive" });
+    line.set_attr("aria-hidden", "true");
+    line
 }
 
 fn paint_bullet(icon: Option<&str>, active: bool, bullet_size: f32, line_size: f32) -> Element {
@@ -454,7 +472,7 @@ fn paint_bullet(icon: Option<&str>, active: bool, bullet_size: f32, line_size: f
             let color = if active {
                 parse_text_color("primary")
             } else {
-                parse_text_color("muted-foreground")
+                parse_text_color("border")
             };
             let icon_el = with_icon_size(build_icon_named(name), glyph_px)
                 .text_color(color)
@@ -479,12 +497,7 @@ fn paint_title(text: &str) -> Element {
             ..Default::default()
         },
     );
-    let mut wrap: Element = vstack()
-        .w("100%")
-        .min_w(0.0)
-        .mb("0.25rem")
-        .child(node)
-        .into();
+    let mut wrap: Element = vstack().w("100%").min_w(0.0).child(node).into();
     wrap.set_attr(ATTR_SLOT, SLOT_TITLE);
     wrap
 }
@@ -835,6 +848,11 @@ pub fn TimelineItem(
                 }
                 Some(SLOT_BULLET) => {
                     bullet_slot = SlotAuthor::from_el(&child);
+                    // Icon children carry default foreground/size/weight. Only
+                    // styles authored on the bullet slot override state chrome.
+                    bullet_slot.color = child.text_style.color;
+                    bullet_slot.size = child.text_style.size;
+                    bullet_slot.weight = child.text_style.weight;
                     if bullet.is_none() {
                         bullet = find_icon_name(&child);
                     }
@@ -950,8 +968,90 @@ mod tests {
     use crate::core::reactivity::create_root;
 
     #[test]
+    fn discs_center_on_complete_copy_including_wrapped_descriptions() {
+        for width in [160.0, 320.0] {
+            let (_owner, ()) = create_root(|| {
+                let specs = [
+                    TimelineItemSpec {
+                        title: "Placed".into(),
+                        ..Default::default()
+                    },
+                    TimelineItemSpec {
+                        index: 1,
+                        title: "Packed".into(),
+                        description: "Left the warehouse.".into(),
+                        ..Default::default()
+                    },
+                    TimelineItemSpec {
+                        index: 2,
+                        title: "Delivered".into(),
+                        description: "Your package was left safely at the front door.".into(),
+                        ..Default::default()
+                    },
+                ];
+                let mut root = Element::new().w(width).h(600.0).child(paint_timeline(
+                    &specs,
+                    1,
+                    DEFAULT_BULLET_PX,
+                    DEFAULT_LINE_PX,
+                    None,
+                ));
+                let mut layout = crate::core::tree::LayoutTree::new();
+                let _ = layout.build_and_layout(&mut root, width, 600.0, [-1.0, -1.0]);
+                for row in &root.children[0].children {
+                    let disc = &row.children[0].children[1];
+                    let copy = &row.children[1];
+                    let first = copy.children.first().unwrap().layout_bounds;
+                    let last = copy.children.last().unwrap().layout_bounds;
+                    let copy_center = (first[1] + last[1] + last[3]) / 2.0;
+                    let disc_center = disc.layout_bounds[1] + disc.layout_bounds[3] / 2.0;
+                    assert!(
+                        (copy_center - disc_center).abs() < 1.5,
+                        "width={width}, copy center={copy_center}, disc center={disc_center}"
+                    );
+                }
+            });
+        }
+    }
+
+    #[test]
+    fn compound_icon_defaults_do_not_override_state_color() {
+        let (_owner, ()) = create_root(|| {
+            provide_context(
+                timeline_context(),
+                TimelineCtx {
+                    active: crate::core::reactivity::create_signal(-1),
+                    bullet_size: DEFAULT_BULLET_PX,
+                    line_size: DEFAULT_LINE_PX,
+                },
+            );
+            push_collect();
+            let bullet = TimelineItemBullet(TimelineItemBulletProps {
+                children: Some(build_icon_named("circle-check")),
+                base: None,
+            });
+            TimelineItem(TimelineItemProps {
+                title: Some("Delivered".into()),
+                description: None,
+                bullet: None,
+                children: Some(bullet),
+                base: None,
+            });
+            let specs = pop_collect();
+            for (active, expected) in [(-1, "border"), (0, "primary")] {
+                let row = paint_item(&specs[0], active, true, DEFAULT_BULLET_PX, DEFAULT_LINE_PX);
+                let disc = &row.children[0].children[1];
+                assert_eq!(
+                    disc.children[0].text_style.color,
+                    Some(parse_text_color(expected))
+                );
+            }
+        });
+    }
+
+    #[test]
     fn bullet_glyph_px_scales_with_disc() {
-        assert!((bullet_glyph_px(20.0) - 14.0).abs() < f32::EPSILON);
+        assert!((bullet_glyph_px(20.0) - 13.0).abs() < f32::EPSILON);
         assert!((bullet_glyph_px(8.0) - BULLET_GLYPH_MIN_PX).abs() < f32::EPSILON);
     }
 

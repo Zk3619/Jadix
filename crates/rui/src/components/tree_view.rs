@@ -84,6 +84,7 @@ const SLOT_ROW: &str = "tree-view-row";
 const SLOT_CHEVRON: &str = "tree-view-chevron";
 
 const ATTR_CHROME: &str = "data-tree-chrome";
+const ATTR_ROW_CHROME: &str = "rui_tree_row_chrome";
 const CHEVRON_PX: f32 = 16.0;
 const CHEVRON_OPEN_DEG: f32 = 90.0;
 const ROW_WEIGHT: u16 = 500;
@@ -337,21 +338,25 @@ fn rest_label_weight(chrome: TreeViewChrome) -> u16 {
     }
 }
 
-fn paint_tree_row_fg(el: &mut Element, color: [u8; 4], weight: u16) {
+fn paint_tree_row_fg(el: &mut Element, color: [u8; 4], weight: u16) -> bool {
     let lock_fg = is_variant_style_overridden(&el.attrs, VariantStyleField::Fg);
     let lock_weight = is_variant_style_overridden(&el.attrs, VariantStyleField::Weight);
+    let mut changed = false;
     crate::core::tree::walk_elements_mut_pruned(el, |el| {
         if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_CHEVRON) {
             return false;
         }
         if !lock_fg {
+            changed |= el.text_style.color != Some(color);
             el.text_style.color = Some(color);
         }
         if !lock_weight {
+            changed |= el.text_style.weight != Some(weight);
             el.text_style.weight = Some(weight);
         }
         true
     });
+    changed
 }
 
 fn row_pointer_id(tree_id: &str, node_id: &str) -> String {
@@ -390,11 +395,11 @@ fn sync_tree_row_chrome(
         )
     };
     let lock_bg = is_variant_style_overridden(&el.attrs, VariantStyleField::Bg);
-    let changed = !lock_bg && el.style.bg_color != want_bg;
+    let mut changed = !lock_bg && el.style.bg_color != want_bg;
     if changed {
         el.style.bg_color = want_bg;
     }
-    paint_tree_row_fg(el, want_fg, want_weight);
+    changed |= paint_tree_row_fg(el, want_fg, want_weight);
     if changed {
         LayoutStatus::StyleChanged
     } else {
@@ -413,7 +418,7 @@ fn with_row_hover_chrome(ctx: &TreeViewCtx, node_id: &str, visual: Element) -> E
     let sel = ctx.selected;
     let nid = node_id.to_string();
     let hover_key_sync = hover_key.clone();
-    let row: Element = interactive(visual)
+    let mut row: Element = interactive(visual)
         .focus_id(fid)
         .on_hover(move |h| {
             if hovered.try_peek() != Some(h) {
@@ -422,6 +427,7 @@ fn with_row_hover_chrome(ctx: &TreeViewCtx, node_id: &str, visual: Element) -> E
             }
         })
         .into();
+    row.set_attr(ATTR_ROW_CHROME, "1");
     row.reactive_sync(move |el, _| {
         let selected = sel.and_then(|s| s.try_peek()).is_some_and(|id| id == nid);
         let hovered = use_signal(hover_key_sync.as_str(), || false)
@@ -429,6 +435,27 @@ fn with_row_hover_chrome(ctx: &TreeViewCtx, node_id: &str, visual: Element) -> E
             .unwrap_or(false);
         sync_tree_row_chrome(el, chrome, selected, hovered)
     })
+}
+
+/// Reconcile row paint after pointer callbacks, including freshly mounted rows.
+pub(crate) fn sync_tree_view_hover_paint_subtree(
+    root: &mut Element,
+    layout_tree: &mut crate::core::tree::LayoutTree,
+    impact: &mut LayoutStatus,
+) {
+    crate::core::tree::walk_elements_mut(root, |el| {
+        if !el.attrs.contains_key(ATTR_ROW_CHROME) {
+            return;
+        }
+        if let Some(sync) = el.reactive_sync.clone() {
+            let status = sync.run(el, layout_tree);
+            if status != LayoutStatus::Clean {
+                crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
+                layout_tree.note_collect_skip_hash_bust_if_idle(el.collect_skip_live);
+                *impact = impact.merge(status);
+            }
+        }
+    });
 }
 
 // ── Shared chrome ─────────────────────────────────────────────────────────────
@@ -444,7 +471,7 @@ fn chevron_right_icon() -> Element {
 fn chevron_transition_entries() -> [TransitionEntry; 1] {
     [TransitionEntry {
         property: TransitionProperty::Transform,
-        duration_ms: 200.0,
+        duration_ms: crate::utils::collapse_panel::CollapseKeyframes::COLLAPSIBLE.duration_ms,
         delay_ms: 0.0,
         timing: crate::style::TimingFunction::EaseOut,
     }]
@@ -461,7 +488,8 @@ fn sync_tree_chevron(el: &mut Element, open: bool) -> LayoutStatus {
     let animating = css_transition_needs_frame(&el.style, &el.transition_snapshot)
         || el.transition_snapshot.has_active_tweens();
     if changed || animating {
-        crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+        // ReactiveSync records this icon's stable paint key and visual bounds.
+        // A second bounds-hashed dirty overlaps the label and replays its edge twice.
         LayoutStatus::StyleChanged
     } else {
         LayoutStatus::Clean
@@ -564,9 +592,10 @@ fn node_open_signal(tree_id: &str, node_id: &str, expanded_key: &str) -> Signal<
     let nid = node_id.to_string();
     let exp_key = expanded_key.to_string();
     let sig = use_signal(&key, move || node_expanded(&exp_key, &nid));
-    let sync_reg_key = format!("{tree_id}::open_sync_reg::{node_id}");
     let open_key = key.clone();
-    use_signal(sync_reg_key.as_str(), move || {
+    // Registration follows the content owner; the open value survives remounts.
+    // A global guard outlives disposed effects and leaves descendants disconnected.
+    {
         let nid_read = node_id.to_string();
         let nid_write = node_id.to_string();
         let exp_key_read = expanded_key.to_string();
@@ -619,7 +648,7 @@ fn node_open_signal(tree_id: &str, node_id: &str, expanded_key: &str) -> Signal<
                 let _ = expanded.try_set(set);
             }
         });
-    });
+    }
     sig
 }
 
@@ -1575,6 +1604,29 @@ mod tests {
                 .into();
             toggle_node_expanded_key(expanded_key, "root");
             assert!(expanded_signal_for_key(expanded_key).try_peek().is_some());
+        });
+    }
+
+    #[test]
+    fn node_open_binding_survives_parent_content_remount() {
+        let (_owner, ()) = create_root(|| {
+            let expanded_key = "tv_remount_binding::expanded";
+            let expanded = use_signal(expanded_key, HashSet::<String>::new);
+            let revision = crate::core::reactivity::Signal::new(0_u32);
+            create_effect(move || {
+                let _ = revision.get();
+                node_open_signal("tv_remount_binding", "child", expanded_key);
+            });
+            // CollapsibleContent rebuilds descendants under a fresh effect owner.
+            revision.set(1);
+            expanded.set(HashSet::from(["child".into()]));
+            let open = use_signal("tv_remount_binding::open::child", || false);
+            assert_eq!(open.peek(), true, "remounted child must follow expanded");
+            open.set(false);
+            assert!(
+                !expanded.peek().contains("child"),
+                "click must update expanded after remount"
+            );
         });
     }
 

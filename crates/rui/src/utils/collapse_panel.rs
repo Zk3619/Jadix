@@ -34,7 +34,7 @@ impl CollapseKeyframes {
     pub const COLLAPSIBLE: Self = Self {
         down: "collapsible-down",
         up: "collapsible-up",
-        duration_ms: 200.0,
+        duration_ms: 280.0,
     };
     pub const ACCORDION: Self = Self {
         down: "accordion-down",
@@ -48,7 +48,7 @@ const PANEL_EXIT: Duration = Duration::from_millis(200);
 thread_local! {
     static PANEL_PRESENCE_REGISTRY: RefCell<Vec<Rc<RefCell<PanelPresenceCell<()>>>>> =
         const { RefCell::new(Vec::new()) };
-    static PENDING_UNMOUNTS: RefCell<Vec<crate::core::reactivity::Signal<bool>>> =
+    static PENDING_UNMOUNTS: RefCell<Vec<CollapsePanelPresence>> =
         const { RefCell::new(Vec::new()) };
 }
 
@@ -82,9 +82,8 @@ pub fn use_collapse_panel_presence(key: &str) -> CollapsePanelPresence {
 impl CollapsePanelPresence {
     /// CSS 退场播完：立刻 Absent，下一帧 drain 卸树。
     pub fn finish_exit(&self) {
-        let mounted_sig = self.mounted();
         self.force_absent_flags();
-        PENDING_UNMOUNTS.with(|q| q.borrow_mut().push(mounted_sig));
+        PENDING_UNMOUNTS.with(|q| q.borrow_mut().push(self.clone()));
         crate::app::runtime::request_redraw();
     }
 }
@@ -116,8 +115,11 @@ pub fn tick_collapse_panel_presence() -> bool {
 
 fn drain_pending_unmounts() {
     let pending = PENDING_UNMOUNTS.with(|q| std::mem::take(&mut *q.borrow_mut()));
-    for sig in pending {
-        if sig.is_alive() {
+    for presence in pending {
+        // A new open may arrive after the closing frame, before this drain.
+        // Only the still-absent panel belongs to the completed exit.
+        let sig = presence.mounted();
+        if presence.phase() == PresencePhase::Absent && sig.is_alive() {
             sig.set(false);
         }
     }
@@ -224,7 +226,8 @@ pub fn apply_collapse_height<E>(
     let exit_armed = presence.exit_armed();
 
     if exiting && (needs_exit_anim || (!has_exit_anim(el, keys.up) && exit_armed)) {
-        let from = if opts.pin_exit_height {
+        let reversing_enter = el.style.animations.iter().any(|a| a.name == keys.down);
+        let from = if opts.pin_exit_height || reversing_enter {
             crate::layout::dim_length_px(el.style.max_size.height)
                 .filter(|h| *h > 1.0)
                 .or_else(|| {
@@ -247,6 +250,9 @@ pub fn apply_collapse_height<E>(
         return CollapseHeightEffect::FinishedExit;
     }
     if open_visual && needs_enter {
+        let reverse_from = has_exit_anim(el, keys.up)
+            .then(|| crate::layout::dim_length_px(el.style.max_size.height))
+            .flatten();
         if !max_height_is_auto(el) {
             el.style.max_size.height = Dimension::auto();
         }
@@ -260,6 +266,26 @@ pub fn apply_collapse_height<E>(
             el.style.opacity = 1.0;
         }
         seed_enter_anim(el, keys);
+        if let Some(from) = reverse_from.filter(|h| *h > 0.0) {
+            // Continue along the down curve from the currently visible clip.
+            // Recover its time by inverting the easing rather than restarting at 0.
+            let ratio = (from / measured).clamp(0.0, 1.0);
+            let mut lo = 0.0;
+            let mut hi = 1.0;
+            for _ in 0..20 {
+                let mid = (lo + hi) * 0.5;
+                if TimingFunction::EaseOut.eval(mid) < ratio {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            el.tick_css_animations(0.0);
+            if let Some(run) = el.animation_snapshot.runs.first_mut() {
+                run.elapsed_ms = (lo + hi) * 0.5 * keys.duration_ms;
+            }
+            el.tick_css_animations(0.0);
+        }
         return CollapseHeightEffect::SeededEnter;
     }
     if open_visual {
@@ -290,7 +316,10 @@ fn mark_layout(el: &Element, layout_tree: &mut LayoutTree) -> LayoutStatus {
     if el.layout_node.is_some() {
         layout_tree.update_taffy_node_style(el);
     }
-    crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+    crate::app::damage::push_frame_region_paint(
+        crate::app::damage::paint_element_key(el),
+        crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc),
+    );
     LayoutStatus::LayoutChanged
 }
 
@@ -347,7 +376,15 @@ pub fn apply_collapse_motion(
         layout = true;
     }
 
-    match apply_collapse_height(el, presence, keys, CollapseHeightOpts::default()) {
+    let previous_max_height = el.style.max_size.height;
+    let effect = apply_collapse_height(el, presence, keys, CollapseHeightOpts::default());
+    if effect == CollapseHeightEffect::Measuring {
+        el.set_attr("rui_collapse_measuring", "1");
+    } else {
+        el.attrs.remove("rui_collapse_measuring");
+    }
+    layout |= el.style.max_size.height != previous_max_height;
+    let status = match effect {
         CollapseHeightEffect::SeededEnter | CollapseHeightEffect::SeededExit => {
             mark_layout(el, layout_tree)
         }
@@ -359,28 +396,121 @@ pub fn apply_collapse_motion(
             if el.layout_node.is_some() {
                 layout_tree.update_taffy_node_style(el);
             }
-            crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+            // A growing clip reveals descendants whose retained node slots did not
+            // exist in the previous frame. Repair the region, including new ink.
+            crate::app::damage::push_frame_region_paint(
+                crate::app::damage::paint_element_key(el),
+                crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc),
+            );
             LayoutStatus::LayoutChanged
         }
         CollapseHeightEffect::Measuring
         | CollapseHeightEffect::Idle
         | CollapseHeightEffect::Hidden => {
-            if layout && el.layout_node.is_some() {
-                return mark_layout(el, layout_tree);
-            }
             if layout {
-                LayoutStatus::LayoutChanged
+                mark_layout(el, layout_tree)
             } else {
                 LayoutStatus::Clean
             }
         }
+    };
+    if status == LayoutStatus::LayoutChanged {
+        el.set_attr("rui_collapse_damage", "1");
     }
+    status
+}
+
+/// Queue the new clip after layout as well as the previous clip before layout.
+pub(crate) fn flush_collapse_layout_damage(root: &mut Element) {
+    crate::core::tree::walk_elements_mut(root, |el| {
+        if el.attrs.remove("rui_collapse_damage").is_some() {
+            crate::app::damage::push_frame_region_paint(
+                crate::app::damage::paint_element_key(el),
+                crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc),
+            );
+        }
+    });
+}
+
+/// Finish first-open measurement before presenting the unconstrained layout.
+pub(crate) fn seed_measured_collapse_panels(
+    root: &mut Element,
+    layout_tree: &mut LayoutTree,
+) -> bool {
+    let mut changed = false;
+    crate::core::tree::walk_elements_mut(root, |el| {
+        if !el.attrs.contains_key("rui_collapse_measuring") || panel_content_height(el) < 1.0 {
+            return;
+        }
+        if let Some(sync) = el.reactive_sync.clone() {
+            let status = sync.run(el, layout_tree);
+            if status != LayoutStatus::Clean && !el.attrs.contains_key("rui_collapse_measuring") {
+                // Sample the starting clip at zero elapsed time, then lay it out.
+                el.tick_css_animations(0.0);
+                layout_tree.update_taffy_node_style(el);
+                changed = true;
+            }
+        }
+    });
+    changed
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::reactivity::create_root;
+
+    #[test]
+    fn reopen_after_finished_exit_cancels_pending_unmount() {
+        let (_o, ()) = create_root(|| {
+            let p = use_collapse_panel_presence("reopen_pending_unmount");
+            sync_collapse_panel_presence(&p, true);
+            sync_collapse_panel_presence(&p, false);
+            p.finish_exit();
+            // Input can arrive between the final closing present and the next tick.
+            sync_collapse_panel_presence(&p, true);
+            drain_pending_unmounts();
+            assert_eq!(p.phase(), PresencePhase::Present);
+            assert!(p.mounted().peek(), "stale exit must not hide reopened content");
+        });
+    }
+
+    #[test]
+    fn finished_exit_still_unmounts_closed_content() {
+        let (_o, ()) = create_root(|| {
+            let p = use_collapse_panel_presence("closed_pending_unmount");
+            sync_collapse_panel_presence(&p, true);
+            sync_collapse_panel_presence(&p, false);
+            p.finish_exit();
+            drain_pending_unmounts();
+            assert!(!p.mounted().peek());
+        });
+    }
+
+    #[test]
+    fn reverse_exit_continues_from_current_clip() {
+        let (_o, ()) = create_root(|| {
+            let p = use_collapse_panel_presence("reverse_exit_clip");
+            sync_collapse_panel_presence(&p, true);
+            let mut el = Element::new();
+            el.layout_bounds = [0.0, 0.0, 100.0, 80.0];
+            let bounds = el.layout_bounds;
+            el.used_layout.stamp_border_box(bounds, false);
+            let keys = CollapseKeyframes::COLLAPSIBLE;
+            sync_collapse_panel_presence(&p, false);
+            apply_collapse_height(&mut el, &p, keys, CollapseHeightOpts::default());
+            el.tick_css_animations(0.05);
+            let before = crate::layout::dim_length_px(el.style.max_size.height).unwrap();
+            sync_collapse_panel_presence(&p, true);
+            apply_collapse_height(&mut el, &p, keys, CollapseHeightOpts::default());
+            el.tick_css_animations(0.0);
+            let after = crate::layout::dim_length_px(el.style.max_size.height).unwrap();
+            assert!(
+                (before - after).abs() < 0.1,
+                "reverse jumped: {before} -> {after}"
+            );
+        });
+    }
 
     #[test]
     fn enter_anim_seeds_after_measure_not_on_empty_bounds() {

@@ -20,17 +20,22 @@ use unicode_segmentation::UnicodeSegmentation;
 
 use super::emoji_detect;
 
-/// Ideograph `一` (U+4E00) — ~1em advance via CJK fallback, **not** Unicode whitespace.
+/// Object replacement character (U+FFFC), reserved for embedded emoji objects.
 ///
 /// Must not be a `Zs` space (old EM SPACE U+2003): cosmic-text strips leading whitespace after
 /// soft-wrap, which dropped the first emoji on each wrapped line and caused stair-step quads.
-/// Fullwidth ASCII (U+FF03) is too narrow in Segoe UI (~0.65em); CJK keeps the em-square slot.
-///
-/// Paint path must color this slot with alpha=0 (`set_shaped_buffer_text`) — otherwise the
-/// ideograph stroke shows as a black line through every Twemoji quad.
+/// Using an ordinary ideograph here made literal `一` in labels such as `上一页`
+/// indistinguishable from a hidden emoji slot, including mixed text/emoji runs.
+/// Paint keeps the object placeholder transparent (`set_shaped_buffer_text`).
 ///
 /// Slot run uses [`emoji_slot_metrics`] so shaped advance ≈ [`EMOJI_ADVANCE_EM`]×font_size.
-pub const EMOJI_LAYOUT_SLOT: char = '\u{4E00}';
+pub const EMOJI_LAYOUT_SLOT: char = '\u{FFFC}';
+
+// Shape the object with the established 1em CJK fallback, but identify it by
+// span metadata. Both codepoints occupy three UTF-8 bytes, so caret/emoji maps
+// keep their offsets. A literal 一 never receives the object metadata.
+const EMOJI_SHAPING_GLYPH: char = '一';
+pub(crate) const EMOJI_SLOT_METADATA: usize = usize::MAX;
 
 /// Trim 后墨水视觉尺寸（相对正文 `font_size`）。
 pub const EMOJI_INK_EM: f32 = 1.10;
@@ -100,7 +105,7 @@ pub fn emoji_ink_pixel_size(font_size: f32) -> u16 {
         .clamp(1.0, 512.0) as u16
 }
 
-/// Metrics for an invisible [`EMOJI_LAYOUT_SLOT`] run: scale font_size so CJK `一`
+/// Metrics for an invisible [`EMOJI_LAYOUT_SLOT`] run: scale the object placeholder so it
 /// advances ≈ [`EMOJI_ADVANCE_EM`]×`font_size`, while keeping the paragraph `line_height`.
 #[inline]
 pub fn emoji_slot_metrics(font_size: f32, line_height: f32) -> glyphon::Metrics {
@@ -118,18 +123,17 @@ pub fn emoji_slot_attrs<'a>(
 ) -> glyphon::Attrs<'a> {
     base.clone()
         .color(glyphon::Color::rgba(0, 0, 0, 0))
+        .metadata(EMOJI_SLOT_METADATA)
         .metrics(emoji_slot_metrics(font_size, line_height))
 }
 
-/// True when this layout glyph is the CJK `一` slot. Paint must skip it — the
-/// ideograph stroke is a horizontal line that otherwise shows through Twemoji.
+/// True when this layout glyph is an embedded emoji placeholder. Paint skips it
+/// because the custom emoji quad supplies the visible ink.
 pub fn glyph_is_emoji_layout_slot(
-    run: &glyphon::LayoutRun<'_>,
+    _run: &glyphon::LayoutRun<'_>,
     glyph: &glyphon::LayoutGlyph,
 ) -> bool {
-    run.text
-        .get(glyph.start..glyph.end)
-        .is_some_and(|s| s.contains(EMOJI_LAYOUT_SLOT))
+    glyph.metadata == EMOJI_SLOT_METADATA
 }
 
 /// Replace each emoji grapheme with [`EMOJI_LAYOUT_SLOT`] so layout advance ≈ custom quad.
@@ -250,7 +254,7 @@ pub fn set_buffer_with_emoji_slots_colored(
         }
         run_slot = is_slot;
         run_fg = fg;
-        buf.push(c);
+        buf.push(if is_slot { EMOJI_SHAPING_GLYPH } else { c });
         byte += c.len_utf8();
     }
     flush(&mut owned, &mut buf, run_slot, run_fg);
@@ -264,7 +268,7 @@ pub fn set_buffer_with_emoji_slots_colored(
         .collect();
     // Default must be the invisible slot attrs. cosmic-text `set_rich_text`
     // drops spans that equal defaults — if the default were the opaque body
-    // color, a dropped slot span would paint `一` as a visible horizontal stroke
+    // color, a dropped slot span would paint the placeholder glyph
     // (reaction chips are emoji-only, so the whole line is one slot run).
     let slot_defaults = invisible.as_attrs();
     buffer.set_rich_text(rich, &slot_defaults, shaping, None);
@@ -500,7 +504,7 @@ mod tests {
         use crate::renderer::font_loader;
         use crate::renderer::text_hit::best_font_family;
 
-        let slot = EMOJI_LAYOUT_SLOT.to_string();
+        let slot = EMOJI_SHAPING_GLYPH.to_string();
         let mut fs = font_loader::create_font_system();
         font_loader::apply_default_families(fs.db_mut());
         font_loader::ensure_coverage_for_text(&mut fs, &slot);
@@ -528,7 +532,7 @@ mod tests {
         );
         assert!(
             ratio > 0.85 && ratio < 1.35,
-            "bare CJK slot (no ADVANCE metrics) must be ~1em after coverage, got ratio={ratio}"
+            "bare object slot (no ADVANCE metrics) must be ~1em after coverage, got ratio={ratio}"
         );
     }
 
@@ -628,6 +632,45 @@ mod tests {
         let (left, _top) = custom_emoji_left_centered_top(&buffer, &layout, slot_start, ink, ink)
             .expect("alpha=0 slot must still produce a layout glyph for Twemoji alignment");
         assert!(left.is_finite() && left >= 0.0, "left={left}");
+    }
+
+    #[test]
+    fn pagination_captions_keep_literal_ideograph_with_and_without_emoji() {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        crate::renderer::font_loader::apply_default_families(fs.db_mut());
+        for text in ["上一页", "下一页", "上一页 😀 下一页"] {
+            let layout = shape_text_for_layout(text);
+            crate::renderer::font_loader::ensure_coverage_for_text(&mut fs, &layout);
+            let attrs = glyphon::Attrs::new()
+                .family(crate::renderer::text_hit::best_font_family(&fs))
+                .color(glyphon::Color::rgba(17, 17, 17, 255));
+            let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 20.0));
+            buffer.set_size(Some(400.0), Some(40.0));
+            set_buffer_with_emoji_slots(
+                &mut buffer,
+                &layout,
+                &attrs,
+                glyphon::Shaping::Advanced,
+                14.0,
+                20.0,
+            );
+            buffer.shape_until_scroll(&mut fs, false);
+            let mut visible_ones = 0;
+            for run in buffer.layout_runs() {
+                for glyph in run.glyphs.iter() {
+                    if run.text.get(glyph.start..glyph.end) == Some("一")
+                        && !glyph_is_emoji_layout_slot(&run, glyph)
+                    {
+                        assert!(
+                            glyph.color_opt.map(|c| c.a()).unwrap_or(255) > 0,
+                            "{text}: literal 一 must retain ink"
+                        );
+                        visible_ones += 1;
+                    }
+                }
+            }
+            assert_eq!(visible_ones, text.matches('一').count());
+        }
     }
 
     #[test]

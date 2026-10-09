@@ -1841,6 +1841,21 @@ pub(crate) fn region_replays_own_chrome_only(
     node_paints: &[NodePaint],
 ) -> bool {
     let has_keyed = paints_has_keyed_slot(key, bounds, node_paints);
+    // A layered texture leaf belongs to its painted composite. Its repair can
+    // also touch the parent's border and the old background; replay those in
+    // scene order, including the frame that returns the parent to its rest pose.
+    if node_paints.iter().any(|leaf| {
+        slot_matches_dirty(key, bounds, leaf, has_keyed)
+            && leaf.layered
+            && leaf.textured.0 < leaf.textured.1
+            && node_paints.iter().any(|parent| {
+                parent.layered
+                    && parent.instance.0 < parent.instance.1
+                    && is_nested_foreign_slot(parent, leaf)
+            })
+    }) {
+        return false;
+    }
     // Fade omitted the quads. Own-chrome then draws nothing and PartialLoad
     // keeps the last gray track. Page-band replay fills that hole with the
     // content that was under the bar. A flat Node clear of the same box
@@ -1848,7 +1863,7 @@ pub(crate) fn region_replays_own_chrome_only(
     let emits = node_paints
         .iter()
         .any(|p| slot_matches_dirty(key, bounds, p, has_keyed) && slot_emits_paint(p));
-    if !emits {
+    if !emits || textured_slot_has_later_overlapping_paint(key, bounds, node_paints) {
         return false;
     }
     let has_nested_paint = node_paints.iter().any(|owner| {
@@ -3049,6 +3064,41 @@ fn owner_is_only_culled_metadata(key: u64, paints: &[NodePaint]) -> bool {
     found
 }
 
+/// A texture-only background cannot repair a hole independently of later
+/// foreground chrome. Spatial containment is not collect-range ownership:
+/// dest-reset would erase the card, and replaying the grid last would cover it.
+fn textured_slot_has_later_overlapping_paint(
+    key: u64,
+    bounds: [f32; 4],
+    node_paints: &[NodePaint],
+) -> bool {
+    let has_keyed = paints_has_keyed_slot(key, bounds, node_paints);
+    node_paints.iter().any(|host| {
+        slot_matches_dirty(key, bounds, host, has_keyed)
+            && host.instance.0 == host.instance.1
+            && host.text.0 == host.text.1
+            && host.chrome.0 == host.chrome.1
+            && host.textured.0 < host.textured.1
+            && host.paint_ops.0 < host.paint_ops.1
+            && node_paints.iter().any(|peer| {
+                !peer.overlay
+                    && peer.key != host.key
+                    && peer.paint_ops.0 >= host.paint_ops.1
+                    && peer.paint_ops.0 < peer.paint_ops.1
+                    && intersect_rects(host.bounds, peer.bounds)
+                        .and_then(|hit| match peer.overflow_clip {
+                            Some(clip) => intersect_rects(hit, clip),
+                            None => Some(hit),
+                        })
+                        .and_then(|hit| match host.overflow_clip {
+                            Some(clip) => intersect_rects(hit, clip),
+                            None => Some(hit),
+                        })
+                        .is_some()
+            })
+    })
+}
+
 /// Compact layered overlay (Latest). Promoting it to Region window-clears the
 /// halo AABB with `clear_color` — the enter white rectangle. A tall stacking
 /// context that owns descendant text still takes that path: its box is the
@@ -3068,13 +3118,34 @@ fn layered_cell_keeps_node_dest_reset(
     instances: &[InstanceInput],
     last_present: &[(u64, [f32; 4])],
 ) -> bool {
-    if !matching_slot_is_layered(key, bounds, node_paints) {
+    if !matching_slot_is_layered(key, bounds, node_paints)
+        || textured_slot_has_later_overlapping_paint(key, bounds, node_paints)
+    {
         return false;
     }
-    if let Some(prev) = last_present_prev_for_dirty(PaintDirtyKind::Node, key, last_present) {
-        if crate::app::damage::paint_poses_separated(prev, bounds) {
-            return false;
-        }
+    let prev = last_present_prev_for_dirty(PaintDirtyKind::Node, key, last_present);
+    if prev.is_some_and(|old| crate::app::damage::paint_poses_separated(old, bounds)) {
+        return false;
+    }
+    let has_keyed = paints_has_keyed_slot(key, bounds, node_paints);
+    if node_paints.iter().any(|owner| {
+        slot_matches_dirty(key, bounds, owner, has_keyed)
+            && owner.rest.into_iter().chain(prev).any(|old| {
+                ((owner.bounds[0] - old[0]).abs() > 0.01 || (owner.bounds[1] - old[1]).abs() > 0.01)
+                    && (owner.bounds[2] - old[2]).abs() < 0.01
+                    && (owner.bounds[3] - old[3]).abs() < 0.01
+            })
+            && slot_has_sdf_dest_ink(owner, instances)
+            && node_paints
+                .iter()
+                .any(|child| is_nested_foreign_slot(owner, child) && slot_emits_paint(child))
+    }) {
+        // A translated composite needs one ordered repair even when every
+        // child is still Node and the old/new footprints overlap. Separate
+        // ink wipes clip the old rounded AA fringe and can erase a child's
+        // just-replayed glyphs. Compare rest too: a follow-up frame at the same
+        // translated pose must not revert to those independent wipes.
+        return false;
     }
     // Viewport-sized stacking bands keep Region. A short pill that owns its
     // label does not: window-clearing that AABB is the white rectangle.
@@ -3314,6 +3385,9 @@ pub(crate) fn prepare_node_present_dirties_ex(
     // A concurrent in-flow caption must not be flushed after a Region that
     // already composited an overlapping Latest layer. Promote connected dirty
     // coverage too; unrelated nodes retain their independent Node fast path.
+    // A compact layered slot must join that ordered repair too: a moving icon
+    // can already be Region while its card stays Node. Clearing the card after
+    // the icon's Region erases the freshly restored glyphs and leaves a trail.
     // Layered / unmatched regions still absorb overlapping captions. A keyed
     // thumb hole (textured ramp, no glyphs) must not promote the full-width
     // track into a page Region — that is the encode spike.
@@ -3333,13 +3407,6 @@ pub(crate) fn prepare_node_present_dirties_ex(
         for dirty in dirties.iter_mut() {
             if dirty.kind != PaintDirtyKind::Node
                 || paint_dirty_is_caret_overlay(dirty, node_paints, instances)
-                || layered_cell_keeps_node_dest_reset(
-                    dirty.key,
-                    dirty.bounds,
-                    node_paints,
-                    instances,
-                    last_present,
-                )
             {
                 continue;
             }
@@ -3370,8 +3437,14 @@ pub(crate) fn prepare_node_present_dirties_ex(
                 bounds = union_xywh(bounds, [rect[0] / s, rect[1] / s, rect[2] / s, rect[3] / s]);
             }
             dirty.kind = PaintDirtyKind::Region;
-            dirty.bounds = bounds;
-            regions.push(bounds);
+            // Match the direct layered Region path's raster fringe. The SDF
+            // paints beyond its nominal box, including at the previous pose.
+            dirty.bounds = if matching_slot_is_layered(dirty.key, bounds, node_paints) {
+                padded_xywh(bounds, 2.0 / ui_scale.max(1e-6))
+            } else {
+                bounds
+            };
+            regions.push(dirty.bounds);
         }
     }
     crate::app::damage::sort_paint_dirty_nodes(dirties);
@@ -10626,6 +10699,242 @@ mod tests {
             layered: false,
             rest,
         }
+    }
+
+    #[test]
+    fn moving_card_joins_overlapping_icon_region_repair() {
+        let current = [373.0, 172.0, 94.0, 16.0];
+        let previous = [357.0, 172.0, 94.0, 16.0];
+        let icon = [374.0, 173.0, 14.0, 14.0];
+        let mut card = paint_slot(1, current, Some(current), (1, 2));
+        card.layered = true;
+        card.text = (0, 2);
+        let mut grip = paint_slot(2, icon, Some(icon), (2, 2));
+        grip.layered = true;
+        grip.text = (0, 1);
+        let paints = [card, grip];
+        let mut page = blank_instance(0.0, 0.0, 800.0, 400.0);
+        page.color = [1.0; 4];
+        let mut outline = blank_instance(current[0], current[1], current[2], current[3]);
+        outline.border_width = 1.0;
+        outline.border_color = [0.5, 0.5, 0.5, 1.0];
+        outline.radii = [8.0; 4];
+        let instances = [page, outline];
+        for (region, previous) in [
+            ([372.0, 171.0, 18.0, 18.0], previous),
+            ([600.0, 300.0, 18.0, 18.0], current),
+        ] {
+            let mut dirties = vec![
+                PaintDirty {
+                    key: 1,
+                    bounds: union_xywh(current, previous),
+                    kind: PaintDirtyKind::Node,
+                },
+                PaintDirty {
+                    key: 2,
+                    bounds: region,
+                    kind: PaintDirtyKind::Region,
+                },
+            ];
+            prepare_node_present_dirties(
+                &mut dirties,
+                &paints,
+                &[(1, previous)],
+                &instances,
+                &[],
+                &[],
+                1.0,
+                None,
+            );
+            let repair = dirties.iter().find(|d| d.key == 1).unwrap();
+            if intersect_rects(current, region).is_some() {
+                assert_eq!(
+                    repair.kind,
+                    PaintDirtyKind::Region,
+                    "card must not clear the glyph Region that was just repaired"
+                );
+                assert!(aabb_covers(repair.bounds, padded_xywh(current, 2.0)));
+                assert!(aabb_covers(repair.bounds, padded_xywh(previous, 2.0)));
+            } else {
+                assert_eq!(
+                    repair.kind,
+                    PaintDirtyKind::Node,
+                    "a distant Region must preserve the compact card's Node path"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn translated_card_texture_region_replays_parent_chrome_and_background() {
+        let card_bounds = [312.0, 140.0, 94.0, 16.0];
+        let mut card = paint_slot(1, card_bounds, Some([306.0, 140.0, 94.0, 16.0]), (0, 1));
+        card.layered = true;
+        card.textured = (0, 1);
+        card.text = (0, 1);
+        card.paint_ops = (0, 2);
+        let icon_bounds = [313.0, 141.0, 14.0, 14.0];
+        let mut grip = paint_slot(2, icon_bounds, Some(icon_bounds), (1, 1));
+        grip.layered = true;
+        grip.textured = (0, 1);
+        grip.paint_ops = (1, 2);
+        let repair = [305.0, 139.0, 24.0, 18.0];
+        assert!(
+            !region_replays_own_chrome_only(2, repair, &[card, grip]),
+            "texture repair must restore the translated card outline and old background"
+        );
+        card.rest = Some(card_bounds);
+        assert!(
+            !region_replays_own_chrome_only(2, repair, &[card, grip]),
+            "returning to rest still repairs the old texture position"
+        );
+        assert!(
+            !region_replays_own_chrome_only(2, icon_bounds, &[card, grip]),
+            "stationary follow-up repairs must preserve the parent chrome too"
+        );
+        assert!(
+            region_replays_own_chrome_only(2, icon_bounds, &[grip]),
+            "an isolated texture retains its local repair path"
+        );
+    }
+
+    #[test]
+    fn slowly_translated_composite_repairs_old_and_new_raster_fringe() {
+        for scale in [1.0, 1.5, 2.0] {
+            for step in [0.0, 0.25, 0.5, 1.0, 4.0] {
+                let previous = [320.0, 144.0, 94.0, 16.0];
+                let current = [previous[0] + step, previous[1] + step * 0.5, 94.0, 16.0];
+                let icon = [current[0] + 1.0, current[1] + 1.0, 14.0, 14.0];
+                let old_icon = [previous[0] + 1.0, previous[1] + 1.0, 14.0, 14.0];
+                let mut card = paint_slot(1, current, Some(previous), (1, 2));
+                card.layered = true;
+                card.text = (0, 2);
+                let mut grip = paint_slot(2, icon, Some(old_icon), (2, 2));
+                grip.layered = true;
+                grip.text = (0, 1);
+                let paints = [card, grip];
+                let mut page = blank_instance(0.0, 0.0, 800.0 * scale, 400.0 * scale);
+                page.color = [1.0; 4];
+                let physical = scale_xywh(current, scale);
+                let mut outline =
+                    blank_instance(physical[0], physical[1], physical[2], physical[3]);
+                outline.color = [0.0; 4];
+                outline.border_width = scale;
+                outline.border_color = [0.5, 0.5, 0.5, 1.0];
+                outline.radii = [8.0 * scale; 4];
+                let mut dirties = vec![
+                    PaintDirty {
+                        key: 1,
+                        bounds: union_xywh(previous, current),
+                        kind: PaintDirtyKind::Node,
+                    },
+                    PaintDirty {
+                        key: 2,
+                        bounds: union_xywh(old_icon, icon),
+                        kind: PaintDirtyKind::Node,
+                    },
+                ];
+                prepare_node_present_dirties(
+                    &mut dirties,
+                    &paints,
+                    &[(1, previous), (2, old_icon)],
+                    &[page, outline],
+                    &[],
+                    &[],
+                    scale,
+                    None,
+                );
+                let repair = dirties.iter().find(|d| d.key == 1).unwrap();
+                if step == 0.0 {
+                    assert_eq!(repair.kind, PaintDirtyKind::Node);
+                } else {
+                    assert!(dirties.iter().all(|d| d.kind == PaintDirtyKind::Region));
+                    assert!(aabb_covers(
+                        repair.bounds,
+                        padded_xywh(previous, 2.0 / scale)
+                    ));
+                    assert!(aabb_covers(
+                        repair.bounds,
+                        padded_xywh(current, 2.0 / scale)
+                    ));
+                    // A second paint without another pointer move must keep
+                    // the translated composite ordered, including fractional AA.
+                    let mut follow_up = vec![
+                        PaintDirty {
+                            key: 1,
+                            bounds: current,
+                            kind: PaintDirtyKind::Node,
+                        },
+                        PaintDirty {
+                            key: 2,
+                            bounds: icon,
+                            kind: PaintDirtyKind::Node,
+                        },
+                    ];
+                    prepare_node_present_dirties(
+                        &mut follow_up,
+                        &paints,
+                        &[(1, current), (2, icon)],
+                        &[page, outline],
+                        &[],
+                        &[],
+                        scale,
+                        None,
+                    );
+                    assert!(follow_up.iter().all(|d| d.kind == PaintDirtyKind::Region));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn canvas_background_replays_overlapping_foreground_in_scene_order() {
+        let board = [20.0, 20.0, 600.0, 160.0];
+        let card = [36.0, 36.0, 176.0, 92.0];
+        let mut grid = paint_slot(1, board, Some(board), (2, 2));
+        grid.textured = (0, 1);
+        grid.paint_ops = (2, 3);
+        grid.layered = true;
+        let mut foreground = paint_slot(2, card, Some(card), (2, 3));
+        foreground.text = (0, 1);
+        foreground.paint_ops = (3, 4);
+        foreground.layered = true;
+        let paints = [grid, foreground];
+        let mut dirties = vec![PaintDirty {
+            key: 1,
+            bounds: board,
+            kind: PaintDirtyKind::Node,
+        }];
+        prepare_node_present_dirties(&mut dirties, &paints, &[], &[], &[], &[], 1.0, None);
+        assert_eq!(
+            dirties[0].kind,
+            PaintDirtyKind::Region,
+            "grid repair must restore the card in the same frame"
+        );
+        assert!(!region_replays_own_chrome_only(1, board, &paints));
+
+        // A clipped or separate foreground does not change the isolated canvas path.
+        foreground.overflow_clip = Some([700.0, 20.0, 20.0, 20.0]);
+        assert!(!textured_slot_has_later_overlapping_paint(
+            1,
+            board,
+            &[grid, foreground]
+        ));
+        foreground.overflow_clip = None;
+        foreground.bounds = [20.0, 200.0, 176.0, 92.0];
+        assert!(!textured_slot_has_later_overlapping_paint(
+            1,
+            board,
+            &[grid, foreground]
+        ));
+        // Ancestor ranges include the canvas and are not later foreground draws.
+        foreground.bounds = board;
+        foreground.paint_ops = (1, 4);
+        assert!(!textured_slot_has_later_overlapping_paint(
+            1,
+            board,
+            &[grid, foreground]
+        ));
     }
 
     #[test]

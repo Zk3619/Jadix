@@ -485,6 +485,88 @@ fn composite_table_row_hover_must_recapture_cell_glyphs() {
 }
 
 #[test]
+fn data_table_sort_headers_align_with_body_through_layout_and_hover() {
+    for sortable in [false, true] {
+        reset_registered_anchors();
+        crate::app::tree_hit::clear_hover_tracking();
+        let live = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(Rc::clone(&live));
+        let (_handle, _) = create_root({
+            let live = Rc::clone(&live);
+            move || {
+                create_effect({
+                    let live = Rc::clone(&live);
+                    move || {
+                        *live.borrow_mut() = table("diag-th-align")
+                            .columns([
+                                TableColumn::new("name", "Name").width(120.0),
+                                TableColumn::new("role", "Role").width(100.0),
+                                TableColumn::new("score", "Score").width(80.0).align("end"),
+                            ])
+                            .sortable(sortable)
+                            .rows([vec!["Item 05".into(), "User".into(), "65".into()]])
+                            .height(80.0)
+                            .into();
+                    }
+                });
+            }
+        });
+        drain_deferred_view_remounts();
+
+        for cycle in 0..6 {
+            let click = {
+                let mut root = live.borrow_mut();
+                let mut tree = LayoutTree::new();
+                let _ = tree.build_and_layout(&mut root, W, H, [-1.0, -1.0]);
+                for hovered in [false, true, false] {
+                    let mouse = if hovered && sortable {
+                        let head =
+                            find_focus(&root, "diag-th-align:th:name").expect("sortable header");
+                        let [x, y, w, h] = head.layout_bounds;
+                        [x + w * 0.5, y + h * 0.5]
+                    } else {
+                        [-1.0, -1.0]
+                    };
+                    sync_table_hover(&mut root, &mut tree, mouse, W, H);
+                    let _ = tree.build_and_layout_fast(&mut root, W, H, mouse, false, false);
+                    for (header, value, end) in [
+                        ("Name", "Item 05", false),
+                        ("Role", "User", false),
+                        ("Score", "65", true),
+                    ] {
+                        let head = crate::core::tree::find_in_tree(&root, |el| {
+                            el.text.as_deref().is_some_and(|s| s.starts_with(header))
+                        })
+                        .expect("header caption");
+                        let body = crate::core::tree::find_in_tree(&root, |el| {
+                            el.text.as_deref() == Some(value)
+                        })
+                        .expect("body caption");
+                        let edge = |el: &Element| {
+                            el.layout_bounds[0] + if end { el.layout_bounds[2] } else { 0.0 }
+                        };
+                        assert!((edge(head) - edge(body)).abs() < 1.0,
+                            "sortable={sortable}, cycle={cycle}, hover={hovered}, {header}: header={:?}, body={:?}, justify={:?}",
+                            head.layout_bounds, body.layout_bounds,
+                            find_focus(&root, "diag-th-align:th:name").map(|el| el.style.justify_content));
+                    }
+                }
+                let sort_column = if cycle < 3 { "name" } else { "score" };
+                find_focus(&root, &format!("diag-th-align:th:{sort_column}"))
+                    .and_then(|el| el.on_click.clone())
+            };
+            if let Some(click) = click {
+                click.borrow_mut()();
+                drain_deferred_view_remounts();
+            }
+        }
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+        crate::app::tree_hit::clear_hover_tracking();
+    }
+}
+
+#[test]
 fn data_table_collect_keeps_visible_cell_texts() {
     reset_registered_anchors();
     let live = Rc::new(RefCell::new(Element::new()));

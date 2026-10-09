@@ -817,6 +817,34 @@ pub(crate) fn snap_grid_lines(grids: &[(SnapGrid, f32)], visible: Signal<bool>) 
         })
 }
 
+const MAGNETIC_LINE_TOP: f32 = 72.0;
+const MAGNETIC_LINE_RANGE: f32 = 14.0;
+
+/// Track the painted guide itself: snap callbacks receive viewport-space origins,
+/// whereas the guide's authored top is relative to the arena's padding box.
+fn magnetic_snap_line() -> (Element, SnapPointFn) {
+    let viewport_y = Rc::new(Cell::new(None::<f32>));
+    let measured_y = viewport_y.clone();
+    let line = Element::new()
+        .absolute()
+        .left(0.0)
+        .top(MAGNETIC_LINE_TOP)
+        .w("100%")
+        .h(1.0)
+        .bg("primary")
+        .pointer_events_none()
+        .reactive_sync(move |el, _| {
+            let bounds = el.viewport_layout_bounds();
+            measured_y.set((bounds[2] > 0.0 && bounds[3] > 0.0).then_some(bounds[1]));
+            LayoutStatus::Clean
+        });
+    let snap: SnapPointFn = Rc::new(move |x, y| {
+        let line_y = viewport_y.get()?;
+        ((y - line_y).abs() <= MAGNETIC_LINE_RANGE).then_some([x, line_y])
+    });
+    (line, snap)
+}
+
 fn resize_handle(rect: Signal<[f32; 4]>, left: f32, top: f32, edges: Edges) -> Element {
     let cursor = edges.cursor().to_string();
     let chrome: Element = ui! {
@@ -1076,6 +1104,74 @@ mod drop_position_tests {
     use super::*;
     use rui::core::reactivity::create_root;
     use rui::utils::drag::{begin, end, tick, BeginDrag};
+
+    fn sync_line(line: &mut Element) {
+        let sync = line
+            .reactive_sync
+            .clone()
+            .expect("line tracks its viewport position");
+        sync.run(line, &mut rui::core::tree::LayoutTree::new());
+    }
+
+    #[test]
+    fn magnetic_line_follows_layout_and_scroll_and_releases_outside_range() {
+        let (mut line, snap) = magnetic_snap_line();
+        assert_eq!(snap(120.0, 72.0), None, "unlaid line has no snap target");
+        line.layout_bounds = [100.0, 473.0, 600.0, 1.0];
+        sync_line(&mut line);
+        for y in [459.0, 473.0, 487.0] {
+            assert_eq!(snap(120.0, y), Some([120.0, 473.0]));
+        }
+        for y in [441.0, 458.0, 488.0] {
+            assert_eq!(snap(120.0, y), None);
+        }
+        line.paint_scroll_acc = [25.0, 120.0];
+        sync_line(&mut line);
+        assert_eq!(snap(180.0, 360.0), Some([180.0, 353.0]));
+        assert_eq!(snap(180.0, 473.0), None, "old screen position must release");
+        line.layout_bounds[1] = 523.0;
+        sync_line(&mut line);
+        assert_eq!(snap(180.0, 410.0), Some([180.0, 403.0]));
+    }
+
+    #[test]
+    fn magnetic_line_drag_moves_freely_snaps_releases_and_persists_preview() {
+        let (_owner, ()) = create_root(|| {
+            let pos = Signal::new([16.0, 40.0]);
+            let (mut line, snap) = magnetic_snap_line();
+            line.layout_bounds = [100.0, 473.0, 600.0, 1.0];
+            sync_line(&mut line);
+            let _scope = drag_scope("magnetic-line-regression")
+                .threshold(0.0)
+                .restrict(Restrict::Rect([100.0, 400.0, 600.0, 224.0]))
+                .snap_fn(snap)
+                .on_drag_end(persist_delta_pos(pos))
+                .child(Element::new);
+            begin(BeginDrag {
+                scope_id: "magnetic-line-regression".into(),
+                draggable_id: "card".into(),
+                pointer: [137.0, 453.0],
+                grab_offset: [20.0, 12.0],
+                start_bounds: [117.0, 441.0, 176.0, 92.0],
+                from_list: None,
+                from_index: None,
+                item_type: "chip".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            for (pointer, expected) in [
+                ([157.0, 455.0], [137.0, 443.0]),
+                ([177.0, 471.0], [157.0, 473.0]),
+                ([197.0, 501.0], [177.0, 489.0]),
+                ([217.0, 471.0], [197.0, 473.0]),
+            ] {
+                assert!(tick(pointer[0], pointer[1], &[], [800.0, 800.0]));
+                assert_eq!(last_overlay_pos("magnetic-line-regression"), Some(expected));
+            }
+            assert!(end(&[]));
+            assert_eq!(pos.peek(), [96.0, 72.0]);
+        });
+    }
 
     #[test]
     fn snap_drop_persists_restricted_position_without_resnapping() {
@@ -1609,6 +1705,7 @@ pub(crate) fn DragShowcase() -> Element {
         "overlap=center · 未进入".to_string()
     });
     let snap_end_pos = use_signal("gal_drag_snap_end_pos", || [16.0_f32, 16.0]);
+    let snap_end_lines_visible = use_signal("gal_drag_snap_end_lines_visible", || false);
     let start_lock_pos = use_signal("gal_drag_start_lock_pos", || [16.0_f32, 16.0]);
     let fling_pos = use_signal("gal_drag_fling_pos", || [16.0_f32, 16.0]);
     let resize_rect = use_signal("gal_drag_resize_rect", || [40.0_f32, 28.0, 160.0, 100.0]);
@@ -2020,7 +2117,7 @@ pub(crate) fn DragShowcase() -> Element {
             }),
     );
 
-    let snap_fn_line: SnapPointFn = Rc::new(|x, _y| Some([x, 72.0]));
+    let (snap_fn_guide, snap_fn_line) = magnetic_snap_line();
     let snap_fn_board = ui! {
         <DragProvider
             id="gal-drag-snap-fn"
@@ -2032,7 +2129,7 @@ pub(crate) fn DragShowcase() -> Element {
             <Box
                 relative={true}
                 w="100%"
-                min_h="10rem"
+                min_h="14rem"
                 overflow="hidden"
                 rounded="0.75rem"
                 bg="background"
@@ -2040,17 +2137,9 @@ pub(crate) fn DragShowcase() -> Element {
                 border_width="1px"
                 border_color="border"
             >
-                <Box
-                    absolute={true}
-                    left="0"
-                    top="72px"
-                    w="100%"
-                    h="1px"
-                    bg="primary"
-                    pointer_events="none"
-                />
+                { snap_fn_guide }
                 <Draggable id="snap-fn-tile" stack="auto">
-                    { free_move_tile("F", "snap_fn → y=72", snap_fn_pos, 0, "secondary") }
+                    { free_move_tile("F", "上边缘吸附 · 14px", snap_fn_pos, 0, "secondary") }
                 </Draggable>
             </Box>
         </DragProvider>
@@ -2110,6 +2199,7 @@ pub(crate) fn DragShowcase() -> Element {
                         border_width="1px"
                         border_color="border"
                     >
+                        { snap_grid_lines(&[(snap_end_grid, 0.16)], snap_end_lines_visible) }
                         <Draggable id="snap-end-tile" stack="auto">
                             { free_move_tile("E", "endOnly + range 18 · 中心钳位", snap_end_pos, 0, "secondary") }
                         </Draggable>
@@ -2954,7 +3044,7 @@ pub(crate) fn DragShowcase() -> Element {
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"snap_fn · 水平磁吸线"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "RSX `<DragProvider snap_fn={…}>` 与 Builder `.snap_fn` 同管道；把幽灵 Y 吸到 y=72。"
+                    "自由二维拖拽；卡片上边缘距线 14px 内吸附，拉远可脱离。磁吸线位于区域内 y=72，随页面滚动。"
                 </Label>
                 { snap_fn_board }
 
@@ -2966,7 +3056,12 @@ pub(crate) fn DragShowcase() -> Element {
                 { dropzone_board }
 
                 <Separator />
-                <Label font_weight="600" text_size="0.875rem">"SnapGrid endOnly + range · RestrictAnchor::Center"</Label>
+                <HStack w="100%" items="center" justify="between" gap="0.75rem" wrap="wrap">
+                    <Label font_weight="600" text_size="0.875rem">"SnapGrid endOnly + range · RestrictAnchor::Center"</Label>
+                    <Switch id="gal-drag-snap-end-lines" checked={snap_end_lines_visible}>
+                        "网格线"
+                    </Switch>
+                </HStack>
                 <Label text_size="0.75rem" color="muted-foreground">
                     "拖中自由走；靠近格子 18px 内松手才吸（interact endOnly + range）。restrict_anchor=center 只钳中点，角可以探出虚线框。"
                 </Label>

@@ -90,6 +90,19 @@ fn run_frames(window: Arc<dyn Window>) {
                 .border_color("border")
                 .border_style("dashed")
                 .child(crate::gallery_drag::snap_grid_lines(grids, visible))
+                .child(
+                    Element::new()
+                        .absolute()
+                        .left(16.0)
+                        .top(16.0)
+                        .w(176.0)
+                        .h(92.0)
+                        .rounded(12.0)
+                        .bg("muted")
+                        .border("destructive", 3.0)
+                        .overflow("hidden")
+                        .child(Element::new().text("S").text_size(44.0)),
+                )
         };
         state.rebuild_ui(
             Element::new()
@@ -116,12 +129,13 @@ fn run_frames(window: Arc<dyn Window>) {
                 .zip(full.pixels.chunks_exact(4))
                 .enumerate()
                 .filter(|(i, (a, b))| {
-                    // Compare grid ink inside the board, independently of the
+                    // Compare grid ink and foreground card chrome, independently of the
                     // dashed border's antialiased coverage at fractional DPI.
                     let scale = state.ui_scale();
                     let x = (*i as u32 % image.width) as f32 / scale;
                     let y = (*i as u32 / image.width) as f32 / scale;
-                    x > 24.0 && x < 616.0
+                    x > 24.0
+                        && x < 616.0
                         && ((y > 24.0 && y < 176.0) || (y > 214.0 && y < 366.0))
                         && a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 2)
                 })

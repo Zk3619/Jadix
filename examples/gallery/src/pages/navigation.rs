@@ -1017,7 +1017,6 @@ pub(crate) fn PaginationShowcase() -> Element {
             <PaginationItem>
                 <PaginationPrevious
                     id="gal-pg-a-prev"
-                    text="上一页"
                     disabled={page <= 1}
                     on_click={move || {
                         page_a.update(|p| *p = (*p).saturating_sub(1).max(1));
@@ -1051,7 +1050,6 @@ pub(crate) fn PaginationShowcase() -> Element {
             <PaginationItem>
                 <PaginationNext
                     id="gal-pg-a-next"
-                    text="下一页"
                     disabled={page >= COUNT_A}
                     on_click={move || {
                         page_a.update(|p| *p = (*p + 1).min(COUNT_A));
@@ -1079,25 +1077,30 @@ pub(crate) fn PaginationShowcase() -> Element {
             RANGE_B.sibling_count,
             RANGE_B.right_count,
         )
-        .previous_text("上一页")
-        .next_text("下一页")
         .jumper(true)
-        .jumper_button_text("跳转")
         .into();
 
     let status_a = rui::reactive!("examples/gallery/PaginationShowcase:status_a", move || {
-        let t = format!(
-            "A · Page {} / {}（left=1 sibling=1 right=1）",
-            page_a.get(),
-            COUNT_A
+        let t = rui::tr_with_default_zh(
+            "gallery.pagination.status_a",
+            "A · Page {page} / {pages} (left=1 sibling=1 right=1)",
+            "A · 第 {page} / {pages} 页（left=1 sibling=1 right=1）",
+            &[
+                ("page", &page_a.get().to_string()),
+                ("pages", &COUNT_A.to_string()),
+            ],
         );
         ui! { <Label text_size="0.875rem">{ t }</Label> }
     });
     let status_b = rui::reactive!("examples/gallery/PaginationShowcase:status_b", move || {
-        let t = format!(
-            "B · Page {} / {}（left=3 sibling=2 right=4 · auto-fit · jumper）",
-            page_b.get(),
-            COUNT_B
+        let t = rui::tr_with_default_zh(
+            "gallery.pagination.status_b",
+            "B · Page {page} / {pages} (left=3 sibling=2 right=4 · auto-fit · jumper)",
+            "B · 第 {page} / {pages} 页（left=3 sibling=2 right=4 · auto-fit · jumper）",
+            &[
+                ("page", &page_b.get().to_string()),
+                ("pages", &COUNT_B.to_string()),
+            ],
         );
         ui! { <Label text_size="0.875rem">{ t }</Label> }
     });

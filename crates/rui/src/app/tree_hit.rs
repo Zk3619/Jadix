@@ -12,6 +12,62 @@ use crate::layout::layout_tree::portal_hit_passthrough;
 
 type HoverCb = Rc<RefCell<dyn FnMut(bool)>>;
 
+/// Resolve hover against freshly laid out bounds after a page structure change.
+/// Never synthesize a leave with a sentinel pointer during a reactive rebuild.
+pub(crate) fn sync_pointer_chrome_after_layout(
+    root: &mut Element,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    mouse: [f32; 2],
+    width: f32,
+    height: f32,
+) -> crate::core::tree::LayoutStatus {
+    let mut impact =
+        sync_pointer_component_chrome_after_layout(root, layout_tree, mouse, width, height);
+    let focused = crate::core::reactivity::use_signal("__rui_button_focus_id", String::new).peek();
+    crate::style::sync_class_variants_subtree(
+        root,
+        mouse,
+        &focused,
+        crate::style::is_dark_theme(),
+        width,
+        height,
+        layout_tree,
+        &mut impact,
+    );
+    impact
+}
+
+/// Resolve component paint against final animated bounds without ticking CSS again.
+pub(crate) fn sync_pointer_component_chrome_after_layout(
+    root: &mut Element,
+    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    mouse: [f32; 2],
+    width: f32,
+    height: f32,
+) -> crate::core::tree::LayoutStatus {
+    apply_pointer_hover_reconcile(root, mouse[0], mouse[1], true);
+    let mut impact = crate::core::tree::LayoutStatus::Clean;
+    crate::components::button::sync_button_hover_paint_subtree(
+        root,
+        layout_tree,
+        &mut impact,
+        width,
+        height,
+        [0.0, 0.0],
+    );
+    crate::components::sidebar::sync_sidebar_menu_button_paint_subtree(
+        root,
+        layout_tree,
+        &mut impact,
+    );
+    crate::components::tree_view::sync_tree_view_hover_paint_subtree(
+        root,
+        layout_tree,
+        &mut impact,
+    );
+    impact
+}
+
 /// Opt-in containers receive hover while an interactive descendant is targeted.
 pub(crate) const ATTR_HOVER_REGION: &str = "rui_hover_region";
 

@@ -7,6 +7,14 @@ use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 mod textarea_present_tests;
 
 #[cfg(target_os = "windows")]
+#[path = "state_pagination_present_tests.rs"]
+mod pagination_present_tests;
+
+#[cfg(target_os = "windows")]
+#[path = "state_tree_view_present_tests.rs"]
+mod tree_view_present_tests;
+
+#[cfg(target_os = "windows")]
 #[path = "state_drag_present_tests.rs"]
 mod drag_present_tests;
 

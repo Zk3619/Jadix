@@ -1268,6 +1268,7 @@ impl From<TableBuilder> for Element {
                 head = apply_cell_align(head, col.align);
                 if can_sort {
                     let col_id = col.id.clone();
+                    let align = col.align;
                     let sort_sig = sort;
                     let bid = format!("{id}:th:{}", col.id);
                     head = button(bid)
@@ -1275,6 +1276,12 @@ impl From<TableBuilder> for Element {
                         .size("sm")
                         .w_full()
                         .h(header_h)
+                        // Apply before Button snapshots its class baseline; later
+                        // layout/hover resolution must retain the column alignment.
+                        .style(move |mut b| {
+                            apply_cell_align_in_place(&mut b.el, align);
+                            b.px(tokens::SPACE_2)
+                        })
                         .on_click(move || {
                             let next = cycle_sort(&sort_sig.peek(), &col_id);
                             sort_sig.set(next);
@@ -1288,7 +1295,6 @@ impl From<TableBuilder> for Element {
                         .into();
                     head = head.min_w(0.0).justify_self_kw("stretch");
                     head.set_attr("data-slot", "table-head");
-                    head = apply_cell_align(head, col.align);
                 }
                 header_row = header_row.child(head);
             }

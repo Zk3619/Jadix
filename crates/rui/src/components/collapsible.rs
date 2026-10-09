@@ -83,7 +83,7 @@ const SLOT_TRIGGER_ICON: &str = "collapsible-trigger-icon";
 const SLOT_CONTENT: &str = "collapsible-content";
 const SLOT_CONTENT_INNER: &str = "collapsible-content-inner";
 
-const COLLAPSE_MS: f32 = 200.0;
+const COLLAPSE_MS: f32 = crate::utils::collapse_panel::CollapseKeyframes::COLLAPSIBLE.duration_ms;
 const CHEVRON_PX: f32 = 16.0;
 const CHEVRON_OPEN_DEG: f32 = 180.0;
 const TRIGGER_WEIGHT: u16 = 500;
@@ -140,14 +140,12 @@ fn stamp_content_text_weight(el: &mut Element) {
     });
 }
 
-fn register_open_redraw_effect(instance_id: &str, open_sig: Signal<bool>) {
-    let key = format!("{instance_id}__collapsible_open_redraw");
-    use_signal(key.as_str(), move || {
-        create_effect(move || {
-            if let Some(_) = open_sig.try_get() {
-                crate::app::runtime::request_redraw();
-            }
-        });
+fn register_open_redraw_effect(open_sig: Signal<bool>) {
+    // Each mount owns its observer; a named registration flag survives disposal.
+    create_effect(move || {
+        if open_sig.try_get().is_some() {
+            crate::app::runtime::request_redraw();
+        }
     });
 }
 
@@ -277,7 +275,7 @@ pub fn collapsible_scope(
 ) -> Element {
     let id = resolve_instance_id(id, "collapsible");
     let open = resolve_bool_signal(open, &id, "open", default_open);
-    register_open_redraw_effect(&id, open);
+    register_open_redraw_effect(open);
     if exclusive {
         if let Some(g) = group.filter(|s| !s.trim().is_empty()) {
             bind_collapsible_exclusive(id.clone(), g, open);
@@ -312,9 +310,16 @@ pub fn collapsible_content(body: impl Fn() -> Element + 'static) -> Element {
     let sync_presence = presence.clone();
     let mounted = presence.mounted();
     sync_collapse_panel_open(open_sig, &presence);
+    let open_presence = presence.clone();
+    create_effect(move || {
+        let want = open_sig.try_get().unwrap_or(false);
+        sync_collapse_panel_presence(&open_presence, want);
+    });
 
     reactive_anchor(effect_anchor, move || {
-        let want = open_sig.try_get().unwrap_or(false);
+        // Open/close drives presence without rebuilding still-mounted content.
+        // Preserve child observers and the current animation clip on reversal.
+        let want = open_sig.try_peek().unwrap_or(false);
         sync_collapse_panel_presence(&sync_presence, want);
         if mounted.try_get().is_none_or(|m| !m) {
             let mut hidden = Element::new();
@@ -335,6 +340,7 @@ pub fn collapsible_content(body: impl Fn() -> Element + 'static) -> Element {
         let mut inner: Element = vstack()
             .w("100%")
             .min_w(0.0)
+            .flex_shrink(0.0)
             .pb(tokens::SPACE_4)
             .child(body)
             .into();
@@ -503,6 +509,7 @@ pub fn CollapsibleContent(children: Option<Element>) -> Element {
     let mut inner: Element = vstack()
         .w("100%")
         .min_w(0.0)
+        .flex_shrink(0.0)
         .pb(tokens::SPACE_4)
         .child(body)
         .into();

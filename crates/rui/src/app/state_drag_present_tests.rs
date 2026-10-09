@@ -5,6 +5,22 @@ use super::*;
 #[test]
 #[ignore = "requires a native Windows GPU surface"]
 fn free_drag_native_frames_follow_pointer_before_release() {
+    run_native_drag_test(false, false);
+}
+
+#[test]
+#[ignore = "requires a native Windows GPU surface"]
+fn dropzone_native_boundary_crossings_match_full_repaint() {
+    run_native_drag_test(true, false);
+}
+
+#[test]
+#[ignore = "requires a native Windows GPU surface"]
+fn dropzone_native_slow_drag_first_two_frames_match_full_repaint() {
+    run_native_drag_test(true, true);
+}
+
+fn run_native_drag_test(dropzone: bool, slow: bool) {
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
     use winit::event_loop::{ActiveEventLoop, EventLoop};
@@ -13,6 +29,8 @@ fn free_drag_native_frames_follow_pointer_before_release() {
 
     struct Harness {
         proxy: winit::event_loop::EventLoopProxy,
+        dropzone: bool,
+        slow: bool,
         callback: Option<Box<dyn FnMut(&dyn ActiveEventLoop, Option<WindowEvent>) -> bool>>,
     }
     impl ApplicationHandler for Harness {
@@ -27,7 +45,12 @@ fn free_drag_native_frames_follow_pointer_before_release() {
                     )
                     .unwrap(),
             );
-            self.callback = Some(run_drag_frames(window, self.proxy.clone()));
+            self.callback = Some(run_drag_frames(
+                window,
+                self.proxy.clone(),
+                self.dropzone,
+                self.slow,
+            ));
         }
         fn window_event(
             &mut self,
@@ -57,6 +80,8 @@ fn free_drag_native_frames_follow_pointer_before_release() {
     event_loop
         .run_app(Harness {
             proxy,
+            dropzone,
+            slow,
             callback: None,
         })
         .unwrap();
@@ -65,6 +90,8 @@ fn free_drag_native_frames_follow_pointer_before_release() {
 fn run_drag_frames(
     window: Arc<dyn Window>,
     proxy: winit::event_loop::EventLoopProxy,
+    dropzone: bool,
+    slow: bool,
 ) -> Box<
     dyn FnMut(&dyn winit::event_loop::ActiveEventLoop, Option<winit::event::WindowEvent>) -> bool,
 > {
@@ -144,7 +171,7 @@ fn run_drag_frames(
     let initial = crate::core::tree::find_by_attr(
         &state.borrow().as_ref().unwrap().root_element,
         crate::utils::drag::ATTR_DRAG_DRAGGABLE,
-        "arb-auto-1",
+        if dropzone { "dz-card" } else { "arb-auto-1" },
     )
     .unwrap()
     .layout_bounds;
@@ -184,23 +211,30 @@ fn run_drag_frames(
         "offscreen local Gallery portals must not reserve global occupancy"
     );
     let hits = collect_hits(&state.borrow().as_ref().unwrap().root_element);
-    let sources = [
-        "arb-pin-top",
-        "arb-pin-bottom",
-        "arb-pin-top",
-        "arb-auto-1",
-        "arb-auto-2",
-        "arb-auto-1",
-        "arb-keep-hi",
-        "arb-keep-lo",
-    ];
-    let cases = sources.map(|id| {
-        hits.iter()
-            .find(|h| h.id == id && h.is_draggable)
-            .unwrap()
-            .rect
-            .to_bounds()
-    });
+    let sources: Vec<&str> = if dropzone {
+        vec!["dz-card"]
+    } else {
+        vec![
+            "arb-pin-top",
+            "arb-pin-bottom",
+            "arb-pin-top",
+            "arb-auto-1",
+            "arb-auto-2",
+            "arb-auto-1",
+            "arb-keep-hi",
+            "arb-keep-lo",
+        ]
+    };
+    let cases: Vec<_> = sources
+        .iter()
+        .map(|id| {
+            hits.iter()
+                .find(|h| h.id == *id && h.is_draggable)
+                .unwrap()
+                .rect
+                .to_bounds()
+        })
+        .collect();
     let mut source = 0;
     let mut bounds = cases[source];
     let mut grab = [10.0, 8.0];
@@ -213,12 +247,97 @@ fn run_drag_frames(
     let mut started = false;
     // Start with T/B on a fresh Gallery, then exercise auto and keep providers.
     // Multiple pointer samples before release catch old-pose raster residue.
-    let mut deltas = [[40.0, 30.0], [220.0, 50.0], [300.0, 50.0]];
+    let mut deltas = vec![[40.0, 30.0], [220.0, 50.0], [300.0, 50.0]];
+    if dropzone {
+        let target = hits
+            .iter()
+            .find(|h| h.id == "dz-target")
+            .unwrap()
+            .rect
+            .to_bounds();
+        // Cross each edge repeatedly while the enter/leave callback remounts
+        // the HUD, including positions where the transparent chip straddles it.
+        deltas = (0..4)
+            .flat_map(|_| {
+                [
+                    [target[0] - bounds[2] * 0.5 - 8.0, target[1] + 32.0],
+                    [target[0] - bounds[2] * 0.5 + 8.0, target[1] + 32.0],
+                    [target[0] + 40.0, target[1] - bounds[3] * 0.5 - 8.0],
+                    [target[0] + 40.0, target[1] - bounds[3] * 0.5 + 8.0],
+                    [
+                        target[0] + target[2] - bounds[2] * 0.5 + 8.0,
+                        target[1] + 64.0,
+                    ],
+                    [
+                        target[0] + target[2] - bounds[2] * 0.5 - 8.0,
+                        target[1] + 64.0,
+                    ],
+                    [
+                        target[0] + 40.0,
+                        target[1] + target[3] - bounds[3] * 0.5 + 8.0,
+                    ],
+                    [
+                        target[0] + 40.0,
+                        target[1] + target[3] - bounds[3] * 0.5 - 8.0,
+                    ],
+                ]
+            })
+            .map(|origin| [origin[0] - bounds[0], origin[1] - bounds[1]])
+            .collect();
+        if slow {
+            // Keep old/new glyph and border footprints overlapping, including
+            // fractional positions and repeated enter/leave HUD remounts.
+            deltas = (0..64)
+                .map(|step| [6.0 + step as f32, step as f32 * 0.5])
+                .collect();
+            for cycle in 0..2 {
+                for step in 0..24 {
+                    let offset = if cycle == 0 {
+                        step as f32
+                    } else {
+                        23.0 - step as f32
+                    };
+                    deltas.push([
+                        target[0] - bounds[2] * 0.5 - 6.0 + offset * 0.5 - bounds[0],
+                        target[1] + 32.0 - bounds[1],
+                    ]);
+                }
+                for step in 0..24 {
+                    let offset = if cycle == 0 {
+                        step as f32
+                    } else {
+                        23.0 - step as f32
+                    };
+                    deltas.push([
+                        target[0] + 40.0 - bounds[0],
+                        target[1] - bounds[3] * 0.5 - 6.0 + offset * 0.5 - bounds[1],
+                    ]);
+                }
+            }
+        }
+        if slow {
+            // Drag through the live HUD, not only around the target edges.
+            // Its text remount and transparent card/glyph footprints overlap.
+            for reverse in [false, true] {
+                for step in 0..96 {
+                    let offset = if reverse { 95 - step } else { step } as f32;
+                    deltas.push([
+                        target[0] - bounds[2] * 0.5 - 4.0 + offset - bounds[0],
+                        target[1] + target[3] * 0.5 - bounds[3] * 0.5 + (offset * 0.5).sin() * 4.0
+                            - bounds[1],
+                    ]);
+                }
+            }
+        }
+        // Repeat without full-repaint comparisons between samples so stale
+        // pixels have a chance to accumulate along the complete drag path.
+        deltas.extend_from_within(..);
+    }
     let mut sample = 0usize;
     let mut pending = false;
     let mut owner = Some(owner);
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(45));
+        std::thread::sleep(std::time::Duration::from_secs(120));
         proxy.wake_up();
     });
     Box::new(move |event_loop, event| {
@@ -239,31 +358,89 @@ fn run_drag_frames(
                     Some(sources[source]),
                     "the intended tile must own the live drag"
                 );
-                if sample == deltas.len() - 1 {
-                    if source < 3 {
+                if dropzone {
+                    let live = state.borrow();
+                    let card = crate::core::tree::find_by_attr(
+                        &live.as_ref().unwrap().root_element,
+                        crate::utils::drag::ATTR_DRAG_DRAGGABLE,
+                        "dz-card",
+                    )
+                    .unwrap();
+                    let mut translations = Vec::new();
+                    crate::core::tree::walk_elements(card, |el| {
+                        translations.push(el.style.translate);
+                    });
+                    assert!(
+                        translations.iter().any(|t| {
+                            (t[0] - delta[0]).abs() < 0.01 && (t[1] - delta[1]).abs() < 0.01
+                        }),
+                        "drag body must follow this pointer sample: sample={sample} delta={delta:?} translations={translations:?}"
+                    );
+                }
+                if (dropzone && sample < deltas.len() / 2) || sample == deltas.len() - 1 {
+                    if !dropzone && source < 3 {
                         let x = ((bounds[0] + delta[0] + 1.0) * scale) as u32;
                         let y = ((bounds[1] + delta[1] + 75.0) * scale) as u32;
                         let i = ((y * image.width + x) * 4) as usize;
                         assert!(image.pixels[i..i + 3].iter().all(|c| *c < 80),
                             "exposed top/bottom border must remain visible: source={source} bounds={bounds:?} delta={delta:?}");
                     }
+                    // Read both retained frames before the reference repaint,
+                    // which would otherwise hide a one-frame erase/replay lag.
+                    let second = slow.then(|| frame(&state, pointer, true));
                     state.borrow_mut().as_mut().unwrap().mark_full_redraw();
                     let reference = frame(&state, pointer, true);
-                    let different = image
-                        .pixels
-                        .chunks_exact(4)
-                        .zip(reference.pixels.chunks_exact(4))
-                        .filter(|(partial, full)| {
-                            partial[..3]
-                                .iter()
-                                .zip(&full[..3])
-                                .any(|(a, b)| a.abs_diff(*b) > 16)
-                        })
-                        .count();
-                    assert_eq!(
+                    for (frame_index, image) in
+                        std::iter::once(&image).chain(second.iter()).enumerate()
+                    {
+                        let different = image
+                            .pixels
+                            .chunks_exact(4)
+                            .zip(reference.pixels.chunks_exact(4))
+                            .filter(|(partial, full)| {
+                                partial[..3]
+                                    .iter()
+                                    .zip(&full[..3])
+                                    .any(|(a, b)| a.abs_diff(*b) > 16)
+                            })
+                            .count();
+                        let first_differences: Vec<_> = image
+                            .pixels
+                            .chunks_exact(4)
+                            .zip(reference.pixels.chunks_exact(4))
+                            .enumerate()
+                            .filter(|(_, (a, b))| {
+                                a[..3].iter().zip(&b[..3]).any(|(a, b)| a.abs_diff(*b) > 16)
+                            })
+                            .take(4)
+                            .map(|(i, (a, b))| {
+                                (
+                                    i as u32 % image.width,
+                                    i as u32 / image.width,
+                                    a.to_vec(),
+                                    b.to_vec(),
+                                )
+                            })
+                            .collect();
+                        if different > 0 {
+                            for (name, img) in [("partial", image), ("full", &reference)] {
+                                let path =
+                                    std::env::temp_dir().join(format!("rui-drag-{name}.png"));
+                                ::image::save_buffer(
+                                    path,
+                                    &img.pixels,
+                                    img.width,
+                                    img.height,
+                                    ::image::ColorType::Rgba8,
+                                )
+                                .unwrap();
+                            }
+                        }
+                        assert_eq!(
                         different, 0,
-                        "partial drag must match a full repaint: source={source} sample={sample} delta={delta:?}"
+                        "partial drag must match a full repaint: source={source} sample={sample} frame={frame_index} delta={delta:?} pixels={first_differences:?}"
                     );
+                    }
                 }
                 sample += 1;
                 pending = false;
@@ -319,7 +496,8 @@ fn run_drag_frames(
                         3 | 6 => [[100.0, 60.0], [200.0, 100.0], [160.0, 80.0]],
                         4 => [[20.0, 20.0], [160.0, 60.0], [250.0, 80.0]],
                         _ => [[-60.0, 40.0], [-100.0, -20.0], [100.0, -20.0]],
-                    };
+                    }
+                    .to_vec();
                     app.cursor_pos = winit::dpi::PhysicalPosition::new(
                         ((bounds[0] + grab[0]) * scale) as f64,
                         ((bounds[1] + grab[1]) * scale) as f64,
