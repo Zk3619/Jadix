@@ -175,6 +175,11 @@ pub(super) fn apply_input_drag_release(rest: &str) {
     }
 }
 
+// Retargeted immediately before the animation tick in RedrawRequested.
+fn retarget_scrollbar_fade(fade: &crate::style::CubicTween, target: f32) {
+    fade.set_at_frame_start(target);
+}
+
 impl super::App {
     pub(super) fn bind_pointer_window(&mut self, id: WindowId) {
         if self.pointer_window == Some(id) {
@@ -1043,13 +1048,13 @@ impl super::App {
                 || now < visible_until_x
                 || text_drag_on_rest;
             match vis_x.as_str() {
-                "never" => fade_x.set(0.0),
-                "always" => fade_x.set(1.0),
+                "never" => retarget_scrollbar_fade(&fade_x, 0.0),
+                "always" => retarget_scrollbar_fade(&fade_x, 1.0),
                 _ => {
                     if spring_eligible_x {
-                        fade_x.set(if keep_visible_x { 1.0 } else { 0.0 });
+                        retarget_scrollbar_fade(&fade_x, if keep_visible_x { 1.0 } else { 0.0 });
                     } else {
-                        fade_x.set(0.0);
+                        retarget_scrollbar_fade(&fade_x, 0.0);
                     }
                 }
             }
@@ -1062,13 +1067,13 @@ impl super::App {
                 || now < visible_until_y
                 || text_drag_on_rest;
             match vis_y.as_str() {
-                "never" => fade_y.set(0.0),
-                "always" => fade_y.set(1.0),
+                "never" => retarget_scrollbar_fade(&fade_y, 0.0),
+                "always" => retarget_scrollbar_fade(&fade_y, 1.0),
                 _ => {
                     if spring_eligible_y {
-                        fade_y.set(if keep_visible_y { 1.0 } else { 0.0 });
+                        retarget_scrollbar_fade(&fade_y, if keep_visible_y { 1.0 } else { 0.0 });
                     } else {
-                        fade_y.set(0.0);
+                        retarget_scrollbar_fade(&fade_y, 0.0);
                     }
                 }
             }
@@ -4991,4 +4996,63 @@ fn root_has_input_caret(el: &crate::core::tree::Element) -> bool {
         return true;
     }
     el.children.iter().any(root_has_input_caret)
+}
+
+#[cfg(test)]
+mod scrollbar_fade_clock_tests {
+    use super::retarget_scrollbar_fade;
+    use crate::style::{tick_animations, CubicTween};
+
+    #[test]
+    fn scrollbar_hide_after_idle_keeps_its_first_frame_and_full_duration() {
+        let fade = CubicTween::new_ui_transition(0.0);
+        fade.set(1.0);
+        tick_animations(0.08);
+        tick_animations(0.08);
+        assert_eq!(fade.peek(), 1.0);
+        // Hover has settled, focus/caret wakeups run, then the hide deadline
+        // retargets before tick. None of the preceding idle interval is fade time.
+        tick_animations(0.52);
+        retarget_scrollbar_fade(&fade, 0.0);
+        assert!(tick_animations(0.52).any);
+        assert_eq!(fade.peek(), 1.0, "idle time consumed the start of the fade");
+        for _ in 0..8 {
+            retarget_scrollbar_fade(&fade, 0.0);
+            tick_animations(0.016);
+        }
+        assert!(fade.is_active(), "a 150ms fade must still run at 128ms");
+        assert!(fade.peek() > 0.0 && fade.peek() < 1.0);
+        for _ in 0..2 {
+            retarget_scrollbar_fade(&fade, 0.0);
+            tick_animations(0.016);
+        }
+        assert!(!fade.is_active());
+        assert_eq!(fade.peek(), 0.0);
+    }
+
+    #[test]
+    fn scrollbar_start_does_not_pause_other_cubics_or_jump_on_reversal() {
+        let fade = CubicTween::new_ui_transition(1.0);
+        let other = CubicTween::new_ui_transition(0.0);
+        other.set(1.0);
+        retarget_scrollbar_fade(&fade, 0.0);
+        tick_animations(0.08);
+        assert_eq!(fade.peek(), 1.0);
+        assert!(
+            other.peek() > 0.5,
+            "an existing animation must keep advancing"
+        );
+        tick_animations(0.04);
+        let mid = fade.peek();
+        assert!(mid > 0.0 && mid < 1.0);
+        retarget_scrollbar_fade(&fade, 1.0);
+        tick_animations(0.08);
+        assert_eq!(
+            fade.peek(),
+            mid,
+            "reversal reused the preceding frame interval"
+        );
+        tick_animations(0.016);
+        assert!(fade.peek() > mid);
+    }
 }

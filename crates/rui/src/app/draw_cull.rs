@@ -1170,9 +1170,9 @@ pub(crate) fn region_scissors_keeping_stable_page_captions(
 ) -> Vec<[f32; 4]> {
     // Translated slots need their complete old/new repair area. A portal
     // elsewhere also must not make ordinary page repairs preserve captions.
-    let moving = paints.iter().any(|p| {
-        p.key == dirty.key && !p.overlay && p.rest.is_some_and(|rest| rest != p.bounds)
-    });
+    let moving = paints
+        .iter()
+        .any(|p| p.key == dirty.key && !p.overlay && p.rest.is_some_and(|rest| rest != p.bounds));
     let near_portal = pieces.iter().any(|piece| {
         shadow.is_some_and(|bounds| intersect_rects(*piece, bounds).is_some())
             || stamps
@@ -3230,7 +3230,9 @@ pub(crate) fn prepare_node_present_dirties_ex(
                 if local_prev.is_none() {
                     leftover_poses.push(PaintDirty {
                         key: dirty.key,
-                        bounds: old,
+                        // The old pose needs the same raster fringe as the new
+                        // one, or a separated drag leaves its rounded outline.
+                        bounds: padded_xywh(old, 2.0 / ui_scale.max(1e-6)),
                         kind: PaintDirtyKind::Region,
                     });
                 } else {
@@ -3794,7 +3796,13 @@ fn clip_rect_against_layered_siblings(
     }
     let s = slot_scale.max(0.0);
     let has_keyed = paints_has_keyed_slot(dirty_key, dirty_bounds, node_paints);
-    for p in node_paints {
+    let host_idx = node_paints
+        .iter()
+        .position(|p| slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed))
+        .unwrap_or(usize::MAX);
+    let rest_host = matching_rest_host(dirty_key, dirty_bounds, node_paints)
+        .map(|bounds| scale_xywh(bounds, s));
+    for (i, p) in node_paints.iter().enumerate() {
         if !p.layered || p.overlay || p.bounds[2] <= 0.0 || p.bounds[3] <= 0.0 {
             continue;
         }
@@ -3830,6 +3838,20 @@ fn clip_rect_against_layered_siblings(
         // PartialLoad (stacked enter ring / hide ghost) or punched a pill hole
         // with no recapture. Keep clipping a *peer* overlay (rail vs pill).
         if occ[2] > rect[2] * 1.5 + 8.0 {
+            continue;
+        }
+        // Earlier rest-overlapping layers are underlay. In particular, a
+        // textarea's absolute text viewport must not carve its later overlay
+        // rail down to the sliver outside the viewport's horizontal padding.
+        // Rest-disjoint captions and later foreground peers still clip. Keep
+        // the same overlapping-circle exception as the foreign-sibling path.
+        if i < host_idx
+            && rest_host.is_some_and(|host| {
+                intersect_rects(host, occ).is_some()
+                    && (!crate::app::damage::is_rest_stack_chip(host)
+                        || !crate::app::damage::is_rest_stack_chip(occ))
+            })
+        {
             continue;
         }
         rect = shrink_aabb_to_exclude(rect, occ);
@@ -4544,6 +4566,23 @@ pub(crate) fn skip_in_flow_under_layered_overlay(
     if matching_slot_is_layered(dirty.key, dirty.bounds, node_paints) {
         return false;
     }
+    // A rail only reconstructs its small overlap. It cannot replace a dirty
+    // field's own fill, border or focus ring outside that hole. Only glyph-only
+    // wrapping can yield its repaint to the layered underlay capture.
+    let has_keyed = paints_has_keyed_slot(dirty.key, dirty.bounds, node_paints);
+    if node_paints.iter().any(|p| {
+        if !slot_matches_dirty(dirty.key, dirty.bounds, p, has_keyed) {
+            return false;
+        }
+        let lo = p.instance.0.min(instances.len());
+        let hi = p.instance.1.min(instances.len());
+        instances[lo..hi].iter().enumerate().any(|(offset, inst)| {
+            !nested_descendant_owns(p, node_paints, lo + offset, |q| q.instance)
+                && instance_has_dest_ink(inst)
+        })
+    }) {
+        return false;
+    }
     nodes.iter().any(|o| {
         o.kind == PaintDirtyKind::Node
             && o.key != dirty.key
@@ -4787,9 +4826,16 @@ pub(crate) fn node_present_glyphs_for_dirty(
             // but uses a layout-node key. `text_hits_damage` would recapture
             // neighbor captions on the same band (gallery: data_table hover
             // stamped invoice 「Status」 as 「Sta」 on Method).
-            let slot_owned = node_paints
-                .iter()
-                .any(|p| !p.overlay && p.key == dirty.key && p.text.0 < p.text.1);
+            // Layered regions reconstruct the scene in the hole, including a
+            // moved plate's vacated pose. Its key still names the live plate,
+            // but that plate's text range cannot restore exposed peer glyphs.
+            let slot_owned = node_paints.iter().any(|p| {
+                !p.overlay
+                    && !p.layered
+                    && p.key == dirty.key
+                    && p.text.0 < p.text.1
+                    && intersect_rects(p.bounds, dirty.bounds).is_some()
+            });
             if slot_owned {
                 for (i, _n) in page_text.iter().enumerate() {
                     if glyph_in_dirty_slot(i, dirty, page_text, node_paints) {
@@ -5980,7 +6026,7 @@ mod tests {
             "gap between the live cell and its last pose was cleared\n {dirties:?}"
         );
         assert!(
-            dirties.iter().any(|d| (d.bounds[1] - stale[1]).abs() < 1.0),
+            dirties.iter().any(|d| aabb_covers(d.bounds, stale)),
             "the leftover pose was not erased\n {dirties:?}"
         );
     }
@@ -6704,6 +6750,50 @@ mod tests {
     }
 
     #[test]
+    fn entering_scrollbar_must_not_suppress_textarea_focus_repaint() {
+        let bounds = [306.0, 350.0, 256.0, 120.0];
+        let rail = [310.0, 459.0, 248.0, 8.0];
+        let mut field = slot(1, bounds, (0, 0));
+        field.instance = (0, 2);
+        let mut track = slot(2, rail, (0, 0));
+        track.instance = (1, 2);
+        track.layered = true;
+        let mut focus = blank_instance(bounds[0], bounds[1], bounds[2], bounds[3]);
+        focus.border_width = 1.0;
+        focus.border_color = [0.5, 0.5, 0.5, 1.0];
+        focus.shadow_spread = 3.0;
+        focus.shadow_color = [0.5, 0.5, 0.5, 0.5];
+        let mut fade = blank_instance(rail[0], rail[1], rail[2], rail[3]);
+        fade.color = [0.9, 0.9, 0.9, 0.4];
+        let field_dirty = PaintDirty {
+            key: 1,
+            bounds,
+            kind: PaintDirtyKind::Node,
+        };
+        let rail_dirty = PaintDirty {
+            key: 2,
+            bounds: rail,
+            kind: PaintDirtyKind::Node,
+        };
+        for spread in [0.0, 3.0] {
+            focus.shadow_spread = spread;
+            for alpha in [0.0, 0.4, 1.0] {
+                fade.color[3] = alpha;
+                track.instance = if alpha == 0.0 { (1, 1) } else { (1, 2) };
+                assert!(
+                    !skip_in_flow_under_layered_overlay(
+                        &field_dirty,
+                        &[field_dirty, rail_dirty],
+                        &[field.clone(), track.clone()],
+                        &[focus, fade],
+                    ),
+                    "a fading rail cannot own the field repaint: spread={spread} alpha={alpha}"
+                );
+            }
+        }
+    }
+
+    #[test]
     fn latest_fade_and_wrap_dirty_must_not_stamp_thread_on_pill() {
         // Click-to-bottom / enter fade: wrapping dest-reset + hole_text flush
         // after Latest stamped "gh" / "as they stream" onto the translucent pill.
@@ -7094,6 +7184,83 @@ mod tests {
                 && wipe[0] + wipe[2] + 0.5 >= track[0] + track[2]
                 && wipe[1] + wipe[3] + 0.5 >= track[1] + track[3],
             "track hide wipe must cover the painted track, not the sliver beside the thumb\n wipe={wipe:?} track={track:?} thumb={thumb:?}"
+        );
+    }
+
+    #[test]
+    fn horizontal_track_reset_keeps_span_over_earlier_textarea_viewport() {
+        // Gallery's absolute text viewport precedes the overlay rail. Its
+        // layout box overlaps all but the last 10px of the rail, even though
+        // its text is painted above the rail's Y. It is an underlay, not a
+        // foreground peer to carve out of the track's repaint scissor.
+        let field = [306.0, 350.0, 256.0, 121.0];
+        let track = [311.0, 460.0, 248.0, 8.0];
+        let thumb = [311.0, 461.0, 77.46, 6.0];
+        let mut viewport = slot(1, [319.0, 351.0, 230.0, 119.0], (0, 1));
+        viewport.instance = (1, 1);
+        viewport.layered = true;
+        viewport.rest = Some(viewport.bounds);
+        let mut thumb_p = slot(2, thumb, (0, 0));
+        thumb_p.instance = (2, 3);
+        thumb_p.layered = true;
+        thumb_p.rest = Some(thumb);
+        let mut track_p = slot(3, track, (0, 0));
+        track_p.instance = (1, 3);
+        track_p.layered = true;
+        track_p.rest = Some(track);
+        let mut field_p = slot(4, field, (0, 1));
+        field_p.instance = (0, 3);
+        field_p.rest = Some(field);
+        let paints = [viewport, thumb_p, track_p, field_p];
+        for alpha in [0.0, 0.3, 1.0] {
+            let mut fill = blank_instance(field[0], field[1], field[2], field[3]);
+            fill.color = [1.0; 4];
+            let mut rail = blank_instance(track[0], track[1], track[2], track[3]);
+            rail.color = [0.96, 0.96, 0.96, alpha];
+            let mut pill = blank_instance(thumb[0], thumb[1], thumb[2], thumb[3]);
+            pill.color = [0.0, 0.0, 0.0, alpha];
+            let reset = node_present_dest_reset_full(
+                3,
+                track,
+                &paints,
+                &[fill, rail, pill],
+                &[],
+                &[],
+                1.0,
+                Some(track),
+            )
+            .expect("track needs a reset through hide and re-entry");
+            assert_eq!(
+                reset.rect, track,
+                "alpha={alpha}: viewport carved the rail down to its right end"
+            );
+        }
+        let foreground = clip_rect_against_layered_siblings(
+            track,
+            3,
+            track,
+            &[paints[2].clone(), paints[0].clone()],
+            1.0,
+        );
+        assert_eq!(
+            foreground,
+            [549.0, 460.0, 10.0, 8.0],
+            "later foreground must still clip"
+        );
+
+        let mut title = paints[0].clone();
+        title.bounds = [319.0, 440.0, 230.0, 20.0];
+        title.rest = Some(title.bounds);
+        let caption_clip = clip_rect_against_layered_siblings(
+            [311.0, 440.0, 248.0, 28.0],
+            3,
+            track,
+            &[title, paints[2].clone()],
+            1.0,
+        );
+        assert_eq!(
+            caption_clip, track,
+            "earlier rest-disjoint title must still clip the halo"
         );
     }
 
@@ -12468,6 +12635,63 @@ mod tests {
             "wipe behind the bubble is the card, got {:?}",
             reset.clear
         );
+    }
+
+    #[test]
+    fn layered_region_restores_peer_glyphs_after_drag_moves_away() {
+        let peer = sample_text("A", 64.0);
+        let dragged = sample_text("B", 364.0);
+        let peer_p = slot(1, [0.0, 0.0, 176.0, 92.0], (0, 1));
+        let mut dragged_p = slot(2, [300.0, 0.0, 176.0, 92.0], (1, 2));
+        dragged_p.layered = true;
+        let paints = [peer_p, dragged_p];
+        let text = [peer, dragged];
+        for bounds in [[0.0, 0.0, 176.0, 92.0], [0.0, 0.0, 400.0, 92.0]] {
+            let dirty = PaintDirty {
+                key: 2,
+                bounds,
+                kind: PaintDirtyKind::Region,
+            };
+            let captured = node_present_glyphs_for_dirty(&dirty, &text, &paints);
+            assert!(captured.contains(&0), "the vacated pose must restore A");
+            assert_eq!(captured.contains(&1), bounds[2] > 300.0);
+        }
+    }
+
+    #[test]
+    fn separated_layered_region_clears_old_pose_raster_fringe() {
+        let old = [20.0, 100.0, 176.0, 92.0];
+        let now = [300.0, 100.0, 176.0, 92.0];
+        let mut paint = slot(2, now, (0, 0));
+        paint.layered = true;
+        paint.instance = (0, 1);
+        let mut fill = blank_instance(now[0], now[1], now[2], now[3]);
+        fill.color = [1.0; 4];
+        fill.radii = [12.0; 4];
+        for scale in [1.0, 2.0] {
+            let mut dirties = vec![PaintDirty {
+                key: 2,
+                bounds: now,
+                kind: PaintDirtyKind::Node,
+            }];
+            prepare_node_present_dirties(
+                &mut dirties,
+                &[paint],
+                &[(2, old)],
+                &[fill],
+                &[],
+                &[],
+                scale,
+                None,
+            );
+            let fringe = padded_xywh(old, 2.0 / scale);
+            assert!(
+                dirties.iter().any(|dirty| {
+                    dirty.kind == PaintDirtyKind::Region && aabb_covers(dirty.bounds, fringe)
+                }),
+                "the separated old outline must be fully cleared: {dirties:?}"
+            );
+        }
     }
 
     #[test]

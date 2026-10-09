@@ -47,6 +47,9 @@ pub struct CubicTweenState {
     pub y2: f32,
     pub active: bool,
     pub signal: Signal<f32>,
+    // A target chosen at the current frame boundary has no share of the
+    // preceding frame interval (which may include an idle WaitUntil).
+    skip_frame_dt: bool,
 }
 
 #[derive(Clone)]
@@ -72,6 +75,7 @@ impl CubicTween {
             y2,
             active: false,
             signal: Signal::new_unowned(initial),
+            skip_frame_dt: false,
         }));
         CUBIC_TWEENS.with(|anim| {
             anim.borrow_mut().push(Rc::downgrade(&state));
@@ -80,6 +84,16 @@ impl CubicTween {
     }
 
     pub fn set(&self, target: f32) {
+        self.retarget(target, false);
+    }
+
+    /// Start at this frame boundary without consuming the preceding interval.
+    /// Repeating the same target still preserves the running animation clock.
+    pub(crate) fn set_at_frame_start(&self, target: f32) {
+        self.retarget(target, true);
+    }
+
+    fn retarget(&self, target: f32, at_frame_start: bool) {
         let mut s = self.0.borrow_mut();
         // 目标未变时不要重置 `elapsed`：chrome sync 每帧会再 `set` 同一目标，
         // 若此处重启，有效时长会远长于 `duration`（asymptotic crawl）。
@@ -90,6 +104,7 @@ impl CubicTween {
         s.target = target;
         s.elapsed = 0.0;
         s.active = (s.value - target).abs() >= 1e-5;
+        s.skip_frame_dt = at_frame_start && s.active;
         let _ = s.signal.try_set_silent(s.value);
     }
 
@@ -136,7 +151,9 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
             if let Some(tw) = list[i].upgrade() {
                 let mut s = tw.borrow_mut();
                 if s.active {
-                    s.elapsed += dt;
+                    if !std::mem::take(&mut s.skip_frame_dt) {
+                        s.elapsed += dt;
+                    }
                     let sample = generator_tween_sample(
                         s.from_value,
                         s.target,

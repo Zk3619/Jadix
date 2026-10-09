@@ -299,6 +299,19 @@ fn hoisted_portal_own_ink(el: &Element) -> bool {
         || el.style.shadow_color[3] > 0.0
         || el.style.border_width > 0.0
         || el.style.backdrop_blur > 0.5
+        || el.text.as_ref().is_some_and(|text| !text.is_empty())
+        || el.image_texture.is_some()
+        || crate::primitives::path::element_has_path_geometry(&el.attrs)
+        || el
+            .attrs
+            .contains_key(crate::primitives::canvas::ATTR_CANVAS_PAINT)
+        || el
+            .attrs
+            .contains_key(crate::primitives::shader::ATTR_SHADER)
+        || el
+            .attrs
+            .contains_key(crate::primitives::scene3d::ATTR_SCENE3D)
+        || el.attrs.contains_key("rui_svg_scene")
 }
 
 fn hoisted_portal_child_paint_union(el: &Element) -> Option<[f32; 4]> {
@@ -344,9 +357,9 @@ fn hoisted_portal_paint_box(el: &Element) -> Option<[f32; 4]> {
     // empty host as occupancy dest-resets the sibling scrim on a zoom/slide CSS tick.
     // Occupancy is GPU ink, not the flex host.
     if !hoisted_portal_own_ink(el) {
-        if let Some(kids) = hoisted_portal_child_paint_union(el) {
-            b = kids;
-        }
+        // A mounted Portal can keep its full-size host while Show has no content.
+        // That empty host must not clip page damage out of PartialLoad presents.
+        b = hoisted_portal_child_paint_union(el)?;
     }
     if let Some(h) = crate::layout::dim_length_px(el.style.max_size.height) {
         if h >= 0.0 {
@@ -10011,7 +10024,11 @@ mod portal_hoist_tests {
             .text("gallery page")
             .template_id("page");
 
-        let mut popover = Element::new().w(72.0).h(36.0).template_id("rx-panel");
+        let mut popover = Element::new()
+            .w(72.0)
+            .h(36.0)
+            .bg([1.0; 4])
+            .template_id("rx-panel");
         popover.set_attr("rui_portal", "1");
         popover.set_attr(ATTR_PORTAL_KEY, "rx");
         popover.layout_bounds = [120.0, 80.0, 72.0, 36.0];
@@ -10037,7 +10054,11 @@ mod portal_hoist_tests {
             d
         ));
 
-        let mut underlay = Element::new().w(800.0).h(600.0).template_id("dlg-underlay");
+        let mut underlay = Element::new()
+            .w(800.0)
+            .h(600.0)
+            .bg([0.0, 0.0, 0.0, 0.5])
+            .template_id("dlg-underlay");
         underlay.set_attr("rui_portal", "1");
         underlay.set_attr(ATTR_PORTAL_KEY, "dlg");
         let mut modal_root = Element::new().w(800.0).h(600.0).child(underlay);
@@ -10059,6 +10080,75 @@ mod portal_hoist_tests {
     }
 
     #[test]
+    fn empty_hoisted_portal_does_not_occlude_page_damage() {
+        // Portal's inset-0 host survives while a nested Show is empty.
+        let mut portal = Element::new().child(Element::new());
+        portal.set_attr(ATTR_HOISTED_PORTAL, "1");
+        portal.set_attr(ATTR_PORTAL_KEY, "empty-root-portal");
+        portal.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+        portal.children[0].layout_bounds = portal.layout_bounds;
+        let root = Element::new().child(portal);
+        let stamps = hoisted_portal_stamps(&root);
+        assert!(
+            stamps.is_empty(),
+            "empty hosts must not become painted stamps"
+        );
+        assert!(hoisted_portal_damage(&root).is_none());
+        let dirty = [120.0, 100.0, 176.0, 92.0];
+        assert_eq!(
+            crate::app::damage::page_scissors_excluding_portal_boxes(dirty, &stamps),
+            vec![dirty],
+            "stationary page drag must retain its repaint scissor"
+        );
+    }
+
+    #[test]
+    fn hoisted_portal_occupancy_tracks_painted_children() {
+        let mut portal = Element::new().child(Element::new());
+        portal.set_attr(ATTR_HOISTED_PORTAL, "1");
+        portal.set_attr(ATTR_PORTAL_KEY, "conditional-portal");
+        portal.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+        portal.children[0].layout_bounds = portal.layout_bounds;
+        assert!(hoisted_portal_paint_box(&portal).is_none());
+
+        let mut panel = Element::new().bg([1.0; 4]);
+        panel.layout_bounds = [120.0, 80.0, 72.0, 36.0];
+        portal.children[0].children.push(panel);
+        assert_eq!(
+            hoisted_portal_paint_box(&portal),
+            Some([120.0, 80.0, 72.0, 36.0])
+        );
+        portal.children[0].children.clear();
+        assert!(
+            hoisted_portal_paint_box(&portal).is_none(),
+            "closed content must release occupancy"
+        );
+    }
+
+    #[test]
+    fn hoisted_portal_text_and_graphics_leaves_keep_paint_boxes() {
+        let bounds = [120.0, 80.0, 72.0, 36.0];
+        let mut text = Element::new().text("Caption");
+        text.layout_bounds = bounds;
+        assert_eq!(hoisted_portal_paint_box(&text), Some(bounds));
+        let mut image = Element::new().image_texture("panel-image");
+        image.layout_bounds = bounds;
+        assert_eq!(hoisted_portal_paint_box(&image), Some(bounds));
+        for attr in [
+            crate::primitives::path::ATTR_PATH_D,
+            crate::primitives::canvas::ATTR_CANVAS_PAINT,
+            crate::primitives::shader::ATTR_SHADER,
+            crate::primitives::scene3d::ATTR_SCENE3D,
+            "rui_svg_scene",
+        ] {
+            let mut leaf = Element::new();
+            leaf.set_attr(attr, "1");
+            leaf.layout_bounds = bounds;
+            assert_eq!(hoisted_portal_paint_box(&leaf), Some(bounds), "{attr}");
+        }
+    }
+
+    #[test]
     fn expand_measure_portal_is_not_a_paint_box() {
         let mut panel = Element::new();
         panel.set_attr(ATTR_HOISTED_PORTAL, "1");
@@ -10074,7 +10164,7 @@ mod portal_hoist_tests {
 
     #[test]
     fn expand_clip_portal_box_follows_max_height() {
-        let mut panel = Element::new();
+        let mut panel = Element::new().bg([1.0; 4]);
         panel.set_attr(ATTR_HOISTED_PORTAL, "1");
         panel.layout_bounds = [90.0, 140.0, 40.0, 200.0];
         panel.style.max_size.height = taffy::style::Dimension::length(40.0);

@@ -26,7 +26,7 @@ fn free_drag_native_frames_follow_pointer_before_release() {
                     )
                     .unwrap(),
             );
-            self.callback = Some(run_drag_frames(window, self.proxy.clone(), event_loop));
+            self.callback = Some(run_drag_frames(window, self.proxy.clone()));
         }
         fn window_event(
             &mut self,
@@ -64,7 +64,6 @@ fn free_drag_native_frames_follow_pointer_before_release() {
 fn run_drag_frames(
     window: Arc<dyn Window>,
     proxy: winit::event_loop::EventLoopProxy,
-    event_loop: &dyn winit::event_loop::ActiveEventLoop,
 ) -> Box<
     dyn FnMut(&dyn winit::event_loop::ActiveEventLoop, Option<winit::event::WindowEvent>) -> bool,
 > {
@@ -72,7 +71,7 @@ fn run_drag_frames(
     use crate::app::runtime::{clear_app_runtime, set_app_runtime, AppRuntime};
     use crate::core::reactivity::{create_effect, create_root};
     use crate::prelude::*;
-    use crate::utils::drag::{collect_hits, end};
+    use crate::utils::drag::collect_hits;
     use std::{cell::RefCell, rc::Rc};
 
     fn frame(
@@ -129,15 +128,22 @@ fn run_drag_frames(
         Rc::downgrade(&secondaries),
     ));
     let (owner, ()) = create_root(|| {
+        let a_pos = use_signal("native-free-a", || [59.0_f32, 600.0]);
+        let b_pos = use_signal("native-free-b", || [131.0_f32, 632.0]);
         let live = Rc::clone(&state);
         crate::core::reactivity::mark_next_effect_as_ui_root();
         create_effect(move || {
             let drag = crate::core::reactivity::isolate_reads(|| {
                 crate::ui! {
-                    <DragProvider id="native-free-drag" threshold={0.0}>
+                    <DragProvider id="native-free-drag" threshold={0.0}
+                        onDragEnd={move |ev: &crate::utils::drag::DragEvent| {
+                            let pos = if ev.draggable_id == "arb-auto-1" { a_pos } else { b_pos };
+                            let p = pos.peek();
+                            pos.set([p[0] + ev.delta[0], p[1] + ev.delta[1]]);
+                        }}>
                         <Box w="100%" h="1000px" relative={true} overflow="hidden">
                             <Draggable id="arb-auto-1" stack="auto">
-                                <Box absolute={true} left={59.0} top={100.0} w="176px" h="92px"
+                                <Box absolute={true} left={a_pos.get()[0]} top={a_pos.get()[1]} w="176px" h="92px"
                                     bg="#ffffff" border_style="solid" border_width="3px"
                                     border_color="#000000" rounded="12px"
                                     items="center" justify="center" overflow="hidden">
@@ -145,7 +151,7 @@ fn run_drag_frames(
                                 </Box>
                             </Draggable>
                             <Draggable id="arb-auto-2" stack="auto">
-                                <Box absolute={true} left={131.0} top={132.0} w="176px" h="92px"
+                                <Box absolute={true} left={b_pos.get()[0]} top={b_pos.get()[1]} w="176px" h="92px"
                                     bg="#ffffff" border_style="solid" border_width="3px"
                                     border_color="#000000" rounded="12px"
                                     items="center" justify="center" overflow="hidden">
@@ -167,6 +173,13 @@ fn run_drag_frames(
                 .relative()
                 .bg([1.0; 4])
                 .child(scroll)
+                // Gallery's root Portal remains mounted with an empty Show.
+                // Its full-size host must not occlude page repaint scissors.
+                .child(crate::ui! {
+                    <Portal id="native-empty-portal">
+                        <Show when={false}><Label>"Hidden"</Label></Show>
+                    </Portal>
+                })
                 .child(
                     Element::new()
                         .absolute()
@@ -193,14 +206,15 @@ fn run_drag_frames(
     for _ in 0..3 {
         let _ = frame(&state, [-1.0, -1.0], true);
     }
-    let initial_hits = collect_hits(&state.borrow().as_ref().unwrap().root_element);
-    let initial = initial_hits
-        .iter()
-        .find(|h| h.id == "arb-auto-1" && h.is_draggable)
-        .unwrap()
-        .rect
-        .to_bounds();
+    let initial = crate::core::tree::find_by_attr(
+        &state.borrow().as_ref().unwrap().root_element,
+        crate::utils::drag::ATTR_DRAG_DRAGGABLE,
+        "arb-auto-1",
+    )
+    .unwrap()
+    .layout_bounds;
     let scroll_y = initial[1] - 100.0;
+    assert!(scroll_y > 400.0);
     crate::core::reactivity::use_signal(
         &crate::core::scroll_viewport::scroll_offset_y_signal_key("native-free-scroll"),
         || 0.0_f32,
@@ -226,24 +240,28 @@ fn run_drag_frames(
     let window_id = state.borrow().as_ref().unwrap().window.id();
     app.pointer_window = Some(window_id);
     let hits = collect_hits(&state.borrow().as_ref().unwrap().root_element);
-    let a = hits
-        .iter()
-        .find(|h| h.id == "arb-auto-1" && h.is_draggable)
-        .unwrap();
-    let bounds = a.rect.to_bounds();
-    let grab = [10.0, 8.0];
+    let cases = ["arb-auto-1", "arb-auto-2"].map(|id| {
+        hits.iter()
+            .find(|h| h.id == id && h.is_draggable)
+            .unwrap()
+            .rect
+            .to_bounds()
+    });
+    let mut source = 0;
+    let mut bounds = cases[source];
+    let mut grab = [10.0, 8.0];
     let scale = state.borrow().as_ref().unwrap().window.scale_factor() as f32;
     app.cursor_pos = winit::dpi::PhysicalPosition::new(
         ((bounds[0] + grab[0]) * scale) as f64,
         ((bounds[1] + grab[1]) * scale) as f64,
     );
-    app.handle_mouse_button(
-        window_id,
-        winit::event::ElementState::Pressed,
-        winit::event::MouseButton::Left,
-        Some(event_loop),
-    );
-    let deltas = [[100.0, 60.0], [200.0, 100.0], [160.0, 80.0]];
+    let mut idle_until = std::time::Instant::now() + std::time::Duration::from_millis(300);
+    let mut started = false;
+    // First move A over B and commit it. Then move B over A and away again
+    // while the pointer is still down; the covered sibling must be restored
+    // before mouseup (this is where the gallery used to leave a lower-left
+    // retained rectangle and erase the sibling glyph).
+    let mut deltas = [[100.0, 60.0], [200.0, 100.0], [160.0, 80.0]];
     let mut sample = 0usize;
     let mut pending = false;
     let mut owner = Some(owner);
@@ -273,7 +291,7 @@ fn run_drag_frames(
                     "drag must paint before release: delta={delta:?} pixel={pixel:?}"
                 );
                 let x = ((bounds[0] + 1.0) * scale) as u32;
-                let y = ((bounds[1] + 46.0) * scale) as u32;
+                let y = ((bounds[1] + 75.0) * scale) as u32;
                 let i = ((y * image.width + x) * 4) as usize;
                 let old = &image.pixels[i..i + 4];
                 assert!(
@@ -295,18 +313,113 @@ fn run_drag_frames(
                     ink > 150,
                     "letter must follow the body before release: ink={ink}"
                 );
+                if source == 1 && sample == 1 {
+                    // B has just moved away from A. A's committed position must
+                    // be repainted during the drag, before B is released.
+                    let a_origin = [cases[0][0] + 160.0, cases[0][1] + 80.0];
+                    let mut sibling_ink = 0;
+                    for ly in 15..62 {
+                        for lx in 65..110 {
+                            let x = ((a_origin[0] + lx as f32) * scale) as u32;
+                            let y = ((a_origin[1] + ly as f32) * scale) as u32;
+                            let i = ((y * image.width + x) * 4) as usize;
+                            if image.pixels[i..i + 3].iter().all(|c| *c < 80) {
+                                sibling_ink += 1;
+                            }
+                        }
+                    }
+                    assert!(
+                        sibling_ink > 150,
+                        "covered sibling must reappear before release: ink={sibling_ink}, a_origin={a_origin:?}, bounds={bounds:?}"
+                    );
+                }
+                if source == 2 && sample == deltas.len() - 1 {
+                    state.borrow_mut().as_mut().unwrap().mark_full_redraw();
+                    let reference = frame(&state, pointer, true);
+                    let different = image
+                        .pixels
+                        .chunks_exact(4)
+                        .zip(reference.pixels.chunks_exact(4))
+                        .filter(|(partial, full)| {
+                            partial[..3]
+                                .iter()
+                                .zip(&full[..3])
+                                .any(|(a, b)| a.abs_diff(*b) > 16)
+                        })
+                        .count();
+                    assert_eq!(
+                        different, 0,
+                        "repeated partial drags must match a full repaint"
+                    );
+                }
                 sample += 1;
                 pending = false;
                 if sample == deltas.len() {
-                    let _ = end(&[]);
-                    owner.take().unwrap().dispose();
-                    clear_app_runtime();
-                    reset_registered_anchors();
-                    return true;
+                    app.handle_mouse_button(
+                        window_id,
+                        winit::event::ElementState::Released,
+                        winit::event::MouseButton::Left,
+                        Some(event_loop),
+                    );
+                    // Let the drop callback rebuild the committed left/top before
+                    // starting the next drag. This is the real gallery sequence.
+                    let _ = frame(&state, [-1.0, -1.0], true);
+                    let _ = frame(&state, [-1.0, -1.0], true);
+                    source += 1;
+                    if source == 3 {
+                        owner.take().unwrap().dispose();
+                        clear_app_runtime();
+                        reset_registered_anchors();
+                        return true;
+                    }
+                    bounds = crate::utils::drag::collect_hits(
+                        &state.borrow().as_ref().unwrap().root_element,
+                    )
+                    .into_iter()
+                    .find(|h| {
+                        h.id == if source == 1 {
+                            "arb-auto-2"
+                        } else {
+                            "arb-auto-1"
+                        } && h.is_draggable
+                    })
+                    .unwrap()
+                    .rect
+                    .to_bounds();
+                    // A was committed to the right; B's top-left is exposed.
+                    grab = [10.0, 8.0];
+                    deltas = if source == 1 {
+                        [[80.0, 60.0], [300.0, 200.0], [320.0, 220.0]]
+                    } else {
+                        [[-180.0, 120.0], [-120.0, 40.0], [100.0, -40.0]]
+                    };
+                    app.cursor_pos = winit::dpi::PhysicalPosition::new(
+                        ((bounds[0] + grab[0]) * scale) as f64,
+                        ((bounds[1] + grab[1]) * scale) as f64,
+                    );
+                    sample = 0;
+                    started = false;
+                    idle_until = std::time::Instant::now() + std::time::Duration::from_millis(300);
                 }
             }
         }
         if event.is_none() {
+            if !started {
+                if std::time::Instant::now() < idle_until {
+                    winit::application::ApplicationHandler::about_to_wait(&mut app, event_loop);
+                    event_loop
+                        .set_control_flow(winit::event_loop::ControlFlow::WaitUntil(idle_until));
+                    return false;
+                }
+                assert!(!app.paint_clock_active);
+                app.handle_mouse_button(
+                    window_id,
+                    winit::event::ElementState::Pressed,
+                    winit::event::MouseButton::Left,
+                    Some(event_loop),
+                );
+                started = true;
+            }
             if !pending {
                 let delta = deltas[sample];
                 let pointer = [
