@@ -542,6 +542,42 @@ fn floating_content_h(el: &Element) -> Option<f32> {
         .filter(|h| *h > 0.5)
 }
 
+/// Auto-height scroll panels must hug the in-flow list, not the viewport cap.
+/// ScrollArea's flex shells can fill max-height even when their rows are shorter.
+/// Follow the single-child shell chain to the viewport; ignore absolute scrollbars
+/// and portal placeholders so submenus cannot inflate the parent's measurement.
+pub(crate) fn floating_scroll_content_h(el: &Element) -> Option<f32> {
+    if !el.style.size.height.is_auto() || el.attrs.contains_key(ATTR_FLOATING_H) {
+        return None;
+    }
+    let mut children = el.children.iter().filter(|c| {
+        c.style.position != taffy::style::Position::Absolute
+            && c.style.display != taffy::style::Display::None
+    });
+    let child = children.next()?;
+    let bottom = match crate::layout::lp_kind(el.style.padding.bottom) {
+        crate::layout::DimKind::Length(px) => px,
+        crate::layout::DimKind::Percent(pct) => pct * el.layout_bounds[2],
+        crate::layout::DimKind::Auto => 0.0,
+    } + el.style.resolved_border_widths()[2];
+    let content = if el
+        .focus_id
+        .as_deref()
+        .is_some_and(|id| id.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX))
+    {
+        std::iter::once(child)
+            .chain(children)
+            .map(|c| c.layout_bounds[1] - el.layout_bounds[1] + c.layout_bounds[3])
+            .fold(0.0_f32, f32::max)
+    } else {
+        if children.next().is_some() {
+            return None;
+        }
+        child.layout_bounds[1] - el.layout_bounds[1] + floating_scroll_content_h(child)?
+    };
+    (content > 0.5).then_some(content + bottom)
+}
+
 fn skip_placement_max_h(el: &Element) -> bool {
     // Expand panels own max-height from the first rebuild (`from_h` is on the fresh
     // tree before MEASURE / keyframes). Writing viewport cap here is a 1-frame
@@ -663,6 +699,8 @@ fn floating_estimate_h(el: &Element) -> f32 {
         .and_then(|s| s.parse::<f32>().ok())
         .filter(|h| *h > 0.5)
     {
+        h
+    } else if let Some(h) = floating_scroll_content_h(el) {
         h
     } else if el.layout_bounds[3] > 0.5 {
         el.layout_bounds[3]
@@ -821,7 +859,8 @@ fn write_floating_place_ex(el: &mut Element, place: FloatingPlace, write_xy: boo
             }
         } else {
             let mut mh = place.max_h.max(1.0);
-            if let Some(content) = floating_content_h(el) {
+            if let Some(content) = floating_content_h(el).or_else(|| floating_scroll_content_h(el))
+            {
                 mh = mh.min(content);
             }
             if dimension_length(el.style.max_size.height).is_none_or(|v| (v - mh).abs() > 0.5) {
@@ -915,6 +954,10 @@ pub fn apply_stored_floating_place(el: &mut Element, id: &str) {
     } else {
         p.anchor_edge_y = None;
         el.attrs.remove(ATTR_FLOATING_ANCHOR_EDGE_Y);
+        // A previous viewport cap is not the new panel's intrinsic height.
+        // Remeasure fresh content under the author's cap before deciding whether
+        // to flip; otherwise reopening after a small viewport ratchets the size.
+        p.max_h = floating_attr_max_h(el).unwrap_or(0.0);
         place.set_silent(p);
         let _ = write_floating_place(el, p);
     }
@@ -1038,6 +1081,13 @@ fn apply_floating_menus(
         }
         return;
     };
+    let preferred = PopupPlacement::from_attr(
+        el.attrs
+            .get(ATTR_FLOATING_PLACEMENT)
+            .or_else(|| el.attrs.get("rui_select_placement"))
+            .map(String::as_str)
+            .unwrap_or("bottom-start"),
+    );
 
     // Exit owns its side and height cap, but its trigger can still move when an
     // ancestor changes size (e.g. ColorPicker adds/removes its alpha row).
@@ -1055,7 +1105,23 @@ fn apply_floating_menus(
                 floating_place_signal_key(&id).as_str(),
                 FloatingPlace::default,
             );
-            if let Some(old_edge) = reverse_expand_edge_y(el) {
+            if preferred.is_horizontal() {
+                let (x, y, _, _) = compute_anchored_placement(
+                    tb,
+                    viewport,
+                    el.layout_bounds[2],
+                    el.layout_bounds[3],
+                    preferred,
+                    gap,
+                );
+                let mut next = place.peek();
+                next.x = x;
+                next.y = y;
+                next.anchor_edge_y = None;
+                el.attrs.remove(ATTR_FLOATING_ANCHOR_EDGE_Y);
+                place.set_silent(next);
+                *changed |= write_floating_place(el, next);
+            } else if let Some(old_edge) = reverse_expand_edge_y(el) {
                 // Above: keep the trigger-facing bottom edge glued.
                 let edge = tb[1] - gap;
                 let delta = edge - old_edge;
@@ -1156,13 +1222,6 @@ fn apply_floating_menus(
             let floor = attr_min_w.unwrap_or(tb[2]).max(0.0);
             (floor, true, floor)
         };
-        let preferred = PopupPlacement::from_attr(
-            el.attrs
-                .get(ATTR_FLOATING_PLACEMENT)
-                .or_else(|| el.attrs.get("rui_select_placement"))
-                .map(|s| s.as_str())
-                .unwrap_or("bottom-start"),
-        );
         let attr_max_h = floating_attr_max_h(el);
         let estimate_h = floating_estimate_h(el);
         // Content-auto before measure: use the trigger width (not a 32px stub) so
@@ -1269,7 +1328,15 @@ fn apply_floating_menus(
             // would re-place the shrinking panel below the trigger (flat sliver flash).
             // Fixed cover already glued the seam above; skip so negative gap is not
             // misread as `ty - gap`.
-            let skip_reverse_glue = strategy_fixed && gap < 0.0;
+            // Cursor placement already performs flip + viewport translation. A translated
+            // box above the cursor is not necessarily an above-edge accordion; nor is
+            // a horizontally anchored submenu shifted upward to fit the viewport.
+            let skip_reverse_glue = preferred.is_horizontal()
+                || (point.is_some()
+                    && !height_keyframe_animation_active(el)
+                    && !expand_measure_pending(el)
+                    && floating_content_h(el).is_none())
+                || (strategy_fixed && gap < 0.0);
             if !skip_reverse_glue {
                 let animating_h = height_keyframe_animation_active(el);
                 let entering = expand_enter_animation_active(el);
@@ -1573,6 +1640,194 @@ pub(crate) fn seed_floating_place_max_h_for_test(id: &str, max_h: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn menu_panel(id: &str, cursor: [f32; 2]) -> Element {
+        let rows: Element = crate::primitives::vstack()
+            .w("100%")
+            .children((0..10).map(|i| {
+                Element::new()
+                    .w(192.0)
+                    .h(40.0)
+                    .flex_shrink(0.0)
+                    .focus_id(format!("{id}-row-{i}"))
+            }))
+            .into();
+        let viewport: Element = crate::components::scroll_area(&format!("{id}-scroll"))
+            .w("100%")
+            .h("auto")
+            .min_h(0.0)
+            .flex_grow(1.0)
+            .flex_shrink(1.0)
+            .child(rows)
+            .into();
+        let mut panel: Element = crate::primitives::vstack()
+            .absolute(true)
+            .w("auto")
+            .h("auto")
+            .min_w(192.0)
+            .min_h(0.0)
+            .child(viewport)
+            .into();
+        mark_floating_at_point(&mut panel, id, "", cursor[0], cursor[1], 2.0);
+        panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+        apply_stored_floating_place(&mut panel, id);
+        mount_anchored_overlay(panel, 1000)
+    }
+
+    #[test]
+    fn cursor_menu_first_frame_and_reopen_keep_full_height_above() {
+        crate::core::reactivity::create_root(|| {
+            let mut tree = crate::layout::layout_tree::LayoutTree::new();
+            for (cursor_y, viewport_h) in [
+                (500.0, 600.0),
+                (1250.0, 1500.0),
+                (1250.0, 1500.0),
+                (120.0, 600.0),
+                (500.0, 600.0),
+                (200.0, 240.0),
+                (500.0, 600.0),
+                (200.0, 600.0),
+                (500.0, 600.0),
+            ] {
+                let mut root = Element::new().w(800.0).h(600.0);
+                tree.build_and_layout(&mut root, 800.0, viewport_h, [0.0, 0.0]);
+                root.children
+                    .push(menu_panel("cursor-reopen", [300.0, cursor_y]));
+                tree.build_and_layout_fast_ex(
+                    &mut root,
+                    800.0,
+                    viewport_h,
+                    [0.0, 0.0],
+                    true,
+                    false,
+                    None,
+                );
+                visit_floating_panels(&root, |panel| {
+                    let b = panel.layout_bounds;
+                    let (_, expected_y, _) = compute_cursor_menu_placement(
+                        [300.0, cursor_y],
+                        [800.0, viewport_h],
+                        b[2],
+                        400.0,
+                        2.0,
+                    );
+                    assert!(
+                        (b[3] - 400.0_f32.min(viewport_h - 16.0)).abs() < 0.5,
+                        "first frame must retain intrinsic menu height at y={cursor_y}: {b:?}"
+                    );
+                    assert!((b[1] - expected_y).abs() < 0.5,
+                        "first frame must flip before translating at y={cursor_y}: expected {expected_y}, got {b:?}");
+                });
+            }
+        });
+    }
+
+    #[test]
+    fn submenu_viewport_shift_does_not_become_vertical_flip() {
+        crate::core::reactivity::create_root(|| {
+            let trigger = Element::new()
+                .absolute()
+                .left(200.0)
+                .top(480.0)
+                .w(192.0)
+                .h(32.0)
+                .focus_id("submenu-shift-trigger");
+            let mut panel = Element::new().absolute().w(192.0).h(200.0);
+            mark_floating_with_gap(
+                &mut panel,
+                "submenu-shift",
+                "submenu-shift-trigger",
+                PopupPlacement::RightStart,
+                2.0,
+            );
+            panel.set_attr(ATTR_FLOATING_W, "192px");
+            apply_stored_floating_place(&mut panel, "submenu-shift");
+            let mut root = Element::new()
+                .w(800.0)
+                .h(600.0)
+                .child(trigger)
+                .child(mount_anchored_overlay(panel, 1000));
+            let mut tree = crate::layout::layout_tree::LayoutTree::new();
+            tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+            visit_floating_panels(&root, |panel| {
+                assert!(
+                    (panel.layout_bounds[1] - 392.0).abs() < 0.5,
+                    "submenu must shift to bottom viewport margin: {:?}",
+                    panel.layout_bounds
+                );
+                assert!(
+                    !panel.attrs.contains_key(ATTR_FLOATING_ANCHOR_EDGE_Y),
+                    "horizontal submenu must not acquire an above-trigger edge"
+                );
+            });
+            let panel = &mut root.children.last_mut().unwrap().children[0];
+            assert_eq!(
+                panel.attrs.get(ATTR_FLOATING).map(String::as_str),
+                Some("submenu-shift")
+            );
+            panel.set_attr(ATTR_FLOATING_EXITING, "1");
+            sync_floating_placement(&mut root, 800.0, 600.0);
+            visit_floating_panels(&root, |panel| {
+                assert_eq!(
+                    inset_length(panel.style.inset.top),
+                    Some(392.0),
+                    "submenu exit must retain horizontal placement"
+                );
+            });
+        });
+    }
+
+    #[test]
+    fn nested_submenu_first_frame_keeps_parent_height_and_live_trigger() {
+        crate::core::reactivity::create_root(|| {
+            let mut root = Element::new()
+                .w(800.0)
+                .h(600.0)
+                .child(menu_panel("nested-parent", [300.0, 500.0]));
+            let mut tree = crate::layout::layout_tree::LayoutTree::new();
+            tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+            fn find_mut<'a>(el: &'a mut Element, id: &str) -> Option<&'a mut Element> {
+                if el.attrs.get(ATTR_FLOATING).map(String::as_str) == Some(id) {
+                    return Some(el);
+                }
+                el.children.iter_mut().find_map(|c| find_mut(c, id))
+            }
+            let parent = find_mut(&mut root, "nested-parent").unwrap();
+            let before = parent.layout_bounds;
+            // The same frame can also move the parent (e.g. a new context click).
+            parent.set_attr(ATTR_FLOATING_POINT, "100,560");
+            let mut sub = Element::new().absolute().w(192.0).h(200.0);
+            mark_floating_with_gap(
+                &mut sub,
+                "nested-sub",
+                "nested-parent-row-8",
+                PopupPlacement::RightStart,
+                2.0,
+            );
+            sub.set_attr(ATTR_FLOATING_W, "192px");
+            apply_stored_floating_place(&mut sub, "nested-sub");
+            parent.children.push(mount_anchored_overlay(sub, 1001));
+            tree.build_and_layout_fast_ex(&mut root, 800.0, 600.0, [0.0, 0.0], true, false, None);
+            let parent = find_mut(&mut root, "nested-parent").unwrap();
+            assert!(
+                (parent.layout_bounds[3] - before[3]).abs() < 0.5,
+                "opening a submenu must not stretch its parent: {:?}",
+                parent.layout_bounds
+            );
+            let parent_bounds = parent.layout_bounds;
+            let sub = find_mut(&mut root, "nested-sub").unwrap();
+            assert!(
+                (sub.layout_bounds[0] - (parent_bounds[0] + parent_bounds[2] + 2.0)).abs() < 0.5,
+                "submenu must use the live parent trigger on its first frame: {:?}",
+                sub.layout_bounds
+            );
+            assert!(
+                (sub.layout_bounds[1] - 392.0).abs() < 0.5,
+                "submenu must shift into the viewport on its first frame: {:?}",
+                sub.layout_bounds
+            );
+        });
+    }
 
     #[test]
     fn visit_floating_panels_finds_marked() {

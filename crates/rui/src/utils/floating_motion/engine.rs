@@ -27,9 +27,9 @@ use crate::utils::panel_presence::{
     SyncEvent, SyncPolicy,
 };
 use crate::utils::popup::{
-    clamp_animated_max_h_to_place, peek_floating_place_max_h, ATTR_FLOATING_CONTENT_H,
-    ATTR_FLOATING_EXITING, ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_EXPAND_FROM_H,
-    ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_EXPAND_MEASURE,
+    clamp_animated_max_h_to_place, floating_scroll_content_h, peek_floating_place_max_h,
+    ATTR_FLOATING_CONTENT_H, ATTR_FLOATING_EXITING, ATTR_FLOATING_EXPAND_CLIP_X,
+    ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_EXPAND_MEASURE,
 };
 use crate::utils::presence::PresencePhase;
 use taffy::style::{Dimension, FlexWrap, Overflow};
@@ -164,8 +164,11 @@ fn ensure_expand_down_to_keyframe(to_h: f32) -> String {
             register_keyframes(
                 &key,
                 vec![
-                    KeyframeStop::at(0.0).max_height(0.0),
-                    KeyframeStop::at(1.0).max_height(to_h),
+                    // Fade the chrome (including its shadow) on the same clock
+                    // as the height reveal; a full-opacity shadow at height≈0
+                    // otherwise appears as a sudden dark line.
+                    KeyframeStop::at(0.0).max_height(0.0).opacity(0.0),
+                    KeyframeStop::at(1.0).max_height(to_h).opacity(1.0),
                 ],
             );
             set.insert(key.clone());
@@ -672,7 +675,8 @@ fn max_height_is_auto(el: &Element) -> bool {
 }
 
 fn take_measured_height(panel: &Element, max_height_cap: Option<f32>) -> f32 {
-    let h = panel.used_layout.anim_height().max(panel.layout_bounds[3]);
+    let h = floating_scroll_content_h(panel)
+        .unwrap_or_else(|| panel.used_layout.anim_height().max(panel.layout_bounds[3]));
     if h <= 1.0 {
         return 0.0;
     }
@@ -755,6 +759,24 @@ fn expand_contents_are_pinned(panel: &Element) -> bool {
     panel.children.iter().any(expand_node_is_pinned)
 }
 
+fn set_expand_scrollbars_hidden(el: &mut Element, hidden: bool) {
+    use crate::components::scrollbar::{
+        ATTR_SCROLLBAR_REVEAL_HIDDEN, SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
+    };
+    if el.focus_id.as_deref().is_some_and(|id| {
+        id.starts_with(SCROLLBAR_TRACK_FOCUS_PREFIX) || id.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX)
+    }) {
+        if hidden {
+            el.set_attr(ATTR_SCROLLBAR_REVEAL_HIDDEN, "1");
+        } else {
+            el.attrs.remove(ATTR_SCROLLBAR_REVEAL_HIDDEN);
+        }
+    }
+    for child in &mut el.children {
+        set_expand_scrollbars_hidden(child, hidden);
+    }
+}
+
 fn pin_expand_overflow_node(el: &mut Element, inner: f32) {
     if node_is_scroll_viewport(el) {
         // Viewport must shrink with the accordion so overflow:auto clips a short
@@ -798,7 +820,7 @@ fn restore_expand_overflow_node(el: &mut Element) {
 }
 
 fn panel_content_height(el: &Element, cap: Option<f32>) -> f32 {
-    take_measured_height(el, cap).max(el.layout_bounds[3].max(0.0))
+    take_measured_height(el, cap)
 }
 
 fn expand_open_content_h(el: &Element, cap: Option<f32>) -> f32 {
@@ -840,9 +862,12 @@ fn pin_expand_overflow_contents(panel: &mut Element, max_height_cap: Option<f32>
     // Idle then unpins and the panel snaps down by that padding, then placement
     // restores the cap.
     let pad_y = crate::layout::lp_length_px(panel.style.padding.top).unwrap_or(0.0)
-        + crate::layout::lp_length_px(panel.style.padding.bottom).unwrap_or(0.0);
+        + crate::layout::lp_length_px(panel.style.padding.bottom).unwrap_or(0.0)
+        + panel.style.resolved_border_widths()[0]
+        + panel.style.resolved_border_widths()[2];
     let inner = (h - pad_y).max(1.0);
     for child in &mut panel.children {
+        set_expand_scrollbars_hidden(child, true);
         pin_expand_overflow_node(child, inner);
     }
 }
@@ -853,13 +878,15 @@ fn restore_expand_overflow_contents(panel: &mut Element) {
         return;
     }
     for child in &mut panel.children {
+        set_expand_scrollbars_hidden(child, false);
         restore_expand_overflow_node(child);
     }
 }
 
 /// Grow used-layout intrinsic; never shrink to the current viewport clip.
 fn absorb_expand_intrinsic(panel: &mut Element, max_height_cap: Option<f32>) {
-    let h = panel.layout_bounds[3];
+    let content_h = floating_scroll_content_h(panel);
+    let h = content_h.unwrap_or(panel.layout_bounds[3]);
     if h > 1.0 {
         let capped = match max_height_cap {
             Some(max) if max > 0.0 => h.min(max),
@@ -873,14 +900,18 @@ fn absorb_expand_intrinsic(panel: &mut Element, max_height_cap: Option<f32>) {
             .get(ATTR_FLOATING_CONTENT_H)
             .and_then(|s| s.parse::<f32>().ok())
             .filter(|x| *x > 0.5);
-        let skip_cap_stretch = max_height_cap
-            .is_some_and(|cap| (capped - cap).abs() < 1.0 && prev.is_some_and(|p| p + 1.0 < cap));
+        let skip_cap_stretch = content_h.is_none()
+            && max_height_cap.is_some_and(|cap| {
+                (capped - cap).abs() < 1.0 && prev.is_some_and(|p| p + 1.0 < cap)
+            });
         if !skip_cap_stretch {
             panel.used_layout.absorb_child_height(capped);
-            let stored = match max_height_cap {
-                Some(max) if max > 0.0 => panel.used_layout.anim_height().min(max),
-                _ => panel.used_layout.anim_height(),
-            };
+            let stored = content_h
+                .map(|_| capped)
+                .unwrap_or_else(|| match max_height_cap {
+                    Some(max) if max > 0.0 => panel.used_layout.anim_height().min(max),
+                    _ => panel.used_layout.anim_height(),
+                });
             panel.set_attr(ATTR_FLOATING_CONTENT_H, format!("{}", stored));
         }
     }
@@ -1949,9 +1980,15 @@ mod tests {
                 "seed+tick(0) must start at max-height≈0, got {mh}"
             );
             assert!(
-                (panel.style.opacity - 1.0).abs() < 0.05,
-                "enter seed must restore opacity"
+                panel.style.opacity < 0.05,
+                "enter seed must reveal the shadow gradually from opacity≈0"
             );
+            let _ = panel.tick_css_animations(0.1);
+            assert!(panel.style.opacity > 0.05 && panel.style.opacity < 0.99);
+            for _ in 0..20 {
+                let _ = panel.tick_css_animations(0.016);
+            }
+            assert!((panel.style.opacity - 1.0).abs() < 0.001);
         });
     }
 

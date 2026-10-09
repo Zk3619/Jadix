@@ -289,27 +289,26 @@ fn z_for_index(i: usize) -> OverlayZ {
     }
 }
 
-/// Nested Menu / Tooltip (Select inside DatePicker, submenu, hover tip) close
-/// with the parent. A later Popover / Modal is a peer successor — exclusive
-/// keep-alive left the parent on the stack only so its exit can play.
-fn exclusive_child_closes_with_parent(parent_id: &str, child: &OverlayLayer) -> bool {
-    child.id.starts_with(&format!("{parent_id}__sub"))
-        || matches!(child.kind, OverlayKind::Menu | OverlayKind::Tooltip)
+/// Nested menus / tooltips close with their parent. A Menu above another Menu
+/// is a peer successor unless its id identifies it as a submenu.
+fn exclusive_child_closes_with_parent(parent: &OverlayLayer, child: &OverlayLayer) -> bool {
+    child.id.starts_with(&format!("{}__sub", parent.id))
+        || child.kind == OverlayKind::Tooltip
+        || (parent.kind != OverlayKind::Menu && child.kind == OverlayKind::Menu)
 }
 
-/// Drop `pos` and nested children stacked immediately above it. Peer Popovers
+/// Drop `pos` and nested children stacked immediately above it. Peer surfaces
 /// above stay so finishing an exclusive exit cannot close the live successor.
 fn drain_layer_and_nested_children(
     stack: &mut Vec<OverlayLayer>,
     pos: usize,
     to_close: &mut Vec<Signal<bool>>,
 ) {
-    let parent_id = stack[pos].id.clone();
     let parent = stack.remove(pos);
     if layer_live(parent.open) {
         to_close.push(parent.open);
     }
-    while pos < stack.len() && exclusive_child_closes_with_parent(&parent_id, &stack[pos]) {
+    while pos < stack.len() && exclusive_child_closes_with_parent(&parent, &stack[pos]) {
         let child = stack.remove(pos);
         if layer_live(child.open) {
             to_close.push(child.open);
@@ -1552,6 +1551,74 @@ mod tests {
             "finishing the previous Popover's exit must not close the live successor"
         );
         assert_eq!(depth(), 1);
+        clear();
+    }
+
+    #[test]
+    fn finishing_menu_exit_keeps_peer_and_its_submenu_open() {
+        clear();
+        let file = Signal::new(true);
+        let file_keep = Signal::new(true);
+        let file_sub = Signal::new(true);
+        let file_sub_keep = Signal::new(true);
+        let edit = Signal::new(true);
+        let edit_sub = Signal::new(true);
+        for (id, open, mounted) in [
+            ("bar__file", file, file_keep),
+            ("bar__file__sub0", file_sub, file_sub_keep),
+        ] {
+            assert!(portal_sync_presence(
+                id,
+                open,
+                mounted,
+                OverlayKind::Menu,
+                OverlayMode::Stacked
+            )
+            .is_some());
+        }
+        assert!(portal_sync("bar__edit", edit, OverlayKind::Menu, OverlayMode::Stacked).is_some());
+        assert!(!file.peek());
+        assert!(!file_sub.peek());
+        assert!(portal_sync(
+            "bar__edit__sub0",
+            edit_sub,
+            OverlayKind::Menu,
+            OverlayMode::Stacked
+        )
+        .is_some());
+
+        file_keep.set(false);
+        assert!(portal_sync_presence(
+            "bar__file",
+            file,
+            file_keep,
+            OverlayKind::Menu,
+            OverlayMode::Stacked
+        )
+        .is_none());
+        assert!(edit.peek(), "finishing File must retain the peer Edit menu");
+        assert!(edit_sub.peek(), "finishing File must retain Edit's submenu");
+        assert_eq!(depth(), 2);
+
+        // File's later submenu exit must also leave the successor intact.
+        file_sub_keep.set(false);
+        assert!(portal_sync_presence(
+            "bar__file__sub0",
+            file_sub,
+            file_sub_keep,
+            OverlayKind::Menu,
+            OverlayMode::Stacked
+        )
+        .is_none());
+        assert!(edit.peek());
+        assert!(edit_sub.peek());
+        edit.set(false);
+        assert!(portal_sync("bar__edit", edit, OverlayKind::Menu, OverlayMode::Stacked).is_none());
+        assert!(
+            !edit_sub.peek(),
+            "a real submenu must still close with its parent"
+        );
+        assert_eq!(depth(), 0);
         clear();
     }
 

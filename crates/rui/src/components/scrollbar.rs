@@ -116,6 +116,8 @@ pub const SCROLLBAR_THUMB_FOCUS_PREFIX: &str = "scrollbar-thumb:";
 pub const SCROLLBAR_TRACK_FOCUS_PREFIX: &str = "scrollbar-track:";
 /// When `"0"`, `auto` fade skips track chrome (overlay thumb-only).
 pub(crate) const ATTR_SCROLLBAR_TRACK_FADES: &str = "rui_scrollbar_track_fades";
+/// Height reveal clips content temporarily; it must not expose scrollbar chrome or hit slabs.
+pub(crate) const ATTR_SCROLLBAR_REVEAL_HIDDEN: &str = "rui_scrollbar_reveal_hidden";
 
 const CHROME_ALPHA_EPS: f32 = 0.01;
 
@@ -216,6 +218,9 @@ pub(crate) fn auto_scrollbar_live_paint_alpha(el: &Element) -> Option<f32> {
         } else {
             return None;
         };
+    if el.attrs.contains_key(ATTR_SCROLLBAR_REVEAL_HIDDEN) {
+        return Some(0.0);
+    }
     let vis = use_signal(&scrollbar_visibility_signal_key(rest, axis), || {
         "auto".to_string()
     })

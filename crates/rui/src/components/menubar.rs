@@ -522,7 +522,16 @@ pub fn MenubarTrigger(id: String, children: Option<Element>) -> Element {
         }
         if any_menu_open(&bar_h) {
             // Peer switch: keep underlay armed (portal_sync also skips disarm).
-            open_h.set(true);
+            // A rapidly revisited menu can still have an exiting portal entry;
+            // portal_sync updates that entry without applying peer exclusivity.
+            crate::core::reactivity::batch(|| {
+                for menu in menus_of(&bar_h) {
+                    if menu.open.is_alive() {
+                        menu.open.set(false);
+                    }
+                }
+                open_h.set(true);
+            });
         }
     });
 
@@ -1020,6 +1029,133 @@ mod tests {
             return Some(el);
         }
         el.children.iter().find_map(find_menubar_trigger)
+    }
+
+    #[test]
+    fn hover_switch_keeps_successor_open_after_previous_menu_exits() {
+        use crate as rui;
+        use crate::app::portal_overlay::clear_overlay_stack;
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, create_root};
+        use crate::core::tree::{find_in_tree, LayoutTree};
+        use crate::utils::floating_motion::{
+            drain_pending_floating_unmounts, flush_floating_motion_subtree, tick_floating_presence,
+            tick_hoisted_floating_css,
+        };
+
+        clear_overlay_stack();
+        reset_registered_anchors();
+        let live = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(live.clone());
+        let (owner, ()) = create_root(|| {
+            let live = live.clone();
+            create_effect(move || {
+                *live.borrow_mut() = crate::ui! {
+                    <Menubar id="mb-hover-switch">
+                        <MenubarMenu id="file">
+                            <MenubarTrigger>"File"</MenubarTrigger>
+                            <MenubarContent><MenubarItem>"New File"</MenubarItem></MenubarContent>
+                        </MenubarMenu>
+                        <MenubarMenu id="edit">
+                            <MenubarTrigger>"Edit"</MenubarTrigger>
+                            <MenubarContent><MenubarItem>"Undo"</MenubarItem></MenubarContent>
+                        </MenubarMenu>
+                        <MenubarMenu id="view">
+                            <MenubarTrigger>"View"</MenubarTrigger>
+                            <MenubarContent><MenubarItem>"Zoom"</MenubarItem></MenubarContent>
+                        </MenubarMenu>
+                    </Menubar>
+                };
+            });
+        });
+        drain_deferred_view_remounts();
+        let trigger = |name: &str| {
+            let fid = format!("mb-hover-switch__{name}__dd_trigger");
+            let tree = live.borrow();
+            let el = find_in_tree(&tree, |el| el.focus_id.as_deref() == Some(&fid))
+                .expect("menubar trigger");
+            (el.on_click.clone().unwrap(), el.on_hover.clone().unwrap())
+        };
+        let (click_file, hover_file) = trigger("file");
+        let (_, hover_edit) = trigger("edit");
+        let (_, hover_view) = trigger("view");
+        let menus = menus_of("mb-hover-switch");
+        let mut layout = LayoutTree::new();
+        let mut advance_frames = |frames| {
+            crate::style::utility::set_frame_dt(0.016);
+            for _ in 0..frames {
+                tick_floating_presence();
+                drain_pending_floating_unmounts();
+                drain_deferred_view_remounts();
+                let mut tree = live.borrow_mut();
+                layout.build_and_layout(&mut tree, 800.0, 600.0, [0.0, 0.0]);
+                crate::utils::popup::sync_floating_placement(&mut tree, 800.0, 600.0);
+                flush_floating_motion_subtree(&mut tree);
+                tick_hoisted_floating_css(&mut tree);
+            }
+        };
+        click_file.borrow_mut()();
+        advance_frames(24);
+        assert!(menus[0].open.peek(), "File must stay open before switching");
+        crate::utils::popup::arm_underlay_close();
+        for (index, hover) in [
+            (1, &hover_edit),
+            (2, &hover_view),
+            (1, &hover_edit),
+            (0, &hover_file),
+        ] {
+            hover.borrow_mut()(true);
+            assert!(menus[index].open.peek(), "hover must open menu {index}");
+            advance_frames(24);
+            assert!(
+                menus[index].open.peek(),
+                "menu {index} must stay open after its predecessor exits"
+            );
+            assert_eq!(menus.iter().filter(|menu| menu.open.peek()).count(), 1);
+            let panel_id = format!("{}__floating_panel", menus[index].id);
+            assert!(
+                find_in_tree(&live.borrow(), |el| el.template_id.as_deref()
+                    == Some(&panel_id))
+                .is_some(),
+                "menu {index} must retain its visible panel"
+            );
+            hover.borrow_mut()(false);
+        }
+        // Change direction again before any of the outgoing menus finishes exiting.
+        for (index, hover) in [
+            (1, &hover_edit),
+            (2, &hover_view),
+            (0, &hover_file),
+            (1, &hover_edit),
+        ] {
+            hover.borrow_mut()(true);
+            advance_frames(1);
+            assert!(
+                menus[index].open.peek(),
+                "rapid hover must keep menu {index} open"
+            );
+            assert_eq!(
+                menus.iter().filter(|menu| menu.open.peek()).count(),
+                1,
+                "rapid switching must leave only the hovered menu open"
+            );
+            hover.borrow_mut()(false);
+        }
+        advance_frames(24);
+        assert!(
+            menus[1].open.peek(),
+            "Edit must survive all preceding exits"
+        );
+        assert!(crate::utils::popup::underlay_close_is_armed());
+        assert!(crate::app::portal_overlay::try_dismiss_outside_press());
+        assert!(!any_menu_open("mb-hover-switch"));
+        crate::style::utility::set_frame_dt(0.0);
+        clear_test_reconcile_root();
+        drop(live);
+        owner.dispose();
+        clear_overlay_stack();
+        reset_registered_anchors();
     }
 
     #[test]

@@ -964,6 +964,37 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
         cmd_dlg_el: Element,
         sheet_sides_el: Element,
     ) -> Element {
+        const PROGRESS_IMAGE_SRC: &str = concat!(
+            "data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='128' height='128' viewBox='0 0 128 128'>",
+            "<rect width='128' height='128' fill='#dbeafe'/><circle cx='94' cy='32' r='13' fill='#fbbf24'/>",
+            "<path d='M0 100 L44 36 L94 100 Z' fill='#3b82f6'/><path d='M48 128 L98 57 L150 128 Z' fill='#1e40af'/>",
+            "<path d='M32 54 L44 36 L58 54 Z M86 74 L98 57 L110 74 Z' fill='white'/></svg>"
+        );
+        let circle_composed: Element = progress_circle()
+            .id("gal-progress-circle-composed")
+            .value_signal(progress_val)
+            .size(ProgressCircleSize::Lg)
+            .child(
+                vstack()
+                    .gap(2.0)
+                    .items_center()
+                    .child(
+                        ui_image()
+                            .src(PROGRESS_IMAGE_SRC)
+                            .style(|b| b.w(24.0).h(24.0)),
+                    )
+                    .child(
+                        Element::new()
+                            .template_id("gal-progress-circle-composed-value")
+                            .text_size(20.0)
+                            .font_weight(600.0)
+                            .text(move || {
+                                format!("{:.0}%", progress_val.get().clamp(0.0, 1.0) * 100.0)
+                            }),
+                    )
+                    .child(Element::new().text_size(12.0).text("上传中")),
+            )
+            .into();
         ui! {
             <MyCard title="Command · Dialog · Sheet · Drawer · Toast · Tooltip · HoverCard · Dropdown · Progress">
                 <VStack w="100%" gap="0.75rem">
@@ -1164,6 +1195,31 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
                             <ProgressCircle id="gal-progress-circle-md" valueSignal={progress_val} size={ProgressCircleSize::Md} />
                             <ProgressCircle id="gal-progress-circle-sm" valueSignal={progress_val} size={ProgressCircleSize::Sm} />
                             <ProgressCircle id="gal-progress-circle-lg" valueSignal={progress_val} size={ProgressCircleSize::Lg} />
+                        </HStack>
+                        <Label text_size="0.75rem" color="muted-foreground" leading="normal">
+                            "圈内自定义内容：百分比、图片、图片与文字组合；点击 Bump 同步更新。"
+                        </Label>
+                        <HStack gap="1.5rem" items="start" wrap="wrap">
+                            <VStack gap="0.375rem" items="center">
+                                <ProgressCircle id="gal-progress-circle-percent" valueSignal={progress_val} size={ProgressCircleSize::Lg}>
+                                    { Element::new()
+                                        .template_id("gal-progress-circle-percent-value")
+                                        .text_size(24.0)
+                                        .font_weight(600.0)
+                                        .text(move || format!("{:.0}%", progress_val.get().clamp(0.0, 1.0) * 100.0)) }
+                                </ProgressCircle>
+                                <Label text_size="0.75rem" color="muted-foreground">"百分比"</Label>
+                            </VStack>
+                            <VStack gap="0.375rem" items="center">
+                                <ProgressCircle id="gal-progress-circle-image" valueSignal={progress_val} size={ProgressCircleSize::Lg}>
+                                    <Image src={PROGRESS_IMAGE_SRC} w="100%" h="100%" />
+                                </ProgressCircle>
+                                <Label text_size="0.75rem" color="muted-foreground">"图片"</Label>
+                            </VStack>
+                            <VStack gap="0.375rem" items="center">
+                                { circle_composed }
+                                <Label text_size="0.75rem" color="muted-foreground">"组合内容 · Builder"</Label>
+                            </VStack>
                         </HStack>
                         <Separator />
                         <Label font_weight="600" text_size="0.875rem">{ "orientation=vertical" }</Label>
