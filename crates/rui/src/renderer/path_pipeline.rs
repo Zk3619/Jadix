@@ -1,4 +1,5 @@
-//! Product GPU 2D path: stroke mesh + stencil-cover fill → 4× MSAA offscreen → `rui_path:`.
+//! Product GPU 2D path: stroke mesh + stencil-cover fill → MSAA (or GPU SSAA)
+//! → linear coverage resolve → straight-alpha `rui_path:` / `rui_canvas:` textures.
 //!
 //! Does **not** go through [`InstanceInput`] / `rounded_rect.wgsl`. CPU
 //! [`crate::primitives::path::paint_path_premul`] stays the golden / fallback.
@@ -152,12 +153,15 @@ pub struct PathGpu {
     stencil_eo: wgpu::RenderPipeline,
     stencil_nz: wgpu::RenderPipeline,
     cover: wgpu::RenderPipeline,
+    resolve: wgpu::RenderPipeline,
+    resolve_bgl: wgpu::BindGroupLayout,
     bgl: wgpu::BindGroupLayout,
     uniform_buf: wgpu::Buffer,
     uniform_bg: wgpu::BindGroup,
     sample_count: u32,
     msaa: Option<(u32, u32, wgpu::Texture)>,
     stencil: Option<(u32, u32, wgpu::Texture)>,
+    coverage: Option<(u32, u32, wgpu::Texture)>,
     target_size: HashMap<String, (u32, u32)>,
 }
 
@@ -268,6 +272,49 @@ impl PathGpu {
             cover_face,
             "rui-path-cover",
         );
+        let resolve_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("rui-path-resolve-bgl"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: false },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            }],
+        });
+        let resolve_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("rui-path-resolve-layout"),
+            bind_group_layouts: &[Some(&bgl), Some(&resolve_bgl)],
+            immediate_size: 0,
+        });
+        let resolve = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("rui-path-resolve"),
+            layout: Some(&resolve_layout),
+            vertex: wgpu::VertexState {
+                module: &shader,
+                entry_point: Some("vs_resolve"),
+                buffers: &[],
+                compilation_options: Default::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &shader,
+                entry_point: Some("fs_resolve"),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    blend: None,
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: Default::default(),
+            }),
+            primitive: Default::default(),
+            depth_stencil: None,
+            multisample: Default::default(),
+            multiview_mask: None,
+            cache: None,
+        });
         let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("rui-path-globals"),
             size: std::mem::size_of::<PathGlobals>() as u64,
@@ -287,12 +334,15 @@ impl PathGpu {
             stencil_eo,
             stencil_nz,
             cover,
+            resolve,
+            resolve_bgl,
             bgl,
             uniform_buf,
             uniform_bg,
             sample_count,
             msaa: None,
             stencil: None,
+            coverage: None,
             target_size: HashMap::new(),
         }
     }
@@ -347,8 +397,25 @@ impl PathGpu {
         let resolve_view = gpu_img
             ._texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        self.ensure_msaa(device, w, h);
-        self.ensure_stencil(device, w, h);
+        // Four coverage samples even when the backend cannot multisample stencil.
+        // Geometry/gradient coordinates stay in job pixels; the viewport scales them.
+        let limit = device.limits().max_texture_dimension_2d;
+        let scale = if self.sample_count == 1 && w <= limit / 2 && h <= limit / 2 {
+            2
+        } else {
+            1
+        };
+        let rw = w * scale;
+        let rh = h * scale;
+        self.ensure_coverage(device, rw, rh);
+        let coverage_view = self
+            .coverage
+            .as_ref()
+            .unwrap()
+            .2
+            .create_view(&wgpu::TextureViewDescriptor::default());
+        self.ensure_msaa(device, rw, rh);
+        self.ensure_stencil(device, rw, rh);
         let msaa_view = self
             .msaa
             .as_ref()
@@ -374,9 +441,9 @@ impl PathGpu {
             let resolve;
             if let Some(msaa) = msaa_view.as_ref() {
                 color_view = msaa;
-                resolve = Some(&resolve_view);
+                resolve = Some(&coverage_view);
             } else {
-                color_view = &resolve_view;
+                color_view = &coverage_view;
                 resolve = None;
             }
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -413,7 +480,8 @@ impl PathGpu {
             });
             pass.set_stencil_reference(0);
             for op in &job.ops {
-                if !apply_scissor(&mut pass, op.clip(), w, h) {
+                let clip = op.clip().map(|c| c.map(|v| v * scale as f32));
+                if !apply_scissor(&mut pass, clip, rw, rh) {
                     continue;
                 }
                 match op {
@@ -492,6 +560,36 @@ impl PathGpu {
                     }
                 }
             }
+        }
+        let coverage_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("rui-path-resolve-bg"),
+            layout: &self.resolve_bgl,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&coverage_view),
+            }],
+        });
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("rui-path-coverage-resolve"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &resolve_view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+                multiview_mask: None,
+            });
+            pass.set_pipeline(&self.resolve);
+            pass.set_bind_group(0, &self.uniform_bg, &[]);
+            pass.set_bind_group(1, &coverage_bg, &[]);
+            pass.draw(0..3, 0..1);
         }
         queue.submit(Some(encoder.finish()));
         drop((bufs, bgs));
@@ -591,6 +689,31 @@ impl PathGpu {
             view_formats: &[],
         });
         self.msaa = Some((w, h, texture));
+    }
+
+    fn ensure_coverage(&mut self, device: &wgpu::Device, w: u32, h: u32) {
+        if self
+            .coverage
+            .as_ref()
+            .is_some_and(|(cw, ch, _)| *cw == w && *ch == h)
+        {
+            return;
+        }
+        let texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("rui-path-coverage"),
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        });
+        self.coverage = Some((w, h, texture));
     }
 
     fn ensure_stencil(&mut self, device: &wgpu::Device, w: u32, h: u32) {
@@ -712,7 +835,11 @@ pub fn path_msaa_sample_count(adapter: &wgpu::Adapter) -> u32 {
     let color = adapter.get_texture_format_features(wgpu::TextureFormat::Rgba8UnormSrgb);
     let ds = adapter.get_texture_format_features(STENCIL_FORMAT);
     let x4 = wgpu::TextureFormatFeatureFlags::MULTISAMPLE_X4;
-    if color.flags.contains(x4) && ds.flags.contains(x4) {
+    if color
+        .flags
+        .contains(x4 | wgpu::TextureFormatFeatureFlags::MULTISAMPLE_RESOLVE)
+        && ds.flags.contains(x4)
+    {
         4
     } else {
         1
@@ -722,6 +849,8 @@ pub fn path_msaa_sample_count(adapter: &wgpu::Adapter) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    mod antialias;
 
     #[test]
     fn vertex_stride_is_32() {

@@ -101,6 +101,11 @@ fn sample_stops(t_in: f32) -> vec4<f32> {
     return c;
 }
 
+fn linearize_srgb(c: vec3<f32>) -> vec3<f32> {
+    return select(pow((c + vec3<f32>(0.055)) / 1.055, vec3<f32>(2.4)),
+        c / 12.92, c <= vec3<f32>(0.04045));
+}
+
 @fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var color = in.color;
@@ -130,5 +135,35 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
         sampled.a = sampled.a * in.color.a;
         color = sampled;
     }
-    return color * in.coverage;
+    let alpha = color.a * in.coverage;
+    return vec4<f32>(linearize_srgb(color.rgb) * alpha, alpha);
+}
+
+@group(1) @binding(0)
+var coverage_tex: texture_2d<f32>;
+
+@vertex
+fn vs_resolve(@builtin(vertex_index) index: u32) -> @builtin(position) vec4<f32> {
+    let x = f32((index << 1u) & 2u);
+    let y = f32(index & 2u);
+    return vec4<f32>(x * 2.0 - 1.0, y * 2.0 - 1.0, 0.0, 1.0);
+}
+
+@fragment
+fn fs_resolve(@builtin(position) p: vec4<f32>) -> @location(0) vec4<f32> {
+    let scale = vec2<i32>(round(vec2<f32>(textureDimensions(coverage_tex)) / g.resolution));
+    let base = vec2<i32>(p.xy) * scale;
+    var color = vec4<f32>(0.0);
+    for (var y = 0; y < scale.y; y++) {
+        for (var x = 0; x < scale.x; x++) {
+            color += textureLoad(coverage_tex, base + vec2<i32>(x, y), 0);
+        }
+    }
+    color /= f32(scale.x * scale.y);
+    // Average linear premultiplied color/coverage, then export the straight-alpha
+    // texture expected by the shared image compositor. Never blur opaque interiors.
+    if (color.a <= 1e-6) {
+        return vec4<f32>(0.0);
+    }
+    return vec4<f32>(color.rgb / color.a, color.a);
 }

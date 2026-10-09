@@ -1812,7 +1812,7 @@ pub(crate) fn for_each_own_textured_run(
                 && q.textured.1 > q.textured.0
                 && q.textured.0 >= lo
                 && q.textured.1 <= hi
-                && occupancy_descendant_slot(owner, q)
+                && is_nested_foreign_slot(owner, q)
         })
         .map(|q| (q.textured.0, q.textured.1))
         .collect();
@@ -3731,6 +3731,17 @@ fn node_paint_occupancy(p: &NodePaint) -> [f32; 4] {
     }
 }
 
+fn node_paint_peer_occupancy(p: &NodePaint) -> [f32; 4] {
+    let rest = node_paint_occupancy(p);
+    // A translated plate blocks its live pose, not the layout slot it left.
+    // Keep rest occupancy for scale/bounce growth and caption halo guards.
+    if (p.bounds[2] - rest[2]).abs() <= 0.5 && (p.bounds[3] - rest[3]).abs() <= 0.5 {
+        p.bounds
+    } else {
+        rest
+    }
+}
+
 /// Dest-reset / node-present scissor occupancy clip.
 ///
 /// Layered slots (absolute ping, jump pills) still punch rest-overlapping
@@ -3822,7 +3833,7 @@ fn clip_rect_against_layered_siblings(
         if related {
             continue;
         }
-        let occ = scale_xywh(node_paint_occupancy(p), s);
+        let occ = scale_xywh(node_paint_peer_occupancy(p), s);
         if occ[2] <= 0.5 || occ[3] <= 0.5 {
             continue;
         }
@@ -4069,15 +4080,14 @@ fn underlay_range_covers_dirty_slot(
     paint: &NodePaint,
     node_paints: &[NodePaint],
 ) -> bool {
-    if paint.instance.1 <= paint.instance.0 {
-        return false;
-    }
     let has_keyed = paints_has_keyed_slot(dirty_key, dirty_bounds, node_paints);
     node_paints.iter().any(|host| {
         host.key != paint.key
             && slot_matches_dirty(dirty_key, dirty_bounds, host, has_keyed)
-            && host.instance != paint.instance
-            && slot_range_nested(host.instance, paint.instance)
+            // Canvas-only slots have no rect instances. Both an ancestor's
+            // collect range and a descendant's range are already submitted by
+            // the dirty slot; neither is a separate underlay.
+            && (is_nested_foreign_slot(paint, host) || is_nested_foreign_slot(host, paint))
     })
 }
 
@@ -4280,7 +4290,7 @@ fn clip_rect_against_foreign_siblings(
             continue;
         }
         let fb = scale_xywh(p.bounds, s);
-        let mut occ = node_paint_occupancy(p);
+        let mut occ = node_paint_peer_occupancy(p);
         // Scrolled text can extend across peers while only painting inside its viewport.
         if let Some(clip) = p.overflow_clip {
             let Some(visible) = intersect_rects(occ, clip) else {
@@ -5833,6 +5843,7 @@ mod tests {
             transform,
             clip_pos: [0.0, 0.0],
             clip_size: crate::renderer::TexturedDraw::NO_CLIP_SIZE,
+            rounded_clips: [[0.0; 4]; 4],
         }
     }
 
@@ -12656,6 +12667,31 @@ mod tests {
             assert!(captured.contains(&0), "the vacated pose must restore A");
             assert_eq!(captured.contains(&1), bounds[2] > 300.0);
         }
+    }
+
+    #[test]
+    fn translated_layer_occupancy_follows_the_visible_plate() {
+        let bounds = [100.0, 100.0, 176.0, 92.0];
+        let mut host = slot(1, bounds, (0, 1));
+        host.layered = true;
+        host.rest = Some(bounds);
+        let mut peer = slot(2, [300.0, 250.0, 176.0, 92.0], (1, 2));
+        peer.layered = true;
+        peer.rest = Some([180.0, 140.0, 176.0, 92.0]);
+        peer.instance = (1, 2);
+        assert_eq!(
+            clip_rect_against_layered_siblings(bounds, 1, bounds, &[host, peer], 1.0),
+            bounds,
+            "a moved plate must not block repaint at its old layout position"
+        );
+        let lower = [320.0, 270.0, 176.0, 92.0];
+        host.bounds = lower;
+        host.rest = Some(lower);
+        assert_ne!(
+            clip_rect_against_layered_siblings(lower, 1, lower, &[host, peer], 1.0),
+            lower,
+            "the moved plate must occupy its current position"
+        );
     }
 
     #[test]

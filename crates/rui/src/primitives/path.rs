@@ -1003,8 +1003,8 @@ fn mid_pt(a: Point2, b: Point2) -> Point2 {
     ((a.0 + b.0) * 0.5, (a.1 + b.1) * 0.5)
 }
 
-/// Chord error in leaf px. Matches the old ~0.35 length heuristic without a 12-seg floor.
-const FLATTEN_FLATNESS: f32 = 0.35;
+/// Maximum chord error in raster pixels (coordinates already include display DPI).
+const FLATTEN_FLATNESS: f32 = 0.125;
 const FLATTEN_MAX_DEPTH: u8 = 10;
 
 fn flatten_cubic(p0: Point2, p1: Point2, p2: Point2, p3: Point2, out: &mut Vec<PathCommand>) {
@@ -1121,13 +1121,7 @@ fn flatten_arc(
         dtheta += std::f32::consts::TAU;
     }
 
-    // Lucide spinners etc. use long circular arcs; ~45°/segment reads as a visible polygon.
-    const MAX_ANGLE_STEP: f32 = std::f32::consts::PI / 30.0; // ~6°
-    let avg_r = (rx + ry) * 0.5;
-    let arc_len = avg_r * dtheta.abs();
-    let by_angle = (dtheta.abs() / MAX_ANGLE_STEP).ceil() as usize;
-    let by_length = (arc_len / FLATTEN_FLATNESS).ceil() as usize;
-    let segments = by_angle.max(by_length).clamp(1, 256);
+    let segments = arc_segments(rx.max(ry), dtheta);
     for i in 1..=segments {
         let t = i as f32 / segments as f32;
         let theta = theta1 + dtheta * t;
@@ -1644,6 +1638,12 @@ fn quad_to_tris(q: PathQuad, out: &mut Vec<PathTri>) {
     let cy = q.pos.1 + q.size.1 * 0.5;
     let hw = q.size.0 * 0.5;
     let hh = q.size.1 * 0.5;
+    // Stroke round caps/joins are circular quads in the SDF path. Preserve
+    // their shape when converting to triangles instead of emitting a square.
+    if q.radii.iter().all(|&r| r > 0.0) {
+        disc_fan((cx, cy), hw.min(hh), q.color, out);
+        return;
+    }
     let (s, c) = q.rotate_deg.to_radians().sin_cos();
     let rot = |x: f32, y: f32| (cx + x * c - y * s, cy + x * s + y * c);
     let p0 = rot(-hw, -hh);
@@ -1680,16 +1680,24 @@ fn fan_fill(pts: &[Point2], color: [f32; 4], out: &mut Vec<PathTri>) {
     }
 }
 
+/// Sagitta bounds the distance from the arc to each chord. Unlike an arc-length
+/// heuristic, this adds geometry only where it improves the rendered silhouette.
+fn arc_segments(radius: f32, angle: f32) -> usize {
+    let step = (2.0 * (1.0 - FLATTEN_FLATNESS / radius.max(0.5)).acos())
+        .clamp(0.001, std::f32::consts::PI / 6.0);
+    (angle.abs() / step).ceil().clamp(1.0, 4096.0) as usize
+}
+
 fn disc_fan(center: Point2, radius: f32, color: [f32; 4], out: &mut Vec<PathTri>) {
     let r = radius.max(0.5);
     if color[3] <= 0.0 {
         return;
     }
-    const N: usize = 12;
     let tau = std::f32::consts::TAU;
-    for i in 0..N {
-        let a0 = i as f32 / N as f32 * tau;
-        let a1 = (i + 1) as f32 / N as f32 * tau;
+    let n = arc_segments(r, tau);
+    for i in 0..n {
+        let a0 = i as f32 / n as f32 * tau;
+        let a1 = (i + 1) as f32 / n as f32 * tau;
         out.push(PathTri {
             a: center,
             b: (center.0 + r * a0.cos(), center.1 + r * a0.sin()),
@@ -2105,7 +2113,15 @@ fn detect_regular_circle(cmds: &[PathCommand]) -> Option<(f32, f32, f32, usize)>
     if !closed {
         return None;
     }
-    let pts = points_from_commands(cmds);
+    let mut pts = points_from_commands(cmds);
+    // Closing arcs repeat the first vertex; counting it twice biases the center
+    // when adaptive tessellation uses fewer segments.
+    if pts.len() > 1
+        && (pts[0].0 - pts[pts.len() - 1].0).abs() < 1e-4
+        && (pts[0].1 - pts[pts.len() - 1].1).abs() < 1e-4
+    {
+        pts.pop();
+    }
     let n = pts.len();
     if n < 8 {
         return None;
@@ -3156,8 +3172,10 @@ fn prepare_path_draw(
     leaf_h: f32,
 ) -> Option<PreparedPathDraw> {
     let target = path_target_leaf_size(attrs, [leaf_w, leaf_h]);
-    let w = target[0].round() as i32;
-    let h = target[1].round() as i32;
+    let dpi = crate::style::gradient_raster_dpi();
+    let raster_target = [target[0] * dpi, target[1] * dpi];
+    let w = raster_target[0].ceil() as i32;
+    let h = raster_target[1].ceil() as i32;
     if w < 2 || h < 2 {
         return None;
     }
@@ -3176,18 +3194,22 @@ fn prepare_path_draw(
                     .iter()
                     .map(|(cmds, st)| {
                         (
-                            scale_commands_preserve_circles(cmds, scene.vb, target),
-                            st.clone(),
+                            scale_commands_preserve_circles(cmds, scene.vb, raster_target),
+                            {
+                                let mut style = st.clone();
+                                style.stroke_width *= dpi;
+                                style
+                            },
                         )
                     })
                     .collect();
                 if layers.iter().all(|(c, _)| c.is_empty()) && scene.markers.is_empty() {
                     return None;
                 }
-                let markers = scale_points(&scene.markers, scene.vb, target);
+                let markers = scale_points(&scene.markers, scene.vb, raster_target);
                 let sx = target[0] / scene.vb[2].max(1e-6);
                 let sy = target[1] / scene.vb[3].max(1e-6);
-                let marker_r = scene.marker_r * sx.min(sy).max(0.25);
+                let marker_r = scene.marker_r * sx.min(sy).max(0.25) * dpi;
                 return Some(PreparedPathDraw {
                     layers,
                     markers,
@@ -3208,28 +3230,31 @@ fn prepare_path_draw(
         .get(ATTR_PATH_VIEWBOX)
         .and_then(|s| parse_path_viewbox(s));
     let cmds = if let Some(vb) = vb {
-        scale_commands_preserve_circles(&raw, vb, target)
+        scale_commands_preserve_circles(&raw, vb, raster_target)
     } else {
-        raw
+        scale_commands(&raw, [0.0, 0.0, target[0], target[1]], raster_target)
     };
-    let style = style_from_attrs(attrs);
+    let mut style = style_from_attrs(attrs);
+    style.stroke_width *= dpi;
     let mut markers = attrs
         .get(ATTR_PATH_MARKERS)
         .map(|s| decode_points(s))
         .unwrap_or_default();
     if let Some(vb) = vb {
-        markers = scale_points(&markers, vb, target);
+        markers = scale_points(&markers, vb, raster_target);
+    } else {
+        markers = scale_points(&markers, [0.0, 0.0, target[0], target[1]], raster_target);
     }
     let marker_r = attrs
         .get("rui_path_marker_r")
         .and_then(|s| s.parse().ok())
-        .unwrap_or_else(|| style.stroke_width.max(2.5) * 0.9);
+        .unwrap_or_else(|| (style.stroke_width / dpi).max(2.5) * 0.9);
     let sx = if let Some(vb) = vb {
         target[0] / vb[2].max(1e-6)
     } else {
         1.0
     };
-    let marker_r = marker_r * sx.max(0.25);
+    let marker_r = marker_r * sx.max(0.25) * dpi;
     Some(PreparedPathDraw {
         layers: vec![(cmds, style)],
         markers,
@@ -3243,6 +3268,22 @@ fn prepare_path_draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn round_caps_and_markers_obey_pixel_error_budget() {
+        for radius in [1.0, 4.0, 16.0, 64.0, 128.0] {
+            let mut tris = Vec::new();
+            disc_fan((0.0, 0.0), radius, [1.0; 4], &mut tris);
+            for tri in tris {
+                let midpoint = ((tri.b.0 + tri.c.0) * 0.5, (tri.b.1 + tri.c.1) * 0.5);
+                let error = radius - midpoint.0.hypot(midpoint.1);
+                assert!(
+                    error <= 0.1251,
+                    "round cap radius {radius} has visible polygon facets: chord error {error}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn polyline_and_pie_encode() {
@@ -3279,7 +3320,8 @@ mod tests {
             )),
             "filled_ellipse must keep rx/ry Arc, got {ell:?}"
         );
-        let pts = points_from_commands(&c);
+        let mut pts = points_from_commands(&c);
+        pts.pop(); // the closing arc repeats the first point
         let n = pts.len().max(1) as f32;
         let cx = pts.iter().map(|p| p.0).sum::<f32>() / n;
         let cy = pts.iter().map(|p| p.1).sum::<f32>() / n;
@@ -3294,7 +3336,8 @@ mod tests {
         let cmds = filled_circle(160.0, 70.0, 8.0, 20);
         let scaled =
             scale_commands_preserve_circles(&cmds, [0.0, 0.0, 320.0, 140.0], [640.0, 140.0]);
-        let pts = points_from_commands(&scaled);
+        let mut pts = points_from_commands(&scaled);
+        pts.pop(); // the closing arc repeats the first point
         let n = pts.len().max(1) as f32;
         let cx = pts.iter().map(|p| p.0).sum::<f32>() / n;
         let cy = pts.iter().map(|p| p.1).sum::<f32>() / n;
@@ -3369,11 +3412,17 @@ mod tests {
     fn loader_circle_arc_flattens_smoothly() {
         let cmds = decode_path_d("M21 12a9 9 0 1 1-6.219-8.56");
         let pts = points_from_commands(&cmds);
-        assert!(
-            pts.len() >= 32,
-            "loader-circle arc should flatten to many segments, got {}",
-            pts.len()
-        );
+        for segment in pts.windows(2) {
+            let midpoint = (
+                (segment[0].0 + segment[1].0) * 0.5,
+                (segment[0].1 + segment[1].1) * 0.5,
+            );
+            let error = 9.0 - (midpoint.0 - 12.0).hypot(midpoint.1 - 12.0);
+            assert!(
+                error.abs() <= 0.1251,
+                "loader-circle arc must have a smooth silhouette: chord error {error}"
+            );
+        }
     }
 
     #[test]

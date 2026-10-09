@@ -232,14 +232,21 @@ pub(crate) fn hoisted_portal_boxes(root: &Element) -> Vec<[f32; 4]> {
 /// Keyframe replace dest-resets this overlay's previous stamp, not a sibling portal.
 pub(crate) fn hoisted_portal_stamps(root: &Element) -> Vec<(u64, [f32; 4])> {
     let mut out = Vec::new();
-    crate::core::tree::walk_elements(root, |el| {
-        if el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) != Some("1") {
-            return;
+    let mut stack = vec![(root, false)];
+    while let Some((el, in_overlay)) = stack.pop() {
+        let in_overlay = in_overlay || el.template_id.as_deref() == Some(PORTAL_LAYER_ID);
+        // A Portal mounted in a page host is painted in the page pass, with the
+        // host's scroll and overflow clip. Its document-space box must not cut a
+        // hole in page damage. Mounts inside the body overlay layer still belong
+        // to the overlay suffix and do reserve their painted footprint.
+        let page_mount = el.attrs.contains_key(ATTR_HOISTED_MOUNT) && !in_overlay;
+        if !page_mount && el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1") {
+            if let Some(b) = hoisted_portal_paint_box(el) {
+                out.push((hoisted_portal_stamp_key(el), b));
+            }
         }
-        if let Some(b) = hoisted_portal_paint_box(el) {
-            out.push((hoisted_portal_stamp_key(el), b));
-        }
-    });
+        stack.extend(el.children.iter().rev().map(|child| (child, in_overlay)));
+    }
     out
 }
 
@@ -1465,6 +1472,7 @@ fn push_border_image_draws(
             transform: crate::style::transform::MAT2D_IDENTITY,
             clip_pos: [0.0, 0.0],
             clip_size: TexturedDraw::NO_CLIP_SIZE,
+            rounded_clips: [[0.0; 4]; 4],
         });
     };
 
@@ -2646,7 +2654,7 @@ pub struct LayoutTree {
     /// Current layout viewport (window / compute available size) for `vw`/`vh`/`dvh`.
     viewport: [f32; 2],
     text_measurements: HashMap<taffy::NodeId, TextMeasureMeta>,
-    /// Per-compute_layout text leaf measure memo (cleared each compute).
+    /// Text sizes survive layout frames until their text metadata changes.
     measure_layout_cache: RefCell<HashMap<TextMeasureCacheKey, taffy::geometry::Size<f32>>>,
     /// Track nodes visited in the current build pass for pruning.
     visited_nodes: std::collections::HashSet<NodeId>,
@@ -2661,6 +2669,8 @@ pub struct LayoutTree {
     /// Test spy: Taffy measure-function invocations in the last compute (text leaves).
     #[cfg(test)]
     pub(crate) text_measure_calls: std::cell::Cell<u32>,
+    #[cfg(test)]
+    pub(crate) text_measure_misses: std::cell::Cell<u32>,
     /// Test spy: [`Self::build_and_layout`] invocations (full tree walk).
     #[cfg(test)]
     pub(crate) full_rebuilds: u32,
@@ -2720,6 +2730,7 @@ impl LayoutTree {
 }
 
 /// Text leaf measure meta (line-height aligned with TextStyle).
+#[derive(PartialEq)]
 struct TextMeasureMeta {
     size: f32,
     text: String,
@@ -2816,7 +2827,7 @@ fn text_measure_meta(element: &Element, text: String, is_icon: bool) -> TextMeas
     }
 }
 
-/// Per-`compute_layout` memo for `measured_text_leaf_size` (Taffy probes the same leaf many times).
+/// Only the inline constraint affects text measure; icons also honor known height.
 #[derive(Clone, Copy, Debug, Hash, Eq, PartialEq)]
 struct TextMeasureCacheKey {
     node: NodeId,
@@ -2831,13 +2842,28 @@ impl TextMeasureCacheKey {
         node: NodeId,
         kd: taffy::geometry::Size<Option<f32>>,
         av: taffy::geometry::Size<taffy::style::AvailableSpace>,
+        meta: Option<&TextMeasureMeta>,
     ) -> Self {
+        let vertical = meta.is_some_and(|m| m.writing_mode.is_vertical());
+        let known_height_matters = vertical || meta.is_none_or(|m| m.is_icon);
         Self {
             node,
             kw: kd.width.map(|w| w.to_bits()).unwrap_or(u32::MAX),
-            kh: kd.height.map(|h| h.to_bits()).unwrap_or(u32::MAX),
-            aw: pack_avail_space(av.width),
-            ah: pack_avail_space(av.height),
+            kh: if known_height_matters {
+                kd.height.map(|h| h.to_bits()).unwrap_or(u32::MAX)
+            } else {
+                u32::MAX
+            },
+            aw: if vertical {
+                0
+            } else {
+                pack_avail_space(av.width)
+            },
+            ah: if vertical {
+                pack_avail_space(av.height)
+            } else {
+                0
+            },
         }
     }
 }
@@ -2882,15 +2908,14 @@ fn measure_leaf_cached(
     known_dimensions: taffy::geometry::Size<Option<f32>>,
     available_space: taffy::geometry::Size<taffy::style::AvailableSpace>,
 ) -> taffy::geometry::Size<f32> {
-    let key = TextMeasureCacheKey::new(node_id, known_dimensions, available_space);
+    let Some(meta) = tm.get(&node_id) else {
+        return taffy::geometry::Size::ZERO;
+    };
+    let key = TextMeasureCacheKey::new(node_id, known_dimensions, available_space, Some(meta));
     if let Some(v) = cache.borrow().get(&key) {
         return *v;
     }
-    let out = if let Some(m) = tm.get(&node_id) {
-        measured_text_leaf_size(m, known_dimensions, available_space)
-    } else {
-        taffy::geometry::Size::ZERO
-    };
+    let out = measured_text_leaf_size(meta, known_dimensions, available_space);
     cache.borrow_mut().insert(key, out);
     out
 }
@@ -3225,11 +3250,17 @@ impl LayoutTree {
         node: NodeId,
         available_space: Size<AvailableSpace>,
     ) -> Result<(), taffy::TaffyError> {
+        // Bound viewport/animated-width variants without evicting on every frame.
+        if self.measure_layout_cache.get_mut().len() > 16_384 {
+            self.measure_layout_cache.get_mut().clear();
+        }
         crate::core::reactivity::with_ui_build_stack(|| {
             let tm = &self.text_measurements;
             let mcache = &self.measure_layout_cache;
             #[cfg(test)]
             self.text_measure_calls.set(0);
+            #[cfg(test)]
+            self.text_measure_misses.set(0);
             #[cfg(test)]
             let measure_calls = &self.text_measure_calls;
             self.taffy.compute_layout_with_measure(
@@ -3239,6 +3270,15 @@ impl LayoutTree {
                     #[cfg(test)]
                     if tm.contains_key(&node_id) {
                         measure_calls.set(measure_calls.get().saturating_add(1));
+                        if !mcache.borrow().contains_key(&TextMeasureCacheKey::new(
+                            node_id,
+                            known_dimensions,
+                            available_space,
+                            tm.get(&node_id),
+                        )) {
+                            self.text_measure_misses
+                                .set(self.text_measure_misses.get() + 1);
+                        }
                     }
                     measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
                 },
@@ -3266,6 +3306,8 @@ impl LayoutTree {
             last_compute_root: None,
             #[cfg(test)]
             text_measure_calls: std::cell::Cell::new(0),
+            #[cfg(test)]
+            text_measure_misses: std::cell::Cell::new(0),
             #[cfg(test)]
             full_rebuilds: 0,
             collect_scratch: CollectScratch::default(),
@@ -3524,6 +3566,9 @@ impl LayoutTree {
             self.text_measurements.remove(&id);
             self.visited_nodes.remove(&id);
         }
+        self.measure_layout_cache
+            .get_mut()
+            .retain(|key, _| self.total_nodes.contains(&key.node));
     }
 
     pub fn update_taffy_node_style(&mut self, element: &Element) {
@@ -3590,12 +3635,24 @@ impl LayoutTree {
         if let Some(text) = &element.text {
             if element.children.is_empty() {
                 let is_icon = element.text_style.font_family.as_deref() == Some("lucide");
-                self.text_measurements
-                    .insert(node_id, text_measure_meta(element, text.clone(), is_icon));
+                let meta = text_measure_meta(element, text.clone(), is_icon);
+                if self.text_measurements.get(&node_id) != Some(&meta) {
+                    if self.text_measurements.contains_key(&node_id) {
+                        self.measure_layout_cache
+                            .get_mut()
+                            .retain(|key, _| key.node != node_id);
+                    }
+                    self.text_measurements.insert(node_id, meta);
+                    let _ = self.taffy.mark_dirty(node_id);
+                }
                 return;
             }
         }
-        self.text_measurements.remove(&node_id);
+        if self.text_measurements.remove(&node_id).is_some() {
+            self.measure_layout_cache
+                .get_mut()
+                .retain(|key, _| key.node != node_id);
+        }
     }
 
     /// Whether taffy's cache for `node` is empty (needs recompute).
@@ -3627,6 +3684,8 @@ impl LayoutTree {
     /// `glyphon_fit` (paint spill → `note_fit_needs_relayout`, or post-resize settle).
     /// Without this, Taffy keeps the previous one-line cache and labels stay clipped / stacked.
     pub fn mark_all_text_leaves_dirty(&mut self, root: &Element) {
+        // Paint-time font fitting can change measured size without changing text metadata.
+        self.measure_layout_cache.get_mut().clear();
         for_each_element(root, |el| {
             if el.text.is_some() && el.children.is_empty() && el.layout_node.is_some() {
                 self.mark_element_layout_dirty(el);
@@ -3685,6 +3744,9 @@ impl LayoutTree {
             self.total_nodes.remove(&node_id);
             self.text_measurements.remove(&node_id);
         }
+        self.measure_layout_cache
+            .get_mut()
+            .retain(|key, _| self.total_nodes.contains(&key.node));
         let rebuild_ms = t_rebuild_begin.elapsed().as_secs_f32() * 1000.0;
 
         let available_space = Size {
@@ -3693,7 +3755,6 @@ impl LayoutTree {
         };
 
         let t_compute_begin = Instant::now();
-        self.measure_layout_cache.borrow_mut().clear();
         {
             #[cfg(feature = "tracing")]
             let _taffy_span = tracing::trace_span!("layout_tree.taffy_compute").entered();
@@ -3888,13 +3949,20 @@ impl LayoutTree {
         width: f32,
         height: f32,
     ) {
-        if !crate::utils::popup::sync_floating_placement(root, width, height) {
-            return;
+        let mut panel_count = 0;
+        crate::utils::popup::visit_floating_panels(root, |_| panel_count += 1);
+        // Each parent placement can move a nested panel's trigger. Settle the
+        // chain before collecting paint, with one extra pass for size constraints.
+        for _ in 0..=panel_count {
+            if !crate::utils::popup::sync_floating_placement(root, width, height) {
+                break;
+            }
+            crate::utils::popup::visit_floating_panels(root, |el| {
+                self.mark_element_layout_dirty(el);
+            });
+            self.compute_portal_layer(root, width, height);
+            self.stamp_tree_layout_bounds_from_taffy(root);
         }
-        crate::utils::popup::visit_floating_panels(root, |el| {
-            self.mark_element_layout_dirty(el);
-        });
-        self.compute_portal_layer(root, width, height);
     }
 
     /// After `sync_floating_placement` writes left/top: recompute only the portal
@@ -4078,7 +4146,6 @@ impl LayoutTree {
             };
 
             let t_compute_begin = Instant::now();
-            self.measure_layout_cache.borrow_mut().clear();
             #[cfg(test)]
             {
                 self.last_compute_root = Some(compute_node);
@@ -4096,7 +4163,7 @@ impl LayoutTree {
         };
 
         // Same pre-stamp as `build_and_layout`: sync needs trigger boxes before collect.
-        if !scroll_only {
+        if !scroll_only || portal_dirty > 0 || viewport_changed {
             self.stamp_tree_layout_bounds_from_taffy(root);
         }
         self.apply_floating_placement_before_collect(root, width, height);
@@ -4380,7 +4447,6 @@ impl LayoutTree {
             return 0.0;
         }
         let t0 = Instant::now();
-        self.measure_layout_cache.borrow_mut().clear();
         if let Err(err) = self.compute_layout_cached_measure(compute_node, available_space) {
             log::error!("taffy deferred-unit relayout failed: {err:?}");
         }
@@ -4537,15 +4603,7 @@ impl LayoutTree {
                     element.layout_node = Some(node_id);
                     self.visited_nodes.insert(node_id);
 
-                    if let Some(text) = &element.text {
-                        if child_nodes.is_empty() {
-                            let text_clone = text.clone();
-                            let is_icon =
-                                element.text_style.font_family.as_deref() == Some("lucide");
-                            self.text_measurements
-                                .insert(node_id, text_measure_meta(element, text_clone, is_icon));
-                        }
-                    }
+                    self.sync_text_measure(element);
 
                     if stack.is_empty() {
                         root_id = Some(node_id);
@@ -4794,7 +4852,11 @@ impl LayoutTree {
         // Match collect_paint_node: Absolute/`rui_scrollbar_overlay` rails need signal
         // stamp whenever the scroll-signal cache is live (scroll_only / overlay), not
         // only when the frame flag is set — else skip-replay keeps Taffy min-cap.
-        let is_overlay = overlay_collect || (overlay_rail && scroll_signals_cache.is_some());
+        let is_overlay = overlay_collect
+            || (overlay_rail && scroll_signals_cache.is_some())
+            || element
+                .attrs
+                .contains_key(crate::components::scrollbar::ATTR_SCROLLBAR_REVEAL_HIDDEN);
         if !is_overlay {
             return false;
         }
@@ -5320,7 +5382,11 @@ impl LayoutTree {
             || element.style.position == taffy::style::Position::Absolute;
         let signal_track_geom = element.focus_id.as_deref().is_some_and(|fid| {
             fid.starts_with(SCROLLBAR_TRACK_FOCUS_PREFIX)
-                && (scrollbar_overlay_collect || (overlay_rail && scroll_signals_cache.is_some()))
+                && (scrollbar_overlay_collect
+                    || (overlay_rail && scroll_signals_cache.is_some())
+                    || element
+                        .attrs
+                        .contains_key(crate::components::scrollbar::ATTR_SCROLLBAR_REVEAL_HIDDEN))
         });
         let (abs_x, abs_y, lay_w, lay_h) = if let Some(r) = thumb_geometry_override {
             (r[0], r[1], r[2], r[3])
@@ -6424,6 +6490,7 @@ impl LayoutTree {
                                 transform: icon_xf,
                                 clip_pos: [0.0, 0.0],
                                 clip_size: crate::renderer::TexturedDraw::NO_CLIP_SIZE,
+                                rounded_clips: [[0.0; 4]; 4],
                             }
                             .with_overflow_clip(clip),
                         );
@@ -6447,6 +6514,7 @@ impl LayoutTree {
                                 transform: icon_xf,
                                 clip_pos: [0.0, 0.0],
                                 clip_size: crate::renderer::TexturedDraw::NO_CLIP_SIZE,
+                                rounded_clips: [[0.0; 4]; 4],
                             }
                             .with_overflow_clip(clip),
                         );
@@ -6477,6 +6545,7 @@ impl LayoutTree {
                                 transform: icon_xf,
                                 clip_pos: [0.0, 0.0],
                                 clip_size: crate::renderer::TexturedDraw::NO_CLIP_SIZE,
+                                rounded_clips: [[0.0; 4]; 4],
                             }
                             .with_overflow_clip(clip),
                         );
@@ -6518,6 +6587,7 @@ impl LayoutTree {
                                         transform,
                                         clip_pos: [0.0, 0.0],
                                         clip_size: crate::renderer::TexturedDraw::NO_CLIP_SIZE,
+                                        rounded_clips: [[0.0; 4]; 4],
                                     }
                                     .with_overflow_clip(clip),
                                 );
@@ -6954,6 +7024,17 @@ impl LayoutTree {
         }
 
         stamp_clip_polys(clip_polys, instances.len(), own_clip_poly);
+
+        // Images, paths, canvases and baked icons inherit the same rounded
+        // overflow layers as SDF primitives (e.g. a ProgressCircle's inner box).
+        for draw in &mut textured_draws[self_tex0..] {
+            draw.rounded_clips = [
+                own_clip_poly.round_rect,
+                own_clip_poly.round_radii,
+                own_clip_poly.round_rect2,
+                own_clip_poly.round_radii2,
+            ];
+        }
 
         paint_rec.push_self(self_inst0, instances.len(), self_tex0, textured_draws.len());
 
@@ -7773,6 +7854,13 @@ fn scrollbar_track_overlay_abs(
     axis: &str,
     sig: &ScrollAreaSignalsCached,
 ) -> ([f32; 4], [f32; 4]) {
+    if track_el
+        .attrs
+        .contains_key(crate::components::scrollbar::ATTR_SCROLLBAR_REVEAL_HIDDEN)
+    {
+        let hidden = [base_abs_x, base_abs_y, 0.0, 0.0];
+        return (hidden, hidden);
+    }
     let vw = sig.vw;
     let vh = sig.vh;
     let cw = sig.cw;
@@ -8919,6 +9007,112 @@ fn push_input_chrome_instances(
 mod prepared_text_attach_tests {
     use super::*;
     use crate::style::{InputCaretDraw, TextOverflow, TextStyle};
+
+    #[test]
+    fn height_animation_reuses_unchanged_text_measures() {
+        let mut rows = vec![Element::new().h(20.0)];
+        rows.extend((0..80).map(|i| {
+            Element::new()
+                .text(format!("row {i}: unchanged wrapped content"))
+                .w("100%")
+        }));
+        let mut root = Element::from(crate::primitives::vstack().children(rows));
+        let mut tree = LayoutTree::new();
+        tree.build_and_layout(&mut root, 360.0, 600.0, [0.0, 0.0]);
+        // Warm both flex probe variants before checking subsequent animation frames.
+        for h in [22.0, 24.0, 26.0] {
+            root.children[0].style.size.height = Dimension::length(h);
+            tree.mark_element_layout_dirty(&root.children[0]);
+            for row in &root.children[1..] {
+                tree.mark_element_layout_dirty(row);
+            }
+            tree.build_and_layout_fast(&mut root, 360.0, 600.0, [0.0, 0.0], false, false);
+        }
+        assert!(
+            tree.text_measure_calls.get() > 0,
+            "fixture must exercise Taffy's text probes during relayout"
+        );
+        assert_eq!(
+            tree.text_measure_misses.get(),
+            0,
+            "changing a preceding row's height must reuse text sizes at unchanged inline widths"
+        );
+        root.children[1].text = Some("changed content that must be measured again".into());
+        tree.mark_element_layout_dirty(&root.children[1]);
+        tree.build_and_layout_fast(&mut root, 360.0, 600.0, [0.0, 0.0], false, false);
+        assert!(
+            tree.text_measure_misses.get() > 0,
+            "text edits must invalidate measurement"
+        );
+        tree.build_and_layout_fast(&mut root, 200.0, 600.0, [0.0, 0.0], false, false);
+        assert!(
+            tree.text_measure_misses.get() > 0,
+            "inline width changes must be measured"
+        );
+        tree.mark_all_text_leaves_dirty(&root);
+        tree.build_and_layout_fast(&mut root, 200.0, 600.0, [0.0, 0.0], false, false);
+        assert!(
+            tree.text_measure_misses.get() > 0,
+            "paint-time font fitting must force new measures"
+        );
+    }
+
+    #[test]
+    fn text_measure_cache_keeps_icon_and_vertical_constraints() {
+        let mut tree = LayoutTree::new();
+        let mut icon = Element::new().text("icon");
+        icon.text_style.font_family = Some("lucide".into());
+        let node = tree.taffy.new_leaf(taffy::Style::default()).unwrap();
+        icon.layout_node = Some(node);
+        tree.sync_text_measure(&icon);
+        let avail = Size {
+            width: AvailableSpace::MaxContent,
+            height: AvailableSpace::MaxContent,
+        };
+        for h in [18.0, 32.0] {
+            let size = measure_leaf_cached(
+                &tree.measure_layout_cache,
+                &tree.text_measurements,
+                node,
+                Size {
+                    width: None,
+                    height: Some(h),
+                },
+                avail,
+            );
+            assert_eq!(
+                size.height, h,
+                "icon dimensions cannot alias text cache entries"
+            );
+        }
+        icon.text_style.font_family = None;
+        icon.style.writing_mode = crate::style::WritingMode::VerticalRl;
+        tree.sync_text_measure(&icon);
+        let wide = measure_leaf_cached(
+            &tree.measure_layout_cache,
+            &tree.text_measurements,
+            node,
+            Size {
+                width: None,
+                height: Some(100.0),
+            },
+            avail,
+        );
+        let narrow = measure_leaf_cached(
+            &tree.measure_layout_cache,
+            &tree.text_measurements,
+            node,
+            Size {
+                width: None,
+                height: Some(20.0),
+            },
+            avail,
+        );
+        assert_ne!(
+            wide, narrow,
+            "vertical text uses height as its inline constraint"
+        );
+    }
 
     #[test]
     fn prepared_text_on_text_layout_info_roundtrips() {
@@ -10077,6 +10271,35 @@ mod portal_hoist_tests {
             [0.0, 0.0, 800.0, 600.0],
             full
         ));
+    }
+
+    #[test]
+    fn page_mounted_portal_does_not_reserve_global_overlay_occupancy() {
+        // Gallery's local scrim lives above the drag examples. After scrolling,
+        // its old document coordinates overlap T/B despite painting offscreen.
+        let bounds = [350.0, 460.0, 264.0, 168.0];
+        let mut panel = Element::new().bg([1.0; 4]);
+        panel.layout_bounds = bounds;
+        let mut portal = Element::new().child(panel);
+        portal.layout_bounds = [306.0, 432.0, 352.0, 224.0];
+        portal.set_attr(ATTR_HOISTED_PORTAL, "1");
+        portal.set_attr(ATTR_HOISTED_MOUNT, "gal-local-scrim-host");
+        portal.set_attr(ATTR_PORTAL_KEY, "gal-local-scrim");
+        let mut root = Element::new().child(portal);
+        let stamps = hoisted_portal_stamps(&root);
+        assert!(stamps.is_empty());
+        assert!(hoisted_portal_damage(&root).is_none());
+        assert_eq!(
+            crate::app::damage::page_scissors_excluding_portal_boxes(bounds, &stamps),
+            vec![bounds]
+        );
+
+        // A local mount inside a global dialog remains part of its overlay pass.
+        root.template_id = Some(PORTAL_LAYER_ID.to_string());
+        assert_eq!(hoisted_portal_stamps(&root)[0].1, bounds);
+        root.template_id = None;
+        root.children[0].attrs.remove(ATTR_HOISTED_MOUNT);
+        assert_eq!(hoisted_portal_stamps(&root)[0].1, bounds);
     }
 
     #[test]

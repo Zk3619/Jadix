@@ -334,6 +334,7 @@ impl Scene3dGpu {
                         warp_c01,
                         warp_c23,
                         warp_w,
+                        rounded_clips: [[0.0; 4]; 4],
                     };
                     textured.update_resolution(queue, w, h);
                     let inst_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {

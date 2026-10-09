@@ -388,6 +388,14 @@ impl EffectPassGpu {
                     warp_c01: TexturedInstanceInput::WARP_C01_OFF,
                     warp_c23: TexturedInstanceInput::WARP_C23_OFF,
                     warp_w: TexturedInstanceInput::WARP_W_OFF,
+                    rounded_clips: std::array::from_fn(|i| {
+                        let mut layer = d.rounded_clips[i];
+                        if i % 2 == 0 && layer[2] > 0.0 {
+                            layer[0] -= ox;
+                            layer[1] -= oy;
+                        }
+                        layer.map(|v| v * ui_scale)
+                    }),
                 }
             })
             .collect();

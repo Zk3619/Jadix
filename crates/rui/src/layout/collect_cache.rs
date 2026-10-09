@@ -1574,6 +1574,15 @@ fn nudge_instance(inst: &mut InstanceInput, delta: [f32; 2], old: &GeomKey, new:
 fn nudge_textured(draw: &mut TexturedDraw, delta: [f32; 2], old: &GeomKey, new: &GeomKey) {
     draw.rect[0] += delta[0];
     draw.rect[1] += delta[1];
+    for i in [0, 2] {
+        let rect = &mut draw.rounded_clips[i];
+        if round_rect_is_parent(*rect, old) {
+            assign_round_rect_parent(rect, new);
+        } else if rect[2] > 0.5 {
+            rect[0] += delta[0];
+            rect[1] += delta[1];
+        }
+    }
     if draw.clip_size[0] < 0.0 {
         return;
     }
@@ -1658,6 +1667,22 @@ fn nudge_clip_poly(poly: &mut GpuClipPoly, delta: [f32; 2], old: &GeomKey, new: 
 mod tests {
     use super::*;
     use crate::utils::drag::ATTR_DRAG_OVERLAY;
+
+    #[test]
+    fn cached_texture_scroll_moves_rounded_clip_with_image() {
+        let mut draw = TexturedDraw::clipped([10.0, 20.0, 40.0, 40.0], None, "photo", 1.0).unwrap();
+        draw.rounded_clips = [[10.0, 20.0, 40.0, 40.0], [20.0; 4], [0.0; 4], [0.0; 4]];
+        nudge_textured(
+            &mut draw,
+            [3.0, -8.0],
+            &GeomKey::default(),
+            &GeomKey::default(),
+        );
+        assert_eq!(draw.rect, [13.0, 12.0, 40.0, 40.0]);
+        assert_eq!(draw.rounded_clips[0], draw.rect);
+        assert_eq!(draw.rounded_clips[1], [20.0; 4]);
+        assert_eq!(draw.rounded_clips[2], [0.0; 4]);
+    }
 
     fn el_with_child() -> Element {
         let mut el = Element::new();

@@ -213,6 +213,9 @@ pub struct TexturedDraw {
     /// tests world `physical` against this AABB (unshifted).
     pub clip_pos: [f32; 2],
     pub clip_size: [f32; 2],
+    /// Two inherited rounded overflow clips: world rect / radii pairs.
+    /// Zero-size rects disable the corresponding layer.
+    pub rounded_clips: [[f32; 4]; 4],
 }
 
 impl TexturedDraw {
@@ -246,6 +249,7 @@ impl TexturedDraw {
             transform: crate::style::transform::MAT2D_IDENTITY,
             clip_pos: [0.0, 0.0],
             clip_size: Self::NO_CLIP_SIZE,
+            rounded_clips: [[0.0; 4]; 4],
         })
     }
 
@@ -359,6 +363,7 @@ pub struct ScaledTexturedDraw {
     pub transform: [f32; 6],
     pub clip_pos: [f32; 2],
     pub clip_size: [f32; 2],
+    pub rounded_clips: [[f32; 4]; 4],
 }
 
 impl ScaledTexturedDraw {
@@ -395,6 +400,7 @@ impl ScaledTexturedDraw {
             warp_c01: TexturedInstanceInput::WARP_C01_OFF,
             warp_c23: TexturedInstanceInput::WARP_C23_OFF,
             warp_w: TexturedInstanceInput::WARP_W_OFF,
+            rounded_clips: self.rounded_clips,
         }
     }
 }
@@ -430,6 +436,7 @@ pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTex
                 transform: t,
                 clip_pos,
                 clip_size,
+                rounded_clips: d.rounded_clips.map(|layer| layer.map(|v| v * scale)),
             }
         })
         .collect()
@@ -438,6 +445,17 @@ pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTex
 #[cfg(test)]
 mod textured_uv_tests {
     use super::{scale_textured_draws, uv_for_subrect, TexturedDraw};
+
+    #[test]
+    fn rounded_texture_clips_scale_with_display_density() {
+        let mut draw = TexturedDraw::clipped([8.0, 8.0, 88.0, 88.0], None, "photo", 1.0).unwrap();
+        draw.rounded_clips = [[8.0, 8.0, 88.0, 88.0], [44.0; 4], [0.0; 4], [0.0; 4]];
+        let scaled = scale_textured_draws(&[draw], 1.5);
+        let instance = scaled[0].to_instance();
+        assert_eq!(instance.rounded_clips[0], [12.0, 12.0, 132.0, 132.0]);
+        assert_eq!(instance.rounded_clips[1], [66.0; 4]);
+        assert_eq!(instance.rounded_clips[2], [0.0; 4]);
+    }
 
     #[test]
     fn scale_instances_in_place_noop_at_unity() {
@@ -486,6 +504,7 @@ mod textured_uv_tests {
             transform: crate::style::transform::MAT2D_IDENTITY,
             clip_pos: [0.0, 0.0],
             clip_size: TexturedDraw::NO_CLIP_SIZE,
+            rounded_clips: [[0.0; 4]; 4],
         };
         assert!((mk("rui_zoom_cap:ab").to_instance().flags - 2.0).abs() < 1e-5);
         assert!((mk("rui_filter_cap:cd").to_instance().flags - 2.0).abs() < 1e-5);
@@ -531,6 +550,7 @@ mod textured_uv_tests {
                 transform: crate::style::transform::MAT2D_IDENTITY,
                 clip_pos: [0.0, 0.0],
                 clip_size: TexturedDraw::NO_CLIP_SIZE,
+                rounded_clips: [[0.0; 4]; 4],
             },
             TexturedDraw {
                 rect: [10.0, 200.0, 180.0, 180.0],
@@ -542,6 +562,7 @@ mod textured_uv_tests {
                 transform: crate::style::transform::MAT2D_IDENTITY,
                 clip_pos: [0.0, 0.0],
                 clip_size: TexturedDraw::NO_CLIP_SIZE,
+                rounded_clips: [[0.0; 4]; 4],
             },
         ];
         let scaled = scale_textured_draws(&draws, 1.0);

@@ -96,6 +96,16 @@ fn filter_cache_id(
         ((d.rect[1] - bounds[1]).to_bits()).hash(&mut hasher);
         d.rect[2].to_bits().hash(&mut hasher);
         d.rect[3].to_bits().hash(&mut hasher);
+        for (i, layer) in d.rounded_clips.iter().enumerate() {
+            for (axis, value) in layer.iter().enumerate() {
+                let relative = if i % 2 == 0 && axis < 2 {
+                    value - bounds[axis]
+                } else {
+                    *value
+                };
+                relative.to_bits().hash(&mut hasher);
+            }
+        }
         d.opacity.to_bits().hash(&mut hasher);
     }
     hasher.finish()
