@@ -49,6 +49,19 @@
 //!     })
 //! // 简单条：
 //! progress().default_value(0.4)
+//!
+//! // Circle · arbitrary centered content, contained inside the inner circle.
+//! ui! {
+//!     <ProgressCircle valueSignal={pct}>
+//!         { Element::new().text(move || format!("{:.0}%", pct.get().clamp(0.0, 1.0) * 100.0)) }
+//!     </ProgressCircle>
+//!     <ProgressCircle value={0.6} size={ProgressCircleSize::Lg}>
+//!         <Image src="assets/photo.jpg" w="100%" h="100%" />
+//!     </ProgressCircle>
+//! }
+//! progress_circle().value_signal(pct)
+//!     .child(Element::new().text(move || format!("{:.0}%", pct.get() * 100.0)))
+//! // Use VStack / HStack inside the slot to compose images, text, icons, etc.
 //! ```
 //!
 //! **Identity (WP-2.8)**: `id` optional; empty string → [`resolve_instance_id`].
@@ -63,7 +76,7 @@ use crate::components::base::{
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
 };
-use crate::core::tree::{Element, LayoutStatus};
+use crate::core::tree::{Element, IntoElementList, LayoutStatus};
 use crate::impl_simple_slot_builder;
 use crate::impl_slot_chrome_methods;
 use crate::primitives::path::{
@@ -708,21 +721,31 @@ pub(crate) fn progress_circle_arc_d(cx: f32, cy: f32, r: f32, value: f32) -> Opt
     ))
 }
 
-fn progress_circle_overlay(children: Element) -> Element {
-    let kids = take_packed(children);
+fn progress_circle_overlay(children: Element, outer_r: f32, stroke_width: f32) -> Element {
+    // Only expand explicit RSX fragments; preserve custom layout containers.
+    let kids = children.into_element_list();
     if kids.is_empty() {
         return Element::new();
     }
-    r#box()
+    let inner_r = (outer_r - stroke_width).max(0.0);
+    let content_side = inner_r * 2.0;
+    let inset = outer_r - inner_r;
+    let mut overlay: Element = r#box()
         .absolute(true)
-        .top(0.0)
-        .left(0.0)
-        .right(0.0)
-        .bottom(0.0)
+        .top(inset)
+        .left(inset)
+        .w(content_side)
+        .h(content_side)
+        .min_w(0.0)
+        .min_h(0.0)
+        .rounded(inner_r)
+        .overflow("hidden")
         .items_center()
         .justify_center()
         .children(kids)
-        .into()
+        .into();
+    overlay.set_attr(ATTR_SLOT, "progress-circle-content");
+    overlay
 }
 
 /// 构建圆形进度叶（path 核；不依赖 `svg` feature / resvg）。
@@ -825,6 +848,8 @@ pub struct ProgressCircleOpts {
     pub stroke_width: Option<f32>,
     pub show_animation: bool,
     pub chrome: SlotChrome,
+    /// Centered custom content clipped by the inner circle.
+    /// `100%` sizes fill its diameter without covering the ring.
     pub children: Option<Element>,
 }
 
@@ -850,7 +875,7 @@ pub fn progress_circle_view(opts: ProgressCircleOpts) -> Element {
     let show_animation = opts.show_animation;
     let chrome = opts.chrome;
     let children = opts.children;
-    let (outer_r, _) = progress_circle_dims(size, radius, stroke_width);
+    let (outer_r, sw) = progress_circle_dims(size, radius, stroke_width);
     let diameter = outer_r * 2.0;
     let view_id = format!("{instance}__view");
 
@@ -859,7 +884,7 @@ pub fn progress_circle_view(opts: ProgressCircleOpts) -> Element {
     core = core.flex_shrink(0.0);
 
     let mut root: Element = if let Some(ch) = children {
-        let overlay = progress_circle_overlay(ch);
+        let overlay = progress_circle_overlay(ch, outer_r, sw);
         if overlay.children.is_empty() {
             core
         } else {
@@ -947,6 +972,9 @@ impl ProgressCircleBuilder {
         self
     }
 
+    /// Set the centered inner content (image, reactive text, or a composed subtree).
+    /// `w("100%")` / `h("100%")` fill the inner circle's diameter.
+    /// Overflow is clipped by the circular content box, keeping the ring visible.
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children = Some(child.into());
         self
@@ -981,6 +1009,7 @@ impl From<ProgressCircleBuilder> for Element {
 }
 
 /// RSX `<ProgressCircle />`（对位 Solid UI [`progress-circle`](../../../../Reference/solid-ui-main/apps/docs/src/registry/ui/progress-circle.tsx)）。
+/// Children are centered and clipped by the inner circle; compose images, text, or subtrees.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn ProgressCircle(
