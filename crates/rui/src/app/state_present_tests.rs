@@ -10,6 +10,14 @@ mod textarea_present_tests;
 #[path = "state_drag_present_tests.rs"]
 mod drag_present_tests;
 
+#[cfg(all(target_os = "windows", feature = "svg"))]
+#[path = "state_snap_grid_present_tests.rs"]
+mod snap_grid_present_tests;
+
+#[cfg(all(target_os = "windows", feature = "svg"))]
+#[path = "state_kanban_present_tests.rs"]
+mod kanban_present_tests;
+
 /// Exercise the production frame planner, reactive portal remounts and native
 /// presentation, rather than reconstructing node-present calls in a test.
 #[cfg(target_os = "windows")]

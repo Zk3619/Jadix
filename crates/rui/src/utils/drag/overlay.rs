@@ -5475,9 +5475,9 @@ mod tests {
         assert!(tick(pointer[0] + 1.0, pointer[1], &hits0, [800.0, 600.0]));
         drain_deferred_view_remounts();
 
-        // Same-list hover on Beta opens a -pitch FLIP. Crossing to Later must
-        // snap that leftover away: layout already packed Beta into Alpha's
-        // slot, so easing -pitch→0 starts at the Inbox container top.
+        // Same-list hover on Beta opens a -pitch FLIP. Crossing to Later
+        // retires that offset as the source slot collapses, preserving the
+        // current visual pack rather than snapping Beta back to its old slot.
         let beta_hit = hits0
             .iter()
             .find(|h| h.id == "tree-inbox:Beta")
@@ -5547,12 +5547,11 @@ mod tests {
                 beta.style.translate
             );
             assert!(
-                !crate::utils::motion::motion_is_animating(&beta.style, &beta.transition_snapshot),
-                "origin sibling must snap when the source leaves the pack; leftover FLIP eases from the Inbox top"
-            );
-            assert!(
-                beta.style.transition.is_empty(),
-                "origin sibling must not keep a transform FLIP across lists"
+                beta.style
+                    .transition
+                    .iter()
+                    .any(|entry| entry.property == crate::style::TransitionProperty::Transform),
+                "enabled sortable motion must keep its transitions across lists"
             );
             let beta_visual_y = beta.layout_bounds[1] + beta.style.translate[1];
             assert!(
@@ -6205,6 +6204,12 @@ mod tests {
 
         let (h2_inbox, h2_later) = {
             let tree = live.borrow();
+            let shell = find_item_shell(&tree, "tree-inbox:Beta").unwrap();
+            assert_eq!(
+                shell.style.overflow.y,
+                taffy::style::Overflow::Visible,
+                "returning source must be able to paint in its same-list insert hole"
+            );
             (
                 h_of(bounds(&tree, "folder:Inbox")),
                 h_of(bounds(&tree, "folder:Later")),
@@ -6884,6 +6889,80 @@ mod tests {
         let _ = end(&collect_hits(&live.borrow()));
         clear_test_reconcile_root();
         reset_registered_anchors();
+    }
+
+    #[cfg(feature = "svg")]
+    #[test]
+    fn gallery_nested_folder_preview_keeps_files_inside_auto_height_cards() {
+        use crate::core::tree::{LayoutStatus, ReactiveSyncCollect};
+        use crate::utils::drag::{begin, collect_hits, tick, BeginDrag};
+
+        let (_owner, live) = mount_scope_tree(|| {
+            crate::gallery_drag::DragShowcase(crate::gallery_drag::DragShowcaseProps::default())
+        });
+        let mut lt = crate::layout::LayoutTree::new();
+        {
+            let mut tree = live.borrow_mut();
+            hoist_and_layout_persisted(&mut lt, &mut tree, false);
+        }
+        let hits = collect_hits(&live.borrow());
+        let source = hits.iter().find(|h| h.id == "tree-inbox:Beta").unwrap();
+        let gamma = hits.iter().find(|h| h.id == "tree-later:Gamma").unwrap();
+        // The showcase is taller than the viewport; use its document extent for
+        // this geometry test so all nested synchronizers remain visible.
+        let viewport = [800.0, gamma.rect.y + 800.0];
+        begin(BeginDrag {
+            scope_id: source.scope_id.clone(),
+            draggable_id: source.id.clone(),
+            pointer: [source.rect.x + 8.0, source.rect.y + 8.0],
+            grab_offset: [8.0, 8.0],
+            start_bounds: source.rect.to_bounds(),
+            from_list: source.list_id.clone(),
+            from_index: source.index,
+            item_type: source.item_type.clone(),
+            group: source.group.clone(),
+            capture_id: "nested-height-test".into(),
+        });
+        let pointer = [gamma.rect.x + 8.0, gamma.rect.y + 2.0];
+        assert!(tick(pointer[0], pointer[1], &hits, viewport));
+        for frame in 0..3 {
+            let mut tree = live.borrow_mut();
+            let mut impact = LayoutStatus::Clean;
+            let mut collect = ReactiveSyncCollect::default();
+            crate::core::tree::sync_reactive_elements_subtree_ex(
+                &mut tree,
+                &mut lt,
+                &mut impact,
+                viewport[0],
+                viewport[1],
+                [0.0, 0.0],
+                false,
+                &mut collect,
+            );
+            lt.mark_dirty_nodes_in_tree(&tree, &collect.layout_dirty.into_iter().collect());
+            let _ = lt.build_and_layout_fast(
+                &mut tree,
+                viewport[0],
+                viewport[1],
+                pointer,
+                false,
+                false,
+            );
+            for (folder, file) in [("Inbox", "tree-inbox:Alpha"), ("Later", "tree-later:Gamma")] {
+                let card = find_draggable(&tree, &format!("folder:{folder}")).unwrap();
+                let row = find_draggable(&tree, file).unwrap();
+                let card_bottom = card.layout_bounds[1] + card.layout_bounds[3];
+                let row_bottom =
+                    row.layout_bounds[1] + row.style.translate[1] + row.layout_bounds[3];
+                assert!(row_bottom <= card_bottom + 1.0,
+                    "frame {frame}: {file} must remain in {folder}: row={:?} translate={:?} card={:?}",
+                    row.layout_bounds, row.style.translate, card.layout_bounds);
+            }
+        }
+        let final_hits = collect_hits(&live.borrow());
+        let _ = crate::utils::drag::end(&final_hits);
+        crate::app::runtime::clear_test_reconcile_root();
+        crate::app::reactive::reset_registered_anchors();
     }
 
     /// Gallery nested folders: after every file leaves Inbox the inner list is
@@ -8728,6 +8807,62 @@ mod tests {
                 Element::from(vstack().children([a, b]))
             })
         })
+    }
+
+    #[test]
+    fn same_named_sortable_in_other_scope_keeps_rest_style() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{cancel, drag_scope, sortable_item};
+
+        let (_o, live) = mount_scope_tree(|| {
+            let columns = ["planets-hide", "planets"].map(|scope| {
+                drag_scope(scope).threshold(0.0).child(move || {
+                    let row = sortable_item("Jupiter")
+                        .list(scope)
+                        .index(0)
+                        .source_opacity(if scope == "planets-hide" { 0.0 } else { 0.4 })
+                        .child(|| Element::new().text("Jupiter").w(80.0).h(32.0));
+                    let overlay: Element = drag_overlay().into();
+                    Element::from(vstack().children([row, overlay]))
+                })
+            });
+            Element::from(vstack().children(columns))
+        });
+        for dragging in 0..2 {
+            let other_rest = {
+                let tree = live.borrow();
+                let other = find_draggable(&tree.children[1 - dragging], "Jupiter")
+                    .expect("independent row at rest");
+                (
+                    other.style.opacity,
+                    other.style.translate,
+                    other.style.z_index,
+                )
+            };
+            let sid = find_scope_id(&live.borrow().children[dragging]).expect("scope");
+            activate_named(&sid, "Jupiter", [40.0, 16.0], [0.0, 0.0, 80.0, 32.0]);
+            {
+                let mut tree = live.borrow_mut();
+                sync_drag_chrome(&mut tree);
+                let source = find_draggable(&tree.children[dragging], "Jupiter").expect("source");
+                let expected_opacity = if dragging == 0 { 0.0 } else { 0.4 };
+                assert!((source.style.opacity - expected_opacity).abs() < 0.001);
+                let other = find_draggable(&tree.children[1 - dragging], "Jupiter")
+                    .expect("independent row");
+                assert_eq!(
+                    other.style.opacity, other_rest.0,
+                    "inactive scope must not dim"
+                );
+                assert_eq!(other.style.translate, other_rest.1);
+                assert_eq!(other.style.z_index, other_rest.2);
+            }
+            cancel();
+            sync_drag_chrome(&mut live.borrow_mut());
+        }
+        clear_test_reconcile_root();
+        reset_registered_anchors();
     }
 
     /// Default `stack=auto`: dragging raises the item above its sibling and the

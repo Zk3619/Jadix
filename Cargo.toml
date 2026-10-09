@@ -144,6 +144,10 @@ opt-level = 2
 [profile.dev.package.rui]
 opt-level = 1
 
+# Flex/grid recomputation runs throughout sortable size animations.
+[profile.dev.package.taffy]
+opt-level = 2
+
 # Glyph packing and atlas preparation also run on every rendered text frame.
 [profile.dev.package.glyphon]
 opt-level = 2

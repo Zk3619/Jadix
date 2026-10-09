@@ -18,8 +18,9 @@ use crate::layout::{dim_kind, DimKind, LayoutTree};
 use crate::primitives::vstack;
 use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
 use crate::utils::motion::{
-    clear_motion, motion_is_animating, motion_sync_status, prepare_motion_sync, MotionBootstrap,
-    MotionEpsilon, MotionStyle, MotionTransform,
+    clear_motion, ensure_motion_transitions, motion_is_animating, motion_sync_status,
+    prepare_motion_sync, snap_motion_baseline, MotionBootstrap, MotionEpsilon, MotionStyle,
+    MotionTransform,
 };
 use crate::utils::resolve_instance_id;
 
@@ -34,7 +35,7 @@ use super::session::{
     active_drag_ids, active_draggable_id, active_pull_clone, active_sort_mode,
     active_source_translate, begin, bump_auto_stack, insert_hole_origin, last_hits,
     live_pack_item_translate, live_same_list_source_translate, overlay_is_registered,
-    overlay_source_opacity, pack_insert_extent, peek_sort_axis, register_scope_product,
+    overlay_source_opacity, pack_gap, pack_insert_extent, peek_sort_axis, register_scope_product,
     remember_draggable_bounds, remember_item_restrict, scope_selected_contains, start_geometry,
     BeginDrag, DragHandler, DragPredicate, ScopeRuntime,
 };
@@ -420,20 +421,22 @@ fn sync_stacking_context_attr(el: &mut Element, on: bool) -> bool {
     true
 }
 
-fn trail_margin_px(el: &Element, axis: Axis) -> f32 {
+fn leading_margin_px(el: &Element, axis: Axis) -> f32 {
     let edge = match axis {
-        Axis::X => el.style.margin.right,
-        Axis::Y | Axis::Xy | Axis::Start => el.style.margin.bottom,
+        Axis::X => el.style.margin.left,
+        Axis::Y | Axis::Xy | Axis::Start => el.style.margin.top,
     };
     crate::layout::lpa_length_px(edge).unwrap_or(0.0)
 }
 
-fn set_trail_margin(el: &mut Element, axis: Axis, px: f32) {
-    let edge = match axis {
-        Axis::X => &mut el.style.margin.right,
-        Axis::Y | Axis::Xy | Axis::Start => &mut el.style.margin.bottom,
-    };
-    *edge = taffy::style::LengthPercentageAuto::length(px);
+fn set_leading_margin(el: &mut Element, axis: Axis, px: f32) {
+    el.style.set_css_dim(
+        match axis {
+            Axis::X => UnitSlot::MarginL,
+            _ => UnitSlot::MarginT,
+        },
+        CssDim::Px(px),
+    );
 }
 
 type AuthorBlock = (
@@ -464,17 +467,17 @@ fn set_block_dims(
     min: taffy::style::Dimension,
     max: taffy::style::Dimension,
 ) {
-    match axis {
-        Axis::X => {
-            el.style.size.width = size;
-            el.style.min_size.width = min;
-            el.style.max_size.width = max;
-        }
-        Axis::Y | Axis::Xy | Axis::Start => {
-            el.style.size.height = size;
-            el.style.min_size.height = min;
-            el.style.max_size.height = max;
-        }
+    let slots = match axis {
+        Axis::X => [UnitSlot::Width, UnitSlot::MinWidth, UnitSlot::MaxWidth],
+        _ => [UnitSlot::Height, UnitSlot::MinHeight, UnitSlot::MaxHeight],
+    };
+    for (slot, value) in slots.into_iter().zip([size, min, max]) {
+        let dim = match dim_kind(value) {
+            DimKind::Length(px) => CssDim::Px(px),
+            DimKind::Percent(pct) => CssDim::Percent(pct * 100.0),
+            DimKind::Auto => CssDim::Auto,
+        };
+        el.style.set_css_dim(slot, dim);
     }
 }
 
@@ -511,8 +514,9 @@ fn apply_shell_stack_z(
     list_sig: Signal<Option<String>>,
     author_margin: &Cell<Option<f32>>,
     author_block: &Cell<Option<AuthorBlock>>,
-    author_pos: &Cell<Option<taffy::style::Position>>,
-    author_width: &Cell<Option<taffy::style::Dimension>>,
+    author_overflow: &Cell<Option<taffy::geometry::Point<taffy::style::Overflow>>>,
+    animation: bool,
+    collapse_started: &Cell<bool>,
 ) -> LayoutStatus {
     let is_active = active.peek().as_deref() == Some(id);
     if stack == DragStack::Auto && is_active && !auto_bumped.get() {
@@ -524,79 +528,97 @@ fn apply_shell_stack_z(
         want_z = want_z.max(1);
     }
     let mut changed = LayoutStatus::Clean;
+    if active.peek().is_none() && el.style.translate != [0.0, 0.0] {
+        el.style.translate = [0.0, 0.0];
+        changed = LayoutStatus::StyleChanged;
+    }
     if el.style.z_index != want_z {
         el.style.z_index = want_z;
         changed = changed.merge(LayoutStatus::StyleChanged);
     }
-    // Cross-list: take the shell out of the origin pack so Taffy flex `gap`
-    // is not reserved around a 0-height sibling. Absolute's containing block
-    // must be the origin *list* (`position: relative` there). A z-index
-    // folder ancestor as CB made `w=100%` fill the header row and flattened
-    // the destination card (Gallery: Beta 贴在 Inbox 标题上、Later 一行塌陷).
     let from_l = from_list.peek();
     let hover_l = hover_list.peek();
-    let cross = is_active && from_l.is_some() && hover_l.is_some() && from_l != hover_l;
-    let _ = (list_sig, drag_extent);
+    let cross = is_active
+        && from_l.is_some()
+        && hover_l.is_some()
+        && from_l != hover_l
+        && !active_pull_clone()
+        && active_sort_mode() != SortMode::Swap;
+    let axis = peek_sort_axis(list_sig.peek().as_deref(), axis);
     let base_margin = match author_margin.get() {
-        Some(v) => v,
+        Some(value) => value,
         None => {
-            let v = trail_margin_px(el, axis);
-            author_margin.set(Some(v));
-            v
+            let value = leading_margin_px(el, axis);
+            author_margin.set(Some(value));
+            value
         }
     };
-    let have_margin = trail_margin_px(el, axis);
-    if (have_margin - base_margin).abs() > 0.5 {
-        set_trail_margin(el, axis, base_margin);
-        changed = changed.merge(LayoutStatus::LayoutChanged);
-    }
-    if author_pos.get().is_none() {
-        author_pos.set(Some(el.style.position));
-    }
-    if author_width.get().is_none() {
-        author_width.set(Some(el.style.size.width));
-    }
-    let want_pos = if cross {
-        taffy::style::Position::Absolute
-    } else {
-        author_pos.get().unwrap_or(taffy::style::Position::Relative)
-    };
-    if el.style.position != want_pos {
-        el.style.position = want_pos;
-        changed = changed.merge(LayoutStatus::LayoutChanged);
-    }
-    let want_width = if cross {
-        taffy::style::Dimension::percent(1.0)
-    } else {
-        author_width
-            .get()
-            .unwrap_or(taffy::style::Dimension::auto())
-    };
-    if !dims_eq(el.style.size.width, want_width) {
-        el.style.size.width = want_width;
-        changed = changed.merge(LayoutStatus::LayoutChanged);
-    }
     if author_block.get().is_none() {
-        // Snapshot before collapsing. The first chrome pass is often already
-        // cross (hover moved before sync); capturing afterwards would store 0
-        // and refuse to restore the row on the way back.
         author_block.set(Some(block_dims(el, axis)));
+        author_overflow.set(Some(el.style.overflow));
     }
-    let author = author_block.get().unwrap_or((
-        taffy::style::Dimension::auto(),
-        taffy::style::Dimension::auto(),
-        taffy::style::Dimension::auto(),
-    ));
-    let zero = taffy::style::Dimension::length(0.0);
-    let want_block = if cross { (zero, zero, zero) } else { author };
-    let have_block = block_dims(el, axis);
-    if dims_changed(have_block, want_block) {
-        set_block_dims(el, axis, want_block.0, want_block.1, want_block.2);
-        changed = changed.merge(LayoutStatus::LayoutChanged);
-    }
-    if cross {
-        el.style.overflow.x = taffy::style::Overflow::Visible;
-        el.style.overflow.y = taffy::style::Overflow::Visible;
+    let author = author_block.get().unwrap();
+    let session_live = active.peek().is_some();
+    if cross || (collapse_started.get() && session_live) {
+        let extent = drag_extent.peek();
+        let chip = match axis {
+            Axis::X => extent[0],
+            _ => extent[1],
+        }
+        .max(0.0);
+        let full = taffy::style::Dimension::length(chip);
+        if !collapse_started.replace(true) {
+            set_block_dims(el, axis, full, full, full);
+            if animation {
+                ensure_motion_transitions(&mut el.style, &cross_layout_entries(axis));
+                el.snap_css_transition_baseline();
+            }
+        }
+        if animation {
+            ensure_motion_transitions(&mut el.style, &cross_layout_entries(axis));
+        } else {
+            clear_motion(el);
+        }
+        // Keep a nonzero flex basis while the slot collapses. Its shrinking
+        // flex contribution includes the negative margin in auto-size layout,
+        // including the final zero-size frame (which otherwise retains a gap).
+        el.style
+            .set_css_dim(UnitSlot::FlexBasis, CssDim::Px(chip.max(1.0)));
+        el.style.flex_shrink = 1.0;
+        // Animate the slot's size and gap together with target sibling FLIP.
+        let size = taffy::style::Dimension::length(if cross { 0.0 } else { chip });
+        let margin = base_margin - if cross { pack_gap(chip) } else { 0.0 };
+        let layout_changed = dims_changed(block_dims(el, axis), (size, size, size))
+            || (leading_margin_px(el, axis) - margin).abs() > 0.01;
+        set_block_dims(el, axis, size, size, size);
+        set_leading_margin(el, axis, margin);
+        el.style.overflow = if cross {
+            taffy::geometry::Point {
+                x: taffy::style::Overflow::Hidden,
+                y: taffy::style::Overflow::Hidden,
+            }
+        } else {
+            // The dimmed source can move to another same-list insert hole.
+            author_overflow.get().unwrap()
+        };
+        if layout_changed {
+            changed = changed.merge(LayoutStatus::LayoutChanged);
+        }
+    } else {
+        if collapse_started.replace(false) {
+            clear_motion(el);
+            el.style.set_css_dim(UnitSlot::FlexBasis, CssDim::Auto);
+            el.style.flex_shrink = 0.0;
+            el.style.overflow = author_overflow.get().unwrap();
+        }
+        if dims_changed(block_dims(el, axis), author) {
+            set_block_dims(el, axis, author.0, author.1, author.2);
+            changed = changed.merge(LayoutStatus::LayoutChanged);
+        }
+        if (leading_margin_px(el, axis) - base_margin).abs() > 0.5 {
+            set_leading_margin(el, axis, base_margin);
+            changed = changed.merge(LayoutStatus::LayoutChanged);
+        }
     }
     // Overlapping free-move tiles (absolute / author z) still need a nested
     // paint band. In-flow sortable rows must not — Gallery ScrollArea already
@@ -675,9 +697,28 @@ fn sortable_flip_entry() -> TransitionEntry {
     }
 }
 
-/// Live gap FLIP: CSS `transition: transform` (includes translate) while the session is active.
-/// Pointer-follow, session end, and `animation: false` snap — leftover tween would invert
-/// commit layout (`end` clears hover before `on_drag_end` mutates the `Vec`).
+/// Use the same easing for source slot vacate and target sibling movement.
+fn cross_layout_entries(axis: Axis) -> [TransitionEntry; 4] {
+    let properties = match axis {
+        Axis::X => [
+            TransitionProperty::Width,
+            TransitionProperty::MinWidth,
+            TransitionProperty::MaxWidth,
+            TransitionProperty::MarginLeft,
+        ],
+        _ => [
+            TransitionProperty::Height,
+            TransitionProperty::MinHeight,
+            TransitionProperty::MaxHeight,
+            TransitionProperty::MarginTop,
+        ],
+    };
+    properties.map(|property| TransitionEntry {
+        property,
+        ..sortable_flip_entry()
+    })
+}
+
 fn apply_item_shift_motion(
     el: &mut Element,
     want_translate: [f32; 2],
@@ -756,6 +797,7 @@ fn apply_live_drag_chrome(
     auto_bumped: &Cell<bool>,
     animation: bool,
     motion: &mut MotionStyle,
+    was_cross: &Cell<Option<bool>>,
     author_island_block: &Cell<Option<(taffy::style::Dimension, taffy::style::Dimension)>>,
 ) -> LayoutStatus {
     let _ = drag_extent;
@@ -776,6 +818,23 @@ fn apply_live_drag_chrome(
     let from_l = from_list.peek();
     let hover_l = hover_list.peek();
     let lists_cross = from_l.is_some() && hover_l.is_some() && from_l != hover_l;
+    let origin_row = active.peek().is_some() && list.is_some() && list == from_l;
+    if origin_row && was_cross.get().is_some_and(|prev| prev != lists_cross) {
+        // Rebase the tween when switching between the collapsed physical pack
+        // and logical source slots, preserving the row's current paint position.
+        let offset = if lists_cross {
+            super::session::painted_source_layout_offset(id)
+        } else {
+            super::session::live_source_layout_offset(scope, id)
+        };
+        let sign = if lists_cross { 1.0 } else { -1.0 };
+        for i in 0..2 {
+            el.style.translate[i] += sign * offset[i];
+        }
+        motion.reset();
+        snap_motion_baseline(el);
+    }
+    was_cross.set(origin_row.then_some(lists_cross));
     let flags = super::registry::item_flags(scope, id);
     let clone_drag = is_active && super::session::active_pull_clone();
     let mut want_opacity = author_opacity;
@@ -833,7 +892,8 @@ fn apply_live_drag_chrome(
         }
     } else {
         auto_bumped.set(false);
-        let in_group = active_drag_ids().iter().any(|x| x == id);
+        // MultiDrag ids are local to the active provider; other providers may reuse them.
+        let in_group = active.peek().is_some() && active_drag_ids().iter().any(|x| x == id);
         if active_sort_mode() == SortMode::Swap {
             want_translate = [0.0, 0.0];
         } else if in_group {
@@ -854,13 +914,6 @@ fn apply_live_drag_chrome(
                     hover_list,
                     hover_index,
                 );
-            }
-            // Source shell left the pack (`position: absolute`). Remaining
-            // origin rows already occupy the hole. A leftover same-list
-            // `-pitch` FLIP would start at the folder's inner top and ease
-            // down (Gallery: Alpha→Later 后 Beta 从 Inbox 顶部下滑).
-            if lists_cross && list == from_l {
-                follow_pointer = true;
             }
         }
     }
@@ -1265,6 +1318,8 @@ fn apply_live_droppable_chrome(
     author_margin: &Cell<Option<f32>>,
     author_pos: &Cell<Option<taffy::style::Position>>,
     author_z: i32,
+    animation: bool,
+    pad_transition: &Cell<bool>,
 ) -> LayoutStatus {
     let axis = peek_sort_axis(Some(list), axis);
     let from = from_list.peek();
@@ -1319,6 +1374,30 @@ fn apply_live_droppable_chrome(
     } else {
         0.0
     };
+    let pad_property = match axis {
+        Axis::X => TransitionProperty::PaddingRight,
+        _ => TransitionProperty::PaddingBottom,
+    };
+    if animation && from.is_some() {
+        if !el
+            .style
+            .transition
+            .iter()
+            .any(|t| t.property == pad_property)
+        {
+            el.style.transition.push(TransitionEntry {
+                property: pad_property,
+                ..sortable_flip_entry()
+            });
+            el.snap_css_transition_baseline();
+            pad_transition.set(true);
+        }
+    } else if pad_transition.replace(false) {
+        el.style
+            .transition
+            .retain(|entry| entry.property != pad_property);
+        el.snap_css_transition_baseline();
+    }
     let want_pad = base_pad + extra_pad;
     let pad_edge = match axis {
         Axis::X => &mut el.style.padding.right,
@@ -1329,10 +1408,8 @@ fn apply_live_droppable_chrome(
         *pad_edge = taffy::style::LengthPercentage::length(want_pad);
         changed = changed.merge(LayoutStatus::LayoutChanged);
     }
-    // Keep the author's trailing margin on the *list*. Vacating a row is the
-    // source shell leaving the pack (`position: absolute` vs this list CB).
-    // A list-level height cap clips the last item; a guessed full-row
-    // negative margin ate remaining files / folder padding.
+    // The source shell animates its own size and gap. Keep the author's
+    // list margin so vacating a row cannot consume folder padding.
     let base_margin = match author_margin.get() {
         Some(v) => v,
         None => {
@@ -1354,8 +1431,8 @@ fn apply_live_droppable_chrome(
         *margin_edge = taffy::style::LengthPercentageAuto::length(base_margin);
         changed = changed.merge(LayoutStatus::LayoutChanged);
     }
-    // Origin list is the containing block for the vacated absolute shell so
-    // `w=100%` resolves against the file column, not a z-index folder card.
+    // The target list anchors the absolute hole preview. Keep the origin
+    // relative too so nested drag geometry stays local to the file column.
     let base_pos = match author_pos.get() {
         Some(v) => v,
         None => {
@@ -2130,6 +2207,7 @@ fn assemble_draggable(
         let preview_id = id_for_mark.clone();
         let preview_scope = scope_for_mark.clone();
         let motion = Rc::new(RefCell::new(MotionStyle::new()));
+        let was_cross = Cell::new(None);
         let auto_bumped = Rc::clone(&auto_bumped);
         let author_island_block = Rc::clone(&author_island_block);
         el = el.reactive_sync(move |el, _lt: &mut LayoutTree| {
@@ -2156,6 +2234,7 @@ fn assemble_draggable(
                 auto_bumped.as_ref(),
                 animation,
                 &mut motion.borrow_mut(),
+                &was_cross,
                 author_island_block.as_ref(),
             )
         });
@@ -2193,8 +2272,8 @@ fn assemble_draggable(
     let shell_scope = scope.clone();
     let author_margin_shell = Rc::new(Cell::new(None::<f32>));
     let author_block_shell = Rc::new(Cell::new(None::<AuthorBlock>));
-    let author_pos_shell = Rc::new(Cell::new(None::<taffy::style::Position>));
-    let author_width_shell = Rc::new(Cell::new(None::<taffy::style::Dimension>));
+    let author_overflow_shell = Cell::new(None);
+    let collapse_started = Cell::new(false);
     shell = shell.reactive_sync(move |el, _lt: &mut LayoutTree| {
         apply_shell_stack_z(
             el,
@@ -2212,8 +2291,9 @@ fn assemble_draggable(
             list_sig,
             author_margin_shell.as_ref(),
             author_block_shell.as_ref(),
-            author_pos_shell.as_ref(),
-            author_width_shell.as_ref(),
+            &author_overflow_shell,
+            animation,
+            &collapse_started,
         )
     });
     shell
@@ -2370,6 +2450,7 @@ fn assemble_droppable(
     let overlay_open = ctx.overlay_open;
     let drag_extent = ctx.drag_extent;
     let axis = ctx.axis;
+    let animation = ctx.animation;
 
     // Height `auto` (not `100%`): a 100% shell in a wrap HStack next to an
     // auto-width chip wraps onto a row whose containing-block height is still
@@ -2421,6 +2502,7 @@ fn assemble_droppable(
         let list_chrome = list.clone();
         let scope_chrome = scope_mark.clone();
         let author_pad = Rc::new(Cell::new(None::<f32>));
+        let pad_transition = Cell::new(false);
         let author_margin = Rc::new(Cell::new(None::<f32>));
         let author_pos = Rc::new(Cell::new(None::<taffy::style::Position>));
         el = el.reactive_sync(move |el, lt| {
@@ -2444,6 +2526,8 @@ fn assemble_droppable(
                 author_margin.as_ref(),
                 author_pos.as_ref(),
                 author_z,
+                animation,
+                &pad_transition,
             ));
             st
         });

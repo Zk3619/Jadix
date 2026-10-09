@@ -12,6 +12,9 @@ use crate::layout::layout_tree::portal_hit_passthrough;
 
 type HoverCb = Rc<RefCell<dyn FnMut(bool)>>;
 
+/// Opt-in containers receive hover while an interactive descendant is targeted.
+pub(crate) const ATTR_HOVER_REGION: &str = "rui_hover_region";
+
 /// Stable identity for exclusive hover tracking across tree rebuilds that replace handler `Rc`s.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum HoverKey {
@@ -28,6 +31,13 @@ struct HoverSlot {
     /// Visual client box of the hoverable (scroll already applied). Chart tooltip
     /// samples datum from this + the pointer without requiring a mousemove.
     bounds: [f32; 4],
+    regions: Vec<HoverSlot>,
+}
+
+fn push_exclusive_hover(slot: &HoverSlot, hovered: bool, cbs: &mut Vec<(HoverCb, bool)>) {
+    if !slot.regions.iter().any(|region| region.key == slot.key) {
+        cbs.push((slot.cb.clone(), hovered));
+    }
 }
 
 fn hover_key_for(el: &Element, cb: &HoverCb) -> HoverKey {
@@ -50,6 +60,7 @@ fn hover_slot_for(el: &Element, bounds: [f32; 4]) -> Option<HoverSlot> {
         key: hover_key_for(el, &cb),
         cb,
         bounds,
+        regions: Vec::new(),
     })
 }
 
@@ -1387,6 +1398,7 @@ pub(crate) fn reconcile_pointer_hovers(
         _ => false,
     };
     if same_identity {
+        reconcile_hover_regions(prev.as_ref(), target.as_ref(), force, cbs);
         if let Some(next) = target {
             let rc_changed = prev.as_ref().is_some_and(|p| !Rc::ptr_eq(&p.cb, &next.cb));
             // Quiet Rc refresh after rebuild. Re-fire enter when soft-invalidated, or when the
@@ -1402,13 +1414,17 @@ pub(crate) fn reconcile_pointer_hovers(
                     }
                 }
             }
-            if rc_changed || reenter {
+            if rc_changed
+                || reenter
+                || !next.regions.is_empty()
+                || prev.as_ref().is_some_and(|s| !s.regions.is_empty())
+            {
                 LAST_HOVER_BY_SCOPE.with(|map| {
                     *map.borrow_mut().entry(scope).or_insert(None) = Some(next.clone());
                 });
             }
             if reenter {
-                cbs.push((next.cb, true));
+                push_exclusive_hover(&next, true, cbs);
             }
         }
         HOVER_MISS_STREAK.set(0);
@@ -1417,10 +1433,11 @@ pub(crate) fn reconcile_pointer_hovers(
     // Different hoverable under the pointer — leave/enter immediately.
     if let Some(new) = target.clone() {
         HOVER_MISS_STREAK.set(0);
+        reconcile_hover_regions(prev.as_ref(), Some(&new), force, cbs);
         if let Some(old) = prev {
-            cbs.push((old.cb, false));
+            push_exclusive_hover(&old, false, cbs);
         }
-        cbs.push((new.cb, true));
+        push_exclusive_hover(&new, true, cbs);
         LAST_HOVER_BY_SCOPE.with(|map| {
             *map.borrow_mut().entry(scope).or_insert(None) = target;
         });
@@ -1439,12 +1456,35 @@ pub(crate) fn reconcile_pointer_hovers(
         return;
     }
     HOVER_MISS_STREAK.set(0);
+    reconcile_hover_regions(prev.as_ref(), None, force, cbs);
     if let Some(old) = prev {
-        cbs.push((old.cb, false));
+        push_exclusive_hover(&old, false, cbs);
     }
     LAST_HOVER_BY_SCOPE.with(|map| {
         *map.borrow_mut().entry(scope).or_insert(None) = None;
     });
+}
+
+fn reconcile_hover_regions(
+    prev: Option<&HoverSlot>,
+    next: Option<&HoverSlot>,
+    force: bool,
+    cbs: &mut Vec<(HoverCb, bool)>,
+) {
+    // Include a region when it is the exclusive target too, so moving between
+    // its background and descendants never emits a spurious leave/enter.
+    let old = prev.map(|s| s.regions.as_slice()).unwrap_or_default();
+    let new = next.map(|s| s.regions.as_slice()).unwrap_or_default();
+    for region in old {
+        if !new.iter().any(|s| s.key == region.key) {
+            cbs.push((region.cb.clone(), false));
+        }
+    }
+    for region in new {
+        if force || !old.iter().any(|s| s.key == region.key) {
+            cbs.push((region.cb.clone(), true));
+        }
+    }
 }
 
 /// Diff pointer hover and fire `on_hover` immediately so `{id}_hover` and CSS `:hover`
@@ -1485,7 +1525,12 @@ pub(crate) fn clear_hover_tracking() {
     let scope = crate::core::reactivity::signal_key_scope();
     let prev = LAST_HOVER_BY_SCOPE.with(|map| map.borrow_mut().insert(scope, None).flatten());
     if let Some(old) = prev {
-        (*old.cb.borrow_mut())(false);
+        let mut cbs = Vec::new();
+        reconcile_hover_regions(Some(&old), None, false, &mut cbs);
+        push_exclusive_hover(&old, false, &mut cbs);
+        for (cb, hovered) in cbs {
+            (*cb.borrow_mut())(hovered);
+        }
     }
 }
 
@@ -1535,18 +1580,23 @@ fn pick_hover_target(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> Hove
         },
         |el, scroll_acc, (), lin, sc, child_hit| {
             let hit = crate::core::tree::visual_paint_aabb_with_ancestor(el, scroll_acc, lin, sc);
-            let bubbled = match child_hit {
+            let mut bubbled = match child_hit {
                 LayerHit::Miss => LayerHit::Miss,
                 LayerHit::Hit(slot) => LayerHit::Hit(slot.or_else(|| hover_slot_for(el, hit))),
             };
-            if !matches!(bubbled, LayerHit::Miss) {
-                return bubbled;
+            if matches!(bubbled, LayerHit::Miss)
+                && element_self_pointer_hit_with(el, x, y, scroll_acc, lin, sc)
+            {
+                bubbled = LayerHit::Hit(hover_slot_for(el, hit));
             }
-            if element_self_pointer_hit_with(el, x, y, scroll_acc, lin, sc) {
-                LayerHit::Hit(hover_slot_for(el, hit))
-            } else {
-                LayerHit::Miss
+            if el.attrs.get(ATTR_HOVER_REGION).map(String::as_str) == Some("1") {
+                if let LayerHit::Hit(Some(slot)) = &mut bubbled {
+                    if let Some(region) = hover_slot_for(el, hit) {
+                        slot.regions.push(region);
+                    }
+                }
             }
+            bubbled
         },
     ) {
         LayerHit::Miss => HoverHit::Miss,
@@ -2366,6 +2416,64 @@ mod hover_occlusion_tests {
         }
         assert_eq!(a_hits.get(), 1);
         assert_eq!(b_hits.get(), 1);
+    }
+
+    #[test]
+    fn hover_region_keeps_child_hover_and_respects_occlusion_after_rebuild() {
+        clear_hover_tracking();
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let region_events = events.clone();
+        let child_events = events.clone();
+        let mut child = Element::new().focus_id("region-child").on_hover(move |h| {
+            child_events.borrow_mut().push(("child", h));
+        });
+        child.layout_bounds = [20.0, 0.0, 20.0, 40.0];
+        let mut region = Element::new()
+            .template_id("hover-region")
+            .child(child)
+            .on_hover(move |h| {
+                region_events.borrow_mut().push(("region", h));
+            });
+        region.set_attr(ATTR_HOVER_REGION, "1");
+        region.layout_bounds = [0.0, 0.0, 80.0, 40.0];
+        let mut root = Element::new().child(region);
+        root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+
+        apply_pointer_hover_reconcile(&root, 30.0, 20.0, true);
+        apply_pointer_hover_reconcile(&root, 10.0, 20.0, true);
+        apply_pointer_hover_reconcile(&root, 30.0, 20.0, true);
+        assert_eq!(
+            *events.borrow(),
+            [
+                ("region", true),
+                ("child", true),
+                ("child", false),
+                ("child", true)
+            ]
+        );
+
+        // Replace the container handler while the child target stays the same.
+        let rebuilt = events.clone();
+        root.children[0].on_hover = Some(Rc::new(RefCell::new(move |h| {
+            rebuilt.borrow_mut().push(("rebuilt", h));
+        })));
+        apply_pointer_hover_reconcile(&root, 30.0, 20.0, true);
+        assert_eq!(
+            events.borrow().len(),
+            4,
+            "stable region identity must not re-enter"
+        );
+
+        // An overlay without its own hover handler still blocks the region below.
+        let mut overlay = Element::new().on_click(|| {});
+        overlay.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        root.children.push(overlay);
+        apply_pointer_hover_reconcile(&root, 30.0, 20.0, true);
+        assert_eq!(
+            &events.borrow()[4..],
+            [("rebuilt", false), ("child", false)]
+        );
+        clear_hover_tracking();
     }
 
     #[test]

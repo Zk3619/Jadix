@@ -1820,6 +1820,13 @@ impl Element {
         self.attrs.get(key)
     }
 
+    /// Viewport-space layout box, with ancestor scroll and sticky offsets applied.
+    /// Excludes CSS transforms. Current during `reactive_sync`; otherwise uses
+    /// the last paint's scroll offset.
+    pub fn viewport_layout_bounds(&self) -> [f32; 4] {
+        crate::app::tree_hit::collision_hit_box(self, self.paint_scroll_acc)
+    }
+
     pub fn template_hash(mut self, hash: impl Into<String>) -> Self {
         self.template_hash = Some(hash.into());
         self

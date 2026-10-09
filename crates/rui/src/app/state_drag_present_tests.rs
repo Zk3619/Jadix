@@ -1,5 +1,6 @@
+#![cfg(feature = "svg")]
+
 use super::*;
-use crate as rui;
 
 #[test]
 #[ignore = "requires a native Windows GPU surface"]
@@ -21,7 +22,7 @@ fn free_drag_native_frames_follow_pointer_before_release() {
                     .create_window(
                         WindowAttributes::default()
                             .with_title("RUI free drag regression")
-                            .with_surface_size(winit::dpi::LogicalSize::new(640.0, 480.0))
+                            .with_surface_size(winit::dpi::LogicalSize::new(1440.0, 900.0))
                             .with_visible(true),
                     )
                     .unwrap(),
@@ -128,78 +129,12 @@ fn run_drag_frames(
         Rc::downgrade(&secondaries),
     ));
     let (owner, ()) = create_root(|| {
-        let a_pos = use_signal("native-free-a", || [59.0_f32, 600.0]);
-        let b_pos = use_signal("native-free-b", || [131.0_f32, 632.0]);
+        use_signal("gal_nav_section", || "overlays".to_string());
         let live = Rc::clone(&state);
         crate::core::reactivity::mark_next_effect_as_ui_root();
         create_effect(move || {
-            let drag = crate::core::reactivity::isolate_reads(|| {
-                crate::ui! {
-                    <DragProvider id="native-free-drag" threshold={0.0}
-                        onDragEnd={move |ev: &crate::utils::drag::DragEvent| {
-                            let pos = if ev.draggable_id == "arb-auto-1" { a_pos } else { b_pos };
-                            let p = pos.peek();
-                            pos.set([p[0] + ev.delta[0], p[1] + ev.delta[1]]);
-                        }}>
-                        <Box w="100%" h="1000px" relative={true} overflow="hidden">
-                            <Draggable id="arb-auto-1" stack="auto">
-                                <Box absolute={true} left={a_pos.get()[0]} top={a_pos.get()[1]} w="176px" h="92px"
-                                    bg="#ffffff" border_style="solid" border_width="3px"
-                                    border_color="#000000" rounded="12px"
-                                    items="center" justify="center" overflow="hidden">
-                                    <Label text_size="44px" font_weight="800">"A"</Label>
-                                </Box>
-                            </Draggable>
-                            <Draggable id="arb-auto-2" stack="auto">
-                                <Box absolute={true} left={b_pos.get()[0]} top={b_pos.get()[1]} w="176px" h="92px"
-                                    bg="#ffffff" border_style="solid" border_width="3px"
-                                    border_color="#000000" rounded="12px"
-                                    items="center" justify="center" overflow="hidden">
-                                    <Label text_size="44px" font_weight="800">"B"</Label>
-                                </Box>
-                            </Draggable>
-                        </Box>
-                    </DragProvider>
-                }
-            });
-            let scroll: Element = crate::components::scroll_area("native-free-scroll")
-                .w("100%")
-                .h("100%")
-                .child(Element::new().flex_col().children([drag]))
-                .into();
-            let root = Element::new()
-                .w("100%")
-                .h("100%")
-                .relative()
-                .bg([1.0; 4])
-                .child(scroll)
-                // Gallery's root Portal remains mounted with an empty Show.
-                // Its full-size host must not occlude page repaint scissors.
-                .child(crate::ui! {
-                    <Portal id="native-empty-portal">
-                        <Show when={false}><Label>"Hidden"</Label></Show>
-                    </Portal>
-                })
-                .child(
-                    Element::new()
-                        .absolute()
-                        .right(0.0)
-                        .w(8.0)
-                        .h(80.0)
-                        .z_index(1000)
-                        .bg([0.5, 0.5, 0.5, 1.0]),
-                )
-                .child(crate::utils::popup::mount_anchored_overlay(
-                    Element::new()
-                        .absolute()
-                        .left(86.0)
-                        .top(422.0)
-                        .w(264.0)
-                        .h(168.0)
-                        .bg([1.0; 4])
-                        .text("Pinned panel"),
-                    900,
-                ));
+            let root =
+                crate::core::reactivity::isolate_reads(crate::gallery_app::build_gallery_app);
             live.borrow_mut().as_mut().unwrap().rebuild_ui(root);
         });
     });
@@ -213,15 +148,15 @@ fn run_drag_frames(
     )
     .unwrap()
     .layout_bounds;
-    let scroll_y = initial[1] - 100.0;
+    let scroll_y = initial[1] - 140.0;
     assert!(scroll_y > 400.0);
     crate::core::reactivity::use_signal(
-        &crate::core::scroll_viewport::scroll_offset_y_signal_key("native-free-scroll"),
+        &crate::core::scroll_viewport::scroll_offset_y_signal_key("scroll-overlays"),
         || 0.0_f32,
     )
     .set_silent(scroll_y);
     crate::core::reactivity::use_signal(
-        &crate::core::scroll_viewport::scroll_target_y_signal_key("native-free-scroll"),
+        &crate::core::scroll_viewport::scroll_target_y_signal_key("scroll-overlays"),
         || 0.0_f32,
     )
     .set_silent(scroll_y);
@@ -229,7 +164,7 @@ fn run_drag_frames(
         .borrow_mut()
         .as_mut()
         .unwrap()
-        .update_scroll_offset_in_place("native-free-scroll", [0.0, scroll_y]);
+        .update_scroll_offset_in_place("scroll-overlays", [0.0, scroll_y]);
     for _ in 0..3 {
         let _ = frame(&state, [-1.0, -1.0], true);
     }
@@ -239,8 +174,27 @@ fn run_drag_frames(
     app.state = Rc::clone(&state);
     let window_id = state.borrow().as_ref().unwrap().window.id();
     app.pointer_window = Some(window_id);
+    assert!(
+        state
+            .borrow()
+            .as_ref()
+            .unwrap()
+            .last_overlay_stamps
+            .is_empty(),
+        "offscreen local Gallery portals must not reserve global occupancy"
+    );
     let hits = collect_hits(&state.borrow().as_ref().unwrap().root_element);
-    let cases = ["arb-auto-1", "arb-auto-2"].map(|id| {
+    let sources = [
+        "arb-pin-top",
+        "arb-pin-bottom",
+        "arb-pin-top",
+        "arb-auto-1",
+        "arb-auto-2",
+        "arb-auto-1",
+        "arb-keep-hi",
+        "arb-keep-lo",
+    ];
+    let cases = sources.map(|id| {
         hits.iter()
             .find(|h| h.id == id && h.is_draggable)
             .unwrap()
@@ -257,16 +211,14 @@ fn run_drag_frames(
     );
     let mut idle_until = std::time::Instant::now() + std::time::Duration::from_millis(300);
     let mut started = false;
-    // First move A over B and commit it. Then move B over A and away again
-    // while the pointer is still down; the covered sibling must be restored
-    // before mouseup (this is where the gallery used to leave a lower-left
-    // retained rectangle and erase the sibling glyph).
-    let mut deltas = [[100.0, 60.0], [200.0, 100.0], [160.0, 80.0]];
+    // Start with T/B on a fresh Gallery, then exercise auto and keep providers.
+    // Multiple pointer samples before release catch old-pose raster residue.
+    let mut deltas = [[40.0, 30.0], [220.0, 50.0], [300.0, 50.0]];
     let mut sample = 0usize;
     let mut pending = false;
     let mut owner = Some(owner);
     std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_secs(5));
+        std::thread::sleep(std::time::Duration::from_secs(45));
         proxy.wake_up();
     });
     Box::new(move |event_loop, event| {
@@ -282,58 +234,19 @@ fn run_drag_frames(
                     bounds[1] + grab[1] + delta[1],
                 ];
                 let image = frame(&state, pointer, false);
-                let x = ((bounds[0] + delta[0] + 1.0) * scale) as u32;
-                let y = ((bounds[1] + delta[1] + 46.0) * scale) as u32;
-                let i = ((y * image.width + x) * 4) as usize;
-                let pixel = &image.pixels[i..i + 4];
-                assert!(
-                    pixel[0] < 80 && pixel[1] < 80 && pixel[2] < 80,
-                    "drag must paint before release: delta={delta:?} pixel={pixel:?}"
+                assert_eq!(
+                    crate::utils::drag::active_draggable_id().as_deref(),
+                    Some(sources[source]),
+                    "the intended tile must own the live drag"
                 );
-                let x = ((bounds[0] + 1.0) * scale) as u32;
-                let y = ((bounds[1] + 75.0) * scale) as u32;
-                let i = ((y * image.width + x) * 4) as usize;
-                let old = &image.pixels[i..i + 4];
-                assert!(
-                    old[..3].iter().all(|c| *c > 220),
-                    "old body must clear before release: {old:?}"
-                );
-                let mut ink = 0;
-                for ly in 15..62 {
-                    for lx in 65..110 {
-                        let x = ((bounds[0] + delta[0] + lx as f32) * scale) as u32;
-                        let y = ((bounds[1] + delta[1] + ly as f32) * scale) as u32;
+                if sample == deltas.len() - 1 {
+                    if source < 3 {
+                        let x = ((bounds[0] + delta[0] + 1.0) * scale) as u32;
+                        let y = ((bounds[1] + delta[1] + 75.0) * scale) as u32;
                         let i = ((y * image.width + x) * 4) as usize;
-                        if image.pixels[i..i + 3].iter().all(|c| *c < 80) {
-                            ink += 1;
-                        }
+                        assert!(image.pixels[i..i + 3].iter().all(|c| *c < 80),
+                            "exposed top/bottom border must remain visible: source={source} bounds={bounds:?} delta={delta:?}");
                     }
-                }
-                assert!(
-                    ink > 150,
-                    "letter must follow the body before release: ink={ink}"
-                );
-                if source == 1 && sample == 1 {
-                    // B has just moved away from A. A's committed position must
-                    // be repainted during the drag, before B is released.
-                    let a_origin = [cases[0][0] + 160.0, cases[0][1] + 80.0];
-                    let mut sibling_ink = 0;
-                    for ly in 15..62 {
-                        for lx in 65..110 {
-                            let x = ((a_origin[0] + lx as f32) * scale) as u32;
-                            let y = ((a_origin[1] + ly as f32) * scale) as u32;
-                            let i = ((y * image.width + x) * 4) as usize;
-                            if image.pixels[i..i + 3].iter().all(|c| *c < 80) {
-                                sibling_ink += 1;
-                            }
-                        }
-                    }
-                    assert!(
-                        sibling_ink > 150,
-                        "covered sibling must reappear before release: ink={sibling_ink}, a_origin={a_origin:?}, bounds={bounds:?}"
-                    );
-                }
-                if source == 2 && sample == deltas.len() - 1 {
                     state.borrow_mut().as_mut().unwrap().mark_full_redraw();
                     let reference = frame(&state, pointer, true);
                     let different = image
@@ -349,7 +262,7 @@ fn run_drag_frames(
                         .count();
                     assert_eq!(
                         different, 0,
-                        "repeated partial drags must match a full repaint"
+                        "partial drag must match a full repaint: source={source} sample={sample} delta={delta:?}"
                     );
                 }
                 sample += 1;
@@ -364,9 +277,23 @@ fn run_drag_frames(
                     // Let the drop callback rebuild the committed left/top before
                     // starting the next drag. This is the real gallery sequence.
                     let _ = frame(&state, [-1.0, -1.0], true);
-                    let _ = frame(&state, [-1.0, -1.0], true);
+                    let committed = frame(&state, [-1.0, -1.0], true);
+                    state.borrow_mut().as_mut().unwrap().mark_full_redraw();
+                    let reference = frame(&state, [-1.0, -1.0], true);
+                    let different = committed
+                        .pixels
+                        .chunks_exact(4)
+                        .zip(reference.pixels.chunks_exact(4))
+                        .filter(|(a, b)| {
+                            a[..3].iter().zip(&b[..3]).any(|(a, b)| a.abs_diff(*b) > 16)
+                        })
+                        .count();
+                    assert_eq!(
+                        different, 0,
+                        "drop must match a full repaint: source={source}"
+                    );
                     source += 1;
-                    if source == 3 {
+                    if source == sources.len() {
                         owner.take().unwrap().dispose();
                         clear_app_runtime();
                         reset_registered_anchors();
@@ -376,22 +303,22 @@ fn run_drag_frames(
                         &state.borrow().as_ref().unwrap().root_element,
                     )
                     .into_iter()
-                    .find(|h| {
-                        h.id == if source == 1 {
-                            "arb-auto-2"
-                        } else {
-                            "arb-auto-1"
-                        } && h.is_draggable
-                    })
+                    .find(|h| h.id == sources[source] && h.is_draggable)
                     .unwrap()
                     .rect
                     .to_bounds();
-                    // A was committed to the right; B's top-left is exposed.
-                    grab = [10.0, 8.0];
-                    deltas = if source == 1 {
-                        [[80.0, 60.0], [300.0, 200.0], [320.0, 220.0]]
+                    // Grab the lower tile outside the higher tile's footprint.
+                    grab = if source == 1 || source == 7 {
+                        [10.0, 80.0]
                     } else {
-                        [[-180.0, 120.0], [-120.0, 40.0], [100.0, -40.0]]
+                        [10.0, 8.0]
+                    };
+                    deltas = match source {
+                        1 | 7 => [[-30.0, 10.0], [-60.0, 20.0], [-40.0, 0.0]],
+                        2 => [[-200.0, -20.0], [-260.0, -40.0], [-180.0, -50.0]],
+                        3 | 6 => [[100.0, 60.0], [200.0, 100.0], [160.0, 80.0]],
+                        4 => [[20.0, 20.0], [160.0, 60.0], [250.0, 80.0]],
+                        _ => [[-60.0, 40.0], [-100.0, -20.0], [100.0, -20.0]],
                     };
                     app.cursor_pos = winit::dpi::PhysicalPosition::new(
                         ((bounds[0] + grab[0]) * scale) as f64,

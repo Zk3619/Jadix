@@ -743,12 +743,78 @@ fn persist_delta_pos(pos: Signal<[f32; 2]>) -> impl FnMut(&DragEvent) {
     }
 }
 
-fn persist_snap_pos(pos: Signal<[f32; 2]>, grid: SnapGrid) -> impl FnMut(&DragEvent) {
-    move |ev: &DragEvent| {
-        let p = pos.peek();
-        let snapped = grid.apply(p[0] + ev.delta[0], p[1] + ev.delta[1]);
-        pos.set(snapped);
+/// Paint-only background: keep the viewport-space lattice used by SnapGrid,
+/// including after the page scrolls, without rebuilding the draggable children.
+pub(crate) fn snap_grid_lines(grids: &[(SnapGrid, f32)], visible: Signal<bool>) -> Element {
+    let mut layers = Vec::new();
+    for &(grid, alpha) in grids {
+        let origin = Rc::new(Cell::new([0.0, 0.0]));
+        let painted_origin = origin.clone();
+        let layer: Element = canvas()
+            .w("100%")
+            .h("100%")
+            .paint(move |ctx, size| {
+                ctx.clear("transparent");
+                ctx.set_fill("foreground");
+                for axis in 0..2 {
+                    let step = [grid.x.abs(), grid.y.abs()][axis];
+                    if !step.is_finite() || step < 1.0 {
+                        continue;
+                    }
+                    let mut p = (grid.offset[axis] - painted_origin.get()[axis]).rem_euclid(step);
+                    while p < [size.w, size.h][axis] {
+                        if axis == 0 {
+                            ctx.fill_rect(p, 0.0, 1.0, size.h);
+                        } else {
+                            ctx.fill_rect(0.0, p, size.w, 1.0);
+                        }
+                        p += step;
+                    }
+                }
+                LayoutStatus::Clean
+            })
+            .into();
+        let painted_color = Cell::new(parse_color("foreground"));
+        layers.push(
+            layer
+                .absolute()
+                .left(0.0)
+                .top(0.0)
+                .opacity(alpha)
+                .pointer_events_none()
+                .reactive_sync(move |el, _| {
+                    let bounds = el.viewport_layout_bounds();
+                    let next = [bounds[0], bounds[1]];
+                    let color = parse_color("foreground");
+                    let moved = origin.replace(next) != next;
+                    let recolored = painted_color.replace(color) != color;
+                    if !moved && !recolored {
+                        return LayoutStatus::Clean;
+                    }
+                    if let Some(id) = el.get_attr(rui::primitives::canvas::ATTR_CANVAS_PAINT) {
+                        rui::primitives::canvas::mark_canvas_dirty_hex(id);
+                    }
+                    LayoutStatus::StyleChanged
+                }),
+        );
     }
+    Element::new()
+        .absolute()
+        .left(0.0)
+        .top(0.0)
+        .w("100%")
+        .h("100%")
+        .opacity(if visible.peek() { 1.0 } else { 0.0 })
+        .pointer_events_none()
+        .children(layers)
+        .reactive_sync(move |el, _| {
+            let opacity = if visible.peek() { 1.0 } else { 0.0 };
+            if el.style.opacity == opacity {
+                return LayoutStatus::Clean;
+            }
+            el.style.opacity = opacity;
+            LayoutStatus::StyleChanged
+        })
 }
 
 fn resize_handle(rect: Signal<[f32; 4]>, left: f32, top: f32, edges: Edges) -> Element {
@@ -1003,6 +1069,41 @@ fn corner_overlay_angle(scope: &str, arena: &str) -> f32 {
     };
     let extent = last_drag_extent(scope).unwrap_or([0.0, 0.0]);
     corner_card_angle(origin, bounds, extent)
+}
+
+#[cfg(test)]
+mod drop_position_tests {
+    use super::*;
+    use rui::core::reactivity::create_root;
+    use rui::utils::drag::{begin, end, tick, BeginDrag};
+
+    #[test]
+    fn snap_drop_persists_restricted_position_without_resnapping() {
+        let (_owner, ()) = create_root(|| {
+            let pos = Signal::new([80.0, 40.0]);
+            let _scope = drag_scope("snap-drop-regression")
+                .threshold(0.0)
+                .restrict(Restrict::Rect([0.0, 0.0, 200.0, 120.0]))
+                .snap(SnapGrid::new(32.0, 32.0).offset([16.0, 16.0]))
+                .on_drag_end(persist_delta_pos(pos))
+                .child(Element::new);
+            begin(BeginDrag {
+                scope_id: "snap-drop-regression".into(),
+                draggable_id: "card".into(),
+                pointer: [100.0, 52.0],
+                grab_offset: [20.0, 12.0],
+                start_bounds: [80.0, 40.0, 40.0, 24.0],
+                from_list: None,
+                from_index: None,
+                item_type: "chip".into(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            assert!(tick(500.0, 500.0, &[], [800.0, 600.0]));
+            assert!(end(&[]));
+            assert_eq!(pos.peek(), [160.0, 96.0]);
+        });
+    }
 }
 
 #[cfg(test)]
@@ -1502,6 +1603,7 @@ pub(crate) fn DragShowcase() -> Element {
     });
     let snap_pos = use_signal("gal_drag_snap_pos", || [16.0_f32, 16.0]);
     let snap_multi_pos = use_signal("gal_drag_snap_multi_pos", || [16.0_f32, 16.0]);
+    let snap_lines_visible = use_signal("gal_drag_snap_lines_visible", || false);
     let snap_fn_pos = use_signal("gal_drag_snap_fn_pos", || [16.0_f32, 40.0]);
     let dropzone_hud = use_signal("gal_drag_dropzone_hud", || {
         "overlap=center · 未进入".to_string()
@@ -1862,7 +1964,7 @@ pub(crate) fn DragShowcase() -> Element {
             .axis(Axis::Xy)
             .restrict(Restrict::Parent)
             .snap(snap_grid)
-            .on_drag_end(persist_snap_pos(snap_pos, snap_grid))
+            .on_drag_end(persist_delta_pos(snap_pos))
             .child(move || {
                 ui! {
                     <Box
@@ -1876,6 +1978,7 @@ pub(crate) fn DragShowcase() -> Element {
                         border_width="1px"
                         border_color="border"
                     >
+                        { snap_grid_lines(&[(snap_grid, 0.16)], snap_lines_visible) }
                         <Draggable id="snap-tile" stack="auto">
                             { free_move_tile("S", "snap 32px · restrict=parent", snap_pos, 0, "primary") }
                         </Draggable>
@@ -1884,21 +1987,14 @@ pub(crate) fn DragShowcase() -> Element {
             }),
     );
 
-    let snap_multi = SnapTargets::new([
-        SnapGrid::new(8.0, 8.0),
-        SnapGrid::new(32.0, 32.0).offset([16.0, 16.0]),
-    ])
-    .range(14.0);
+    let snap_fine_grid = SnapGrid::new(8.0, 8.0);
+    let snap_multi = SnapTargets::new([snap_fine_grid, snap_grid]).range(14.0);
     let snap_multi_board = Element::from(
         drag_scope("gal-drag-snap-multi")
             .axis(Axis::Xy)
             .restrict(Restrict::Parent)
-            .snap_targets(snap_multi.clone())
-            .on_drag_end(move |ev: &DragEvent| {
-                let p = snap_multi_pos.peek();
-                let snapped = snap_multi.apply(p[0] + ev.delta[0], p[1] + ev.delta[1]);
-                snap_multi_pos.set(snapped);
-            })
+            .snap_targets(snap_multi)
+            .on_drag_end(persist_delta_pos(snap_multi_pos))
             .child(move || {
                 ui! {
                     <Box
@@ -1912,6 +2008,10 @@ pub(crate) fn DragShowcase() -> Element {
                         border_width="1px"
                         border_color="border"
                     >
+                        { snap_grid_lines(
+                            &[(snap_fine_grid, 0.06), (snap_grid, 0.16)],
+                            snap_lines_visible,
+                        ) }
                         <Draggable id="snap-multi-tile" stack="auto">
                             { free_move_tile("M", "8px + 32px 双格 · 近者胜", snap_multi_pos, 0, "accent") }
                         </Draggable>
@@ -1996,7 +2096,7 @@ pub(crate) fn DragShowcase() -> Element {
             .restrict(Restrict::Parent)
             .restrict_anchor(RestrictAnchor::CENTER)
             .snap(snap_end_grid)
-            .on_drag_end(persist_snap_pos(snap_end_pos, snap_end_grid))
+            .on_drag_end(persist_delta_pos(snap_end_pos))
             .child(move || {
                 ui! {
                     <Box
@@ -2833,7 +2933,12 @@ pub(crate) fn DragShowcase() -> Element {
                 </DragProvider>
 
                 <Separator />
-                <Label font_weight="600" text_size="0.875rem">"SnapGrid · restrict=parent"</Label>
+                <HStack w="100%" items="center" justify="between" gap="0.75rem" wrap="wrap">
+                    <Label font_weight="600" text_size="0.875rem">"SnapGrid · restrict=parent"</Label>
+                    <Switch id="gal-drag-snap-lines" checked={snap_lines_visible}>
+                        "网格线（两个区域）"
+                    </Switch>
+                </HStack>
                 <Label text_size="0.75rem" color="muted-foreground">
                     "Builder .snap(32px) 在 modifier 管道里取整幽灵原点；松手把 left/top 写回网格。restrict=parent 钳虚线框，无需给容器分配 id。无 Overlay：本体跟手。"
                 </Label>

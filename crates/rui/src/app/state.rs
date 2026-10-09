@@ -504,6 +504,7 @@ fn draw_shadow_tex_draws<'pass>(
             warp_c01: TexturedInstanceInput::WARP_C01_OFF,
             warp_c23: TexturedInstanceInput::WARP_C23_OFF,
             warp_w: TexturedInstanceInput::WARP_W_OFF,
+            rounded_clips: [[0.0; 4]; 4],
         };
         let shadow_inst_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Shadow instance"),
@@ -3008,9 +3009,6 @@ impl AppState {
                             cull_rect,
                             clear_color,
                         );
-                        if dirty.kind == PaintDirtyKind::Region {
-                            node_glyph_holes.push(cull_rect);
-                        }
                         if allow_primitives {
                             if !page_bands.is_empty() {
                                 for (band_i, band) in page_bands.iter().enumerate() {
@@ -3041,8 +3039,7 @@ impl AppState {
                                         cull_phys,
                                         false,
                                     );
-                                    if dirty.kind != PaintDirtyKind::Region
-                                        && band.text.0 < band.text.1
+                                    if band.text.0 < band.text.1
                                         && !page_band_skip_text.get(band_i).copied().unwrap_or(true)
                                     {
                                         if band_i == 0 {
@@ -3053,13 +3050,8 @@ impl AppState {
                                         }
                                     }
                                 }
-                                // Page `TextRenderer` holds every glyph on the
-                                // forms page. Recording it for a thumb hole is
-                                // the 150ms encode (prepare stays ~4ms; the
-                                // scissor does not shrink the command buffer).
-                                // Hole glyphs are in the capture renderer and
-                                // flushed once after chrome — drawing them here
-                                // as well src-overs the caption darker.
+                                // Rebuild each layer's glyphs before the next
+                                // plate, matching full repaint at rounded edges.
                                 continue;
                             }
                             if overlay_paint_start > 0 {
@@ -3115,7 +3107,7 @@ impl AppState {
                                 Some(cull_rect),
                             );
                         }
-                        if dirty.kind != PaintDirtyKind::Region && !skip_page_text {
+                        if !skip_page_text {
                             render_pass.set_scissor_rect(x, y, w, h);
                             self.text_renderer.render(render_pass);
                         }
@@ -3184,21 +3176,27 @@ impl AppState {
                                         })
                                         .min_by_key(|p| p.instance.1.saturating_sub(p.instance.0))
                                     {
-                                        let t0 = owner.textured.0;
-                                        let t1 = owner.textured.1.min(overlay_tex_start);
-                                        if t0 < t1 {
-                                            draw_packed_textured_runs(
-                                                render_pass,
-                                                &self.textured_pipeline,
-                                                &self.textured_instance_buffer,
-                                                &self.image_textures,
-                                                scaled_tex,
-                                                t0,
-                                                t1,
-                                                wipe_cull,
-                                            );
-                                            render_pass.set_scissor_rect(x, y, w, h);
-                                        }
+                                        // Parent ranges include child canvases. Restore
+                                        // only the underlay's own texture; dirty children
+                                        // are composited once below.
+                                        super::draw_cull::for_each_own_textured_run(
+                                            owner,
+                                            node_paints,
+                                            overlay_tex_start,
+                                            |t0, t1| {
+                                                draw_packed_textured_runs(
+                                                    render_pass,
+                                                    &self.textured_pipeline,
+                                                    &self.textured_instance_buffer,
+                                                    &self.image_textures,
+                                                    scaled_tex,
+                                                    t0,
+                                                    t1,
+                                                    wipe_cull,
+                                                );
+                                            },
+                                        );
+                                        render_pass.set_scissor_rect(x, y, w, h);
                                     }
                                 }
                             }
@@ -6849,14 +6847,19 @@ impl AppState {
         let page_text_for_glyphs = &self.text_nodes[..overlay_text_start];
         let node_in_glyph_dirties = |d: &super::damage::PaintDirty| match d.kind {
             super::damage::PaintDirtyKind::OverlayRestore => false,
-            // Own-chrome regions skip the page glyphon run. Child captions in
-            // the hole (select trigger value) are covered by the fill unless
-            // this capture puts them back. Flush draws that capture once.
-            super::damage::PaintDirtyKind::Region => super::draw_cull::region_needs_glyph_capture(
-                d,
-                &render_result.node_paints,
-                page_text_for_glyphs,
-            ),
+            // Complete regions replay glyphs in page-band order. Only local
+            // chrome repairs need the deferred capture after their fill.
+            super::damage::PaintDirtyKind::Region => {
+                super::draw_cull::region_replays_own_chrome_only(
+                    d.key,
+                    d.bounds,
+                    &render_result.node_paints,
+                ) && super::draw_cull::region_needs_glyph_capture(
+                    d,
+                    &render_result.node_paints,
+                    page_text_for_glyphs,
+                )
+            }
             super::damage::PaintDirtyKind::Node => {
                 !super::damage::paint_dirty_covered_by_overlay_restore(
                     d,
@@ -7092,6 +7095,11 @@ impl AppState {
                 // Dest AABB is often the rest pose; CSS scale/rotate lives here.
                 for v in d.transform {
                     v.to_bits().hash(&mut hasher);
+                }
+                for layer in d.rounded_clips {
+                    for v in layer {
+                        v.to_bits().hash(&mut hasher);
+                    }
                 }
             }
             hash_present_underline_layers(

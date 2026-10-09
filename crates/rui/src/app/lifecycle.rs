@@ -784,6 +784,32 @@ impl ApplicationHandler for super::App {
             }
         }
 
+        // A moved pointer can stop before the drag hold delay expires.
+        if let Some(wake) = crate::utils::drag::session::activation_next_wake_at() {
+            if wake <= now {
+                let sample = self.state.borrow().as_ref().map(|state| {
+                    let size = state.window.surface_size();
+                    let scale = (state.window.scale_factor() as f32).max(1.0);
+                    (
+                        crate::utils::drag::collect_hits(&state.root_element),
+                        [size.width as f32 / scale, size.height as f32 / scale],
+                        state.window.clone(),
+                    )
+                });
+                if let (Some((hits, viewport, window)), Some(pointer)) =
+                    (sample, crate::utils::drag::last_pointer())
+                {
+                    // Activation writes signals that can rebuild AppState.
+                    if crate::utils::drag::tick(pointer[0], pointer[1], &hits, viewport) {
+                        self.force_redraw_count = self.force_redraw_count.max(2);
+                        window.request_redraw();
+                    }
+                }
+            } else {
+                next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
+            }
+        }
+
         // Drag / resize / gesture: keep edge auto-scroll alive while held still.
         if crate::utils::drag::is_active() || crate::utils::pointer_action::edge_scroll_active() {
             if let Some(state) = (*self.state.borrow()).as_ref() {

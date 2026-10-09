@@ -40,6 +40,33 @@ pub mod utils;
 #[cfg(test)]
 mod crate_tests;
 
+// Native drag regressions mount the Gallery source, including every provider.
+#[cfg(all(test, feature = "svg"))]
+extern crate self as rui;
+#[cfg(all(test, feature = "svg"))]
+#[path = "../../../examples/gallery/src/imports.rs"]
+mod imports;
+#[cfg(all(test, feature = "svg"))]
+#[allow(dead_code, non_snake_case)]
+#[path = "../../../examples/gallery/src/shared.rs"]
+mod shared;
+#[cfg(all(test, feature = "svg"))]
+#[allow(dead_code, non_snake_case)]
+#[path = "../../../examples/gallery/src/pages/mod.rs"]
+mod pages;
+#[cfg(all(test, feature = "svg"))]
+pub(crate) mod gallery_drag {
+    pub(crate) use super::pages::drag::*;
+}
+#[cfg(all(test, feature = "svg"))]
+#[allow(dead_code)]
+#[path = "../../../examples/gallery/src/styles.rs"]
+mod styles;
+#[cfg(all(test, feature = "svg"))]
+#[allow(dead_code, non_snake_case)]
+#[path = "../../../examples/gallery/src/app.rs"]
+mod gallery_app;
+
 /// Backward-compatible path for macro-generated code.
 pub mod tree {
     pub use crate::core::tree::*;

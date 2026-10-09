@@ -45,8 +45,8 @@ pub struct DragModifierCtx {
     pub restrict: Restrict,
     /// Current source layout slot (scroll-adjusted). Used by pin-locked-axis.
     pub live_slot: Option<Rect>,
-    /// `true` only while [`super::session::end`] re-runs the pipeline for
-    /// `end_only` snap / restrict.
+    /// `true` while [`super::session::end`] runs the final modifier pipeline,
+    /// including `end_only` snap / restrict.
     pub at_end: bool,
     pub restrict_end_only: bool,
     pub restrict_anchor: RestrictAnchor,

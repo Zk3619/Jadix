@@ -9,13 +9,13 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use crate::core::reactivity::{batch, Signal};
+use crate::core::reactivity::{Signal, batch};
 use crate::core::tree::Element;
 
 use crate::utils::pointer_action::{Inertia, InertiaOpts, VelocityTracker};
 
 use super::autoscroll::AutoScroll;
-use super::collision::{detect_with, Candidate, CollisionAlg, CollisionFn, CollisionInput};
+use super::collision::{Candidate, CollisionAlg, CollisionFn, CollisionInput, detect_with};
 #[cfg(test)]
 use super::geometry::SnapGrid;
 use super::geometry::{
@@ -23,7 +23,7 @@ use super::geometry::{
     SortMode,
 };
 use super::modifier::{
-    apply_modifiers, builtin_modifiers, DragDelta, DragModifier, DragModifierCtx,
+    DragDelta, DragModifier, DragModifierCtx, apply_modifiers, builtin_modifiers,
 };
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_AXIS, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
@@ -62,6 +62,9 @@ pub struct DragEvent {
     pub to_list: Option<String>,
     pub to_index: Option<usize>,
     pub pointer: [f32; 2],
+    /// Axis-filtered pointer travel during start/move; final modifier-adjusted
+    /// travel relative to the live source slot on end (including parent scroll).
+    /// Persist this directly without snapping it again.
     pub delta: [f32; 2],
     pub phase: DragPhase,
     /// SortableJS `pull: 'clone'` session.
@@ -243,6 +246,8 @@ thread_local! {
     static NAMED_BOUNDS: RefCell<HashMap<String, [f32; 4]>> = RefCell::new(HashMap::new());
     /// Author-parent box of each draggable (`restrict="parent"`).
     static PARENT_BOUNDS: RefCell<HashMap<String, [f32; 4]>> = RefCell::new(HashMap::new());
+    /// Author packing gap survives singleton lists, where neighbour stride is unavailable.
+    static ITEM_PACK_GAPS: RefCell<HashMap<String, [f32; 2]>> = RefCell::new(HashMap::new());
     static LAST_HITS: RefCell<Vec<DragHit>> = const { RefCell::new(Vec::new()) };
     static LAST_SCROLL_AT: RefCell<Option<Instant>> = const { RefCell::new(None) };
     /// Packed row (item + author gap) and the author `gap` inside it,
@@ -253,6 +258,9 @@ thread_local! {
     /// the pitch).
     static DRAG_PACK_PITCH: Cell<f32> = const { Cell::new(0.0) };
     static DRAG_PACK_GAP: Cell<f32> = const { Cell::new(0.0) };
+    // Logical source slots survive the source shell's cross-list size animation.
+    static SOURCE_LIST_LAYOUT: RefCell<Vec<DragHit>> = const { RefCell::new(Vec::new()) };
+    static SOURCE_LAYOUT_OFFSETS: RefCell<HashMap<String, [f32; 2]>> = RefCell::new(HashMap::new());
     /// Laid-out overlay child size for [`OverlayAlign::Center`]
     /// (`origin = pointer - size / 2`).
     static OVERLAY_GHOST_EXTENT: RefCell<HashMap<String, [f32; 2]>> = RefCell::new(HashMap::new());
@@ -903,10 +911,7 @@ pub fn active_source_translate() -> Option<[f32; 2]> {
         }
         let origin =
             SCOPES.with(|m| m.borrow().get(&sess.scope_id).map(|r| r.overlay_pos.peek()))?;
-        Some([
-            origin[0] - sess.start_bounds[0],
-            origin[1] - sess.start_bounds[1],
-        ])
+        LAST_HITS.with(|hits| Some(source_translation(sess, origin, &hits.borrow())))
     })
 }
 
@@ -924,19 +929,15 @@ fn event_from_delta(
     droppable: Option<&DragHit>,
     to_list: Option<String>,
     to_index: Option<usize>,
-    origin: Option<[f32; 2]>,
+    delta: Option<[f32; 2]>,
 ) -> DragEvent {
-    let (dx, dy) = if let Some(o) = origin {
-        (
-            o[0] - sess.start_pointer[0] + sess.grab_offset[0],
-            o[1] - sess.start_pointer[1] + sess.grab_offset[1],
-        )
-    } else {
-        sess.motion_axis.apply(
+    let [dx, dy] = delta.unwrap_or_else(|| {
+        let (dx, dy) = sess.motion_axis.apply(
             sess.last_pointer[0] - sess.start_pointer[0],
             sess.last_pointer[1] - sess.start_pointer[1],
-        )
-    };
+        );
+        [dx, dy]
+    });
     DragEvent {
         scope_id: sess.scope_id.clone(),
         draggable_id: sess.draggable_id.clone(),
@@ -1126,6 +1127,15 @@ fn live_source_slot(sess: &DragSession, hits: &[DragHit]) -> Option<Rect> {
         .find(|h| h.is_draggable && h.id == sess.draggable_id && h.scope_id == sess.scope_id)
         .map(|h| h.rect)
         .filter(|r| r.is_usable())
+}
+
+fn source_translation(sess: &DragSession, origin: [f32; 2], hits: &[DragHit]) -> [f32; 2] {
+    // Scroll moves the source's screen-space slot without changing its authored
+    // left/top. Both preview translate and persisted delta use that live slot.
+    let slot = live_source_slot(sess, hits)
+        .map(|r| [r.x, r.y])
+        .unwrap_or([sess.start_bounds[0], sess.start_bounds[1]]);
+    [origin[0] - slot[0], origin[1] - slot[1]]
 }
 
 fn ghost_origin(
@@ -1566,7 +1576,7 @@ fn write_ghost_follow(scope_id: &str, origin: [f32; 2]) {
 /// After layout (and the frame's scroll-offset chase), refresh `overlay_pos` +
 /// Hidden clip from live visual hits so the clip shell tracks a scrolled parent.
 /// Collision / `hover_list` stay on vsync [`tick`] — this must not remount.
-pub(crate) fn resync_overlay_follow_after_layout(root: &Element) {
+pub(crate) fn resync_overlay_follow_after_layout(root: &mut Element) {
     if !is_active() {
         return;
     }
@@ -1574,9 +1584,129 @@ pub(crate) fn resync_overlay_follow_after_layout(root: &Element) {
         return;
     };
     let hits = collect_hits(root);
+    let at_origin = SCOPES.with(|m| {
+        m.borrow()
+            .get(&sess.scope_id)
+            .is_some_and(|rt| sess.from_list.is_some() && rt.hover_list.peek() == sess.from_list)
+    }) && !sess.pull_clone
+        && active_sort_mode() != SortMode::Swap;
+    let offsets: HashMap<String, [f32; 2]> = if at_origin {
+        sess.from_list
+            .as_deref()
+            .and_then(|list| source_list_layout(&hits, list))
+            .unwrap_or_default()
+            .iter()
+            .filter_map(|slot| {
+                let live = hits.iter().find(|h| {
+                    h.id == slot.id && h.scope_id == slot.scope_id && h.index == slot.index
+                })?;
+                slot.index.map(|_| {
+                    (
+                        slot.id.clone(),
+                        [slot.rect.x - live.rect.x, slot.rect.y - live.rect.y],
+                    )
+                })
+            })
+            .collect()
+    } else {
+        HashMap::new()
+    };
+    sync_source_layout_offsets(root, &sess.scope_id, &offsets);
+    SOURCE_LAYOUT_OFFSETS.with(|last| *last.borrow_mut() = offsets);
     LAST_HITS.with(|h| *h.borrow_mut() = hits.clone());
     let origin = ghost_origin(&sess, sess.last_pointer, sess.last_viewport, &hits, false);
     write_ghost_follow(&sess.scope_id, origin);
+    // The scroll chase can run after reactive_sync. Apply the same live
+    // translation before collect so a held-still source stays inside this frame.
+    if !overlay_is_registered(&sess.scope_id) && !sess.pull_clone {
+        if let Some(path) = crate::core::tree::find_path_in_tree(root, |el| {
+            el.attrs.get(ATTR_DRAG_SCOPE) == Some(&sess.scope_id)
+                && el.attrs.get(ATTR_DRAG_DRAGGABLE) == Some(&sess.draggable_id)
+                && !el.attrs.contains_key(ATTR_DRAG_SKIP_FOLLOW)
+        }) {
+            let mut source = &mut *root;
+            for &index in &path {
+                source = &mut source.children[index];
+            }
+            let translate = source_translation(&sess, origin, &hits);
+            if source.style.translate != translate {
+                crate::app::damage::push_frame_paint_element(source, source.paint_scroll_acc);
+                source.style.translate = translate;
+                crate::utils::motion::clear_motion(source);
+                crate::app::damage::push_frame_paint_element(source, source.paint_scroll_acc);
+                crate::layout::collect_cache::invalidate_collect_paint_hash_path(root, &path);
+            }
+        }
+    }
+}
+
+// Compensate layout on the kit shell, separately from the body's FLIP tween.
+// Retargeting that tween as the source slot grows would animate the same move twice.
+fn sync_source_layout_offsets(
+    root: &mut Element,
+    scope: &str,
+    offsets: &HashMap<String, [f32; 2]>,
+) {
+    if root.attrs.contains_key(super::ATTR_DRAG_ITEM_SHELL) {
+        let offset = crate::core::tree::find_in_tree(root, |e| {
+            e.attrs.contains_key(super::ATTR_DRAG_DRAGGABLE)
+        })
+        .filter(|e| e.attrs.get(super::ATTR_DRAG_SCOPE).map(String::as_str) == Some(scope))
+        .and_then(|e| e.attrs.get(super::ATTR_DRAG_DRAGGABLE))
+        .and_then(|id| offsets.get(id))
+        .copied()
+        .unwrap_or([0.0, 0.0]);
+        root.style.translate = offset;
+    }
+    for child in &mut root.children {
+        sync_source_layout_offsets(child, scope, offsets);
+    }
+}
+
+pub(crate) fn live_source_layout_offset(scope: &str, id: &str) -> [f32; 2] {
+    LAST_HITS.with(|hits| {
+        let hits = hits.borrow();
+        let Some(live) = hits.iter().find(|h| h.scope_id == scope && h.id == id) else {
+            return [0.0, 0.0];
+        };
+        let Some(layout) = live
+            .list_id
+            .as_deref()
+            .and_then(|list| source_list_layout(&hits, list))
+        else {
+            return [0.0, 0.0];
+        };
+        layout
+            .iter()
+            .find(|h| h.id == id && h.index == live.index)
+            .map(|slot| [slot.rect.x - live.rect.x, slot.rect.y - live.rect.y])
+            .unwrap_or([0.0, 0.0])
+    })
+}
+
+pub(crate) fn painted_source_layout_offset(id: &str) -> [f32; 2] {
+    SOURCE_LAYOUT_OFFSETS.with(|offsets| offsets.borrow().get(id).copied().unwrap_or([0.0, 0.0]))
+}
+
+/// Wake a pending drag once time is the only remaining activation condition.
+pub(crate) fn activation_next_wake_at() -> Option<Instant> {
+    SESSION.with(|s| {
+        let session = s.borrow();
+        let sess = session.as_ref()?;
+        if sess.phase != DragPhase::Pending || sess.delay_ms <= 0.0 {
+            return None;
+        }
+        let dx = sess.last_pointer[0] - sess.start_pointer[0];
+        let dy = sess.last_pointer[1] - sess.start_pointer[1];
+        let dist = dx.hypot(dy);
+        if dist == 0.0
+            || !sess.start_axis.allows_start_move(dx, dy)
+            || (sess.activation == Activation::And && dist < sess.threshold)
+        {
+            return None;
+        }
+        Some(sess.pressed_at + std::time::Duration::from_secs_f32(sess.delay_ms / 1000.0))
+    })
 }
 
 /// Advance the session. `hits` must be collected from the current layout tree.
@@ -1780,6 +1910,12 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
             .and_then(|list| {
                 if sess.sort_mode == SortMode::Swap {
                     resolve_swap_hover_index(hits, list, [x, y])
+                } else if prev_list.is_some()
+                    && prev_list.as_deref() != Some(list)
+                    && sess.from_list.as_deref() == Some(list)
+                    && !sess.pull_clone
+                {
+                    resolve_source_reentry_index(hits, &sess, list, [x, y])
                 } else {
                     resolve_sortable_hover_index(hits, &sess, list, [x, y], prev_hover)
                 }
@@ -1846,6 +1982,45 @@ fn resolve_swap_hover_index(hits: &[DragHit], list_id: &str, pointer: [f32; 2]) 
         .and_then(|h| h.index)
 }
 
+/// Reenter the source using the remaining rows of its currently vacated pack.
+fn resolve_source_reentry_index(
+    hits: &[DragHit],
+    sess: &DragSession,
+    list: &str,
+    pointer: [f32; 2],
+) -> Option<usize> {
+    let from = sess.from_index?;
+    // The lifted row has no slot in the vacated pack. Probe only the remaining
+    // rows, then convert the insert slot back to a same-list reorder index.
+    let remaining: Vec<DragHit> = hits
+        .iter()
+        .filter(|h| {
+            h.list_id.as_deref() == Some(list)
+                && h.scope_id == sess.scope_id
+                && h.index != Some(from)
+        })
+        .cloned()
+        .collect();
+    let axis = sort_axis_for_list(hits, list, sess.axis);
+    let raw = insert_index_along_axis(&remaining, list, pointer, axis)
+        .or_else(|| {
+            let items = indexed_list_items(&remaining, list);
+            let first = items.first()?;
+            if axis_origin(first.rect, axis)
+                > match axis {
+                    Axis::X => pointer[0],
+                    _ => pointer[1],
+                }
+            {
+                first.index
+            } else {
+                items.last()?.index.map(|i| i + 1)
+            }
+        })
+        .unwrap_or(0);
+    Some(raw.saturating_sub(usize::from(raw > from)))
+}
+
 /// Sortable insert index: midpoint row split, then pin below the opened hole.
 fn resolve_sortable_hover_index(
     hits: &[DragHit],
@@ -1854,6 +2029,8 @@ fn resolve_sortable_hover_index(
     pointer: [f32; 2],
     prev_hover: Option<usize>,
 ) -> Option<usize> {
+    let restored = source_list_layout(hits, list_id);
+    let hits = restored.as_deref().unwrap_or(hits);
     // Pre-normalize layout bounds (remembered at collect). While the pointer is
     // still on the lifted chip, keep hover=from — slot math alone can read
     // append when pitch < chip height (Gallery Kanban dimmed body pushed down).
@@ -1986,11 +2163,7 @@ fn pin_hover_below_opened_hole(
         Axis::X => hole_pt[0],
         Axis::Y | Axis::Xy | Axis::Start => hole_pt[1],
     };
-    if p < hole + pitch {
-        prev
-    } else {
-        computed
-    }
+    if p < hole + pitch { prev } else { computed }
 }
 
 fn pointer_on_other_origin_row(sess: &DragSession, hits: &[DragHit], pointer: [f32; 2]) -> bool {
@@ -2089,6 +2262,17 @@ fn activate_scope(sess: &DragSession, hits: &[DragHit], origin: [f32; 2]) {
         .unwrap_or(0.0)
         .max(0.0);
     DRAG_PACK_GAP.set(gap);
+    SOURCE_LIST_LAYOUT.with(|layout| {
+        *layout.borrow_mut() = hits
+            .iter()
+            .filter(|h| {
+                sess.from_list.is_some()
+                    && h.list_id == sess.from_list
+                    && h.scope_id == sess.scope_id
+            })
+            .cloned()
+            .collect();
+    });
     // Copy signal handles out first: `.set` flushes the overlay island, which
     // must not run under `SCOPES.borrow()` (`with_scope` is `borrow_mut`).
     let ui = SCOPES.with(|m| {
@@ -2156,6 +2340,8 @@ fn reset_scope_ui(rt: &ScopeRuntime) {
     // One transition: overlay / active / hover are one session, not six effects.
     DRAG_PACK_PITCH.set(0.0);
     DRAG_PACK_GAP.set(0.0);
+    SOURCE_LIST_LAYOUT.with(|layout| layout.borrow_mut().clear());
+    SOURCE_LAYOUT_OFFSETS.with(|offsets| offsets.borrow_mut().clear());
     clear_restrict_clip_state();
     super::overlay::clear_ghost_follow();
     batch(|| {
@@ -2238,21 +2424,16 @@ fn commit_end(hits: &[DragHit]) -> bool {
     let was_active = sess.phase == DragPhase::Active || sess.phase == DragPhase::Coasting;
     let ev = if was_active {
         sess.phase = DragPhase::Active;
-        let need_end_mod =
-            sess.snap.as_ref().map(|s| s.end_only()).unwrap_or(false) || sess.restrict_end_only;
-        let end_origin = if need_end_mod {
-            let origin = ghost_origin(&sess, sess.last_pointer, sess.last_viewport, hits, true);
-            SCOPES.with(|m| {
-                if let Some(rt) = m.borrow().get(&sess.scope_id) {
-                    if rt.overlay_pos.peek() != origin {
-                        rt.overlay_pos.set_silent(origin);
-                    }
+        // Commit the modifier result, including ordinary snap / restrict;
+        // raw pointer travel can extend past the clamped preview at an edge.
+        let end_origin = ghost_origin(&sess, sess.last_pointer, sess.last_viewport, hits, true);
+        SCOPES.with(|m| {
+            if let Some(rt) = m.borrow().get(&sess.scope_id) {
+                if rt.overlay_pos.peek() != end_origin {
+                    rt.overlay_pos.set_silent(end_origin);
                 }
-            });
-            Some(origin)
-        } else {
-            None
-        };
+            }
+        });
         let drop_id = SCOPES.with(|m| {
             m.borrow()
                 .get(&sess.scope_id)
@@ -2268,7 +2449,11 @@ fn commit_end(hits: &[DragHit]) -> bool {
                 .unwrap_or((None, None))
         });
         Some(event_from_delta(
-            &sess, drop_hit, to_list, to_index, end_origin,
+            &sess,
+            drop_hit,
+            to_list,
+            to_index,
+            Some(source_translation(&sess, end_origin, hits)),
         ))
     } else {
         try_click_select(&sess.scope_id, &sess.draggable_id);
@@ -2497,6 +2682,7 @@ pub fn pump_autoscroll(root: &Element, viewport: [f32; 2]) -> bool {
 pub fn collect_hits(root: &Element) -> Vec<DragHit> {
     NAMED_BOUNDS.with(|m| m.borrow_mut().clear());
     PARENT_BOUNDS.with(|m| m.borrow_mut().clear());
+    ITEM_PACK_GAPS.with(|m| m.borrow_mut().clear());
     ANCESTOR_OVERFLOW_CLIP.with(|m| m.borrow_mut().clear());
     let mut out = Vec::new();
     collect_hits_inner(root, [0.0, 0.0], None, None, &mut out);
@@ -2630,6 +2816,17 @@ fn collect_hits_inner(
     let child_anc = RestrictAncestor {
         slot,
         item_shell,
+        gap: if item_shell {
+            ancestor.map(|a| a.gap).unwrap_or_default()
+        } else {
+            let zoom = if el.style.zoom.is_finite() && el.style.zoom > 0.0 {
+                el.style.zoom
+            } else {
+                1.0
+            };
+            [el.style.gap.width, el.style.gap.height]
+                .map(|gap| crate::layout::lp_length_px(gap).unwrap_or(0.0).max(0.0) * zoom)
+        },
         outer: if item_shell {
             author_parent_slot(ancestor)
         } else {
@@ -2657,6 +2854,14 @@ fn collect_hits_inner(
         let scope_id = el.attrs.get(ATTR_DRAG_SCOPE).cloned().unwrap_or_default();
         remember_draggable_bounds(&scope_id, &id, slot);
         remember_ancestor_overflow_clip(&id, overflow_clip);
+        if el.attrs.contains_key(ATTR_DRAG_INDEX) {
+            if let Some(parent) = ancestor {
+                ITEM_PACK_GAPS.with(|m| {
+                    m.borrow_mut()
+                        .insert(item_bounds_key(&scope_id, &id), parent.gap);
+                });
+            }
+        }
         if drag_id.is_some() {
             if let Some(parent) = author_parent_slot(ancestor) {
                 remember_parent_bounds(&scope_id, &id, parent);
@@ -2688,7 +2893,13 @@ fn collect_hits_inner(
             pull_clone,
         });
     }
-    let next_acc = crate::app::tree_hit::next_hit_scroll_acc(el, scroll_acc);
+    let mut next_acc = crate::app::tree_hit::next_hit_scroll_acc(el, scroll_acc);
+    // Child layout_bounds include ancestor translates. The kit shell's layout
+    // compensation belongs to paint, not the sortable collision slots.
+    if el.attrs.contains_key(super::ATTR_DRAG_ITEM_SHELL) {
+        next_acc[0] += el.style.translate[0];
+        next_acc[1] += el.style.translate[1];
+    }
     let next_clip = child_overflow_clip(el, slot, overflow_clip);
     for c in &el.children {
         collect_hits_inner(c, next_acc, Some(child_anc), next_clip, out);
@@ -2698,6 +2909,7 @@ fn collect_hits_inner(
 #[derive(Clone, Copy)]
 struct RestrictAncestor {
     slot: [f32; 4],
+    gap: [f32; 2],
     /// Kit [`ATTR_DRAG_ITEM_SHELL`] — skip so `restrict=parent` is the author box.
     item_shell: bool,
     outer: Option<[f32; 4]>,
@@ -2705,11 +2917,7 @@ struct RestrictAncestor {
 
 fn author_parent_slot(anc: Option<RestrictAncestor>) -> Option<[f32; 4]> {
     let a = anc?;
-    if a.item_shell {
-        a.outer
-    } else {
-        Some(a.slot)
-    }
+    if a.item_shell { a.outer } else { Some(a.slot) }
 }
 
 /// Sortable-style insert index: dropping on a container (no index) appends.
@@ -2955,6 +3163,40 @@ fn visual_index_order(items: &[&DragHit], from: usize, hover: usize) -> Vec<usiz
     order
 }
 
+/// Source collapse is a visual preview, not a change to its logical sort slots.
+/// Rebase activation-time slots on the live list shell so scrolling and moving
+/// ancestor containers still move both hover targets and packed origins.
+fn source_list_layout(hits: &[DragHit], list_id: &str) -> Option<Vec<DragHit>> {
+    SOURCE_LIST_LAYOUT.with(|layout| {
+        let layout = layout.borrow();
+        let shell = layout
+            .iter()
+            .find(|h| h.index.is_none() && h.list_id.as_deref() == Some(list_id))?;
+        let live_shell = hits
+            .iter()
+            .find(|h| h.id == shell.id && h.scope_id == shell.scope_id && h.index.is_none())?;
+        let delta = [
+            live_shell.rect.x - shell.rect.x,
+            live_shell.rect.y - shell.rect.y,
+        ];
+        Some(
+            layout
+                .iter()
+                .map(|slot| {
+                    let mut hit = slot.clone();
+                    if hit.index.is_some() {
+                        hit.rect.x += delta[0];
+                        hit.rect.y += delta[1];
+                    } else {
+                        hit.rect = live_shell.rect;
+                    }
+                    hit
+                })
+                .collect(),
+        )
+    })
+}
+
 /// Packed origins after lifting `from` and inserting at `hover` (same list).
 /// Total span equals the layout span (reorder does not grow the list).
 fn pack_same_list_origins(
@@ -2964,6 +3206,8 @@ fn pack_same_list_origins(
     hover: usize,
     axis: Axis,
 ) -> HashMap<usize, [f32; 2]> {
+    let restored = source_list_layout(hits, list_id);
+    let hits = restored.as_deref().unwrap_or(hits);
     let items = indexed_list_items(hits, list_id);
     let mut map = HashMap::new();
     if items.is_empty() {
@@ -3024,11 +3268,17 @@ fn pack_item_translate(
         else {
             return [0.0, 0.0];
         };
+        // Returning from another list restores the source's in-flow slot.
+        // Its cached hits can still describe the vacated pack for this frame.
+        if from == hover {
+            return [0.0, 0.0];
+        }
         let packed = pack_same_list_origins(hits, my_list, from, hover, axis);
         let Some(new) = packed.get(&my_i) else {
             return [0.0, 0.0];
         };
-        let Some(layout) = indexed_list_items(hits, my_list)
+        let restored = source_list_layout(hits, my_list);
+        let Some(layout) = indexed_list_items(restored.as_deref().unwrap_or(hits), my_list)
             .into_iter()
             .find(|h| h.index == Some(my_i))
         else {
@@ -3037,10 +3287,8 @@ fn pack_item_translate(
         return [new[0] - layout.rect.x, new[1] - layout.rect.y];
     }
     if from_list == Some(my_list) {
-        // Source shell is taken out of flow (`position: absolute`). Remaining
-        // origin rows already pack into the hole. A second `-extent` FLIP
-        // walks them into the folder header (Gallery: dragging Alpha leaves
-        // Beta covering "Inbox").
+        // The source shell's size animation closes the origin hole in layout.
+        // A second -extent translate would move siblings twice, into the header.
         return [0.0, 0.0];
     }
     if hover_list != my_list {
@@ -3120,6 +3368,17 @@ fn row_pitch_along(hits: &[DragHit], list_id: Option<&str>, axis: Axis, chip: f3
     let Some(list_id) = list_id else {
         return chip;
     };
+    let items = indexed_list_items(hits, list_id);
+    if let [item] = items.as_slice() {
+        let gap = ITEM_PACK_GAPS
+            .with(|m| {
+                m.borrow()
+                    .get(&item_bounds_key(&item.scope_id, &item.id))
+                    .copied()
+            })
+            .unwrap_or_default();
+        return chip + gap[if axis == Axis::X { 0 } else { 1 }];
+    }
     let stride = slot_stride_along_axis(hits, list_id, axis, chip);
     if stride >= MIN_SLOT_PITCH && (chip < 1.0 || stride <= chip * STRETCH_RATIO) {
         stride
@@ -3178,7 +3437,6 @@ pub(crate) fn list_is_append_hover(list: &str, hover_index: Option<usize>) -> bo
 /// `gap` a 0-height source shell still occupies. Snapshotted at activate
 /// from neighbour stride − item size — not `pitch - live drag_extent`,
 /// which is 0 when those two happen to match.
-#[cfg(test)]
 pub(crate) fn pack_gap(_chip: f32) -> f32 {
     DRAG_PACK_GAP.get().max(0.0)
 }
@@ -3323,6 +3581,101 @@ mod tests {
             skip_follow: false,
             pull_clone: false,
         }
+    }
+
+    #[test]
+    fn restricted_source_and_drop_follow_parent_scroll() {
+        use crate::core::reactivity::use_signal;
+        use crate::core::scroll_viewport::{
+            SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_offset_x_signal_key, scroll_offset_y_signal_key,
+        };
+
+        let (_owner, ()) = create_root(|| {
+            let committed = Signal::new([0.0, 0.0]);
+            let _scope = super::super::drag_scope("scroll-drop")
+                .threshold(0.0)
+                .restrict(Restrict::Parent)
+                .on_drag_end(move |ev| committed.set(ev.delta))
+                .child(Element::new);
+            let sx = use_signal(&scroll_offset_x_signal_key("scroll-drop-page"), || 0.0_f32);
+            let sy = use_signal(&scroll_offset_y_signal_key("scroll-drop-page"), || 0.0_f32);
+            let mut card = Element::new();
+            card.layout_bounds = [80.0, 240.0, 40.0, 24.0];
+            card.set_attr(ATTR_DRAG_DRAGGABLE, "card");
+            card.set_attr(ATTR_DRAG_SCOPE, "scroll-drop");
+            let mut arena = Element::new();
+            arena.layout_bounds = [10.0, 200.0, 200.0, 120.0];
+            arena.set_attr("id", "scroll-drop-arena");
+            arena = arena.child(card);
+            let mut page = Element::new();
+            page.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}scroll-drop-page"));
+            page.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+            page = page.child(arena);
+
+            for axis in [Axis::Xy, Axis::X, Axis::Y] {
+                for scroll in [[160.0, 180.0], [40.0, 20.0]] {
+                    for pointer in [[-500.0, -500.0], [900.0, 900.0]] {
+                        sx.set_silent(100.0);
+                        sy.set_silent(100.0);
+                        SCOPES.with(|scopes| {
+                            scopes.borrow_mut().get_mut("scroll-drop").unwrap().axis = axis;
+                        });
+                        let hits = collect_hits(&page);
+                        let start = hits.iter().find(|h| h.id == "card").unwrap().rect;
+                        begin(BeginDrag {
+                            scope_id: "scroll-drop".into(),
+                            draggable_id: "card".into(),
+                            pointer: [start.x + 20.0, start.y + 12.0],
+                            grab_offset: [20.0, 12.0],
+                            start_bounds: start.to_bounds(),
+                            from_list: None,
+                            from_index: None,
+                            item_type: "chip".into(),
+                            group: String::new(),
+                            capture_id: "cap".into(),
+                        });
+                        assert!(tick(pointer[0], pointer[1], &hits, [800.0, 600.0]));
+                        sx.set_silent(scroll[0]);
+                        sy.set_silent(scroll[1]);
+                        // The page scrolls while the pointer stays at the edge.
+                        resync_overlay_follow_after_layout(&mut page);
+                        let ghost = peek_overlay_pos("scroll-drop").unwrap();
+                        let hits = collect_hits(&page);
+                        let slot = hits.iter().find(|h| h.id == "card").unwrap().rect;
+                        let translate = active_source_translate().unwrap();
+                        assert_eq!(
+                            [slot.x + translate[0], slot.y + translate[1]],
+                            ghost,
+                            "scrolled source must paint at the restricted origin: axis={axis:?}, scroll={scroll:?}"
+                        );
+                        let painted = crate::core::tree::find_in_tree(&page, |el| {
+                            el.attrs.get(ATTR_DRAG_DRAGGABLE).map(String::as_str) == Some("card")
+                        })
+                        .unwrap()
+                        .style
+                        .translate;
+                        assert_eq!(
+                            [slot.x + painted[0], slot.y + painted[1]],
+                            ghost,
+                            "post-layout sync must update the source before paint"
+                        );
+                        let parent = last_parent_bounds("scroll-drop", "card").unwrap();
+                        assert!(ghost[0] >= parent[0] && ghost[1] >= parent[1]);
+                        assert!(ghost[0] + slot.width <= parent[0] + parent[2]);
+                        assert!(ghost[1] + slot.height <= parent[1] + parent[3]);
+                        assert!(tick(pointer[0], pointer[1], &hits, [800.0, 600.0]));
+                        let ghost = peek_overlay_pos("scroll-drop").unwrap();
+                        assert!(end(&hits));
+                        let delta = committed.peek();
+                        assert_eq!(
+                            [slot.x + delta[0], slot.y + delta[1]],
+                            ghost,
+                            "persisted position must match preview after scroll: axis={axis:?}, scroll={scroll:?}"
+                        );
+                    }
+                }
+            }
+        });
     }
 
     #[test]
@@ -4084,7 +4437,7 @@ mod tests {
     fn pump_autoscroll_resyncs_axis_y_after_parent_scroll() {
         use crate::core::reactivity::use_signal;
         use crate::core::scroll_viewport::{
-            scroll_offset_x_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
+            SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_offset_x_signal_key,
         };
 
         let (_o, _) = create_root(|| {
@@ -4478,6 +4831,52 @@ mod tests {
     }
 
     #[test]
+    fn singleton_cross_list_hole_keeps_author_gap_through_item_shell() {
+        for axis in [Axis::X, Axis::Y] {
+            let mut item = Element::new();
+            item.layout_bounds = [10.0, 20.0, 40.0, 24.0];
+            item.set_attr(ATTR_DRAG_DRAGGABLE, "singleton-gap-card");
+            item.set_attr(ATTR_DRAG_SCOPE, "singleton-gap-scope");
+            item.set_attr(ATTR_DRAG_LIST, "singleton-gap-list");
+            item.set_attr(ATTR_DRAG_INDEX, "0");
+            let mut shell = Element::new().child(item);
+            shell.set_attr(ATTR_DRAG_ITEM_SHELL, "1");
+            let mut parent = Element::new().child(shell);
+            parent.style.gap.width = taffy::LengthPercentage::length(4.0);
+            parent.style.gap.height = taffy::LengthPercentage::length(6.0);
+            let chip = if axis == Axis::X { 40.0 } else { 24.0 };
+            let gap = if axis == Axis::X { 4.0 } else { 6.0 };
+            let hits = collect_hits(&parent);
+            LAST_HITS.with(|h| *h.borrow_mut() = hits.clone());
+            DRAG_PACK_PITCH.set(0.0);
+            assert_eq!(
+                pack_insert_extent(Some("singleton-gap-list"), axis, chip),
+                chip + gap
+            );
+            let hole =
+                insert_hole_origin(&hits, "singleton-gap-list", Some(1), axis, chip).unwrap();
+            let advance = if axis == Axis::X {
+                hole[0] - 10.0
+            } else {
+                hole[1] - 20.0
+            };
+            assert_eq!(
+                advance,
+                chip + gap,
+                "preview and layout must use the same packed row"
+            );
+
+            // A subsequent collect replaces authored spacing, including a genuine zero gap.
+            parent.style.gap = taffy::Size::zero();
+            let hits = collect_hits(&parent);
+            assert_eq!(
+                row_pitch_along(&hits, Some("singleton-gap-list"), axis, chip),
+                chip
+            );
+        }
+    }
+
+    #[test]
     fn insert_index_uses_item_slots_not_container() {
         let mut a = hit("a", [0.0, 0.0, 40.0, 20.0], true);
         a.index = Some(0);
@@ -4709,6 +5108,32 @@ mod tests {
             "short last folder must not inherit the previous stride, got {}",
             hits[1].rect.height
         );
+    }
+
+    #[test]
+    fn unchanged_insert_slot_ignores_vacated_layout_hits() {
+        for axis in [Axis::X, Axis::Y] {
+            let mut source = hit("Move me", [0.0, 0.0, 40.0, 16.0], true);
+            source.index = Some(0);
+            let mut peer = hit("Locked", [0.0, 0.0, 40.0, 16.0], true);
+            peer.index = Some(1);
+            for index in 0..2 {
+                assert_eq!(
+                    pack_item_translate(
+                        &[source.clone(), peer.clone()],
+                        Some("list"),
+                        Some(index),
+                        Some("list"),
+                        Some(0),
+                        Some("list"),
+                        Some(0),
+                        axis,
+                    ),
+                    [0.0, 0.0],
+                    "unchanged order must not introduce a gap from stale hits"
+                );
+            }
+        }
     }
 
     #[test]
@@ -5215,6 +5640,7 @@ mod tests {
     #[test]
     fn tick_restrict_parent_clamps_ghost_to_author_box() {
         let (_o, _) = create_root(|| {
+            let committed_delta = Rc::new(RefCell::new(None));
             let overlay_open = Signal::new(false);
             let overlay_pos = Signal::new([0.0_f32, 0.0]);
             let active_draggable = Signal::new(None::<String>);
@@ -5251,7 +5677,10 @@ mod tests {
                     on_start: None,
                     on_move: None,
                     on_over: None,
-                    on_end: None,
+                    on_end: Some(Rc::new(RefCell::new({
+                        let committed_delta = committed_delta.clone();
+                        move |ev: &DragEvent| *committed_delta.borrow_mut() = Some(ev.delta)
+                    }))),
                     overlay_open,
                     overlay_pos,
                     active_draggable,
@@ -5290,13 +5719,125 @@ mod tests {
                 group: String::new(),
                 capture_id: "cap".into(),
             });
-            assert!(tick(500.0, 500.0, &hits, [800.0, 600.0]));
+            assert!(tick(200.0, 108.0, &hits, [800.0, 600.0]));
+            assert!(tick_follow(500.0, 500.0, [800.0, 600.0]));
             let pos = overlay_pos.peek();
             let _ = end(&hits);
             assert!(
                 (pos[0] - 160.0).abs() < 0.5 && (pos[1] - 96.0).abs() < 0.5,
                 "ghost must clamp to author parent (200-40, 120-24), not the window or hug shell; got {pos:?}"
             );
+            let delta = committed_delta.borrow().expect("active drag must commit");
+            assert_eq!(
+                [80.0 + delta[0], 40.0 + delta[1]],
+                pos,
+                "drop must persist the restricted preview after dragging beyond the edge"
+            );
+
+            // Offset edges deliberately fall between snap points. A second
+            // snap in a drop handler could push the committed tile outside.
+            use super::super::geometry::SnapTargets;
+            let arena = [5.0, 7.0, 200.0, 120.0];
+            parent.layout_bounds = arena;
+            parent.set_attr("id", "arena");
+            let hits = collect_hits(&parent);
+            for (restrict, bounds) in [
+                (Restrict::Parent, arena),
+                (Restrict::Rect(arena), arena),
+                (Restrict::Element("arena".into()), arena),
+                (Restrict::Viewport, [0.0, 0.0, 205.0, 127.0]),
+            ] {
+                for (kind, snap) in [
+                    ("none", None),
+                    (
+                        "grid",
+                        Some(Snap::grid(SnapGrid::new(32.0, 32.0).offset([16.0, 16.0]))),
+                    ),
+                    (
+                        "end-grid",
+                        Some(Snap::grid(
+                            SnapGrid::new(32.0, 32.0)
+                                .offset([16.0, 16.0])
+                                .end_only(true),
+                        )),
+                    ),
+                    (
+                        "targets",
+                        Some(Snap::targets(
+                            SnapTargets::new([
+                                SnapGrid::new(8.0, 8.0),
+                                SnapGrid::new(32.0, 32.0).offset([16.0, 16.0]),
+                            ])
+                            .range(14.0),
+                        )),
+                    ),
+                    (
+                        "fn",
+                        Some(Snap::targets(
+                            SnapTargets::default().with_fn(Rc::new(|x, _| Some([x, 72.0]))),
+                        )),
+                    ),
+                ] {
+                    for overlay_registered in [false, true] {
+                        for pointer in [
+                            [-500.0, -500.0],
+                            [-500.0, 500.0],
+                            [500.0, -500.0],
+                            [500.0, 500.0],
+                        ] {
+                            SCOPES.with(|scopes| {
+                                let mut scopes = scopes.borrow_mut();
+                                let rt = scopes.get_mut("s").unwrap();
+                                rt.restrict = restrict.clone();
+                                rt.snap = snap.clone();
+                                rt.overlay_registered = overlay_registered;
+                            });
+                            begin(BeginDrag {
+                                scope_id: "s".into(),
+                                draggable_id: "card".into(),
+                                pointer: [100.0, 52.0],
+                                grab_offset: [20.0, 12.0],
+                                start_bounds: [80.0, 40.0, 40.0, 24.0],
+                                from_list: None,
+                                from_index: None,
+                                item_type: "chip".into(),
+                                group: String::new(),
+                                capture_id: "cap".into(),
+                            });
+                            assert!(tick(101.0, 53.0, &hits, [205.0, 127.0]));
+                            assert!(tick_follow(pointer[0], pointer[1], [205.0, 127.0]));
+                            let expected = [
+                                if pointer[0] < 0.0 {
+                                    bounds[0]
+                                } else {
+                                    bounds[0] + bounds[2] - 40.0
+                                },
+                                if kind == "fn" {
+                                    72.0
+                                } else if pointer[1] < 0.0 {
+                                    bounds[1]
+                                } else {
+                                    bounds[1] + bounds[3] - 24.0
+                                },
+                            ];
+                            if kind != "end-grid" {
+                                assert_eq!(
+                                    overlay_pos.peek(),
+                                    expected,
+                                    "restricted preview: {restrict:?}, {kind}, {pointer:?}"
+                                );
+                            }
+                            assert!(end(&hits));
+                            let delta = committed_delta.borrow().unwrap();
+                            assert_eq!(
+                                [80.0 + delta[0], 40.0 + delta[1]],
+                                expected,
+                                "restricted drop: {restrict:?}, {kind}, {pointer:?}, overlay={overlay_registered}"
+                            );
+                        }
+                    }
+                }
+            }
         });
     }
 
@@ -5354,7 +5895,7 @@ mod tests {
     fn collect_hits_rect_is_visual_inside_scrolled_viewport() {
         use crate::core::reactivity::use_signal;
         use crate::core::scroll_viewport::{
-            scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
+            SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_offset_y_signal_key,
         };
 
         let (_o, (layout_y, hit_y, grab_y, start_y)) = create_root(|| {
@@ -8191,6 +8732,10 @@ mod tests {
             let drops = vec![hit("zone", [50.0, 50.0, 80.0, 80.0], true)];
             assert!(!tick(10.0, 10.0, &drops, [400.0, 300.0]));
             assert!(!is_active());
+            assert!(
+                activation_next_wake_at().is_none(),
+                "press-only must not arm activation"
+            );
             std::thread::sleep(std::time::Duration::from_millis(12));
             assert!(
                 !tick(10.0, 10.0, &drops, [400.0, 300.0]),
@@ -8202,6 +8747,10 @@ mod tests {
                 "Or + delay already met: first movement must activate immediately"
             );
             assert!(is_active());
+            assert!(
+                activation_next_wake_at().is_none(),
+                "active drag must clear its deadline"
+            );
             let _ = end(&drops);
         });
     }
@@ -8256,6 +8805,11 @@ mod tests {
             std::thread::sleep(std::time::Duration::from_millis(12));
             assert!(!tick(10.0, 10.0, &drops, [400.0, 300.0]));
             assert!(!is_active());
+            assert!(!tick(11.0, 10.0, &drops, [400.0, 300.0]));
+            assert!(
+                activation_next_wake_at().is_none(),
+                "And still needs the distance threshold"
+            );
             let _ = end(&drops);
         });
     }
@@ -8311,7 +8865,7 @@ mod tests {
 
     #[test]
     fn pull_clone_skips_sibling_shift() {
-        use crate::utils::drag::registry::{set_item_flags, ItemFlags};
+        use crate::utils::drag::registry::{ItemFlags, set_item_flags};
         set_item_flags(
             "s",
             "a",
