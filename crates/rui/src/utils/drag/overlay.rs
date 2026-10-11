@@ -27,7 +27,7 @@ use crate::utils::popup::{flow_hidden_portal_host, mount_anchored_overlay, ATTR_
 use super::builder::{
     clone_source_preview, provide_drag_ctx, require_drag, source_preview_item, DragCtx, DragItemCtx,
 };
-use super::geometry::OverlayAlign;
+use super::geometry::{Axis, OverlayAlign};
 use super::session::{
     active_drag_ids, mark_overlay_registered, overlay_center_origin_now,
     overlay_origin_after_ghost_measure, peek_restrict_clip, remember_overlay_ghost_extent,
@@ -657,14 +657,21 @@ fn suffix_ghost_ids(el: &mut Element, suffix: &str) {
     }
 }
 
-fn stacked_ghost_panel(scope: &str, ids: &[String]) -> Element {
-    let mut wrap = Element::new().relative();
-    for (i, id) in ids.iter().enumerate() {
+pub(crate) fn stacked_ghost_panel(scope: &str, ids: &[String]) -> Element {
+    let axis = with_scope(scope, |rt| {
+        super::session::peek_sort_axis(rt.from_list.peek().as_deref(), rt.axis)
+    })
+    .unwrap_or(Axis::Y);
+    let mut wrap = Element::new().relative().gap(super::session::pack_gap(0.0));
+    wrap = if axis == Axis::X {
+        wrap.flex_row()
+    } else {
+        wrap.flex_col()
+    };
+    let extent = super::session::last_drag_extent(scope).unwrap_or([0.0, 0.0]);
+    for id in ids {
         let mut chip = clone_source_preview(scope, id).unwrap_or_else(Element::new);
-        if i > 0 {
-            let o = i as f32 * 4.0;
-            chip = chip.absolute().left(o).top(o);
-        }
+        chip = pin_percent_size_to_extent(chip, extent).flex_shrink(0.0);
         wrap = wrap.child(chip);
     }
     wrap
@@ -3046,6 +3053,225 @@ mod tests {
             let mut lt = crate::layout::LayoutTree::new();
             let _ = lt.build_and_layout(tree, 800.0, 600.0, [0.0, 0.0]);
         });
+    }
+
+    #[test]
+    fn swap_hover_preserves_column_heights_with_and_without_preview() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::{hstack, vstack};
+        use crate::utils::drag::{
+            begin, collect_hits, drag_scope, end, sortable_item, sortable_list, tick, BeginDrag,
+            SortMode,
+        };
+        for preview in [false, true] {
+            let (_owner, live) = mount_scope_tree(move || {
+                drag_scope("swap-height")
+                    .threshold(0.0)
+                    .sort_mode(SortMode::Swap)
+                    .reorder_preview(preview)
+                    .child(|| {
+                        let column = |list: &'static str| {
+                            sortable_list(list).child(move || {
+                                Element::from(vstack().gap(4.0).children((0..3).map(|i| {
+                                    sortable_item(format!("{list}:{i}"))
+                                        .list(list)
+                                        .index(i)
+                                        .child(move || {
+                                            Element::new()
+                                                .text(format!("{list}:{i}"))
+                                                .w(100.0)
+                                                .h(24.0)
+                                        })
+                                })))
+                            })
+                        };
+                        Element::from(hstack().items("start").gap(20.0).children([
+                            column("left"),
+                            column("right"),
+                            drag_overlay().into(),
+                        ]))
+                    })
+            });
+            hoist_and_layout(&mut live.borrow_mut());
+            let original = ["left", "right"]
+                .map(|id| find_droppable(&live.borrow(), id).unwrap().layout_bounds[3]);
+            let hits = collect_hits(&live.borrow());
+            let source = hits.iter().find(|h| h.id == "left:1").unwrap();
+            let target = hits.iter().find(|h| h.id == "right:2").unwrap();
+            begin(BeginDrag {
+                scope_id: "swap-height".into(),
+                draggable_id: source.id.clone(),
+                pointer: source.rect.center(),
+                grab_offset: [50.0, 12.0],
+                start_bounds: source.rect.to_bounds(),
+                from_list: Some("left".into()),
+                from_index: Some(1),
+                item_type: String::new(),
+                group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let p = target.rect.center();
+            assert!(tick(p[0], p[1], &hits, [800.0, 600.0]));
+            sync_drag_chrome(&mut live.borrow_mut());
+            hoist_and_layout(&mut live.borrow_mut());
+            for (id, height) in ["left", "right"].into_iter().zip(original) {
+                let tree = live.borrow();
+                let column = find_droppable(&tree, id).unwrap();
+                assert!(
+                    (column.layout_bounds[3] - height).abs() < 0.1,
+                    "{id}, preview={preview}"
+                );
+                assert_eq!(
+                    crate::layout::lp_length_px(column.style.padding.bottom).unwrap_or(0.0),
+                    0.0
+                );
+            }
+            assert!(end(&collect_hits(&live.borrow())));
+            clear_test_reconcile_root();
+            reset_registered_anchors();
+        }
+    }
+
+    #[test]
+    fn multi_drag_ghost_keeps_every_selected_row_readable_on_first_frame() {
+        use crate::utils::drag::{
+            begin, collect_hits, drag_scope, end, sortable_item, sortable_list, tick, use_drag,
+            BeginDrag,
+        };
+        let (_owner, live) = mount_scope_tree(|| {
+            drag_scope("multi-ghost")
+                .multi_drag(true)
+                .threshold(0.0)
+                .child(|| {
+                    use_drag()
+                        .unwrap()
+                        .selected
+                        .set(vec!["a".into(), "b".into(), "c".into()]);
+                    Element::from(crate::primitives::vstack().children([
+                        sortable_list("list").child(|| {
+                            Element::from(crate::primitives::vstack().gap(4.0).children(
+                                ["a", "b", "c", "d"].into_iter().enumerate().map(|(i, id)| {
+                                    sortable_item(id)
+                                        .list("list")
+                                        .index(i)
+                                        .child(move || Element::new().text(id).w(100.0).h(24.0))
+                                }),
+                            ))
+                        }),
+                        drag_overlay().into(),
+                    ]))
+                })
+        });
+        hoist_and_layout(&mut live.borrow_mut());
+        let hits = collect_hits(&live.borrow());
+        let source = hits.iter().find(|h| h.id == "a").unwrap();
+        begin(BeginDrag {
+            scope_id: "multi-ghost".into(),
+            draggable_id: "a".into(),
+            pointer: source.rect.center(),
+            grab_offset: [50.0, 12.0],
+            start_bounds: source.rect.to_bounds(),
+            from_list: Some("list".into()),
+            from_index: Some(0),
+            item_type: String::new(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        assert!(tick(150.0, 150.0, &hits, [800.0, 600.0]));
+        sync_drag_chrome(&mut live.borrow_mut());
+        hoist_and_layout(&mut live.borrow_mut());
+        {
+            let tree = live.borrow();
+            let ghost = find_ghost(&tree).unwrap();
+            let mut labels = Vec::new();
+            collect_texts(ghost, &mut labels);
+            assert_eq!(labels, vec!["a", "b", "c"]);
+            assert_eq!(ghost.children.len(), 3);
+            for rows in ghost.children.windows(2) {
+                assert!(
+                    rows[0].layout_bounds[1] + rows[0].layout_bounds[3] <= rows[1].layout_bounds[1]
+                );
+            }
+            assert!(ghost.layout_bounds[3] >= 72.0);
+            for id in ["a", "b", "c"] {
+                assert!(find_draggable(&tree, id).unwrap().style.opacity < 1.0);
+            }
+        }
+        assert!(end(&hits));
+        crate::app::runtime::clear_test_reconcile_root();
+        crate::app::reactive::reset_registered_anchors();
+    }
+
+    #[test]
+    fn clone_preview_opens_one_dimmed_target_slot_and_restores_height_on_end() {
+        use crate::utils::drag::{
+            begin, collect_hits, drag_scope, end, sortable_item, sortable_list, tick, BeginDrag,
+        };
+        let (_owner, live) = mount_scope_tree(|| {
+            drag_scope("clone-preview")
+                .threshold(0.0)
+                .reorder_preview(true)
+                .child(|| {
+                    Element::from(crate::primitives::vstack().children([
+                        sortable_list("list").child(|| {
+                            Element::from(crate::primitives::vstack().gap(4.0).children(
+                                ["a", "b", "c"].into_iter().enumerate().map(|(i, id)| {
+                                    sortable_item(id)
+                                        .list("list")
+                                        .index(i)
+                                        .pull_clone(true)
+                                        .child(move || Element::new().text(id).w(100.0).h(24.0))
+                                }),
+                            ))
+                        }),
+                        drag_overlay().into(),
+                    ]))
+                })
+        });
+        hoist_and_layout(&mut live.borrow_mut());
+        let height = find_droppable(&live.borrow(), "list")
+            .unwrap()
+            .layout_bounds[3];
+        let hits = collect_hits(&live.borrow());
+        let source = hits.iter().find(|h| h.id == "a").unwrap();
+        let target = hits.iter().find(|h| h.id == "c").unwrap();
+        begin(BeginDrag {
+            scope_id: "clone-preview".into(),
+            draggable_id: "a".into(),
+            pointer: source.rect.center(),
+            grab_offset: [50.0, 12.0],
+            start_bounds: source.rect.to_bounds(),
+            from_list: Some("list".into()),
+            from_index: Some(0),
+            item_type: String::new(),
+            group: String::new(),
+            capture_id: "cap".into(),
+        });
+        let p = target.rect.center();
+        assert!(tick(p[0], p[1], &hits, [800.0, 600.0]));
+        sync_drag_chrome(&mut live.borrow_mut());
+        hoist_and_layout(&mut live.borrow_mut());
+        {
+            let tree = live.borrow();
+            let list = find_droppable(&tree, "list").unwrap();
+            assert!((list.layout_bounds[3] - height - 28.0).abs() < 0.1);
+            let preview = find_hole_preview(list).unwrap();
+            assert!(preview.style.opacity > 0.0 && preview.style.opacity < 1.0);
+            assert_eq!(find_draggable(&tree, "a").unwrap().style.opacity, 1.0);
+            assert!(find_ghost(&tree).unwrap().layout_bounds[3] > 0.0);
+        }
+        assert!(end(&hits));
+        sync_drag_chrome(&mut live.borrow_mut());
+        hoist_and_layout(&mut live.borrow_mut());
+        {
+            let tree = live.borrow();
+            let list = find_droppable(&tree, "list").unwrap();
+            assert!((list.layout_bounds[3] - height).abs() < 0.1);
+            assert!(find_hole_preview(list).is_none());
+        }
+        crate::app::runtime::clear_test_reconcile_root();
+        crate::app::reactive::reset_registered_anchors();
     }
 
     /// Same `LayoutTree` across frames — Gallery paint never does `LayoutTree::new()`
@@ -6954,9 +7180,13 @@ mod tests {
                 let card_bottom = card.layout_bounds[1] + card.layout_bounds[3];
                 let row_bottom =
                     row.layout_bounds[1] + row.style.translate[1] + row.layout_bounds[3];
-                assert!(row_bottom <= card_bottom + 1.0,
+                assert!(
+                    row_bottom <= card_bottom + 1.0,
                     "frame {frame}: {file} must remain in {folder}: row={:?} translate={:?} card={:?}",
-                    row.layout_bounds, row.style.translate, card.layout_bounds);
+                    row.layout_bounds,
+                    row.style.translate,
+                    card.layout_bounds
+                );
             }
         }
         let final_hits = collect_hits(&live.borrow());

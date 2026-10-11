@@ -9,13 +9,13 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Instant;
 
-use crate::core::reactivity::{Signal, batch};
+use crate::core::reactivity::{batch, Signal};
 use crate::core::tree::Element;
 
 use crate::utils::pointer_action::{Inertia, InertiaOpts, VelocityTracker};
 
 use super::autoscroll::AutoScroll;
-use super::collision::{Candidate, CollisionAlg, CollisionFn, CollisionInput, detect_with};
+use super::collision::{detect_with, Candidate, CollisionAlg, CollisionFn, CollisionInput};
 #[cfg(test)]
 use super::geometry::SnapGrid;
 use super::geometry::{
@@ -23,7 +23,7 @@ use super::geometry::{
     SortMode,
 };
 use super::modifier::{
-    DragDelta, DragModifier, DragModifierCtx, apply_modifiers, builtin_modifiers,
+    apply_modifiers, builtin_modifiers, DragDelta, DragModifier, DragModifierCtx,
 };
 use super::{
     ATTR_DRAG_ACCEPT, ATTR_DRAG_AXIS, ATTR_DRAG_DISABLED, ATTR_DRAG_DRAGGABLE, ATTR_DRAG_DROPPABLE,
@@ -185,6 +185,9 @@ struct ScopeProduct {
     sort_mode: SortMode,
     multi_drag: bool,
     selected: Signal<Vec<String>>,
+    selection_anchor: Option<String>,
+    shift_pressed: bool,
+    reorder_preview: bool,
 }
 
 pub(super) struct ScopeRuntime {
@@ -577,14 +580,44 @@ pub(super) fn register_scope_product(
     selected: Signal<Vec<String>>,
 ) {
     SCOPE_PRODUCT.with(|m| {
-        m.borrow_mut().insert(
+        let mut m = m.borrow_mut();
+        let selection_anchor = m.get(&id).and_then(|p| p.selection_anchor.clone());
+        let shift_pressed = m.get(&id).is_some_and(|p| p.shift_pressed);
+        m.insert(
             id,
             ScopeProduct {
                 sort_mode,
                 multi_drag,
                 selected,
+                selection_anchor,
+                shift_pressed,
+                reorder_preview: false,
             },
         );
+    });
+}
+
+pub(super) fn set_reorder_preview(scope: &str, enabled: bool) {
+    SCOPE_PRODUCT.with(|m| {
+        if let Some(p) = m.borrow_mut().get_mut(scope) {
+            p.reorder_preview = enabled;
+        }
+    });
+}
+
+pub(super) fn reorder_preview(scope: &str) -> bool {
+    SCOPE_PRODUCT.with(|m| m.borrow().get(scope).is_some_and(|p| p.reorder_preview))
+}
+
+pub(super) fn active_reorder_preview() -> bool {
+    active_scope_id().is_some_and(|scope| reorder_preview(&scope))
+}
+
+pub(super) fn selection_press(scope: &str, shift: bool) {
+    SCOPE_PRODUCT.with(|m| {
+        if let Some(p) = m.borrow_mut().get_mut(scope) {
+            p.shift_pressed = shift;
+        }
     });
 }
 
@@ -633,24 +666,56 @@ pub fn active_drag_ids() -> Vec<String> {
     })
 }
 
-fn active_drag_group_contains(id: &str) -> bool {
-    SESSION.with(|s| {
-        s.borrow()
-            .as_ref()
-            .is_some_and(|d| d.items.len() > 1 && d.items.iter().any(|i| i.id == id))
-    })
-}
-
-fn try_click_select(scope: &str, id: &str) {
-    let Some(selected) = SCOPE_PRODUCT.with(|m| {
-        m.borrow()
-            .get(scope)
-            .and_then(|p| p.multi_drag.then_some(p.selected))
+fn try_click_select(scope: &str, id: &str, hits: &[DragHit]) {
+    let Some((selected, anchor, shift)) = SCOPE_PRODUCT.with(|m| {
+        let mut m = m.borrow_mut();
+        let p = m.get_mut(scope)?;
+        if !p.multi_drag {
+            return None;
+        }
+        let anchor = p.selection_anchor.clone();
+        if !p.shift_pressed || anchor.is_none() {
+            p.selection_anchor = Some(id.to_string());
+        }
+        Some((p.selected, anchor, p.shift_pressed))
     }) else {
         return;
     };
     let mut v = selected.peek();
-    if let Some(i) = v.iter().position(|x| x == id) {
+    let range = anchor.as_deref().and_then(|anchor| {
+        let a = hits
+            .iter()
+            .find(|h| h.scope_id == scope && h.id == anchor && h.is_draggable)?;
+        let b = hits
+            .iter()
+            .find(|h| h.scope_id == scope && h.id == id && h.is_draggable)?;
+        if a.list_id.is_none() || a.list_id != b.list_id {
+            return None;
+        }
+        Some((
+            a.list_id.clone(),
+            a.index?.min(b.index?),
+            a.index?.max(b.index?),
+        ))
+    });
+    if let Some((list, first, last)) = range.filter(|_| shift) {
+        let mut rows: Vec<_> = hits
+            .iter()
+            .filter(|h| {
+                h.scope_id == scope
+                    && h.is_draggable
+                    && !h.disabled
+                    && h.list_id == list
+                    && h.index.is_some_and(|i| i >= first && i <= last)
+            })
+            .collect();
+        rows.sort_by_key(|h| h.index);
+        for h in rows {
+            if !v.contains(&h.id) {
+                v.push(h.id.clone());
+            }
+        }
+    } else if let Some(i) = v.iter().position(|x| x == id) {
         v.remove(i);
     } else {
         v.push(id.to_string());
@@ -685,6 +750,7 @@ fn freeze_drag_items(sess: &mut DragSession, hits: &[DragHit]) {
         .filter(|h| {
             h.scope_id == sess.scope_id
                 && h.is_draggable
+                && !h.disabled
                 && h.index.is_some()
                 && h.list_id == from_list
                 && selected.iter().any(|sid| sid == &h.id)
@@ -1069,6 +1135,7 @@ pub fn begin(opts: BeginDrag) {
     let pull_clone = super::registry::item_flags(&opts.scope_id, &opts.draggable_id).pull_clone;
     let data = super::registry::item_data(&opts.scope_id, &opts.draggable_id);
     let sort_mode = scope_sort_mode(&opts.scope_id);
+    selection_press(&opts.scope_id, false);
     let items = vec![DragItemRef {
         id: opts.draggable_id.clone(),
         from_list: opts.from_list.clone(),
@@ -1529,7 +1596,7 @@ fn clamp_tail_append_hover(
     hits: &[DragHit],
     hover: usize,
 ) -> usize {
-    if sess.from_list.as_deref() != Some(list_id) {
+    if sess.from_list.as_deref() != Some(list_id) || sess.pull_clone || sess.items.len() > 1 {
         return hover;
     }
     let from = sess.from_index.unwrap_or(hover);
@@ -1773,6 +1840,9 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
             sess.motion_axis = Axis::resolve_start(dx, dy);
         }
         freeze_drag_items(&mut sess, hits);
+        // Overlay subscribers run synchronously when activate_scope opens it.
+        // Publish the frozen group first so the first ghost has every item.
+        SESSION.with(|s| *s.borrow_mut() = Some(sess.clone()));
         // Clip box + origin must exist before `overlay_open` so Hidden overflow
         // mounts a clip shell on the first island rebuild (no extra mousemove).
         let origin = ghost_origin(&sess, [x, y], viewport, hits, false);
@@ -1910,6 +1980,16 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
             .and_then(|list| {
                 if sess.sort_mode == SortMode::Swap {
                     resolve_swap_hover_index(hits, list, [x, y])
+                } else if sess.items.len() > 1 {
+                    let restored = source_list_layout(hits, list);
+                    let slots = restored.as_deref().unwrap_or(hits);
+                    insert_index_along_axis(
+                        slots,
+                        list,
+                        [x, y],
+                        sort_axis_for_list(slots, list, sess.axis),
+                    )
+                    .or_else(|| nearest_end_insert_slot(slots, &sess, list, [x, y]))
                 } else if prev_list.is_some()
                     && prev_list.as_deref() != Some(list)
                     && sess.from_list.as_deref() == Some(list)
@@ -2163,7 +2243,11 @@ fn pin_hover_below_opened_hole(
         Axis::X => hole_pt[0],
         Axis::Y | Axis::Xy | Axis::Start => hole_pt[1],
     };
-    if p < hole + pitch { prev } else { computed }
+    if p < hole + pitch {
+        prev
+    } else {
+        computed
+    }
 }
 
 fn pointer_on_other_origin_row(sess: &DragSession, hits: &[DragHit], pointer: [f32; 2]) -> bool {
@@ -2456,7 +2540,7 @@ fn commit_end(hits: &[DragHit]) -> bool {
             Some(source_translation(&sess, end_origin, hits)),
         ))
     } else {
-        try_click_select(&sess.scope_id, &sess.draggable_id);
+        try_click_select(&sess.scope_id, &sess.draggable_id, hits);
         None
     };
     // Clear live preview before `on_drag_end` mutates the Vec, so the rebuild
@@ -2917,7 +3001,11 @@ struct RestrictAncestor {
 
 fn author_parent_slot(anc: Option<RestrictAncestor>) -> Option<[f32; 4]> {
     let a = anc?;
-    if a.item_shell { a.outer } else { Some(a.slot) }
+    if a.item_shell {
+        a.outer
+    } else {
+        Some(a.slot)
+    }
 }
 
 /// Sortable-style insert index: dropping on a container (no index) appends.
@@ -3215,7 +3303,28 @@ fn pack_same_list_origins(
     }
     let start = [items[0].rect.x, items[0].rect.y];
     let gap = inferred_list_gap(&items, axis);
-    let order = visual_index_order(&items, from, hover);
+    let group = SESSION
+        .with(|s| {
+            s.borrow().as_ref().filter(|s| s.items.len() > 1).map(|s| {
+                s.items
+                    .iter()
+                    .filter_map(|i| i.from_index)
+                    .collect::<Vec<_>>()
+            })
+        })
+        .unwrap_or_default();
+    let order = if group.is_empty() {
+        visual_index_order(&items, from, hover)
+    } else {
+        let mut order: Vec<_> = items
+            .iter()
+            .filter_map(|h| h.index)
+            .filter(|i| !group.contains(i))
+            .collect();
+        let insert = order.iter().filter(|i| **i < hover).count();
+        order.splice(insert..insert, group);
+        order
+    };
     let index_to_pos: HashMap<usize, usize> = items
         .iter()
         .enumerate()
@@ -3249,17 +3358,46 @@ fn pack_item_translate(
     hover_index: Option<usize>,
     axis: Axis,
 ) -> [f32; 2] {
-    if active_pull_clone() || active_sort_mode() == SortMode::Swap {
+    if (active_pull_clone() || active_sort_mode() == SortMode::Swap) && !active_reorder_preview() {
         return [0.0, 0.0];
     }
     let (Some(my_list), Some(my_i), Some(hover_list)) = (my_list, my_index, hover_list) else {
         return [0.0, 0.0];
     };
+    if active_sort_mode() == SortMode::Swap {
+        let source = hits.iter().find(|h| {
+            h.list_id.as_deref() == from_list && h.index == from_index && h.index.is_some()
+        });
+        let target = hits.iter().find(|h| {
+            h.list_id.as_deref() == Some(hover_list) && h.index == hover_index && h.index.is_some()
+        });
+        if let (Some(source), Some(target)) = (source, target) {
+            let delta = [target.rect.x - source.rect.x, target.rect.y - source.rect.y];
+            if my_list == from_list.unwrap_or("") && Some(my_i) == from_index {
+                return delta;
+            }
+            if my_list == hover_list && Some(my_i) == hover_index {
+                return [-delta[0], -delta[1]];
+            }
+        }
+        return [0.0, 0.0];
+    }
+    if active_pull_clone() {
+        if my_list == hover_list && hover_index.is_some_and(|i| my_i >= i) {
+            let extent = packed_row_extent(hits, Some(my_list), axis, 1.0);
+            return if axis == Axis::X {
+                [extent, 0.0]
+            } else {
+                [0.0, extent]
+            };
+        }
+        return [0.0, 0.0];
+    }
     if let Some(hit) = hits
         .iter()
         .find(|h| h.list_id.as_deref() == Some(my_list) && h.index == Some(my_i))
     {
-        if hit.skip_shift || active_drag_group_contains(&hit.id) {
+        if hit.skip_shift {
             return [0.0, 0.0];
         }
     }
@@ -3270,7 +3408,7 @@ fn pack_item_translate(
         };
         // Returning from another list restores the source's in-flow slot.
         // Its cached hits can still describe the vacated pack for this frame.
-        if from == hover {
+        if from == hover && active_drag_ids().len() <= 1 {
             return [0.0, 0.0];
         }
         let packed = pack_same_list_origins(hits, my_list, from, hover, axis);
@@ -3310,7 +3448,7 @@ fn pack_item_translate(
     // snapshots chip-only, and shifting Inbox by that pitch sits Gamma flush
     // on Alpha/Beta (Gallery: Later→Inbox 插到任意项之上).
     let chip = fallback.max(1.0);
-    let extent = packed_row_extent(hits, Some(my_list), axis, chip);
+    let extent = group_insert_extent(hits, my_list, axis, chip);
     match axis {
         Axis::X => [extent, 0.0],
         Axis::Y | Axis::Xy | Axis::Start => [0.0, extent],
@@ -3414,11 +3552,34 @@ pub(crate) fn pack_insert_extent(target_list: Option<&str>, axis: Axis, chip: f3
         let occupied = hits
             .iter()
             .any(|hit| hit.list_id.as_deref() == Some(list) && hit.index.is_some());
-        if !occupied {
+        if !occupied && active_drag_ids().len() <= 1 {
             return chip;
         }
-        packed_row_extent(&hits, Some(list), axis, chip)
+        group_insert_extent(&hits, list, axis, chip)
     })
+}
+
+fn group_insert_extent(hits: &[DragHit], list: &str, axis: Axis, chip: f32) -> f32 {
+    let ids = active_drag_ids();
+    if ids.len() <= 1 {
+        return packed_row_extent(hits, Some(list), axis, chip);
+    }
+    let source = SOURCE_LIST_LAYOUT.with(|layout| layout.borrow().clone());
+    let rows = indexed_list_items(hits, list);
+    let gap = inferred_list_gap(&rows, axis)
+        .max(DRAG_PACK_GAP.get())
+        .max(0.0);
+    let size: f32 = ids
+        .iter()
+        .map(|id| {
+            source
+                .iter()
+                .find(|h| &h.id == id)
+                .map(|h| axis_size(h.rect, axis))
+                .unwrap_or(chip)
+        })
+        .sum();
+    size + gap * (ids.len() - usize::from(rows.is_empty())) as f32
 }
 
 /// True when the hover is past the last occupied slot (append), or the list
@@ -3587,7 +3748,7 @@ mod tests {
     fn restricted_source_and_drop_follow_parent_scroll() {
         use crate::core::reactivity::use_signal;
         use crate::core::scroll_viewport::{
-            SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_offset_x_signal_key, scroll_offset_y_signal_key,
+            scroll_offset_x_signal_key, scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
         };
 
         let (_owner, ()) = create_root(|| {
@@ -4437,7 +4598,7 @@ mod tests {
     fn pump_autoscroll_resyncs_axis_y_after_parent_scroll() {
         use crate::core::reactivity::use_signal;
         use crate::core::scroll_viewport::{
-            SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_offset_x_signal_key,
+            scroll_offset_x_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
         };
 
         let (_o, _) = create_root(|| {
@@ -5895,7 +6056,7 @@ mod tests {
     fn collect_hits_rect_is_visual_inside_scrolled_viewport() {
         use crate::core::reactivity::use_signal;
         use crate::core::scroll_viewport::{
-            SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_offset_y_signal_key,
+            scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
         };
 
         let (_o, (layout_y, hit_y, grab_y, start_y)) = create_root(|| {
@@ -8841,6 +9002,119 @@ mod tests {
     }
 
     #[test]
+    fn multi_drag_preview_and_commit_use_the_same_boundary() {
+        use crate::utils::drag::{apply_event, drag_scope, use_drag};
+        let (_owner, ()) = create_root(|| {
+            let items = Signal::new(vec!["a", "b", "c", "d", "e"]);
+            let _scope = drag_scope("s")
+                .multi_drag(true)
+                .threshold(0.0)
+                .on_drag_end(move |ev| {
+                    let mut v = items.peek();
+                    apply_event(&mut v, None, ev);
+                    items.set(v);
+                })
+                .child(|| {
+                    use_drag()
+                        .unwrap()
+                        .selected
+                        .set(vec!["a".into(), "b".into(), "c".into()]);
+                    Element::new()
+                });
+            for (pointer_y, expected) in [
+                (145.0, vec!["d", "e", "a", "b", "c"]),
+                (1.0, vec!["a", "b", "c", "d", "e"]),
+            ] {
+                let mut hits = vec![axis_hit(
+                    "list",
+                    "list",
+                    [0.0, 0.0, 80.0, 160.0],
+                    None,
+                    Axis::Y,
+                )];
+                hits.extend(items.peek().iter().enumerate().map(|(i, id)| {
+                    axis_hit(
+                        id,
+                        "list",
+                        [0.0, i as f32 * 24.0, 80.0, 20.0],
+                        Some(i),
+                        Axis::Y,
+                    )
+                }));
+                let primary = hits.iter().find(|h| h.id == "a").unwrap();
+                begin(BeginDrag {
+                    scope_id: "s".into(),
+                    draggable_id: "a".into(),
+                    pointer: [40.0, primary.rect.y + 10.0],
+                    grab_offset: [40.0, 10.0],
+                    start_bounds: primary.rect.to_bounds(),
+                    from_list: Some("list".into()),
+                    from_index: primary.index,
+                    item_type: "card".into(),
+                    group: String::new(),
+                    capture_id: "cap".into(),
+                });
+                assert!(tick(40.0, pointer_y, &hits, [800.0, 600.0]));
+                assert_eq!(active_drag_ids(), vec!["a", "b", "c"]);
+                let hover = SCOPES
+                    .with(|scopes| scopes.borrow()["s"].hover_index.peek())
+                    .unwrap();
+                for row in hits.iter().filter(|h| h.index.is_some()) {
+                    let shift = pack_item_translate(
+                        &hits,
+                        Some("list"),
+                        row.index,
+                        Some("list"),
+                        primary.index,
+                        Some("list"),
+                        Some(hover),
+                        Axis::Y,
+                    );
+                    let expected_index = expected.iter().position(|id| *id == row.id).unwrap();
+                    assert_eq!(
+                        row.rect.y + shift[1],
+                        expected_index as f32 * 24.0,
+                        "{} must occupy its committed slot",
+                        row.id
+                    );
+                }
+                assert!(end(&hits));
+                assert_eq!(items.peek(), expected);
+            }
+        });
+    }
+
+    #[test]
+    fn shift_selection_uses_live_list_order_and_skips_disabled_rows() {
+        let (_owner, ()) = create_root(|| {
+            let selected = Signal::new(Vec::new());
+            register_scope_product("s".into(), SortMode::Insert, true, selected);
+            let mut hits: Vec<_> = ["a", "b", "c", "d", "e"]
+                .iter()
+                .enumerate()
+                .map(|(i, id)| {
+                    axis_hit(
+                        id,
+                        "list",
+                        [0.0, i as f32 * 24.0, 80.0, 20.0],
+                        Some(i),
+                        Axis::Y,
+                    )
+                })
+                .collect();
+            hits[3].disabled = true;
+            selection_press("s", false);
+            try_click_select("s", "b", &hits);
+            selection_press("s", true);
+            try_click_select("s", "e", &hits);
+            assert_eq!(selected.peek(), vec!["b", "c", "e"]);
+            selection_press("s", false);
+            try_click_select("s", "c", &hits);
+            assert_eq!(selected.peek(), vec!["b", "e"]);
+        });
+    }
+
+    #[test]
     fn swap_hover_picks_item_not_insert_slot() {
         let hits = vec![
             axis_hit("a", "list", [0.0, 0.0, 40.0, 20.0], Some(0), Axis::Y),
@@ -8865,7 +9139,7 @@ mod tests {
 
     #[test]
     fn pull_clone_skips_sibling_shift() {
-        use crate::utils::drag::registry::{ItemFlags, set_item_flags};
+        use crate::utils::drag::registry::{set_item_flags, ItemFlags};
         set_item_flags(
             "s",
             "a",

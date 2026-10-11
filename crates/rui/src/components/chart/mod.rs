@@ -548,6 +548,64 @@ mod tests {
     }
 
     #[test]
+    fn tooltip_color_uses_explicit_mark_paint() {
+        use super::scale::resolve_scales;
+        let fill = [0.12, 0.34, 0.56, 1.0];
+        let mark = ChartMark::from(bar_y([ChartDatum::new("A", 2.0)]).fill(ChartPaint::Rgba(fill)));
+        let scales = resolve_scales(
+            120.0,
+            80.0,
+            &AxisSpec::band(),
+            &AxisSpec::linear(),
+            vec!["A".into()],
+            &[],
+            &[],
+            &[2.0],
+            false,
+        );
+        let theme = ChartTheme::tokens();
+        let ctx = MarkRenderContext::new(&scales, &theme, None, 80.0);
+        assert_eq!(mark.tooltip_color(&ctx, 0), Some(fill));
+    }
+
+    #[test]
+    fn radial_marks_share_category_anchor_points() {
+        use super::scale::resolve_scales;
+        let rows = [
+            ChartDatum::new("N", 4.0),
+            ChartDatum::new("E", 2.0),
+            ChartDatum::new("S", 3.0),
+            ChartDatum::new("W", 1.5),
+        ];
+        let scales = resolve_scales(
+            180.0,
+            180.0,
+            &AxisSpec::band(),
+            &AxisSpec::linear(),
+            vec!["N".into(), "E".into(), "S".into(), "W".into()],
+            &[],
+            &[],
+            &[4.0, 2.0, 3.0, 1.5],
+            true,
+        );
+        let theme = ChartTheme::tokens();
+        let ctx = MarkRenderContext::new(&scales, &theme, None, 180.0);
+        let bar = ChartMark::from(radial_bar(rows.clone()));
+        let line = ChartMark::from(radial_line(rows.clone()));
+        let dot = ChartMark::from(radial_dot(rows));
+        for index in 0..4 {
+            let a = bar.datum_point(&ctx, index).unwrap();
+            let b = line.datum_point(&ctx, index).unwrap();
+            let c = dot.datum_point(&ctx, index).unwrap();
+            assert!((b.0 - c.0).abs() < 1e-4 && (b.1 - c.1).abs() < 1e-4);
+            let center = (scales.polar_cx(), scales.polar_cy());
+            let av = (a.0 - center.0, a.1 - center.1);
+            let bv = (b.0 - center.0, b.1 - center.1);
+            assert!((av.0 * bv.1 - av.1 * bv.0).abs() < 1e-3);
+        }
+    }
+
+    #[test]
     fn format_time_label_picks_granularity() {
         let t = 1_704_067_200_000i64; // 2023-12-31 approx
         assert!(format_time_label(t, 3_600_000).contains(':'));

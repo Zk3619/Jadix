@@ -71,6 +71,25 @@ fn angle_in(ang: f32, a0: f32, a1: f32) -> bool {
     rel < span
 }
 
+fn polar_category_slot(
+    rows: &[ChartDatum],
+    ctx: &MarkRenderContext<'_>,
+    row_index: usize,
+    row: &ChartDatum,
+) -> (usize, usize) {
+    let n = ctx.scales.x_cats.len().max(rows.len()).max(1);
+    let k = if row.label.is_empty() {
+        row_index.min(n.saturating_sub(1))
+    } else {
+        ctx.scales
+            .x_cats
+            .iter()
+            .position(|label| label == &row.label)
+            .unwrap_or(row_index.min(n.saturating_sub(1)))
+    };
+    (k, n)
+}
+
 fn polar_series_points(
     rows: &[ChartDatum],
     ctx: &MarkRenderContext<'_>,
@@ -82,11 +101,10 @@ fn polar_series_points(
         .enumerate()
         .filter(|(_, r)| &r.series == ser)
         .collect();
-    let n = series_rows.len().max(1);
     series_rows
         .iter()
-        .enumerate()
-        .map(|(k, (di, r))| {
+        .map(|(di, r)| {
+            let (k, n) = polar_category_slot(rows, ctx, *di, r);
             let a = ctx
                 .scales
                 .polar_angle_center(k, n, ctx.polar_start, ctx.polar_end);
@@ -190,7 +208,6 @@ impl MarkRender for RadialBarMark {
         }
     }
     fn render(&self, ctx: &MarkRenderContext<'_>) -> Vec<SceneLayer> {
-        let n = self.rows.len().max(1);
         let inner_f = inner_frac(self.inner_radius, ctx);
         let hole = ctx.scales.polar_r_max() * inner_f;
         let cx = ctx.scales.polar_cx();
@@ -201,9 +218,10 @@ impl MarkRender for RadialBarMark {
         let mut selected_layer: Option<SceneLayer> = None;
         for (i, r) in self.rows.iter().enumerate() {
             let si = series.iter().position(|s| s == &r.series).unwrap_or(0);
-            let (a0, a1) = ctx
-                .scales
-                .polar_angle_band(i, n, ctx.polar_start, ctx.polar_end, 0.04);
+            let (category, n) = polar_category_slot(&self.rows, ctx, i, r);
+            let (a0, a1) =
+                ctx.scales
+                    .polar_angle_band(category, n, ctx.polar_start, ctx.polar_end, 0.04);
             let outer0 = ctx
                 .scales
                 .polar_radius(r.value.max(0.0), inner_f)
@@ -236,7 +254,6 @@ impl MarkRender for RadialBarMark {
         layers
     }
     fn hit_index(&self, ctx: &MarkRenderContext<'_>, local: Point2) -> Option<usize> {
-        let n = self.rows.len().max(1);
         let inner_f = inner_frac(self.inner_radius, ctx);
         let hole = ctx.scales.polar_r_max() * inner_f;
         let cx = ctx.scales.polar_cx();
@@ -246,9 +263,10 @@ impl MarkRender for RadialBarMark {
         let dist = dx.hypot(dy);
         let ang = dy.atan2(dx);
         for (i, r) in self.rows.iter().enumerate() {
-            let (a0, a1) = ctx
-                .scales
-                .polar_angle_band(i, n, ctx.polar_start, ctx.polar_end, 0.04);
+            let (category, n) = polar_category_slot(&self.rows, ctx, i, r);
+            let (a0, a1) =
+                ctx.scales
+                    .polar_angle_band(category, n, ctx.polar_start, ctx.polar_end, 0.04);
             let outer = ctx
                 .scales
                 .polar_radius(r.value.max(0.0), inner_f)
@@ -266,18 +284,31 @@ impl MarkRender for RadialBarMark {
         datum_hover_item(&self.rows, index)
     }
     fn datum_point(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<Point2> {
-        let n = self.rows.len().max(1);
         let r = self.rows.get(index)?;
         let inner_f = inner_frac(self.inner_radius, ctx);
         let hole = ctx.scales.polar_r_max() * inner_f;
+        let (category, n) = polar_category_slot(&self.rows, ctx, index, r);
         let a = ctx
             .scales
-            .polar_angle_center(index, n, ctx.polar_start, ctx.polar_end);
+            .polar_angle_center(category, n, ctx.polar_start, ctx.polar_end);
         let outer = ctx
             .scales
             .polar_radius(r.value.max(0.0), inner_f)
             .max(hole + 1.0);
         Some(ctx.scales.polar_xy(a, (hole + outer) * 0.5))
+    }
+    fn tooltip_color(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<[f32; 4]> {
+        let row = self.rows.get(index)?;
+        let series = unique_series(&self.rows);
+        let si = series.iter().position(|s| s == &row.series).unwrap_or(0);
+        Some(paint_fill(
+            &self.style,
+            ctx.theme,
+            si,
+            index,
+            ctx.selected,
+            1.0,
+        ))
     }
 }
 
@@ -376,9 +407,10 @@ impl MarkRender for RadialLineMark {
             }
             let pts: Vec<Point2> = indexed.iter().map(|(_, p)| *p).collect();
             if self.area || self.style.fill.is_some() || self.style.fill_opacity.is_some() {
-                let n = pts.len().max(1);
                 let mut area_pts = pts.clone();
-                for k in (0..n).rev() {
+                for (di, _) in indexed.iter().rev() {
+                    let row = &self.rows[*di];
+                    let (k, n) = polar_category_slot(&self.rows, ctx, *di, row);
                     let a = ctx
                         .scales
                         .polar_angle_center(k, n, ctx.polar_start, ctx.polar_end);
@@ -442,6 +474,12 @@ impl MarkRender for RadialLineMark {
             }
         }
         None
+    }
+    fn tooltip_color(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<[f32; 4]> {
+        let row = self.rows.get(index)?;
+        let series = unique_series(&self.rows);
+        let si = series.iter().position(|s| s == &row.series).unwrap_or(0);
+        Some(paint_stroke(&self.style, ctx.theme, si, 0, None, 1.0))
     }
 }
 
@@ -563,6 +601,12 @@ impl MarkRender for RadialDotMark {
             }
         }
         None
+    }
+    fn tooltip_color(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<[f32; 4]> {
+        let row = self.rows.get(index)?;
+        let series = unique_series(&self.rows);
+        let si = series.iter().position(|s| s == &row.series).unwrap_or(0);
+        Some(paint_fill(&self.style, ctx.theme, si, index, None, 1.0))
     }
 }
 

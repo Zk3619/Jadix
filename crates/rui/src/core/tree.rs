@@ -4744,10 +4744,11 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                                 .is_some_and(|style| *style == element.style);
                         let halo_dirty = element.attrs.remove("rui_halo_dirty").is_some();
                         if !scroll_only && !halo_dirty {
-                            crate::app::damage::push_frame_paint_element_change(
+                            crate::app::damage::push_frame_paint_element_change_from_before(
                                 element,
                                 scroll_acc,
                                 before_opacity,
+                                Some(before),
                             );
                         }
                     }

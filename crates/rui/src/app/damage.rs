@@ -152,16 +152,32 @@ pub(crate) fn push_frame_paint_element_change(
     scroll_acc: [f32; 2],
     previous_opacity: f32,
 ) {
+    push_frame_paint_element_change_from_before(el, scroll_acc, previous_opacity, None);
+}
+
+/// Record a paint-only change together with the visual box occupied before the
+/// change.  Reactive overlays commonly move by changing `translate` while
+/// retaining the same layout box; clearing only the new box leaves the old
+/// pixels behind as white trails until a later full repaint.
+pub(crate) fn push_frame_paint_element_change_from_before(
+    el: &Element,
+    scroll_acc: [f32; 2],
+    previous_opacity: f32,
+    previous_visual: Option<[f32; 4]>,
+) {
     // Entering at opacity≈0 has no dest-ink. Dest-reset of the empty
     // fill+shadow AABB punches underlay. Hide-settle still dest-resets
     // the last faded box (`settled_this_tick`).
     if previous_opacity < 0.01 && skip_transparent_shown_dest_reset(el) {
         return;
     }
-    let b = crate::components::button_group::group_damage_bounds(
+    let current = crate::components::button_group::group_damage_bounds(
         el,
         clamp_overlay_clip_box(el, crate::core::tree::visual_paint_aabb(el, scroll_acc)),
     );
+    let b = previous_visual
+        .map(|old| union_rects(current, old))
+        .unwrap_or(current);
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return;
     }
@@ -270,6 +286,14 @@ fn clamp_overlay_clip_box(el: &Element, mut b: [f32; 4]) -> [f32; 4] {
 /// Descendants (reaction chips, menu items) inherit overlay membership from
 /// last collect (`paint_overlay_stamp`) — they are not themselves `__floating_panel`.
 pub fn paint_kind_for_element(el: &Element) -> PaintDirtyKind {
+    // Chart tooltips and crosshair strokes are local absolute children, not
+    // hoisted portals. Their old pixels sit over the rasterized chart, so a
+    // Node dest-reset would clear the page color and leave a white band until
+    // the next full repaint. Treat their retained movement as a tiny Region:
+    // the present pass clears and replays the page band in the same scissor.
+    if el.attrs.get("rui_chart_overlay").map(String::as_str) == Some("1") {
+        return PaintDirtyKind::Region;
+    }
     if el.paint_overlay_stamp.is_some_and(|k| k != 0) {
         return PaintDirtyKind::Overlay;
     }
@@ -3382,6 +3406,17 @@ mod tests {
             paint_kind_for_element(&floating),
             PaintDirtyKind::Overlay,
             "Select/Popover fade chrome must not dest-reset as a page Node"
+        );
+    }
+
+    #[test]
+    fn local_chart_overlay_replays_its_page_band() {
+        let mut overlay = Element::new();
+        overlay.set_attr("rui_chart_overlay", "1");
+        assert_eq!(
+            paint_kind_for_element(&overlay),
+            PaintDirtyKind::Region,
+            "moving a local tooltip/crosshair must replay the chart underlay"
         );
     }
 

@@ -3137,3 +3137,7 @@ fn sdf_vertex_clip_flags_preserve_every_world_clip_channel() {
         }
     }
 }
+
+#[cfg(target_os = "windows")]
+#[path = "state_chart_present_tests.rs"]
+mod chart_present_tests;

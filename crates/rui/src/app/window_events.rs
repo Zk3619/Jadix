@@ -1811,6 +1811,8 @@ impl super::App {
             && !crate::components::slider::is_slider_dragging()
             && !crate::components::color_picker::is_color_dragging()
             && !crate::components::resizable::is_resizable_dragging()
+            && !crate::utils::pointer_action::resize_is_active()
+            && !crate::utils::pointer_action::gesture_is_active()
             && !crate::utils::anchored_overlay::is_floating_panel_dragging()
             && !crate::utils::drag::is_dragging()
         {
@@ -2388,6 +2390,17 @@ impl super::App {
                 &mut pev,
                 super::pointer_events::PointerKind::Down,
             );
+            // The touch-content pan is armed before dispatch so it can inspect
+            // the same hit path. Resize handles claim the event during
+            // dispatch; drop the provisional pan in that case.
+            if crate::utils::pointer_action::resize_is_active()
+                || crate::utils::pointer_action::gesture_is_active()
+            {
+                self.content_scroll_drag = None;
+                if let Some(st) = (*self.state.borrow()).as_ref() {
+                    crate::utils::pointer_action::capture_resize_scroll_owner(&st.root_element);
+                }
+            }
             self.click_press_path = Some(path.clone());
             self.click_press_scrolled = false;
             // Overlay / on_drag_start wait for `tick`. Press-only stays Pending

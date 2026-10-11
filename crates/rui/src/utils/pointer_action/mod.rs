@@ -21,14 +21,17 @@ pub use pointers::{
 };
 pub use resize::{hit_edges, resize_box, Edges, Invert, ResizeAxis, ResizeOpts, ResizeSession};
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::time::Instant;
 
-use crate::core::tree::Element;
+use crate::core::reactivity::Signal;
+use crate::core::tree::{Element, IntoCssDim, LayoutStatus};
+use crate::style::{IntoCursor, UnitSlot};
 use crate::utils::drag::geometry::Axis;
 pub use crate::utils::edge_scroll::{AutoScroll, ScrollLock};
 
-use crate::utils::edge_scroll::pump_at;
+use crate::utils::edge_scroll::{apply, collect_scroll_hits, frame_dt, pump_at, ScrollHit};
 
 /// Pointer-space rectangle `[x, y, width, height]` (may be negative under [`Invert::Negate`]).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -116,8 +119,11 @@ impl GestureOpts {
 /// Live resize driven from `window_events` (one primary pointer).
 struct LiveResize {
     session: ResizeSession,
-    signal_key: Option<String>,
+    signal: Option<Signal<[f32; 4]>>,
     last_pointer: [f32; 2],
+    start_pointer: [f32; 2],
+    // Outer None means unresolved; inner None means the press had no scroll owner.
+    scroll_owner: Option<Option<String>>,
 }
 
 thread_local! {
@@ -181,15 +187,45 @@ fn resize_motion_axis() -> Axis {
 
 /// Pump edge auto-scroll for live resize / gesture (also while pointer is held still).
 pub fn pump_edge_scroll(root: &Element) -> bool {
-    let (pointer, cfg, motion) = if let Some((p, c)) = resize_edge_scroll() {
-        (p, c, resize_motion_axis())
-    } else if let Some((p, c)) = gesture_edge_scroll() {
-        (p, c, Axis::Xy)
-    } else {
-        LAST_EDGE_SCROLL_AT.with(|t| t.borrow_mut().take());
-        return false;
-    };
-    LAST_EDGE_SCROLL_AT.with(|slot| pump_at(root, pointer, cfg, motion, slot))
+    if let Some((pointer, cfg)) = resize_edge_scroll() {
+        let mut views = Vec::new();
+        collect_scroll_hits(root, &mut views);
+        let owner = resolve_resize_scroll_owner(&views);
+        views.retain(|view| owner.as_deref() == Some(view.rest.as_str()));
+        let motion = resize_motion_axis();
+        return LAST_EDGE_SCROLL_AT
+            .with(|slot| apply(pointer, &views, cfg, frame_dt(slot), motion));
+    }
+    if let Some((pointer, cfg)) = gesture_edge_scroll() {
+        return LAST_EDGE_SCROLL_AT.with(|slot| pump_at(root, pointer, cfg, Axis::Xy, slot));
+    }
+    LAST_EDGE_SCROLL_AT.with(|t| t.borrow_mut().take());
+    false
+}
+
+fn resolve_resize_scroll_owner(views: &[ScrollHit]) -> Option<String> {
+    LIVE_RESIZE.with(|slot| {
+        let mut live = slot.borrow_mut();
+        let live = live.as_mut()?;
+        live.scroll_owner
+            .get_or_insert_with(|| {
+                views
+                    .iter()
+                    .rev()
+                    .find(|view| view.rect.contains_point(live.start_pointer))
+                    .map(|view| view.rest.clone())
+            })
+            .clone()
+    })
+}
+
+/// Resolve at press time, before scrolling or relayout can move the source viewport.
+pub(crate) fn capture_resize_scroll_owner(root: &Element) {
+    if resize_is_active() {
+        let mut views = Vec::new();
+        collect_scroll_hits(root, &mut views);
+        resolve_resize_scroll_owner(&views);
+    }
 }
 
 /// Start an edge/corner resize. `signal_key` if set is written `[x,y,w,h]` each tick.
@@ -199,27 +235,41 @@ pub fn begin_resize(
     opts: ResizeOpts,
     signal_key: Option<String>,
 ) {
+    let signal =
+        signal_key.map(|key| crate::core::reactivity::use_signal(&key, || start.to_xywh()));
+    start_resize(start, pointer, opts, signal);
+}
+
+fn start_resize(
+    start: BoxRect,
+    pointer: [f32; 2],
+    opts: ResizeOpts,
+    signal: Option<Signal<[f32; 4]>>,
+) {
     LIVE_RESIZE.with(|s| {
         *s.borrow_mut() = Some(LiveResize {
             session: ResizeSession::begin(start, pointer, opts),
-            signal_key,
+            signal,
             last_pointer: pointer,
+            start_pointer: pointer,
+            scroll_owner: None,
         });
     });
 }
 
 /// Returns the latest box when a resize is live.
 pub fn tick_resize(x: f32, y: f32) -> Option<BoxRect> {
-    LIVE_RESIZE.with(|s| {
+    let (rect, signal) = LIVE_RESIZE.with(|s| {
         let mut slot = s.borrow_mut();
         let live = slot.as_mut()?;
         live.last_pointer = [x, y];
         let rect = live.session.tick([x, y]);
-        if let Some(key) = live.signal_key.as_deref() {
-            crate::core::reactivity::use_signal(key, || rect.to_xywh()).set(rect.to_xywh());
-        }
-        Some(rect)
-    })
+        Some((rect, live.signal))
+    })?;
+    if let Some(signal) = signal {
+        signal.try_set(rect.to_xywh());
+    }
+    Some(rect)
 }
 
 pub fn end_resize() -> bool {
@@ -228,6 +278,144 @@ pub fn end_resize() -> bool {
 
 pub fn resize_is_active() -> bool {
     LIVE_RESIZE.with(|s| s.borrow().is_some())
+}
+
+/// The edge/corner cursor stays fixed until the current resize ends.
+pub fn active_resize_cursor() -> Option<crate::style::CursorValue> {
+    LIVE_RESIZE.with(|s| {
+        s.borrow()
+            .as_ref()?
+            .session
+            .opts()
+            .edges
+            .cursor()
+            .into_cursor()
+    })
+}
+
+/// Bind an absolute element's `[left, top, width, height]` to a rectangle signal.
+/// Updates the existing node in the frame prepass, without rebuilding its children.
+pub fn bind_resize_rect(mut el: Element, rect: Signal<[f32; 4]>) -> Element {
+    let previous = el.reactive_sync.take();
+    let last = rect.peek();
+    apply_resize_rect(&mut el, last);
+    let last = Cell::new(last);
+    el.reactive_sync(move |el, layout| {
+        let status = previous
+            .as_ref()
+            .map_or(LayoutStatus::Clean, |sync| sync.run(el, layout));
+        let next = rect.peek();
+        if last.replace(next) == next {
+            return status;
+        }
+        apply_resize_rect(el, next);
+        status.merge(LayoutStatus::LayoutChanged)
+    })
+}
+
+fn apply_resize_rect(el: &mut Element, rect: [f32; 4]) {
+    for (slot, value) in [
+        UnitSlot::InsetL,
+        UnitSlot::InsetT,
+        UnitSlot::Width,
+        UnitSlot::Height,
+    ]
+    .into_iter()
+    .zip(rect)
+    {
+        el.style.set_css_dim(slot, value.into_css_dim());
+    }
+}
+
+/// Make an absolute box resize like a window, without visible handles.
+///
+/// `margin` is the edge band in logical pixels inside the element's hit box.
+/// Corners select two edges; the interior retains its original pointer behavior.
+/// This binds `rect` to the element and replaces `opts.edges` with the hit edges.
+/// Existing pointer handlers and frame synchronization are preserved.
+///
+/// ```
+/// use rui::core::{reactivity::Signal, tree::Element};
+/// use rui::utils::pointer_action::{resize_on_edges, ResizeOpts};
+/// let rect = Signal::new([40.0, 28.0, 220.0, 120.0]);
+/// let panel = resize_on_edges(Element::new().absolute(), rect,
+///     ResizeOpts::default().min_size(120.0, 80.0), 8.0);
+/// ```
+pub fn resize_on_edges(
+    el: Element,
+    rect: Signal<[f32; 4]>,
+    opts: ResizeOpts,
+    margin: f32,
+) -> Element {
+    use winit::event::MouseButton;
+
+    let mut el = bind_resize_rect(el, rect);
+    let hover = Rc::new(Cell::new(Edges::NONE));
+    let on_move = el.on_mousemove.take();
+    let move_hover = hover.clone();
+    el = el.on_mousemove(move |event| {
+        if !resize_is_active() {
+            let [x, y, w, h] = event.current_bounds;
+            let edges = hit_edges(BoxRect::from_xywh(x, y, w, h), [event.x, event.y], margin);
+            if move_hover.replace(edges) != edges {
+                crate::app::runtime::request_redraw();
+            }
+        }
+        if let Some(handler) = &on_move {
+            (handler.borrow_mut())(event);
+        }
+    });
+    let on_out = el.on_mouseout.take();
+    let out_hover = hover.clone();
+    el = el.on_mouseout(move |event| {
+        if out_hover.replace(Edges::NONE).any() {
+            crate::app::runtime::request_redraw();
+        }
+        if let Some(handler) = &on_out {
+            (handler.borrow_mut())(event);
+        }
+    });
+    let on_down = el.on_mousedown.take();
+    el = el.on_mousedown(move |event| {
+        if event.button == MouseButton::Left {
+            let [x, y, w, h] = event.current_bounds;
+            let edges = hit_edges(BoxRect::from_xywh(x, y, w, h), [event.x, event.y], margin);
+            if edges.any() {
+                let [x, y, w, h] = rect.peek();
+                start_resize(
+                    BoxRect::from_xywh(x, y, w, h),
+                    [event.x, event.y],
+                    opts.edges(edges),
+                    Some(rect),
+                );
+                crate::app::runtime::request_redraw();
+                event.prevent_default();
+                event.stop_propagation();
+                return;
+            }
+        }
+        if let Some(handler) = &on_down {
+            (handler.borrow_mut())(event);
+        }
+    });
+    let previous = el.reactive_sync.take();
+    let original_cursor = el.cursor.clone();
+    el.reactive_sync(move |el, layout| {
+        let status = previous
+            .as_ref()
+            .map_or(LayoutStatus::Clean, |sync| sync.run(el, layout));
+        let edges = hover.get();
+        let cursor = if edges.any() {
+            edges.cursor().into_cursor()
+        } else {
+            original_cursor.clone()
+        };
+        if el.cursor == cursor {
+            return status;
+        }
+        el.cursor = cursor;
+        status.merge(LayoutStatus::StyleChanged)
+    })
 }
 
 /// `mousemove` / `mouseup` hooks for the app loop.

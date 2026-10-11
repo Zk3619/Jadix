@@ -132,6 +132,12 @@ pub(crate) trait MarkRender {
     fn datum_point(&self, _ctx: &MarkRenderContext<'_>, _index: usize) -> Option<Point2> {
         None
     }
+    /// Resolve the color used by the mark at a hovered datum.  Keeping this
+    /// beside `render` prevents tooltip swatches from drifting from explicit
+    /// mark-level fill/stroke styles.
+    fn tooltip_color(&self, _ctx: &MarkRenderContext<'_>, _index: usize) -> Option<[f32; 4]> {
+        None
+    }
 }
 
 /// A layer of mark for type erasure (can enter [`super::define_chart`]).
@@ -172,6 +178,9 @@ impl ChartMark {
     }
     pub fn datum_point(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<Point2> {
         self.inner.datum_point(ctx, index)
+    }
+    pub fn tooltip_color(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<[f32; 4]> {
+        self.inner.tooltip_color(ctx, index)
     }
 }
 
@@ -579,6 +588,19 @@ impl MarkRender for BarYMark {
             Some((x0 + slot * 0.5, (y0 + y1) * 0.5))
         }
     }
+    fn tooltip_color(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<[f32; 4]> {
+        let row = self.rows.get(index)?;
+        let series = unique_series(&self.rows);
+        let si = series.iter().position(|s| s == &row.series).unwrap_or(0);
+        Some(paint_fill(
+            &self.style,
+            ctx.theme,
+            si,
+            index,
+            ctx.selected,
+            1.0,
+        ))
+    }
 }
 
 impl From<BarYMark> for ChartMark {
@@ -807,6 +829,12 @@ impl MarkRender for LineYMark {
         }
         None
     }
+    fn tooltip_color(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<[f32; 4]> {
+        let row = self.rows.get(index)?;
+        let series = unique_series(&self.rows);
+        let si = series.iter().position(|s| s == &row.series).unwrap_or(0);
+        Some(paint_stroke(&self.style, ctx.theme, si, 0, None, 1.0))
+    }
 }
 
 impl From<LineYMark> for ChartMark {
@@ -976,6 +1004,17 @@ impl MarkRender for PieMark {
         let r = s * 0.40 * 0.62;
         Some((s * 0.5 + r * mid.cos(), s * 0.5 + r * mid.sin()))
     }
+    fn tooltip_color(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<[f32; 4]> {
+        self.rows.get(index)?;
+        Some(paint_fill(
+            &self.style,
+            ctx.theme,
+            index,
+            index,
+            ctx.selected,
+            1.0,
+        ))
+    }
 }
 
 impl From<PieMark> for ChartMark {
@@ -1098,6 +1137,12 @@ impl MarkRender for DotMark {
             }
         }
         None
+    }
+    fn tooltip_color(&self, ctx: &MarkRenderContext<'_>, index: usize) -> Option<[f32; 4]> {
+        let row = self.rows.get(index)?;
+        let series = unique_series(&self.rows);
+        let si = series.iter().position(|s| s == &row.series).unwrap_or(0);
+        Some(paint_fill(&self.style, ctx.theme, si, index, None, 1.0))
     }
 }
 
@@ -1229,6 +1274,9 @@ impl MarkRender for RuleMark {
     }
     fn hit_index(&self, _ctx: &MarkRenderContext<'_>, _local: Point2) -> Option<usize> {
         None
+    }
+    fn tooltip_color(&self, ctx: &MarkRenderContext<'_>, _index: usize) -> Option<[f32; 4]> {
+        Some(paint_stroke(&self.style, ctx.theme, 0, 0, None, 1.0))
     }
 }
 

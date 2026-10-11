@@ -95,6 +95,7 @@ impl Edges {
     /// CSS-ish cursor for the active edges (interact `getCursor`).
     pub fn cursor(self) -> &'static str {
         match (self.top, self.bottom, self.left, self.right) {
+            (false, false, false, false) => "default",
             (true, false, true, false) => "nwse-resize",
             (false, true, false, true) => "nwse-resize",
             (true, false, false, true) => "nesw-resize",
@@ -165,6 +166,9 @@ pub struct ResizeOpts {
     pub min_size: [f32; 2],
     /// Optional cap (RUI beyond interact).
     pub max_size: Option<[f32; 2]>,
+    /// Optional bounds in the same coordinates as the resized box. Bounds take
+    /// precedence over size/aspect constraints when there is insufficient room.
+    pub restrict_rect: Option<BoxRect>,
     /// Grow/shrink about the center instead of the opposite edge (RUI beyond).
     pub from_center: bool,
     /// Optional edge auto-scroll while resizing (interact `autoScroll` on resize).
@@ -181,6 +185,7 @@ impl Default for ResizeOpts {
             axis: ResizeAxis::Xy,
             min_size: [0.0, 0.0],
             max_size: None,
+            restrict_rect: None,
             from_center: false,
             autoscroll: None,
         }
@@ -212,6 +217,10 @@ impl ResizeOpts {
         self.max_size = Some([w.max(0.0), h.max(0.0)]);
         self
     }
+    pub fn restrict_rect(mut self, rect: BoxRect) -> Self {
+        self.restrict_rect = Some(rect.normalized());
+        self
+    }
     pub fn from_center(mut self, yes: bool) -> Self {
         self.from_center = yes;
         self
@@ -234,6 +243,7 @@ impl ResizeOpts {
 
 /// Hit-test pointer against a box's edge band (interact `margin`).
 pub fn hit_edges(rect: BoxRect, pointer: [f32; 2], margin: f32) -> Edges {
+    let rect = rect.normalized();
     let m = margin.max(1.0);
     let [x, y] = pointer;
     let inside_x = x >= rect.x - m && x <= rect.right() + m;
@@ -242,10 +252,10 @@ pub fn hit_edges(rect: BoxRect, pointer: [f32; 2], margin: f32) -> Edges {
         return Edges::NONE;
     }
     Edges {
-        left: (x - rect.x).abs() <= m,
-        right: (rect.right() - x).abs() <= m,
-        top: (y - rect.y).abs() <= m,
-        bottom: (rect.bottom() - y).abs() <= m,
+        left: (x - rect.x).abs() <= m && x <= rect.x + rect.width * 0.5,
+        right: (rect.right() - x).abs() <= m && x > rect.x + rect.width * 0.5,
+        top: (y - rect.y).abs() <= m && y <= rect.y + rect.height * 0.5,
+        bottom: (rect.bottom() - y).abs() <= m && y > rect.y + rect.height * 0.5,
     }
 }
 
@@ -398,6 +408,12 @@ pub fn resize_box(
         }
     }
 
+    if let Some(bounds) = opts.restrict_rect {
+        left = left.clamp(bounds.x, bounds.right());
+        right = right.clamp(bounds.x, bounds.right());
+        top = top.clamp(bounds.y, bounds.bottom());
+        bottom = bottom.clamp(bounds.y, bounds.bottom());
+    }
     BoxRect::from_ltrb(left, top, right, bottom)
 }
 
@@ -493,6 +509,25 @@ mod tests {
 
     fn box_xywh(x: f32, y: f32, w: f32, h: f32) -> BoxRect {
         BoxRect::from_xywh(x, y, w, h)
+    }
+
+    #[test]
+    fn restriction_bounds_all_edges_including_inversion() {
+        let start = box_xywh(40.0, 28.0, 160.0, 100.0);
+        let bounds = box_xywh(6.0, 6.0, 788.0, 436.0);
+        for edges in [Edges::top_left(), Edges::bottom_right()] {
+            for invert in [Invert::None, Invert::Reposition, Invert::Negate] {
+                let opts = ResizeOpts::default()
+                    .edges(edges)
+                    .invert(invert)
+                    .restrict_rect(bounds);
+                for pointer in [[-10000.0, -10000.0], [10000.0, 10000.0]] {
+                    let rect = resize_box(start, [200.0, 128.0], pointer, opts, 1.6).normalized();
+                    assert!(rect.x >= bounds.x && rect.y >= bounds.y);
+                    assert!(rect.right() <= bounds.right() && rect.bottom() <= bounds.bottom());
+                }
+            }
+        }
     }
 
     #[test]
@@ -639,6 +674,14 @@ mod tests {
         assert!(e.left && !e.right);
         let miss = hit_edges(r, [200.0, 200.0], 8.0);
         assert!(!miss.any());
+        assert_eq!(miss.cursor(), "default");
+        let tiny = box_xywh(10.0, 10.0, 8.0, 8.0);
+        assert_eq!(hit_edges(tiny, [18.0, 14.0], 8.0), Edges::top_right());
+        assert_eq!(hit_edges(tiny, [10.0, 18.0], 8.0), Edges::bottom_left());
+        assert_eq!(
+            hit_edges(box_xywh(90.0, 50.0, -80.0, -40.0), [10.0, 30.0], 8.0),
+            Edges::left()
+        );
     }
 
     #[test]

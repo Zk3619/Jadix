@@ -12,8 +12,8 @@ use rui::utils::drag::{
     SnapTargets,
 };
 use rui::utils::pointer_action::{
-    begin_resize, last_gesture, set_gesture_opts, BoxRect, Edges, GestureOpts, GestureState,
-    Invert, ResizeOpts,
+    begin_resize, bind_resize_rect, last_gesture, resize_on_edges, set_gesture_opts, BoxRect,
+    Edges, GestureOpts, GestureState, Invert, ResizeOpts,
 };
 
 /// `reactive_sync` runs in the frame prepass with no provider owner.
@@ -109,22 +109,50 @@ fn keyed_sortable_flags_chips(
     Element::from(vstack().w("100%").gap("0.375rem").children(rows))
 }
 
-fn keyed_pull_clone_chips(items: Signal<Vec<String>>) -> Element {
+#[derive(Clone, Debug, PartialEq)]
+struct PullCloneItem {
+    key: u64,
+    label: String,
+}
+
+fn apply_pull_clone_event(items: &mut Vec<PullCloneItem>, ev: &DragEvent) {
+    let len = items.len();
+    let key = items
+        .iter()
+        .map(|item| item.key)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    apply_event(items, None, ev);
+    if items.len() > len {
+        let index = ev.to_index.unwrap_or(len).min(len);
+        items[index].key = key;
+    }
+}
+
+fn keyed_pull_clone_chips(
+    items: Signal<Vec<PullCloneItem>>,
+    rows_id: &'static str,
+    list: &'static str,
+) -> Element {
     let items_snap = items.get();
     let rows = rui::for_keyed!(
-        "gal-drag-clone-rows",
+        rows_id,
         items_snap.as_slice(),
-        |s: &String| s.clone(),
-        |label: &String| {
-            let name = label.clone();
-            let i = items_snap.iter().position(|x| x == &name).unwrap_or(0);
-            let id = format!("clone:{name}");
+        |item: &PullCloneItem| item.key,
+        |item: &PullCloneItem| {
+            let name = item.label.clone();
+            let i = items_snap
+                .iter()
+                .position(|x| x.key == item.key)
+                .unwrap_or(0);
+            let id = format!("{list}:{}", item.key);
             ui! {
                 <SortableItem
                     id={id}
                     item_type="clone-tag"
                     accept="clone-tag"
-                    list="clone-list"
+                    list={list}
                     index={i}
                     pull_clone={true}
                     source_opacity={0.35}
@@ -167,17 +195,37 @@ fn rsx_sortable_flags_column(
 }
 
 fn rsx_pull_clone_board(
-    items: Signal<Vec<String>>,
+    items: Signal<Vec<PullCloneItem>>,
+    preview: bool,
     on_end: impl FnMut(&DragEvent) + 'static,
 ) -> Element {
-    let n = items.get().len();
-    let hint = format!("共 {n} 项 · `<SortableItem pull_clone={{true}}>` 松手 insert 副本");
+    let (scope, list, rows, count) = if preview {
+        (
+            "gal-drag-clone-preview",
+            "clone-preview-list",
+            "gal-drag-clone-preview-rows",
+            "gal-drag-clone-preview-count",
+        )
+    } else {
+        (
+            "gal-drag-clone",
+            "clone-list",
+            "gal-drag-clone-rows",
+            "gal-drag-clone-count",
+        )
+    };
+    let hint = rui::bind_text!(count, move || {
+        format!(
+            "共 {} 项 · `<SortableItem pull_clone={{true}}>` 松手 insert 副本",
+            items.get().len()
+        )
+    });
     ui! {
-        <DragProvider id="gal-drag-clone" collision="closest-center" onDragEnd={on_end}>
+        <DragProvider id={scope} collision="closest-center" reorder_preview={preview} onDragEnd={on_end}>
             <VStack gap="0.375rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground">{ hint }</Label>
-                <SortableList id="clone-list" accept="clone-tag">
-                    { keyed_pull_clone_chips(items) }
+                <SortableList id={list} accept="clone-tag">
+                    { keyed_pull_clone_chips(items, rows, list) }
                 </SortableList>
                 <DragOverlay class="shadow-lg" />
             </VStack>
@@ -426,12 +474,8 @@ fn swap_chip(label: &str, list: &'static str, index: usize, item_id: String) -> 
 
 fn multi_select_chip(label: &str, item_id: &str) -> Element {
     let ctx = use_drag();
-    let selected = ctx
-        .as_ref()
-        .is_some_and(|c| c.selected.get().iter().any(|x| x == item_id));
-    let bg = if selected { "accent" } else { "card" };
-    let border = if selected { "primary" } else { "border" };
-    ui! {
+    let item_id = item_id.to_string();
+    let el = ui! {
         <HStack
             p="0.375rem 0.65rem"
             gap="0.375rem"
@@ -439,14 +483,27 @@ fn multi_select_chip(label: &str, item_id: &str) -> Element {
             rounded="0.5rem"
             border_style="solid"
             border_width="1px"
-            border_color={border}
+            border_color="border"
             cursor="grab"
-            bg={bg}
+            bg="card"
         >
             <Icon name="grip-vertical" size="14px" color="muted-foreground" pointer_events="none" />
             <Label text_size="0.875rem" color="foreground">{ label.to_string() }</Label>
         </HStack>
-    }
+    };
+    el.reactive_sync(move |el, _| {
+        let selected = ctx
+            .as_ref()
+            .is_some_and(|c| c.selected.peek().contains(&item_id));
+        let bg = parse_color(if selected { "accent" } else { "card" });
+        let border = parse_color(if selected { "primary" } else { "border" });
+        if el.style.bg_color == bg && el.style.border_color == border {
+            return LayoutStatus::Clean;
+        }
+        el.style.bg_color = bg;
+        el.style.border_color = border;
+        LayoutStatus::StyleChanged
+    })
 }
 
 fn apply_two_list_event(
@@ -553,21 +610,44 @@ fn keyed_multi_chips(items: Signal<Vec<String>>) -> Element {
 fn rsx_swap_board(
     left: Signal<Vec<String>>,
     right: Signal<Vec<String>>,
+    preview: bool,
     on_end: impl FnMut(&DragEvent) + 'static,
 ) -> Element {
+    let (scope, left_list, right_list, left_rows, right_rows) = if preview {
+        (
+            "gal-drag-swap-preview",
+            "swap-preview-left",
+            "swap-preview-right",
+            "gal-drag-swap-preview-left-rows",
+            "gal-drag-swap-preview-right-rows",
+        )
+    } else {
+        (
+            "gal-drag-swap",
+            "swap-left",
+            "swap-right",
+            "gal-drag-swap-left-rows",
+            "gal-drag-swap-right-rows",
+        )
+    };
+    let left_title = if preview {
+        "左 · 半透明交换预览"
+    } else {
+        "左 · 不让位，高亮对端"
+    };
     ui! {
-        <DragProvider id="gal-drag-swap" collision="closest-center" sort_mode="swap" onDragEnd={on_end}>
+        <DragProvider id={scope} collision="closest-center" sort_mode="swap" reorder_preview={preview} onDragEnd={on_end}>
             <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
                 <VStack gap="0.375rem" min_w="10rem">
-                    <Label text_size="0.75rem" color="muted-foreground">"左 · 不让位，高亮对端"</Label>
-                    <SortableList id="swap-left" group="swap-demo" accept="swap">
-                        { keyed_swap_chips("gal-drag-swap-left-rows", left, "swap-left") }
+                    <Label text_size="0.75rem" color="muted-foreground">{ left_title }</Label>
+                    <SortableList id={left_list} group="swap-demo" accept="swap">
+                        { keyed_swap_chips(left_rows, left, left_list) }
                     </SortableList>
                 </VStack>
                 <VStack gap="0.375rem" min_w="10rem">
                     <Label text_size="0.75rem" color="muted-foreground">"右 · 跨列 mem::swap"</Label>
-                    <SortableList id="swap-right" group="swap-demo" accept="swap">
-                        { keyed_swap_chips("gal-drag-swap-right-rows", right, "swap-right") }
+                    <SortableList id={right_list} group="swap-demo" accept="swap">
+                        { keyed_swap_chips(right_rows, right, right_list) }
                     </SortableList>
                 </VStack>
             </HStack>
@@ -576,10 +656,15 @@ fn rsx_swap_board(
     }
 }
 
-fn multi_selected_hud(n: usize) -> Element {
-    let ctx = use_drag();
-    let selected_n = ctx.as_ref().map(|c| c.selected.get().len()).unwrap_or(0);
-    let hint = format!("共 {n} 项 · 已选 {selected_n} · 单击选中，拖已选项一次带走");
+fn multi_selected_hud(items: Signal<Vec<String>>) -> Element {
+    let selected = use_drag().expect("MultiDrag provider").selected;
+    let hint = rui::bind_text!("gal-drag-multi-count", move || {
+        format!(
+            "共 {} 项 · 已选 {} · 单击选中，Shift 范围选中",
+            items.get().len(),
+            selected.get().len()
+        )
+    });
     ui! {
         <Label text_size="0.75rem" color="muted-foreground">{ hint }</Label>
     }
@@ -589,11 +674,10 @@ fn rsx_multi_board(
     items: Signal<Vec<String>>,
     on_end: impl FnMut(&DragEvent) + 'static,
 ) -> Element {
-    let n = items.get().len();
     ui! {
         <DragProvider id="gal-drag-multi" collision="closest-center" multi_drag={true} onDragEnd={on_end}>
             <VStack gap="0.375rem" w="100%">
-                { multi_selected_hud(n) }
+                { multi_selected_hud(items) }
                 <SortableList id="multi-list" accept="multi">
                     { keyed_multi_chips(items) }
                 </SortableList>
@@ -845,7 +929,13 @@ fn magnetic_snap_line() -> (Element, SnapPointFn) {
     (line, snap)
 }
 
-fn resize_handle(rect: Signal<[f32; 4]>, left: f32, top: f32, edges: Edges) -> Element {
+fn resize_handle(
+    rect: Signal<[f32; 4]>,
+    bounds: Rc<Cell<BoxRect>>,
+    left: &str,
+    top: &str,
+    edges: Edges,
+) -> Element {
     let cursor = edges.cursor().to_string();
     let chrome: Element = ui! {
         <Box
@@ -865,6 +955,11 @@ fn resize_handle(rect: Signal<[f32; 4]>, left: f32, top: f32, edges: Edges) -> E
     };
     interactive(chrome)
         .on_mousedown(move |e: &MouseEvent| {
+            if e.phase == rui::EventPhase::Capture
+                || rui::app::pointer_events::dom_button(e.button) != 0
+            {
+                return;
+            }
             let r = rect.peek();
             begin_resize(
                 BoxRect::from_xywh(r[0], r[1], r[2], r[3]),
@@ -873,50 +968,80 @@ fn resize_handle(rect: Signal<[f32; 4]>, left: f32, top: f32, edges: Edges) -> E
                     .edges(edges)
                     .invert(Invert::Reposition)
                     .min_size(64.0, 48.0)
+                    .restrict_rect(bounds.get())
                     .autoscroll(true),
                 Some("gal_drag_resize_rect".into()),
             );
+            e.prevent_default();
+            e.stop_propagation();
         })
         .into()
 }
 
 fn resize_board(rect: Signal<[f32; 4]>) -> Element {
-    let r = rect.get();
-    let [x, y, w, h] = r;
-    let hx = 6.0;
+    let bounds = Rc::new(Cell::new(BoxRect::default()));
+    let chrome = ui! {
+        <Box absolute={true} rounded="0.5rem" bg="card" border_style="solid" border_width="2px" border_color="primary" items="center" justify="center">
+            <VStack items="center" gap="0.125rem" pointer_events="none">
+                <Label font_weight="700" text_size="0.875rem">"resize"</Label>
+                <Label color="muted-foreground" text_size="0.6875rem">{ format!("{:.0}×{:.0}", rect.get()[2], rect.get()[3]) }</Label>
+                <Label color="muted-foreground" text_size="0.625rem">"autoscroll · 拖到边缘滚"</Label>
+            </VStack>
+            { resize_handle(rect, bounds.clone(), "-6px", "-6px", Edges::top_left()) }
+            { resize_handle(rect, bounds.clone(), "calc(50% - 6px)", "-6px", Edges::top()) }
+            { resize_handle(rect, bounds.clone(), "calc(100% - 6px)", "-6px", Edges::top_right()) }
+            { resize_handle(rect, bounds.clone(), "-6px", "calc(50% - 6px)", Edges::left()) }
+            { resize_handle(rect, bounds.clone(), "calc(100% - 6px)", "calc(50% - 6px)", Edges::right()) }
+            { resize_handle(rect, bounds.clone(), "-6px", "calc(100% - 6px)", Edges::bottom_left()) }
+            { resize_handle(rect, bounds.clone(), "calc(50% - 6px)", "calc(100% - 6px)", Edges::bottom()) }
+            { resize_handle(rect, bounds.clone(), "calc(100% - 6px)", "calc(100% - 6px)", Edges::bottom_right()) }
+        </Box>
+    };
+    let chrome = bind_resize_rect(chrome, rect);
+    let arena: Element = ui! {
+        <Box relative={true} w="100%" h="28rem" min_h="28rem" rounded="0.75rem" bg="background" border_style="dashed" border_width="1px" border_color="border">
+            { chrome }
+        </Box>
+    };
+    let arena = arena.on_mousedown(move |event| {
+        if event.phase == rui::EventPhase::Capture {
+            let [_, _, w, h] = event.current_bounds;
+            // Keep the 12px handles inside the fixed content area as well.
+            bounds.set(BoxRect::from_xywh(
+                6.0,
+                6.0,
+                (w - 12.0).max(0.0),
+                (h - 12.0).max(0.0),
+            ));
+        }
+    });
     ui! {
-        <ScrollArea id="gal-drag-resize-scroll" h="14rem" w="100%" overflow_y="auto">
+        <ScrollArea id="gal-drag-resize-scroll" h="14rem" w="100%" overflow_x="hidden" overflow_y="auto" scrollbar_visibility="always">
+            { arena }
+        </ScrollArea>
+    }
+}
+
+fn resize_edges_board(rect: Signal<[f32; 4]>) -> Element {
+    let chrome = ui! {
+        <Box absolute={true} rounded="0.5rem" bg="card" border_style="solid" border_width="2px" border_color="accent" items="center" justify="center">
+            <VStack items="center" gap="0.25rem" pointer_events="none">
+                <Label font_weight="700" text_size="0.875rem">"无把手 resize"</Label>
+                <Label color="muted-foreground" text_size="0.6875rem">{ format!("{:.0}×{:.0}", rect.get()[2], rect.get()[3]) }</Label>
+                <Label color="muted-foreground" text_size="0.6875rem">"靠近四边或四角拖动"</Label>
+            </VStack>
+        </Box>
+    };
+    let chrome = resize_on_edges(
+        chrome,
+        rect,
+        ResizeOpts::default().min_size(120.0, 80.0),
+        8.0,
+    );
+    ui! {
+        <ScrollArea id="gal-drag-resize-edges-scroll" h="14rem" w="100%" overflow_y="auto">
             <Box relative={true} w="100%" min_h="28rem" rounded="0.75rem" bg="background" border_style="dashed" border_width="1px" border_color="border">
-                <Box
-                    absolute={true}
-                    left={x}
-                    top={y}
-                    w={w}
-                    h={h}
-                    rounded="0.5rem"
-                    bg="card"
-                    border_style="solid"
-                    border_width="2px"
-                    border_color="primary"
-                    items="center"
-                    justify="center"
-                >
-                    <VStack items="center" gap="0.125rem" pointer_events="none">
-                        <Label font_weight="700" text_size="0.875rem">"resize"</Label>
-                        <Label color="muted-foreground" text_size="0.6875rem">
-                            { format!("{:.0}×{:.0}", w, h) }
-                        </Label>
-                        <Label color="muted-foreground" text_size="0.625rem">"autoscroll · 拖到边缘滚"</Label>
-                    </VStack>
-                </Box>
-                { resize_handle(rect, x - hx, y - hx, Edges::top_left()) }
-                { resize_handle(rect, x + w * 0.5 - hx, y - hx, Edges::top()) }
-                { resize_handle(rect, x + w - hx, y - hx, Edges::top_right()) }
-                { resize_handle(rect, x - hx, y + h * 0.5 - hx, Edges::left()) }
-                { resize_handle(rect, x + w - hx, y + h * 0.5 - hx, Edges::right()) }
-                { resize_handle(rect, x - hx, y + h - hx, Edges::bottom_left()) }
-                { resize_handle(rect, x + w * 0.5 - hx, y + h - hx, Edges::bottom()) }
-                { resize_handle(rect, x + w - hx, y + h - hx, Edges::bottom_right()) }
+                { chrome }
             </Box>
         </ScrollArea>
     }
@@ -1105,6 +1230,255 @@ mod drop_position_tests {
     use rui::core::reactivity::create_root;
     use rui::utils::drag::{begin, end, tick, BeginDrag};
 
+    #[test]
+    fn pull_clone_keeps_distinct_draggable_rows_after_drop() {
+        let (_owner, ()) = create_root(|| {
+            let items = Signal::new(vec![
+                PullCloneItem {
+                    key: 1,
+                    label: "Rust".into(),
+                },
+                PullCloneItem {
+                    key: 2,
+                    label: "UI".into(),
+                },
+                PullCloneItem {
+                    key: 3,
+                    label: "Drag".into(),
+                },
+            ]);
+            let event = DragEvent {
+                scope_id: "gal-drag-clone".into(),
+                draggable_id: "clone:1".into(),
+                droppable_id: Some("clone:3".into()),
+                from_list: Some("clone-list".into()),
+                from_index: Some(0),
+                to_list: Some("clone-list".into()),
+                to_index: Some(3),
+                pointer: [0.0, 0.0],
+                delta: [0.0, 0.0],
+                phase: rui::utils::drag::DragPhase::Active,
+                pull_clone: true,
+                data: None,
+                sort_mode: rui::utils::drag::SortMode::Insert,
+                items: Vec::new(),
+            };
+            let mut values = items.peek();
+            apply_pull_clone_event(&mut values, &event);
+            assert_eq!(values.len(), 4);
+            assert_eq!(values[3].label, "Rust");
+            assert_ne!(values[0].key, values[3].key);
+            let copied_key = values[3].key;
+            let event = DragEvent {
+                from_index: Some(3),
+                to_index: Some(1),
+                ..event
+            };
+            apply_pull_clone_event(&mut values, &event);
+            assert_eq!(
+                values
+                    .iter()
+                    .map(|item| item.label.as_str())
+                    .collect::<Vec<_>>(),
+                ["Rust", "Rust", "UI", "Drag", "Rust"]
+            );
+            assert_eq!(
+                values[4].key, copied_key,
+                "the source copy keeps its identity"
+            );
+            assert_ne!(
+                values[1].key, copied_key,
+                "a copy of a copy gets a fresh key"
+            );
+            items.set(values);
+            let board = drag_scope("gal-drag-clone")
+                .child(move || keyed_pull_clone_chips(items, "gal-drag-clone-rows", "clone-list"));
+            let mut ids = Vec::new();
+            fn collect(el: &Element, ids: &mut Vec<String>) {
+                if let Some(id) = &el.template_id {
+                    if id.starts_with("gal-drag-clone-rows:") {
+                        ids.push(id.clone());
+                    }
+                }
+                for child in &el.children {
+                    collect(child, ids);
+                }
+            }
+            collect(&board, &mut ids);
+            assert_eq!(ids.len(), 5, "each drop adds one visible row");
+            ids.sort();
+            ids.dedup();
+            assert_eq!(
+                ids.len(),
+                5,
+                "same-label copies need distinct drag identities"
+            );
+            fn collect_draggable_ids(el: &Element, ids: &mut Vec<String>) {
+                if let Some(id) = &el.template_id {
+                    if id.starts_with("gal-drag-clone__draggable:") {
+                        ids.push(id.clone());
+                    }
+                }
+                for child in &el.children {
+                    collect_draggable_ids(child, ids);
+                }
+            }
+            let mut draggable_ids = Vec::new();
+            collect_draggable_ids(&board, &mut draggable_ids);
+            assert_eq!(draggable_ids.len(), 5);
+            draggable_ids.sort();
+            draggable_ids.dedup();
+            assert_eq!(draggable_ids.len(), 5, "drag identities are unique too");
+        });
+    }
+
+    #[test]
+    fn handled_resize_stays_in_content_and_never_scrolls_sibling() {
+        use rui::app::pointer_events::{dispatch_pointer, hit_path, MouseEvent, PointerKind};
+        use rui::core::scroll_viewport::{
+            scroll_content_h_signal_key, scroll_offset_y_signal_key, scroll_viewport_h_signal_key,
+        };
+        use rui::utils::pointer_action::{on_move, on_up, pump_edge_scroll, resize_is_active};
+        fn sync_tree(el: &mut Element, layout: &mut rui::core::tree::LayoutTree) {
+            if let Some(sync) = el.reactive_sync.clone() {
+                sync.run(el, layout);
+            }
+            for child in &mut el.children {
+                sync_tree(child, layout);
+            }
+        }
+        fn find_box(el: &Element) -> Option<&Element> {
+            if el.children.len() == 9 {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_box)
+        }
+        let (_owner, ()) = create_root(|| {
+            on_up();
+            let rect = use_signal("gal_drag_resize_rect", || [40.0_f32, 28.0, 160.0, 100.0]);
+            let edges_rect = Signal::new([40.0, 28.0, 220.0, 120.0]);
+            let mut root = Element::new()
+                .flex_col()
+                .gap(80.0)
+                .child(resize_board(rect))
+                .child(resize_edges_board(edges_rect));
+            let mut layout = rui::core::tree::LayoutTree::new();
+            layout.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+            sync_tree(&mut root, &mut layout);
+            let mut views = Vec::new();
+            rui::utils::edge_scroll::collect_scroll_hits(&root, &mut views);
+            assert_eq!(views.len(), 2);
+            for view in &views {
+                use_signal(&scroll_content_h_signal_key(&view.rest), || 0.0_f32).set_silent(448.0);
+                use_signal(&scroll_viewport_h_signal_key(&view.rest), || 0.0_f32)
+                    .set_silent(view.rect.height);
+            }
+            let sibling = use_signal(
+                &scroll_offset_y_signal_key("gal-drag-resize-edges-scroll"),
+                || 0.0_f32,
+            );
+            let owner_offset = use_signal(
+                &scroll_offset_y_signal_key("gal-drag-resize-scroll"),
+                || 0.0_f32,
+            );
+            for (handle_index, target) in [(8, [790.0, 1000.0]), (1, [-800.0, -1000.0])] {
+                rect.set_silent([40.0, 28.0, 160.0, 100.0]);
+                owner_offset.set_silent(0.0);
+                sync_tree(&mut root, &mut layout);
+                layout.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+                let handle =
+                    find_box(&root).unwrap().children[handle_index].viewport_layout_bounds();
+                let press = [handle[0] + 6.0, handle[1] + 6.0];
+                let path = hit_path(&root, press[0], press[1]);
+                let mut event =
+                    MouseEvent::new(press[0], press[1], winit::event::MouseButton::Left, 0);
+                dispatch_pointer(&path, &mut event, PointerKind::Down);
+                assert!(
+                    resize_is_active(),
+                    "actual handle {handle_index} at {press:?} must start resize"
+                );
+                on_move(press[0], views[0].rect.bottom() - 4.0);
+                for _ in 0..30 {
+                    pump_edge_scroll(&root);
+                }
+                assert!(owner_offset.peek() > 0.0, "the owner's edge must scroll");
+                let after_scroll = rect.peek();
+                on_move(press[0], views[0].rect.bottom() - 4.0);
+                assert_eq!(
+                    rect.peek(),
+                    after_scroll,
+                    "scroll is not repeatedly added to geometry"
+                );
+                on_move(press[0], views[1].rect.bottom() - 4.0);
+                for _ in 0..30 {
+                    pump_edge_scroll(&root);
+                }
+                assert_eq!(sibling.peek(), 0.0);
+                on_move(target[0], target[1]);
+                let [x, y, w, h] = rect.peek();
+                assert!(
+                    x >= 6.0 && y >= 6.0 && x + w <= 794.0 && y + h <= 442.0,
+                    "resize must stay within fixed content bounds: {:?}",
+                    rect.peek()
+                );
+                on_up();
+                assert!(!pump_edge_scroll(&root), "release stops autoscroll");
+                assert_eq!(edges_rect.peek(), [40.0, 28.0, 220.0, 120.0]);
+            }
+        });
+    }
+
+    #[test]
+    fn resize_board_updates_box_and_handles_during_drag() {
+        fn sync_tree(el: &mut Element, layout: &mut rui::core::tree::LayoutTree) {
+            if let Some(sync) = el.reactive_sync.clone() {
+                sync.run(el, layout);
+            }
+            for child in &mut el.children {
+                sync_tree(child, layout);
+            }
+        }
+        fn find_box(el: &Element) -> Option<&Element> {
+            if el.children.len() == 9 {
+                return Some(el);
+            }
+            el.children.iter().find_map(find_box)
+        }
+        let (_owner, ()) = create_root(|| {
+            let rect = use_signal("gal_drag_resize_rect", || [40.0_f32, 28.0, 160.0, 100.0]);
+            rect.set_silent([40.0, 28.0, 160.0, 100.0]);
+            let mut board = resize_board(rect);
+            let mut layout = rui::core::tree::LayoutTree::new();
+            layout.build_and_layout(&mut board, 800.0, 500.0, [0.0, 0.0]);
+            let before = find_box(&board).unwrap().children[8].layout_bounds;
+            begin_resize(
+                BoxRect::from_xywh(40.0, 28.0, 160.0, 100.0),
+                [200.0, 128.0],
+                ResizeOpts::default().edges(Edges::bottom_right()),
+                Some("gal_drag_resize_rect".into()),
+            );
+            assert!(rui::utils::pointer_action::on_move(240.0, 158.0));
+            assert!(rui::utils::pointer_action::on_up());
+            sync_tree(&mut board, &mut layout);
+            layout.build_and_layout(&mut board, 800.0, 500.0, [0.0, 0.0]);
+            let handles = find_box(&board).expect("resize box and eight handles");
+            assert_eq!(rect.peek(), [40.0, 28.0, 200.0, 130.0]);
+            assert_eq!(
+                handles.style.size,
+                Element::new().w(200.0).h(130.0).style.size
+            );
+            let after = handles.children[8].layout_bounds;
+            assert!(
+                (after[0] - before[0] - 40.0).abs() < 0.1,
+                "right handle must follow width: {before:?} -> {after:?}"
+            );
+            assert!(
+                (after[1] - before[1] - 30.0).abs() < 0.1,
+                "bottom handle must follow height: {before:?} -> {after:?}"
+            );
+        });
+    }
+
     fn sync_line(line: &mut Element) {
         let sync = line
             .reactive_sync
@@ -1125,7 +1499,14 @@ mod drop_position_tests {
         for y in [441.0, 458.0, 488.0] {
             assert_eq!(snap(120.0, y), None);
         }
-        line.paint_scroll_acc = [25.0, 120.0];
+        let mut root = Element::new()
+            .w(800.0)
+            .h(800.0)
+            .overflow("scroll")
+            .scroll_offset(25.0, 120.0)
+            .child(line.left(100.0).top(473.0).w(600.0).h(1.0));
+        rui::core::tree::LayoutTree::new().build_and_layout(&mut root, 800.0, 800.0, [0.0, 0.0]);
+        let mut line = root.children.remove(0);
         sync_line(&mut line);
         assert_eq!(snap(180.0, 360.0), Some([180.0, 353.0]));
         assert_eq!(snap(180.0, 473.0), None, "old screen position must release");
@@ -1709,6 +2090,9 @@ pub(crate) fn DragShowcase() -> Element {
     let start_lock_pos = use_signal("gal_drag_start_lock_pos", || [16.0_f32, 16.0]);
     let fling_pos = use_signal("gal_drag_fling_pos", || [16.0_f32, 16.0]);
     let resize_rect = use_signal("gal_drag_resize_rect", || [40.0_f32, 28.0, 160.0, 100.0]);
+    let resize_edges_rect = use_signal("gal_drag_resize_edges_rect", || {
+        [40.0_f32, 28.0, 220.0, 120.0]
+    });
     let gesture_a = use_signal("gal_drag_gesture_a", || [48.0_f32, 72.0]);
     let gesture_b = use_signal("gal_drag_gesture_b", || [200.0_f32, 72.0]);
     set_gesture_opts(GestureOpts::default().autoscroll(true));
@@ -1717,7 +2101,20 @@ pub(crate) fn DragShowcase() -> Element {
     });
     let veto_empty = use_signal("gal_drag_veto_empty", Vec::<String>::new);
     let clone_tags = use_signal("gal_drag_clone", || {
-        vec!["Rust".to_string(), "UI".to_string(), "Drag".to_string()]
+        vec![
+            PullCloneItem {
+                key: 1,
+                label: "Rust".to_string(),
+            },
+            PullCloneItem {
+                key: 2,
+                label: "UI".to_string(),
+            },
+            PullCloneItem {
+                key: 3,
+                label: "Drag".to_string(),
+            },
+        ]
     });
     let swap_left = use_signal("gal_drag_swap_left", || {
         vec![
@@ -1764,11 +2161,17 @@ pub(crate) fn DragShowcase() -> Element {
         let clone_tags = clone_tags.clone();
         move |ev: &DragEvent| {
             let mut v = clone_tags.peek();
-            apply_event(&mut v, None, ev);
+            apply_pull_clone_event(&mut v, ev);
             clone_tags.set(v);
         }
     };
-    let clone_board = rsx_pull_clone_board(clone_tags, clone_on_end);
+    let clone_board = rsx_pull_clone_board(clone_tags, false, clone_on_end);
+    let clone_preview_tags = use_signal("gal_drag_clone_preview", || clone_tags.peek());
+    let clone_preview_board = rsx_pull_clone_board(clone_preview_tags, true, move |ev| {
+        let mut items = clone_preview_tags.peek();
+        apply_pull_clone_event(&mut items, ev);
+        clone_preview_tags.set(items);
+    });
 
     let swap_on_end = {
         let swap_left = swap_left.clone();
@@ -1777,7 +2180,18 @@ pub(crate) fn DragShowcase() -> Element {
             apply_two_list_event(swap_left, swap_right, "swap-left", ev);
         }
     };
-    let swap_board = rsx_swap_board(swap_left, swap_right, swap_on_end);
+    let swap_board = rsx_swap_board(swap_left, swap_right, false, swap_on_end);
+    let swap_preview_left = use_signal("gal_drag_swap_preview_left", || swap_left.peek());
+    let swap_preview_right = use_signal("gal_drag_swap_preview_right", || swap_right.peek());
+    let swap_preview_board =
+        rsx_swap_board(swap_preview_left, swap_preview_right, true, move |ev| {
+            apply_two_list_event(
+                swap_preview_left,
+                swap_preview_right,
+                "swap-preview-left",
+                ev,
+            );
+        });
 
     let multi_on_end = {
         let multi_tags = multi_tags.clone();
@@ -3081,6 +3495,12 @@ pub(crate) fn DragShowcase() -> Element {
                 </Label>
                 { resize_board(resize_rect) }
 
+                <Label font_weight="600" text_size="0.875rem">"resize · 无把手边角识别"</Label>
+                <Label text_size="0.75rem" color="muted-foreground">
+                    "像窗口一样：边缘 8px 自动切换横向、纵向或对角光标；按住左键调整大小，内部区域不启动调整。"
+                </Label>
+                { resize_edges_board(resize_edges_rect) }
+
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"gesture · 双指（桌面两点）"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">{ gesture_hud }</Label>
@@ -3101,6 +3521,9 @@ pub(crate) fn DragShowcase() -> Element {
                 </Label>
                 { clone_board }
 
+                <Label font_weight="600" text_size="0.875rem">"pull_clone · 让位预览"</Label>
+                { clone_preview_board }
+
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"§12 · Swap · SortMode"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
@@ -3108,10 +3531,13 @@ pub(crate) fn DragShowcase() -> Element {
                 </Label>
                 { swap_board }
 
+                <Label font_weight="600" text_size="0.875rem">"Swap · 让位预览"</Label>
+                { swap_preview_board }
+
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"§12 · MultiDrag · 多选拖"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "`<DragProvider multi_drag={{true}}>` — 单击（未过阈值）切换选中；拖已选项一次带走，Overlay 叠卡。v1 无 Shift 范围选。"
+                    "`<DragProvider multi_drag={{true}}>` — 单击切换选中，Shift 范围选中；拖已选项一次带走。"
                 </Label>
                 { multi_board }
 

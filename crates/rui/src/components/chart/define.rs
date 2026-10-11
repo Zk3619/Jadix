@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use crate::app::pointer_events::EventPhase;
 use crate::components::base::{paint_slot, SlotChrome, SlotMap};
-use crate::core::reactivity::{use_scoped_signal, use_signal, Signal, SignalId};
+use crate::core::reactivity::{create_memo, use_scoped_signal, use_signal, Signal, SignalId};
 use crate::core::tree::{CursorKind, Element, LayoutStatus};
 use crate::primitives::path::{
     encode_path_d, encode_points, ensure_raster_texture, filled_circle, points_from_commands,
@@ -615,6 +615,7 @@ fn assign_chart_hover(sig: Signal<ChartHover>, next: ChartHover) {
     }
     if sig.peek() != next {
         sig.set(next);
+        crate::primitives::interactive::mark_hover_paint_dirty();
     }
 }
 
@@ -624,6 +625,7 @@ fn flush_pending_chart_hovers() {
         set_overlay_scroll_hidden(sig.id(), false);
         if sig.is_alive() && sig.peek() != next {
             sig.set(next);
+            crate::primitives::interactive::mark_hover_paint_dirty();
         }
     }
 }
@@ -642,6 +644,73 @@ fn attach_overlay_scroll_hide(layer: Element, sig: Signal<ChartHover>) -> Elemen
             LayoutStatus::Clean
         }
     })
+}
+
+/// Keep pointer movement in the paint prepass; only datum changes rebuild content.
+fn attach_overlay_pointer_sync(
+    mut layer: Element,
+    sig: Signal<ChartHover>,
+    selected: Option<usize>,
+    sc: &TooltipScene,
+) -> Element {
+    let bounds = Rc::new(Cell::new([0.0; 4]));
+    let parent_bounds = bounds.clone();
+    layer = attach_overlay_scroll_hide(layer, sig);
+    let hide = layer.reactive_sync.take().expect("overlay scroll sync");
+    layer = layer.reactive_sync(move |el, tree| {
+        parent_bounds.set(el.layout_bounds);
+        hide.run(el, tree)
+    });
+    let (logic_w, logic_h) = (sc.logic_w.max(1.0), sc.logic_h.max(1.0));
+    for (i, child) in layer.children.iter_mut().enumerate() {
+        let bounds = bounds.clone();
+        let tooltip = child
+            .get_attr("data-slot")
+            .is_some_and(|s| s == "chart-tooltip");
+        let crosshair = sc.crosshair;
+        let previous = child.reactive_sync.take();
+        *child = std::mem::take(child).reactive_sync(move |el, tree| {
+            let status = previous
+                .as_ref()
+                .map_or(LayoutStatus::Clean, |sync| sync.run(el, tree));
+            let hov = sig.peek();
+            if hov == ChartHover::default() || (hov.index.is_none() && selected.is_some()) {
+                return status;
+            }
+            let [bx, by, bw, bh] = bounds.get();
+            if bw <= 0.0 || bh <= 0.0 {
+                return status;
+            }
+            let x = (hov.x / logic_w).clamp(0.0, 1.0) * bw;
+            let y = (hov.y / logic_h).clamp(0.0, 1.0) * bh;
+            let [ex, ey, ew, eh] = el.layout_bounds;
+            let target = if tooltip {
+                let gap = TOOLTIP_GAP_PX;
+                let margin = TOOLTIP_MARGIN_PX;
+                let flip_x = ew > bw - x - gap - margin && x >= bw - x;
+                let flip_y = eh > bh - y - gap - margin && y >= bh - y;
+                [
+                    bx + x + if flip_x { -ew - gap } else { gap },
+                    by + y + if flip_y { -eh - gap } else { gap },
+                ]
+            } else if crosshair && i == 0 {
+                [bx + x, ey]
+            } else if crosshair && i == 1 {
+                [ex, by + y]
+            } else if crosshair && i == 2 {
+                [bx + x - ew / 2.0, by + y - eh / 2.0]
+            } else {
+                return status;
+            };
+            let translate = [target[0] - ex, target[1] - ey];
+            if el.style.translate == translate {
+                return status;
+            }
+            el.style.translate = translate;
+            status.merge(LayoutStatus::StyleChanged)
+        });
+    }
+    layer
 }
 
 #[derive(Clone)]
@@ -774,27 +843,45 @@ fn live_selected_chart(builder: ChartBuilder) -> Element {
         if wants_overlay {
             b.overlay_key = Some(tip_for_plot.clone());
         }
-        let el = if b.polar() {
+        // A fluid cartesian chart is first compiled before its real plot size
+        // is known. Keep that bootstrap raster hidden so it cannot flash at
+        // the default width for one frame when the chart enters the viewport.
+        let polar = b.polar();
+        let measured = polar || (lw >= 16.0 && lh >= 16.0);
+        let mut el = if polar {
             compile_polar(b)
         } else {
             compile_cartesian(b)
         };
+        if !measured {
+            el.style.opacity = 0.0;
+        }
         // The image reconcile will be replaced with a new overlay placeholder; the bump will allow the tooltip island to fill in the content afterwards.
         plot_gen.set(plot_gen.peek().wrapping_add(1));
         el
     });
 
     if wants_overlay {
+        let content = create_memo(move || {
+            let hover = hov.get();
+            (hover.index, hover == ChartHover::default())
+        });
         crate::app::reactive::reactive_anchor(tip_id, move || {
             let _ = use_signal(tip_remount_key.as_str(), || 0u32).get();
             let _ = plot_gen.get();
-            let hov_now = hov.get();
+            let _ = content.get();
+            let hov_now = hov.peek();
             let selected = sig.peek();
             let sc = scene.borrow();
             let Some(sc) = sc.as_ref() else {
                 return attach_overlay_scroll_hide(empty_overlay_layer(), hov);
             };
-            attach_overlay_scroll_hide(overlay_from_pointer(hov_now, selected, sc), hov)
+            attach_overlay_pointer_sync(
+                overlay_from_pointer(hov_now, selected, sc),
+                hov,
+                selected,
+                sc,
+            )
         });
     }
 
@@ -821,7 +908,8 @@ fn selection_pin(
     config: &ChartConfig,
 ) -> ChartPin {
     let i = selected?;
-    let mut item = marks.iter().rev().find_map(|m| m.hover_item(i))?;
+    let mark = marks.iter().rev().find(|m| m.hover_item(i).is_some())?;
+    let mut item = mark.hover_item(i)?;
     // config 只改行标签（系列名）；顶栏 header（类目）保留。
     if let Some(key) = item.series_key.as_deref() {
         if let Some(lbl) = config.label_for(key) {
@@ -830,13 +918,18 @@ fn selection_pin(
     } else if let Some(lbl) = config.label_for(&item.label) {
         item.label = lbl.to_string();
     }
-    let color = item
-        .series_key
-        .as_deref()
-        .and_then(|k| config.color_for(k))
-        .or_else(|| config.color_for(&item.label))
+    let color = mark
+        .tooltip_color(ctx, i)
+        .or_else(|| {
+            item.series_key
+                .as_deref()
+                .and_then(|k| config.color_for(k))
+                .or_else(|| config.color_for(&item.label))
+        })
         .unwrap_or_else(|| ctx.theme.color(i));
-    let pt = marks.iter().rev().find_map(|m| m.datum_point(ctx, i))?;
+    let pt = mark
+        .datum_point(ctx, i)
+        .or_else(|| marks.iter().rev().find_map(|m| m.datum_point(ctx, i)))?;
     Some(ChartPinData {
         x: pt.0,
         y: pt.1,
@@ -992,7 +1085,11 @@ fn chart_tooltip_content(
             font_family: Some("ui-monospace".into()),
             ..Default::default()
         },
-    );
+    )
+    // Tooltip values are atomic readouts.  Letting the flex row shrink this leaf
+    // makes glyphon wrap the last digit into a second visual row.
+    .whitespace_nowrap()
+    .flex_shrink(0.0);
     let row: Element = hstack()
         .gap("0.5rem")
         .items_center()
@@ -1049,6 +1146,10 @@ fn pin_overlay_layer(
         .top(0.0)
         .pointer_events("none")
         .into();
+    // Local chart overlays move every pointer frame. Mark the whole retained
+    // overlay subtree so damage can replay the chart page band underneath the
+    // old and new positions instead of doing a white node dest-reset.
+    layer.set_attr("rui_chart_overlay", "1");
     let Some(pin) = pin else {
         return layer;
     };
@@ -1065,6 +1166,7 @@ fn pin_overlay_layer(
             .top(0.0)
             .pointer_events("none")
             .into();
+        v.set_attr("rui_chart_overlay", "1");
         v = v.bg(theme.grid);
         let mut hline: Element = r#box()
             .h(1.0)
@@ -1074,6 +1176,7 @@ fn pin_overlay_layer(
             .top(format!("{y_pct:.2}%"))
             .pointer_events("none")
             .into();
+        hline.set_attr("rui_chart_overlay", "1");
         hline = hline.bg(theme.grid);
         layer = layer.child(v).child(hline);
         if polar {
@@ -1086,6 +1189,7 @@ fn pin_overlay_layer(
                 .top(format!("calc({y_pct:.2}% - 3px)"))
                 .pointer_events("none")
                 .into();
+            dot.set_attr("rui_chart_overlay", "1");
             dot = dot.bg(pin.color);
             layer = layer.child(dot);
         }
@@ -1095,6 +1199,7 @@ fn pin_overlay_layer(
         let gap = TOOLTIP_GAP_PX;
         let body = chart_tooltip_content(&pin.item, pin.color, tooltip_indicator);
         let mut tip = chart_tooltip_bubble(body, tooltip_chrome);
+        tip.set_attr("rui_chart_overlay", "1");
         tip = tip.absolute().pointer_events("none");
         if place.flip_x {
             let from_right = (100.0 - x_pct).clamp(0.0, 100.0);
@@ -1725,6 +1830,21 @@ fn compile_cartesian(builder: ChartBuilder) -> Element {
     apply_optional_id(root, &id)
 }
 
+/// Polar marks share one raster scene, so their semantic z-order must not
+/// depend on the order in which a caller happened to provide the builders.
+/// Filled bars/areas stay underneath strokes, and dots are the final ink.
+fn polar_mark_order(marks: &[ChartMark]) -> Vec<usize> {
+    let mut order: Vec<usize> = (0..marks.len()).collect();
+    order.sort_by_key(|&i| match marks[i].kind() {
+        "radialBar" | "pie" => 0u8,
+        "radialArea" => 1,
+        "radialLine" => 2,
+        "radialDot" => 3,
+        _ => 2,
+    });
+    order
+}
+
 fn compile_polar(builder: ChartBuilder) -> Element {
     let hover_signal = builder.hover_signal;
     let tooltip_scene = builder.tooltip_scene.clone();
@@ -1785,8 +1905,8 @@ fn compile_polar(builder: ChartBuilder) -> Element {
     if guides && !pie_only {
         layers.extend(polar_guide_layers(&ctx));
     }
-    for m in &marks {
-        layers.extend(m.render(&ctx));
+    for i in polar_mark_order(&marks) {
+        layers.extend(marks[i].render(&ctx));
     }
     let (mut path_layers, markers, marker_r) = compile_layers(&layers);
     push_selected_vertex(&mut path_layers, &markers, &marks, selected, &theme);
@@ -1952,6 +2072,229 @@ pub(crate) fn pie_legend_rows(
 mod hover_freeze_tests {
     use super::*;
     use crate::core::reactivity::{create_root, use_signal};
+
+    #[test]
+    fn tooltip_regression_decimal_stays_on_one_line() {
+        let item = ChartTooltipItem {
+            label: "Tuesday".into(),
+            value: 0.52,
+            series_key: None,
+            header: None,
+        };
+        let body = chart_tooltip_content(&item, [0.0, 0.0, 1.0, 1.0], TooltipIndicator::Dot);
+        let mut chart = chart_tooltip_bubble(body, &SlotChrome::default())
+            .w(96.0)
+            .max_w(96.0);
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        let result = tree.build_and_layout(&mut chart, 1360.0, 200.0, [-1.0, -1.0]);
+        for text in ["0.52"] {
+            let value = result.text_nodes.iter().find(|t| t.text == text).unwrap();
+            assert_eq!(
+                value.style.white_space,
+                crate::style::WhiteSpace::Nowrap,
+                "tooltip {text} must stay on one visual row"
+            );
+            let prepared = value.prepared.as_ref().expect("measured tooltip text");
+            let metrics = crate::text::layout(prepared, value.width);
+            let intrinsic = crate::text::layout(prepared, f32::MAX).width;
+            assert!(
+                value.width + 0.01 >= intrinsic,
+                "tooltip {text} is squeezed: {} < {intrinsic}",
+                value.width
+            );
+            assert_eq!(
+                metrics.line_count, 1,
+                "tooltip {text} wraps at width {}",
+                value.width
+            );
+        }
+    }
+
+    #[test]
+    fn tooltip_regression_pointer_moves_do_not_rebuild() {
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::core::reactivity::{create_effect, take_flushed_effects, EffectPhase};
+
+        reset_registered_anchors();
+        let live = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(live.clone());
+        let (owner, hov) = create_root({
+            let live = live.clone();
+            move || {
+                let hov = use_signal("tooltip-regression-move", || ChartHover {
+                    x: 30.0,
+                    y: 20.0,
+                    index: Some(0),
+                });
+                create_effect(move || {
+                    let mut builder = define_chart()
+                        .id("tooltip-regression")
+                        .mark(super::super::mark::bar_y([("Tue", 0.52), ("Wed", 0.8)]))
+                        .tooltip(true);
+                    builder.hover_signal = Some(hov);
+                    *live.borrow_mut() = builder.into();
+                });
+                hov
+            }
+        });
+        drain_deferred_view_remounts();
+        let _ = take_flushed_effects();
+        assign_chart_hover(
+            hov,
+            ChartHover {
+                x: 50.0,
+                y: 30.0,
+                index: Some(0),
+            },
+        );
+        let rebuilds = take_flushed_effects()
+            .into_iter()
+            .filter(|(_, phase)| *phase == EffectPhase::Render)
+            .count();
+        assign_chart_hover(
+            hov,
+            ChartHover {
+                x: 70.0,
+                y: 30.0,
+                index: Some(1),
+            },
+        );
+        let datum_rebuilds = take_flushed_effects()
+            .into_iter()
+            .filter(|(_, phase)| *phase == EffectPhase::Render)
+            .count();
+        let mut updated_value = false;
+        crate::core::tree::walk_elements(&live.borrow(), |el| {
+            updated_value |= el.text.as_deref() == Some("0.80");
+        });
+        assign_chart_hover(hov, ChartHover::default());
+        let mut tooltip_visible = false;
+        crate::core::tree::walk_elements(&live.borrow(), |el| {
+            tooltip_visible |= el
+                .get_attr("data-slot")
+                .is_some_and(|s| s == "chart-tooltip");
+        });
+        clear_test_reconcile_root();
+        owner.dispose();
+        reset_registered_anchors();
+        assert_eq!(
+            rebuilds, 0,
+            "moving within a datum must only update overlay position"
+        );
+        assert!(
+            datum_rebuilds > 0 && updated_value,
+            "changing datum must refresh the content"
+        );
+        assert!(
+            !tooltip_visible,
+            "leaving must remove an unselected tooltip"
+        );
+    }
+
+    #[test]
+    fn tooltip_regression_pointer_sync_follows_and_flips_without_layout() {
+        create_root(|| {
+            let scene = Rc::new(RefCell::new(None));
+            let mut builder = define_chart()
+                .mark(super::super::mark::bar_y([("Tue", 0.52)]))
+                .width_px(200.0)
+                .plot_h(80.0)
+                .tooltip(true)
+                .crosshair(true);
+            builder.tooltip_scene = Some(scene.clone());
+            let _ = compile_cartesian(builder);
+            let scene = scene.borrow();
+            let sc = scene.as_ref().unwrap();
+            let sig = use_signal("tooltip-sync-regression", || ChartHover {
+                x: 30.0,
+                y: 20.0,
+                index: Some(0),
+            });
+            let layer = attach_overlay_pointer_sync(
+                overlay_from_pointer(sig.peek(), None, sc),
+                sig,
+                None,
+                sc,
+            );
+            let mut root: Element = r#box().w(200.0).h(80.0).relative(true).child(layer).into();
+            let mut tree = crate::layout::layout_tree::LayoutTree::new();
+            tree.build_and_layout(&mut root, 200.0, 80.0, [-1.0, -1.0]);
+            let original = root.children[0].children[2].layout_bounds;
+            for (x, y, flip) in [
+                (50.0, 25.0, false),
+                (190.0, 75.0, true),
+                (40.0, 15.0, false),
+            ] {
+                assign_chart_hover(
+                    sig,
+                    ChartHover {
+                        x,
+                        y,
+                        index: Some(0),
+                    },
+                );
+                let mut impact = LayoutStatus::Clean;
+                crate::core::tree::sync_reactive_elements_subtree(
+                    &mut root,
+                    &mut tree,
+                    &mut impact,
+                    200.0,
+                    80.0,
+                    [0.0, 0.0],
+                );
+                assert_eq!(impact, LayoutStatus::StyleChanged);
+                let layer = &root.children[0];
+                let tip = &layer.children[2];
+                assert_eq!(
+                    tip.layout_bounds, original,
+                    "movement must retain the layout box"
+                );
+                let expected_x = x + if flip {
+                    -original[2] - TOOLTIP_GAP_PX
+                } else {
+                    TOOLTIP_GAP_PX
+                };
+                let expected_y = y + if flip {
+                    -original[3] - TOOLTIP_GAP_PX
+                } else {
+                    TOOLTIP_GAP_PX
+                };
+                assert!((tip.layout_bounds[0] + tip.style.translate[0] - expected_x).abs() < 0.01);
+                assert!((tip.layout_bounds[1] + tip.style.translate[1] - expected_y).abs() < 0.01);
+                assert!(
+                    (layer.children[0].layout_bounds[0] + layer.children[0].style.translate[0] - x)
+                        .abs()
+                        < 0.01
+                );
+                assert!(
+                    (layer.children[1].layout_bounds[1] + layer.children[1].style.translate[1] - y)
+                        .abs()
+                        < 0.01
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn polar_marks_keep_fill_stroke_and_dot_z_order() {
+        let rows = || {
+            vec![
+                super::super::datum::ChartDatum::new("N", 4.0),
+                super::super::datum::ChartDatum::new("E", 2.0),
+            ]
+        };
+        let marks = vec![
+            ChartMark::from(super::super::polar::radial_dot(rows())),
+            ChartMark::from(super::super::polar::radial_line(rows())),
+            ChartMark::from(super::super::polar::radial_bar(rows())),
+        ];
+        let kinds: Vec<_> = polar_mark_order(&marks)
+            .into_iter()
+            .map(|i| marks[i].kind())
+            .collect();
+        assert_eq!(kinds, vec!["radialBar", "radialLine", "radialDot"]);
+    }
 
     #[test]
     fn frozen_hover_does_not_write_until_unfreeze() {

@@ -4,7 +4,7 @@ use proc_macro::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::parse::{Parse, ParseStream, Parser};
 use syn::visit::Visit;
-use syn::{Expr, Ident, Token, braced};
+use syn::{braced, Expr, Ident, Token};
 
 /// RSX 中省略 `id` 的 `<Input>`：编译期为每个标签分配序号，生成稳定字面量，避免多个 Input 共用空 `id` 导致信号冲突。
 static INPUT_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -2623,6 +2623,10 @@ fn expand_node(
                         .or_else(|| get_attr("multiDrag"))
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { false });
+                    let reorder_preview = get_attr("reorder_preview")
+                        .or_else(|| get_attr("reorderPreview"))
+                        .map(|e| quote! { #e })
+                        .unwrap_or_else(|| quote! { false });
                     let debug_hits = get_attr("debug_hits")
                         .or_else(|| get_attr("debugHits"))
                         .map(|e| quote! { #e })
@@ -2747,6 +2751,7 @@ fn expand_node(
                             __b = __b.animation(#animation);
                             __b = __b.sort_mode(rui::utils::drag::SortMode::parse(&(#sort_mode)));
                             __b = __b.multi_drag(#multi_drag);
+                            __b = __b.reorder_preview(#reorder_preview);
                             __b = __b.debug_hits(#debug_hits);
                             __b = __b.inertia(#inertia);
                             #snap_ts
@@ -5057,11 +5062,13 @@ fn expand_node(
                             quote! { rui::app::portal_overlay::OverlayMode::Stacked }
                         });
                     let mode = get_attr("pinned")
-                        .map(|e| quote! {
-                            if #e {
-                                rui::app::portal_overlay::OverlayMode::Pinned
-                            } else {
-                                rui::app::portal_overlay::OverlayMode::Stacked
+                        .map(|e| {
+                            quote! {
+                                if #e {
+                                    rui::app::portal_overlay::OverlayMode::Pinned
+                                } else {
+                                    rui::app::portal_overlay::OverlayMode::Stacked
+                                }
                             }
                         })
                         .unwrap_or(mode);
@@ -10837,17 +10844,21 @@ mod rsx_lowering_tests {
 
     #[test]
     fn drag_provider_emits_sort_mode_and_multi_drag() {
-        let s =
-            expand(r#"<DragProvider id="p" sort_mode="swap" multi_drag={true}></DragProvider>"#);
+        let s = expand(
+            r#"<DragProvider id="p" sort_mode="swap" multi_drag={true} reorder_preview={true}></DragProvider>"#,
+        );
         let compact = s.replace(' ', "");
         assert!(compact.contains("SortMode::parse"), "{s}");
         assert!(compact.contains("\"swap\""), "{s}");
         assert!(compact.contains("multi_drag(true)"), "{s}");
-        let camel =
-            expand(r#"<DragProvider id="p" sortMode="swap" multiDrag={true}></DragProvider>"#);
+        assert!(compact.contains("reorder_preview(true)"), "{s}");
+        let camel = expand(
+            r#"<DragProvider id="p" sortMode="swap" multiDrag={true} reorderPreview={true}></DragProvider>"#,
+        );
         let compact_camel = camel.replace(' ', "");
         assert!(compact_camel.contains("SortMode::parse"), "{camel}");
         assert!(compact_camel.contains("multi_drag(true)"), "{camel}");
+        assert!(compact_camel.contains("reorder_preview(true)"), "{camel}");
     }
 
     #[test]

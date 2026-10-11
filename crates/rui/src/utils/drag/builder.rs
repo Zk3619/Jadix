@@ -538,7 +538,8 @@ fn apply_shell_stack_z(
     }
     let from_l = from_list.peek();
     let hover_l = hover_list.peek();
-    let cross = is_active
+    let cross = (is_active
+        || (active.peek().is_some() && active_drag_ids().iter().any(|x| x == id)))
         && from_l.is_some()
         && hover_l.is_some()
         && from_l != hover_l
@@ -818,7 +819,11 @@ fn apply_live_drag_chrome(
     let from_l = from_list.peek();
     let hover_l = hover_list.peek();
     let lists_cross = from_l.is_some() && hover_l.is_some() && from_l != hover_l;
-    let origin_row = active.peek().is_some() && list.is_some() && list == from_l;
+    let origin_row = active.peek().is_some()
+        && list.is_some()
+        && list == from_l
+        && !active_pull_clone()
+        && active_sort_mode() != SortMode::Swap;
     if origin_row && was_cross.get().is_some_and(|prev| prev != lists_cross) {
         // Rebase the tween when switching between the collapsed physical pack
         // and logical source slots, preserving the row's current paint position.
@@ -837,17 +842,52 @@ fn apply_live_drag_chrome(
     was_cross.set(origin_row.then_some(lists_cross));
     let flags = super::registry::item_flags(scope, id);
     let clone_drag = is_active && super::session::active_pull_clone();
+    let preview = super::session::reorder_preview(scope);
+    let ids = active_drag_ids();
+    let in_group = active.peek().is_some() && ids.len() > 1 && ids.iter().any(|x| x == id);
     let mut want_opacity = author_opacity;
     let mut want_translate = [0.0_f32, 0.0];
     let mut follow_pointer = false;
-    if is_active {
+    if in_group && overlay_on {
+        want_opacity = if active_pull_clone() {
+            author_opacity
+        } else if lists_cross {
+            0.0
+        } else {
+            item_source_opacity.unwrap_or_else(|| overlay_source_opacity(scope))
+        };
+        want_translate = live_sortable_translate(
+            also_droppable,
+            axis,
+            list.as_deref(),
+            index,
+            from_list,
+            from_index,
+            hover_list,
+            hover_index,
+        );
+        follow_pointer = true;
+    } else if is_active {
         if flags.skip_follow {
             want_opacity = author_opacity;
             want_translate = [0.0, 0.0];
             follow_pointer = false;
         } else if clone_drag {
             want_opacity = author_opacity;
-            want_translate = [0.0, 0.0];
+            want_translate = if preview {
+                live_sortable_translate(
+                    also_droppable,
+                    axis,
+                    list.as_deref(),
+                    index,
+                    from_list,
+                    from_index,
+                    hover_list,
+                    hover_index,
+                )
+            } else {
+                [0.0, 0.0]
+            };
             follow_pointer = false;
         } else if overlay_on {
             let src_op = item_source_opacity.unwrap_or_else(|| overlay_source_opacity(scope));
@@ -856,7 +896,20 @@ fn apply_live_drag_chrome(
             let swap = active_sort_mode() == SortMode::Swap;
             if swap {
                 want_opacity = src_op;
-                want_translate = [0.0, 0.0];
+                want_translate = if preview {
+                    live_sortable_translate(
+                        also_droppable,
+                        axis,
+                        list.as_deref(),
+                        index,
+                        from_list,
+                        from_index,
+                        hover_list,
+                        hover_index,
+                    )
+                } else {
+                    [0.0, 0.0]
+                };
                 follow_pointer = false;
             } else if hide {
                 want_opacity = src_op;
@@ -894,14 +947,14 @@ fn apply_live_drag_chrome(
         auto_bumped.set(false);
         // MultiDrag ids are local to the active provider; other providers may reuse them.
         let in_group = active.peek().is_some() && active_drag_ids().iter().any(|x| x == id);
-        if active_sort_mode() == SortMode::Swap {
+        if active_sort_mode() == SortMode::Swap && !preview {
             want_translate = [0.0, 0.0];
         } else if in_group {
             let src_op = item_source_opacity.unwrap_or_else(|| overlay_source_opacity(scope));
             want_opacity = src_op;
             want_translate = [0.0, 0.0];
         } else if also_droppable {
-            if flags.skip_shift || super::session::active_pull_clone() {
+            if flags.skip_shift || (super::session::active_pull_clone() && !preview) {
                 want_translate = [0.0, 0.0];
             } else {
                 want_translate = live_sortable_translate(
@@ -939,6 +992,9 @@ fn apply_live_drag_chrome(
         && !is_active
         && hover_index.peek() == index
         && hover_list.peek() == list;
+    if swap_peer && preview && overlay_on {
+        want_opacity = item_source_opacity.unwrap_or_else(|| overlay_source_opacity(scope));
+    }
     if write_flag_attr(el, ATTR_DRAG_SWAP, swap_peer) {
         changed = changed.merge(LayoutStatus::StyleChanged);
     }
@@ -1230,9 +1286,9 @@ fn sync_cross_list_hole_preview(
     let show = overlay_on
         && from_list.is_some()
         && hover_list == Some(list)
-        && from_list != hover_list
+        && (from_list != hover_list || active_pull_clone())
         && active_sort_mode() != SortMode::Swap
-        && !active_pull_clone();
+        && (!active_pull_clone() || super::session::reorder_preview(scope));
     let existing = el
         .children
         .iter()
@@ -1281,7 +1337,15 @@ fn sync_cross_list_hole_preview(
         }
         return changed;
     }
-    let Some(mut preview) = clone_source_preview(scope, &src_id) else {
+    let preview = if active_drag_ids().len() > 1 {
+        Some(super::overlay::stacked_ghost_panel(
+            scope,
+            &active_drag_ids(),
+        ))
+    } else {
+        clone_source_preview(scope, &src_id)
+    };
+    let Some(mut preview) = preview else {
         return LayoutStatus::Clean;
     };
     strip_preview_session_attrs(&mut preview);
@@ -1368,7 +1432,11 @@ fn apply_live_droppable_chrome(
     // Mid-list insert FLIPs siblings (paint-only); trailing pad grows the
     // list so the last row still fits after the shift.
     let extent = pack_insert_extent(Some(list), axis, chip);
-    let extra_pad = if hover.as_deref() == Some(list) && from.as_deref().is_some() && from != hover
+    let extra_pad = if active_sort_mode() != SortMode::Swap
+        && (!active_pull_clone() || super::session::reorder_preview(scope))
+        && hover.as_deref() == Some(list)
+        && from.as_deref().is_some()
+        && (from != hover || (active_pull_clone() && super::session::reorder_preview(scope)))
     {
         extent
     } else {
@@ -1505,6 +1573,7 @@ pub struct DragScopeBuilder {
     sort_mode: SortMode,
     /// Click-select + batch drag. Overlay stacks frozen ids.
     multi_drag: bool,
+    reorder_preview: bool,
     modifiers: Vec<super::modifier::DragModifier>,
     sensors: Vec<super::sensor::DragSensor>,
     /// Paint collision slots (solid-dnd `DragDropDebugger`). Sticky process-wide flag.
@@ -1538,6 +1607,7 @@ pub fn drag_scope(id: impl Into<String>) -> DragScopeBuilder {
         animation: true,
         sort_mode: SortMode::Insert,
         multi_drag: false,
+        reorder_preview: false,
         modifiers: Vec::new(),
         sensors: Vec::new(),
         debug_hits: false,
@@ -1674,6 +1744,11 @@ impl DragScopeBuilder {
         self.multi_drag = yes;
         self
     }
+    /// Show insertion / exchange previews for clone and swap drags.
+    pub fn reorder_preview(mut self, yes: bool) -> Self {
+        self.reorder_preview = yes;
+        self
+    }
     /// Draw layout-slot rectangles (dashed idle, bold active droppable).
     /// Sets the process-wide [`super::set_debug_drag_hits`] flag when `true`.
     pub fn debug_hits(mut self, yes: bool) -> Self {
@@ -1759,6 +1834,7 @@ impl DragScopeBuilder {
         let drag_extent = use_signal(format!("{id}__drag_extent").as_str(), || [0.0_f32, 0.0]);
         let selected = use_signal(format!("{id}__drag_selected").as_str(), Vec::<String>::new);
         register_scope_product(id.clone(), self.sort_mode, self.multi_drag, selected);
+        super::session::set_reorder_preview(&id, self.reorder_preview);
         super::session::register_scope(
             id.clone(),
             ScopeRuntime {
@@ -2262,6 +2338,7 @@ fn assemble_draggable(
                     group: group.clone(),
                     capture_id: capture.clone(),
                 });
+                super::session::selection_press(&scope, e.shift_key);
                 e.stop_propagation();
             });
         }
@@ -2569,6 +2646,7 @@ pub fn drag_handle(mut el: Element) -> Element {
             group: item.group.clone(),
             capture_id: capture.clone(),
         });
+        super::session::selection_press(&item.scope_id, e.shift_key);
         e.stop_propagation();
     })
 }

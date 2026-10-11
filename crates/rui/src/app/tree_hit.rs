@@ -775,6 +775,8 @@ pub(super) fn session_owned_cursor(
 ) -> Option<CursorValue> {
     if nwse_resize {
         Some(CursorKind::NwseResize.into())
+    } else if let Some(cursor) = crate::utils::pointer_action::active_resize_cursor() {
+        Some(cursor)
     } else if grabbing {
         Some(CursorKind::Grabbing.into())
     } else {

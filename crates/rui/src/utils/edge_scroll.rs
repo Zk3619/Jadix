@@ -157,9 +157,14 @@ pub fn edge_delta(pointer: f32, start: f32, size: f32, sensitivity: f32, step: f
 }
 
 pub fn collect_scroll_hits(root: &Element, out: &mut Vec<ScrollHit>) {
+    collect_scroll_hits_inner(root, [0.0, 0.0], out);
+}
+
+fn collect_scroll_hits_inner(root: &Element, scroll_acc: [f32; 2], out: &mut Vec<ScrollHit>) {
+    let scroll_acc = crate::app::tree_hit::escape_scroll_acc(root, scroll_acc);
     if let Some(fid) = &root.focus_id {
         if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
-            let rect = Rect::from_bounds(root.layout_bounds);
+            let rect = Rect::from_bounds(crate::app::tree_hit::collision_hit_box(root, scroll_acc));
             if rect.is_usable() {
                 out.push(ScrollHit {
                     rest: rest.to_string(),
@@ -168,8 +173,9 @@ pub fn collect_scroll_hits(root: &Element, out: &mut Vec<ScrollHit>) {
             }
         }
     }
+    let next_acc = crate::app::tree_hit::next_hit_scroll_acc(root, scroll_acc);
     for c in &root.children {
-        collect_scroll_hits(c, out);
+        collect_scroll_hits_inner(c, next_acc, out);
     }
 }
 
@@ -196,7 +202,7 @@ fn nudge_axis(
     true
 }
 
-fn frame_dt(last_at: &RefCell<Option<Instant>>) -> f32 {
+pub(crate) fn frame_dt(last_at: &RefCell<Option<Instant>>) -> f32 {
     let now = Instant::now();
     let dt = last_at
         .borrow()
@@ -223,6 +229,13 @@ pub fn apply(
     let step = (cfg.speed * (dt * 60.0).clamp(0.25, 2.5)).max(1.0);
     let mut moved = false;
     for v in views {
+        // A page can contain several independently scrollable regions. Edge
+        // scrolling is local to the region under the pointer; applying the
+        // edge delta to every collected viewport makes an unrelated gallery
+        // panel move as well and feeds that offset back into resize geometry.
+        if !v.rect.contains_point(pointer) {
+            continue;
+        }
         let dx = if skip_x {
             0.0
         } else {
