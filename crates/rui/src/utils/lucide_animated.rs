@@ -973,7 +973,9 @@ pub fn ensure_animated_icon_texture(
     let mut hasher = DefaultHasher::new();
     name.hash(&mut hasher);
     state.hash(&mut hasher);
-    ((elapsed * 60.0).round() as i32).hash(&mut hasher);
+    // A key identifies pixels, including the final settled frame. Time buckets
+    // alone can alias two different documents near an animation boundary.
+    doc.hash(&mut hasher);
     bridging.hash(&mut hasher);
     side.hash(&mut hasher);
     color.hash(&mut hasher);
@@ -981,9 +983,8 @@ pub fn ensure_animated_icon_texture(
 
     #[cfg(feature = "svg")]
     {
-        // SMIL-style: per-frame key (no shared static SVG cache thrash).
-        let rgba = crate::media::svg_raster::rasterize_svg_str(&doc, side, side)?;
-        crate::app::pending_images::queue_image_rgba8(&tex, side, side, rgba);
+        let tex =
+            crate::media::svg_raster::ensure_svg_document_texture_with_key(tex, &doc, side, side)?;
         return Some((tex, side as f32));
     }
     #[cfg(not(feature = "svg"))]
@@ -1559,5 +1560,55 @@ mod tests {
         let fg = crate::style::parse_text_color("foreground");
         let (tex, _) = ensure_animated_icon_texture(&el, 32.0, fg, 2.0).expect("tex");
         assert!(tex.starts_with("rui_lucide_anim:"));
+    }
+
+    #[cfg(feature = "svg")]
+    #[test]
+    fn unchanged_animated_frame_reuses_resident_texture() {
+        let el: Element = animated_icon("bell").size_px(31.0).into();
+        let color = [13, 37, 91, 255];
+        let (key, _) = ensure_animated_icon_texture(&el, 31.0, color, 1.0).unwrap();
+        crate::media::svg_raster::flush_svg_textures(|_| false);
+        assert!(crate::app::pending_images::take_pending_key(&key).is_some());
+        assert_eq!(
+            ensure_animated_icon_texture(&el, 31.0, color, 1.0)
+                .unwrap()
+                .0,
+            key
+        );
+        crate::media::svg_raster::flush_svg_textures(|_| true);
+        assert!(
+            crate::app::pending_images::take_pending_key(&key).is_none(),
+            "an unchanged resident frame must not rasterize/upload on every scroll"
+        );
+        ensure_animated_icon_texture(&el, 31.0, color, 1.0).unwrap();
+        crate::media::svg_raster::flush_svg_textures(|_| false);
+        assert!(
+            crate::app::pending_images::take_pending_key(&key).is_some(),
+            "GPU eviction must still rehydrate the frame"
+        );
+    }
+
+    #[cfg(feature = "svg")]
+    #[test]
+    fn animated_frame_key_tracks_pixels_within_one_time_bucket() {
+        let mut el: Element = animated_icon("bell").size_px(31.0).into();
+        set_animated_icon_state(&mut el, "animate");
+        let sample = |elapsed: f32| {
+            play_store()
+                .lock()
+                .unwrap()
+                .get_mut(&instance_key(&el))
+                .unwrap()
+                .elapsed = elapsed;
+            ensure_animated_icon_texture(&el, 31.0, [13, 37, 91, 255], 1.0)
+                .unwrap()
+                .0
+        };
+        assert_ne!(
+            sample(0.101),
+            sample(0.102),
+            "different SVG pixels in one 60Hz bucket must not alias in the raster cache"
+        );
     }
 }

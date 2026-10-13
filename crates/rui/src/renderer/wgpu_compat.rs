@@ -12,10 +12,20 @@ pub(crate) enum SurfaceAcquireError {
 }
 
 pub(crate) fn instance(backends: wgpu::Backends) -> wgpu::Instance {
-    wgpu::Instance::new(wgpu::InstanceDescriptor {
+    #[allow(unused_mut)] // D3D12 compiler policy is Windows-only.
+    let mut descriptor = wgpu::InstanceDescriptor {
         backends,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
-    })
+    };
+    #[cfg(all(windows, feature = "backend-dx12"))]
+    {
+        // RUI needs SM5, not a PATH-discovered DXC/DXIL toolchain. The latter can
+        // compile successfully but fail PSO creation on the installed driver.
+        // Use the Windows compiler by default; an explicit wgpu override wins.
+        descriptor.backend_options.dx12.shader_compiler =
+            wgpu::Dx12Compiler::from_env().unwrap_or(wgpu::Dx12Compiler::Fxc);
+    }
+    wgpu::Instance::new(descriptor)
 }
 
 pub(crate) fn device_desc<'a>(

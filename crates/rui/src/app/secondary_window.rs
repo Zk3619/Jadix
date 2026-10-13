@@ -988,15 +988,17 @@ impl SecondaryWindowState {
 
     /// Rehydrate CPU caches into this window's device, then upload `take_pending`.
     ///
-    /// Glass sidecars cannot share primary `GpuImageTexture`s; Lucide caption icons
-    /// re-queue from the CPU cache every collect so sequential primary/secondary
-    /// presents can both upload.
+    /// Glass sidecars cannot share primary `GpuImageTexture`s; each collect marks
+    /// its Lucide icons needed so missing slots are uploaded to this window's pool.
     fn upload_pending_textures(&mut self, scaled_tex: &[ScaledTexturedDraw]) {
         self.image_textures.begin_frame();
         for draw in scaled_tex {
             self.image_textures.touch(&draw.texture_key);
         }
         let _ = crate::style::flush_gradient_textures(|key| self.image_textures.get(key).is_some());
+        let _ = crate::utils::icon_texture::flush_icon_textures(|key| {
+            self.image_textures.get(key).is_some()
+        });
         let _ = crate::primitives::path::flush_path_textures(|key| {
             self.image_textures.get(key).is_some()
         });

@@ -2,6 +2,9 @@ use std::borrow::Cow;
 #[cfg(test)]
 #[path = "state_present_tests.rs"]
 mod present_pixel_tests;
+#[cfg(all(test, target_os = "windows", feature = "svg"))]
+#[path = "state_scroll_perf_tests.rs"]
+mod scroll_perf_tests;
 #[cfg(all(test, target_os = "windows"))]
 #[path = "state_theme_present_tests.rs"]
 mod theme_present_tests;
@@ -247,6 +250,8 @@ pub(super) struct AppState {
     render_prof_upload_ms: f32,
     render_prof_text_ms: f32,
     render_prof_encode_ms: f32,
+    #[cfg(test)]
+    native_render_sample: [f32; 8],
     last_text_nodes_cache: Vec<crate::core::tree::TextLayoutInfo>,
     last_text_ui_scale: f32,
     last_text_surface_size: [u32; 2],
@@ -617,14 +622,14 @@ fn draw_instance_range(
             for (s, c) in super::draw_cull::visible_instance_runs(instances, start, count, damage) {
                 if c > 0 {
                     super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Quad, c);
-                    pass.draw_indexed(0..pipeline.num_indices, 0, s..(s + c));
+                    pipeline.draw_instance_span(pass, instances, s, c);
                 }
             }
             return;
         }
     }
     super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Quad, count);
-    pass.draw_indexed(0..pipeline.num_indices, 0, start..start + count);
+    pipeline.draw_instance_span(pass, instances, start, count);
 }
 
 /// Node-present ranged SDF: copy the instance range and its clip_polys so
@@ -1949,6 +1954,8 @@ impl AppState {
             render_prof_upload_ms: 0.0,
             render_prof_text_ms: 0.0,
             render_prof_encode_ms: 0.0,
+            #[cfg(test)]
+            native_render_sample: [0.0; 8],
             last_text_nodes_cache: Vec::new(),
             last_text_ui_scale: 0.0,
             last_text_surface_size: [0, 0],
@@ -6089,6 +6096,9 @@ impl AppState {
         // Rehydrate CPU-cached textures after TexturePool eviction / first paint.
         // Uploads happen immediately in take_pending below (same frame).
         let _ = crate::style::flush_gradient_textures(|key| self.image_textures.get(key).is_some());
+        let _ = crate::utils::icon_texture::flush_icon_textures(|key| {
+            self.image_textures.get(key).is_some()
+        });
         let _ = crate::primitives::path::flush_path_textures(|key| {
             self.image_textures.get(key).is_some()
         });
@@ -6107,7 +6117,10 @@ impl AppState {
             self.image_textures.get(key).is_some()
         });
 
-        for (id, rgba, w, h) in super::pending_images::take_pending() {
+        let pending_images = super::pending_images::take_pending();
+        #[cfg(test)]
+        let pending_count = pending_images.len();
+        for (id, rgba, w, h) in pending_images {
             // Bake/MSDF text: Linear filter without mip chain. Mips + minify washed out
             // supersample AA and blurred sticky 0° / rotate samples.
             let is_text_xform = crate::utils::text_texture::is_text_xform_texture_key(&id);
@@ -6143,6 +6156,8 @@ impl AppState {
             };
             self.image_textures.insert_with_size(id, gpu, w, h);
         }
+        #[cfg(test)]
+        let images_uploaded = Instant::now();
         #[cfg(feature = "scene3d")]
         {
             if !crate::renderer::scene3d::scene3d_gpu_enabled() {
@@ -7173,6 +7188,19 @@ impl AppState {
             });
         }
         let text_done = Instant::now();
+        #[cfg(test)]
+        {
+            self.native_render_sample = [
+                (fx_done - fx_begin).as_secs_f32() * 1000.0,
+                (text_done - fx_done).as_secs_f32() * 1000.0,
+                capture_n as f32,
+                if fx_dirty { 1.0 } else { 0.0 },
+                (images_uploaded - upload_done).as_secs_f32() * 1000.0,
+                (fx_begin - images_uploaded).as_secs_f32() * 1000.0,
+                pending_count as f32,
+                self.page_stack_band_text_renderers.len() as f32,
+            ];
+        }
         let prev_presented_underlines = self.last_presented_underlines.clone();
         let page_stack_underline_flat: Vec<InstanceInput> = page_stack_band_underlines
             .iter()

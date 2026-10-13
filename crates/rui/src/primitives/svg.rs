@@ -2055,17 +2055,14 @@ pub fn svg_raster_from_element_attrs(
     {
         let doc = emit_svg_document_at(&scene.nodes, scene.vb, smil_t);
         let tex = if scene.has_smil {
-            // SMIL: include time bucket in cache key via fresh raster each ~frame
-            let frame = (smil_t.unwrap_or(0.0) * 60.0) as u64;
+            // The baked document identifies the pixels. A wall-clock bucket
+            // would keep rasterizing finite SMIL animations after they settle.
             let mut hasher = DefaultHasher::new();
             doc.hash(&mut hasher);
             w.hash(&mut hasher);
             h.hash(&mut hasher);
-            frame.hash(&mut hasher);
             let key = format!("rui_svg_anim:{:016x}", hasher.finish());
-            let rgba = crate::media::svg_raster::rasterize_svg_str(&doc, w, h)?;
-            crate::app::pending_images::queue_image_rgba8(&key, w, h, rgba);
-            key
+            crate::media::svg_raster::ensure_svg_document_texture_with_key(key, &doc, w, h)?
         } else {
             crate::media::svg_raster::ensure_svg_document_texture(&doc, w, h)?
         };

@@ -2259,7 +2259,8 @@ pub fn prepare_text_frame_at(
     let mut text_areas = Vec::with_capacity(cap);
     let viewport_clip = [0.0, 0.0, width as f32, height as f32];
 
-    // Compute growth before parking: first-frame / list-grew still preshape offscreen.
+    // Compute growth before parking. First mount is not permission to shape the whole
+    // document: keep the same bounded near-viewport prefetch used by later frames.
     let initial_preshape = text_renderer.shaped_cache.len() < text_nodes.len();
     // Clip-strip submit and band-cull change membership/order every scroll frame.
     // Index-aligned reuse then mass-misses; park everything and FIFO-reclaim by hash.
@@ -2267,16 +2268,8 @@ pub fn prepare_text_frame_at(
         &mut text_renderer.shaped_cache,
         &mut text_renderer.shaped_identity_pool,
     );
-    let effective_margin = if initial_preshape {
-        f32::MAX
-    } else {
-        preshape_margin()
-    };
-    let effective_budget = if initial_preshape {
-        usize::MAX
-    } else {
-        preshape_budget()
-    };
+    let effective_margin = preshape_margin();
+    let effective_budget = preshape_budget();
 
     let mut preshape_miss_count = 0usize;
     let mut preshape_warmup: Vec<(usize, f32, f32, f32, f32)> = Vec::new();

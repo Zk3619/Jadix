@@ -114,6 +114,9 @@ fn vs_main(
         && instance.shadow_color.a <= 0.001
         && instance.clip_size_and_extra.w <= 0.5
         && instance.clip_size_and_extra.z < 0.5;
+    let plain_fill = instance.border_width <= 0.0
+        && instance.shadow_color.a <= 0.001
+        && instance.clip_size_and_extra.w <= 0.5;
     var ext = vec2<f32>(0.0);
     if (!simple_fill) {
         let spread = max(0.0, shadow_spread);
@@ -154,7 +157,7 @@ fn vs_main(
     // Simple fill color is constant per instance. Decode sRGB here rather than
     // running three pow() calls for every pixel of each full-window background.
     var fill_color = instance.color;
-    if (simple_fill && instance.rect_size.x > 32.0 && instance.rect_size.y > 32.0) {
+    if (plain_fill) {
         fill_color = vec4<f32>(linearize_srgb_rgb(instance.color.rgb), instance.color.a);
     }
     out.color = fill_color;
@@ -179,7 +182,8 @@ fn vs_main(
         instance.clip_size_and_extra.z,
         f32(instance_idx),
         instance.clip_size_and_extra.w,
-        select(0.0, 1.0, has_world_clip) + select(0.0, 2.0, fast_fill),
+        select(0.0, 1.0, has_world_clip) + select(0.0, 2.0, fast_fill)
+            + select(0.0, 4.0, plain_fill),
     );
 
     return out;
@@ -582,27 +586,35 @@ fn clip_poly_contains(p: vec2<f32>, inst_id: u32) -> bool {
     if (inst_id >= n) {
         return true;
     }
-    let poly = clip_polys[inst_id];
-    if (poly.count >= 3u) {
-        if (!clip_layer_contains(p, poly.count, poly.fill, poly.pts)) {
+    // Read only active fields. Copying this struct and passing both vertex arrays
+    // by value creates large fragment-local arrays even for rectangular clips.
+    if (clip_polys[inst_id].count >= 3u) {
+        if (!clip_layer_contains(p, clip_polys[inst_id].count, clip_polys[inst_id].fill, inst_id, false)) {
             return false;
         }
     }
-    if (poly.count2 >= 3u) {
-        if (!clip_layer_contains(p, poly.count2, poly.fill2, poly.pts2)) {
+    if (clip_polys[inst_id].count2 >= 3u) {
+        if (!clip_layer_contains(p, clip_polys[inst_id].count2, clip_polys[inst_id].fill2, inst_id, true)) {
             return false;
         }
     }
-    if (!round_clip_contains(p, poly.round_rect, poly.round_radii)) {
+    if (!round_clip_contains(p, clip_polys[inst_id].round_rect, clip_polys[inst_id].round_radii)) {
         return false;
     }
-    if (!round_clip_contains(p, poly.round_rect2, poly.round_radii2)) {
+    if (!round_clip_contains(p, clip_polys[inst_id].round_rect2, clip_polys[inst_id].round_radii2)) {
         return false;
     }
     return true;
 }
 
-fn clip_layer_contains(p: vec2<f32>, count: u32, fill: u32, pts: array<vec2<f32>, 16>) -> bool {
+fn clip_point(inst_id: u32, index: u32, second: bool) -> vec2<f32> {
+    if (second) {
+        return clip_polys[inst_id].pts2[index];
+    }
+    return clip_polys[inst_id].pts[index];
+}
+
+fn clip_layer_contains(p: vec2<f32>, count: u32, fill: u32, inst_id: u32, second: bool) -> bool {
     if (count < 3u) {
         return true;
     }
@@ -610,8 +622,8 @@ fn clip_layer_contains(p: vec2<f32>, count: u32, fill: u32, pts: array<vec2<f32>
         var inside = false;
         var j = count - 1u;
         for (var i = 0u; i < count; i++) {
-            let a = pts[i];
-            let b = pts[j];
+            let a = clip_point(inst_id, i, second);
+            let b = clip_point(inst_id, j, second);
             if ((a.y > p.y) != (b.y > p.y)) {
                 let x_int = (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x;
                 if (p.x < x_int) {
@@ -625,8 +637,8 @@ fn clip_layer_contains(p: vec2<f32>, count: u32, fill: u32, pts: array<vec2<f32>
     var w = 0;
     var jn = count - 1u;
     for (var i = 0u; i < count; i++) {
-        let a = pts[i];
-        let b = pts[jn];
+        let a = clip_point(inst_id, i, second);
+        let b = clip_point(inst_id, jn, second);
         if (a.y <= p.y) {
             if (b.y > p.y && clip_edge_left(a, b, p) > 0.0) {
                 w = w + 1;
@@ -695,6 +707,16 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 
     // Compute alpha for the inner rect body
     let alpha_bg = 1.0 - smoothstep(-aa, aa, d);
+    // Radius changes coverage, not the fill RGB. Decode a constant fill once
+    // per vertex instead of three pow() calls for each pixel of rounded panels.
+    if ((flags & 4u) != 0u) {
+        let alpha = in.color.a * alpha_bg;
+        var rgb = in.color.rgb;
+        if (globals.premultiply > 0.5) {
+            rgb = rgb * alpha;
+        }
+        return vec4<f32>(rgb, alpha);
+    }
 
     var final_color = in.color;
     if (in.border_width > 0.0 && bstyle > 0.5) {
@@ -824,4 +846,42 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         rgb = rgb * out_a;
     }
     return vec4<f32>(rgb, out_a);
+}
+
+// Separate entry point keeps shadow/backdrop/decorative-border temporaries out
+// of the ordinary fill pipeline. CPU dispatch admits only normal boxes with
+// no active shadow/backdrop and a none/solid border, in unchanged painter order.
+@fragment
+fn fs_solid(in: VertexOutput) -> @location(0) vec4<f32> {
+    let flags = u32(in.extra_and_id.w);
+    if ((flags & 1u) != 0u && !clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) {
+        discard;
+    }
+    if (in.clip_size.x >= 0.0 && in.clip_size.y >= 0.0) {
+        let c1 = in.clip_pos + in.clip_size;
+        if (in.p.x < in.clip_pos.x || in.p.x >= c1.x
+            || in.p.y < in.clip_pos.y || in.p.y >= c1.y) {
+            discard;
+        }
+    }
+    var coverage = 1.0;
+    var color = in.color;
+    if ((flags & 2u) == 0u) {
+        let d = sd_shaped_box(in.p, in.rect_size * 0.5, in.radii, 0.0, 0.0);
+        let aa = clamp(fwidth(d), 0.75, 2.0);
+        coverage = 1.0 - smoothstep(-aa, aa, d);
+        if (in.border_width > 0.0 && in.extra_and_id.x > 0.5) {
+            let border_coverage = 1.0 - smoothstep(-aa, aa, d + in.border_width);
+            color = mix(in.border_color, in.color, border_coverage);
+        }
+    }
+    let alpha = color.a * coverage;
+    var rgb = color.rgb;
+    if ((flags & 4u) == 0u) {
+        rgb = linearize_srgb_rgb(rgb);
+    }
+    if (globals.premultiply > 0.5) {
+        rgb = rgb * alpha;
+    }
+    return vec4<f32>(rgb, alpha);
 }

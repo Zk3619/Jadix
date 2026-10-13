@@ -3,7 +3,8 @@
 //! Glyphon `TextArea` cannot rotate. With `svg` feature: resvg (browser-grade curves).
 //! Without: fall back to [`crate::primitives::path`] or font outlines.
 
-use std::collections::HashMap;
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
@@ -30,6 +31,9 @@ struct GlyphCpuEntry {
 }
 
 static GLYPH_CPU: Mutex<Option<HashMap<String, GlyphCpuEntry>>> = Mutex::new(None);
+thread_local! {
+    static GLYPH_NEEDED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+}
 const MAX_GLYPH_CACHE: usize = 256;
 #[cfg(not(feature = "svg"))]
 const LUCIDE_VB: f32 = 24.0;
@@ -339,17 +343,23 @@ fn cache_put(key: String, w: u32, h: u32, rgba: Vec<u8>) -> Option<(String, f32)
     let mut guard = GLYPH_CPU.lock().ok()?;
     let map = guard.get_or_insert_with(HashMap::new);
     if map.len() >= MAX_GLYPH_CACHE {
-        map.clear();
+        let evict = GLYPH_NEEDED.with(|n| {
+            let needed = n.borrow();
+            map.keys().find(|key| !needed.contains(*key)).cloned()
+        });
+        if let Some(key) = evict {
+            map.remove(&key);
+        }
     }
     map.insert(
         key.clone(),
         GlyphCpuEntry {
             width: w,
             height: h,
-            rgba: rgba.clone(),
+            rgba,
         },
     );
-    queue_image_rgba8(&key, w, h, rgba);
+    GLYPH_NEEDED.with(|n| n.borrow_mut().insert(key.clone()));
     Some((key, w as f32))
 }
 
@@ -378,7 +388,7 @@ pub fn ensure_lucide_icon_texture(
             let mut guard = GLYPH_CPU.lock().ok()?;
             let map = guard.get_or_insert_with(HashMap::new);
             if let Some(entry) = map.get(&key) {
-                queue_image_rgba8(&key, entry.width, entry.height, entry.rgba.clone());
+                GLYPH_NEEDED.with(|n| n.borrow_mut().insert(key.clone()));
                 return Some((key, entry.width as f32));
             }
             drop(guard);
@@ -397,7 +407,7 @@ pub fn ensure_lucide_icon_texture(
     let mut guard = GLYPH_CPU.lock().ok()?;
     let map = guard.get_or_insert_with(HashMap::new);
     if let Some(entry) = map.get(&key) {
-        queue_image_rgba8(&key, entry.width, entry.height, entry.rgba.clone());
+        GLYPH_NEEDED.with(|n| n.borrow_mut().insert(key.clone()));
         return Some((key, entry.width as f32));
     }
     drop(guard);
@@ -412,6 +422,50 @@ pub fn ensure_lucide_glyph_texture(
     color: [u8; 4],
 ) -> Option<(String, f32)> {
     ensure_lucide_icon_texture(None, glyph, size_px, color, 1.0)
+}
+
+/// Upload only missing GPU slots, including after texture-pool eviction.
+pub(crate) fn flush_icon_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool {
+    let needed = GLYPH_NEEDED.with(|n| std::mem::take(&mut *n.borrow_mut()));
+    let guard = GLYPH_CPU.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(map) = guard.as_ref() else {
+        return false;
+    };
+    let mut uploaded = false;
+    for key in needed {
+        if has_gpu(&key) {
+            continue;
+        }
+        if let Some(entry) = map.get(&key) {
+            queue_image_rgba8(key, entry.width, entry.height, entry.rgba.clone());
+            uploaded = true;
+        }
+    }
+    uploaded
+}
+
+#[cfg(all(test, feature = "bundled-lucide"))]
+mod upload_tests {
+    use super::*;
+
+    #[test]
+    fn cached_icon_uploads_only_on_gpu_miss() {
+        let ensure = || {
+            ensure_lucide_icon_texture(Some("circle"), "", 31.25, [31, 47, 63, 255], 1.0)
+                .unwrap()
+                .0
+        };
+        let key = ensure();
+        assert!(crate::app::pending_images::take_pending_key(&key).is_none());
+        assert!(flush_icon_textures(|_| false));
+        assert!(crate::app::pending_images::take_pending_key(&key).is_some());
+        assert_eq!(ensure(), key);
+        assert!(!flush_icon_textures(|_| true));
+        assert!(crate::app::pending_images::take_pending_key(&key).is_none());
+        assert_eq!(ensure(), key);
+        assert!(flush_icon_textures(|_| false));
+        assert!(crate::app::pending_images::take_pending_key(&key).is_some());
+    }
 }
 
 #[cfg(all(test, feature = "bundled-lucide"))]

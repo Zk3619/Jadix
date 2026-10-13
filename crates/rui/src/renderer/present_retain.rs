@@ -530,6 +530,143 @@ mod tests {
         }
     }
 
+    #[test]
+    fn rounded_fill_fast_path_matches_general_shader_pixels() {
+        let Some(gpu) = OffscreenGpu::new() else {
+            return;
+        };
+        for alpha in [1.0, 0.5] {
+            let mut fast = solid_inst(256.0, 256.0, 12.0, 0.0);
+            fast.rect_pos = [4.0, 4.0];
+            fast.color = [0.15, 0.4, 0.8, alpha];
+            let mut general = fast;
+            general.rect_pos[0] += 264.0;
+            // Disable the constant-fill branch without painting a shadow.
+            general.shadow_color[3] = 0.002;
+            general.shadow_offset = [0.002, 0.0];
+            let img = gpu
+                .render_instances_readback(528, 264, wgpu::Color::WHITE, &[fast, general])
+                .expect("rounded fill readback");
+            let interior = img.pixel(36, 36).unwrap();
+            assert!(
+                interior[3] == 255 && interior[0] < interior[2],
+                "fill must paint: {interior:?}"
+            );
+            for y in 0..264 {
+                for x in 0..264 {
+                    let a = img.pixel(x, y).unwrap();
+                    let b = img.pixel(x + 264, y).unwrap();
+                    assert!(
+                        a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 1),
+                        "rounded coverage/color changed at {x},{y}: {a:?} vs {b:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn solid_pipeline_matches_general_for_borders_and_mixed_painter_order() {
+        let Some(gpu) = OffscreenGpu::new() else {
+            return;
+        };
+        let pipeline = crate::renderer::RuiPipeline::from_format(
+            &gpu.device,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            256,
+            256,
+        );
+        let mut instances = Vec::new();
+        for i in 0..18 {
+            let side = if i % 2 == 0 { 256.0 } else { 96.0 };
+            let mut inst = solid_inst(side, side, (i % 4) as f32 * 6.0, 0.0);
+            inst.rect_pos = [(i % 5) as f32 * 37.25, (i % 7) as f32 * 24.5];
+            inst.color = [0.15, 0.4, 0.8, if i % 2 == 0 { 1.0 } else { 0.4 }];
+            inst.border_color = [0.8, 0.25, 0.1, 0.7];
+            inst.border_width = (i % 3) as f32;
+            inst.border_extra = if i % 6 == 0 { 2.0 } else { 1.0 };
+            inst.clip_pos = [12.5, 18.25];
+            inst.clip_size = [220.0, 202.0];
+            if i % 5 == 0 {
+                inst.shadow_color = [0.1, 0.2, 0.3, 0.3];
+                inst.shadow_blur = 4.0;
+            }
+            if i % 4 == 0 {
+                inst.transform = [0.98, 0.17, -0.17, 0.98, 0.0, 0.0];
+            }
+            instances.push(inst);
+        }
+        let buffer = gpu
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("solid pipeline pixel instances"),
+                contents: bytemuck::cast_slice(&instances),
+                usage: wgpu::BufferUsages::VERTEX,
+            });
+        let render = |specialized| {
+            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("solid pipeline pixel target"),
+                size: wgpu::Extent3d {
+                    width: 256,
+                    height: 256,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::WHITE),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    ..Default::default()
+                });
+                pass.set_pipeline(&pipeline.render_pipeline);
+                pass.set_bind_group(0, &pipeline.bind_group, &[]);
+                pass.set_bind_group(1, pipeline.dummy_backdrop(), &[]);
+                pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+                pass.set_vertex_buffer(1, buffer.slice(..));
+                pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                if specialized {
+                    pipeline.draw_instance_span(&mut pass, &instances, 0, instances.len() as u32);
+                } else {
+                    pass.draw_indexed(0..pipeline.num_indices, 0, 0..instances.len() as u32);
+                }
+            }
+            crate::renderer::offscreen::readback_texture(
+                &gpu.device,
+                &gpu.queue,
+                &texture,
+                256,
+                256,
+                encoder,
+            )
+            .unwrap()
+        };
+        let general = render(false);
+        let specialized = render(true);
+        assert!(specialized
+            .pixels
+            .chunks_exact(4)
+            .any(|pixel| pixel[0] < pixel[2]));
+        assert!(
+            crate::renderer::offscreen::images_match(&general, &specialized, 1),
+            "solid pipeline must preserve colors, border AA, clipping and painter order"
+        );
+    }
+
     fn time_sdf_ms(
         gpu: &OffscreenGpu,
         w: u32,

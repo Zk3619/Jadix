@@ -1198,8 +1198,8 @@ pub fn ensure_morph_icon_texture(
     color.hash(&mut hasher);
     sw.to_bits().hash(&mut hasher);
     let tex = format!("rui_morph_icon:{:016x}", hasher.finish());
-    let rgba = crate::media::svg_raster::rasterize_svg_str(&doc, side, side)?;
-    crate::app::pending_images::queue_image_rgba8(&tex, side, side, rgba);
+    let tex =
+        crate::media::svg_raster::ensure_svg_document_texture_with_key(tex, &doc, side, side)?;
     Some((tex, side as f32))
 }
 
@@ -1530,6 +1530,31 @@ mod tests {
         let fg = crate::style::parse_text_color("foreground");
         let (tex, _) = ensure_morph_icon_texture(&el, 32.0, fg, 2.0).expect("tex");
         assert!(tex.starts_with("rui_morph_icon:"));
+    }
+
+    #[cfg(feature = "bundled-lucide")]
+    #[test]
+    fn unchanged_morph_frame_reuses_resident_texture() {
+        let el: Element = morph_icon("menu").id("cache-regression").into();
+        let color = [17, 41, 97, 255];
+        let (key, _) = ensure_morph_icon_texture(&el, 29.0, color, 1.0).unwrap();
+        crate::media::svg_raster::flush_svg_textures(|_| false);
+        assert!(crate::app::pending_images::take_pending_key(&key).is_some());
+        assert_eq!(
+            ensure_morph_icon_texture(&el, 29.0, color, 1.0).unwrap().0,
+            key
+        );
+        crate::media::svg_raster::flush_svg_textures(|_| true);
+        assert!(
+            crate::app::pending_images::take_pending_key(&key).is_none(),
+            "an unchanged resident frame must not upload on every scroll"
+        );
+        let next = ensure_morph_icon_texture(&el, 29.0, [19, 43, 101, 255], 1.0)
+            .unwrap()
+            .0;
+        assert_ne!(key, next, "paint changes must produce a new texture");
+        crate::media::svg_raster::flush_svg_textures(|_| false);
+        assert!(crate::app::pending_images::take_pending_key(&next).is_some());
     }
 
     #[cfg(feature = "bundled-lucide")]

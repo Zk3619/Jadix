@@ -61,6 +61,12 @@ impl OffscreenGpu {
         ))
         .ok()?;
         super::wgpu_compat::install_device_error_handlers(&device);
+        // A logged validation error must not turn a pixel regression into a
+        // comparison of two empty images when tests have no logger installed.
+        #[cfg(test)]
+        device.on_uncaptured_error(std::sync::Arc::new(|err| {
+            panic!("offscreen GPU error: {err}");
+        }));
         Some(Self {
             device,
             queue,
@@ -150,7 +156,7 @@ impl OffscreenGpu {
                 pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, ib.slice(..));
                 pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-                pass.draw_indexed(0..pipeline.num_indices, 0, 0..instances.len() as u32);
+                pipeline.draw_instance_span(&mut pass, instances, 0, instances.len() as u32);
             }
         }
 

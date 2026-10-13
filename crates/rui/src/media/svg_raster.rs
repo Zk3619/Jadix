@@ -126,18 +126,37 @@ fn hash_svg_doc(svg: &str, width: u32, height: u32) -> String {
 
 /// Rasterize SVG document string, cache CPU RGBA, queue GPU upload. Same lifecycle as path textures.
 pub fn ensure_svg_document_texture(svg: &str, width: u32, height: u32) -> Option<String> {
+    ensure_svg_document_texture_with_key(hash_svg_doc(svg, width, height), svg, width, height)
+}
+
+/// The key must identify the document, dimensions and paint parameters.
+/// Animation callers keep their frame-key namespace while sharing raster/upload reuse.
+pub(crate) fn ensure_svg_document_texture_with_key(
+    tex_id: String,
+    svg: &str,
+    width: u32,
+    height: u32,
+) -> Option<String> {
     if svg.trim().is_empty() || width < 1 || height < 1 {
         return None;
     }
     if width.saturating_mul(height) > 1024 * 1024 {
         return None;
     }
-    let tex_id = hash_svg_doc(svg, width, height);
     RASTER_CPU.with(|c| {
         let mut g = c.borrow_mut();
         if !g.contains_key(&tex_id) {
             if g.len() >= MAX_SVG_RASTER_CACHE {
-                g.clear();
+                // Do not discard rasters referenced earlier in this collect: flush
+                // still needs them to upload the complete frame. Like TexturePool,
+                // allow a temporary overshoot when all entries are in use.
+                let evict = RASTER_NEEDED.with(|n| {
+                    let needed = n.borrow();
+                    g.keys().find(|key| !needed.contains(*key)).cloned()
+                });
+                if let Some(key) = evict {
+                    g.remove(&key);
+                }
             }
             let rgba = rasterize_svg_str(svg, width, height)?;
             g.insert(
@@ -238,6 +257,27 @@ pub fn lucide_icon_cache_put(key: String, w: u32, h: u32, rgba: Vec<u8>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn raster_cache_preserves_all_textures_needed_by_one_frame() {
+        RASTER_CPU.with(|c| c.borrow_mut().clear());
+        RASTER_NEEDED.with(|n| n.borrow_mut().clear());
+        let doc = r#"<svg xmlns="http://www.w3.org/2000/svg" width="1" height="1"><rect width="1" height="1" fill="red"/></svg>"#;
+        let keys: Vec<_> = (0..MAX_SVG_RASTER_CACHE + 1)
+            .map(|i| {
+                ensure_svg_document_texture_with_key(format!("raster-frame-test:{i}"), doc, 1, 1)
+                    .unwrap()
+            })
+            .collect();
+        assert!(flush_svg_textures(|_| false));
+        for key in keys {
+            assert!(
+                crate::app::pending_images::take_pending_key(&key).is_some(),
+                "cache pressure dropped a texture before the frame uploaded it"
+            );
+        }
+        RASTER_CPU.with(|c| c.borrow_mut().clear());
+    }
 
     #[test]
     fn unpremultiply_restores_straight_rgb_on_partial_alpha() {

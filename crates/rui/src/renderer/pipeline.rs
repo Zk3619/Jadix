@@ -206,8 +206,24 @@ impl InstanceInput {
     }
 }
 
+fn solid_fill_eligible(instance: &InstanceInput) -> bool {
+    let shadow_active = instance.shadow_color[3] > 0.001
+        && (instance.shadow_blur > 0.001
+            || instance.shadow_spread.abs() > 0.001
+            || instance.shadow_offset[0].abs() > 0.001
+            || instance.shadow_offset[1].abs() > 0.001);
+    // Small chrome saves little fragment work and alternating its pipeline can
+    // cost more than the shader branch. Restrict specialization to large fills.
+    instance.rect_size[0] * instance.rect_size[1] >= 65_536.0
+        && instance.border_extra >= 0.0
+        && instance.border_extra < 1.5
+        && instance.backdrop_blur <= 0.5
+        && !shadow_active
+}
+
 pub struct RuiPipeline {
     pub render_pipeline: wgpu::RenderPipeline,
+    solid_render_pipeline: Option<wgpu::RenderPipeline>,
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub num_indices: u32,
@@ -316,6 +332,16 @@ impl RuiPipeline {
         );
         let render_pipeline =
             Self::make_render_pipeline(device, config, &shader, &bind_group_layout, &backdrop_bgl);
+        let solid_render_pipeline = wgsl_source.contains("fn fs_solid(").then(|| {
+            Self::make_render_pipeline_entry(
+                device,
+                config,
+                &shader,
+                &bind_group_layout,
+                &backdrop_bgl,
+                "fs_solid",
+            )
+        });
 
         let vertices = &[
             VertexInput {
@@ -352,6 +378,7 @@ impl RuiPipeline {
 
         Self {
             render_pipeline,
+            solid_render_pipeline,
             vertex_buffer,
             index_buffer,
             num_indices: indices.len() as u32,
@@ -498,6 +525,24 @@ impl RuiPipeline {
         bind_group_layout: &wgpu::BindGroupLayout,
         backdrop_bgl: &wgpu::BindGroupLayout,
     ) -> wgpu::RenderPipeline {
+        Self::make_render_pipeline_entry(
+            device,
+            config,
+            shader,
+            bind_group_layout,
+            backdrop_bgl,
+            "fs_main",
+        )
+    }
+
+    fn make_render_pipeline_entry(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+        shader: &wgpu::ShaderModule,
+        bind_group_layout: &wgpu::BindGroupLayout,
+        backdrop_bgl: &wgpu::BindGroupLayout,
+        fragment_entry: &str,
+    ) -> wgpu::RenderPipeline {
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Rui Render Pipeline Layout"),
@@ -516,7 +561,7 @@ impl RuiPipeline {
             },
             fragment: Some(wgpu::FragmentState {
                 module: shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some(fragment_entry),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
                     blend: Some(crate::renderer::color_target_blend(config.alpha_mode)),
@@ -613,9 +658,25 @@ impl RuiPipeline {
                 &self.bind_group_layout,
                 &self.backdrop_bgl,
             );
-            (bind_group, bind_group_clip_poly, render_pipeline)
+            let solid_render_pipeline = wgsl_source.contains("fn fs_solid(").then(|| {
+                Self::make_render_pipeline_entry(
+                    device,
+                    config,
+                    &shader,
+                    &self.bind_group_layout,
+                    &self.backdrop_bgl,
+                    "fs_solid",
+                )
+            });
+            (
+                bind_group,
+                bind_group_clip_poly,
+                render_pipeline,
+                solid_render_pipeline,
+            )
         }));
-        let (bind_group, bind_group_clip_poly, render_pipeline) = match built {
+        let (bind_group, bind_group_clip_poly, render_pipeline, solid_render_pipeline) = match built
+        {
             Ok(tuple) => tuple,
             Err(_) => {
                 let _ = crate::renderer::wgpu_compat::wait_error_scope(device, scope);
@@ -630,7 +691,42 @@ impl RuiPipeline {
         self.bind_group = bind_group;
         self.bind_group_clip_poly = bind_group_clip_poly;
         self.render_pipeline = render_pipeline;
+        self.solid_render_pipeline = solid_render_pipeline;
         true
+    }
+
+    /// Split only consecutive styles. Bind groups and instance indices remain
+    /// unchanged, so polygon clips and translucent painter order stay intact.
+    pub(crate) fn draw_instance_span(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        instances: &[InstanceInput],
+        start: u32,
+        count: u32,
+    ) {
+        let end = start + count;
+        if self.solid_render_pipeline.is_none() || end as usize > instances.len() {
+            pass.set_pipeline(&self.render_pipeline);
+            pass.draw_indexed(0..self.num_indices, 0, start..end);
+            return;
+        }
+        let mut lo = start;
+        while lo < end {
+            let solid = solid_fill_eligible(&instances[lo as usize]);
+            let mut hi = lo + 1;
+            while hi < end && solid_fill_eligible(&instances[hi as usize]) == solid {
+                hi += 1;
+            }
+            pass.set_pipeline(if solid {
+                self.solid_render_pipeline.as_ref().unwrap()
+            } else {
+                &self.render_pipeline
+            });
+            pass.draw_indexed(0..self.num_indices, 0, lo..hi);
+            lo = hi;
+        }
+        // Existing direct draws can follow this ranged helper.
+        pass.set_pipeline(&self.render_pipeline);
     }
 
     /// Bind group 1 when the instance does not sample a blurred capture.
