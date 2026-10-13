@@ -1,6 +1,12 @@
 [workspace]
 members = ["crates/*", "examples/*"]
+exclude = ["vendor/glyphon"]
 resolver = "2"
+
+[patch.crates-io]
+# Batch on-demand glyph uploads; retain atlas pixels across growth instead of
+# rasterizing the same glyphs again. See vendor/glyphon/RUI_PATCH.md.
+glyphon = { path = "vendor/glyphon" }
 
 [workspace.package]
 version = "0.1.0"

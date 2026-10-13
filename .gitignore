@@ -24,6 +24,12 @@ crates/rui/tmp_stack_crumb.txt
 !Cargo.toml
 !Cargo.lock
 
+# Local upstream glyphon patch: batched, on-demand glyph atlas uploads.
+!vendor/
+vendor/*
+!vendor/glyphon/
+!vendor/glyphon/**
+
 # Allow the two main source directories and all contents
 !crates/
 !crates/**
