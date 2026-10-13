@@ -6098,7 +6098,10 @@ impl LayoutTree {
         // Canvas：GpuCanvas → PathPipeline `rui_canvas:`（或 CPU pixmap）；再 shader/scene3d，再 path。
         // Chart 多层 scene / 单层 `d` 已在此出图时，勿再画 `image_texture`（否则低分拉伸 + 默认黑描边叠一层）。
         let mut path_tex_drawn = false;
-        if visible_rect[2] > 0.0 && visible_rect[3] > 0.0 {
+        // Match chrome/text visibility: hidden canvases must not queue offscreen
+        // GPU work while scrolling (e.g. invisible drag snap-grid layers).
+        // Leave their dirty state intact so reveal paints the current content.
+        if opacity >= 0.01 && visible_rect[2] > 0.0 && visible_rect[3] > 0.0 {
             if let Some((tex_key, dw, dh)) =
                 crate::primitives::canvas::canvas_raster_from_element_attrs(
                     &element.attrs,
@@ -6352,7 +6355,7 @@ impl LayoutTree {
             }
         }
 
-        if !path_tex_drawn {
+        if !path_tex_drawn && opacity >= 0.01 {
             if let Some(tex_key) = element.image_texture.as_ref() {
                 if !tex_key.is_empty() {
                     if let Some(mut draw) = TexturedDraw::clipped(

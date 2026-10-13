@@ -2265,6 +2265,79 @@ fn gallery_layout_cost_default_vs_maximized() {
     });
 }
 
+/// Scan viewport-sized slices so expensive content cannot hide below the fold.
+#[test]
+#[ignore = "performance scan; run explicitly with --ignored --nocapture"]
+fn gallery_scroll_segment_cost() {
+    run_on_gallery_build_stack(|| {
+        let mut fs = rui::renderer::font_loader::create_font_system();
+        rui::renderer::font_loader::apply_default_families(fs.db_mut());
+        rui::text::install_shared_font_system(&mut fs);
+        let (_owner, _) = create_root(|| {
+            create_effect(|| {
+                for section in [
+                    "basics",
+                    "forms",
+                    "events",
+                    "overlays",
+                    "data",
+                    "draw",
+                    "navigation",
+                    "layout",
+                    "text",
+                    "theme",
+                ] {
+                    rui::app::reactive::reset_registered_anchors();
+                    let mut root =
+                        rui::core::reactivity::isolate_reads(|| gallery_section_body(section));
+                    let mut tree = rui::core::tree::LayoutTree::new();
+                    let first = tree.build_and_layout(&mut root, 1920.0, 1080.0, [-1.0; 2]);
+                    let Some((rest, _, _, content)) = first
+                        .scroll_metrics
+                        .iter()
+                        .find(|(rest, _, _, _)| rest == &format!("scroll-{section}"))
+                        .cloned()
+                    else {
+                        continue;
+                    };
+                    let offset = rui::core::reactivity::use_signal(
+                        &rui::core::scroll_viewport::scroll_offset_y_signal_key(&rest),
+                        || 0.0_f32,
+                    );
+                    tree.set_collect_skip_allowed(true);
+                    let max = (content[1] - 1080.0).max(0.0);
+                    for step in 0..=((max / 900.0).ceil() as usize) {
+                        let y = (step as f32 * 900.0).min(max);
+                        let mut times = Vec::new();
+                        let mut stats = (0.0, 0.0, 0, 0);
+                        for frame in 0..4 {
+                            offset.set_silent(y + frame as f32);
+                            let start = std::time::Instant::now();
+                            let out = tree.build_and_layout_fast(
+                                &mut root, 1920.0, 1080.0, [-1.0; 2], true, true,
+                            );
+                            if frame > 0 {
+                                times.push(start.elapsed().as_secs_f32() * 1000.0);
+                            }
+                            stats = (
+                                out.prof.collect_ms,
+                                out.prof.collect_stamp_ms,
+                                out.instances.len(),
+                                out.text_nodes.len(),
+                            );
+                        }
+                        times.sort_by(f32::total_cmp);
+                        eprintln!("scroll/{section} y={y:.0}/{max:.0}: wall={:.2}ms collect={:.2} stamp={:.2} inst={} text={}", times[1], stats.0, stats.1, stats.2, stats.3);
+                        assert!(times[1] < 10.0,
+                            "gallery/{section} scroll segment y={y:.0} costs {:.2}ms before GPU work", times[1]);
+                    }
+                }
+            });
+        });
+        rui::app::reactive::reset_registered_anchors();
+    });
+}
+
 /// Clicking the RSX ViewportModal trigger must not eat the card's VStack gap
 /// (button label toggles 打开→关闭 while DialogFade · RSX / SheetSlide stay put).
 #[test]

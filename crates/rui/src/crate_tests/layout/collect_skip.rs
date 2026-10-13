@@ -16,6 +16,33 @@ use crate::renderer::font_loader;
 use crate::style::sync_class_variants_subtree;
 use crate::text::install_shared_font_system;
 
+#[test]
+fn transparent_canvas_defers_paint_until_visible() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let paints = Rc::new(Cell::new(0));
+    let count = paints.clone();
+    let canvas: Element = crate::primitives::canvas::canvas()
+        .w(64.0)
+        .h(32.0)
+        .paint(move |ctx, _| {
+            count.set(count.get() + 1);
+            ctx.clear("red");
+            LayoutStatus::Clean
+        })
+        .into();
+    let mut root = Element::new().w(64.0).h(32.0).opacity(0.0).child(canvas);
+    let mut tree = LayoutTree::new();
+    let hidden = tree.build_and_layout(&mut root, 64.0, 32.0, [-1.0; 2]);
+    assert_eq!(paints.get(), 0, "invisible GPU work must not be queued");
+    assert!(hidden.textured_draws.is_empty());
+    root.style.opacity = 1.0;
+    let visible = tree.build_and_layout_fast(&mut root, 64.0, 32.0, [-1.0; 2], false, false);
+    assert_eq!(paints.get(), 1, "deferred paint must run on reveal");
+    assert!(!visible.textured_draws.is_empty());
+}
+
+
 fn two_column_page() -> Element {
     let col = |bg: [f32; 4], label: &str| {
         Element::new()

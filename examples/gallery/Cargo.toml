@@ -16,6 +16,9 @@ rui = { workspace = true, features = [
 jadix_window_state = { workspace = true, features = ["jadix"] }
 log = { workspace = true }
 
+[dev-dependencies]
+winit = { workspace = true }
+
 [features]
 # Optional logger: console + RUI_LOG_FILE (via rui/runtime-logging).
 #   cargo run -p gallery --features runtime-logging
