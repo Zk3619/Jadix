@@ -242,6 +242,10 @@ impl PresentRetainPipeline {
         self.retain.as_ref().map(|r| &r.view)
     }
 
+    pub(crate) fn color_texture(&self) -> Option<&wgpu::Texture> {
+        self.retain.as_ref().map(|r| &r.texture)
+    }
+
     #[cfg(test)]
     pub(crate) fn color_texture_for_test(&self) -> Option<&wgpu::Texture> {
         self.retain.as_ref().map(|r| &r.texture)

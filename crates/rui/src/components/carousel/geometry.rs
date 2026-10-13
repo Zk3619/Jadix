@@ -160,6 +160,18 @@ pub(super) fn ideal_offset(ctx: &CarouselCtx) -> f32 {
     let cc = loop_clone_count(ctx);
     let hi = max_index(ctx);
     let min_off = max_scroll_offset(ctx);
+    if ctx.variant == CarouselVariant::Multi
+        && ctx.scroll_by == CarouselScrollBy::Page
+        && !track_loops(ctx)
+    {
+        let cur = offset_target(&ctx.id).peek();
+        let snapped = track::page_snap_offset(cur, page_delta_px(ctx), min_off);
+        // The final page and the preceding grid point can share a rounded slide index.
+        // Preserve the actual page selected by navigation/drag instead of quantizing twice.
+        if (cur - snapped).abs() < 0.5 && index_from_offset(ctx, cur) == ctx.index.peek() {
+            return snapped;
+        }
+    }
     track::ideal_offset(track::IdealOffsetInput {
         index: ctx.index.peek(),
         max_index: hi,
@@ -237,11 +249,10 @@ pub(super) fn scroll_by_free_offset(ctx: &CarouselCtx, dir: i32) {
 pub(super) fn scroll_by_page(ctx: &CarouselCtx, dir: i32) {
     let page = page_delta_px(ctx).max(step_px(ctx));
     let cur = offset_target(&ctx.id).peek();
-    let cur_page = (-cur / page).round().max(0.0);
     let target_page = if dir > 0 {
-        (cur_page - 1.0).max(0.0)
+        ((-cur - 0.5) / page).floor().max(0.0)
     } else {
-        cur_page + 1.0
+        ((-cur + 0.5) / page).floor().max(0.0) + 1.0
     };
     let target = clamp_offset(ctx, -target_page * page);
     ctx.index.set(index_from_offset(ctx, target));
@@ -278,6 +289,23 @@ pub(super) fn apply_viewport_len(ctx: &CarouselCtx, new_len: f32) -> bool {
         return false;
     }
 
+    let page_offset = if prev > 1.0
+        && ctx.variant == CarouselVariant::Multi
+        && ctx.scroll_by == CarouselScrollBy::Page
+        && !track_loops(ctx)
+        && effective_snap(ctx)
+    {
+        let cur = offset_target(&ctx.id).peek();
+        let snapped = track::page_snap_offset(cur, page_delta_px(ctx), max_scroll_offset(ctx));
+        ((cur - snapped).abs() < 0.5 && index_from_offset(ctx, cur) == ctx.index.peek()).then_some(
+            (
+                cur,
+                cur < -0.5 && (cur - max_scroll_offset(ctx)).abs() < 0.5,
+            ),
+        )
+    } else {
+        None
+    };
     ctx.viewport_len.set(new_len);
 
     if is_carousel_dragging_id(&ctx.id) {
@@ -309,7 +337,22 @@ pub(super) fn apply_viewport_len(ctx: &CarouselCtx, new_len: f32) -> bool {
         }
         return true;
     }
-    let ideal = ideal_offset(ctx);
+    let ideal = if let Some((cur, at_end)) = page_offset {
+        let scaled = if ctx.item_sizing == CarouselItemSizing::Fixed {
+            cur
+        } else {
+            cur * (new_len / prev)
+        };
+        let target = if at_end {
+            max_scroll_offset(ctx)
+        } else {
+            track::page_snap_offset(scaled, page_delta_px(ctx), max_scroll_offset(ctx))
+        };
+        ctx.index.set(index_from_offset(ctx, target));
+        target
+    } else {
+        ideal_offset(ctx)
+    };
     if prev <= 1.0 {
         snap_offset_to(&ctx.id, ideal);
         // First measure (0 → real width) is not a Taffy resize. Returning true used to

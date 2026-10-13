@@ -642,10 +642,23 @@ fn check_focus_ring(
                     frame_at(s, false, mouse)
                 };
                 let guard = app.state.borrow();
-                let track = find_field_by_id(&guard.as_ref().unwrap().root_element, &format!("scrollbar-track:{rest}:x")).unwrap();
-                let track_bounds = crate::core::tree::visual_paint_aabb(track, track.paint_scroll_acc);
-                let center = expected.pixel(((track_bounds[0] + track_bounds[2] * 0.5) * scale) as u32, ((track_bounds[1] + track_bounds[3] * 0.5) * scale) as u32).unwrap();
-                eprintln!("[DEBUG-track] bounds={track_bounds:?} color={:?} opacity={} center={center:?}", track.style.bg_color, track.style.opacity);
+                let track = find_field_by_id(
+                    &guard.as_ref().unwrap().root_element,
+                    &format!("scrollbar-track:{rest}:x"),
+                )
+                .unwrap();
+                let track_bounds =
+                    crate::core::tree::visual_paint_aabb(track, track.paint_scroll_acc);
+                let center = expected
+                    .pixel(
+                        ((track_bounds[0] + track_bounds[2] * 0.5) * scale) as u32,
+                        ((track_bounds[1] + track_bounds[3] * 0.5) * scale) as u32,
+                    )
+                    .unwrap();
+                eprintln!(
+                    "[DEBUG-track] bounds={track_bounds:?} color={:?} opacity={} center={center:?}",
+                    track.style.bg_color, track.style.opacity
+                );
                 std::env::set_var("RUI_TEXTAREA_TEST_OUTPUT", ".tmp/textarea-track");
                 snapshot("track-full", &expected);
                 std::env::remove_var("RUI_TEXTAREA_TEST_OUTPUT");

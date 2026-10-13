@@ -1436,9 +1436,17 @@ pub(crate) fn reconcile_pointer_hovers(
     cbs: &mut Vec<(HoverCb, bool)>,
     immediate_miss_leave: bool,
 ) {
-    let target = match pick_hover_target(el, x, y, scroll_offset) {
-        HoverHit::Hit(slot) => slot,
-        HoverHit::Miss => None,
+    // Drag collision/over feedback has its own hit testing. Ordinary hover must
+    // leave immediately, including sensor activation without CursorMoved.
+    let dragging = crate::utils::drag::is_active();
+    let immediate_miss_leave = immediate_miss_leave || dragging;
+    let target = if dragging {
+        None
+    } else {
+        match pick_hover_target(el, x, y, scroll_offset) {
+            HoverHit::Hit(slot) => slot,
+            HoverHit::Miss => None,
+        }
     };
     crate::app::pointer_events::note_pointer_client(x, y);
     if let Some(slot) = target.as_ref() {

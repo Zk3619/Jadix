@@ -7,7 +7,8 @@ use crate::shared::*;
 use rui::prelude::{
     clear_stylesheets, clear_theme_overrides, install_theme_overrides,
     load_and_install_theme_overrides, parse_stylesheet, parse_theme_overrides_str,
-    register_stylesheet, reload_stylesheets, theme_mode, toggle_theme_mode, ThemeMode,
+    register_stylesheet, reload_stylesheets, theme_mode, theme_transition_config,
+    toggle_theme_mode, ThemeMode,
 };
 
 const THEME_TOML: &str = include_str!("../../theme.toml");
@@ -32,6 +33,7 @@ pub(crate) fn ThemeShowcase() -> Element {
         ThemeMode::Light => "light",
         ThemeMode::Dark => "dark",
     };
+    let transition = theme_transition_config();
 
     let apply_embedded = move || match parse_theme_overrides_str(THEME_TOML) {
         Ok(patch) => match install_theme_overrides(patch) {
@@ -80,6 +82,24 @@ pub(crate) fn ThemeShowcase() -> Element {
         status.set("已清除样式表 registry".into());
         bump(tick);
     };
+    let toggle_transition = move || {
+        let mut config = theme_transition_config();
+        config.enabled = !config.enabled;
+        rui::style::set_theme_transition_config(config);
+        bump(tick);
+    };
+    let cycle_duration = move || {
+        let mut config = theme_transition_config();
+        config.duration_ms = if config.duration_ms < 300.0 {
+            400.0
+        } else if config.duration_ms < 700.0 {
+            800.0
+        } else {
+            180.0
+        };
+        rui::style::set_theme_transition_config(config);
+        bump(tick);
+    };
     let toggle_mode = move || {
         toggle_theme_mode();
         status.set(format!("主题模式 → {:?}", theme_mode()));
@@ -92,6 +112,9 @@ pub(crate) fn ThemeShowcase() -> Element {
             <VStack w="100%" min_w="0" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     { format!("只改 DesignTokens.destructive；Button / Badge / Bubble 不用改源码。当前模式：{mode}") }
+                </Label>
+                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
+                    { format!("主题平滑切换：{} · {:.0}ms · {}（可在 theme.toml 的 [transition] 配置）", if transition.enabled { "启用" } else { "停用" }, transition.duration_ms, transition.easing) }
                 </Label>
                 <Label id="gal-theme-status" w="100%" text_size="0.75rem" leading="normal">
                     { status.get() }
@@ -108,6 +131,14 @@ pub(crate) fn ThemeShowcase() -> Element {
                     </Button>
                     <Button id="gal-theme-mode" variant="secondary" size="sm" on_click={toggle_mode}>
                         "切换 light/dark"
+                    </Button>
+                </HStack>
+                <HStack w="100%" min_w="0" gap="0.5rem" wrap="wrap">
+                    <Button id="gal-theme-transition" variant="outline" size="sm" on_click={toggle_transition}>
+                        { if transition.enabled { "关闭平滑切换" } else { "开启平滑切换" } }
+                    </Button>
+                    <Button id="gal-theme-duration" variant="outline" size="sm" on_click={cycle_duration}>
+                        { format!("切换时长（{:.0}ms）", transition.duration_ms) }
                     </Button>
                 </HStack>
                 <HStack w="100%" min_w="0" gap="0.5rem" items="center" wrap="wrap">

@@ -48,6 +48,8 @@ pub(super) struct SecondaryWindowState {
     config: wgpu::SurfaceConfiguration,
     size: PhysicalSize<u32>,
     pipeline: RuiPipeline,
+    pub(super) present_retain: crate::renderer::PresentRetainPipeline,
+    pub(super) theme_transition: crate::renderer::theme_transition::ThemeTransition,
     /// Lucide caption icons / Image / SVG collect as `textured_draws`. The primary
     /// window uploads these; secondaries (especially glass sidecars) must too.
     textured_pipeline: TexturedQuadPipeline,
@@ -156,6 +158,9 @@ impl SecondaryWindowState {
         super::window_chrome::apply_created_window(window.as_ref(), &chrome, false);
 
         let mut pipeline = RuiPipeline::new(&device, &config);
+        let present_retain = crate::renderer::PresentRetainPipeline::new(&device, config.format);
+        let theme_transition =
+            crate::renderer::theme_transition::ThemeTransition::new(&device, config.format);
         let (textured_pipeline, textured_instance_buffer, textured_instance_capacity) =
             init_secondary_textured(&device, &config);
         let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
@@ -201,6 +206,8 @@ impl SecondaryWindowState {
             config,
             size,
             pipeline,
+            present_retain,
+            theme_transition,
             textured_pipeline,
             image_textures: TexturePool::new(),
             textured_instance_buffer,
@@ -251,6 +258,9 @@ impl SecondaryWindowState {
         super::window_chrome::apply_created_window(window.as_ref(), &chrome, composition_swapchain);
 
         let mut pipeline = RuiPipeline::new(&device, &config);
+        let present_retain = crate::renderer::PresentRetainPipeline::new(&device, config.format);
+        let theme_transition =
+            crate::renderer::theme_transition::ThemeTransition::new(&device, config.format);
         let (textured_pipeline, textured_instance_buffer, textured_instance_capacity) =
             init_secondary_textured(&device, &config);
         let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
@@ -296,6 +306,8 @@ impl SecondaryWindowState {
             config,
             size,
             pipeline,
+            present_retain,
+            theme_transition,
             textured_pipeline,
             image_textures: TexturePool::new(),
             textured_instance_buffer,
@@ -363,6 +375,15 @@ impl SecondaryWindowState {
             &self.chrome,
             self.composition_swapchain,
         );
+    }
+
+    pub(super) fn sync_window_theme(&self) {
+        super::window_chrome::apply_created_window(
+            self.window.as_ref(),
+            &self.chrome,
+            self.composition_swapchain,
+        );
+        self.window.request_redraw();
     }
 
     /// Layout + clear + draw primitives/text for this secondary window.
@@ -681,11 +702,26 @@ impl SecondaryWindowState {
                 label: Some("Secondary Render Encoder"),
             });
 
+        let draw_to_retain =
+            crate::style::theme_transition_config().enabled || self.theme_transition.needs_frame();
+        if draw_to_retain {
+            self.present_retain
+                .ensure_size(&self.device, self.config.width, self.config.height);
+            self.theme_transition
+                .prepare(&self.device, &mut encoder, &self.present_retain);
+        } else {
+            self.present_retain.invalidate_contents();
+        }
         {
+            let color_view = if draw_to_retain {
+                self.present_retain.color_view().unwrap()
+            } else {
+                &view
+            };
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Secondary Render Pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: color_view,
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -902,6 +938,19 @@ impl SecondaryWindowState {
             }
         }
 
+        if draw_to_retain {
+            if self.theme_transition.present(
+                &self.queue,
+                &mut encoder,
+                &self.present_retain,
+                &view,
+                crate::renderer::surface_clear_color(self.compositor_alpha),
+                |_| {},
+            ) {
+                self.window.request_redraw();
+            }
+            self.present_retain.mark_contents_valid();
+        }
         self.queue.submit(std::iter::once(encoder.finish()));
         self.queue.present(output);
         // This window redraws its complete surface; consume only its own damage.
@@ -1015,23 +1064,32 @@ impl SecondaryWindowState {
         self.window.set_visible(false);
     }
 
-    pub(super) fn replace_root(&mut self, root: Element) {
+    pub(super) fn replace_root(&mut self, mut root: Element) {
+        let status = super::state::AppState::reconcile_elements(
+            &mut root,
+            &mut self.root_element,
+            &mut self.pending_layout_dirty,
+        );
         self.root_element = root;
-        self.layout_status = LayoutStatus::StructureChanged;
+        super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
+        self.layout_status = self.layout_status.merge(status);
         self.template_paths.clear();
-        self.pending_layout_dirty.clear();
     }
 
     pub(super) fn reconcile_subtree(
         &mut self,
         anchor_id: &str,
-        new_fragment: Element,
+        mut new_fragment: Element,
     ) -> Option<LayoutStatus> {
         let want = anchor_id.replace('\\', "/").to_ascii_lowercase();
         let old = find_template_mut(&mut self.root_element, &want)?;
         let needs_portal_hoist = element_contains_rui_portal(&new_fragment);
+        let mut status = super::state::AppState::reconcile_elements(
+            &mut new_fragment,
+            old,
+            &mut self.pending_layout_dirty,
+        );
         *old = new_fragment;
-        let mut status = LayoutStatus::StructureChanged;
         if needs_portal_hoist {
             let portal_moves = crate::app::state::hoist_portal_subtrees_refreshing_scroll_flags(
                 &mut self.root_element,

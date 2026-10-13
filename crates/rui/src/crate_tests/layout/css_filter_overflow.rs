@@ -18,6 +18,58 @@ fn filter_draw(result: &RenderResult) -> Option<&crate::renderer::TexturedDraw> 
         .find(|d| d.texture_key.starts_with("rui_filter:"))
 }
 
+#[test]
+fn css_filter_scroll_collect_keeps_node_paint_ranges_valid() {
+    drain_filter_queues();
+    let mut root = Element::new()
+        .w(100.0)
+        .h(100.0)
+        .flex_col()
+        .overflow("hidden")
+        .child(
+            Element::new()
+                .w(80.0)
+                .h(20.0)
+                .bg([0.0, 0.0, 1.0, 1.0])
+                .text("before"),
+        )
+        .child(
+            Element::new()
+                .w(80.0)
+                .h(60.0)
+                .filter("blur(4px)")
+                .bg([1.0, 0.0, 0.0, 1.0])
+                .child(Element::new().w(40.0).h(40.0).bg([0.0, 1.0, 0.0, 1.0])),
+        );
+    let mut tree = LayoutTree::new();
+    let _ = tree.build_and_layout(&mut root, 100.0, 100.0, [-1.0, -1.0]);
+    drain_filter_queues();
+    tree.set_collect_skip_allowed(true);
+    for offset in [0.0, 10.0, 100.0, 0.0] {
+        root.scroll_offset[1] = offset;
+        let result = tree.build_and_layout_fast(&mut root, 100.0, 100.0, [-1.0, -1.0], true, false);
+        assert!(
+            filter_draw(&result).is_some(),
+            "filter output must remain visible"
+        );
+        for paint in &result.node_paints {
+            for (range, len) in [
+                (paint.instance, result.instances.len()),
+                (paint.textured, result.textured_draws.len()),
+                (paint.text, result.text_nodes.len()),
+                (paint.chrome, result.input_chrome_instances.len()),
+                (paint.paint_ops, result.paint_ops.len()),
+            ] {
+                assert!(
+                    range.0 <= range.1 && range.1 <= len,
+                    "invalid range {range:?}, len={len}"
+                );
+            }
+        }
+        drain_filter_queues();
+    }
+}
+
 /// Half of a filtered box sits left of an `overflow: hidden` clip.
 #[test]
 fn css_filter_partially_offscreen_still_composites() {

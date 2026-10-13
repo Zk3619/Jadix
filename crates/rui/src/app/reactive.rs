@@ -475,7 +475,23 @@ pub fn reactive_placeholder_in_flow(anchor_id: impl Into<String>, visible: bool)
 
 /// Register a **single** effect (first call per `anchor_id`) that rebuilds `fragment` and runs
 /// [`runtime::try_reconcile_subtree`], then [`runtime::request_redraw`] when reconciliation runs.
-pub fn reactive_anchor<F>(anchor_id: impl Into<String>, mut f: F)
+pub fn reactive_anchor<F>(anchor_id: impl Into<String>, f: F)
+where
+    F: FnMut() -> Element + 'static,
+{
+    reactive_anchor_impl(anchor_id, f, true);
+}
+
+// List owners rebuild their cached fragment on style changes. The consuming effect must
+// not also subscribe: it would try to consume the same fragment a second time.
+pub(super) fn cached_reactive_anchor<F>(anchor_id: impl Into<String>, f: F)
+where
+    F: FnMut() -> Element + 'static,
+{
+    reactive_anchor_impl(anchor_id, f, false);
+}
+
+fn reactive_anchor_impl<F>(anchor_id: impl Into<String>, mut f: F, track_style: bool)
 where
     F: FnMut() -> Element + 'static,
 {
@@ -556,7 +572,10 @@ where
     let effect_window = super::window_scope::active_window_id();
     let effect_id = create_render_effect(move || {
         let _scope = restore_window_scope(effect_scope, effect_window);
-        let mut fragment = f();
+        if track_style {
+            crate::style::track_style_changes();
+        }
+        let mut fragment = crate::style::apply_stylesheet_rules_tree(f());
         if let Some(orig) = fragment.template_id.as_ref() {
             if orig != &effect_anchor_id {
                 fragment.set_attr(ATTR_SOURCE_TEMPLATE_ID, orig.clone());
@@ -1024,6 +1043,9 @@ where
                 let _ = initial;
                 return chain_unmount_hook(el, hook);
             }
+            // Parent reruns dispose the old effect before the mounted node is replaced.
+            // Its stale hook must not remove the new registration when that node drops.
+            hook.disarm();
             REGISTERED_BINDINGS.with(|registry| {
                 registry.borrow_mut().remove(&registry_key);
             });

@@ -483,7 +483,9 @@ impl super::App {
                     let secondaries = secondaries.clone();
                     crate::core::reactivity::create_effect(move || {
                         let _scope = super::window_scope::enter_secondary_id(id);
+                        crate::style::track_style_changes();
                         let new_root = (builder_rc.borrow_mut())();
+                        let new_root = crate::style::apply_stylesheet_rules_tree(new_root);
                         if let Some(sec) = secondaries.borrow_mut().get_mut(&id) {
                             sec.replace_root(new_root);
                             sec.window.request_redraw();
@@ -630,9 +632,11 @@ impl super::App {
             crate::core::reactivity::mark_next_effect_as_ui_root();
             crate::core::reactivity::create_effect(move || {
                 log::debug!("root_effect: before app_builder");
+                crate::style::track_style_changes();
                 let new_root = (builder_ref.borrow_mut())();
                 #[cfg(feature = "devtools")]
                 let new_root = crate::app::devtools::wrap_app(new_root);
+                let new_root = crate::style::apply_stylesheet_rules_tree(new_root);
                 log::debug!(
                     "root_effect: after app_builder children={}",
                     new_root.children.len()
@@ -889,7 +893,23 @@ impl ApplicationHandler for super::App {
         let text_edit_pump = super::input_controller::take_text_edit_force_immediate();
         crate::components::color_picker::drain_color_drag_apply();
         crate::components::drawer::drain_drawer_layout_bumps();
-        let page_css_needs = crate::style::any_page_css_needs_frame();
+        // Theme presentation is a window-level animation, independent of element CSS clocks.
+        let can_animate = |window: &dyn winit::window::Window| {
+            !self.is_suspended
+                && window.is_visible() != Some(false)
+                && window.is_minimized() != Some(true)
+                && window.surface_size().width > 0
+                && window.surface_size().height > 0
+        };
+        let theme_needs_frame =
+            self.state.borrow().as_ref().is_some_and(|s| {
+                can_animate(s.window.as_ref()) && s.theme_transition.needs_frame()
+            }) || self
+                .secondaries
+                .borrow()
+                .values()
+                .any(|s| can_animate(s.window.as_ref()) && s.theme_transition.needs_frame());
+        let page_css_needs = crate::style::any_page_css_needs_frame() || theme_needs_frame;
         let modal_css_needs = crate::utils::modal_motion::any_modal_css_needs_frame();
         // Nested Select Expand (ColorPicker format menu) is not Dialog CSS. A one-shot
         // armed at floating Enter is consumed by the parent Fade; query live motion.

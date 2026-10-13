@@ -269,17 +269,8 @@ pub(super) fn end_carousel_drag() {
                 && cc == 0
             {
                 let page = drag_page_delta_px(&drag).max(step);
-                let base_page = (-drag.base_offset / page).round().max(0.0);
-                let nearest_page = (-visual / page).round().max(0.0);
-                let home = -base_page * page;
-                let in_home_half = (visual - home).abs() < page * 0.5;
-                let tiny_move = drag.drag_px.peek().abs() <= DRAG_THRESHOLD_PX;
-                let target_page = if tiny_move && in_home_half {
-                    base_page
-                } else {
-                    nearest_page
-                };
-                let ideal = drag_clamp_offset(&drag, -target_page * page);
+                let min_offset = drag_clamp_offset(&drag, -(n as f32) * step);
+                let ideal = track::page_snap_offset(visual, page, min_offset);
                 let idx = if step > 1.0 {
                     ((-ideal / step).round() as i32).clamp(0, hi as i32) as usize
                 } else {

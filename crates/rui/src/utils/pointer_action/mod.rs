@@ -26,6 +26,7 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use crate::core::reactivity::Signal;
+use crate::core::scroll_viewport::{scroll_offset_x_signal_key, scroll_offset_y_signal_key};
 use crate::core::tree::{Element, IntoCssDim, LayoutStatus};
 use crate::style::{IntoCursor, UnitSlot};
 use crate::utils::drag::geometry::Axis;
@@ -123,7 +124,7 @@ struct LiveResize {
     last_pointer: [f32; 2],
     start_pointer: [f32; 2],
     // Outer None means unresolved; inner None means the press had no scroll owner.
-    scroll_owner: Option<Option<String>>,
+    scroll_owner: Option<Option<(String, [f32; 2])>>,
 }
 
 thread_local! {
@@ -193,8 +194,12 @@ pub fn pump_edge_scroll(root: &Element) -> bool {
         let owner = resolve_resize_scroll_owner(&views);
         views.retain(|view| owner.as_deref() == Some(view.rest.as_str()));
         let motion = resize_motion_axis();
-        return LAST_EDGE_SCROLL_AT
-            .with(|slot| apply(pointer, &views, cfg, frame_dt(slot), motion));
+        let moved =
+            LAST_EDGE_SCROLL_AT.with(|slot| apply(pointer, &views, cfg, frame_dt(slot), motion));
+        if moved {
+            tick_resize(pointer[0], pointer[1]);
+        }
+        return moved;
     }
     if let Some((pointer, cfg)) = gesture_edge_scroll() {
         return LAST_EDGE_SCROLL_AT.with(|slot| pump_at(root, pointer, cfg, Axis::Xy, slot));
@@ -213,10 +218,34 @@ fn resolve_resize_scroll_owner(views: &[ScrollHit]) -> Option<String> {
                     .iter()
                     .rev()
                     .find(|view| view.rect.contains_point(live.start_pointer))
-                    .map(|view| view.rest.clone())
+                    .map(|view| {
+                        let x = crate::core::reactivity::use_signal(
+                            &scroll_offset_x_signal_key(&view.rest),
+                            || 0.0_f32,
+                        )
+                        .peek();
+                        let y = crate::core::reactivity::use_signal(
+                            &scroll_offset_y_signal_key(&view.rest),
+                            || 0.0_f32,
+                        )
+                        .peek();
+                        (view.rest.clone(), [x, y])
+                    })
             })
             .clone()
+            .map(|(id, _)| id)
     })
+}
+
+fn resize_scroll_delta(live: &LiveResize) -> [f32; 2] {
+    let Some(Some((owner, start_offset))) = &live.scroll_owner else {
+        return [0.0, 0.0];
+    };
+    let x =
+        crate::core::reactivity::use_signal(&scroll_offset_x_signal_key(owner), || 0.0_f32).peek();
+    let y =
+        crate::core::reactivity::use_signal(&scroll_offset_y_signal_key(owner), || 0.0_f32).peek();
+    [x - start_offset[0], y - start_offset[1]]
 }
 
 /// Resolve at press time, before scrolling or relayout can move the source viewport.
@@ -263,7 +292,8 @@ pub fn tick_resize(x: f32, y: f32) -> Option<BoxRect> {
         let mut slot = s.borrow_mut();
         let live = slot.as_mut()?;
         live.last_pointer = [x, y];
-        let rect = live.session.tick([x, y]);
+        let scroll = resize_scroll_delta(live);
+        let rect = live.session.tick([x + scroll[0], y + scroll[1]]);
         Some((rect, live.signal))
     })?;
     if let Some(signal) = signal {

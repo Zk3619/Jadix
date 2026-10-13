@@ -265,7 +265,7 @@ thread_local! {
         const { Cell::new(Some(CSS_TRANSITION_DEFAULT_MAX_STEP_MS)) };
 }
 
-fn css_timeline_now_ms() -> f64 {
+pub(crate) fn css_timeline_now_ms() -> f64 {
     if let Some(ms) = CSS_TIMELINE_VIRTUAL_MS.get() {
         return ms.max(0.0);
     }

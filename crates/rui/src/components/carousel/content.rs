@@ -14,6 +14,25 @@ fn viewport_measure_status(applied: bool) -> LayoutStatus {
     }
 }
 
+fn track_motion_sync_status(el: &Element, changed: bool, dragging: bool) -> LayoutStatus {
+    let animating =
+        !dragging && crate::utils::motion::motion_is_animating(&el.style, &el.transition_snapshot);
+    if changed || dragging || animating {
+        // The track's children overflow its translated border box. Repaint the
+        // viewport as a region so entering slides and their glyphs share a clear.
+        let mut bounds = el.layout_bounds;
+        bounds[0] -= el.paint_scroll_acc[0];
+        bounds[1] -= el.paint_scroll_acc[1];
+        crate::app::damage::push_frame_region_paint(
+            crate::app::damage::paint_element_key(el),
+            bounds,
+        );
+        LayoutStatus::StyleChanged
+    } else {
+        LayoutStatus::Clean
+    }
+}
+
 fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
     // 与 Single/Multi 一致：舞台宽度 = 视口 100%；高度由内容撑开（不用写死 rem）。
     // 绝对卡不占文档流，故放隐形测量槽（首卡克隆）提供高度；卡面 h(100%) 填满舞台。
@@ -25,6 +44,12 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
         .min_w(0.0)
         .overflow("hidden")
         .into();
+    // Stack cards move independently inside this fixed viewport. Mark the
+    // viewport as a region so retained pixels from the previous card are
+    // cleared before the transformed card/text is replayed.
+    stage
+        .attrs
+        .insert("data-carousel-track".to_string(), "1".to_string());
     stage
         .attrs
         .insert("data-stacking-context".to_string(), "1".to_string());
@@ -182,9 +207,34 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
         stamp_carousel_painted(&vp_ctx.id);
         let len = el.layout_bounds[2];
         let off = offset_target(&vp_ctx.id).peek();
+        let previous_off = last_visual_offset(&vp_ctx.id);
         set_last_visual_offset(&vp_ctx.id, off);
         auto_sync_offset_if_snapping(&vp_ctx);
-        viewport_measure_status(apply_viewport_len(&vp_ctx, len))
+        let measured = apply_viewport_len(&vp_ctx, len);
+        let dragging = is_carousel_dragging_id(&vp_ctx.id);
+        let animating = !dragging
+            && el.children.iter().any(|child| {
+                child.transition_snapshot.has_active_tweens()
+                    || crate::style::css_transition_needs_frame(
+                        &child.style,
+                        &child.transition_snapshot,
+                    )
+            });
+        let moving = dragging || (off - previous_off).abs() > 0.05 || animating;
+        if moving {
+            let mut bounds = el.layout_bounds;
+            bounds[0] -= el.paint_scroll_acc[0];
+            bounds[1] -= el.paint_scroll_acc[1];
+            crate::app::damage::push_frame_region_paint(
+                crate::app::damage::paint_element_key(el),
+                bounds,
+            );
+        }
+        if measured || moving {
+            LayoutStatus::StyleChanged
+        } else {
+            LayoutStatus::Clean
+        }
     });
 
     let capture_id = format!("{}:content", ctx.id);
@@ -381,7 +431,7 @@ pub fn CarouselContent(children: Option<Element>) -> Element {
             let _ = take_instant_snap_to(&track_ctx.id);
             clear_track_css_transition(el);
             apply_axis_translate(el, track_ctx.orientation, x_or_y);
-            return motion_sync_status(el, true, true);
+            return track_motion_sync_status(el, true, true);
         }
 
         ensure_track_css_transition(el);
@@ -393,7 +443,7 @@ pub fn CarouselContent(children: Option<Element>) -> Element {
 
         apply_axis_translate(el, track_ctx.orientation, x_or_y);
         let style_changed = (visual - x_or_y).abs() > 0.05;
-        motion_sync_status(el, style_changed, false)
+        track_motion_sync_status(el, style_changed, false)
     });
 
     let mut viewport: Element = r#box()

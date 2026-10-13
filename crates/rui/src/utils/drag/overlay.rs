@@ -19,7 +19,9 @@ use crate::app::portal_overlay::{pinned_overlay_z, portal_sync, OverlayKind, Ove
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::core::reactivity::{isolate_reads, with_child_owner, Signal};
 use crate::core::tree::{lpa_length_px, Element, IntoCssDim, IntoOpacity, LayoutStatus, UnitSlot};
-use crate::layout::layout_tree::{ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT};
+use crate::layout::layout_tree::{
+    ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT,
+};
 use crate::layout::{dim_kind, dim_length_px, DimKind};
 use crate::utils::anchored_overlay::pin_overlay_follow_insets;
 use crate::utils::popup::{flow_hidden_portal_host, mount_anchored_overlay, ATTR_FLOATING};
@@ -355,7 +357,7 @@ fn build_ghost_body_inner(
     if following_source {
         let ids = active_drag_ids();
         if ids.len() <= 1 {
-            panel = pin_percent_size_to_extent(panel, extent);
+            panel = pin_source_size_to_extent(panel, extent);
         }
     }
     if let Some(dec) = decorate {
@@ -386,6 +388,8 @@ fn write_placed_ghost(
     let portal_key = host.attrs.get(ATTR_PORTAL_KEY).cloned();
     let portal = host.attrs.get("rui_portal").cloned();
     let portal_mount = host.attrs.get(ATTR_PORTAL_MOUNT).cloned();
+    let hoisted = host.attrs.get(ATTR_HOISTED_PORTAL).cloned();
+    let hoisted_mount = host.attrs.get(ATTR_HOISTED_MOUNT).cloned();
     *host = place_drag_ghost(body, ghost_id, origin, clip);
     host.reactive_sync = sync;
     if z != 0 {
@@ -399,6 +403,14 @@ fn write_placed_ghost(
     }
     if let Some(m) = portal_mount {
         host.set_attr(ATTR_PORTAL_MOUNT, m);
+    }
+    // Keep portal ownership across body/clip replacement, so removing its
+    // declaration slot also removes the hoisted node on close.
+    if let Some(v) = hoisted {
+        host.set_attr(ATTR_HOISTED_PORTAL, v);
+    }
+    if let Some(m) = hoisted_mount {
+        host.set_attr(ATTR_HOISTED_MOUNT, m);
     }
 }
 
@@ -548,15 +560,22 @@ pub(crate) fn sync_overlay_ghost_insets(el: &mut Element) {
     }
 }
 
-/// Follow-source clones of `w=100%` / `h=100%` must pin the used `drag_extent`
-/// (portal CB would resolve the percentage into a slab). Auto-sized chips must
-/// keep author size — `start_bounds` is the stretched island, not the chip.
-fn pin_percent_size_to_extent(mut panel: Element, extent: [f32; 2]) -> Element {
-    if matches!(dim_kind(panel.style.size.width), DimKind::Percent(_)) && extent[0] > 0.0 {
-        panel = panel.w(extent[0]);
+/// Percentages resolve against the drag extent instead of the portal. Auto
+/// dimensions retain the measured author body, including parent-driven stretch;
+/// the drag extent can belong to a larger island wrapper around a compact chip.
+fn pin_source_size_to_extent(mut panel: Element, extent: [f32; 2]) -> Element {
+    let size = |dim, measured, fallback| match dim_kind(dim) {
+        DimKind::Auto => measured,
+        DimKind::Percent(_) => fallback,
+        _ => 0.0,
+    };
+    let w = size(panel.style.size.width, panel.layout_bounds[2], extent[0]);
+    let h = size(panel.style.size.height, panel.layout_bounds[3], extent[1]);
+    if w.is_finite() && w > 0.0 {
+        panel = panel.w(w);
     }
-    if matches!(dim_kind(panel.style.size.height), DimKind::Percent(_)) && extent[1] > 0.0 {
-        panel = panel.h(extent[1]);
+    if h.is_finite() && h > 0.0 {
+        panel = panel.h(h);
     }
     panel
 }
@@ -671,7 +690,7 @@ pub(crate) fn stacked_ghost_panel(scope: &str, ids: &[String]) -> Element {
     let extent = super::session::last_drag_extent(scope).unwrap_or([0.0, 0.0]);
     for id in ids {
         let mut chip = clone_source_preview(scope, id).unwrap_or_else(Element::new);
-        chip = pin_percent_size_to_extent(chip, extent).flex_shrink(0.0);
+        chip = pin_source_size_to_extent(chip, extent).flex_shrink(0.0);
         wrap = wrap.child(chip);
     }
     wrap
@@ -699,31 +718,55 @@ impl From<DragOverlayBuilder> for Element {
         let ghost_id = format!("{}__ghost", ctx.id);
 
         reactive_anchor(view_id.clone(), move || {
-            // Mount the portal host once. Do **not** subscribe `open` / `active` /
-            // `overlay_pos`: remount-on-open races AppState `try_borrow_mut`
-            // (pointerdown / first activating move) and leaves source_opacity=0
-            // with no stand-in. Body + origin are paint (`sync_drag_overlay_ghost`).
+            // Only the active provider mounts a portal. The local 0x0 controller
+            // also synchronizes during paint, so activation while AppState is
+            // borrowed does not have to wait for an island remount. Subscribe
+            // only to membership changes, ensuring offscreen close still removes
+            // the portal slot; pointer follow stays in the ghost's paint hook.
+            let _ = open.get();
             let _ = portal_sync(
                 ghost_id.as_str(),
                 open,
                 OverlayKind::Popover,
                 OverlayMode::Pinned,
             );
-            let mut panel = place_drag_ghost(Element::new(), ghost_id.as_str(), pos.peek(), None);
-            panel = sync_drag_overlay_ghost(
-                panel,
-                open,
-                pos,
-                active,
-                extent,
-                scope_id.clone(),
-                ghost_id.clone(),
-                custom.clone(),
-                body_for.clone(),
-                decorate.clone(),
-                ctx.clone(),
-            );
-            mount_anchored_overlay(panel, pinned_overlay_z().panel)
+            let scope_id = scope_id.clone();
+            let ghost_id = ghost_id.clone();
+            let custom = custom.clone();
+            let body_for = body_for.clone();
+            let decorate = decorate.clone();
+            let ctx = ctx.clone();
+            flow_hidden_portal_host(Element::new()).reactive_sync(move |host, _| {
+                if !open.peek() {
+                    if host.children.is_empty() {
+                        return LayoutStatus::Clean;
+                    }
+                    host.children.clear();
+                    return LayoutStatus::StructureChanged;
+                }
+                // Hoisting replaces the panel with a keep-alive slot. Retain it
+                // throughout the gesture rather than rebuilding on every frame.
+                if !host.children.is_empty() {
+                    return LayoutStatus::Clean;
+                }
+                let panel = place_drag_ghost(Element::new(), &ghost_id, pos.peek(), None);
+                let panel = sync_drag_overlay_ghost(
+                    panel,
+                    open,
+                    pos,
+                    active,
+                    extent,
+                    scope_id.clone(),
+                    ghost_id.clone(),
+                    custom.clone(),
+                    body_for.clone(),
+                    decorate.clone(),
+                    ctx.clone(),
+                );
+                host.children
+                    .push(mount_anchored_overlay(panel, pinned_overlay_z().panel));
+                LayoutStatus::StructureChanged
+            })
         });
         flow_hidden_portal_host(
             reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none(),
@@ -1041,9 +1084,154 @@ mod tests {
         reset_registered_anchors();
     }
 
+    #[test]
+    fn idle_overlays_are_lazy_and_reopen_with_their_own_custom_body() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::clear_test_reconcile_root;
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin_draggable, collect_hits, drag_scope, draggable, run_scope_sensors,
+        };
+
+        let builds = Rc::new(Cell::new(0));
+        let observed = builds.clone();
+        let (_owner, live) = mount_scope_tree(move || {
+            let board = |name: &'static str, chip: &'static str| {
+                let builds = observed.clone();
+                drag_scope(name)
+                    .sensor("button", move |ctx| {
+                        begin_draggable(&ctx.scope_id, chip, &ctx.begin)
+                    })
+                    .child(move || {
+                        let builds = builds.clone();
+                        Element::from(
+                            vstack().children([
+                                draggable(chip)
+                                    .child(move || Element::new().text(chip).w(80.0).h(32.0)),
+                                drag_overlay()
+                                    .child(move || {
+                                        builds.set(builds.get() + 1);
+                                        Element::new().text(name).w(90.0).h(40.0)
+                                    })
+                                    .into(),
+                            ]),
+                        )
+                    })
+            };
+            Element::from(vstack().children([board("lazy-a", "chip-a"), board("lazy-b", "chip-b")]))
+        });
+        hoist_and_layout(&mut live.borrow_mut());
+        assert!(
+            find_ghost(&live.borrow()).is_none(),
+            "idle providers must not mount ghosts"
+        );
+        assert_eq!(builds.get(), 0);
+        let hits = collect_hits(&live.borrow());
+        for (chip, label) in [
+            ("chip-a", "lazy-a"),
+            ("chip-b", "lazy-b"),
+            ("chip-a", "lazy-a"),
+        ] {
+            let scope = &hits.iter().find(|hit| hit.id == chip).unwrap().scope_id;
+            assert!(run_scope_sensors(scope));
+            {
+                let mut tree = live.borrow_mut();
+                sync_drag_chrome(&mut tree);
+                hoist_and_layout(&mut tree);
+                let ghost = find_ghost(&tree).expect("active ghost");
+                assert_eq!(ghost.text.as_deref(), Some(label));
+                assert!(ghost_is_under_portal_layer(&tree));
+                let mut count = 0;
+                crate::core::tree::walk_elements(&tree, |el| {
+                    count += usize::from(el.attrs.contains_key(ATTR_DRAG_OVERLAY));
+                });
+                assert_eq!(count, 1, "only the active provider may mount a ghost");
+            }
+            crate::utils::drag::cancel();
+            {
+                let mut tree = live.borrow_mut();
+                sync_drag_chrome(&mut tree);
+                hoist_and_layout(&mut tree);
+                assert!(find_ghost(&tree).is_none(), "cancel must unmount the ghost");
+            }
+        }
+        assert_eq!(builds.get(), 3, "build custom bodies only when used");
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
+    #[test]
+    fn sensor_activation_paints_ghost_without_pointer_move() {
+        use crate::app::reactive::reset_registered_anchors;
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use crate::primitives::vstack;
+        use crate::utils::drag::{
+            begin_draggable, collect_hits, drag_overlay, drag_scope, draggable, run_scope_sensors,
+        };
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let starts = Rc::new(Cell::new(0));
+        let observed_starts = starts.clone();
+        let (_owner, live) = mount_scope_tree(move || {
+            let starts = observed_starts.clone();
+            drag_scope("ov-sensor")
+                .threshold(100.0)
+                .delay_ms(60_000.0)
+                .on_drag_start(move |_| starts.set(starts.get() + 1))
+                .sensor("button", |ctx| {
+                    begin_draggable(&ctx.scope_id, "chip", &ctx.begin)
+                })
+                .child(|| {
+                    Element::from(
+                        vstack().children([
+                            draggable("chip")
+                                .source_opacity(0.0)
+                                .child(|| Element::new().text("sensor source").w(80.0).h(32.0)),
+                            drag_overlay().source_opacity(0.0).into(),
+                        ]),
+                    )
+                })
+        });
+        hoist_and_layout(&mut live.borrow_mut());
+        let hits = collect_hits(&live.borrow());
+        let sid = find_scope_id(&live.borrow()).expect("scope");
+        // Button handlers can hold AppState mutably, preventing an immediate remount.
+        clear_test_reconcile_root();
+        assert!(run_scope_sensors(&sid));
+        install_test_reconcile_root(Rc::clone(&live));
+        {
+            let mut tree = live.borrow_mut();
+            sync_drag_chrome(&mut tree);
+            hoist_and_layout(&mut tree);
+            let ghost = find_ghost(&tree).expect("overlay host");
+            assert!(
+                ghost.layout_bounds[2] > 10.0 && ghost.layout_bounds[3] > 10.0,
+                "sensor must paint its ghost before any pointer move: {:?}",
+                ghost.layout_bounds
+            );
+            let mut texts = Vec::new();
+            collect_texts(ghost, &mut texts);
+            assert!(texts.iter().any(|text| text.contains("sensor source")));
+            assert!(find_draggable(&tree, "chip").unwrap().style.opacity <= 0.001);
+        }
+        assert_eq!(starts.get(), 1);
+        let rect = hits.iter().find(|hit| hit.id == "chip").unwrap().rect;
+        let pointer = [rect.x + rect.width * 0.5, rect.y + rect.height * 0.5];
+        crate::utils::drag::tick(pointer[0], pointer[1], &hits, [800.0, 600.0]);
+        assert_eq!(
+            starts.get(),
+            1,
+            "pointer follow must not activate a second time"
+        );
+        let _ = crate::utils::drag::end(&hits);
+        clear_test_reconcile_root();
+        reset_registered_anchors();
+    }
+
     /// Gallery `card_chip`: auto-sized chip (padding / border / text, no w×h).
-    /// Page layout measures the empty overlay host first; the ghost must be
-    /// `place_drag_ghost(clone)`, not a 0×0 bordered pill grafted onto that host.
+    /// First activation must place the full clone, rather than grafting its
+    /// border onto a 0×0 controller.
     #[test]
     fn gallery_auto_chip_ghost_is_not_a_dot() {
         use crate::app::reactive::reset_registered_anchors;
@@ -1056,6 +1244,7 @@ mod tests {
                 let chip = draggable("chip").item_type("chip").child(|| {
                     Element::new()
                         .text("可拖卡片")
+                        .align_self_kw("start")
                         .p(8.0)
                         .rounded(8.0)
                         .border_style("solid")
@@ -1070,6 +1259,10 @@ mod tests {
             hoist_and_layout(&mut tree);
         }
         let sid = find_scope_id(&live.borrow()).expect("scope");
+        let source_width = find_draggable(&live.borrow(), "chip")
+            .unwrap()
+            .layout_bounds[2];
+        assert!(source_width > 40.0 && source_width < 200.0);
         begin(BeginDrag {
             scope_id: sid,
             draggable_id: "chip".into(),
@@ -1090,6 +1283,7 @@ mod tests {
             let ghost = find_ghost(&tree).expect("ghost");
             let mut texts = Vec::new();
             collect_texts(ghost, &mut texts);
+            assert!((ghost.layout_bounds[2] - source_width).abs() < 0.1);
             assert!(
                 texts.iter().any(|t| t.contains("可拖卡片")),
                 "ghost must clone chip text, not an empty bordered shell; texts={texts:?}"
@@ -1105,14 +1299,9 @@ mod tests {
             let mut tree = live.borrow_mut();
             sync_drag_chrome(&mut tree);
             hoist_and_layout(&mut tree);
-            let ghost = find_ghost(&tree).expect("closed host");
             assert!(
-                ghost.style.border_width < 0.01
-                    && ghost.layout_bounds[2] < 1.0
-                    && ghost.layout_bounds[3] < 1.0,
-                "closed host must be an empty placement shell; bounds={:?} border={}",
-                ghost.layout_bounds,
-                ghost.style.border_width
+                find_ghost(&tree).is_none(),
+                "closed overlays must unmount completely"
             );
         }
         clear_test_reconcile_root();
@@ -1166,6 +1355,9 @@ mod tests {
             hoist_and_layout(&mut tree);
         }
         let sid = find_scope_id(&live.borrow()).expect("scope");
+        let source_width = find_draggable(&live.borrow(), "chip")
+            .unwrap()
+            .layout_bounds[2];
         begin(BeginDrag {
             scope_id: sid,
             draggable_id: "chip".into(),
@@ -1196,12 +1388,12 @@ mod tests {
             );
             assert!(
                 w > 40.0 && h >= 14.0,
-                "auto card_chip must hug cloned content, not collapse to a border-radius dot; bounds={:?}",
+                "auto card_chip must not collapse to a border-radius dot; bounds={:?}",
                 ghost.layout_bounds
             );
             assert!(
-                w < 200.0,
-                "auto card_chip must not inherit the stretched parent box; bounds={:?}",
+                (w - source_width).abs() < 0.1,
+                "auto card_chip must retain its measured source width {source_width}; bounds={:?}",
                 ghost.layout_bounds
             );
         }
@@ -1257,14 +1449,15 @@ mod tests {
         {
             let mut tree = live.borrow_mut();
             hoist_and_layout_persisted(&mut lt, &mut tree, false);
-            let ghost = find_ghost(&tree).expect("idle host");
             assert!(
-                ghost.layout_bounds[2] < 1.0 && ghost.layout_bounds[3] < 1.0,
-                "idle overlay host must be an empty 0×0 shell; bounds={:?}",
-                ghost.layout_bounds
+                find_ghost(&tree).is_none(),
+                "idle overlays must not mount empty portals"
             );
         }
         let sid = find_scope_id(&live.borrow()).expect("scope");
+        let source_width = find_draggable(&live.borrow(), "chip")
+            .unwrap()
+            .layout_bounds[2];
         begin(BeginDrag {
             scope_id: sid,
             draggable_id: "chip".into(),
@@ -1295,12 +1488,12 @@ mod tests {
             );
             assert!(
                 w > 40.0 && h >= 14.0,
-                "fast-path auto card_chip must hug cloned content, not collapse to a border-radius dot; bounds={:?}",
+                "fast-path auto card_chip must not collapse to a border-radius dot; bounds={:?}",
                 ghost.layout_bounds
             );
             assert!(
-                w < 200.0,
-                "fast-path auto card_chip must not inherit the stretched parent box; bounds={:?}",
+                (w - source_width).abs() < 0.1,
+                "fast-path auto card_chip must retain its measured source width {source_width}; bounds={:?}",
                 ghost.layout_bounds
             );
         }
@@ -1309,24 +1502,18 @@ mod tests {
             let mut tree = live.borrow_mut();
             sync_drag_chrome(&mut tree);
             hoist_and_layout_persisted(&mut lt, &mut tree, true);
-            let ghost = find_ghost(&tree).expect("closed host");
             assert!(
-                ghost.style.border_width < 0.01
-                    && ghost.layout_bounds[2] < 1.0
-                    && ghost.layout_bounds[3] < 1.0,
-                "closed host on the fast path must be an empty placement shell; bounds={:?} border={}",
-                ghost.layout_bounds,
-                ghost.style.border_width
+                find_ghost(&tree).is_none(),
+                "closed overlays must unmount completely"
             );
         }
         clear_test_reconcile_root();
         reset_registered_anchors();
     }
 
-    /// Always-mounted host: close must un-adopt chip chrome. Clearing children
-    /// only leaves a bordered 0-content pill on the portal layer.
+    /// Close must remove the ghost entirely, including its adopted chip chrome.
     #[test]
-    fn overlay_close_restores_empty_shell() {
+    fn overlay_close_removes_ghost() {
         use crate::app::reactive::reset_registered_anchors;
         use crate::app::runtime::clear_test_reconcile_root;
         use crate::primitives::vstack;
@@ -1379,20 +1566,9 @@ mod tests {
             let mut tree = live.borrow_mut();
             sync_drag_chrome(&mut tree);
             hoist_and_layout(&mut tree);
-            let ghost = find_ghost(&tree).expect("closed host stays mounted");
             assert!(
-                ghost.children.is_empty() && ghost.text.is_none(),
-                "closed host must not keep clone children"
-            );
-            assert!(
-                ghost.style.border_width < 0.01,
-                "closed host must not keep adopted border (leftover dot); width={}",
-                ghost.style.border_width
-            );
-            assert!(
-                ghost.layout_bounds[2] < 1.0 && ghost.layout_bounds[3] < 1.0,
-                "closed host must not keep a painted box; bounds={:?}",
-                ghost.layout_bounds
+                find_ghost(&tree).is_none(),
+                "closed overlays must unmount completely"
             );
         }
         clear_test_reconcile_root();
@@ -1600,26 +1776,9 @@ mod tests {
             let mut tree = live.borrow_mut();
             sync_drag_chrome(&mut tree);
             hoist_and_layout(&mut tree);
-            let ghost = find_ghost(&tree).expect("closed host stays mounted");
             assert!(
-                ghost.children.is_empty() && ghost.text.is_none(),
-                "closed host must not keep clone children after empty-list drop"
-            );
-            assert!(
-                ghost.style.border_width < 0.01 && ghost.layout_bounds[2] < 1.0,
-                "closed host must not keep a painted box; bounds={:?} border={}",
-                ghost.layout_bounds,
-                ghost.style.border_width
-            );
-            let mut n = 0usize;
-            crate::core::tree::walk_elements(&tree, |el| {
-                if el.attrs.get(ATTR_DRAG_OVERLAY).is_some() {
-                    n += 1;
-                }
-            });
-            assert_eq!(
-                n, 1,
-                "must not leak a second frozen ghost on the portal layer"
+                find_ghost(&tree).is_none(),
+                "closed overlays must unmount completely"
             );
         }
 
@@ -3042,7 +3201,7 @@ mod tests {
             &[],
             [800.0, 600.0]
         ));
-        // Same order as AppState paint: chrome (fills the always-mounted host) then layout.
+        // Same order as AppState paint: chrome mounts the active ghost, then layout.
         let mut tree = live.borrow_mut();
         sync_drag_chrome(&mut tree);
     }
@@ -3073,17 +3232,16 @@ mod tests {
                     .child(|| {
                         let column = |list: &'static str| {
                             sortable_list(list).child(move || {
-                                Element::from(vstack().gap(4.0).children((0..3).map(|i| {
-                                    sortable_item(format!("{list}:{i}"))
-                                        .list(list)
-                                        .index(i)
-                                        .child(move || {
-                                            Element::new()
-                                                .text(format!("{list}:{i}"))
-                                                .w(100.0)
-                                                .h(24.0)
-                                        })
-                                })))
+                                Element::from(vstack().w(240.0).gap(4.0).children((0..3).map(
+                                    |i| {
+                                        sortable_item(format!("{list}:{i}"))
+                                            .list(list)
+                                            .index(i)
+                                            .child(move || {
+                                                Element::new().text(format!("{list}:{i}")).h(24.0)
+                                            })
+                                    },
+                                )))
                             })
                         };
                         Element::from(hstack().items("start").gap(20.0).children([
@@ -3098,6 +3256,7 @@ mod tests {
                 .map(|id| find_droppable(&live.borrow(), id).unwrap().layout_bounds[3]);
             let hits = collect_hits(&live.borrow());
             let source = hits.iter().find(|h| h.id == "left:1").unwrap();
+            assert!((source.rect.width - 240.0).abs() < 0.1);
             let target = hits.iter().find(|h| h.id == "right:2").unwrap();
             begin(BeginDrag {
                 scope_id: "swap-height".into(),
@@ -3115,6 +3274,12 @@ mod tests {
             assert!(tick(p[0], p[1], &hits, [800.0, 600.0]));
             sync_drag_chrome(&mut live.borrow_mut());
             hoist_and_layout(&mut live.borrow_mut());
+            let ghost_width = find_ghost(&live.borrow()).unwrap().layout_bounds[2];
+            assert!(
+                (ghost_width - source.rect.width).abs() < 0.1,
+                "swap ghost must retain the stretched row width: source={} ghost={ghost_width}",
+                source.rect.width
+            );
             for (id, height) in ["left", "right"].into_iter().zip(original) {
                 let tree = live.borrow();
                 let column = find_droppable(&tree, id).unwrap();
@@ -3155,7 +3320,7 @@ mod tests {
                                     sortable_item(id)
                                         .list("list")
                                         .index(i)
-                                        .child(move || Element::new().text(id).w(100.0).h(24.0))
+                                        .child(move || Element::new().text(id).h(24.0))
                                 }),
                             ))
                         }),
@@ -3188,6 +3353,14 @@ mod tests {
             collect_texts(ghost, &mut labels);
             assert_eq!(labels, vec!["a", "b", "c"]);
             assert_eq!(ghost.children.len(), 3);
+            for row in &ghost.children {
+                assert!(
+                    (row.layout_bounds[2] - source.rect.width).abs() < 0.1,
+                    "each multi-drag ghost row must retain its source width: source={} ghost={:?}",
+                    source.rect.width,
+                    row.layout_bounds
+                );
+            }
             for rows in ghost.children.windows(2) {
                 assert!(
                     rows[0].layout_bounds[1] + rows[0].layout_bounds[3] <= rows[1].layout_bounds[1]
@@ -5773,11 +5946,8 @@ mod tests {
                 beta.style.translate
             );
             assert!(
-                beta.style
-                    .transition
-                    .iter()
-                    .any(|entry| entry.property == crate::style::TransitionProperty::Transform),
-                "enabled sortable motion must keep its transitions across lists"
+                !crate::utils::motion::motion_is_animating(&beta.style, &beta.transition_snapshot),
+                "source slot collapse must finish the origin sibling's old shift"
             );
             let beta_visual_y = beta.layout_bounds[1] + beta.style.translate[1];
             assert!(

@@ -252,6 +252,13 @@ impl VariantContext<'_> {
 /// Base tokens are applied immediately and snapshotted. Variant tokens are stored on
 /// [`Element::class_set`] and re-applied by [`resolve_class_variants`].
 pub fn apply_class_list(el: &mut Element, classes: &str) -> LayoutStatus {
+    let combined;
+    let classes = if let Some(sheet) = el.attrs.get("rui_stylesheet_class") {
+        combined = format!("{sheet} {classes}");
+        combined.as_str()
+    } else {
+        classes
+    };
     let parsed = parse_class_list(classes);
     apply_parsed_class_list(el, parsed, classes)
 }

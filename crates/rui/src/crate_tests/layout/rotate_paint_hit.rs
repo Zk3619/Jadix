@@ -13,6 +13,109 @@ fn aabb_contains(aabb: [f32; 4], p: [f32; 2]) -> bool {
 }
 
 #[test]
+fn rotating_overflow_repair_covers_title_overlap_after_scroll_stops() {
+    use crate::app::damage::{paint_element_key, PaintDirty, PaintDirtyKind};
+    use crate::app::draw_cull::{
+        last_present_visual_slots, node_present_scissor_logical, prepare_node_present_dirties,
+        region_replays_own_chrome_only,
+    };
+
+    let mut root = Element::new().w(320.0).h(200.0).bg([1.0; 4]).child(
+        Element::new().w(320.0).h(180.0).overflow_y("scroll").child(
+            Element::new()
+                .flex_col()
+                .w(320.0)
+                .h(400.0)
+                .flex_shrink(0.0)
+                .child(
+                    Element::new()
+                        .w(88.0)
+                        .h(56.0)
+                        .flex_shrink(0.0)
+                        .bg([0.2, 0.5, 1.0, 1.0]),
+                )
+                .child(
+                    Element::new()
+                        .w(160.0)
+                        .h(20.0)
+                        .flex_shrink(0.0)
+                        .text("Title below rotating rectangle"),
+                ),
+        ),
+    );
+    let mut tree = LayoutTree::new();
+    let mut previous = Vec::new();
+    for (angle, scroll, scrolling) in [
+        (0.0, 0.0, false),
+        (45.0, 0.0, false),
+        (60.0, 8.0, true),
+        (90.0, 8.0, false),
+        (0.0, 8.0, false),
+    ] {
+        root.children[0].scroll_offset[1] = scroll;
+        root.children[0].children[0].children[0].style.rotate_deg = angle;
+        let scene = tree.build_and_layout_fast(&mut root, 320.0, 200.0, [-1.0; 2], scrolling, true);
+        let tile = &root.children[0].children[0].children[0];
+        let key = paint_element_key(tile);
+        let bounds = scene
+            .node_paints
+            .iter()
+            .find(|p| p.key == key)
+            .unwrap()
+            .bounds;
+        if !previous.is_empty() && !scrolling {
+            let old = previous.iter().find(|(k, _)| *k == key).unwrap().1;
+            let coverage = crate::app::damage::union_rects(bounds, old);
+            let mut dirties = vec![PaintDirty {
+                key,
+                bounds: coverage,
+                kind: PaintDirtyKind::Node,
+            }];
+            let textured = crate::renderer::scale_textured_draws(&scene.textured_draws, 1.0);
+            prepare_node_present_dirties(
+                &mut dirties,
+                &scene.node_paints,
+                &previous,
+                &scene.instances,
+                &textured,
+                &[],
+                1.0,
+                None,
+            );
+            let dirty = dirties.iter().find(|d| d.key == key).unwrap();
+            let scissor = node_present_scissor_logical(
+                dirty.kind,
+                key,
+                dirty.bounds,
+                &previous,
+                &scene.node_paints,
+                8.0,
+            );
+            let visible =
+                crate::app::damage::intersect_rects(coverage, [0.0, 0.0, 320.0, 180.0]).unwrap();
+            assert!(crate::app::damage::rect_contains_rect(scissor, visible),
+                "angle={angle} scroll={scroll}: rotation repair clips old/new ink at title: scissor={scissor:?}, coverage={visible:?}");
+            assert_eq!(
+                dirty.kind,
+                PaintDirtyKind::Region,
+                "overlapping title must be restored in scene order"
+            );
+            assert!(
+                !region_replays_own_chrome_only(key, dirty.bounds, &scene.node_paints),
+                "repair must replay the title as well as the rotating fill"
+            );
+        }
+        previous = last_present_visual_slots(
+            &scene.node_paints,
+            &scene.instances,
+            &crate::renderer::scale_textured_draws(&scene.textured_draws, 1.0),
+            &scene.text_nodes,
+            &[],
+        );
+    }
+}
+
+#[test]
 fn visual_paint_aabb_origin_left_rotate_90_shifts_left() {
     let mut el = Element::new();
     el.layout_bounds = [400.0, 200.0, 100.0, 100.0];

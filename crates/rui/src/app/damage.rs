@@ -286,6 +286,11 @@ fn clamp_overlay_clip_box(el: &Element, mut b: [f32; 4]) -> [f32; 4] {
 /// Descendants (reaction chips, menu items) inherit overlay membership from
 /// last collect (`paint_overlay_stamp`) — they are not themselves `__floating_panel`.
 pub fn paint_kind_for_element(el: &Element) -> PaintDirtyKind {
+    // A carousel track moves overflowing child cards through a fixed viewport.
+    // Its border box cannot own the entering cards' retained pixels or glyphs.
+    if el.attrs.get("data-carousel-track").map(String::as_str) == Some("1") {
+        return PaintDirtyKind::Region;
+    }
     // Chart tooltips and crosshair strokes are local absolute children, not
     // hoisted portals. Their old pixels sit over the rasterized chart, so a
     // Node dest-reset would clear the page color and leave a white band until

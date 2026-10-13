@@ -170,11 +170,12 @@ pub use crate::style::{
     focus_ring_width, get_theme, install_theme_overrides, is_dark_theme,
     load_and_install_theme_overrides, load_stylesheet, load_theme_overrides, parse_stylesheet,
     parse_theme_overrides_str, register_stylesheet, reload_stylesheets, set_focus_ring_style,
-    set_focus_ring_width, set_theme_mode, theme_mode, toggle_theme_mode, watch_stylesheets,
-    ClassPart, DesignTokensPatch, FocusRingStyle, IntoAlignItems, IntoCursor, IntoFlexWrap,
-    IntoJustifyContent, IntoOverflow, IntoPaintColor, IntoTextColor, LineStyle, MatchedStyleRule,
-    Selector, StyleRule, Stylesheet, StylesheetError, TextAlign, TextOverflow, Theme, ThemeMode,
-    ThemeOverrideError, ThemeOverrides, TRANSPARENT,
+    set_focus_ring_width, set_theme_mode, set_theme_transition_config, theme_mode,
+    theme_transition_config, toggle_theme_mode, watch_stylesheets, ClassPart, DesignTokensPatch,
+    FocusRingStyle, IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent, IntoOverflow,
+    IntoPaintColor, IntoTextColor, LineStyle, MatchedStyleRule, Selector, StyleRule, Stylesheet,
+    StylesheetError, TextAlign, TextOverflow, Theme, ThemeMode, ThemeOverrideError, ThemeOverrides,
+    ThemeTransitionConfig, TRANSPARENT,
 };
 
 // ---------------------------------------------------------------------------

@@ -12,6 +12,7 @@ use serde::{Deserialize, Serialize};
 use super::color::try_parse_color;
 use super::theme::{
     get_theme, set_theme, theme_mode, DesignTokens, FocusRingStyle, Theme, ThemeMode,
+    ThemeTransitionConfig,
 };
 
 thread_local! {
@@ -114,6 +115,25 @@ pub struct ThemeOverrides {
     /// Logical px; Hard spread / Soft blur. Alias `focus-ring-width`.
     #[serde(alias = "focus-ring-width")]
     pub focus_ring_width: Option<f32>,
+    /// Smooth presentation settings; default enabled, 180 ms, ease-in-out.
+    pub transition: ThemeTransitionConfig,
+}
+
+/// Current theme switch presentation settings.
+pub fn theme_transition_config() -> ThemeTransitionConfig {
+    USER_OVERRIDES.with(|o| o.borrow().transition.clone())
+}
+
+/// Change presentation settings without rebuilding component styles.
+/// A zero duration or reduced-motion preference makes switches immediate.
+pub fn set_theme_transition_config(mut config: ThemeTransitionConfig) {
+    config.duration_ms = if config.duration_ms.is_finite() {
+        config.duration_ms.max(0.0)
+    } else {
+        0.0
+    };
+    USER_OVERRIDES.with(|o| o.borrow_mut().transition = config);
+    crate::app::runtime::request_redraw_all();
 }
 
 /// Compose built-in defaults + stored user patch for `mode`.
@@ -144,8 +164,24 @@ pub fn install_theme_overrides(overrides: ThemeOverrides) -> Result<(), ThemeOve
             value: overrides.focus_ring_style.clone().unwrap_or_default(),
         });
     }
+    if !overrides.transition.duration_ms.is_finite() || overrides.transition.duration_ms < 0.0 {
+        return Err(ThemeOverrideError::InvalidTransitionDuration(
+            overrides.transition.duration_ms,
+        ));
+    }
+    let easing = overrides.transition.easing.trim().to_ascii_lowercase();
+    let timing = overrides.transition.timing();
+    if (timing == super::TimingFunction::Ease && easing != "ease")
+        || matches!(timing, super::TimingFunction::CubicBezier(x1, y1, x2, y2)
+            if ![x1, y1, x2, y2].iter().all(|n| n.is_finite()) || !(0.0..=1.0).contains(&x1) || !(0.0..=1.0).contains(&x2))
+    {
+        return Err(ThemeOverrideError::InvalidTransitionEasing(
+            overrides.transition.easing.clone(),
+        ));
+    }
     USER_OVERRIDES.with(|o| *o.borrow_mut() = overrides);
     refresh_active_theme();
+    crate::app::runtime::request_redraw_all();
     Ok(())
 }
 
@@ -309,15 +345,15 @@ fn apply_design_tokens_patch(
 
 fn resolve_patch_color(raw: &str, tokens: &DesignTokens) -> Option<[f32; 4]> {
     let prior = get_theme();
-    set_theme(Theme {
-        mode: prior.mode,
-        focus_ring_style: prior.focus_ring_style,
-        focus_ring_width: prior.focus_ring_width,
-        colors: *tokens,
-    });
-    let resolved = try_parse_color(raw);
-    set_theme(prior);
-    resolved
+    super::theme::with_temporary_theme(
+        Theme {
+            mode: prior.mode,
+            focus_ring_style: prior.focus_ring_style,
+            focus_ring_width: prior.focus_ring_width,
+            colors: *tokens,
+        },
+        || try_parse_color(raw),
+    )
 }
 
 fn parse_focus_ring_style(raw: Option<&str>) -> Option<FocusRingStyle> {
@@ -338,6 +374,8 @@ pub enum ThemeOverrideError {
     UnsupportedExtension(String),
     UnknownColor { field: String, value: String },
     UnknownFocusRingStyle { value: String },
+    InvalidTransitionDuration(f32),
+    InvalidTransitionEasing(String),
 }
 
 impl std::fmt::Display for ThemeOverrideError {
@@ -353,6 +391,15 @@ impl std::fmt::Display for ThemeOverrideError {
             }
             Self::UnknownFocusRingStyle { value } => {
                 write!(f, "unknown focus_ring_style: {value} (use hard|soft)")
+            }
+            Self::InvalidTransitionEasing(value) => {
+                write!(f, "invalid theme transition easing: {value}")
+            }
+            Self::InvalidTransitionDuration(value) => {
+                write!(
+                    f,
+                    "invalid theme transition duration: {value} (use a non-negative number)"
+                )
             }
         }
     }
@@ -393,6 +440,45 @@ mod tests {
         assert_eq!(patch.focus_ring_style.as_deref(), Some("soft"));
         assert_eq!(patch.focus_ring_width, Some(8.0));
         assert!(patch.light.ring.is_some());
+    }
+
+    #[test]
+    fn toml_theme_transition_defaults_and_overrides() {
+        let defaults = parse_theme_overrides_str("").unwrap().transition;
+        assert!(defaults.enabled);
+        assert_eq!(defaults.duration_ms, 180.0);
+        assert_eq!(defaults.easing, "ease-in-out");
+        let raw = r#"
+            [transition]
+            enabled = false
+            duration-ms = 320
+            easing = "linear"
+        "#;
+        let parsed = parse_theme_overrides_str(raw)
+            .expect("transition config")
+            .transition;
+        assert!(!parsed.enabled);
+        assert_eq!(parsed.duration_ms, 320.0);
+        assert_eq!(parsed.easing, "linear");
+    }
+
+    #[test]
+    fn invalid_transition_keeps_theme_and_settings() {
+        let prior_theme = get_theme();
+        let prior_overrides = snapshot_theme_overrides();
+        for (duration_ms, easing) in [
+            (-1.0, "linear"),
+            (f32::INFINITY, "ease"),
+            (180.0, "invalid-curve"),
+        ] {
+            let mut bad = ThemeOverrides::default();
+            bad.transition.duration_ms = duration_ms;
+            bad.transition.easing = easing.into();
+            bad.light.background = Some("#123456".into());
+            assert!(install_theme_overrides(bad).is_err());
+            assert_eq!(get_theme(), prior_theme);
+            assert_eq!(snapshot_theme_overrides(), prior_overrides);
+        }
     }
 
     #[test]

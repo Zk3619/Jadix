@@ -474,6 +474,9 @@ pub fn hit_path(el: &Element, x: f32, y: f32) -> Vec<HitPathEntry> {
 /// CSS `:hover` must use this set: geometric AABB alone paints covered siblings
 /// (ColorPicker popover over a DatePicker trigger).
 pub(crate) fn pointer_hit_node_set(el: &Element, x: f32, y: f32) -> HashSet<*const Element> {
+    if crate::utils::drag::is_active() {
+        return HashSet::new();
+    }
     hit_path_nodes(el, x, y)
         .into_iter()
         .map(|n| n.ptr)
@@ -655,6 +658,11 @@ fn find_by_template_id_exact<'a>(el: &'a Element, id: &str) -> Option<&'a Elemen
 ///   (DOM-like click), unless a capture/target handler already called
 ///   [`PointerEvent::stop_propagation`] on that gesture.
 pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: PointerKind) {
+    // The same hit path skips hover reconciliation. Keep the client sample
+    // current so reactive chart sync cannot restore the previous frame's pose.
+    if matches!(kind, PointerKind::Move) {
+        note_pointer_client(event.x, event.y);
+    }
     if path.is_empty() {
         return;
     }

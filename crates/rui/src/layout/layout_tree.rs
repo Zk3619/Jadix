@@ -2319,6 +2319,23 @@ pub(crate) fn replay_node_paints(paints: impl IntoIterator<Item = NodePaint>) {
     NODE_PAINTS.with(|s| s.borrow_mut().extend(paints));
 }
 
+fn truncate_node_paint_ranges(end: crate::layout::collect_cache::DlCursor) {
+    NODE_PAINTS.with(|s| {
+        for paint in s.borrow_mut().iter_mut() {
+            for (range, len) in [
+                (&mut paint.instance, end.instances),
+                (&mut paint.textured, end.textured),
+                (&mut paint.text, end.text),
+                (&mut paint.chrome, end.chrome),
+                (&mut paint.paint_ops, end.paint_ops),
+            ] {
+                range.1 = range.1.min(len);
+                range.0 = range.0.min(range.1);
+            }
+        }
+    });
+}
+
 fn record_node_paint(
     node: NodeId,
     el: &Element,
@@ -7694,6 +7711,14 @@ impl LayoutTree {
                 text_nodes.truncate(cap_text0);
                 clip_polys.truncate(cap_inst0);
                 paint_rec.truncate_from(cap_inst0, cap_tex0);
+                truncate_node_paint_ranges(crate::layout::collect_cache::DlCursor::capture(
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                    clip_polys,
+                    &paint_rec.ops,
+                ));
             } else if let Some([sx, sy]) = scale_layer {
                 // Hairline SDF (Select trigger border, inner cards) stays live, scaled
                 // about the card center. A 1px stroke in the blit dest goes thick/dark
@@ -7705,6 +7730,14 @@ impl LayoutTree {
                 flatten_zoom_capture_text(&mut child_text, element.style.bg_color);
                 textured_draws.truncate(cap_tex0);
                 paint_rec.truncate_from(instances.len(), cap_tex0);
+                truncate_node_paint_ranges(crate::layout::collect_cache::DlCursor::capture(
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                    clip_polys,
+                    &paint_rec.ops,
+                ));
                 let fade = element.style.opacity.clamp(0.0, 1.0);
                 let cx = layout_border[0] + layout_border[2] * 0.5;
                 let cy = layout_border[1] + layout_border[3] * 0.5;
@@ -7742,6 +7775,16 @@ impl LayoutTree {
                 textured_draws.truncate(cap_tex0);
                 clip_polys.truncate(cap_inst0);
                 paint_rec.truncate_from(cap_inst0, cap_tex0);
+                // Captured payload is now owned by the offscreen layer. Keep
+                // descendant ranges out of the replacement blit's main-pass slots.
+                truncate_node_paint_ranges(crate::layout::collect_cache::DlCursor::capture(
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                    clip_polys,
+                    &paint_rec.ops,
+                ));
                 let out_key = if filter_capture {
                     element.style.filter.as_ref().and_then(|list| {
                         crate::renderer::queue_css_filter_wrap(

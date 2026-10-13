@@ -37,6 +37,18 @@ pub struct IdealOffsetInput {
     pub min_offset: f32,
 }
 
+/// Page grid plus the clamped final page, which can be shorter than a full page.
+pub fn page_snap_offset(off: f32, page: f32, min_offset: f32) -> f32 {
+    let page = page.max(1.0);
+    let off = off.clamp(min_offset, 0.0);
+    let grid = (-(-off / page).round() * page).clamp(min_offset, 0.0);
+    if (off - min_offset).abs() < (off - grid).abs() {
+        min_offset
+    } else {
+        grid
+    }
+}
+
 pub fn ideal_offset(input: IdealOffsetInput) -> f32 {
     let IdealOffsetInput {
         index,
@@ -63,8 +75,7 @@ pub fn ideal_offset(input: IdealOffsetInput) -> f32 {
     if multi_page_linear {
         let page = page_delta.max(step);
         let i = index.min(max_index) as f32;
-        let k = (i * step / page).round().max(0.0);
-        return (-k * page).clamp(min_offset, 0.0);
+        return page_snap_offset(-i * step, page, min_offset);
     }
     let i = index.min(max_index);
     let raw = snap::snap_target_for_index(i, step, clone_count);

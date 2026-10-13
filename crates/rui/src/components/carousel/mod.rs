@@ -60,9 +60,7 @@ use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{TimingFunction, TransitionEntry, TransitionProperty, UnitSlot};
 use crate::tokens;
 use crate::utils::lucide::lucide_glyph;
-use crate::utils::motion::{
-    clear_motion, ensure_motion_transitions, motion_sync_status, snap_motion_baseline,
-};
+use crate::utils::motion::{clear_motion, ensure_motion_transitions, snap_motion_baseline};
 use crate::utils::resolve_instance_id;
 use crate::utils::take_packed;
 use crate::utils::text_node::build_icon_text_node;
@@ -517,12 +515,16 @@ fn reset_stack_descendant_scales(el: &mut Element) {
 
 /// Interpolate scale/transparency/z at a continuous distance from center (drag to avoid hard-cut transitions of ad=0.5).
 fn stack_card_appearance(ad: f32, sides: f32, idx: usize, count: usize) -> (f32, f32, i32) {
-    let visible = ad <= sides + 0.01;
-    if !visible {
-        return (0.68, 0.0, 0);
-    }
     // ad=0 → sc1/op1; ad=1 → ≈0.82/0.72; ad≥2 → lower limit.
     let sc = (1.0 - 0.18 * ad).clamp(0.72, 1.0);
+    // A side card must fade out as it leaves, rather than disappear on the
+    // first drag pixel past `sides`. End the fade before the ring distance
+    // flips sides (notably with three cards).
+    let fade_span = (count as f32 * 0.5 - sides).clamp(0.01, 1.0);
+    let visibility = ((sides + fade_span - ad) / fade_span).clamp(0.0, 1.0);
+    if visibility <= 0.0 {
+        return (sc, 0.0, 0);
+    }
     let op = if ad <= 1.0 {
         (1.0 - 0.28 * ad).clamp(0.72, 1.0)
     } else {
@@ -530,7 +532,7 @@ fn stack_card_appearance(ad: f32, sides: f32, idx: usize, count: usize) -> (f32,
     };
     // Fine-grained z + slot breaks juxtaposition (z used to be the same when the preceding and following items ad were close, and the band was out of order, causing the text to "stop following").
     let z = ((10_000.0 - ad * 1_000.0) * 10.0).round() as i32 + (count - idx) as i32;
-    (sc, op, z.max(1))
+    (sc, op * visibility, z.max(1))
 }
 
 fn clear_track_css_transition(el: &mut Element) {
@@ -1098,6 +1100,130 @@ mod tests {
     use super::*;
 
     #[test]
+    fn moving_single_carousel_keeps_slide_width_and_text() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::sync_reactive_elements_subtree;
+
+        fn content(el: &Element) -> &Element {
+            crate::core::tree::find_by_attr(el, ATTR_SLOT, SLOT_CONTENT).expect("carousel viewport")
+        }
+
+        create_root(|| {
+            crate::style::set_css_transition_virtual_timeline(true);
+            crate::style::set_css_transition_timeline_ms(0.0);
+            crate::style::utility::set_frame_dt(0.016);
+            let id = "moving-single-regression";
+            let mut builder = carousel_single(id).autoplay_ms(4000);
+            for label in ["Slide A", "Slide B", "Slide C"] {
+                builder = builder.slide(move || {
+                    r#box()
+                        .w("100%")
+                        .h(128.0)
+                        .p(16.0)
+                        .class("rounded-md")
+                        .bg([0.9, 0.9, 0.9, 1.0])
+                        .items("center")
+                        .justify("center")
+                        .child(Element::new().text(label))
+                        .into()
+                });
+            }
+            let mut root: Element = r#box().w("100%").child(builder).into();
+            let mut tree = LayoutTree::new();
+            let _ = tree.build_and_layout(&mut root, 600.0, 240.0, [-1.0, -1.0]);
+            tree.set_collect_skip_allowed(true);
+            for frame in 0..120 {
+                if frame == 1 {
+                    tick_carousel_autoplay();
+                }
+                if frame == 10 || frame == 50 || frame == 90 {
+                    AUTOPLAY_AT.with(|at| {
+                        at.borrow_mut()
+                            .insert(id.into(), Instant::now() - Duration::from_millis(4000));
+                    });
+                    assert!(
+                        tick_carousel_autoplay(),
+                        "frame {frame}: autoplay must advance"
+                    );
+                }
+                if frame == 100 {
+                    let vp = content(&root).layout_bounds;
+                    let x = vp[0] + vp[2] * 0.75;
+                    let y = vp[1] + vp[3] * 0.5;
+                    let path = crate::app::pointer_events::hit_path(&root, x, y);
+                    crate::app::pointer_events::dispatch_pointer(
+                        &path,
+                        &mut PointerEvent::new(x, y, winit::event::MouseButton::Left, 0),
+                        crate::app::pointer_events::PointerKind::Down,
+                    );
+                }
+                if (101..110).contains(&frame) {
+                    let vp = content(&root).layout_bounds;
+                    tick_carousel_drag(
+                        vp[0] + vp[2] * (0.75 - (frame - 100) as f32 * 0.07),
+                        vp[1] + vp[3] * 0.5,
+                    );
+                }
+                if frame == 110 {
+                    clear_carousel_drag_if_any();
+                }
+                crate::style::advance_css_transition_timeline_ms(16.0);
+                begin_carousel_paint_frame();
+                let mut impact = LayoutStatus::Clean;
+                sync_reactive_elements_subtree(
+                    &mut root,
+                    &mut tree,
+                    &mut impact,
+                    600.0,
+                    240.0,
+                    [0.0, 0.0],
+                );
+                crate::style::sync_class_variants_subtree(
+                    &mut root,
+                    [-1.0, -1.0],
+                    "",
+                    false,
+                    600.0,
+                    240.0,
+                    &mut tree,
+                    &mut impact,
+                );
+                let scroll_only = !matches!(
+                    impact,
+                    LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged
+                );
+                let result = tree.build_and_layout_fast(
+                    &mut root,
+                    600.0,
+                    240.0,
+                    [-1.0, -1.0],
+                    scroll_only,
+                    false,
+                );
+                let vp = content(&root);
+                let track = &vp.children[0];
+                for item in &track.children {
+                    assert!(
+                        (item.layout_bounds[2] - vp.layout_bounds[2]).abs() < 1.0,
+                        "frame {frame}: slide width {} differs from viewport {}",
+                        item.layout_bounds[2],
+                        vp.layout_bounds[2]
+                    );
+                }
+                assert!(
+                    result
+                        .text_nodes
+                        .iter()
+                        .any(|text| text.text.starts_with("Slide ")),
+                    "frame {frame}: carousel lost all slide text at offset {}",
+                    track.style.translate[0]
+                );
+            }
+            crate::style::set_css_transition_virtual_timeline(false);
+        });
+    }
+
+    #[test]
     fn orientation_parse() {
         assert_eq!(
             CarouselOrientation::parse("vertical"),
@@ -1524,7 +1650,7 @@ mod tests {
     }
 
     #[test]
-    fn page_viewport_advances_full_screen() {
+    fn page_navigation_and_drag_keep_partial_final_page_flush() {
         use crate::core::reactivity::create_root;
         create_root(|| {
             let id = "t-car-page-vp";
@@ -1535,7 +1661,7 @@ mod tests {
             let paused = use_signal("t-car-page-vp__paused", || false);
             viewport_len.set(440.0);
             snap_offset_to(id, 0.0);
-            let ctx = CarouselCtx {
+            let mut ctx = CarouselCtx {
                 id: id.into(),
                 index,
                 count,
@@ -1565,6 +1691,161 @@ mod tests {
                 (after + vp).abs() < 1.0,
                 "viewport pageSnap must move one screen; got {after}"
             );
+            auto_sync_offset_if_snapping(&ctx);
+            scroll_next(&ctx);
+            auto_sync_offset_if_snapping(&ctx);
+            let end = max_scroll_offset(&ctx);
+            assert!(
+                (offset_target(id).peek() - end).abs() < 0.01,
+                "the partial final page must remain flush after frame sync"
+            );
+            assert!(!can_scroll_next(&ctx));
+            scroll_prev(&ctx);
+            auto_sync_offset_if_snapping(&ctx);
+            assert!((offset_target(id).peek() + vp).abs() < 0.01);
+            assert!(can_scroll_next(&ctx));
+
+            for (n, per_view, viewport, item_width, page_snap, stops) in [
+                (
+                    5,
+                    2.2,
+                    440.0,
+                    0.0,
+                    CarouselPageSnap::Viewport,
+                    [0.0, -440.0, -560.0],
+                ),
+                // Both last pages round to slide index 3, but must remain distinct.
+                (
+                    6,
+                    2.8,
+                    560.0,
+                    0.0,
+                    CarouselPageSnap::Viewport,
+                    [0.0, -560.0, -640.0],
+                ),
+                (
+                    4,
+                    3.8,
+                    760.0,
+                    0.0,
+                    CarouselPageSnap::Viewport,
+                    [0.0, -40.0, -40.0],
+                ),
+                (
+                    5,
+                    2.0,
+                    400.0,
+                    0.0,
+                    CarouselPageSnap::Viewport,
+                    [0.0, -400.0, -600.0],
+                ),
+                (
+                    5,
+                    2.2,
+                    440.0,
+                    0.0,
+                    CarouselPageSnap::Peek,
+                    [0.0, -400.0, -560.0],
+                ),
+                (
+                    5,
+                    2.2,
+                    450.0,
+                    200.0,
+                    CarouselPageSnap::Viewport,
+                    [0.0, -400.0, -550.0],
+                ),
+            ] {
+                ctx.count.set(n);
+                ctx.per_view = per_view;
+                ctx.viewport_len.set(viewport);
+                ctx.item_sizing = if item_width > 0.0 {
+                    CarouselItemSizing::Fixed
+                } else {
+                    CarouselItemSizing::Fraction
+                };
+                ctx.item_width_px = item_width;
+                ctx.page_snap = page_snap;
+                ctx.index.set(0);
+                snap_offset_to(id, 0.0);
+                for expected in stops.into_iter().skip(1) {
+                    scroll_next(&ctx);
+                    for _ in 0..3 {
+                        auto_sync_offset_if_snapping(&ctx);
+                    }
+                    assert!(
+                        (offset_target(id).peek() - expected).abs() < 0.01,
+                        "next: n={n}, per_view={per_view}, expected={expected}"
+                    );
+                }
+                assert!(!can_scroll_next(&ctx));
+                scroll_next(&ctx);
+                auto_sync_offset_if_snapping(&ctx);
+                assert!((offset_target(id).peek() - stops[2]).abs() < 0.01);
+
+                let previous = if stops[1] == stops[2] { 0.0 } else { stops[1] };
+                scroll_prev(&ctx);
+                auto_sync_offset_if_snapping(&ctx);
+                assert!(
+                    (offset_target(id).peek() - previous).abs() < 0.01,
+                    "previous from partial final page must visit the preceding page"
+                );
+
+                let drag_from = |base_offset| CarouselDrag {
+                    id: id.into(),
+                    start_ptr: 0.0,
+                    base_offset,
+                    index: ctx.index,
+                    count: ctx.count,
+                    per_view: ctx.per_view,
+                    wraps: false,
+                    loop_clones: 0,
+                    end_align: ctx.end_align,
+                    variant: ctx.variant,
+                    item_sizing: ctx.item_sizing,
+                    item_width_px: ctx.item_width_px,
+                    scroll_by: ctx.scroll_by,
+                    page_snap: ctx.page_snap,
+                    snap: true,
+                    viewport_len: ctx.viewport_len,
+                    drag_px: ctx.drag_px,
+                    orientation: ctx.orientation,
+                    autoplay_ms: 0,
+                };
+                // Drag just past the midpoint of the short final segment.
+                begin_carousel_drag(drag_from(previous));
+                ctx.drag_px.set((stops[2] - previous) * 0.6);
+                end_carousel_drag();
+                auto_sync_offset_if_snapping(&ctx);
+                assert!((offset_target(id).peek() - stops[2]).abs() < 0.01);
+                assert!(!can_scroll_next(&ctx));
+
+                begin_carousel_drag(drag_from(stops[2]));
+                ctx.drag_px.set(1.0);
+                end_carousel_drag();
+                auto_sync_offset_if_snapping(&ctx);
+                assert!(
+                    (offset_target(id).peek() - stops[2]).abs() < 0.01,
+                    "a tiny drag must not leave the final page"
+                );
+
+                apply_viewport_len(&ctx, viewport * 1.2);
+                auto_sync_offset_if_snapping(&ctx);
+                assert!(
+                    (offset_target(id).peek() - max_scroll_offset(&ctx)).abs() < 0.01,
+                    "the final page must remain flush after resize"
+                );
+                assert!(!can_scroll_next(&ctx));
+            }
+            // Shrinking a previously non-overflowing fixed-width list keeps the first page.
+            ctx.count.set(2);
+            ctx.viewport_len.set(450.0);
+            ctx.index.set(0);
+            snap_offset_to(id, 0.0);
+            apply_viewport_len(&ctx, 300.0);
+            auto_sync_offset_if_snapping(&ctx);
+            assert!(offset_target(id).peek().abs() < 0.01);
+            assert!(can_scroll_next(&ctx));
         });
     }
 
@@ -2065,6 +2346,81 @@ mod tests {
                 "sides must be scaled down and faded; L sc={l_sc} op={l_op}; R sc={r_sc} op={r_op}"
             );
         });
+    }
+
+    #[test]
+    fn stack_small_drag_keeps_previous_and_next_cards_visible() {
+        use crate::app::pointer_events::{dispatch_pointer, hit_path, PointerKind};
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::{find_by_attr, sync_reactive_elements_subtree};
+
+        for autoplay_ms in [0, 4000] {
+            create_root(|| {
+                let mut builder = carousel_stack(format!("stack-small-drag-{autoplay_ms}"))
+                    .autoplay_ms(autoplay_ms)
+                    .stack_sides(1)
+                    .loop_slides(true);
+                for label in ["Stack A", "Stack B", "Stack C", "Stack D", "Stack E"] {
+                    builder = builder.slide(move || {
+                        r#box()
+                            .w("100%")
+                            .h(128.0)
+                            .child(Element::new().text(label))
+                            .into()
+                    });
+                }
+                let mut root: Element = builder.into();
+                let mut layout = LayoutTree::new();
+                for _ in 0..4 {
+                    layout.build_and_layout(&mut root, 700.0, 400.0, [-1.0, -1.0]);
+                    sync_reactive_elements_subtree(
+                        &mut root,
+                        &mut layout,
+                        &mut LayoutStatus::Clean,
+                        700.0,
+                        400.0,
+                        [0.0, 0.0],
+                    );
+                }
+                let bounds = find_by_attr(&root, ATTR_SLOT, SLOT_CONTENT)
+                    .unwrap()
+                    .layout_bounds;
+                let x = bounds[0] + bounds[2] * 0.5;
+                let y = bounds[1] + bounds[3] * 0.5;
+                let path = hit_path(&root, x, y);
+                dispatch_pointer(
+                    &path,
+                    &mut PointerEvent::new(x, y, winit::event::MouseButton::Left, 0),
+                    PointerKind::Down,
+                );
+                let step = stack_step_px(bounds[2]);
+                for fraction in [0.02, 0.15, 0.5, -0.02, -0.15, -0.5, 0.0] {
+                    tick_carousel_drag(x - fraction * step, y);
+                    sync_reactive_elements_subtree(
+                        &mut root,
+                        &mut layout,
+                        &mut LayoutStatus::Clean,
+                        700.0,
+                        400.0,
+                        [0.0, 0.0],
+                    );
+                    let content = find_by_attr(&root, ATTR_SLOT, SLOT_CONTENT).unwrap();
+                    let cards: Vec<_> = content
+                        .children
+                        .iter()
+                        .filter(|c| c.attrs.get("data-carousel-stack-measure").is_none())
+                        .collect();
+                    for idx in [1, 4] {
+                        assert!(
+                            cards[idx].style.opacity > 0.1,
+                            "autoplay={autoplay_ms}, drag={fraction}: side card {idx} disappeared (opacity={})",
+                            cards[idx].style.opacity,
+                        );
+                    }
+                }
+                clear_carousel_drag_if_any();
+            });
+        }
     }
 
     #[test]

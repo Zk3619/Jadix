@@ -367,6 +367,7 @@ impl super::App {
         event_loop: &dyn ActiveEventLoop,
     ) {
         super::window_scope::force_secondary_id(id);
+        crate::style::flush_style_rebuild();
         super::input_controller::clear_text_edit_frame_mutated();
         let suspended = self.is_suspended;
         let (has_caret, render_ok) = {
@@ -3227,6 +3228,7 @@ impl super::App {
     ) {
         self.flush_pending_cursor_moved(id, event_loop);
         let _scope = super::window_scope::enter_primary();
+        crate::style::flush_style_rebuild();
         crate::app::reactive::drain_deferred_view_remounts();
         crate::utils::modal_motion::drain_pending_modal_unmounts();
         crate::utils::floating_motion::drain_pending_floating_unmounts();
@@ -3337,12 +3339,11 @@ impl super::App {
                 }
             }
         }
-        let style_rebuild = crate::style::take_style_hot_rebuild();
         #[cfg(feature = "i18n")]
         let locale_rebuild = crate::i18n::take_locale_rebuild();
         #[cfg(not(feature = "i18n"))]
         let locale_rebuild = false;
-        if style_rebuild || locale_rebuild {
+        if locale_rebuild {
             let new_root = super::with_ui_build_stack(|| (self.app_builder.borrow_mut())());
             state.rebuild_ui(new_root);
             state.window.request_redraw();
@@ -4063,6 +4064,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         animated
                     }
                 };
+                let theme_anim_active = state.theme_transition.needs_frame();
                 let gpu_presented = state.gpu_presented_this_frame;
                 let painted_caret_matches_focus =
                     super::ime_support::painted_caret_matches_focus(&state.text_nodes, &fid);
@@ -4489,7 +4491,8 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     || super::scroll_support::has_pending_scroll_item_align()
                     || modal_css_active
                     || page_css_active
-                    || ui_anim_active;
+                    || ui_anim_active
+                    || theme_anim_active;
                 if self.paint_clock_active || self.scrollbar_geometry_pending {
                     window.request_redraw();
                 } else if scrollbar_visibility_pending {

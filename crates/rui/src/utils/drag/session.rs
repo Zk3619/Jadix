@@ -261,9 +261,8 @@ thread_local! {
     /// the pitch).
     static DRAG_PACK_PITCH: Cell<f32> = const { Cell::new(0.0) };
     static DRAG_PACK_GAP: Cell<f32> = const { Cell::new(0.0) };
-    // Logical source slots survive the source shell's cross-list size animation.
+    // Logical source slots survive the source shell's cross-list collapse.
     static SOURCE_LIST_LAYOUT: RefCell<Vec<DragHit>> = const { RefCell::new(Vec::new()) };
-    static SOURCE_LAYOUT_OFFSETS: RefCell<HashMap<String, [f32; 2]>> = RefCell::new(HashMap::new());
     /// Laid-out overlay child size for [`OverlayAlign::Center`]
     /// (`origin = pointer - size / 2`).
     static OVERLAY_GHOST_EXTENT: RefCell<HashMap<String, [f32; 2]>> = RefCell::new(HashMap::new());
@@ -1176,6 +1175,18 @@ pub fn begin(opts: BeginDrag) {
     });
 }
 
+/// A sensor activator has already accepted its gesture; pointer thresholds and
+/// axis gates must not defer its first ghost until a later mouse movement.
+pub(super) fn begin_sensor(opts: BeginDrag) {
+    let pointer = opts.pointer;
+    let hits = super::registry::registered_hits_in_scope(&opts.scope_id);
+    begin(opts);
+    let (width, height) = crate::utils::modal_surface::modal_viewport_size();
+    if tick_session(pointer[0], pointer[1], &hits, [width, height], true) {
+        crate::app::runtime::request_redraw();
+    }
+}
+
 pub struct BeginDrag {
     pub scope_id: String,
     pub draggable_id: String,
@@ -1679,7 +1690,6 @@ pub(crate) fn resync_overlay_follow_after_layout(root: &mut Element) {
         HashMap::new()
     };
     sync_source_layout_offsets(root, &sess.scope_id, &offsets);
-    SOURCE_LAYOUT_OFFSETS.with(|last| *last.borrow_mut() = offsets);
     LAST_HITS.with(|h| *h.borrow_mut() = hits.clone());
     let origin = ghost_origin(&sess, sess.last_pointer, sess.last_viewport, &hits, false);
     write_ghost_follow(&sess.scope_id, origin);
@@ -1730,31 +1740,6 @@ fn sync_source_layout_offsets(
     }
 }
 
-pub(crate) fn live_source_layout_offset(scope: &str, id: &str) -> [f32; 2] {
-    LAST_HITS.with(|hits| {
-        let hits = hits.borrow();
-        let Some(live) = hits.iter().find(|h| h.scope_id == scope && h.id == id) else {
-            return [0.0, 0.0];
-        };
-        let Some(layout) = live
-            .list_id
-            .as_deref()
-            .and_then(|list| source_list_layout(&hits, list))
-        else {
-            return [0.0, 0.0];
-        };
-        layout
-            .iter()
-            .find(|h| h.id == id && h.index == live.index)
-            .map(|slot| [slot.rect.x - live.rect.x, slot.rect.y - live.rect.y])
-            .unwrap_or([0.0, 0.0])
-    })
-}
-
-pub(crate) fn painted_source_layout_offset(id: &str) -> [f32; 2] {
-    SOURCE_LAYOUT_OFFSETS.with(|offsets| offsets.borrow().get(id).copied().unwrap_or([0.0, 0.0]))
-}
-
 /// Wake a pending drag once time is the only remaining activation condition.
 pub(crate) fn activation_next_wake_at() -> Option<Instant> {
     SESSION.with(|s| {
@@ -1779,6 +1764,16 @@ pub(crate) fn activation_next_wake_at() -> Option<Instant> {
 /// Advance the session. `hits` must be collected from the current layout tree.
 /// Returns `true` when the UI should redraw.
 pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
+    tick_session(x, y, hits, viewport, false)
+}
+
+fn tick_session(
+    x: f32,
+    y: f32,
+    hits: &[DragHit],
+    viewport: [f32; 2],
+    sensor_activated: bool,
+) -> bool {
     crate::utils::pointer_drag::tick(x, y);
     let coasting = SESSION.with(|s| {
         s.borrow()
@@ -1831,7 +1826,7 @@ pub fn tick(x: f32, y: f32, hits: &[DragHit], viewport: [f32; 2]) -> bool {
         let dy = y - sess.start_pointer[1];
         // interact cancels the prepared action; we stay Pending so the user can
         // still cross the required axis (beyond interact).
-        if !activated || !sess.start_axis.allows_start_move(dx, dy) {
+        if !sensor_activated && (!activated || !sess.start_axis.allows_start_move(dx, dy)) {
             SESSION.with(|s| *s.borrow_mut() = Some(sess));
             return false;
         }
@@ -2425,7 +2420,6 @@ fn reset_scope_ui(rt: &ScopeRuntime) {
     DRAG_PACK_PITCH.set(0.0);
     DRAG_PACK_GAP.set(0.0);
     SOURCE_LIST_LAYOUT.with(|layout| layout.borrow_mut().clear());
-    SOURCE_LAYOUT_OFFSETS.with(|offsets| offsets.borrow_mut().clear());
     clear_restrict_clip_state();
     super::overlay::clear_ghost_follow();
     batch(|| {
@@ -3425,7 +3419,7 @@ fn pack_item_translate(
         return [new[0] - layout.rect.x, new[1] - layout.rect.y];
     }
     if from_list == Some(my_list) {
-        // The source shell's size animation closes the origin hole in layout.
+        // The source shell closes the origin hole in layout at the column boundary.
         // A second -extent translate would move siblings twice, into the header.
         return [0.0, 0.0];
     }

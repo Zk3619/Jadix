@@ -2,6 +2,9 @@ use std::borrow::Cow;
 #[cfg(test)]
 #[path = "state_present_tests.rs"]
 mod present_pixel_tests;
+#[cfg(all(test, target_os = "windows"))]
+#[path = "state_theme_present_tests.rs"]
+mod theme_present_tests;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
@@ -164,6 +167,7 @@ pub(super) struct AppState {
     compute: crate::renderer::ComputePipelines,
     /// Offscreen color target so PartialLoad+scissor does not hit a non-retaining swapchain.
     present_retain: PresentRetainPipeline,
+    pub(super) theme_transition: crate::renderer::theme_transition::ThemeTransition,
     image_textures: crate::renderer::TexturePool,
     textured_instance_buffer: wgpu::Buffer,
     textured_instance_capacity: usize,
@@ -1825,6 +1829,8 @@ impl AppState {
         let backdrop_blur = BackdropBlurPipeline::new(&device, config.format);
         let effect_pass = crate::renderer::EffectPassGpu::new(&device, config.format);
         let css_filter_pass = crate::renderer::CssFilterPassGpu::new(&device, config.format);
+        let theme_transition =
+            crate::renderer::theme_transition::ThemeTransition::new(&device, config.format);
         let mut present_retain = PresentRetainPipeline::new(&device, config.format);
         let _ = present_retain.ensure_size(&device, config.width, config.height);
         let tex_inst_stride = std::mem::size_of::<TexturedInstanceInput>();
@@ -1891,6 +1897,7 @@ impl AppState {
             css_filter_pass,
             compute,
             present_retain,
+            theme_transition,
             image_textures: crate::renderer::TexturePool::new(),
             textured_instance_buffer,
             textured_instance_capacity: 256,
@@ -4455,7 +4462,7 @@ impl AppState {
         walk(new_root, old_root, false)
     }
 
-    fn reconcile_elements(
+    pub(super) fn reconcile_elements(
         new_el: &mut Element,
         old_el: &mut Element,
         dirty: &mut Vec<taffy::prelude::NodeId>,
@@ -4521,9 +4528,15 @@ impl AppState {
                 // until the anchor effect runs again — but updates that only rerun the root
                 // effect (e.g. unrelated `use_signal` in `main`) never rerun that anchor.
                 let tid = new_el.template_id.clone();
+                // Keep the fresh island effect alive when promoting its old tree.
+                // Dropping this placeholder hook would dispose the theme refresh.
+                let hook = new_el.on_unmount.take();
                 let promoted = std::mem::take(old_el);
                 *new_el = promoted;
                 new_el.template_id = tid;
+                if hook.is_some() {
+                    new_el.on_unmount = hook;
+                }
             }
             return LayoutStatus::Clean;
         }
@@ -5093,6 +5106,17 @@ impl AppState {
         self.mark_full_redraw();
     }
 
+    pub(super) fn sync_window_theme(&mut self) {
+        super::window_chrome::apply_created_window(
+            self.window.as_ref(),
+            &self.chrome,
+            self.composition_swapchain,
+        );
+        self.local_backdrop_valid = false;
+        self.mark_full_redraw();
+        self.window.request_redraw();
+    }
+
     pub(super) fn render(
         &mut self,
         mouse_pos: [f32; 2],
@@ -5643,6 +5667,7 @@ impl AppState {
         let use_full_taffy_rebuild =
             self.layout_tree.root_node.is_none() || self.root_element.layout_node.is_none();
         let layout_subtree_root: Option<taffy::prelude::NodeId> = None;
+        let has_layout_dirty_nodes = !self.pending_layout_dirty.is_empty();
         if !use_full_taffy_rebuild
             && (matches!(
                 layout_for_build,
@@ -5690,7 +5715,12 @@ impl AppState {
         // keeps promoting `LayoutChanged` for several frames. Forcing full `compute_layout` on
         // every smooth-scroll frame janks the whole window (sidebar + scrollbar flash together).
         // Defer that remeasure until scroll settles (`take_fit_needs_relayout` re-arms below).
-        let geom_followup = viewport_resizing || settling || self.needs_text_settle;
+        // Reconciled geometry must be computed even during scrolling. In particular,
+        // a newly visible chart measures its plot and updates axis-label insets;
+        // skipping compute would paint the new bars with the old label positions.
+        // Only the unqueued glyphon-fit remeasure may wait for scroll to settle.
+        let geom_followup =
+            viewport_resizing || settling || self.needs_text_settle || has_layout_dirty_nodes;
         let scroll_only = !geom_followup
             && ((scrollbar_update_resolved == ScrollbarUpdateMode::ViewportsOnly
                 && matches!(
@@ -7255,6 +7285,9 @@ impl AppState {
             }
             let frame_fp = hasher.finish();
             if self.has_presented_frame
+                && !self.theme_transition.needs_frame()
+                && !(crate::style::theme_transition_config().enabled
+                    && !self.present_retain.contents_valid())
                 && !self.force_full_redraw
                 && self.damage_nodes.is_empty()
                 && !self.scroll_layer_clear
@@ -7315,7 +7348,9 @@ impl AppState {
         let mut scissor_physical = gpu_present.scissor_physical;
         let logical_policy = gpu_present.logical_policy;
         let use_partial_damage = gpu_present.use_partial_damage;
-        let mut draw_to_retain = gpu_present.draw_to_retain;
+        let mut draw_to_retain = gpu_present.draw_to_retain
+            || crate::style::theme_transition_config().enabled
+            || self.theme_transition.needs_frame();
         super::damage::note_frame_clear_policy(logical_policy);
 
         let max_backdrop_blur_logical = overlay_split
@@ -7352,6 +7387,10 @@ impl AppState {
             );
         } else {
             self.present_retain.invalidate_contents();
+        }
+        if draw_to_retain {
+            self.theme_transition
+                .prepare(&self.device, &mut encoder, &self.present_retain);
         }
         let mut strip_copy_committed = self.scroll_strip_blit.is_empty();
         if use_partial_damage && self.present_retain.contents_valid() {
@@ -8233,10 +8272,16 @@ impl AppState {
             let device = &self.device;
             let dummy = pipeline.dummy_backdrop();
             let chrome = scaled_input_chrome.as_slice();
-            self.present_retain
-                .blit_to_surface(&mut encoder, &view, clear_color, |pass| {
-                    draw_input_caret_overlay(pass, pipeline, device, dummy, chrome);
-                });
+            if self.theme_transition.present(
+                &self.queue,
+                &mut encoder,
+                &self.present_retain,
+                &view,
+                clear_color,
+                |pass| draw_input_caret_overlay(pass, pipeline, device, dummy, chrome),
+            ) {
+                self.window.request_redraw();
+            }
             self.present_retain.mark_contents_valid();
         } else {
             // Surface-direct FullClear: retain no longer matches the presented frame.

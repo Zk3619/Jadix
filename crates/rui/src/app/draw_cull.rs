@@ -1841,6 +1841,30 @@ pub(crate) fn region_replays_own_chrome_only(
     node_paints: &[NodePaint],
 ) -> bool {
     let has_keyed = paints_has_keyed_slot(key, bounds, node_paints);
+    if node_present_clips_visual_overflow(key, bounds, node_paints) {
+        return false;
+    }
+    // A solid overlay over a raster cannot be repaired by src-overing own
+    // chrome. That either erases the raster with an ancestor fill or blends
+    // its antialiased fringe twice. Clear and replay the ordered page bands.
+    if node_paints.iter().any(|slot| {
+        slot_matches_dirty(key, bounds, slot, has_keyed)
+            && slot.layered
+            && slot.textured.0 == slot.textured.1
+            && node_paints.iter().any(|underlay| {
+                !underlay.overlay
+                    && underlay.key != slot.key
+                    && underlay.textured.0 < underlay.textured.1
+                    && intersect_rects(bounds, underlay.bounds)
+                        .and_then(|hit| match underlay.overflow_clip {
+                            Some(clip) => intersect_rects(hit, clip),
+                            None => Some(hit),
+                        })
+                        .is_some()
+            })
+    }) {
+        return false;
+    }
     // A layered texture leaf belongs to its painted composite. Its repair can
     // also touch the parent's border and the old background; replay those in
     // scene order, including the frame that returns the parent to its rest pose.
@@ -2228,6 +2252,11 @@ fn scrolled_out_top_into_title(
     let cx = dirty_bounds[0] + dirty_bounds[2] * 0.5;
     let cy = dirty_bounds[1] + dirty_bounds[3] * 0.5;
     clips.iter().any(|c| {
+        // A scrolled-out node remains in its viewport's horizontal span.
+        // Unrelated Forms viewports to the right must not reject sidebar hover.
+        if dirty_bounds[0] + dirty_bounds[2] <= c[0] || dirty_bounds[0] >= c[0] + c[2] {
+            return false;
+        }
         if !dirty_entirely_above_overflow(dirty_bounds, *c) {
             return false;
         }
@@ -3267,6 +3296,26 @@ pub(crate) fn prepare_node_present_dirties_ex(
         if prev.is_none() && owner_is_only_culled_metadata(dirty.key, node_paints) {
             continue;
         }
+        let visual = node_paints
+            .iter()
+            .filter(|p| !p.overlay && p.key == dirty.key)
+            .map(|p| p.bounds)
+            .reduce(union_xywh);
+        if let Some(visual) = visual {
+            let coverage = prev
+                .filter(|old| !crate::app::damage::paint_poses_separated(*old, visual))
+                .map(|old| union_xywh(visual, old))
+                .unwrap_or(visual);
+            if node_present_clips_visual_overflow(dirty.key, coverage, node_paints) {
+                // A sibling's layout box is not an overflow clip. Repair the
+                // old/new transformed ink and replay intersecting paint in scene
+                // order, as scrolling does, rather than cropping the rotation.
+                dirty.bounds =
+                    padded_xywh(union_xywh(dirty.bounds, coverage), 2.0 / ui_scale.max(1e-6));
+                dirty.kind = PaintDirtyKind::Region;
+                continue;
+            }
+        }
         if matching_slot_is_layered(dirty.key, dirty.bounds, node_paints) {
             if layered_cell_keeps_node_dest_reset(
                 dirty.key,
@@ -3815,16 +3864,33 @@ fn node_paint_peer_occupancy(p: &NodePaint) -> [f32; 4] {
     }
 }
 
-/// Dest-reset / node-present scissor occupancy clip.
-///
-/// Layered slots (absolute ping, jump pills) still punch rest-overlapping
-/// underlay, but must not paint or wipe a rest-disjoint caption above — GPU
-/// scissor used to stay unclipped, so `animate-ping` src-overed the label.
-///
-/// In-flow `animate-spin` grows to a circumcircle. Skipping occupancy clip let
-/// the 8px node scissor dest-reset the caption every tick (ghost 「play-state」).
-/// Clip rest-disjoint captions again; the gallery stage keeps the diamond ink
-/// off the title so the clip only removes pad leak, not leftover frames.
+/// Occupancy clipping may remove scissor padding, but actual visual overflow
+/// needs an ordered Region repair so both old ink and intersecting peers redraw.
+fn node_present_clips_visual_overflow(key: u64, coverage: [f32; 4], paints: &[NodePaint]) -> bool {
+    let overflows = paints.iter().any(|p| {
+        p.key == key
+            && !p.overlay
+            && p.rest.is_some_and(|rest| {
+                !crate::app::damage::rect_contains_rect(padded_xywh(rest, 2.5), coverage)
+            })
+    });
+    overflows
+        && !crate::app::damage::rect_contains_rect(
+            clip_node_present_rect(
+                coverage,
+                key,
+                coverage,
+                paints,
+                1.0,
+                matching_slot_is_layered(key, coverage, paints),
+                &[],
+            ),
+            coverage,
+        )
+}
+
+/// Dest-reset / node-present scissor occupancy clip for independent Node repairs.
+/// Repairs whose actual ink crosses a peer are promoted to Region before encode.
 fn clip_node_present_rect(
     rect: [f32; 4],
     dirty_key: u64,
@@ -6200,6 +6266,26 @@ mod tests {
         track.layered = true;
         track.textured = (0, 1);
         assert!(region_replays_own_chrome_only(3, track.bounds, &[track]));
+    }
+
+    #[test]
+    fn solid_chart_indicator_over_raster_requires_ordered_replay() {
+        let mut line = slot(3, [100.0, 20.0, 1.0, 180.0], (0, 0));
+        line.layered = true;
+        line.instance = (1, 2);
+        let mut chart = slot(2, [20.0, 20.0, 280.0, 180.0], (0, 0));
+        chart.textured = (0, 1);
+        assert!(!region_replays_own_chrome_only(
+            3,
+            line.bounds,
+            &[chart, line]
+        ));
+        chart.overflow_clip = Some([20.0, 20.0, 60.0, 180.0]);
+        assert!(region_replays_own_chrome_only(
+            3,
+            line.bounds,
+            &[chart, line]
+        ));
     }
 
     #[test]
@@ -8969,6 +9055,39 @@ mod tests {
         assert!(
             rect[1] <= 32.0 && rect[1] + rect[3] >= 112.0 + 16.0,
             "wipe must cover previous visual Y and now, got {rect:?}"
+        );
+    }
+
+    #[test]
+    fn sidebar_hover_scissor_ignores_forms_viewport_to_the_right() {
+        let bounds = [8.0, 125.0, 239.0, 32.0];
+        let sidebar = NodePaint {
+            key: 1,
+            bounds,
+            overflow_clip: Some([0.0, 49.0, 255.0, 898.0]),
+            instance: (0, 1),
+            overlay: false,
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 1),
+            layered: false,
+            rest: Some(bounds),
+        };
+        // On a wide window this textarea clip exceeds the sidebar's area.
+        let forms = NodePaint {
+            key: 2,
+            bounds: [312.0, 660.0, 1344.0, 200.0],
+            overflow_clip: Some([312.0, 660.0, 1344.0, 200.0]),
+            ..sidebar
+        };
+        let paints = [sidebar, forms];
+        let scissor =
+            node_present_scissor_logical(PaintDirtyKind::Node, 1, bounds, &[], &paints, 8.0);
+        assert!(crate::app::damage::rect_contains_rect(scissor, bounds));
+        assert!(
+            scrolled_out_top_into_title([320.0, 600.0, 80.0, 32.0], None, &paints,),
+            "a genuinely culled Forms node must still be rejected"
         );
     }
 

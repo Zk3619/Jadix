@@ -197,7 +197,9 @@ fn test_reconcile_subtree(
 ) -> Option<crate::core::tree::LayoutStatus> {
     TEST_RECONCILE_ROOT.with(|c| {
         let root = c.borrow().as_ref()?.clone();
-        let mut root = root.borrow_mut();
+        // Match the real AppState path: pointer handlers and drag-end callers
+        // may still hold the live tree; defer rather than panicking on remount.
+        let mut root = root.try_borrow_mut().ok()?;
         let want = anchor_id.replace('\\', "/").to_ascii_lowercase();
         let mut new_fragment = new_fragment;
         let Some(needs_portal_hoist) = find_template_id_mut(&mut root, &want).map(|slot| {
@@ -243,6 +245,28 @@ pub fn request_redraw() {
     APP_RUNTIME.with(|c| {
         if let Some(rt) = c.borrow().as_ref() {
             rt.request_redraw();
+        }
+    });
+}
+
+/// Called after style invalidation while no window tree is borrowed.
+pub(crate) fn sync_window_theme() {
+    APP_RUNTIME.with(|slot| {
+        let rt = slot.borrow().clone();
+        let Some(rt) = rt else { return };
+        if let Some(state) = rt.state.upgrade() {
+            if let Ok(mut state) = state.try_borrow_mut() {
+                if let Some(state) = state.as_mut() {
+                    state.sync_window_theme();
+                }
+            }
+        }
+        if let Some(secondaries) = rt.secondaries.upgrade() {
+            if let Ok(secondaries) = secondaries.try_borrow() {
+                for secondary in secondaries.values() {
+                    secondary.sync_window_theme();
+                }
+            }
         }
     });
 }

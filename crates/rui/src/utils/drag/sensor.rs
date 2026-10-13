@@ -1,8 +1,8 @@
 //! Custom drag sensors (solid-dnd `addSensor` / `activators`).
 //!
 //! Pointer drag remains the default path (`assemble_draggable` /
-//! `window_events`). Additional sensors call the same [`super::BeginDrag`] entry
-//! when their activator returns true.
+//! `window_events`). Additional sensors accept their own activation gesture and
+//! start an active drag immediately using [`super::BeginDrag`].
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -13,7 +13,7 @@ use super::session::BeginDrag;
 /// Inputs for a custom sensor activator.
 pub struct DragSensorCtx {
     pub scope_id: String,
-    /// Call to start a drag (same as pointer `pointerdown`).
+    /// Start an active drag immediately, bypassing pointer movement/delay gates.
     pub begin: Rc<dyn Fn(BeginDrag)>,
 }
 
@@ -94,7 +94,7 @@ pub fn run_scope_sensors(scope_id: &str) -> bool {
         return false;
     }
     let sensors = super::session::scope_sensors(scope_id);
-    let begin: Rc<dyn Fn(BeginDrag)> = Rc::new(super::session::begin);
+    let begin: Rc<dyn Fn(BeginDrag)> = Rc::new(super::session::begin_sensor);
     let ctx = DragSensorCtx {
         scope_id: scope_id.to_string(),
         begin,

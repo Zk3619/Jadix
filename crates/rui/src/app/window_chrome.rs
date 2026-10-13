@@ -434,6 +434,7 @@ impl WindowOptions {
     /// Must stay **off** for DWM SystemBackdrop and the shared GL path.
     pub(crate) fn window_attributes(&self, composition_swapchain: bool) -> WindowAttributes {
         let mut attrs = WindowAttributes::default()
+            .with_theme(Some(native_theme()))
             .with_title(&self.title)
             .with_visible(false)
             .with_decorations(self.decorations)
@@ -472,7 +473,16 @@ pub(crate) fn apply_created_window(
     options: &WindowOptions,
     composition_swapchain: bool,
 ) {
+    window.set_theme(Some(native_theme()));
     crate::platform::apply_created_window(window, options, composition_swapchain);
+}
+
+pub(crate) fn native_theme() -> winit::window::Theme {
+    if crate::style::is_dark_theme() {
+        winit::window::Theme::Dark
+    } else {
+        winit::window::Theme::Light
+    }
 }
 
 /// Builder argument for [`WindowOptions::glass_tint`].

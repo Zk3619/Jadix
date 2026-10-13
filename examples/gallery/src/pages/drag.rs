@@ -70,26 +70,41 @@ fn data_payload_ghost(item: &DragItemCtx) -> Element {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+struct SortableFlagItem {
+    key: String,
+    label: String,
+}
+
+fn sortable_flag_items(list: &str, labels: &[&str]) -> Vec<SortableFlagItem> {
+    labels
+        .iter()
+        .map(|label| SortableFlagItem {
+            key: format!("{list}:{label}"),
+            label: (*label).into(),
+        })
+        .collect()
+}
+
 fn keyed_sortable_flags_chips(
     rows_id: &'static str,
-    items: Signal<Vec<String>>,
+    items: Signal<Vec<SortableFlagItem>>,
     list: &'static str,
     item_type: &'static str,
     source_opacity: f32,
-    middle_skip_shift: bool,
-    middle_skip_follow: bool,
 ) -> Element {
     let items_snap = items.get();
+    let rows_data: Vec<_> = items_snap.iter().cloned().enumerate().collect();
     let rows = rui::for_keyed!(
         rows_id,
-        items_snap.as_slice(),
-        |s: &String| s.clone(),
-        |label: &String| {
-            let name = label.clone();
-            let i = items_snap.iter().position(|x| x == &name).unwrap_or(0);
-            let id = format!("{list}:{name}");
-            let skip_shift = middle_skip_shift && i == 1;
-            let skip_follow = middle_skip_follow && i == 1;
+        rows_data.as_slice(),
+        |(_, item): &(usize, SortableFlagItem)| item.key.clone(),
+        |(index, item): &(usize, SortableFlagItem)| {
+            let name = item.label.clone();
+            let i = *index;
+            let id = item.key.clone();
+            let skip_shift = id == "shift-pinned:Pin";
+            let skip_follow = id == "shift-follow:Follow";
             ui! {
                 <SortableItem
                     id={id}
@@ -157,7 +172,7 @@ fn keyed_pull_clone_chips(
                     pull_clone={true}
                     source_opacity={0.35}
                 >
-                    { compact_chip(&name) }
+                    { full_width_chip(&name) }
                 </SortableItem>
             }
         }
@@ -169,11 +184,9 @@ fn rsx_sortable_flags_column(
     title: &str,
     rows_id: &'static str,
     list: &'static str,
-    items: Signal<Vec<String>>,
+    items: Signal<Vec<SortableFlagItem>>,
     item_type: &'static str,
     source_opacity: f32,
-    middle_skip_shift: bool,
-    middle_skip_follow: bool,
 ) -> Element {
     let title = title.to_string();
     ui! {
@@ -186,8 +199,6 @@ fn rsx_sortable_flags_column(
                     list,
                     item_type,
                     source_opacity,
-                    middle_skip_shift,
-                    middle_skip_follow,
                 ) }
             </SortableList>
         </VStack>
@@ -234,9 +245,9 @@ fn rsx_pull_clone_board(
 }
 
 fn rsx_skip_flags_board(
-    shift_normal: Signal<Vec<String>>,
-    shift_pinned: Signal<Vec<String>>,
-    shift_follow: Signal<Vec<String>>,
+    shift_normal: Signal<Vec<SortableFlagItem>>,
+    shift_pinned: Signal<Vec<SortableFlagItem>>,
+    shift_follow: Signal<Vec<SortableFlagItem>>,
     on_end: impl FnMut(&DragEvent) + 'static,
 ) -> Element {
     ui! {
@@ -250,28 +261,22 @@ fn rsx_skip_flags_board(
                         shift_normal,
                         "shift-demo",
                         0.35,
-                        false,
-                        false,
                     ) }
                     { rsx_sortable_flags_column(
-                        "skip_shift · 中项",
+                        "skip_shift · Pin",
                         "gal-drag-shift-pinned-rows",
                         "shift-pinned",
                         shift_pinned,
                         "shift-demo",
                         0.35,
-                        true,
-                        false,
                     ) }
                     { rsx_sortable_flags_column(
-                        "skip_follow · 中项",
+                        "skip_follow · Follow",
                         "gal-drag-shift-follow-rows",
                         "shift-follow",
                         shift_follow,
                         "shift-demo",
                         0.35,
-                        false,
-                        true,
                     ) }
                 </HStack>
                 <DragOverlay class="shadow-lg" />
@@ -448,6 +453,12 @@ fn compact_chip(label: &str) -> Element {
     }
 }
 
+/// The pull-clone example is a vertical list, so its source and cloned rows
+/// should retain the list width when the body is rendered in the overlay.
+fn full_width_chip(label: &str) -> Element {
+    compact_chip(label).w("100%")
+}
+
 fn swap_chip(label: &str, list: &'static str, index: usize, item_id: String) -> Element {
     let ctx = use_drag();
     compact_chip(label).reactive_sync(move |el, _| {
@@ -475,7 +486,10 @@ fn swap_chip(label: &str, list: &'static str, index: usize, item_id: String) -> 
 fn multi_select_chip(label: &str, item_id: &str) -> Element {
     let ctx = use_drag();
     let item_id = item_id.to_string();
-    let el = ui! {
+    let selected = ctx
+        .as_ref()
+        .is_some_and(|c| c.selected.get().contains(&item_id));
+    let mut el = ui! {
         <HStack
             p="0.375rem 0.65rem"
             gap="0.375rem"
@@ -491,19 +505,9 @@ fn multi_select_chip(label: &str, item_id: &str) -> Element {
             <Label text_size="0.875rem" color="foreground">{ label.to_string() }</Label>
         </HStack>
     };
-    el.reactive_sync(move |el, _| {
-        let selected = ctx
-            .as_ref()
-            .is_some_and(|c| c.selected.peek().contains(&item_id));
-        let bg = parse_color(if selected { "accent" } else { "card" });
-        let border = parse_color(if selected { "primary" } else { "border" });
-        if el.style.bg_color == bg && el.style.border_color == border {
-            return LayoutStatus::Clean;
-        }
-        el.style.bg_color = bg;
-        el.style.border_color = border;
-        LayoutStatus::StyleChanged
-    })
+    el.style.bg_color = parse_color(if selected { "accent" } else { "card" });
+    el.style.border_color = parse_color(if selected { "primary" } else { "border" });
+    el
 }
 
 fn apply_two_list_event(
@@ -539,13 +543,15 @@ fn apply_two_list_event(
         right.peek()
     };
     apply_event(&mut src, Some(&mut dst), ev);
-    if from == left_id {
-        left.set(src);
-        right.set(dst);
-    } else {
-        right.set(src);
-        left.set(dst);
-    }
+    batch(|| {
+        if from == left_id {
+            left.set(src);
+            right.set(dst);
+        } else {
+            right.set(src);
+            left.set(dst);
+        }
+    });
 }
 
 fn keyed_swap_chips(
@@ -1333,6 +1339,80 @@ mod drop_position_tests {
     }
 
     #[test]
+    fn skip_flags_board_commits_cross_list_move_to_both_columns() {
+        let (_owner, ()) = create_root(|| {
+            let normal = Signal::new(sortable_flag_items(
+                "shift-normal",
+                &["Alpha", "Beta", "Gamma"],
+            ));
+            let pinned = Signal::new(sortable_flag_items(
+                "shift-pinned",
+                &["Alpha", "Pin", "Gamma"],
+            ));
+            let follow = Signal::new(sortable_flag_items(
+                "shift-follow",
+                &["Alpha", "Follow", "Gamma"],
+            ));
+            let event = DragEvent {
+                scope_id: "gal-drag-skip-shift".into(),
+                draggable_id: "shift-normal:Alpha".into(),
+                droppable_id: Some("shift-pinned".into()),
+                from_list: Some("shift-normal".into()),
+                from_index: Some(0),
+                to_list: Some("shift-pinned".into()),
+                to_index: Some(1),
+                pointer: [0.0, 0.0],
+                delta: [0.0, 0.0],
+                phase: rui::utils::drag::DragPhase::Active,
+                pull_clone: false,
+                data: None,
+                sort_mode: rui::utils::drag::SortMode::Insert,
+                items: Vec::new(),
+            };
+
+            apply_skip_flags_event(normal, pinned, follow, &event);
+
+            assert_eq!(
+                normal.peek(),
+                sortable_flag_items("shift-normal", &["Beta", "Gamma"])
+            );
+            let mut expected = sortable_flag_items("shift-pinned", &["Alpha", "Pin", "Gamma"]);
+            expected.insert(1, sortable_flag_items("shift-normal", &["Alpha"]).remove(0));
+            assert_eq!(pinned.peek(), expected);
+            assert_eq!(
+                follow.peek(),
+                sortable_flag_items("shift-follow", &["Alpha", "Follow", "Gamma"])
+            );
+
+            let rows = [normal.peek(), pinned.peek(), follow.peek()].concat();
+            let ids: std::collections::HashSet<_> = rows.iter().map(|item| &item.key).collect();
+            assert_eq!(
+                ids.len(),
+                9,
+                "same labels retain distinct stable drag identities"
+            );
+
+            let back = DragEvent {
+                droppable_id: Some("shift-normal".into()),
+                from_list: Some("shift-pinned".into()),
+                from_index: Some(1),
+                to_list: Some("shift-normal".into()),
+                to_index: Some(0),
+                ..event
+            };
+            apply_skip_flags_event(normal, pinned, follow, &back);
+            assert_eq!(
+                normal.peek(),
+                sortable_flag_items("shift-normal", &["Alpha", "Beta", "Gamma"])
+            );
+            assert_eq!(
+                pinned.peek(),
+                sortable_flag_items("shift-pinned", &["Alpha", "Pin", "Gamma"])
+            );
+        });
+    }
+
+    #[test]
     fn handled_resize_stays_in_content_and_never_scrolls_sibling() {
         use rui::app::pointer_events::{dispatch_pointer, hit_path, MouseEvent, PointerKind};
         use rui::core::scroll_viewport::{
@@ -1813,13 +1893,15 @@ fn apply_kanban(left: Signal<Vec<String>>, right: Signal<Vec<String>>, ev: &Drag
     };
     let to_index = ev.to_index.unwrap_or(dst.len());
     apply_transfer(&mut src, &mut dst, from_index, to_index);
-    if from_list == "todo" {
-        left.set(src);
-        right.set(dst);
-    } else {
-        right.set(src);
-        left.set(dst);
-    }
+    batch(|| {
+        if from_list == "todo" {
+            left.set(src);
+            right.set(dst);
+        } else {
+            right.set(src);
+            left.set(dst);
+        }
+    });
 }
 
 fn apply_nested_lists(
@@ -1894,13 +1976,51 @@ fn apply_kanban_named(
     };
     let to_index = ev.to_index.unwrap_or(dst.len());
     apply_transfer(&mut src, &mut dst, from_index, to_index);
-    if from_list == left_id {
-        left.set(src);
-        right.set(dst);
-    } else {
-        right.set(src);
-        left.set(dst);
+    batch(|| {
+        if from_list == left_id {
+            left.set(src);
+            right.set(dst);
+        } else {
+            right.set(src);
+            left.set(dst);
+        }
+    });
+}
+
+fn apply_skip_flags_event(
+    normal: Signal<Vec<SortableFlagItem>>,
+    pinned: Signal<Vec<SortableFlagItem>>,
+    follow: Signal<Vec<SortableFlagItem>>,
+    ev: &DragEvent,
+) {
+    let Some(from_list) = ev.from_list.as_deref() else {
+        return;
+    };
+    let to_list = ev.to_list.as_deref().unwrap_or(from_list);
+    let signal_for = |list: &str| match list {
+        "shift-normal" => Some(normal),
+        "shift-pinned" => Some(pinned),
+        "shift-follow" => Some(follow),
+        _ => None,
+    };
+    let (Some(source), Some(target)) = (signal_for(from_list), signal_for(to_list)) else {
+        return;
+    };
+
+    if from_list == to_list {
+        let mut values = source.peek();
+        apply_event(&mut values, None, ev);
+        source.set(values);
+        return;
     }
+
+    let mut source_values = source.peek();
+    let mut target_values = target.peek();
+    apply_event(&mut source_values, Some(&mut target_values), ev);
+    batch(|| {
+        source.set(source_values);
+        target.set(target_values);
+    });
 }
 
 fn nest_list_for(folder: &str) -> &'static str {
@@ -2140,21 +2260,18 @@ pub(crate) fn DragShowcase() -> Element {
         ]
     });
     let shift_normal = use_signal("gal_drag_shift_normal", || {
-        vec!["Alpha".to_string(), "Beta".to_string(), "Gamma".to_string()]
+        sortable_flag_items("shift-normal", &["Alpha", "Beta", "Gamma"])
     });
     let shift_pinned = use_signal("gal_drag_shift_pinned", || {
-        vec!["Alpha".to_string(), "Pin".to_string(), "Gamma".to_string()]
+        sortable_flag_items("shift-pinned", &["Alpha", "Pin", "Gamma"])
     });
     let shift_follow = use_signal("gal_drag_shift_follow", || {
-        vec![
-            "Alpha".to_string(),
-            "Follow".to_string(),
-            "Gamma".to_string(),
-        ]
+        sortable_flag_items("shift-follow", &["Alpha", "Follow", "Gamma"])
     });
     let data_note = use_signal("gal_drag_data_note", || {
         "拖起看幽灵上的 payload".to_string()
     });
+    let idle_hits_note = use_signal("gal_drag_idle_hits_note", || "尚未发生 drop".to_string());
     let sensor_target = use_signal("gal_drag_sensor_target", || None::<String>);
 
     let clone_on_end = {
@@ -2266,63 +2383,59 @@ pub(crate) fn DragShowcase() -> Element {
         )
     };
 
-    let idle_hits_board = Element::from(
-        drag_scope("gal-drag-idle-hits")
-            .collision(CollisionAlg::PointerWithin)
-            .child(|| {
-                ui! {
-                    <VStack gap="0.375rem" w="100%">
-                        { hits_hud() }
-                        <HStack gap="0.5rem" w="100%" wrap="wrap">
-                            <Draggable id="idle-a" item_type="peek">
-                                { compact_chip("idle draggable A") }
-                            </Draggable>
-                            <Draggable id="idle-b" item_type="peek">
-                                { compact_chip("idle draggable B") }
-                            </Draggable>
-                            <Droppable id="idle-zone" accept="peek">
-                                { collision_hit_zone(
-                                    "idle-zone",
-                                    "idle droppable",
-                                    ui! {
-                                        <Label text_size="0.75rem" color="muted-foreground">
-                                            "未拖时 hits() 走 registered 表"
-                                        </Label>
-                                    },
-                                ) }
-                            </Droppable>
-                        </HStack>
-                    </VStack>
-                }
-            }),
-    );
+    let idle_hits_board = {
+        let idle_hits_note = idle_hits_note.clone();
+        Element::from(
+            drag_scope("gal-drag-idle-hits")
+                .collision(CollisionAlg::PointerWithin)
+                .on_drag_end({
+                    let idle_hits_note = idle_hits_note.clone();
+                    move |ev: &DragEvent| {
+                        let target = ev.droppable_id.as_deref().unwrap_or("—");
+                        idle_hits_note.set(format!(
+                            "最近 drop · {} → {} · drag={} drop={}",
+                            ev.draggable_id,
+                            target,
+                            ev.items.len().max(1),
+                            usize::from(ev.droppable_id.is_some())
+                        ));
+                    }
+                })
+                .child(move || {
+                    let idle_hits_note = idle_hits_note.get();
+                    ui! {
+                        <VStack gap="0.375rem" w="100%">
+                            { hits_hud() }
+                            <Label text_size="0.75rem" color="muted-foreground">
+                                { idle_hits_note }
+                            </Label>
+                            <HStack gap="0.5rem" w="100%" wrap="wrap">
+                                <Draggable id="idle-a" item_type="peek">
+                                    { compact_chip("idle draggable A") }
+                                </Draggable>
+                                <Draggable id="idle-b" item_type="peek">
+                                    { compact_chip("idle draggable B") }
+                                </Draggable>
+                                <Droppable id="idle-zone" accept="peek">
+                                    { collision_hit_zone(
+                                        "idle-zone",
+                                        "idle droppable",
+                                        ui! {
+                                            <Label text_size="0.75rem" color="muted-foreground">
+                                                "未拖时 hits() 走 registered 表"
+                                            </Label>
+                                        },
+                                    ) }
+                                </Droppable>
+                            </HStack>
+                        </VStack>
+                    }
+                }),
+        )
+    };
 
-    let skip_on_end = move |ev: &DragEvent| match ev.from_list.as_deref() {
-        Some("shift-normal") => {
-            let Some(from) = ev.from_index else {
-                return;
-            };
-            let mut v = shift_normal.peek();
-            apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
-            shift_normal.set(v);
-        }
-        Some("shift-pinned") => {
-            let Some(from) = ev.from_index else {
-                return;
-            };
-            let mut v = shift_pinned.peek();
-            apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
-            shift_pinned.set(v);
-        }
-        Some("shift-follow") => {
-            let Some(from) = ev.from_index else {
-                return;
-            };
-            let mut v = shift_follow.peek();
-            apply_reorder_vec(&mut v, from, ev.to_index.unwrap_or(from));
-            shift_follow.set(v);
-        }
-        _ => {}
+    let skip_on_end = move |ev: &DragEvent| {
+        apply_skip_flags_event(shift_normal, shift_pinned, shift_follow, ev);
     };
     let skip_shift_board =
         rsx_skip_flags_board(shift_normal, shift_pinned, shift_follow, skip_on_end);
@@ -2347,7 +2460,7 @@ pub(crate) fn DragShowcase() -> Element {
                         ui! {
                             <VStack gap="0.375rem" w="100%">
                                 <Label text_size="0.75rem" color="muted-foreground">
-                                    "`.sensor` + `run_scope_sensors`：按钮模拟键盘 activator，走与 pointerdown 相同的 `begin`。"
+                                    "`.sensor` + `run_scope_sensors`：按钮模拟键盘 activator，点击后立即显示替身，无需先移动鼠标。"
                                 </Label>
                                 <HStack gap="0.5rem" w="100%" items="center" wrap="wrap">
                                     <Draggable id="sensor-chip" item_type="sensor">
@@ -3551,14 +3664,14 @@ pub(crate) fn DragShowcase() -> Element {
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"§11 · 空闲 hits · registered 表"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "assemble 时 register_drag_slot_meta；未拖时 `use_drag().hits()` 走 registered_hits_in_scope，不必持有 app 根。HUD 标 idle vs 拖中。"
+                    "仅验证命中注册表，不修改列表；drop 结果显示在区域内。assemble 时 register_drag_slot_meta；未拖时 `use_drag().hits()` 走 registered_hits_in_scope。"
                 </Label>
                 { idle_hits_board }
 
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"§11 · skip_shift · skip_follow"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "`<SortableItem skip_shift={{true}}>` / `skip_follow={{true}}>` — 中项 RSX 属性；三列对照默认 / skip_shift / skip_follow。"
+                    "`<SortableItem skip_shift={{true}}>` / `skip_follow={{true}}>` — Pin 不参与让位平移，Follow 不随指针移动；标记随项目保留，三列支持跨列移动。"
                 </Label>
                 { skip_shift_board }
 

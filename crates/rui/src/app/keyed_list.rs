@@ -4,6 +4,7 @@
 //!   reorder item owners; unchanged keys do not re-run item `render`.
 //! - [`index_reactive`]: fixed index identity; per-index [`Signal`] accessor; same-index value
 //!   updates propagate through `bind_*` without rebuilding the item subtree.
+//! Theme / stylesheet changes rebuild item fragments under their existing owners.
 
 use std::any::Any;
 use std::cell::RefCell;
@@ -17,7 +18,7 @@ use crate::core::reactivity::{
 use crate::core::tree::{Element, UnmountHook};
 
 use super::reactive::{
-    reactive_anchor, reactive_placeholder, reactive_placeholder_sized, reactive_view,
+    cached_reactive_anchor, reactive_placeholder, reactive_placeholder_sized, reactive_view,
     reactive_view_sized, window_scoped_registry_key,
 };
 
@@ -81,10 +82,11 @@ impl<T: Clone + PartialEq + 'static> IndexListState<T> {
             let keepalive_for_effect = Rc::clone(&keepalive);
             let (owner, _) = create_root(move || {
                 create_effect(move || {
+                    crate::style::track_style_changes();
                     let inner = render.borrow_mut()(index, item_signal);
                     *keepalive_for_effect.borrow_mut() = retain_unmount_hooks(&inner);
                     let cache = Rc::new(RefCell::new(Some(wrap_item_fragment(inner))));
-                    reactive_anchor(anchor_id.clone(), move || take_cached_element(&cache));
+                    cached_reactive_anchor(anchor_id.clone(), move || take_cached_element(&cache));
                 });
             });
             self.slots.push(IndexSlot {
@@ -172,18 +174,19 @@ fn mount_keyed_item<T, RF>(
 ) -> (OwnerHandle, Rc<RefCell<Vec<Rc<UnmountHook>>>>)
 where
     T: Clone + 'static,
-    RF: FnOnce(&T) -> Element + 'static,
+    RF: FnMut(&T) -> Element + 'static,
 {
     let anchor = item_anchor_id.clone();
     let keepalive = Rc::new(RefCell::new(Vec::new()));
     let keepalive_for_effect = Rc::clone(&keepalive);
     let (owner, _) = create_root(move || {
-        let mut render = Some(render);
+        let mut render = render;
         create_effect(move || {
-            let inner = render.take().expect("keyed item render runs once")(&item);
+            crate::style::track_style_changes();
+            let inner = render(&item);
             *keepalive_for_effect.borrow_mut() = retain_unmount_hooks(&inner);
             let cache = Rc::new(RefCell::new(Some(wrap_item_fragment(inner))));
-            reactive_anchor(anchor.clone(), move || take_cached_element(&cache));
+            cached_reactive_anchor(anchor.clone(), move || take_cached_element(&cache));
         });
     });
     (owner, keepalive)

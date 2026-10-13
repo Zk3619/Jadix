@@ -7,6 +7,10 @@ use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 mod textarea_present_tests;
 
 #[cfg(target_os = "windows")]
+#[path = "state_rotation_present_tests.rs"]
+mod rotation_present_tests;
+
+#[cfg(target_os = "windows")]
 #[path = "state_pagination_present_tests.rs"]
 mod pagination_present_tests;
 
@@ -17,6 +21,10 @@ mod tree_view_present_tests;
 #[cfg(target_os = "windows")]
 #[path = "state_drag_present_tests.rs"]
 mod drag_present_tests;
+
+#[cfg(target_os = "windows")]
+#[path = "state_carousel_present_tests.rs"]
+mod carousel_present_tests;
 
 #[cfg(all(target_os = "windows", feature = "svg"))]
 #[path = "state_snap_grid_present_tests.rs"]
@@ -93,10 +101,16 @@ fn run_color_picker_native_frames(window: Arc<dyn Window>, calendar: bool) {
         el.children.iter().find_map(trigger)
     }
     fn focus_suffix<'a>(el: &'a Element, suffix: &str) -> Option<&'a Element> {
-        if el.focus_id.as_deref().is_some_and(|id| id.ends_with(suffix)) {
+        if el
+            .focus_id
+            .as_deref()
+            .is_some_and(|id| id.ends_with(suffix))
+        {
             return Some(el);
         }
-        el.children.iter().find_map(|child| focus_suffix(child, suffix))
+        el.children
+            .iter()
+            .find_map(|child| focus_suffix(child, suffix))
     }
     fn frame(state: &Rc<RefCell<Option<AppState>>>, mouse: [f32; 2]) -> RgbaImage {
         std::thread::sleep(std::time::Duration::from_millis(16));
@@ -233,10 +247,7 @@ fn run_color_picker_native_frames(window: Arc<dyn Window>, calendar: bool) {
             })
             .count()
     }
-    fn full_composite(
-        state: &Rc<RefCell<Option<AppState>>>,
-        mouse: [f32; 2],
-    ) -> RgbaImage {
+    fn full_composite(state: &Rc<RefCell<Option<AppState>>>, mouse: [f32; 2]) -> RgbaImage {
         let mut opt = state.borrow_mut();
         let s = opt.as_mut().unwrap();
         crate::style::utility::set_frame_dt(0.0);
@@ -537,13 +548,7 @@ fn run_color_picker_native_frames(window: Arc<dyn Window>, calendar: bool) {
             for tick in 0..14 {
                 let image = frame(&state, year_mouse);
                 let full = full_composite(&state, year_mouse);
-                let same_frame = changed_outside_threshold(
-                    &image,
-                    &full,
-                    &[],
-                    nested_scale,
-                    20,
-                );
+                let same_frame = changed_outside_threshold(&image, &full, &[], nested_scale, 20);
                 assert_eq!(
                     same_frame, 0,
                     "nested year menu opening retained frame differs from full composite at tick {tick}: {same_frame}"

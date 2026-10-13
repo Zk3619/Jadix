@@ -287,10 +287,10 @@ pub(crate) fn DataChartShowcase() -> Element {
         .mark(radial_bar(radial_rows.clone()).inner_radius(0.2))
         .mark(
             radial_line(radial_rows.clone())
-                .stroke("chart-1")
+                .stroke("chart-4")
                 .stroke_width(2.0),
         )
-        .mark(radial_dot(radial_rows.clone()).r(3.5).fill("chart-1"))
+        .mark(radial_dot(radial_rows.clone()).r(3.5).fill("chart-4"))
         .guides(true)
         .legend(true)
         .tooltip(true)

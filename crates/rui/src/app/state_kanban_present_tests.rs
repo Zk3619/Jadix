@@ -42,6 +42,12 @@ fn committed_empty_column_transfer_back_preserves_preview_gap() {
     native_sortable_frames(6);
 }
 
+#[test]
+#[ignore = "requires a native Windows GPU surface"]
+fn sensor_button_paints_overlay_on_first_frame_after_scroll() {
+    native_sortable_frames(7);
+}
+
 fn native_sortable_frames(scenario: u8) {
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
@@ -95,10 +101,10 @@ fn run_kanban_drop_frames(
         crate::style::set_css_transition_timeline_ms(0.0);
     }
     use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
-    use crate::app::runtime::{AppRuntime, clear_app_runtime, set_app_runtime};
+    use crate::app::runtime::{clear_app_runtime, set_app_runtime, AppRuntime};
     use crate::core::reactivity::{create_effect, create_root, isolate_reads, use_signal};
     use crate::prelude::*;
-    use crate::utils::drag::{BeginDrag, begin, collect_hits, tick};
+    use crate::utils::drag::{begin, collect_hits, tick, BeginDrag};
     use std::{cell::RefCell, rc::Rc};
 
     fn frame(
@@ -203,7 +209,7 @@ fn run_kanban_drop_frames(
     let _ = take_frame_paint_nodes();
     let state = Rc::new(RefCell::new(Some(crate::utils::block_on::block_on(
         AppState::new_bootstrap(
-            window,
+            Arc::clone(&window),
             super::super::super::window_chrome::WindowOptions::default(),
         ),
     ))));
@@ -243,6 +249,144 @@ fn run_kanban_drop_frames(
         let _ = frame(&state, [-1.0, -1.0]);
     }
     let hits = collect_hits(&state.borrow().as_ref().unwrap().root_element);
+    if scenario == 7 {
+        fn ghost_count(root: &Element) -> usize {
+            let mut count = 0;
+            crate::core::tree::walk_elements(root, |el| {
+                if el.attrs.contains_key(crate::utils::drag::ATTR_DRAG_OVERLAY) {
+                    count += 1;
+                }
+            });
+            count
+        }
+        let idle_ghosts = ghost_count(&state.borrow().as_ref().unwrap().root_element);
+        eprintln!("idle drag ghost count: {idle_ghosts}");
+        let source = hits.iter().find(|h| h.id == "sensor-chip").unwrap();
+        let scroll_y = source.rect.y - 160.0;
+        for key in [
+            crate::core::scroll_viewport::scroll_offset_y_signal_key("native-kanban-scroll"),
+            crate::core::scroll_viewport::scroll_target_y_signal_key("native-kanban-scroll"),
+        ] {
+            use_signal(&key, || 0.0_f32).set_silent(scroll_y);
+        }
+        state
+            .borrow_mut()
+            .as_mut()
+            .unwrap()
+            .update_scroll_offset_in_place("native-kanban-scroll", [0.0, scroll_y]);
+        for _ in 0..3 {
+            let _ = frame(&state, [-1.0, -1.0]);
+        }
+        let mut source_rect = source.rect;
+        source_rect.y -= scroll_y;
+        let (button_bounds, button_id) = {
+            let opt = state.borrow();
+            let root = &opt.as_ref().unwrap().root_element;
+            let button = crate::core::tree::find_in_tree(root, |el| {
+                el.on_click.is_some()
+                    && crate::core::tree::find_in_tree(el, |child| {
+                        child.text.as_deref() == Some("sensor 启动")
+                    })
+                    .is_some()
+            })
+            .expect("sensor button");
+            (button.layout_bounds, button.focus_id.clone().unwrap())
+        };
+        let pointer = [
+            button_bounds[0] + button_bounds[2] * 0.5,
+            button_bounds[1] + button_bounds[3] * 0.5 - scroll_y,
+        ];
+        let (_, user_rx) = std::sync::mpsc::channel();
+        let mut app =
+            crate::app::lifecycle::create_app(Default::default(), Element::new, proxy, user_rx);
+        app.state = Rc::clone(&state);
+        let scale = window.scale_factor() as f32;
+        app.cursor_pos = winit::dpi::PhysicalPosition::new(
+            (pointer[0] * scale) as f64,
+            (pointer[1] * scale) as f64,
+        );
+        let _ = frame(&state, pointer);
+        let hovered = use_signal(&format!("{button_id}_hover"), || false);
+        assert!(hovered.peek(), "button must hover before sensor activation");
+        app.handle_mouse_button(
+            window.id(),
+            winit::event::ElementState::Pressed,
+            winit::event::MouseButton::Left,
+            None,
+        );
+        let _ = frame(&state, pointer);
+        app.handle_mouse_button(
+            window.id(),
+            winit::event::ElementState::Released,
+            winit::event::MouseButton::Left,
+            None,
+        );
+        assert!(
+            crate::utils::drag::is_active(),
+            "button must activate the sensor"
+        );
+        let image = frame(&state, pointer);
+        assert!(
+            !hovered.peek(),
+            "active ghost must clear the button hover immediately"
+        );
+        assert!(
+            crate::app::pointer_events::pointer_hit_node_set(
+                &state.borrow().as_ref().unwrap().root_element,
+                pointer[0],
+                pointer[1]
+            )
+            .is_empty(),
+            "CSS hover must not hit through an active ghost"
+        );
+        assert_eq!(idle_ghosts, 0, "idle providers must not mount empty ghosts");
+        assert_eq!(
+            ghost_count(&state.borrow().as_ref().unwrap().root_element),
+            1
+        );
+        let opt = state.borrow();
+        let ghost = crate::core::tree::find_in_tree(&opt.as_ref().unwrap().root_element, |el| {
+            el.attrs
+                .get(crate::utils::popup::ATTR_FLOATING)
+                .map(String::as_str)
+                == Some("gal-drag-sensor__ghost")
+        })
+        .expect("sensor overlay must mount on first frame");
+        let bounds = ghost.layout_bounds;
+        assert!(
+            (bounds[0] - source_rect.x).abs() < 1.0 && (bounds[1] - source_rect.y).abs() < 1.0,
+            "sensor overlay must appear over the visible source: {bounds:?}"
+        );
+        let dark_ink = (0..image.height)
+            .flat_map(|y| (0..image.width).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                x as f32 >= bounds[0] * scale
+                    && (x as f32) < (bounds[0] + bounds[2]) * scale
+                    && y as f32 >= bounds[1] * scale
+                    && (y as f32) < (bounds[1] + bounds[3]) * scale
+            })
+            .filter(|&(x, y)| {
+                let offset = ((y * image.width + x) * 4) as usize;
+                image.pixels[offset..offset + 3].iter().all(|v| *v < 100)
+            })
+            .count();
+        assert!(
+            dark_ink > 10,
+            "sensor overlay must paint opaque text/border on its first frame"
+        );
+        drop(opt);
+        crate::utils::drag::cancel();
+        let _ = frame(&state, pointer);
+        assert_eq!(
+            ghost_count(&state.borrow().as_ref().unwrap().root_element),
+            0
+        );
+        assert!(hovered.peek(), "hover must resume after the drag ends");
+        owner.dispose();
+        clear_app_runtime();
+        reset_registered_anchors();
+        return;
+    }
     if matches!(scenario, 2 | 3 | 5 | 6) {
         use winit::application::ApplicationHandler;
         let source_id = if scenario == 2 {
@@ -443,11 +587,11 @@ fn run_kanban_drop_frames(
                 .iter()
                 .find(|h| h.id == "veto-open:Locked")
                 .unwrap();
-            let locked_rest = source.rect.y + source.rect.height + original_gap.unwrap();
             assert!(
-                locked_mid.rect.y > source.rect.y + 1.0 && locked_mid.rect.y < locked_rest - 1.0,
-                "cross-list vacate must animate between rest and packed positions: y={} start={locked_rest}",
-                locked_mid.rect.y
+                (locked_mid.rect.y - source.rect.y).abs() <= 1.0,
+                "cross-list vacate must close the layout slot once; y={} packed={}",
+                locked_mid.rect.y,
+                source.rect.y
             );
             let hits = collect_hits(&state.borrow().as_ref().unwrap().root_element);
             let back = [start[0], start[1] - 6.0];
@@ -824,19 +968,17 @@ fn run_kanban_drop_frames(
         commit_started.elapsed().as_secs_f64() * 1000.0
     );
     assert!(!crate::utils::drag::is_dragging());
-    assert!(
-        use_signal(
-            if nested {
-                "gal_drag_nest_later"
-            } else {
-                "gal_drag_todo"
-            },
-            Vec::<String>::new
-        )
-        .peek()
-        .iter()
-        .any(|s| s == if nested { "Beta" } else { "Write tests" })
-    );
+    assert!(use_signal(
+        if nested {
+            "gal_drag_nest_later"
+        } else {
+            "gal_drag_todo"
+        },
+        Vec::<String>::new
+    )
+    .peek()
+    .iter()
+    .any(|s| s == if nested { "Beta" } else { "Write tests" }));
     let source_items = use_signal(
         if nested {
             "gal_drag_nest_inbox"
@@ -846,11 +988,9 @@ fn run_kanban_drop_frames(
         Vec::<String>::new,
     )
     .peek();
-    assert!(
-        !source_items
-            .iter()
-            .any(|s| s == if nested { "Beta" } else { "Write tests" })
-    );
+    assert!(!source_items
+        .iter()
+        .any(|s| s == if nested { "Beta" } else { "Write tests" }));
     let partial = frame(&state, pointer);
     let restored_edge = if nested {
         idle_edge

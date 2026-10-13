@@ -43,13 +43,14 @@ fn resize_does_not_scroll_other_gallery_regions() {
             "a resize must not pan a different region"
         );
         let rect = tick_resize(200.0, 290.0).unwrap();
+        let rect_scroll = offsets[0].peek();
         for _ in 0..10 {
             pump_edge_scroll(&root);
         }
-        assert_eq!(
-            tick_resize(200.0, 290.0).unwrap(),
-            rect,
-            "stationary pointer must not accumulate scroll into resize dimensions"
+        let scrolled = tick_resize(200.0, 290.0).unwrap();
+        assert!(
+            (scrolled.bottom() - rect.bottom() - (offsets[0].peek() - rect_scroll)).abs() < 0.01,
+            "scroll displacement must keep the resized edge under a stationary pointer: {rect:?} -> {scrolled:?}"
         );
         on_up();
     });

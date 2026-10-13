@@ -20,7 +20,15 @@ pub fn apply_stylesheet_rules(mut el: Element) -> Element {
     }
     let classes = collect_matching_classes(&el);
     if !classes.is_empty() {
+        let sheet_classes = classes.clone();
+        // Tree mounts reach slots after caller classes have been applied. Keep those
+        // utilities last, including their hover/dark rules, instead of replacing them.
+        let classes = match el.attrs.get("rui_utility_class") {
+            Some(caller) if !caller.trim().is_empty() => format!("{classes} {caller}"),
+            _ => classes,
+        };
         el = with_class_list(el, &classes);
+        el.set_attr("rui_stylesheet_class", sheet_classes);
     }
     el.set_attr(ATTR_SHEET_APPLIED, "1");
     el

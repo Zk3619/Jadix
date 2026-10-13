@@ -15,11 +15,13 @@ pub fn register_stylesheet(sheet: Stylesheet) -> Result<(), ThemeOverrideError> 
         install_theme_overrides(theme.clone())?;
     }
     REGISTRY.with(|r| r.borrow_mut().push(sheet));
+    super::watch::mark_style_hot_rebuild();
     Ok(())
 }
 
 pub fn clear_stylesheets() {
     REGISTRY.with(|r| r.borrow_mut().clear());
+    super::watch::mark_style_hot_rebuild();
 }
 
 pub(super) fn snapshot_stylesheets() -> Vec<Stylesheet> {
@@ -28,6 +30,7 @@ pub(super) fn snapshot_stylesheets() -> Vec<Stylesheet> {
 
 pub(super) fn restore_stylesheets(sheets: Vec<Stylesheet>) {
     REGISTRY.with(|r| *r.borrow_mut() = sheets);
+    super::watch::mark_style_hot_rebuild();
 }
 
 pub fn stylesheet_count() -> usize {

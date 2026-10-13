@@ -1390,8 +1390,15 @@ fn capture_slice(
             (&mut p.chrome, start.chrome),
             (&mut p.paint_ops, start.paint_ops),
         ] {
-            range.0 -= base;
-            range.1 -= base;
+            // Filter/zoom capture can drain the payload that a descendant
+            // NodePaint originally referenced. Such a range is stale in the
+            // cached slice; keep it empty instead of underflowing in debug.
+            if range.0 < base || range.1 < base || range.1 < range.0 {
+                *range = (0, 0);
+            } else {
+                range.0 -= base;
+                range.1 -= base;
+            }
         }
     }
     CachedSubtree {

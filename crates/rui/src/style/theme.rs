@@ -7,9 +7,10 @@
 //! 支持运行时浅色 / 深色切换；[`get_theme`] 读取当前主题，[`set_theme_mode`] 切换。
 //! 焦点环由 [`FocusRingStyle`]（Hard / Soft）+ [`Theme::focus_ring_width`] 配置，颜色走 token `ring`。
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use super::color_space::oklch_to_display_srgba;
+use super::element_style::TimingFunction;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum ThemeMode {
@@ -20,6 +21,32 @@ pub enum ThemeMode {
 
 /// Default Hard spread / Soft blur in logical px (ShadCN `ring-[3px]`).
 pub const DEFAULT_FOCUS_RING_WIDTH: f32 = 3.0;
+
+/// Global transition used when a theme rebuild changes component colors.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct ThemeTransitionConfig {
+    pub enabled: bool,
+    #[serde(alias = "duration-ms")]
+    pub duration_ms: f32,
+    pub easing: String,
+}
+
+impl Default for ThemeTransitionConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            duration_ms: 180.0,
+            easing: "ease-in-out".into(),
+        }
+    }
+}
+
+impl ThemeTransitionConfig {
+    pub(crate) fn timing(&self) -> TimingFunction {
+        TimingFunction::from_css(&self.easing)
+    }
+}
 
 /// Theme-level focus-ring geometry (ShadCN v4 Hard vs RUI Soft glow).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -32,7 +59,7 @@ pub enum FocusRingStyle {
 }
 
 /// ShadCN v4 `@theme inline` 语义色（`globals.css` → `--color-*`）。
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct DesignTokens {
     pub background: [f32; 4],
     pub foreground: [f32; 4],
@@ -130,7 +157,7 @@ mod tw_blue {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
     pub mode: ThemeMode,
     pub colors: DesignTokens,
@@ -281,6 +308,11 @@ impl Default for Theme {
 
 thread_local! {
     static CURRENT_THEME: RefCell<Theme> = RefCell::new(Theme::light());
+    static THEME_GENERATION: Cell<u64> = const { Cell::new(0) };
+}
+
+pub(crate) fn theme_generation() -> u64 {
+    THEME_GENERATION.with(Cell::get)
 }
 
 /// Borrow the current theme for a short closure (avoids returning a dangling reference).
@@ -312,17 +344,45 @@ pub fn focus_ring_width() -> f32 {
 
 /// Set focus-ring geometry without replacing color tokens.
 pub fn set_focus_ring_style(style: FocusRingStyle) {
-    CURRENT_THEME.with(|t| t.borrow_mut().focus_ring_style = style);
+    let mut theme = get_theme();
+    theme.focus_ring_style = style;
+    set_theme(theme);
 }
 
 /// Set theme focus-ring thickness (logical px; clamped ≥ 0).
 pub fn set_focus_ring_width(width: f32) {
-    CURRENT_THEME.with(|t| t.borrow_mut().focus_ring_width = width.max(0.0));
+    let mut theme = get_theme();
+    theme.focus_ring_width = width.max(0.0);
+    set_theme(theme);
 }
 
 pub fn set_theme(theme: Theme) {
-    CURRENT_THEME.with(|t| *t.borrow_mut() = theme);
+    let changed = CURRENT_THEME.with(|current| {
+        let mut current = current.borrow_mut();
+        if *current == theme {
+            return false;
+        }
+        *current = theme;
+        true
+    });
+    if !changed {
+        return;
+    }
+    THEME_GENERATION.with(|generation| generation.set(generation.get().wrapping_add(1)));
     crate::platform::glass_sync_rui_theme();
+    super::stylesheet::watch::mark_style_hot_rebuild();
+}
+
+/// Resolve override expressions against scratch tokens without notifying live trees.
+pub(crate) fn with_temporary_theme<R>(theme: Theme, f: impl FnOnce() -> R) -> R {
+    struct Restore(Theme);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            CURRENT_THEME.with(|t| *t.borrow_mut() = self.0.clone());
+        }
+    }
+    let _restore = Restore(CURRENT_THEME.with(|t| t.replace(theme)));
+    f()
 }
 
 /// Switch light/dark tokens while preserving the current [`FocusRingStyle`] /

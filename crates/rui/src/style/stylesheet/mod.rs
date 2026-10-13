@@ -8,7 +8,7 @@ mod ir;
 mod load_file;
 mod match_sel;
 mod registry;
-mod watch;
+pub(crate) mod watch;
 
 use std::path::Path;
 
@@ -17,7 +17,7 @@ pub use ir::{MatchedStyleRule, Selector, StyleRule, Stylesheet};
 pub use load_file::parse_stylesheet;
 pub use match_sel::{apply_stylesheet_rules, apply_stylesheet_rules_tree, collect_matching_rules};
 pub use registry::{clear_stylesheets, register_stylesheet, stylesheet_count};
-pub(crate) use watch::take_style_hot_rebuild;
+pub(crate) use watch::{flush_style_rebuild, track_style_changes};
 pub use watch::{is_theme_override_file, watch_stylesheets};
 
 use error::with_path;
@@ -52,12 +52,12 @@ where
         .map(|p| p.as_ref().to_path_buf())
         .collect();
     apply_style_file_batch(&batch)?;
-    crate::app::runtime::request_redraw();
+    watch::mark_style_hot_rebuild();
     Ok(())
 }
 
 /// Load a mixed batch: `theme.toml` → token patch; other `.toml` → stylesheet IR.
-/// Does **not** redraw; watchers / HMR rebuild the tree afterwards.
+/// Successful commits schedule a rebuild of all mounted window trees.
 ///
 /// Parse the whole batch **before** mutating live state. Any load or commit
 /// failure restores the previous registry and theme overrides
@@ -173,6 +173,56 @@ classes = "px-3"
         el = apply_stylesheet_rules(el);
         let cs = el.class_set.as_ref().expect("class_set");
         assert!(cs.base.iter().any(|c| c == "px-3"), "got {:?}", cs.base);
+        reset();
+    }
+
+    #[test]
+    fn tree_rules_preserve_caller_classes_and_variants() {
+        reset();
+        register_stylesheet(
+            parse_stylesheet(
+                "[[rule]]\nselectors = [\"[data-slot=test]\"]\nclasses = \"bg-destructive ring-2\"",
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        let mut slot = Element::new();
+        slot.set_attr("data-slot", "test");
+        crate::style::apply_class_list(&mut slot, "bg-primary hover:bg-accent");
+        let mut slot = apply_stylesheet_rules_tree(slot);
+        assert_eq!(slot.style.bg_color, parse_color("primary"));
+        assert!(slot.class_set.as_ref().unwrap().has_hover_color());
+        crate::style::resolve_class_variants(
+            &mut slot,
+            &crate::style::VariantContext {
+                hovered: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(slot.style.bg_color, parse_color("accent"));
+        reset();
+    }
+
+    #[test]
+    fn caller_class_keeps_stylesheet_variants() {
+        reset();
+        register_stylesheet(parse_stylesheet(
+            "[[rule]]\nselectors = [\"[data-slot=test]\"]\nclasses = \"bg-destructive hover:bg-accent\"",
+        ).unwrap()).unwrap();
+        let mut slot = Element::new();
+        slot.set_attr("data-slot", "test");
+        let mut slot = apply_stylesheet_rules(slot);
+        crate::style::apply_class_list(&mut slot, "bg-primary");
+        assert_eq!(slot.style.bg_color, parse_color("primary"));
+        assert!(slot.class_set.as_ref().unwrap().has_hover_color());
+        crate::style::resolve_class_variants(
+            &mut slot,
+            &crate::style::VariantContext {
+                hovered: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(slot.style.bg_color, parse_color("accent"));
         reset();
     }
 

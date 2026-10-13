@@ -49,6 +49,7 @@ pub use animatable::{
     parse_background_position, parse_fr_tracks, AnimatableValue, LayoutImpact, PropertyId,
     PropertySet,
 };
+pub(crate) use animation::css_timeline_now_ms;
 pub(crate) use animation::note_page_css_needs_frame;
 pub use animation::{
     advance_css_transition_timeline_ms, animation_run_active, any_page_css_needs_frame,
@@ -138,13 +139,13 @@ pub use semantic_tone::{
     SoftSemanticMix, MODAL_OVERLAY_OPACITY_NEUTRAL, SEMANTIC_MEDIA_WASH_ALPHA,
 };
 pub use specified::SpecifiedPresent;
-pub(crate) use stylesheet::take_style_hot_rebuild;
 pub use stylesheet::{
     apply_style_file_batch, apply_stylesheet_rules, apply_stylesheet_rules_tree, clear_stylesheets,
     collect_matching_rules, load_stylesheet, parse_stylesheet, register_stylesheet,
     reload_stylesheets, watch_stylesheets, MatchedStyleRule, Selector, StyleRule, Stylesheet,
     StylesheetError,
 };
+pub(crate) use stylesheet::{flush_style_rebuild, track_style_changes};
 pub use svg_filter::{
     lookup_svg_filter, register_svg_filter, register_svg_filter_graph,
     resolve_filter_list_to_graph, resolve_svg_filter_url, FilterGraph, FilterParseError,
@@ -159,15 +160,18 @@ pub use text_style::{
     parse_text_shadow, InputCaretDraw, TextAlign, TextAlignDeclaration, TextDecorationStyle,
     TextDirection, TextOverflow, TextSpan, TextSpanKind, TextStyle, WhiteSpace,
 };
+pub(crate) use theme::theme_generation;
 pub use theme::{
     focus_ring_style, focus_ring_width, get_theme, is_dark_theme, set_focus_ring_style,
     set_focus_ring_width, set_theme, set_theme_mode, theme_mode, toggle_theme_mode, with_theme,
-    DesignTokens, FocusRingStyle, Theme, ThemeMode, DEFAULT_FOCUS_RING_WIDTH,
+    DesignTokens, FocusRingStyle, Theme, ThemeMode, ThemeTransitionConfig,
+    DEFAULT_FOCUS_RING_WIDTH,
 };
 pub use theme_override::{
     apply_theme_patch, clear_theme_overrides, compose_theme, install_theme_overrides,
     load_and_install_theme_overrides, load_theme_overrides, parse_theme_overrides_str,
-    DesignTokensPatch, ThemeOverrideError, ThemeOverrides,
+    set_theme_transition_config, theme_transition_config, DesignTokensPatch, ThemeOverrideError,
+    ThemeOverrides,
 };
 pub(crate) use theme_override::{restore_theme_overrides, snapshot_theme_overrides};
 pub use timeline::{
