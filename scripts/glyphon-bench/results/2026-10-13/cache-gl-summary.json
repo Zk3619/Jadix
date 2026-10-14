@@ -1,0 +1,128 @@
+[
+  {
+    "scenario": "cjk_cached",
+    "baseline": {
+      "samples": 900,
+      "prepare_median_us": 218.4,
+      "prepare_p95_us": 860.1,
+      "complete_median_us": 1179.8,
+      "complete_p95_us": 2270.4,
+      "run_prepare_medians_us": [
+        154.4,
+        264.5,
+        197
+      ],
+      "uploads_mean": 0,
+      "upload_bytes_mean": 0,
+      "mirror_bytes_max": 0,
+      "gpu_atlas_bytes_max": 1310720,
+      "raster_calls_mean": 0,
+      "hash": "838665277823899220"
+    },
+    "patched": {
+      "samples": 900,
+      "prepare_median_us": 243.7,
+      "prepare_p95_us": 1080.9,
+      "complete_median_us": 1341.9,
+      "complete_p95_us": 3070.7,
+      "run_prepare_medians_us": [
+        293.2,
+        235.3,
+        208.4
+      ],
+      "uploads_mean": 0,
+      "upload_bytes_mean": 0,
+      "mirror_bytes_max": 1048576,
+      "gpu_atlas_bytes_max": 1310720,
+      "raster_calls_mean": 0,
+      "hash": "838665277823899220"
+    },
+    "prepare_speedup": 0.8961838325810423,
+    "complete_speedup": 0.8792011327222594,
+    "pixels_equal": true
+  },
+  {
+    "scenario": "color_cached",
+    "baseline": {
+      "samples": 900,
+      "prepare_median_us": 238.6,
+      "prepare_p95_us": 867.3,
+      "complete_median_us": 1397.3,
+      "complete_p95_us": 2433,
+      "run_prepare_medians_us": [
+        272.1,
+        235.2,
+        197
+      ],
+      "uploads_mean": 0,
+      "upload_bytes_mean": 0,
+      "mirror_bytes_max": 0,
+      "gpu_atlas_bytes_max": 4259840,
+      "raster_calls_mean": 0,
+      "hash": "500015101356916532"
+    },
+    "patched": {
+      "samples": 900,
+      "prepare_median_us": 235.4,
+      "prepare_p95_us": 1012.8,
+      "complete_median_us": 1369,
+      "complete_p95_us": 2499.4,
+      "run_prepare_medians_us": [
+        155.8,
+        244,
+        227.4
+      ],
+      "uploads_mean": 0,
+      "upload_bytes_mean": 0,
+      "mirror_bytes_max": 4194304,
+      "gpu_atlas_bytes_max": 4259840,
+      "raster_calls_mean": 0,
+      "hash": "500015101356916532"
+    },
+    "prepare_speedup": 1.0135938827527613,
+    "complete_speedup": 1.020672023374726,
+    "pixels_equal": true
+  },
+  {
+    "scenario": "color_single",
+    "baseline": {
+      "samples": 900,
+      "prepare_median_us": 807.5,
+      "prepare_p95_us": 4690.2,
+      "complete_median_us": 2721.7,
+      "complete_p95_us": 9944.6,
+      "run_prepare_medians_us": [
+        199.8,
+        832.2,
+        943.9
+      ],
+      "uploads_mean": 1,
+      "upload_bytes_mean": 2304,
+      "mirror_bytes_max": 0,
+      "gpu_atlas_bytes_max": 4259840,
+      "raster_calls_mean": 1,
+      "hash": "7769327140222955538"
+    },
+    "patched": {
+      "samples": 900,
+      "prepare_median_us": 294.2,
+      "prepare_p95_us": 1447.4,
+      "complete_median_us": 1484.6,
+      "complete_p95_us": 3298.1,
+      "run_prepare_medians_us": [
+        278.6,
+        354.6,
+        273.6
+      ],
+      "uploads_mean": 1,
+      "upload_bytes_mean": 2304,
+      "mirror_bytes_max": 4194304,
+      "gpu_atlas_bytes_max": 4259840,
+      "raster_calls_mean": 1,
+      "hash": "7769327140222955538"
+    },
+    "prepare_speedup": 2.744731475186948,
+    "complete_speedup": 1.833288427859356,
+    "pixels_equal": true
+  }
+]

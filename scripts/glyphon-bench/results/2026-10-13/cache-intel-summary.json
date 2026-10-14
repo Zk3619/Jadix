@@ -1,0 +1,128 @@
+[
+  {
+    "scenario": "cjk_cached",
+    "baseline": {
+      "samples": 900,
+      "prepare_median_us": 217.3,
+      "prepare_p95_us": 378.3,
+      "complete_median_us": 1021.6,
+      "complete_p95_us": 1463.7,
+      "run_prepare_medians_us": [
+        176.5,
+        274.7,
+        199.8
+      ],
+      "uploads_mean": 0,
+      "upload_bytes_mean": 0,
+      "mirror_bytes_max": 0,
+      "gpu_atlas_bytes_max": 1310720,
+      "raster_calls_mean": 0,
+      "hash": "838665277823899220"
+    },
+    "patched": {
+      "samples": 900,
+      "prepare_median_us": 193.2,
+      "prepare_p95_us": 345.8,
+      "complete_median_us": 1021.7,
+      "complete_p95_us": 1407.6,
+      "run_prepare_medians_us": [
+        203,
+        117.8,
+        237.4
+      ],
+      "uploads_mean": 0,
+      "upload_bytes_mean": 0,
+      "mirror_bytes_max": 1048576,
+      "gpu_atlas_bytes_max": 1310720,
+      "raster_calls_mean": 0,
+      "hash": "838665277823899220"
+    },
+    "prepare_speedup": 1.1247412008281574,
+    "complete_speedup": 0.9999021239111285,
+    "pixels_equal": true
+  },
+  {
+    "scenario": "color_cached",
+    "baseline": {
+      "samples": 900,
+      "prepare_median_us": 168.9,
+      "prepare_p95_us": 268.4,
+      "complete_median_us": 1007.9,
+      "complete_p95_us": 1422.5,
+      "run_prepare_medians_us": [
+        239.6,
+        139.6,
+        159.4
+      ],
+      "uploads_mean": 0,
+      "upload_bytes_mean": 0,
+      "mirror_bytes_max": 0,
+      "gpu_atlas_bytes_max": 4259840,
+      "raster_calls_mean": 0,
+      "hash": "500015101356916532"
+    },
+    "patched": {
+      "samples": 900,
+      "prepare_median_us": 153.6,
+      "prepare_p95_us": 298.6,
+      "complete_median_us": 1013.4,
+      "complete_p95_us": 1475.2,
+      "run_prepare_medians_us": [
+        158.9,
+        87.3,
+        205.4
+      ],
+      "uploads_mean": 0,
+      "upload_bytes_mean": 0,
+      "mirror_bytes_max": 4194304,
+      "gpu_atlas_bytes_max": 4259840,
+      "raster_calls_mean": 0,
+      "hash": "500015101356916532"
+    },
+    "prepare_speedup": 1.099609375,
+    "complete_speedup": 0.9945727254785869,
+    "pixels_equal": true
+  },
+  {
+    "scenario": "color_single",
+    "baseline": {
+      "samples": 900,
+      "prepare_median_us": 158.9,
+      "prepare_p95_us": 341.1,
+      "complete_median_us": 916.7,
+      "complete_p95_us": 1533.7,
+      "run_prepare_medians_us": [
+        234.4,
+        112.6,
+        153.6
+      ],
+      "uploads_mean": 1,
+      "upload_bytes_mean": 2304,
+      "mirror_bytes_max": 0,
+      "gpu_atlas_bytes_max": 4259840,
+      "raster_calls_mean": 1,
+      "hash": "7769327140222955538"
+    },
+    "patched": {
+      "samples": 900,
+      "prepare_median_us": 173.1,
+      "prepare_p95_us": 343.7,
+      "complete_median_us": 978.3,
+      "complete_p95_us": 1431.8,
+      "run_prepare_medians_us": [
+        144.2,
+        160.4,
+        237.4
+      ],
+      "uploads_mean": 1,
+      "upload_bytes_mean": 2304,
+      "mirror_bytes_max": 4194304,
+      "gpu_atlas_bytes_max": 4259840,
+      "raster_calls_mean": 1,
+      "hash": "7769327140222955538"
+    },
+    "prepare_speedup": 0.9179664933564414,
+    "complete_speedup": 0.9370336297659205,
+    "pixels_equal": true
+  }
+]
