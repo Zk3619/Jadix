@@ -2196,7 +2196,7 @@ pub struct OverlayPaintBand {
     pub backdrop_blur: f32,
     /// Underlay 有效 opacity（祖先 × 自身），用于 backdrop blur 与遮罩同步淡入淡出。
     pub underlay_opacity: f32,
-    /// [`overlay_portal_stamp_key`] of this portal-layer child. `0` = synthetic / page-stack.
+    /// Portal stamp identity, or the Taffy identity of an in-page band. `0` = synthetic.
     pub stamp_key: u64,
 }
 
@@ -2319,6 +2319,51 @@ pub(crate) fn replay_node_paints(paints: impl IntoIterator<Item = NodePaint>) {
     NODE_PAINTS.with(|s| s.borrow_mut().extend(paints));
 }
 
+#[cfg(test)]
+#[test]
+fn captured_open_node_paint_ranges_are_empty_after_payload_drain() {
+    begin_node_paint_collect();
+    let mut element = Element::new().w(30.0).h(30.0);
+    element.layout_bounds = [0.0, 0.0, 30.0, 30.0];
+    let start = crate::layout::collect_cache::DlCursor {
+        instances: 8,
+        textured: 4,
+        text: 16,
+        chrome: 3,
+        paint_ops: 9,
+        ..Default::default()
+    };
+    record_node_paint(
+        NodeId::from(42_u64),
+        &element,
+        start,
+        &[],
+        &[],
+        &[],
+        &[],
+        &[],
+        false,
+        [0.0; 2],
+        None,
+        false,
+    );
+    let paints = take_node_paints();
+    assert_eq!(paints.len(), 1);
+    for range in [
+        paints[0].instance,
+        paints[0].textured,
+        paints[0].text,
+        paints[0].chrome,
+        paints[0].paint_ops,
+    ] {
+        assert_eq!(
+            range,
+            (0, 0),
+            "captured payload has no live main-pass range"
+        );
+    }
+}
+
 fn truncate_node_paint_ranges(end: crate::layout::collect_cache::DlCursor) {
     NODE_PAINTS.with(|s| {
         for paint in s.borrow_mut().iter_mut() {
@@ -2376,11 +2421,14 @@ fn record_node_paint(
             key: u64::from(node),
             bounds: b,
             overlay,
-            instance: (start.instances, end.instances),
-            textured: (start.textured, end.textured),
-            text: (start.text, end.text),
-            chrome: (start.chrome, end.chrome),
-            paint_ops: (start.paint_ops, end.paint_ops),
+            // A nested offscreen capture may drain a parent's open range before
+            // that parent is recorded. Captured ink belongs to the layer; it
+            // cannot remain a reversed range in the main-pass paint metadata.
+            instance: (start.instances.min(end.instances), end.instances),
+            textured: (start.textured.min(end.textured), end.textured),
+            text: (start.text.min(end.text), end.text),
+            chrome: (start.chrome.min(end.chrome), end.chrome),
+            paint_ops: (start.paint_ops.min(end.paint_ops), end.paint_ops),
             overflow_clip,
             layered,
             rest: {
@@ -7342,6 +7390,8 @@ impl LayoutTree {
             // PartialLoad then skips.
             stamp_key: if is_body_portal_layer {
                 overlay_portal_stamp_key(band_root)
+            } else if record_page_stack_bands {
+                crate::app::damage::paint_element_key(band_root)
             } else {
                 0
             },
@@ -10783,6 +10833,46 @@ mod portal_hoist_tests {
                 .any(|t| t.text == "toast-high"),
             "higher z text in last band"
         );
+    }
+
+    #[test]
+    fn page_stack_cache_identity_follows_host_when_earlier_band_is_culled() {
+        let host = |label: &str| {
+            Element::new()
+                .w(200.0)
+                .h(120.0)
+                .flex_shrink(0.0)
+                .z_index(1)
+                .text(label)
+        };
+        let mut root = Element::new().w(200.0).h(150.0).overflow_y("scroll").child(
+            Element::new().w(200.0).flex_col().children([
+                host("first"),
+                host("second"),
+                host("third"),
+            ]),
+        );
+        let mut tree = LayoutTree::new();
+        let first = tree.build_and_layout(&mut root, 200.0, 150.0, [-1.0; 2]);
+        let key_for = |result: &RenderResult, label: &str| {
+            result
+                .overlay_split
+                .page_stack_band_ranges()
+                .iter()
+                .find(|b| {
+                    result.text_nodes[b.text.0..b.text.1]
+                        .iter()
+                        .any(|t| t.text == label)
+                })
+                .map(|b| b.stamp_key)
+                .unwrap()
+        };
+        let second_key = key_for(&first, "second");
+        assert_ne!(second_key, 0);
+        assert_ne!(key_for(&first, "first"), second_key);
+        root.scroll_offset = [0.0, 120.0];
+        let moved = tree.build_and_layout_fast(&mut root, 200.0, 150.0, [-1.0; 2], true, false);
+        assert_eq!(second_key, key_for(&moved, "second"));
     }
 
     #[test]

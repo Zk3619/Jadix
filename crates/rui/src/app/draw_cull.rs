@@ -62,8 +62,9 @@ pub(crate) fn padded_xywh(rect: [f32; 4], pad: f32) -> [f32; 4] {
     ]
 }
 
-/// Cap on Clear/cull holes for one scroll blit frame (strips + sticky / overlay / named paint).
-pub(crate) const CULL_RECTS_CAP: usize = 12;
+/// Bounded repair list for strips + sticky / overlay / named paint. Thirty-two
+/// disjoint holes avoid repainting a 4K viewport when nested pins fragment it.
+pub(crate) const CULL_RECTS_CAP: usize = 32;
 
 /// N cull AABBs. Dual-axis L strips and extra pin holes — never their union
 /// (Clear of the AABB would wipe the copied overlap).
@@ -111,6 +112,12 @@ impl CullRects {
             len: 0,
         };
         for r in rects {
+            #[cfg(test)]
+            if let Ok(limit) = std::env::var("RUI_PERF_REPAIR_LIMIT") {
+                if s.len as usize >= limit.parse::<usize>().unwrap().min(CULL_RECTS_CAP) {
+                    return None;
+                }
+            }
             if !s.push(r) {
                 return None;
             }
@@ -173,6 +180,52 @@ pub(crate) fn scroll_repair_rects_physical(
         crate::app::damage::push_disjoint_rect(&mut rects, r);
     }
     CullRects::from_rects(rects)
+}
+
+/// Replaying the painter list for many scissors costs more than one full pass.
+/// Empty/unbounded coverage also needs a full clear so copied pixels cannot be
+/// blended twice. Keep sparse edge repairs on the strip path.
+pub(crate) fn scroll_repair_prefers_full(
+    coverage: Option<CullRects>,
+    width: u32,
+    height: u32,
+) -> bool {
+    let max_passes = 12;
+    #[cfg(test)]
+    let max_passes = std::env::var("RUI_PERF_SCROLL_PASS_LIMIT")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .unwrap_or(max_passes);
+    #[cfg(test)]
+    if max_passes == 0 {
+        return false;
+    }
+    let Some(coverage) = coverage else {
+        return true;
+    };
+    let mut count = 0;
+    let mut area = 0_u64;
+    for rect in coverage.strips() {
+        if let Some((_, _, w, h)) =
+            crate::app::damage::physical_xywh_to_scissor(rect, width, height)
+        {
+            count += 1;
+            area += w as u64 * h as u64;
+        }
+    }
+    count >= max_passes || area as f64 >= width as f64 * height as f64 * 0.6
+}
+
+#[cfg(test)]
+#[test]
+fn scroll_repair_cost_keeps_sparse_edges_but_bounds_fragmented_replays() {
+    let edges = CullRects::from_rects([[0.0, 0.0, 3840.0, 24.0], [0.0, 2136.0, 3840.0, 24.0]]);
+    assert!(!scroll_repair_prefers_full(edges, 3840, 2160));
+    let fragmented = CullRects::from_rects((0..12).map(|i| [i as f32 * 32.0, 0.0, 8.0, 8.0]));
+    assert!(scroll_repair_prefers_full(fragmented, 3840, 2160));
+    let broad = Some(CullRects::one([0.0, 0.0, 3840.0, 1400.0]));
+    assert!(scroll_repair_prefers_full(broad, 3840, 2160));
+    assert!(scroll_repair_prefers_full(None, 3840, 2160));
 }
 
 /// Text preparation coverage for visible Region/OverlayRestore clears.
@@ -2727,7 +2780,7 @@ fn nested_foreign_owns(
 ) -> bool {
     paints
         .iter()
-        .any(|q| is_nested_foreign_slot(parent, q) && range_contains_index(range(q), i))
+        .any(|q| range_contains_index(range(q), i) && is_nested_foreign_slot(parent, q))
 }
 
 /// Dest-reset ink of a wrap must not include a descendant's bake.
@@ -2742,10 +2795,10 @@ fn nested_descendant_owns(
     range: impl Fn(&NodePaint) -> (usize, usize),
 ) -> bool {
     paints.iter().any(|q| {
-        q.key != parent.key
+        range_contains_index(range(q), i)
+            && q.key != parent.key
             && !q.overlay
             && occupancy_descendant_slot(parent, q)
-            && range_contains_index(range(q), i)
     })
 }
 
@@ -7589,12 +7642,16 @@ mod tests {
     }
 
     #[test]
-    fn cull_rects_from_rects_caps_at_twelve() {
-        let too_many: Vec<_> = (0..13).map(|i| [i as f32, 0.0, 1.0, 1.0]).collect();
+    fn cull_rects_from_rects_bounds_repair_count() {
+        let too_many: Vec<_> = (0..CULL_RECTS_CAP + 1)
+            .map(|i| [i as f32, 0.0, 1.0, 1.0])
+            .collect();
         assert!(CullRects::from_rects(too_many).is_none());
-        let ok: Vec<_> = (0..12).map(|i| [i as f32, 0.0, 1.0, 1.0]).collect();
+        let ok: Vec<_> = (0..CULL_RECTS_CAP)
+            .map(|i| [i as f32, 0.0, 1.0, 1.0])
+            .collect();
         let cull = CullRects::from_rects(ok).expect("cap");
-        assert_eq!(cull.count(), 12);
+        assert_eq!(cull.count(), CULL_RECTS_CAP);
         assert!(CullRects::from_rects(std::iter::empty()).is_none());
     }
 

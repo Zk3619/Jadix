@@ -2768,7 +2768,15 @@ impl super::App {
             }
         }
     }
-    fn commit_wheel_delta(&mut self, rest: String, dx: f32, dy: f32, max_x: f32, max_y: f32) {
+    fn commit_wheel_delta(
+        &mut self,
+        rest: String,
+        dx: f32,
+        dy: f32,
+        max_x: f32,
+        max_y: f32,
+        wheel: bool,
+    ) {
         self.note_user_scroll_after_press();
         // Keep the I-beam solid across page scroll (Gallery 图二). Strip blit may
         // copy a blink-OFF retain; restarting before the next collect forces chrome ON
@@ -2810,18 +2818,48 @@ impl super::App {
         let tx = crate::core::reactivity::use_signal(keys.target_x.as_str(), || sx.peek());
         let ty = crate::core::reactivity::use_signal(keys.target_y.as_str(), || sy.peek());
 
+        if wheel {
+            // Direct input supersedes a previous content-pan fling.
+            self.scroll_velocity.remove(&rest);
+        }
+
         if is_smooth_mode {
             crate::components::chart::set_chart_hover_frozen(true);
-            let next_x = (tx.peek() - dx).clamp(0.0, max_x);
-            let next_y = (ty.peek() - dy).clamp(0.0, max_y);
+            let next_x = if wheel {
+                super::scroll_support::wheel_scroll_target(sx.peek(), tx.peek(), dx, max_x)
+            } else {
+                (tx.peek() - dx).clamp(0.0, max_x)
+            };
+            let next_y = if wheel {
+                super::scroll_support::wheel_scroll_target(sy.peek(), ty.peek(), dy, max_y)
+            } else {
+                (ty.peek() - dy).clamp(0.0, max_y)
+            };
             tx.set_silent(next_x);
             ty.set_silent(next_y);
             self.bump_smooth_active_until(&rest, now);
             crate::core::reactivity::use_signal(keys.activity.as_str(), || 0.0_f32).set_silent(1.0);
         } else {
             let entry = self.scroll_accum.entry(rest.clone()).or_insert([0.0, 0.0]);
-            entry[0] += dx;
-            entry[1] += dy;
+            if wheel {
+                entry[0] = tx.peek()
+                    - super::scroll_support::wheel_scroll_target(
+                        sx.peek(),
+                        tx.peek() - entry[0],
+                        dx,
+                        max_x,
+                    );
+                entry[1] = ty.peek()
+                    - super::scroll_support::wheel_scroll_target(
+                        sy.peek(),
+                        ty.peek() - entry[1],
+                        dy,
+                        max_y,
+                    );
+            } else {
+                entry[0] += dx;
+                entry[1] += dy;
+            }
         }
         // `auto` bar spring targets are set post-render from `visible_until`, same beat as exit:
         // setting 1 before tick lets the first idle-frame dt clamp still hit ~0 and accumulate a jump.
@@ -2912,7 +2950,7 @@ impl super::App {
                     if can_move_x || can_move_y {
                         let window = state.window.clone();
                         drop(state_borrow);
-                        self.commit_wheel_delta(sticky, dx, dy, max_x, max_y);
+                        self.commit_wheel_delta(sticky, dx, dy, max_x, max_y, true);
                         window.request_redraw();
                         return;
                     }
@@ -2998,7 +3036,7 @@ impl super::App {
         if let Some((rest, dx, dy, max_x, max_y)) = captured {
             self.wheel_sticky_rest = Some(rest.clone());
             self.wheel_sticky_cursor = [x, y];
-            self.commit_wheel_delta(rest, dx, dy, max_x, max_y);
+            self.commit_wheel_delta(rest, dx, dy, max_x, max_y, true);
 
             #[cfg(debug_assertions)]
             {
@@ -3188,7 +3226,7 @@ impl super::App {
                             now,
                         );
                     }
-                    self.commit_wheel_delta(rest, dx, dy, max_x, max_y);
+                    self.commit_wheel_delta(rest, dx, dy, max_x, max_y, false);
                 }
                 ScrollAction::Absolute(tx, ty) => {
                     if tx > 0.5 {
@@ -3734,8 +3772,8 @@ impl super::App {
             let mut state_borrow = self.state.borrow_mut();
             if let Some(state) = state_borrow.as_mut() {
                 for (rest, old_sx, old_sy, new_sx, new_sy, sx_sig, sy_sig) in pre_render_data {
-                    state.update_scroll_offset_in_place(&rest, [new_sx, new_sy]);
                     if (new_sx - old_sx).abs() > 0.01 || (new_sy - old_sy).abs() > 0.01 {
+                        state.update_scroll_offset_in_place(&rest, [new_sx, new_sy]);
                         rests_offset_moved.push(rest);
                     }
                     if (new_sx - old_sx).abs() > OVERLAY_DISMISS_SCROLL_PX
@@ -5070,5 +5108,203 @@ mod scrollbar_fade_clock_tests {
         );
         tick_animations(0.016);
         assert!(fade.peek() > mid);
+    }
+}
+
+#[cfg(all(test, target_os = "windows"))]
+mod wheel_recovery_tests {
+    use super::*;
+    use crate::app::runtime::{clear_app_runtime, set_app_runtime, AppRuntime};
+    use crate::core::reactivity::{create_root, use_signal};
+    use crate::core::tree::Element;
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+
+    #[test]
+    #[ignore = "native wheel delivery and redraw regression; run in a separate process"]
+    fn queued_wheel_events_do_not_replay_screens_after_stall() {
+        struct Harness;
+        impl ApplicationHandler for Harness {
+            fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+                crate::init();
+                let window: std::sync::Arc<dyn winit::window::Window> = std::sync::Arc::from(
+                    event_loop
+                        .create_window(
+                            winit::window::WindowAttributes::default()
+                                .with_visible(false)
+                                .with_surface_size(winit::dpi::PhysicalSize::new(960, 600)),
+                        )
+                        .unwrap(),
+                );
+                let id = window.id();
+                let scale = window.scale_factor() as f32;
+                let (_, rx) = std::sync::mpsc::channel();
+                let mut app = crate::app::lifecycle::create_app(
+                    Default::default(),
+                    Element::new,
+                    event_loop.create_proxy(),
+                    rx,
+                );
+                *app.state.borrow_mut() = Some(crate::utils::block_on::block_on(
+                    crate::app::state::AppState::new_bootstrap(window, Default::default()),
+                ));
+                app.state
+                    .borrow()
+                    .as_ref()
+                    .unwrap()
+                    .device
+                    .on_uncaptured_error(std::sync::Arc::new(|err| {
+                        panic!("wheel regression GPU error: {err}")
+                    }));
+                set_app_runtime(AppRuntime::new(
+                    std::rc::Rc::downgrade(&app.state),
+                    std::rc::Rc::downgrade(&app.secondaries),
+                ));
+                let (_owner, root) = create_root(|| {
+                    let mut row = Element::new().w("100%").h("100%").flex_row();
+                    for (rest, behavior) in [("wheel-smooth", "smooth"), ("wheel-jump", "jump")] {
+                        row = row.child(
+                            crate::components::scroll_area(rest)
+                                .w("50%")
+                                .h("100%")
+                                .scroll_behavior(behavior)
+                                .child(
+                                    Element::new()
+                                        .w("100%")
+                                        .h(5000.0)
+                                        .min_h(5000.0)
+                                        .bg([0.1, 0.2, 0.3, 1.0]),
+                                ),
+                        );
+                    }
+                    row
+                });
+                app.state.borrow_mut().as_mut().unwrap().rebuild_ui(root);
+                for _ in 0..3 {
+                    app.handle_redraw_requested(id, event_loop);
+                }
+                for rest in ["wheel-smooth", "wheel-jump"] {
+                    let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(rest);
+                    let offset = use_signal(&keys.offset_y, || 0.0f32);
+                    let target = use_signal(&keys.target_y, || 0.0f32);
+                    offset.set_silent(1000.0);
+                    target.set_silent(1000.0);
+                    app.state
+                        .borrow_mut()
+                        .as_mut()
+                        .unwrap()
+                        .update_scroll_offset_in_place(rest, [0.0, 1000.0]);
+                    let (bounds, max, _) = app
+                        .scroll_metrics_cache
+                        .get(rest)
+                        .copied()
+                        .expect("live viewport metrics");
+                    assert!(max[1] > 1500.0);
+                    app.cursor_pos = winit::dpi::PhysicalPosition::new(
+                        ((bounds[0] + bounds[2] * 0.5) * scale) as f64,
+                        ((bounds[1] + bounds[3] * 0.5) * scale) as f64,
+                    );
+                    app.scroll_velocity.insert(rest.to_string(), [0.0, 5000.0]);
+                    // A blocked UI thread receives a batch before any redraw.
+                    for _ in 0..15 {
+                        app.handle_mouse_wheel(id, MouseScrollDelta::LineDelta(0.0, -3.0));
+                    }
+                    assert!(
+                        !app.scroll_velocity.contains_key(rest),
+                        "wheel must cancel old fling"
+                    );
+                    if rest == "wheel-smooth" {
+                        assert!(
+                            (target.peek() - 1225.0).abs() < 0.01,
+                            "queued target {}",
+                            target.peek()
+                        );
+                    } else {
+                        assert!(
+                            (app.scroll_accum[rest][1] + 225.0).abs() < 0.01,
+                            "jump debt {:?}",
+                            app.scroll_accum[rest]
+                        );
+                    }
+                    for _ in 0..4 {
+                        app.last_frame_time =
+                            std::time::Instant::now() - std::time::Duration::from_millis(16);
+                        app.handle_redraw_requested(id, event_loop);
+                        let guard = app.state.borrow();
+                        let mut found = false;
+                        crate::core::tree::walk_elements(
+                            &guard.as_ref().unwrap().root_element,
+                            |el| {
+                                if el.focus_id.as_deref() == Some(format!("scroll:{rest}").as_str())
+                                {
+                                    assert!(
+                                        (el.scroll_offset[1] - offset.peek()).abs() < 0.01,
+                                        "painted tree and offset signal diverged"
+                                    );
+                                    found = true;
+                                }
+                            },
+                        );
+                        assert!(found);
+                    }
+                    let moved = offset.peek() - 1000.0;
+                    assert!(
+                        moved > 0.0
+                            && moved
+                                <= if rest == "wheel-smooth" {
+                                    105.0
+                                } else {
+                                    225.01
+                                },
+                        "{rest} recovery jumped {moved}px"
+                    );
+                    app.handle_mouse_wheel(id, MouseScrollDelta::LineDelta(0.0, 3.0));
+                    let next = if rest == "wheel-smooth" {
+                        target.peek()
+                    } else {
+                        offset.peek() - app.scroll_accum[rest][1]
+                    };
+                    assert!(next < offset.peek(), "reverse must take effect immediately");
+                    app.scroll_accum.remove(rest);
+                    // Page navigation is intentional, not accumulated wheel debt.
+                    app.commit_wheel_delta(rest.to_string(), 0.0, -600.0, max[0], max[1], false);
+                    let keyboard_next = if rest == "wheel-smooth" {
+                        target.peek()
+                    } else {
+                        target.peek() - app.scroll_accum[rest][1]
+                    };
+                    assert!(
+                        keyboard_next - offset.peek() > 500.0,
+                        "page navigation was wheel-capped"
+                    );
+                    target.set_silent(offset.peek());
+                    app.scroll_accum.remove(rest);
+                    // Programmatic navigation may have a target distinct from the
+                    // painted offset before this wheel batch is delivered.
+                    target.set_silent(offset.peek() + 500.0);
+                    app.commit_wheel_delta(rest.to_string(), 0.0, -75.0, max[0], max[1], true);
+                    let next = if rest == "wheel-smooth" {
+                        target.peek()
+                    } else {
+                        target.peek() - app.scroll_accum[rest][1]
+                    };
+                    assert!(
+                        next - offset.peek() <= 225.01,
+                        "stale navigation target escaped wheel cap"
+                    );
+                    target.set_silent(offset.peek());
+                    app.scroll_accum.remove(rest);
+                }
+                clear_app_runtime();
+                crate::app::reactive::reset_registered_anchors();
+                event_loop.exit();
+            }
+            fn window_event(&mut self, _: &dyn ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+        }
+        let mut builder = EventLoop::builder();
+        builder.with_any_thread(true);
+        crate::app::with_ui_build_stack(|| builder.build().unwrap().run_app(Harness).unwrap());
     }
 }

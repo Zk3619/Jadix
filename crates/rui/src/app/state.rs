@@ -199,6 +199,7 @@ pub(super) struct AppState {
     /// Extra glyphon pipelines for in-page stacking bands beyond the first (CarouselStack).
     /// Band 0 reuses [`Self::text_renderer`]; further bands share its FontSystem.
     page_stack_band_text_renderers: Vec<RuiTextRenderer>,
+    page_stack_band_text_keys: Vec<u64>,
     pub(super) root_element: Element,
     /// `template_id` -> child-index path from [`Self::root_element`]. Validated on each use instead
     /// of invalidated on reconcile, so a stale entry only costs one failed walk before the DFS.
@@ -622,14 +623,14 @@ fn draw_instance_range(
             for (s, c) in super::draw_cull::visible_instance_runs(instances, start, count, damage) {
                 if c > 0 {
                     super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Quad, c);
-                    pipeline.draw_instance_span(pass, instances, s, c);
+                    pipeline.draw_main_instance_span(pass, instances, s, c);
                 }
             }
             return;
         }
     }
     super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Quad, count);
-    pipeline.draw_instance_span(pass, instances, start, count);
+    pipeline.draw_main_instance_span(pass, instances, start, count);
 }
 
 /// Node-present ranged SDF: copy the instance range and its clip_polys so
@@ -726,7 +727,21 @@ fn draw_uploaded_sdf_with_clip<'a>(
     pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
     pass.set_vertex_buffer(1, inst_buf.slice(..));
     pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-    draw_instance_range(pass, pipeline, instances, 0, instances.len() as u32, cull);
+    // This buffer starts at zero and has its own clip SSBO, not the main one.
+    if let Some(damage) = cull {
+        for (start, count) in
+            super::draw_cull::visible_instance_runs(instances, 0, instances.len() as u32, damage)
+        {
+            super::frame_stats::note_scene_batch(super::frame_stats::SceneKind::Quad, count);
+            pipeline.draw_instance_span(pass, instances, start, count);
+        }
+    } else {
+        super::frame_stats::note_scene_batch(
+            super::frame_stats::SceneKind::Quad,
+            instances.len() as u32,
+        );
+        pipeline.draw_instance_span(pass, instances, 0, instances.len() as u32);
+    }
 }
 
 fn draw_cpu_sdf_instances<'a>(
@@ -1915,6 +1930,7 @@ impl AppState {
             overlay_text_renderer,
             overlay_band_text_renderers: Vec::new(),
             page_stack_band_text_renderers: Vec::new(),
+            page_stack_band_text_keys: Vec::new(),
             root_element,
             template_paths: HashMap::new(),
             pending_layout_dirty: Vec::new(),
@@ -2096,20 +2112,12 @@ impl AppState {
     }
 
     fn find_viewport_element(&self, viewport_id: &str) -> Option<&Element> {
-        let mut found: Option<&Element> = None;
-        crate::core::tree::walk_elements(&self.root_element, |el| {
-            if found.is_some() {
-                return;
-            }
-            if let Some(fid) = el.focus_id.as_deref() {
-                if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
-                    if rest == viewport_id {
-                        found = Some(el);
-                    }
-                }
-            }
-        });
-        found
+        crate::core::tree::find_in_tree(&self.root_element, |el| {
+            el.focus_id
+                .as_deref()
+                .and_then(|fid| fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX))
+                == Some(viewport_id)
+        })
     }
 
     /// One or more viewports. Overlay / sticky / named paint become pin holes
@@ -2131,6 +2139,10 @@ impl AppState {
             overlay: self.overlay_occupied.is_some() || !self.last_overlay_boxes.is_empty(),
         };
         if !policy.allows() {
+            #[cfg(test)]
+            if std::env::var_os("RUI_PERF_FRAME_DETAIL").is_some() {
+                eprintln!("blit-policy: {policy:?}");
+            }
             return (Vec::new(), Vec::new());
         }
         let Some(deltas) = super::damage::changed_viewport_scroll_deltas(prev, cur) else {
@@ -2305,7 +2317,17 @@ impl AppState {
         });
     }
 
+    #[cfg_attr(test, track_caller)]
     pub(super) fn mark_full_redraw(&mut self) {
+        #[cfg(test)]
+        if std::env::var_os("RUI_PERF_FRAME_DETAIL").is_some() {
+            eprintln!(
+                "full-redraw: {} status={:?} page_geom={}",
+                std::panic::Location::caller(),
+                self.layout_status,
+                self.page_geom_dirty
+            );
+        }
         self.force_full_redraw = true;
         self.damage_rect = None;
         self.damage_nodes.clear();
@@ -2671,11 +2693,11 @@ impl AppState {
         let keep_retain = Self::gpu_partial_damage_enabled();
         let want_gpu_partial =
             keep_retain && matches!(logical_policy, super::damage::FrameClearPolicy::PartialLoad);
-        let use_partial_damage = want_gpu_partial && self.present_retain.contents_valid();
+        let mut use_partial_damage = want_gpu_partial && self.present_retain.contents_valid();
         let warm_retain = keep_retain && !self.present_retain.contents_valid();
         let draw_to_retain = keep_retain;
         let use_node_present = node_present && use_partial_damage;
-        let cull_phys = if use_partial_damage && !use_node_present {
+        let mut cull_phys = if use_partial_damage && !use_node_present {
             if !self.scroll_strip_blit.is_empty() {
                 super::draw_cull::scroll_repair_rects_physical(
                     &self.scroll_strip_blit,
@@ -2692,6 +2714,30 @@ impl AppState {
         } else {
             None
         };
+        if use_partial_damage
+            && !use_node_present
+            && !self.scroll_strip_blit.is_empty()
+            && super::draw_cull::scroll_repair_prefers_full(
+                cull_phys,
+                self.config.width,
+                self.config.height,
+            )
+        {
+            // Decide before text preparation and strip copying: this frame must
+            // prepare all glyphs, clear once and paint the complete visible page.
+            #[cfg(test)]
+            if std::env::var_os("RUI_PERF_FRAME_DETAIL").is_some() {
+                eprintln!(
+                    "scroll-full: pins={} repairs={}",
+                    self.scroll_blit_pins.len(),
+                    cull_phys.map(|c| c.strips().count()).unwrap_or(0)
+                );
+            }
+            logical_policy = super::damage::FrameClearPolicy::FullClear;
+            scissor_physical = None;
+            use_partial_damage = false;
+            cull_phys = None;
+        }
         GpuPresentPlan {
             logical_policy,
             scissor_physical,
@@ -4054,18 +4100,39 @@ impl AppState {
         }
     }
 
-    /// Grow shared-font page stacking pipelines (band 0 = [`Self::text_renderer`]).
-    fn ensure_page_stack_band_text_renderers(&mut self, band_count: usize) {
-        let extra_needed = band_count.saturating_sub(1);
-        while self.page_stack_band_text_renderers.len() < extra_needed {
-            self.page_stack_band_text_renderers
-                .push(RuiTextRenderer::new_sharing_resources(
-                    &self.device,
-                    &self.queue,
-                    &self.config,
-                    &self.text_renderer,
-                ));
+    /// Keep shaping and atlas caches with their stacking host. Scroll culling
+    /// changes band indices; assigning caches by index rerasterized the same
+    /// captions whenever an earlier offscreen host entered or left the list.
+    fn ensure_page_stack_band_text_renderers(
+        &mut self,
+        bands: &[crate::layout::layout_tree::OverlayBandRange],
+    ) {
+        for (slot, band) in bands.iter().skip(1).enumerate() {
+            if let Some(found) = self.page_stack_band_text_keys[slot..]
+                .iter()
+                .position(|key| *key == band.stamp_key)
+                .map(|offset| slot + offset)
+            {
+                self.page_stack_band_text_keys.swap(slot, found);
+                self.page_stack_band_text_renderers.swap(slot, found);
+            } else {
+                self.page_stack_band_text_keys.push(band.stamp_key);
+                self.page_stack_band_text_renderers
+                    .push(RuiTextRenderer::new_sharing_resources(
+                        &self.device,
+                        &self.queue,
+                        &self.config,
+                        &self.text_renderer,
+                    ));
+                let last = self.page_stack_band_text_keys.len() - 1;
+                self.page_stack_band_text_keys.swap(slot, last);
+                self.page_stack_band_text_renderers.swap(slot, last);
+            }
         }
+        // Keep only a bounded history of culled hosts, loaded as they are visited.
+        let keep = bands.len().saturating_sub(1).max(64);
+        self.page_stack_band_text_keys.truncate(keep);
+        self.page_stack_band_text_renderers.truncate(keep);
     }
 
     fn trim_all_glyph_atlases(&mut self) {
@@ -5481,18 +5548,19 @@ impl AppState {
             .any(|d| matches!(d.kind, super::damage::PaintDirtyKind::Region))
             || !sync_collect.display_reveal_keys.is_empty();
         let has_named = !self.damage_nodes.is_empty();
+        #[cfg(test)]
+        if std::env::var_os("RUI_PERF_FRAME_DETAIL").is_some() {
+            eprintln!("present-input: pre={pre_chrome_layout_status:?} sync={sync_impact:?} geom={page_geom} portal_skip={portal_skip} named={has_named} region={has_region}");
+        }
         // One gate for sync_impact **and** pre_chrome. A later pre_chrome
         // `mark_full_redraw` used to undo named-node PartialLoad (Input + spin).
-        if matches!(
-            super::damage::classify_present_tier(
-                pre_chrome_layout_status,
-                sync_impact,
-                page_geom,
-                portal_skip,
-                has_named,
-                has_region,
-            ),
-            super::damage::PresentTier::Window
+        if super::damage::force_full_redraw_after_chrome(
+            pre_chrome_layout_status,
+            sync_impact,
+            page_geom,
+            portal_skip,
+            has_named,
+            has_region,
         ) {
             self.mark_full_redraw();
         }
@@ -5866,7 +5934,8 @@ impl AppState {
                 .extend(super::damage::take_frame_paint_nodes());
         }
         crate::utils::collapse_panel::flush_collapse_layout_damage(&mut self.root_element);
-        self.damage_nodes.extend(super::damage::take_frame_paint_nodes());
+        self.damage_nodes
+            .extend(super::damage::take_frame_paint_nodes());
         // Collapse height animations move rows under a stationary pointer. Reconcile
         // component hover against the final layout, rather than painting yesterday's hit.
         if defer_pointer_chrome || !scroll_only {
@@ -6052,6 +6121,8 @@ impl AppState {
         }
         self.pipeline
             .ensure_clip_polys(&self.device, &self.queue, &render_result.clip_polys);
+        self.pipeline
+            .prepare_main_instance_clips(&scaled_instances, &render_result.clip_polys);
         self.layout_status = crate::core::tree::LayoutStatus::Clean;
         if crate::core::tree_stats::tree_stats_enabled()
             && !Self::is_bootstrap_root(&self.root_element)
@@ -6393,33 +6464,36 @@ impl AppState {
                 self.layout_tree.last_clip_culled_paint_keys(),
             );
         }
-        if super::damage::node_present_moved_forces_full_clear(
-            super::damage::unnamed_translated_page_slots(
+        // Scroll clears replay the painter list in their repair scissors; they
+        // never execute node-present dest resets. Pins above already include
+        // concurrent named damage, so only node frames need backdrop recovery
+        // and the previous-slot search (quadratic in visible paint slots).
+        if !self.scroll_layer_clear {
+            if super::damage::unnamed_translated_page_slots(
                 &next_last_present,
                 &self.last_present_node_bounds,
                 &self.damage_nodes,
-            ),
-            self.scroll_layer_clear,
-        ) {
-            self.mark_full_redraw();
+            ) {
+                self.mark_full_redraw();
+            }
+            // Tier changes must precede both policy selection and glyph capture.
+            super::draw_cull::restore_culled_dirty_clips(
+                &self.root_element,
+                &mut render_result.node_paints,
+                &self.damage_nodes,
+            );
+            super::draw_cull::prepare_node_present_dirties_ex(
+                &mut self.damage_nodes,
+                &render_result.node_paints,
+                &self.last_present_node_bounds,
+                &scaled_instances[..overlay_inst_start.min(scaled_instances.len())],
+                &scaled_tex[..overlay_tex_start.min(scaled_tex.len())],
+                &scaled_input_chrome[..overlay_chrome_start.min(scaled_input_chrome.len())],
+                ui_scale,
+                self.overlay_occupied,
+                &self.last_overlay_stamps,
+            );
         }
-        // Tier changes must precede both policy selection and glyph capture.
-        super::draw_cull::restore_culled_dirty_clips(
-            &self.root_element,
-            &mut render_result.node_paints,
-            &self.damage_nodes,
-        );
-        super::draw_cull::prepare_node_present_dirties_ex(
-            &mut self.damage_nodes,
-            &render_result.node_paints,
-            &self.last_present_node_bounds,
-            &scaled_instances[..overlay_inst_start.min(scaled_instances.len())],
-            &scaled_tex[..overlay_tex_start.min(scaled_tex.len())],
-            &scaled_input_chrome[..overlay_chrome_start.min(scaled_input_chrome.len())],
-            ui_scale,
-            self.overlay_occupied,
-            &self.last_overlay_stamps,
-        );
         let region_present =
             super::damage::portal_composite_damage(&self.damage_nodes, self.overlay_occupied)
                 .is_some()
@@ -6556,7 +6630,7 @@ impl AppState {
             (Vec::new(), Vec::new())
         };
         let (underline_instances, caret_instances, shadow_tex_draws) = if has_page_stack_bands {
-            self.ensure_page_stack_band_text_renderers(page_stack_band_ranges.len());
+            self.ensure_page_stack_band_text_renderers(&page_stack_band_ranges);
             let mut underlines = Vec::with_capacity(page_stack_band_ranges.len());
             let mut shadow_bands = Vec::with_capacity(page_stack_band_ranges.len());
             page_stack_skip_glyphon = vec![false; page_stack_band_ranges.len()];

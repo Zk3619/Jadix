@@ -2277,6 +2277,11 @@ pub fn prepare_text_frame_at(
     let _t0 = std::time::Instant::now();
     let mut _shape_misses = 0usize;
     let mut _emoji_misses = 0usize;
+    // Reuse family selection until on-demand coverage changes the database.
+    // Do not scan the database again for every cached caption.
+    let mut default_family = None;
+    let mut explicit_families = std::collections::HashMap::new();
+    let mut family_face_count = unsafe { &*text_renderer.font_system }.db().len();
 
     for (i, info) in text_nodes.iter().enumerate() {
         let st = &info.style;
@@ -2399,10 +2404,19 @@ pub fn prepare_text_frame_at(
         // Twemoji custom glyphs keep layout on UI sans (`best_font_family`) — same as the
         // default family path — so emoji detection need not run before the Exact key.
         // Defer `text_contains_emoji` until after cache lookup (scroll: Exact hits dominate).
+        let face_count = unsafe { &*text_renderer.font_system }.db().len();
+        if face_count != family_face_count {
+            default_family = None;
+            explicit_families.clear();
+            family_face_count = face_count;
+        }
         let family = if let Some(f) = &st.font_family {
-            crate::utils::font::resolve_family(unsafe { &*text_renderer.font_system }.db(), f)
+            *explicit_families.entry(f.as_str()).or_insert_with(|| {
+                crate::utils::font::resolve_family(unsafe { &*text_renderer.font_system }.db(), f)
+            })
         } else {
-            best_font_family(unsafe { &*text_renderer.font_system })
+            *default_family
+                .get_or_insert_with(|| best_font_family(unsafe { &*text_renderer.font_system }))
         };
 
         let is_icon = st.font_family.as_deref() == Some("lucide");
@@ -4045,7 +4059,7 @@ pub fn prepare_text_frame_at(
 
     let _t3 = std::time::Instant::now();
     let _total_ms = (_t3 - _t0).as_secs_f64() * 1000.0;
-    if _total_ms > 4.0 {
+    if _total_ms > 4.0 || (cfg!(test) && std::env::var_os("RUI_PERF_TEXT_DETAIL").is_some()) {
         log::warn!(
             "prepare_text_frame {:.1}ms | loop={:.1}ms areas={:.1}ms gpu={:.1}ms | nodes={} shape_miss={} emoji_miss={} areas={} warmup={} preshape={} pool={}",
             _total_ms,

@@ -2105,6 +2105,14 @@ pub fn force_full_redraw_after_chrome(
     has_named_damage: bool,
     has_region_damage: bool,
 ) -> bool {
+    // No chrome change is not an unnamed paint miss. Keep the retained frame
+    // so the following scroll pass can copy it and repair the exposed strip.
+    if !page_geometry_changed
+        && pre_chrome == LayoutStatus::Clean
+        && sync_impact == LayoutStatus::Clean
+    {
+        return false;
+    }
     matches!(
         classify_present_tier(
             pre_chrome,
@@ -2468,7 +2476,8 @@ pub fn expand_paint_dirties_for_clip_culled_slots(
 /// leaves and blit finally carries them out. Pin the last in-viewport box (and
 /// the post-blit dest if it still hits the clip) so collect redraws occupants.
 ///
-/// One union per viewport so a Marker subtree cannot blow the 12-rect cull cap.
+/// Keep distinct culled nodes separate. The final repair pass deduplicates
+/// overlapping parent/child coverage before applying its bounded rectangle list.
 pub fn clip_culled_scroll_blit_pins(
     previous_slots: &[(u64, [f32; 4])],
     clip_culled_keys: &HashSet<u64>,
@@ -2481,8 +2490,9 @@ pub fn clip_culled_scroll_blit_pins(
     let mut out = Vec::new();
     for (i, vp) in viewports.iter().enumerate() {
         let delta = deltas.get(i).copied().unwrap_or([0.0, 0.0]);
-        let mut acc: Option<[f32; 4]> = None;
         for (key, prev) in previous_slots {
+            // Keep distant edge repairs separate; their union wipes copied pixels.
+            let mut acc: Option<[f32; 4]> = None;
             if prev[2] <= 0.5 || prev[3] <= 0.5 {
                 continue;
             }
@@ -2504,14 +2514,34 @@ pub fn clip_culled_scroll_blit_pins(
                     });
                 }
             }
-        }
-        if let Some(r) = acc {
-            if r[2] > 0.5 && r[3] > 0.5 {
-                out.push(r);
+            if let Some(r) = acc {
+                if r[2] > 0.5 && r[3] > 0.5 {
+                    out.push(r);
+                }
             }
         }
     }
     out
+}
+
+#[cfg(test)]
+#[test]
+fn distant_culled_edges_must_not_repaint_the_middle_of_a_4k_viewport() {
+    let viewport = [0.0, 0.0, 3840.0, 2160.0];
+    let previous = [
+        (1, [0.0, 0.0, 3840.0, 20.0]),
+        (2, [0.0, 2140.0, 3840.0, 20.0]),
+    ];
+    let keys = HashSet::from([1_u64, 2_u64]);
+    let pins = clip_culled_scroll_blit_pins(&previous, &keys, &[viewport], &[[0.0, 24.0]]);
+    assert!(
+        pins.iter().all(|r| !(1920.0 >= r[0]
+            && 1920.0 < r[0] + r[2]
+            && 1080.0 >= r[1]
+            && 1080.0 < r[1] + r[3])),
+        "middle was already copied; pins={pins:?}"
+    );
+    assert!(pins.iter().all(|r| r[3] <= 44.0));
 }
 
 /// True when some page slot translated but is not a named Node dirty (dest-reset
@@ -3007,9 +3037,13 @@ fn walk_out_of_flow_scroll_blit_pins(
     // MessageScroller (and a Gallery page ScrollArea) contain a viewport; the
     // Latest dock is a sibling of that viewport, not scrolling content.
     let in_scroll = in_scroll || element_is_strip_blit_viewport(el, viewport_ids, blit_viewports);
+    // Every descendant belongs to the copied content too. None can be an
+    // external pin; stop before scanning the entire offscreen Gallery page.
+    if in_scroll {
+        return;
+    }
     let under_oof = under_oof || is_out_of_flow_position(el);
-    if !in_scroll
-        && under_oof
+    if under_oof
         && el.style.opacity > 0.05
         && node_has_own_dest_ink(el)
         && el.focus_id.as_deref().is_none_or(|fid| {
@@ -3394,6 +3428,42 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn clean_chrome_preserves_retain_for_scroll_strip_copy() {
+        assert!(!force_full_redraw_after_chrome(
+            LayoutStatus::Clean,
+            LayoutStatus::Clean,
+            false,
+            false,
+            false,
+            false
+        ));
+        assert!(force_full_redraw_after_chrome(
+            LayoutStatus::Clean,
+            LayoutStatus::Clean,
+            true,
+            false,
+            false,
+            false
+        ));
+        assert!(force_full_redraw_after_chrome(
+            LayoutStatus::LayoutChanged,
+            LayoutStatus::Clean,
+            false,
+            false,
+            false,
+            false
+        ));
+        assert!(force_full_redraw_after_chrome(
+            LayoutStatus::StyleChanged,
+            LayoutStatus::Clean,
+            false,
+            false,
+            false,
+            false
+        ));
+    }
+
+    #[test]
     fn paint_kind_for_modal_chrome_is_overlay() {
         let mut overlay = Element::new();
         overlay.template_id = Some("dlg__modal_overlay".into());
@@ -3666,7 +3736,8 @@ mod tests {
         assert_eq!(dirties.len(), 1, "expected one dirty node, got {dirties:?}");
         let b = dirties[0].bounds;
         assert_eq!(
-            b, [10.0, 20.0, 100.0, 30.0],
+            b,
+            [10.0, 20.0, 100.0, 30.0],
             "a joined fill must dirty its layout box; shrinking it splits the group frame"
         );
     }

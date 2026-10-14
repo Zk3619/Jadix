@@ -509,7 +509,6 @@ pub(super) fn snap_scroll_offset_to_device_px(offset: f32, ui_scale: f32) -> f32
 /// Returns `(paint_offset, still_animating)`.
 pub(super) fn smooth_scroll_step(current: f32, target: f32, dt: f32, ui_scale: f32) -> (f32, bool) {
     const TAU_SEC: f32 = 0.14;
-    const MAX_ALPHA: f32 = 0.18;
     const SETTLE_DEVICE_PX: f32 = 3.0;
     const MIN_STEP_DEVICE_PX: f32 = 2.0;
     let scale = ui_scale.max(0.01);
@@ -528,8 +527,9 @@ pub(super) fn smooth_scroll_step(current: f32, target: f32, dt: f32, ui_scale: f
     }
 
     let sign = remaining.signum();
-    let raw_alpha = 1.0 - (-dt.max(0.0) / TAU_SEC).exp();
-    let alpha = raw_alpha.min(MAX_ALPHA).clamp(0.0, 1.0);
+    // Use elapsed time, not a percentage cap per rendered frame: the latter
+    // lengthens the chase during slow frames and accelerates on FPS recovery.
+    let alpha = (1.0 - (-dt.clamp(0.0, 0.08) / TAU_SEC).exp()).clamp(0.0, 1.0);
     let min_step = MIN_STEP_DEVICE_PX * device_px;
     let desired = (remaining * alpha).abs().max(min_step);
     let mut next = snap_scroll_offset_to_device_px(current + desired * sign, scale);
@@ -542,6 +542,26 @@ pub(super) fn smooth_scroll_step(current: f32, target: f32, dt: f32, ui_scale: f
         return (target, false);
     }
     (next, true)
+}
+
+/// Keep at most three ordinary wheel notches ahead of the painted position.
+/// A single larger pixel-wheel event retains its distance; repeated events
+/// while rendering is blocked cannot queue several screens of catch-up.
+/// Keyboard/page navigation uses its own unbounded destination.
+pub(super) fn wheel_scroll_target(current: f32, target: f32, delta: f32, max: f32) -> f32 {
+    if delta == 0.0 {
+        return target;
+    }
+    let pending = target - current;
+    let base = if pending * delta > 0.0 {
+        current
+    } else {
+        target
+    };
+    let limit = 225.0_f32.max(delta.abs());
+    (base - delta)
+        .clamp(current - limit, current + limit)
+        .clamp(0.0, max)
 }
 
 fn collect_descendant_extent(
@@ -1196,7 +1216,62 @@ mod inertia_tests {
 
 #[cfg(test)]
 mod smooth_scroll_step_tests {
-    use super::{smooth_scroll_step, snap_scroll_offset_to_device_px};
+    use super::{smooth_scroll_step, snap_scroll_offset_to_device_px, wheel_scroll_target};
+
+    #[test]
+    fn wheel_burst_during_stall_has_bounded_recovery_distance() {
+        let current = 1000.0;
+        let mut target = current;
+        // Fifteen queued Windows wheel notches, delivered before a redraw.
+        for _ in 0..15 {
+            target = wheel_scroll_target(current, target, -75.0, 10000.0);
+        }
+        let mut recovered = current;
+        for _ in 0..4 {
+            recovered = smooth_scroll_step(recovered, target, 1.0 / 60.0, 1.5).0;
+        }
+        assert!(
+            target - current <= 225.01,
+            "wheel debt grew to {}px",
+            target - current
+        );
+        assert!(
+            recovered - current <= 100.0,
+            "recovery jumped {}px in 67ms",
+            recovered - current
+        );
+        assert_eq!(
+            wheel_scroll_target(current, target, 75.0, 10000.0),
+            current - 75.0,
+            "reverse input must cancel stale forward debt"
+        );
+    }
+
+    #[test]
+    fn smooth_chase_speed_does_not_accelerate_when_frame_rate_recovers() {
+        let chase = |dt, frames| {
+            let mut y = 0.0;
+            for _ in 0..frames {
+                y = smooth_scroll_step(y, 1000.0, dt, 1.5).0;
+            }
+            y
+        };
+        let fast = chase(0.016, 20);
+        let slow = chase(0.08, 4);
+        assert!(
+            (fast - slow).abs() <= 4.0,
+            "same 320ms chase changed with FPS: fast={fast} slow={slow}"
+        );
+    }
+
+    #[test]
+    fn wheel_target_preserves_normal_input_and_one_large_event() {
+        assert_eq!(wheel_scroll_target(1000.0, 1000.0, -75.0, 10000.0), 1075.0);
+        assert_eq!(wheel_scroll_target(1000.0, 1075.0, 0.0, 10000.0), 1075.0);
+        assert_eq!(wheel_scroll_target(1000.0, 1000.0, -600.0, 10000.0), 1600.0);
+        assert_eq!(wheel_scroll_target(50.0, 50.0, 75.0, 10000.0), 0.0);
+        assert_eq!(wheel_scroll_target(9950.0, 9950.0, -75.0, 10000.0), 10000.0);
+    }
 
     #[test]
     fn snap_aligns_to_device_pixel() {

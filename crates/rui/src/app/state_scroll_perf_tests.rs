@@ -40,6 +40,19 @@ fn gallery_native_scroll_segment_cost() {
                 gallery_root.join("theme.toml"),
                 gallery_root.join("styles.toml"),
             ]);
+            // Gallery source is compiled into rui for this harness, so its
+            // CARGO_MANIFEST_DIR image constant points at rui/assets. Seed the
+            // same source key from the real Gallery fixture before it mounts.
+            let logo_key = super::super::pending_images::texture_key_for_src(
+                crate::pages::layout::FILTER_DEMO_LOGO,
+            );
+            assert!(super::super::pending_images::queue_image_from_src(
+                logo_key,
+                gallery_root
+                    .join("assets/firefox-logo.svg")
+                    .to_str()
+                    .unwrap(),
+            ));
             let (rgba, w, h) = crate::shared::checker_rgba_texture();
             crate::queue_image_rgba8("demo-checker", w, h, rgba);
             let sizes = if std::env::var_os("RUI_PERF_DENSE").is_some() {
@@ -190,6 +203,37 @@ fn gallery_native_scroll_segment_cost() {
                         max > 0.0,
                         "{section} must exercise scrollable content: {content:?} / {viewport:?}"
                     );
+                    if std::env::var_os("RUI_PERF_SCROLL_SYNC").is_some() {
+                        let mut offsets = HashMap::new();
+                        crate::core::tree::walk_elements(&state.root_element, |el| {
+                            if let Some(id) = el.focus_id.as_deref().and_then(|id| {
+                                id.strip_prefix(
+                                    crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX,
+                                )
+                            }) {
+                                offsets.insert(id.to_string(), el.scroll_offset);
+                            }
+                        });
+                        // Replay the old per-redraw work on this real Gallery tree,
+                        // then the changed page viewport only. No GPU work in this timing.
+                        let begin = Instant::now();
+                        for _ in 0..100 {
+                            for (id, offset) in &offsets {
+                                state.update_scroll_offset_in_place(id, *offset);
+                            }
+                        }
+                        let all_ms = begin.elapsed().as_secs_f64() * 10.0;
+                        let page_offset = offsets[&rest];
+                        let begin = Instant::now();
+                        for _ in 0..100 {
+                            state.update_scroll_offset_in_place(&rest, page_offset);
+                        }
+                        let changed_ms = begin.elapsed().as_secs_f64() * 10.0;
+                        eprintln!(
+                            "scroll-sync/{section} areas={} all={all_ms:.3}ms changed={changed_ms:.3}ms",
+                            offsets.len()
+                        );
+                    }
                     let positions: Vec<f32> = if std::env::var_os("RUI_PERF_DENSE").is_some() {
                         (0..=(max / 240.0).ceil() as usize)
                             .map(|step| (step as f32 * 240.0).min(max))
@@ -197,24 +241,35 @@ fn gallery_native_scroll_segment_cost() {
                     } else {
                         [0.0, 0.25, 0.5, 0.75, 1.0].map(|f| max * f).to_vec()
                     };
+                    let scroll_step: f32 = std::env::var("RUI_PERF_SCROLL_STEP")
+                        .ok()
+                        .and_then(|s| s.parse().ok())
+                        .unwrap_or(1.0);
                     for y in positions {
                         if let Ok(selected) = std::env::var("RUI_PERF_Y") {
                             let targets: Vec<f32> = selected
                                 .split(',')
                                 .filter_map(|value| value.trim().parse().ok())
                                 .collect();
-                            if !targets.iter().any(|target| (y - *target).abs() <= 240.0) {
+                            if !targets.iter().any(|target| (y - *target).abs() < 0.5) {
                                 continue;
                             }
                         }
                         let mut times = Vec::new();
                         let mut first_ms = 0.0;
-                        for frame in 0..8 {
-                            offset.set_silent((y + frame as f32).min(max));
-                            state.update_scroll_offset_in_place(
-                                &rest,
-                                [0.0, (y + frame as f32).min(max)],
-                            );
+                        let frames = std::env::var("RUI_PERF_FRAMES")
+                            .ok()
+                            .and_then(|s| s.parse::<usize>().ok())
+                            .unwrap_or(8)
+                            .max(2);
+                        for frame in 0..frames {
+                            let frame_y =
+                                super::super::scroll_support::snap_scroll_offset_to_device_px(
+                                    (y + frame as f32 * scroll_step).min(max),
+                                    state.ui_scale(),
+                                );
+                            offset.set_silent(frame_y);
+                            state.update_scroll_offset_in_place(&rest, [0.0, frame_y]);
                             state.scroll_layer_clear = true;
                             // Counters are reset periodically by production profiling;
                             // reset here so the sampled stages always describe this frame.
@@ -257,14 +312,25 @@ fn gallery_native_scroll_segment_cost() {
                             if frame > 0 {
                                 times.push(ms);
                             }
-                            if frame == 0 || frame == 7 {
-                                eprintln!("  cpu={render_ms:.2} wait={:.2} acquire={:.2} submit={:.2} taffy={:.2} setup={:.2} stamp={:.2} strips={} pins={}",
-                                    ms-render_ms, state.render_prof_acquire_ms-extra_before[0],
-                                    state.render_prof_submit_ms-extra_before[1],
-                                    state.render_prof_layout_taffy_ms-extra_before[2],
-                                    state.render_prof_layout_setup_ms-extra_before[3],
-                                    state.render_prof_layout_stamp_ms-extra_before[4],
-                                    state.scroll_strip_blit.len(), state.scroll_blit_pins.len());
+                            if frame == 0
+                                || frame + 1 == frames
+                                || (ms > 16.67
+                                    && std::env::var_os("RUI_PERF_FRAME_DETAIL").is_some())
+                            {
+                                eprintln!(
+                                    "  sample/{section} y={y:.0} frame={frame} total={ms:.2}"
+                                );
+                                eprintln!(
+                                    "  cpu={render_ms:.2} wait={:.2} acquire={:.2} submit={:.2} taffy={:.2} setup={:.2} stamp={:.2} strips={} pins={}",
+                                    ms - render_ms,
+                                    state.render_prof_acquire_ms - extra_before[0],
+                                    state.render_prof_submit_ms - extra_before[1],
+                                    state.render_prof_layout_taffy_ms - extra_before[2],
+                                    state.render_prof_layout_setup_ms - extra_before[3],
+                                    state.render_prof_layout_stamp_ms - extra_before[4],
+                                    state.scroll_strip_blit.len(),
+                                    state.scroll_blit_pins.len()
+                                );
                                 eprintln!(
                                     "  effects={:.2} glyphs={:.2} captures={} fx_dirty={}",
                                     state.native_render_sample[0],
@@ -293,13 +359,21 @@ fn gallery_native_scroll_segment_cost() {
                             }
                         }
                         times.sort_by(f32::total_cmp);
-                        eprintln!("native/{section} {}x{} y={y:.0}/{max:.0}: frame={:.2}ms first={first_ms:.2}ms worst={:.2}ms pending_dirty={}", size.0, size.1, times[3], times[6].max(first_ms), state.pending_layout_dirty.len());
+                        eprintln!(
+                            "native/{section} {}x{} y={y:.0}/{max:.0}: frame={:.2}ms first={first_ms:.2}ms worst={:.2}ms warm_worst={:.2}ms pending_dirty={}",
+                            size.0,
+                            size.1,
+                            times[times.len() / 2],
+                            times.last().unwrap().max(first_ms),
+                            times.last().unwrap(),
+                            state.pending_layout_dirty.len()
+                        );
                         if let Ok(budget) = std::env::var("RUI_PERF_BUDGET_MS") {
                             let budget: f32 = budget.parse().unwrap();
                             assert!(
-                                times[3] <= budget,
-                                "{section} {size:?} y={y}: steady {}ms exceeds {budget}ms",
-                                times[3]
+                                *times.last().unwrap() <= budget,
+                                "{section} {size:?} y={y}: warm worst {}ms exceeds {budget}ms",
+                                times.last().unwrap()
                             );
                         }
                     }

@@ -148,7 +148,7 @@ opt-level = 2
 # The engine's per-frame tree walks and paint planning must fit a frame budget
 # in the default Gallery build. Keep debug info and assertions enabled.
 [profile.dev.package.rui]
-opt-level = 1
+opt-level = 2
 
 # Flex/grid recomputation runs throughout sortable size animations.
 [profile.dev.package.taffy]
