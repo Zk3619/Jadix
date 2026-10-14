@@ -221,9 +221,85 @@ fn solid_fill_eligible(instance: &InstanceInput) -> bool {
         && !shadow_active
 }
 
+// The VS emits the transformed, padded AABB even for rotated instances.
+// Only convex rounded boxes can be proved to contain it by testing corners;
+// arbitrary clip paths keep their fragment tests (four corners are insufficient).
+fn instance_clip_needed(i: &InstanceInput, clip: &crate::style::GpuClipPoly) -> bool {
+    if !clip.is_active() {
+        return false;
+    }
+    if clip.count >= 3
+        || clip.count2 >= 3
+        || i.rect_size[0] * i.rect_size[1] < 65_536.0
+        || clip
+            .round_radii
+            .iter()
+            .chain(&clip.round_radii2)
+            .any(|r| !r.is_finite() || *r < 0.0)
+    {
+        return true;
+    }
+    // CPU hit testing clamps radii; the GPU SDF consumes them verbatim. Do
+    // not use that proof for an unnormalized clip or invalid geometry.
+    for (rect, radii) in [
+        (clip.round_rect, clip.round_radii),
+        (clip.round_rect2, clip.round_radii2),
+    ] {
+        if rect.iter().any(|v| !v.is_finite()) {
+            return true;
+        }
+        if rect[2] >= 0.5 && rect[3] >= 0.5 && radii.iter().any(|r| *r > rect[2].min(rect[3]) * 0.5)
+        {
+            return true;
+        }
+    }
+    let pad = i.shadow_blur.max(0.0) * 2.0 + i.border_width.max(0.0) + i.shadow_spread.abs() + 3.0;
+    let ex = i.shadow_offset[0].abs() + pad;
+    let ey = i.shadow_offset[1].abs() + pad;
+    let bounds = crate::style::aabb_of_centered_transform(
+        [
+            i.rect_pos[0] - ex,
+            i.rect_pos[1] - ey,
+            i.rect_size[0] + ex * 2.0,
+            i.rect_size[1] + ey * 2.0,
+        ],
+        &i.transform,
+    );
+    let [x, y, w, h] = bounds;
+    ![[x, y], [x + w, y], [x, y + h], [x + w, y + h]]
+        .into_iter()
+        .all(|p| p.iter().all(|v| v.is_finite()) && clip.contains_point(p))
+}
+
+fn opaque_box_eligible(i: &InstanceInput) -> bool {
+    if i.color[3] != 1.0
+        || i.rect_size[0] * i.rect_size[1] < 262_144.0
+        || i.border_extra < 0.0
+        || i.border_extra >= 1.5
+        || i.backdrop_blur > 0.5
+        || i.transform[..4] != [1.0, 0.0, 0.0, 1.0]
+        || (i.shadow_inset > 0.5 && i.shadow_color[3] > 0.001)
+        || i.radii.iter().any(|r| !r.is_finite() || *r < 0.0)
+    {
+        return false;
+    }
+    let inset = i.radii.iter().copied().fold(0.0, f32::max) + i.border_width.max(0.0) + 4.0;
+    i.rect_size
+        .iter()
+        .all(|side| side.is_finite() && *side > inset * 2.0)
+}
+
+struct OpaqueBoxPipeline {
+    ring: wgpu::RenderPipeline,
+    interior: wgpu::RenderPipeline,
+    vertices: wgpu::Buffer,
+    indices: wgpu::Buffer,
+}
+
 pub struct RuiPipeline {
     pub render_pipeline: wgpu::RenderPipeline,
     solid_render_pipeline: Option<wgpu::RenderPipeline>,
+    opaque_box: Option<OpaqueBoxPipeline>,
     pub vertex_buffer: wgpu::Buffer,
     pub index_buffer: wgpu::Buffer,
     pub num_indices: u32,
@@ -242,6 +318,7 @@ pub struct RuiPipeline {
     clip_poly_buffer: wgpu::Buffer,
     clip_poly_none_buffer: wgpu::Buffer,
     clip_poly_capacity: usize,
+    main_clip_needed: Vec<bool>,
     premultiply: f32,
 }
 
@@ -343,6 +420,14 @@ impl RuiPipeline {
             )
         });
 
+        let opaque_box = Self::make_opaque_box_pipeline(
+            device,
+            config,
+            &shader,
+            &bind_group_layout,
+            &backdrop_bgl,
+            wgsl_source,
+        );
         let vertices = &[
             VertexInput {
                 position: [0.0, 0.0],
@@ -379,6 +464,7 @@ impl RuiPipeline {
         Self {
             render_pipeline,
             solid_render_pipeline,
+            opaque_box,
             vertex_buffer,
             index_buffer,
             num_indices: indices.len() as u32,
@@ -394,6 +480,7 @@ impl RuiPipeline {
             clip_poly_buffer,
             clip_poly_none_buffer,
             clip_poly_capacity: 1,
+            main_clip_needed: Vec::new(),
             premultiply,
         }
     }
@@ -555,7 +642,11 @@ impl RuiPipeline {
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: shader,
-                entry_point: Some("vs_main"),
+                entry_point: Some(match fragment_entry {
+                    "fs_ring" => "vs_ring",
+                    "fs_interior" => "vs_interior",
+                    _ => "vs_main",
+                }),
                 buffers: &[Some(VertexInput::desc()), Some(InstanceInput::desc())],
                 compilation_options: Default::default(),
             },
@@ -589,6 +680,63 @@ impl RuiPipeline {
         })
     }
 
+    fn make_opaque_box_pipeline(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+        shader: &wgpu::ShaderModule,
+        globals: &wgpu::BindGroupLayout,
+        backdrop: &wgpu::BindGroupLayout,
+        source: &str,
+    ) -> Option<OpaqueBoxPipeline> {
+        if !source.contains("fn vs_ring(")
+            || !source.contains("fn vs_interior(")
+            || !source.contains("fn fs_ring(")
+            || !source.contains("fn fs_interior(")
+        {
+            return None;
+        }
+        let mut vertices = Vec::with_capacity(32);
+        let mut indices: Vec<u16> = Vec::with_capacity(48);
+        for y in 0..3 {
+            for x in 0..3 {
+                if x == 1 && y == 1 {
+                    continue;
+                }
+                let base = vertices.len() as u16;
+                for (cx, cy) in [(x, y), (x + 1, y), (x + 1, y + 1), (x, y + 1)] {
+                    vertices.push(VertexInput {
+                        position: [cx as f32 / 3.0, cy as f32 / 3.0],
+                        uv: [0.0; 2],
+                    });
+                }
+                indices.extend([base, base + 1, base + 2, base + 2, base + 3, base]);
+            }
+        }
+        Some(OpaqueBoxPipeline {
+            ring: Self::make_render_pipeline_entry(
+                device, config, shader, globals, backdrop, "fs_ring",
+            ),
+            interior: Self::make_render_pipeline_entry(
+                device,
+                config,
+                shader,
+                globals,
+                backdrop,
+                "fs_interior",
+            ),
+            vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Opaque box perimeter vertices"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            }),
+            indices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("Opaque box perimeter indices"),
+                contents: bytemuck::cast_slice(&indices),
+                usage: wgpu::BufferUsages::INDEX,
+            }),
+        })
+    }
+
     /// Upload per-instance polygon clips. Empty input stores one `NONE` (wgpu forbids 0-size storage).
     pub fn ensure_clip_polys(
         &mut self,
@@ -596,6 +744,7 @@ impl RuiPipeline {
         queue: &wgpu::Queue,
         polys: &[crate::style::GpuClipPoly],
     ) {
+        self.main_clip_needed.clear();
         let data: Vec<crate::style::GpuClipPoly> = if polys.is_empty() {
             vec![crate::style::GpuClipPoly::NONE]
         } else {
@@ -668,22 +817,33 @@ impl RuiPipeline {
                     "fs_solid",
                 )
             });
+            let opaque_box = Self::make_opaque_box_pipeline(
+                device,
+                config,
+                &shader,
+                &self.bind_group_layout,
+                &self.backdrop_bgl,
+                wgsl_source,
+            );
             (
                 bind_group,
                 bind_group_clip_poly,
                 render_pipeline,
                 solid_render_pipeline,
+                opaque_box,
             )
         }));
-        let (bind_group, bind_group_clip_poly, render_pipeline, solid_render_pipeline) = match built
-        {
-            Ok(tuple) => tuple,
-            Err(_) => {
-                let _ = crate::renderer::wgpu_compat::wait_error_scope(device, scope);
-                log::warn!("hot-reload WGSL: pipeline create panicked; keeping previous pipeline");
-                return false;
-            }
-        };
+        let (bind_group, bind_group_clip_poly, render_pipeline, solid_render_pipeline, opaque_box) =
+            match built {
+                Ok(tuple) => tuple,
+                Err(_) => {
+                    let _ = crate::renderer::wgpu_compat::wait_error_scope(device, scope);
+                    log::warn!(
+                        "hot-reload WGSL: pipeline create panicked; keeping previous pipeline"
+                    );
+                    return false;
+                }
+            };
         if crate::renderer::wgpu_compat::wait_error_scope(device, scope).is_some() {
             log::warn!("hot-reload WGSL: pipeline validation failed; keeping previous pipeline");
             return false;
@@ -692,6 +852,7 @@ impl RuiPipeline {
         self.bind_group_clip_poly = bind_group_clip_poly;
         self.render_pipeline = render_pipeline;
         self.solid_render_pipeline = solid_render_pipeline;
+        self.opaque_box = opaque_box;
         true
     }
 
@@ -710,23 +871,99 @@ impl RuiPipeline {
             pass.draw_indexed(0..self.num_indices, 0, start..end);
             return;
         }
+        let mode = |i: &InstanceInput| {
+            if self.opaque_box.is_some() && opaque_box_eligible(i) {
+                2
+            } else if solid_fill_eligible(i) {
+                1
+            } else {
+                0
+            }
+        };
         let mut lo = start;
         while lo < end {
-            let solid = solid_fill_eligible(&instances[lo as usize]);
+            let kind = mode(&instances[lo as usize]);
             let mut hi = lo + 1;
-            while hi < end && solid_fill_eligible(&instances[hi as usize]) == solid {
+            while hi < end && mode(&instances[hi as usize]) == kind {
                 hi += 1;
             }
-            pass.set_pipeline(if solid {
-                self.solid_render_pipeline.as_ref().unwrap()
+            if kind == 2 {
+                let opaque = self.opaque_box.as_ref().unwrap();
+                // A later perimeter can cover an earlier center. Keep the two
+                // draws adjacent for each instance, including overlapping cards.
+                for index in lo..hi {
+                    pass.set_pipeline(&opaque.ring);
+                    pass.set_vertex_buffer(0, opaque.vertices.slice(..));
+                    pass.set_index_buffer(opaque.indices.slice(..), wgpu::IndexFormat::Uint16);
+                    pass.draw_indexed(0..48, 0, index..index + 1);
+                    pass.set_pipeline(&opaque.interior);
+                    pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+                    pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+                    pass.draw_indexed(0..self.num_indices, 0, index..index + 1);
+                }
             } else {
-                &self.render_pipeline
-            });
-            pass.draw_indexed(0..self.num_indices, 0, lo..hi);
+                pass.set_pipeline(if kind == 1 {
+                    self.solid_render_pipeline.as_ref().unwrap()
+                } else {
+                    &self.render_pipeline
+                });
+                pass.draw_indexed(0..self.num_indices, 0, lo..hi);
+            }
             lo = hi;
         }
         // Existing direct draws can follow this ranged helper.
         pass.set_pipeline(&self.render_pipeline);
+    }
+
+    /// Associate the main instance buffer with its uploaded world clips.
+    /// Subset/capture buffers continue to use their own explicit clip bind group.
+    pub(crate) fn prepare_main_instance_clips(
+        &mut self,
+        instances: &[InstanceInput],
+        polys: &[crate::style::GpuClipPoly],
+    ) {
+        self.main_clip_needed.clear();
+        self.main_clip_needed
+            .extend(instances.iter().enumerate().map(|(index, inst)| {
+                polys
+                    .get(index)
+                    .is_some_and(|clip| instance_clip_needed(inst, clip))
+            }));
+    }
+
+    pub(crate) fn draw_main_instance_span(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        instances: &[InstanceInput],
+        start: u32,
+        count: u32,
+    ) {
+        let end = start + count;
+        if end as usize > self.main_clip_needed.len() {
+            self.draw_instance_span(pass, instances, start, count);
+            return;
+        }
+        let mut lo = start;
+        while lo < end {
+            let clipped = self.main_clip_needed[lo as usize];
+            let mut hi = lo + 1;
+            while hi < end && self.main_clip_needed[hi as usize] == clipped {
+                hi += 1;
+            }
+            pass.set_bind_group(
+                0,
+                if clipped {
+                    &self.bind_group_clip_poly
+                } else {
+                    &self.bind_group
+                },
+                &[],
+            );
+            self.draw_instance_span(pass, instances, lo, hi - lo);
+            lo = hi;
+        }
+        // Leave the full-buffer binding for subsequent direct draws.
+        pass.set_bind_group(0, &self.bind_group_clip_poly, &[]);
     }
 
     /// Bind group 1 when the instance does not sample a blurred capture.
@@ -835,6 +1072,117 @@ pub(crate) fn compositor_premultiply(alpha_mode: wgpu::CompositeAlphaMode) -> f3
 #[cfg(test)]
 mod tests {
     use super::InstanceInput;
+
+    #[test]
+    fn opaque_center_requires_full_coverage_and_untransformed_painter_geometry() {
+        let mut inst = InstanceInput {
+            rect_pos: [0.0; 2],
+            rect_size: [640.0; 2],
+            color: [1.0; 4],
+            border_color: [0.0; 4],
+            radii: [12.0; 4],
+            border_width: 3.0,
+            shadow_color: [0.0, 0.0, 0.0, 0.2],
+            shadow_offset: [4.0, 6.0],
+            shadow_blur: 12.0,
+            shadow_spread: 0.0,
+            shadow_inset: 0.0,
+            transform: crate::style::transform::MAT2D_IDENTITY,
+            clip_pos: [0.0; 2],
+            clip_size: InstanceInput::NO_CLIP_SIZE,
+            border_extra: 1.0,
+            backdrop_blur: 0.0,
+        };
+        assert!(super::opaque_box_eligible(&inst));
+        inst.shadow_inset = 1.0;
+        assert!(
+            !super::opaque_box_eligible(&inst),
+            "inset shadow colors the center"
+        );
+        inst.shadow_inset = 0.0;
+        inst.color[3] = 0.9;
+        assert!(
+            !super::opaque_box_eligible(&inst),
+            "alpha order must remain unchanged"
+        );
+        inst.color[3] = 1.0;
+        inst.border_extra = 2.0;
+        assert!(
+            !super::opaque_box_eligible(&inst),
+            "decorative borders keep general coverage"
+        );
+        inst.border_extra = 1.0;
+        inst.transform[0] = 1.01;
+        assert!(
+            !super::opaque_box_eligible(&inst),
+            "transformed SDF uses its original AABB"
+        );
+        inst.transform[0] = 1.0;
+        inst.backdrop_blur = 4.0;
+        assert!(!super::opaque_box_eligible(&inst));
+        inst.backdrop_blur = 0.0;
+        inst.radii = [320.0; 4];
+        assert!(
+            !super::opaque_box_eligible(&inst),
+            "round body has no opaque rectangular center"
+        );
+    }
+
+    #[test]
+    fn contained_large_quad_skips_only_redundant_convex_clips() {
+        use super::{instance_clip_needed, InstanceInput};
+        use crate::style::GpuClipPoly;
+        let mut inst = InstanceInput {
+            rect_pos: [64.0, 64.0],
+            rect_size: [256.0, 256.0],
+            color: [1.0; 4],
+            border_color: [0.0; 4],
+            radii: [12.0; 4],
+            border_width: 3.0,
+            shadow_color: [0.0; 4],
+            shadow_offset: [0.0; 2],
+            shadow_blur: 0.0,
+            shadow_spread: 0.0,
+            shadow_inset: 0.0,
+            transform: crate::style::transform::MAT2D_IDENTITY,
+            clip_pos: [0.0; 2],
+            clip_size: InstanceInput::NO_CLIP_SIZE,
+            border_extra: 1.0,
+            backdrop_blur: 0.0,
+        };
+        let clip = GpuClipPoly::from_rounded_rect([0.0, 0.0, 384.0, 384.0], [24.0; 4]);
+        assert!(!instance_clip_needed(&inst, &clip));
+        inst.rect_pos = [12.0, 12.0];
+        assert!(
+            instance_clip_needed(&inst, &clip),
+            "AA/border may touch rounded corner"
+        );
+        inst.rect_pos = [64.0, 64.0];
+        inst.shadow_blur = 40.0;
+        assert!(
+            instance_clip_needed(&inst, &clip),
+            "shadow halo leaves clip"
+        );
+        inst.shadow_blur = 0.0;
+        inst.transform = [0.707, 0.707, -0.707, 0.707, 0.0, 0.0];
+        assert!(
+            instance_clip_needed(&inst, &clip),
+            "rotated AABB leaves rounded corner"
+        );
+        assert!(!instance_clip_needed(&inst, &GpuClipPoly::NONE));
+        let poly = GpuClipPoly::from_world_points(
+            &[[0.0, 0.0], [1000.0, 0.0], [1000.0, 1000.0], [0.0, 1000.0]],
+            crate::style::ClipFillRule::NonZero,
+        );
+        assert!(
+            instance_clip_needed(&inst, &poly),
+            "polygon paths retain fragment tests"
+        );
+        inst.transform = crate::style::transform::MAT2D_IDENTITY;
+        let mut second = clip;
+        second.round_rect2 = [100.0, 100.0, 100.0, 100.0];
+        assert!(instance_clip_needed(&inst, &second));
+    }
 
     fn approx(a: f32, b: f32) {
         assert!((a - b).abs() < 0.001, "expected {a} ~= {b}");

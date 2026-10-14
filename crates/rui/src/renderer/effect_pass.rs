@@ -198,6 +198,12 @@ impl EffectPassGpu {
                 .textured_draws
                 .iter()
                 .all(|d| images.contains_key(&d.texture_key));
+            // An image-only capture cannot paint until its source arrives.
+            // Retrying an empty GPU pass every redraw made missing/pending
+            // images a permanent scroll cost. A later ready source retries it.
+            if !sources_ready && cap.instances.is_empty() && cap.text_nodes.is_empty() {
+                continue;
+            }
             if filter_cap
                 && sources_ready
                 && self.completed_filter_caps.contains(&cap.key)
@@ -206,6 +212,8 @@ impl EffectPassGpu {
             {
                 continue;
             }
+            #[cfg(test)]
+            let cap_begin = std::time::Instant::now();
             self.ensure_target(device, textured, images, &cap.key, w, h);
             if self.render_capture(
                 device,
@@ -220,6 +228,12 @@ impl EffectPassGpu {
                 text.as_deref_mut(),
             ) {
                 any = true;
+                #[cfg(test)]
+                if std::env::var_os("RUI_PERF_CAPTURE_DETAIL").is_some() {
+                    eprintln!("capture-perf: {} {}x{} instances={} textures={} texts={} sources_ready={} ms={:.2}",
+                        cap.key, w, h, cap.instances.len(), cap.textured_draws.len(), cap.text_nodes.len(), sources_ready,
+                        cap_begin.elapsed().as_secs_f32() * 1000.0);
+                }
                 if filter_cap && sources_ready {
                     self.completed_filter_caps.insert(cap.key.clone());
                 }

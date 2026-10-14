@@ -56,8 +56,11 @@ impl Default for FilterUniforms {
 
 pub struct CssFilterPassGpu {
     pipeline: wgpu::RenderPipeline,
-    uniform_buf: wgpu::Buffer,
-    uniform_bg: wgpu::BindGroup,
+    uniform_bgl: wgpu::BindGroupLayout,
+    // Each encoded pass needs its own uniform snapshot until submission.
+    uniform_slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
+    uniform_cursor: usize,
+    pending_encoder: Option<wgpu::CommandEncoder>,
     tex_bgl: wgpu::BindGroupLayout,
     vertex_buffer: wgpu::Buffer,
     index_buffer: wgpu::Buffer,
@@ -211,8 +214,10 @@ impl CssFilterPassGpu {
 
         Self {
             pipeline,
-            uniform_buf,
-            uniform_bg,
+            uniform_bgl,
+            uniform_slots: vec![(uniform_buf, uniform_bg)],
+            uniform_cursor: 0,
+            pending_encoder: None,
             tex_bgl,
             vertex_buffer,
             index_buffer,
@@ -240,10 +245,16 @@ impl CssFilterPassGpu {
             return false;
         }
         self.ensure_fallback(device, textured);
+        self.uniform_cursor = 0;
         let mut any = false;
         let mut seen = std::collections::HashSet::new();
         for job in filters {
             if !seen.insert(job.output_key.clone()) {
+                continue;
+            }
+            // Do not cache a transparent fallback while an image capture is
+            // still pending; its real SourceGraphic must run when it arrives.
+            if !images.contains_key(&job.input_key) {
                 continue;
             }
             let scale = ui_scale.max(0.01);
@@ -269,10 +280,46 @@ impl CssFilterPassGpu {
                 any = true;
             }
         }
+        self.submit_pending(queue);
         if any {
             crate::app::pending_images::bump_dynamic_texture_epoch();
         }
         any
+    }
+
+    fn submit_pending(&mut self, queue: &wgpu::Queue) {
+        if let Some(encoder) = self.pending_encoder.take() {
+            queue.submit(std::iter::once(encoder.finish()));
+        }
+    }
+
+    fn prepare_uniform_slot(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        uniforms: &FilterUniforms,
+    ) -> usize {
+        let slot = self.uniform_cursor;
+        if slot == self.uniform_slots.len() {
+            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("rui-css-filter-uniforms"),
+                size: std::mem::size_of::<FilterUniforms>() as u64,
+                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("rui-css-filter-ubg"),
+                layout: &self.uniform_bgl,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: buffer.as_entire_binding(),
+                }],
+            });
+            self.uniform_slots.push((buffer, bind_group));
+        }
+        queue.write_buffer(&self.uniform_slots[slot].0, 0, bytemuck::bytes_of(uniforms));
+        self.uniform_cursor += 1;
+        slot
     }
 
     fn ensure_fallback(&mut self, device: &wgpu::Device, textured: &TexturedQuadPipeline) {
@@ -330,7 +377,13 @@ impl CssFilterPassGpu {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | if cfg!(test) {
+                    wgpu::TextureUsages::COPY_SRC
+                } else {
+                    wgpu::TextureUsages::empty()
+                },
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -365,8 +418,6 @@ impl CssFilterPassGpu {
 
         let ping = format!("rui_filter_tmp:{}:a", job.output_key);
         let pong = format!("rui_filter_tmp:{}:b", job.output_key);
-        self.ensure_target(device, textured, images, &ping, w, h);
-        self.ensure_target(device, textured, images, &pong, w, h);
         self.ensure_target(device, textured, images, &job.output_key, w, h);
 
         let mut named: HashMap<String, String> = HashMap::new();
@@ -378,8 +429,18 @@ impl CssFilterPassGpu {
         let mut use_ping = true;
 
         for (pi, prim) in job.graph.primitives.iter().enumerate() {
-            let dst_key = if use_ping { ping.clone() } else { pong.clone() };
+            // The last primitive can write the final output directly. A simple
+            // filter needs no ping/pong target, named snapshot or trailing copy.
+            let is_last = pi + 1 == job.graph.primitives.len();
+            let dst_key = if is_last && job.input_key != job.output_key {
+                job.output_key.clone()
+            } else if use_ping {
+                ping.clone()
+            } else {
+                pong.clone()
+            };
             use_ping = !use_ping;
+            self.ensure_target(device, textured, images, &dst_key, w, h);
 
             let ok = self.dispatch_primitive(
                 device,
@@ -402,7 +463,7 @@ impl CssFilterPassGpu {
             }
             last_key = dst_key.clone();
             let result = prim.result_name();
-            if !result.is_empty() {
+            if !result.is_empty() && !is_last {
                 // Persist named result into a stable slot so later prims can read it after ping-pong reuse.
                 let persist = format!("rui_filter_rt:{}:{}", job.output_key, result);
                 self.ensure_target(device, textured, images, &persist, w, h);
@@ -501,6 +562,8 @@ impl CssFilterPassGpu {
             } => {
                 let src = self.resolve_input(named, last_key, in1);
                 if let Some(cs) = compute {
+                    // Compute owns a separate encoder and reads the preceding graph output.
+                    self.submit_pending(queue);
                     if let Some(src_img) = images.get(&src) {
                         let src_view = src_img
                             ._texture
@@ -790,7 +853,7 @@ impl CssFilterPassGpu {
     }
 
     fn blit_from_view(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         textured: &TexturedQuadPipeline,
@@ -830,9 +893,11 @@ impl CssFilterPassGpu {
                 },
             ],
         });
-        queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&u));
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("rui-css-filter-blit-cs"),
+        let slot = self.prepare_uniform_slot(device, queue, &u);
+        let encoder = self.pending_encoder.get_or_insert_with(|| {
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("rui-css-filter-batch"),
+            })
         });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -852,13 +917,12 @@ impl CssFilterPassGpu {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.uniform_bg, &[]);
+            pass.set_bind_group(0, &self.uniform_slots[slot].1, &[]);
             pass.set_bind_group(1, &tex_bg, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             pass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
-        queue.submit(std::iter::once(encoder.finish()));
         true
     }
 
@@ -884,7 +948,7 @@ impl CssFilterPassGpu {
     }
 
     fn draw(
-        &self,
+        &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         textured: &TexturedQuadPipeline,
@@ -934,10 +998,11 @@ impl CssFilterPassGpu {
             ],
         });
 
-        queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(uniforms));
-
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("rui-css-filter-enc"),
+        let slot = self.prepare_uniform_slot(device, queue, uniforms);
+        let encoder = self.pending_encoder.get_or_insert_with(|| {
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("rui-css-filter-batch"),
+            })
         });
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -957,13 +1022,12 @@ impl CssFilterPassGpu {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.uniform_bg, &[]);
+            pass.set_bind_group(0, &self.uniform_slots[slot].1, &[]);
             pass.set_bind_group(1, &tex_bg, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
             pass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
-        queue.submit(std::iter::once(encoder.finish()));
         true
     }
 }
@@ -1067,5 +1131,198 @@ fn light_dir(light: &LightSource) -> (f32, f32, f32) {
             (az.cos() * el.cos(), az.sin() * el.cos(), el.sin())
         }
         LightSource::Point { x, y, z } | LightSource::Spot { x, y, z, .. } => (*x, *y, *z),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::renderer::offscreen::{readback_texture, OffscreenGpu};
+
+    #[test]
+    #[ignore = "native GPU filter batch pixel comparison; run explicitly"]
+    fn batched_filters_preserve_uniforms_dependencies_and_pending_sources() {
+        let gpu = OffscreenGpu::with_backends(wgpu::Backends::GL).expect("native GL GPU");
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            width: 32,
+            height: 32,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            color_space: Default::default(),
+            view_formats: vec![],
+        };
+        let textured = TexturedQuadPipeline::new(&gpu.device, &config);
+        let run = |batch: bool| {
+            let mut filter = CssFilterPassGpu::new(&gpu.device, config.format);
+            let mut images = HashMap::new();
+            filter.ensure_fallback(&gpu.device, &textured);
+            for key in ["input", "red", "shifted", "blue"] {
+                filter.ensure_target(&gpu.device, &textured, &mut images, key, 32, 32);
+            }
+            let mut flood = FilterUniforms::default();
+            flood.mode = 5.0;
+            flood.color = [1.0, 0.0, 0.0, 1.0];
+            assert!(filter.draw(
+                &gpu.device,
+                &gpu.queue,
+                &textured,
+                &images,
+                "input",
+                "input",
+                "red",
+                &flood
+            ));
+            if !batch {
+                filter.submit_pending(&gpu.queue);
+            }
+            let mut offset = FilterUniforms::default();
+            offset.mode = 1.0;
+            offset.m0 = [0.5, 0.0, 0.0, 0.0];
+            offset.m1 = [0.0, 1.0, 0.0, 0.0];
+            offset.m2 = [0.0, 0.0, 1.0, 0.0];
+            offset.m3 = [0.0, 0.0, 0.0, 1.0];
+            assert!(filter.draw(
+                &gpu.device,
+                &gpu.queue,
+                &textured,
+                &images,
+                "red",
+                "red",
+                "shifted",
+                &offset
+            ));
+            if !batch {
+                filter.submit_pending(&gpu.queue);
+            }
+            flood.color = [0.0, 0.0, 1.0, 0.5];
+            assert!(filter.draw(
+                &gpu.device,
+                &gpu.queue,
+                &textured,
+                &images,
+                "input",
+                "input",
+                "blue",
+                &flood
+            ));
+            filter.submit_pending(&gpu.queue);
+            let mut result = Vec::new();
+            for key in ["red", "shifted", "blue"] {
+                let encoder = gpu.device.create_command_encoder(&Default::default());
+                result.push(
+                    readback_texture(
+                        &gpu.device,
+                        &gpu.queue,
+                        &images[key]._texture,
+                        32,
+                        32,
+                        encoder,
+                    )
+                    .unwrap()
+                    .pixels,
+                );
+            }
+            assert!(result[0]
+                .chunks_exact(4)
+                .any(|px| px[0] > 200 && px[3] > 200));
+            assert_ne!(
+                result[0], result[1],
+                "color matrix must change its preceding source"
+            );
+            assert_ne!(result[0], result[2], "uniform snapshots must differ");
+
+            let direct_job = FilterJob {
+                graph: crate::style::resolve_filter_list_to_graph(
+                    &crate::style::parse_filter("brightness(0.5)").unwrap(),
+                )
+                .unwrap(),
+                input_key: "red".into(),
+                output_key: "direct".into(),
+                bounds: [0.0, 0.0, 32.0, 32.0],
+            };
+            assert!(filter.flush_filter_jobs(
+                &gpu.device,
+                &gpu.queue,
+                &textured,
+                &mut images,
+                std::slice::from_ref(&direct_job),
+                1.0,
+                None
+            ));
+            assert!(
+                !filter
+                    .target_size
+                    .keys()
+                    .any(|key| key.starts_with("rui_filter_tmp:direct:")
+                        || key.starts_with("rui_filter_rt:direct:")),
+                "single primitive needs no intermediate targets"
+            );
+            let encoder = gpu.device.create_command_encoder(&Default::default());
+            let direct = readback_texture(
+                &gpu.device,
+                &gpu.queue,
+                &images["direct"]._texture,
+                32,
+                32,
+                encoder,
+            )
+            .unwrap();
+            assert_eq!(
+                direct.pixels, result[1],
+                "direct brightness must match the separately captured matrix"
+            );
+
+            let job = FilterJob {
+                graph: Default::default(),
+                input_key: "late".into(),
+                output_key: "ready".into(),
+                bounds: [0.0, 0.0, 32.0, 32.0],
+            };
+            assert!(!filter.flush_filter_jobs(
+                &gpu.device,
+                &gpu.queue,
+                &textured,
+                &mut images,
+                std::slice::from_ref(&job),
+                1.0,
+                None
+            ));
+            assert!(!images.contains_key("ready"));
+            assert!(!filter.completed_outputs.contains("ready"));
+            let late = images.remove("red").unwrap();
+            images.insert("late".into(), late);
+            assert!(filter.flush_filter_jobs(
+                &gpu.device,
+                &gpu.queue,
+                &textured,
+                &mut images,
+                std::slice::from_ref(&job),
+                1.0,
+                None
+            ));
+            let encoder = gpu.device.create_command_encoder(&Default::default());
+            let ready = readback_texture(
+                &gpu.device,
+                &gpu.queue,
+                &images["ready"]._texture,
+                32,
+                32,
+                encoder,
+            )
+            .unwrap();
+            assert_eq!(
+                ready.pixels, result[0],
+                "ready source must replace the pending result"
+            );
+            result
+        };
+        assert_eq!(
+            run(true),
+            run(false),
+            "batch must match separate submits byte for byte"
+        );
     }
 }

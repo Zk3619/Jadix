@@ -119,6 +119,15 @@ fn filter_cache_id(
             }
         }
         d.opacity.to_bits().hash(&mut hasher);
+        for value in d
+            .uv_offset
+            .into_iter()
+            .chain(d.uv_scale)
+            .chain(d.tint_rgb)
+            .chain(d.transform)
+        {
+            value.to_bits().hash(&mut hasher);
+        }
     }
     hasher.finish()
 }
@@ -135,7 +144,15 @@ pub fn queue_css_filter_wrap(
         return None;
     }
     let id = filter_cache_id(filter, bounds, &instances, &textured_draws);
-    let cap_key = format!("rui_filter_cap:{id:016x}");
+    // SourceGraphic is independent of the graph applied afterward. Image-only
+    // captures have a complete textured fingerprint; keep SDF captures on their
+    // existing per-filter key until their full paint state is fingerprinted.
+    let cap_id = if instances.is_empty() && !textured_draws.is_empty() {
+        filter_cache_id(&FilterList::new(), bounds, &instances, &textured_draws)
+    } else {
+        id
+    };
+    let cap_key = format!("rui_filter_cap:{cap_id:016x}");
     let out_key = format!("rui_filter:{id:016x}");
     queue_capture(CaptureJob {
         key: cap_key.clone(),
@@ -208,6 +225,49 @@ mod tests {
         );
         let _ = take_filter_jobs();
         let _ = take_capture_jobs();
+    }
+
+    #[test]
+    fn image_only_filters_share_source_capture_but_keep_distinct_outputs() {
+        let _ = take_filter_jobs();
+        let _ = take_capture_jobs();
+        let bounds = [10.0, 20.0, 64.0, 32.0];
+        let image = TexturedDraw::clipped(bounds, None, "logo", 1.0).unwrap();
+        for css in ["grayscale(1)", "brightness(0.5)"] {
+            queue_css_filter_wrap(
+                &parse_filter(css).unwrap(),
+                bounds,
+                vec![],
+                vec![image.clone()],
+            );
+        }
+        let captures = take_capture_jobs();
+        let filters = take_filter_jobs();
+        assert_eq!(captures.len(), 2);
+        assert_eq!(captures[0].key, captures[1].key);
+        assert_eq!(filters[0].input_key, filters[1].input_key);
+        assert_ne!(filters[0].output_key, filters[1].output_key);
+
+        let empty = FilterList::new();
+        let original = filter_cache_id(&empty, bounds, &[], &[image.clone()]);
+        let mut changed = image.clone();
+        changed.tint_rgb[0] = 0.5;
+        assert_ne!(original, filter_cache_id(&empty, bounds, &[], &[changed]));
+        let mut changed = image.clone();
+        changed.uv_scale[0] = 0.5;
+        assert_ne!(original, filter_cache_id(&empty, bounds, &[], &[changed]));
+        let mut changed = image;
+        changed.transform[0] = 0.5;
+        assert_ne!(original, filter_cache_id(&empty, bounds, &[], &[changed]));
+        assert_ne!(
+            original,
+            filter_cache_id(
+                &empty,
+                [10.0, 20.0, 65.0, 32.0],
+                &[],
+                &captures[0].textured_draws
+            )
+        );
     }
 
     #[test]

@@ -89,11 +89,11 @@ fn affine_inv_linear(v: vec2<f32>, ab: vec2<f32>, cd: vec2<f32>) -> vec2<f32> {
                      -ab.y * v.x + ab.x * v.y) * inv_det;
 }
 
-@vertex
-fn vs_main(
+fn rect_vertex(
     model: VertexInput,
     instance: InstanceInput,
-    @builtin(instance_index) instance_idx: u32,
+    instance_idx: u32,
+    mode: u32,
 ) -> VertexOutput {
     var out: VertexOutput;
 
@@ -139,7 +139,21 @@ fn vs_main(
     let c3 = abs(affine_linear(vec2<f32>(-half.x, -half.y), ab, cd));
     let aabb_half = max(max(c0, c1), max(c2, c3));
 
-    let local_scaled = (model.position - 0.5) * 2.0 * aabb_half;
+    var local_scaled = (model.position - 0.5) * 2.0 * aabb_half;
+    if (mode != 0u) {
+        let inset = max(max(instance.radii.x, instance.radii.y), max(instance.radii.z, instance.radii.w))
+            + max(instance.border_width, 0.0) + 4.0;
+        let inner_half = max(instance.rect_size * 0.5 - vec2<f32>(inset), vec2<f32>(0.0));
+        if (mode == 1u) {
+            // Eight disjoint perimeter patches. The center is submitted separately
+            // with a constant-color shader, in the same instance painter order.
+            let side = select(vec2<f32>(-1.0), vec2<f32>(1.0), model.position > vec2<f32>(0.5));
+            let outer = (model.position < vec2<f32>(0.1)) | (model.position > vec2<f32>(0.9));
+            local_scaled = side * select(inner_half, aabb_half, outer);
+        } else {
+            local_scaled = (model.position - 0.5) * 2.0 * inner_half;
+        }
+    }
     // Inverse-transform the fragment position back to local space for SDF.
     let local = affine_inv_linear(local_scaled, ab, cd);
 
@@ -157,7 +171,7 @@ fn vs_main(
     // Simple fill color is constant per instance. Decode sRGB here rather than
     // running three pow() calls for every pixel of each full-window background.
     var fill_color = instance.color;
-    if (plain_fill) {
+    if (plain_fill || mode == 2u) {
         fill_color = vec4<f32>(linearize_srgb_rgb(instance.color.rgb), instance.color.a);
     }
     out.color = fill_color;
@@ -187,6 +201,21 @@ fn vs_main(
     );
 
     return out;
+}
+
+@vertex
+fn vs_main(model: VertexInput, instance: InstanceInput, @builtin(instance_index) index: u32) -> VertexOutput {
+    return rect_vertex(model, instance, index, 0u);
+}
+
+@vertex
+fn vs_ring(model: VertexInput, instance: InstanceInput, @builtin(instance_index) index: u32) -> VertexOutput {
+    return rect_vertex(model, instance, index, 1u);
+}
+
+@vertex
+fn vs_interior(model: VertexInput, instance: InstanceInput, @builtin(instance_index) index: u32) -> VertexOutput {
+    return rect_vertex(model, instance, index, 2u);
 }
 
 // 2D Box Signed Distance Field (round corners)
@@ -653,8 +682,7 @@ fn clip_layer_contains(p: vec2<f32>, count: u32, fill: u32, inst_id: u32, second
     return w != 0;
 }
 
-@fragment
-fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+fn paint_rect(in: VertexOutput) -> vec4<f32> {
     let b = in.rect_size * 0.5;
     // Large axis-aligned fills skip SDF; overflow still uses clip_poly + clip_pos.
     let flags = u32(in.extra_and_id.w);
@@ -884,4 +912,27 @@ fn fs_solid(in: VertexOutput) -> @location(0) vec4<f32> {
         rgb = rgb * alpha;
     }
     return vec4<f32>(rgb, alpha);
+}
+
+@fragment
+fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    return paint_rect(in);
+}
+
+@fragment
+fn fs_ring(in: VertexOutput) -> @location(0) vec4<f32> {
+    return paint_rect(in);
+}
+
+@fragment
+fn fs_interior(in: VertexOutput) -> @location(0) vec4<f32> {
+    let flags = u32(in.extra_and_id.w);
+    if ((flags & 1u) != 0u && !clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) { discard; }
+    if (in.clip_size.x >= 0.0 && in.clip_size.y >= 0.0) {
+        let c1 = in.clip_pos + in.clip_size;
+        if (in.p.x < in.clip_pos.x || in.p.x >= c1.x || in.p.y < in.clip_pos.y || in.p.y >= c1.y) { discard; }
+    }
+    // CPU dispatch proves full opacity and coverage, without inset shadow,
+    // backdrop sampling or a transformed edge. Color was decoded in the VS.
+    return vec4<f32>(in.color.rgb, 1.0);
 }

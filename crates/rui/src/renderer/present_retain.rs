@@ -567,10 +567,11 @@ mod tests {
 
     #[test]
     fn solid_pipeline_matches_general_for_borders_and_mixed_painter_order() {
-        let Some(gpu) = OffscreenGpu::new() else {
+        let Some(gpu) = OffscreenGpu::with_backends(wgpu::Backends::GL).or_else(OffscreenGpu::new)
+        else {
             return;
         };
-        let pipeline = crate::renderer::RuiPipeline::from_format(
+        let mut pipeline = crate::renderer::RuiPipeline::from_format(
             &gpu.device,
             wgpu::TextureFormat::Rgba8UnormSrgb,
             256,
@@ -578,7 +579,7 @@ mod tests {
         );
         let mut instances = Vec::new();
         for i in 0..18 {
-            let side = if i % 2 == 0 { 256.0 } else { 96.0 };
+            let side = if i % 2 == 0 { 640.0 } else { 96.0 };
             let mut inst = solid_inst(side, side, (i % 4) as f32 * 6.0, 0.0);
             inst.rect_pos = [(i % 5) as f32 * 37.25, (i % 7) as f32 * 24.5];
             inst.color = [0.15, 0.4, 0.8, if i % 2 == 0 { 1.0 } else { 0.4 }];
@@ -596,6 +597,26 @@ mod tests {
             }
             instances.push(inst);
         }
+        let polys: Vec<_> = instances
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                if index % 3 == 0 {
+                    crate::style::GpuClipPoly::NONE
+                } else {
+                    crate::style::GpuClipPoly::from_rounded_rect(
+                        if index % 3 == 1 {
+                            [-128.0, -128.0, 1024.0, 1024.0]
+                        } else {
+                            [8.5, 14.25, 240.0, 230.0]
+                        },
+                        [24.0; 4],
+                    )
+                }
+            })
+            .collect();
+        pipeline.ensure_clip_polys(&gpu.device, &gpu.queue, &polys);
+        pipeline.prepare_main_instance_clips(&instances, &polys);
         let buffer = gpu
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -634,13 +655,18 @@ mod tests {
                     ..Default::default()
                 });
                 pass.set_pipeline(&pipeline.render_pipeline);
-                pass.set_bind_group(0, &pipeline.bind_group, &[]);
+                pass.set_bind_group(0, &pipeline.bind_group_clip_poly, &[]);
                 pass.set_bind_group(1, pipeline.dummy_backdrop(), &[]);
                 pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
                 pass.set_vertex_buffer(1, buffer.slice(..));
                 pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
                 if specialized {
-                    pipeline.draw_instance_span(&mut pass, &instances, 0, instances.len() as u32);
+                    pipeline.draw_main_instance_span(
+                        &mut pass,
+                        &instances,
+                        0,
+                        instances.len() as u32,
+                    );
                 } else {
                     pass.draw_indexed(0..pipeline.num_indices, 0, 0..instances.len() as u32);
                 }
