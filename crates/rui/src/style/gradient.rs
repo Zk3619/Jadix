@@ -10,7 +10,7 @@
 //! CSS `linear-gradient(<angle>, …)` uses the CSS Images angle (`0deg` = bottom→top);
 //! [`parse_gradient`] converts to the internal convention (`internal = css - 90`).
 
-use super::color_space::lerp_display_srgb_linear;
+use super::color_space::{encode_linear_srgb_to_display_srgb, linearize_display_srgb};
 
 /// CSS `<named-color>` + project tokens / hex / `rgb()` via [`try_parse_color`].
 fn parse_gradient_color(s: &str) -> Option<[f32; 4]> {
@@ -302,6 +302,7 @@ impl Gradient {
 #[derive(Clone, Copy, Debug)]
 struct ResolvedStop {
     color: [f32; 4],
+    linear_rgb: [f32; 3],
     pos: f32,
 }
 
@@ -382,6 +383,7 @@ fn expand_and_resolve_stops(
         .zip(positions)
         .map(|((color, _), pos)| ResolvedStop {
             color,
+            linear_rgb: linearize_display_srgb([color[0], color[1], color[2]]),
             pos: pos.unwrap_or(0.0),
         })
         .collect();
@@ -393,8 +395,24 @@ fn expand_and_resolve_stops(
 fn sample_resolved(
     stops: &[ResolvedStop],
     hints: &[Option<ColorHint>],
+    t: f32,
+    repeating: bool,
+) -> [f32; 4] {
+    sample_resolved_with_encoder(
+        stops,
+        hints,
+        t,
+        repeating,
+        encode_linear_srgb_to_display_srgb,
+    )
+}
+
+fn sample_resolved_with_encoder(
+    stops: &[ResolvedStop],
+    hints: &[Option<ColorHint>],
     mut t: f32,
     repeating: bool,
+    encode: impl Fn([f32; 3]) -> [f32; 3],
 ) -> [f32; 4] {
     if stops.is_empty() {
         return [0.0, 0.0, 0.0, 0.0];
@@ -443,7 +461,16 @@ fn sample_resolved(
                 0.5 + 0.5 * ((u - h) / (1.0 - h))
             };
         }
-        return lerp_display_srgb_linear(a.color, b.color, u);
+        let u = u.clamp(0.0, 1.0);
+        let rgb = encode(std::array::from_fn(|i| {
+            a.linear_rgb[i] * (1.0 - u) + b.linear_rgb[i] * u
+        }));
+        return [
+            rgb[0],
+            rgb[1],
+            rgb[2],
+            a.color[3] * (1.0 - u) + b.color[3] * u,
+        ];
     }
     stops[stops.len() - 1].color
 }
@@ -507,6 +534,103 @@ pub fn sample_gradient_in_box(grad: &Gradient, x: f32, y: f32, w_px: f32, h_px: 
             let ref_len = w.min(h).max(1.0);
             sample_stops(&g.stops, &g.hints, t, g.repeating, ref_len)
         }
+    }
+}
+
+/// Exact RGBA8 quantization boundaries for this platform's sRGB conversion.
+/// Find the first positive f32 producing each byte; no interpolation or gamma
+/// approximation is involved. Initialized only when a gradient needs it.
+fn linear_srgb_byte_thresholds() -> &'static [f32; 255] {
+    static THRESHOLDS: std::sync::OnceLock<[f32; 255]> = std::sync::OnceLock::new();
+    THRESHOLDS.get_or_init(|| {
+        std::array::from_fn(|byte| {
+            let mut low = 0_u32;
+            let mut high = 1.0_f32.to_bits();
+            while low < high {
+                let mid = low + (high - low) / 2;
+                let encoded = super::color_space::encode_linear_srgb_component(f32::from_bits(mid));
+                let quantized = encoded.clamp(0.0, 1.0).mul_add(255.0, 0.5) as u8;
+                if quantized > byte as u8 {
+                    high = mid;
+                } else {
+                    low = mid + 1;
+                }
+            }
+            f32::from_bits(low)
+        })
+    })
+}
+
+#[inline]
+fn quantized_linear_srgb_component(linear: f32, thresholds: &[f32; 255]) -> f32 {
+    thresholds.partition_point(|threshold| linear >= *threshold) as u32 as f32 / 255.0
+}
+
+/// Resolve geometry and stops once per texture, not once per pixel/subsample.
+fn prepared_gradient_sampler(
+    grad: &Gradient,
+    w: f32,
+    h: f32,
+) -> impl Fn(f32, f32) -> [f32; 4] + '_ {
+    let (stops, hints, repeating, ref_len) = match grad {
+        Gradient::Linear(g) => {
+            let rad = g.angle_deg.to_radians();
+            (
+                &g.stops,
+                &g.hints,
+                g.repeating,
+                (rad.cos().abs() * w + rad.sin().abs() * h).max(1.0),
+            )
+        }
+        Gradient::Radial(g) => {
+            let (rx, ry) = resolve_radial_radii(g, w, h);
+            (&g.stops, &g.hints, g.repeating, (rx * ry).sqrt().max(1.0))
+        }
+        Gradient::Conic(g) => (&g.stops, &g.hints, g.repeating, w.min(h).max(1.0)),
+    };
+    let stops = expand_and_resolve_stops(stops, hints, ref_len);
+    // Quantize only a single sample. SSAA must average unquantized colors first.
+    let byte_thresholds = (!gradient_needs_ssaa(grad)).then(linear_srgb_byte_thresholds);
+    let (dx, dy, half) = if let Gradient::Linear(g) = grad {
+        let rad = g.angle_deg.to_radians();
+        let (dx, dy) = (rad.cos(), rad.sin());
+        (dx, dy, 0.5 * (dx.abs() + dy.abs()).max(1e-6))
+    } else {
+        (0.0, 0.0, 1.0)
+    };
+    let (rx, ry) = if let Gradient::Radial(g) = grad {
+        resolve_radial_radii(g, 1.0, 1.0)
+    } else {
+        (1.0, 1.0)
+    };
+    move |x, y| {
+        let t = match grad {
+            Gradient::Linear(_) => (((x - 0.5) * dx + (y - 0.5) * dy) / half + 1.0) * 0.5,
+            Gradient::Radial(g) => {
+                let nx = if rx > 1e-6 {
+                    (x - g.position.x) / rx
+                } else {
+                    0.0
+                };
+                let ny = if ry > 1e-6 {
+                    (y - g.position.y) / ry
+                } else {
+                    0.0
+                };
+                (nx * nx + ny * ny).sqrt()
+            }
+            Gradient::Conic(g) => {
+                let deg = (y - g.position.y).atan2(x - g.position.x).to_degrees() - g.from_deg;
+                ((deg % 360.0) + 360.0) % 360.0 / 360.0
+            }
+        };
+        sample_resolved_with_encoder(&stops, hints, t, repeating, |linear| {
+            if let Some(thresholds) = byte_thresholds {
+                linear.map(|channel| quantized_linear_srgb_component(channel, thresholds))
+            } else {
+                encode_linear_srgb_to_display_srgb(linear)
+            }
+        })
     }
 }
 
@@ -614,6 +738,38 @@ pub fn rasterize_gradient_with_radii(
     height: u32,
     radii: [f32; 4],
 ) -> Vec<u8> {
+    let sample = prepared_gradient_sampler(grad, width.max(1) as f32, height.max(1) as f32);
+    // Cold large textures can consume a whole frame even with prepared stops.
+    // Rows are independent; keep small / repeated-row fills on the UI thread.
+    let horizontal = matches!(grad, Gradient::Linear(g) if g.angle_deg.to_radians().sin() == 0.0);
+    let workers = if !horizontal && u64::from(width) * u64::from(height) >= 131_072 {
+        static WORKERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+        *WORKERS.get_or_init(|| std::thread::available_parallelism().map_or(1, |n| n.get().min(4)))
+    } else {
+        1
+    };
+    rasterize_gradient_with_workers(grad, width, height, radii, sample, workers)
+}
+
+#[cfg(test)]
+fn rasterize_gradient_with_sampler(
+    grad: &Gradient,
+    width: u32,
+    height: u32,
+    radii: [f32; 4],
+    sample: impl Fn(f32, f32) -> [f32; 4] + Sync,
+) -> Vec<u8> {
+    rasterize_gradient_with_workers(grad, width, height, radii, sample, 1)
+}
+
+fn rasterize_gradient_with_workers(
+    grad: &Gradient,
+    width: u32,
+    height: u32,
+    radii: [f32; 4],
+    sample: impl Fn(f32, f32) -> [f32; 4] + Sync,
+    workers: usize,
+) -> Vec<u8> {
     let w = width.max(1);
     let h = height.max(1);
     let mut out = vec![0u8; (w * h * 4) as usize];
@@ -626,36 +782,68 @@ pub fn rasterize_gradient_with_radii(
         1u32
     };
     let inv = 1.0 / (ssaa * ssaa) as f32;
-    for y in 0..h {
-        for x in 0..w {
-            let mut acc = [0.0_f32; 4];
-            for sy in 0..ssaa {
-                for sx in 0..ssaa {
-                    let u = (x as f32 + (sx as f32 + 0.5) / ssaa as f32) / wf;
-                    let v = (y as f32 + (sy as f32 + 0.5) / ssaa as f32) / hf;
-                    let mut c = sample_gradient_in_box(grad, u, v, wf, hf);
-                    if has_radii {
-                        let cover = rounded_rect_coverage(
-                            x as f32 + (sx as f32 + 0.5) / ssaa as f32,
-                            y as f32 + (sy as f32 + 0.5) / ssaa as f32,
-                            wf,
-                            hf,
-                            radii,
-                        );
-                        c[3] *= cover;
-                    }
-                    acc[0] += c[0];
-                    acc[1] += c[1];
-                    acc[2] += c[2];
-                    acc[3] += c[3];
+    let horizontal = matches!(grad, Gradient::Linear(g) if g.angle_deg.to_radians().sin() == 0.0);
+    let top = radii[0].max(radii[1]).max(0.0).ceil() as u32;
+    let bottom = radii[2].max(radii[3]).max(0.0).ceil() as u32;
+    let row_bytes = w as usize * 4;
+    let render_rows = |start_y: u32, out: &mut [u8]| {
+        let mut repeated_row = None;
+        for local_y in 0..out.len() / row_bytes {
+            let y = start_y + local_y as u32;
+            let copy_row = horizontal && (!has_radii || (y >= top && y < h.saturating_sub(bottom)));
+            if copy_row {
+                if let Some(source) = repeated_row {
+                    let dest = local_y * row_bytes;
+                    out.copy_within(source..source + row_bytes, dest);
+                    continue;
                 }
+                repeated_row = Some(local_y * row_bytes);
             }
-            let i = ((y * w + x) * 4) as usize;
-            out[i] = (acc[0] * inv).clamp(0.0, 1.0).mul_add(255.0, 0.5) as u8;
-            out[i + 1] = (acc[1] * inv).clamp(0.0, 1.0).mul_add(255.0, 0.5) as u8;
-            out[i + 2] = (acc[2] * inv).clamp(0.0, 1.0).mul_add(255.0, 0.5) as u8;
-            out[i + 3] = (acc[3] * inv).clamp(0.0, 1.0).mul_add(255.0, 0.5) as u8;
+            for x in 0..w {
+                let mut acc = [0.0_f32; 4];
+                for sy in 0..ssaa {
+                    for sx in 0..ssaa {
+                        let u = (x as f32 + (sx as f32 + 0.5) / ssaa as f32) / wf;
+                        let v = (y as f32 + (sy as f32 + 0.5) / ssaa as f32) / hf;
+                        let mut c = sample(u, v);
+                        if has_radii {
+                            let cover = rounded_rect_coverage(
+                                x as f32 + (sx as f32 + 0.5) / ssaa as f32,
+                                y as f32 + (sy as f32 + 0.5) / ssaa as f32,
+                                wf,
+                                hf,
+                                radii,
+                            );
+                            c[3] *= cover;
+                        }
+                        acc[0] += c[0];
+                        acc[1] += c[1];
+                        acc[2] += c[2];
+                        acc[3] += c[3];
+                    }
+                }
+                let i = local_y * row_bytes + x as usize * 4;
+                out[i] = (acc[0] * inv).clamp(0.0, 1.0).mul_add(255.0, 0.5) as u8;
+                out[i + 1] = (acc[1] * inv).clamp(0.0, 1.0).mul_add(255.0, 0.5) as u8;
+                out[i + 2] = (acc[2] * inv).clamp(0.0, 1.0).mul_add(255.0, 0.5) as u8;
+                out[i + 3] = (acc[3] * inv).clamp(0.0, 1.0).mul_add(255.0, 0.5) as u8;
+            }
         }
+    };
+    let workers = workers.max(1).min(h as usize);
+    if workers == 1 {
+        render_rows(0, &mut out);
+    } else {
+        let rows_per_chunk = (h as usize).div_ceil(workers);
+        std::thread::scope(|scope| {
+            let mut chunks = out.chunks_mut(rows_per_chunk * row_bytes);
+            let first = chunks.next().unwrap();
+            for (index, chunk) in chunks.enumerate() {
+                let render_rows = &render_rows;
+                scope.spawn(move || render_rows(((index + 1) * rows_per_chunk) as u32, chunk));
+            }
+            render_rows(0, first);
+        });
     }
     out
 }
@@ -1359,6 +1547,138 @@ mod tests {
                 );
             }
             _ => panic!(),
+        }
+    }
+
+    #[test]
+    fn byte_thresholds_match_scalar_conversion_at_boundaries_and_random_values() {
+        let thresholds = linear_srgb_byte_thresholds();
+        let verify = |linear: f32| {
+            let expected = super::super::color_space::encode_linear_srgb_component(linear)
+                .clamp(0.0, 1.0)
+                .mul_add(255.0, 0.5) as u8;
+            let actual =
+                quantized_linear_srgb_component(linear, thresholds).mul_add(255.0, 0.5) as u8;
+            assert_eq!(actual, expected, "linear={linear:?}");
+        };
+        for threshold in thresholds {
+            for bits in threshold.to_bits() - 256..=threshold.to_bits() + 256 {
+                verify(f32::from_bits(bits));
+            }
+        }
+        let mut seed = 1_u32;
+        for _ in 0..1_000_000 {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            verify(seed as f32 / u32::MAX as f32);
+        }
+        for value in [0.0, 1.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            verify(value);
+        }
+    }
+
+    #[test]
+    fn prepared_stop_colors_preserve_linear_srgb_interpolation() {
+        for (a, b) in [
+            ([0.1, 0.4, 0.7, 0.25], [0.85, 0.3, 0.01, 0.9]),
+            ([1.0, 0.0, 0.0, 1.0], [0.0, 0.0, 1.0, 0.0]),
+        ] {
+            let stops = expand_and_resolve_stops(
+                &[ColorStop::at(a, 0.0), ColorStop::at(b, 1.0)],
+                &[],
+                100.0,
+            );
+            // Clamped endpoints have always returned their original colors.
+            assert_eq!(sample_resolved(&stops, &[], 0.0, false), a);
+            assert_eq!(sample_resolved(&stops, &[], 1.0, false), b);
+            for t in [0.01, 0.17, 0.5, 0.91] {
+                assert_eq!(
+                    sample_resolved(&stops, &[], t, false),
+                    super::super::color_space::lerp_display_srgb_linear(a, b, t)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn prepared_raster_matches_scalar_sampler_byte_for_byte() {
+        for css in [
+            "linear-gradient(37deg, red, blue 28%, green)",
+            "linear-gradient(to right, #12345680, #abcdef)",
+            "repeating-linear-gradient(to right, red 0px 5px, blue 5px 10px)",
+            "linear-gradient(to right, red 10% 25%, 40%, blue 80%)",
+            "repeating-linear-gradient(-45deg, red, red 5px, blue 5px, blue 10px)",
+            "radial-gradient(ellipse farthest-corner at 20% 35%, red, blue)",
+            "radial-gradient(circle closest-side at 70% 25%, red 3px, blue 20px)",
+            "conic-gradient(from 37deg at 30% 70%, red, blue, green)",
+            "repeating-conic-gradient(red 0deg 15deg, blue 15deg 30deg)",
+            "linear-gradient(125deg, #12345680, #aabbcc00, #abcdef)",
+        ] {
+            let g = parse_gradient(css).unwrap();
+            for (w, h) in [(1, 1), (63, 37), (127, 83)] {
+                for radii in [[0.0; 4], [4.0, 7.0, 11.0, 2.0]] {
+                    let reference = rasterize_gradient_with_sampler(&g, w, h, radii, |x, y| {
+                        sample_gradient_in_box(&g, x, y, w as f32, h as f32)
+                    });
+                    assert_eq!(
+                        rasterize_gradient_with_radii(&g, w, h, radii),
+                        reference,
+                        "{css} {w}x{h}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "CPU gradient raster timing; run explicitly"]
+    fn gradient_raster_cold_cost() {
+        for css in [
+            "repeating-linear-gradient(-45deg, #2563eb, #2563eb 5px, #ef4444 5px, #ef4444 10px)",
+            "linear-gradient(-45deg, #2563eb, #ef4444)",
+        ] {
+            let g = parse_gradient(css).unwrap();
+            let now = std::time::Instant::now();
+            let reference = rasterize_gradient_with_sampler(&g, 768, 192, [12.0; 4], |x, y| {
+                sample_gradient_in_box(&g, x, y, 768.0, 192.0)
+            });
+            let old = now.elapsed();
+            let now = std::time::Instant::now();
+            let optimized = rasterize_gradient_with_radii(&g, 768, 192, [12.0; 4]);
+            let new = now.elapsed();
+            assert_eq!(reference, optimized);
+            eprintln!("gradient-raster 768x192 css={css} reference={old:?} prepared={new:?}");
+        }
+    }
+
+    #[test]
+    fn parallel_raster_preserves_samples_and_uneven_row_boundaries() {
+        for css in [
+            "repeating-linear-gradient(-45deg, #2563eb, #2563eb 5px, #ef4444 5px, #ef4444 10px)",
+            "linear-gradient(125deg, #12345680, #aabbcc00, #abcdef)",
+            "conic-gradient(from 37deg at 30% 70%, red, blue, green)",
+            "linear-gradient(to right, #12345680, #abcdef)",
+        ] {
+            let g = parse_gradient(css).unwrap();
+            for (w, h) in [(63, 3), (257, 513)] {
+                let radii = [4.0, 7.0, 11.0, 2.0];
+                let serial = rasterize_gradient_with_workers(
+                    &g,
+                    w,
+                    h,
+                    radii,
+                    prepared_gradient_sampler(&g, w as f32, h as f32),
+                    1,
+                );
+                let parallel = rasterize_gradient_with_workers(
+                    &g,
+                    w,
+                    h,
+                    radii,
+                    prepared_gradient_sampler(&g, w as f32, h as f32),
+                    4,
+                );
+                assert_eq!(serial, parallel, "{css} {w}x{h}");
+            }
         }
     }
 
