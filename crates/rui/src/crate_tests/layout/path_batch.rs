@@ -60,6 +60,31 @@ fn path_leaf_emits_textured_stroke() {
 }
 
 #[test]
+fn chart_defers_raster_until_layout_selects_its_backend() {
+    let mut el: Element = area_chart()
+        .values([0.23, 0.91, 0.47, 0.72])
+        .size(203.0, 83.0)
+        .into();
+    crate::core::tree::walk_elements(&el, |node| {
+        if node
+            .get_attr(crate::primitives::path::ATTR_PATH_SCENE)
+            .is_some()
+        {
+            assert!(
+                node.image_texture.is_none(),
+                "chart construction must not raster a fallback before backend selection"
+            );
+        }
+    });
+    let mut tree = LayoutTree::new();
+    let result = tree.build_and_layout(&mut el, 220.0, 100.0, [-1.0, -1.0]);
+    assert!(result
+        .textured_draws
+        .iter()
+        .any(|draw| draw.texture_key.starts_with("rui_path:")));
+}
+
+#[test]
 fn line_chart_layout_is_not_fake_bars_only() {
     let mut el: Element = line_chart()
         .values([0.2, 0.9, 0.4, 0.7])
@@ -150,9 +175,8 @@ fn find_path_d_bounds(el: &Element) -> Option<[f32; 4]> {
 fn find_chart_tex_bounds(el: &Element, kind: &str) -> Option<[f32; 4]> {
     if el.get_attr("rui_chart").map(|s| s.as_str()) == Some(kind)
         && el
-            .image_texture
-            .as_deref()
-            .is_some_and(|k| k.starts_with("rui_path:"))
+            .get_attr(crate::primitives::path::ATTR_PATH_SCENE)
+            .is_some()
     {
         return Some(el.layout_bounds);
     }
@@ -207,7 +231,7 @@ fn line_path_leaf_stays_plot_height_above_pie_in_scroll_column() {
     );
 
     let line_b = find_path_d_bounds(&root).expect("line path leaf");
-    let pie_b = find_chart_tex_bounds(&root, "pie").expect("pie raster texture");
+    let pie_b = find_chart_tex_bounds(&root, "pie").expect("pie path scene");
     assert!(
         line_b[3] > 120.0 && line_b[3] <= 150.0,
         "line path layout height must stay ~140px, got {:?}",

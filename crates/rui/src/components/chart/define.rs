@@ -12,9 +12,9 @@ use crate::components::base::{paint_slot, SlotChrome, SlotMap};
 use crate::core::reactivity::{create_memo, use_scoped_signal, use_signal, Signal, SignalId};
 use crate::core::tree::{CursorKind, Element, LayoutStatus};
 use crate::primitives::path::{
-    encode_path_d, encode_points, ensure_raster_texture, filled_circle, points_from_commands,
-    register_path_scene, PathCommand, PathStyle, Point2, ATTR_PATH_D, ATTR_PATH_MARKERS,
-    ATTR_PATH_SCENE, ATTR_PATH_VIEWBOX,
+    encode_path_d, encode_points, filled_circle, points_from_commands, register_path_scene,
+    PathCommand, PathStyle, Point2, ATTR_PATH_D, ATTR_PATH_MARKERS, ATTR_PATH_SCENE,
+    ATTR_PATH_VIEWBOX,
 };
 use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::style::{parse_color, parse_text_color};
@@ -513,11 +513,8 @@ fn attach_chart_scene(
         logic_h.max(1.0),
     );
     plot.set_attr(ATTR_PATH_SCENE, format!("{id:016x}"));
-    let dim_w = logic_w.round().max(16.0) as u32;
-    let dim_h = logic_h.round().max(16.0) as u32;
-    if let Some(tex) = ensure_raster_texture(path_layers, markers, marker_r, dim_w, dim_h, 2) {
-        plot = plot.image_texture(tex);
-    }
+    // Layout selects GPU Path2d or the CPU fallback at the actual paint size.
+    // Eager CPU raster here was discarded by GPU collect, stalling chart resize.
     if let Some((cmds, _)) = path_layers
         .iter()
         .find(|(c, st)| st.stroke.is_some() && !c.is_empty())

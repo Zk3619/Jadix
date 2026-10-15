@@ -67,6 +67,17 @@ mod tests {
     use std::rc::Rc;
     use winit::event::MouseButton;
 
+    fn assert_chart_path_draws(mut el: Element) {
+        let result = LayoutTree::new().build_and_layout(&mut el, 400.0, 300.0, [-1.0, -1.0]);
+        assert!(
+            result
+                .textured_draws
+                .iter()
+                .any(|d| d.texture_key.starts_with("rui_path:")),
+            "chart layout must draw its scene through the shared path kernel"
+        );
+    }
+
     #[test]
     fn bar_chart_without_id_writes_no_template_id() {
         let el: Element = bar_chart().values([1.0, 2.0]).into();
@@ -244,24 +255,8 @@ mod tests {
             .iter()
             .find(|c| c.get_attr("rui_chart").map(|s| s.as_str()) == Some("pie"))
             .expect("pie plot");
-        let self_tex = plot
-            .image_texture
-            .as_deref()
-            .is_some_and(|k| k.starts_with("rui_path:"));
-        let child_tex = plot.children.iter().any(|c| {
-            c.image_texture
-                .as_deref()
-                .is_some_and(|k| k.starts_with("rui_path:"))
-        });
-        let slices_with_d = plot
-            .children
-            .iter()
-            .filter(|c| c.get_attr(ATTR_PATH_D).is_some())
-            .count();
-        assert!(
-            self_tex || child_tex || slices_with_d >= 3,
-            "pie must raster via path kernel (texture) or keep slice d attrs; self_tex={self_tex} d={slices_with_d}"
-        );
+        assert!(plot.get_attr(ATTR_PATH_SCENE).is_some());
+        assert_chart_path_draws(el);
     }
 
     #[test]
@@ -374,12 +369,8 @@ mod tests {
             .iter()
             .find(|c| c.get_attr("rui_chart").map(|s| s.as_str()) == Some("pie"))
             .expect("pie plot");
-        assert!(
-            plot.image_texture
-                .as_deref()
-                .is_some_and(|k| k.starts_with("rui_path:")),
-            "donut must still raster via path kernel"
-        );
+        assert!(plot.get_attr(ATTR_PATH_SCENE).is_some());
+        assert_chart_path_draws(el);
     }
 
     #[test]
@@ -409,16 +400,7 @@ mod tests {
         assert!(el.template_id.is_none());
         assert_eq!(el.get_attr("rui_chart").map(|s| s.as_str()), Some("chart"));
         assert!(find_attr(&el, ATTR_PATH_D).is_some());
-        fn has_path_tex(el: &Element) -> bool {
-            el.image_texture
-                .as_deref()
-                .is_some_and(|k| k.starts_with("rui_path:"))
-                || el.children.iter().any(has_path_tex)
-        }
-        assert!(
-            has_path_tex(&el),
-            "composed chart must raster via shared path kernel"
-        );
+        assert_chart_path_draws(el);
     }
 
     #[test]
@@ -439,13 +421,7 @@ mod tests {
             .guides(false)
             .into();
         assert!(find_attr(&el, ATTR_PATH_D).is_some());
-        fn has_path_tex(el: &Element) -> bool {
-            el.image_texture
-                .as_deref()
-                .is_some_and(|k| k.starts_with("rui_path:"))
-                || el.children.iter().any(has_path_tex)
-        }
-        assert!(has_path_tex(&el), "custom mark must raster");
+        assert_chart_path_draws(el);
     }
 
     #[test]
@@ -530,21 +506,12 @@ mod tests {
             .tooltip(true)
             .size(140.0)
             .into();
-        fn has_path_tex(el: &Element) -> bool {
-            el.image_texture
-                .as_deref()
-                .is_some_and(|k| k.starts_with("rui_path:"))
-                || el.children.iter().any(has_path_tex)
-        }
-        assert!(
-            has_path_tex(&el),
-            "radial chart must raster via path kernel"
-        );
         let kind = el.get_attr("rui_chart").map(|s| s.as_str());
         assert!(
             kind == Some("chart") || kind == Some("radialBar"),
             "got {kind:?}"
         );
+        assert_chart_path_draws(el);
     }
 
     #[test]
