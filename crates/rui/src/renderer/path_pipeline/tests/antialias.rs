@@ -118,6 +118,68 @@ fn shared_gpu_edges_have_subpixel_coverage() {
 
 #[test]
 #[ignore = "requires a headless GPU adapter"]
+fn shared_gpu_lazy_gradients_match_general_cover() {
+    use crate::primitives::path::{filled_rect, register_path_scene, ATTR_PATH_SCENE};
+    let (gpu, textured) = setup();
+    for samples in [1, 4] {
+        let begin = std::time::Instant::now();
+        let mut path = PathGpu::try_new(&gpu.device, samples).expect("path pipeline");
+        eprintln!(
+            "path init samples={samples}: {:.3}ms",
+            begin.elapsed().as_secs_f64() * 1000.0
+        );
+        assert!(path.gradient_cover.is_none());
+        let mut reference = PathGpu::try_new(&gpu.device, samples).unwrap();
+        let face = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::NotEqual,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Replace,
+        };
+        reference.cover = make_pipeline(
+            &gpu.device,
+            &reference.layout,
+            &reference.shader,
+            samples,
+            wgpu::ColorWrites::ALL,
+            face,
+            face,
+            "rui-path-cover",
+        );
+        for gradient in [
+            None,
+            Some("linear-gradient(35deg, #ff000080, #0044ff)"),
+            Some("radial-gradient(circle, #ffffff, #00000080)"),
+            None,
+        ] {
+            let mut style = PathStyle::fill([0.3, 0.6, 0.8, 0.7]);
+            style.fill_gradient = gradient.map(|css| crate::style::parse_gradient(css).unwrap());
+            let scene = register_path_scene(
+                vec![(filled_rect(9.3, 12.4, 70.5, 66.2), style)],
+                Vec::new(),
+                0.0,
+                96.0,
+                96.0,
+            );
+            let mut el = Element::new();
+            el.set_attr(ATTR_PATH_SCENE, format!("{scene:016x}"));
+            for dpi in [1.0, 1.5, 2.0] {
+                let actual = render(&gpu, &textured, &mut path, &el, dpi);
+                let expected = render(&gpu, &textured, &mut reference, &el, dpi);
+                assert_eq!(
+                    actual.pixels, expected.pixels,
+                    "gradient={gradient:?} samples={samples} dpi={dpi}"
+                );
+            }
+            if gradient.is_some() {
+                assert!(path.gradient_cover.is_some());
+            }
+        }
+    }
+}
+
+#[test]
+#[ignore = "requires a headless GPU adapter"]
 fn shared_gpu_translucent_layers_preserve_color() {
     use crate::primitives::path::{filled_rect, register_path_scene, ATTR_PATH_SCENE};
     let (gpu, textured) = setup();

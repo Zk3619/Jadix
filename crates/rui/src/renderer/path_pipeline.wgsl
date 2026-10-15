@@ -107,6 +107,18 @@ fn linearize_srgb(c: vec3<f32>) -> vec3<f32> {
 }
 
 @fragment
+fn fs_stencil() -> @location(0) vec4<f32> {
+    // Stencil triangles never write color and have no coverage discard.
+    return vec4<f32>(0.0);
+}
+
+@fragment
+fn fs_solid(in: VsOut) -> @location(0) vec4<f32> {
+    let alpha = in.color.a * in.coverage;
+    return vec4<f32>(linearize_srgb(in.color.rgb) * alpha, alpha);
+}
+
+@fragment
 fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     var color = in.color;
     if (g.fill_kind > 0.5) {

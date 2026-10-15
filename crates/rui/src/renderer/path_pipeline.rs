@@ -153,6 +153,9 @@ pub struct PathGpu {
     stencil_eo: wgpu::RenderPipeline,
     stencil_nz: wgpu::RenderPipeline,
     cover: wgpu::RenderPipeline,
+    gradient_cover: Option<wgpu::RenderPipeline>,
+    shader: wgpu::ShaderModule,
+    layout: wgpu::PipelineLayout,
     resolve: wgpu::RenderPipeline,
     resolve_bgl: wgpu::BindGroupLayout,
     bgl: wgpu::BindGroupLayout,
@@ -270,7 +273,7 @@ impl PathGpu {
             wgpu::ColorWrites::ALL,
             cover_face,
             cover_face,
-            "rui-path-cover",
+            "rui-path-cover-solid",
         );
         let resolve_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("rui-path-resolve-bgl"),
@@ -334,6 +337,9 @@ impl PathGpu {
             stencil_eo,
             stencil_nz,
             cover,
+            gradient_cover: None,
+            shader,
+            layout,
             resolve,
             resolve_bgl,
             bgl,
@@ -389,6 +395,32 @@ impl PathGpu {
             self.target_size.get(&job.key) == Some(&(w, h)) && images.contains_key(&job.key);
         if reuse && !always {
             return false;
+        }
+        // Most path leaves (spinners, progress and charts) only use vertex
+        // colors. Compile the gradient program only for a real gradient fill.
+        if self.gradient_cover.is_none()
+            && job.ops.iter().any(|op| {
+                matches!(op, PathGpuOp::Fill(fill) if !fill.stencil.is_empty() && fill.grad.is_some())
+            })
+        {
+            let face = wgpu::StencilFaceState {
+                compare: wgpu::CompareFunction::NotEqual,
+                fail_op: wgpu::StencilOperation::Keep,
+                depth_fail_op: wgpu::StencilOperation::Keep,
+                pass_op: wgpu::StencilOperation::Replace,
+            };
+            self.gradient_cover = crate::renderer::wgpu_compat::try_gpu_init(
+                device,
+                "path gradient pipeline failed; falling back to CPU raster",
+                || make_pipeline(
+                    device, &self.layout, &self.shader, self.sample_count,
+                    wgpu::ColorWrites::ALL, face, face, "rui-path-cover",
+                ),
+            );
+            if self.gradient_cover.is_none() {
+                crate::renderer::geometry2d::disable_gpu2d_runtime();
+                return false;
+            }
         }
         self.ensure_target(device, textured, images, &job.key, w, h);
         let Some(gpu_img) = images.get(&job.key) else {
@@ -532,7 +564,11 @@ impl PathGpu {
                             bufs.push(gbuf);
                             bgs.push(bg);
                         }
-                        pass.set_pipeline(&self.cover);
+                        pass.set_pipeline(if use_grad {
+                            self.gradient_cover.as_ref().unwrap()
+                        } else {
+                            &self.cover
+                        });
                         if use_grad {
                             pass.set_bind_group(0, bgs.last().unwrap(), &[]);
                         } else {
@@ -752,6 +788,21 @@ fn make_pipeline(
     stencil_back: wgpu::StencilFaceState,
     label: &str,
 ) -> wgpu::RenderPipeline {
+    // Meshes carry their color in vertices; only fill-cover triangles use
+    // gradient uniforms. Stencil-only passes need no color computation at all.
+    let fragment_entry = if write_mask.is_empty() {
+        "fs_stencil"
+    } else if label == "rui-path-stroke" || label == "rui-path-cover-solid" {
+        "fs_solid"
+    } else {
+        "fs_main"
+    };
+    #[cfg(test)]
+    let fragment_entry = if std::env::var_os("RUI_PATH_GENERAL_SHADER").is_some() {
+        "fs_main"
+    } else {
+        fragment_entry
+    };
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some(label),
         layout: Some(layout),
@@ -763,7 +814,7 @@ fn make_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some("fs_main"),
+            entry_point: Some(fragment_entry),
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
