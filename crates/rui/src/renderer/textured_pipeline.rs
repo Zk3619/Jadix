@@ -286,6 +286,30 @@ impl TexturedQuadPipeline {
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::cast_slice(&[globals]));
     }
 
+    /// Change resolution in command order, between captures in one submission.
+    /// Queue writes would give every pass the last capture's dimensions.
+    pub(crate) fn encode_resolution(
+        &self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        width: u32,
+        height: u32,
+    ) {
+        let globals = Globals::new(width as f32, height as f32, self.premultiply);
+        let snapshot = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("capture resolution snapshot"),
+            contents: bytemuck::bytes_of(&globals),
+            usage: wgpu::BufferUsages::COPY_SRC,
+        });
+        encoder.copy_buffer_to_buffer(
+            &snapshot,
+            0,
+            &self.globals_buffer,
+            0,
+            std::mem::size_of::<Globals>() as u64,
+        );
+    }
+
     pub fn create_texture_bind_group(
         &self,
         device: &wgpu::Device,

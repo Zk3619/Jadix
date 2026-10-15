@@ -742,7 +742,10 @@ pub fn rasterize_gradient_with_radii(
     // Cold large textures can consume a whole frame even with prepared stops.
     // Rows are independent; keep small / repeated-row fills on the UI thread.
     let horizontal = matches!(grad, Gradient::Linear(g) if g.angle_deg.to_radians().sin() == 0.0);
-    let workers = if !horizontal && u64::from(width) * u64::from(height) >= 131_072 {
+    // Several Gallery cards enter together at roughly 180×108 px. Keeping
+    // those independent rows serial made a cold frame pay every raster in
+    // sequence; the sampler is immutable and the output is disjoint.
+    let workers = if !horizontal && u64::from(width) * u64::from(height) >= 16_384 {
         static WORKERS: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
         *WORKERS.get_or_init(|| std::thread::available_parallelism().map_or(1, |n| n.get().min(4)))
     } else {

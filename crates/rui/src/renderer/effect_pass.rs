@@ -12,6 +12,7 @@ use crate::renderer::compute::ComputePipelines;
 
 pub struct EffectPassGpu {
     pipeline: wgpu::RenderPipeline,
+    target_format: wgpu::TextureFormat,
     uniform_buf: wgpu::Buffer,
     uniform_bg: wgpu::BindGroup,
     tex_bgl: wgpu::BindGroupLayout,
@@ -147,6 +148,7 @@ impl EffectPassGpu {
 
         Self {
             pipeline,
+            target_format: format,
             uniform_buf,
             uniform_bg,
             tex_bgl,
@@ -181,6 +183,7 @@ impl EffectPassGpu {
             return false;
         }
         let mut any = false;
+        let mut image_batch: Option<wgpu::CommandEncoder> = None;
         for cap in captures {
             if cap.instances.is_empty()
                 && cap.textured_draws.is_empty()
@@ -215,6 +218,22 @@ impl EffectPassGpu {
             #[cfg(test)]
             let cap_begin = std::time::Instant::now();
             self.ensure_target(device, textured, images, &cap.key, w, h);
+            // Text prepares reuse a glyphon vertex buffer and therefore still
+            // submit before the next prepare. Image-only captures can share an
+            // encoder, including captures that sample preceding outputs.
+            let image_only = cap.instances.is_empty() && cap.text_nodes.is_empty();
+            if !image_only {
+                if let Some(encoder) = image_batch.take() {
+                    queue.submit(std::iter::once(encoder.finish()));
+                }
+            }
+            let batch = image_only.then(|| {
+                image_batch.get_or_insert_with(|| {
+                    device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                        label: Some("rui-image-capture-batch"),
+                    })
+                })
+            });
             if self.render_capture(
                 device,
                 queue,
@@ -226,18 +245,30 @@ impl EffectPassGpu {
                 h,
                 scale,
                 text.as_deref_mut(),
+                batch,
             ) {
                 any = true;
                 #[cfg(test)]
                 if std::env::var_os("RUI_PERF_CAPTURE_DETAIL").is_some() {
-                    eprintln!("capture-perf: {} {}x{} instances={} textures={} texts={} sources_ready={} ms={:.2}",
-                        cap.key, w, h, cap.instances.len(), cap.textured_draws.len(), cap.text_nodes.len(), sources_ready,
-                        cap_begin.elapsed().as_secs_f32() * 1000.0);
+                    eprintln!(
+                        "capture-perf: {} {}x{} instances={} textures={} texts={} sources_ready={} ms={:.2}",
+                        cap.key,
+                        w,
+                        h,
+                        cap.instances.len(),
+                        cap.textured_draws.len(),
+                        cap.text_nodes.len(),
+                        sources_ready,
+                        cap_begin.elapsed().as_secs_f32() * 1000.0
+                    );
                 }
                 if filter_cap && sources_ready {
                     self.completed_filter_caps.insert(cap.key.clone());
                 }
             }
+        }
+        if let Some(encoder) = image_batch {
+            queue.submit(std::iter::once(encoder.finish()));
         }
         for job in effects {
             let w = job.bounds[2].round().max(2.0) as u32;
@@ -293,9 +324,15 @@ impl EffectPassGpu {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            // Must match SDF / glyphon pipelines (surface sRGB).
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            // Captures use the window's SDF, textured and glyphon pipelines.
+            format: self.target_format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | if cfg!(test) {
+                    wgpu::TextureUsages::COPY_SRC
+                } else {
+                    wgpu::TextureUsages::empty()
+                },
             view_formats: &[],
         });
         let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
@@ -322,6 +359,7 @@ impl EffectPassGpu {
         h: u32,
         ui_scale: f32,
         mut text: Option<&mut super::text::RuiTextRenderer>,
+        batch: Option<&mut wgpu::CommandEncoder>,
     ) -> bool {
         let Some(gpu_img) = images.get(&cap.key) else {
             return false;
@@ -457,8 +495,10 @@ impl EffectPassGpu {
             }
         }
 
-        rect_pipeline.update_resolution(queue, w, h);
-        textured.update_resolution(queue, w, h);
+        if batch.is_none() {
+            rect_pipeline.update_resolution(queue, w, h);
+            textured.update_resolution(queue, w, h);
+        }
 
         let inst_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("capture-inst"),
@@ -477,9 +517,17 @@ impl EffectPassGpu {
             )
         };
 
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("rui-capture-enc"),
+        let mut owned_encoder = batch.is_none().then(|| {
+            device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("rui-capture-enc"),
+            })
         });
+        let encoder = if let Some(encoder) = batch {
+            textured.encode_resolution(device, encoder, w, h);
+            encoder
+        } else {
+            owned_encoder.as_mut().unwrap()
+        };
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("rui-capture-pass"),
@@ -539,7 +587,9 @@ impl EffectPassGpu {
                 }
             }
         }
-        queue.submit(std::iter::once(encoder.finish()));
+        if let Some(encoder) = owned_encoder {
+            queue.submit(std::iter::once(encoder.finish()));
+        }
         true
     }
 
@@ -685,5 +735,210 @@ impl EffectPassGpu {
         }
         queue.submit(std::iter::once(encoder.finish()));
         true
+    }
+}
+
+#[cfg(test)]
+mod capture_batch_tests {
+    use super::*;
+    use crate::renderer::offscreen::{readback_texture, OffscreenGpu};
+
+    #[test]
+    #[ignore = "native GPU capture pixel comparison; run explicitly"]
+    fn image_capture_batch_matches_separate_sizes_dependencies_and_pending_sources() {
+        let backend = if std::env::var("RUI_GPU_BACKEND").as_deref() == Ok("dx12") {
+            wgpu::Backends::DX12
+        } else {
+            wgpu::Backends::GL
+        };
+        let gpu = OffscreenGpu::with_backends(backend).expect("native GPU");
+        let mut rgba_reference = None;
+        for format in [
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+        ] {
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format,
+                width: 64,
+                height: 64,
+                present_mode: wgpu::PresentMode::Fifo,
+                desired_maximum_frame_latency: 1,
+                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                color_space: Default::default(),
+                view_formats: vec![],
+            };
+            let textured = TexturedQuadPipeline::new(&gpu.device, &config);
+            let rect = super::super::RuiPipeline::new(&gpu.device, &config);
+            let run = |batch: bool| {
+                let mut pass = EffectPassGpu::new(&gpu.device, config.format);
+                let mut images = HashMap::new();
+                let mut rgba = vec![0; 8 * 8 * 4];
+                for y in 0..8 {
+                    for x in 0..8 {
+                        let i = (y * 8 + x) * 4;
+                        rgba[i..i + 4].copy_from_slice(&[
+                            (x * 31) as u8,
+                            (y * 31) as u8,
+                            180,
+                            if x < 4 { 255 } else { 96 },
+                        ]);
+                    }
+                }
+                images.insert(
+                    "source".into(),
+                    crate::app::image_registry::upload_rgba8(
+                        &gpu.device,
+                        &gpu.queue,
+                        &textured,
+                        &rgba,
+                        8,
+                        8,
+                    ),
+                );
+                let capture = |key: &str, source: &str, bounds: [f32; 4], alpha: f32| {
+                    let mut draw = super::super::TexturedDraw::clipped(
+                        [
+                            bounds[0] + 2.0,
+                            bounds[1] + 1.0,
+                            bounds[2] - 4.0,
+                            bounds[3] - 2.0,
+                        ],
+                        None,
+                        source,
+                        alpha,
+                    )
+                    .unwrap();
+                    draw.tint_rgb = [0.75, 1.0, 0.5];
+                    CaptureJob {
+                        key: key.into(),
+                        bounds,
+                        instances: vec![],
+                        textured_draws: vec![draw],
+                        text_nodes: vec![],
+                    }
+                };
+                let mut sdf = <InstanceInput as bytemuck::Zeroable>::zeroed();
+                sdf.rect_pos = [7.0, 11.0];
+                sdf.rect_size = [23.0, 17.0];
+                sdf.color = [0.1, 0.8, 0.3, 1.0];
+                sdf.transform = crate::style::transform::MAT2D_IDENTITY;
+                sdf.clip_size = InstanceInput::NO_CLIP_SIZE;
+                let captures = vec![
+                    capture("rui_filter_cap:a", "source", [10.5, 20.5, 19.0, 13.0], 1.0),
+                    capture(
+                        "rui_filter_cap:b",
+                        "rui_filter_cap:a",
+                        [30.5, 40.5, 33.0, 29.0],
+                        0.65,
+                    ),
+                    CaptureJob {
+                        key: "sdf".into(),
+                        bounds: [7.0, 11.0, 23.0, 17.0],
+                        instances: vec![sdf],
+                        textured_draws: vec![],
+                        text_nodes: vec![],
+                    },
+                    capture("rui_filter_cap:c", "sdf", [3.5, 5.5, 41.0, 17.0], 0.8),
+                    capture(
+                        "rui_filter_cap:pending",
+                        "late",
+                        [2.0, 4.0, 27.0, 21.0],
+                        1.0,
+                    ),
+                ];
+                let mut flush =
+                    |jobs: &[CaptureJob], images: &mut HashMap<String, GpuImageTexture>| {
+                        pass.flush(
+                            &gpu.device,
+                            &gpu.queue,
+                            &textured,
+                            images,
+                            jobs,
+                            &[],
+                            0.0,
+                            [0.0; 2],
+                            1.5,
+                            &rect,
+                            None,
+                            None,
+                        )
+                    };
+                if batch {
+                    assert!(flush(&captures, &mut images));
+                } else {
+                    for cap in &captures {
+                        let ran = flush(std::slice::from_ref(cap), &mut images);
+                        assert_eq!(ran, cap.key != "rui_filter_cap:pending");
+                    }
+                }
+                assert!(!images.contains_key("rui_filter_cap:pending"));
+                let late = images.remove("source").unwrap();
+                images.insert("late".into(), late);
+                assert!(flush(&captures[4..], &mut images));
+                drop(flush);
+                let mut result = vec![];
+                for cap in &captures {
+                    assert_eq!(images[&cap.key]._texture.format(), format);
+                    let w = (cap.bounds[2] * 1.5).round() as u32;
+                    let h = (cap.bounds[3] * 1.5).round() as u32;
+                    let mut output = readback_texture(
+                        &gpu.device,
+                        &gpu.queue,
+                        &images[&cap.key]._texture,
+                        w,
+                        h,
+                        gpu.device.create_command_encoder(&Default::default()),
+                    )
+                    .unwrap();
+                    if format == wgpu::TextureFormat::Bgra8UnormSrgb {
+                        for pixel in output.pixels.chunks_exact_mut(4) {
+                            pixel.swap(0, 2);
+                        }
+                    }
+                    assert!(
+                        output.pixels.chunks_exact(4).any(|p| p[3] > 20),
+                        "{} must paint",
+                        cap.key
+                    );
+                    if batch && cap.key != "sdf" {
+                        assert!(
+                            output.pixels.chunks_exact(4).any(|p| p[3] == 0),
+                            "{} keeps its transparent margins",
+                            cap.key
+                        );
+                    }
+                    if batch {
+                        if let Ok(dir) = std::env::var("RUI_CAPTURE_TEST_OUTPUT") {
+                            let name = cap.key.replace(':', "-");
+                            image::save_buffer(
+                                std::path::Path::new(&dir).join(format!("{name}.png")),
+                                &output.pixels,
+                                w,
+                                h,
+                                image::ColorType::Rgba8,
+                            )
+                            .unwrap();
+                        }
+                    }
+                    result.push(output.pixels);
+                }
+                result
+            };
+            let batched = run(true);
+            assert_eq!(
+                batched,
+                run(false),
+                "batched captures must preserve every pixel and command dependency"
+            );
+            if let Some(reference) = &rgba_reference {
+                assert_eq!(
+                    &batched, reference,
+                    "capture colors must match across target formats"
+                );
+            } else {
+                rgba_reference = Some(batched);
+            }
+        }
     }
 }

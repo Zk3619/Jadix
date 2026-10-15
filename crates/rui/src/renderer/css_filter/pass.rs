@@ -55,6 +55,8 @@ impl Default for FilterUniforms {
 }
 
 pub struct CssFilterPassGpu {
+    #[cfg(test)]
+    force_named_snapshots: bool,
     pipeline: wgpu::RenderPipeline,
     uniform_bgl: wgpu::BindGroupLayout,
     // Each encoded pass needs its own uniform snapshot until submission.
@@ -213,6 +215,8 @@ impl CssFilterPassGpu {
         });
 
         Self {
+            #[cfg(test)]
+            force_named_snapshots: false,
             pipeline,
             uniform_bgl,
             uniform_slots: vec![(uniform_buf, uniform_bg)],
@@ -464,6 +468,19 @@ impl CssFilterPassGpu {
             last_key = dst_key.clone();
             let result = prim.result_name();
             if !result.is_empty() && !is_last {
+                // The immediately following pass reads before ping/pong is
+                // reused. Only references beyond it need a durable snapshot.
+                let needs_snapshot = job.graph.primitives[pi + 2..]
+                    .iter()
+                    .any(|later| primitive_reads_result(later, result));
+                #[cfg(test)]
+                let needs_snapshot = needs_snapshot
+                    || self.force_named_snapshots
+                    || std::env::var_os("RUI_FILTER_ALL_SNAPSHOTS").is_some();
+                if !needs_snapshot {
+                    named.insert(result.to_string(), dst_key.clone());
+                    continue;
+                }
                 // Persist named result into a stable slot so later prims can read it after ping-pong reuse.
                 let persist = format!("rui_filter_rt:{}:{}", job.output_key, result);
                 self.ensure_target(device, textured, images, &persist, w, h);
@@ -1032,6 +1049,28 @@ impl CssFilterPassGpu {
     }
 }
 
+fn primitive_reads_result(primitive: &FilterPrimitive, result: &str) -> bool {
+    let reads = |input: &FilterInput| matches!(input, FilterInput::Result(name) if name == result);
+    match primitive {
+        FilterPrimitive::Blend { in1, in2, .. }
+        | FilterPrimitive::Composite { in1, in2, .. }
+        | FilterPrimitive::DisplacementMap { in1, in2, .. } => reads(in1) || reads(in2),
+        FilterPrimitive::ColorMatrix { in1, .. }
+        | FilterPrimitive::ComponentTransfer { in1, .. }
+        | FilterPrimitive::ConvolveMatrix { in1, .. }
+        | FilterPrimitive::DiffuseLighting { in1, .. }
+        | FilterPrimitive::GaussianBlur { in1, .. }
+        | FilterPrimitive::Morphology { in1, .. }
+        | FilterPrimitive::Offset { in1, .. }
+        | FilterPrimitive::SpecularLighting { in1, .. }
+        | FilterPrimitive::Tile { in1, .. } => reads(in1),
+        FilterPrimitive::Merge { nodes, .. } => nodes.iter().any(reads),
+        FilterPrimitive::Flood { .. }
+        | FilterPrimitive::Image { .. }
+        | FilterPrimitive::Turbulence { .. } => false,
+    }
+}
+
 fn fill_matrix_from_values(u: &mut FilterUniforms, values: &[f32]) {
     let mut v = [
         1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0,
@@ -1138,6 +1177,109 @@ fn light_dir(light: &LightSource) -> (f32, f32, f32) {
 mod tests {
     use super::*;
     use crate::renderer::offscreen::{readback_texture, OffscreenGpu};
+
+    #[test]
+    #[ignore = "native GPU named-result lifetime pixel comparison; run explicitly"]
+    fn transient_filter_results_match_persistent_snapshots() {
+        let gpu = OffscreenGpu::with_backends(wgpu::Backends::GL).expect("native GL GPU");
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            width: 32,
+            height: 32,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 1,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            color_space: Default::default(),
+            view_formats: vec![],
+        };
+        let textured = TexturedQuadPipeline::new(&gpu.device, &config);
+        let mut rgba = vec![0; 32 * 32 * 4];
+        for y in 0..32 {
+            for x in 0..32 {
+                let i = (y * 32 + x) * 4;
+                rgba[i..i + 4].copy_from_slice(&[
+                    (x * 7) as u8,
+                    (y * 7) as u8,
+                    120,
+                    if x < 8 || y < 8 { 0 } else { 160 },
+                ]);
+            }
+        }
+        let input = crate::app::image_registry::upload_rgba8(
+            &gpu.device,
+            &gpu.queue,
+            &textured,
+            &rgba,
+            32,
+            32,
+        );
+        let graphs = [
+            "grayscale(0.4) brightness(0.7) contrast(1.2) saturate(0.8)",
+            "drop-shadow(2px 3px 2px #123456) grayscale(0.5) drop-shadow(-2px 1px 1px #abcdef)",
+            "blur(2px) sepia(0.8) hue-rotate(45deg) opacity(0.6)",
+        ];
+        for css in graphs {
+            let graph = crate::style::resolve_filter_list_to_graph(
+                &crate::style::parse_filter(css).unwrap(),
+            )
+            .unwrap();
+            let run = |persist: bool| {
+                let mut filters = CssFilterPassGpu::new(&gpu.device, config.format);
+                filters.force_named_snapshots = persist;
+                let mut images = HashMap::from([(
+                    "source".into(),
+                    GpuImageTexture {
+                        _texture: input._texture.clone(),
+                        bind_group: input.bind_group.clone(),
+                    },
+                )]);
+                let job = FilterJob {
+                    graph: graph.clone(),
+                    input_key: "source".into(),
+                    output_key: "output".into(),
+                    bounds: [0.0, 0.0, 32.0, 32.0],
+                };
+                assert!(filters.flush_filter_jobs(
+                    &gpu.device,
+                    &gpu.queue,
+                    &textured,
+                    &mut images,
+                    &[job],
+                    1.0,
+                    None
+                ));
+                let snapshots = filters
+                    .target_size
+                    .keys()
+                    .filter(|key| key.starts_with("rui_filter_rt:"))
+                    .count();
+                let output = readback_texture(
+                    &gpu.device,
+                    &gpu.queue,
+                    &images["output"]._texture,
+                    32,
+                    32,
+                    gpu.device.create_command_encoder(&Default::default()),
+                )
+                .unwrap();
+                (output.pixels, snapshots)
+            };
+            let (optimized, fewer) = run(false);
+            let (reference, all) = run(true);
+            assert_eq!(optimized, reference, "named dependencies changed: {css}");
+            assert!(
+                fewer < all,
+                "should eliminate temporary snapshots: {css}, {fewer}/{all}"
+            );
+            if css.starts_with("drop-shadow") {
+                assert!(
+                    fewer > 0,
+                    "branching drop-shadow must preserve results across reuse"
+                );
+            }
+        }
+    }
 
     #[test]
     #[ignore = "native GPU filter batch pixel comparison; run explicitly"]
