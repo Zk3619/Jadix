@@ -643,6 +643,12 @@ pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
     }
     state.attempted.merge(mark);
 
+    // Emoji slots use an isolated raster FontSystem. Calling db_mut without
+    // loading a face still clears cosmic-text's font match cache.
+    if todo.is_empty() {
+        return;
+    }
+
     let db = font_system.db_mut();
     let mut loaded_any = false;
     if todo.cjk {
@@ -837,6 +843,29 @@ pub fn create_font_system() -> FontSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deferred_emoji_coverage_preserves_font_match_cache() {
+        if env_flag_enabled("RUI_LOAD_SYSTEM_EMOJI") {
+            return;
+        }
+        let mut fs = create_font_system();
+        let attrs = glyphon::Attrs::new().family(glyphon::Family::SansSerif);
+        let matches = fs.get_font_matches(&attrs);
+        for _ in 0..3 {
+            ensure_scripts(
+                &mut fs,
+                ScriptNeeds {
+                    emoji: true,
+                    ..Default::default()
+                },
+            );
+            assert!(
+                std::sync::Arc::ptr_eq(&matches, &fs.get_font_matches(&attrs)),
+                "deferred emoji coverage must not invalidate font matching"
+            );
+        }
+    }
 
     #[test]
     fn ensure_coverage_injects_cjk_into_each_font_system() {

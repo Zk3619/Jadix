@@ -1,4 +1,6 @@
+use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::OnceLock;
 
@@ -298,7 +300,9 @@ pub struct RuiTextRenderer {
     /// `Copy` raw pointer so call sites can borrow atlas/cache disjointly via `unsafe { &mut *fs }`.
     pub(crate) font_system: *mut FontSystem,
     owned_font_system: Option<Box<FontSystem>>,
-    pub swash_cache: SwashCache,
+    /// CPU rasters are shared only with renderers using this FontSystem. GPU
+    /// atlas slots and meshes remain independent, including custom emoji ids.
+    pub swash_cache: Rc<RefCell<SwashCache>>,
     pub text_atlas: TextAtlas,
     pub text_renderer: TextRenderer,
     pub viewport: Viewport,
@@ -340,6 +344,7 @@ impl RuiTextRenderer {
             ptr,
             Some(owned),
             glyphon::Cache::new(device),
+            Rc::new(RefCell::new(SwashCache::new())),
         );
         log::debug!("RuiTextRenderer::new done");
         out
@@ -360,6 +365,7 @@ impl RuiTextRenderer {
             shared,
             None,
             glyphon::Cache::new(device),
+            Rc::new(RefCell::new(SwashCache::new())),
         )
     }
 
@@ -378,6 +384,7 @@ impl RuiTextRenderer {
             source.font_system,
             None,
             source.gpu_cache.clone(),
+            source.swash_cache.clone(),
         )
     }
 
@@ -388,9 +395,8 @@ impl RuiTextRenderer {
         font_system: *mut FontSystem,
         owned_font_system: Option<Box<FontSystem>>,
         cache: glyphon::Cache,
+        swash_cache: Rc<RefCell<SwashCache>>,
     ) -> Self {
-        log::debug!("with_font_ptr: SwashCache");
-        let swash_cache = SwashCache::new();
         log::debug!("with_font_ptr: glyphon Cache");
         log::debug!("with_font_ptr: TextAtlas::new");
         let mut text_atlas = TextAtlas::new(device, queue, &cache, config.format);
@@ -439,7 +445,7 @@ impl RuiTextRenderer {
             &mut self.text_atlas,
             &self.viewport,
             text_areas,
-            &mut self.swash_cache,
+            &mut self.swash_cache.borrow_mut(),
             |input| self.emoji_cache.rasterize(input),
         ) {
             log::error!("glyphon TextRenderer::prepare failed: {err:?}");
@@ -476,6 +482,140 @@ impl RuiTextRenderer {
 mod tests {
     use super::*;
     use glyphon::RasterizeCustomGlyphRequest;
+
+    #[test]
+    #[ignore = "native GPU glyph cache pixel comparison; run explicitly"]
+    fn shared_cpu_glyph_rasters_preserve_independent_meshes() {
+        use super::super::offscreen::{readback_texture, OffscreenGpu};
+        let gpu = OffscreenGpu::with_backends(wgpu::Backends::GL).expect("native GL GPU");
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            width: 512,
+            height: 128,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 1,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            color_space: Default::default(),
+            view_formats: vec![],
+        };
+        let mut primary = RuiTextRenderer::new(&gpu.device, &gpu.queue, &config);
+        let mut shared =
+            RuiTextRenderer::new_sharing_resources(&gpu.device, &gpu.queue, &config, &primary);
+        let mut independent = RuiTextRenderer::new_sharing_font_system(
+            &gpu.device,
+            &gpu.queue,
+            &config,
+            primary.font_system,
+        );
+        assert!(Rc::ptr_eq(&primary.swash_cache, &shared.swash_cache));
+        assert!(
+            primary.swash_cache.borrow().image_cache.is_empty(),
+            "construction must not rasterize glyphs"
+        );
+        let mut buffer =
+            glyphon::Buffer::new(primary.font_system_mut(), glyphon::Metrics::new(22.0, 30.0));
+        buffer.set_size(Some(500.0), Some(120.0));
+        buffer.set_text(
+            "Gallery 字形缓存 ABC xyz",
+            &glyphon::Attrs::new(),
+            glyphon::Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(primary.font_system_mut(), false);
+        let area = |top| glyphon::TextArea {
+            buffer: &buffer,
+            left: 3.25,
+            top,
+            scale: 1.0,
+            bounds: glyphon::TextBounds {
+                left: 0,
+                top: 0,
+                right: 512,
+                bottom: 128,
+            },
+            default_color: glyphon::Color::rgb(180, 220, 255),
+            custom_glyphs: &[],
+        };
+        primary.prepare(&gpu.device, &gpu.queue, &config, std::iter::once(area(0.0)));
+        let entries = primary.swash_cache.borrow().image_cache.len();
+        assert!(entries > 0);
+        shared.prepare(
+            &gpu.device,
+            &gpu.queue,
+            &config,
+            std::iter::once(area(45.0)),
+        );
+        assert_eq!(
+            primary.swash_cache.borrow().image_cache.len(),
+            entries,
+            "integer translation must reuse CPU rasters"
+        );
+        independent.prepare(
+            &gpu.device,
+            &gpu.queue,
+            &config,
+            std::iter::once(area(45.0)),
+        );
+        let draw = |other: &RuiTextRenderer| {
+            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("shared glyph raster pixels"),
+                size: wgpu::Extent3d {
+                    width: 512,
+                    height: 128,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: config.format,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view,
+                        depth_slice: None,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                primary.render(&mut pass);
+                other.render(&mut pass);
+            }
+            readback_texture(&gpu.device, &gpu.queue, &texture, 512, 128, encoder)
+                .expect("readback")
+        };
+        let actual = draw(&shared);
+        let expected = draw(&independent);
+        assert_eq!(actual.pixels, expected.pixels);
+        assert!(
+            actual.pixels.chunks_exact(4).any(|p| p[3] != 0),
+            "comparison must contain visible glyphs"
+        );
+        if let Some(dir) = std::env::var_os("RUI_GLYPH_TEST_OUTPUT") {
+            std::fs::create_dir_all(&dir).unwrap();
+            image::save_buffer(
+                std::path::Path::new(&dir).join("shared-glyph-rasters.png"),
+                &actual.pixels,
+                512,
+                128,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
+        }
+    }
 
     fn sample_raster(w: u16, h: u16) -> EmojiRaster {
         EmojiRaster::new(w, h, vec![10; (w as usize) * (h as usize) * 4])

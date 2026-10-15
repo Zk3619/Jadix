@@ -219,6 +219,43 @@ struct ShadowBitmapOutput {
     draw_rect: [f32; 4],
 }
 
+/// Composite coverage with the same integer rounding as the shadow reference.
+/// Clip once per glyph; transparent outline pixels never change the destination.
+fn stamp_shadow_glyph(
+    dst: &mut [u16],
+    dst_size: [u32; 2],
+    coverage: &[u8],
+    glyph_size: [u32; 2],
+    origin: [i32; 2],
+    alpha: u8,
+) {
+    let [bw, bh] = dst_size;
+    let [gw, gh] = glyph_size;
+    let [x, y] = origin;
+    let left = (-x).max(0).min(gw as i32) as usize;
+    let right = (bw as i32 - x).clamp(left as i32, gw as i32) as usize;
+    let top = (-y).max(0).min(gh as i32) as usize;
+    let bottom = (bh as i32 - y).clamp(top as i32, gh as i32) as usize;
+    if left == right || alpha == 0 {
+        return;
+    }
+    for row in top..bottom {
+        let src_start = row * gw as usize + left;
+        let dst_start = (y + row as i32) as usize * bw as usize + (x + left as i32) as usize;
+        let len = right - left;
+        for (&a, dest) in coverage[src_start..src_start + len]
+            .iter()
+            .zip(&mut dst[dst_start..dst_start + len])
+        {
+            if a == 0 {
+                continue;
+            }
+            let src = (a as u16 * alpha as u16) / 255;
+            *dest = src + *dest - (src * *dest) / 255;
+        }
+    }
+}
+
 /// 使用 swash 将文本阴影栅格化为 RGBA 位图（Vogel spiral 多采样）。
 /// 仅在缓存未命中时调用（每个唯一阴影文本仅一次）。
 fn generate_shadow_bitmap(
@@ -238,7 +275,6 @@ fn generate_shadow_bitmap(
         data: Vec<u8>,
         width: u32,
         height: u32,
-        is_color: bool,
     }
     let mut glyph_entries: Vec<GlyphEntry> = Vec::new();
     for run in buffer.layout_runs() {
@@ -248,17 +284,23 @@ fn generate_shadow_bitmap(
                 continue;
             }
             let physical = g.physical((0.0, 0.0), 1.0);
-            let img = match swash_cache.get_image_uncached(font_system, physical.cache_key) {
+            let img = match swash_cache
+                .get_image(font_system, physical.cache_key)
+                .as_ref()
+            {
                 Some(img) => img,
                 None => continue,
             };
             glyph_entries.push(GlyphEntry {
                 px: physical.x + img.placement.left,
                 py: line_y_px + physical.y - img.placement.top,
-                data: img.data,
+                data: if matches!(img.content, glyphon::SwashContent::Color) {
+                    img.data.chunks_exact(4).map(|px| px[3]).collect()
+                } else {
+                    img.data.clone()
+                },
                 width: img.placement.width,
                 height: img.placement.height,
-                is_color: matches!(img.content, glyphon::SwashContent::Color),
             });
         }
     }
@@ -306,28 +348,14 @@ fn generate_shadow_bitmap(
         for ge in &glyph_entries {
             let px0 = ge.px - bmp_x0 + ox.round() as i32;
             let py0 = ge.py - bmp_y0 + oy.round() as i32;
-            for row in 0..ge.height as i32 {
-                let by = py0 + row;
-                if by < 0 || by >= bh as i32 {
-                    continue;
-                }
-                let row_off = (row as u32 * ge.width) as usize;
-                let dst_row = by as usize * bw as usize;
-                for col in 0..ge.width as i32 {
-                    let bx = px0 + col;
-                    if bx < 0 || bx >= bw as i32 {
-                        continue;
-                    }
-                    let src_a = if ge.is_color {
-                        ge.data[(row_off + col as usize) * 4 + 3]
-                    } else {
-                        ge.data[row_off + col as usize]
-                    };
-                    let src = (src_a as u16 * sample_alpha as u16) / 255;
-                    let dst = alpha_buf[dst_row + bx as usize];
-                    alpha_buf[dst_row + bx as usize] = src + dst - (src * dst) / 255;
-                }
-            }
+            stamp_shadow_glyph(
+                &mut alpha_buf,
+                [bw, bh],
+                &ge.data,
+                [ge.width, ge.height],
+                [px0, py0],
+                sample_alpha,
+            );
         }
     };
 
@@ -3449,7 +3477,7 @@ pub fn prepare_text_frame_at(
                         } else if let Some(bmp) = generate_shadow_bitmap(
                             &text_renderer.shaped_cache[i].buffer,
                             unsafe { &mut *text_renderer.font_system },
-                            &mut text_renderer.swash_cache,
+                            &mut text_renderer.swash_cache.borrow_mut(),
                             sc,
                             sdx,
                             sdy,
@@ -4034,7 +4062,7 @@ pub fn prepare_text_frame_at(
             &mut text_renderer.text_atlas,
             &text_renderer.viewport,
             warmup_areas,
-            &mut text_renderer.swash_cache,
+            &mut text_renderer.swash_cache.borrow_mut(),
             |input| text_renderer.emoji_cache.rasterize(input),
         ) {
             log::error!("glyphon warmup prepare failed: {err:?}");
@@ -4049,7 +4077,7 @@ pub fn prepare_text_frame_at(
         &mut text_renderer.text_atlas,
         &text_renderer.viewport,
         text_areas,
-        &mut text_renderer.swash_cache,
+        &mut text_renderer.swash_cache.borrow_mut(),
         |input| text_renderer.emoji_cache.rasterize(input),
     ) {
         log::error!("glyphon prepare failed: {err:?}");
@@ -4180,6 +4208,40 @@ mod text_shadow_tests {
             }
         }
         any.then_some(max_y)
+    }
+
+    #[test]
+    fn shadow_coverage_clipping_matches_scalar_composite() {
+        let coverage: Vec<u8> = (0..35).map(|i| [0, 1, 64, 127, 255][i % 5]).collect();
+        for y in -7..10 {
+            for x in -9..12 {
+                let mut expected: Vec<u16> = (0..99).map(|i| (i * 37 % 256) as u16).collect();
+                let mut actual = expected.clone();
+                // Multiple translucent overlapping stamps must preserve integer rounding.
+                for alpha in [0_u8, 1, 17, 128, 254, 255] {
+                    for row in 0..5_i32 {
+                        for col in 0..7_i32 {
+                            let (bx, by) = (x + col, y + row);
+                            if (0..11).contains(&bx) && (0..9).contains(&by) {
+                                let src =
+                                    coverage[(row * 7 + col) as usize] as u16 * alpha as u16 / 255;
+                                let dst = &mut expected[(by * 11 + bx) as usize];
+                                *dst = src + *dst - src * *dst / 255;
+                            }
+                        }
+                    }
+                    super::stamp_shadow_glyph(
+                        &mut actual,
+                        [11, 9],
+                        &coverage,
+                        [7, 5],
+                        [x, y],
+                        alpha,
+                    );
+                    assert_eq!(actual, expected, "origin=({x},{y}) alpha={alpha}");
+                }
+            }
+        }
     }
 
     #[test]
@@ -4340,6 +4402,19 @@ mod text_shadow_tests {
         };
         assert!(bmp.width > 0 && bmp.height > 0);
         assert!(bmp.rgba.chunks_exact(4).any(|p| p[3] > 0));
+        let raster_count = swash.image_cache.len();
+        assert!(
+            raster_count > 0,
+            "shadow must share cached glyph rasters with text"
+        );
+        let repeated =
+            generate_shadow_bitmap(&buffer, &mut fs, &mut swash, [0, 0, 0, 200], 0.0, 8.0, 2.0)
+                .unwrap();
+        assert_eq!(swash.image_cache.len(), raster_count);
+        assert_eq!(
+            bmp.rgba, repeated.rgba,
+            "cached shadow must preserve every pixel"
+        );
 
         let mut sum_a = 0.0_f64;
         let mut sum_ay = 0.0_f64;

@@ -281,9 +281,18 @@ impl TextRenderer {
                         },
                         bounds,
                         |system, _rasterize_custom_glyph| -> Option<GetGlyphImageResult> {
-                            let image = system
-                                .cache
-                                .get_image_uncached(system.font_system, physical_glyph.cache_key)?;
+                            // A glyph can enter several independent atlases. Keep a
+                            // bounded, demand-filled CPU cache instead of rasterizing
+                            // it again for every page band or capture.
+                            let key = physical_glyph.cache_key;
+                            if system.cache.image_cache.len() >= 4096
+                                && !system.cache.image_cache.contains_key(&key)
+                            {
+                                if let Some(old) = system.cache.image_cache.keys().next().copied() {
+                                    system.cache.image_cache.remove(&old);
+                                }
+                            }
+                            let image = system.cache.get_image(system.font_system, key).as_ref()?;
 
                             let content_type = match image.content {
                                 SwashContent::Color => ContentType::Color,
@@ -300,7 +309,7 @@ impl TextRenderer {
                                 left: image.placement.left as i16,
                                 width: image.placement.width as u16,
                                 height: image.placement.height as u16,
-                                data: image.data,
+                                data: image.data.clone(),
                             })
                         },
                         &mut metadata_to_depth,
