@@ -3887,7 +3887,9 @@ impl super::App {
                     // Eager `tree_update_from_elements` on every scroll frame is a full-tree walk.
                     adapter.update_if_active(|| state.accesskit_tree_update());
                 }
-                let scroll_metrics: Vec<_> = state.last_render_scroll_metrics.drain(..).collect();
+                // The next scroll frame needs these clips to damage/blit only its viewport.
+                // Consuming them here forced every native wheel frame into FullClear.
+                let scroll_metrics = state.last_render_scroll_metrics.clone();
                 let mut diag_track_bounds: std::collections::HashMap<String, ([f32; 4], [f32; 4])> =
                     std::collections::HashMap::new();
                 let mut diag_thumb_bounds: std::collections::HashMap<String, ([f32; 4], [f32; 4])> =
@@ -5233,6 +5235,15 @@ mod wheel_recovery_tests {
                             std::time::Instant::now() - std::time::Duration::from_millis(16);
                         app.handle_redraw_requested(id, event_loop);
                         let guard = app.state.borrow();
+                        assert!(
+                            guard
+                                .as_ref()
+                                .unwrap()
+                                .last_render_scroll_metrics
+                                .iter()
+                                .any(|(id, _, _, _)| id == rest),
+                            "native redraw consumed clips needed by the next scroll frame"
+                        );
                         let mut found = false;
                         crate::core::tree::walk_elements(
                             &guard.as_ref().unwrap().root_element,

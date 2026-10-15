@@ -50,6 +50,50 @@ use std::sync::OnceLock;
 use std::time::Instant;
 use taffy::prelude::Dimension;
 
+/// Promote a host without swapping the just-culled host into the eviction tail.
+fn promote_page_stack_text_cache_slot<T>(
+    keys: &mut [u64],
+    renderers: &mut [T],
+    slot: usize,
+    found: usize,
+) {
+    keys[slot..=found].rotate_right(1);
+    renderers[slot..=found].rotate_right(1);
+}
+
+#[cfg(test)]
+#[test]
+fn page_stack_text_cache_keeps_recent_hosts_on_reentry() {
+    let mut keys: Vec<u64> = (1..=64).collect();
+    let mut renderers: Vec<u64> = keys.iter().map(|k| k * 100).collect();
+    keys.push(65);
+    renderers.push(6500);
+    promote_page_stack_text_cache_slot(&mut keys, &mut renderers, 0, 64);
+    keys.truncate(64);
+    renderers.truncate(64);
+    assert_eq!(
+        &keys[..3],
+        &[65, 1, 2],
+        "the host just left must survive a full cache"
+    );
+    assert!(!keys.contains(&64), "the least recent host should leave");
+    promote_page_stack_text_cache_slot(&mut keys, &mut renderers, 0, 1);
+    assert_eq!(&keys[..3], &[1, 65, 2]);
+    assert_eq!(
+        &renderers[..3],
+        &[100, 6500, 200],
+        "reentry must retain the same renderer"
+    );
+    // A second live stacking host must not displace the first host or its history.
+    keys.push(66);
+    renderers.push(6600);
+    promote_page_stack_text_cache_slot(&mut keys, &mut renderers, 1, 64);
+    keys.truncate(64);
+    renderers.truncate(64);
+    assert_eq!(&keys[..4], &[1, 66, 65, 2]);
+    assert_eq!(&renderers[..4], &[100, 6600, 6500, 200]);
+}
+
 fn render_profile_log_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| cfg!(debug_assertions) || std::env::var_os("RUI_RENDER_PROFILE").is_some())
@@ -252,7 +296,7 @@ pub(super) struct AppState {
     render_prof_text_ms: f32,
     render_prof_encode_ms: f32,
     #[cfg(test)]
-    native_render_sample: [f32; 8],
+    native_render_sample: [f32; 12],
     last_text_nodes_cache: Vec<crate::core::tree::TextLayoutInfo>,
     last_text_ui_scale: f32,
     last_text_surface_size: [u32; 2],
@@ -1849,6 +1893,18 @@ impl AppState {
         let backdrop_blur = BackdropBlurPipeline::new(&device, config.format);
         let effect_pass = crate::renderer::EffectPassGpu::new(&device, config.format);
         let css_filter_pass = crate::renderer::CssFilterPassGpu::new(&device, config.format);
+        // Compile fixed path programs with the other window pipelines. Doing
+        // this on the first visible path stalls a scroll frame in the driver.
+        let path2d = if crate::renderer::gpu2d_enabled() {
+            let samples = crate::renderer::path_pipeline::path_msaa_sample_count(&adapter);
+            let path = crate::renderer::path_pipeline::PathGpu::try_new(&device, samples);
+            if path.is_none() {
+                crate::renderer::geometry2d::disable_gpu2d_runtime();
+            }
+            path
+        } else {
+            None
+        };
         let theme_transition =
             crate::renderer::theme_transition::ThemeTransition::new(&device, config.format);
         let mut present_retain = PresentRetainPipeline::new(&device, config.format);
@@ -1911,7 +1967,7 @@ impl AppState {
             #[cfg(feature = "scene3d")]
             scene3d: None,
             shader: None,
-            path2d: None,
+            path2d,
             backdrop_blur,
             effect_pass,
             css_filter_pass,
@@ -1971,7 +2027,7 @@ impl AppState {
             render_prof_text_ms: 0.0,
             render_prof_encode_ms: 0.0,
             #[cfg(test)]
-            native_render_sample: [0.0; 8],
+            native_render_sample: [0.0; 12],
             last_text_nodes_cache: Vec::new(),
             last_text_ui_scale: 0.0,
             last_text_surface_size: [0, 0],
@@ -4106,16 +4162,22 @@ impl AppState {
     fn ensure_page_stack_band_text_renderers(
         &mut self,
         bands: &[crate::layout::layout_tree::OverlayBandRange],
-    ) {
+    ) -> usize {
+        let mut created = 0;
         for (slot, band) in bands.iter().skip(1).enumerate() {
             if let Some(found) = self.page_stack_band_text_keys[slot..]
                 .iter()
                 .position(|key| *key == band.stamp_key)
                 .map(|offset| slot + offset)
             {
-                self.page_stack_band_text_keys.swap(slot, found);
-                self.page_stack_band_text_renderers.swap(slot, found);
+                promote_page_stack_text_cache_slot(
+                    &mut self.page_stack_band_text_keys,
+                    &mut self.page_stack_band_text_renderers,
+                    slot,
+                    found,
+                );
             } else {
+                created += 1;
                 self.page_stack_band_text_keys.push(band.stamp_key);
                 self.page_stack_band_text_renderers
                     .push(RuiTextRenderer::new_sharing_resources(
@@ -4125,18 +4187,28 @@ impl AppState {
                         &self.text_renderer,
                     ));
                 let last = self.page_stack_band_text_keys.len() - 1;
-                self.page_stack_band_text_keys.swap(slot, last);
-                self.page_stack_band_text_renderers.swap(slot, last);
+                // Keep the just-culled host at the front of the history. Swapping
+                // it to `last` immediately evicts it when this cache is full,
+                // causing another cold atlas on a scroll direction change.
+                promote_page_stack_text_cache_slot(
+                    &mut self.page_stack_band_text_keys,
+                    &mut self.page_stack_band_text_renderers,
+                    slot,
+                    last,
+                );
             }
         }
         // Keep only a bounded history of culled hosts, loaded as they are visited.
         let keep = bands.len().saturating_sub(1).max(64);
         self.page_stack_band_text_keys.truncate(keep);
         self.page_stack_band_text_renderers.truncate(keep);
+        created
     }
 
     fn trim_all_glyph_atlases(&mut self) {
         self.text_renderer.trim_glyph_atlas();
+        self.capture_text_renderer.trim_glyph_atlas();
+        self.capture_underlay_text_renderer.trim_glyph_atlas();
         self.overlay_text_renderer.trim_glyph_atlas();
         for tr in &mut self.overlay_band_text_renderers {
             tr.trim_glyph_atlas();
@@ -6057,6 +6129,33 @@ impl AppState {
             &render_result.text_nodes,
             &render_result.input_chrome_instances,
         );
+        #[cfg(test)]
+        if std::env::var_os("RUI_PERF_SLOT_DETAIL").is_some() {
+            let textured = scale_textured_draws(&render_result.textured_draws, 1.0);
+            let begin = Instant::now();
+            let reference = super::draw_cull::last_present_visual_slots_reference(
+                &render_result.node_paints,
+                &render_result.instances,
+                &textured,
+                &render_result.text_nodes,
+                &render_result.input_chrome_instances,
+            );
+            let reference_ms = begin.elapsed().as_secs_f64() * 1000.0;
+            let begin = Instant::now();
+            let indexed = super::draw_cull::last_present_visual_slots(
+                &render_result.node_paints,
+                &render_result.instances,
+                &textured,
+                &render_result.text_nodes,
+                &render_result.input_chrome_instances,
+            );
+            let indexed_ms = begin.elapsed().as_secs_f64() * 1000.0;
+            assert_eq!(indexed, reference, "visual slot ownership changed");
+            eprintln!(
+                "visual-slots paints={} reference={reference_ms:.3}ms indexed={indexed_ms:.3}ms",
+                render_result.node_paints.len()
+            );
+        }
         scale_instances_in_place(&mut render_result.instances, ui_scale_now);
         scale_instances_in_place(&mut render_result.input_chrome_instances, ui_scale_now);
         scale_clip_polys_in_place(&mut render_result.clip_polys, ui_scale_now);
@@ -6227,7 +6326,6 @@ impl AppState {
             };
             self.image_textures.insert_with_size(id, gpu, w, h);
         }
-        #[cfg(test)]
         let images_uploaded = Instant::now();
         #[cfg(feature = "scene3d")]
         {
@@ -6281,6 +6379,7 @@ impl AppState {
                 }
             }
         }
+        let paths_done = Instant::now();
         {
             if !crate::renderer::shader_leaf::shader_gpu_enabled() {
                 let _ = crate::primitives::shader::take_shader_jobs();
@@ -6615,6 +6714,8 @@ impl AppState {
             Vec::new();
         let mut page_stack_skip_glyphon: Vec<bool> = Vec::new();
         let mut skip_page_glyphon = false;
+        let mut band_alloc_ms = 0.0;
+        let mut band_new = 0;
         // Only node present executes the caption repair pass. Full draws must
         // keep complete page runs instead of cutting holes for an absent pass.
         let (caption_replay_runs, caption_glyph_holes) = if gpu_present.use_node_present {
@@ -6630,7 +6731,9 @@ impl AppState {
             (Vec::new(), Vec::new())
         };
         let (underline_instances, caret_instances, shadow_tex_draws) = if has_page_stack_bands {
-            self.ensure_page_stack_band_text_renderers(&page_stack_band_ranges);
+            let band_begin = Instant::now();
+            band_new = self.ensure_page_stack_band_text_renderers(&page_stack_band_ranges);
+            band_alloc_ms = band_begin.elapsed().as_secs_f32() * 1000.0;
             let mut underlines = Vec::with_capacity(page_stack_band_ranges.len());
             let mut shadow_bands = Vec::with_capacity(page_stack_band_ranges.len());
             page_stack_skip_glyphon = vec![false; page_stack_band_ranges.len()];
@@ -7273,6 +7376,10 @@ impl AppState {
                 (fx_begin - images_uploaded).as_secs_f32() * 1000.0,
                 pending_count as f32,
                 self.page_stack_band_text_renderers.len() as f32,
+                (paths_done - images_uploaded).as_secs_f32() * 1000.0,
+                (fx_begin - paths_done).as_secs_f32() * 1000.0,
+                band_alloc_ms,
+                band_new as f32,
             ];
         }
         let prev_presented_underlines = self.last_presented_underlines.clone();
@@ -8445,6 +8552,17 @@ impl AppState {
             let elapsed = self.render_prof_last.elapsed();
             if elapsed >= std::time::Duration::from_secs(1) && render_profile_log_enabled() {
                 let f = self.render_prof_frames.max(1) as f32;
+                if (text_done - upload_done).as_secs_f32() * 1000.0 > 16.67 {
+                    log::warn!(
+                        "slow prep frame: images={:.2} paths={:.2} shader={:.2} effects={:.2} glyphs={:.2} band_alloc={band_alloc_ms:.2} band_new={band_new} bands={} captures={capture_n}",
+                        (images_uploaded - upload_done).as_secs_f32() * 1000.0,
+                        (paths_done - images_uploaded).as_secs_f32() * 1000.0,
+                        (fx_begin - paths_done).as_secs_f32() * 1000.0,
+                        (fx_done - fx_begin).as_secs_f32() * 1000.0,
+                        (text_done - fx_done).as_secs_f32() * 1000.0,
+                        page_stack_band_ranges.len(),
+                    );
+                }
                 log::warn!(
                     "render profile(last ~{:.0}ms): fps≈{:.1}, pre={:.2}ms, layout={:.2}ms, draw={:.2}ms [layout_tree: rebuild={:.2} setup={:.2} taffy={:.2} collect={:.2} stamp={:.2} skip={:.0} patch={:.0}] [upload={:.2}, acquire={:.2}, text={:.2}, encode={:.2}, submit={:.2}, present={:.2}]",
                     elapsed.as_millis() as f32,

@@ -157,3 +157,26 @@ opt-level = 2
 # Glyph packing and atlas preparation also run on every rendered text frame.
 [profile.dev.package.glyphon]
 opt-level = 2
+
+# GPU validation, command encoding and uploads are also on the frame path.
+# Keep their debug information and assertions while optimizing CPU execution.
+[profile.dev.package.wgpu-core]
+opt-level = 2
+
+[profile.dev.package.wgpu-hal]
+opt-level = 2
+
+[profile.dev.package.wgpu-types]
+opt-level = 2
+
+# WGSL validation and GLSL translation happen lazily when shader/path leaves
+# first enter the viewport. Optimize the parser without changing demand loading.
+[profile.dev.package.naga]
+opt-level = 2
+
+[profile.dev.package.wgpu-naga-bridge]
+opt-level = 2
+
+# Atlas allocation/eviction is on the first-visible glyph path as well.
+[profile.dev.package.etagere]
+opt-level = 2

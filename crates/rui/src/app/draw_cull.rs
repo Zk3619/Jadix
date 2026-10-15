@@ -134,7 +134,7 @@ impl CullRects {
     }
 
     pub(crate) fn hits_instance(self, i: &InstanceInput) -> bool {
-        self.strips().any(|r| instance_hits_damage(i, r))
+        self.len > 0 && self.hits_aabb(instance_paint_bounds(i))
     }
 
     pub(crate) fn hits_textured(self, d: &ScaledTexturedDraw) -> bool {
@@ -154,6 +154,100 @@ impl CullRects {
 pub(crate) fn scale_xywh(rect: [f32; 4], scale: f32) -> [f32; 4] {
     let s = scale.max(0.0);
     [rect[0] * s, rect[1] * s, rect[2] * s, rect[3] * s]
+}
+
+/// Compact caption slivers can share one painter replay. Keep tall repairs
+/// separate so merging cannot bypass the full-pass fallback for broad regions.
+/// Rebuild disjoint coverage after
+/// merging: an expanded hole may meet a third hole, but alpha must paint once.
+fn coalesce_scroll_repairs(rects: &mut Vec<[f32; 4]>) {
+    if rects.len() < 4 || rects.len() > 128 {
+        return;
+    }
+    loop {
+        let mut best = None;
+        let mut best_cost = f32::INFINITY;
+        for i in 0..rects.len() {
+            for j in i + 1..rects.len() {
+                let union = crate::app::damage::union_rects(rects[i], rects[j]);
+                let sum = rects[i][2] * rects[i][3] + rects[j][2] * rects[j][3];
+                let area = union[2] * union[3];
+                let cost = area - sum;
+                if union[3] <= 64.0 && cost <= 16_384.0 && area <= sum * 1.5 && cost < best_cost {
+                    best = Some((i, j, union));
+                    best_cost = cost;
+                }
+            }
+        }
+        let Some((i, j, union)) = best else { break };
+        rects[i] = union;
+        rects.swap_remove(j);
+    }
+    let mut disjoint = Vec::new();
+    rects.sort_by(|a, b| (b[2] * b[3]).total_cmp(&(a[2] * a[3])));
+    for rect in rects.drain(..) {
+        crate::app::damage::push_disjoint_rect(&mut disjoint, rect);
+    }
+    *rects = disjoint;
+}
+
+#[cfg(test)]
+#[test]
+fn scroll_repairs_merge_clustered_caption_slivers_and_keep_distant_edges() {
+    let original = vec![
+        [396.0, 2112.0, 3432.0, 36.0],
+        [3810.0, 87.0, 15.0, 2025.0],
+        [459.0, 84.0, 3306.0, 8.0],
+        [454.0, 84.0, 5.0, 8.0],
+        [454.0, 92.0, 143.0, 5.0],
+        [600.0, 92.0, 120.0, 5.0],
+        [723.0, 92.0, 150.0, 5.0],
+        [876.0, 92.0, 92.0, 5.0],
+        [970.0, 92.0, 113.0, 5.0],
+    ];
+    let mut repairs = original.clone();
+    coalesce_scroll_repairs(&mut repairs);
+    assert_eq!(
+        repairs.len(),
+        3,
+        "one clustered header repair plus two edges"
+    );
+    for rect in original {
+        let mut missing = vec![rect];
+        for repair in &repairs {
+            missing = missing
+                .into_iter()
+                .flat_map(|r| crate::app::damage::subtract_rect(r, *repair))
+                .collect();
+        }
+        assert!(missing.is_empty(), "repair lost coverage: {rect:?}");
+    }
+    for (i, a) in repairs.iter().enumerate() {
+        for b in &repairs[i + 1..] {
+            assert!(intersect_rects(*a, *b).is_none(), "alpha replay overlaps");
+        }
+    }
+    assert!(
+        !repairs.iter().any(|r| r[0] <= 1920.0
+            && r[0] + r[2] > 1920.0
+            && r[1] <= 1080.0
+            && r[1] + r[3] > 1080.0),
+        "distant edges must keep copied middle pixels"
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn broad_scroll_repairs_keep_the_full_pass_cost_fallback() {
+    let mut rects: Vec<_> = (0..12)
+        .map(|i| [i as f32 * 32.0, 0.0, 24.0, 250.0])
+        .collect();
+    coalesce_scroll_repairs(&mut rects);
+    assert!(scroll_repair_prefers_full(
+        CullRects::from_rects(rects),
+        3840,
+        2160
+    ));
 }
 
 /// Final scroll repair coverage. Inputs already include each owner's paint
@@ -178,6 +272,13 @@ pub(crate) fn scroll_repair_rects_physical(
         let y = r[1].floor();
         let r = [x, y, (r[0] + r[2]).ceil() - x, (r[1] + r[3]).ceil() - y];
         crate::app::damage::push_disjoint_rect(&mut rects, r);
+    }
+    #[cfg(test)]
+    let merge = std::env::var("RUI_PERF_REPAIR_MERGE").as_deref() != Ok("0");
+    #[cfg(not(test))]
+    let merge = true;
+    if merge {
+        coalesce_scroll_repairs(&mut rects);
     }
     CullRects::from_rects(rects)
 }
@@ -2835,6 +2936,23 @@ pub(crate) fn node_paint_visual_bounds_in(
     chrome: &[InstanceInput],
     paints: &[NodePaint],
 ) -> [f32; 4] {
+    node_paint_visual_bounds_with_ownership(p, instances, textured, texts, chrome, |channel, i| {
+        nested_foreign_owns(p, paints, i, |q| match channel {
+            0 => q.instance,
+            1 => q.textured,
+            _ => q.text,
+        })
+    })
+}
+
+fn node_paint_visual_bounds_with_ownership(
+    p: &NodePaint,
+    instances: &[InstanceInput],
+    textured: &[ScaledTexturedDraw],
+    texts: &[TextLayoutInfo],
+    chrome: &[InstanceInput],
+    foreign_owns: impl Fn(usize, usize) -> bool,
+) -> [f32; 4] {
     // Text/caret leaves have no SDF. Starting from the flex `w(100%)` layout box
     // made last-present (and dest-reset ∪ prev) the whole Input content slot —
     // blink then punched the rounded stroke and the sibling clear X.
@@ -2846,7 +2964,7 @@ pub(crate) fn node_paint_visual_bounds_in(
     let lo = p.instance.0.min(instances.len());
     let hi = p.instance.1.min(instances.len());
     for (off, inst) in instances[lo..hi].iter().enumerate() {
-        if nested_foreign_owns(p, paints, lo + off, |q| q.instance) {
+        if foreign_owns(0, lo + off) {
             continue;
         }
         // Layered last-present must cover the SDF halo so hide-settle dest-reset
@@ -2867,7 +2985,7 @@ pub(crate) fn node_paint_visual_bounds_in(
     let tlo = p.textured.0.min(textured.len());
     let thi = p.textured.1.min(textured.len());
     for (off, d) in textured[tlo..thi].iter().enumerate() {
-        if nested_foreign_owns(p, paints, tlo + off, |q| q.textured) {
+        if foreign_owns(1, tlo + off) {
             continue;
         }
         let b = textured_paint_bounds(d);
@@ -2895,7 +3013,7 @@ pub(crate) fn node_paint_visual_bounds_in(
     let ghi = p.text.1.min(texts.len());
     let _ = chrome;
     for (off, n) in texts[glo..ghi].iter().enumerate() {
-        if nested_foreign_owns(p, paints, glo + off, |q| q.text) {
+        if foreign_owns(2, glo + off) {
             continue;
         }
         let Some(b) = text_ink_in_slot(n, p.bounds) else {
@@ -2981,11 +3099,44 @@ pub(crate) fn last_present_visual_slots(
     texts: &[TextLayoutInfo],
     chrome: &[InstanceInput],
 ) -> Vec<(u64, [f32; 4])> {
+    #[cfg(test)]
+    if std::env::var_os("RUI_VISUAL_SLOTS_REFERENCE").is_some() {
+        return last_present_visual_slots_reference(
+            node_paints,
+            instances,
+            textured,
+            texts,
+            chrome,
+        );
+    }
+    // Index each payload's candidate owners once. Testing a primitive's
+    // ownership used to scan every paint slot, including unrelated siblings.
+    let mut owners =
+        [instances.len(), textured.len(), texts.len()].map(|len| vec![Vec::new(); len]);
+    for p in node_paints.iter().filter(|p| !p.overlay) {
+        for (channel, (lo, hi)) in [p.instance, p.textured, p.text].into_iter().enumerate() {
+            let hi = hi.min(owners[channel].len());
+            for candidates in &mut owners[channel][lo.min(hi)..hi] {
+                candidates.push(p);
+            }
+        }
+    }
     node_paints
         .iter()
         .filter(|p| !p.overlay)
         .filter_map(|p| {
-            let b = node_paint_visual_bounds_in(p, instances, textured, texts, chrome, node_paints);
+            let b = node_paint_visual_bounds_with_ownership(
+                p,
+                instances,
+                textured,
+                texts,
+                chrome,
+                |channel, i| {
+                    owners[channel][i]
+                        .iter()
+                        .any(|q| is_nested_foreign_slot(p, q))
+                },
+            );
             // Skip phantom `[layout_origin, 0×0]` (caret blink OFF). Recording that
             // origin made the next I-beam look translated from the flex leaf.
             if b[2] <= 0.5 || b[3] <= 0.5 {
@@ -2993,6 +3144,24 @@ pub(crate) fn last_present_visual_slots(
             } else {
                 Some((p.key, b))
             }
+        })
+        .collect()
+}
+
+#[cfg(test)]
+pub(crate) fn last_present_visual_slots_reference(
+    paints: &[NodePaint],
+    instances: &[InstanceInput],
+    textured: &[ScaledTexturedDraw],
+    texts: &[TextLayoutInfo],
+    chrome: &[InstanceInput],
+) -> Vec<(u64, [f32; 4])> {
+    paints
+        .iter()
+        .filter(|p| !p.overlay)
+        .filter_map(|p| {
+            let b = node_paint_visual_bounds_in(p, instances, textured, texts, chrome, paints);
+            (b[2] > 0.5 && b[3] > 0.5).then_some((p.key, b))
         })
         .collect()
 }
@@ -6021,6 +6190,35 @@ mod tests {
             clip_size: InstanceInput::NO_CLIP_SIZE,
             border_extra: 0.0,
             backdrop_blur: 0.0,
+        }
+    }
+
+    #[test]
+    fn cull_instance_bounds_match_per_rect_checks() {
+        let plain = blank_instance(10.0, 20.0, 40.0, 30.0);
+        let mut transformed = blank_instance(90.0, 30.0, 36.0, 28.0);
+        transformed.transform = [0.8, 0.6, -0.6, 0.8, 4.0, -3.0];
+        transformed.shadow_blur = 8.0;
+        transformed.shadow_offset = [2.0, 5.0];
+        let mut clipped = blank_instance(170.0, 40.0, 48.0, 36.0);
+        clipped.clip_pos = [180.0, 32.0];
+        clipped.clip_size = [24.0, 42.0];
+        let instances = [plain, transformed, clipped];
+        let culls = [
+            CullRects::empty(),
+            CullRects::one([12.0, 22.0, 3.0, 4.0]),
+            CullRects::from_rects([
+                [0.0, 0.0, 5.0, 5.0],
+                [120.0, 40.0, 8.0, 8.0],
+                [196.0, 45.0, 4.0, 4.0],
+            ])
+            .unwrap(),
+        ];
+        for cull in culls {
+            for instance in &instances {
+                let reference = cull.strips().any(|r| instance_hits_damage(instance, r));
+                assert_eq!(cull.hits_instance(instance), reference);
+            }
         }
     }
 
