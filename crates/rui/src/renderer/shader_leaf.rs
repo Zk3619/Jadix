@@ -301,6 +301,21 @@ impl ShaderGpu {
         any
     }
 
+    pub(crate) fn prepare_source(&mut self, device: &wgpu::Device, source: &str) -> u64 {
+        let composed = compose_user_wgsl(source);
+        let hash = hash_source(&composed);
+        self.pipelines.entry(hash).or_insert_with(|| {
+            match create_pipeline(device, &self.layout, &composed, self.format) {
+                Some(p) => CachedPipe::Ok(p),
+                None => {
+                    log::warn!("shader() WGSL compile failed; using last frame or magenta");
+                    CachedPipe::Failed
+                }
+            }
+        });
+        hash
+    }
+
     fn render_job(
         &mut self,
         device: &wgpu::Device,
@@ -313,18 +328,7 @@ impl ShaderGpu {
     ) -> bool {
         let w = job.width.max(2);
         let h = job.height.max(2);
-        let composed = compose_user_wgsl(&job.source);
-        let hash = hash_source(&composed);
-        if !self.pipelines.contains_key(&hash) {
-            let cached = match create_pipeline(device, &self.layout, &composed, self.format) {
-                Some(p) => CachedPipe::Ok(p),
-                None => {
-                    log::warn!("shader() WGSL compile failed; using last frame or magenta");
-                    CachedPipe::Failed
-                }
-            };
-            self.pipelines.insert(hash, cached);
-        }
+        let hash = self.prepare_source(device, &job.source);
         let use_fallback = matches!(self.pipelines.get(&hash), Some(CachedPipe::Failed));
         if use_fallback && self.had_good_frame.get(&job.key) == Some(&true) {
             return false;

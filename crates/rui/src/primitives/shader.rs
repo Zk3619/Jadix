@@ -314,6 +314,11 @@ fn unregister_source(id: u64) {
     });
 }
 
+/// Sources owned by mounted leaves, including leaves below the viewport.
+pub(crate) fn mounted_shader_sources() -> Vec<Arc<str>> {
+    SOURCES.with(|sources| sources.borrow().values().cloned().collect())
+}
+
 /// 布局期：有 `rui_shader` 则排队 GPU 叶并返回贴图键。
 pub fn shader_tex_from_element_attrs(
     attrs: &std::collections::HashMap<String, String>,
