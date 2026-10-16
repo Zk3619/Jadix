@@ -2,6 +2,9 @@
 use super::*;
 use crate::core::reactivity::{create_effect, create_root};
 
+#[path = "state_scroll_wheel_perf_tests.rs"]
+mod wheel_event_loop;
+
 #[test]
 #[ignore = "native Windows GPU performance scan; run explicitly with --ignored --nocapture"]
 fn gallery_native_scroll_segment_cost() {
@@ -22,6 +25,10 @@ fn gallery_native_scroll_segment_cost() {
         static LOGGER: TextPerfLog = TextPerfLog;
         let _ = log::set_logger(&LOGGER);
         log::set_max_level(log::LevelFilter::Warn);
+    }
+    if std::env::var_os("RUI_PERF_WHEEL").is_some() {
+        wheel_event_loop::run();
+        return;
     }
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
@@ -109,23 +116,6 @@ fn gallery_native_scroll_segment_cost() {
                         &std::fs::read_to_string(path).unwrap()
                     ));
                 }
-                let mut wheel_app = std::env::var_os("RUI_PERF_WHEEL").map(|_| {
-                    let (_tx, rx) = std::sync::mpsc::channel();
-                    let mut app = crate::app::lifecycle::create_app(
-                        crate::app::WindowOptions::new(),
-                        || {
-                            Element::new()
-                                .w("100%")
-                                .h("100%")
-                                .child(crate::gallery_app::build_gallery_app())
-                        },
-                        event_loop.create_proxy(),
-                        rx,
-                    );
-                    app.state = live_state.clone();
-                    app.secondaries = secondaries.clone();
-                    app
-                });
                 for section in [
                     "basics",
                     "forms",
@@ -135,6 +125,9 @@ fn gallery_native_scroll_segment_cost() {
                     "navigation",
                     "layout",
                     "text",
+                    "events",
+                    "theme",
+                    "about",
                 ] {
                     if let Ok(selected) = std::env::var("RUI_PERF_SECTION") {
                         if !selected.split(',').any(|s| s == section) {
@@ -183,6 +176,15 @@ fn gallery_native_scroll_segment_cost() {
                                     "text" => {
                                         GallerySectionText(GallerySectionTextProps::default())
                                     }
+                                    "events" => {
+                                        GallerySectionEvents(GallerySectionEventsProps::default())
+                                    }
+                                    "theme" => crate::pages::GallerySectionTheme(
+                                        crate::pages::GallerySectionThemeProps::default(),
+                                    ),
+                                    "about" => {
+                                        GallerySectionAbout(GallerySectionAboutProps::default())
+                                    }
                                     _ => GallerySectionBasics(GallerySectionBasicsProps::default()),
                                 }
                             };
@@ -207,10 +209,6 @@ fn gallery_native_scroll_segment_cost() {
                                 false,
                             )
                             .unwrap();
-                    }
-                    if let Some(app) = wheel_app.as_mut() {
-                        profile_gallery_wheel_events(event_loop, app, section, &rest);
-                        continue;
                     }
                     let mut state_guard = live_state.borrow_mut();
                     let state = state_guard.as_mut().unwrap();
@@ -438,94 +436,4 @@ fn gallery_native_scroll_segment_cost() {
     let mut builder = EventLoop::builder();
     builder.with_any_thread(true);
     crate::app::with_ui_build_stack(|| builder.build().unwrap().run_app(Harness).unwrap());
-}
-
-/// Replay native wheel delivery and redraw, including animation/hover/settle.
-/// Do not drain the GPU after every frame: the production event loop does not.
-fn profile_gallery_wheel_events(
-    event_loop: &dyn winit::event_loop::ActiveEventLoop,
-    app: &mut crate::app::App,
-    section: &str,
-    rest: &str,
-) {
-    let live = app.state.clone();
-    let (id, scale, viewport, max) = {
-        let guard = live.borrow();
-        let state = guard.as_ref().unwrap();
-        let (_, viewport, max, _) = state
-            .last_render_scroll_metrics
-            .iter()
-            .find(|(id, _, _, _)| id == rest)
-            .cloned()
-            .expect("gallery viewport");
-        (state.window.id(), state.ui_scale(), viewport, max[1])
-    };
-    app.cursor_pos = winit::dpi::PhysicalPosition::new(
-        ((viewport[0] + viewport[2] * 0.6) * scale) as f64,
-        ((viewport[1] + viewport[3] * 0.5) * scale) as f64,
-    );
-    app.cursor_inside_window = true;
-    app.cursor_move_pending = true;
-    app.handle_redraw_requested(id, event_loop);
-    assert!(
-        live.borrow()
-            .as_ref()
-            .unwrap()
-            .last_render_scroll_metrics
-            .iter()
-            .any(|(id, _, _, _)| id == rest),
-        "native redraw must retain viewport clips for scroll damage"
-    );
-    let step = std::env::var("RUI_PERF_SCROLL_STEP")
-        .ok()
-        .and_then(|s| s.parse::<f32>().ok())
-        .unwrap_or(24.0)
-        .abs()
-        .max(1.0);
-    let leg = (max / step).ceil() as usize + 30;
-    let frames = std::env::var("RUI_PERF_WHEEL_FRAMES")
-        .ok()
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(leg * 2 + 30);
-    let offset = use_signal(
-        &crate::core::scroll_viewport::scroll_offset_y_signal_key(rest),
-        || 0.0_f32,
-    );
-    let mut times = Vec::new();
-    for frame in 0..frames {
-        app.last_frame_time = Instant::now() - std::time::Duration::from_millis(16);
-        let t = Instant::now();
-        if frame < leg * 2 {
-            let dy = if frame < leg { -step } else { step };
-            app.handle_mouse_wheel(
-                id,
-                winit::event::MouseScrollDelta::PixelDelta(winit::dpi::PhysicalPosition::new(
-                    0.0,
-                    (dy * scale) as f64,
-                )),
-            );
-        }
-        app.handle_redraw_requested(id, event_loop);
-        let ms = t.elapsed().as_secs_f32() * 1000.0;
-        times.push(ms);
-        if frame == 0 || frame + 1 == frames || ms > 16.67 {
-            let guard = live.borrow();
-            let state = guard.as_ref().unwrap();
-            let a = state.native_render_sample;
-            eprintln!("wheel/{section} frame={frame} offset={:.1} total={ms:.2} images={:.2} paths={:.2} shader={:.2} effects={:.2} glyphs={:.2} band_alloc={:.2} band_new={} bands={} strips={} pins={}",
-                offset.peek(), a[4], a[8], a[9], a[0], a[1], a[10], a[11], a[7],
-                state.scroll_strip_blit.len(), state.scroll_blit_pins.len());
-        }
-    }
-    let over = times.iter().filter(|&&t| t > 16.67).count();
-    times.sort_by(f32::total_cmp);
-    eprintln!("native-wheel/{section}: frames={frames} median={:.2} worst={:.2} over={over} max_offset={max:.1}", times[times.len()/2], times.last().unwrap());
-    if let Ok(budget) = std::env::var("RUI_PERF_BUDGET_MS") {
-        let budget: f32 = budget.parse().unwrap();
-        assert!(
-            *times.last().unwrap() <= budget,
-            "native-wheel/{section} worst={:.2} exceeds {budget}ms",
-            times.last().unwrap()
-        );
-    }
 }

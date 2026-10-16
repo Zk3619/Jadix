@@ -1345,6 +1345,7 @@ pub(super) fn create_app(
         scrollbar_hide_wake: false,
         scroll_velocity: std::collections::HashMap::new(),
         smooth_active_until: std::collections::HashMap::new(),
+        smooth_scroll_motion: std::collections::HashMap::new(),
         scroll_max_lowpass: std::collections::HashMap::new(),
         scroll_metrics_cache: std::collections::HashMap::new(),
         scroll_metric_duplicate_warned: std::collections::HashSet::new(),

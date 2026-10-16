@@ -15,6 +15,8 @@ struct RetainRt {
     texture: wgpu::Texture,
     /// Ping-pong for overlapping `copy_texture_to_texture` (same-texture copies are invalid).
     scratch: wgpu::Texture,
+    scratch_view: wgpu::TextureView,
+    scratch_bind_group: wgpu::BindGroup,
     view: wgpu::TextureView,
     bind_group: wgpu::BindGroup,
     width: u32,
@@ -224,12 +226,32 @@ impl PresentRetainPipeline {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: self.format,
-            usage: wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST,
+            usage: wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::COPY_DST
+                | wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
+        });
+        let scratch_view = scratch.create_view(&wgpu::TextureViewDescriptor::default());
+        let scratch_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Present Retain Scratch BG"),
+            layout: &self.tex_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&scratch_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
         });
         self.retain = Some(RetainRt {
             texture,
             scratch,
+            scratch_view,
+            scratch_bind_group,
             view,
             bind_group,
             width,
@@ -254,7 +276,7 @@ impl PresentRetainPipeline {
     /// Copy the still-visible overlap to its new origin via scratch (may overlap).
     /// Returns `false` when the retain buffer is missing or the rects leave the texture.
     pub fn copy_scroll_strip(
-        &self,
+        &mut self,
         encoder: &mut wgpu::CommandEncoder,
         src_x: u32,
         src_y: u32,
@@ -263,7 +285,7 @@ impl PresentRetainPipeline {
         width: u32,
         height: u32,
     ) -> bool {
-        let Some(rt) = self.retain.as_ref() else {
+        let Some(rt) = self.retain.as_mut() else {
             return false;
         };
         if width == 0 || height == 0 {
@@ -275,6 +297,50 @@ impl PresentRetainPipeline {
             dst_x.saturating_add(width) <= rt.width && dst_y.saturating_add(height) <= rt.height;
         if !src_ok || !dst_ok || width > rt.width || height > rt.height {
             return false;
+        }
+        // Large overlaps used to travel to scratch and back. Copy the rest of
+        // the frame unchanged, copy the moved overlap once, then swap targets.
+        // For small overlaps the original two-copy path moves fewer pixels.
+        if u64::from(width) * u64::from(height) * 2 > u64::from(rt.width) * u64::from(rt.height) {
+            let rectangles = [
+                (0, 0, rt.width, dst_y),
+                (0, dst_y + height, rt.width, rt.height - dst_y - height),
+                (0, dst_y, dst_x, height),
+                (dst_x + width, dst_y, rt.width - dst_x - width, height),
+                (dst_x, dst_y, width, height),
+            ];
+            for (i, &(x, y, w, h)) in rectangles.iter().enumerate() {
+                if w == 0 || h == 0 {
+                    continue;
+                }
+                encoder.copy_texture_to_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &rt.texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d {
+                            x: if i == 4 { src_x } else { x },
+                            y: if i == 4 { src_y } else { y },
+                            z: 0,
+                        },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &rt.scratch,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x, y, z: 0 },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    wgpu::Extent3d {
+                        width: w,
+                        height: h,
+                        depth_or_array_layers: 1,
+                    },
+                );
+            }
+            std::mem::swap(&mut rt.texture, &mut rt.scratch);
+            std::mem::swap(&mut rt.view, &mut rt.scratch_view);
+            std::mem::swap(&mut rt.bind_group, &mut rt.scratch_bind_group);
+            return true;
         }
         let extent = wgpu::Extent3d {
             width,
@@ -370,6 +436,101 @@ mod tests {
     use crate::renderer::InstanceInput;
     use std::time::Instant;
     use wgpu::util::DeviceExt;
+
+    #[test]
+    #[ignore = "native GL texture-copy regression"]
+    fn scroll_target_swap_preserves_outside_pixels_and_sequential_copies() {
+        let gpu = OffscreenGpu::with_backends(wgpu::Backends::GL).expect("GL adapter");
+        let (w, h) = (64, 48);
+        let mut retain =
+            PresentRetainPipeline::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+        retain.ensure_size(&gpu.device, w, h);
+        let mut expected = Vec::new();
+        for y in 0..h {
+            for x in 0..w {
+                expected.extend_from_slice(&[(x * 3) as u8, (y * 4) as u8, (x ^ y) as u8, 255]);
+            }
+        }
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: retain.color_texture().unwrap(),
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &expected,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+        );
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        for (sx, sy, dx, dy, cw, ch) in [
+            (3, 4, 5, 6, 54, 38),
+            (5, 6, 3, 4, 54, 38),
+            (6, 6, 9, 7, 10, 12),
+            (3, 4, 3, 5, 54, 38),
+        ] {
+            let before = expected.clone();
+            for y in 0..ch {
+                for x in 0..cw {
+                    let src = (((sy + y) * w + sx + x) * 4) as usize;
+                    let dst = (((dy + y) * w + dx + x) * 4) as usize;
+                    expected[dst..dst + 4].copy_from_slice(&before[src..src + 4]);
+                }
+            }
+            assert!(retain.copy_scroll_strip(&mut encoder, sx, sy, dx, dy, cw, ch));
+        }
+        let image = crate::renderer::offscreen::readback_texture(
+            &gpu.device,
+            &gpu.queue,
+            retain.color_texture().unwrap(),
+            w,
+            h,
+            encoder,
+        )
+        .unwrap();
+        assert_eq!(
+            image.pixels, expected,
+            "every pixel outside the destination stays intact"
+        );
+        let target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+            label: None,
+        });
+        let view = target.create_view(&Default::default());
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        retain.blit_to_surface(&mut encoder, &view, wgpu::Color::BLACK, |_| {});
+        let blit = crate::renderer::offscreen::readback_texture(
+            &gpu.device,
+            &gpu.queue,
+            &target,
+            w,
+            h,
+            encoder,
+        )
+        .unwrap();
+        assert_eq!(
+            blit.pixels, expected,
+            "blit bind group must follow the swapped texture"
+        );
+    }
 
     fn dest_view(
         gpu: &OffscreenGpu,
@@ -527,6 +688,40 @@ mod tests {
                 Some([255; 4]),
                 "paint stays inside its geometry"
             );
+        }
+    }
+
+    #[test]
+    fn rounded_edges_are_invariant_under_integer_pixel_scroll() {
+        let Some(gpu) = OffscreenGpu::with_backends(wgpu::Backends::GL) else {
+            return;
+        };
+        for (size, radius, border) in [(80.0, 20.0, 0.0), (32.0, 16.0, 2.0), (120.0, 12.0, 1.0)] {
+            let mut inst = solid_inst(size, size, radius, 0.0);
+            inst.rect_pos = [40.25, 30.5];
+            inst.color = [0.0, 0.0, 0.0, 1.0];
+            inst.border_color = [1.0, 0.0, 0.0, 1.0];
+            inst.border_width = border;
+            inst.border_extra = 1.0;
+            let before = gpu
+                .render_instances_readback(240, 300, wgpu::Color::WHITE, &[inst])
+                .unwrap();
+            inst.rect_pos[1] += 101.0;
+            let after = gpu
+                .render_instances_readback(240, 300, wgpu::Color::WHITE, &[inst])
+                .unwrap();
+            assert!(
+                before.pixel(56, 46).unwrap()[0] < 100,
+                "shape must actually paint"
+            );
+            for y in 20..170 {
+                for x in 30..180 {
+                    let a = before.pixel(x, y).unwrap();
+                    let b = after.pixel(x, y + 101).unwrap();
+                    assert!(a.iter().zip(b).all(|(a, b)| a.abs_diff(b) <= 1),
+                        "integer scroll changed rounded coverage: size={size} radius={radius} border={border} at {x},{y}: {a:?} vs {b:?}");
+                }
+            }
         }
     }
 

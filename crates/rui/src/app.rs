@@ -257,6 +257,11 @@ struct App {
     /// `scroll_behavior="smooth"`: keep animating/redrawing at least until this instant after wheel input,
     /// so consecutive ticks do not stutter.
     smooth_active_until: std::collections::HashMap<String, std::time::Instant>,
+    /// Continuous chase state and clock, separate from content-pan fling velocity.
+    smooth_scroll_motion: std::collections::HashMap<
+        String,
+        ([scroll_support::SmoothScrollAxis; 2], std::time::Instant),
+    >,
     /// Low-passed max scroll `[max_x, max_y]` to damp layout-metric jitter that makes targets bounce mid-range.
     scroll_max_lowpass: std::collections::HashMap<String, [f32; 2]>,
     /// Hash snapshot from the last `collect_scroll_area_metrics`, used to integrate smooth scroll before `render()`.

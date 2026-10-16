@@ -2437,6 +2437,7 @@ impl super::App {
             {
                 self.content_scroll_drag = None;
                 self.smooth_active_until.clear();
+                self.smooth_scroll_motion.clear();
                 self.scroll_velocity.clear();
                 let rests: Vec<String> = self.scroll_metrics_cache.keys().cloned().collect();
                 super::scroll_support::snap_scroll_targets_to_current_offsets(
@@ -2592,6 +2593,7 @@ impl super::App {
                 self.content_scroll_drag = None;
                 // End wheel-bridge so the focus frame is not stuck in text_force_fast.
                 self.smooth_active_until.clear();
+                self.smooth_scroll_motion.clear();
                 self.left_button_down = true;
                 need_paint_sync_redraw = true;
                 // Leftover smooth `target != offset` from the wheel-to-clip would
@@ -2824,6 +2826,17 @@ impl super::App {
         }
 
         if is_smooth_mode {
+            self.smooth_scroll_motion
+                .entry(rest.clone())
+                .or_insert_with(|| {
+                    (
+                        [
+                            super::scroll_support::SmoothScrollAxis::new(sx.peek()),
+                            super::scroll_support::SmoothScrollAxis::new(sy.peek()),
+                        ],
+                        now,
+                    )
+                });
             crate::components::chart::set_chart_hover_frozen(true);
             let next_x = if wheel {
                 super::scroll_support::wheel_scroll_target(sx.peek(), tx.peek(), dx, max_x)
@@ -3539,6 +3552,7 @@ impl super::App {
                 self.scroll_accum.remove(rest);
                 self.scroll_velocity.remove(rest);
                 self.smooth_active_until.remove(rest);
+                self.smooth_scroll_motion.remove(rest);
             }
             super::scroll_support::snap_scroll_targets_to_current_offsets(
                 frozen.iter().map(String::as_str),
@@ -3593,8 +3607,10 @@ impl super::App {
             smooth_scroll_animating = true;
         }
 
-        // First-order exponential smoothing toward wheel targets, quantized to device
-        // pixels so glyphon glyphs and synthetic-bold shadow quads share one grid.
+        // Preserve velocity across notches and exclude the preceding idle interval
+        // from the first frame. Painting still uses whole device pixels.
+        self.smooth_scroll_motion
+            .retain(|rest, _| self.scroll_metrics_cache.contains_key(rest));
         let ui_scale = {
             let g = self.state.borrow();
             g.as_ref()
@@ -3715,6 +3731,7 @@ impl super::App {
                 // Nested ScrollArea: skip work for areas already at target (outer idle while inner scrolls).
                 let idle_eps = (1.0 / ui_scale.max(0.01)) * 0.51;
                 if (target_x - old_sx).abs() < idle_eps && (target_y - old_sy).abs() < idle_eps {
+                    self.smooth_scroll_motion.remove(rest);
                     // Idle, but still clamp offset into max (stale offset after max shrink).
                     pre_render_data.push((
                         rest.clone(),
@@ -3727,12 +3744,22 @@ impl super::App {
                     ));
                     continue;
                 }
-                let (cur_x, ax) = super::scroll_support::smooth_scroll_step(
-                    old_sx, target_x, scroll_dt, ui_scale,
-                );
-                let (cur_y, ay) = super::scroll_support::smooth_scroll_step(
-                    old_sy, target_y, scroll_dt, ui_scale,
-                );
+                let (motion, last_tick) = self
+                    .smooth_scroll_motion
+                    .entry(rest.clone())
+                    .or_insert_with(|| {
+                        (
+                            [
+                                super::scroll_support::SmoothScrollAxis::new(old_sx),
+                                super::scroll_support::SmoothScrollAxis::new(old_sy),
+                            ],
+                            now,
+                        )
+                    });
+                let chase_dt = now.saturating_duration_since(*last_tick).as_secs_f32();
+                *last_tick = now;
+                let (cur_x, ax) = motion[0].step(old_sx, target_x, chase_dt, ui_scale);
+                let (cur_y, ay) = motion[1].step(old_sy, target_y, chase_dt, ui_scale);
                 if ax || ay {
                     smooth_scroll_animating = true;
                 }
@@ -3746,6 +3773,7 @@ impl super::App {
                     sy,
                 ));
             } else {
+                self.smooth_scroll_motion.remove(rest);
                 if is_dragging_this {
                     if let Some(v) = self.scroll_velocity.get_mut(rest) {
                         v[0] = 0.0;
@@ -4761,6 +4789,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     self.force_redraw_count -= 1;
                     window.request_redraw();
                 }
+
             }
             Err(SurfaceAcquireError::Lost | SurfaceAcquireError::Outdated) => {
                 let mut rb = self.state.borrow_mut();
@@ -5208,6 +5237,25 @@ mod wheel_recovery_tests {
                         ((bounds[0] + bounds[2] * 0.5) * scale) as f64,
                         ((bounds[1] + bounds[3] * 0.5) * scale) as f64,
                     );
+                    if rest == "wheel-smooth" {
+                        app.last_frame_time =
+                            std::time::Instant::now() - std::time::Duration::from_secs(1);
+                        app.handle_mouse_wheel(id, MouseScrollDelta::LineDelta(0.0, -1.0));
+                        app.handle_redraw_requested(id, event_loop);
+                        assert!(
+                            offset.peek() - 1000.0 <= 3.0,
+                            "idle time leaked into the first wheel frame: {}px",
+                            offset.peek() - 1000.0
+                        );
+                        offset.set_silent(1000.0);
+                        target.set_silent(1000.0);
+                        app.smooth_scroll_motion.remove(rest);
+                        app.state
+                            .borrow_mut()
+                            .as_mut()
+                            .unwrap()
+                            .update_scroll_offset_in_place(rest, [0.0, 1000.0]);
+                    }
                     app.scroll_velocity.insert(rest.to_string(), [0.0, 5000.0]);
                     // A blocked UI thread receives a batch before any redraw.
                     for _ in 0..15 {
@@ -5233,6 +5281,9 @@ mod wheel_recovery_tests {
                     for _ in 0..4 {
                         app.last_frame_time =
                             std::time::Instant::now() - std::time::Duration::from_millis(16);
+                        if let Some((_, last_tick)) = app.smooth_scroll_motion.get_mut(rest) {
+                            *last_tick = app.last_frame_time;
+                        }
                         app.handle_redraw_requested(id, event_loop);
                         let guard = app.state.borrow();
                         assert!(

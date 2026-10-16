@@ -491,57 +491,69 @@ pub(super) fn decay_scroll_velocity(vx: f32, vy: f32, dt: f32, friction_per_sec:
 }
 
 /// Quantize a logical scroll offset to whole device pixels so glyphs, synthetic-bold
-/// shadows, and page fills move on the same grid. Combined with
-/// [`smooth_scroll_step`]'s ≥2px stalls (no 1px crawl) this avoids both
-/// subpixel chase-tail shimmer and the 1px text vibration that crawl caused.
+/// shadows, and page fills move on the same grid. The chase keeps a continuous internal position while painting on this grid.
 pub(super) fn snap_scroll_offset_to_device_px(offset: f32, ui_scale: f32) -> f32 {
     let s = ui_scale.max(0.01);
     (offset * s).round() / s
 }
 
-/// Ease `current` toward `target` on the device-pixel grid.
-///
-/// First-order catch-up (`v ∝ remaining`) so a long leftover decelerates
-/// instead of sliding at a constant extra 16px. Quantizing every stall to
-/// 1 device px used to crawl the last 8–16px as a 1px staircase — page text
-/// reads as vibrating until the seek ends. Close remaining snaps in one
-/// frame; a stalled exponential step is at least 2 device px.
-/// Returns `(paint_offset, still_animating)`.
-pub(super) fn smooth_scroll_step(current: f32, target: f32, dt: f32, ui_scale: f32) -> (f32, bool) {
-    const TAU_SEC: f32 = 0.14;
-    const SETTLE_DEVICE_PX: f32 = 3.0;
-    const MIN_STEP_DEVICE_PX: f32 = 2.0;
-    let scale = ui_scale.max(0.01);
-    let device_px = 1.0 / scale;
-    let target = snap_scroll_offset_to_device_px(target, scale);
-    let current = snap_scroll_offset_to_device_px(current, scale);
-    let remaining = target - current;
-    if !remaining.is_finite() {
-        return (target, false);
-    }
-    if remaining.abs() < device_px * 0.5 {
-        return (target, false);
-    }
-    if remaining.abs() <= SETTLE_DEVICE_PX * device_px {
-        return (target, false);
+/// Critically damped chase: gentle acceleration, continuous retargeting, no overshoot.
+/// Keep the continuous position between frames; rounding the integrator itself
+/// makes a small wheel delta depend on frame rate and crawl at high refresh rates.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct SmoothScrollAxis {
+    position: f32,
+    velocity: f32,
+}
+
+impl SmoothScrollAxis {
+    pub(super) fn new(current: f32) -> Self {
+        Self {
+            position: current,
+            velocity: 0.0,
+        }
     }
 
-    let sign = remaining.signum();
-    // Use elapsed time, not a percentage cap per rendered frame: the latter
-    // lengthens the chase during slow frames and accelerates on FPS recovery.
-    let alpha = (1.0 - (-dt.clamp(0.0, 0.08) / TAU_SEC).exp()).clamp(0.0, 1.0);
-    let min_step = MIN_STEP_DEVICE_PX * device_px;
-    let desired = (remaining * alpha).abs().max(min_step);
-    let mut next = snap_scroll_offset_to_device_px(current + desired * sign, scale);
-    if remaining > 0.0 {
-        next = next.min(target);
-    } else {
-        next = next.max(target);
+    pub(super) fn step(
+        &mut self,
+        current: f32,
+        target: f32,
+        dt: f32,
+        ui_scale: f32,
+    ) -> (f32, bool) {
+        const OMEGA: f32 = 18.0;
+        let scale = ui_scale.max(0.01);
+        let target = snap_scroll_offset_to_device_px(target, scale);
+        let current = snap_scroll_offset_to_device_px(current, scale);
+        if (snap_scroll_offset_to_device_px(self.position, scale) - current).abs() > 0.51 / scale {
+            *self = Self::new(current);
+        }
+        let remaining = target - self.position;
+        if !remaining.is_finite() {
+            *self = Self::new(current);
+            return (current, false);
+        }
+        // Reversing the wheel must cancel velocity toward the old destination.
+        if self.velocity * remaining < 0.0 {
+            self.velocity = 0.0;
+        }
+        let dt = dt.clamp(0.0, 0.08);
+        if dt == 0.0 {
+            return (current, (target - current).abs() > 0.5 / scale);
+        }
+        let displacement = self.position - target;
+        let j = self.velocity + OMEGA * displacement;
+        let decay = (-OMEGA * dt).exp();
+        self.position = target + (displacement + j * dt) * decay;
+        self.velocity = (self.velocity - OMEGA * j * dt) * decay;
+        if (target - self.position) * remaining < 0.0
+            || ((target - self.position).abs() * scale < 0.5 && self.velocity.abs() * scale < 12.0)
+        {
+            *self = Self::new(target);
+            return (target, false);
+        }
+        (snap_scroll_offset_to_device_px(self.position, scale), true)
     }
-    if (next - target).abs() < device_px * 0.5 {
-        return (target, false);
-    }
-    (next, true)
 }
 
 /// Keep at most three ordinary wheel notches ahead of the painted position.
@@ -1216,51 +1228,108 @@ mod inertia_tests {
 
 #[cfg(test)]
 mod smooth_scroll_step_tests {
-    use super::{smooth_scroll_step, snap_scroll_offset_to_device_px, wheel_scroll_target};
+    use super::{snap_scroll_offset_to_device_px, wheel_scroll_target, SmoothScrollAxis};
+
+    #[test]
+    fn gentle_wheel_notch_accelerates_from_rest() {
+        let mut motion = SmoothScrollAxis::new(0.0);
+        let first = motion.step(0.0, 75.0, 0.016, 1.5).0;
+        let second = motion.step(first, 75.0, 0.016, 1.5).0 - first;
+        assert!(
+            first > 0.0 && first <= 3.0,
+            "gentle notch starts with a {first}px jump"
+        );
+        assert!(second > first, "start must ease in: {first} then {second}");
+    }
+
+    #[test]
+    fn smooth_chase_is_independent_of_frame_rate() {
+        let chase = |dt, frames| {
+            let mut motion = SmoothScrollAxis::new(0.0);
+            let mut y = 0.0;
+            for _ in 0..frames {
+                y = motion.step(y, 1000.0, dt, 1.5).0;
+            }
+            y
+        };
+        assert!((chase(0.016, 20) - chase(0.08, 4)).abs() <= 1.0);
+        assert!((chase(1.0 / 240.0, 72) - chase(1.0 / 60.0, 18)).abs() <= 1.0);
+    }
+
+    #[test]
+    fn rhythmic_notches_preserve_momentum_and_reverse_immediately() {
+        let mut motion = SmoothScrollAxis::new(500.0);
+        let mut y = 500.0;
+        let mut target = y;
+        for frame in 0..60 {
+            if frame % 12 == 0 {
+                target = wheel_scroll_target(y, target, -75.0, 10000.0);
+            }
+            let next = motion.step(y, target, 1.0 / 60.0, 1.5).0;
+            assert!(next >= y && next <= target);
+            assert!(next - y < 20.0, "rhythmic notch jumped {}px", next - y);
+            y = next;
+        }
+        target = wheel_scroll_target(y, target, 75.0, 10000.0);
+        let next = motion.step(y, target, 0.016, 1.5).0;
+        assert!(next < y, "reverse input must cancel forward velocity");
+    }
+
+    #[test]
+    fn quantized_chase_settles_without_overshoot_or_long_tail() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for distance in [0.4, 2.0, 16.0, 75.0, 240.0, -75.0] {
+                let mut motion = SmoothScrollAxis::new(500.0);
+                let target = snap_scroll_offset_to_device_px(500.0 + distance, scale);
+                let mut y = 500.0;
+                let mut done = false;
+                for _ in 0..120 {
+                    let (next, anim) = motion.step(y, target, 1.0 / 120.0, scale);
+                    assert!((next * scale - (next * scale).round()).abs() < 0.001);
+                    assert!((next - y) * distance >= -0.001);
+                    assert!((target - next) * distance >= -0.001);
+                    y = next;
+                    if !anim {
+                        done = true;
+                        break;
+                    }
+                }
+                assert!(done && y == target, "did not settle: {y} target={target}");
+            }
+        }
+    }
+
+    #[test]
+    fn zero_elapsed_time_does_not_advance_and_external_jump_resets_motion() {
+        let mut motion = SmoothScrollAxis::new(0.0);
+        assert_eq!(motion.step(0.0, 75.0, 0.0, 1.5), (0.0, true));
+        let y = motion.step(0.0, 75.0, 0.016, 1.5).0;
+        assert!(y > 0.0);
+        let jumped = motion.step(500.0, 575.0, 0.016, 1.5).0;
+        assert!(jumped > 500.0 && jumped <= 503.0);
+    }
 
     #[test]
     fn wheel_burst_during_stall_has_bounded_recovery_distance() {
         let current = 1000.0;
         let mut target = current;
-        // Fifteen queued Windows wheel notches, delivered before a redraw.
         for _ in 0..15 {
             target = wheel_scroll_target(current, target, -75.0, 10000.0);
         }
+        let mut motion = SmoothScrollAxis::new(current);
         let mut recovered = current;
         for _ in 0..4 {
-            recovered = smooth_scroll_step(recovered, target, 1.0 / 60.0, 1.5).0;
+            recovered = motion.step(recovered, target, 1.0 / 60.0, 1.5).0;
         }
+        assert!(target - current <= 225.01);
         assert!(
-            target - current <= 225.01,
-            "wheel debt grew to {}px",
-            target - current
-        );
-        assert!(
-            recovered - current <= 100.0,
-            "recovery jumped {}px in 67ms",
+            recovered - current <= 110.0,
+            "recovery jumped {}px",
             recovered - current
         );
         assert_eq!(
             wheel_scroll_target(current, target, 75.0, 10000.0),
-            current - 75.0,
-            "reverse input must cancel stale forward debt"
-        );
-    }
-
-    #[test]
-    fn smooth_chase_speed_does_not_accelerate_when_frame_rate_recovers() {
-        let chase = |dt, frames| {
-            let mut y = 0.0;
-            for _ in 0..frames {
-                y = smooth_scroll_step(y, 1000.0, dt, 1.5).0;
-            }
-            y
-        };
-        let fast = chase(0.016, 20);
-        let slow = chase(0.08, 4);
-        assert!(
-            (fast - slow).abs() <= 4.0,
-            "same 320ms chase changed with FPS: fast={fast} slow={slow}"
+            current - 75.0
         );
     }
 
@@ -1271,249 +1340,6 @@ mod smooth_scroll_step_tests {
         assert_eq!(wheel_scroll_target(1000.0, 1000.0, -600.0, 10000.0), 1600.0);
         assert_eq!(wheel_scroll_target(50.0, 50.0, 75.0, 10000.0), 0.0);
         assert_eq!(wheel_scroll_target(9950.0, 9950.0, -75.0, 10000.0), 10000.0);
-    }
-
-    #[test]
-    fn snap_aligns_to_device_pixel() {
-        assert!((snap_scroll_offset_to_device_px(10.4, 1.0) - 10.0).abs() < 1e-4);
-        assert!((snap_scroll_offset_to_device_px(10.4, 1.25) - 10.4).abs() < 1e-4);
-        assert!((snap_scroll_offset_to_device_px(10.2, 2.0) - 10.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn chase_tail_snaps_onto_device_grid() {
-        let (next, anim) = smooth_scroll_step(10.2, 10.4, 0.016, 1.0);
-        assert!(
-            !anim,
-            "sub-pixel remainder must snap, still_animating={anim}"
-        );
-        assert!((next - 10.0).abs() < 1e-4);
-        let (done, anim2) = smooth_scroll_step(next, 10.4, 0.016, 1.0);
-        assert!(!anim2);
-        assert!((done - 10.0).abs() < 1e-4);
-    }
-
-    #[test]
-    fn tail_does_not_overshoot_then_snap_back() {
-        let target = 10.7_f32;
-        let snapped_t = snap_scroll_offset_to_device_px(target, 1.0);
-        let mut y = 8.0_f32;
-        let mut prev = y;
-        for _ in 0..80 {
-            let (next, anim) = smooth_scroll_step(y, target, 0.016, 1.0);
-            assert!(
-                next + 1e-4 >= prev && next <= snapped_t + 1e-4,
-                "non-monotonic or overshoot: {prev} -> {next} (target {snapped_t})"
-            );
-            assert!(
-                (next - prev).abs() <= 3.01 + 1e-3,
-                "settle snap must stay ≤3 device px: {prev} -> {next}"
-            );
-            y = next;
-            prev = next;
-            if !anim {
-                break;
-            }
-        }
-        assert!((y - snapped_t).abs() < 1e-4);
-    }
-
-    #[test]
-    fn long_chase_paint_stays_on_device_grid() {
-        let mut y = 0.0_f32;
-        let target = 240.0;
-        let scale = 1.25_f32;
-        let mut frames = 0u32;
-        loop {
-            let (next, anim) = smooth_scroll_step(y, target, 0.016, scale);
-            let device = (next * scale).round() / scale;
-            assert!(
-                (next - device).abs() < 1e-4,
-                "offset {next} not on device grid at scale {scale}"
-            );
-            y = next;
-            frames += 1;
-            if !anim {
-                break;
-            }
-            assert!(frames < 400, "chase did not settle");
-        }
-        assert!((y - snap_scroll_offset_to_device_px(target, scale)).abs() < 1e-3);
-        assert!(frames > 4, "should ease over several frames, got {frames}");
-    }
-
-    fn collect_chase_deltas(start: f32, target: f32) -> Vec<f32> {
-        let mut y = start;
-        let mut prev = y;
-        let mut deltas = Vec::new();
-        for _ in 0..80 {
-            let (next, anim) = smooth_scroll_step(y, target, 0.016, 1.0);
-            let delta = (next - prev).abs();
-            if delta > 1e-4 {
-                deltas.push(delta);
-            }
-            y = next;
-            prev = next;
-            if !anim {
-                break;
-            }
-        }
-        assert!((y - snap_scroll_offset_to_device_px(target, 1.0)).abs() < 1e-3);
-        deltas
-    }
-
-    #[test]
-    fn stop_chase_tail_decelerates_to_zero() {
-        // 16px leftover: first-order chase must slow (not a constant extra
-        // slide) and must not 1px-crawl. The last ≤3 device px may snap.
-        let deltas = collect_chase_deltas(0.0, 16.0);
-        assert!(
-            deltas.first().copied().unwrap_or(0.0) >= 2.0 - 1e-3,
-            "tail must still be decelerating at 16px, first step {:?}",
-            deltas.first()
-        );
-        for w in deltas.windows(2) {
-            assert!(w[1] <= w[0] + 1e-3, "tail must not speed up: {w:?}");
-        }
-        let last = *deltas.last().expect("chase moved");
-        assert!(
-            last >= 2.0 - 1e-3 && last <= 3.0 + 1e-3,
-            "last tick must be a 2–3px settle, got {last}"
-        );
-        let ones = deltas.iter().filter(|d| (*d - 1.0).abs() < 0.01).count();
-        assert_eq!(ones, 0, "1px staircase crawled {ones} frames: {deltas:?}");
-    }
-
-    #[test]
-    fn stop_chase_small_leftover_settles_without_1px_crawl() {
-        let deltas = collect_chase_deltas(0.0, 2.0);
-        assert!(
-            deltas.iter().all(|d| *d <= 3.01),
-            "2px leftover must settle in ≤3px, got {deltas:?}"
-        );
-        assert!(
-            deltas.len() <= 1,
-            "2px leftover should snap, not crawl, got {deltas:?}"
-        );
-    }
-
-    #[test]
-    fn chase_tail_must_not_1px_crawl_text_jitter() {
-        // Device-grid chase used to tick 1px for many frames (the last ~8–16px).
-        // That reads as page text vibrating until the seek ends.
-        for target in [16.0_f32, 48.0, 75.0] {
-            let deltas = collect_chase_deltas(0.0, target);
-            let ones = deltas.iter().filter(|d| (*d - 1.0).abs() < 0.01).count();
-            assert!(
-                ones <= 1,
-                "target={target}: 1px staircase crawled {ones} frames; {deltas:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn stop_chase_from_wheel_notch_lag_decelerates() {
-        let mut y = 0.0_f32;
-        let target = 75.0;
-        let mut tail_deltas = Vec::new();
-        let mut frames = 0u32;
-        let mut prev = y;
-        loop {
-            let (next, anim) = smooth_scroll_step(y, target, 0.016, 1.0);
-            assert!(
-                next + 1e-4 >= prev && next <= target + 1e-4,
-                "non-monotonic or overshoot: {prev} -> {next}"
-            );
-            let delta = (next - prev).abs();
-            if (target - prev).abs() <= 20.0 + 1e-3 && delta > 1e-4 {
-                tail_deltas.push(delta);
-            }
-            y = next;
-            prev = next;
-            frames += 1;
-            if !anim {
-                break;
-            }
-            assert!(frames < 400, "chase did not settle");
-        }
-        assert!((y - target).abs() < 1e-3);
-        assert!(
-            tail_deltas.iter().any(|d| *d >= 2.0 - 1e-3),
-            "last 20px must pass through 2px steps, got {tail_deltas:?}"
-        );
-        if let Some((last, rest)) = tail_deltas.split_last() {
-            for w in rest.windows(2) {
-                assert!(w[1] <= w[0] + 1e-3, "tail must decelerate: {w:?}");
-            }
-            assert!(
-                *last <= 3.0 + 1e-3,
-                "final settle must stay ≤3 device px, got {last}"
-            );
-        }
-        assert!(frames > 4, "75px leftover should still ease, got {frames}");
-    }
-
-    /// glyphon `prepare_glyph` Y: `round(line_y) + trunc(glyph.y + TextArea.top)`.
-    /// Coverage path does **not** round the origin (`info.y * ui_scale`).
-    fn glyphon_quad_y(
-        layout_y: f32,
-        scroll_y: f32,
-        ui_scale: f32,
-        line_y: f32,
-        glyph_y: f32,
-    ) -> i32 {
-        let top = (layout_y - scroll_y) * ui_scale;
-        let physical_y = (glyph_y + top).trunc() as i32;
-        line_y.round() as i32 + physical_y
-    }
-
-    #[test]
-    fn chase_must_not_jitter_glyph_quad_y() {
-        // User report: page text jitters up/down for the whole smooth-scroll
-        // chase. Device-grid offsets should keep glyphon Y monotonic and keep
-        // the glyph-vs-fill fractional error stable (no 1px relative bounce).
-        let layout_ys = [10.0_f32, 10.4, 48.6, 100.3, 100.5, 217.75, 333.2];
-        let line_ys = [14.0_f32, 17.5, 20.0];
-        let scales = [1.0_f32, 1.25, 1.5, 2.0];
-        for scale in scales {
-            for &layout_y in &layout_ys {
-                for &line_y in &line_ys {
-                    let mut scroll = 0.0_f32;
-                    let target = 64.0;
-                    let mut prev_quad = glyphon_quad_y(layout_y, scroll, scale, line_y, 0.0);
-                    let fill0 = (layout_y - scroll) * scale;
-                    let err0 = prev_quad as f32 - fill0;
-                    loop {
-                        let (next, anim) = smooth_scroll_step(scroll, target, 0.016, scale);
-                        let quad = glyphon_quad_y(layout_y, next, scale, line_y, 0.0);
-                        let fill = (layout_y - next) * scale;
-                        // Visible page text sits at positive device Y. Off-screen
-                        // (negative) Y hits cosmic `truncf` toward-zero vs fill
-                        // floor-like motion — not the in-view chase jitter.
-                        if fill > 8.0 && fill < 800.0 {
-                            assert!(
-                                quad <= prev_quad,
-                                "glyph Y reversed during chase (text jitter): \
-                                 layout_y={layout_y} scale={scale} line_y={line_y} \
-                                 scroll {scroll} -> {next} quad {prev_quad} -> {quad}"
-                            );
-                            let err = quad as f32 - fill;
-                            assert!(
-                                (err - err0).abs() < 0.51,
-                                "glyph vs fill error jumped {err0} -> {err} \
-                                 (relative 1px bounce) layout_y={layout_y} scale={scale} \
-                                 scroll={next}"
-                            );
-                        }
-                        scroll = next;
-                        prev_quad = quad;
-                        if !anim {
-                            break;
-                        }
-                    }
-                }
-            }
-        }
     }
 }
 

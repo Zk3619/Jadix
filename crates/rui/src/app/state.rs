@@ -9,7 +9,7 @@ mod scroll_perf_tests;
 #[path = "state_theme_present_tests.rs"]
 mod theme_present_tests;
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hasher;
 use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
@@ -242,7 +242,7 @@ pub(super) struct AppState {
     overlay_band_text_renderers: Vec<RuiTextRenderer>,
     /// Extra glyphon pipelines for in-page stacking bands beyond the first (CarouselStack).
     /// Band 0 reuses [`Self::text_renderer`]; further bands share its FontSystem.
-    page_stack_band_text_renderers: Vec<RuiTextRenderer>,
+    page_stack_band_text_renderers: Vec<Option<RuiTextRenderer>>,
     page_stack_band_text_keys: Vec<u64>,
     pub(super) root_element: Element,
     /// `template_id` -> child-index path from [`Self::root_element`]. Validated on each use instead
@@ -338,7 +338,6 @@ pub(super) struct AppState {
     /// geometry (gallery forms: page frozen, candidate HWND walks up).
     pub(super) gpu_presented_this_frame: bool,
     /// Hash of all `scroll:` viewport offsets after prepass.
-    last_scroll_offset_fp: u64,
     last_scroll_offsets: HashMap<String, [u32; 2]>,
     /// Scroll moved: PartialLoad the viewport layer (Clear scissor, then redraw).
     scroll_layer_clear: bool,
@@ -751,23 +750,28 @@ fn draw_uploaded_sdf_with_clip<'a>(
     if instances.is_empty() {
         return;
     }
-    let polys_owned = if polys.len() >= instances.len() {
-        polys[..instances.len()].to_vec()
-    } else {
-        let mut padded = polys.to_vec();
-        while padded.len() < instances.len() {
-            padded.push(crate::style::GpuClipPoly::NONE);
-        }
-        padded
-    };
     note_present_sdf_bg();
     let inst_buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Node present SDF range"),
         contents: bytemuck::cast_slice(instances),
         usage: wgpu::BufferUsages::VERTEX,
     });
-    let (_clip_buf, _clip_bg) =
-        pipeline.bind_sdf_with_clip_polys(pass, device, dummy, &polys_owned);
+    // Most local chrome has no polygon clip. Reuse the existing unclipped
+    // binding instead of allocating a storage buffer and bind group per hole.
+    let _clip_resources = if polys.iter().take(instances.len()).any(|p| p.is_active()) {
+        let mut padded;
+        let polys = if polys.len() >= instances.len() {
+            &polys[..instances.len()]
+        } else {
+            padded = polys.to_vec();
+            padded.resize(instances.len(), crate::style::GpuClipPoly::NONE);
+            &padded
+        };
+        Some(pipeline.bind_sdf_with_clip_polys(pass, device, dummy, polys))
+    } else {
+        pipeline.bind_sdf(pass, false, dummy);
+        None
+    };
     pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
     pass.set_vertex_buffer(1, inst_buf.slice(..));
     pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
@@ -1124,7 +1128,7 @@ fn capture_page_stack_local_backdrop(
     page_stack_band_shadows: &[Vec<crate::renderer::prepare_text::ShadowTexDraw>],
     shadow_tex_cache: &HashMap<u64, super::image_registry::GpuImageTexture>,
     text_renderer: &crate::renderer::RuiTextRenderer,
-    page_stack_band_text_renderers: &[crate::renderer::RuiTextRenderer],
+    page_stack_band_text_renderers: &[Option<crate::renderer::RuiTextRenderer>],
     compute: Option<&mut crate::renderer::ComputePipelines>,
     instances: &[InstanceInput],
     capture_region: Option<(u32, u32, u32, u32)>,
@@ -1210,7 +1214,10 @@ fn capture_page_stack_local_backdrop(
                 if j == 0 {
                     text_renderer.render(&mut scene_pass);
                 } else {
-                    page_stack_band_text_renderers[j - 1].render(&mut scene_pass);
+                    page_stack_band_text_renderers[j - 1]
+                        .as_ref()
+                        .expect("nonempty text band")
+                        .render(&mut scene_pass);
                 }
             }
         }
@@ -1723,11 +1730,12 @@ impl AppState {
                 .await
                 .ok()?;
             let required_limits = crate::renderer::limits_for(&adapter);
+            let memory_hints = wgpu::MemoryHints::MemoryUsage;
             match adapter
                 .request_device(&crate::renderer::wgpu_compat::device_desc(
                     None,
                     required_limits,
-                    wgpu::MemoryHints::MemoryUsage,
+                    memory_hints,
                 ))
                 .await
             {
@@ -1883,7 +1891,7 @@ impl AppState {
             alpha_mode,
             color_space: wgpu::SurfaceColorSpace::Auto,
             view_formats: vec![],
-            desired_maximum_frame_latency: 1,
+            desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
         super::window_chrome::apply_created_window(window.as_ref(), &chrome, composition_swapchain);
@@ -2051,7 +2059,6 @@ impl AppState {
             has_presented_frame: false,
             last_gpu_frame_fp: 0,
             gpu_presented_this_frame: true,
-            last_scroll_offset_fp: 0,
             last_scroll_offsets: HashMap::new(),
             last_present_node_bounds: Vec::new(),
             scroll_layer_clear: false,
@@ -2065,22 +2072,6 @@ impl AppState {
             chrome,
             local_backdrop_valid: false,
         }
-    }
-
-    /// Fingerprint scroll viewport offsets (logical). Used to force FullClear when content moves.
-    fn scroll_offset_fingerprint(root: &Element) -> u64 {
-        use std::collections::hash_map::DefaultHasher;
-        let mut hasher = DefaultHasher::new();
-        crate::core::tree::walk_elements(root, |el| {
-            if let Some(fid) = el.focus_id.as_deref() {
-                if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
-                    rest.hash(&mut hasher);
-                    el.scroll_offset[0].to_bits().hash(&mut hasher);
-                    el.scroll_offset[1].to_bits().hash(&mut hasher);
-                }
-            }
-        });
-        hasher.finish()
     }
 
     fn scroll_offsets_map(root: &Element) -> HashMap<String, [u32; 2]> {
@@ -2296,6 +2287,13 @@ impl AppState {
                 sticky.extend(super::damage::sticky_layout_bounds(vp));
             }
         }
+        for (id, viewport) in ids.iter().zip(&viewports) {
+            sticky.extend(super::damage::rounded_scroll_clip_blit_pins(
+                &self.root_element,
+                id,
+                *viewport,
+            ));
+        }
         sticky.extend(super::damage::overlay_scrollbar_scroll_blit_pins(
             &self.root_element,
             &ids,
@@ -2308,9 +2306,11 @@ impl AppState {
             .map(|j| j.plan.delta)
             .collect();
         sticky.extend(oof.iter().copied());
-        sticky.extend(super::damage::smear_out_of_flow_after_strip_blit(
-            &oof, &viewports, &deltas,
-        ));
+        // All fixed chrome, including rails and rounded ancestor edges, also
+        // leaves a translated imprint in the copied overlap.
+        let smeared =
+            super::damage::smear_out_of_flow_after_strip_blit(&sticky, &viewports, &deltas);
+        sticky.extend(smeared);
         sticky.extend(super::damage::focused_input_caret_scroll_blit_pins(
             &self.root_element,
             &viewports,
@@ -3162,6 +3162,8 @@ impl AppState {
                                             self.text_renderer.render(render_pass);
                                         } else {
                                             self.page_stack_band_text_renderers[band_i - 1]
+                                                .as_ref()
+                                                .expect("nonempty text band")
                                                 .render(render_pass);
                                         }
                                     }
@@ -4136,7 +4138,11 @@ impl AppState {
         if band_i == 0 {
             self.text_renderer
                 .prepare(&self.device, &self.queue, &self.config, std::iter::empty());
-        } else if let Some(tr) = self.page_stack_band_text_renderers.get_mut(band_i - 1) {
+        } else if let Some(tr) = self
+            .page_stack_band_text_renderers
+            .get_mut(band_i - 1)
+            .and_then(Option::as_mut)
+        {
             tr.prepare(&self.device, &self.queue, &self.config, std::iter::empty());
         }
     }
@@ -4177,15 +4183,9 @@ impl AppState {
                     found,
                 );
             } else {
-                created += 1;
                 self.page_stack_band_text_keys.push(band.stamp_key);
-                self.page_stack_band_text_renderers
-                    .push(RuiTextRenderer::new_sharing_resources(
-                        &self.device,
-                        &self.queue,
-                        &self.config,
-                        &self.text_renderer,
-                    ));
+                // Geometry-only stacking bands need an identity slot, not an atlas.
+                self.page_stack_band_text_renderers.push(None);
                 let last = self.page_stack_band_text_keys.len() - 1;
                 // Keep the just-culled host at the front of the history. Swapping
                 // it to `last` immediately evicts it when this cache is full,
@@ -4196,6 +4196,16 @@ impl AppState {
                     slot,
                     last,
                 );
+            }
+            if band.text.0 < band.text.1 && self.page_stack_band_text_renderers[slot].is_none() {
+                self.page_stack_band_text_renderers[slot] =
+                    Some(RuiTextRenderer::new_sharing_resources(
+                        &self.device,
+                        &self.queue,
+                        &self.config,
+                        &self.text_renderer,
+                    ));
+                created += 1;
             }
         }
         // Keep only a bounded history of culled hosts, loaded as they are visited.
@@ -4213,7 +4223,7 @@ impl AppState {
         for tr in &mut self.overlay_band_text_renderers {
             tr.trim_glyph_atlas();
         }
-        for tr in &mut self.page_stack_band_text_renderers {
+        for tr in self.page_stack_band_text_renderers.iter_mut().flatten() {
             tr.trim_glyph_atlas();
         }
     }
@@ -4835,6 +4845,7 @@ impl AppState {
         status
     }
 
+    #[cfg(test)]
     fn path_has_button_ancestor(root: &Element, path: &[usize]) -> bool {
         let mut node = root;
         for &index in path {
@@ -5695,9 +5706,10 @@ impl AppState {
         // labels). `scroll_layer_clear` is that gate — not window FullClear.
         // Resize+StructureChanged may skip scrollbar geometry above; it must not
         // skip this check.
-        let scroll_fp = Self::scroll_offset_fingerprint(&self.root_element);
-        let scroll_changed = self.has_presented_frame && scroll_fp != self.last_scroll_offset_fp;
+        // The exact offset snapshot already feeds damage planning. Compare it directly;
+        // a second full-tree walk/hash duplicates work and can only lose information.
         let cur_offsets = Self::scroll_offsets_map(&self.root_element);
+        let scroll_changed = self.has_presented_frame && cur_offsets != self.last_scroll_offsets;
         self.scroll_layer_clear = false;
         self.scroll_text_clip = None;
         self.scroll_text_clip_second = None;
@@ -5727,7 +5739,7 @@ impl AppState {
                 }
             }
         }
-        // Do **not** commit `last_scroll_offset_fp` here. skip_present still ran
+        // Do **not** commit `last_scroll_offsets` here. skip_present still ran
         // `update_scroll_offset_in_place`; committing would hide the delta from the
         // next presented frame (page frozen, leftover target dumps on unfreeze).
         // Highlight geometry is restamped during layout collect from paint_visual_bounds.
@@ -5822,14 +5834,20 @@ impl AppState {
             ) || !self.pending_layout_dirty.is_empty())
         {
             let dirty: std::collections::HashSet<_> = self.pending_layout_dirty.drain(..).collect();
-            if dirty.is_empty() {
+            if dirty.is_empty()
+                && (matches!(
+                    pre_chrome_layout_status,
+                    crate::core::tree::LayoutStatus::LayoutChanged
+                ) || settling
+                    || self.needs_text_settle)
+            {
                 // Resize settle / paint→fit relayout: available space often unchanged, so Taffy
                 // will not remasure unless text leaves are marked dirty.
                 // Do **not** hit this when `reactive_sync` returned LayoutChanged — those nodes
                 // are queued into `pending_layout_dirty` (portal toast pile, slider, …).
                 self.layout_tree
                     .mark_all_text_leaves_dirty(&self.root_element);
-            } else {
+            } else if !dirty.is_empty() {
                 self.layout_tree
                     .mark_dirty_nodes_in_tree(&self.root_element, &dirty);
             }
@@ -6381,9 +6399,23 @@ impl AppState {
         }
         let paths_done = Instant::now();
         {
+            // Compile mounted offscreen shader leaves while establishing the
+            // page, so first exposure during a wheel gesture does not compile.
+            let shader_sources = if use_full_taffy_rebuild
+                || matches!(
+                    layout_for_build,
+                    crate::core::tree::LayoutStatus::StructureChanged
+                ) {
+                crate::primitives::shader::mounted_shader_sources()
+            } else {
+                Vec::new()
+            };
             if !crate::renderer::shader_leaf::shader_gpu_enabled() {
                 let _ = crate::primitives::shader::take_shader_jobs();
-            } else if crate::primitives::shader::has_shader_jobs() || self.shader.is_some() {
+            } else if crate::primitives::shader::has_shader_jobs()
+                || self.shader.is_some()
+                || !shader_sources.is_empty()
+            {
                 if self.shader.is_none() {
                     match crate::renderer::shader_leaf::ShaderGpu::try_new(&self.device) {
                         Some(gpu) => self.shader = Some(gpu),
@@ -6394,6 +6426,9 @@ impl AppState {
                     }
                 }
                 if let Some(gpu) = self.shader.as_mut() {
+                    for source in shader_sources {
+                        gpu.prepare_source(&self.device, &source);
+                    }
                     if gpu.flush(
                         &self.device,
                         &self.queue,
@@ -6609,6 +6644,7 @@ impl AppState {
             self.force_full_redraw = true;
         }
         let gpu_present = self.plan_gpu_present(ui_scale);
+
         let cull_phys = gpu_present.cull_phys;
         let page_stack_band_ranges = overlay_split.page_stack_band_ranges();
         let has_page_stack_bands = !page_stack_band_ranges.is_empty();
@@ -6819,7 +6855,9 @@ impl AppState {
                         )
                     } else {
                         prepare_text_frame(
-                            &mut self.page_stack_band_text_renderers[band_i - 1],
+                            self.page_stack_band_text_renderers[band_i - 1]
+                                .as_mut()
+                                .expect("nonempty text band"),
                             &self.device,
                             &self.queue,
                             &self.config,
@@ -7540,7 +7578,6 @@ impl AppState {
         // with present pacing; this typically reduces blocking time in get_current_texture().
         let acquire_begin = Instant::now();
         let output = crate::renderer::wgpu_compat::acquire_surface(&self.surface)?;
-        self.last_scroll_offset_fp = scroll_fp;
         self.last_scroll_offsets = cur_offsets;
         self.gpu_presented_this_frame = true;
         let acquire_done = Instant::now();
@@ -7891,6 +7928,8 @@ impl AppState {
                                     self.text_renderer.render(&mut page_pass);
                                 } else {
                                     self.page_stack_band_text_renderers[band_i - 1]
+                                        .as_ref()
+                                        .expect("nonempty text band")
                                         .render(&mut page_pass);
                                 }
                             }
@@ -8091,6 +8130,14 @@ impl AppState {
                     strip_draw_scissors.iter().copied().map(Some).collect()
                 };
             for page_sc in page_scissor_passes {
+                // Each repair is replayed under its own hardware scissor. Cull to
+                // that same rectangle, not to every hole on every replay: the latter
+                // resubmits all other holes' quads/textures N times for N repairs.
+                let cull_phys = page_sc
+                    .map(|(x, y, w, h)| {
+                        super::draw_cull::CullRects::one([x as f32, y as f32, w as f32, h as f32])
+                    })
+                    .or(cull_phys);
                 if let Some((x, y, w, h)) = page_sc {
                     render_pass.set_scissor_rect(x, y, w, h);
                 }
@@ -8171,6 +8218,8 @@ impl AppState {
                                     self.text_renderer.render(&mut render_pass);
                                 } else {
                                     self.page_stack_band_text_renderers[band_i - 1]
+                                        .as_ref()
+                                        .expect("nonempty text band")
                                         .render(&mut render_pass);
                                 }
                                 super::frame_stats::note_scene_batch(

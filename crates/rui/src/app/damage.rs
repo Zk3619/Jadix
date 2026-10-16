@@ -2933,6 +2933,48 @@ pub fn sticky_layout_bounds(root: &Element) -> Vec<[f32; 4]> {
     out
 }
 
+/// Rounded ancestor clips are fixed chrome in the retained composite. Their
+/// edge pixels cannot ride a rectangular scroll copy with the content.
+pub fn rounded_scroll_clip_blit_pins(
+    root: &Element,
+    viewport_id: &str,
+    viewport: [f32; 4],
+) -> Vec<[f32; 4]> {
+    fn visit(el: &Element, id: &str, viewport: [f32; 4], pins: &mut Vec<[f32; 4]>) -> bool {
+        let is_viewport = el.focus_id.as_deref().and_then(|f| {
+            f.strip_prefix(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
+        }) == Some(id);
+        if !is_viewport
+            && !el
+                .children
+                .iter()
+                .any(|child| child.contains_scroll_viewport && visit(child, id, viewport, pins))
+        {
+            return false;
+        }
+        let radius = el.style.radii.into_iter().fold(0.0_f32, f32::max);
+        let (clip_x, clip_y) = crate::core::tree::overflow_clip_axes(el);
+        if radius > 0.0 && (clip_x || clip_y) {
+            let [x, y, w, h] = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
+            let pad = radius + 2.0;
+            for edge in [
+                [x, y, pad.min(w), h],
+                [x + (w - pad).max(0.0), y, pad.min(w), h],
+                [x, y, w, pad.min(h)],
+                [x, y + (h - pad).max(0.0), w, pad.min(h)],
+            ] {
+                if let Some(hit) = intersect_rects(edge, viewport) {
+                    push_scroll_blit_pin(pins, hit);
+                }
+            }
+        }
+        true
+    }
+    let mut pins = Vec::new();
+    visit(root, viewport_id, viewport, &mut pins);
+    pins
+}
+
 /// Out-of-flow page chrome (absolute/fixed later sibling of a scroller) that
 /// shares pixels with a blit viewport.
 ///
@@ -6441,7 +6483,7 @@ mod tests {
         // Copied overlap pixels must move by the same device delta as glyphon
         // quads. A 1px disagreement is the chase-time "text jitter" (blit then
         // a later FullClear snaps back).
-        use crate::app::scroll_support::{smooth_scroll_step, snap_scroll_offset_to_device_px};
+        use crate::app::scroll_support::{snap_scroll_offset_to_device_px, SmoothScrollAxis};
 
         fn glyphon_quad_y(layout_y: f32, scroll_y: f32, ui_scale: f32) -> i32 {
             let top = (layout_y - scroll_y) * ui_scale;
@@ -6451,10 +6493,11 @@ mod tests {
         let vp = [0.0, 48.6, 200.0, 400.0];
         for scale in [1.0_f32, 1.25, 1.5, 2.0] {
             let mut scroll = 0.0_f32;
+            let mut motion = SmoothScrollAxis::new(scroll);
             let target = snap_scroll_offset_to_device_px(80.0, scale);
             let layout_y = 120.4_f32;
             loop {
-                let (next, anim) = smooth_scroll_step(scroll, target, 0.016, scale);
+                let (next, anim) = motion.step(scroll, target, 0.016, scale);
                 let dy = next - scroll;
                 if dy.abs() >= 0.5 {
                     let plan = plan_scroll_strip_blit(vp, [0.0, dy]).expect("plan");
@@ -6790,6 +6833,45 @@ mod tests {
         assert!(
             disjoint.is_empty(),
             "rails of other viewports must not pin, got {disjoint:?}"
+        );
+    }
+
+    #[test]
+    fn rounded_ancestor_edges_and_copied_imprints_are_repaired() {
+        let vp = [10.0, 40.0, 200.0, 160.0];
+        let mut viewport = Element::new();
+        viewport.focus_id = Some(crate::core::scroll_viewport::focus_id_for_scroll_viewport(
+            "rounded",
+        ));
+        viewport.contains_scroll_viewport = true;
+        viewport.layout_bounds = vp;
+        let mut shell = Element::new()
+            .rounded(12.0)
+            .overflow("hidden")
+            .child(viewport);
+        shell.contains_scroll_viewport = true;
+        shell.layout_bounds = [10.0, 10.0, 200.0, 190.0];
+        let pins = rounded_scroll_clip_blit_pins(&shell, "rounded", vp);
+        assert_eq!(
+            pins.len(),
+            3,
+            "left, right and bottom intersect the scrollport"
+        );
+        assert!(pins
+            .iter()
+            .all(|pin| intersect_rects(*pin, vp) == Some(*pin)));
+        assert!(rounded_scroll_clip_blit_pins(&shell, "other", vp).is_empty());
+        let smear = smear_out_of_flow_after_strip_blit(&pins, &[vp], &[[0.0, 30.0]]);
+        assert!(
+            smear.contains(&[10.0, 156.0, 200.0, 14.0]),
+            "copied bottom corners need repair too"
+        );
+        assert!(
+            !pins
+                .iter()
+                .chain(&smear)
+                .any(|p| { intersect_rects(*p, [90.0, 80.0, 30.0, 30.0]).is_some() }),
+            "the copied center must stay reusable"
         );
     }
 

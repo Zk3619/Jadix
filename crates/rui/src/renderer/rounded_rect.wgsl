@@ -234,6 +234,28 @@ fn sd_round_box(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>) -> f32 {
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0))) - r_sel;
 }
 
+// fwidth(distance) samples a 2x2 pixel quad. At a curved edge its result
+// changes when an integer scroll swaps the even/odd pixel lanes, so copied
+// corners differ from a fresh raster. Differentiate the rounded-box SDF
+// analytically, then transform that gradient into screen-pixel space.
+fn shape_aa(p: vec2<f32>, b: vec2<f32>, r: vec4<f32>, d: f32, shape_type: f32) -> f32 {
+    let fallback = fwidth(d);
+    let dx = dpdx(p);
+    let dy = dpdy(p);
+    if (shape_type < 0.5) {
+        let q = abs(p) - b + vec2<f32>(select_corner_radius(p, r));
+        let outside = max(q, vec2<f32>(0.0));
+        let len = length(outside);
+        var normal = select(vec2<f32>(0.0, 1.0), vec2<f32>(1.0, 0.0), q.x > q.y);
+        if (len > 0.00001) {
+            normal = outside / len;
+        }
+        let gradient = normal * sign(p);
+        return clamp(abs(dot(gradient, dx)) + abs(dot(gradient, dy)), 0.75, 2.0);
+    }
+    return clamp(fallback, 0.75, 2.0);
+}
+
 fn sd_aabb(p: vec2<f32>, b: vec2<f32>) -> f32 {
     let q = abs(p) - b;
     return min(max(q.x, q.y), 0.0) + length(max(q, vec2<f32>(0.0)));
@@ -731,7 +753,7 @@ fn paint_rect(in: VertexOutput) -> vec4<f32> {
     // derivatives after the clip discard) becomes tens of pixels, so alpha_bg
     // is a ramp across the pill: thread text shows through Latest and glyphs
     // look cut in half. Discrete GPUs keep fwidth ≈ 1px.
-    let aa = clamp(fwidth(d), 0.75, 2.0);
+    let aa = shape_aa(in.p, b, in.radii, d, shape_type);
 
     // Compute alpha for the inner rect body
     let alpha_bg = 1.0 - smoothstep(-aa, aa, d);
@@ -896,7 +918,7 @@ fn fs_solid(in: VertexOutput) -> @location(0) vec4<f32> {
     var color = in.color;
     if ((flags & 2u) == 0u) {
         let d = sd_shaped_box(in.p, in.rect_size * 0.5, in.radii, 0.0, 0.0);
-        let aa = clamp(fwidth(d), 0.75, 2.0);
+        let aa = shape_aa(in.p, in.rect_size * 0.5, in.radii, d, 0.0);
         coverage = 1.0 - smoothstep(-aa, aa, d);
         if (in.border_width > 0.0 && in.extra_and_id.x > 0.5) {
             let border_coverage = 1.0 - smoothstep(-aa, aa, d + in.border_width);

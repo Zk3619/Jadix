@@ -3,6 +3,10 @@ use super::*;
 use crate::app::{damage::*, draw_cull::*};
 use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 
+#[cfg(all(target_os = "windows", feature = "svg"))]
+#[path = "state_scroll_damage_tests.rs"]
+mod scroll_damage_tests;
+
 #[path = "state_textarea_present_tests.rs"]
 mod textarea_present_tests;
 

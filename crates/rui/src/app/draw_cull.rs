@@ -533,6 +533,7 @@ fn instance_fill_bounds(i: &InstanceInput) -> [f32; 4] {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn instance_hits_damage(i: &InstanceInput, damage: [f32; 4]) -> bool {
     !aabbs_disjoint(instance_paint_bounds(i), damage)
 }
@@ -718,6 +719,7 @@ fn clip_text_node_to_rect(n: &TextLayoutInfo, clip: [f32; 4]) -> Option<TextLayo
 /// A node that spans several strips is emitted once per hit strip with disjoint
 /// clips so overlap-only glyphs stay in the copied retain (glyphon clip_bounds
 /// is AABB). Extra pin holes (sticky / overlay / named paint) use the same rule.
+#[cfg(test)]
 pub(crate) fn clip_text_nodes_to_strips(
     nodes: &[TextLayoutInfo],
     strips: &[[f32; 4]],
@@ -831,13 +833,33 @@ pub(crate) fn clip_text_nodes_to_cull(
     nodes: &[TextLayoutInfo],
     cull: CullRects,
 ) -> Vec<TextLayoutInfo> {
-    cull.strips()
-        .flat_map(|strip| {
-            nodes
-                .iter()
-                .filter_map(move |node| clip_text_node_to_scroll_rect(node, strip))
-        })
-        .collect()
+    let mut out = Vec::new();
+    for node in nodes {
+        let mut clips = Vec::new();
+        let mut unclipped = false;
+        for strip in cull.strips() {
+            if let Some(cloned) = clip_text_node_to_scroll_rect(node, strip) {
+                if let Some(clip) = cloned.clip_bounds {
+                    // Vertical coverage preserves the whole glyph line. Two
+                    // disjoint repair strips can therefore capture the same
+                    // glyph pixels; submit that coverage only once.
+                    crate::app::damage::push_disjoint_rect(&mut clips, clip);
+                } else {
+                    unclipped = true;
+                }
+            }
+        }
+        if unclipped {
+            out.push(node.clone());
+        } else {
+            out.extend(clips.into_iter().map(|clip| {
+                let mut cloned = node.clone();
+                cloned.clip_bounds = Some(clip);
+                cloned
+            }));
+        }
+    }
+    out
 }
 
 fn approx_f32(a: f32, b: f32, eps: f32) -> bool {
@@ -2593,6 +2615,17 @@ pub(crate) fn node_present_reset_rect(
     if acc.is_none() && node_dirty_has_text(dirty_key, dirty_bounds, node_paints) {
         let dirty_phys = scale_xywh(dirty_bounds, s);
         let prev_usable = prev_bounds.is_some_and(|p| p[2] > 0.5 && p[3] > 0.5);
+        // Transparent captions have no SDF ink to contribute their new pose.
+        // Using only last-present crops the suffix after a flex sibling grows.
+        if prev_usable
+            && slot_visual.is_some_and(|now| {
+                prev_bounds.is_some_and(|prev| {
+                    crate::app::damage::node_present_slot_moved(prev, now.map(|v| v / s.max(1e-6)))
+                })
+            })
+        {
+            acc = Some(dirty_phys);
+        }
         // `Some([x,y,0,0])` is caret-blink OFF last-present, not "never presented".
         // Falling back to the flex leaf AABB wipes placeholder on blur (失焦闪一下).
         // bind_text first present passes `prev=None` and still needs this wipe.
@@ -2873,6 +2906,7 @@ fn occupancy_descendant_slot(parent: &NodePaint, child: &NodePaint) -> bool {
         && (parent_box[2] > child_box[2] + 2.5 || parent_box[3] > child_box[3] + 2.5)
 }
 
+#[cfg(test)]
 fn nested_foreign_owns(
     parent: &NodePaint,
     paints: &[NodePaint],
@@ -2886,7 +2920,7 @@ fn nested_foreign_owns(
 
 /// Dest-reset ink of a wrap must not include a descendant's bake.
 ///
-/// [`nested_foreign_owns`] also treats same-box wrap↔leaf (equal collect spans)
+/// The test reference `nested_foreign_owns` also treats same-box wrap↔leaf (equal collect spans)
 /// as foreign — that dropped the lucide dest-reset on the spinning leaf, while
 /// the Marker row still clamped last-present (caption ∪ bake) to bake+48px.
 fn nested_descendant_owns(
@@ -2928,6 +2962,7 @@ pub(crate) fn node_paint_visual_bounds(
 /// dest-reset an overflow:visible pill as a sharp rect (reaction bar chrome).
 /// Same-box wrappers (MarkerIcon around Icon) are nested too — the leaf slot
 /// owns the lucide bake so idle spin cannot dirty-and-redraw the wrap.
+#[cfg(test)]
 pub(crate) fn node_paint_visual_bounds_in(
     p: &NodePaint,
     instances: &[InstanceInput],
@@ -3465,6 +3500,7 @@ pub(crate) fn portal_occupancy_requires_region(
     !rest.is_empty()
 }
 
+#[cfg(test)]
 pub(crate) fn prepare_node_present_dirties(
     dirties: &mut Vec<PaintDirty>,
     node_paints: &[NodePaint],
@@ -3488,7 +3524,7 @@ pub(crate) fn prepare_node_present_dirties(
     );
 }
 
-/// [`prepare_node_present_dirties`] with portal layout stamps.
+/// Prepare node dirties with portal layout stamps.
 ///
 /// `overlay` is the visual halo (shadow included). A trigger under an open
 /// popover intersects that halo every `transition-colors` tick. Escalating
@@ -4174,6 +4210,9 @@ fn clip_rect_against_layered_siblings(
         .unwrap_or(usize::MAX);
     let rest_host = matching_rest_host(dirty_key, dirty_bounds, node_paints)
         .map(|bounds| scale_xywh(bounds, s));
+    let matching: Vec<_> = node_paints.iter()
+        .filter(|p| slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed))
+        .collect();
     for (i, p) in node_paints.iter().enumerate() {
         if !p.layered || p.overlay || p.bounds[2] <= 0.0 || p.bounds[3] <= 0.0 {
             continue;
@@ -4181,15 +4220,14 @@ fn clip_rect_against_layered_siblings(
         if slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed) {
             continue;
         }
-        let related = node_paints.iter().any(|m| {
-            slot_matches_dirty(dirty_key, dirty_bounds, m, has_keyed)
-                && (slot_ranges_covered_by(m, p)
+        let related = matching.iter().any(|m| {
+                slot_ranges_covered_by(m, p)
                     || slot_ranges_covered_by(p, m)
                     // Fade-to-zero emits no quads, so collect ranges are empty and
                     // `slot_ranges_covered_by` is false. The thumb still sits inside
                     // the track. Carving that hole keeps only the sliver beside the
                     // thumb; the track ink under the thumb stays in retain.
-                    || occupancy_descendant_slot(m, p))
+                    || occupancy_descendant_slot(m, p)
         });
         if related {
             continue;
@@ -4611,13 +4649,15 @@ fn clip_rect_against_foreign_siblings(
         return rect;
     };
     let mut rest_host = rest_host.unwrap_or(host);
+    let matching: Vec<_> = node_paints.iter()
+        .filter(|p| slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed))
+        .collect();
     // A leaf and its paint-less wrapper share one draw span. Its layout
     // occupancy is the wrapper's box, even when the leaf's glyph line starts
     // lower. Use that box to distinguish an overlapping underlay from a peer.
     for p in node_paints {
-        if node_paints.iter().any(|m| {
-            slot_matches_dirty(dirty_key, dirty_bounds, m, has_keyed)
-                && slot_ranges_covered_by(m, p)
+        if matching.iter().any(|m| {
+                slot_ranges_covered_by(m, p)
                 && slot_ranges_covered_by(p, m)
         }) {
             rest_host = union_xywh(rest_host, scale_xywh(node_paint_occupancy(p), s));
@@ -4633,12 +4673,11 @@ fn clip_rect_against_foreign_siblings(
         if slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed) {
             continue;
         }
-        let related = node_paints.iter().any(|m| {
-            slot_matches_dirty(dirty_key, dirty_bounds, m, has_keyed)
+        let related = matching.iter().any(|m| {
                 // A capture leaf can share a texture with an ancestor whose
                 // other channels include unrelated chrome. It is not a peer
                 // to carve out of that texture's repair scissor.
-                && slot_paint_ranges_overlap(m, p)
+                slot_paint_ranges_overlap(m, p)
         });
         if related {
             continue;
@@ -5208,11 +5247,7 @@ pub(crate) fn node_present_glyphs_for_dirty(
                     && intersect_rects(p.bounds, dirty.bounds).is_some()
             });
             if slot_owned {
-                for (i, _n) in page_text.iter().enumerate() {
-                    if glyph_in_dirty_slot(i, dirty, page_text, node_paints) {
-                        idx.insert(i);
-                    }
-                }
+                collect_dirty_slot_glyphs(dirty, page_text, node_paints, &mut idx);
             } else {
                 for (i, n) in page_text.iter().enumerate() {
                     if text_hits_damage(n, dirty.bounds) {
@@ -5223,14 +5258,33 @@ pub(crate) fn node_present_glyphs_for_dirty(
         }
         PaintDirtyKind::Overlay => {}
         PaintDirtyKind::Node => {
-            for (i, n) in page_text.iter().enumerate() {
-                if glyph_belongs_to_dirty(i, n, dirty, page_text, node_paints) {
-                    idx.insert(i);
-                }
-            }
+            collect_dirty_slot_glyphs(dirty, page_text, node_paints, &mut idx);
         }
     }
     idx
+}
+
+fn collect_dirty_slot_glyphs(
+    dirty: &PaintDirty,
+    page_text: &[TextLayoutInfo],
+    node_paints: &[NodePaint],
+    indices: &mut BTreeSet<usize>,
+) {
+    let has_keyed = paints_has_keyed_slot(dirty.key, dirty.bounds, node_paints);
+    let dirty_area = (dirty.bounds[2] * dirty.bounds[3]).max(0.0);
+    for paint in node_paints {
+        if !slot_matches_dirty(dirty.key, dirty.bounds, paint, has_keyed) {
+            continue;
+        }
+        let lo = paint.text.0.min(page_text.len());
+        let hi = paint.text.1.min(page_text.len());
+        let broad = (paint.bounds[2] * paint.bounds[3]).max(0.0) > dirty_area * 2.0 + 1.0;
+        for i in lo..hi {
+            if !broad || text_hits_damage(&page_text[i], dirty.bounds) {
+                indices.insert(i);
+            }
+        }
+    }
 }
 
 /// Capture copies with `clip_bounds` intersected to the owning dirty box.
@@ -5363,21 +5417,31 @@ fn clip_minus_foreign_opaque_plates(
         return clips;
     };
     let origin = [n.x, n.y];
-    let preceding_instances = node_paints
+    // Resolve glyph ownership once. Aggregate ancestor ranges can contain
+    // thousands of instances; rescanning every paint for each one is quadratic.
+    let owners: Vec<_> = node_paints
         .iter()
         .filter(|p| !p.overlay && range_contains_index(p.text, glyph_index))
+        .collect();
+    let preceding_instances = owners
+        .iter()
         .map(|p| p.instance.0)
         .max()
         .unwrap_or(0);
-    for paint in node_paints {
-        if paint.overlay {
-            continue;
-        }
-        let lo = paint.text.0.min(page_text.len());
-        let hi = paint.text.1.min(page_text.len());
-        if glyph_index < lo || glyph_index >= hi {
-            continue;
-        }
+    let own_chrome: Vec<_> = owners
+        .iter()
+        .map(|p| slot_own_chrome_range(p, instances, ui_scale))
+        .collect();
+    let selection: Vec<_> = if n.style.input_caret.is_some() {
+        node_paints
+            .iter()
+            .filter(|p| p.text == (glyph_index, glyph_index + 1))
+            .map(|p| p.instance)
+            .collect()
+    } else {
+        Vec::new()
+    };
+    for paint in owners {
         let inst_lo = paint.instance.0.min(instances.len());
         let inst_hi = paint.instance.1.min(instances.len());
         for (offset, inst) in instances[inst_lo..inst_hi].iter().enumerate() {
@@ -5389,23 +5453,11 @@ fn clip_minus_foreign_opaque_plates(
             // Ancestor backgrounds precede their glyphs even when scrolling moves
             // the glyph origin outside the background's visible bounds. A higher
             // ancestor's aggregate instance range includes those same backgrounds.
-            if node_paints.iter().any(|owner| {
-                !owner.overlay
-                    && range_contains_index(owner.text, glyph_index)
-                    && range_contains_index(
-                        slot_own_chrome_range(owner, instances, ui_scale),
-                        inst_lo + offset,
-                    )
-            }) {
+            if own_chrome.iter().any(|range| range_contains_index(*range, inst_lo + offset)) {
                 continue;
             }
             // A selection fill owns this run even when it starts after the glyph origin.
-            if n.style.input_caret.is_some()
-                && node_paints.iter().any(|owner| {
-                    owner.text == (glyph_index, glyph_index + 1)
-                        && range_contains_index(owner.instance, inst_lo + offset)
-                })
-            {
+            if selection.iter().any(|range| range_contains_index(*range, inst_lo + offset)) {
                 continue;
             }
             let Some(plate) = logical_opaque_fill_aabb(inst, ui_scale) else {
@@ -5890,6 +5942,7 @@ pub(crate) fn node_present_layered_underlay_capture_text(
 /// inside TextBounds, and a later piece's underlay `render` ignores the GPU
 /// scissor, so a clip that covers the chip redraws the wrapping line on top of
 /// the plate ("es is the" through Latest).
+#[cfg(test)]
 pub(crate) fn opaque_slot_fill_aabb(
     dirty_key: u64,
     dirty_bounds: [f32; 4],
@@ -6171,6 +6224,25 @@ mod tests {
     use super::*;
     use crate::renderer::InstanceInput;
     use crate::style::TextStyle;
+
+    #[test]
+    fn dirty_slot_range_walk_matches_glyph_ownership_with_recycled_keys() {
+        let text: Vec<_> = (0..80).map(|i| sample_text("caption", i as f32 * 24.0)).collect();
+        let mut paints: Vec<_> = (0..80)
+            .map(|i| slot((i % 17) as u64, [i as f32 * 24.0, 0.0, 20.0, 18.0], (i, i + 1)))
+            .collect();
+        // A broad ancestor with a recycled key must still require intersection.
+        paints.push(slot(4, [0.0, 0.0, 1920.0, 100.0], (0, 80)));
+        for key in 0..22 {
+            for x in [0.0, 96.0, 504.0, 1800.0] {
+                let dirty = PaintDirty { key, bounds: [x, 0.0, 38.0, 20.0], kind: PaintDirtyKind::Node };
+                let expected: BTreeSet<_> = text.iter().enumerate()
+                    .filter(|(i, n)| glyph_belongs_to_dirty(*i, n, &dirty, &text, &paints))
+                    .map(|(i, _)| i).collect();
+                assert_eq!(node_present_glyphs_for_dirty(&dirty, &text, &paints), expected);
+            }
+        }
+    }
 
     fn blank_instance(x: f32, y: f32, w: f32, h: f32) -> InstanceInput {
         InstanceInput {
@@ -7757,6 +7829,25 @@ mod tests {
         assert_eq!(bounds[2], 60.0);
         assert_eq!(bounds[1], 100.0);
         assert_eq!(bounds[3], 20.0);
+    }
+
+    #[test]
+    fn disjoint_scroll_repairs_do_not_capture_glyph_pixels_twice() {
+        let mut message = sample_text("message", 240.0);
+        message.y = 100.0;
+        message.width = 120.0;
+        message.height = 20.0;
+        message.clip_bounds = Some([220.0, 80.0, 180.0, 100.0]);
+        let clipped = clip_text_nodes_to_cull(
+            &[message],
+            CullRects::from_rects([[220.0, 100.0, 100.0, 8.0], [240.0, 112.0, 120.0, 8.0]])
+                .unwrap(),
+        );
+        for (i, a) in clipped.iter().enumerate() {
+            for b in &clipped[i + 1..] {
+                assert!(intersect_rects(a.clip_bounds.unwrap(), b.clip_bounds.unwrap()).is_none());
+            }
+        }
     }
 
     /// Nested Select accordion occupancy is the stamp. Overlay glyphon ignores the
