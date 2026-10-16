@@ -2919,12 +2919,12 @@ impl TextMeasureCacheKey {
             } else {
                 u32::MAX
             },
-            aw: if vertical {
+            aw: if vertical || kd.width.is_some() {
                 0
             } else {
                 pack_avail_space(av.width)
             },
-            ah: if vertical {
+            ah: if vertical && kd.height.is_none() {
                 pack_avail_space(av.height)
             } else {
                 0
@@ -2972,13 +2972,22 @@ fn measure_leaf_cached(
     node_id: NodeId,
     known_dimensions: taffy::geometry::Size<Option<f32>>,
     available_space: taffy::geometry::Size<taffy::style::AvailableSpace>,
+    #[cfg(test)] counters: Option<(&std::cell::Cell<u32>, &std::cell::Cell<u32>)>,
 ) -> taffy::geometry::Size<f32> {
     let Some(meta) = tm.get(&node_id) else {
         return taffy::geometry::Size::ZERO;
     };
+    #[cfg(test)]
+    if let Some((calls, _)) = counters {
+        calls.set(calls.get().saturating_add(1));
+    }
     let key = TextMeasureCacheKey::new(node_id, known_dimensions, available_space, Some(meta));
     if let Some(v) = cache.borrow().get(&key) {
         return *v;
+    }
+    #[cfg(test)]
+    if let Some((_, misses)) = counters {
+        misses.set(misses.get().saturating_add(1));
     }
     let out = measured_text_leaf_size(meta, known_dimensions, available_space);
     cache.borrow_mut().insert(key, out);
@@ -3327,25 +3336,20 @@ impl LayoutTree {
             #[cfg(test)]
             self.text_measure_misses.set(0);
             #[cfg(test)]
-            let measure_calls = &self.text_measure_calls;
+            let counters = Some((&self.text_measure_calls, &self.text_measure_misses));
             self.taffy.compute_layout_with_measure(
                 node,
                 available_space,
                 |known_dimensions, available_space, node_id, _context, _style| {
-                    #[cfg(test)]
-                    if tm.contains_key(&node_id) {
-                        measure_calls.set(measure_calls.get().saturating_add(1));
-                        if !mcache.borrow().contains_key(&TextMeasureCacheKey::new(
-                            node_id,
-                            known_dimensions,
-                            available_space,
-                            tm.get(&node_id),
-                        )) {
-                            self.text_measure_misses
-                                .set(self.text_measure_misses.get() + 1);
-                        }
-                    }
-                    measure_leaf_cached(mcache, tm, node_id, known_dimensions, available_space)
+                    measure_leaf_cached(
+                        mcache,
+                        tm,
+                        node_id,
+                        known_dimensions,
+                        available_space,
+                        #[cfg(test)]
+                        counters,
+                    )
                 },
             )
         })
@@ -3645,6 +3649,15 @@ impl LayoutTree {
                 &self.unit_ctx_from_parent_layout(element),
                 self.parent_flex_direction(element),
             );
+            // Taffy invalidates ancestors even for an identical style. Paint
+            // synchronizers and the fast-path root refresh call this too.
+            if self
+                .taffy
+                .style(node_id)
+                .is_ok_and(|previous| *previous == style)
+            {
+                return;
+            }
             self.taffy.set_style(node_id, style).unwrap();
         }
     }
@@ -3725,7 +3738,10 @@ impl LayoutTree {
         self.taffy.dirty(node).unwrap_or(false)
     }
 
-    /// Walk `root` and call [`Self::mark_element_layout_dirty`] for each node in `dirty`.
+    /// Synchronize queued layout inputs. A component may queue its entire
+    /// subtree after changing one descendant; unchanged nodes must keep their
+    /// intrinsic measurements. Explicit fit/settle invalidation still uses
+    /// `mark_element_layout_dirty` / `mark_all_text_leaves_dirty` directly.
     pub fn mark_dirty_nodes_in_tree(
         &mut self,
         root: &Element,
@@ -3734,13 +3750,39 @@ impl LayoutTree {
         if dirty.is_empty() {
             return;
         }
+        self.collect_skip.hash_bust = true;
         for_each_element(root, |el| {
             if let Some(n) = el.layout_node {
-                if dirty.contains(&n) {
+                if dirty.contains(&n) && self.element_layout_inputs_changed(el, n) {
                     self.mark_element_layout_dirty(el);
                 }
             }
         });
+    }
+
+    fn element_layout_inputs_changed(&self, element: &Element, node: NodeId) -> bool {
+        let style = element.style.to_taffy_style_with_parent(
+            &self.unit_ctx_from_parent_layout(element),
+            self.parent_flex_direction(element),
+        );
+        if self
+            .taffy
+            .style(node)
+            .map_or(true, |previous| *previous != style)
+        {
+            return true;
+        }
+        if let Some(text) = element
+            .text
+            .as_ref()
+            .filter(|_| element.children.is_empty())
+        {
+            let is_icon = element.text_style.font_family.as_deref() == Some("lucide");
+            self.text_measurements.get(&node)
+                != Some(&text_measure_meta(element, text.clone(), is_icon))
+        } else {
+            self.text_measurements.contains_key(&node)
+        }
     }
 
     /// Mark every text leaf dirty so `compute_layout` re-runs measure (FIT_CACHE / settle).
@@ -3826,8 +3868,8 @@ impl LayoutTree {
             self.compute_layout_cached_measure(root_node, available_space)
                 .unwrap();
         }
-        let relayout_ms = self.relayout_deferred_units_if_needed(root, root_node, available_space);
-        let taffy_compute_ms = t_compute_begin.elapsed().as_secs_f32() * 1000.0 + relayout_ms;
+        self.relayout_deferred_units_if_needed(root, root_node, available_space);
+        let taffy_compute_ms = t_compute_begin.elapsed().as_secs_f32() * 1000.0;
 
         // Floating sync reads `Element.layout_bounds` for triggers. Collect stamps
         // those later — without a pre-stamp, a StructureChanged open sees 0×0
@@ -7477,7 +7519,7 @@ impl LayoutTree {
         if walk.stopped {
             return None;
         }
-        if let Some(order) = walk.z_order.clone() {
+        if let Some(order) = walk.z_order.as_ref() {
             while walk.cursor < order.len() {
                 let i = order[walk.cursor];
                 walk.cursor += 1;
@@ -9154,6 +9196,67 @@ mod prepared_text_attach_tests {
     }
 
     #[test]
+    fn paint_style_refresh_preserves_taffy_cache_but_geometry_still_invalidates() {
+        let mut tree = LayoutTree::new();
+        let mut root = Element::new()
+            .flex_col()
+            .child(Element::new().w(100.0).h(40.0));
+        tree.build_and_layout(&mut root, 200.0, 200.0, [0.0, 0.0]);
+        let node = root.children[0].layout_node.unwrap();
+        root.children[0].style.bg_color = [0.2, 0.4, 0.6, 1.0];
+        tree.update_taffy_node_style(&root.children[0]);
+        assert!(
+            !tree.is_node_dirty(node),
+            "paint-only refresh must preserve layout"
+        );
+        root.children[0].style.size.height = Dimension::length(80.0);
+        tree.update_taffy_node_style(&root.children[0]);
+        assert!(
+            tree.is_node_dirty(node),
+            "real geometry must invalidate the cache"
+        );
+        tree.build_and_layout_fast(&mut root, 200.0, 200.0, [0.0, 0.0], false, false);
+        assert_eq!(root.children[0].layout_bounds[3], 80.0);
+    }
+
+    #[test]
+    fn text_measure_cache_ignores_available_width_when_inline_size_is_known() {
+        let mut tree = LayoutTree::new();
+        let mut leaf = Element::new().text("known inline width wraps consistently");
+        let node = tree.taffy.new_leaf(taffy::Style::default()).unwrap();
+        leaf.layout_node = Some(node);
+        tree.sync_text_measure(&leaf);
+        let known = Size {
+            width: Some(96.0),
+            height: None,
+        };
+        let mut first = None;
+        for width in [
+            AvailableSpace::MinContent,
+            AvailableSpace::MaxContent,
+            AvailableSpace::Definite(240.0),
+        ] {
+            let result = measure_leaf_cached(
+                &tree.measure_layout_cache,
+                &tree.text_measurements,
+                node,
+                known,
+                Size {
+                    width,
+                    height: AvailableSpace::MaxContent,
+                },
+                None,
+            );
+            assert_eq!(*first.get_or_insert(result), result);
+        }
+        assert_eq!(
+            tree.measure_layout_cache.borrow().len(),
+            1,
+            "the same known inline size must not reshape for each flex sizing phase"
+        );
+    }
+
+    #[test]
     fn text_measure_cache_keeps_icon_and_vertical_constraints() {
         let mut tree = LayoutTree::new();
         let mut icon = Element::new().text("icon");
@@ -9175,6 +9278,7 @@ mod prepared_text_attach_tests {
                     height: Some(h),
                 },
                 avail,
+                None,
             );
             assert_eq!(
                 size.height, h,
@@ -9193,6 +9297,7 @@ mod prepared_text_attach_tests {
                 height: Some(100.0),
             },
             avail,
+            None,
         );
         let narrow = measure_leaf_cached(
             &tree.measure_layout_cache,
@@ -9203,6 +9308,7 @@ mod prepared_text_attach_tests {
                 height: Some(20.0),
             },
             avail,
+            None,
         );
         assert_ne!(
             wide, narrow,

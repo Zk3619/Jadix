@@ -308,7 +308,7 @@ fn latest_enter_and_exit_rebuild_one_ordered_composite() {
         );
     let mut tree = LayoutTree::new();
     let mut prev = Vec::new();
-    for alpha in [0.15, 0.6, 1.0, 0.08, 0.0] {
+    for alpha in [0.15, 0.6, 1.0, 1.0, 0.08, 0.0] {
         root.children[1].style.opacity = alpha;
         root.children[1].style.translate[1] = (1.0 - alpha) * 8.0;
         tree.set_collect_skip_allowed(false);
@@ -331,18 +331,19 @@ fn latest_enter_and_exit_rebuild_one_ordered_composite() {
             1.0,
             None,
         );
-        // Compact text-owning chrome stays Node. Region window-clears an AABB
-        // larger than the pill. Opacity 0 drops the quad, so the leftover hole
-        // is Region. A live opaque plate must not recapture wrapping inside it.
-        let expect = if alpha < 0.01 {
+        // Translated composites replay in painter order to restore their old
+        // rounded fringe and caption together. Only the settled pill is Node.
+        let translated = prev.iter().any(|(k, old)| {
+            *k == key && ((old[0] - bounds[0]).abs() > 0.01 || (old[1] - bounds[1]).abs() > 0.01)
+        });
+        let expect = if alpha < 0.99 || translated {
             PaintDirtyKind::Region
         } else {
             PaintDirtyKind::Node
         };
         assert_eq!(
-            dirty[0].kind,
-            expect,
-            "alpha={alpha}: compact layer dest-resets the ink wipe; only an empty quad is Region"
+            dirty[0].kind, expect,
+            "alpha={alpha}: translated or empty composites need an ordered repair"
         );
         if alpha >= 0.99 {
             let under = crate::app::draw_cull::node_present_layered_underlay_capture_text_wipes(
@@ -819,7 +820,16 @@ fn offscreen_animation_preserves_retained_page_without_preparing_labels() {
         &frame.text_nodes,
         0,
         frame.text_nodes.len(),
-        Some(region_repair_text_cull(&nodes, &[], &[], &[], None, 1.0, 800, 600)),
+        Some(region_repair_text_cull(
+            &nodes,
+            &[],
+            &[],
+            &[],
+            None,
+            1.0,
+            800,
+            600
+        )),
         false
     )
     .is_none());
@@ -1204,20 +1214,47 @@ fn page_with_portal_descendant_is_not_an_overlay_only_island() {
 
 #[test]
 fn hiding_flow_content_invalidates_moved_siblings() {
+    use crate::core::reactivity::use_signal;
+    let hidden = use_signal("flow-content-hidden", || false);
+    hidden.set_silent(false);
     crate::app::damage::clear_frame_paint_nodes();
-    let child = Element::new().reactive_sync(|element, _| {
-        element.style.display = taffy::style::Display::None;
-        LayoutStatus::LayoutChanged
-    });
+    let child = Element::new()
+        .h(200.0)
+        .flex_shrink(0.0)
+        .reactive_sync(move |element, _| {
+            if hidden.peek() {
+                element.style.display = taffy::style::Display::None;
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::Clean
+            }
+        });
     let mut root = Element::new()
+        .w(300.0)
+        .h(300.0)
+        .flex_col()
         .child(child)
-        .child(Element::new().text("Footer"));
-    root.layout_bounds = [0.0, 0.0, 300.0, 300.0];
-    root.children[0].layout_bounds = [0.0, 0.0, 300.0, 200.0];
+        .child(Element::new().text("Footer").h(30.0));
+    let mut layout = LayoutTree::new();
+    let before = layout.build_and_layout(&mut root, 300.0, 300.0, [-1.0; 2]);
+    let previous = last_present_visual_slots(
+        &before.node_paints,
+        &before.instances,
+        &[],
+        &before.text_nodes,
+        &[],
+    );
+    let footer_key = paint_element_key(&root.children[1]);
+    let old_footer = previous
+        .iter()
+        .find(|(key, _)| *key == footer_key)
+        .unwrap()
+        .1;
+    hidden.set_silent(true);
     let mut collect = crate::core::tree::ReactiveSyncCollect::default();
     crate::core::tree::sync_reactive_elements_subtree_ex(
         &mut root,
-        &mut LayoutTree::new(),
+        &mut layout,
         &mut LayoutStatus::Clean,
         300.0,
         300.0,
@@ -1225,11 +1262,20 @@ fn hiding_flow_content_invalidates_moved_siblings() {
         false,
         &mut collect,
     );
-    let damage = crate::app::damage::take_frame_paint_nodes();
+    let after = layout.build_and_layout(&mut root, 300.0, 300.0, [-1.0; 2]);
+    let current = last_present_visual_slots(
+        &after.node_paints,
+        &after.instances,
+        &[],
+        &after.text_nodes,
+        &[],
+    );
+    let mut damage = crate::app::damage::take_frame_paint_nodes();
+    expand_paint_dirties_for_translated_slots(&mut damage, &current, &previous);
     assert!(
         damage
             .iter()
-            .any(|dirty| dirty.bounds == [0.0, 0.0, 300.0, 300.0]),
+            .any(|dirty| dirty.key == footer_key && rect_contains_rect(dirty.bounds, old_footer)),
         "the footer's old position also needs erasing"
     );
 }

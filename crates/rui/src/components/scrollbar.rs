@@ -823,6 +823,9 @@ impl From<ScrollbarBuilder> for Element {
         };
 
         let mut thumb = Element::new()
+            // The track owns its size. Moving its thumb must not invalidate
+            // intrinsic measurements of the surrounding scrolling content.
+            .absolute()
             .w(thumb_w)
             .h(thumb_h)
             .min_w(thumb_cross)
