@@ -22,12 +22,12 @@ include = [
 
 [features]
 # Lean by default: no resvg. Theme/stylesheet files are always TOML (`toml` crate).
-default = []
+default = ["backend-dx12"]
 # Entire `src/i18n` module (catalogs, locale overlay, ICU4X format). Off by default.
 # Component chrome uses `tr_default` / `tr_with_default`, which return the source
 # string when this feature is off. Enable: cargo test -p rui --lib --features i18n
 i18n = ["dep:icu", "dep:icu_provider_blob", "dep:writeable"]
-# AccessKit tree + local 0.31 winit hook. Off by default (`default = []`).
+# AccessKit tree + local 0.31 winit hook. Off by default.
 # Element `accesskit_*` attrs still compile; the bridge is feature-gated.
 # Enable: cargo test -p rui --lib --features a11y
 # `accesskit_winit` still tracks winit 0.30. The OS hook is in-tree
@@ -43,9 +43,9 @@ runtime-logging = ["dep:env_logger"]
 tracing = ["dep:tracing"]
 # Native system tray via tray-icon + muda. Off by default (see docs/ops/tray.md).
 system-tray = ["dep:tray-icon"]
-# Add the D3D12 backend (~520 KiB: wgpu-hal dx12 + DXC + gpu-allocator). Off by default:
-# the GL backend renders the same UI and its driver commits ~80 MB less on Windows.
-# Enable when you need WARP software fallback or D3D12-specific behaviour.
+# Windows defaults to D3D12 for predictable presentation and 4K frame throughput.
+# GL remains the fallback; lean consumers can disable default features.
+# This adds native backend code and driver memory (ADR-3, 2026-10-16 update).
 backend-dx12 = ["wgpu/dx12", "dep:windows", "dep:windows-core", "dep:windows-numerics", "dep:windows-collections"]
 # Optional Vulkan backend (kept off by default to avoid multi-backend bloat on Windows).
 backend-vulkan = ["wgpu/vulkan"]

@@ -29,6 +29,9 @@ crates/rui/tmp_stack_crumb.txt
 vendor/*
 !vendor/glyphon/
 !vendor/glyphon/**
+!vendor/taffy/
+!vendor/taffy/**
+vendor/taffy/target/
 
 # Allow the two main source directories and all contents
 !crates/
