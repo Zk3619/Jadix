@@ -114,17 +114,40 @@ fn hue_rotate_matrix(deg: f32) -> mat4x4<f32> {
 }
 
 fn gaussian_1d(uv: vec2<f32>, dir: vec2<f32>, sigma: f32) -> vec4<f32> {
-    let s = max(sigma, 0.01);
-    let radius = i32(min(ceil(s * 3.0), 16.0));
-    var sum = vec4<f32>(0.0);
-    var wsum = 0.0;
-    for (var i = -radius; i <= radius; i = i + 1) {
-        let fi = f32(i);
-        let w = exp(-0.5 * (fi * fi) / (s * s));
-        sum += sample_a(uv + dir * fi) * w;
-        wsum += w;
+    var sum = sample_a(uv) * u.p1;
+    if (u.p2 > 0.0) {
+        let offset = dir * u.k0.y;
+        sum += (sample_a(uv + offset) + sample_a(uv - offset)) * u.k0.x;
     }
-    return sum / max(wsum, 1e-6);
+    if (u.p2 > 1.0) {
+        let offset = dir * u.k0.w;
+        sum += (sample_a(uv + offset) + sample_a(uv - offset)) * u.k0.z;
+    }
+    if (u.p2 > 2.0) {
+        let offset = dir * u.k1.y;
+        sum += (sample_a(uv + offset) + sample_a(uv - offset)) * u.k1.x;
+    }
+    if (u.p2 > 3.0) {
+        let offset = dir * u.k1.w;
+        sum += (sample_a(uv + offset) + sample_a(uv - offset)) * u.k1.z;
+    }
+    if (u.p2 > 4.0) {
+        let offset = dir * u.k2.y;
+        sum += (sample_a(uv + offset) + sample_a(uv - offset)) * u.k2.x;
+    }
+    if (u.p2 > 5.0) {
+        let offset = dir * u.k2.w;
+        sum += (sample_a(uv + offset) + sample_a(uv - offset)) * u.k2.z;
+    }
+    if (u.p2 > 6.0) {
+        let offset = dir * u.k3.y;
+        sum += (sample_a(uv + offset) + sample_a(uv - offset)) * u.k3.x;
+    }
+    if (u.p2 > 7.0) {
+        let offset = dir * u.k3.w;
+        sum += (sample_a(uv + offset) + sample_a(uv - offset)) * u.k3.z;
+    }
+    return sum;
 }
 
 fn composite_op(src: vec4<f32>, dst: vec4<f32>, op: i32) -> vec4<f32> {
@@ -308,12 +331,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return apply_color_matrix(c);
     }
 
-    if (mode < 2.5) {
-        return gaussian_1d(uv, vec2<f32>(u.texel.x, 0.0), u.p0);
-    }
-    if (mode < 3.5) {
-        return gaussian_1d(uv, vec2<f32>(0.0, u.texel.y), u.p0);
-    }
+    if (mode < 2.5) { return gaussian_1d(uv, vec2<f32>(u.texel.x,0.0),u.p0); }
+    if (mode < 3.5) { return gaussian_1d(uv, vec2<f32>(0.0,u.texel.y),u.p0); }
 
     if (mode < 4.5) {
         // offset: p0=dx_px, p1=dy_px in UV via texel

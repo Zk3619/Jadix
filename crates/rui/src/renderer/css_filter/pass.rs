@@ -48,6 +48,34 @@ pub struct FilterUniforms {
     pub t3: [f32; 4],
 }
 
+impl FilterUniforms {
+    fn set_gaussian(&mut self, sigma: f32) {
+        let sigma = sigma.max(0.01);
+        let radius = (sigma * 3.0).ceil().min(16.0) as usize;
+        let mut weights = [0.0_f32; 17];
+        let mut total = 0.0;
+        for (i, weight) in weights.iter_mut().enumerate().take(radius + 1) {
+            let x = i as f32;
+            *weight = (-0.5 * x * x / (sigma * sigma)).exp();
+            total += *weight * if i == 0 { 1.0 } else { 2.0 };
+        }
+        self.p0 = sigma;
+        self.p1 = weights[0] / total;
+        self.p2 = radius.div_ceil(2) as f32;
+        let mut pairs = [0.0; 16];
+        for (pair, i) in (1..=radius).step_by(2).enumerate() {
+            let a = weights[i];
+            let b = if i < radius { weights[i + 1] } else { 0.0 };
+            pairs[pair * 2] = (a + b) / total;
+            pairs[pair * 2 + 1] = i as f32 + if a + b > 0.0 { b / (a + b) } else { 0.0 };
+        }
+        self.k0.copy_from_slice(&pairs[0..4]);
+        self.k1.copy_from_slice(&pairs[4..8]);
+        self.k2.copy_from_slice(&pairs[8..12]);
+        self.k3.copy_from_slice(&pairs[12..16]);
+    }
+}
+
 impl Default for FilterUniforms {
     fn default() -> Self {
         Self::zeroed()
@@ -60,8 +88,10 @@ pub struct CssFilterPassGpu {
     pipeline: wgpu::RenderPipeline,
     uniform_bgl: wgpu::BindGroupLayout,
     // Each encoded pass needs its own uniform snapshot until submission.
-    uniform_slots: Vec<(wgpu::Buffer, wgpu::BindGroup)>,
-    uniform_cursor: usize,
+    uniform_buffer: wgpu::Buffer,
+    uniform_bg: wgpu::BindGroup,
+    uniform_stride: usize,
+    uniform_bytes: Vec<u8>,
     pending_encoder: Option<wgpu::CommandEncoder>,
     tex_bgl: wgpu::BindGroupLayout,
     vertex_buffer: wgpu::Buffer,
@@ -77,9 +107,13 @@ pub struct CssFilterPassGpu {
 
 impl CssFilterPassGpu {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Self::with_shader(device, format, include_str!("filter_pass.wgsl"))
+    }
+
+    fn with_shader(device: &wgpu::Device, format: wgpu::TextureFormat, source: &str) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("rui-css-filter-pass"),
-            source: wgpu::ShaderSource::Wgsl(include_str!("filter_pass.wgsl").into()),
+            source: wgpu::ShaderSource::Wgsl(source.into()),
         });
 
         let uniform_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -89,7 +123,7 @@ impl CssFilterPassGpu {
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
+                    has_dynamic_offset: true,
                     min_binding_size: wgpu::BufferSize::new(
                         std::mem::size_of::<FilterUniforms>() as u64
                     ),
@@ -142,47 +176,12 @@ impl CssFilterPassGpu {
             immediate_size: 0,
         });
 
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("rui-css-filter-pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(VertexInput::desc())],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some("fs_main"),
-                // Must match capture / ping-pong RTs (`Rgba8UnormSrgb`), not the swapchain format.
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: wgpu::PrimitiveState::default(),
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline = make_filter_pipeline(device, &pipeline_layout, &shader, "fs_main");
 
-        let uniform_buf = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("rui-css-filter-uniforms"),
-            size: std::mem::size_of::<FilterUniforms>() as u64,
-            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        let uniform_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("rui-css-filter-ubg"),
-            layout: &uniform_bgl,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: uniform_buf.as_entire_binding(),
-            }],
-        });
+        let alignment = device.limits().min_uniform_buffer_offset_alignment as usize;
+        let uniform_stride = std::mem::size_of::<FilterUniforms>().div_ceil(alignment) * alignment;
+        let (uniform_buffer, uniform_bg) =
+            make_uniform_buffer(device, &uniform_bgl, uniform_stride * 16);
 
         let vertices = &[
             VertexInput {
@@ -219,8 +218,10 @@ impl CssFilterPassGpu {
             force_named_snapshots: false,
             pipeline,
             uniform_bgl,
-            uniform_slots: vec![(uniform_buf, uniform_bg)],
-            uniform_cursor: 0,
+            uniform_buffer,
+            uniform_bg,
+            uniform_stride,
+            uniform_bytes: Vec::new(),
             pending_encoder: None,
             tex_bgl,
             vertex_buffer,
@@ -249,7 +250,6 @@ impl CssFilterPassGpu {
             return false;
         }
         self.ensure_fallback(device, textured);
-        self.uniform_cursor = 0;
         let mut any = false;
         let mut seen = std::collections::HashSet::new();
         for job in filters {
@@ -282,6 +282,10 @@ impl CssFilterPassGpu {
             ) {
                 self.completed_outputs.insert(job.output_key.clone());
                 any = true;
+                // A graph is the dependency boundary. Start its GPU work while
+                // preparing the next graph instead of serializing every graph's
+                // resource transitions into one large command buffer.
+                self.submit_pending(queue);
             }
         }
         self.submit_pending(queue);
@@ -293,8 +297,28 @@ impl CssFilterPassGpu {
 
     fn submit_pending(&mut self, queue: &wgpu::Queue) {
         if let Some(encoder) = self.pending_encoder.take() {
+            if !self.uniform_bytes.is_empty() {
+                queue.write_buffer(&self.uniform_buffer, 0, &self.uniform_bytes);
+            }
             queue.submit(std::iter::once(encoder.finish()));
+            self.uniform_bytes.clear();
         }
+    }
+
+    fn ensure_uniform_capacity(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        needed: usize,
+    ) {
+        if needed as u64 <= self.uniform_buffer.size() {
+            return;
+        }
+        // Only actual draws grow storage. Submit the preceding snapshots before
+        // replacing their buffer; retained command references keep it alive.
+        self.submit_pending(queue);
+        (self.uniform_buffer, self.uniform_bg) =
+            make_uniform_buffer(device, &self.uniform_bgl, needed.next_power_of_two());
     }
 
     fn prepare_uniform_slot(
@@ -302,28 +326,17 @@ impl CssFilterPassGpu {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         uniforms: &FilterUniforms,
-    ) -> usize {
-        let slot = self.uniform_cursor;
-        if slot == self.uniform_slots.len() {
-            let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-                label: Some("rui-css-filter-uniforms"),
-                size: std::mem::size_of::<FilterUniforms>() as u64,
-                usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
-                mapped_at_creation: false,
-            });
-            let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("rui-css-filter-ubg"),
-                layout: &self.uniform_bgl,
-                entries: &[wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: buffer.as_entire_binding(),
-                }],
-            });
-            self.uniform_slots.push((buffer, bind_group));
-        }
-        queue.write_buffer(&self.uniform_slots[slot].0, 0, bytemuck::bytes_of(uniforms));
-        self.uniform_cursor += 1;
-        slot
+    ) -> u32 {
+        self.ensure_uniform_capacity(
+            device,
+            queue,
+            self.uniform_bytes.len() + self.uniform_stride,
+        );
+        let offset = self.uniform_bytes.len();
+        self.uniform_bytes.resize(offset + self.uniform_stride, 0);
+        self.uniform_bytes[offset..offset + std::mem::size_of::<FilterUniforms>()]
+            .copy_from_slice(bytemuck::bytes_of(uniforms));
+        offset as u32
     }
 
     fn ensure_fallback(&mut self, device: &wgpu::Device, textured: &TexturedQuadPipeline) {
@@ -600,12 +613,12 @@ impl CssFilterPassGpu {
                     self.ensure_target(device, textured, images, &mid, ww, hh);
                 }
                 u.mode = 2.0;
-                u.p0 = (std_deviation.0 * ui_scale).max(0.01);
+                u.set_gaussian(std_deviation.0 * ui_scale);
                 if !self.draw(device, queue, textured, images, &src, &src, &mid, &u) {
                     return false;
                 }
                 u.mode = 3.0;
-                u.p0 = (std_deviation.1 * ui_scale).max(0.01);
+                u.set_gaussian(std_deviation.1 * ui_scale);
                 self.draw(device, queue, textured, images, &mid, &mid, dst_key, &u)
             }
             FilterPrimitive::Offset { in1, dx, dy, .. } => {
@@ -665,8 +678,12 @@ impl CssFilterPassGpu {
                 }
                 let mut acc = first;
                 let merge_tmp = format!("{dst_key}__merge");
-                if let Some(&(ww, hh)) = self.target_size.get(dst_key) {
-                    self.ensure_target(device, textured, images, &merge_tmp, ww, hh);
+                // Two layers write directly to dst. Only a longer merge needs
+                // an accumulator between its first and final composite.
+                if nodes.len() > 2 {
+                    if let Some(&(ww, hh)) = self.target_size.get(dst_key) {
+                        self.ensure_target(device, textured, images, &merge_tmp, ww, hh);
+                    }
                 }
                 for (i, n) in nodes.iter().enumerate().skip(1) {
                     let layer = self.resolve_input(named, last_key, n);
@@ -934,7 +951,7 @@ impl CssFilterPassGpu {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.uniform_slots[slot].1, &[]);
+            pass.set_bind_group(0, &self.uniform_bg, &[slot]);
             pass.set_bind_group(1, &tex_bg, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
@@ -985,9 +1002,13 @@ impl CssFilterPassGpu {
         let view_a = tex_a
             ._texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let view_b = tex_b
-            ._texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+        let view_b = if src_a == src_b {
+            view_a.clone()
+        } else {
+            tex_b
+                ._texture
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
         let dst_view = dst
             ._texture
             .create_view(&wgpu::TextureViewDescriptor::default());
@@ -1039,7 +1060,7 @@ impl CssFilterPassGpu {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &self.uniform_slots[slot].1, &[]);
+            pass.set_bind_group(0, &self.uniform_bg, &[slot]);
             pass.set_bind_group(1, &tex_bg, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
             pass.set_index_buffer(self.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
@@ -1047,6 +1068,66 @@ impl CssFilterPassGpu {
         }
         true
     }
+}
+
+fn make_uniform_buffer(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    bytes: usize,
+) -> (wgpu::Buffer, wgpu::BindGroup) {
+    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("rui-css-filter-uniforms"),
+        size: bytes as u64,
+        usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+        mapped_at_creation: false,
+    });
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("rui-css-filter-ubg"),
+        layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                buffer: &buffer,
+                offset: 0,
+                size: wgpu::BufferSize::new(std::mem::size_of::<FilterUniforms>() as u64),
+            }),
+        }],
+    });
+    (buffer, bind_group)
+}
+
+fn make_filter_pipeline(
+    device: &wgpu::Device,
+    pipeline_layout: &wgpu::PipelineLayout,
+    shader: &wgpu::ShaderModule,
+    fragment_entry: &str,
+) -> wgpu::RenderPipeline {
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("rui-css-filter-pipeline"),
+        layout: Some(pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: shader,
+            entry_point: Some("vs_main"),
+            buffers: &[Some(VertexInput::desc())],
+            compilation_options: Default::default(),
+        },
+        fragment: Some(wgpu::FragmentState {
+            module: shader,
+            entry_point: Some(fragment_entry),
+            // Must match capture / ping-pong RTs (`Rgba8UnormSrgb`), not the swapchain format.
+            targets: &[Some(wgpu::ColorTargetState {
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                blend: Some(wgpu::BlendState::REPLACE),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+            compilation_options: Default::default(),
+        }),
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        multiview_mask: None,
+        cache: None,
+    })
 }
 
 fn primitive_reads_result(primitive: &FilterPrimitive, result: &str) -> bool {
@@ -1177,6 +1258,96 @@ fn light_dir(light: &LightSource) -> (f32, f32, f32) {
 mod tests {
     use super::*;
     use crate::renderer::offscreen::{readback_texture, OffscreenGpu};
+
+    #[test]
+    #[ignore = "native GPU paired Gaussian versus original discrete taps; run explicitly"]
+    fn paired_gaussian_matches_discrete_taps() {
+        let source = include_str!("filter_pass.wgsl");
+        let start = source.find("fn gaussian_1d(").unwrap();
+        let end = start + source[start + 4..].find("\nfn ").unwrap() + 4;
+        let mut reference_source = source.to_string();
+        reference_source.replace_range(start..end, include_str!("gaussian_reference.wgsl"));
+        for backend in [wgpu::Backends::GL, wgpu::Backends::DX12] {
+            if backend == wgpu::Backends::DX12 && !cfg!(feature = "backend-dx12") {
+                continue;
+            }
+            let gpu = OffscreenGpu::with_backends(backend).expect("native GPU adapter");
+            let (w, h) = (67_u32, 49_u32);
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                width: w,
+                height: h,
+                present_mode: wgpu::PresentMode::Fifo,
+                desired_maximum_frame_latency: 2,
+                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+                color_space: Default::default(),
+                view_formats: vec![],
+            };
+            let textured = TexturedQuadPipeline::new(&gpu.device, &config);
+            let rgba: Vec<u8> = (0..w * h * 4)
+                .map(|i| ((i.wrapping_mul(73) ^ (i / 17)) & 255) as u8)
+                .collect();
+            let input = crate::app::image_registry::upload_rgba8(
+                &gpu.device,
+                &gpu.queue,
+                &textured,
+                &rgba,
+                w,
+                h,
+            );
+            let mut optimized = CssFilterPassGpu::new(&gpu.device, config.format);
+            let mut reference =
+                CssFilterPassGpu::with_shader(&gpu.device, config.format, &reference_source);
+            for sigma in [0.01_f32, 0.3, 0.5, 1.0, 2.0, 3.0, 5.1, 8.0, 18.0] {
+                let graph = crate::style::resolve_filter_list_to_graph(
+                    &crate::style::parse_filter(&format!("blur({sigma}px)")).unwrap(),
+                )
+                .unwrap();
+                let run = |filter: &mut CssFilterPassGpu| {
+                    filter.completed_outputs.clear();
+                    let mut images = HashMap::from([(
+                        "source".into(),
+                        GpuImageTexture {
+                            _texture: input._texture.clone(),
+                            bind_group: input.bind_group.clone(),
+                        },
+                    )]);
+                    assert!(filter.flush_filter_jobs(
+                        &gpu.device,
+                        &gpu.queue,
+                        &textured,
+                        &mut images,
+                        &[FilterJob {
+                            graph: graph.clone(),
+                            input_key: "source".into(),
+                            output_key: "output".into(),
+                            bounds: [0.0, 0.0, w as f32, h as f32],
+                        }],
+                        1.0,
+                        None
+                    ));
+                    readback_texture(
+                        &gpu.device,
+                        &gpu.queue,
+                        &images["output"]._texture,
+                        w,
+                        h,
+                        gpu.device.create_command_encoder(&Default::default()),
+                    )
+                    .unwrap()
+                    .pixels
+                };
+                let a = run(&mut optimized);
+                let b = run(&mut reference);
+                let delta = a.iter().zip(&b).map(|(a, b)| a.abs_diff(*b)).max().unwrap();
+                assert!(
+                    delta <= 1,
+                    "{backend:?} sigma={sigma} max byte delta={delta}"
+                );
+            }
+        }
+    }
 
     #[test]
     #[ignore = "native GPU named-result lifetime pixel comparison; run explicitly"]
@@ -1350,6 +1521,24 @@ mod tests {
                 "blue",
                 &flood
             ));
+            // Cross the initial uniform capacity with distinct snapshots. A
+            // growing batch must preserve both its earlier outputs and its tail.
+            for step in 0..20 {
+                flood.color = [step as f32 / 19.0, 0.0, 1.0, 0.5];
+                assert!(filter.draw(
+                    &gpu.device,
+                    &gpu.queue,
+                    &textured,
+                    &images,
+                    "input",
+                    "input",
+                    "blue",
+                    &flood
+                ));
+                if !batch {
+                    filter.submit_pending(&gpu.queue);
+                }
+            }
             filter.submit_pending(&gpu.queue);
             let mut result = Vec::new();
             for key in ["red", "shifted", "blue"] {
