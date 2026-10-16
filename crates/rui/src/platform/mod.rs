@@ -333,7 +333,7 @@ mod tests {
     fn edit_shortcut_modifiers_match_host() {
         use winit::keyboard::ModifiersState;
         let ctrl = super::edit_shortcut_modifiers(&ModifiersState::CONTROL);
-        let super_key = super::edit_shortcut_modifiers(&ModifiersState::SUPER);
+        let super_key = super::edit_shortcut_modifiers(&ModifiersState::META);
         if cfg!(any(target_os = "macos", target_os = "ios")) {
             assert!(super_key && !ctrl);
         } else {
@@ -352,7 +352,12 @@ mod tests {
         } else if cfg!(target_os = "android") {
             assert_eq!(opaque.first().map(|(_, n)| *n), Some("gl"));
         } else if cfg!(target_os = "windows") {
-            assert_eq!(opaque.first().map(|(_, n)| *n), Some("gl"));
+            let expected = if cfg!(feature = "backend-dx12") {
+                "dx12"
+            } else {
+                "gl"
+            };
+            assert_eq!(opaque.first().map(|(_, n)| *n), Some(expected));
         }
 
         let compositor = super::gpu_backend_candidates(true);

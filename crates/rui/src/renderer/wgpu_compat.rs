@@ -17,6 +17,10 @@ pub(crate) fn instance(backends: wgpu::Backends) -> wgpu::Instance {
         backends,
         ..wgpu::InstanceDescriptor::new_without_display_handle()
     };
+    // Use wgpu's production flags in every build. Native SDK validation and
+    // unoptimized shader debugging are explicit WGPU_VALIDATION/WGPU_DEBUG
+    // opt-ins; wgpu-core and indirect-call validation remain enabled.
+    descriptor.flags = wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL.with_env();
     #[cfg(all(windows, feature = "backend-dx12"))]
     {
         // RUI needs SM5, not a PATH-discovered DXC/DXIL toolchain. The latter can
