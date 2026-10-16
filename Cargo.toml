@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*", "examples/*"]
-exclude = ["vendor/glyphon", "vendor/taffy"]
+exclude = ["vendor/glyphon", "vendor/taffy", "vendor/winit-wayland", "vendor/winit-win32"]
 resolver = "2"
 
 [patch.crates-io]
@@ -9,6 +9,13 @@ resolver = "2"
 glyphon = { path = "vendor/glyphon" }
 # Normalize irrelevant parent constraints for intrinsic flex nodes; see JADIX_PATCH.md.
 taffy = { path = "vendor/taffy" }
+# Some transitive crates also consume DPI types; keep those identical to Winit.
+dpi = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+
+# OHOS uses Winit's fork URL; bind it to the exact same core/DPI as our facade.
+[patch."https://github.com/richerfu/winit.git"]
+winit-core = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+dpi = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
 
 [workspace.package]
 version = "0.1.0"
@@ -27,15 +34,17 @@ jadix_window_state = { path = "crates/jadix_window_state", version = "0.1.0" }
 jadix_clipboard = { path = "crates/jadix_clipboard", version = "0.1.0", default-features = false }
 
 # --- window / GPU ---
-# 0.31-beta.3 shares `winit-core` with `winit-ohos` (no second winit line).
-winit = "0.31.0-beta.3"
-# Official facade has no OHOS backend; this crate is the Ability loop on `target_env = "ohos"`.
-winit-ohos = "0.31.0-beta.3"
+# Local facade fork; backends/core are pinned together (see jadix_winit/README.md).
+winit = { package = "jadix_winit", path = "crates/jadix_winit", version = "0.31.0-beta.3-jadix.1" }
+winit-ohos = { git = "https://github.com/ohos-rs/winit-ohos.git", rev = "af4063b4e75b62b152a315d2606d799ca65bda84", version = "=0.31.0-beta.3", default-features = false }
 web-sys = "0.3"
 wasm-bindgen = "0.2"
 # HarmonyOS Ability (gpui-template / ohos-rs). Only used on `target_env = "ohos"`.
-openharmony-ability = "1.0.0-beta.2"
-openharmony-ability-derive = "1.0.0-beta.1"
+openharmony-ability = "=1.0.0-beta.3"
+openharmony-ability-derive = "=1.0.0-beta.3"
+napi-ohos = "1.2"
+napi-derive-ohos = "1.2"
+napi-build-ohos = "1.2"
 accesskit = "0.24.1"
 # wgpu 30 gates native backends behind features (unlike 22, which force-linked
 # Vulkan+GLES on Windows). Keep GL/Metal available; jadix enables DX12 for the
@@ -87,6 +96,7 @@ rfd = "0.17.2"
 # default-features off: skip Linux libxdo / libappindicator. gtk still required on Linux if this feature is on.
 # 0.25 + muda 0.20 accept windows-sys 0.61 (range >=0.60, <=0.61).
 tray-icon = { version = "0.25", default-features = false }
+muda = { version = "0.20", default-features = false }
 # 8.2 pins windows-sys ^0.60.1 (cannot pick 0.61). 9.0.0-rc.5 is the first line that pins 0.61.
 notify = "9.0.0-rc.5"
 # Scoped grow around `app_builder` / `ui!` (Windows PE ~1 MiB). Not a PE `/STACK` bump.

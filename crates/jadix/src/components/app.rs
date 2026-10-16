@@ -23,6 +23,17 @@ pub fn App(
     window_label: Option<String>,
     width: Option<f64>,
     height: Option<f64>,
+    min_width: Option<f64>,
+    min_height: Option<f64>,
+    max_width: Option<f64>,
+    max_height: Option<f64>,
+    x: Option<f64>,
+    y: Option<f64>,
+    resizable: Option<bool>,
+    resize_border: Option<f64>,
+    maximized: Option<bool>,
+    fullscreen: Option<bool>,
+    always_on_top: Option<bool>,
     decorations: Option<bool>,
     frameless: Option<bool>,
     transparent: Option<bool>,
@@ -55,6 +66,14 @@ pub fn App(
         window_label,
         inner_width: width,
         inner_height: height,
+        min_size: min_width.zip(min_height).map(|(w, h)| [w, h]),
+        max_size: max_width.zip(max_height).map(|(w, h)| [w, h]),
+        position: x.zip(y).map(|(x, y)| [x, y]),
+        resizable,
+        resize_border,
+        maximized,
+        fullscreen,
+        always_on_top,
         decorations,
         transparent,
         blur,
@@ -77,12 +96,9 @@ pub fn App(
         locale: locale.or(lang),
         i18n,
         timezone,
-        ..Default::default()
+        #[cfg(feature = "devtools")]
+        devtools,
     };
-    #[cfg(feature = "devtools")]
-    {
-        config.devtools = devtools;
-    }
     #[cfg(not(feature = "devtools"))]
     {
         let _ = devtools;

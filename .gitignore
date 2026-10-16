@@ -32,6 +32,13 @@ vendor/*
 !vendor/taffy/
 !vendor/taffy/**
 vendor/taffy/target/
+# Small native API extensions, pinned to jadix_winit's upstream core revision.
+!vendor/winit-wayland/
+!vendor/winit-wayland/**
+!vendor/winit-win32/
+!vendor/winit-win32/**
+vendor/winit-wayland/target/
+vendor/winit-win32/target/
 
 # Allow the two main source directories and all contents
 !crates/

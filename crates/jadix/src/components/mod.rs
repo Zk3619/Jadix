@@ -128,6 +128,7 @@ pub mod table;
 pub mod tabs;
 pub mod textarea;
 pub mod timeline;
+pub mod title_bar;
 pub mod toast;
 pub mod toggle;
 pub mod toggle_group;
@@ -611,6 +612,10 @@ pub use timeline::{
     TimelineItemBulletProps, TimelineItemDescription, TimelineItemDescriptionBuilder,
     TimelineItemDescriptionProps, TimelineItemProps, TimelineItemTitle, TimelineItemTitleBuilder,
     TimelineItemTitleProps, TimelineProps,
+};
+pub use title_bar::{
+    title_bar, window_drag_region, TitleBar, TitleBarBuilder, TitleBarProps, WindowDragRegion,
+    WindowDragRegionProps,
 };
 pub use toast::host::{toast_host, toaster, Toaster, ToasterBuilder, ToasterProps};
 pub use toast::view::{

@@ -103,10 +103,14 @@ impl super::App {
         self.secondaries.borrow().get(&id).map(|s| s.window.clone())
     }
 
-    fn shutdown_renderer(&mut self) {
+    pub(super) fn shutdown_renderer(&mut self) {
         // Idempotent: CloseRequested / Destroyed / exiting / post-run_app may all call us.
+        if self.state.borrow().is_none() && self.secondaries.borrow().is_empty() {
+            return;
+        }
         self.persist_window_state();
         super::tray::dispose_trays_for_shutdown();
+        super::native_menu::dispose_all();
 
         // 1) Pull secondary UI/GPU state out of the map *before* disposing owners, so
         //    OwnerHandle Drop → effect cleanup cannot re-enter `secondaries` (RefCell panic)
@@ -133,6 +137,7 @@ impl super::App {
         self.ime_owner_window = None;
         // 2) Drop registry Arcs so OS windows are destroyed (not only SecondaryWindowState).
         drop(self.window_registry.drain_secondaries());
+        self.window_registry = Default::default();
 
         let Some(state) = self.state.borrow_mut().take() else {
             return;
@@ -157,6 +162,7 @@ impl super::App {
     }
 
     fn drop_secondary(&mut self, id: WindowId) {
+        super::native_menu::remove_window(id);
         self.frame_pacers.remove(&id);
         if let Some(window) = self.secondaries.borrow().get(&id).map(|s| s.window.clone()) {
             super::window_lifecycle::emit_closing(window.as_ref());
@@ -191,6 +197,45 @@ impl super::App {
         }
         if self.pointer_window == Some(id) {
             self.pointer_window = None;
+        }
+        super::runtime::unregister_window(id);
+    }
+
+    fn request_close(&mut self, event_loop: &dyn ActiveEventLoop, id: Option<WindowId>) {
+        let primary = self.window_registry.primary_id();
+        if id.is_some_and(|id| !self.window_registry.contains(id)) {
+            return;
+        }
+        let closing: Vec<_> = if id.is_none() || id == primary {
+            // Primary first, then remaining windows. No window is dropped on veto.
+            primary
+                .into_iter()
+                .chain(self.secondaries.borrow().keys().copied())
+                .collect()
+        } else {
+            id.into_iter().collect()
+        };
+        for wid in closing {
+            let Some(window) = self.lifecycle_window(wid) else {
+                continue;
+            };
+            let _scope = if Some(wid) == primary {
+                super::window_scope::enter_primary()
+            } else {
+                super::window_scope::enter_secondary_id(wid)
+            };
+            if !super::window_lifecycle::close_requested(window.as_ref()) {
+                return;
+            }
+        }
+        if id.is_none() || id == primary {
+            self.shutdown_renderer();
+            event_loop.exit();
+        } else if let Some(id) = id {
+            self.drop_secondary(id);
+            if let Some(slot) = self.window_registry.remove_secondary(id) {
+                slot.window.set_visible(false);
+            }
         }
     }
 
@@ -336,7 +381,7 @@ fn create_accesskit_adapter(
 }
 
 impl super::App {
-    fn handle_user_event(
+    pub(super) fn handle_user_event(
         &mut self,
         event_loop: &dyn ActiveEventLoop,
         event: super::JadixUserEvent,
@@ -349,11 +394,8 @@ impl super::App {
                     self.force_redraw_count = self.force_redraw_count.max(2);
                 }
             }
-            super::JadixUserEvent::UiWake => {
-                super::ui_bridge::drain_ui_tasks();
-                crate::app::runtime::request_redraw_all();
-            }
             super::JadixUserEvent::OpenWindow { options, builder } => {
+                let options = *options;
                 if !crate::platform::host_capabilities().multi_window {
                     log::warn!(
                         "multi-window: secondary windows are not supported on {}",
@@ -475,6 +517,13 @@ impl super::App {
 
                 let id = window.id();
                 self.window_registry.insert_secondary_slot(window.clone());
+                super::runtime::register_window(&window, false);
+                if let Some(handle) = super::runtime::window_handle(window.id()) {
+                    if let Err(e) = handle.set_resize_border(options.resize_border) {
+                        log::warn!("resize_border: {e}");
+                    }
+                }
+                super::entry::seed_window_config(id, &options);
                 self.secondaries.borrow_mut().insert(id, secondary);
 
                 let builder_rc = std::rc::Rc::new(std::cell::RefCell::new(builder.0));
@@ -512,28 +561,18 @@ impl super::App {
                 window.request_redraw();
             }
             super::JadixUserEvent::CloseWindow { id } => {
-                let is_primary = self.window_registry.primary_id() == Some(id)
-                    || (*self.state.borrow())
-                        .as_ref()
-                        .is_some_and(|s| s.window.id() == id);
-                if is_primary {
-                    self.shutdown_renderer();
-                    event_loop.exit();
-                    return;
-                }
-                self.drop_secondary(id);
-                if let Some(slot) = self.window_registry.remove_secondary(id) {
-                    slot.window.set_visible(false);
-                }
+                self.request_close(event_loop, Some(id));
             }
             super::JadixUserEvent::Exit => {
-                self.shutdown_renderer();
-                event_loop.exit();
+                self.request_close(event_loop, None);
             }
             #[cfg(feature = "a11y")]
             super::JadixUserEvent::AccessKit(ev) => {
                 use crate::a11y::winit_adapter::AdapterWindowEvent as AkWindowEvent;
                 let wid = ev.window_id;
+                if !ev.is_current() || self.lifecycle_window(wid).is_none() {
+                    return;
+                }
                 let is_secondary = self.is_secondary_window(wid);
                 match ev.window_event {
                     AkWindowEvent::ActionRequested(req) => {
@@ -620,6 +659,13 @@ impl super::App {
             ));
             *self.state.borrow_mut() = Some(state);
             self.window_registry.insert_primary(window.clone());
+            super::runtime::register_window(&window, true);
+            if let Some(handle) = super::runtime::window_handle(window.id()) {
+                if let Err(e) = handle.set_resize_border(self.window_options.resize_border) {
+                    log::warn!("resize_border: {e}");
+                }
+            }
+            super::entry::seed_window_config(window.id(), &self.window_options);
 
             let state_ref = self.state.clone();
             crate::app::runtime::set_app_runtime(crate::app::runtime::AppRuntime::new(
@@ -674,13 +720,59 @@ impl super::App {
 
 impl ApplicationHandler for super::App {
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
-        while let Ok(event) = self.user_events.try_recv() {
+        // A producer must not keep us in try_recv forever, starving OS input.
+        const EVENT_BATCH: usize = 64;
+        let mut processed = 0;
+        for _ in 0..EVENT_BATCH {
+            let Ok(event) = self.user_events.try_recv() else {
+                break;
+            };
             self.handle_user_event(event_loop, event);
+            processed += 1;
+            if event_loop.exiting() {
+                return;
+            }
+        }
+        if super::ui_bridge::drain_ui_tasks() != 0 {
+            crate::app::runtime::request_redraw_all();
+        }
+        // wake_up may coalesce. Re-arm even if exactly EVENT_BATCH were queued;
+        // the occasional empty turn costs less than losing a trailing event.
+        // The UI queue independently re-arms itself while callbacks remain.
+        if processed == EVENT_BATCH {
+            self.event_loop_proxy.wake_up();
         }
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
         self.create_primary_if_needed(event_loop);
+        #[cfg(all(feature = "a11y", target_env = "ohos"))]
+        if self.accesskit_adapter.is_none() {
+            if let Some(state) = self.state.borrow().as_ref() {
+                self.accesskit_adapter = Some(create_accesskit_adapter(
+                    event_loop,
+                    state.window.as_ref(),
+                    self.event_loop_proxy.clone(),
+                ));
+                state.window.request_redraw();
+            }
+        }
+        #[cfg(all(feature = "a11y", target_env = "ohos"))]
+        for (id, secondary) in self.secondaries.borrow().iter() {
+            self.secondary_accesskit.entry(*id).or_insert_with(|| {
+                create_accesskit_adapter(
+                    event_loop,
+                    secondary.window.as_ref(),
+                    self.event_loop_proxy.clone(),
+                )
+            });
+        }
+    }
+
+    #[cfg(all(feature = "a11y", target_env = "ohos"))]
+    fn destroy_surfaces(&mut self, _event_loop: &dyn ActiveEventLoop) {
+        self.accesskit_adapter = None;
+        self.secondary_accesskit.clear();
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
@@ -1029,21 +1121,12 @@ impl ApplicationHandler for super::App {
         if let Some(win) = self.lifecycle_window(id) {
             super::window_lifecycle::emit_event(win.as_ref(), &event);
         }
+        if self.handle_native_resize_border(id, &event, event_loop) {
+            return;
+        }
         match event {
             WindowEvent::CloseRequested => {
-                let is_primary = self.window_registry.primary_id() == Some(id)
-                    || (*self.state.borrow())
-                        .as_ref()
-                        .is_some_and(|s| s.window.id() == id);
-                if !is_primary {
-                    self.drop_secondary(id);
-                    if let Some(slot) = self.window_registry.remove_secondary(id) {
-                        slot.window.set_visible(false);
-                    }
-                    return;
-                }
-                self.shutdown_renderer();
-                event_loop.exit();
+                self.request_close(event_loop, Some(id));
             }
             WindowEvent::Destroyed => {
                 let is_primary = self.window_registry.primary_id() == Some(id)
@@ -1160,6 +1243,9 @@ impl ApplicationHandler for super::App {
                 }
             }
             WindowEvent::Focused(focused) => {
+                if focused {
+                    super::native_menu::focus_window(id);
+                }
                 let is_primary = (*self.state.borrow())
                     .as_ref()
                     .is_some_and(|state| state.window.id() == id);

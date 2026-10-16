@@ -5,7 +5,7 @@
 //!
 //! Runtime wiring ([`winit_adapter::Adapter`]) stays in [`crate::app::lifecycle`]; this
 //! module owns the pure tree/action mapping. On Windows the adapter subclasses the
-//! HWND via `accesskit_windows`.
+//! OHOS uses a per-XComponent ArkUI provider; Windows subclasses the HWND via `accesskit_windows`.
 //!
 //! **Boundary (WP-1.3 vs identity engineering):**
 //! - **In scope here:** Role/name/value/Action mapping; `Window`→`Document` content tree;

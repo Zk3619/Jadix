@@ -1,0 +1,20 @@
+[package]
+name = "jadix_accesskit_ohos"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT OR Apache-2.0"
+publish = false
+description = "Pinned AccessKit OpenHarmony adapter backport for Jadix"
+
+[features]
+default = ["api-15"]
+api-15 = ["ohos-accessibility-binding/api-15"]
+api-24 = ["api-15", "ohos-accessibility-binding/api-24"]
+
+[dependencies]
+accesskit = { workspace = true }
+accesskit_consumer = "=0.38.0"
+
+[target.'cfg(target_env = "ohos")'.dependencies]
+ohos-accessibility-binding = { version = "=0.1.3", default-features = false, features = ["api-13"] }

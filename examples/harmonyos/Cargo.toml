@@ -6,6 +6,9 @@ license.workspace = true
 publish = false
 description = "OpenHarmony Ability entry (gpui-template contract). Build with ohrs on target_env=ohos."
 
+[features]
+a11y = ["jadix/a11y"]
+
 [lib]
 crate-type = ["cdylib", "rlib"]
 
@@ -15,4 +18,9 @@ jadix = { workspace = true }
 [target.'cfg(target_env = "ohos")'.dependencies]
 openharmony-ability = { workspace = true }
 openharmony-ability-derive = { workspace = true }
+napi-ohos = { workspace = true }
+napi-derive-ohos = { workspace = true }
 log = { workspace = true }
+
+[build-dependencies]
+napi-build-ohos = { workspace = true }

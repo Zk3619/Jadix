@@ -5,9 +5,9 @@
 //! - ArkTS: `EntryAbility extends NativeAbility` (`@ohos-rs/ability`)
 //! - Build: cdylib + `napi-build-ohos` + `ohrs build --arch aarch`
 //!
-//! `target_env = "ohos"` is `os::current`. The event loop is `winit-ohos`
-//! (`install_ohos_app` + the same `ApplicationHandler` as desktop). Do not
-//! fork winit. [`HarmonyOsHost`] is capabilities only — it does not take over.
+//! `target_env = "ohos"` is `os::current`. The `jadix_winit` facade selects
+//! `winit-ohos` with the same core as desktop. [`HarmonyOsHost`] describes
+//! capabilities only — Ability owns the native loop.
 
 use std::sync::Arc;
 

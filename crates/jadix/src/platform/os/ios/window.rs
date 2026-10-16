@@ -9,8 +9,11 @@ pub(crate) fn decorate_window_attributes(
     _options: &WindowOptions,
     _composition_swapchain: bool,
 ) -> WindowAttributes {
-    use winit::platform::ios::{ValidOrientations, WindowAttributesExtIOS};
-    attrs.with_valid_orientations(ValidOrientations::LandscapeAndPortrait)
+    use winit::platform::ios::{ValidOrientations, WindowAttributesIos};
+    attrs.with_platform_attributes(Box::new(
+        WindowAttributesIos::default()
+            .with_valid_orientations(ValidOrientations::LandscapeAndPortrait),
+    ))
 }
 
 pub(crate) fn apply_created_window(

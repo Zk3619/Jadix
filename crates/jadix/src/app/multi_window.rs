@@ -12,14 +12,252 @@
 //! Cross-window state uses [`shared_slot`] / [`super::ui_bridge::run_on_ui_thread`].
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use winit::chrome::WindowExtJadix;
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::core::tree::Element;
 
 use super::secondary_window::SecondaryUiBuilder;
 use super::window_chrome::WindowOptions;
+
+/// A weak OS window handle: retaining it never keeps a closed window alive.
+/// Capture this in workers or callbacks to target a particular window, independent
+/// of whichever window currently owns the input/reactivity scope.
+#[derive(Clone, Debug)]
+pub struct WindowHandle {
+    id: WindowId,
+    window: std::sync::Weak<dyn Window>,
+    pub(super) chrome: Arc<WindowChromeState>,
+}
+
+#[derive(Debug, Default)]
+pub(super) struct WindowChromeState {
+    pub inset: AtomicU64,
+    pub hovered: AtomicBool,
+    pub pressed: AtomicBool,
+}
+
+impl WindowHandle {
+    pub(crate) fn new(window: &Arc<dyn Window>) -> Self {
+        Self {
+            id: window.id(),
+            window: Arc::downgrade(window),
+            chrome: Arc::default(),
+        }
+    }
+
+    pub fn id(&self) -> WindowId {
+        self.id
+    }
+
+    pub fn is_alive(&self) -> bool {
+        self.window.strong_count() > 0
+    }
+
+    pub(crate) fn upgrade(&self) -> Result<Arc<dyn Window>, String> {
+        self.window
+            .upgrade()
+            .ok_or_else(|| "window has closed".into())
+    }
+
+    pub fn close(&self) -> Result<(), String> {
+        let _window = self.upgrade()?;
+        super::ui_bridge::send_user_event(super::JadixUserEvent::CloseWindow { id: self.id })
+    }
+
+    /// Ask the window manager to show, restore, and focus this window.
+    pub fn focus(&self) -> Result<(), String> {
+        let window = self.upgrade()?;
+        window.set_visible(true);
+        window.set_minimized(false);
+        window.focus_window();
+        Ok(())
+    }
+
+    pub fn set_title(&self, title: &str) -> Result<(), String> {
+        self.upgrade()?.set_title(title);
+        Ok(())
+    }
+
+    pub fn set_visible(&self, visible: bool) -> Result<(), String> {
+        self.upgrade()?.set_visible(visible);
+        Ok(())
+    }
+
+    pub fn set_fullscreen(&self, enabled: bool) -> Result<(), String> {
+        self.clear_resize_cursor();
+        self.upgrade()?
+            .set_fullscreen(enabled.then_some(winit::monitor::Fullscreen::Borderless(None)));
+        Ok(())
+    }
+
+    /// Native move; invoke directly from a left-button press on a title drag region.
+    pub fn start_drag(&self) -> Result<(), String> {
+        self.upgrade()?.drag_window().map_err(|e| e.to_string())
+    }
+
+    pub fn set_minimized(&self, minimized: bool) -> Result<(), String> {
+        self.upgrade()?.set_minimized(minimized);
+        Ok(())
+    }
+
+    pub fn set_maximized(&self, maximized: bool) -> Result<(), String> {
+        self.clear_resize_cursor();
+        self.upgrade()?.set_maximized(maximized);
+        Ok(())
+    }
+
+    pub fn is_maximized(&self) -> Result<bool, String> {
+        Ok(self.upgrade()?.is_maximized())
+    }
+
+    /// Custom title-bar maximize/double-click action. Honors the native policy.
+    /// Explicit programmatic maximize remains available via `set_maximized`.
+    pub fn toggle_maximized(&self) -> Result<(), String> {
+        let window = self.upgrade()?;
+        if !window.chrome_state().can_maximize() {
+            return Err("window cannot be maximized by its title bar".into());
+        }
+        self.clear_resize_cursor();
+        window.set_maximized(!window.is_maximized());
+        Ok(())
+    }
+
+    /// Live backend capabilities, including Wayland configure/tiled edges.
+    pub fn chrome_state(&self) -> Result<winit::chrome::WindowChrome, String> {
+        Ok(self.upgrade()?.chrome_state())
+    }
+
+    /// macOS follows the system double-click action; desktop peers maximize/restore.
+    pub fn titlebar_double_click(&self) -> Result<(), String> {
+        self.clear_resize_cursor();
+        self.upgrade()?
+            .titlebar_double_click()
+            .map_err(|e| e.to_string())
+    }
+
+    /// Publish native caption rectangles after layout (Windows, any thread). Do not add
+    /// client click handlers for the same rectangles: Windows owns the action.
+    #[cfg(windows)]
+    pub fn set_window_control_regions(
+        &self,
+        regions: Vec<winit::chrome::WindowControlRegion>,
+    ) -> Result<(), String> {
+        winit::platform::windows::set_window_control_regions(&self.upgrade()?, regions)
+            .map_err(|e| e.to_string())
+    }
+
+    pub fn set_resizable(&self, resizable: bool) -> Result<(), String> {
+        if !resizable {
+            self.clear_resize_cursor();
+        }
+        self.upgrade()?.set_resizable(resizable);
+        Ok(())
+    }
+
+    /// Enable the native resize band for a frameless window (logical pixels).
+    /// Zero disables it. Windows/Linux/OHOS; native macOS decorations remain available.
+    pub fn set_resize_border(&self, inset: f64) -> Result<(), String> {
+        self.upgrade()?;
+        if !inset.is_finite() || inset < 0.0 {
+            return Err("resize border must be finite and nonnegative".into());
+        }
+        if inset > 0.0 && !cfg!(any(windows, target_os = "linux")) {
+            return Err("custom native resize borders require Windows, Linux or OHOS".into());
+        }
+        self.chrome.inset.store(inset.to_bits(), Ordering::Relaxed);
+        if inset == 0.0 {
+            self.clear_resize_cursor();
+        }
+        Ok(())
+    }
+
+    pub(super) fn clear_resize_cursor(&self) {
+        if self.chrome.hovered.swap(false, Ordering::Relaxed) {
+            if let Ok(window) = self.upgrade() {
+                window.set_cursor(winit::cursor::CursorIcon::Default.into());
+            }
+        }
+    }
+
+    /// Native system menu at a logical client position (Windows/Wayland).
+    /// Wayland requires a valid pointer/touch serial and compositor capability.
+    pub fn show_system_menu(&self, x: f64, y: f64) -> Result<(), String> {
+        let window = self.upgrade()?;
+        if !x.is_finite() || !y.is_finite() {
+            return Err("window menu position must be finite".into());
+        }
+        window
+            .try_show_window_menu(winit::dpi::LogicalPosition::new(x, y).into())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Query a custom border using logical client coordinates and a logical inset.
+    /// Native decorations, fixed size, maximize and fullscreen never offer resize.
+    pub fn resize_direction_at(
+        &self,
+        x: f64,
+        y: f64,
+        inset: f64,
+    ) -> Result<Option<winit::window::ResizeDirection>, String> {
+        let window = self.upgrade()?;
+        let chrome = window.chrome_state();
+        if chrome.decorated || !chrome.resizable || chrome.maximized || chrome.fullscreen {
+            return Ok(None);
+        }
+        let size = window
+            .surface_size()
+            .to_logical::<f64>(window.scale_factor());
+        if chrome.tiled != winit::chrome::TiledEdges::default() {
+            return Ok(winit::chrome::resize_direction_at_frame(
+                [size.width, size.height],
+                [x, y],
+                [0.0; 4],
+                chrome.tiled,
+                inset,
+            ));
+        }
+        Ok(super::window_chrome::resize_direction_at(
+            [size.width, size.height],
+            [x, y],
+            inset,
+        ))
+    }
+
+    /// Current native policy, including changes made after window creation.
+    /// Custom borders should omit resize hit zones and cursors when false.
+    pub fn is_resizable(&self) -> Result<bool, String> {
+        Ok(self.upgrade()?.is_resizable())
+    }
+
+    /// Call from a pointer-down handler on a custom resize border.
+    /// Rejects non-resizable windows before asking the OS to begin a resize.
+    pub fn start_resize(&self, direction: winit::window::ResizeDirection) -> Result<(), String> {
+        let window = self.upgrade()?;
+        if !window.is_resizable() {
+            return Err("window is not resizable".into());
+        }
+        if window.is_maximized() || window.fullscreen().is_some() {
+            return Err("maximized or fullscreen windows cannot be resized by their border".into());
+        }
+        window
+            .start_window_resize(direction)
+            .map_err(|e| e.to_string())
+    }
+}
+
+/// Handle for the UI tree currently being built or handling an event.
+pub fn current_window() -> Option<WindowHandle> {
+    super::runtime::current_window_handle()
+}
+
+/// Snapshot of live windows. Call on the UI thread; handles can then be sent to workers.
+pub fn windows() -> Vec<WindowHandle> {
+    super::runtime::window_handles()
+}
 
 /// Per-window handle slot. Primary owns full [`super::state::AppState`];
 /// secondaries are tracked here and rendered via [`super::secondary_window::SecondaryWindowState`].
@@ -141,7 +379,7 @@ pub fn open_secondary_window_with(
     builder: impl FnMut() -> Element + 'static,
 ) -> Result<(), String> {
     super::ui_bridge::send_user_event(super::JadixUserEvent::OpenWindow {
-        options,
+        options: Box::new(options),
         builder: SecondaryUiBuilder(Box::new(builder)),
     })
     .map_err(|e| format!("multi-window: failed to queue OpenWindow: {e}"))

@@ -68,6 +68,19 @@ pub struct WindowOptions {
     pub window_label: Option<String>,
     pub inner_width: Option<f64>,
     pub inner_height: Option<f64>,
+    /// Logical client-area constraints. Invalid/non-finite sizes are ignored.
+    pub min_size: Option<[f64; 2]>,
+    pub max_size: Option<[f64; 2]>,
+    /// Logical outer position; window managers (notably Wayland) may ignore it.
+    pub position: Option<[f64; 2]>,
+    /// Allow user resizing. Custom borders must also check the live window policy.
+    pub resizable: bool,
+    /// Opt-in client-side native resize band, in logical pixels (Windows/Linux).
+    /// Only active without OS decorations; zero keeps it disabled.
+    pub resize_border: f64,
+    pub maximized: bool,
+    pub fullscreen: bool,
+    pub always_on_top: bool,
     /// OS title bar / border. `false` = frameless (draw your own chrome).
     pub decorations: bool,
     /// Per-pixel alpha is composited with the desktop. Pair with translucent fills.
@@ -120,6 +133,14 @@ impl Default for WindowOptions {
             window_label: None,
             inner_width: None,
             inner_height: None,
+            min_size: None,
+            max_size: None,
+            position: None,
+            resizable: true,
+            resize_border: 0.0,
+            maximized: false,
+            fullscreen: false,
+            always_on_top: false,
             decorations: true,
             transparent: false,
             blur: false,
@@ -182,6 +203,51 @@ impl WindowOptions {
 
     pub fn decorations(mut self, decorations: bool) -> Self {
         self.decorations = decorations;
+        self
+    }
+
+    pub fn min_size(mut self, width: f64, height: f64) -> Self {
+        self.min_size = Some([width, height]);
+        self
+    }
+
+    pub fn max_size(mut self, width: f64, height: f64) -> Self {
+        self.max_size = Some([width, height]);
+        self
+    }
+
+    pub fn position(mut self, x: f64, y: f64) -> Self {
+        self.position = Some([x, y]);
+        self
+    }
+
+    pub fn resizable(mut self, enabled: bool) -> Self {
+        self.resizable = enabled;
+        self
+    }
+
+    pub fn resize_border(mut self, inset: f64) -> Self {
+        self.resize_border = if inset.is_finite() {
+            inset.max(0.0)
+        } else {
+            0.0
+        };
+        self
+    }
+
+    pub fn maximized(mut self, enabled: bool) -> Self {
+        self.maximized = enabled;
+        self
+    }
+
+    /// Borderless fullscreen on the current monitor (OS permission/policy applies).
+    pub fn fullscreen(mut self, enabled: bool) -> Self {
+        self.fullscreen = enabled;
+        self
+    }
+
+    pub fn always_on_top(mut self, enabled: bool) -> Self {
+        self.always_on_top = enabled;
         self
     }
 
@@ -437,12 +503,23 @@ impl WindowOptions {
             .with_theme(Some(native_theme()))
             .with_title(&self.title)
             .with_visible(false)
+            .with_resizable(self.resizable)
+            .with_maximized(self.maximized)
+            .with_fullscreen(
+                self.fullscreen
+                    .then_some(winit::monitor::Fullscreen::Borderless(None)),
+            )
+            .with_window_level(if self.always_on_top {
+                winit::window::WindowLevel::AlwaysOnTop
+            } else {
+                winit::window::WindowLevel::Normal
+            })
             .with_decorations(self.decorations)
             .with_transparent(self.compositor_alpha())
             .with_blur(self.blur && !self.wants_dcomp_swapchain());
 
         if let (Some(w), Some(h)) = (self.inner_width, self.inner_height) {
-            if w > 0.0 && h > 0.0 {
+            if valid_size([w, h]) {
                 attrs = attrs.with_surface_size(LogicalSize::new(w, h));
             }
         } else if let (Ok(w), Ok(h)) = (
@@ -450,14 +527,131 @@ impl WindowOptions {
             std::env::var("JADIX_WINDOW_HEIGHT"),
         ) {
             if let (Ok(w), Ok(h)) = (w.parse::<f64>(), h.parse::<f64>()) {
-                if w > 0.0 && h > 0.0 {
+                if valid_size([w, h]) {
                     attrs = attrs.with_surface_size(LogicalSize::new(w, h));
                 }
             }
         }
 
+        let min = self.min_size.filter(|s| valid_size(*s));
+        if let Some([w, h]) = min {
+            attrs = attrs.with_min_surface_size(LogicalSize::new(w, h));
+        }
+        if let Some([mut w, mut h]) = self.max_size.filter(|s| valid_size(*s)) {
+            if let Some([min_w, min_h]) = min {
+                w = w.max(min_w);
+                h = h.max(min_h);
+            }
+            attrs = attrs.with_max_surface_size(LogicalSize::new(w, h));
+        }
+        if let Some([x, y]) = self.position.filter(|p| p.iter().all(|v| v.is_finite())) {
+            attrs = attrs.with_position(winit::dpi::LogicalPosition::new(x, y));
+        }
         attrs = crate::platform::decorate_window_attributes(attrs, self, composition_swapchain);
         attrs
+    }
+}
+
+fn valid_size(size: [f64; 2]) -> bool {
+    size.iter().all(|v| v.is_finite() && *v > 0.0)
+}
+
+impl super::App {
+    /// Native chrome is dispatched before the content tree, for primary and secondary alike.
+    pub(super) fn handle_native_resize_border(
+        &mut self,
+        id: winit::window::WindowId,
+        event: &winit::event::WindowEvent,
+        event_loop: &dyn winit::event_loop::ActiveEventLoop,
+    ) -> bool {
+        use std::sync::atomic::Ordering;
+        use winit::cursor::CursorIcon;
+        use winit::event::{ButtonSource, ElementState, MouseButton, PointerSource, WindowEvent};
+        use winit::window::ResizeDirection::*;
+        let Some(handle) = super::runtime::window_handle(id) else {
+            return false;
+        };
+        let inset = f64::from_bits(handle.chrome.inset.load(Ordering::Relaxed));
+        if inset <= 0.0 {
+            return false;
+        }
+        let position = match event {
+            WindowEvent::PointerMoved {
+                position,
+                source: PointerSource::Mouse,
+                ..
+            } => *position,
+            WindowEvent::PointerButton {
+                position,
+                button: ButtonSource::Mouse(MouseButton::Left),
+                state,
+                ..
+            } => {
+                if *state == ElementState::Released {
+                    return handle.chrome.pressed.swap(false, Ordering::Relaxed);
+                }
+                // Native resize can consume the release. A fresh press always
+                // starts a new gesture, including a press in the content area.
+                handle.chrome.pressed.store(false, Ordering::Relaxed);
+                *position
+            }
+            WindowEvent::PointerLeft { .. }
+            | WindowEvent::Focused(false)
+            | WindowEvent::SurfaceResized(_)
+            | WindowEvent::ScaleFactorChanged { .. } => {
+                handle.chrome.pressed.store(false, Ordering::Relaxed);
+                handle.clear_resize_cursor();
+                return false;
+            }
+            _ => return false,
+        };
+        let Ok(window) = handle.upgrade() else {
+            return false;
+        };
+        let position = position.to_logical::<f64>(window.scale_factor());
+        let Some(direction) = handle
+            .resize_direction_at(position.x, position.y, inset)
+            .ok()
+            .flatten()
+        else {
+            handle.clear_resize_cursor();
+            return false;
+        };
+        let cursor = match direction {
+            North => CursorIcon::NResize,
+            South => CursorIcon::SResize,
+            West => CursorIcon::WResize,
+            East => CursorIcon::EResize,
+            NorthWest => CursorIcon::NwResize,
+            NorthEast => CursorIcon::NeResize,
+            SouthWest => CursorIcon::SwResize,
+            SouthEast => CursorIcon::SeResize,
+        };
+        window.set_cursor(cursor.into());
+        let was_hovered = handle.chrome.hovered.swap(true, Ordering::Relaxed);
+        if matches!(
+            event,
+            WindowEvent::PointerButton {
+                state: ElementState::Pressed,
+                ..
+            }
+        ) {
+            handle.chrome.pressed.store(true, Ordering::Relaxed);
+            if let Err(e) = handle.start_resize(direction) {
+                log::debug!("native resize border: {e}");
+                handle.chrome.pressed.store(false, Ordering::Relaxed);
+            }
+        }
+        // Clear content hover once when entering the native band.
+        if !was_hovered {
+            if self.is_secondary_window(id) {
+                self.handle_secondary_cursor_left(id, event_loop);
+            } else {
+                self.with_primary_input(id, |app| app.handle_cursor_left(id, event_loop));
+            }
+        }
+        window.set_cursor(cursor.into());
+        true
     }
 }
 
@@ -511,17 +705,6 @@ fn with_active_window<R>(f: impl FnOnce(&dyn Window) -> R) -> Option<R> {
     super::runtime::with_active_winit_window(f)
 }
 
-pub(crate) fn set_window_title(title: impl AsRef<str>) {
-    let title = title.as_ref();
-    with_active_window(|w| w.set_title(title));
-}
-
-pub(crate) fn request_window_inner_size(width: f64, height: f64) {
-    with_active_window(|w| {
-        w.request_surface_size(winit::dpi::Size::Logical(LogicalSize::new(width, height)))
-    });
-}
-
 /// Begin an OS window move. Call from **mousedown** on a custom title bar (not `click`).
 pub fn start_window_drag() {
     let err = with_active_window(|w| w.drag_window().err()).flatten();
@@ -538,6 +721,14 @@ pub fn window_is_maximized() -> bool {
     with_active_window(|w| w.is_maximized()).unwrap_or(false)
 }
 
+/// Whether the active window allows resizing. False when no window is active.
+/// Check when drawing custom resize hit zones/cursors; `start_resize` rechecks on press.
+pub fn window_is_resizable() -> bool {
+    with_active_window(|w| w.is_resizable()).unwrap_or(false)
+}
+
+pub(super) use winit::chrome::resize_direction_at;
+
 pub fn toggle_window_maximized() {
     with_active_window(|w| w.set_maximized(!w.is_maximized()));
 }
@@ -546,21 +737,11 @@ pub fn set_window_minimized(minimized: bool) {
     with_active_window(|w| w.set_minimized(minimized));
 }
 
-/// Close the active window. Primary → [`super::request_exit`]; secondary is dropped.
+/// Request closing the active window, honoring [`super::WindowLifecycleHook::on_close_requested`].
 pub fn close_window() {
-    match super::window_scope::tree_home_for(super::window_scope::active()) {
-        super::window_scope::TreeHome::AppState => {
-            super::ui_bridge::request_exit();
-        }
-        super::window_scope::TreeHome::SecondarySlot => {
-            let Some(id) = super::window_scope::active_window_id() else {
-                return;
-            };
-            if let Err(e) =
-                super::ui_bridge::send_user_event(super::JadixUserEvent::CloseWindow { id })
-            {
-                log::warn!("close_window: {e}");
-            }
+    if let Some(window) = super::multi_window::current_window() {
+        if let Err(e) = window.close() {
+            log::warn!("close_window: {e}");
         }
     }
 }
@@ -568,6 +749,43 @@ pub fn close_window() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_constraints_reject_nonfinite_values_and_normalize_bounds() {
+        use winit::dpi::{LogicalSize, Size};
+        let attrs = WindowOptions::new()
+            .min_size(400.0, 300.0)
+            .max_size(200.0, 900.0)
+            .resizable(false)
+            .maximized(true)
+            .always_on_top(true)
+            .fullscreen(true)
+            .position(-100.0, 20.0)
+            .to_window_attributes();
+        assert_eq!(
+            attrs.min_surface_size,
+            Some(Size::Logical(LogicalSize::new(400.0, 300.0)))
+        );
+        assert_eq!(
+            attrs.max_surface_size,
+            Some(Size::Logical(LogicalSize::new(400.0, 900.0)))
+        );
+        assert!(!attrs.resizable);
+        assert!(attrs.maximized);
+        assert!(attrs.fullscreen.is_some());
+        assert_eq!(attrs.window_level, winit::window::WindowLevel::AlwaysOnTop);
+        assert!(attrs.position.is_some());
+        let invalid = WindowOptions::new()
+            .size(f64::INFINITY, 20.0)
+            .min_size(0.0, 10.0)
+            .max_size(f64::NAN, 100.0)
+            .position(f64::NAN, 10.0)
+            .to_window_attributes();
+        assert!(invalid.surface_size.is_none());
+        assert!(invalid.min_surface_size.is_none());
+        assert!(invalid.max_surface_size.is_none());
+        assert!(invalid.position.is_none());
+    }
 
     #[test]
     fn default_options_are_decorated_opaque() {

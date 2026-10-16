@@ -25,6 +25,38 @@ use crate::utils::take_packed;
 
 use super::window_chrome::{WindowBackdrop, WindowOptions};
 
+thread_local! {
+    // Apply RSX window patches only when their requested values change, so a
+    // reactive text update cannot undo a user's move/maximize/fullscreen gesture.
+    static WINDOW_PATCHES: std::cell::RefCell<std::collections::HashMap<winit::window::WindowId, AppConfig>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+pub(crate) fn forget_window_config(id: winit::window::WindowId) {
+    WINDOW_PATCHES.with(|c| c.borrow_mut().remove(&id));
+}
+
+pub(crate) fn seed_window_config(id: winit::window::WindowId, options: &WindowOptions) {
+    WINDOW_PATCHES.with(|c| {
+        c.borrow_mut().insert(
+            id,
+            AppConfig {
+                title: Some(options.title.clone()),
+                inner_width: options.inner_width,
+                inner_height: options.inner_height,
+                min_size: options.min_size,
+                max_size: options.max_size,
+                position: options.position,
+                resizable: Some(options.resizable),
+                resize_border: Some(options.resize_border),
+                maximized: Some(options.maximized),
+                fullscreen: Some(options.fullscreen),
+                always_on_top: Some(options.always_on_top),
+                ..Default::default()
+            },
+        )
+    });
+}
+
 /// Document / window patch. Unset fields keep current process / [`WindowOptions::default`] values.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AppConfig {
@@ -32,6 +64,14 @@ pub struct AppConfig {
     pub window_label: Option<String>,
     pub inner_width: Option<f64>,
     pub inner_height: Option<f64>,
+    pub min_size: Option<[f64; 2]>,
+    pub max_size: Option<[f64; 2]>,
+    pub position: Option<[f64; 2]>,
+    pub resizable: Option<bool>,
+    pub resize_border: Option<f64>,
+    pub maximized: Option<bool>,
+    pub fullscreen: Option<bool>,
+    pub always_on_top: Option<bool>,
     pub decorations: Option<bool>,
     pub transparent: Option<bool>,
     pub blur: Option<bool>,
@@ -68,6 +108,24 @@ impl AppConfig {
             o.title = title;
         }
         o.window_label = self.window_label;
+        o.min_size = self.min_size;
+        o.max_size = self.max_size;
+        o.position = self.position;
+        if let Some(v) = self.resizable {
+            o.resizable = v;
+        }
+        if let Some(v) = self.resize_border {
+            o = o.resize_border(v);
+        }
+        if let Some(v) = self.maximized {
+            o.maximized = v;
+        }
+        if let Some(v) = self.fullscreen {
+            o.fullscreen = v;
+        }
+        if let Some(v) = self.always_on_top {
+            o.always_on_top = v;
+        }
         if self.inner_width.is_some() {
             o.inner_width = self.inner_width;
         }
@@ -129,6 +187,7 @@ impl AppConfig {
 
     /// Apply font / rem root (always) and live window title / size when a window exists.
     pub fn apply_document(&self) {
+        self.apply_window_patch();
         let mut d = text_defaults();
         let mut font_changed = false;
         if let Some(ref family) = self.font_family {
@@ -176,16 +235,88 @@ impl AppConfig {
             #[cfg(not(feature = "i18n"))]
             let _ = tz;
         }
+    }
 
-        if let Some(ref title) = self.title {
-            super::window_chrome::set_window_title(title);
-        }
-        match (self.inner_width, self.inner_height) {
-            (Some(w), Some(h)) if w > 0.0 && h > 0.0 => {
-                super::window_chrome::request_window_inner_size(w, h);
+    fn apply_window_patch(&self) {
+        super::runtime::with_active_winit_window(|window| {
+            let previous = WINDOW_PATCHES
+                .with(|c| c.borrow().get(&window.id()).cloned())
+                .unwrap_or_default();
+            if self.title != previous.title {
+                if let Some(title) = &self.title {
+                    window.set_title(title);
+                }
             }
-            _ => {}
-        }
+            if (self.inner_width, self.inner_height)
+                != (previous.inner_width, previous.inner_height)
+            {
+                if let (Some(w), Some(h)) = (self.inner_width, self.inner_height) {
+                    if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
+                        let _ =
+                            window.request_surface_size(winit::dpi::LogicalSize::new(w, h).into());
+                    }
+                }
+            }
+            let valid_size = |size: [f64; 2]| size.iter().all(|v| v.is_finite() && *v > 0.0);
+            let mut next = self.clone();
+            next.min_size = self
+                .min_size
+                .filter(|s| valid_size(*s))
+                .or(previous.min_size);
+            next.max_size = self
+                .max_size
+                .filter(|s| valid_size(*s))
+                .or(previous.max_size);
+            if next.min_size != previous.min_size || next.max_size != previous.max_size {
+                let attrs = next.clone().into_window_options().to_window_attributes();
+                // Clear old bounds first, then set a consistent min/max pair.
+                window.set_min_surface_size(None);
+                window.set_max_surface_size(attrs.max_surface_size);
+                window.set_min_surface_size(attrs.min_surface_size);
+            }
+            if self.position != previous.position {
+                if let Some([x, y]) = self.position.filter(|p| p.iter().all(|v| v.is_finite())) {
+                    window.set_outer_position(winit::dpi::LogicalPosition::new(x, y).into());
+                }
+            }
+            if self.resizable != previous.resizable {
+                if let Some(v) = self.resizable {
+                    if let Some(handle) = super::runtime::current_window_handle() {
+                        let _ = handle.set_resizable(v);
+                    }
+                }
+            }
+            if self.resize_border != previous.resize_border {
+                if let Some(v) = self.resize_border {
+                    if let Some(handle) = super::runtime::current_window_handle() {
+                        if let Err(e) = handle.set_resize_border(v) {
+                            log::warn!("resize_border: {e}");
+                        }
+                    }
+                }
+            }
+            if self.maximized != previous.maximized {
+                if let Some(v) = self.maximized {
+                    window.set_maximized(v);
+                }
+            }
+            if self.fullscreen != previous.fullscreen {
+                if let Some(v) = self.fullscreen {
+                    window
+                        .set_fullscreen(v.then_some(winit::monitor::Fullscreen::Borderless(None)));
+                }
+            }
+            if self.always_on_top != previous.always_on_top {
+                if let Some(v) = self.always_on_top {
+                    window.set_window_level(if v {
+                        winit::window::WindowLevel::AlwaysOnTop
+                    } else {
+                        winit::window::WindowLevel::Normal
+                    });
+                }
+            }
+            WINDOW_PATCHES.with(|c| c.borrow_mut().insert(window.id(), next));
+        });
     }
 }
 
@@ -253,6 +384,46 @@ impl AppBuilder {
 
     pub fn width(mut self, width: f64) -> Self {
         self.config.inner_width = Some(width);
+        self
+    }
+
+    pub fn min_size(mut self, width: f64, height: f64) -> Self {
+        self.config.min_size = Some([width, height]);
+        self
+    }
+
+    pub fn max_size(mut self, width: f64, height: f64) -> Self {
+        self.config.max_size = Some([width, height]);
+        self
+    }
+
+    pub fn position(mut self, x: f64, y: f64) -> Self {
+        self.config.position = Some([x, y]);
+        self
+    }
+
+    pub fn resizable(mut self, enabled: bool) -> Self {
+        self.config.resizable = Some(enabled);
+        self
+    }
+
+    pub fn resize_border(mut self, inset: f64) -> Self {
+        self.config.resize_border = Some(inset);
+        self
+    }
+
+    pub fn maximized(mut self, enabled: bool) -> Self {
+        self.config.maximized = Some(enabled);
+        self
+    }
+
+    pub fn fullscreen(mut self, enabled: bool) -> Self {
+        self.config.fullscreen = Some(enabled);
+        self
+    }
+
+    pub fn always_on_top(mut self, enabled: bool) -> Self {
+        self.config.always_on_top = Some(enabled);
         self
     }
 
@@ -478,6 +649,24 @@ impl crate::core::tree::IntoElementList for AppBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn app_builder_preserves_native_window_controls() {
+        let options = app()
+            .min_size(320.0, 240.0)
+            .max_size(1280.0, 900.0)
+            .position(-20.0, 50.0)
+            .resizable(false)
+            .maximized(true)
+            .fullscreen(true)
+            .always_on_top(true)
+            .into_window_options();
+        assert_eq!(options.min_size, Some([320.0, 240.0]));
+        assert_eq!(options.max_size, Some([1280.0, 900.0]));
+        assert_eq!(options.position, Some([-20.0, 50.0]));
+        assert!(!options.resizable);
+        assert!(options.maximized && options.fullscreen && options.always_on_top);
+    }
 
     #[test]
     fn app_builder_maps_title_size_font_and_frameless() {

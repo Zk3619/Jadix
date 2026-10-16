@@ -15,6 +15,9 @@ use super::window_scope::{self, TreeHome};
 
 thread_local! {
     static APP_RUNTIME: RefCell<Option<AppRuntime>> = const { RefCell::new(None) };
+    // OS operations must work even while input dispatch borrows a UI tree.
+    static WINDOWS: RefCell<HashMap<WindowId, super::multi_window::WindowHandle>> = RefCell::new(HashMap::new());
+    static PRIMARY: std::cell::Cell<Option<WindowId>> = const { std::cell::Cell::new(None) };
 }
 
 /// Weak handle to primary [`AppState`] plus secondary trees.
@@ -146,6 +149,26 @@ pub fn set_app_runtime(rt: AppRuntime) {
 
 pub fn clear_app_runtime() {
     APP_RUNTIME.with(|c| *c.borrow_mut() = None);
+    for window in window_handles() {
+        super::entry::forget_window_config(window.id());
+    }
+    WINDOWS.with(|c| c.borrow_mut().clear());
+    PRIMARY.with(|c| c.set(None));
+}
+
+pub(crate) fn register_window(window: &Arc<dyn Window>, primary: bool) {
+    WINDOWS.with(|c| {
+        c.borrow_mut()
+            .insert(window.id(), super::multi_window::WindowHandle::new(window))
+    });
+    if primary {
+        PRIMARY.with(|c| c.set(Some(window.id())));
+    }
+}
+
+pub(crate) fn unregister_window(id: WindowId) {
+    WINDOWS.with(|c| c.borrow_mut().remove(&id));
+    super::entry::forget_window_config(id);
 }
 
 /// Returns [`None`] if no runtime is installed (e.g. before first `resumed` or after teardown).
@@ -350,24 +373,37 @@ pub fn request_redraw_all() {
 /// Drops AppState / secondary borrows before calling `f` so OS APIs that re-enter
 /// the event loop (`drag_window`, DWM) cannot `RefCell`-panic.
 pub(crate) fn with_active_winit_window<R>(f: impl FnOnce(&dyn Window) -> R) -> Option<R> {
-    let window: Arc<dyn Window> = APP_RUNTIME.with(|c| {
-        let rt = c.borrow();
-        let rt = rt.as_ref()?;
-        match window_scope::tree_home_for(window_scope::active()) {
-            TreeHome::AppState => {
-                let state_rc = rt.state.upgrade()?;
-                let opt = state_rc.try_borrow().ok()?;
-                Some(opt.as_ref()?.window.clone())
-            }
-            TreeHome::SecondarySlot => {
-                let id = window_scope::active_window_id()?;
-                let secs = rt.secondaries.upgrade()?;
-                let secs = secs.try_borrow().ok()?;
-                Some(secs.get(&id)?.window.clone())
-            }
-        }
-    })?;
+    let window = active_window()?;
     Some(f(window.as_ref()))
+}
+
+fn active_window() -> Option<Arc<dyn Window>> {
+    current_window_handle()?.upgrade().ok()
+}
+
+pub(crate) fn current_window_handle() -> Option<super::multi_window::WindowHandle> {
+    let id = match window_scope::tree_home_for(window_scope::active()) {
+        TreeHome::AppState => PRIMARY.with(|c| c.get()),
+        TreeHome::SecondarySlot => window_scope::window_id_for_active_token(),
+    }?;
+    WINDOWS.with(|c| c.borrow().get(&id).filter(|w| w.is_alive()).cloned())
+}
+
+pub(super) fn window_handle(id: WindowId) -> Option<super::multi_window::WindowHandle> {
+    WINDOWS.with(|c| c.borrow().get(&id).filter(|w| w.is_alive()).cloned())
+}
+
+pub(crate) fn window_handles() -> Vec<super::multi_window::WindowHandle> {
+    let mut windows = WINDOWS.with(|c| {
+        c.borrow()
+            .values()
+            .filter(|w| w.is_alive())
+            .cloned()
+            .collect::<Vec<_>>()
+    });
+    let primary = PRIMARY.with(|c| c.get());
+    windows.sort_by_key(|w| (Some(w.id()) != primary, w.id()));
+    windows
 }
 
 #[cfg(test)]

@@ -598,6 +598,7 @@ pub use crate::components::{
     timeline_item_title,
     timeline_line_active,
     timeline_scope,
+    title_bar,
     // Toast / Toaster（默认 stack 堆叠；list 为逐条展开）
     toast,
     toast_dismiss,
@@ -664,6 +665,7 @@ pub use crate::components::{
     use_tree_view_item,
     virtual_list,
     virtual_masonry,
+    window_drag_region,
     Accordion,
     AccordionBuilder,
     AccordionContent,
@@ -1387,6 +1389,9 @@ pub use crate::components::{
     TimelineItemTitleBuilder,
     TimelineItemTitleProps,
     TimelineProps,
+    TitleBar,
+    TitleBarBuilder,
+    TitleBarProps,
     Toast,
     ToastBuilder,
     ToastClose,
@@ -1437,5 +1442,7 @@ pub use crate::components::{
     TreeViewVariant,
     VirtualListBuilder,
     VirtualMasonryBuilder,
+    WindowDragRegion,
+    WindowDragRegionProps,
     TABSTRIP_FOCUS_PREFIX,
 };

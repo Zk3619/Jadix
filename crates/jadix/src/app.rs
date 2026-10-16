@@ -10,11 +10,9 @@ use secondary_window::SecondaryUiBuilder;
 pub(super) enum JadixUserEvent {
     #[cfg(all(debug_assertions, feature = "hot-reload"))]
     HotReloadWake,
-    /// A worker thread queued a closure via [`ui_bridge::run_on_ui_thread`].
-    UiWake,
     /// Create and show a secondary window (see [`multi_window::open_secondary_window`]).
     OpenWindow {
-        options: WindowOptions,
+        options: Box<WindowOptions>,
         builder: SecondaryUiBuilder,
     },
     /// Drop a secondary window (custom chrome Close).
@@ -30,7 +28,6 @@ impl std::fmt::Debug for JadixUserEvent {
         match self {
             #[cfg(all(debug_assertions, feature = "hot-reload"))]
             Self::HotReloadWake => f.write_str("HotReloadWake"),
-            Self::UiWake => f.write_str("UiWake"),
             Self::OpenWindow { options, .. } => f
                 .debug_struct("OpenWindow")
                 .field("title", &options.title)
@@ -64,6 +61,8 @@ pub use ime_support::{
     apply_ime_commit, peek_last_ime_cursor_snapshot, physical_ime_cursor_area,
     prepare_compose_anchor, take_last_ime_commit, take_last_ime_cursor_snapshot, ImeCursorSnapshot,
 };
+#[cfg(all(test, windows, feature = "native-menu"))]
+mod desktop_contract_tests;
 pub mod entry;
 mod error_boundary;
 mod frame_pacing;
@@ -71,7 +70,13 @@ mod glass_gpu;
 mod input_controller;
 pub mod keyed_list;
 mod lifecycle;
+#[cfg(any(
+    feature = "system-tray",
+    all(feature = "native-menu", any(windows, target_os = "macos"))
+))]
+mod menu_events;
 pub mod multi_window;
+pub mod native_menu;
 pub mod navigator;
 pub mod pending_images;
 pub mod pointer_events;
@@ -108,8 +113,8 @@ pub use entry::{app, launch, AppBuilder, AppConfig};
 pub use error_boundary::{error_boundary, throw_error, throw_resource_error};
 pub use frame_pacing::set_frame_rate_limit;
 pub use multi_window::{
-    open_secondary_window, open_secondary_window_title_only, open_secondary_window_with,
-    shared_slot,
+    current_window, open_secondary_window, open_secondary_window_title_only,
+    open_secondary_window_with, shared_slot, windows, WindowHandle,
 };
 pub use portal_overlay::{
     page_scroll_locked, parse_scroll_freeze, set_page_scroll_locked, set_scroll_freeze,
@@ -121,8 +126,8 @@ pub use tray::{system_tray_native, tray_icon, TrayIcon, TrayIconBuilder, TrayMen
 pub use ui_bridge::{request_exit, run_on_ui_thread, spawn_blocking};
 pub use window_chrome::{
     close_window, set_window_maximized, set_window_minimized, start_window_drag,
-    toggle_window_maximized, window_is_maximized, WindowBackdrop, WindowOptions,
-    PRIMARY_WINDOW_LABEL,
+    toggle_window_maximized, window_is_maximized, window_is_resizable, WindowBackdrop,
+    WindowOptions, PRIMARY_WINDOW_LABEL,
 };
 pub use window_lifecycle::{set_window_lifecycle_hook, WindowLifecycleHook};
 

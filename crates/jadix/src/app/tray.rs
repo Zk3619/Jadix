@@ -10,9 +10,6 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-#[cfg(feature = "system-tray")]
-use super::run_on_ui_thread;
-
 thread_local! {
     static MENU_CLICKS: RefCell<HashMap<String, Rc<dyn Fn()>>> = RefCell::new(HashMap::new());
     #[cfg(feature = "system-tray")]
@@ -170,7 +167,7 @@ impl TrayIconBuilder {
 
         #[cfg(feature = "system-tray")]
         {
-            ensure_menu_event_bridge();
+            super::menu_events::install();
             match try_build_native(&self, instance) {
                 Ok(native) => {
                     log::debug!("jadix tray: native TrayIcon registered");
@@ -265,18 +262,6 @@ impl Drop for TrayIcon {
             drop(native);
         }
     }
-}
-
-#[cfg(feature = "system-tray")]
-fn ensure_menu_event_bridge() {
-    use std::sync::Once;
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        tray_icon::menu::MenuEvent::set_event_handler(Some(|event: tray_icon::menu::MenuEvent| {
-            let id = event.id.0.clone();
-            run_on_ui_thread(move || dispatch_tray_menu_click(&id));
-        }));
-    });
 }
 
 #[cfg(feature = "system-tray")]

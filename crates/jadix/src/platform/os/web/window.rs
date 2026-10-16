@@ -5,24 +5,26 @@ use winit::window::{Window, WindowAttributes};
 use crate::app::WindowOptions;
 
 pub(crate) fn decorate_window_attributes(
-    mut attrs: WindowAttributes,
+    attrs: WindowAttributes,
     options: &WindowOptions,
     _composition_swapchain: bool,
 ) -> WindowAttributes {
-    use winit::platform::web::WindowAttributesExtWebSys;
+    use winit::platform::web::WindowAttributesWeb;
 
-    attrs = attrs.with_prevent_default(true).with_focusable(true);
+    let mut web = WindowAttributesWeb::default()
+        .with_prevent_default(true)
+        .with_focusable(true);
 
     if let Some(target) = options.web_canvas_target.as_deref() {
         if let Some(canvas) = lookup_canvas(target) {
-            attrs = attrs.with_canvas(Some(canvas)).with_append(false);
+            web = web.with_canvas(Some(canvas)).with_append(false);
         } else {
-            attrs = attrs.with_append(false);
+            web = web.with_append(false);
         }
     } else {
-        attrs = attrs.with_append(true);
+        web = web.with_append(true);
     }
-    attrs
+    attrs.with_platform_attributes(Box::new(web))
 }
 
 pub(crate) fn apply_created_window(
@@ -31,7 +33,7 @@ pub(crate) fn apply_created_window(
     _composition_swapchain: bool,
 ) {
     use wasm_bindgen::JsCast;
-    use winit::platform::web::WindowExtWebSys;
+    use winit::platform::web::WindowExtWeb;
 
     let Some(canvas) = window.canvas() else {
         return;

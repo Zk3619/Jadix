@@ -1,4 +1,4 @@
-//! Web / wasm32 host. Event loop uses `EventLoopExtWebSys::spawn_app`.
+//! Web / wasm32 host. Event loop uses `EventLoopExtRegister::register_app`.
 //! Fonts come from bundled assets (`system_font_dirs` is empty on the web).
 
 mod clipboard;

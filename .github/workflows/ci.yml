@@ -56,8 +56,31 @@ jobs:
           sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev pkg-config mesa-vulkan-drivers
       - name: Build
         run: cargo build --workspace --all-targets
+      - name: Window backend dependency identities
+        shell: pwsh
+        run: ./scripts/check-window-deps.ps1
+      - name: Wayland configure capability projection
+        if: runner.os == 'Linux'
+        run: cargo test -p winit-wayland --lib projects_real_configure
       - name: Test
         run: cargo test --workspace
+      - name: Native menu contracts (Windows)
+        if: runner.os == 'Windows'
+        run: cargo test -p jadix --lib --features native-menu,system-tray native_menu:: -- --test-threads=1
+      - name: Native menu bridge + example (all hosts)
+        run: cargo check -p jadix --features native-menu --example desktop_shell
+      - name: AccessKit bridge and OHOS node identities
+        run: |
+          cargo test -p jadix --lib --features a11y a11y:: -- --test-threads=1
+          cargo test -p jadix_accesskit_ohos --lib
+      - name: Window chrome + proxy contracts (all hosts)
+        run: |
+          cargo test -p jadix --lib --features native-menu window_chrome:: -- --test-threads=1
+          cargo test -p jadix --lib --features native-menu title_bar:: -- --test-threads=1
+          cargo test -p jadix --lib --features native-menu ui_bridge:: -- --test-threads=1
+      - name: Native menu + tray coexistence (macOS)
+        if: runner.os == 'macOS'
+        run: cargo check -p jadix --features native-menu,system-tray
       - name: Box model contract (freeze)
         run: cargo test -p jadix --lib box_model -- --nocapture
       - name: Text measure contract (freeze)
