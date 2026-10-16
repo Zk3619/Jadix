@@ -18,7 +18,7 @@ pub(crate) fn NavigatorShowcase() -> Element {
     let nav_sheet = nav.clone();
     let nav_home = nav.clone();
 
-    let body = rui::reactive!(NAVIGATOR_SHOWCASE_REACTIVE, move || {
+    let body = jadix::reactive!(NAVIGATOR_SHOWCASE_REACTIVE, move || {
         let n = nav.clone();
         Element::from(navigation_host(n, |route| match route {
             GalNavRoute::Home => ui! {
@@ -218,7 +218,7 @@ pub(crate) fn RouterShowcase() -> Element {
                         on_click={move || {
                             match open_secondary_window_with(
                                 WindowOptions::new()
-                                    .title("RUI Gallery — Shell")
+                                    .title("Jadix Gallery — Shell")
                                     .window_label("gallery-shell"),
                                 gallery_secondary_shell_root,
                             ) {
@@ -250,7 +250,7 @@ pub(crate) fn RouterShowcase() -> Element {
 }
 
 thread_local! {
-    static GAL_TRAY: RefCell<Option<rui::app::TrayIcon>> = const { RefCell::new(None) };
+    static GAL_TRAY: RefCell<Option<jadix::app::TrayIcon>> = const { RefCell::new(None) };
 }
 
 #[component]
@@ -276,7 +276,7 @@ pub(crate) fn TrayShowcase() -> Element {
                                 let mut g = slot.borrow_mut();
                                 if g.is_none() {
                                     let tray = tray_icon()
-                                        .tooltip("RUI Gallery")
+                                        .tooltip("Jadix Gallery")
                                         .menu_item(
                                             TrayMenuItem::new("ping", "Ping").on_click(|| {
                                                 toast_push("Tray ping", 2000);
@@ -473,7 +473,7 @@ pub(crate) fn WindowChromeShowcase() -> Element {
                         on_click={move || {
                             gallery_open_chrome(
                                 WindowOptions::new()
-                                    .title("RUI Gallery — Frameless")
+                                    .title("Jadix Gallery — Frameless")
                                     .window_label("gallery-frameless")
                                     .size(420.0, 280.0)
                                     .frameless(),
@@ -491,7 +491,7 @@ pub(crate) fn WindowChromeShowcase() -> Element {
                         on_click={move || {
                             gallery_open_chrome(
                                 WindowOptions::new()
-                                    .title("RUI Gallery — Transparent")
+                                    .title("Jadix Gallery — Transparent")
                                     .window_label("gallery-transparent")
                                     .size(440.0, 300.0)
                                     .frameless()
@@ -510,7 +510,7 @@ pub(crate) fn WindowChromeShowcase() -> Element {
                         on_click={move || {
                             gallery_open_chrome(
                                 WindowOptions::new()
-                                    .title("RUI Gallery — Blur")
+                                    .title("Jadix Gallery — Blur")
                                     .window_label("gallery-blur")
                                     .size(460.0, 300.0)
                                     .frameless()
@@ -530,7 +530,7 @@ pub(crate) fn WindowChromeShowcase() -> Element {
                         on_click={move || {
                             gallery_open_chrome(
                                 WindowOptions::new()
-                                    .title("RUI Gallery — Custom Blur")
+                                    .title("Jadix Gallery — Custom Blur")
                                     .size(460.0, 320.0)
                                     .frameless()
                                     .transparent(true)
@@ -557,7 +557,7 @@ pub(crate) fn WindowChromeShowcase() -> Element {
                         on_click={move || {
                             gallery_open_chrome(
                                 WindowOptions::new()
-                                    .title("RUI Gallery — Aero")
+                                    .title("Jadix Gallery — Aero")
                                     .size(460.0, 320.0)
                                     .frameless()
                                     .transparent(true)
@@ -591,7 +591,7 @@ pub(crate) fn WindowChromeShowcase() -> Element {
                         on_click={move || {
                             gallery_open_chrome(
                                 WindowOptions::new()
-                                    .title("RUI Gallery — Acrylic recipe")
+                                    .title("Jadix Gallery — Acrylic recipe")
                                     .size(460.0, 320.0)
                                     .frameless()
                                     .transparent(true)
@@ -618,7 +618,7 @@ pub(crate) fn WindowChromeShowcase() -> Element {
                         on_click={move || {
                             gallery_open_chrome(
                                 WindowOptions::new()
-                                    .title("RUI Gallery — Mica recipe")
+                                    .title("Jadix Gallery — Mica recipe")
                                     .size(460.0, 320.0)
                                     .frameless()
                                     .transparent(true)
@@ -646,7 +646,7 @@ pub(crate) fn WindowChromeShowcase() -> Element {
                         on_click={move || {
                             gallery_open_chrome(
                                 WindowOptions::new()
-                                    .title("RUI Gallery — Mica Alt")
+                                    .title("Jadix Gallery — Mica Alt")
                                     .size(460.0, 320.0)
                                     .frameless()
                                     .transparent(true)
@@ -695,7 +695,7 @@ pub(crate) fn SidebarShowcase() -> Element {
                 move || picked.set(key.to_string())
             })
             .into();
-        rui::app::reactive::bind_prop(
+        jadix::app::reactive::bind_prop(
             btn,
             format!("{id}__active"),
             move || picked.get() == key,
@@ -913,7 +913,7 @@ pub(crate) fn NavbarNavigationMenuShowcase() -> Element {
             })
             .into();
         navbar()
-            .brand(label("").text("RUI").font_weight(600.0))
+            .brand(label("").text("Jadix").font_weight(600.0))
             .center_child(nav_menu)
             .center_justify("center")
             .action(button("").variant("outline").size("sm").text("Action"))
@@ -930,7 +930,7 @@ pub(crate) fn NavbarNavigationMenuShowcase() -> Element {
                 <Label text_size="0.75rem" font_weight="600">"A. 复合 RSX"</Label>
                 <Navbar>
                     <NavbarBrand>
-                        <Label font_weight="600">"RUI"</Label>
+                        <Label font_weight="600">"Jadix"</Label>
                     </NavbarBrand>
                     <NavbarCenter>
                         <NavigationMenu id="gal-navmenu">
@@ -1010,7 +1010,7 @@ pub(crate) fn PaginationShowcase() -> Element {
 
     // Gallery 分区体在 isolate_reads 下构建：`disabled={sig.get()…}` / `is_active={…}`
     // 会被宏 untrack 冻住。用 reactive! 岛订阅 page，在闭包内用局部页码重建零件。
-    let rsx_bar = rui::reactive!("examples/gallery/PaginationShowcase:rsx", move || {
+    let rsx_bar = jadix::reactive!("examples/gallery/PaginationShowcase:rsx", move || {
         let page = page_a.get();
         let mut items: Vec<Element> = Vec::new();
         items.push(ui! {
@@ -1058,7 +1058,7 @@ pub(crate) fn PaginationShowcase() -> Element {
             </PaginationItem>
         });
         let mut frag = Element::new();
-        frag.set_attr("rui_fragment", "1");
+        frag.set_attr("jadix_fragment", "1");
         ui! {
             <Pagination>
                 <PaginationContent>
@@ -1080,8 +1080,8 @@ pub(crate) fn PaginationShowcase() -> Element {
         .jumper(true)
         .into();
 
-    let status_a = rui::reactive!("examples/gallery/PaginationShowcase:status_a", move || {
-        let t = rui::tr_with_default_zh(
+    let status_a = jadix::reactive!("examples/gallery/PaginationShowcase:status_a", move || {
+        let t = jadix::tr_with_default_zh(
             "gallery.pagination.status_a",
             "A · Page {page} / {pages} (left=1 sibling=1 right=1)",
             "A · 第 {page} / {pages} 页（left=1 sibling=1 right=1）",
@@ -1092,8 +1092,8 @@ pub(crate) fn PaginationShowcase() -> Element {
         );
         ui! { <Label text_size="0.875rem">{ t }</Label> }
     });
-    let status_b = rui::reactive!("examples/gallery/PaginationShowcase:status_b", move || {
-        let t = rui::tr_with_default_zh(
+    let status_b = jadix::reactive!("examples/gallery/PaginationShowcase:status_b", move || {
+        let t = jadix::tr_with_default_zh(
             "gallery.pagination.status_b",
             "B · Page {page} / {pages} (left=3 sibling=2 right=4 · auto-fit · jumper)",
             "B · 第 {page} / {pages} 页（left=3 sibling=2 right=4 · auto-fit · jumper）",
@@ -1267,7 +1267,7 @@ pub(crate) fn StepperShowcase() -> Element {
         <MyCard title="Stepper">
             <VStack w="100%" gap="0.75rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "编号步骤条（RUI 自研，ShadCN 官方无此控件）：主色圆点 + 勾选完成态 + muted 待办；连线与圆点中线对齐。可点圆点或用 Prev/Next。"
+                    "编号步骤条（Jadix 自研，ShadCN 官方无此控件）：主色圆点 + 勾选完成态 + muted 待办；连线与圆点中线对齐。可点圆点或用 Prev/Next。"
                 </Label>
 
                 <Label text_size="0.75rem" font_weight="600">"A. RSX"</Label>

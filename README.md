@@ -1,4 +1,4 @@
-# RUI - Rust Native UI Framework
+# Jadix - Rust Native UI Framework
 
 > **GitHub Description (建议 / Suggested)**
 >
@@ -10,10 +10,10 @@
 ## 项目简介 | Overview
 
 **中文**  
-RUI 是一个纯 Rust 原生 UI 工作区，目标是在不依赖高层 GUI 框架的前提下，构建现代化、可组合、可扩展的跨平台 UI 引擎。项目采用分层架构、信号驱动更新、ShadCN 风格组件体验与开发期热重载等设计目标，并已在实际代码中落地了可运行的核心链路。
+Jadix 是一个纯 Rust 原生 UI 工作区，目标是在不依赖高层 GUI 框架的前提下，构建现代化、可组合、可扩展的跨平台 UI 引擎。项目采用分层架构、信号驱动更新、ShadCN 风格组件体验与开发期热重载等设计目标，并已在实际代码中落地了可运行的核心链路。
 
 **English**  
-RUI is a pure Rust-native UI workspace aimed at building a modern, composable, and extensible cross-platform UI engine without relying on heavyweight high-level GUI frameworks. It targets layered architecture, signal-driven updates, a ShadCN-like component experience, and dev-time hot reload, with working implementations already present in code.
+Jadix is a pure Rust-native UI workspace aimed at building a modern, composable, and extensible cross-platform UI engine without relying on heavyweight high-level GUI frameworks. It targets layered architecture, signal-driven updates, a ShadCN-like component experience, and dev-time hot reload, with working implementations already present in code.
 
 ---
 
@@ -43,11 +43,11 @@ RUI is a pure Rust-native UI workspace aimed at building a modern, composable, a
   内置 `Button`、`Input`、`Label`、`ScrollArea`、`Scrollbar` 等组件，支持类 utility 的样式属性写法。
 
 - **国际化 | i18n**
-  `src/i18n` 整模块收进 `--features i18n`（与 `a11y` 相同）。应用文案用两参数 `tr_default("save", "Save")`；RUI 组件用 `tr_default_zh(..., "Previous", "上一页")` 带 en-US/zh-CN。其它语言只开 feature、改 `i18n.toml` / `locales/<tag>.toml` 覆盖即可。关 feature 时返回英文源字符串。无障碍桥接需 `--features a11y`。
-  The `i18n` module is feature-gated. Apps call two-arg `tr_default`. RUI chrome ships en-US/zh-CN via `tr_default_zh`. More locales are TOML overlays. AccessKit is `--features a11y`.
+  `src/i18n` 整模块收进 `--features i18n`（与 `a11y` 相同）。应用文案用两参数 `tr_default("save", "Save")`；Jadix 组件用 `tr_default_zh(..., "Previous", "上一页")` 带 en-US/zh-CN。其它语言只开 feature、改 `i18n.toml` / `locales/<tag>.toml` 覆盖即可。关 feature 时返回英文源字符串。无障碍桥接需 `--features a11y`。
+  The `i18n` module is feature-gated. Apps call two-arg `tr_default`. Jadix chrome ships en-US/zh-CN via `tr_default_zh`. More locales are TOML overlays. AccessKit is `--features a11y`.
 
 - **开发期热重载 | Dev-time hot reload**  
-  `rui_hot_reload_cli` 监听 `crates/` 与 `examples/` 变更，通过本地 TCP 通知运行时刷新模板与资源。
+  `jadix_hot_reload_cli` 监听 `crates/` 与 `examples/` 变更，通过本地 TCP 通知运行时刷新模板与资源。
 
 ---
 
@@ -67,12 +67,12 @@ Versions are pinned once in the root `[workspace.dependencies]` table. Member cr
 ## 工作区结构 | Workspace Structure
 
 ```text
-rui/
+jadix/
 ├─ crates/
-│  ├─ rui/                  # 核心运行时与组件系统 | Core runtime and components
-│  ├─ rui_macros/           # #[component] / ui! 宏 | Proc-macro crate
-│  ├─ rui_style_tokens/     # utility 真源 | Shared style tokens
-│  ├─ rui_hot_reload_cli/   # 热重载监听器 | Hot reload watcher
+│  ├─ jadix/                  # 核心运行时与组件系统 | Core runtime and components
+│  ├─ jadix_macros/           # #[component] / ui! 宏 | Proc-macro crate
+│  ├─ jadix_style_tokens/     # utility 真源 | Shared style tokens
+│  ├─ jadix_hot_reload_cli/   # 热重载监听器 | Hot reload watcher
 │  └─ jadix_window_state/   # 可选：窗口几何 TOML 持久化 | Optional window-state crate
 └─ examples/
    ├─ gallery/              # 组件与能力展示 | Component gallery
@@ -104,7 +104,7 @@ cargo run -p gallery
 Run the demo in one terminal, then run watcher in another:
 
 ```bash
-cargo run -p rui_hot_reload_cli -- .
+cargo run -p jadix_hot_reload_cli -- .
 ```
 
 默认会连接到 `127.0.0.1:39091`。  
@@ -117,12 +117,12 @@ By default, it connects to `127.0.0.1:39091`.
 ```rust
 #![allow(non_snake_case)]
 
-use rui::component;
-use rui::core::reactivity::use_signal;
-use rui::ui;
+use jadix::component;
+use jadix::core::reactivity::use_signal;
+use jadix::ui;
 
 #[component]
-fn Counter() -> rui::core::tree::Element {
+fn Counter() -> jadix::core::tree::Element {
     let count = use_signal("count", || 0);
 
     ui! {
@@ -136,7 +136,7 @@ fn Counter() -> rui::core::tree::Element {
 }
 
 fn main() {
-    rui::app::run(|| {
+    jadix::app::run(|| {
         ui! { <Counter /> }
     });
 }
@@ -145,10 +145,10 @@ fn main() {
 同一棵树也可用 **Builder（无类 HTML 标签）** 拼装，并与 `ui!` 互嵌，例如：
 
 ```rust
-use rui::components::button;
-use rui::core::tree::Element;
-use rui::primitives::r#box::vstack;
-use rui::ui;
+use jadix::components::button;
+use jadix::core::tree::Element;
+use jadix::primitives::r#box::vstack;
+use jadix::ui;
 
 fn toolbar() -> Element {
     Element::from(
@@ -169,17 +169,17 @@ fn toolbar() -> Element {
 
 - **`reactive!`**：为一段子树创建独立 effect，并通过稳定 anchor 做子树级 reconcile。  
   Use `reactive!(id, || ui! { ... })` to localize updates to a subtree.
-- **`create_memo`**：派生只读值，依赖变化时重算；读者通过 `.get()` 订阅 memo 输出（见 `crates/rui/src/core/reactivity.rs`）。
+- **`create_memo`**：派生只读值，依赖变化时重算；读者通过 `.get()` 订阅 memo 输出（见 `crates/jadix/src/core/reactivity.rs`）。
 - **`show`**：条件渲染辅助（`when == false` 时返回空节点）。  
   Conditional rendering helper that returns an empty element when false.
 - **`<For>` / `for_keyed!` / `for_keyed`**：列表渲染；推荐标签式 `<For>`，需要显式 key 时传 `key={...}`。  
   List rendering with optional explicit keys (`key={...}`) for stable reconciliation.
 
 ```rust
-use rui::core::reactivity::use_signal;
-use rui::ui;
+use jadix::core::reactivity::use_signal;
+use jadix::ui;
 
-fn FineGrainedDemo() -> rui::core::tree::Element {
+fn FineGrainedDemo() -> jadix::core::tree::Element {
     let selected = use_signal("selected", || "default".to_string());
     let items = vec!["A", "B", "C"];
 

@@ -106,9 +106,9 @@ pub(crate) fn format_mouse_log(e: &MouseEvent) -> String {
         e.region.as_deref(),
         e.related_target.as_deref(),
         match e.phase {
-            rui::EventPhase::Capture => "Capture",
-            rui::EventPhase::Target => "Target",
-            rui::EventPhase::Bubble => "Bubble",
+            jadix::EventPhase::Capture => "Capture",
+            jadix::EventPhase::Target => "Target",
+            jadix::EventPhase::Bubble => "Bubble",
         },
         e.is_consumed(),
         e.default_prevented(),
@@ -263,8 +263,8 @@ pub(crate) fn MouseEventShowcase() -> Element {
     )
     .focus_id("gal-mouse-swallow-parent")
     .on_mousedown(move |e| {
-        // DOM default listeners are bubble; Rui still walks ancestors in capture.
-        if e.phase == rui::EventPhase::Capture {
+        // DOM default listeners are bubble; Jadix still walks ancestors in capture.
+        if e.phase == jadix::EventPhase::Capture {
             return;
         }
         increment_count(swallow_parent_downs);

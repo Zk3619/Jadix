@@ -1,7 +1,7 @@
-RUI — Third-Party Notices
+Jadix — Third-Party Notices
 =========================
 
-Copyright 2026 RUI contributors
+Copyright 2026 Jadix contributors
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -20,17 +20,17 @@ limitations under the License.
 Third-party notices
 -------------------
 
-The RUI source code is licensed under the Apache License, Version 2.0 (see LICENSE).
+The Jadix source code is licensed under the Apache License, Version 2.0 (see LICENSE).
 
 This file lists bundled assets and other third-party material shipped inside
-the `rui` crate (optional features may omit some entries). Rust crate
+the `jadix` crate (optional features may omit some entries). Rust crate
 dependencies retain their own licenses; run `cargo deny check licenses bans sources`
-or `cargo license -p rui` for the full dependency graph.
+or `cargo license -p jadix` for the full dependency graph.
 
 Bundled fonts (optional `bundled-*` / `fonts-*` features)
 ---------------------------------------------------------
 
-Google Noto fonts in `crates/rui/assets/`:
+Google Noto fonts in `crates/jadix/assets/`:
 
 - NotoSansCJK.ttc
 - NotoSerifCJK.ttc
@@ -45,7 +45,7 @@ Google Noto fonts in `crates/rui/assets/`:
   Copyright: The Noto Project Authors (Google LLC and contributors)
   https://fonts.google.com/noto/specimen/Noto+Sans
 
-Lucide icon font in `crates/rui/assets/lucide.ttf`:
+Lucide icon font in `crates/jadix/assets/lucide.ttf`:
 
   License: ISC License
   Copyright: Lucide Contributors
@@ -54,14 +54,14 @@ Lucide icon font in `crates/rui/assets/lucide.ttf`:
 Bundled icon data
 -----------------
 
-Lucide name → codepoint maps in `crates/rui/assets/lucide.json` and
+Lucide name → codepoint maps in `crates/jadix/assets/lucide.json` and
 `lucide_paths.json`:
 
   License: ISC License
   Copyright: Lucide Contributors
   https://github.com/lucide-icons/lucide
 
-Animated icon recipes in `crates/rui/assets/lucide_animated.json`
+Animated icon recipes in `crates/jadix/assets/lucide_animated.json`
 (optional `lucide-animated` feature; extracted offline from pqoqubbw/icons):
 
   License: MIT License
@@ -71,7 +71,7 @@ Animated icon recipes in `crates/rui/assets/lucide_animated.json`
 Optional ICU4X locale data (`i18n` feature)
 ------------------------------------------
 
-When the `i18n` feature is enabled, RUI links ICU4X (`icu` / `icu_provider_blob`)
+When the `i18n` feature is enabled, Jadix links ICU4X (`icu` / `icu_provider_blob`)
 with Unicode CLDR compiled data (and optional runtime blobs).
 
   License: Unicode License v3
@@ -82,13 +82,13 @@ Design alignment (not shipped as third-party source)
 ----------------------------------------------------
 
 Component naming and token semantics align with shadcn/ui and Tailwind CSS
-v4 conventions. RUI reimplements these APIs in Rust; upstream React/TS source
+v4 conventions. Jadix reimplements these APIs in Rust; upstream React/TS source
 is not vendored into this repository.
 
 Window glass recipes (Blur / Aero / Acrylic / Mica graphs, tint opacity
 modifier, Aero inactive remaps) follow publicly documented WinUI Acrylic
 behavior and the effect-graph structure described by DWMBlurGlass
-(LGPL-3.0, https://github.com/Maplespe/DWMBlurGlass). RUI does not vendor
+(LGPL-3.0, https://github.com/Maplespe/DWMBlurGlass). Jadix does not vendor
 that project's source, assets, or DWM injection.
 
 Local reference snapshots under `Reference/` (when present on a developer
@@ -98,4 +98,4 @@ machine) are for comparison only and are not included in published crates.
 (MIT, Copyright 2024 桃树夭 / ChurchTao). The crate itself is Apache-2.0;
 the MIT notice is in `crates/jadix_clipboard/NOTICE`.
 
-The crate-local copy for crates.io is [`crates/rui/NOTICE`](crates/rui/NOTICE).
+The crate-local copy for crates.io is [`crates/jadix/NOTICE`](crates/jadix/NOTICE).

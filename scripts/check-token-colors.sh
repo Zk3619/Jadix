@@ -8,9 +8,9 @@ patterns=(
   '\.bg\(\s*\[\s*0(\.0+)?\s*,\s*0(\.0+)?\s*,\s*0(\.0+)?\s*,\s*0\.[1-9]'
 )
 dirs=(
-  "$root/crates/rui/src/components"
-  "$root/crates/rui/src/primitives"
-  "$root/crates/rui/src/app/navigator"
+  "$root/crates/jadix/src/components"
+  "$root/crates/jadix/src/primitives"
+  "$root/crates/jadix/src/app/navigator"
 )
 hits=""
 for pat in "${patterns[@]}"; do

@@ -10,7 +10,7 @@ description = "OpenHarmony Ability entry (gpui-template contract). Build with oh
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-rui = { workspace = true }
+jadix = { workspace = true }
 
 [target.'cfg(target_env = "ohos")'.dependencies]
 openharmony-ability = { workspace = true }

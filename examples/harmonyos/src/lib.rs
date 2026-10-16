@@ -9,18 +9,22 @@
 
 #[cfg(target_env = "ohos")]
 mod ohos_main {
+    use jadix::prelude::*;
     use openharmony_ability::OpenHarmonyApp;
-    use rui::prelude::*;
 
     #[openharmony_ability_derive::ability]
     pub fn openharmony_app(app: OpenHarmonyApp) {
-        rui::run_ohos(app, WindowOptions::default().title("RUI HarmonyOS"), || {
-            ui! {
-                <App title="RUI HarmonyOS">
-                    <Label>"HarmonyOS Ability host"</Label>
-                </App>
-            }
-        });
+        jadix::run_ohos(
+            app,
+            WindowOptions::default().title("Jadix HarmonyOS"),
+            || {
+                ui! {
+                    <App title="Jadix HarmonyOS">
+                        <Label>"HarmonyOS Ability host"</Label>
+                    </App>
+                }
+            },
+        );
     }
 }
 

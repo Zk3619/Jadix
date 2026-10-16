@@ -150,7 +150,7 @@ const MORPH_PLAYGROUND_ICONS: &[&str] = &[
 
 /// morphicons.com playground caption: `from → to` + Procrustes θ / residual.
 fn morph_plan_caption(from: &str, to: &str) -> (String, String, String) {
-    use rui::utils::icon_morph::{build_plan, icon_input_from_src, resample_icon, SAMPLE_N};
+    use jadix::utils::icon_morph::{build_plan, icon_input_from_src, resample_icon, SAMPLE_N};
     let pair = format!("{from} → {to}");
     let empty = (pair.clone(), String::new(), String::new());
     let Some(a) = icon_input_from_src(from) else {
@@ -314,10 +314,10 @@ pub(crate) fn MorphIconShowcase() -> Element {
         .size_px(32.0)
         .into();
     let svg_el: Element = {
-        let from = rui::utils::svg_to_icon(
+        let from = jadix::utils::svg_to_icon(
             r#"<svg viewBox="0 0 24 24"><path d="M5 12h14" fill="none" stroke="black" stroke-width="2"/></svg>"#,
         );
-        let to = rui::utils::svg_to_icon(
+        let to = jadix::utils::svg_to_icon(
             r#"<svg viewBox="0 0 24 24"><path d="M12 5v14" fill="none" stroke="black" stroke-width="2"/></svg>"#,
         );
         match (from, to) {
@@ -620,7 +620,7 @@ pub(crate) fn DrawingCanvasShowcase() -> Element {
     }
 }
 
-const IMAGE_STREAM_KEY: &str = "rui-gallery-stream";
+const IMAGE_STREAM_KEY: &str = "jadix-gallery-stream";
 const IMAGE_STREAM_W: u32 = 320;
 const IMAGE_STREAM_H: u32 = 180;
 const STREAM_BAR_HALF: i32 = 16;
@@ -698,17 +698,17 @@ fn queue_synthetic_stream_frame() {
     #[cfg(feature = "image-stream")]
     {
         let (y, u, v) = synthetic_i420_frame(stream_phase());
-        rui::queue_media_frame(
+        jadix::queue_media_frame(
             IMAGE_STREAM_KEY,
-            rui::MediaFrame::i420(IMAGE_STREAM_W, IMAGE_STREAM_H, &y, &u, &v),
+            jadix::MediaFrame::i420(IMAGE_STREAM_W, IMAGE_STREAM_H, &y, &u, &v),
         );
     }
     #[cfg(not(feature = "image-stream"))]
     {
         let rgba = synthetic_stream_frame(stream_phase());
-        rui::queue_media_frame(
+        jadix::queue_media_frame(
             IMAGE_STREAM_KEY,
-            rui::MediaFrame::rgba8(IMAGE_STREAM_W, IMAGE_STREAM_H, &rgba),
+            jadix::MediaFrame::rgba8(IMAGE_STREAM_W, IMAGE_STREAM_H, &rgba),
         );
     }
 }
@@ -745,7 +745,7 @@ pub(crate) fn ImageStreamShowcase() -> Element {
 
 #[component]
 pub(crate) fn DrawingScene3dShowcase() -> Element {
-    let cube: Element = scene3d().w(220.0).h(160.0).label("RUI 3D").into();
+    let cube: Element = scene3d().w(220.0).h(160.0).label("Jadix 3D").into();
     ui! {
         <MyCard title="Scene3d · 透视立方（WP-3.13）">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
@@ -849,7 +849,7 @@ pub(crate) fn DrawingShaderShowcase() -> Element {
         <MyCard title="Shader · 用户 WGSL 叶（experimental）">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "公开 shader() 叶：框架 VS + time/resolution/pointer + t_src / t_src1。用户只写 fs_main。离屏 RT 再 textured 合成。编译失败品红/留上帧，不 panic。`.texture(\"src\"|\"src1\", key)` 吃 rui_path: / rui_canvas: / 媒体槽（本卡采样合成色条）。默认 GLES，不是 Cargo feature。"
+                    "公开 shader() 叶：框架 VS + time/resolution/pointer + t_src / t_src1。用户只写 fs_main。离屏 RT 再 textured 合成。编译失败品红/留上帧，不 panic。`.texture(\"src\"|\"src1\", key)` 吃 jadix_path: / jadix_canvas: / 媒体槽（本卡采样合成色条）。默认 GLES，不是 Cargo feature。"
                 </Label>
                 <HStack gap="1.5rem" wrap="wrap" items="start">
                     <VStack gap="0.25rem">

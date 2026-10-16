@@ -1,7 +1,7 @@
 # Glyphon 0.12.0 patch measurement
 
 Date: 2026-10-13. Repository revision: `01d49174f2830d453b226f8732beb199220481f2`.
-Production glyphon and RUI sources were not changed. The only retained additions
+Production glyphon and Jadix sources were not changed. The only retained additions
 are the standalone benchmark, documentation and measurement artifacts.
 
 ## Decision

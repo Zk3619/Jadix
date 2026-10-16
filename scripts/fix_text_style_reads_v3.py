@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[1] / "crates" / "rui" / "src"
+ROOT = Path(__file__).resolve().parents[1] / "crates" / "jadix" / "src"
 
 FIELDS = [
     "color",

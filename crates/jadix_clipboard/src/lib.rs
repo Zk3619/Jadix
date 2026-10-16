@@ -1,4 +1,4 @@
-//! Cross-platform clipboard for Jadix/RUI.
+//! Cross-platform clipboard for Jadix.
 //!
 //! Maintained fork of [`clipboard-rs`](https://github.com/ChurchTao/clipboard-rs) 0.3.x
 //! (MIT, ChurchTao). Windows uses workspace `windows` 0.62 instead of 0.59.

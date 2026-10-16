@@ -1,12 +1,12 @@
 #![allow(non_snake_case)]
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use rui::component;
-use rui::components::*;
-use rui::core::reactivity::{use_signal, Signal};
-use rui::core::tree::Element;
-use rui::style::parse_color;
-use rui::ui;
+use jadix::component;
+use jadix::components::*;
+use jadix::core::reactivity::{use_signal, Signal};
+use jadix::core::tree::Element;
+use jadix::style::parse_color;
+use jadix::ui;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Op {
@@ -855,7 +855,7 @@ fn CalculatorApp() -> Element {
     let mode = use_signal("calc_mode_str", || "standard".to_string());
     let eng = use_signal("calc_engine", Engine::default);
 
-    rui::app::window_keys::set_window_key_handler(move |key| apply_key(eng, key));
+    jadix::app::window_keys::set_window_key_handler(move |key| apply_key(eng, key));
 
     // Keep Select outside the engine-tracking subtree so digit clicks do not remount it.
     let mode_header = ui! {
@@ -874,7 +874,7 @@ fn CalculatorApp() -> Element {
         </HStack>
     };
 
-    let body = rui::reactive!("examples/calculator/body", move || {
+    let body = jadix::reactive!("examples/calculator/body", move || {
         let e = eng.get();
         let has_mem = e.memory != 0.0;
         let display = e.shown();
@@ -942,14 +942,14 @@ fn CalculatorApp() -> Element {
 }
 
 fn main() {
-    std::env::set_var("RUI_WINDOW_TITLE", "计算器");
-    std::env::set_var("RUI_WINDOW_WIDTH", "380");
-    std::env::set_var("RUI_WINDOW_HEIGHT", "620");
+    std::env::set_var("JADIX_WINDOW_TITLE", "计算器");
+    std::env::set_var("JADIX_WINDOW_WIDTH", "380");
+    std::env::set_var("JADIX_WINDOW_HEIGHT", "620");
     // Calculator scene has very limited emoji usage; keep cache ceilings low to reduce working set.
-    std::env::set_var("RUI_EMOJI_RASTER_CACHE_MAX", "16");
-    std::env::set_var("RUI_EMOJI_NODE_CACHE_MAX", "8");
+    std::env::set_var("JADIX_EMOJI_RASTER_CACHE_MAX", "16");
+    std::env::set_var("JADIX_EMOJI_NODE_CACHE_MAX", "8");
 
-    rui::app::run(|| {
+    jadix::app::run(|| {
         ui! {
             <VStack w="100%" h="100%">
                 <CalculatorApp />
@@ -961,8 +961,8 @@ fn main() {
 #[cfg(test)]
 mod stack_tests {
     use super::*;
-    use rui::core::reactivity::{create_effect, create_root};
-    use rui::core::tree::LayoutTree;
+    use jadix::core::reactivity::{create_effect, create_root};
+    use jadix::core::tree::LayoutTree;
 
     #[test]
     fn calculator_app_mount_and_layout_fits_default_stack() {

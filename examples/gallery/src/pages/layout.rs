@@ -4,7 +4,7 @@ use crate::imports::*;
 use crate::shared::*;
 
 #[component]
-pub(crate) fn ShadowShowcase() -> rui::core::tree::Element {
+pub(crate) fn ShadowShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="12) Box-shadow & Text-shadow">
             <VStack gap="1rem" w="100%">
@@ -157,7 +157,7 @@ pub(crate) fn filter_demo_logo(filter: Option<&str>, class: Option<&str>) -> Ele
         wrap = wrap.filter(f);
     }
     if let Some(c) = class {
-        wrap = rui::style::with_class_list(wrap, c);
+        wrap = jadix::style::with_class_list(wrap, c);
     }
     wrap.child(ui! {
         <Image src={FILTER_DEMO_LOGO} w="4.5rem" h="4.5rem" />
@@ -165,9 +165,9 @@ pub(crate) fn filter_demo_logo(filter: Option<&str>, class: Option<&str>) -> Ele
 }
 
 #[component]
-pub(crate) fn FilterShowcase() -> rui::core::tree::Element {
+pub(crate) fn FilterShowcase() -> jadix::core::tree::Element {
     // Register a sample SVG filter for url(#galleryBlurSepia)
-    let _ = rui::style::register_svg_filter(
+    let _ = jadix::style::register_svg_filter(
         "galleryBlurSepia",
         r##"<filter id="galleryBlurSepia">
   <feGaussianBlur stdDeviation="2"/>
@@ -271,7 +271,7 @@ pub(crate) fn gradient_swatch(css: &str, w: &str, h: &str) -> Element {
 
 /// MDN-aligned CSS gradient showcase (linear / radial / conic / repeating).
 #[component]
-pub(crate) fn GradientShowcase() -> rui::core::tree::Element {
+pub(crate) fn GradientShowcase() -> jadix::core::tree::Element {
     let linear_tiles: Vec<Element> = [
         ("basic ↓", "linear-gradient(blue, pink)", "7.5rem", "4.5rem"),
         (
@@ -452,7 +452,7 @@ pub(crate) fn GradientShowcase() -> rui::core::tree::Element {
     })
     .collect();
 
-    let tw_tile = Element::from(rui::style::with_class_list(
+    let tw_tile = Element::from(jadix::style::with_class_list(
         r#box().w("7.5rem").h("4.5rem").rounded("0.5rem").into(),
         "bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500",
     ));
@@ -534,8 +534,8 @@ pub(crate) fn GradientShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn BorderStyleShowcase() -> rui::core::tree::Element {
-    use rui::style::CornerShape;
+pub(crate) fn BorderStyleShowcase() -> jadix::core::tree::Element {
+    use jadix::style::CornerShape;
 
     fn caption(label: &str) -> Element {
         ui! {
@@ -744,7 +744,7 @@ pub(crate) fn BorderStyleShowcase() -> rui::core::tree::Element {
 
 /// CSS `outline` 全能力展示。
 #[component]
-pub(crate) fn OutlineShowcase() -> rui::core::tree::Element {
+pub(crate) fn OutlineShowcase() -> jadix::core::tree::Element {
     fn outline_box(
         label: &str,
         color: [f32; 4],
@@ -859,7 +859,7 @@ pub(crate) fn OutlineShowcase() -> rui::core::tree::Element {
 
 /// ANIM 对齐：steps()、text color transition、layout 属性、reduced-motion。
 fn ensure_gallery_motion_extras() {
-    use rui::style::{
+    use jadix::style::{
         parse_clip_path, register_clip_path, register_keyframes, AnimatableValue, KeyframeStop,
         PropertyId,
     };
@@ -900,13 +900,13 @@ fn ensure_gallery_motion_extras() {
 }
 
 #[component]
-pub(crate) fn AnimAlignmentShowcase() -> rui::core::tree::Element {
+pub(crate) fn AnimAlignmentShowcase() -> jadix::core::tree::Element {
     ensure_gallery_motion_extras();
     ui! {
         <MyCard title="ANIM 对齐（CSS animation / transition / keyframes）">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "完整对齐面：steps() 步进、transition-colors 文本色、padding 布局动画、will-change 提示。`transition: transform spring()` 是原生弹簧腿（可中断、不靠 duration）。系统 RUI_REDUCED_MOTION=1 时时长归零。Accordion 备选：RUI_ACCORDION_GRID_FR=1 走 grid-template-rows 0fr→1fr（默认仍是 accordion-down max-height）。"
+                    "完整对齐面：steps() 步进、transition-colors 文本色、padding 布局动画、will-change 提示。`transition: transform spring()` 是原生弹簧腿（可中断、不靠 duration）。系统 JADIX_REDUCED_MOTION=1 时时长归零。Accordion 备选：JADIX_ACCORDION_GRID_FR=1 走 grid-template-rows 0fr→1fr（默认仍是 accordion-down max-height）。"
                 </Label>
                 <Label text_size="0.7rem" font_weight="600">"steps(4, jump-end) opacity"</Label>
                 <Box w="6rem" h="3rem" bg="primary" rounded="0.5rem"
@@ -970,7 +970,7 @@ pub(crate) fn AnimAlignmentShowcase() -> rui::core::tree::Element {
 
 /// CSS `scale` + `zoom` Gallery 展示。
 #[component]
-pub(crate) fn TransitionShowcase() -> rui::core::tree::Element {
+pub(crate) fn TransitionShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="CSS transition">
             <VStack w="100%" gap="0.75rem">
@@ -1040,7 +1040,7 @@ pub(crate) fn TransitionShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn ScaleZoomShowcase() -> rui::core::tree::Element {
+pub(crate) fn ScaleZoomShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="CSS scale + zoom">
             <VStack w="100%" gap="0.75rem">
@@ -1158,7 +1158,7 @@ pub(crate) fn ScaleZoomShowcase() -> rui::core::tree::Element {
 
 /// CSS `transform` 属性族 Gallery 展示。
 #[component]
-pub(crate) fn TransformShowcase() -> rui::core::tree::Element {
+pub(crate) fn TransformShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="CSS transform">
             <VStack w="100%" gap="0.75rem">
@@ -1319,8 +1319,8 @@ pub(crate) fn TransformShowcase() -> rui::core::tree::Element {
 
 /// CSS `rotate` + `translate` Gallery 展示。
 #[component]
-pub(crate) fn RotateTranslateShowcase() -> rui::core::tree::Element {
-    use rui::style::with_class_list;
+pub(crate) fn RotateTranslateShowcase() -> jadix::core::tree::Element {
+    use jadix::style::with_class_list;
 
     fn translate_demo(
         label: &str,
@@ -1525,7 +1525,7 @@ pub(crate) fn RotateTranslateShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn ScrollShowcase() -> rui::core::tree::Element {
+pub(crate) fn ScrollShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="4) ScrollArea + Scrollbar">
             <VStack gap="1rem" w="100%">
@@ -1710,7 +1710,7 @@ pub(crate) fn ScrollShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn AccordionShowcase() -> rui::core::tree::Element {
+pub(crate) fn AccordionShowcase() -> jadix::core::tree::Element {
     let multi_open = use_signal("gal-acc-multi", || vec!["m-1".to_string()]);
 
     let builder_el: Element = accordion("gal-acc-builder")
@@ -1785,7 +1785,7 @@ pub(crate) fn AccordionShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn CollapsibleShowcase() -> rui::core::tree::Element {
+pub(crate) fn CollapsibleShowcase() -> jadix::core::tree::Element {
     let controlled = use_signal("gal-col-ctrl", || false);
 
     let builder_el: Element = collapsible("gal-col-builder")
@@ -1871,7 +1871,7 @@ pub(crate) fn CollapsibleShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn ResizableShowcase() -> rui::core::tree::Element {
+pub(crate) fn ResizableShowcase() -> jadix::core::tree::Element {
     let builder_el: Element = resizable("gal-rz-builder")
         .orientation("horizontal")
         .height(160.0)
@@ -1882,11 +1882,11 @@ pub(crate) fn ResizableShowcase() -> rui::core::tree::Element {
             r#box()
                 .w("100%")
                 .h("100%")
-                .bg(rui::tokens::muted())
+                .bg(jadix::tokens::muted())
                 .p("0.75rem")
                 .child(
-                    rui::primitives::text::text("Builder left")
-                        .color(rui::style::parse_text_color("foreground")),
+                    jadix::primitives::text::text("Builder left")
+                        .color(jadix::style::parse_text_color("foreground")),
                 )
                 .into()
         })
@@ -1894,11 +1894,11 @@ pub(crate) fn ResizableShowcase() -> rui::core::tree::Element {
             r#box()
                 .w("100%")
                 .h("100%")
-                .bg(rui::tokens::background())
+                .bg(jadix::tokens::background())
                 .p("0.75rem")
                 .child(
-                    rui::primitives::text::text("Builder right")
-                        .color(rui::style::parse_text_color("foreground")),
+                    jadix::primitives::text::text("Builder right")
+                        .color(jadix::style::parse_text_color("foreground")),
                 )
                 .into()
         })
@@ -1994,7 +1994,7 @@ pub(crate) fn ResizableShowcase() -> rui::core::tree::Element {
 /// WP-2.3 Gallery 验收：嵌套 flex 加宽子项 → wrap 行增高，footer 下移（非错误裁剪）。
 /// 对照 docs/engine/layout_subtree.md；live 路径为 mark_dirty + app-root compute。
 #[component]
-pub(crate) fn LayoutSubtreeShowcase() -> rui::core::tree::Element {
+pub(crate) fn LayoutSubtreeShowcase() -> jadix::core::tree::Element {
     let wide = use_signal("gal_wp23_wide", || false);
 
     ui! {
@@ -2041,8 +2041,8 @@ pub(crate) fn LayoutSubtreeShowcase() -> rui::core::tree::Element {
 /// WP-2.2 Gallery 验收（策略可测）：同宽 bind_text → 逻辑 PartialLoad；结构变更 → FullClear。
 /// 计数在动作的 **下一帧 present 后** 写入，刷新快照会 suppress 自身那帧，避免 +1 污染。
 #[component]
-pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
-    use rui::core::tree::LayoutStatus;
+pub(crate) fn DamageShowcase() -> jadix::core::tree::Element {
+    use jadix::core::tree::LayoutStatus;
 
     let count = use_signal("gal_wp22_count", || 0_u32);
     let show_extra = use_signal("gal_wp22_struct", || false);
@@ -2056,12 +2056,12 @@ pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
     let base_patch = use_signal("gal_wp22_base_patch", || 0_u64);
     let scene_line = use_signal("gal_wp22_scene", || String::new());
 
-    let apply_snap = move |s: rui::PolicySnapshot| {
+    let apply_snap = move |s: jadix::PolicySnapshot| {
         partial_snap.set(s.partial_load);
         full_snap.set(s.full_clear);
         skip_snap.set(s.skipped_siblings);
         patch_snap.set(s.patched_dl);
-        let b = rui::last_scene_batches();
+        let b = jadix::last_scene_batches();
         scene_line.set(format!(
             "scene batches: quad={} surface={} underline={} text={} shadow_tex={}",
             b.quad, b.surface, b.underline, b.text, b.shadow_tex
@@ -2099,25 +2099,25 @@ pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
                     </Label>
                     <Button variant="default" on_click={move || {
                         count.set(count.get().wrapping_add(1));
-                        rui::arm_policy_snapshot();
+                        jadix::arm_policy_snapshot();
                     }}>
                         "同宽 +1（00–99）"
                     </Button>
                     <Button variant="outline" on_click={move || {
                         show_extra.set(!show_extra.get());
-                        rui::arm_policy_snapshot();
+                        jadix::arm_policy_snapshot();
                     }}>
                         "切换结构（Show）"
                     </Button>
                     <Button variant="outline" on_click={move || {
-                        rui::suppress_policy_counts(2);
-                        rui::arm_policy_snapshot();
+                        jadix::suppress_policy_counts(2);
+                        jadix::arm_policy_snapshot();
                     }}>
                         "刷新快照"
                     </Button>
                     <Button variant="secondary" on_click={move || {
-                        rui::reset_frame_policy_counters();
-                        rui::suppress_policy_counts(2);
+                        jadix::reset_frame_policy_counters();
+                        jadix::suppress_policy_counts(2);
                         partial_snap.set(0);
                         full_snap.set(0);
                         skip_snap.set(0);
@@ -2142,8 +2142,8 @@ pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
         </MyCard>
     };
     root = root.reactive_sync(move |_, _| {
-        if let Some(s) = rui::take_policy_snapshot() {
-            rui::suppress_policy_counts(1);
+        if let Some(s) = jadix::take_policy_snapshot() {
+            jadix::suppress_policy_counts(1);
             apply_snap(s);
             LayoutStatus::StyleChanged
         } else {
@@ -2155,9 +2155,9 @@ pub(crate) fn DamageShowcase() -> rui::core::tree::Element {
 
 /// Fine-grained matrix (suggested): who ran this `set`. Not a D1–D7 / B8 exit gate.
 #[component]
-pub(crate) fn FgMatrixShowcase() -> rui::core::tree::Element {
-    use rui::app::reactive::{bind_miss_count, unkeyed_for_rebuild_count};
-    use rui::core::reactivity::{take_flushed_effects, ui_root_effect_dep_count, EffectPhase};
+pub(crate) fn FgMatrixShowcase() -> jadix::core::tree::Element {
+    use jadix::app::reactive::{bind_miss_count, unkeyed_for_rebuild_count};
+    use jadix::core::reactivity::{take_flushed_effects, ui_root_effect_dep_count, EffectPhase};
 
     let n = use_signal("gal_fg_n", || 0_u32);
     let last_render = use_signal("gal_fg_render", || 0_usize);
@@ -2222,11 +2222,11 @@ pub(crate) fn FgMatrixShowcase() -> rui::core::tree::Element {
 
 /// WP-2.4 Gallery 验收：Owner dispose 后 Anchors/Bindings 不残留；scoped id 可演示。
 #[component]
-pub(crate) fn OwnerRegistryShowcase() -> rui::core::tree::Element {
-    use rui::app::reactive::{
+pub(crate) fn OwnerRegistryShowcase() -> jadix::core::tree::Element {
+    use jadix::app::reactive::{
         component_props_count, registered_anchor_count, registered_binding_count,
     };
-    use rui::core::reactivity::{scoped_focus_id, scoped_template_id};
+    use jadix::core::reactivity::{scoped_focus_id, scoped_template_id};
 
     let mount = use_signal("gal_wp24_mount", || true);
     let cycles = use_signal("gal_wp24_cycles", || 0_u32);
@@ -2267,7 +2267,7 @@ pub(crate) fn OwnerRegistryShowcase() -> rui::core::tree::Element {
                     "A · 库测（必须）"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "命令：cargo test -p rui --lib registry_owner"
+                    "命令：cargo test -p jadix --lib registry_owner"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "通过：2 passed。失败：任一 FAILED。"
@@ -2376,11 +2376,11 @@ pub(crate) fn OwnerRegistryShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn StoreResourceShowcase() -> rui::core::tree::Element {
-    use rui::core::reactivity::{create_effect, create_memo};
-    use rui::core::resource::{Resource, ResourceState};
-    use rui::core::store::create_store;
-    use rui::prelude::throw_resource_error;
+pub(crate) fn StoreResourceShowcase() -> jadix::core::tree::Element {
+    use jadix::core::reactivity::{create_effect, create_memo};
+    use jadix::core::resource::{Resource, ResourceState};
+    use jadix::core::store::create_store;
+    use jadix::prelude::throw_resource_error;
 
     #[derive(Clone, Debug, PartialEq)]
     struct Form {
@@ -2433,7 +2433,7 @@ pub(crate) fn StoreResourceShowcase() -> rui::core::tree::Element {
                     "A · 库测（必须）"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "命令：cargo test -p rui --lib produce_notifies   与   cargo test -p rui --lib resource_err_to_error_boundary   与   cargo test -p rui --lib create_resource_err_sets"
+                    "命令：cargo test -p jadix --lib produce_notifies   与   cargo test -p jadix --lib resource_err_to_error_boundary   与   cargo test -p jadix --lib create_resource_err_sets"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "通过：三测均 passed。失败：任一 FAILED。"
@@ -2547,8 +2547,8 @@ pub(crate) fn StoreResourceShowcase() -> rui::core::tree::Element {
 
 /// WP-2.7 Gallery 验收：根裸 `get()` 可观测；bind / Show 不抬高 UI-root dep。
 #[component]
-pub(crate) fn RootBareGetShowcase() -> rui::core::tree::Element {
-    use rui::core::reactivity::ui_root_effect_dep_count;
+pub(crate) fn RootBareGetShowcase() -> jadix::core::tree::Element {
+    use jadix::core::reactivity::ui_root_effect_dep_count;
 
     let root_deps = use_signal("gal_wp27_root_deps", || ui_root_effect_dep_count());
     let baseline = use_signal("gal_wp27_baseline", || None::<usize>);
@@ -2598,7 +2598,7 @@ pub(crate) fn RootBareGetShowcase() -> rui::core::tree::Element {
                     "A · 库测（必须）"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "命令：cargo test -p rui --lib root_bare_get"
+                    "命令：cargo test -p jadix --lib root_bare_get"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "通过：3 passed（裸 get 可观测 + bind + Show 根 dep=0）。失败：任一 FAILED。"
@@ -2674,7 +2674,7 @@ pub(crate) fn RootBareGetShowcase() -> rui::core::tree::Element {
 
 /// WP-2.8 Gallery 验收：展示型无必填 id；空串不写身份；Toggle scoped 试点。
 #[component]
-pub(crate) fn IdentityApiShowcase() -> rui::core::tree::Element {
+pub(crate) fn IdentityApiShowcase() -> jadix::core::tree::Element {
     let note = use_signal("gal_wp28_note", || "尚未操作".to_string());
     let navbar_el: Element = navbar().brand(label("").text("Brand")).into();
     let chart_el: Element = bar_chart().values([0.3, 0.6, 0.4]).h("3rem").into();
@@ -2691,7 +2691,7 @@ pub(crate) fn IdentityApiShowcase() -> rui::core::tree::Element {
                     "A · 库测（必须）"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "命令：cargo test -p rui --lib navbar_without_id   与   bar_chart_without_id   与   toggle_empty_id   与   toggle_uncontrolled_uses_scoped"
+                    "命令：cargo test -p jadix --lib navbar_without_id   与   bar_chart_without_id   与   toggle_empty_id   与   toggle_uncontrolled_uses_scoped"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "通过：展示型无 template_id；Toggle 空 id 非空 focus/template；scoped 跨 Owner 独立。失败：任一 FAILED。"
@@ -2800,7 +2800,7 @@ pub(crate) fn gal_box_model_onion() -> Element {
 
 /// WP-2.9 / B15 Gallery：完整 CSS 盒模型（单位 · box-sizing · 分边 border · outline）。
 #[component]
-pub(crate) fn BoxModelShowcase() -> rui::core::tree::Element {
+pub(crate) fn BoxModelShowcase() -> jadix::core::tree::Element {
     let hits = use_signal("gal_wp29_outline_hits", || 0_u32);
     let outline_box: Element = Element::from(
         r#box()
@@ -2828,7 +2828,7 @@ pub(crate) fn BoxModelShowcase() -> rui::core::tree::Element {
         <MyCard title="WP-2.9 / B15) CSS 盒模型">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "手册 docs/engine/box_model.md。默认 BorderBox；% = 父 content-box；outline/shadow 不进布局。库测：cargo test -p rui --lib box_model_contract"
+                    "手册 docs/engine/box_model.md。默认 BorderBox；% = 父 content-box；outline/shadow 不进布局。库测：cargo test -p jadix --lib box_model_contract"
                 </Label>
 
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
@@ -3032,7 +3032,7 @@ fn writing_mode_sample(
 
 /// CSS `writing-mode` 五值：关键字在盒外横排，盒内文案随模式旋转。
 #[component]
-pub(crate) fn WritingModeShowcase() -> rui::core::tree::Element {
+pub(crate) fn WritingModeShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="writing-mode（CSS）">
             <VStack w="100%" gap="0.75rem">
@@ -3100,7 +3100,7 @@ pub(crate) fn WritingModeShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn LogicalShowcase() -> rui::core::tree::Element {
+pub(crate) fn LogicalShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="5) Logical Properties & Layout">
             <VStack gap="0.75rem">
@@ -3133,7 +3133,7 @@ pub(crate) fn LogicalShowcase() -> rui::core::tree::Element {
 /// WP-2.1 visual acceptance: narrow soft-wrap, Chip/Mention atomic, VirtualList font row height.
 
 #[component]
-pub(crate) fn UtilityClassShowcase() -> rui::core::tree::Element {
+pub(crate) fn UtilityClassShowcase() -> jadix::core::tree::Element {
     let tone = use_signal("gal-util-class-tone", || "bg-secondary".to_string());
     let busy = use_signal("gal-util-class-busy", || false);
     let loud = use_signal("gal-util-class-loud", || false);
@@ -3259,16 +3259,16 @@ pub(crate) fn GridAndDragShowcase() -> Element {
     let hover = use_signal(GAL_GRID_SORT_HOVER, || None::<usize>);
 
     // `for_keyed!` 闭包含 `{}`，不能放在 `ui!` 的单层 `{ ... }` 表达式里（会与 RSX 花括号扫描冲突）。
-    let sort_list = rui::reactive!(GRID_DRAG_REACTIVE, move || {
+    let sort_list = jadix::reactive!(GRID_DRAG_REACTIVE, move || {
         if let Some((from, to)) = commit.get() {
             let mut v = order.get();
-            rui::utils::drag_reorder::apply_reorder_vec(&mut v, from, to);
+            jadix::utils::drag_reorder::apply_reorder_vec(&mut v, from, to);
             order.set(v);
             commit.set(None);
         }
         let hover_ix = hover.get();
         let items = order.get();
-        let rows = rui::for_keyed!(
+        let rows = jadix::for_keyed!(
             "gal-grid-sort-list",
             items.as_slice(),
             |s: &String| s.clone(),
@@ -3282,7 +3282,7 @@ pub(crate) fn GridAndDragShowcase() -> Element {
     });
 
     ui! {
-        <MyCard title="Grid + drag-reorder (ShadCN Card: rui::components::Card)">
+        <MyCard title="Grid + drag-reorder (ShadCN Card: jadix::components::Card)">
             <VStack w="100%" gap="0.5rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
                     "GStack（cols / rows / col_span）沙盘；列表为 for_keyed! + drag_reorder_handle；排序块用 reactive! 订阅 commit/hover。"

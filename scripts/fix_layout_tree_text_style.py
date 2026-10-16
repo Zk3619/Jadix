@@ -6,7 +6,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-p = Path(__file__).resolve().parents[1] / "crates/rui/src/layout/layout_tree.rs"
+p = Path(__file__).resolve().parents[1] / "crates/jadix/src/layout/layout_tree.rs"
 text = p.read_text(encoding="utf-8")
 
 # Reads in push_input_chrome (TextStyle param named `style`)

@@ -1,4 +1,4 @@
-# License and dependency policy for the RUI workspace.
+# License and dependency policy for the Jadix workspace.
 # Run: cargo deny check licenses bans sources
 # Inventory and upgrade rules: development-docs/ops/crate_deps.md
 # Publish checklist: development-docs/ops/PUBLISH.md
@@ -48,7 +48,7 @@ allow-wildcard-paths = true
 # Duplicate versions we do not control (winit / cosmic-text / resvg / rfd).
 # Only crates that actually appear twice in the three-target graph; new names still warn.
 skip = [
-  { crate = "windows-sys", reason = "Windows host is 0.61 (winit-win32 0.31-beta + rfd/rui IME/stacker/notify/tray); lock leftover 0.45 is jni android" },
+  { crate = "windows-sys", reason = "Windows host is 0.61 (winit-win32 0.31-beta + rfd/jadix IME/stacker/notify/tray); lock leftover 0.45 is jni android" },
   { crate = "objc2", reason = "accesskit may still pin 0.5; rfd/wgpu-hal/jadix_clipboard/winit 0.31 pin 0.6" },
   { crate = "objc2-app-kit", reason = "follows objc2 0.5 vs 0.6" },
   { crate = "objc2-foundation", reason = "follows objc2 0.5 vs 0.6" },

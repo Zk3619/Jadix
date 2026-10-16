@@ -28,11 +28,11 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
       - name: Clippy (remote-asset)
-        run: cargo clippy -p rui --all-targets --no-deps --features remote-asset -- -D warnings
+        run: cargo clippy -p jadix --all-targets --no-deps --features remote-asset -- -D warnings
       - name: Clippy (image-stream)
-        run: cargo clippy -p rui --all-targets --no-deps --features image-stream -- -D warnings
+        run: cargo clippy -p jadix --all-targets --no-deps --features image-stream -- -D warnings
       - name: Clippy (text-undo)
-        run: cargo clippy -p rui --all-targets --no-deps --features text-undo -- -D warnings
+        run: cargo clippy -p jadix --all-targets --no-deps --features text-undo -- -D warnings
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
       - name: License + dependency policy (deny.toml)
@@ -59,15 +59,15 @@ jobs:
       - name: Test
         run: cargo test --workspace
       - name: Box model contract (freeze)
-        run: cargo test -p rui --lib box_model -- --nocapture
+        run: cargo test -p jadix --lib box_model -- --nocapture
       - name: Text measure contract (freeze)
-        run: cargo test -p rui --lib text_align_ -- --nocapture
+        run: cargo test -p jadix --lib text_align_ -- --nocapture
       - name: CSS animation contract (freeze)
-        run: cargo test -p rui --lib anim_freeze -- --nocapture
+        run: cargo test -p jadix --lib anim_freeze -- --nocapture
       - name: Color contract (freeze)
-        run: cargo test -p rui --lib color_freeze -- --nocapture
+        run: cargo test -p jadix --lib color_freeze -- --nocapture
       - name: Color space contract (freeze)
-        run: cargo test -p rui --lib color_space -- --nocapture
+        run: cargo test -p jadix --lib color_space -- --nocapture
       - name: Token color audit (WP-STY.1)
         if: runner.os != 'Windows'
         run: bash scripts/check-token-colors.sh
@@ -75,9 +75,9 @@ jobs:
         if: runner.os == 'Windows'
         run: powershell -File scripts/check-token-colors.ps1
       - name: Text undo/redo contract (freeze)
-        run: cargo test -p rui --lib text_undo_freeze -- --nocapture
+        run: cargo test -p jadix --lib text_undo_freeze -- --nocapture
       - name: Text undo/redo contract (freeze, text-undo)
-        run: cargo test -p rui --lib --features text-undo text_undo_freeze -- --nocapture
+        run: cargo test -p jadix --lib --features text-undo text_undo_freeze -- --nocapture
 
   offscreen:
     name: offscreen smoke (${{ matrix.os }})
@@ -88,7 +88,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     env:
       # Prefer a software adapter so headless runners without a GPU still exercise the pixel path.
-      RUI_FORCE_SOFTWARE: "1"
+      JADIX_FORCE_SOFTWARE: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -99,29 +99,29 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev pkg-config mesa-vulkan-drivers
       - name: Offscreen clear/readback + golden
-        run: cargo test -p rui --lib offscreen -- --nocapture
+        run: cargo test -p jadix --lib offscreen -- --nocapture
       - name: ImageStream YUV GPU convert (WP-M.3)
-        run: cargo test -p rui --lib --features image-stream yuv_convert -- --nocapture
+        run: cargo test -p jadix --lib --features image-stream yuv_convert -- --nocapture
       - name: Component golden (WP-2.6)
         if: runner.os != 'Windows'
         # Serialize GPU device creation — software adapters dislike parallel request_device.
-        run: cargo test -p rui --lib golden_component -- --nocapture --test-threads=1
+        run: cargo test -p jadix --lib golden_component -- --nocapture --test-threads=1
       - name: Component golden (WP-2.6, Windows WARP)
         if: runner.os == 'Windows'
-        run: cargo test -p rui --features backend-dx12 --lib golden_component -- --nocapture --test-threads=1
+        run: cargo test -p jadix --features backend-dx12 --lib golden_component -- --nocapture --test-threads=1
       - name: Library unit tests (smoke)
         # Golden / smoke companion: fast lib tests without full workspace matrix cost.
-        run: cargo test -p rui --lib -- --skip golden_component
+        run: cargo test -p jadix --lib -- --skip golden_component
       - name: Box model contract (freeze)
-        run: cargo test -p rui --lib box_model -- --nocapture
+        run: cargo test -p jadix --lib box_model -- --nocapture
       - name: Text measure contract (freeze)
-        run: cargo test -p rui --lib text_align_ -- --nocapture
+        run: cargo test -p jadix --lib text_align_ -- --nocapture
       - name: CSS animation contract (freeze)
-        run: cargo test -p rui --lib anim_freeze -- --nocapture
+        run: cargo test -p jadix --lib anim_freeze -- --nocapture
       - name: Color contract (freeze)
-        run: cargo test -p rui --lib color_freeze -- --nocapture
+        run: cargo test -p jadix --lib color_freeze -- --nocapture
       - name: Color space contract (freeze)
-        run: cargo test -p rui --lib color_space -- --nocapture
+        run: cargo test -p jadix --lib color_space -- --nocapture
       - name: Token color audit (WP-STY.1)
         if: runner.os != 'Windows'
         run: bash scripts/check-token-colors.sh
@@ -129,12 +129,12 @@ jobs:
         if: runner.os == 'Windows'
         run: powershell -File scripts/check-token-colors.ps1
       - name: Text undo/redo contract (freeze)
-        run: cargo test -p rui --lib text_undo_freeze -- --nocapture
+        run: cargo test -p jadix --lib text_undo_freeze -- --nocapture
       - name: Text undo/redo contract (freeze, text-undo)
-        run: cargo test -p rui --lib --features text-undo text_undo_freeze -- --nocapture
+        run: cargo test -p jadix --lib --features text-undo text_undo_freeze -- --nocapture
       - name: Remote-asset fetcher seam
-        run: cargo test -p rui --lib --features remote-asset remote -- --nocapture
+        run: cargo test -p jadix --lib --features remote-asset remote -- --nocapture
       - name: ImageStream YUV (WP-M.3)
-        run: cargo test -p rui --lib --features image-stream yuv -- --nocapture
+        run: cargo test -p jadix --lib --features image-stream yuv -- --nocapture
       - name: Text undo/redo history (text-undo)
-        run: cargo test -p rui --lib --features text-undo text_edit_history document_registry -- --nocapture
+        run: cargo test -p jadix --lib --features text-undo text_edit_history document_registry -- --nocapture

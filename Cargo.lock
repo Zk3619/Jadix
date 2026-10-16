@@ -408,7 +408,7 @@ checksum = "1e748733b7cbc798e1434b6ac524f0c1ff2ab456fe201501e6497c8417a4fc33"
 name = "calculator"
 version = "0.1.0"
 dependencies = [
- "rui",
+ "jadix",
  "winit",
 ]
 
@@ -1035,9 +1035,9 @@ dependencies = [
 name = "gallery"
 version = "0.1.0"
 dependencies = [
+ "jadix",
  "jadix_window_state",
  "log",
- "rui",
  "winit",
 ]
 
@@ -1180,10 +1180,10 @@ dependencies = [
 name = "harmonyos_host"
 version = "0.1.0"
 dependencies = [
+ "jadix",
  "log",
  "openharmony-ability",
  "openharmony-ability-derive",
- "rui",
 ]
 
 [[package]]
@@ -1791,6 +1791,51 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jadix"
+version = "0.1.0"
+dependencies = [
+ "accesskit",
+ "accesskit_windows",
+ "bytemuck",
+ "env_logger",
+ "glyphon",
+ "icu",
+ "icu_provider_blob",
+ "image",
+ "jadix_clipboard",
+ "jadix_macros",
+ "jadix_style_tokens",
+ "libc",
+ "log",
+ "openharmony-ability",
+ "resvg",
+ "rfd",
+ "ropey",
+ "serde",
+ "serde_json",
+ "stacker",
+ "swash",
+ "taffy",
+ "toml",
+ "tracing",
+ "tray-icon",
+ "ttf-parser",
+ "unicode-linebreak",
+ "unicode-segmentation",
+ "wasm-bindgen",
+ "web-sys",
+ "wgpu",
+ "windows",
+ "windows-collections",
+ "windows-core",
+ "windows-numerics",
+ "windows-sys 0.61.2",
+ "winit",
+ "winit-ohos",
+ "writeable",
+]
+
+[[package]]
 name = "jadix_clipboard"
 version = "0.1.0"
 dependencies = [
@@ -1805,11 +1850,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "jadix_hot_reload_cli"
+version = "0.1.0"
+dependencies = [
+ "notify",
+ "proc-macro2",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "jadix_macros"
+version = "0.1.0"
+dependencies = [
+ "jadix_style_tokens",
+ "proc-macro2",
+ "quote",
+ "serde_json",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "jadix_style_tokens"
+version = "0.1.0"
+
+[[package]]
 name = "jadix_window_state"
 version = "0.1.0"
 dependencies = [
+ "jadix",
  "log",
- "rui",
  "serde",
  "toml",
  "winit",
@@ -3502,76 +3572,6 @@ checksum = "f1964b10c76125c36f8afe190065a4bf9a87bf324842c05701330bba9f1cacbb"
 dependencies = [
  "memchr",
 ]
-
-[[package]]
-name = "rui"
-version = "0.1.0"
-dependencies = [
- "accesskit",
- "accesskit_windows",
- "bytemuck",
- "env_logger",
- "glyphon",
- "icu",
- "icu_provider_blob",
- "image",
- "jadix_clipboard",
- "libc",
- "log",
- "openharmony-ability",
- "resvg",
- "rfd",
- "ropey",
- "rui_macros",
- "rui_style_tokens",
- "serde",
- "serde_json",
- "stacker",
- "swash",
- "taffy",
- "toml",
- "tracing",
- "tray-icon",
- "ttf-parser",
- "unicode-linebreak",
- "unicode-segmentation",
- "wasm-bindgen",
- "web-sys",
- "wgpu",
- "windows",
- "windows-collections",
- "windows-core",
- "windows-numerics",
- "windows-sys 0.61.2",
- "winit",
- "winit-ohos",
- "writeable",
-]
-
-[[package]]
-name = "rui_hot_reload_cli"
-version = "0.1.0"
-dependencies = [
- "notify",
- "proc-macro2",
- "serde",
- "serde_json",
-]
-
-[[package]]
-name = "rui_macros"
-version = "0.1.0"
-dependencies = [
- "proc-macro2",
- "quote",
- "rui_style_tokens",
- "serde_json",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "rui_style_tokens"
-version = "0.1.0"
 
 [[package]]
 name = "rustc-hash"

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Extract lucide-animated (pqoqubbw/icons) TSX → RUI recipe JSON.
+ * Extract lucide-animated (pqoqubbw/icons) TSX → Jadix recipe JSON.
  * Usage: node scripts/extract_lucide_animated.mjs [.tmp/lucide-animated/icons]
  */
 import fs from "node:fs";
@@ -10,7 +10,7 @@ const iconsDir = path.resolve(
   process.argv[2] ?? ".tmp/lucide-animated/icons"
 );
 const outPath = path.resolve(
-  process.argv[3] ?? "crates/rui/assets/lucide_animated.json"
+  process.argv[3] ?? "crates/jadix/assets/lucide_animated.json"
 );
 
 function extractBalancedObject(src, startIdx) {

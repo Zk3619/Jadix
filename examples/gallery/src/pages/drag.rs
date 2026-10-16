@@ -4,14 +4,14 @@ use crate::imports::*;
 use crate::shared::*;
 use std::rc::Rc;
 
-use rui::utils::drag::{
+use jadix::utils::drag::{
     apply_event, apply_reorder_vec, apply_transfer, begin_draggable, detect, drag_overlay,
     drag_scope, last_drag_extent, last_hit_rect, last_overlay_pos, last_pointer, run_scope_sensors,
     set_debug_drag_hits, sortable_item, sortable_list, use_drag, Axis, CollisionAlg, DragCtx,
     DragEvent, DragItemCtx, OverlayAlign, Restrict, RestrictAnchor, SnapGrid, SnapPointFn,
     SnapTargets,
 };
-use rui::utils::pointer_action::{
+use jadix::utils::pointer_action::{
     begin_resize, bind_resize_rect, last_gesture, resize_on_edges, set_gesture_opts, BoxRect,
     Edges, GestureOpts, GestureState, Invert, ResizeOpts,
 };
@@ -95,7 +95,7 @@ fn keyed_sortable_flags_chips(
 ) -> Element {
     let items_snap = items.get();
     let rows_data: Vec<_> = items_snap.iter().cloned().enumerate().collect();
-    let rows = rui::for_keyed!(
+    let rows = jadix::for_keyed!(
         rows_id,
         rows_data.as_slice(),
         |(_, item): &(usize, SortableFlagItem)| item.key.clone(),
@@ -151,7 +151,7 @@ fn keyed_pull_clone_chips(
     list: &'static str,
 ) -> Element {
     let items_snap = items.get();
-    let rows = rui::for_keyed!(
+    let rows = jadix::for_keyed!(
         rows_id,
         items_snap.as_slice(),
         |item: &PullCloneItem| item.key,
@@ -225,7 +225,7 @@ fn rsx_pull_clone_board(
             "gal-drag-clone-count",
         )
     };
-    let hint = rui::bind_text!(count, move || {
+    let hint = jadix::bind_text!(count, move || {
         format!(
             "共 {} 项 · `<SortableItem pull_clone={{true}}>` 松手 insert 副本",
             items.get().len()
@@ -560,7 +560,7 @@ fn keyed_swap_chips(
     list: &'static str,
 ) -> Element {
     let items_snap = items.get();
-    let rows = rui::for_keyed!(
+    let rows = jadix::for_keyed!(
         rows_id,
         items_snap.as_slice(),
         |s: &String| s.clone(),
@@ -588,7 +588,7 @@ fn keyed_swap_chips(
 
 fn keyed_multi_chips(items: Signal<Vec<String>>) -> Element {
     let items_snap = items.get();
-    let rows = rui::for_keyed!(
+    let rows = jadix::for_keyed!(
         "gal-drag-multi-rows",
         items_snap.as_slice(),
         |s: &String| s.clone(),
@@ -664,7 +664,7 @@ fn rsx_swap_board(
 
 fn multi_selected_hud(items: Signal<Vec<String>>) -> Element {
     let selected = use_drag().expect("MultiDrag provider").selected;
-    let hint = rui::bind_text!("gal-drag-multi-count", move || {
+    let hint = jadix::bind_text!("gal-drag-multi-count", move || {
         format!(
             "共 {} 项 · 已选 {} · 单击选中，Shift 范围选中",
             items.get().len(),
@@ -881,8 +881,8 @@ pub(crate) fn snap_grid_lines(grids: &[(SnapGrid, f32)], visible: Signal<bool>) 
                     if !moved && !recolored {
                         return LayoutStatus::Clean;
                     }
-                    if let Some(id) = el.get_attr(rui::primitives::canvas::ATTR_CANVAS_PAINT) {
-                        rui::primitives::canvas::mark_canvas_dirty_hex(id);
+                    if let Some(id) = el.get_attr(jadix::primitives::canvas::ATTR_CANVAS_PAINT) {
+                        jadix::primitives::canvas::mark_canvas_dirty_hex(id);
                     }
                     LayoutStatus::StyleChanged
                 }),
@@ -961,8 +961,8 @@ fn resize_handle(
     };
     interactive(chrome)
         .on_mousedown(move |e: &MouseEvent| {
-            if e.phase == rui::EventPhase::Capture
-                || rui::app::pointer_events::dom_button(e.button) != 0
+            if e.phase == jadix::EventPhase::Capture
+                || jadix::app::pointer_events::dom_button(e.button) != 0
             {
                 return;
             }
@@ -1010,7 +1010,7 @@ fn resize_board(rect: Signal<[f32; 4]>) -> Element {
         </Box>
     };
     let arena = arena.on_mousedown(move |event| {
-        if event.phase == rui::EventPhase::Capture {
+        if event.phase == jadix::EventPhase::Capture {
             let [_, _, w, h] = event.current_bounds;
             // Keep the 12px handles inside the fixed content area as well.
             bounds.set(BoxRect::from_xywh(
@@ -1233,8 +1233,8 @@ fn corner_overlay_angle(scope: &str, arena: &str) -> f32 {
 #[cfg(test)]
 mod drop_position_tests {
     use super::*;
-    use rui::core::reactivity::create_root;
-    use rui::utils::drag::{begin, end, tick, BeginDrag};
+    use jadix::core::reactivity::create_root;
+    use jadix::utils::drag::{begin, end, tick, BeginDrag};
 
     #[test]
     fn pull_clone_keeps_distinct_draggable_rows_after_drop() {
@@ -1263,10 +1263,10 @@ mod drop_position_tests {
                 to_index: Some(3),
                 pointer: [0.0, 0.0],
                 delta: [0.0, 0.0],
-                phase: rui::utils::drag::DragPhase::Active,
+                phase: jadix::utils::drag::DragPhase::Active,
                 pull_clone: true,
                 data: None,
-                sort_mode: rui::utils::drag::SortMode::Insert,
+                sort_mode: jadix::utils::drag::SortMode::Insert,
                 items: Vec::new(),
             };
             let mut values = items.peek();
@@ -1363,10 +1363,10 @@ mod drop_position_tests {
                 to_index: Some(1),
                 pointer: [0.0, 0.0],
                 delta: [0.0, 0.0],
-                phase: rui::utils::drag::DragPhase::Active,
+                phase: jadix::utils::drag::DragPhase::Active,
                 pull_clone: false,
                 data: None,
-                sort_mode: rui::utils::drag::SortMode::Insert,
+                sort_mode: jadix::utils::drag::SortMode::Insert,
                 items: Vec::new(),
             };
 
@@ -1414,12 +1414,12 @@ mod drop_position_tests {
 
     #[test]
     fn handled_resize_stays_in_content_and_never_scrolls_sibling() {
-        use rui::app::pointer_events::{dispatch_pointer, hit_path, MouseEvent, PointerKind};
-        use rui::core::scroll_viewport::{
+        use jadix::app::pointer_events::{dispatch_pointer, hit_path, MouseEvent, PointerKind};
+        use jadix::core::scroll_viewport::{
             scroll_content_h_signal_key, scroll_offset_y_signal_key, scroll_viewport_h_signal_key,
         };
-        use rui::utils::pointer_action::{on_move, on_up, pump_edge_scroll, resize_is_active};
-        fn sync_tree(el: &mut Element, layout: &mut rui::core::tree::LayoutTree) {
+        use jadix::utils::pointer_action::{on_move, on_up, pump_edge_scroll, resize_is_active};
+        fn sync_tree(el: &mut Element, layout: &mut jadix::core::tree::LayoutTree) {
             if let Some(sync) = el.reactive_sync.clone() {
                 sync.run(el, layout);
             }
@@ -1442,11 +1442,11 @@ mod drop_position_tests {
                 .gap(80.0)
                 .child(resize_board(rect))
                 .child(resize_edges_board(edges_rect));
-            let mut layout = rui::core::tree::LayoutTree::new();
+            let mut layout = jadix::core::tree::LayoutTree::new();
             layout.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
             sync_tree(&mut root, &mut layout);
             let mut views = Vec::new();
-            rui::utils::edge_scroll::collect_scroll_hits(&root, &mut views);
+            jadix::utils::edge_scroll::collect_scroll_hits(&root, &mut views);
             assert_eq!(views.len(), 2);
             for view in &views {
                 use_signal(&scroll_content_h_signal_key(&view.rest), || 0.0_f32).set_silent(448.0);
@@ -1510,7 +1510,7 @@ mod drop_position_tests {
 
     #[test]
     fn resize_board_updates_box_and_handles_during_drag() {
-        fn sync_tree(el: &mut Element, layout: &mut rui::core::tree::LayoutTree) {
+        fn sync_tree(el: &mut Element, layout: &mut jadix::core::tree::LayoutTree) {
             if let Some(sync) = el.reactive_sync.clone() {
                 sync.run(el, layout);
             }
@@ -1528,7 +1528,7 @@ mod drop_position_tests {
             let rect = use_signal("gal_drag_resize_rect", || [40.0_f32, 28.0, 160.0, 100.0]);
             rect.set_silent([40.0, 28.0, 160.0, 100.0]);
             let mut board = resize_board(rect);
-            let mut layout = rui::core::tree::LayoutTree::new();
+            let mut layout = jadix::core::tree::LayoutTree::new();
             layout.build_and_layout(&mut board, 800.0, 500.0, [0.0, 0.0]);
             let before = find_box(&board).unwrap().children[8].layout_bounds;
             begin_resize(
@@ -1537,8 +1537,8 @@ mod drop_position_tests {
                 ResizeOpts::default().edges(Edges::bottom_right()),
                 Some("gal_drag_resize_rect".into()),
             );
-            assert!(rui::utils::pointer_action::on_move(240.0, 158.0));
-            assert!(rui::utils::pointer_action::on_up());
+            assert!(jadix::utils::pointer_action::on_move(240.0, 158.0));
+            assert!(jadix::utils::pointer_action::on_up());
             sync_tree(&mut board, &mut layout);
             layout.build_and_layout(&mut board, 800.0, 500.0, [0.0, 0.0]);
             let handles = find_box(&board).expect("resize box and eight handles");
@@ -1564,7 +1564,7 @@ mod drop_position_tests {
             .reactive_sync
             .clone()
             .expect("line tracks its viewport position");
-        sync.run(line, &mut rui::core::tree::LayoutTree::new());
+        sync.run(line, &mut jadix::core::tree::LayoutTree::new());
     }
 
     #[test]
@@ -1585,7 +1585,7 @@ mod drop_position_tests {
             .overflow("scroll")
             .scroll_offset(25.0, 120.0)
             .child(line.left(100.0).top(473.0).w(600.0).h(1.0));
-        rui::core::tree::LayoutTree::new().build_and_layout(&mut root, 800.0, 800.0, [0.0, 0.0]);
+        jadix::core::tree::LayoutTree::new().build_and_layout(&mut root, 800.0, 800.0, [0.0, 0.0]);
         let mut line = root.children.remove(0);
         sync_line(&mut line);
         assert_eq!(snap(180.0, 360.0), Some([180.0, 353.0]));
@@ -1701,7 +1701,7 @@ fn keyed_sortable_chips(
     source_opacity: f32,
 ) -> Element {
     let items = items.get();
-    let rows = rui::for_keyed!(
+    let rows = jadix::for_keyed!(
         rows_id,
         items.as_slice(),
         |s: &String| s.clone(),
@@ -1747,7 +1747,7 @@ fn keyed_h_chips(
     source_opacity: f32,
 ) -> Element {
     let items = items.get();
-    let rows = rui::for_keyed!(
+    let rows = jadix::for_keyed!(
         rows_id,
         items.as_slice(),
         |s: &String| s.clone(),
@@ -2085,7 +2085,7 @@ fn nest_folder_tree(
     later: Signal<Vec<String>>,
 ) -> Element {
     let items = folders.get();
-    let rows = rui::for_keyed!(
+    let rows = jadix::for_keyed!(
         "gal-drag-nest-folders",
         items.as_slice(),
         |s: &String| s.clone(),
@@ -3346,7 +3346,7 @@ pub(crate) fn DragShowcase() -> Element {
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"跨容器（Sortable group）"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "两列共享 group=board。同列半透本体留在原槽；跨列时本体平移到目标槽。容器高亮只打当前投放目标（hover_list / rui_drag_over），源列保持静息样式。颜色由调用方 reactive_sync 自定，不是 CSS :hover。松手 apply_transfer。"
+                    "两列共享 group=board。同列半透本体留在原槽；跨列时本体平移到目标槽。容器高亮只打当前投放目标（hover_list / jadix_drag_over），源列保持静息样式。颜色由调用方 reactive_sync 自定，不是 CSS :hover。松手 apply_transfer。"
                 </Label>
                 <DragProvider
                     id="gal-drag-board"
@@ -3640,7 +3640,7 @@ pub(crate) fn DragShowcase() -> Element {
                 <Separator />
                 <Label font_weight="600" text_size="0.875rem">"§12 · Swap · SortMode"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">
-                    "`<DragProvider sort_mode=\"swap\">` — 拖中不让位，高亮对端 `rui_drag_swap`；松手 `apply_event` 走 `Vec::swap` / 跨列 `mem::swap`。与插入 FLIP 互斥。"
+                    "`<DragProvider sort_mode=\"swap\">` — 拖中不让位，高亮对端 `jadix_drag_swap`；松手 `apply_event` 走 `Vec::swap` / 跨列 `mem::swap`。与插入 FLIP 互斥。"
                 </Label>
                 { swap_board }
 

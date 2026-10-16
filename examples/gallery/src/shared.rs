@@ -27,11 +27,11 @@ pub(crate) const GAL_SHELL_GLASS_AERO: &str = "gal_shell_glass_aero";
 pub(crate) const GAL_SHELL_GLASS_ACRYLIC: &str = "gal_shell_glass_acrylic";
 #[cfg(test)]
 pub(crate) const GAL_SHELL_GLASS_MICA: &str = "gal_shell_glass_mica";
-pub(crate) const GAL_GRID_SORT_COMMIT: &str = "__rui_drag_commit:gal-grid-sort";
-pub(crate) const GAL_GRID_SORT_HOVER: &str = "__rui_drag_hover:gal-grid-sort";
+pub(crate) const GAL_GRID_SORT_COMMIT: &str = "__jadix_drag_commit:gal-grid-sort";
+pub(crate) const GAL_GRID_SORT_HOVER: &str = "__jadix_drag_hover:gal-grid-sort";
 pub(crate) const GAL_GRID_LIST_ID: &str = "gal-grid-sort";
 /// Demo remote `src` for `remote-asset`（main 里用 fetcher 映射成本地 PNG，不访问外网）。
-pub(crate) const GALLERY_REMOTE_PNG: &str = "https://rui.test/gallery-demo.png";
+pub(crate) const GALLERY_REMOTE_PNG: &str = "https://jadix.test/gallery-demo.png";
 
 pub(crate) fn gal_grid_sort_row(row_label: &str, i: usize, _items: &[String], hl: bool) -> Element {
     ui! {
@@ -76,20 +76,20 @@ pub(crate) fn checker_rgba_texture() -> (Vec<u8>, u32, u32) {
     (v, w, h)
 }
 
-pub(crate) fn increment_count(count: rui::core::reactivity::Signal<i32>) {
+pub(crate) fn increment_count(count: jadix::core::reactivity::Signal<i32>) {
     count.set(count.peek() + 1);
 }
 
-pub(crate) fn choose_variant(selected: rui::core::reactivity::Signal<String>, variant: &str) {
+pub(crate) fn choose_variant(selected: jadix::core::reactivity::Signal<String>, variant: &str) {
     selected.set(variant.to_string());
 }
 
 #[component]
 pub(crate) fn MyCard(
     title: String,
-    children: Option<rui::core::tree::Element>,
-) -> rui::core::tree::Element {
-    let child = children.unwrap_or_else(rui::core::tree::Element::new);
+    children: Option<jadix::core::tree::Element>,
+) -> jadix::core::tree::Element {
+    let child = children.unwrap_or_else(jadix::core::tree::Element::new);
     ui! {
         <VStack w="100%" min_w="0" p="1rem" bg="background" gap="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.125" class="rounded-lg">
             <Label w="100%" text_size="1.25rem" font_weight="700" leading="normal">{ title }</Label>
@@ -103,9 +103,9 @@ pub(crate) fn MyCard(
 #[component(reactive)]
 pub(crate) fn ReactiveStatusBadge(
     id: String,
-    label: rui::core::reactivity::Signal<String>,
-    ok: rui::core::reactivity::Signal<bool>,
-) -> rui::core::tree::Element {
+    label: jadix::core::reactivity::Signal<String>,
+    ok: jadix::core::reactivity::Signal<bool>,
+) -> jadix::core::tree::Element {
     let _ = &id; // 实例键由 #[component(reactive)] 占用；徽标本身展示型可不写 id
     ui! {
         <Badge

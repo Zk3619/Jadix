@@ -79,7 +79,7 @@ out of the process. `-SkipBuild` reuses existing binaries; omit it after edits t
 the harness or either glyphon source. Historical measurements and analysis are
 saved in [RESULTS.md](RESULTS.md) and its adjacent results directory.
 
-These scenarios isolate the modified glyph atlas code. They do not time RUI's
+These scenarios isolate the modified glyph atlas code. They do not time Jadix's
 Bake/MSDF, text-shadow bitmap cache, layout, composition, event handling or
 full application scrolling. Other GPUs, drivers, backend choices and glyph
 distributions can change the result.

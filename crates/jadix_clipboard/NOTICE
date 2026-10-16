@@ -2,7 +2,7 @@ jadix_clipboard — Third-Party Notices
 =====================================
 
 This crate is Apache-2.0. Desktop clipboard backends are a maintained fork of
-clipboard-rs 0.3.x (MIT), adapted to the RUI workspace dependency pins
+clipboard-rs 0.3.x (MIT), adapted to the Jadix workspace dependency pins
 (`windows` 0.62, shared `image` / `objc2` 0.6). Android is a stub for a later
 JNI backend.
 

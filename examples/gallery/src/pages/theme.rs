@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::imports::*;
 use crate::shared::*;
-use rui::prelude::{
+use jadix::prelude::{
     clear_stylesheets, clear_theme_overrides, install_theme_overrides,
     load_and_install_theme_overrides, parse_stylesheet, parse_theme_overrides_str,
     register_stylesheet, reload_stylesheets, theme_mode, theme_transition_config,
@@ -18,7 +18,7 @@ fn gallery_file(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join(name)
 }
 
-fn bump(tick: rui::core::reactivity::Signal<u32>) {
+fn bump(tick: jadix::core::reactivity::Signal<u32>) {
     tick.set(tick.get().saturating_add(1));
 }
 
@@ -85,7 +85,7 @@ pub(crate) fn ThemeShowcase() -> Element {
     let toggle_transition = move || {
         let mut config = theme_transition_config();
         config.enabled = !config.enabled;
-        rui::style::set_theme_transition_config(config);
+        jadix::style::set_theme_transition_config(config);
         bump(tick);
     };
     let cycle_duration = move || {
@@ -97,7 +97,7 @@ pub(crate) fn ThemeShowcase() -> Element {
         } else {
             180.0
         };
-        rui::style::set_theme_transition_config(config);
+        jadix::style::set_theme_transition_config(config);
         bump(tick);
     };
     let toggle_mode = move || {
@@ -152,7 +152,7 @@ pub(crate) fn ThemeShowcase() -> Element {
         <MyCard title="样式表（styles.toml → data-slot）">
             <VStack w="100%" min_w="0" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "气泡未写 RSX class。注册后 [data-slot=bubble-content] 得 rounded-2xl；destructive 另加 ring-2。匹配也认 rui_bubble_variant。"
+                    "气泡未写 RSX class。注册后 [data-slot=bubble-content] 得 rounded-2xl；destructive 另加 ring-2。匹配也认 jadix_bubble_variant。"
                 </Label>
                 <HStack w="100%" min_w="0" gap="0.5rem" wrap="wrap">
                     <Button id="gal-theme-sheet" variant="default" size="sm" on_click={apply_sheet}>
@@ -190,7 +190,7 @@ pub(crate) fn ThemeShowcase() -> Element {
 
 #[component]
 pub(crate) fn GallerySectionTheme() -> Element {
-    rui::core::reactivity::isolate_reads(|| {
+    jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-theme" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">

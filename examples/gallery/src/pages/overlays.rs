@@ -5,7 +5,7 @@ use crate::pages::navigation::gallery_secondary_shell_root;
 use crate::shared::*;
 
 #[component]
-pub(crate) fn PrimitivesShowcase() -> rui::core::tree::Element {
+pub(crate) fn PrimitivesShowcase() -> jadix::core::tree::Element {
     let overlay_open = use_signal("prim_overlay_open", || false);
     let local_open = use_signal("prim_local_portal_open", || false);
     let trap_on = use_signal("prim_trap_on", || false);
@@ -41,7 +41,7 @@ pub(crate) fn PrimitivesShowcase() -> rui::core::tree::Element {
                                     <Button variant="secondary" on_click={move || {
                                         let next = !trap_on.get();
                                         trap_on.set(next);
-                                        rui::sync_focus_trap("prim-trap", next, "trap-a,trap-b");
+                                        jadix::sync_focus_trap("prim-trap", next, "trap-a,trap-b");
                                     }}>
                                         { if trap_on.get() { "关闭焦点陷阱" } else { "启用焦点陷阱" } }
                                     </Button>
@@ -702,7 +702,7 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
             .open_signal(hc_builder_open)
             .child(|| {
                 let mut frag = Element::new();
-                frag.set_attr("rui_fragment", "1");
+                frag.set_attr("jadix_fragment", "1");
                 frag.children(vec![
                     HoverCardTrigger(HoverCardTriggerProps {
                         id: String::new(),
@@ -732,7 +732,7 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
                                     .gap("0.25rem")
                                     .child(
                                         label("gal-hc-b-title")
-                                            .text("@rui")
+                                            .text("@jadix")
                                             .size(14.0)
                                             .font_weight(600.0),
                                     )
@@ -1154,7 +1154,7 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
                             on_click={move || {
                                 match open_secondary_window_with(
                                     WindowOptions::new()
-                                        .title("RUI Gallery — Secondary")
+                                        .title("Jadix Gallery — Secondary")
                                         .window_label("gallery-secondary"),
                                     gallery_secondary_shell_root,
                                 ) {

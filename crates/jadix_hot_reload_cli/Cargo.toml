@@ -1,0 +1,19 @@
+[package]
+name = "jadix_hot_reload_cli"
+version.workspace = true
+edition.workspace = true
+description = "Dev-time hot-reload watcher for jadix (`template_patch` / reload)"
+license.workspace = true
+repository.workspace = true
+
+include = [
+  "/Cargo.toml",
+  "/LICENSE",
+  "/src/**/*",
+]
+
+[dependencies]
+notify = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+proc-macro2 = { workspace = true }

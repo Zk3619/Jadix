@@ -7,7 +7,7 @@ publish = false
 
 [dependencies]
 # Keep lucide embedded so Icon PUA glyphs never tofu when cwd ≠ workspace.
-rui = { workspace = true, features = [
+jadix = { workspace = true, features = [
     "bundled-lucide",
     "lucide-animated",
     "svg",
@@ -15,37 +15,40 @@ rui = { workspace = true, features = [
 ] }
 jadix_window_state = { workspace = true, features = ["jadix"] }
 log = { workspace = true }
+winit = { workspace = true, optional = true }
 
 [dev-dependencies]
 winit = { workspace = true }
 
 [features]
-# Optional logger: console + RUI_LOG_FILE (via rui/runtime-logging).
+# Native CPU benchmark telemetry; uses the production Gallery and event loop.
+cpu-bench = ["dep:winit"]
+# Optional logger: console + JADIX_LOG_FILE (via jadix/runtime-logging).
 #   cargo run -p gallery --features runtime-logging
-#   $env:RUI_LOG_FILE="rui.log"; $env:RUST_LOG="info"
-runtime-logging = ["rui/runtime-logging"]
+#   $env:JADIX_LOG_FILE="jadix.log"; $env:RUST_LOG="info"
+runtime-logging = ["jadix/runtime-logging"]
 # Native tray demo (WP-3.6). Off by default so `cargo check -p gallery` stays lean.
 #   cargo run -p gallery --features system-tray
-system-tray = ["rui/system-tray"]
+system-tray = ["jadix/system-tray"]
 # Remote http(s) Image/Avatar src via app fetcher. cargo run -p gallery --features remote-asset
-remote-asset = ["rui/remote-asset"]
+remote-asset = ["jadix/remote-asset"]
 # B1 Inspector (F12). cargo run -p gallery --features devtools
-devtools = ["rui/devtools"]
+devtools = ["jadix/devtools"]
 # WP-3.13 rotating cube. Off by default.
 #   cargo run -p gallery --features scene3d
-scene3d = ["rui/scene3d"]
+scene3d = ["jadix/scene3d"]
 # WP-M.3 I420 Gallery path. Off by default.
 #   cargo run -p gallery --features image-stream
-image-stream = ["rui/image-stream"]
+image-stream = ["jadix/image-stream"]
 # Optional wgpu compute (blur / histogram / particles / backdrop-filter).
 #   cargo run -p gallery --features compute
-compute = ["rui/compute"]
+compute = ["jadix/compute"]
 # Windows custom DComp glass recipes (Blur / Aero / tunable Acrylic). Enables DX12.
 #   cargo run -p gallery --features glass
-glass = ["rui/backend-dx12"]
+glass = ["jadix/backend-dx12"]
 # Locale overlays. cargo run -p gallery --features i18n
-i18n = ["rui/i18n"]
+i18n = ["jadix/i18n"]
 # AccessKit bridge. cargo run -p gallery --features a11y
-a11y = ["rui/a11y"]
-# Deprecated alias (raster formats are always available via rui's image core).
-images = ["rui/images"]
+a11y = ["jadix/a11y"]
+# Deprecated alias (raster formats are always available via jadix's image core).
+images = ["jadix/images"]

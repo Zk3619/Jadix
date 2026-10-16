@@ -1,12 +1,12 @@
 # P.0.3: Gallery release scroll profile (~10s synthetic wheel). See size_and_memory.md §7.5.
 $ErrorActionPreference = "Stop"
-$root = "d:\Projects\Rust\rust-native-ui"
+$root = Split-Path -Parent $PSScriptRoot
 $exe = Join-Path $root "target\release\gallery.exe"
-$logFile = Join-Path $root "crates\rui\tmp_p03_scroll_profile.log"
+$logFile = Join-Path $root "crates\jadix\tmp_p03_scroll_profile.log"
 Remove-Item $logFile -ErrorAction SilentlyContinue
 
 $env:RUST_LOG = "warn"
-$env:RUI_RENDER_PROFILE = "1"
+$env:JADIX_RENDER_PROFILE = "1"
 
 $proc = Start-Process -FilePath $exe -RedirectStandardError $logFile -PassThru -WindowStyle Normal
 Start-Sleep -Seconds 4

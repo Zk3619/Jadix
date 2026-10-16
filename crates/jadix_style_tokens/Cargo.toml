@@ -1,0 +1,15 @@
+[package]
+name = "jadix_style_tokens"
+version.workspace = true
+edition.workspace = true
+description = "Shared Tailwind/Uno-style utility token catalog and variant parsing for jadix"
+license.workspace = true
+repository.workspace = true
+
+include = [
+  "/Cargo.toml",
+  "/LICENSE",
+  "/src/**/*",
+]
+
+[dependencies]

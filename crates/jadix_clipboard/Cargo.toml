@@ -2,7 +2,7 @@
 name = "jadix_clipboard"
 version.workspace = true
 edition.workspace = true
-description = "Cross-platform clipboard for Jadix/RUI (text, html, rtf, files, optional image). Fork of clipboard-rs aligned to workspace Windows/objc pins."
+description = "Cross-platform clipboard for Jadix (text, html, rtf, files, optional image). Fork of clipboard-rs aligned to workspace Windows/objc pins."
 license.workspace = true
 repository.workspace = true
 readme = false

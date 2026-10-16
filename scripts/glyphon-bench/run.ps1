@@ -120,11 +120,11 @@ $metadata = [ordered]@{
     cpu = (Get-CimInstance Win32_Processor | Select-Object -ExpandProperty Name)
     graphics = @(Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion)
     upstream_source = $upstream.FullName
-    font_sha256 = (Get-FileHash (Join-Path $repo 'crates/rui/assets/NotoSansCJK.ttc')).Hash
+    font_sha256 = (Get-FileHash (Join-Path $repo 'crates/jadix/assets/NotoSansCJK.ttc')).Hash
     patched_atlas_sha256 = (Get-FileHash (Join-Path $repo 'vendor/glyphon/src/text_atlas.rs')).Hash
 }
 $metadata | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $lab "$Label-metadata.json") -Encoding utf8
-$font = Join-Path $repo 'crates/rui/assets/NotoSansCJK.ttc'
+$font = Join-Path $repo 'crates/jadix/assets/NotoSansCJK.ttc'
 foreach ($round in 0..($Rounds - 1)) {
     $order = if ($round % 2 -eq 0) { @('baseline', 'patched') } else { @('patched', 'baseline') }
     foreach ($variant in $order) {

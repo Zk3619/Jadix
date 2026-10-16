@@ -16,9 +16,9 @@ $patterns = @(
     '\.bg\(\s*\[\s*0(?:\.0+)?\s*,\s*0(?:\.0+)?\s*,\s*0(?:\.0+)?\s*,\s*0\.[1-9]'
 )
 $dirs = @(
-    (Join-Path $root "crates\rui\src\components"),
-    (Join-Path $root "crates\rui\src\primitives"),
-    (Join-Path $root "crates\rui\src\app\navigator")
+    (Join-Path $root "crates\jadix\src\components"),
+    (Join-Path $root "crates\jadix\src\primitives"),
+    (Join-Path $root "crates\jadix\src\app\navigator")
 )
 $hits = @()
 foreach ($pat in $patterns) {

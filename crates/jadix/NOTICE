@@ -1,0 +1,98 @@
+Jadix — Third-Party Notices
+=========================
+
+Copyright 2026 Jadix contributors
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+---
+
+Third-party notices
+-------------------
+
+The Jadix source code is licensed under the Apache License, Version 2.0 (see LICENSE).
+
+This file lists bundled assets and other third-party material shipped inside
+the `jadix` crate (optional features may omit some entries). Rust crate
+dependencies retain their own licenses; run `cargo deny check licenses bans sources` from the
+workspace root for the full dependency graph.
+
+Bundled fonts (optional `bundled-*` / `fonts-*` features)
+---------------------------------------------------------
+
+Google Noto fonts in `assets/`:
+
+- NotoSansCJK.ttc
+- NotoSerifCJK.ttc
+- NotoColorEmoji.ttf
+- NotoColorEmoji_WindowsCompatible.ttf
+- NotoSansMath-Regular.ttf
+- NotoSansSymbols-wght.ttf
+- NotoSansSymbols2-Regular.ttf
+- NotoMusic-Regular.ttf
+
+  License: SIL Open Font License 1.1 (OFL-1.1)
+  Copyright: The Noto Project Authors (Google LLC and contributors)
+  https://fonts.google.com/noto/specimen/Noto+Sans
+
+Lucide icon font in `assets/lucide.ttf`:
+
+  License: ISC License
+  Copyright: Lucide Contributors
+  https://github.com/lucide-icons/lucide
+
+Bundled icon data
+-----------------
+
+Lucide name → codepoint maps in `assets/lucide.json` and `assets/lucide_paths.json`:
+
+  License: ISC License
+  Copyright: Lucide Contributors
+  https://github.com/lucide-icons/lucide
+
+Animated icon recipes in `assets/lucide_animated.json` (optional `lucide-animated`
+feature; extracted offline from pqoqubbw/icons):
+
+  License: MIT License
+  Copyright: pqoqubbw and contributors
+  https://github.com/pqoqubbw/icons
+
+Optional ICU4X locale data (`i18n` feature)
+------------------------------------------
+
+When the `i18n` feature is enabled, Jadix links ICU4X (`icu` / `icu_provider_blob`)
+with Unicode CLDR compiled data (and optional runtime blobs).
+
+  License: Unicode License v3
+  Copyright: Unicode, Inc. and others
+  https://github.com/unicode-org/icu4x
+
+Design alignment (not shipped as third-party source)
+----------------------------------------------------
+
+Component naming and token semantics align with shadcn/ui and Tailwind CSS
+v4 conventions. Jadix reimplements these APIs in Rust; upstream React/TS source
+is not vendored into this repository.
+
+Window glass recipes (Blur / Aero / Acrylic / Mica graphs, tint opacity
+modifier, Aero inactive remaps) follow publicly documented WinUI Acrylic
+behavior and the effect-graph structure described by DWMBlurGlass
+(LGPL-3.0, https://github.com/Maplespe/DWMBlurGlass). Jadix does not vendor
+that project's source, assets, or DWM injection.
+
+Local reference snapshots under `Reference/` (when present on a developer
+machine) are for comparison only and are not included in published crates.
+
+System clipboard is `jadix_clipboard` (workspace crate; fork of clipboard-rs
+0.3.x, MIT, ChurchTao). See `crates/jadix_clipboard/NOTICE`.
+

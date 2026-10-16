@@ -1,0 +1,219 @@
+{
+  "executable_sha256": "87259ec2fc9da1736976e17271ddac95dec4dca0d4e36ab6c2b282dd06b5ece9",
+  "platform": "Windows-11-10.0.26300-SP0",
+  "processor": "Intel64 Family 6 Model 183 Stepping 1, GenuineIntel",
+  "logical_cpus": 32,
+  "input_hz": 60,
+  "cpu_definition": "100% = one logical CPU, all process threads included",
+  "width": 1280,
+  "height": 800,
+  "measured_on": "2026-10-16",
+  "status": "targets-not-met",
+  "measurement_note": "One six-second round per phase, four-second warmup; compiler suspended during capture. This is a checkpoint, not final acceptance.",
+  "default_frame_cap": 60,
+  "summary": [
+    {
+      "section": "ordinary",
+      "phase": "scroll",
+      "cpu_min": 13.80103836468776,
+      "cpu_median": 13.80103836468776,
+      "cpu_max": 13.80103836468776,
+      "fps_min": 58.49557091025393,
+      "passed": false
+    },
+    {
+      "section": "ordinary",
+      "phase": "settled",
+      "cpu_min": 0.25933023721467446,
+      "cpu_median": 0.25933023721467446,
+      "cpu_max": 0.25933023721467446,
+      "fps_min": 0.0,
+      "passed": true
+    },
+    {
+      "section": "forms",
+      "phase": "scroll",
+      "cpu_min": 20.311350716089315,
+      "cpu_median": 20.311350716089315,
+      "cpu_max": 20.311350716089315,
+      "fps_min": 58.49669006233723,
+      "passed": true
+    },
+    {
+      "section": "forms",
+      "phase": "settled",
+      "cpu_min": 0.0,
+      "cpu_median": 0.0,
+      "cpu_max": 0.0,
+      "fps_min": 0.0,
+      "passed": true
+    },
+    {
+      "section": "layout",
+      "phase": "scroll",
+      "cpu_min": 26.56001354007108,
+      "cpu_median": 26.56001354007108,
+      "cpu_max": 26.56001354007108,
+      "fps_min": 58.32787287231296,
+      "passed": false
+    },
+    {
+      "section": "layout",
+      "phase": "settled",
+      "cpu_min": 0.0,
+      "cpu_median": 0.0,
+      "cpu_max": 0.0,
+      "fps_min": 0.0,
+      "passed": true
+    }
+  ],
+  "results": [
+    {
+      "section": "ordinary",
+      "phase": "scroll",
+      "round": 1,
+      "wall_seconds": 6.00045430001046,
+      "cpu_seconds": 0.828125,
+      "single_core_percent": 13.80103836468776,
+      "limit_percent": 10,
+      "wheel_ticks": 360,
+      "start_unix": 1792128289.3119879,
+      "foreground_visible": true,
+      "client_size": [
+        1265,
+        762
+      ],
+      "pid": 16252,
+      "passed": false,
+      "redraws": 352,
+      "fps": 58.49557091025393,
+      "presented_frames": 351,
+      "scroll_range_px": 1474.0,
+      "frame_interval_p95_ms": 17.443000000000097,
+      "delivered_wheel_events": 360,
+      "valid": true
+    },
+    {
+      "section": "ordinary",
+      "phase": "settled",
+      "round": 1,
+      "wall_seconds": 6.025136200012639,
+      "cpu_seconds": 0.015625,
+      "single_core_percent": 0.25933023721467446,
+      "limit_percent": 0.5,
+      "wheel_ticks": 0,
+      "start_unix": 1792128298.3134139,
+      "foreground_visible": true,
+      "client_size": [
+        1265,
+        762
+      ],
+      "pid": 16252,
+      "passed": true,
+      "redraws": 0,
+      "fps": 0.0,
+      "scroll_range_px": 0,
+      "frame_interval_p95_ms": null,
+      "delivered_wheel_events": 360,
+      "valid": true
+    },
+    {
+      "section": "forms",
+      "phase": "scroll",
+      "round": 1,
+      "wall_seconds": 6.00033949999488,
+      "cpu_seconds": 1.21875,
+      "single_core_percent": 20.311350716089315,
+      "limit_percent": 25,
+      "wheel_ticks": 360,
+      "start_unix": 1792128311.5299284,
+      "foreground_visible": true,
+      "client_size": [
+        1265,
+        762
+      ],
+      "pid": 11956,
+      "passed": true,
+      "redraws": 352,
+      "fps": 58.49669006233723,
+      "presented_frames": 351,
+      "scroll_range_px": 1474.667,
+      "frame_interval_p95_ms": 17.423000000000854,
+      "delivered_wheel_events": 360,
+      "valid": true
+    },
+    {
+      "section": "forms",
+      "phase": "settled",
+      "round": 1,
+      "wall_seconds": 6.024394899999606,
+      "cpu_seconds": 0.0,
+      "single_core_percent": 0.0,
+      "limit_percent": 0.5,
+      "wheel_ticks": 0,
+      "start_unix": 1792128320.5306776,
+      "foreground_visible": true,
+      "client_size": [
+        1265,
+        762
+      ],
+      "pid": 11956,
+      "passed": true,
+      "redraws": 0,
+      "fps": 0.0,
+      "scroll_range_px": 0,
+      "frame_interval_p95_ms": null,
+      "delivered_wheel_events": 360,
+      "valid": true
+    },
+    {
+      "section": "layout",
+      "phase": "scroll",
+      "round": 1,
+      "wall_seconds": 6.000561699998798,
+      "cpu_seconds": 1.59375,
+      "single_core_percent": 26.56001354007108,
+      "limit_percent": 25,
+      "wheel_ticks": 360,
+      "start_unix": 1792128333.8617165,
+      "foreground_visible": true,
+      "client_size": [
+        1265,
+        762
+      ],
+      "pid": 40624,
+      "passed": false,
+      "redraws": 351,
+      "fps": 58.32787287231296,
+      "presented_frames": 350,
+      "scroll_range_px": 1479.333,
+      "frame_interval_p95_ms": 17.4789999999998,
+      "delivered_wheel_events": 360,
+      "valid": true
+    },
+    {
+      "section": "layout",
+      "phase": "settled",
+      "round": 1,
+      "wall_seconds": 6.023844900002587,
+      "cpu_seconds": 0.0,
+      "single_core_percent": 0.0,
+      "limit_percent": 0.5,
+      "wheel_ticks": 0,
+      "start_unix": 1792128342.8625278,
+      "foreground_visible": true,
+      "client_size": [
+        1265,
+        762
+      ],
+      "pid": 40624,
+      "passed": true,
+      "redraws": 0,
+      "fps": 0.0,
+      "scroll_range_px": 0,
+      "frame_interval_p95_ms": null,
+      "delivered_wheel_events": 360,
+      "valid": true
+    }
+  ]
+}

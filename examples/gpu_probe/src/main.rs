@@ -1,4 +1,4 @@
-//! Memory floor probe: winit + wgpu clear-screen only, zero rui code.
+//! Memory floor probe: winit + wgpu clear-screen only, zero jadix code.
 //!
 //! Prints working set / private commit after each initialization stage so the
 //! GPU driver's contribution can be told apart from framework allocations.
@@ -94,7 +94,7 @@ fn selected_backends() -> wgpu::Backends {
         "vulkan" | "vk" => wgpu::Backends::VULKAN,
         "gl" | "gles" | "opengl" => wgpu::Backends::GL,
         "dx12" => wgpu::Backends::DX12,
-        // ADR-3 / rui default: GL on Windows for lower driver private bytes.
+        // ADR-3 / jadix default: GL on Windows for lower driver private bytes.
         _ if cfg!(windows) => wgpu::Backends::GL,
         _ => wgpu::Backends::PRIMARY,
     }
@@ -107,7 +107,7 @@ struct Probe {
     done: bool,
 }
 
-/// Keep `Instance` alive for the whole surface lifetime (same as `rui` AppState).
+/// Keep `Instance` alive for the whole surface lifetime (same as `jadix` AppState).
 struct Gpu {
     _instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,

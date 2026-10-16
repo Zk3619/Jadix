@@ -79,7 +79,7 @@ fn font_rsx_family_tile(_id: &str, caption: &str, sample: Element) -> Element {
 
 /// 族 / 字重 / 字号 / 行高覆盖验收（对照 `docs/engine/font.md`）。
 #[component]
-pub(crate) fn FontOverrideShowcase() -> rui::core::tree::Element {
+pub(crate) fn FontOverrideShowcase() -> jadix::core::tree::Element {
     let family_sans = font_family_tile(
         "gal-font-sans",
         "class=\"font-sans\"",
@@ -178,7 +178,7 @@ pub(crate) fn FontOverrideShowcase() -> rui::core::tree::Element {
         <MyCard title="7) 字体族 / 字重 / 行高覆盖（验收）">
             <VStack w="100%" min_w="0" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "对照 docs/engine/font.md · font_strategy.md。默认栈 Inter → Inter Variable → Segoe/SF → CJK 后段。进程级 RUI_FONT_FAMILY / WindowOptions::default_font* 不在本卡切换。"
+                    "对照 docs/engine/font.md · font_strategy.md。默认栈 Inter → Inter Variable → Segoe/SF → CJK 后段。进程级 JADIX_FONT_FAMILY / WindowOptions::default_font* 不在本卡切换。"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "勾选：① sans/serif/mono 字形可辨 ② RSX font_family 覆盖 class ③ 400 < 500 ≤ 700（无 Medium 面时 500 为 Regular+伪粗）④ 字号阶梯 ⑤ leading-none 比 normal 更易裁切 CJK ⑥ 子级可覆盖父级族"
@@ -319,7 +319,7 @@ pub(crate) fn typography_showcase_decoration() -> Element {
 }
 
 #[component]
-pub(crate) fn TypographyShowcase() -> rui::core::tree::Element {
+pub(crate) fn TypographyShowcase() -> jadix::core::tree::Element {
     let buttons = typography_showcase_buttons();
     let decoration = typography_showcase_decoration();
     ui! {
@@ -352,8 +352,8 @@ pub(crate) fn gal_wp21_chip_mention() -> Element {
 }
 
 #[component]
-pub(crate) fn TextAlignShowcase() -> rui::core::tree::Element {
-    let row_h = rui::item_height_for_text(14.0, 1.5);
+pub(crate) fn TextAlignShowcase() -> jadix::core::tree::Element {
+    let row_h = jadix::item_height_for_text(14.0, 1.5);
     let chip_mention = gal_wp21_chip_mention();
     // Always-on scrollbar: idle `auto` chrome hides and a mid-list offset looks "broken".
     let virt: Element = virtual_list(TEXT_ALIGN_WP21_VIRT)
@@ -385,7 +385,7 @@ pub(crate) fn TextAlignShowcase() -> rui::core::tree::Element {
                         <Label font_weight="700" text_size="0.75rem">"ASCII soft-wrap（~5rem）"</Label>
                         <Box bg="muted" rounded="0.375rem" p="0.5rem" w="5rem" borderStyle="solid" borderColor="border" borderWidth="0.0625">
                             <Label w="100%" text_size="0.875rem" leading="normal">
-                                "hello world from rui text measure alignment"
+                                "hello world from jadix text measure alignment"
                             </Label>
                         </Box>
                     </VStack>
@@ -421,7 +421,7 @@ pub(crate) fn TextAlignShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn TextCompatibilityShowcase() -> rui::core::tree::Element {
+pub(crate) fn TextCompatibilityShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="6) Text Compatibility Stress Test">
             <VStack w="100%" gap="0.75rem">
@@ -499,7 +499,7 @@ pub(crate) fn TextCompatibilityShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn EmojiRealtimeRegressionShowcase() -> rui::core::tree::Element {
+pub(crate) fn EmojiRealtimeRegressionShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="6b) Windows Emoji Realtime Regression">
             <VStack w="100%" gap="0.75rem">
@@ -524,7 +524,7 @@ pub(crate) fn EmojiRealtimeRegressionShowcase() -> rui::core::tree::Element {
 
 /// Coverage / Bake / 三通道 MSDF 对照（scale>2 走 Msdf；尖角看「永角」）。
 #[component]
-pub(crate) fn MsdfMultichannelShowcase() -> rui::core::tree::Element {
+pub(crate) fn MsdfMultichannelShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="三通道 MSDF（Coverage / Bake / Msdf）">
             <VStack w="100%" gap="0.75rem">

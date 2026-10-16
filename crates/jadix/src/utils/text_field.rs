@@ -1,0 +1,1459 @@
+//! # Text field（能力层）
+//!
+//! Input / Textarea 共用的无外观契约：信号键、focus 前缀、受控绑定。
+//! **禁止**写入圆角、配色、阴影等产品样式（见 `docs/COMPONENT_LIBRARY.md` §2）。
+//!
+//! `input_controller` 写 store 后应调用 [`commit_value`]，以便受控 Signal 在
+//! **非 paint** 路径上通知订阅者；paint sync 仅允许 [`pull_controlled_into_store`]
+//!（`set_silent`），避免 `AppState` RefCell 重入。
+
+use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::time::Instant;
+
+use crate::core::reactivity::{use_signal, Signal};
+
+/// 单行文本焦点前缀（`input:{id}`）。
+pub const INPUT_FOCUS_PREFIX: &str = "input:";
+/// 多行文本焦点前缀（`textarea:{id}`）；controller 据此允许 Enter 换行。
+pub const TEXTAREA_FOCUS_PREFIX: &str = "textarea:";
+
+pub fn input_focus_id(id: &str) -> String {
+    format!("{INPUT_FOCUS_PREFIX}{id}")
+}
+
+pub fn textarea_focus_id(id: &str) -> String {
+    format!("{TEXTAREA_FOCUS_PREFIX}{id}")
+}
+
+/// 多行内部滚动视口 rest（`scroll:{rest}`）。
+pub fn textarea_scroll_rest(id: &str) -> String {
+    format!("{id}__ta_scroll")
+}
+
+/// 多行高度信号（resize / 固定可视区）。
+pub fn textarea_height_signal_key(id: &str) -> String {
+    format!("__jadix_textarea_h_{id}")
+}
+
+/// Soft-wrap 可用宽度（逻辑 px）；↑/↓ / Home/End 视觉行导航读取。
+pub fn textarea_wrap_width_signal_key(id: &str) -> String {
+    format!("__jadix_textarea_wrap_w_{id}")
+}
+
+/// Active [`WrapMode`] for a textarea (Word / Char / None).
+pub fn textarea_wrap_mode_signal_key(id: &str) -> String {
+    format!("__jadix_textarea_wrap_mode_{id}")
+}
+
+/// Textarea / text soft-wrap mode ([`crate::text::WrapMode`]).
+///
+/// Soft wrap never inserts `\n` into the value — only visual rows.
+///
+/// HTML: `wrap="soft"` → Word; `wrap="off"` → None; plus `char` mid-word break.
+pub use crate::text::visual_lines::WrapMode;
+
+/// Historical alias — prefer [`WrapMode`].
+pub type TextareaWrapMode = WrapMode;
+
+/// Selection behavior when an Input or Textarea loses focus.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum SelectionOnBlur {
+    #[default]
+    Clear,
+    Retain,
+}
+
+impl From<&str> for SelectionOnBlur {
+    fn from(value: &str) -> Self {
+        if value.trim().eq_ignore_ascii_case("retain") {
+            Self::Retain
+        } else {
+            Self::Clear
+        }
+    }
+}
+
+impl From<String> for SelectionOnBlur {
+    fn from(value: String) -> Self {
+        Self::from(value.as_str())
+    }
+}
+
+pub(crate) fn clear_blurred_selection(field_id: &str) {
+    use_signal(&input_selection_signal_key(field_id), || {
+        None::<(usize, usize)>
+    })
+    .set_silent(None);
+    extra_carets_signal(field_id).set_silent(Vec::new());
+    latest_caret_signal(field_id).set_silent(None);
+}
+
+pub(crate) fn install_selection_on_blur(
+    field_id: &str,
+    focus_id: String,
+    policy: SelectionOnBlur,
+    disabled: bool,
+) {
+    let slot = use_signal(&format!("__jadix_selection_blur_effect_{field_id}"), || {
+        None::<crate::core::reactivity::EffectId>
+    });
+    if let Some(old) = slot.peek() {
+        crate::core::reactivity::dispose_effect(old);
+    }
+    let effect = if policy == SelectionOnBlur::Clear {
+        let field = field_id.to_string();
+        let focused = use_signal("__jadix_button_focus_id", String::new);
+        Some(crate::core::reactivity::create_effect(move || {
+            if focused.get() != focus_id || disabled {
+                clear_blurred_selection(&field);
+            }
+        }))
+    } else {
+        None
+    };
+    slot.set_silent(effect);
+}
+
+/// 右下角 resize grip 的 `focus_id` 前缀。
+pub const TEXTAREA_RESIZE_FOCUS_PREFIX: &str = "textarea-resize:";
+
+pub fn textarea_resize_focus_id(id: &str) -> String {
+    format!("{TEXTAREA_RESIZE_FOCUS_PREFIX}{id}")
+}
+
+/// 默认可视高度：`rows * line_box + vertical padding`。
+/// `line_height_px` 须与文本测量/绘制行盒一致（通常为 tw 默认 leading × 字号）。
+pub fn textarea_default_height(rows: u32, line_height_px: f32, pad_y_px: f32) -> f32 {
+    rows.max(1) as f32 * line_height_px.max(1.0) + pad_y_px * 2.0
+}
+
+#[inline]
+fn length_percentage_px(v: &taffy::style::LengthPercentage) -> f32 {
+    crate::layout::lp_length_px(*v)
+        .filter(|px| px.is_finite())
+        .unwrap_or(0.0)
+}
+
+/// Horizontal inset of the textarea text region.
+pub const TEXTAREA_SCROLLPORT_PAD_X: f32 = 0.75 * 16.0;
+
+/// Scrollport horizontal padding from style, falling back to layout gap text leaf ↔ region box.
+pub fn textarea_scrollport_padding_x(
+    region: &crate::core::tree::Element,
+    region_abs_x: f32,
+    viewport_w: f32,
+) -> (f32, f32) {
+    let mut pad_left = length_percentage_px(&region.style.padding.left);
+    let mut pad_right = length_percentage_px(&region.style.padding.right);
+    for child in &region.children {
+        let is_text = child.text.is_some()
+            || child
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t.contains(":text"));
+        if !is_text {
+            continue;
+        }
+        let child_left = child.layout_bounds[0];
+        let child_right = child.layout_bounds[0] + child.layout_bounds[2];
+        let region_right = region_abs_x + viewport_w;
+        if pad_left < 0.5 {
+            pad_left = (child_left - region_abs_x).max(0.0);
+        }
+        if pad_right < 0.5 {
+            pad_right = (region_right - child_right).max(0.0);
+        }
+        break;
+    }
+    (pad_left, pad_right)
+}
+
+/// Extra scrollable width past the last glyph on `wrap=off` lines (region `padding-inline-end`).
+#[inline]
+pub fn textarea_nowrap_trailing_pad_x(
+    region: Option<&crate::core::tree::Element>,
+    region_abs_x: f32,
+    viewport_w: f32,
+) -> f32 {
+    region
+        .map(|r| textarea_scrollport_padding_x(r, region_abs_x, viewport_w).1)
+        .unwrap_or(TEXTAREA_SCROLLPORT_PAD_X)
+}
+
+/// Hairline caret width (logical px). Wrap=off follow-scroll must pan this far past ink
+/// so the caret is not clipped at the viewport edge.
+pub const TEXT_EDIT_CARET_W: f32 = 2.0;
+
+/// Scrollport vertical padding from style, falling back to layout gap text leaf ↔ region box.
+pub fn textarea_scrollport_padding_y(
+    region: &crate::core::tree::Element,
+    region_abs_y: f32,
+    viewport_h: f32,
+) -> (f32, f32) {
+    let mut pad_top = length_percentage_px(&region.style.padding.top);
+    let mut pad_bottom = length_percentage_px(&region.style.padding.bottom);
+    for child in &region.children {
+        let is_text = child.text.is_some()
+            || child
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t.contains(":text"));
+        if !is_text {
+            continue;
+        }
+        let child_top = child.layout_bounds[1];
+        let child_bottom = child.layout_bounds[1] + child.layout_bounds[3];
+        let region_bottom = region_abs_y + viewport_h;
+        if pad_top < 0.5 {
+            pad_top = (child_top - region_abs_y).max(0.0);
+        }
+        if pad_bottom < 0.5 {
+            pad_bottom = (region_bottom - child_bottom).max(0.0);
+        }
+        break;
+    }
+    (pad_top, pad_bottom)
+}
+
+/// Textarea internal scrollport content height (text block + top/bottom padding).
+///
+/// Do not derive from `max_bottom - origin`: collect seeds `max_bottom` to the viewport
+/// bottom before walking children, so an empty/shorter leaf still yields `viewport + pad_bottom`.
+pub fn textarea_scroll_content_h(
+    region: &crate::core::tree::Element,
+    region_abs_y: f32,
+    viewport_h: f32,
+) -> f32 {
+    let (pad_top, pad_bottom) = textarea_scrollport_padding_y(region, region_abs_y, viewport_h);
+    let mut content = viewport_h;
+    for child in &region.children {
+        let is_text = child.text.is_some()
+            || child
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t.contains(":text"));
+        if !is_text {
+            continue;
+        }
+        let style_h = crate::layout::dim_length_px(child.style.size.height)
+            .filter(|h| h.is_finite())
+            .unwrap_or(0.0);
+        let layout_h = child.layout_bounds[3];
+        // Layout is authoritative; stale style must not inflate scroll when leaf is shorter.
+        let mut child_h = if layout_h > 0.5 { layout_h } else { style_h };
+        if let Some(text) = &child.text {
+            let w = child.layout_bounds[2].max(1.0);
+            let lh = child
+                .text_style
+                .line_height_px
+                .unwrap_or(child.text_style.size_resolved() * 1.5)
+                .max(1.0);
+            let measured = text_edit_content_height_px(
+                text,
+                child.text_style.size_resolved(),
+                child.text_style.weight_resolved(),
+                lh,
+                w,
+            );
+            child_h = child_h.max(measured);
+        }
+        if child_h > 0.0 {
+            content = content.max(pad_top + child_h + pad_bottom);
+        }
+        break;
+    }
+    content
+}
+
+/// Textarea internal scrollport content width (text leaf + inline padding).
+///
+/// Wrap=off leaf is sized to the longest hard line; using the viewport border box as
+/// `content_w` made `max_scroll_x = 0`, so post-render clamped caret/selection `sx` back
+/// to 0 every frame. Soft-wrap leaves are ~content-box wide, so this stays ≈ viewport.
+pub fn textarea_scroll_content_w(
+    region: &crate::core::tree::Element,
+    region_abs_x: f32,
+    viewport_w: f32,
+) -> f32 {
+    let (pad_left, _pad_right) = textarea_scrollport_padding_x(region, region_abs_x, viewport_w);
+    let mut content = viewport_w.max(0.0);
+    for child in &region.children {
+        let is_text = child.text.is_some()
+            || child
+                .template_id
+                .as_deref()
+                .is_some_and(|t| t.contains(":text"));
+        if !is_text {
+            continue;
+        }
+        let style_w = crate::layout::dim_length_px(child.style.size.width)
+            .filter(|w| w.is_finite())
+            .unwrap_or(0.0);
+        let layout_w = child.layout_bounds[2];
+        let child_w = if layout_w > 0.5 { layout_w } else { style_w };
+        if child_w > 0.0 {
+            // Wrap=off leaf contains ink + caret width; inline padding is outside
+            // the viewport, so neither end of it contributes to the scroll range.
+            let origin_x = if child.layout_bounds[2] > 0.5 {
+                (child.layout_bounds[0] - region_abs_x).max(0.0)
+            } else {
+                pad_left
+            };
+            content = content.max(origin_x + child_w);
+        }
+        break;
+    }
+    content
+}
+
+/// Hard-`\n` line body under leaf-local `rel_y` (0 at the first line top).
+pub fn hard_line_body_at_y(text: &str, rel_y: f32, line_height: f32) -> &str {
+    let n = text.split('\n').count().max(1);
+    let i = (rel_y / line_height.max(1.0)).floor() as isize;
+    let i = i.clamp(0, (n as isize) - 1) as usize;
+    text.split('\n').nth(i).unwrap_or("")
+}
+
+/// Max `scroll_x` that keeps a wrap=off line-end caret fully inside the viewport clip.
+///
+/// `line_end_x` is leaf-relative ink width of the **current** hard line (not the longest
+/// sibling). `pad_left` is the scrollport inline-start padding.
+pub fn nowrap_line_end_max_scroll_x(line_end_x: f32, viewport_w: f32, pad_left: f32) -> f32 {
+    if !viewport_w.is_finite() || viewport_w < 4.0 {
+        return 0.0;
+    }
+    (pad_left.max(0.0) + line_end_x.max(0.0) + TEXT_EDIT_CARET_W - viewport_w).max(0.0)
+}
+
+/// 解析 Input/Textarea 行盒高度（逻辑 px）。
+///
+/// 未显式指定时用 **leading-normal（1.5）**，与 Gallery 中正常的 Label 对照一致，
+/// 并避免 `text-sm` 默认 leading 在 glyphon/CJK 下仍偏紧导致「行底裁切 / 行距挤叠」。
+/// ShadCN Textarea 虽跟 `text-sm` token，但浏览器 ink 可溢出 line-box；Jadix 必须把余量做进行盒。
+pub fn text_edit_line_box_px(
+    size_px: f32,
+    line_height_px: Option<f32>,
+    leading_scale: Option<f32>,
+) -> f32 {
+    if let Some(lh) = line_height_px {
+        lh.max(1.0)
+    } else if let Some(scale) = leading_scale {
+        (size_px * scale).max(1.0)
+    } else {
+        (size_px * 1.5).max(1.0)
+    }
+}
+
+/// 未显式 leading 时 TextEdit 使用的行高倍率（= CSS `leading-normal`）。
+pub fn text_edit_default_leading_scale() -> f32 {
+    1.5
+}
+
+/// 字形墨水余量（逻辑 px）。仅 TextEdit 内容块：滚动视口按行盒裁切时，最后一行
+/// 降部仍要可画。静态 Label **不要**用此值垫高 glyphon buffer——CSS 行盒不是 clip，
+/// Cosmic 却按 buffer 高度硬裁；静态文本应 `set_size(w, None)`，由祖先
+/// `overflow:hidden`（glyphon TextBounds）做 CSS 裁切。
+/// **不要**再做 `y += top_ink` 绘制偏移——否则叶高/裁切与字形原点脱节，表现为半截字。
+pub fn text_edit_ink_pad_px(font_size_px: f32) -> f32 {
+    (font_size_px * 0.25).max(4.0)
+}
+
+/// 编辑叶内容块高度：`layout(text).height + bottom_ink`。
+/// 多行对齐 ShadCN `field-sizing-content`：叶高由内容驱动（与 VisualLineModel 同源）。
+pub fn text_edit_content_height_px(
+    text: &str,
+    size_px: f32,
+    weight: u16,
+    line_height_px: f32,
+    avail_width_px: f32,
+) -> f32 {
+    text_edit_content_height_px_wrap(
+        text,
+        size_px,
+        weight,
+        line_height_px,
+        avail_width_px,
+        WrapMode::Word,
+    )
+}
+
+/// Like [`text_edit_content_height_px`] but respects [`WrapMode`].
+pub fn text_edit_content_height_px_wrap(
+    text: &str,
+    size_px: f32,
+    weight: u16,
+    line_height_px: f32,
+    avail_width_px: f32,
+    wrap: WrapMode,
+) -> f32 {
+    let lh = line_height_px.max(1.0);
+    let ink = text_edit_ink_pad_px(size_px);
+    let est = crate::text::textarea_visual_content_height(
+        text,
+        size_px,
+        weight,
+        lh,
+        avail_width_px.max(1.0),
+        wrap,
+        ink,
+    );
+    est.content_height.max(lh + ink)
+}
+
+/// 汉字（表意文字）。选区/光标按这块墨水上下留白，不按拉丁行盒。
+pub(crate) fn is_cjk_ideograph(c: char) -> bool {
+    matches!(
+        c as u32,
+        0x2E80..=0x2EFF
+            | 0x2F00..=0x2FDF
+            | 0x3400..=0x4DBF
+            | 0x4E00..=0x9FFF
+            | 0xF900..=0xFAFF
+            | 0x20000..=0x2A6DF
+            | 0x2A700..=0x2B73F
+            | 0x2B740..=0x2B81F
+            | 0x2B820..=0x2CEAF
+            | 0x2CEB0..=0x2EBEF
+            | 0x30000..=0x3134F
+    )
+}
+
+pub(crate) fn text_contains_cjk_ideograph(s: &str) -> bool {
+    s.chars().any(is_cjk_ideograph)
+}
+
+pub(crate) fn caret_touches_cjk_ideograph(text: &str, byte_ix: usize) -> bool {
+    let ix = text.floor_char_boundary(byte_ix.min(text.len()));
+    let prev = text[..ix].chars().next_back();
+    let next = text[ix..].chars().next();
+    prev.is_some_and(is_cjk_ideograph) || next.is_some_and(is_cjk_ideograph)
+}
+
+/// 在行盒内放一条选区/光标，使表意文字墨水上下留白相等，且不越出本行。
+///
+/// `ascent_em` / `descent_em` 与 cosmic 相同（相对基线、正值）。
+/// `ink_above_em` / `ink_below_em` 是字形边界，不是 hhea 盒子。
+pub(crate) fn chrome_band_around_ink(
+    line_height_px: f32,
+    font_size_px: f32,
+    ascent_em: f32,
+    descent_em: f32,
+    ink_above_em: f32,
+    ink_below_em: f32,
+) -> (f32, f32) {
+    let lh = line_height_px.max(1.0);
+    let fs = font_size_px.max(1.0);
+    let metrics_h = (ascent_em + descent_em) * fs;
+    let baseline = (lh - metrics_h) * 0.5 + ascent_em * fs;
+    let ink_top = baseline - ink_above_em * fs;
+    let ink_bot = baseline + ink_below_em * fs;
+    let gap_above = ink_top;
+    let gap_below = lh - ink_bot;
+    let pad = gap_above.min(gap_below);
+    if !pad.is_finite() || pad < 0.0 || ink_bot <= ink_top {
+        return (0.0, lh);
+    }
+    let y = (ink_top - pad).clamp(0.0, lh - 1.0);
+    let h = ((ink_bot - ink_top) + pad * 2.0).min(lh - y).max(1.0);
+    (y, h)
+}
+
+/// 当前 CJK 字体下，汉字选区/光标在行盒内的 `(dy, height)`。量不到字形时为 `None`。
+pub(crate) fn text_edit_cjk_chrome_band_px(
+    line_height_px: f32,
+    font_size_px: f32,
+) -> Option<(f32, f32)> {
+    let (ascent, descent, above, below) = crate::text::measure::ideograph_vertical_em()?;
+    Some(chrome_band_around_ink(
+        line_height_px,
+        font_size_px,
+        ascent,
+        descent,
+        above,
+        below,
+    ))
+}
+
+/// 光标高度：略高于行盒（+1px），行内居中；避免再抬到 lh+4 / 1.2×lh 显得顶满。
+/// 汉字旁的光标不用这条，见 [`text_edit_cjk_chrome_band_px`]。
+pub fn text_edit_caret_height_px(line_height_px: f32, font_size_px: f32) -> f32 {
+    let lh = line_height_px.max(1.0);
+    (lh + 1.0).max(font_size_px + 1.0).max(1.0)
+}
+
+/// Hard-`\n`：全局字节下标 → `(line_i, local_byte)`；落在 `\n` 之后为下一行行首。
+pub fn caret_line_and_local(text: &str, byte_ix: usize) -> (usize, usize) {
+    let ix = text.floor_char_boundary(byte_ix.min(text.len()));
+    let mut line_i = 0usize;
+    let mut line_start = 0usize;
+    let mut i = 0usize;
+    while i < text.len() {
+        if i >= ix {
+            return (line_i, ix.saturating_sub(line_start));
+        }
+        let ch = text[i..].chars().next().unwrap();
+        let next = i + ch.len_utf8();
+        if ch == '\n' {
+            if next == ix {
+                return (line_i + 1, 0);
+            }
+            line_i += 1;
+            line_start = next;
+        }
+        i = next;
+    }
+    (line_i, ix.saturating_sub(line_start))
+}
+
+/// Scroll insets for [`ensure_caret_visible_scroll_y`] inside a padded textarea scrollport.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TextareaCaretScrollInsets {
+    pub pad_top: f32,
+    pub pad_bottom: f32,
+    /// Bottom ink on the last hard line (see [`text_edit_ink_pad_px`]).
+    pub ink_bottom: f32,
+}
+
+/// 若 caret 行盒不在视口内，返回应写入的新 `scroll_y`；已可见则 `None`。
+///
+/// - `viewport_h` 过小（未就绪）时：若仍有明显 `scroll_y`，强制清零（避免信号未就绪时
+///   陈旧 sy 把多行裁成顶上一薄条，看起来像「字形被压扁」）。
+/// - `max_scroll_y`（通常 `max(0, content_h - viewport_h)`）用于钳制，避免把内容顶出裁切区。
+/// - `insets`：textarea 内部 `py` 与末行 ink；单行 Input 用 [`Default::default()`]。
+/// - `visual_line_i`：软换行时传视觉行下标；`None` 则按 hard-`\n` 行。
+pub fn ensure_caret_visible_scroll_y(
+    text: &str,
+    caret_byte: usize,
+    line_height: f32,
+    viewport_h: f32,
+    scroll_y: f32,
+    max_scroll_y: f32,
+    insets: TextareaCaretScrollInsets,
+) -> Option<f32> {
+    ensure_caret_visible_scroll_y_at_line(
+        text,
+        caret_byte,
+        None,
+        line_height,
+        viewport_h,
+        scroll_y,
+        max_scroll_y,
+        insets,
+    )
+}
+
+/// Like [`ensure_caret_visible_scroll_y`], but `visual_line` is `(line_i, line_count)`
+/// for soft-wrap visual rows; `None` uses hard-`\n` indexing.
+pub fn ensure_caret_visible_scroll_y_at_line(
+    text: &str,
+    caret_byte: usize,
+    visual_line: Option<(usize, usize)>,
+    line_height: f32,
+    viewport_h: f32,
+    scroll_y: f32,
+    max_scroll_y: f32,
+    insets: TextareaCaretScrollInsets,
+) -> Option<f32> {
+    let lh = line_height.max(1.0);
+    let max_sy = max_scroll_y.max(0.0);
+    if !viewport_h.is_finite() || viewport_h < lh * 0.5 {
+        // Viewport metrics not ready — still kill stale offsets that clip glyphs.
+        return if scroll_y > 0.5 { Some(0.0) } else { None };
+    }
+    if max_sy < 0.5 {
+        // Content fits: any stale sy must clear.
+        return if scroll_y > 0.5 { Some(0.0) } else { None };
+    }
+    let (line_i, line_count) = if let Some((i, n)) = visual_line {
+        (i, n.max(1))
+    } else {
+        let (hard_i, _) = caret_line_and_local(text, caret_byte);
+        (hard_i, text.split('\n').count().max(1))
+    };
+    let on_last_line = line_i + 1 >= line_count;
+    let ink = if on_last_line {
+        insets.ink_bottom.max(0.0)
+    } else {
+        0.0
+    };
+    // Coordinates in scroll-content space (includes scrollport padding).
+    let caret_top = insets.pad_top + line_i as f32 * lh;
+    let caret_bot = insets.pad_top + (line_i + 1) as f32 * lh + ink;
+    let mut new_sy = scroll_y.clamp(0.0, max_sy);
+    if caret_top < new_sy {
+        new_sy = (caret_top - insets.pad_top).max(0.0);
+    }
+    if caret_bot > new_sy + viewport_h {
+        new_sy = (caret_bot - viewport_h).max(0.0);
+    }
+    new_sy = new_sy.clamp(0.0, max_sy);
+    if (new_sy - scroll_y).abs() > 0.5 {
+        Some(new_sy)
+    } else {
+        None
+    }
+}
+
+/// Max `scroll_x` that keeps `content_w` (+ caret pad) inside `viewport_w`.
+pub fn max_caret_scroll_x(content_w: f32, viewport_w: f32) -> f32 {
+    if !viewport_w.is_finite() || viewport_w < 4.0 {
+        return 0.0;
+    }
+    (content_w + TEXT_EDIT_CARET_W - viewport_w).max(0.0)
+}
+
+/// Drop leftover pan when the clip grows (window resize) without moving the caret.
+pub fn clamp_caret_scroll_x(content_w: f32, viewport_w: f32, scroll_x: f32) -> f32 {
+    let max_sx = max_caret_scroll_x(content_w, viewport_w);
+    if max_sx < 0.5 {
+        0.0
+    } else {
+        scroll_x.clamp(0.0, max_sx)
+    }
+}
+
+/// Keep `anchor_x` (caret / selection end) inside the viewport along X.
+///
+/// `anchor_x` and `content_w` share a coordinate space whose origin is the scroll
+/// content's inline-start (for wrap=off textarea: `pad_left + leaf-relative X`).
+/// Pass the **current hard line's ink end** as `content_w` so follow-scroll never
+/// pans past that line's caret (a longer sibling line must not extend the cap).
+///
+/// Returns the clamped `scroll_x` (always a concrete value; caller writes the signal).
+pub fn ensure_caret_visible_scroll_x(
+    anchor_x: f32,
+    content_w: f32,
+    viewport_w: f32,
+    scroll_x: f32,
+) -> f32 {
+    let pad = TEXT_EDIT_CARET_W;
+    let max_sx = max_caret_scroll_x(content_w, viewport_w);
+    if !viewport_w.is_finite() || viewport_w < 4.0 {
+        return if scroll_x > 0.5 {
+            0.0
+        } else {
+            scroll_x.max(0.0)
+        };
+    }
+    if max_sx < 0.5 {
+        return 0.0;
+    }
+    let mut sx = scroll_x.clamp(0.0, max_sx);
+    // Scroll left to reveal the caret. If it already fits in the first screen,
+    // snap to 0 — otherwise `anchor_x - pad` leaves a leftover offset that clips
+    // the first glyph (native `<input>` shows the line head whenever the caret
+    // can sit in the un-panned viewport).
+    if anchor_x - pad < sx {
+        if anchor_x + pad <= viewport_w {
+            sx = 0.0;
+        } else {
+            sx = (anchor_x - pad).max(0.0);
+        }
+    }
+    if anchor_x + pad > sx + viewport_w {
+        sx = (anchor_x + pad - viewport_w).max(0.0);
+    }
+    sx.clamp(0.0, max_sx)
+}
+
+pub fn focus_id_for_text_edit(id: &str, multiline: bool) -> String {
+    if multiline {
+        textarea_focus_id(id)
+    } else {
+        input_focus_id(id)
+    }
+}
+
+/// `input:{rest}` / `textarea:{rest}` → `rest`。
+pub fn text_edit_rest(focus_id: &str) -> Option<&str> {
+    focus_id
+        .strip_prefix(INPUT_FOCUS_PREFIX)
+        .or_else(|| focus_id.strip_prefix(TEXTAREA_FOCUS_PREFIX))
+}
+
+pub fn input_value_signal_key(id: &str) -> String {
+    format!("__jadix_input_value_{id}")
+}
+pub fn input_preedit_signal_key(id: &str) -> String {
+    format!("__jadix_input_preedit_{id}")
+}
+pub fn input_preedit_sel_signal_key(id: &str) -> String {
+    format!("__jadix_input_preedit_sel_{id}")
+}
+
+/// Preedit-local underline runs `(start, end, style)` from `GCS_COMPATTR`.
+pub fn input_preedit_marks_signal_key(id: &str) -> String {
+    format!("__jadix_input_preedit_marks_{id}")
+}
+pub fn input_caret_signal_key(id: &str) -> String {
+    format!("__jadix_input_caret_{id}")
+}
+pub fn input_selection_signal_key(id: &str) -> String {
+    format!("__jadix_input_selection_{id}")
+}
+pub fn input_extra_carets_signal_key(id: &str) -> String {
+    format!("__jadix_input_extra_carets_{id}")
+}
+pub fn input_latest_caret_signal_key(id: &str) -> String {
+    format!("__jadix_input_latest_caret_{id}")
+}
+pub fn input_overwrite_signal_key(id: &str) -> String {
+    format!("__jadix_input_overwrite_{id}")
+}
+pub fn input_ime_anchor_signal_key(id: &str) -> String {
+    format!("__jadix_input_ime_anchor_{id}")
+}
+pub fn input_type_signal_key(id: &str) -> String {
+    format!("__jadix_input_type_{id}")
+}
+pub fn input_password_reveal_signal_key(id: &str) -> String {
+    format!("__jadix_input_pw_reveal_{id}")
+}
+pub fn input_scroll_x_signal_key(id: &str) -> String {
+    format!("__jadix_input_scroll_x_{id}")
+}
+
+/// Preferred caret X (px from visual-line start) for ↑↓ navigation.
+pub fn input_caret_preferred_x_signal_key(id: &str) -> String {
+    format!("__jadix_input_caret_pref_x_{id}")
+}
+
+pub(crate) fn extra_carets_signal(
+    field_id: &str,
+) -> crate::core::reactivity::Signal<Vec<crate::utils::text_multi_cursor::ExtraCaret>> {
+    use_signal(
+        &input_extra_carets_signal_key(field_id),
+        Vec::<crate::utils::text_multi_cursor::ExtraCaret>::new,
+    )
+}
+
+pub(crate) fn latest_caret_signal(
+    field_id: &str,
+) -> crate::core::reactivity::Signal<Option<usize>> {
+    use_signal(&input_latest_caret_signal_key(field_id), || None::<usize>)
+}
+
+pub(crate) fn field_compose_anchors(field_id: &str, committed: &str) -> Vec<usize> {
+    crate::utils::text_multi_cursor::caret_insert_points(&load_text_cursors(field_id, committed))
+}
+
+pub(crate) fn load_text_cursors(
+    field_id: &str,
+    text: &str,
+) -> Vec<crate::utils::text_multi_cursor::TextCursor> {
+    let caret = use_signal(&input_caret_signal_key(field_id), || None::<usize>).peek();
+    let sel = use_signal(&input_selection_signal_key(field_id), || {
+        None::<(usize, usize)>
+    })
+    .peek();
+    let extras = extra_carets_signal(field_id).peek();
+    crate::utils::text_multi_cursor::assemble_cursors(text, caret, sel, &extras)
+}
+
+pub(crate) fn store_text_cursors(
+    field_id: &str,
+    cursors: &[crate::utils::text_multi_cursor::TextCursor],
+) {
+    let (caret, sel, extras) = crate::utils::text_multi_cursor::split_primary(cursors);
+    use_signal(&input_caret_signal_key(field_id), || None::<usize>).set(Some(caret));
+    use_signal(&input_selection_signal_key(field_id), || {
+        None::<(usize, usize)>
+    })
+    .set(sel);
+    extra_carets_signal(field_id).set(extras);
+}
+
+/// Alt / Shift+Alt pointer down. `Some((drag_anchor, extras_before_gesture))`
+/// means a multi-caret drag should start. Shift+Alt uses the **first caret** as
+/// origin and writes the full column set immediately (click is enough; drag
+/// then moves the end column).
+pub(crate) fn begin_alt_pointer(
+    field_id: &str,
+    text: &str,
+    at: usize,
+    column_select: bool,
+) -> Option<(usize, Vec<(usize, usize)>)> {
+    if column_select {
+        let cs = load_text_cursors(field_id, text);
+        let origin = cs.first().map(|c| c.caret).unwrap_or(at);
+        let next = crate::utils::text_multi_cursor::gesture_carets(text, origin, at, true);
+        store_text_cursors(field_id, &next);
+        let latest = crate::utils::text_multi_cursor::caret_on_pointer_line(text, &next, at)
+            .unwrap_or(origin);
+        latest_caret_signal(field_id).set(Some(latest));
+        return Some((origin, Vec::new()));
+    }
+    let base = extra_carets_signal(field_id).peek();
+    let cursors = load_text_cursors(field_id, text);
+    let (next, added) = crate::utils::text_multi_cursor::add_or_toggle(text, cursors, at);
+    store_text_cursors(field_id, &next);
+    if added {
+        latest_caret_signal(field_id).set(Some(at));
+        Some((at, base))
+    } else {
+        None
+    }
+}
+
+pub(crate) fn clear_extra_carets(field_id: &str) {
+    extra_carets_signal(field_id).set(Vec::new());
+    latest_caret_signal(field_id).set(None);
+}
+
+pub(crate) fn has_extra_carets(field_id: &str) -> bool {
+    !extra_carets_signal(field_id).peek().is_empty()
+}
+
+pub(crate) fn input_text_template_id(id: &str) -> String {
+    format!("__jadix_input:{id}:text")
+}
+
+pub(crate) fn input_rest_from_text_template_id(tid: &str) -> Option<&str> {
+    tid.strip_prefix("__jadix_input:")?.strip_suffix(":text")
+}
+pub(crate) fn input_clear_template_id(id: &str) -> String {
+    format!("__jadix_input:{id}:clear")
+}
+pub(crate) fn input_reveal_template_id(id: &str) -> String {
+    format!("__jadix_input:{id}:reveal")
+}
+pub(crate) fn input_number_inc_template_id(id: &str) -> String {
+    format!("__jadix_input:{id}:num_inc")
+}
+pub(crate) fn input_number_dec_template_id(id: &str) -> String {
+    format!("__jadix_input:{id}:num_dec")
+}
+
+thread_local! {
+    /// Controlled pairing (field_id → external Signal). Same leak class as the old undo
+    /// `HISTORIES` map; `attach_text_edit_field_lifecycle` unbinds on Element unmount.
+    static CONTROLLED_VALUES: RefCell<HashMap<String, Signal<String>>> =
+        RefCell::new(HashMap::new());
+    /// True while an input/textarea text drag-select is active. Paint must not run
+    /// `ensure_caret_visible_scroll_x` in this window — it fights edge auto-scroll.
+    static TEXT_DRAG_SELECT: Cell<bool> = const { Cell::new(false) };
+    /// Last edge-scroll tick. Shared so CursorMoved + Wait + Redraw do not
+    /// each apply a full-frame `dt` in the same instant (that flattened the curve).
+    static TEXT_DRAG_SCROLL_AT: Cell<Option<Instant>> = const { Cell::new(None) };
+}
+
+/// Mark / clear text drag-select (window mouse down/up on input caret drag).
+pub(crate) fn set_text_drag_select_active(active: bool) {
+    TEXT_DRAG_SELECT.with(|c| c.set(active));
+    TEXT_DRAG_SCROLL_AT.with(|c| c.set(None));
+}
+
+/// Consume elapsed time since the last edge-scroll tick. First tick of a drag
+/// uses `suggested` (usually the frame `dt`). Later calls in the same instant
+/// return ~0 so mouse-move storms cannot stack full-frame steps.
+pub(crate) fn take_text_drag_scroll_dt(suggested: f32) -> f32 {
+    let now = Instant::now();
+    let dt = TEXT_DRAG_SCROLL_AT.with(|c| {
+        let prev = c.get();
+        c.set(Some(now));
+        match prev {
+            Some(t) => now.duration_since(t).as_secs_f32(),
+            None => suggested.max(0.0),
+        }
+    });
+    dt.min(0.05)
+}
+
+pub(crate) fn text_drag_select_active() -> bool {
+    TEXT_DRAG_SELECT.with(|c| c.get())
+}
+
+fn controlled_of(field_id: &str) -> Option<Signal<String>> {
+    CONTROLLED_VALUES.with(|m| m.borrow().get(field_id).copied())
+}
+
+fn live_controlled(field_id: &str) -> Option<(Signal<String>, String)> {
+    let ext = controlled_of(field_id)?;
+    match ext.try_peek() {
+        Some(v) => Some((ext, v)),
+        None => {
+            // TabsContent / overlay unmount disposes the author Signal while a
+            // hoisted Input can still paint (ColorPicker hex field).
+            unbind_controlled_value(field_id);
+            None
+        }
+    }
+}
+
+/// 挂载时以外部 Signal 为准灌入 store，并登记对拍。
+///
+/// 之后的外部写入只在失焦且无 IME 未提交时经 [`pull_controlled_into_store`] 进入 store（N.7）。
+pub fn bind_controlled_value(field_id: &str, external: Signal<String>) {
+    let store = use_signal(&input_value_signal_key(field_id), String::new);
+    if let Some(ev) = external.try_peek() {
+        if store.peek() != ev {
+            store.set(ev);
+        }
+        CONTROLLED_VALUES.with(|m| {
+            m.borrow_mut().insert(field_id.to_string(), external);
+        });
+    }
+}
+
+/// Drop controlled pairing so paint sync stops pulling an external Signal into the store.
+/// Used by Inspector editors that switched to uncontrolled stores.
+pub fn unbind_controlled_value(field_id: &str) {
+    CONTROLLED_VALUES.with(|m| {
+        m.borrow_mut().remove(field_id);
+    });
+}
+
+/// Attach a stable unmount hook (reconcile copies it when the new tree omits one).
+///
+/// Frees the controlled-value TLS pair. Undo history is dropped when `drop_undo` is true
+/// (L1 Input/Textarea). L3 document sessions pass `false` and release via
+/// [`crate::utils::document_registry::DocumentRegistry::unregister`].
+/// The live flag is a named signal so rebuilds of the same `field_id` do not install a
+/// second hook that would fire on the old node's Drop.
+pub(crate) fn attach_text_edit_field_lifecycle(
+    el: crate::core::tree::Element,
+    field_id: &str,
+    drop_undo: bool,
+) -> crate::core::tree::Element {
+    let live_key = format!("__jadix_input_lifecycle_hook_{field_id}");
+    let live = use_signal(&live_key, || false);
+    if live.peek() {
+        return el;
+    }
+    live.set(true);
+    let fid = field_id.to_string();
+    el.on_unmount(move || {
+        if drop_undo {
+            crate::utils::text_edit_history::reset(&fid);
+        }
+        unbind_controlled_value(&fid);
+        let blur_key = format!("__jadix_selection_blur_effect_{fid}");
+        if let Some(effect) =
+            use_signal(&blur_key, || None::<crate::core::reactivity::EffectId>).peek()
+        {
+            crate::core::reactivity::dispose_effect(effect);
+        }
+        crate::core::reactivity::remove_named_signal(&blur_key);
+        crate::core::reactivity::remove_named_signal(&live_key);
+    })
+}
+
+/// Drop value / caret / undo named slots for a field (L3 close-tab).
+pub(crate) fn wipe_text_edit_named_slots(field_id: &str) {
+    crate::utils::text_edit_history::reset(field_id);
+    unbind_controlled_value(field_id);
+    let keys = [
+        input_value_signal_key(field_id),
+        input_preedit_signal_key(field_id),
+        input_preedit_sel_signal_key(field_id),
+        input_preedit_marks_signal_key(field_id),
+        input_caret_signal_key(field_id),
+        input_selection_signal_key(field_id),
+        input_extra_carets_signal_key(field_id),
+        input_latest_caret_signal_key(field_id),
+        input_overwrite_signal_key(field_id),
+        input_ime_anchor_signal_key(field_id),
+        input_type_signal_key(field_id),
+        input_password_reveal_signal_key(field_id),
+        input_scroll_x_signal_key(field_id),
+        input_caret_preferred_x_signal_key(field_id),
+        textarea_height_signal_key(field_id),
+        textarea_wrap_width_signal_key(field_id),
+        textarea_wrap_mode_signal_key(field_id),
+        format!("__jadix_input_lifecycle_hook_{field_id}"),
+        format!("__jadix_selection_blur_effect_{field_id}"),
+    ];
+    for key in keys {
+        crate::core::reactivity::remove_named_signal(&key);
+    }
+}
+
+fn mirror_store_to_controlled(field_id: &str, value: &str) {
+    let Some((ext, current)) = live_controlled(field_id) else {
+        return;
+    };
+    if current != value {
+        // Safe outside paint / AppState borrow (e.g. input_controller key path).
+        ext.set(value.to_string());
+    }
+}
+
+/// 写入值 store 并同步受控 Signal（供 `input_controller` / 程序化赋值）。
+pub fn commit_value(field_id: &str, value: String) {
+    commit_value_with_policy(
+        field_id,
+        value,
+        crate::utils::text_edit_history::SetTextUndoPolicy::NotUndoable,
+    );
+}
+
+/// Programmatic write with an explicit undo policy (P1).
+pub fn commit_value_with_policy(
+    field_id: &str,
+    value: String,
+    policy: crate::utils::text_edit_history::SetTextUndoPolicy,
+) {
+    let store = use_signal(&input_value_signal_key(field_id), String::new);
+    commit_value_sig_with_policy(field_id, store, value, policy);
+}
+
+/// 已持有 store [`Signal`] 时写入并同步受控端。
+pub fn commit_value_sig(field_id: &str, store: Signal<String>, value: String) {
+    commit_value_sig_with_policy(
+        field_id,
+        store,
+        value,
+        crate::utils::text_edit_history::SetTextUndoPolicy::NotUndoable,
+    );
+}
+
+fn commit_value_sig_with_policy(
+    field_id: &str,
+    store: Signal<String>,
+    value: String,
+    policy: crate::utils::text_edit_history::SetTextUndoPolicy,
+) {
+    #[cfg(feature = "text-undo")]
+    {
+        use crate::utils::text_edit_history::{self, SetTextUndoPolicy};
+        if matches!(policy, SetTextUndoPolicy::Undoable) {
+            text_edit_history::will_user_edit_field(field_id, text_edit_history::EditKind::Replace);
+        }
+    }
+    crate::utils::text_edit_history::with_internal_sync(field_id, || {
+        if store.peek() != value {
+            store.set(value.clone());
+        }
+        mirror_store_to_controlled(field_id, &value);
+    });
+    #[cfg(feature = "text-undo")]
+    {
+        use crate::utils::text_edit_history::{self, SetTextUndoPolicy};
+        if matches!(policy, SetTextUndoPolicy::Undoable) {
+            text_edit_history::note_field_after_edit(field_id);
+        }
+        if matches!(policy, SetTextUndoPolicy::ClearHistory) {
+            text_edit_history::reset(field_id);
+        }
+    }
+    #[cfg(not(feature = "text-undo"))]
+    let _ = policy;
+}
+
+/// Paint 路径专用：失焦且无 IME 未提交时把外部值 **silent** 拉进 store。
+///
+/// 焦点内 / 合成中不写 store（由 [`commit_value`] 负责），避免外部 `set` 抢光标或清选区（N.7）。
+/// 返回 store 被外部改写后的新 committed（供当帧绘制）。
+pub fn pull_controlled_into_store(
+    field_id: &str,
+    store_value: &str,
+    is_focused: bool,
+) -> Option<String> {
+    if is_focused {
+        return None;
+    }
+    let composing = !use_signal(&input_preedit_signal_key(field_id), String::new)
+        .peek()
+        .is_empty();
+    if composing {
+        return None;
+    }
+    let (_ext, ev) = live_controlled(field_id)?;
+    if ev == store_value {
+        return None;
+    }
+    crate::utils::text_edit_history::with_internal_sync(field_id, || {
+        let store = use_signal(&input_value_signal_key(field_id), String::new);
+        store.set_silent(ev.clone());
+    });
+    Some(ev)
+}
+
+/// Tab / Ctrl+A: select the committed value. Caret sits at 0 so overflow fields keep
+/// showing the line head (Win / Chrome). Returns `false` when `focus_id` is not a text edit.
+pub fn select_all_in_text_edit(focus_id: &str) -> bool {
+    let Some(rest) = text_edit_rest(focus_id) else {
+        return false;
+    };
+    let s = use_signal(&input_value_signal_key(rest), String::new).peek();
+    let sk = input_selection_signal_key(rest);
+    let ck = input_caret_signal_key(rest);
+    clear_extra_carets(rest);
+    if let Some(range) = crate::utils::keyboard::select_all_range(&s) {
+        use_signal(&sk, || None::<(usize, usize)>).set(Some(range));
+        use_signal(&ck, || None::<usize>).set(Some(0));
+    } else {
+        use_signal(&sk, || None::<(usize, usize)>).set(None);
+        use_signal(&ck, || None::<usize>).set(Some(0));
+    }
+    if focus_id.starts_with(TEXTAREA_FOCUS_PREFIX) {
+        let vr = textarea_scroll_rest(rest);
+        use_signal(
+            &crate::core::scroll_viewport::scroll_offset_x_signal_key(&vr),
+            || 0.0_f32,
+        )
+        .set(0.0);
+        use_signal(
+            &crate::core::scroll_viewport::scroll_offset_y_signal_key(&vr),
+            || 0.0_f32,
+        )
+        .set(0.0);
+    } else {
+        use_signal(&input_scroll_x_signal_key(rest), || 0.0_f32).set(0.0);
+    }
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::reactivity::create_root;
+
+    #[test]
+    fn cjk_chrome_band_pads_ideograph_equally() {
+        // Microsoft YaHei hhea + U+4E2D ink (font units / 2048).
+        let fs = 14.0_f32;
+        let lh = 21.0_f32;
+        let ascent = 2167.0 / 2048.0;
+        let descent = 536.0 / 2048.0;
+        let above = 1707.0 / 2048.0;
+        let below = 277.0 / 2048.0;
+        let (y, h) = chrome_band_around_ink(lh, fs, ascent, descent, above, below);
+        let baseline = (lh - (ascent + descent) * fs) * 0.5 + ascent * fs;
+        let ink_top = baseline - above * fs;
+        let ink_bot = baseline + below * fs;
+        let gap_above = ink_top - y;
+        let gap_below = (y + h) - ink_bot;
+        assert!(
+            (gap_above - gap_below).abs() < 0.05,
+            "gaps {gap_above} vs {gap_below} (y={y} h={h})"
+        );
+        assert!(y >= -0.01 && y + h <= lh + 0.01);
+        assert!(
+            h < lh - 0.5,
+            "band should trim the uneven side, h={h} lh={lh}"
+        );
+    }
+
+    #[test]
+    fn cjk_probe_band_is_symmetric_when_face_present() {
+        let Some((ascent, descent, above, below)) = crate::text::measure::ideograph_vertical_em()
+        else {
+            #[cfg(windows)]
+            if std::path::Path::new(r"C:\Windows\Fonts\msyh.ttc").is_file()
+                || std::path::Path::new(r"C:\Windows\Fonts\msyh.ttf").is_file()
+            {
+                panic!("YaHei is installed but U+4E2D ink was not measured");
+            }
+            return;
+        };
+        let fs = 14.0_f32;
+        let lh = 21.0_f32;
+        let (y, h) = chrome_band_around_ink(lh, fs, ascent, descent, above, below);
+        let baseline = (lh - (ascent + descent) * fs) * 0.5 + ascent * fs;
+        let ink_top = baseline - above * fs;
+        let ink_bot = baseline + below * fs;
+        let gap_above = ink_top - y;
+        let gap_below = (y + h) - ink_bot;
+        assert!(
+            (gap_above - gap_below).abs() < 0.05,
+            "probed gaps {gap_above} vs {gap_below} ascent={ascent} descent={descent} above={above} below={below}"
+        );
+        assert!(y >= -0.01 && y + h <= lh + 0.01);
+        assert!(h < lh - 0.5, "probed band should trim the line box, h={h}");
+    }
+
+    #[test]
+    fn focus_prefixes() {
+        assert_eq!(input_focus_id("a"), "input:a");
+        assert_eq!(textarea_focus_id("a"), "textarea:a");
+        assert_eq!(text_edit_rest("textarea:bio"), Some("bio"));
+        assert_eq!(focus_id_for_text_edit("x", true), "textarea:x");
+    }
+
+    #[test]
+    fn pull_controlled_into_store_after_external_dispose_must_not_peek() {
+        use crate::core::reactivity::use_scoped_signal;
+
+        let field = "tf_disposed_ext";
+        let (owner, ()) = create_root(|| {
+            let ext = use_scoped_signal("tf_disposed_ext_val", || "hello".to_string());
+            bind_controlled_value(field, ext);
+        });
+        owner.dispose();
+        assert!(
+            pull_controlled_into_store(field, "hello", false).is_none(),
+            "paint sync must unbind a disposed controlled Signal instead of peeking it"
+        );
+        unbind_controlled_value(field);
+    }
+
+    #[test]
+    fn commit_mirrors_controlled() {
+        let (_owner, ()) = create_root(|| {
+            let ext = use_signal("tf_ext", || "seed".to_string());
+            bind_controlled_value("tf1", ext);
+            assert_eq!(
+                use_signal(&input_value_signal_key("tf1"), String::new).peek(),
+                "seed"
+            );
+            commit_value("tf1", "typed".into());
+            assert_eq!(ext.peek(), "typed");
+        });
+    }
+
+    #[test]
+    fn external_set_pulls_into_store_when_unfocused() {
+        let (_owner, ()) = create_root(|| {
+            let ext = use_signal("tf_ext_pull", || "seed".to_string());
+            bind_controlled_value("tf_pull", ext);
+            ext.set("hello".into());
+            let next = pull_controlled_into_store("tf_pull", "seed", false);
+            assert_eq!(next.as_deref(), Some("hello"));
+            assert_eq!(
+                use_signal(&input_value_signal_key("tf_pull"), String::new).peek(),
+                "hello"
+            );
+            assert!(pull_controlled_into_store("tf_pull", "hello", true).is_none());
+        });
+    }
+
+    #[test]
+    fn composing_external_set_does_not_pull_even_when_unfocused() {
+        let (_owner, ()) = create_root(|| {
+            let ext = use_signal("tf_ext_ime", || "seed".to_string());
+            bind_controlled_value("tf_ime", ext);
+            use_signal(&input_preedit_signal_key("tf_ime"), String::new).set("ni".into());
+            ext.set("hello".into());
+            assert!(
+                pull_controlled_into_store("tf_ime", "seed", false).is_none(),
+                "IME preedit must block external pull (do not steal caret)"
+            );
+            assert_eq!(
+                use_signal(&input_value_signal_key("tf_ime"), String::new).peek(),
+                "seed"
+            );
+        });
+    }
+
+    #[test]
+    fn focused_same_value_external_set_does_not_move_caret() {
+        let (_owner, ()) = create_root(|| {
+            let ext = use_signal("tf_ext_caret", || "hello".to_string());
+            bind_controlled_value("tf_caret", ext);
+            use_signal(&input_caret_signal_key("tf_caret"), || None::<usize>).set(Some(2));
+            use_signal(&input_selection_signal_key("tf_caret"), || {
+                None::<(usize, usize)>
+            })
+            .set(Some((1, 4)));
+            ext.set("hello".into());
+            assert!(
+                pull_controlled_into_store("tf_caret", "hello", true).is_none(),
+                "focused same-value set must not pull"
+            );
+            assert_eq!(
+                use_signal(&input_caret_signal_key("tf_caret"), || None::<usize>).peek(),
+                Some(2)
+            );
+            assert_eq!(
+                use_signal(&input_selection_signal_key("tf_caret"), || {
+                    None::<(usize, usize)>
+                })
+                .peek(),
+                Some((1, 4))
+            );
+        });
+    }
+
+    #[test]
+    fn select_all_in_text_edit_covers_value_and_parks_caret_at_start() {
+        let (_owner, ()) = create_root(|| {
+            let id = "sel_all_tab";
+            use_signal(&input_value_signal_key(id), String::new).set("hello".into());
+            use_signal(&input_caret_signal_key(id), || None::<usize>).set(Some(5));
+            use_signal(&input_scroll_x_signal_key(id), || 0.0_f32).set(40.0);
+            assert!(select_all_in_text_edit(&input_focus_id(id)));
+            assert_eq!(
+                use_signal(&input_selection_signal_key(id), || None::<(usize, usize)>).peek(),
+                Some((0, 5))
+            );
+            assert_eq!(
+                use_signal(&input_caret_signal_key(id), || None::<usize>).peek(),
+                Some(0)
+            );
+            assert_eq!(
+                use_signal(&input_scroll_x_signal_key(id), || 0.0_f32).peek(),
+                0.0
+            );
+            assert!(!select_all_in_text_edit("button:x"));
+        });
+    }
+
+    #[test]
+    fn caret_after_newline_maps_to_next_line_start() {
+        assert_eq!(caret_line_and_local("a\n", 2), (1, 0));
+        assert_eq!(caret_line_and_local("a\nb", 2), (1, 0));
+        assert_eq!(caret_line_and_local("a\nb", 3), (1, 1));
+        assert_eq!(caret_line_and_local("a", 1), (0, 1));
+    }
+
+    #[test]
+    fn ensure_caret_visible_scrolls_when_below_viewport() {
+        // line 4 at y=80..100, viewport 50 tall scrolled to 0 → need sy=50
+        let text = "a\nb\nc\nd\ne";
+        let caret = text.len();
+        let new_sy =
+            ensure_caret_visible_scroll_y(text, caret, 20.0, 50.0, 0.0, 50.0, Default::default());
+        assert_eq!(new_sy, Some(50.0));
+        assert_eq!(
+            ensure_caret_visible_scroll_y(text, caret, 20.0, 50.0, 50.0, 50.0, Default::default()),
+            None
+        );
+    }
+
+    #[test]
+    fn ensure_caret_visible_textarea_insets_include_pad_and_last_line_ink() {
+        let text = "a\nb\nc\nd\ne";
+        let caret = text.len();
+        let lh = 20.0;
+        let vh = 50.0;
+        let insets = TextareaCaretScrollInsets {
+            pad_top: 8.0,
+            pad_bottom: 8.0,
+            ink_bottom: 4.0,
+        };
+        // Last line bottom in content space: 8 + 5*20 + 4 = 112 → sy = 62
+        assert_eq!(
+            ensure_caret_visible_scroll_y(text, caret, lh, vh, 0.0, 80.0, insets),
+            Some(62.0)
+        );
+        // Without insets (input path): sy = 50
+        assert_eq!(
+            ensure_caret_visible_scroll_y(text, caret, lh, vh, 0.0, 80.0, Default::default()),
+            Some(50.0)
+        );
+    }
+
+    #[test]
+    fn ensure_caret_visible_skips_when_viewport_unready() {
+        let text = "a\nb";
+        // Unready viewport still clears a stale scroll offset (gallery squash).
+        assert_eq!(
+            ensure_caret_visible_scroll_y(
+                text,
+                text.len(),
+                20.0,
+                0.0,
+                40.0,
+                0.0,
+                Default::default()
+            ),
+            Some(0.0)
+        );
+        assert_eq!(
+            ensure_caret_visible_scroll_y(
+                text,
+                text.len(),
+                20.0,
+                5.0,
+                0.0,
+                0.0,
+                Default::default()
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn ensure_caret_visible_clears_stale_sy_when_content_fits() {
+        let text = "a\nb";
+        assert_eq!(
+            ensure_caret_visible_scroll_y(
+                text,
+                text.len(),
+                20.0,
+                100.0,
+                40.0,
+                0.0,
+                Default::default()
+            ),
+            Some(0.0)
+        );
+    }
+
+    #[test]
+    fn content_height_grows_with_hard_newlines_and_ink() {
+        let size = 14.0;
+        let lh = text_edit_line_box_px(size, None, None);
+        let h1 = text_edit_content_height_px("啊", size, 400, lh, 400.0);
+        let h2 = text_edit_content_height_px("啊\n啊", size, 400, lh, 400.0);
+        assert!(h1 >= lh && h1 <= lh + text_edit_ink_pad_px(size) + 1.0);
+        assert!(h2 > h1 + lh * 0.9, "h1={h1} h2={h2} lh={lh}");
+    }
+
+    #[test]
+    fn ensure_caret_visible_scroll_x_pans_when_caret_past_fold() {
+        // viewport 40, content 100, caret at 90, scroll 0 → need ~52 (90+2-40)
+        assert!((ensure_caret_visible_scroll_x(90.0, 100.0, 40.0, 0.0) - 52.0).abs() < 0.01);
+        // already showing caret
+        assert!((ensure_caret_visible_scroll_x(90.0, 100.0, 40.0, 52.0) - 52.0).abs() < 0.01);
+        // caret moved back near the head → snap to 0 so the first glyph is not clipped
+        assert_eq!(ensure_caret_visible_scroll_x(5.0, 100.0, 40.0, 52.0), 0.0);
+        assert_eq!(ensure_caret_visible_scroll_x(0.0, 100.0, 40.0, 52.0), 0.0);
+        // content fits
+        assert_eq!(ensure_caret_visible_scroll_x(10.0, 30.0, 40.0, 12.0), 0.0);
+        // caret at content end: pan 2px past text so the 2px caret is inside the viewport
+        let end = ensure_caret_visible_scroll_x(100.0, 100.0, 40.0, 0.0);
+        assert!((end - 62.0).abs() < 0.01, "end caret scroll={end}");
+        assert!(
+            100.0 - end <= 40.0 - 1.5,
+            "caret must sit inside the viewport"
+        );
+    }
+
+    #[test]
+    fn ensure_caret_visible_scroll_x_caps_at_current_line_end() {
+        let pad_left = 12.0;
+        let line_end = 300.0;
+        let vw = 200.0;
+        let caret = pad_left + line_end;
+        let cap = pad_left + line_end;
+        let want = nowrap_line_end_max_scroll_x(line_end, vw, pad_left);
+        assert!((want - 114.0).abs() < 0.01, "want={want}");
+        let from_zero = ensure_caret_visible_scroll_x(caret, cap, vw, 0.0);
+        assert!((from_zero - want).abs() < 0.01, "from_zero={from_zero}");
+        // Stale offset from a longer sibling line must snap back to this line's end.
+        let from_overscroll = ensure_caret_visible_scroll_x(caret, cap, vw, 400.0);
+        assert!(
+            (from_overscroll - want).abs() < 0.01,
+            "from_overscroll={from_overscroll}"
+        );
+        assert!(
+            caret + TEXT_EDIT_CARET_W - from_zero <= vw + 0.01,
+            "caret must sit fully inside the viewport"
+        );
+        assert_eq!(
+            hard_line_body_at_y("short\nlong line here", 5.0, 21.0),
+            "short"
+        );
+        assert_eq!(
+            hard_line_body_at_y("short\nlong line here", 25.0, 21.0),
+            "long line here"
+        );
+    }
+
+    #[test]
+    fn clamp_caret_scroll_x_drops_pan_when_viewport_grows() {
+        assert_eq!(
+            clamp_caret_scroll_x(400.0, 80.0, 322.0),
+            max_caret_scroll_x(400.0, 80.0)
+        );
+        let after_grow = clamp_caret_scroll_x(400.0, 320.0, 322.0);
+        assert!(
+            after_grow < 90.0,
+            "widening the clip must drop leftover pan, got {after_grow}"
+        );
+        assert_eq!(clamp_caret_scroll_x(400.0, 420.0, 322.0), 0.0);
+    }
+}

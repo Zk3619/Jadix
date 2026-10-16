@@ -5,7 +5,7 @@ use crate::pages::basics::{ReactiveCountChip, ReactiveCountChipProps};
 use crate::shared::*;
 
 #[component]
-pub(crate) fn InputShowcase() -> rui::core::tree::Element {
+pub(crate) fn InputShowcase() -> jadix::core::tree::Element {
     let mark_invalid = use_signal("gal_input_mark_invalid", || false);
     let badge_ok = use_signal("gal_status_badge_ok", || true);
     let badge_label = use_signal("gal_status_badge_label", || "Ready".to_string());
@@ -121,7 +121,7 @@ pub(crate) fn InputShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn InputAdornmentShowcase() -> rui::core::tree::Element {
+pub(crate) fn InputAdornmentShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="2b) InputAdornment（对位 ShadCN InputGroup）">
             <VStack w="100%" gap="0.75rem">
@@ -192,7 +192,7 @@ pub(crate) fn InputAdornmentShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn InputOTPShowcase() -> rui::core::tree::Element {
+pub(crate) fn InputOTPShowcase() -> jadix::core::tree::Element {
     let code = use_signal("gal_otp_code", || String::new());
     ui! {
         <MyCard title="2c) InputOTP（对位 ShadCN）">
@@ -277,7 +277,7 @@ pub(crate) fn wp39_form_demo() -> Element {
 }
 
 #[component]
-pub(crate) fn FormValidateShowcase() -> rui::core::tree::Element {
+pub(crate) fn FormValidateShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="Form 校验（WP-3.9）">
             <VStack w="100%" gap="0.75rem">
@@ -291,7 +291,7 @@ pub(crate) fn FormValidateShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn QuestionnaireShowcase() -> rui::core::tree::Element {
+pub(crate) fn QuestionnaireShowcase() -> jadix::core::tree::Element {
     let summary = use_signal("gal-q-summary", || String::new());
     let summary_submit = summary;
     let builder_el: Element = questionnaire("gal-q-builder")
@@ -428,7 +428,7 @@ pub(crate) fn QuestionnaireShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
+pub(crate) fn PickerPlaceholdersShowcase() -> jadix::core::tree::Element {
     ui! {
         <VStack w="100%" gap="1rem">
             <MyCard title="2b) Pickers (file · color · date/time)">
@@ -442,7 +442,7 @@ pub(crate) fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
                             size="sm"
                             flex_grow="1"
                             on_click={move || {
-                                let _ = rui::utils::pick_files_into("gal-file", "image/*", false);
+                                let _ = jadix::utils::pick_files_into("gal-file", "image/*", false);
                             }}
                         >
                             "Choose image…"
@@ -452,7 +452,7 @@ pub(crate) fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
                             size="sm"
                             flex_grow="1"
                             on_click={move || {
-                                let _ = rui::utils::pick_folder_into("gal-dir");
+                                let _ = jadix::utils::pick_folder_into("gal-dir");
                             }}
                         >
                             "Choose folder…"
@@ -544,7 +544,7 @@ pub(crate) fn PickerPlaceholdersShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn ToggleControlsShowcase() -> rui::core::tree::Element {
+pub(crate) fn ToggleControlsShowcase() -> jadix::core::tree::Element {
     let sw = use_signal("demo_switch_checked", || false);
     let cb = use_signal("demo_checkbox_checked", || false);
 
@@ -693,7 +693,7 @@ pub(crate) fn ToggleControlsShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn RadioSliderShowcase() -> rui::core::tree::Element {
+pub(crate) fn RadioSliderShowcase() -> jadix::core::tree::Element {
     let tier = use_signal("gallery_radio_tier", || "free".to_string());
     let notify = use_signal("gallery_radio_notify", || "all".to_string());
     let tier_opts = use_signal("gallery_radio_tier_opts", || "pro".to_string());
@@ -770,7 +770,7 @@ pub(crate) fn RadioSliderShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
+pub(crate) fn SelectPopoverTabShowcase() -> jadix::core::tree::Element {
     let tab_idx = use_signal("gallery_tabs_idx", || 0usize);
     let pop_open = use_signal("gallery_popover_open", || false);
     let pop_builder_open = use_signal("gallery_popover_builder_open", || false);
@@ -853,7 +853,7 @@ pub(crate) fn SelectPopoverTabShowcase() -> rui::core::tree::Element {
                             .open_signal(pop_builder_open)
                             .child(|| {
                                 let mut frag = Element::new();
-                                frag.set_attr("rui_fragment", "1");
+                                frag.set_attr("jadix_fragment", "1");
                                 frag.children(vec![
                                     PopoverTrigger(PopoverTriggerProps {
                                         id: String::new(),
@@ -1068,7 +1068,7 @@ pub(crate) fn TextareaComboboxShowcase() -> Element {
 }
 
 #[component]
-pub(crate) fn ToggleGroupShowcase() -> rui::core::tree::Element {
+pub(crate) fn ToggleGroupShowcase() -> jadix::core::tree::Element {
     let align = use_signal("gal_tg_align", || "left".to_string());
     let align_joined = use_signal("gal_tg_align_joined", || "center".to_string());
     let formats = use_signal("gal_tg_formats", || vec!["bold".to_string()]);

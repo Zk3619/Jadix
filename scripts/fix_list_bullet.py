@@ -1,6 +1,6 @@
 import pathlib
 
-p = pathlib.Path(__file__).resolve().parents[1] / "crates/rui/src/components/list.rs"
+p = pathlib.Path(__file__).resolve().parents[1] / "crates/jadix/src/components/list.rs"
 lines = p.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
 bullet = "\u2022"
 

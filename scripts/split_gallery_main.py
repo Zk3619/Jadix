@@ -37,27 +37,27 @@ def pubcrate(src: str) -> str:
 
 IMPORTS = """#![allow(unused_imports)]
 
-pub(crate) use rui::app::navigator::{navigation_host, Navigator, Presentation, PushOptions};
-pub(crate) use rui::app::{
+pub(crate) use jadix::app::navigator::{navigation_host, Navigator, Presentation, PushOptions};
+pub(crate) use jadix::app::{
     close_window, open_secondary_window, open_secondary_window_with, request_exit,
     run_on_ui_thread, set_window_minimized, shared_slot, start_window_drag, system_tray_native,
     toggle_window_maximized, tray_icon, Router, TrayMenuItem, WindowOptions,
 };
-pub(crate) use rui::component;
-pub(crate) use rui::components::*;
-pub(crate) use rui::components::{tabs_headless, TABSTRIP_FOCUS_PREFIX};
-pub(crate) use rui::core::reactivity::{batch, use_signal, Signal};
-pub(crate) use rui::core::tree::{Element, LayoutStatus};
-pub(crate) use rui::primitives::{
+pub(crate) use jadix::component;
+pub(crate) use jadix::components::*;
+pub(crate) use jadix::components::{tabs_headless, TABSTRIP_FOCUS_PREFIX};
+pub(crate) use jadix::core::reactivity::{batch, use_signal, Signal};
+pub(crate) use jadix::core::tree::{Element, LayoutStatus};
+pub(crate) use jadix::primitives::{
     canvas, circle, hstack, interactive, polyline, r#box, scene3d, svg, svg_path, vstack, Canvas2D,
     CanvasSize, Portal, PortalProps,
 };
-pub(crate) use rui::style::{parse_color, parse_text_color, TextSpan};
-pub(crate) use rui::ui;
-pub(crate) use rui::utils::animated_icon;
-pub(crate) use rui::utils::lucide::lucide_glyph;
-pub(crate) use rui::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
-pub(crate) use rui::{register_cursor_rgba8, CursorKind, MouseEvent};
+pub(crate) use jadix::style::{parse_color, parse_text_color, TextSpan};
+pub(crate) use jadix::ui;
+pub(crate) use jadix::utils::animated_icon;
+pub(crate) use jadix::utils::lucide::lucide_glyph;
+pub(crate) use jadix::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
+pub(crate) use jadix::{register_cursor_rgba8, CursorKind, MouseEvent};
 pub(crate) use std::cell::{Cell, RefCell};
 pub(crate) use std::collections::HashSet;
 pub(crate) use std::rc::Rc;
@@ -412,12 +412,12 @@ tests_src = tests_src.replace(
         run_on_stack(WINDOWS_PE_STACK, f);
     }
 
-    /// 1 MiB thread (Windows PE default) + framework [`rui::app::with_ui_build_stack`].
+    /// 1 MiB thread (Windows PE default) + framework [`jadix::app::with_ui_build_stack`].
     fn run_on_gallery_build_stack<F>(f: F)
     where
         F: FnOnce() + Send + 'static,
     {
-        run_on_pe_stack(|| rui::app::with_ui_build_stack(f));
+        run_on_pe_stack(|| jadix::app::with_ui_build_stack(f));
     }
 """,
 )
@@ -434,7 +434,7 @@ MAIN.write_text(
 // Release GUI builds should not spawn a console window.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! RUI Gallery — 完整框架能力与组件 / 变体展示。
+//! Jadix Gallery — 完整框架能力与组件 / 变体展示。
 //!
 //! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 绘制 · 导航（含 Router / 托盘 / 无边框窗） · 布局 · 文本 · 关于。
 //! 运行：`cargo run -p gallery`；Inspector：`cargo run -p gallery --features devtools`（F12）；托盘原生：`cargo run -p gallery --features system-tray`
@@ -455,20 +455,20 @@ use shared::checker_rgba_texture;
 
 fn main() {
     #[cfg(feature = "runtime-logging")]
-    rui::logging::init_with(rui::logging::InitOptions {
+    jadix::logging::init_with(jadix::logging::InitOptions {
         default_filter:
             "info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off,fontdb=error",
     });
     let (rgba, w, h) = checker_rgba_texture();
-    rui::queue_image_rgba8("demo-checker", w, h, rgba);
+    jadix::queue_image_rgba8("demo-checker", w, h, rgba);
 
     #[cfg(feature = "devtools")]
-    rui::app::run_with(
-        rui::app::WindowOptions::new().devtools(true),
+    jadix::app::run_with(
+        jadix::app::WindowOptions::new().devtools(true),
         build_gallery_app,
     );
     #[cfg(not(feature = "devtools"))]
-    rui::app::run(build_gallery_app);
+    jadix::app::run(build_gallery_app);
 }
 
 #[cfg(test)]

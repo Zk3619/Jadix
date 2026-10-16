@@ -4,7 +4,7 @@ use crate::imports::*;
 use crate::shared::*;
 
 #[component]
-pub(crate) fn BadgeShowcase() -> rui::core::tree::Element {
+pub(crate) fn BadgeShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="1c) Badge 变体（ShadCN）">
             <VStack w="100%" min_w="0" gap="0.75rem">
@@ -44,7 +44,7 @@ pub(crate) fn BadgeShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn KbdShowcase() -> rui::core::tree::Element {
+pub(crate) fn KbdShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="1c-k) Kbd（ShadCN keycap）">
             <VStack w="100%" min_w="0" gap="0.75rem">
@@ -102,7 +102,7 @@ pub(crate) fn KbdShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn SkeletonShowcase() -> rui::core::tree::Element {
+pub(crate) fn SkeletonShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="1c-s) Skeleton（ShadCN loading placeholder）">
             <VStack w="100%" min_w="0" gap="0.75rem">
@@ -149,7 +149,7 @@ pub(crate) fn SkeletonShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn EmptyShowcase() -> rui::core::tree::Element {
+pub(crate) fn EmptyShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="1c-e) Empty（ShadCN empty state）">
             <VStack w="100%" min_w="0" gap="1rem">
@@ -214,7 +214,7 @@ pub(crate) fn EmptyShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn MarkerShowcase() -> rui::core::tree::Element {
+pub(crate) fn MarkerShowcase() -> jadix::core::tree::Element {
     let marker_variant = use_signal("gal_marker_variant", || "default".to_string());
     let marker_var_btn = marker_variant;
     let marker_var_live = marker_variant;
@@ -341,7 +341,7 @@ pub(crate) fn MarkerShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn MessageShowcase() -> rui::core::tree::Element {
+pub(crate) fn MessageShowcase() -> jadix::core::tree::Element {
     let msg_align = use_signal("gal_message_align", || "start".to_string());
     let msg_align_btn = msg_align;
     let msg_align_live = msg_align;
@@ -351,7 +351,7 @@ pub(crate) fn MessageShowcase() -> rui::core::tree::Element {
 pub(crate) fn message_showcase_tree(
     msg_align_btn: Signal<String>,
     msg_align_live: Signal<String>,
-) -> rui::core::tree::Element {
+) -> jadix::core::tree::Element {
     ui! {
         <MyCard title="1c-msg) Message（ShadCN conversation row）">
             <VStack w="100%" min_w="0" gap="0.75rem">
@@ -625,7 +625,7 @@ pub(crate) fn gal_ms_followups() -> Vec<GalMsMsg> {
 }
 
 /// Plain bubble children (no `BubbleContent` — must be built inside `<Bubble>` or auto-wrapped).
-pub(crate) fn gal_ms_bubble_body(text: &str) -> rui::core::tree::Element {
+pub(crate) fn gal_ms_bubble_body(text: &str) -> jadix::core::tree::Element {
     let paras: Vec<String> = text
         .split("\n\n")
         .map(str::trim)
@@ -634,9 +634,9 @@ pub(crate) fn gal_ms_bubble_body(text: &str) -> rui::core::tree::Element {
         .collect();
     if paras.len() <= 1 {
         let t = paras.into_iter().next().unwrap_or_default();
-        rui::core::tree::Element::new().text(t)
+        jadix::core::tree::Element::new().text(t)
     } else {
-        let lines: Vec<rui::core::tree::Element> = paras
+        let lines: Vec<jadix::core::tree::Element> = paras
             .into_iter()
             .map(|p| {
                 ui! {
@@ -644,8 +644,8 @@ pub(crate) fn gal_ms_bubble_body(text: &str) -> rui::core::tree::Element {
                 }
             })
             .collect();
-        let mut frag = rui::core::tree::Element::new();
-        frag.set_attr("rui_fragment", "1");
+        let mut frag = jadix::core::tree::Element::new();
+        frag.set_attr("jadix_fragment", "1");
         let frag = frag.children(lines);
         ui! {
             <VStack w="100%" min_w="0" gap="0.5rem">
@@ -655,7 +655,7 @@ pub(crate) fn gal_ms_bubble_body(text: &str) -> rui::core::tree::Element {
     }
 }
 
-pub(crate) fn gal_ms_item(m: &GalMsMsg) -> rui::core::tree::Element {
+pub(crate) fn gal_ms_item(m: &GalMsMsg) -> jadix::core::tree::Element {
     let id = m.id.clone();
     let body = gal_ms_bubble_body(&m.text);
     if m.user {
@@ -686,7 +686,7 @@ pub(crate) fn gal_ms_item(m: &GalMsMsg) -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn MessageScrollerShowcase() -> rui::core::tree::Element {
+pub(crate) fn MessageScrollerShowcase() -> jadix::core::tree::Element {
     let thread = use_signal("gal_ms_thread", gal_ms_script);
     let extra = use_signal("gal_ms_extra", || 0u32);
     let thread_send = thread;
@@ -698,7 +698,7 @@ pub(crate) fn MessageScrollerShowcase() -> rui::core::tree::Element {
     // Same key as MessageScrollerProvider `{id}:auto_scroll` — Switch toggles without remount.
     let auto_scroll = use_signal("gal-ms-showcase:auto_scroll", || true);
 
-    let rows_live = rui::app::reactive::reactive_view_sized(
+    let rows_live = jadix::app::reactive::reactive_view_sized(
         "examples/gallery/MessageScrollerShowcase:rows",
         "100%",
         "max-content",
@@ -728,7 +728,7 @@ pub(crate) fn MessageScrollerShowcase() -> rui::core::tree::Element {
         </MessageScrollerProvider>
     };
 
-    let preview_live = rui::reactive!(
+    let preview_live = jadix::reactive!(
         "examples/gallery/MessageScrollerShowcase:preview",
         move || {
             let extra_n = extra_preview.get() as usize;
@@ -816,7 +816,7 @@ pub(crate) fn MessageScrollerShowcase() -> rui::core::tree::Element {
                                                         v.push(next);
                                                         thread_send.set(v);
                                                         extra_send.set((n as u32) + 1);
-                                                        rui::components::message_scroller_stick_to_end(
+                                                        jadix::components::message_scroller_stick_to_end(
                                                             "gal-ms-showcase",
                                                         );
                                                     }
@@ -839,7 +839,7 @@ pub(crate) fn MessageScrollerShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn AlertShowcase() -> rui::core::tree::Element {
+pub(crate) fn AlertShowcase() -> jadix::core::tree::Element {
     let alert_variant = use_signal("gal_alert_variant", || "default".to_string());
     let alert_var_btn = alert_variant;
     let alert_var_live = alert_variant;
@@ -911,7 +911,7 @@ pub(crate) fn AlertShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn AlertDialogShowcase() -> rui::core::tree::Element {
+pub(crate) fn AlertDialogShowcase() -> jadix::core::tree::Element {
     let delete_open = use_signal("gal_alert_dialog_delete", || false);
     let delete_open_action = delete_open;
     let sm_open = use_signal("gal_alert_dialog_sm", || false);
@@ -1121,7 +1121,7 @@ pub(crate) fn AlertDialogShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn ItemShowcase() -> rui::core::tree::Element {
+pub(crate) fn ItemShowcase() -> jadix::core::tree::Element {
     let item_variant = use_signal("gal_item_variant", || "outline".to_string());
     let item_var_btn = item_variant;
     let item_var_live = item_variant;
@@ -1210,7 +1210,7 @@ pub(crate) fn ItemShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn AttachmentShowcase() -> rui::core::tree::Element {
+pub(crate) fn AttachmentShowcase() -> jadix::core::tree::Element {
     let att_state = use_signal("gal_attachment_state", || "done".to_string());
     let att_state_btn = att_state;
     let att_state_live = att_state;
@@ -1370,7 +1370,7 @@ pub(crate) fn AttachmentShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn ListShowcase() -> rui::core::tree::Element {
+pub(crate) fn ListShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="1c-j) List（语义 ul/li）">
             <VStack w="100%" min_w="0" gap="0.75rem">
@@ -1582,7 +1582,7 @@ pub(crate) fn bubble_showcase_reactions() -> Element {
 pub(crate) fn bubble_showcase_desc() -> Element {
     ui! {
         <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-            "双写法：<Bubble variant align> + <BubbleContent> / <BubbleReactions>。默认独立行（左气泡右下 / 右气泡左下）；side / align 可覆盖；layout=\"overlay\" 咬住气泡边并内缩。`max_visible` 控制折叠前展示数（默认 3），宽度不足时自动收入 +N；悬停/点击展开浮层。Emoji 默认系统色光栅 + 字形盒内居中；Twemoji 位图需 RUI_EMOJI_CUSTOM_GLYPH=1 或 RUI_TWEMOJI_DIR。"
+            "双写法：<Bubble variant align> + <BubbleContent> / <BubbleReactions>。默认独立行（左气泡右下 / 右气泡左下）；side / align 可覆盖；layout=\"overlay\" 咬住气泡边并内缩。`max_visible` 控制折叠前展示数（默认 3），宽度不足时自动收入 +N；悬停/点击展开浮层。Emoji 默认系统色光栅 + 字形盒内居中；Twemoji 位图需 JADIX_EMOJI_CUSTOM_GLYPH=1 或 JADIX_TWEMOJI_DIR。"
         </Label>
     }
 }
@@ -1670,7 +1670,7 @@ pub(crate) fn bubble_placement_b3() -> Element {
 }
 
 #[component]
-pub(crate) fn BubbleShowcase() -> rui::core::tree::Element {
+pub(crate) fn BubbleShowcase() -> jadix::core::tree::Element {
     let mut kids: Vec<Element> = Vec::new();
     kids.push(bubble_showcase_desc());
     kids.push(bubble_showcase_conversation());
@@ -1743,7 +1743,7 @@ pub(crate) fn avatar_showcase_row() -> Element {
             <VStack gap="0.25rem" items="center">
                 <Label font_weight="700" text_size="0.75rem">"Load fail"</Label>
                 <Avatar>
-                    <AvatarImage src="/nonexistent/rui-gallery-avatar.png" />
+                    <AvatarImage src="/nonexistent/jadix-gallery-avatar.png" />
                     <AvatarFallback>"404"</AvatarFallback>
                 </Avatar>
             </VStack>
@@ -1814,7 +1814,7 @@ pub(crate) fn avatar_showcase_builders() -> Element {
 }
 
 #[component]
-pub(crate) fn AvatarShowcase() -> rui::core::tree::Element {
+pub(crate) fn AvatarShowcase() -> jadix::core::tree::Element {
     let row = avatar_showcase_row();
     let group = avatar_showcase_group();
     let builders = avatar_showcase_builders();
@@ -1833,7 +1833,7 @@ pub(crate) fn AvatarShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn BreadcrumbShowcase() -> rui::core::tree::Element {
+pub(crate) fn BreadcrumbShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="1e) Breadcrumb（ShadCN）">
             <VStack w="100%" min_w="0" gap="0.75rem">
@@ -1883,7 +1883,7 @@ pub(crate) fn BreadcrumbShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn ButtonGroupShowcase() -> rui::core::tree::Element {
+pub(crate) fn ButtonGroupShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="1e-b) ButtonGroup（ShadCN）">
             <VStack w="100%" min_w="0" gap="0.75rem">
@@ -1931,7 +1931,7 @@ pub(crate) fn ButtonGroupShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn AspectRatioShowcase() -> rui::core::tree::Element {
+pub(crate) fn AspectRatioShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="1f) AspectRatio（CSS aspect-ratio）">
             <VStack w="100%" min_w="0" gap="0.75rem">
@@ -1973,7 +1973,7 @@ pub(crate) fn AspectRatioShowcase() -> rui::core::tree::Element {
                                     Element::new()
                                         .w("100%")
                                         .h("100%")
-                                        .bg(rui::core::tree::parse_color("primary")),
+                                        .bg(jadix::core::tree::parse_color("primary")),
                                 ),
                         )
                         .w("10rem")
@@ -1986,7 +1986,7 @@ pub(crate) fn AspectRatioShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn RemoteAssetShowcase() -> rui::core::tree::Element {
+pub(crate) fn RemoteAssetShowcase() -> jadix::core::tree::Element {
     const REMOTE_PNG: &str = crate::shared::GALLERY_REMOTE_PNG;
     #[cfg(feature = "remote-asset")]
     const HINT: &str = "remote-asset：http(s) src 走 set_remote_asset_fetcher（本 Gallery 用进程内映射，无外网）。换 reqwest/ureq 即可接真 HTTP。";
@@ -2098,7 +2098,7 @@ pub(crate) fn animation_showcase_demos(
 }
 
 #[component]
-pub(crate) fn AnimationShowcase() -> rui::core::tree::Element {
+pub(crate) fn AnimationShowcase() -> jadix::core::tree::Element {
     let play = use_signal("gal_anim_play", || true);
     let play_btn = play;
     let play_box = play;
@@ -2116,19 +2116,19 @@ pub(crate) fn AnimationShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn WaapiShowcase() -> rui::core::tree::Element {
+pub(crate) fn WaapiShowcase() -> jadix::core::tree::Element {
     let alice = use_signal("gal_waapi_alice", || {
-        rui::style::Animation::animate(
+        jadix::style::Animation::animate(
             vec![
-                rui::style::Keyframe::new()
+                jadix::style::Keyframe::new()
                     .transform("rotate(0deg)")
                     .color("#18181b"),
-                rui::style::Keyframe::new().color("#431236").offset(0.3),
-                rui::style::Keyframe::new()
+                jadix::style::Keyframe::new().color("#431236").offset(0.3),
+                jadix::style::Keyframe::new()
                     .transform("rotate(360deg)")
                     .color("#18181b"),
             ],
-            rui::style::KeyframeEffect::new()
+            jadix::style::KeyframeEffect::new()
                 .duration(3000.0)
                 .iterations(f32::INFINITY),
         )
@@ -2165,10 +2165,10 @@ pub(crate) fn WaapiShowcase() -> rui::core::tree::Element {
 fn gen_track_travel_px() -> f32 {
     const TRACK_REM: f32 = 16.0;
     const BALL_REM: f32 = 1.75;
-    (TRACK_REM - BALL_REM) * rui::layout::dimension::css_root_font_size_px()
+    (TRACK_REM - BALL_REM) * jadix::layout::dimension::css_root_font_size_px()
 }
 
-fn gen_track_ball(x: rui::core::reactivity::Signal<f32>, bind_key: &str, tone: &str) -> Element {
+fn gen_track_ball(x: jadix::core::reactivity::Signal<f32>, bind_key: &str, tone: &str) -> Element {
     let target_id = format!("gal_gen_tx:{bind_key}");
     let ball = {
         let el: Element = ui! {
@@ -2181,7 +2181,7 @@ fn gen_track_ball(x: rui::core::reactivity::Signal<f32>, bind_key: &str, tone: &
                 shrink={0.0}
             />
         };
-        rui::app::reactive::bind_prop(
+        jadix::app::reactive::bind_prop(
             el,
             format!("gal_gen_tx:{bind_key}"),
             move || x.get(),
@@ -2231,8 +2231,8 @@ fn gen_css_chip(gone: Signal<bool>, timing: &str, tone: &str, caption: &str, key
     };
     // Direct translate — do not `bind_class` (replaces ClassSet + clones Style).
     // Travel = track `14rem` − ball `1.75rem` (not a shorter `translate-x-40`).
-    let travel = (14.0 - 1.75) * rui::layout::dimension::css_root_font_size_px();
-    let ball = rui::app::reactive::bind_prop(
+    let travel = (14.0 - 1.75) * jadix::layout::dimension::css_root_font_size_px();
+    let ball = jadix::app::reactive::bind_prop(
         ball,
         bind,
         move || gone.get(),
@@ -2269,7 +2269,7 @@ fn gen_stagger_bar(on: Signal<bool>, index: usize, tone: &str) -> Element {
             "transform 520ms spring(visual 0.28) {}ms",
             index * 50
         ));
-    rui::app::reactive::bind_prop(
+    jadix::app::reactive::bind_prop(
         bar,
         id,
         move || on.get(),
@@ -2286,9 +2286,9 @@ fn gen_stagger_bar(on: Signal<bool>, index: usize, tone: &str) -> Element {
 
 /// Motion 生成器内核：CSS `spring()` 解析 + 标量 `animate` / follow / inertia / stagger / 序列。
 #[component]
-pub(crate) fn GeneratorShowcase() -> rui::core::tree::Element {
-    use rui::style::{
-        AnimatedNumber, InertiaOptions, RepeatMode, TimingFunction, ValueDriver, use_animated,
+pub(crate) fn GeneratorShowcase() -> jadix::core::tree::Element {
+    use jadix::style::{
+        use_animated, AnimatedNumber, InertiaOptions, RepeatMode, TimingFunction, ValueDriver,
     };
 
     let travel = gen_track_travel_px();
@@ -2348,7 +2348,7 @@ pub(crate) fn GeneratorShowcase() -> rui::core::tree::Element {
                             w="4.25rem"
                             on_click={move || css_go.set(!css_go.peek())}
                         >
-                            { rui::app::reactive::bind_text("gal_gen_css_go_lbl", move || {
+                            { jadix::app::reactive::bind_text("gal_gen_css_go_lbl", move || {
                                 if css_go.get() {
                                     "Reset".into()
                                 } else {
@@ -2412,7 +2412,7 @@ pub(crate) fn GeneratorShowcase() -> rui::core::tree::Element {
                     <HStack gap="0.5rem" items="center" wrap="wrap">
                         <Label font_weight="700" text_size="0.75rem">"stagger"</Label>
                         <Button size="sm" variant="outline" on_click={move || stagger_on.set(!stagger_on.get())}>
-                            { rui::app::reactive::bind_text("gal_gen_stagger_label", move || {
+                            { jadix::app::reactive::bind_text("gal_gen_stagger_label", move || {
                                 if stagger_on.get() { "Reset".into() } else { "Play".into() }
                             }).w("3rem") }
                         </Button>
@@ -2434,8 +2434,8 @@ pub(crate) fn GeneratorShowcase() -> rui::core::tree::Element {
 #[component(reactive)]
 pub(crate) fn ReactiveCountChip(
     id: String,
-    count: rui::core::reactivity::Signal<i32>,
-) -> rui::core::tree::Element {
+    count: jadix::core::reactivity::Signal<i32>,
+) -> jadix::core::tree::Element {
     ui! {
         <HStack gap="0.5rem" items="center" p="0.5rem" class="rounded" bg="muted">
             <Label text_size="0.875rem">{ format!("count {}", count.get()) }</Label>
@@ -2444,7 +2444,7 @@ pub(crate) fn ReactiveCountChip(
 }
 
 #[component]
-pub(crate) fn ButtonShowcase() -> rui::core::tree::Element {
+pub(crate) fn ButtonShowcase() -> jadix::core::tree::Element {
     let count = use_signal("gallery_btn_count", || 0);
     let selected = use_signal("gallery_selected_variant", || "default".to_string());
 
@@ -2490,7 +2490,7 @@ pub(crate) fn ButtonShowcase() -> rui::core::tree::Element {
 }
 
 #[component]
-pub(crate) fn ButtonHoverEasingShowcase() -> rui::core::tree::Element {
+pub(crate) fn ButtonHoverEasingShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="1b) Hover：弹簧 vs cubic-bezier">
             <VStack w="100%" min_w="0" gap="0.75rem">

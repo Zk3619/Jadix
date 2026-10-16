@@ -2,12 +2,12 @@
 
 use crate::imports::*;
 use crate::shared::*;
-use rui::app::portal_overlay::OverlayKind;
-use rui::primitives::r#box::vstack;
-use rui::tokens;
-use rui::utils::anchored_overlay::{anchored_overlay, drag_handle, FloatingStrategy, Placement};
-use rui::utils::popup::{disarm_underlay_close, PopupPlacement};
-use rui::utils::presence::presence;
+use jadix::app::portal_overlay::OverlayKind;
+use jadix::primitives::r#box::vstack;
+use jadix::tokens;
+use jadix::utils::anchored_overlay::{anchored_overlay, drag_handle, FloatingStrategy, Placement};
+use jadix::utils::popup::{disarm_underlay_close, PopupPlacement};
+use jadix::utils::presence::presence;
 
 fn shell_panel(title: &str, body: &str, extra: Element) -> Element {
     let mut panel: Element = vstack()
@@ -224,7 +224,7 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
     let point_stage = {
         let pos = point_pos;
         let open = point_open;
-        let mut stage: Element = rui::primitives::r#box::r#box()
+        let mut stage: Element = jadix::primitives::r#box::r#box()
             .w("100%")
             .min_h("8rem")
             .p("0.75rem")
@@ -236,8 +236,8 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
             })
             .into();
         stage = stage.bg(tokens::muted()).cursor("crosshair").on_mousedown(
-            move |e: &rui::app::pointer_events::PointerEvent| {
-                if e.phase == rui::app::pointer_events::EventPhase::Capture {
+            move |e: &jadix::app::pointer_events::PointerEvent| {
+                if e.phase == jadix::app::pointer_events::EventPhase::Capture {
                     return;
                 }
                 pos.set([e.x, e.y]);
@@ -454,10 +454,10 @@ pub(crate) fn ViewportModalShowcase() -> Element {
                     { if open.get() { "关闭 Builder Sheet" } else { "打开 Builder ViewportModal" } }
                 </Button>
                 { Element::from(
-                    rui::utils::viewport_modal::viewport_modal("gal-vm-sheet-b")
+                    jadix::utils::viewport_modal::viewport_modal("gal-vm-sheet-b")
                         .open(open)
                         .overlay_opacity(0.3)
-                        .motion(rui::utils::viewport_modal::ModalSurfaceMotion::SlideFromRight)
+                        .motion(jadix::utils::viewport_modal::ModalSurfaceMotion::SlideFromRight)
                         .child(move || {
                             let mut panel: Element = vstack()
                                 .w("18rem")
@@ -740,16 +740,16 @@ mod presence_motion_tests {
     use super::*;
 
     fn tick(card: &mut Element, time_ms: f64, dt: f32) {
-        rui::style::set_css_transition_timeline_ms(time_ms);
+        jadix::style::set_css_transition_timeline_ms(time_ms);
         let inner = &mut card.inner;
-        rui::style::tick_element_animations_ex(
+        jadix::style::tick_element_animations_ex(
             &mut inner.style,
             &mut inner.text_style,
             &inner.used_layout,
             &mut inner.animation_snapshot,
             dt,
         );
-        rui::style::tick_element_transitions_with_text(
+        jadix::style::tick_element_transitions_with_text(
             &mut inner.style,
             &mut inner.text_style,
             &mut inner.transition_snapshot,
@@ -760,10 +760,10 @@ mod presence_motion_tests {
 
     #[test]
     fn presence_cards_fade_in_and_out_across_frames() {
-        rui::style::set_css_transition_virtual_timeline(true);
-        let (owner, _) = rui::core::reactivity::create_root(|| {
+        jadix::style::set_css_transition_virtual_timeline(true);
+        let (owner, _) = jadix::core::reactivity::create_root(|| {
             for scope in ["gal-pres-exit-rsx", "gal-pres-exit-b"] {
-                let tid = rui::utils::presence::presence_template_id(scope);
+                let tid = jadix::utils::presence::presence_template_id(scope);
                 let mut card = presence_fade_card(scope, "", false).template_id(tid.clone());
                 card.layout_bounds = [20.0, 20.0, 192.0, 80.0];
                 tick(&mut card, 0.0, 0.0);
@@ -782,7 +782,10 @@ mod presence_motion_tests {
 
                 let mut exiting = presence_fade_card(scope, "", true).template_id(tid);
                 exiting.layout_bounds = card.layout_bounds;
-                rui::utils::keyed_overlay::preserve_keyed_motion_on_reconcile(&mut exiting, &card);
+                jadix::utils::keyed_overlay::preserve_keyed_motion_on_reconcile(
+                    &mut exiting,
+                    &card,
+                );
                 tick(&mut exiting, 320.0, 0.0);
                 assert!(
                     exiting.style.opacity > 0.99,
@@ -802,7 +805,7 @@ mod presence_motion_tests {
             }
         });
         owner.dispose();
-        rui::style::set_css_transition_virtual_timeline(false);
+        jadix::style::set_css_transition_virtual_timeline(false);
     }
 }
 

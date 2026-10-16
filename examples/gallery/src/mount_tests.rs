@@ -1,17 +1,16 @@
-use super::*;
 use crate::app::*;
 use crate::imports::*;
 use crate::pages::*;
 use crate::shared::*;
-use rui::core::reactivity::{create_effect, create_root};
+use jadix::core::reactivity::{create_effect, create_root};
 
 #[test]
 fn anchored_overlay_pinned_attribute_matches_builder_dismiss_behavior() {
     run_on_gallery_build_stack(|| {
         for builder in [false, true] {
             for pinned in [false, true] {
-                rui::app::portal_overlay::clear_overlay_stack();
-                rui::app::reactive::reset_registered_anchors();
+                jadix::app::portal_overlay::clear_overlay_stack();
+                jadix::app::reactive::reset_registered_anchors();
                 let (owner, _) = create_root(|| {
                     let open = Signal::new(true);
                     let pos = Signal::new([120.0, 80.0]);
@@ -19,10 +18,12 @@ fn anchored_overlay_pinned_attribute_matches_builder_dismiss_behavior() {
                     let kept_effect = kept.clone();
                     create_effect(move || {
                         let tree = if builder {
-                            rui::utils::anchored_overlay::anchored_overlay("pinned-builder-check")
+                            jadix::utils::anchored_overlay::anchored_overlay("pinned-builder-check")
                                 .open(open)
                                 .pinned(pinned)
-                                .placement(rui::utils::anchored_overlay::Placement::point(pos, 0.0))
+                                .placement(jadix::utils::anchored_overlay::Placement::point(
+                                    pos, 0.0,
+                                ))
                                 .child(|| Element::new().w(100.0).h(60.0))
                         } else {
                             ui! {
@@ -35,9 +36,9 @@ fn anchored_overlay_pinned_attribute_matches_builder_dismiss_behavior() {
                         };
                         *kept_effect.borrow_mut() = Some(tree);
                     });
-                    rui::utils::popup::arm_underlay_close();
+                    jadix::utils::popup::arm_underlay_close();
                     assert_eq!(
-                        rui::app::portal_overlay::try_dismiss_outside_press(),
+                        jadix::app::portal_overlay::try_dismiss_outside_press(),
                         !pinned,
                         "builder={builder}, pinned={pinned}"
                     );
@@ -48,8 +49,8 @@ fn anchored_overlay_pinned_attribute_matches_builder_dismiss_behavior() {
                 owner.dispose();
             }
         }
-        rui::app::portal_overlay::clear_overlay_stack();
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::portal_overlay::clear_overlay_stack();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
@@ -98,7 +99,7 @@ fn generator_go_reset_caption_keeps_its_authored_width() {
 }
 
 /// Headless tests build one page at a time (same trees as the live `<When>` arms).
-fn gallery_section_body(section: &str) -> rui::core::tree::Element {
+fn gallery_section_body(section: &str) -> jadix::core::tree::Element {
     match section {
         "forms" => GallerySectionForms(GallerySectionFormsProps::default()),
         "events" => GallerySectionEvents(GallerySectionEventsProps::default()),
@@ -114,14 +115,14 @@ fn gallery_section_body(section: &str) -> rui::core::tree::Element {
     }
 }
 
-fn gallery_find_tid(el: &rui::core::tree::Element, want: &str) -> bool {
+fn gallery_find_tid(el: &jadix::core::tree::Element, want: &str) -> bool {
     gallery_find_by_tid(el, want).is_some()
 }
 
 fn gallery_find_by_tid<'a>(
-    el: &'a rui::core::tree::Element,
+    el: &'a jadix::core::tree::Element,
     want: &str,
-) -> Option<&'a rui::core::tree::Element> {
+) -> Option<&'a jadix::core::tree::Element> {
     let mut stack = vec![el];
     while let Some(el) = stack.pop() {
         if el.template_id.as_deref() == Some(want) {
@@ -133,9 +134,9 @@ fn gallery_find_by_tid<'a>(
 }
 
 fn gallery_find_slot<'a>(
-    el: &'a rui::core::tree::Element,
+    el: &'a jadix::core::tree::Element,
     slot: &str,
-) -> Option<&'a rui::core::tree::Element> {
+) -> Option<&'a jadix::core::tree::Element> {
     let mut stack = vec![el];
     while let Some(el) = stack.pop() {
         if el.attrs.get("data-slot").map(String::as_str) == Some(slot) {
@@ -146,7 +147,7 @@ fn gallery_find_slot<'a>(
     None
 }
 
-fn gallery_tid_contains(el: &rui::core::tree::Element, needle: &str) -> bool {
+fn gallery_tid_contains(el: &jadix::core::tree::Element, needle: &str) -> bool {
     let mut stack = vec![el];
     while let Some(el) = stack.pop() {
         if el
@@ -193,7 +194,7 @@ fn mouse_event_log_line_count_stable_from_idle_to_move() {
     );
 }
 
-fn find_mouse_log_node(el: &rui::core::tree::Element) -> Option<&rui::core::tree::Element> {
+fn find_mouse_log_node(el: &jadix::core::tree::Element) -> Option<&jadix::core::tree::Element> {
     let mut stack = vec![el];
     while let Some(el) = stack.pop() {
         if el
@@ -209,9 +210,9 @@ fn find_mouse_log_node(el: &rui::core::tree::Element) -> Option<&rui::core::tree
 }
 
 fn gallery_find_by_focus_id<'a>(
-    el: &'a rui::core::tree::Element,
+    el: &'a jadix::core::tree::Element,
     want: &str,
-) -> Option<&'a rui::core::tree::Element> {
+) -> Option<&'a jadix::core::tree::Element> {
     let mut stack = vec![el];
     while let Some(el) = stack.pop() {
         if el.focus_id.as_deref() == Some(want) {
@@ -233,11 +234,11 @@ fn color_close(inst: [f32; 4], token: [f32; 4]) -> bool {
     inst[3] > 0.5 && rgb_dist(inst, token) < 0.08
 }
 
-fn subtree_has_bg(el: &rui::core::tree::Element, token: [f32; 4]) -> bool {
+fn subtree_has_bg(el: &jadix::core::tree::Element, token: [f32; 4]) -> bool {
     color_close(el.style.bg_color, token) || el.children.iter().any(|c| subtree_has_bg(c, token))
 }
 
-fn find_lca_click_caption(el: &rui::core::tree::Element) -> Option<&rui::core::tree::Element> {
+fn find_lca_click_caption(el: &jadix::core::tree::Element) -> Option<&jadix::core::tree::Element> {
     let mut stack = vec![el];
     while let Some(el) = stack.pop() {
         if el
@@ -255,23 +256,23 @@ fn find_lca_click_caption(el: &rui::core::tree::Element) -> Option<&rui::core::t
 #[test]
 fn mouse_event_lca_target_is_info_blue_on_muted_pad() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        rui::style::set_theme_mode(rui::style::ThemeMode::Light);
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        jadix::style::set_theme_mode(jadix::style::ThemeMode::Light);
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let tree = rui::core::reactivity::isolate_reads(|| {
+                let tree = jadix::core::reactivity::isolate_reads(|| {
                     MouseEventShowcase(MouseEventShowcaseProps::default())
                 });
                 let outer =
                     gallery_find_by_tid(&tree, "gal-mouse-lca-outer").expect("gal-mouse-lca-outer");
                 let inner = gallery_find_by_focus_id(&tree, "gal-mouse-lca-target")
                     .expect("gal-mouse-lca-target");
-                let muted = rui::style::parse_color("muted");
-                let info = rui::style::parse_color("info");
-                let primary = rui::style::parse_color("primary");
+                let muted = jadix::style::parse_color("muted");
+                let info = jadix::style::parse_color("info");
+                let primary = jadix::style::parse_color("primary");
                 assert!(
                     info[2] > info[0] + 0.15,
                     "info must be theme blue, got {info:?}"
@@ -295,24 +296,24 @@ fn mouse_event_lca_target_is_info_blue_on_muted_pad() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn mouse_event_lca_click_caption_is_plain_definite_width_leaf() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        rui::style::set_theme_mode(rui::style::ThemeMode::Light);
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        jadix::style::set_theme_mode(jadix::style::ThemeMode::Light);
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                let mut tree = jadix::core::reactivity::isolate_reads(|| {
                     MouseEventShowcase(MouseEventShowcaseProps::default())
                 });
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
                 let caption = find_lca_click_caption(&tree).expect("lca click caption");
                 assert!(
@@ -330,23 +331,23 @@ fn mouse_event_lca_click_caption_is_plain_definite_width_leaf() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn mouse_event_swallow_hit_path_excludes_pad() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                let mut tree = jadix::core::reactivity::isolate_reads(|| {
                     MouseEventShowcase(MouseEventShowcaseProps::default())
                 });
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
                 let swallow = gallery_find_by_focus_id(&tree, "gal-mouse-swallow")
                     .expect("gal-mouse-swallow");
@@ -365,8 +366,11 @@ fn mouse_event_swallow_hit_path_excludes_pad() {
                     b[2] > 8.0 && b[3] > 8.0,
                     "swallow must have a hittable box, got {b:?}"
                 );
-                let path =
-                    rui::app::pointer_events::hit_path(&tree, b[0] + b[2] * 0.5, b[1] + b[3] * 0.5);
+                let path = jadix::app::pointer_events::hit_path(
+                    &tree,
+                    b[0] + b[2] * 0.5,
+                    b[1] + b[3] * 0.5,
+                );
                 let ids: Vec<&str> = path.iter().filter_map(|e| e.focus_id.as_deref()).collect();
                 assert!(
                     ids.contains(&"gal-mouse-swallow"),
@@ -382,23 +386,23 @@ fn mouse_event_swallow_hit_path_excludes_pad() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn mouse_event_pad_hit_path_includes_pad_under_hint_label() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                let mut tree = jadix::core::reactivity::isolate_reads(|| {
                     MouseEventShowcase(MouseEventShowcaseProps::default())
                 });
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
                 let pad = gallery_find_by_focus_id(&tree, "gal-mouse-pad").expect("gal-mouse-pad");
                 let b = pad.layout_bounds;
@@ -408,7 +412,7 @@ fn mouse_event_pad_hit_path_includes_pad_under_hint_label() {
                 );
                 let x = b[0] + b[2] * 0.5;
                 let y = b[1] + b[3] * 0.5;
-                let path = rui::app::pointer_events::hit_path(&tree, x, y);
+                let path = jadix::app::pointer_events::hit_path(&tree, x, y);
                 let ids: Vec<&str> = path.iter().filter_map(|e| e.focus_id.as_deref()).collect();
                 assert!(
                     ids.contains(&"gal-mouse-pad"),
@@ -420,23 +424,23 @@ fn mouse_event_pad_hit_path_includes_pad_under_hint_label() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn mouse_event_lca_center_click_increments_count() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                let mut tree = jadix::core::reactivity::isolate_reads(|| {
                     MouseEventShowcase(MouseEventShowcaseProps::default())
                 });
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
                 let inner = gallery_find_by_focus_id(&tree, "gal-mouse-lca-target")
                     .expect("gal-mouse-lca-target");
@@ -447,14 +451,15 @@ fn mouse_event_lca_center_click_increments_count() {
                 );
                 let x = b[0] + b[2] * 0.5;
                 let y = b[1] + b[3] * 0.5;
-                let path = rui::app::pointer_events::hit_path(&tree, x, y);
+                let path = jadix::app::pointer_events::hit_path(&tree, x, y);
                 let ids: Vec<&str> = path.iter().filter_map(|e| e.focus_id.as_deref()).collect();
                 assert!(
                     ids.contains(&"gal-mouse-lca-target"),
                     "clicking the blue target (including its caption) must hit gal-mouse-lca-target, got {ids:?}"
                 );
-                let click_path = rui::app::pointer_events::click_dispatch_path(&path, &path);
-                let (cb, _) = rui::app::pointer_events::resolve_click_from_path(&tree, &click_path);
+                let click_path = jadix::app::pointer_events::click_dispatch_path(&path, &path);
+                let (cb, _) =
+                    jadix::app::pointer_events::resolve_click_from_path(&tree, &click_path);
                 (*cb.expect("LCA on_click on press/release path").borrow_mut())();
                 let lca = use_signal("gal_mouse_lca_clicks", || 0i32);
                 assert_eq!(
@@ -464,23 +469,23 @@ fn mouse_event_lca_center_click_increments_count() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn mouse_event_log_is_plain_definite_width_leaf() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                let mut tree = jadix::core::reactivity::isolate_reads(|| {
                     MouseEventShowcase(MouseEventShowcaseProps::default())
                 });
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
                 let log = find_mouse_log_node(&tree).expect("mouse log text node");
                 assert!(
@@ -498,23 +503,23 @@ fn mouse_event_log_is_plain_definite_width_leaf() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn mouse_event_log_panel_reserves_height_before_first_move() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                let mut tree = jadix::core::reactivity::isolate_reads(|| {
                     MouseEventShowcase(MouseEventShowcaseProps::default())
                 });
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut tree, 720.0, 900.0, [0.0, 0.0]);
                 let panel =
                     gallery_find_by_tid(&tree, "gal-mouse-log-panel").expect("gal-mouse-log-panel");
@@ -526,25 +531,25 @@ fn mouse_event_log_panel_reserves_height_before_first_move() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn forms_section_under_isolate_reads_keeps_mark_invalid_caption() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 // Match App: `<When>` arm builds the section component (isolate_reads inside).
                 let mut tree =
-                    rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                    jadix::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
                 fn find_btn<'a>(
-                    el: &'a rui::core::tree::Element,
-                ) -> Option<&'a rui::core::tree::Element> {
+                    el: &'a jadix::core::tree::Element,
+                ) -> Option<&'a jadix::core::tree::Element> {
                     if el.template_id.as_deref() == Some("gal-s2-mark-invalid") {
                         return Some(el);
                     }
@@ -561,7 +566,7 @@ fn forms_section_under_isolate_reads_keeps_mark_invalid_caption() {
                         .map(|c| (c.template_id.clone(), c.text.clone(), c.text_style.size))
                         .collect::<Vec<_>>()
                 );
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let result = layout.build_and_layout(&mut tree, 900.0, 800.0, [0.0, 0.0]);
                 let node = result
                     .text_nodes
@@ -575,17 +580,17 @@ fn forms_section_under_isolate_reads_keeps_mark_invalid_caption() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn forms_color_picker_variants_tabs_mount_only_active() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let tree = rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                let tree = jadix::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
                 assert!(
                     gallery_tid_contains(&tree, "gal-cp-variants"),
                     "forms pickers must host ColorPicker variants under Tabs"
@@ -607,23 +612,23 @@ fn forms_color_picker_variants_tabs_mount_only_active() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn picker_showcase_tabs_chips_layout_alone() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                let mut tree = jadix::core::reactivity::isolate_reads(|| {
                     PickerPlaceholdersShowcase(PickerPlaceholdersShowcaseProps::default())
                 });
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let result = layout.build_and_layout(&mut tree, 900.0, 800.0, [0.0, 0.0]);
                 eprintln!(
                     "picker alone: root={:?} texts={} instances={}",
@@ -643,8 +648,8 @@ fn picker_showcase_tabs_chips_layout_alone() {
                     }
                 }
                 fn collect_triggers<'a>(
-                    el: &'a rui::core::tree::Element,
-                    out: &mut Vec<&'a rui::core::tree::Element>,
+                    el: &'a jadix::core::tree::Element,
+                    out: &mut Vec<&'a jadix::core::tree::Element>,
                 ) {
                     if el.attrs.get("data-slot").map(|s| s.as_str()) == Some("tabs-trigger") {
                         out.push(el);
@@ -686,22 +691,22 @@ fn picker_showcase_tabs_chips_layout_alone() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn forms_tabs_chips_after_scroll_into_view_do_not_overlap() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 let mut tree =
-                    rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
-                let mut layout = rui::core::tree::LayoutTree::new();
+                    jadix::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut tree, 900.0, 5000.0, [0.0, 0.0]);
 
                 let tabs_y = gallery_find_by_tid(&tree, "gal-dp-kinds")
@@ -716,7 +721,7 @@ fn forms_tabs_chips_after_scroll_into_view_do_not_overlap() {
                     "scroll:scroll-forms viewport must exist"
                 );
                 use_signal(
-                    &rui::core::scroll_viewport::scroll_offset_y_signal_key("scroll-forms"),
+                    &jadix::core::scroll_viewport::scroll_offset_y_signal_key("scroll-forms"),
                     || 0.0_f32,
                 )
                 .set_silent(scroll_y);
@@ -759,22 +764,22 @@ fn forms_tabs_chips_after_scroll_into_view_do_not_overlap() {
                 }
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn forms_date_time_tabs_chips_do_not_overlap() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 let mut tree =
-                    rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
-                let mut layout = rui::core::tree::LayoutTree::new();
+                    jadix::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let result = layout.build_and_layout(&mut tree, 900.0, 5000.0, [0.0, 0.0]);
                 eprintln!(
                     "forms layout: root_bounds={:?} text_nodes={} instances={}",
@@ -793,8 +798,8 @@ fn forms_date_time_tabs_chips_do_not_overlap() {
                 }
 
                 fn collect_triggers<'a>(
-                    el: &'a rui::core::tree::Element,
-                    out: &mut Vec<&'a rui::core::tree::Element>,
+                    el: &'a jadix::core::tree::Element,
+                    out: &mut Vec<&'a jadix::core::tree::Element>,
                 ) {
                     if el.attrs.get("data-slot").map(|s| s.as_str()) == Some("tabs-trigger") {
                         out.push(el);
@@ -804,9 +809,9 @@ fn forms_date_time_tabs_chips_do_not_overlap() {
                     }
                 }
                 fn under_tabs<'a>(
-                    el: &'a rui::core::tree::Element,
+                    el: &'a jadix::core::tree::Element,
                     tabs_id: &str,
-                ) -> Option<&'a rui::core::tree::Element> {
+                ) -> Option<&'a jadix::core::tree::Element> {
                     if el.template_id.as_deref() == Some(tabs_id) {
                         return Some(el);
                     }
@@ -873,17 +878,17 @@ fn forms_date_time_tabs_chips_do_not_overlap() {
                 }
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn forms_date_time_pickers_tabs_mount_only_active() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let tree = rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                let tree = jadix::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
                 assert!(
                     gallery_tid_contains(&tree, "gal-dp-kinds"),
                     "forms must host Date/Time kinds under Tabs"
@@ -902,29 +907,29 @@ fn forms_date_time_pickers_tabs_mount_only_active() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn forms_password_input_adornments_visible_when_focused() {
-    rui::app::reactive::reset_registered_anchors();
-    let mut fs = rui::renderer::font_loader::create_font_system();
-    rui::renderer::font_loader::apply_default_families(fs.db_mut());
-    rui::text::install_shared_font_system(&mut fs);
+    jadix::app::reactive::reset_registered_anchors();
+    let mut fs = jadix::renderer::font_loader::create_font_system();
+    jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+    jadix::text::install_shared_font_system(&mut fs);
     let (_handle, _) = create_root(|| {
         create_effect(|| {
             let id = "gal-s2-input-pw";
-            use_signal(&rui::components::input_value_signal_key(id), String::new)
+            use_signal(&jadix::components::input_value_signal_key(id), String::new)
                 .set("secret1".into());
-            use_signal("__rui_button_focus_id", String::new)
-                .set(format!("{}{id}", rui::components::INPUT_FOCUS_PREFIX));
+            use_signal("__jadix_button_focus_id", String::new)
+                .set(format!("{}{id}", jadix::components::INPUT_FOCUS_PREFIX));
 
-            let mut tree = rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+            let mut tree = jadix::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
             let pw = gallery_find_by_tid(&tree, id).expect("password input root");
-            let clear = gallery_find_by_tid(pw, &format!("__rui_input:{id}:clear"))
+            let clear = gallery_find_by_tid(pw, &format!("__jadix_input:{id}:clear"))
                 .expect("clear adornment must mount for clearable=\"true\"");
-            let eye = gallery_find_by_tid(pw, &format!("__rui_input:{id}:reveal"))
+            let eye = gallery_find_by_tid(pw, &format!("__jadix_input:{id}:reveal"))
                 .expect("eye adornment must mount for password_toggle=\"true\"");
             assert!(
                 (clear.style.opacity - 1.0).abs() < 0.001,
@@ -937,12 +942,12 @@ fn forms_password_input_adornments_visible_when_focused() {
                 eye.style.opacity
             );
 
-            let mut layout = rui::core::tree::LayoutTree::new();
+            let mut layout = jadix::core::tree::LayoutTree::new();
             let result = layout.build_and_layout(&mut tree, 900.0, 800.0, [0.0, 0.0]);
             let pw = gallery_find_by_tid(&tree, id).unwrap();
             for suffix in ["clear", "reveal"] {
                 let button =
-                    gallery_find_by_tid(pw, &format!("__rui_input:{id}:{suffix}")).unwrap();
+                    gallery_find_by_tid(pw, &format!("__jadix_input:{id}:{suffix}")).unwrap();
                 let [x, y, w, h] = button.layout_bounds;
                 let inside = |rect: [f32; 4]| {
                     rect[2] > 0.5
@@ -960,7 +965,7 @@ fn forms_password_input_adornments_visible_when_focused() {
                         && inside([n.x, n.y, n.width, n.height])
                 });
                 let texture = result.textured_draws.iter().any(|n| {
-                    n.texture_key.starts_with("rui_lucide_") && n.opacity > 0.01 && inside(n.rect)
+                    n.texture_key.starts_with("jadix_lucide_") && n.opacity > 0.01 && inside(n.rect)
                 });
                 assert!(
                     glyph || texture,
@@ -970,12 +975,15 @@ fn forms_password_input_adornments_visible_when_focused() {
             }
         });
     });
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
 }
 
-fn gallery_collect_input_bounds(el: &rui::core::tree::Element, out: &mut Vec<(String, [f32; 4])>) {
+fn gallery_collect_input_bounds(
+    el: &jadix::core::tree::Element,
+    out: &mut Vec<(String, [f32; 4])>,
+) {
     if let Some(fid) = el.focus_id.as_deref() {
-        if let Some(rest) = fid.strip_prefix(rui::components::INPUT_FOCUS_PREFIX) {
+        if let Some(rest) = fid.strip_prefix(jadix::components::INPUT_FOCUS_PREFIX) {
             out.push((rest.to_string(), el.layout_bounds));
         }
     }
@@ -984,7 +992,7 @@ fn gallery_collect_input_bounds(el: &rui::core::tree::Element, out: &mut Vec<(St
     }
 }
 
-fn gallery_tree_has_input_caret(el: &rui::core::tree::Element) -> bool {
+fn gallery_tree_has_input_caret(el: &jadix::core::tree::Element) -> bool {
     el.text_style.input_caret.is_some() || el.children.iter().any(gallery_tree_has_input_caret)
 }
 
@@ -995,10 +1003,10 @@ fn gallery_tree_has_input_caret(el: &rui::core::tree::Element) -> bool {
 #[test]
 fn forms_input_showcase_keeps_caret_when_first_field_partially_clipped() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 const VW: f32 = 520.0;
@@ -1006,12 +1014,12 @@ fn forms_input_showcase_keeps_caret_when_first_field_partially_clipped() {
                 let showcase = "gal-s2-input-a";
                 let adornment = "gal-ia-search";
                 use_signal(
-                    &rui::components::input_value_signal_key(showcase),
+                    &jadix::components::input_value_signal_key(showcase),
                     String::new,
                 )
                 .set("hello".into());
                 use_signal(
-                    &rui::components::input_value_signal_key(adornment),
+                    &jadix::components::input_value_signal_key(adornment),
                     String::new,
                 )
                 .set("query".into());
@@ -1021,13 +1029,13 @@ fn forms_input_showcase_keeps_caret_when_first_field_partially_clipped() {
                     vw: f32,
                     vh: f32,
                 ) -> (bool, bool, bool, f32, Vec<(String, [f32; 4])>, usize) {
-                    use_signal("__rui_button_focus_id", String::new).set(format!(
+                    use_signal("__jadix_button_focus_id", String::new).set(format!(
                         "{}{focus_rest}",
-                        rui::components::INPUT_FOCUS_PREFIX
+                        jadix::components::INPUT_FOCUS_PREFIX
                     ));
                     let mut tree =
-                        rui::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
-                    let mut layout = rui::core::tree::LayoutTree::new();
+                        jadix::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
+                    let mut layout = jadix::core::tree::LayoutTree::new();
                     let _ = layout.build_and_layout(&mut tree, vw, vh, [-1.0, -1.0]);
                     let mut bounds = Vec::new();
                     gallery_collect_input_bounds(&tree, &mut bounds);
@@ -1042,7 +1050,7 @@ fn forms_input_showcase_keeps_caret_when_first_field_partially_clipped() {
                         "scroll:scroll-forms viewport must exist"
                     );
                     use_signal(
-                        &rui::core::scroll_viewport::scroll_offset_y_signal_key("scroll-forms"),
+                        &jadix::core::scroll_viewport::scroll_offset_y_signal_key("scroll-forms"),
                         || 0.0_f32,
                     )
                     .set_silent(scroll_y);
@@ -1104,16 +1112,16 @@ fn forms_input_showcase_keeps_caret_when_first_field_partially_clipped() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn forms_section_mounts_wp_r7_reactive_chips() {
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
     let (_handle, _) = create_root(|| {
         create_effect(|| {
-            let tree = rui::core::reactivity::isolate_reads(|| {
+            let tree = jadix::core::reactivity::isolate_reads(|| {
                 InputShowcase(InputShowcaseProps::default())
             });
             assert!(
@@ -1135,15 +1143,15 @@ fn forms_section_mounts_wp_r7_reactive_chips() {
             );
         });
     });
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
 }
 
 #[test]
 fn forms_section_mounts_wp39_submit() {
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
     let (_handle, _) = create_root(|| {
         create_effect(|| {
-            let tree = rui::core::reactivity::isolate_reads(|| {
+            let tree = jadix::core::reactivity::isolate_reads(|| {
                 FormValidateShowcase(FormValidateShowcaseProps::default())
             });
             assert!(
@@ -1152,15 +1160,15 @@ fn forms_section_mounts_wp39_submit() {
             );
         });
     });
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
 }
 
 #[test]
 fn data_section_mounts_wp310_masonry() {
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
     let (_handle, _) = create_root(|| {
         create_effect(|| {
-            let tree = rui::core::reactivity::isolate_reads(|| {
+            let tree = jadix::core::reactivity::isolate_reads(|| {
                 VirtualMasonryShowcase(VirtualMasonryShowcaseProps::default())
             });
             assert!(
@@ -1169,12 +1177,12 @@ fn data_section_mounts_wp310_masonry() {
             );
         });
     });
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
 }
 
-fn set_scroll_offset(el: &mut rui::core::tree::Element, rest: &str, offset: [f32; 2]) -> bool {
+fn set_scroll_offset(el: &mut jadix::core::tree::Element, rest: &str, offset: [f32; 2]) -> bool {
     let want = format!("scroll:{rest}");
-    let mut stack: Vec<*mut rui::core::tree::Element> = vec![el];
+    let mut stack: Vec<*mut jadix::core::tree::Element> = vec![el];
     while let Some(ptr) = stack.pop() {
         let node = unsafe { &mut *ptr };
         if node.focus_id.as_deref() == Some(want.as_str()) {
@@ -1190,7 +1198,7 @@ fn set_scroll_offset(el: &mut rui::core::tree::Element, rest: &str, offset: [f32
 }
 
 fn scroll_metrics_xy(
-    result: &rui::core::tree::RenderResult,
+    result: &jadix::core::tree::RenderResult,
     rest: &str,
 ) -> ([f32; 4], [f32; 2], [f32; 2]) {
     result
@@ -1204,7 +1212,7 @@ fn scroll_metrics_xy(
 #[test]
 fn data_section_mounts_timeline() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, tree) = create_root(|| gallery_section_body("data"));
         assert!(
             find_tid(&tree, "gal-timeline-builder__timeline"),
@@ -1214,7 +1222,7 @@ fn data_section_mounts_timeline() {
             gallery_tid_contains(&tree, "__timeline"),
             "data section must mount at least one Timeline shell"
         );
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
@@ -1224,15 +1232,15 @@ fn data_section_scroll_metrics_stable_across_offsets() {
     // scrollports, and CarouselStack. Outer `scroll-data` content size must not
     // breathe as cards enter/leave the clip — that jitters the page thumb.
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 let mut tree =
-                    rui::core::reactivity::isolate_reads(|| gallery_section_body("data"));
-                let mut layout = rui::core::tree::LayoutTree::new();
+                    jadix::core::reactivity::isolate_reads(|| gallery_section_body("data"));
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let first = layout.build_and_layout(&mut tree, 900.0, 600.0, [-1.0, -1.0]);
                 let (vp0, max0, content0) = scroll_metrics_xy(&first, "scroll-data");
                 assert!(
@@ -1297,7 +1305,7 @@ fn data_section_scroll_metrics_stable_across_offsets() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
@@ -1306,17 +1314,17 @@ fn data_section_scroll_metrics_stable_across_offsets() {
 #[test]
 fn data_section_table_texts_survive_skip_and_hover() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 let mut tree =
-                    rui::core::reactivity::isolate_reads(|| gallery_section_body("data"));
-                let mut layout = rui::core::tree::LayoutTree::new();
+                    jadix::core::reactivity::isolate_reads(|| gallery_section_body("data"));
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let first = layout.build_and_layout(&mut tree, 1280.0, 800.0, [-1.0, -1.0]);
-                let texts = |r: &rui::core::tree::RenderResult| {
+                let texts = |r: &jadix::core::tree::RenderResult| {
                     r.text_nodes
                         .iter()
                         .map(|n| n.text.clone())
@@ -1324,7 +1332,7 @@ fn data_section_table_texts_survive_skip_and_hover() {
                 };
                 let t0 = texts(&first);
                 // Invoice composite is in-tree (not a reactive_view island).
-                // data_table cells wait on remount drain — assert those in rui table_paint.
+                // data_table cells wait on remount drain — assert those in jadix table_paint.
                 for needle in ["INV001", "Paid", "$250.00", "INV002", "Invoice"] {
                     assert!(
                         t0.iter().any(|t| t.contains(needle)),
@@ -1359,8 +1367,8 @@ fn data_section_table_texts_survive_skip_and_hover() {
 
                 let (mouse, on_hover) = {
                     fn find_row<'a>(
-                        el: &'a rui::core::tree::Element,
-                    ) -> Option<&'a rui::core::tree::Element> {
+                        el: &'a jadix::core::tree::Element,
+                    ) -> Option<&'a jadix::core::tree::Element> {
                         if el.focus_id.as_deref() == Some("inv-0") {
                             return Some(el);
                         }
@@ -1378,8 +1386,8 @@ fn data_section_table_texts_survive_skip_and_hover() {
                 if let Some(hover) = on_hover {
                     hover.borrow_mut()(true);
                 }
-                let mut impact = rui::core::tree::LayoutStatus::Clean;
-                rui::style::sync_class_variants_subtree(
+                let mut impact = jadix::core::tree::LayoutStatus::Clean;
+                jadix::style::sync_class_variants_subtree(
                     &mut tree,
                     mouse,
                     "",
@@ -1389,7 +1397,7 @@ fn data_section_table_texts_survive_skip_and_hover() {
                     &mut layout,
                     &mut impact,
                 );
-                rui::style::tick_active_css_transitions_subtree(
+                jadix::style::tick_active_css_transitions_subtree(
                     &mut tree,
                     mouse,
                     "",
@@ -1411,22 +1419,22 @@ fn data_section_table_texts_survive_skip_and_hover() {
                 }
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn forms_input_showcase_mark_invalid_button_has_caption() {
-    rui::app::reactive::reset_registered_anchors();
-    let mut fs = rui::renderer::font_loader::create_font_system();
-    rui::renderer::font_loader::apply_default_families(fs.db_mut());
-    rui::text::install_shared_font_system(&mut fs);
+    jadix::app::reactive::reset_registered_anchors();
+    let mut fs = jadix::renderer::font_loader::create_font_system();
+    jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+    jadix::text::install_shared_font_system(&mut fs);
     let (_handle, _) = create_root(|| {
         create_effect(|| {
             let mut tree = InputShowcase(InputShowcaseProps::default());
             fn find_caption<'a>(
-                el: &'a mut rui::core::tree::Element,
-            ) -> Option<&'a mut rui::core::tree::Element> {
+                el: &'a mut jadix::core::tree::Element,
+            ) -> Option<&'a mut jadix::core::tree::Element> {
                 if el.text.as_deref() == Some("Mark invalid") {
                     return Some(el);
                 }
@@ -1444,7 +1452,7 @@ fn forms_input_showcase_mark_invalid_button_has_caption() {
                 "caption alpha must be visible, got {:?}",
                 color
             );
-            let mut layout = rui::core::tree::LayoutTree::new();
+            let mut layout = jadix::core::tree::LayoutTree::new();
             let result = layout.build_and_layout(&mut tree, 900.0, 900.0, [0.0, 0.0]);
             let node = result
                 .text_nodes
@@ -1467,12 +1475,12 @@ fn forms_input_showcase_mark_invalid_button_has_caption() {
             );
         });
     });
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
 }
 
 #[test]
 fn headless_mount_gallery_app_does_not_overflow() {
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
     let (_handle, _) = create_root(|| {
         create_effect(|| {
             let tree = build_gallery_app();
@@ -1488,11 +1496,11 @@ fn headless_mount_gallery_app_does_not_overflow() {
 fn button_showcase_format_get_lowers_to_bind_text() {
     // Section pages build under `isolate_reads`; without bind_text lowering,
     // `format!(…, count.get())` would bake a static label and never update.
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
     let (_handle, _) = create_root(|| {
         create_effect(|| {
             let tree = ButtonShowcase(ButtonShowcaseProps::default());
-            fn find_bind(el: &rui::core::tree::Element) -> bool {
+            fn find_bind(el: &jadix::core::tree::Element) -> bool {
                 if el
                     .template_id
                     .as_deref()
@@ -1511,20 +1519,20 @@ fn button_showcase_format_get_lowers_to_bind_text() {
             );
         });
     });
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
 }
 
 #[test]
 fn forms_section_does_not_crush_sidebar_width() {
-    rui::app::reactive::reset_registered_anchors();
-    let mut fs = rui::renderer::font_loader::create_font_system();
-    rui::renderer::font_loader::apply_default_families(fs.db_mut());
-    rui::text::install_shared_font_system(&mut fs);
+    jadix::app::reactive::reset_registered_anchors();
+    let mut fs = jadix::renderer::font_loader::create_font_system();
+    jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+    jadix::text::install_shared_font_system(&mut fs);
     let (_handle, _) = create_root(|| {
         create_effect(|| {
             use_signal("gal_nav_section", || "basics".to_string()).set("forms".to_string());
             let mut app = build_gallery_app();
-            let mut layout = rui::core::tree::LayoutTree::new();
+            let mut layout = jadix::core::tree::LayoutTree::new();
             let _ = layout.build_and_layout(&mut app, 720.0, 700.0, [-1.0, -1.0]);
             let side = gallery_find_by_tid(&app, "gal-sidebar").expect("gal-sidebar");
             let w = side.layout_bounds[2];
@@ -1534,7 +1542,7 @@ fn forms_section_does_not_crush_sidebar_width() {
             );
         });
     });
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
 }
 
 #[test]
@@ -1543,15 +1551,15 @@ fn overlays_section_effect_flush_completes() {
     // miss `try_reconcile_subtree` (no AppState) and `schedule_effect` into the
     // in-flight deferred flush → `flush_deferred_effects exceeded 100k rounds`.
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let _ = rui::core::reactivity::isolate_reads(|| {
+                let _ = jadix::core::reactivity::isolate_reads(|| {
                     GallerySectionOverlays(GallerySectionOverlaysProps::default())
                 });
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
@@ -1563,19 +1571,19 @@ fn overlays_revisit_does_not_shrink_main_pane() {
     // `build_gallery_app()`: the latter returns a `reactive_view` placeholder, so
     // `scroll-overlays` is not in the local tree.
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 let mut widths = Vec::new();
                 for section in ["overlays", "basics", "overlays", "basics", "overlays"] {
-                    rui::app::reactive::reset_registered_anchors();
+                    jadix::app::reactive::reset_registered_anchors();
                     let mut app =
-                        rui::core::reactivity::isolate_reads(|| gallery_section_body(section));
-                    let _ = rui::layout::layout_tree::hoist_portal_subtrees(&mut app);
-                    let mut layout = rui::core::tree::LayoutTree::new();
+                        jadix::core::reactivity::isolate_reads(|| gallery_section_body(section));
+                    let _ = jadix::layout::layout_tree::hoist_portal_subtrees(&mut app);
+                    let mut layout = jadix::core::tree::LayoutTree::new();
                     let _ = layout.build_and_layout(&mut app, 1000.0, 700.0, [-1.0, -1.0]);
                     let pane = gallery_find_by_tid(&app, &format!("scroll-{section}"))
                         .expect("scroll pane");
@@ -1594,22 +1602,22 @@ fn overlays_revisit_does_not_shrink_main_pane() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn gallery_main_pane_uses_remaining_width() {
     // toast_host must not flex-split the main column (reactive_placeholder is w/h 100%).
-    rui::app::reactive::reset_registered_anchors();
-    let mut fs = rui::renderer::font_loader::create_font_system();
-    rui::renderer::font_loader::apply_default_families(fs.db_mut());
-    rui::text::install_shared_font_system(&mut fs);
+    jadix::app::reactive::reset_registered_anchors();
+    let mut fs = jadix::renderer::font_loader::create_font_system();
+    jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+    jadix::text::install_shared_font_system(&mut fs);
     let (_handle, _) = create_root(|| {
         create_effect(|| {
             use_signal("gal_nav_section", || "basics".to_string());
             let mut app = build_gallery_app();
-            let mut layout = rui::core::tree::LayoutTree::new();
+            let mut layout = jadix::core::tree::LayoutTree::new();
             let _ = layout.build_and_layout(&mut app, 1000.0, 700.0, [-1.0, -1.0]);
             let side = gallery_find_by_tid(&app, "gal-sidebar").expect("sidebar");
             let inset = gallery_find_slot(&app, "sidebar-inset").expect("sidebar-inset");
@@ -1628,21 +1636,21 @@ fn gallery_main_pane_uses_remaining_width() {
             );
         });
     });
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
 }
 
 #[test]
 fn gallery_sidebar_collapses_to_icon_rail() {
-    rui::app::reactive::reset_registered_anchors();
-    let mut fs = rui::renderer::font_loader::create_font_system();
-    rui::renderer::font_loader::apply_default_families(fs.db_mut());
-    rui::text::install_shared_font_system(&mut fs);
+    jadix::app::reactive::reset_registered_anchors();
+    let mut fs = jadix::renderer::font_loader::create_font_system();
+    jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+    jadix::text::install_shared_font_system(&mut fs);
     let (_handle, _) = create_root(|| {
         create_effect(|| {
             use_signal("gal_nav_section", || "basics".to_string());
             use_signal("gal-shell__open", || false);
             let mut app = build_gallery_app();
-            let mut layout = rui::core::tree::LayoutTree::new();
+            let mut layout = jadix::core::tree::LayoutTree::new();
             let _ = layout.build_and_layout(&mut app, 1000.0, 700.0, [-1.0, -1.0]);
             let side = gallery_find_by_tid(&app, "gal-sidebar").expect("sidebar");
             let w = side.layout_bounds[2];
@@ -1652,7 +1660,7 @@ fn gallery_sidebar_collapses_to_icon_rail() {
             );
         });
     });
-    rui::app::reactive::reset_registered_anchors();
+    jadix::app::reactive::reset_registered_anchors();
 }
 
 #[test]
@@ -1661,15 +1669,15 @@ fn basics_section_scrolls_when_viewport_shorter() {
     // viewport is shorter — same failure mode as gallery after a window-height shrink
     // once surface size tracks Resized (see AppState::resolve_surface_size).
     run_on_gallery_build_stack(|| {
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
 
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 let mut body = gallery_section_body("basics");
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let tall = layout.build_and_layout(&mut body, 600.0, 2000.0, [-1.0, -1.0]);
                 let (_, _tall_vp, _, tall_content) = tall
                     .scroll_metrics
@@ -1697,18 +1705,18 @@ fn basics_section_scrolls_when_viewport_shorter() {
                 );
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn headless_layout_basics_section_does_not_overflow() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 let mut tree = gallery_section_body("basics");
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut tree, 1280.0, 800.0, [0.0, 0.0]);
             });
         });
@@ -1720,15 +1728,15 @@ fn headless_layout_basics_section_does_not_overflow() {
 #[test]
 fn headless_layout_basics_fits_pe_stack_without_grow() {
     run_on_pe_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 let mut tree = gallery_section_body("basics");
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut tree, 1280.0, 800.0, [0.0, 0.0]);
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
@@ -1754,18 +1762,18 @@ where
     run_on_stack(WINDOWS_PE_STACK, f);
 }
 
-/// 1 MiB thread (Windows PE default) + framework [`rui::app::with_ui_build_stack`].
+/// 1 MiB thread (Windows PE default) + framework [`jadix::app::with_ui_build_stack`].
 fn run_on_gallery_build_stack<F>(f: F)
 where
     F: FnOnce() + Send + 'static,
 {
-    run_on_pe_stack(|| rui::app::with_ui_build_stack(f));
+    run_on_pe_stack(|| jadix::app::with_ui_build_stack(f));
 }
 
 #[test]
 fn headless_layout_all_sections_does_not_overflow() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 for key in [
@@ -1781,7 +1789,7 @@ fn headless_layout_all_sections_does_not_overflow() {
                     "about",
                 ] {
                     let mut tree = gallery_section_body(key);
-                    let mut layout = rui::core::tree::LayoutTree::new();
+                    let mut layout = jadix::core::tree::LayoutTree::new();
                     let _ = layout.build_and_layout(&mut tree, 1280.0, 800.0, [0.0, 0.0]);
                 }
             });
@@ -1810,10 +1818,10 @@ fn gallery_section_scroll_id(key: &str) -> &'static str {
 #[test]
 fn gallery_section_pages_must_not_enable_x_scroll() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 for key in [
@@ -1829,10 +1837,10 @@ fn gallery_section_pages_must_not_enable_x_scroll() {
                     "theme",
                     "about",
                 ] {
-                    rui::app::reactive::reset_registered_anchors();
+                    jadix::app::reactive::reset_registered_anchors();
                     let rest = gallery_section_scroll_id(key);
                     let mut tree = gallery_section_body(key);
-                    let mut layout = rui::core::tree::LayoutTree::new();
+                    let mut layout = jadix::core::tree::LayoutTree::new();
                     for &(w, h) in &[(640.0, 700.0), (800.0, 700.0), (900.0, 700.0)] {
                         let result = layout.build_and_layout(&mut tree, w, h, [-1.0, -1.0]);
                         let (vp, max, content) = scroll_metrics_xy(&result, rest);
@@ -1848,15 +1856,15 @@ fn gallery_section_pages_must_not_enable_x_scroll() {
                 }
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
-fn find_tid(el: &rui::core::tree::Element, want: &str) -> bool {
+fn find_tid(el: &jadix::core::tree::Element, want: &str) -> bool {
     gallery_find_tid(el, want)
 }
 
-fn gallery_find_attr(el: &rui::core::tree::Element, key: &str, value: &str) -> bool {
+fn gallery_find_attr(el: &jadix::core::tree::Element, key: &str, value: &str) -> bool {
     let mut stack = vec![el];
     while let Some(el) = stack.pop() {
         if el.attrs.get(key).map(String::as_str) == Some(value) {
@@ -1870,7 +1878,7 @@ fn gallery_find_attr(el: &rui::core::tree::Element, key: &str, value: &str) -> b
 #[test]
 fn theme_section_mounts_controls() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, tree) = create_root(|| gallery_section_body("theme"));
         assert!(
             find_tid(&tree, "gal-theme-apply") || gallery_find_attr(&tree, "id", "gal-theme-apply"),
@@ -1880,14 +1888,14 @@ fn theme_section_mounts_controls() {
             find_tid(&tree, "gal-theme-sheet") || gallery_find_attr(&tree, "id", "gal-theme-sheet"),
             "theme section must mount apply styles.toml"
         );
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn text_section_mounts_msdf_card() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, tree) = create_root(|| gallery_section_body("text"));
         assert!(
             find_tid(&tree, "gal-msdf-coverage"),
@@ -1901,14 +1909,14 @@ fn text_section_mounts_msdf_card() {
             find_tid(&tree, "gal-msdf-msdf"),
             "text section must mount three-channel MSDF sample"
         );
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn draw_section_mounts_billboard() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, tree) = create_root(|| gallery_section_body("draw"));
         assert!(
             find_tid(&tree, "gal-billboard-default"),
@@ -1919,17 +1927,17 @@ fn draw_section_mounts_billboard() {
             "draw section must mount steep-pitch billboard"
         );
         assert!(
-            gallery_find_attr(&tree, "rui_scene3d_label", "永角"),
+            gallery_find_attr(&tree, "jadix_scene3d_label", "永角"),
             "steep billboard must carry CJK MSDF label"
         );
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn navigation_section_mounts_shell_router_view() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, tree) = create_root(|| gallery_section_body("navigation"));
         assert!(
             find_tid(&tree, "gal_shell_router__router_view"),
@@ -1967,11 +1975,11 @@ fn navigation_section_mounts_shell_router_view() {
             find_tid(&tree, GAL_SHELL_GLASS_MICA),
             "navigation section must mount Mica recipe button"
         );
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
-fn subtree_nodes_with_class_util(el: &rui::core::tree::Element, util: &str) -> usize {
+fn subtree_nodes_with_class_util(el: &jadix::core::tree::Element, util: &str) -> usize {
     let here = el
         .class_set
         .as_ref()
@@ -1986,7 +1994,7 @@ fn subtree_nodes_with_class_util(el: &rui::core::tree::Element, util: &str) -> u
 #[test]
 fn frameless_title_bar_close_overrides_hover_bg_destructive() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, tree) = create_root(gallery_frameless_root);
         assert_eq!(
             subtree_nodes_with_class_util(&tree, "bg-destructive"),
@@ -1998,25 +2006,25 @@ fn frameless_title_bar_close_overrides_hover_bg_destructive() {
             1,
             "close hover text must overlay destructive-foreground for contrast on red"
         );
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn full_app_mount_and_layout_fits_pe_stack() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 let mut app = build_gallery_app();
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut app, 1280.0, 800.0, [0.0, 0.0]);
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
@@ -2024,29 +2032,29 @@ fn full_app_mount_and_layout_fits_pe_stack() {
 #[test]
 fn full_app_mount_and_layout_fits_pe_stack_without_grow() {
     run_on_pe_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 let mut app = build_gallery_app();
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut app, 1280.0, 800.0, [0.0, 0.0]);
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
 #[test]
 fn button_showcase_fits_pe_stack() {
     run_on_pe_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 let mut tree = ButtonShowcase(Default::default());
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let _ = layout.build_and_layout(&mut tree, 1280.0, 800.0, [0.0, 0.0]);
             });
         });
@@ -2067,20 +2075,20 @@ fn rects_intersect(a: [f32; 4], b: [f32; 4]) -> bool {
 #[test]
 fn overlays_local_scrim_yellow_is_in_capture_prefix() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let mut root = rui::core::reactivity::isolate_reads(|| {
+                let mut root = jadix::core::reactivity::isolate_reads(|| {
                     GallerySectionOverlays(GallerySectionOverlaysProps::default())
                 });
                 assert!(
-                    rui::layout::layout_tree::hoist_portal_subtrees(&mut root) >= 1,
+                    jadix::layout::layout_tree::hoist_portal_subtrees(&mut root) >= 1,
                     "local Portal must hoist onto gal-local-scrim-host"
                 );
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 let result = layout.build_and_layout(&mut root, 1280.0, 1800.0, [-1.0, -1.0]);
                 let overlay_text_start =
                     result.overlay_split.text_start.min(result.text_nodes.len());
@@ -2184,11 +2192,11 @@ fn overlays_local_scrim_yellow_is_in_capture_prefix() {
                 }
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
-fn instance_fill_mpx(instances: &[rui::renderer::InstanceInput], vw: f32, vh: f32) -> f32 {
+fn instance_fill_mpx(instances: &[jadix::renderer::InstanceInput], vw: f32, vh: f32) -> f32 {
     let mut area = 0.0f32;
     for i in instances {
         let x0 = i.rect_pos[0].max(0.0);
@@ -2209,18 +2217,18 @@ fn instance_fill_mpx(instances: &[rui::renderer::InstanceInput], vw: f32, vh: f3
 #[test]
 fn gallery_layout_cost_default_vs_maximized() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
                 for section in ["basics", "layout", "draw"] {
-                    rui::app::reactive::reset_registered_anchors();
+                    jadix::app::reactive::reset_registered_anchors();
                     let mut app =
-                        rui::core::reactivity::isolate_reads(|| gallery_section_body(section));
-                    let _ = rui::layout::layout_tree::hoist_portal_subtrees(&mut app);
-                    let mut layout = rui::core::tree::LayoutTree::new();
+                        jadix::core::reactivity::isolate_reads(|| gallery_section_body(section));
+                    let _ = jadix::layout::layout_tree::hoist_portal_subtrees(&mut app);
+                    let mut layout = jadix::core::tree::LayoutTree::new();
                     let sizes = [(800.0, 600.0), (1280.0, 800.0), (1920.0, 1080.0)];
                     let mut fast_ms = [0.0f32; 3];
                     let mut inst = [0usize; 3];
@@ -2283,7 +2291,7 @@ fn gallery_layout_cost_default_vs_maximized() {
                 }
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
@@ -2292,9 +2300,9 @@ fn gallery_layout_cost_default_vs_maximized() {
 #[ignore = "performance scan; run explicitly with --ignored --nocapture"]
 fn gallery_scroll_segment_cost() {
     run_on_gallery_build_stack(|| {
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_owner, _) = create_root(|| {
             create_effect(|| {
                 for section in [
@@ -2309,10 +2317,10 @@ fn gallery_scroll_segment_cost() {
                     "text",
                     "theme",
                 ] {
-                    rui::app::reactive::reset_registered_anchors();
+                    jadix::app::reactive::reset_registered_anchors();
                     let mut root =
-                        rui::core::reactivity::isolate_reads(|| gallery_section_body(section));
-                    let mut tree = rui::core::tree::LayoutTree::new();
+                        jadix::core::reactivity::isolate_reads(|| gallery_section_body(section));
+                    let mut tree = jadix::core::tree::LayoutTree::new();
                     let first = tree.build_and_layout(&mut root, 1920.0, 1080.0, [-1.0; 2]);
                     let Some((rest, _, _, content)) = first
                         .scroll_metrics
@@ -2322,8 +2330,8 @@ fn gallery_scroll_segment_cost() {
                     else {
                         continue;
                     };
-                    let offset = rui::core::reactivity::use_signal(
-                        &rui::core::scroll_viewport::scroll_offset_y_signal_key(&rest),
+                    let offset = jadix::core::reactivity::use_signal(
+                        &jadix::core::scroll_viewport::scroll_offset_y_signal_key(&rest),
                         || 0.0_f32,
                     );
                     tree.set_collect_skip_allowed(true);
@@ -2356,7 +2364,7 @@ fn gallery_scroll_segment_cost() {
                 }
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
@@ -2365,17 +2373,17 @@ fn gallery_scroll_segment_cost() {
 #[test]
 fn viewport_modal_rsx_open_keeps_card_vstack_gap() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        rui::app::portal_overlay::clear_overlay_stack();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::renderer::font_loader::ensure_coverage_for_text(
+        jadix::app::reactive::reset_registered_anchors();
+        jadix::app::portal_overlay::clear_overlay_stack();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::renderer::font_loader::ensure_coverage_for_text(
             &mut fs,
             "打开 RSX ViewportModal 关闭 RSX 模态 视口舞台 presence DialogFade SheetSlide",
         );
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::text::install_shared_font_system(&mut fs);
 
-        let text_y = |result: &rui::layout::layout_tree::RenderResult, needle: &str| -> f32 {
+        let text_y = |result: &jadix::layout::layout_tree::RenderResult, needle: &str| -> f32 {
             result
                 .text_nodes
                 .iter()
@@ -2393,10 +2401,10 @@ fn viewport_modal_rsx_open_keeps_card_vstack_gap() {
                 })
         };
         let layout_card = |width: f32| {
-            rui::app::reactive::reset_registered_anchors();
+            jadix::app::reactive::reset_registered_anchors();
             let mut tree = ViewportModalShowcase(ViewportModalShowcaseProps::default());
-            let _ = rui::layout::layout_tree::hoist_portal_subtrees(&mut tree);
-            let mut layout = rui::core::tree::LayoutTree::new();
+            let _ = jadix::layout::layout_tree::hoist_portal_subtrees(&mut tree);
+            let mut layout = jadix::core::tree::LayoutTree::new();
             layout.build_and_layout(&mut tree, width, 800.0, [0.0, 0.0])
         };
 
@@ -2439,8 +2447,8 @@ fn viewport_modal_rsx_open_keeps_card_vstack_gap() {
             );
         });
 
-        rui::app::portal_overlay::clear_overlay_stack();
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::portal_overlay::clear_overlay_stack();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
@@ -2449,21 +2457,21 @@ fn viewport_modal_rsx_open_keeps_card_vstack_gap() {
 #[test]
 fn message_scroller_latest_button_stays_inside_chat_card() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let mut root = rui::core::reactivity::isolate_reads(|| {
+                let mut root = jadix::core::reactivity::isolate_reads(|| {
                     MessageScrollerShowcase(MessageScrollerShowcaseProps::default())
                 });
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 for _ in 0..3 {
                     let _ = layout.build_and_layout(&mut root, 420.0, 900.0, [-1.0, -1.0]);
                 }
                 use_signal(
-                    &rui::core::scroll_viewport::scroll_offset_y_signal_key(
+                    &jadix::core::scroll_viewport::scroll_offset_y_signal_key(
                         "gal-ms-showcase:viewport",
                     ),
                     || 0.0_f32,
@@ -2509,11 +2517,11 @@ fn message_scroller_latest_button_stays_inside_chat_card() {
                 }
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
-fn gallery_subtree_has_text(el: &rui::core::tree::Element, needle: &str) -> bool {
+fn gallery_subtree_has_text(el: &jadix::core::tree::Element, needle: &str) -> bool {
     if el.text.as_deref().is_some_and(|t| t.contains(needle)) {
         return true;
     }
@@ -2523,10 +2531,10 @@ fn gallery_subtree_has_text(el: &rui::core::tree::Element, needle: &str) -> bool
 }
 
 fn gallery_find_slot_with_text<'a>(
-    el: &'a rui::core::tree::Element,
+    el: &'a jadix::core::tree::Element,
     slot: &str,
     needle: &str,
-) -> Option<&'a rui::core::tree::Element> {
+) -> Option<&'a jadix::core::tree::Element> {
     if el.attrs.get("data-slot").map(String::as_str) == Some(slot)
         && gallery_subtree_has_text(el, needle)
     {
@@ -2542,16 +2550,16 @@ fn gallery_find_slot_with_text<'a>(
 #[test]
 fn attachment_live_state_chip_is_not_clipped_by_group() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                let mut tree = jadix::core::reactivity::isolate_reads(|| {
                     AttachmentShowcase(AttachmentShowcaseProps::default())
                 });
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 for width in [360.0, 720.0, 1100.0] {
                     let _ = layout.build_and_layout(&mut tree, width, 1600.0, [0.0, 0.0]);
                     let group =
@@ -2589,7 +2597,7 @@ fn attachment_live_state_chip_is_not_clipped_by_group() {
                 }
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }
 
@@ -2599,16 +2607,16 @@ fn attachment_live_state_chip_is_not_clipped_by_group() {
 #[test]
 fn basics_oliver_is_typing_shimmer_must_keep_full_ink() {
     run_on_gallery_build_stack(|| {
-        rui::app::reactive::reset_registered_anchors();
-        let mut fs = rui::renderer::font_loader::create_font_system();
-        rui::renderer::font_loader::apply_default_families(fs.db_mut());
-        rui::text::install_shared_font_system(&mut fs);
+        jadix::app::reactive::reset_registered_anchors();
+        let mut fs = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fs.db_mut());
+        jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                let mut tree = rui::core::reactivity::isolate_reads(|| {
+                let mut tree = jadix::core::reactivity::isolate_reads(|| {
                     MessageShowcase(MessageShowcaseProps::default())
                 });
-                let mut layout = rui::core::tree::LayoutTree::new();
+                let mut layout = jadix::core::tree::LayoutTree::new();
                 for &(w, h) in &[(400.0, 900.0), (720.0, 900.0)] {
                     let result = layout.build_and_layout(&mut tree, w, h, [-1.0, -1.0]);
                     let caption = result
@@ -2632,7 +2640,7 @@ fn basics_oliver_is_typing_shimmer_must_keep_full_ink() {
                     let ink = caption
                         .prepared
                         .as_ref()
-                        .map(rui::text::intrinsic_width)
+                        .map(jadix::text::intrinsic_width)
                         .unwrap_or(0.0);
                     assert!(
                         caption.text.contains("Oliver is typing"),
@@ -2661,6 +2669,6 @@ fn basics_oliver_is_typing_shimmer_must_keep_full_ink() {
                 }
             });
         });
-        rui::app::reactive::reset_registered_anchors();
+        jadix::app::reactive::reset_registered_anchors();
     });
 }

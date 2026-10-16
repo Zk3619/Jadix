@@ -149,7 +149,7 @@ pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
 
 #[component]
 pub(crate) fn GallerySectionForms() -> Element {
-    rui::core::reactivity::isolate_reads(|| {
+    jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-forms" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
@@ -172,7 +172,7 @@ pub(crate) fn GallerySectionForms() -> Element {
 
 #[component]
 pub(crate) fn GallerySectionEvents() -> Element {
-    rui::core::reactivity::isolate_reads(|| {
+    jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-events" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
@@ -186,7 +186,7 @@ pub(crate) fn GallerySectionEvents() -> Element {
 
 #[component]
 pub(crate) fn GallerySectionOverlays() -> Element {
-    rui::core::reactivity::isolate_reads(|| {
+    jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-overlays" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
@@ -205,7 +205,7 @@ pub(crate) fn GallerySectionOverlays() -> Element {
 
 #[component]
 pub(crate) fn GallerySectionDraw() -> Element {
-    rui::core::reactivity::isolate_reads(|| {
+    jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-draw" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
@@ -225,7 +225,7 @@ pub(crate) fn GallerySectionDraw() -> Element {
 
 #[component]
 pub(crate) fn GallerySectionData() -> Element {
-    rui::core::reactivity::isolate_reads(|| {
+    jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-data" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
@@ -242,7 +242,7 @@ pub(crate) fn GallerySectionData() -> Element {
 
 #[component]
 pub(crate) fn GallerySectionNavigation() -> Element {
-    rui::core::reactivity::isolate_reads(|| {
+    jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-navigation" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
@@ -263,7 +263,7 @@ pub(crate) fn GallerySectionNavigation() -> Element {
 
 #[component]
 pub(crate) fn GallerySectionLayout() -> Element {
-    rui::core::reactivity::isolate_reads(|| {
+    jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-layout" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
@@ -301,7 +301,7 @@ pub(crate) fn GallerySectionLayout() -> Element {
 
 #[component]
 pub(crate) fn GallerySectionText() -> Element {
-    rui::core::reactivity::isolate_reads(|| {
+    jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-text" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
@@ -320,7 +320,7 @@ pub(crate) fn GallerySectionText() -> Element {
 
 #[component]
 pub(crate) fn GallerySectionAbout() -> Element {
-    rui::core::reactivity::isolate_reads(|| {
+    jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-about" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem" max_w="48rem">
@@ -345,7 +345,7 @@ pub(crate) fn GallerySectionAbout() -> Element {
 
 #[component]
 pub(crate) fn GallerySectionBasics() -> Element {
-    rui::core::reactivity::isolate_reads(|| {
+    jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-basics" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" gap="1rem" p="1.5rem">
@@ -381,12 +381,12 @@ pub(crate) fn GallerySectionBasics() -> Element {
 
 pub(crate) fn build_gallery_app() -> Element {
     let gallery_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    rui::style::watch_stylesheets([
+    jadix::style::watch_stylesheets([
         gallery_dir.join("theme.toml"),
         gallery_dir.join("styles.toml"),
     ]);
     let section = use_signal("gal_nav_section", || {
-        std::env::var("RUI_GALLERY_SECTION").unwrap_or_else(|_| "basics".to_string())
+        std::env::var("JADIX_GALLERY_SECTION").unwrap_or_else(|_| "basics".to_string())
     });
     let nav_menu = gallery_nav_menu(section);
 
@@ -402,7 +402,7 @@ pub(crate) fn build_gallery_app() -> Element {
                                 <SidebarMenuButton id="gal-workspace">
                                     <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
                                         <Icon name="box" size="16px" color="sidebar-foreground" pointer_events="none" />
-                                        <Label grow="1" min_w="0" text_size="0.875rem" font_weight="700" color="sidebar-foreground">"RUI Gallery"</Label>
+                                        <Label grow="1" min_w="0" text_size="0.875rem" font_weight="700" color="sidebar-foreground">"Jadix Gallery"</Label>
                                     </HStack>
                                 </SidebarMenuButton>
                             </SidebarMenuItem>
@@ -477,7 +477,7 @@ pub(crate) fn build_gallery_app() -> Element {
                             <Match scope="examples/gallery/App:section_desc">
                                 <When when={section.get() == "events"}>
                                     <Label id="gal-section-desc" w="100%" min_w="0" text_size="0.875rem" color="muted-foreground" text_overflow="ellipsis">
-                                        "crates/rui/src/app/pointer_events.rs：MouseEvent 字段、捕获/冒泡、click LCA"
+                                        "crates/jadix/src/app/pointer_events.rs：MouseEvent 字段、捕获/冒泡、click LCA"
                                     </Label>
                                 </When>
                                 <When when={section.get() == "draw"}>

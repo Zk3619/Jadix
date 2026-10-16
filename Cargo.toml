@@ -5,26 +5,24 @@ resolver = "2"
 
 [patch.crates-io]
 # Batch on-demand glyph uploads; retain atlas pixels across growth instead of
-# rasterizing the same glyphs again. See vendor/glyphon/RUI_PATCH.md.
+# rasterizing the same glyphs again. See vendor/glyphon/JADIX_PATCH.md.
 glyphon = { path = "vendor/glyphon" }
-# Normalize irrelevant parent constraints for intrinsic flex nodes; see RUI_PATCH.md.
+# Normalize irrelevant parent constraints for intrinsic flex nodes; see JADIX_PATCH.md.
 taffy = { path = "vendor/taffy" }
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 license = "Apache-2.0"
-repository = "https://github.com/Zk3619/rui"
+repository = "https://github.com/Zk3619/Jadix"
 
 # Single source of truth for versions. Member crates use `{ workspace = true }`
 # plus crate-local features / optional. Policy: development-docs/ops/crate_deps.md
 [workspace.dependencies]
 # --- path crates (version required so they are not `*` wildcards for cargo-deny / publish) ---
-rui = { path = "crates/rui", version = "0.1.0", default-features = false, features = ["backend-dx12"] }
-# Alias so `jadix_window_state` can feature-gate the engine under the W4 name.
-jadix = { package = "rui", path = "crates/rui", version = "0.1.0", default-features = false, features = ["backend-dx12"] }
-rui_macros = { path = "crates/rui_macros", version = "0.1.0" }
-rui_style_tokens = { path = "crates/rui_style_tokens", version = "0.1.0" }
+jadix = { path = "crates/jadix", version = "0.1.0", default-features = false, features = ["backend-dx12"] }
+jadix_macros = { path = "crates/jadix_macros", version = "0.1.0" }
+jadix_style_tokens = { path = "crates/jadix_style_tokens", version = "0.1.0" }
 jadix_window_state = { path = "crates/jadix_window_state", version = "0.1.0" }
 jadix_clipboard = { path = "crates/jadix_clipboard", version = "0.1.0", default-features = false }
 
@@ -40,7 +38,7 @@ openharmony-ability = "1.0.0-beta.2"
 openharmony-ability-derive = "1.0.0-beta.1"
 accesskit = "0.24.1"
 # wgpu 30 gates native backends behind features (unlike 22, which force-linked
-# Vulkan+GLES on Windows). Keep GL/Metal available; rui enables DX12 for the
+# Vulkan+GLES on Windows). Keep GL/Metal available; jadix enables DX12 for the
 # Windows frame path. Vulkan stays opt-in.
 # glyphon 0.12 pins wgpu 30 + cosmic-text 0.19; swash/ttf-parser follow that stack.
 wgpu = { version = "30", default-features = false, features = [
@@ -121,8 +119,8 @@ windows-collections = "0.3"
 
 [profile.release]
 codegen-units = 1
-# Extreme size: "z" over "s". Fat LTO deletes more dead code (slower / hungrier link).
-opt-level = "z"
+# Optimize per-frame CPU work; retain fat LTO to eliminate unused code.
+opt-level = 3
 lto = "fat"
 debug = false
 split-debuginfo = "off"
@@ -149,7 +147,7 @@ opt-level = 2
 
 # The engine's per-frame tree walks and paint planning must fit a frame budget
 # in the default Gallery build. Keep debug info and assertions enabled.
-[profile.dev.package.rui]
+[profile.dev.package.jadix]
 opt-level = 2
 
 # Flex/grid recomputation runs throughout sortable size animations.
