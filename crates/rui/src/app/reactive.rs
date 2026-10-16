@@ -1240,7 +1240,7 @@ pub fn apply_bound_size(el: &mut Element, axis: &str, next: impl IntoCssDim) -> 
     };
     let before_specs = el.style.unit_specs.clone();
     if slot.is_logical() {
-        el.style.set_css_dim(slot, dim);
+        el.set_css_dim(slot, dim);
         return if before_specs == el.style.unit_specs {
             LayoutStatus::Clean
         } else {
@@ -1256,7 +1256,7 @@ pub fn apply_bound_size(el: &mut Element, axis: &str, next: impl IntoCssDim) -> 
         UnitSlot::MaxHeight => el.style.max_size.height,
         _ => return LayoutStatus::Clean,
     };
-    el.style.set_css_dim(slot, dim);
+    el.set_css_dim(slot, dim);
     let after_taffy = match slot {
         UnitSlot::Width => el.style.size.width,
         UnitSlot::Height => el.style.size.height,

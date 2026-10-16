@@ -1761,8 +1761,16 @@ impl Element {
     }
 
     fn set_css(mut self, slot: UnitSlot, dim: impl IntoCssDim) -> Self {
-        self.style.set_css_dim(slot, dim.into_css_dim());
+        self.set_css_dim(slot, dim.into_css_dim());
         self
+    }
+
+    /// Authored dimensions must also survive the next class-variant restore.
+    pub(crate) fn set_css_dim(&mut self, slot: UnitSlot, dim: CssDim) {
+        if let Some(classes) = self.class_set.as_mut() {
+            classes.set_base_dimension(slot, dim.clone());
+        }
+        self.style.set_css_dim(slot, dim);
     }
 
     fn apply_rect_pair(self, start: UnitSlot, end: UnitSlot, pair: impl IntoCssRectPair) -> Self {
@@ -4581,9 +4589,22 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
     collect: &mut ReactiveSyncCollect,
 ) {
     let root_ptr = element as *mut Element;
-    let mut stack: Vec<(*mut Element, [f32; 2], bool, Option<[f32; 4]>, Vec<usize>)> =
-        vec![(root_ptr, scroll_acc, in_portal, None, Vec::new())];
-    while let Some((ptr, scroll_acc, in_portal, clip_bounds, path)) = stack.pop() {
+    // DFS siblings share their ancestor spine. Store depth/index in the work
+    // stack instead of allocating and copying a complete path for every node.
+    let mut path = Vec::new();
+    let mut stack: Vec<(
+        *mut Element,
+        [f32; 2],
+        bool,
+        Option<[f32; 4]>,
+        usize,
+        Option<usize>,
+    )> = vec![(root_ptr, scroll_acc, in_portal, None, 0, None)];
+    while let Some((ptr, scroll_acc, in_portal, clip_bounds, depth, index)) = stack.pop() {
+        path.truncate(depth);
+        if let Some(index) = index {
+            path.push(index);
+        }
         // Exclusive node borrow ends before any root-wide hash bust (overlapping
         // `&mut` through `root_ptr` would alias `ptr` when `path` reaches this node).
         let (child_acc, in_portal, clip_bounds, child_count, paint_changed) = {
@@ -4670,9 +4691,9 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                                         );
                                     }
                                 } else if element.layout_node.is_some() {
-                                    collect.display_reveal_keys.push(
-                                        crate::app::damage::paint_element_key(element),
-                                    );
+                                    collect
+                                        .display_reveal_keys
+                                        .push(crate::app::damage::paint_element_key(element));
                                 }
                             }
                         } else {
@@ -4779,14 +4800,13 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
         // SAFETY: exclusive subtree; push child pointers after hash bust.
         let element = unsafe { &mut *ptr };
         for i in (0..child_count).rev() {
-            let mut child_path = path.clone();
-            child_path.push(i);
             stack.push((
                 std::ptr::addr_of_mut!(element.children[i]),
                 child_acc,
                 in_portal,
                 clip_bounds,
-                child_path,
+                path.len(),
+                Some(i),
             ));
         }
     }
@@ -4883,6 +4903,35 @@ impl From<Option<Element>> for Element {
 mod p1_builder_tests {
     use super::*;
     use crate::style::{TextDirection, TextSpan};
+
+    #[test]
+    fn reactive_sync_keeps_the_correct_spine_across_dfs_siblings() {
+        let changed = || Element::new().reactive_sync(|_, _| LayoutStatus::StyleChanged);
+        let mut root = Element::new()
+            .child(
+                Element::new()
+                    .child(Element::new().child(changed()))
+                    .child(Element::new()),
+            )
+            .child(Element::new().child(Element::new()))
+            .child(changed());
+        walk_elements_post_order_mut(&mut root, |el| el.collect_paint_hash = 42);
+        let mut tree = LayoutTree::new();
+        let mut impact = LayoutStatus::Clean;
+        sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 400.0, 300.0, [0.0; 2]);
+        assert_eq!(impact, LayoutStatus::StyleChanged);
+        assert_eq!(root.collect_paint_hash, 0);
+        assert_eq!(root.children[0].collect_paint_hash, 0);
+        assert_eq!(root.children[0].children[0].collect_paint_hash, 0);
+        assert_eq!(
+            root.children[0].children[0].children[0].collect_paint_hash,
+            0
+        );
+        assert_eq!(root.children[0].children[1].collect_paint_hash, 42);
+        assert_eq!(root.children[1].collect_paint_hash, 42);
+        assert_eq!(root.children[1].children[0].collect_paint_hash, 42);
+        assert_eq!(root.children[2].collect_paint_hash, 0);
+    }
 
     #[test]
     fn text_spans_builder_sets_concat_text() {

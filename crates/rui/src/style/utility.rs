@@ -99,6 +99,17 @@ pub struct ClassSet {
 }
 
 impl ClassSet {
+    pub(crate) fn set_base_dimension(
+        &mut self,
+        slot: crate::style::UnitSlot,
+        dim: crate::layout::dimension::CssDim,
+    ) {
+        if let Some(base) = self.base_style.as_mut() {
+            base.set_css_dim(slot, dim);
+            self.last_ctx_fp = None;
+        }
+    }
+
     /// `hover:scale-*` / `hover:rotate-*` / `hover:skew-*` (and `group-hover:`).
     /// Idle nodes will apply a linear xform on pointer enter; sticky Bake avoids a
     /// Coverage→Bake pop (Twemoji chips, gallery rotate tiles).
@@ -694,9 +705,13 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
             }
         }
     }
+    // Variant values are temporary: dimension builders update authored base
+    // values too, so detach the snapshot while applying the variant overlay.
+    let class_set = el.class_set.take();
     for util in apply {
         impact = impact.merge(apply_known_utility_ex(el, &util, false));
     }
+    el.class_set = class_set;
     if let Some((r, t, z, bw, sides)) = join_chrome {
         if el.style.radii != r {
             el.style.radii = r;
@@ -3322,6 +3337,89 @@ mod tests {
             Display::None,
             "data-* fingerprint change must not restore Flex over Display::None"
         );
+    }
+
+    #[test]
+    fn dimension_writes_survive_variant_restore_without_relayout() {
+        use crate::core::tree::LayoutTree;
+        use taffy::style::Dimension;
+
+        for button in [false, true] {
+            let mut el = if button {
+                Element::from(crate::components::button("dimension-restore").child("Go"))
+            } else {
+                with_class_list(Element::new().text("Go"), "hover:bg-accent")
+            };
+            el = el.w(68.0).h(32.0).px(12.0).gap(6.0);
+            let mut root = Element::new().flex_col().child(el);
+            let mut tree = LayoutTree::new();
+            tree.build_and_layout(&mut root, 300.0, 200.0, [-1.0; 2]);
+            for hovered in [true, false, true, false] {
+                resolve_class_variants(
+                    &mut root.children[0],
+                    &VariantContext {
+                        hovered,
+                        ..Default::default()
+                    },
+                );
+                let el = &root.children[0];
+                assert_eq!(el.style.size.width, Dimension::length(68.0));
+                assert_eq!(el.style.size.height, Dimension::length(32.0));
+                assert_eq!(
+                    el.style.padding.left,
+                    taffy::style::LengthPercentage::length(12.0)
+                );
+                assert_eq!(
+                    el.style.gap.width,
+                    taffy::style::LengthPercentage::length(6.0)
+                );
+                tree.update_taffy_node_style(el);
+                assert!(
+                    !tree.is_node_dirty(tree.root_node.unwrap()),
+                    "color variants must preserve clean layout"
+                );
+                tree.build_and_layout_fast_ex(
+                    &mut root, 300.0, 200.0, [-1.0; 2], false, false, None,
+                );
+                assert_eq!(
+                    tree.text_measure_calls.get(),
+                    0,
+                    "paint change must not remeasure text"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn bound_dimension_updates_rest_value_without_freezing_size_variants() {
+        use taffy::style::Dimension;
+        let mut el = with_class_list(Element::new(), "w-8 hover:w-32").w(68.0);
+        resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                hovered: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(el.style.size.width, Dimension::length(128.0));
+        crate::app::reactive::apply_bound_size(&mut el, "w", 96.0);
+        resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                hovered: true,
+                ..Default::default()
+            },
+        );
+        assert_eq!(el.style.size.width, Dimension::length(128.0));
+        resolve_class_variants(&mut el, &VariantContext::default());
+        assert_eq!(el.style.size.width, Dimension::length(96.0));
+        crate::app::reactive::apply_bound_size(&mut el, "inline_size", "50%");
+        resolve_class_variants(&mut el, &VariantContext::default());
+        assert!(el
+            .style
+            .unit_specs
+            .iter()
+            .any(|(slot, _)| *slot == crate::style::UnitSlot::InlineSize));
     }
 
     #[test]
