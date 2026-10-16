@@ -140,19 +140,19 @@ impl PathGlobals {
     }
 }
 
-fn tris_to_verts(tris: &[PathTri]) -> Vec<PathVert> {
-    let mut verts = Vec::with_capacity(tris.len() * 3);
+fn append_vertices(verts: &mut Vec<PathVert>, tris: &[PathTri]) -> std::ops::Range<u32> {
+    let start = verts.len() as u32;
     for tri in tris {
         verts.extend_from_slice(&PathVert::from_tri(*tri));
     }
-    verts
+    start..verts.len() as u32
 }
 
 pub struct PathGpu {
     stroke: wgpu::RenderPipeline,
-    stencil_eo: wgpu::RenderPipeline,
-    stencil_nz: wgpu::RenderPipeline,
-    cover: wgpu::RenderPipeline,
+    stencil_eo: Option<wgpu::RenderPipeline>,
+    stencil_nz: Option<wgpu::RenderPipeline>,
+    cover: Option<wgpu::RenderPipeline>,
     gradient_cover: Option<wgpu::RenderPipeline>,
     shader: wgpu::ShaderModule,
     layout: wgpu::PipelineLayout,
@@ -211,30 +211,6 @@ impl PathGpu {
             depth_fail_op: wgpu::StencilOperation::Keep,
             pass_op: wgpu::StencilOperation::Keep,
         };
-        let invert = wgpu::StencilFaceState {
-            compare: wgpu::CompareFunction::Always,
-            fail_op: wgpu::StencilOperation::Keep,
-            depth_fail_op: wgpu::StencilOperation::Keep,
-            pass_op: wgpu::StencilOperation::Invert,
-        };
-        let inc_back = wgpu::StencilFaceState {
-            compare: wgpu::CompareFunction::Always,
-            fail_op: wgpu::StencilOperation::Keep,
-            depth_fail_op: wgpu::StencilOperation::Keep,
-            pass_op: wgpu::StencilOperation::IncrementWrap,
-        };
-        let dec_front = wgpu::StencilFaceState {
-            compare: wgpu::CompareFunction::Always,
-            fail_op: wgpu::StencilOperation::Keep,
-            depth_fail_op: wgpu::StencilOperation::Keep,
-            pass_op: wgpu::StencilOperation::DecrementWrap,
-        };
-        let cover_face = wgpu::StencilFaceState {
-            compare: wgpu::CompareFunction::NotEqual,
-            fail_op: wgpu::StencilOperation::Keep,
-            depth_fail_op: wgpu::StencilOperation::Keep,
-            pass_op: wgpu::StencilOperation::Replace,
-        };
         let stroke = make_pipeline(
             device,
             &layout,
@@ -244,36 +220,6 @@ impl PathGpu {
             keep,
             keep,
             "rui-path-stroke",
-        );
-        let stencil_eo = make_pipeline(
-            device,
-            &layout,
-            &shader,
-            sample_count,
-            wgpu::ColorWrites::empty(),
-            invert,
-            invert,
-            "rui-path-stencil-eo",
-        );
-        let stencil_nz = make_pipeline(
-            device,
-            &layout,
-            &shader,
-            sample_count,
-            wgpu::ColorWrites::empty(),
-            dec_front,
-            inc_back,
-            "rui-path-stencil-nz",
-        );
-        let cover = make_pipeline(
-            device,
-            &layout,
-            &shader,
-            sample_count,
-            wgpu::ColorWrites::ALL,
-            cover_face,
-            cover_face,
-            "rui-path-cover-solid",
         );
         let resolve_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("rui-path-resolve-bgl"),
@@ -334,9 +280,9 @@ impl PathGpu {
         });
         Self {
             stroke,
-            stencil_eo,
-            stencil_nz,
-            cover,
+            stencil_eo: None,
+            stencil_nz: None,
+            cover: None,
             gradient_cover: None,
             shader,
             layout,
@@ -351,6 +297,96 @@ impl PathGpu {
             coverage: None,
             target_size: HashMap::new(),
         }
+    }
+
+    /// Stroke-only jobs must not pay for either winding rule or the fill cover.
+    /// Keep the same PSOs, creating each only when a nonempty fill needs it.
+    fn ensure_fill_pipelines(&mut self, device: &wgpu::Device, ops: &[PathGpuOp]) -> bool {
+        let mut needed = [false; 3];
+        for op in ops {
+            if let PathGpuOp::Fill(fill) = op {
+                if !fill.stencil.is_empty() {
+                    needed[usize::from(!fill.even_odd)] = true;
+                    needed[2] |= fill.grad.is_none();
+                }
+            }
+        }
+        let missing = (needed[0] && self.stencil_eo.is_none())
+            || (needed[1] && self.stencil_nz.is_none())
+            || (needed[2] && self.cover.is_none());
+        if !missing {
+            return true;
+        }
+        let invert = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Invert,
+        };
+        let inc_back = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::IncrementWrap,
+        };
+        let dec_front = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::Always,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::DecrementWrap,
+        };
+        let cover_face = wgpu::StencilFaceState {
+            compare: wgpu::CompareFunction::NotEqual,
+            fail_op: wgpu::StencilOperation::Keep,
+            depth_fail_op: wgpu::StencilOperation::Keep,
+            pass_op: wgpu::StencilOperation::Replace,
+        };
+        crate::renderer::wgpu_compat::try_gpu_init(
+            device,
+            "path fill pipeline failed; falling back to CPU raster",
+            || {
+                for (slot, required, front, back, write, label) in [
+                    (
+                        &mut self.stencil_eo,
+                        needed[0],
+                        invert,
+                        invert,
+                        wgpu::ColorWrites::empty(),
+                        "rui-path-stencil-eo",
+                    ),
+                    (
+                        &mut self.stencil_nz,
+                        needed[1],
+                        dec_front,
+                        inc_back,
+                        wgpu::ColorWrites::empty(),
+                        "rui-path-stencil-nz",
+                    ),
+                    (
+                        &mut self.cover,
+                        needed[2],
+                        cover_face,
+                        cover_face,
+                        wgpu::ColorWrites::ALL,
+                        "rui-path-cover-solid",
+                    ),
+                ] {
+                    if required && slot.is_none() {
+                        *slot = Some(make_pipeline(
+                            device,
+                            &self.layout,
+                            &self.shader,
+                            self.sample_count,
+                            write,
+                            front,
+                            back,
+                            label,
+                        ));
+                    }
+                }
+            },
+        )
+        .is_some()
     }
 
     pub fn flush(
@@ -386,9 +422,6 @@ impl PathGpu {
     ) -> bool {
         let canvas_rt = job.key.starts_with("rui_canvas:");
         let always = job.force_redraw || canvas_rt;
-        if job.ops.iter().all(PathGpuOp::is_empty) && !always {
-            return false;
-        }
         let w = job.width.max(2);
         let h = job.height.max(2);
         let reuse =
@@ -396,10 +429,22 @@ impl PathGpu {
         if reuse && !always {
             return false;
         }
+        #[cfg(test)]
+        let profile = std::env::var_os("RUI_PATH_GPU_PROFILE").map(|_| std::time::Instant::now());
+        let ops = job.ops.into_ops();
+        #[cfg(test)]
+        let geometry_ms = profile.map(|t| t.elapsed().as_secs_f64() * 1000.0);
+        if ops.iter().all(PathGpuOp::is_empty) && !always {
+            return false;
+        }
+        if !self.ensure_fill_pipelines(device, &ops) {
+            crate::renderer::geometry2d::disable_gpu2d_runtime();
+            return false;
+        }
         // Most path leaves (spinners, progress and charts) only use vertex
         // colors. Compile the gradient program only for a real gradient fill.
         if self.gradient_cover.is_none()
-            && job.ops.iter().any(|op| {
+            && ops.iter().any(|op| {
                 matches!(op, PathGpuOp::Fill(fill) if !fill.stencil.is_empty() && fill.grad.is_some())
             })
         {
@@ -422,6 +467,8 @@ impl PathGpu {
                 return false;
             }
         }
+        #[cfg(test)]
+        let pipeline_ms = profile.map(|t| t.elapsed().as_secs_f64() * 1000.0);
         self.ensure_target(device, textured, images, &job.key, w, h);
         let Some(gpu_img) = images.get(&job.key) else {
             return false;
@@ -457,12 +504,43 @@ impl PathGpu {
             .as_ref()
             .map(|(_, _, t)| t.create_view(&wgpu::TextureViewDescriptor::default()));
 
+        #[cfg(test)]
+        let target_ms = profile.map(|t| t.elapsed().as_secs_f64() * 1000.0);
         queue.write_buffer(
             &self.uniform_buf,
             0,
             bytemuck::bytes_of(&PathGlobals::resolution(w, h)),
         );
 
+        // Upload this job's ordered geometry once. Draw ranges retain each
+        // fill's stencil/cover pair and each mesh's original stacking order.
+        let mut vertices = Vec::new();
+        let ranges: Vec<_> = ops
+            .iter()
+            .map(|op| {
+                let clip = op.clip().map(|c| c.map(|v| v * scale as f32));
+                let scissor = scissor_rect(clip, rw, rh);
+                if scissor.is_none() {
+                    return (None, 0..0, 0..0);
+                }
+                let (geometry, cover) = match op {
+                    PathGpuOp::Fill(fill) if !fill.stencil.is_empty() => (
+                        append_vertices(&mut vertices, &fill.stencil),
+                        append_vertices(&mut vertices, &fill.cover),
+                    ),
+                    PathGpuOp::Mesh(mesh) => (append_vertices(&mut vertices, &mesh.tris), 0..0),
+                    _ => (0..0, 0..0),
+                };
+                (scissor, geometry, cover)
+            })
+            .collect();
+        let vertex_buffer = (!vertices.is_empty()).then(|| {
+            device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("rui-path-job-vb"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            })
+        });
         let mut bufs: Vec<wgpu::Buffer> = Vec::new();
         let mut bgs: Vec<wgpu::BindGroup> = Vec::new();
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
@@ -511,38 +589,26 @@ impl PathGpu {
                 multiview_mask: None,
             });
             pass.set_stencil_reference(0);
-            for op in &job.ops {
-                let clip = op.clip().map(|c| c.map(|v| v * scale as f32));
-                if !apply_scissor(&mut pass, clip, rw, rh) {
+            if let Some(buffer) = vertex_buffer.as_ref() {
+                pass.set_vertex_buffer(0, buffer.slice(..));
+            }
+            for (op, (scissor, geometry, cover)) in ops.iter().zip(&ranges) {
+                let Some([x, y, width, height]) = *scissor else {
                     continue;
-                }
+                };
+                pass.set_scissor_rect(x, y, width, height);
                 match op {
                     PathGpuOp::Fill(fill) => {
                         if fill.stencil.is_empty() {
                             continue;
                         }
-                        let stencil_verts = tris_to_verts(&fill.stencil);
-                        let sv = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("rui-path-stencil-vb"),
-                            contents: bytemuck::cast_slice(&stencil_verts),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        });
                         pass.set_pipeline(if fill.even_odd {
-                            &self.stencil_eo
+                            self.stencil_eo.as_ref().unwrap()
                         } else {
-                            &self.stencil_nz
+                            self.stencil_nz.as_ref().unwrap()
                         });
                         pass.set_bind_group(0, &self.uniform_bg, &[]);
-                        pass.set_vertex_buffer(0, sv.slice(..));
-                        pass.draw(0..stencil_verts.len() as u32, 0..1);
-                        bufs.push(sv);
-
-                        let cover_verts = tris_to_verts(&fill.cover);
-                        let cv = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("rui-path-cover-vb"),
-                            contents: bytemuck::cast_slice(&cover_verts),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        });
+                        pass.draw(geometry.clone(), 0..1);
                         let use_grad = fill.grad.is_some();
                         if use_grad {
                             let gbuf =
@@ -567,32 +633,22 @@ impl PathGpu {
                         pass.set_pipeline(if use_grad {
                             self.gradient_cover.as_ref().unwrap()
                         } else {
-                            &self.cover
+                            self.cover.as_ref().unwrap()
                         });
                         if use_grad {
                             pass.set_bind_group(0, bgs.last().unwrap(), &[]);
                         } else {
                             pass.set_bind_group(0, &self.uniform_bg, &[]);
                         }
-                        pass.set_vertex_buffer(0, cv.slice(..));
-                        pass.draw(0..cover_verts.len() as u32, 0..1);
-                        bufs.push(cv);
+                        pass.draw(cover.clone(), 0..1);
                     }
                     PathGpuOp::Mesh(mesh) => {
                         if mesh.tris.is_empty() {
                             continue;
                         }
-                        let verts = tris_to_verts(&mesh.tris);
-                        let vb = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                            label: Some("rui-path-mesh-vb"),
-                            contents: bytemuck::cast_slice(&verts),
-                            usage: wgpu::BufferUsages::VERTEX,
-                        });
                         pass.set_pipeline(&self.stroke);
                         pass.set_bind_group(0, &self.uniform_bg, &[]);
-                        pass.set_vertex_buffer(0, vb.slice(..));
-                        pass.draw(0..verts.len() as u32, 0..1);
-                        bufs.push(vb);
+                        pass.draw(geometry.clone(), 0..1);
                     }
                 }
             }
@@ -627,7 +683,19 @@ impl PathGpu {
             pass.set_bind_group(1, &coverage_bg, &[]);
             pass.draw(0..3, 0..1);
         }
+        #[cfg(test)]
+        let encode_ms = profile.map(|t| t.elapsed().as_secs_f64() * 1000.0);
         queue.submit(Some(encoder.finish()));
+        #[cfg(test)]
+        if let Some(t) = profile {
+            let total = t.elapsed().as_secs_f64() * 1000.0;
+            if total > 1.0 {
+                eprintln!("path-gpu/{} {}x{} ops={} geometry={:.3} pipeline={:.3} target={:.3} encode={:.3} submit={:.3}",
+                    job.key, w, h, ops.len(), geometry_ms.unwrap(),
+                    pipeline_ms.unwrap()-geometry_ms.unwrap(), target_ms.unwrap()-pipeline_ms.unwrap(),
+                    encode_ms.unwrap()-target_ms.unwrap(), total-encode_ms.unwrap());
+            }
+        }
         drop((bufs, bgs));
         if crate::primitives::path::take_path_rt_readback_request(&job.key) {
             if let Some(gpu_img) = images.get(&job.key) {
@@ -850,17 +918,12 @@ fn make_pipeline(
     })
 }
 
-fn apply_scissor(
-    pass: &mut wgpu::RenderPass<'_>,
-    clip: Option<[f32; 4]>,
-    tw: u32,
-    th: u32,
-) -> bool {
+fn scissor_rect(clip: Option<[f32; 4]>, tw: u32, th: u32) -> Option<[u32; 4]> {
     let (x, y, w, h) = match clip {
         None => (0u32, 0u32, tw, th),
         Some(c) => {
             if c[2] <= 0.0 || c[3] <= 0.0 {
-                return false;
+                return None;
             }
             let x0 = c[0].floor().max(0.0) as u32;
             let y0 = c[1].floor().max(0.0) as u32;
@@ -869,16 +932,15 @@ fn apply_scissor(
             let x1 = x1.min(tw);
             let y1 = y1.min(th);
             if x0 >= x1 || y0 >= y1 {
-                return false;
+                return None;
             }
             (x0, y0, x1 - x0, y1 - y0)
         }
     };
     if w == 0 || h == 0 || x >= tw || y >= th {
-        return false;
+        return None;
     }
-    pass.set_scissor_rect(x, y, w.min(tw - x), h.min(th - y));
-    true
+    Some([x, y, w.min(tw - x), h.min(th - y)])
 }
 
 /// 4× MSAA when color **and** depth-stencil formats support it; otherwise 1×.

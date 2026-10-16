@@ -2016,6 +2016,8 @@ fn build_gpu_ops(
     markers: &[Point2],
     marker_r: f32,
 ) -> Vec<PathGpuOp> {
+    #[cfg(test)]
+    GPU_OP_BUILDS.with(|count| count.set(count.get() + 1));
     let mut ops = Vec::new();
     let last = layers.len().saturating_sub(1);
     for (i, (cmds, style)) in layers.iter().enumerate() {
@@ -2036,6 +2038,16 @@ fn build_gpu_ops(
         }
     }
     ops
+}
+
+#[cfg(test)]
+thread_local! {
+    static GPU_OP_BUILDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+pub(crate) fn gpu_op_build_count() -> usize {
+    GPU_OP_BUILDS.with(std::cell::Cell::get)
 }
 
 pub fn parse_path_viewbox(s: &str) -> Option<[f32; 4]> {
@@ -2231,9 +2243,26 @@ pub struct PathGpuJob {
     pub key: String,
     pub width: u32,
     pub height: u32,
-    pub(crate) ops: Vec<PathGpuOp>,
+    pub(crate) ops: PathGpuOps,
     /// Canvas keys are id-stable; skip-if-same-size would freeze `request_frame`.
     pub force_redraw: bool,
+}
+
+/// Keep canonical path geometry until the renderer knows its texture is missing.
+/// Canvas already records GPU operations and still submits them for every repaint.
+#[derive(Clone, Debug)]
+pub(crate) enum PathGpuOps {
+    Ready(Vec<PathGpuOp>),
+    Path(PreparedPathDraw),
+}
+
+impl PathGpuOps {
+    pub(crate) fn into_ops(self) -> Vec<PathGpuOp> {
+        match self {
+            Self::Ready(ops) => ops,
+            Self::Path(path) => build_gpu_ops(&path.layers, &path.markers, path.marker_r),
+        }
+    }
 }
 
 pub(crate) fn queue_path_job(job: PathGpuJob) {
@@ -3129,10 +3158,6 @@ pub fn path_gpu_from_element_attrs(
     if mesh_needs_cpu(&prepared.layers) {
         return None;
     }
-    let ops = build_gpu_ops(&prepared.layers, &prepared.markers, prepared.marker_r);
-    if ops.iter().all(PathGpuOp::is_empty) {
-        return None;
-    }
     let mut hasher = DefaultHasher::new();
     b"stencil-v1".hash(&mut hasher);
     prepared.width.hash(&mut hasher);
@@ -3147,17 +3172,19 @@ pub fn path_gpu_from_element_attrs(
         y.to_bits().hash(&mut hasher);
     }
     let key = format!("rui_path:{:016x}", hasher.finish());
+    let target = prepared.target;
     queue_path_job(PathGpuJob {
         key: key.clone(),
         width: prepared.width,
         height: prepared.height,
-        ops,
+        ops: PathGpuOps::Path(prepared),
         force_redraw: false,
     });
-    Some((key, prepared.target[0], prepared.target[1]))
+    Some((key, target[0], target[1]))
 }
 
-struct PreparedPathDraw {
+#[derive(Clone, Debug)]
+pub(crate) struct PreparedPathDraw {
     layers: Vec<(Vec<PathCommand>, PathStyle)>,
     markers: Vec<Point2>,
     marker_r: f32,
@@ -3574,8 +3601,8 @@ mod tests {
         assert!(w > 40.0 && h > 20.0);
         let jobs = take_path_jobs();
         assert!(!jobs.is_empty());
-        let n = jobs[0]
-            .ops
+        let ops = jobs[0].ops.clone().into_ops();
+        let n = ops
             .iter()
             .map(|op| match op {
                 PathGpuOp::Mesh(m) => m.tris.len(),
@@ -3600,7 +3627,8 @@ mod tests {
             .expect("solid fill must queue stencil-cover");
         assert!(key.starts_with("rui_path:"));
         let jobs = take_path_jobs();
-        let fill = jobs[0].ops.iter().find_map(|op| match op {
+        let ops = jobs[0].ops.clone().into_ops();
+        let fill = ops.iter().find_map(|op| match op {
             PathGpuOp::Fill(f) => Some(f),
             PathGpuOp::Mesh(_) => None,
         });
@@ -3623,8 +3651,8 @@ mod tests {
         let el = attach_path(Element::new().w(80.0).h(60.0), &cmds, &style);
         path_gpu_from_element_attrs(&el.attrs, 80.0, 60.0).expect("evenodd hole must stay on GPU");
         let jobs = take_path_jobs();
-        let fill = jobs[0]
-            .ops
+        let ops = jobs[0].ops.clone().into_ops();
+        let fill = ops
             .iter()
             .find_map(|op| match op {
                 PathGpuOp::Fill(f) => Some(f),

@@ -47,6 +47,80 @@ fn render(
 
 #[test]
 #[ignore = "requires a headless GPU adapter"]
+fn resident_path_recollect_does_not_tessellate_again() {
+    use crate::primitives::path::gpu_op_build_count;
+    let (gpu, textured) = setup();
+    let el = attach_path(
+        Element::new(),
+        &crate::primitives::path::decode_path_d("M 12 72 C 22 -14 76 118 84 19"),
+        &PathStyle::stroke([0.2, 0.5, 0.8, 1.0], 2.5),
+    );
+    let mut path = PathGpu::try_new(&gpu.device, 1).unwrap();
+    assert!(path.stencil_eo.is_none() && path.stencil_nz.is_none() && path.cover.is_none());
+    let mut images = HashMap::new();
+    let _ = take_path_jobs();
+    crate::style::set_gradient_raster_dpi(1.0);
+    let (key, _, _) = path_gpu_from_element_attrs(&el.attrs, 96.0, 96.0).unwrap();
+    request_path_rt_readback(&key);
+    assert!(path.flush(&gpu.device, &gpu.queue, &textured, &mut images));
+    let original = take_path_rt_readback(&key).unwrap();
+    assert!(
+        path.stencil_eo.is_none() && path.stencil_nz.is_none() && path.cover.is_none(),
+        "stroke jobs must not compile fill programs"
+    );
+    let built = gpu_op_build_count();
+    for _ in 0..4 {
+        path_gpu_from_element_attrs(&el.attrs, 96.0, 96.0).unwrap();
+        assert!(!path.flush(&gpu.device, &gpu.queue, &textured, &mut images));
+    }
+    assert_eq!(
+        gpu_op_build_count(),
+        built,
+        "resident recollect must skip tessellation"
+    );
+    images.remove(&key);
+    path_gpu_from_element_attrs(&el.attrs, 96.0, 96.0).unwrap();
+    request_path_rt_readback(&key);
+    assert!(path.flush(&gpu.device, &gpu.queue, &textured, &mut images));
+    assert_eq!(
+        gpu_op_build_count(),
+        built + 1,
+        "eviction must rebuild geometry"
+    );
+    assert_eq!(
+        take_path_rt_readback(&key).unwrap(),
+        original,
+        "eviction must preserve pixels"
+    );
+
+    path_gpu_from_element_attrs(&el.attrs, 96.0, 96.0).unwrap();
+    let mut forced = take_path_jobs().pop().unwrap();
+    forced.force_redraw = true;
+    crate::primitives::path::queue_path_job(forced);
+    request_path_rt_readback(&key);
+    assert!(path.flush(&gpu.device, &gpu.queue, &textured, &mut images));
+    assert_eq!(
+        gpu_op_build_count(),
+        built + 2,
+        "explicit redraw must rebuild"
+    );
+    assert_eq!(take_path_rt_readback(&key).unwrap(), original);
+
+    let (resized, _, _) = path_gpu_from_element_attrs(&el.attrs, 80.0, 64.0).unwrap();
+    assert_ne!(
+        resized, key,
+        "dimensions must remain part of texture identity"
+    );
+    assert!(path.flush(&gpu.device, &gpu.queue, &textured, &mut images));
+    assert_eq!(
+        gpu_op_build_count(),
+        built + 3,
+        "new dimensions must rebuild"
+    );
+}
+
+#[test]
+#[ignore = "requires a headless GPU adapter"]
 fn shared_gpu_edges_have_subpixel_coverage() {
     let (gpu, textured) = setup();
     let triangle = [
@@ -136,7 +210,7 @@ fn shared_gpu_lazy_gradients_match_general_cover() {
             depth_fail_op: wgpu::StencilOperation::Keep,
             pass_op: wgpu::StencilOperation::Replace,
         };
-        reference.cover = make_pipeline(
+        reference.cover = Some(make_pipeline(
             &gpu.device,
             &reference.layout,
             &reference.shader,
@@ -145,7 +219,7 @@ fn shared_gpu_lazy_gradients_match_general_cover() {
             face,
             face,
             "rui-path-cover",
-        );
+        ));
         for gradient in [
             None,
             Some("linear-gradient(35deg, #ff000080, #0044ff)"),
@@ -171,6 +245,11 @@ fn shared_gpu_lazy_gradients_match_general_cover() {
                     "gradient={gradient:?} samples={samples} dpi={dpi}"
                 );
             }
+            assert!(path.stencil_nz.is_some());
+            assert!(
+                path.stencil_eo.is_none(),
+                "nonzero fills must not compile even-odd"
+            );
             if gradient.is_some() {
                 assert!(path.gradient_cover.is_some());
             }

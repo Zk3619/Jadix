@@ -1014,7 +1014,7 @@ pub fn canvas_raster_from_element_attrs(
                 key: tex_id.clone(),
                 width: w,
                 height: h,
-                ops,
+                ops: crate::primitives::path::PathGpuOps::Ready(ops),
                 force_redraw: true,
             });
         }
@@ -1365,8 +1365,8 @@ mod tests {
         assert!(jobs[0].force_redraw);
         assert_eq!(jobs[0].width, 40);
         assert_eq!(jobs[0].height, 20);
-        let mesh_n = jobs[0]
-            .ops
+        let ops = jobs[0].ops.clone().into_ops();
+        let mesh_n = ops
             .iter()
             .map(|op| match op {
                 PathGpuOp::Mesh(m) => m.tris.len(),
@@ -1374,8 +1374,7 @@ mod tests {
             })
             .sum::<usize>();
         assert!(mesh_n >= 2, "stroke must tessellate, got {mesh_n}");
-        let has_clear = jobs[0]
-            .ops
+        let has_clear = ops
             .iter()
             .any(|op| matches!(op, PathGpuOp::Fill(_)));
         assert!(has_clear, "clear() must queue a fill of the leaf");
@@ -1401,7 +1400,8 @@ mod tests {
             .into();
         canvas_raster_from_element_attrs(&el.attrs, 40.0, 20.0).expect("gpu canvas");
         let jobs = take_path_jobs();
-        let clipped = jobs[0].ops.iter().find_map(|op| match op {
+        let ops = jobs[0].ops.clone().into_ops();
+        let clipped = ops.iter().find_map(|op| match op {
             PathGpuOp::Fill(f) if f.clip.is_some() => f.clip,
             _ => None,
         });

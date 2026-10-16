@@ -32,7 +32,7 @@ fn progress_circle_gpu_stroke_stays_inside_outer_circle() {
             let _ = take_path_jobs();
             path_gpu_from_element_attrs(&el.attrs, r * 2.0, r * 2.0).unwrap();
             for job in take_path_jobs() {
-                for op in job.ops {
+                for op in job.ops.into_ops() {
                     if let PathGpuOp::Mesh(mesh) = op {
                         for tri in mesh.tris {
                             for p in [tri.a, tri.b, tri.c] {
