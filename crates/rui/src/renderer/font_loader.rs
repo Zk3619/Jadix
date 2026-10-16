@@ -714,7 +714,14 @@ pub fn ensure_emoji_font_fallback(font_system: &mut FontSystem) {
     log::info!("emoji raster fallback — lazy-loading system/user emoji font");
     load_lazy_emoji(font_system.db_mut(), &mut state);
     apply_default_families(font_system.db_mut());
-    crate::text::measure::invalidate_prepare_cache();
+}
+
+/// Emoji rasters own a separate database; UI/icon faces and UI layout caches
+/// do not participate in this font system.
+pub(crate) fn create_emoji_font_system() -> FontSystem {
+    let mut font_system = FontSystem::new_with_locale_and_db(resolve_locale(), Database::new());
+    ensure_emoji_font_fallback(&mut font_system);
+    font_system
 }
 
 /// Scan `text` and lazily open CJK / emoji / symbol / script fonts as needed.

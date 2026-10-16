@@ -1608,6 +1608,28 @@ mod tests {
     }
 
     #[test]
+    fn isolated_emoji_load_preserves_ui_text_layout() {
+        let text = "unrelated UI paragraph 123";
+        prepare(text, 14.0, 400, 21.0);
+        glyphon_fit_soft_wrap(text, 14.0, 400, 21.0, 180.0);
+        let prepared = PREPARE_CACHE.with(|c| c.borrow().len());
+        let advances = ASCII_ADVANCES.with(|c| c.borrow().len());
+        assert!(prepared > 0);
+        assert!(try_glyphon_fit_soft_wrap(text, 14.0, 400, 21.0, 180.0).is_some());
+
+        let mut isolated = FontSystem::new_with_locale_and_db(
+            "en-US".into(),
+            glyphon::fontdb::Database::new(),
+        );
+        font_loader::ensure_emoji_font_fallback(&mut isolated);
+        assert_eq!(PREPARE_CACHE.with(|c| c.borrow().len()), prepared,
+            "an isolated emoji database must not invalidate UI segment widths");
+        assert_eq!(ASCII_ADVANCES.with(|c| c.borrow().len()), advances);
+        assert!(try_glyphon_fit_soft_wrap(text, 14.0, 400, 21.0, 180.0).is_some(),
+            "an isolated emoji database must not invalidate UI wrapping");
+    }
+
+    #[test]
     fn prepare_is_cached() {
         let a = prepare("cache-me", 12.0, 400, 18.0);
         let b = prepare("cache-me", 12.0, 400, 18.0);
