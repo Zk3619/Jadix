@@ -20,7 +20,8 @@ fn anchored_overlay_pinned_attribute_matches_builder_dismiss_behavior() {
                     create_effect(move || {
                         let tree = if builder {
                             rui::utils::anchored_overlay::anchored_overlay("pinned-builder-check")
-                                .open(open).pinned(pinned)
+                                .open(open)
+                                .pinned(pinned)
                                 .placement(rui::utils::anchored_overlay::Placement::point(pos, 0.0))
                                 .child(|| Element::new().w(100.0).h(60.0))
                         } else {
@@ -35,8 +36,11 @@ fn anchored_overlay_pinned_attribute_matches_builder_dismiss_behavior() {
                         *kept_effect.borrow_mut() = Some(tree);
                     });
                     rui::utils::popup::arm_underlay_close();
-                    assert_eq!(rui::app::portal_overlay::try_dismiss_outside_press(), !pinned,
-                        "builder={builder}, pinned={pinned}");
+                    assert_eq!(
+                        rui::app::portal_overlay::try_dismiss_outside_press(),
+                        !pinned,
+                        "builder={builder}, pinned={pinned}"
+                    );
                     assert_eq!(open.peek(), pinned);
                     open.set(false);
                     assert!(!open.peek(), "author close must work for a resident panel");
@@ -935,16 +939,35 @@ fn forms_password_input_adornments_visible_when_focused() {
 
             let mut layout = rui::core::tree::LayoutTree::new();
             let result = layout.build_and_layout(&mut tree, 900.0, 800.0, [0.0, 0.0]);
-            let lucide = result
-                .text_nodes
-                .iter()
-                .filter(|n| n.style.font_family.as_deref() == Some("lucide"))
-                .filter(|n| n.style.color_resolved()[3] > 0 && n.width > 0.5)
-                .count();
-            assert!(
-                lucide >= 2,
-                "focused password input must collect visible lucide adornments; got {lucide}"
-            );
+            let pw = gallery_find_by_tid(&tree, id).unwrap();
+            for suffix in ["clear", "reveal"] {
+                let button =
+                    gallery_find_by_tid(pw, &format!("__rui_input:{id}:{suffix}")).unwrap();
+                let [x, y, w, h] = button.layout_bounds;
+                let inside = |rect: [f32; 4]| {
+                    rect[2] > 0.5
+                        && rect[3] > 0.5
+                        && rect[0] >= x - 0.5
+                        && rect[1] >= y - 0.5
+                        && rect[0] + rect[2] <= x + w + 0.5
+                        && rect[1] + rect[3] <= y + h + 0.5
+                };
+                // Named Lucide icons use SVG textures when svg is enabled;
+                // glyphon is the fallback. Check each actual adornment's paint.
+                let glyph = result.text_nodes.iter().any(|n| {
+                    n.style.font_family.as_deref() == Some("lucide")
+                        && n.style.color_resolved()[3] > 0
+                        && inside([n.x, n.y, n.width, n.height])
+                });
+                let texture = result.textured_draws.iter().any(|n| {
+                    n.texture_key.starts_with("rui_lucide_") && n.opacity > 0.01 && inside(n.rect)
+                });
+                assert!(
+                    glyph || texture,
+                    "focused password {suffix} must collect a visible icon inside {:?}",
+                    button.layout_bounds
+                );
+            }
         });
     });
     rui::app::reactive::reset_registered_anchors();
@@ -1677,7 +1700,6 @@ fn basics_section_scrolls_when_viewport_shorter() {
         rui::app::reactive::reset_registered_anchors();
     });
 }
-
 
 #[test]
 fn headless_layout_basics_section_does_not_overflow() {

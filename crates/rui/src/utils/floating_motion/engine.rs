@@ -382,13 +382,6 @@ pub(crate) fn floating_mounted_signal(handle: &FloatingPresenceHandle) -> Signal
     handle.cell.borrow().mounted
 }
 
-/// Skip unflushed enter initial state (for tests that assert final paint / layout).
-#[cfg(test)]
-pub(crate) fn clear_pending_floating_enter(handle: &FloatingPresenceHandle) {
-    let mut c = handle.cell.borrow_mut();
-    c.needs_enter = false;
-}
-
 /// Sync logical `open`; returns phase. If something cleared `mounted` (mutex kick), become Absent immediately.
 pub(crate) fn sync_floating_presence(
     handle: &FloatingPresenceHandle,
@@ -853,6 +846,11 @@ fn pin_expand_overflow_contents(panel: &mut Element, max_height_cap: Option<f32>
     {
         return;
     }
+    // A freshly rebuilt exit shell may not have measured rows yet. Its
+    // scrollbar must still stay hidden while max-height clips the list.
+    for child in &mut panel.children {
+        set_expand_scrollbars_hidden(child, true);
+    }
     let h = expand_open_content_h(panel, max_height_cap);
     if h <= 1.0 {
         return;
@@ -867,7 +865,6 @@ fn pin_expand_overflow_contents(panel: &mut Element, max_height_cap: Option<f32>
         + panel.style.resolved_border_widths()[2];
     let inner = (h - pad_y).max(1.0);
     for child in &mut panel.children {
-        set_expand_scrollbars_hidden(child, true);
         pin_expand_overflow_node(child, inner);
     }
 }

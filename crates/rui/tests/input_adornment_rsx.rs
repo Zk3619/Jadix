@@ -61,28 +61,31 @@ fn gallery_style_password_input_shows_adornment_glyphs() {
     let mut tree = LayoutTree::new();
     let mut root = rui::core::tree::Element::new().w(400.0).h(80.0).child(el);
     let result = tree.build_and_layout(&mut root, 400.0, 80.0, [-1.0, -1.0]);
-    let lucide: Vec<_> = result
-        .text_nodes
-        .iter()
-        .filter(|n| n.style.font_family.as_deref() == Some("lucide"))
-        .collect();
-    assert!(
-        lucide.len() >= 2,
-        "expected ≥2 lucide adornments, got {} (text_nodes={})",
-        lucide.len(),
-        result.text_nodes.len()
-    );
-    for n in &lucide {
-        assert!(
-            n.style.color_resolved()[3] > 0,
-            "invisible lucide alpha: {:?}",
-            n.style.color_resolved()
-        );
-        assert!(
-            n.width > 0.5 && n.height > 0.5,
-            "zero-size lucide w={} h={}",
-            n.width,
-            n.height
-        );
+    for tid in [&clear_tid, &reveal_tid] {
+        let button = root.children[0]
+            .children
+            .iter()
+            .find(|c| c.template_id.as_deref() == Some(tid.as_str()))
+            .unwrap();
+        let [x, y, w, h] = button.layout_bounds;
+        let inside = |rect: [f32; 4]| {
+            rect[2] > 0.5
+                && rect[3] > 0.5
+                && rect[0] >= x - 0.5
+                && rect[1] >= y - 0.5
+                && rect[0] + rect[2] <= x + w + 0.5
+                && rect[1] + rect[3] <= y + h + 0.5
+        };
+        // SVG-enabled builds paint named Lucide icons as textures; glyphs
+        // remain the fallback. Require visible paint in each button.
+        let glyph = result.text_nodes.iter().any(|n| {
+            n.style.font_family.as_deref() == Some("lucide")
+                && n.style.color_resolved()[3] > 0
+                && inside([n.x, n.y, n.width, n.height])
+        });
+        let texture = result.textured_draws.iter().any(|n| {
+            n.texture_key.starts_with("rui_lucide_") && n.opacity > 0.01 && inside(n.rect)
+        });
+        assert!(glyph || texture, "missing visible adornment paint: {tid}");
     }
 }
