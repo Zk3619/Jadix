@@ -14,7 +14,7 @@ use winit::keyboard::ModifiersState;
 
 fn host_edit_mods() -> ModifiersState {
     if cfg!(target_os = "macos") {
-        ModifiersState::SUPER
+        ModifiersState::META
     } else {
         ModifiersState::CONTROL
     }

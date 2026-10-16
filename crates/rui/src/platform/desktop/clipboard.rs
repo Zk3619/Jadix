@@ -27,7 +27,7 @@ mod tests {
     #[test]
     fn desktop_edit_shortcut_is_ctrl_not_super() {
         assert!(edit_shortcut_modifiers(&ModifiersState::CONTROL));
-        assert!(!edit_shortcut_modifiers(&ModifiersState::SUPER));
+        assert!(!edit_shortcut_modifiers(&ModifiersState::META));
         assert!(!edit_shortcut_modifiers(&ModifiersState::empty()));
     }
 }
