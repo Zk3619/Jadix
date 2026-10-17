@@ -1,4 +1,4 @@
-//! Desktop GPU order: Windows prefers native D3D12; other desktops prefer GL.
+//! Opaque desktop windows prefer GL for low startup and driver overhead.
 //!
 //! macOS overrides to Metal-only. `JADIX_GPU_BACKEND` is applied by the facade so an
 //! unsupported pick degrades instead of aborting.
@@ -26,9 +26,8 @@ pub(crate) fn with_requested_backend_front(
 }
 
 fn opaque_backend_order() -> Vec<(wgpu::Backends, &'static str)> {
-    let mut order = Vec::new();
+    let mut order = vec![(wgpu::Backends::GL, "gl")];
     push_optional_backend(&mut order, wgpu::Backends::DX12, "dx12");
-    order.push((wgpu::Backends::GL, "gl"));
     push_optional_backend(&mut order, wgpu::Backends::VULKAN, "vulkan");
     order
 }
@@ -81,14 +80,14 @@ mod tests {
     }
 
     #[test]
-    fn opaque_prefers_native_windows_backend_with_gl_fallback() {
+    fn opaque_prefers_gl_with_native_fallback() {
         let order = gpu_backend_order(false);
         if cfg!(target_os = "macos") {
             return;
         }
         if cfg!(all(windows, feature = "backend-dx12")) {
-            assert_eq!(order.first().map(|(_, n)| *n), Some("dx12"));
-            assert_eq!(order.get(1).map(|(_, n)| *n), Some("gl"));
+            assert_eq!(order.first().map(|(_, n)| *n), Some("gl"));
+            assert_eq!(order.get(1).map(|(_, n)| *n), Some("dx12"));
         } else {
             assert_eq!(order.first().map(|(_, n)| *n), Some("gl"));
         }

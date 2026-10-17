@@ -30,15 +30,15 @@ pub(crate) use font_script::SystemFontScript;
 pub(crate) use host::run_winit_app;
 #[cfg(target_arch = "wasm32")]
 pub(crate) use host::spawn_winit_app;
-pub(crate) use host::{build_event_loop, ensure_winit_host};
 pub use host::{
-    compiled_host_kind, host_capabilities, host_kind, set_external_host, HostBackend,
-    HostCapabilities, HostError, HostKind,
+    HostBackend, HostCapabilities, HostError, HostKind, compiled_host_kind, host_capabilities,
+    host_kind, set_external_host,
 };
+pub(crate) use host::{build_event_loop, ensure_winit_host};
 pub(crate) use os::harmonyos::apply_window_options as apply_ohos_window_options;
 pub use os::harmonyos::{
-    install_harmonyos_host, install_ohos_content_rect, ohos_ability_installed, ohos_content_rect,
-    HarmonyOsHost, OhosContentRect,
+    HarmonyOsHost, OhosContentRect, install_harmonyos_host, install_ohos_content_rect,
+    ohos_ability_installed, ohos_content_rect,
 };
 
 #[cfg(target_os = "android")]
@@ -354,12 +354,7 @@ mod tests {
         } else if cfg!(target_os = "android") {
             assert_eq!(opaque.first().map(|(_, n)| *n), Some("gl"));
         } else if cfg!(target_os = "windows") {
-            let expected = if cfg!(feature = "backend-dx12") {
-                "dx12"
-            } else {
-                "gl"
-            };
-            assert_eq!(opaque.first().map(|(_, n)| *n), Some(expected));
+            assert_eq!(opaque.first().map(|(_, n)| *n), Some("gl"));
         }
 
         let compositor = super::gpu_backend_candidates(true);
