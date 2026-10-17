@@ -878,7 +878,8 @@ fn paint_rect(in: VertexOutput) -> vec4<f32> {
                 in.radii + vec4<f32>(spread_signed),
                 shape_type, shape_param
             );
-            shadow_alpha = smoothstep(blur, 0.0, max(0.0, d_shadow)) * in.shadow_color.a;
+            // Reversed smoothstep edges are undefined on GLSL / GLES drivers.
+            shadow_alpha = (1.0 - smoothstep(0.0, blur, max(0.0, d_shadow))) * in.shadow_color.a;
         }
     }
 
@@ -938,11 +939,6 @@ fn fs_solid(in: VertexOutput) -> @location(0) vec4<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    return paint_rect(in);
-}
-
-@fragment
-fn fs_ring(in: VertexOutput) -> @location(0) vec4<f32> {
     return paint_rect(in);
 }
 

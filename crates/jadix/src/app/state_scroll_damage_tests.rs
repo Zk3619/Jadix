@@ -165,9 +165,11 @@ fn run(window: Arc<dyn Window>) {
     ));
     let count = use_signal("gallery_btn_count", || 0);
     count.set_silent(0);
-    use_signal("gal_nav_section", || "basics".to_string()).set_silent("basics".to_string());
+    let section = std::env::var("JADIX_DAMAGE_SECTION").unwrap_or_else(|_| "basics".into());
+    use_signal("gal_nav_section", || section.clone()).set_silent(section.clone());
+    let rest = format!("scroll-{section}");
     let offset = use_signal(
-        &crate::core::scroll_viewport::scroll_offset_y_signal_key("scroll-basics"),
+        &crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest),
         || 0.0f32,
     );
     offset.set_silent(0.0);
@@ -188,7 +190,7 @@ fn run(window: Arc<dyn Window>) {
         render(state.borrow_mut().as_mut().unwrap(), false);
     }
     let mut failures = Vec::new();
-    if std::env::var("JADIX_DAMAGE_CASE").as_deref() != Ok("scroll") {
+    if section == "basics" && std::env::var("JADIX_DAMAGE_CASE").as_deref() != Ok("scroll") {
         for i in 1..=10 {
             count.set(i);
             crate::app::reactive::drain_deferred_view_remounts();
@@ -203,7 +205,8 @@ fn run(window: Arc<dyn Window>) {
     }
     let mut blits = 0;
     if std::env::var("JADIX_DAMAGE_CASE").as_deref() != Ok("layout") {
-        let rail = crate::style::use_ui_transition_cubic("scrollbar_spring_scroll-basics:y", 0.0);
+        let rail =
+            crate::style::use_ui_transition_cubic(&format!("scrollbar_spring_{rest}:y"), 0.0);
         rail.set(1.0);
         crate::style::tick_animations(0.2);
         let mut opt = state.borrow_mut();
@@ -223,7 +226,7 @@ fn run(window: Arc<dyn Window>) {
                     s.ui_scale(),
                 );
                 offset.set_silent(y);
-                s.update_scroll_offset_in_place("scroll-basics", [0.0, y]);
+                s.update_scroll_offset_in_place(&rest, [0.0, y]);
                 partial = Some(render(s, true));
                 blits += usize::from(!s.scroll_strip_blit.is_empty());
             }
@@ -254,5 +257,232 @@ fn run(window: Arc<dyn Window>) {
     assert!(
         failures.is_empty(),
         "incremental Gallery differs from full: {failures:?}; optimized scroll frames={blits}"
+    );
+}
+
+#[test]
+#[ignore = "native Windows GPU sidebar clipped-edge regression"]
+fn sidebar_clipped_edge_keeps_color_after_hover() {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    use winit::window::{WindowAttributes, WindowId};
+    struct Harness;
+    impl ApplicationHandler for Harness {
+        fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+            let window = event_loop
+                .create_window(
+                    WindowAttributes::default()
+                        .with_surface_size(winit::dpi::LogicalSize::new(800.0, 400.0))
+                        .with_visible(false),
+                )
+                .unwrap();
+            run_sidebar_edge(Arc::from(window));
+            event_loop.exit();
+        }
+        fn window_event(&mut self, _: &dyn ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    }
+    let mut builder = EventLoop::builder();
+    builder.with_any_thread(true);
+    builder.build().unwrap().run_app(Harness).unwrap();
+}
+
+fn run_sidebar_edge(window: Arc<dyn Window>) {
+    crate::init();
+    crate::app::reactive::reset_registered_anchors();
+    crate::style::set_css_transition_virtual_timeline(true);
+    crate::style::set_css_transition_timeline_ms(0.0);
+    crate::style::set_global_time_for_test(Some(0.0));
+    crate::style::utility::set_frame_dt(0.0);
+    let theme =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/gallery/theme.toml");
+    crate::style::load_and_install_theme_overrides(theme).unwrap();
+    let state = Rc::new(RefCell::new(Some(crate::utils::block_on::block_on(
+        AppState::new_bootstrap(window, crate::app::WindowOptions::new()),
+    ))));
+    let secondary = Rc::new(RefCell::new(HashMap::new()));
+    crate::app::runtime::set_app_runtime(crate::app::runtime::AppRuntime::new(
+        Rc::downgrade(&state),
+        Rc::downgrade(&secondary),
+    ));
+    use_signal("gal_nav_section", String::new).set_silent("basics".into());
+    let (owner, ()) = create_root(|| {
+        let live = state.clone();
+        crate::core::reactivity::mark_next_effect_as_ui_root();
+        create_effect(move || {
+            live.borrow_mut()
+                .as_mut()
+                .unwrap()
+                .rebuild_ui(crate::gallery_app::build_gallery_app())
+        });
+    });
+    for _ in 0..4 {
+        crate::app::reactive::drain_deferred_view_remounts();
+        render(state.borrow_mut().as_mut().unwrap(), false);
+    }
+    let mut failures = Vec::new();
+    let mut clipped_ink = 0;
+    let copies_before = crate::app::damage::scroll_strip_blit_count();
+    for offset in [0.0, 0.666667, 1.333333, 2.0, 4.0, 8.0, 16.0, 24.0, 32.0] {
+        let offset = super::super::super::scroll_support::snap_scroll_offset_to_device_px(
+            offset,
+            state.borrow().as_ref().unwrap().ui_scale(),
+        );
+        let rest = {
+            let mut guard = state.borrow_mut();
+            let s = guard.as_mut().unwrap();
+            // Resolve the actual content scroll ID; it belongs to the provider.
+            let vp = crate::core::tree::find_in_tree(&s.root_element, |el| {
+                el.attrs.get("data-slot").map(String::as_str) == Some("sidebar-content")
+            })
+            .unwrap();
+            let fid = vp.focus_id.as_ref().unwrap();
+            let rest = fid.strip_prefix("scroll:").unwrap().to_owned();
+            use_signal(
+                &crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest),
+                || 0.0f32,
+            )
+            .set_silent(offset);
+            for y in [30.0, 60.0, 90.0, 60.0, 30.0, offset] {
+                use_signal(
+                    &crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest),
+                    || 0.0f32,
+                )
+                .set_silent(y);
+                s.update_scroll_offset_in_place(&rest, [0.0, y]);
+                render(s, true);
+            }
+            rest
+        };
+        let before = render(state.borrow_mut().as_mut().unwrap(), true);
+        for target in [
+            "gal-nav-events",
+            "gal-nav-forms",
+            "gal-nav-data",
+            "scrollbar-show",
+            "scrollbar-hide",
+        ] {
+            let pointer = {
+                let guard = state.borrow();
+                let s = guard.as_ref().unwrap();
+                let pos = if target.starts_with("scrollbar-") {
+                    let rail = crate::style::use_ui_transition_cubic(
+                        &format!("scrollbar_spring_{rest}:y"),
+                        0.0,
+                    );
+                    rail.set(if target == "scrollbar-show" { 1.0 } else { 0.0 });
+                    [-1.0; 2]
+                } else {
+                    let b = crate::core::tree::find_by_template_id(&s.root_element, target)
+                        .unwrap()
+                        .layout_bounds;
+                    [b[0] + 30.0, b[1] + b[3] / 2.0 - offset]
+                };
+                crate::app::tree_hit::apply_pointer_hover_reconcile(
+                    &s.root_element,
+                    pos[0],
+                    pos[1],
+                    true,
+                );
+                pos
+            };
+            crate::style::tick_animations(0.3);
+            crate::app::reactive::drain_deferred_view_remounts();
+            let mut guard = state.borrow_mut();
+            let s = guard.as_mut().unwrap();
+            s.render(
+                pointer,
+                ScrollbarUpdateMode::ViewportsOnly,
+                None,
+                false,
+                false,
+                false,
+            )
+            .unwrap();
+            let partial = readback_texture(
+                &s.device,
+                &s.queue,
+                s.present_retain.color_texture_for_test().unwrap(),
+                s.config.width,
+                s.config.height,
+                s.device.create_command_encoder(&Default::default()),
+            )
+            .unwrap();
+            let host = crate::core::tree::find_in_tree(&s.root_element, |el| {
+                el.attrs.get("data-slot").map(String::as_str) == Some("sidebar-content-host")
+            })
+            .unwrap()
+            .layout_bounds;
+            let scale = s.ui_scale();
+            let bottom = ((host[1] + host[3]) * scale).round() as u32;
+            // Compare the clipped item's text/icon column. The trailing
+            // scrollbar gutter intentionally changes when the rail appears.
+            let label = s.text_nodes.iter().find(|n| n.text == "布局").unwrap();
+            let right = ((label.x + label.width) * scale).floor() as u32;
+            let dark = (bottom.saturating_sub(3)..bottom)
+                .flat_map(|y| (20..right).map(move |x| (x, y)))
+                .filter(|&(x, y)| before.pixel(x, y).unwrap()[0] < 180)
+                .count();
+            clipped_ink += dark;
+            let diff = (bottom.saturating_sub(8)..bottom + 2)
+                .flat_map(|y| (20..right).map(move |x| (x, y)))
+                .filter(|&(x, y)| {
+                    before
+                        .pixel(x, y)
+                        .unwrap()
+                        .iter()
+                        .zip(partial.pixel(x, y).unwrap())
+                        .any(|(a, b)| a.abs_diff(b) > 3)
+                })
+                .count();
+            eprintln!("offset={offset} target={target} bottom={bottom} dark edge pixels={dark} edge changed pixels={diff}");
+            s.mark_full_redraw();
+            let full = render(s, false);
+            let full_diff = (bottom.saturating_sub(8)..bottom + 2)
+                .flat_map(|y| (20..right).map(move |x| (x, y)))
+                .filter(|&(x, y)| {
+                    partial
+                        .pixel(x, y)
+                        .unwrap()
+                        .iter()
+                        .zip(full.pixel(x, y).unwrap())
+                        .any(|(a, b)| a.abs_diff(b) > 3)
+                })
+                .count();
+            if diff > 0 || full_diff > 0 {
+                let changed: Vec<_> = (bottom.saturating_sub(8)..bottom + 2)
+                    .flat_map(|y| (20..right).map(move |x| (x, y)))
+                    .filter_map(|(x, y)| {
+                        let a = before.pixel(x, y).unwrap();
+                        let b = partial.pixel(x, y).unwrap();
+                        a.iter()
+                            .zip(b)
+                            .any(|(a, b)| a.abs_diff(b) > 3)
+                            .then_some((x, y, a, b))
+                    })
+                    .take(20)
+                    .collect();
+                eprintln!("edge differences: {changed:?}; partial/full={full_diff}");
+                failures.push((offset, target, diff, full_diff));
+            }
+        }
+    }
+    crate::app::runtime::clear_app_runtime();
+    owner.dispose();
+    crate::app::reactive::reset_registered_anchors();
+    crate::style::set_css_transition_virtual_timeline(false);
+    crate::style::set_global_time_for_test(None);
+    assert!(
+        crate::app::damage::scroll_strip_blit_count() > copies_before,
+        "regression must execute GPU scroll copies"
+    );
+    assert!(
+        clipped_ink > 50,
+        "fixture must expose actual clipped text/icon ink at the bottom edge"
+    );
+    assert!(
+        failures.is_empty(),
+        "Clipped sidebar edge changed on unrelated hover: {failures:?}"
     );
 }

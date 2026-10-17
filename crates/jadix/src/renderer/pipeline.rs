@@ -416,6 +416,7 @@ impl JadixPipeline {
                 &shader,
                 &bind_group_layout,
                 &backdrop_bgl,
+                "vs_main",
                 "fs_solid",
             )
         });
@@ -618,6 +619,7 @@ impl JadixPipeline {
             shader,
             bind_group_layout,
             backdrop_bgl,
+            "vs_main",
             "fs_main",
         )
     }
@@ -628,6 +630,7 @@ impl JadixPipeline {
         shader: &wgpu::ShaderModule,
         bind_group_layout: &wgpu::BindGroupLayout,
         backdrop_bgl: &wgpu::BindGroupLayout,
+        vertex_entry: &str,
         fragment_entry: &str,
     ) -> wgpu::RenderPipeline {
         let render_pipeline_layout =
@@ -642,11 +645,7 @@ impl JadixPipeline {
             layout: Some(&render_pipeline_layout),
             vertex: wgpu::VertexState {
                 module: shader,
-                entry_point: Some(match fragment_entry {
-                    "fs_ring" => "vs_ring",
-                    "fs_interior" => "vs_interior",
-                    _ => "vs_main",
-                }),
+                entry_point: Some(vertex_entry),
                 buffers: &[Some(VertexInput::desc()), Some(InstanceInput::desc())],
                 compilation_options: Default::default(),
             },
@@ -690,7 +689,6 @@ impl JadixPipeline {
     ) -> Option<OpaqueBoxPipeline> {
         if !source.contains("fn vs_ring(")
             || !source.contains("fn vs_interior(")
-            || !source.contains("fn fs_ring(")
             || !source.contains("fn fs_interior(")
         {
             return None;
@@ -714,7 +712,19 @@ impl JadixPipeline {
         }
         Some(OpaqueBoxPipeline {
             ring: Self::make_render_pipeline_entry(
-                device, config, shader, globals, backdrop, "fs_ring",
+                device,
+                config,
+                shader,
+                globals,
+                backdrop,
+                "vs_ring",
+                // Share the compiled general fragment; a custom hot-reload
+                // shader may still supply a distinct ring fragment.
+                if source.contains("fn fs_ring(") {
+                    "fs_ring"
+                } else {
+                    "fs_main"
+                },
             ),
             interior: Self::make_render_pipeline_entry(
                 device,
@@ -722,6 +732,7 @@ impl JadixPipeline {
                 shader,
                 globals,
                 backdrop,
+                "vs_interior",
                 "fs_interior",
             ),
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -814,6 +825,7 @@ impl JadixPipeline {
                     &shader,
                     &self.bind_group_layout,
                     &self.backdrop_bgl,
+                    "vs_main",
                     "fs_solid",
                 )
             });

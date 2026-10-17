@@ -1,0 +1,326 @@
+{
+  "date": "2026-10-17",
+  "verification": "native Win32 events and real GPU pixels; no Computer Use",
+  "fixes": [
+    "integer overflow clipping shared by scroll copies, glyphon and textured icons; no new redraw bands",
+    "restored maximization shown atomically via SW_MAXIMIZE"
+  ],
+  "windows": {
+    "path": "D:\\Projects\\Rust\\rust-native-ui\\target\\release\\gallery-sidebar-fixed.exe",
+    "sha256": "6c0c24537490dd80f41163e08d02c1e6d21c4a3c5647aa3cb68fe174513938a9",
+    "bytes": 30964224
+  },
+  "ubuntu24_arm64": {
+    "path": "D:\\Projects\\Rust\\rust-native-ui\\target\\artifacts\\gallery-ubuntu24.04-arm64-sidebar-fix-20261017.tar.gz",
+    "sha256": "01b3118f12f7079607df3cbba7af9b3275deab867b5caa944304563005298e13",
+    "bytes": 13685082
+  },
+  "arm64_build": {
+    "date": "2026-10-17",
+    "target": "aarch64-unknown-linux-gnu",
+    "glibc_max": "2.39",
+    "features": [
+      "runtime-logging",
+      "jadix/backend-vulkan"
+    ],
+    "profile": "release: opt-level=3, fat LTO",
+    "binary_sha256": "c0c73db3de37198bf6a6195b9ca400b87d18c7af0416897faf035d76787ef1d0",
+    "binary_bytes": 31510880,
+    "loader_check": "QEMU reached the event-loop creation; expected failure without a graphical display",
+    "device_graphics_validation": "pending Raspberry Pi test"
+  },
+  "tests": {
+    "jadix_unit_passed": 3799,
+    "jadix_unit_ignored": 63,
+    "window_state_unit_passed": 20,
+    "window_facade_unit_passed": 3,
+    "native_window_checks": [
+      "native_hidden_maximize_waits_for_explicit_show",
+      "native_caption_regions_follow_policy_and_window_lifetime"
+    ],
+    "sidebar_gpu": {
+      "backends": [
+        "gl",
+        "dx12"
+      ],
+      "offsets": 9,
+      "actions_per_offset": 5,
+      "edge_changed_pixels": 0,
+      "copies_required": true
+    },
+    "gallery_scroll_gpu": {
+      "backends": [
+        "gl",
+        "dx12"
+      ],
+      "frames_per_backend": 180,
+      "copies_per_backend": 135
+    },
+    "native_sidebar": {
+      "clipped_ink_pixels": 124,
+      "hover_changed_pixels": [
+        0,
+        0,
+        0
+      ]
+    },
+    "modal_gpu_gl": "passed",
+    "drawer_gpu_dx12": "passed",
+    "dependency_identity_check": "passed"
+  },
+  "restart_maximize": {
+    "executable": "D:\\Projects\\Rust\\rust-native-ui\\target\\release\\gallery-sidebar-fixed.exe",
+    "results": [
+      {
+        "launch": 1,
+        "startup": [
+          {
+            "elapsed": 0.0010841000184882432,
+            "maximized": false,
+            "rect": [
+              70,
+              80,
+              1092,
+              836
+            ],
+            "work": [
+              0,
+              0,
+              2560,
+              1528
+            ],
+            "covers_work_area": false
+          }
+        ],
+        "initial": {
+          "maximized": false,
+          "rect": [
+            70,
+            80,
+            1092,
+            836
+          ],
+          "work": [
+            0,
+            0,
+            2560,
+            1528
+          ],
+          "covers_work_area": false
+        },
+        "before_close": {
+          "maximized": true,
+          "rect": [
+            -11,
+            -11,
+            2571,
+            1539
+          ],
+          "work": [
+            0,
+            0,
+            2560,
+            1528
+          ],
+          "covers_work_area": true
+        },
+        "saved": {
+          "width": 1000,
+          "height": 700,
+          "x": -11,
+          "y": -11,
+          "prev_x": 70,
+          "prev_y": 80,
+          "maximized": true,
+          "visible": true,
+          "decorated": true,
+          "fullscreen": false
+        },
+        "passed": true
+      },
+      {
+        "launch": 2,
+        "startup": [
+          {
+            "elapsed": 1.680001150816679e-05,
+            "maximized": true,
+            "rect": [
+              -11,
+              -11,
+              2571,
+              1539
+            ],
+            "work": [
+              0,
+              0,
+              2560,
+              1528
+            ],
+            "covers_work_area": true
+          }
+        ],
+        "initial": {
+          "maximized": true,
+          "rect": [
+            -11,
+            -11,
+            2571,
+            1539
+          ],
+          "work": [
+            0,
+            0,
+            2560,
+            1528
+          ],
+          "covers_work_area": true
+        },
+        "before_close": {
+          "maximized": true,
+          "rect": [
+            -11,
+            -11,
+            2571,
+            1539
+          ],
+          "work": [
+            0,
+            0,
+            2560,
+            1528
+          ],
+          "covers_work_area": true
+        },
+        "saved": {
+          "width": 1000,
+          "height": 700,
+          "x": -11,
+          "y": -11,
+          "prev_x": 70,
+          "prev_y": 80,
+          "maximized": true,
+          "visible": true,
+          "decorated": true,
+          "fullscreen": false
+        },
+        "passed": true
+      },
+      {
+        "launch": 3,
+        "startup": [
+          {
+            "elapsed": 3.540000761859119e-05,
+            "maximized": true,
+            "rect": [
+              -11,
+              -11,
+              2571,
+              1539
+            ],
+            "work": [
+              0,
+              0,
+              2560,
+              1528
+            ],
+            "covers_work_area": true
+          }
+        ],
+        "initial": {
+          "maximized": true,
+          "rect": [
+            -11,
+            -11,
+            2571,
+            1539
+          ],
+          "work": [
+            0,
+            0,
+            2560,
+            1528
+          ],
+          "covers_work_area": true
+        },
+        "before_close": {
+          "maximized": true,
+          "rect": [
+            -11,
+            -11,
+            2571,
+            1539
+          ],
+          "work": [
+            0,
+            0,
+            2560,
+            1528
+          ],
+          "covers_work_area": true
+        },
+        "restored": {
+          "maximized": false,
+          "rect": [
+            70,
+            80,
+            1092,
+            836
+          ],
+          "work": [
+            0,
+            0,
+            2560,
+            1528
+          ],
+          "covers_work_area": false
+        },
+        "normal_geometry_preserved": true,
+        "saved": {
+          "width": 1000,
+          "height": 700,
+          "x": -11,
+          "y": -11,
+          "prev_x": 70,
+          "prev_y": 80,
+          "maximized": true,
+          "visible": true,
+          "decorated": true,
+          "fullscreen": false
+        },
+        "passed": true
+      }
+    ]
+  },
+  "startup": {
+    "executable": "D:\\Projects\\Rust\\rust-native-ui\\target\\release\\gallery-sidebar-fixed.exe",
+    "executable_sha256": "6c0c24537490dd80f41163e08d02c1e6d21c4a3c5647aa3cb68fe174513938a9",
+    "content_median_seconds": 0.38480369999888353,
+    "results": [
+      {
+        "round": 1,
+        "visible_seconds": 0.3635787999955937,
+        "content_seconds": 0.3977591000148095,
+        "visible_blank_seconds": 0.03418030001921579,
+        "passed": true
+      },
+      {
+        "round": 2,
+        "visible_seconds": 0.35545010000350885,
+        "content_seconds": 0.38480369999888353,
+        "visible_blank_seconds": 0.02935359999537468,
+        "passed": true
+      },
+      {
+        "round": 3,
+        "visible_seconds": 0.3407512000121642,
+        "content_seconds": 0.3738879000011366,
+        "visible_blank_seconds": 0.033136699988972396,
+        "passed": true
+      }
+    ]
+  },
+  "limitations": [
+    "Raspberry Pi graphical performance requires hardware verification",
+    "the running old Gallery locks target/release/gallery.exe; updated Windows binary is gallery-sidebar-fixed.exe"
+  ]
+}

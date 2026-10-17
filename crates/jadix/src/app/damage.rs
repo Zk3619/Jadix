@@ -3372,7 +3372,14 @@ pub fn scroll_strip_copy_physical(
     target_w: u32,
     target_h: u32,
 ) -> Option<ScrollStripCopyPhysical> {
-    let (x, y, w, h) = damage_to_scissor_physical(plan.viewport, 0.0, scale, target_w, target_h)?;
+    // A damage scissor rounds the far edge outward to cover every dirty pixel.
+    // A scroll copy must instead match the content's integer overflow clip:
+    // copying the ceil row/column moves sibling separator AA into the content
+    // and overwrites the fixed separator at the viewport boundary.
+    let scale = scale.max(0.0);
+    let clip =
+        crate::renderer::prepare_text::integerize_clip_rect(plan.viewport.map(|v| v * scale))?;
+    let (x, y, w, h) = damage_to_scissor_physical(clip, 0.0, 1.0, target_w, target_h)?;
     let dpx = (plan.delta[0] * scale.max(0.0)).round() as i32;
     let dpy = (plan.delta[1] * scale.max(0.0)).round() as i32;
     if dpx == 0 && dpy == 0 {
@@ -6451,6 +6458,21 @@ mod tests {
             scroll_blit_pass_scissor_logical(&[plan], &[]).is_none(),
             "dual-axis must not collapse to one AABB scissor"
         );
+    }
+
+    #[test]
+    fn scroll_copy_excludes_fractional_footer_separator_pixel() {
+        let viewport = [8.0, 75.0, 240.0, 276.0];
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            for delta in [[0.0, 20.0], [0.0, -20.0], [20.0, 0.0], [-20.0, 0.0]] {
+                let plan = plan_scroll_strip_blit(viewport, delta).unwrap();
+                let copy = scroll_strip_copy_physical(&plan, scale, 1200, 900).unwrap();
+                let right = ((viewport[0] + viewport[2]) * scale).floor() as u32;
+                let bottom = ((viewport[1] + viewport[3]) * scale).floor() as u32;
+                assert!(copy.src_x + copy.width <= right && copy.dst_x + copy.width <= right);
+                assert!(copy.src_y + copy.height <= bottom && copy.dst_y + copy.height <= bottom);
+            }
+        }
     }
 
     #[test]
