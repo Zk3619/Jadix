@@ -112,6 +112,113 @@ By default, it connects to `127.0.0.1:39091`.
 
 ---
 
+## Ubuntu 24.04 arm64 / 树莓派 5 交叉编译 | Cross-compilation
+
+目标为 **64 位 Ubuntu 24.04 Desktop**，Rust target 为 `aarch64-unknown-linux-gnu`。
+请按环境选择一种方式；下面的命令均在仓库根目录运行。首次构建建议至少预留 10GB 磁盘空间，内存紧张时使用 `-j 2`。
+
+| 方式 | 前置条件 | 适用场景 |
+|---|---|---|
+| [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild) | Rust、Zig、cargo-zigbuild | Windows / macOS / Linux；可指定最低 glibc 版本，无需 Docker |
+| [cross](https://github.com/cross-rs/cross) | Rust、Docker / Podman 的 Linux 容器环境 | 用容器统一交叉工具链；Windows 建议在 WSL2 中运行并启用 Docker 集成 |
+| Ubuntu / WSL2 + GCC | Linux Rust 工具链、GNU arm64 交叉编译器 | 已有 Ubuntu 构建环境，或需要自行配置目标系统库 |
+
+2026-10-16 的验证包使用 **cargo-zigbuild 0.23.0 + Zig 0.16.0 + Rust 1.95.0** 构建，
+已检查 AArch64 ELF、最高 glibc 符号要求为 2.39，并在 QEMU 中完成加载至事件循环创建的无桌面启动检查。
+`cross` 和 GCC 是可选步骤，本次未执行完整构建；树莓派实机图形验证仍待完成。
+
+### A) cargo-zigbuild
+
+安装 [Zig](https://ziglang.org/download/) 并加入 PATH，然后执行：
+
+```sh
+cargo install cargo-zigbuild --locked
+rustup target add aarch64-unknown-linux-gnu
+cargo zigbuild -j 2 -p gallery --release --locked \
+  --target aarch64-unknown-linux-gnu.2.39 \
+  --features runtime-logging,jadix/backend-vulkan
+```
+
+`.2.39` 指定 Ubuntu 24.04 对应的 glibc 版本；产物目录仍为
+`target/aarch64-unknown-linux-gnu/release/gallery`。PowerShell 请将多行命令写成一行，或把行尾 `\` 换为反引号。
+Zig 提供 C 工具链和 libc；若启用需要额外系统开发库的 feature（如 `system-tray`），仍需准备 arm64 库和 pkg-config sysroot。
+
+### B) cross
+
+启动 Docker / Podman 后执行：
+
+```sh
+cargo install cross --git https://github.com/cross-rs/cross --locked
+cross build -j 2 -p gallery --release --locked \
+  --target aarch64-unknown-linux-gnu \
+  --features runtime-logging,jadix/backend-vulkan
+```
+
+`cross` 自动使用目标架构的构建镜像。glibc 基线由镜像决定；如果另加原生库，
+需在自定义 cross 镜像中安装 **arm64** 开发包。此方式不声称固定使用 Ubuntu 24.04 sysroot，发布前应检查产物的 glibc 要求。
+
+### C) Ubuntu 24.04 / WSL2 + GCC
+
+以下命令在 Ubuntu shell 中运行（WSL 也需安装 Linux 版 Rust）：
+
+```sh
+sudo apt-get update
+sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu pkg-config
+rustup target add aarch64-unknown-linux-gnu
+CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc \
+CC_aarch64_unknown_linux_gnu=aarch64-linux-gnu-gcc \
+CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++ \
+cargo build -j 2 -p gallery --release --locked \
+  --target aarch64-unknown-linux-gnu \
+  --features runtime-logging,jadix/backend-vulkan
+```
+
+不要用宿主机 x86_64 的库冒充 arm64 库，也不要仅设置 `PKG_CONFIG_ALLOW_CROSS=1` 绕过检查。
+当前 Gallery 默认依赖以动态加载 / Rust 实现为主；增加原生依赖后，应为目标架构配置 `PKG_CONFIG_LIBDIR` / `PKG_CONFIG_SYSROOT_DIR`。
+
+### 打包与树莓派运行 | Package and run
+
+三种方式产物均为 `target/aarch64-unknown-linux-gnu/release/gallery`；设置 `CARGO_TARGET_DIR` 时以该目录为准。
+一起分发以下文件，不要复制 Windows 的窗口状态文件：
+
+```text
+gallery-ubuntu24.04-arm64/
+├── gallery
+├── theme.toml                # examples/gallery/theme.toml
+├── styles.toml               # examples/gallery/styles.toml
+├── assets/firefox-logo.svg   # examples/gallery/assets/firefox-logo.svg
+├── LICENSE
+└── NOTICE
+```
+
+在树莓派 5 的 Ubuntu 24.04 **图形桌面终端**中安装运行库并启动：
+
+```sh
+sudo apt-get update
+sudo apt-get install -y libegl1 libgles2 libgl1-mesa-dri mesa-vulkan-drivers \
+  libvulkan1 libwayland-client0 libwayland-cursor0 libwayland-egl1 \
+  libxkbcommon0 libxkbcommon-x11-0 libx11-6 libxcursor1 libxi6 libxrandr2 \
+  fonts-noto-cjk fonts-noto-color-emoji
+chmod +x ./gallery
+RUST_LOG=info ./gallery 2>&1 | tee gallery.log
+# 分别验证 GLES 与 Vulkan：
+JADIX_GPU_BACKEND=gl ./gallery
+JADIX_GPU_BACKEND=vulkan ./gallery
+# X11 / Wayland 对照需相应桌面会话可用：
+env -u WAYLAND_DISPLAY -u WAYLAND_SOCKET ./gallery  # X11，保留 DISPLAY
+env -u DISPLAY ./gallery                           # Wayland，保留 WAYLAND_DISPLAY
+```
+
+字体使用目标系统字体，Lucide 图标已内嵌。文件选择器依赖桌面的 XDG portal 服务。
+Gallery 默认在右下角显示实时性能 overlay（FPS、帧间隔、CPU 帧耗时、布局与文字准备耗时），
+每 500 ms 更新；点击“性能 / FPS”收起，`JADIX_PERF_OVERLAY=0` 完全关闭采样。
+CPU 耗时包含获取表面和提交的等待，并非 GPU 执行时间；静止时显示 Idle，不强制连续渲染。
+Windows release 的启动与最大化重启回归见 [scripts/startup-bench.md](scripts/startup-bench.md)。
+交叉编译成功表示二进制可构建；树莓派 GPU、窗口、输入法和剪贴板仍需在实机验证。
+可用 `file gallery`、`readelf -d gallery`、`readelf --version-info gallery` 检查 AArch64 架构、动态依赖和 glibc 要求。
+
+---
+
 ## 最小示例 | Minimal Example
 
 ```rust
