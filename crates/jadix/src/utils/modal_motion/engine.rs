@@ -194,20 +194,6 @@ thread_local! {
     static MODAL_CSS_NEEDS_FRAME: Cell<bool> = const { Cell::new(false) };
     /// One-shot: `about_to_wait` must `Poll` instead of caret/long-press `WaitUntil`.
     static MODAL_FORCE_IMMEDIATE_WAKE: Cell<bool> = const { Cell::new(false) };
-    /// Drawer snap-commit after CSS settle. Engine must not import `components::drawer`.
-    static SLIDE_SETTLE_COMPLETE: Cell<Option<fn(&str)>> = const { Cell::new(None) };
-}
-
-pub(crate) fn register_slide_settle_complete(f: fn(&str)) {
-    SLIDE_SETTLE_COMPLETE.with(|c| c.set(Some(f)));
-}
-
-fn notify_slide_settle_complete(id: &str) {
-    SLIDE_SETTLE_COMPLETE.with(|c| {
-        if let Some(f) = c.get() {
-            f(id);
-        }
-    });
 }
 
 /// True while hoisted Dialog/Sheet/Drawer CSS still has frames to paint.
@@ -768,21 +754,12 @@ fn settle_modal_enter_if_ready(
     let settled = enter_visual_settled(overlay, panel, motion, target_translate, slide_axis_px)
         && !modal_shell_enter_css_active(overlay, panel);
     if settled {
-        let modal_id = presence
-            .cell
-            .borrow()
-            .shell
-            .as_ref()
-            .map(|s| s.modal_id.clone());
         {
             let mut c = presence.cell.borrow_mut();
             c.enter_active = false;
             c.slide_settle = false;
         }
         crate::utils::popup::arm_underlay_close();
-        if let Some(id) = modal_id {
-            notify_slide_settle_complete(&id);
-        }
     }
     !settled
 }
@@ -1339,12 +1316,9 @@ fn apply_modal_shell_motion_inner(
         // Swipe owns transform/opacity — an in-flight enter tick would write the
         // snap target and can leave the panel fill on a stale clip.
         c.enter_active = false;
-        let frac = c
-            .shell
-            .as_ref()
-            .map(|s| s.live_open_frac)
-            .unwrap_or_else(|| open_frac_from_extra(motion, extra_translate, slide_axis_px));
-        overlay.style.opacity = frac.clamp(0.0, 1.0);
+        // Drawer depth tints the scrim color in its shell. Whole-element opacity
+        // belongs to presence only; changing it also fades the backdrop blur.
+        overlay.style.opacity = 1.0;
         panel.style.translate = p_target.translate;
         panel.style.translate_pct = p_target.translate_pct;
         panel.style.opacity = 1.0;
@@ -1358,7 +1332,7 @@ fn apply_modal_shell_motion_inner(
             panel.style.translate = [0.0, 0.0];
             panel.style.translate_pct = extra_to_translate_pct(motion, from, slide_axis_px);
             panel.style.opacity = 1.0;
-            overlay.style.opacity = open_frac_from_extra(motion, from, slide_axis_px);
+            overlay.style.opacity = 1.0;
         }
     }
 

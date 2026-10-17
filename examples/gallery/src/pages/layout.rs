@@ -132,6 +132,7 @@ pub(crate) fn ShadowShowcase() -> jadix::core::tree::Element {
 }
 
 /// MDN-style filter demo subject (downloaded into `examples/gallery/assets/`).
+#[cfg(test)]
 pub(crate) const FILTER_DEMO_LOGO: &str =
     concat!(env!("CARGO_MANIFEST_DIR"), "/assets/firefox-logo.svg");
 
@@ -160,7 +161,7 @@ pub(crate) fn filter_demo_logo(filter: Option<&str>, class: Option<&str>) -> Ele
         wrap = jadix::style::with_class_list(wrap, c);
     }
     wrap.child(ui! {
-        <Image src={FILTER_DEMO_LOGO} w="4.5rem" h="4.5rem" />
+        <Image src={format!("{}/assets/firefox-logo.svg", gallery_resource_root().display())} w="4.5rem" h="4.5rem" />
     })
 }
 

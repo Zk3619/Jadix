@@ -17,8 +17,6 @@ mod pages;
 mod shared;
 mod styles;
 
-use std::path::PathBuf;
-
 use shared::checker_rgba_texture;
 
 fn build_startup_scene() -> jadix::core::tree::Element {
@@ -32,7 +30,7 @@ fn build_startup_scene() -> jadix::core::tree::Element {
 }
 
 fn install_gallery_theme() {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = shared::gallery_resource_root();
     let theme = root.join("theme.toml");
     if let Err(e) = jadix::prelude::load_and_install_theme_overrides(&theme) {
         eprintln!("gallery: theme.toml: {e}");
@@ -45,6 +43,9 @@ fn main() {
     let benchmarking = cpu_bench::install();
     #[cfg(not(feature = "cpu-bench"))]
     let benchmarking = false;
+    if !benchmarking {
+        shared::install_performance_overlay();
+    }
     #[cfg(feature = "runtime-logging")]
     jadix::logging::init_with(jadix::logging::InitOptions {
         default_filter:

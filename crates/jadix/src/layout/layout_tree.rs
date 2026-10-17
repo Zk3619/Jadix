@@ -3958,19 +3958,32 @@ impl LayoutTree {
     }
 
     fn portal_layer_available_space(
-        &self,
+        &mut self,
         overlay_root: NodeId,
         root_node: NodeId,
         width: f32,
         height: f32,
     ) -> (NodeId, Size<AvailableSpace>) {
         if overlay_root != root_node {
-            if let Ok(layout) = self.taffy.layout(overlay_root) {
+            if let Ok(current) = self.taffy.style(overlay_root) {
+                // As a compute root, inset-only auto sizing collapses to zero
+                // with absolute children. Percentages fill the definite available
+                // space here and still follow the parent on a later app-root
+                // resize. Pixel sizes would pin every retained portal to the
+                // viewport from the last floating-only pass.
+                let mut style = current.clone();
+                style.size = Size {
+                    width: Dimension::percent(1.0),
+                    height: Dimension::percent(1.0),
+                };
+                if &style != current {
+                    let _ = self.taffy.set_style(overlay_root, style);
+                }
                 return (
                     overlay_root,
                     Size {
-                        width: AvailableSpace::Definite(layout.size.width),
-                        height: AvailableSpace::Definite(layout.size.height),
+                        width: AvailableSpace::Definite(width),
+                        height: AvailableSpace::Definite(height),
                     },
                 );
             }

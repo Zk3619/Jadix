@@ -21,12 +21,6 @@ pub(crate) use engine::{
     tick_hoisted_modal_css, tick_modal_presence, use_modal_presence, ModalPresenceHandle,
 };
 
-/// Drawer snap-commit after CSS settle. Named here so `components::drawer` does
-/// not depend on the private `engine` module path.
-pub(crate) fn register_slide_settle_complete(f: fn(&str)) {
-    engine::register_slide_settle_complete(f);
-}
-
 #[cfg(test)]
 pub(crate) use engine::{
     clear_pending_modal_enter, finish_modal_exit_for_test, set_modal_css_needs_frame_for_test,

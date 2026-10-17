@@ -227,6 +227,48 @@ impl BackdropBlurPipeline {
         }
     }
 
+    /// Independent capture/work textures and uniforms, sharing the compiled GPU
+    /// program. First modal open must not compile the local blur shader again.
+    pub(crate) fn new_target(&self, device: &wgpu::Device) -> Self {
+        let uniforms_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Modal Blur Uniforms"),
+            size: UNIFORM_STRIDE * MAX_PASSES,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+        let uniforms_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Modal Blur Uniforms BG"),
+            layout: &self.pipeline.get_bind_group_layout(0),
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                    buffer: &uniforms_buffer,
+                    offset: 0,
+                    size: wgpu::BufferSize::new(std::mem::size_of::<BlurUniforms>() as u64),
+                }),
+            }],
+        });
+        Self {
+            pipeline: self.pipeline.clone(),
+            tex_bgl: self.tex_bgl.clone(),
+            uniforms_buffer,
+            uniforms_bind_group,
+            sampler: self.sampler.clone(),
+            vertex_buffer: self.vertex_buffer.clone(),
+            index_buffer: self.index_buffer.clone(),
+            num_indices: self.num_indices,
+            scene: None,
+            work_a: None,
+            work_b: None,
+            full: None,
+            width: 0,
+            height: 0,
+            work_w: 0,
+            work_h: 0,
+            format: self.format,
+        }
+    }
+
     fn make_rt(
         device: &wgpu::Device,
         format: wgpu::TextureFormat,
@@ -416,11 +458,40 @@ impl BackdropBlurPipeline {
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
         radius_px: f32,
-        mut compute: Option<&mut ComputePipelines>,
+        compute: Option<&mut ComputePipelines>,
         region: Option<(u32, u32, u32, u32)>,
     ) {
+        self.blur_impl(device, queue, encoder, radius_px, compute, region, None);
+    }
+
+    /// Modal fades keep one work resolution for the whole animation. Choosing
+    /// it from the current (fading) sigma reallocates targets at threshold frames
+    /// and runs the smallest sigmas at full screen resolution.
+    pub(crate) fn blur_modal(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        radius_px: f32,
+        target_radius_px: f32,
+        compute: Option<&mut ComputePipelines>,
+    ) {
+        let factor = Self::work_factor(target_radius_px).max(2);
+        self.blur_impl(device, queue, encoder, radius_px, compute, None, Some(factor));
+    }
+
+    fn blur_impl(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        radius_px: f32,
+        mut compute: Option<&mut ComputePipelines>,
+        region: Option<(u32, u32, u32, u32)>,
+        work_factor: Option<u32>,
+    ) {
         let radius = radius_px.clamp(0.5, 64.0);
-        let factor = Self::work_factor(radius);
+        let factor = work_factor.unwrap_or_else(|| Self::work_factor(radius));
         self.ensure_work(device, factor);
 
         let Some(scene) = self.scene.as_ref() else {
@@ -864,7 +935,10 @@ impl BackdropBlurPipeline {
         let Some(full) = self.full.as_ref() else {
             return;
         };
-        let mut slot = 0u32;
+        // blur() and this blit are recorded into the same encoder. Queue buffer
+        // writes run before submission, so reusing slot 0 overwrites the first
+        // downsample pass's uniforms with blit mode. Reserve the final slot.
+        let mut slot = (MAX_PASSES - 1) as u32;
         Self::dispatch_pass(
             &mut slot,
             &self.pipeline,
@@ -964,6 +1038,11 @@ impl BackdropBlurPipeline {
 
     pub fn format(&self) -> wgpu::TextureFormat {
         self.format
+    }
+
+    #[cfg(test)]
+    pub(crate) fn work_size(&self) -> (u32, u32) {
+        (self.work_w, self.work_h)
     }
 }
 

@@ -51,7 +51,7 @@
 //! ```
 
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::OnceLock;
 use std::time::Instant;
@@ -231,6 +231,18 @@ pub fn coerce_snap_point_list(points: Vec<DrawerSnapPoint>) -> Vec<DrawerSnapPoi
 pub struct DrawerCtx {
     pub open: Signal<bool>,
     pub id: String,
+}
+
+#[derive(Clone)]
+struct DrawerSwipeConfig {
+    direction: DrawerDirection,
+    snap_points: Vec<DrawerSnapPoint>,
+    sequential: bool,
+}
+
+fn drawer_swipe_context() -> Context<DrawerSwipeConfig> {
+    static CTX: OnceLock<Context<DrawerSwipeConfig>> = OnceLock::new();
+    *CTX.get_or_init(create_context::<DrawerSwipeConfig>)
 }
 
 fn drawer_context() -> Context<DrawerCtx> {
@@ -498,7 +510,11 @@ fn drawer_swipe_handle_element(
             .flex_shrink(0.0)
             .into(),
     };
-    el = el.rounded_full().cursor("grab");
+    el = el.rounded_full().cursor(if is_drawer_dragging(drawer_id) {
+        "grabbing"
+    } else {
+        "grab"
+    });
     bind_drawer_drag_region(
         el,
         drawer_id,
@@ -517,10 +533,40 @@ fn drawer_swipe_handle_element(
 
 /// 对齐 shadcn `cn-drawer-popup`：底滑默认顶圆角、`max-h: calc(100dvh - 6rem)`。
 /// `6rem` inset at 16px root ≈ 96px.
-const DRAWER_Y_INSET_PX: f32 = 96.0;
-
 fn drawer_y_max_h(vh: f32) -> f32 {
-    (vh - DRAWER_Y_INSET_PX).max(120.0)
+    (vh - 6.0 * crate::layout::dimension::css_root_font_size_px()).max(120.0)
+}
+
+fn drawer_panel_axis(
+    direction: DrawerDirection,
+    vw: f32,
+    vh: f32,
+    width: Option<&str>,
+    height: Option<&str>,
+) -> f32 {
+    use crate::layout::dimension::{parse_css_dim, css_root_font_size_px, PercentAxis, UnitCtx};
+    let ctx =
+        UnitCtx::new(vw, vh, css_root_font_size_px()).with_containing_block(Some(vw), Some(vh));
+    let (value, axis, max, default) = if direction.is_vertical() {
+        (
+            height,
+            PercentAxis::Block,
+            drawer_y_max_h(vh),
+            drawer_y_max_h(vh),
+        )
+    } else {
+        (
+            width,
+            PercentAxis::Inline,
+            (24.0 * ctx.root_font_size).min(vw),
+            vw * 0.75,
+        )
+    };
+    value
+        .and_then(parse_css_dim)
+        .and_then(|v| v.resolve_px(&ctx, axis))
+        .unwrap_or(default)
+        .clamp(1.0, max.max(1.0))
 }
 
 /// Visible height for a Y-axis snap or drag (frac × max-h). Swipe follows this
@@ -639,13 +685,11 @@ fn drawer_shell_panel(
     chrome_close: Option<Element>,
     panel_chrome: crate::components::base::SlotChrome,
 ) -> Element {
-    ensure_slide_settle_hook();
     let (vw, vh) = drawer_viewport_size();
-    let axis = if direction.is_vertical() {
-        drawer_y_max_h(vh)
-    } else {
-        direction.axis_viewport(vw, vh)
-    };
+    let axis = drawer_panel_axis(direction, vw, vh, width, height);
+    DRAWER_PANEL_AXIS.with(|m| {
+        m.borrow_mut().insert(modal_id.to_string(), axis);
+    });
     let snap_fracs = resolve_snap_fractions(snap_points, axis);
     cache_snap_fracs(modal_id, &snap_fracs);
 
@@ -653,7 +697,7 @@ fn drawer_shell_panel(
     let frac = drawer_open_fraction_tracked(modal_id);
     let dragging = is_drawer_dragging(modal_id);
     let visible_px = if direction.is_vertical() {
-        Some(drawer_y_shell_metrics(frac, vh).0)
+        Some((frac.clamp(0.0, 1.0) * axis).max(1.0))
     } else {
         None
     };
@@ -824,12 +868,17 @@ pub fn DrawerClose(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn DrawerSwipeHandle(_children: Option<Element>) -> Element {
     let ctx = require_drawer("DrawerSwipeHandle");
+    let config = use_context(drawer_swipe_context()).unwrap_or(DrawerSwipeConfig {
+        direction: DrawerDirection::Down,
+        snap_points: vec![DrawerSnapPoint::Fraction(1.0)],
+        sequential: false,
+    });
     drawer_swipe_handle_element(
         &ctx.id,
         ctx.open,
-        DrawerDirection::Down,
-        &[DrawerSnapPoint::Fraction(1.0)],
-        false,
+        config.direction,
+        &config.snap_points,
+        config.sequential,
     )
 }
 
@@ -919,12 +968,13 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
     viewport_modal_island(view_id, move || {
         let owner = format!("drawer:{id}");
         let (vw, vh) = drawer_viewport_size();
-        let axis = if direction.is_vertical() {
-            drawer_y_max_h(vh)
-        } else {
-            direction.axis_viewport(vw, vh)
-        };
+        let axis = drawer_panel_axis(direction, vw, vh, width.as_deref(), height.as_deref());
         let frac = drawer_open_fraction_tracked(&id);
+        DRAWER_SCRIM_ALPHA.with(|m| {
+            m.borrow_mut().insert(id.clone(), overlay.color[3]);
+        });
+        let mut live_overlay = overlay.clone();
+        live_overlay.color[3] *= frac.clamp(0.0, 1.0);
         let dragging = is_drawer_dragging(&id);
         let extra = if direction.is_vertical() {
             drawer_y_shell_metrics(frac, vh).1
@@ -936,10 +986,12 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
         layer_opts.dragging = dragging;
         layer_opts.overlay = modal;
         layer_opts.stage_overflow_hidden = true;
-        viewport_modal_layer(&id, open, &overlay, layer_opts, |phase| {
+        viewport_modal_layer(&id, open, &live_overlay, layer_opts, |phase| {
             let Some(phase) = phase else {
+                had_mounted.set(false);
                 clear_drawer_scale_background(&id);
                 clear_drawer_y_settling(&id);
+                clear_drawer_live_frac(&id);
                 sync_focus_trap(&owner, false, "");
                 return None;
             };
@@ -949,6 +1001,14 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
             }
             had_mounted.set(m);
 
+            provide_context(
+                drawer_swipe_context(),
+                DrawerSwipeConfig {
+                    direction,
+                    snap_points: snap_points.clone(),
+                    sequential: snap_to_sequential,
+                },
+            );
             let mut inner = body();
             inner = inner
                 .w("100%")
@@ -1189,9 +1249,10 @@ thread_local! {
     static DRAWER_LIVE_FRAC: RefCell<HashMap<String, f32>> = RefCell::new(HashMap::new());
     static DRAWER_SCALE_BG: RefCell<Option<DrawerScaleBg>> = const { RefCell::new(None) };
     static DRAWER_SNAP_FRACS: RefCell<HashMap<String, Vec<f32>>> = RefCell::new(HashMap::new());
+    static DRAWER_PANEL_AXIS: RefCell<HashMap<String, f32>> = RefCell::new(HashMap::new());
+    static DRAWER_SCRIM_ALPHA: RefCell<HashMap<String, f32>> = RefCell::new(HashMap::new());
     static DRAWER_SCALE_BG_APPLIED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-    /// After a Y-axis snap CSS settle (horizontal drawers). Vertical snap resizes height immediately.
-    static DRAWER_Y_SETTLING: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static DRAWER_Y_SETTLING: RefCell<HashMap<String, DrawerSettle>> = RefCell::new(HashMap::new());
     /// `tick_drawer_drag` runs while `AppState` is borrowed. Queue shell layout
     /// bumps and drain after the RefCell drop (same contract as ColorPicker SV).
     static PENDING_DRAWER_LAYOUT_BUMP: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
@@ -1235,10 +1296,6 @@ pub(crate) fn drawer_viewport_size() -> (f32, f32) {
     crate::utils::modal_surface::modal_viewport_size()
 }
 
-fn ensure_slide_settle_hook() {
-    crate::utils::modal_motion::register_slide_settle_complete(on_modal_slide_settle_complete);
-}
-
 fn drawer_frac_signal(id: &str) -> Signal<f32> {
     use_signal(&format!("__jadix_drawer_open_frac:{id}"), || 1.0_f32)
 }
@@ -1274,14 +1331,33 @@ fn clear_drawer_y_settling(id: &str) {
     });
 }
 
-/// Snap CSS settle finished: commit rest height so `DrawerBody` can overflow-scroll.
-pub(crate) fn on_modal_slide_settle_complete(modal_id: &str) {
-    let was = DRAWER_Y_SETTLING.with(|s| s.borrow_mut().remove(modal_id));
-    if !was {
-        return;
+#[derive(Clone)]
+struct DrawerSettle {
+    from: f32,
+    target: f32,
+    started: Instant,
+}
+
+/// Run outside the live tree borrow, alongside the existing modal frame pump.
+pub(crate) fn tick_drawer_snaps() -> bool {
+    tick_drawer_snaps_at(Instant::now())
+}
+
+fn tick_drawer_snaps_at(now: Instant) -> bool {
+    let snaps = DRAWER_Y_SETTLING.with(|s| s.borrow().clone());
+    for (id, snap) in snaps {
+        let t = (now.saturating_duration_since(snap.started).as_secs_f32() / 0.25).min(1.0);
+        let eased = 1.0 - (1.0 - t).powi(3);
+        set_drawer_live_frac(&id, snap.from + (snap.target - snap.from) * eased);
+        if t >= 1.0 {
+            clear_drawer_y_settling(&id);
+            clear_drawer_live_frac(&id);
+        }
+        queue_drawer_layout_bump(&id);
+        let (vw, vh) = drawer_viewport_size();
+        crate::app::damage::push_frame_paint_damage([0.0, 0.0, vw, vh]);
     }
-    bump_drawer_shell_layout(modal_id);
-    request_redraw();
+    DRAWER_Y_SETTLING.with(|s| !s.borrow().is_empty())
 }
 
 fn drawer_snap_index_signal(id: &str) -> Signal<Option<usize>> {
@@ -1296,7 +1372,11 @@ fn normalize_snap_points(points: &[DrawerSnapPoint]) -> Vec<DrawerSnapPoint> {
 }
 
 fn resolve_snap_fractions(points: &[DrawerSnapPoint], axis_px: f32) -> Vec<f32> {
-    let mut out: Vec<f32> = points.iter().map(|p| p.to_open_fraction(axis_px)).collect();
+    let mut out: Vec<f32> = points
+        .iter()
+        .map(|p| p.to_open_fraction(axis_px))
+        .filter(|p| p.is_finite())
+        .collect();
     out.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     out.dedup_by(|a, b| (*a - *b).abs() < 0.01);
     if out.is_empty() {
@@ -1306,6 +1386,8 @@ fn resolve_snap_fractions(points: &[DrawerSnapPoint], axis_px: f32) -> Vec<f32> 
 }
 
 fn reset_drawer_open_fraction(id: &str, snap_points: &[DrawerSnapPoint], axis_px: f32) {
+    clear_drawer_live_frac(id);
+    clear_drawer_y_settling(id);
     let fracs = resolve_snap_fractions(snap_points, axis_px);
     let max_idx = fracs.len().saturating_sub(1);
     drawer_frac_signal(id).set(fracs[max_idx]);
@@ -1321,10 +1403,11 @@ fn drawer_open_fraction(id: &str) -> f32 {
 
 /// Subscribe so `apply_snap_index` rebuilds rest extra (peek-only left the last drag pose).
 fn drawer_open_fraction_tracked(id: &str) -> f32 {
-    if let Some(f) = DRAWER_LIVE_FRAC.with(|m| m.borrow().get(id).copied()) {
-        return f;
-    }
-    drawer_frac_signal(id).get()
+    // Retain the subscription even while a live swipe temporarily owns the pose.
+    let rest = drawer_frac_signal(id).get();
+    DRAWER_LIVE_FRAC
+        .with(|m| m.borrow().get(id).copied())
+        .unwrap_or(rest)
 }
 
 fn set_drawer_live_frac(id: &str, frac: f32) {
@@ -1350,7 +1433,11 @@ fn drawer_drag_translate(direction: DrawerDirection, open_frac: f32, axis_px: f3
 }
 
 fn is_drawer_dragging(id: &str) -> bool {
-    DRAWER_DRAG.with(|d| d.borrow().as_ref().is_some_and(|drag| drag.id == id))
+    DRAWER_DRAG.with(|d| {
+        d.borrow()
+            .as_ref()
+            .is_some_and(|drag| drag.id == id && drag.committed)
+    })
 }
 
 fn axis_delta(direction: DrawerDirection, drag: &DrawerDrag, x: f32, y: f32) -> f32 {
@@ -1373,18 +1460,23 @@ fn begin_drawer_drag(
     capture_id: String,
     exclusive: bool,
 ) {
-    ensure_slide_settle_hook();
     let (vw, vh) = drawer_viewport_size();
     let axis_px = if direction.is_vertical() {
         drawer_y_max_h(vh)
     } else {
         direction.axis_viewport(vw, vh)
     };
+    let axis_px = DRAWER_PANEL_AXIS
+        .with(|m| m.borrow().get(&id).copied())
+        .unwrap_or(axis_px);
     let snap_fracs = resolve_snap_fractions(snap_points, axis_px);
     let start_frac = drawer_open_fraction(&id);
-    let now = Instant::now();
-    set_drawer_live_frac(&id, start_frac);
     if exclusive {
+        clear_drawer_y_settling(&id);
+    }
+    let now = Instant::now();
+    if exclusive {
+        set_drawer_live_frac(&id, start_frac);
         set_pointer_capture(capture_id.clone());
     }
     // Y-axis swipe resizes height from `frac`; extra stays 0. Horizontal still translates.
@@ -1393,7 +1485,9 @@ fn begin_drawer_drag(
     } else {
         drawer_drag_translate(direction, start_frac, axis_px)
     };
-    crate::utils::modal_motion::note_modal_shell_drag(&id, extra, true, start_frac);
+    if exclusive {
+        crate::utils::modal_motion::note_modal_shell_drag(&id, extra, true, start_frac);
+    }
     DRAWER_DRAG.with(|slot| {
         *slot.borrow_mut() = Some(DrawerDrag {
             id,
@@ -1438,21 +1532,10 @@ fn nearest_snap(snap_fracs: &[f32], frac: f32) -> f32 {
 }
 
 fn sequential_snap_target(snap_fracs: &[f32], start_frac: f32, delta_sign: f32) -> f32 {
-    // Vaul `snapToSequentialPoint`: step from the press-time snap, not nearest-to-live.
+    // Select by neighboring midpoints, then limit travel to one gear.
     let idx = nearest_snap_index(snap_fracs, start_frac);
-    if delta_sign < -0.5 {
-        snap_fracs
-            .get(idx.saturating_sub(1))
-            .copied()
-            .unwrap_or(0.0)
-    } else if delta_sign > 0.5 {
-        snap_fracs
-            .get((idx + 1).min(snap_fracs.len().saturating_sub(1)))
-            .copied()
-            .unwrap_or(1.0)
-    } else {
-        snap_fracs[idx]
-    }
+    let nearest = nearest_snap_index(snap_fracs, start_frac + delta_sign);
+    snap_fracs[nearest.clamp(idx.saturating_sub(1), (idx + 1).min(snap_fracs.len() - 1))]
 }
 
 fn apply_snap_index(id: &str, snap_fracs: &[f32], target: f32) {
@@ -1477,6 +1560,8 @@ pub fn drawer_set_active_snap_point(drawer_id: &str, index: usize) {
     let fracs = DRAWER_SNAP_FRACS.with(|m| m.borrow().get(drawer_id).cloned());
     if let Some(fracs) = fracs {
         if let Some(&target) = fracs.get(index) {
+            clear_drawer_y_settling(drawer_id);
+            clear_drawer_live_frac(drawer_id);
             drawer_frac_signal(drawer_id).set(target);
             drawer_snap_index_signal(drawer_id).set(Some(index));
             request_redraw();
@@ -1557,6 +1642,9 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
     let Some(mut drag) = DRAWER_DRAG.with(|d| d.borrow().clone()) else {
         return false;
     };
+    if x == drag.last_x && y == drag.last_y {
+        return false;
+    }
     let now = Instant::now();
     // Sub-frame dt (1ms) explodes px/s and false-triggers flick-dismiss on the next gesture.
     let dt = now
@@ -1578,9 +1666,10 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
     if !drag.committed {
         if delta.abs() < DRAWER_DRAG_COMMIT_PX {
             DRAWER_DRAG.with(|d| *d.borrow_mut() = Some(drag));
-            return true;
+            return false;
         }
         drag.committed = true;
+        clear_drawer_y_settling(&drag.id);
         if !drag.captured {
             set_pointer_capture(drag.capture_id.clone());
             drag.captured = true;
@@ -1589,24 +1678,25 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
 
     let next = (drag.start_frac - delta / drag.axis_px).clamp(0.0, 1.15);
     set_drawer_live_frac(&drag.id, next);
+    let overlay_tid = format!("{}__modal_overlay", drag.id);
+    if let Some(overlay) = crate::core::tree::find_in_tree_mut(root, |n| {
+        n.template_id.as_deref() == Some(overlay_tid.as_str())
+    }) {
+        let alpha = DRAWER_SCRIM_ALPHA
+            .with(|m| m.borrow().get(&drag.id).copied())
+            .unwrap_or(0.25);
+        overlay.style.bg_color[3] = alpha * next.clamp(0.0, 1.0);
+    }
     if drag.direction.is_vertical() {
         crate::utils::modal_motion::note_modal_shell_drag(&drag.id, [0.0, 0.0], true, next);
-        crate::utils::modal_motion::patch_modal_overlay_opacity(
-            root,
-            &drag.id,
-            next.clamp(0.0, 1.0),
-        );
+        crate::utils::modal_motion::patch_modal_overlay_opacity(root, &drag.id, 1.0);
         queue_drawer_layout_bump(&drag.id);
         request_redraw();
     } else {
         let extra = drawer_drag_translate(drag.direction, next, drag.axis_px);
         crate::utils::modal_motion::note_modal_shell_drag(&drag.id, extra, true, next);
         crate::utils::modal_motion::patch_modal_panel_transform(root, &drag.id, extra);
-        crate::utils::modal_motion::patch_modal_overlay_opacity(
-            root,
-            &drag.id,
-            next.clamp(0.0, 1.0),
-        );
+        crate::utils::modal_motion::patch_modal_overlay_opacity(root, &drag.id, 1.0);
     }
     DRAWER_DRAG.with(|d| *d.borrow_mut() = Some(drag));
     true
@@ -1618,28 +1708,33 @@ pub(crate) fn clear_drawer_drag_if_any() {
         return;
     };
     DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
+    if drag.captured {
+        release_pointer_capture();
+    }
 
     let frac = DRAWER_LIVE_FRAC
         .with(|m| m.borrow().get(&drag.id).copied())
         .unwrap_or_else(|| drawer_frac_signal(&drag.id).peek());
-    clear_drawer_live_frac(&drag.id);
-
     if !drag.committed {
-        let rest = drawer_frac_signal(&drag.id).peek();
-        let extra = if drag.direction.is_vertical() {
-            [0.0, 0.0]
-        } else {
-            drawer_drag_translate(drag.direction, rest, drag.axis_px)
-        };
-        crate::utils::modal_motion::note_modal_shell_drag(&drag.id, extra, false, rest);
-        request_redraw();
         return;
     }
+    clear_drawer_live_frac(&drag.id);
+    // Release restores the full modal scrim. Invalidate its entire silhouette,
+    // not only the resized panel, or later Body scroll leaves opacity bands.
+    let (vw, vh) = drawer_viewport_size();
+    crate::app::damage::push_frame_paint_damage([0.0, 0.0, vw, vh]);
 
     let lowest = drag.snap_fracs.first().copied().unwrap_or(1.0);
     let dismiss = should_dismiss_drawer(frac, drag.velocity, lowest);
     if dismiss {
-        let extra = drawer_drag_translate(drag.direction, frac, drag.axis_px);
+        // Vertical drag already resized the panel. Keep that live height for exit;
+        // a second full-axis translate or restoring the full height would jump.
+        let extra = if drag.direction.is_vertical() {
+            set_drawer_live_frac(&drag.id, frac);
+            [0.0, 0.0]
+        } else {
+            drawer_drag_translate(drag.direction, frac, drag.axis_px)
+        };
         crate::utils::modal_motion::note_modal_shell_drag(&drag.id, extra, false, frac);
         drag.open.set(false);
         request_redraw();
@@ -1651,6 +1746,19 @@ pub(crate) fn clear_drawer_drag_if_any() {
     } else {
         nearest_snap(&drag.snap_fracs, frac)
     };
+    if drag.direction.is_vertical() && (target - frac).abs() > 0.001 {
+        set_drawer_live_frac(&drag.id, frac);
+        DRAWER_Y_SETTLING.with(|s| {
+            s.borrow_mut().insert(
+                drag.id.clone(),
+                DrawerSettle {
+                    from: frac,
+                    target,
+                    started: Instant::now(),
+                },
+            );
+        });
+    }
     apply_snap_index(&drag.id, &drag.snap_fracs, target);
     if drag.direction.is_vertical() {
         crate::utils::modal_motion::note_modal_shell_drag(&drag.id, [0.0, 0.0], false, target);
@@ -1661,19 +1769,18 @@ pub(crate) fn clear_drawer_drag_if_any() {
         crate::utils::modal_motion::note_modal_shell_drag(&drag.id, to, false, target);
         crate::utils::modal_motion::arm_modal_slide_settle(&drag.id, from);
     }
-    if target < DRAWER_CLOSE_THRESHOLD {
-        drag.open.set(false);
-    }
     request_redraw();
 }
 
 fn should_dismiss_drawer(frac: f32, velocity: f32, lowest_snap: f32) -> bool {
-    if frac < DRAWER_CLOSE_THRESHOLD {
+    // A configured low snap is a valid rest pose, not an implicit dismissal.
+    let threshold = DRAWER_CLOSE_THRESHOLD.min(lowest_snap * 0.56);
+    if frac < threshold {
         return true;
     }
     // Flick-close only when already well below the lowest rest snap — not a
     // high instantaneous px/s while parked on 0.5.
-    velocity > DRAWER_CLOSE_VELOCITY && frac < lowest_snap && frac < DRAWER_CLOSE_THRESHOLD + 0.08
+    velocity > DRAWER_CLOSE_VELOCITY && frac < lowest_snap && frac < threshold + lowest_snap * 0.16
 }
 
 fn bind_drawer_drag_region(
@@ -1691,6 +1798,9 @@ fn bind_drawer_drag_region(
     let cap = capture_id.to_string();
     el.focus_id(cap.clone())
         .on_pointer_down(move |e: &PointerEvent| {
+            if e.button != winit::event::MouseButton::Left {
+                return;
+            }
             if exclusive {
                 // Handle: bubble + capture so the gesture is exclusive.
                 if e.phase == EventPhase::Capture {
@@ -1710,8 +1820,14 @@ fn bind_drawer_drag_region(
                 e.stop_propagation();
                 return;
             }
-            // Panel: start on capture (child is target) or target (blank panel).
-            // Do not stop_propagation so buttons/inputs still receive the click.
+            // Nested controls and Body scrolling own their pointer gesture.
+            if e.target_focus_id
+                .as_deref()
+                .is_some_and(|target| target != cap)
+            {
+                return;
+            }
+            // Panel: start on capture (plain content) or target (blank panel).
             if e.phase == EventPhase::Bubble {
                 return;
             }
@@ -1739,6 +1855,195 @@ fn bind_drawer_drag_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sequential_snap_crosses_neighbor_midpoint() {
+        let points = [0.2, 0.5, 1.0];
+        assert_eq!(sequential_snap_target(&points, 1.0, -0.3), 0.5);
+        assert_eq!(sequential_snap_target(&points, 0.5, 0.3), 1.0);
+        assert_eq!(sequential_snap_target(&points, 0.5, -0.2), 0.2);
+        assert_eq!(sequential_snap_target(&points, 1.0, -0.1), 1.0);
+    }
+
+    #[test]
+    fn configured_low_snap_is_not_a_dismiss_gesture() {
+        assert!(!should_dismiss_drawer(0.2, 0.0, 0.2));
+        assert!(!should_dismiss_drawer(0.15, 0.0, 0.2));
+        assert!(should_dismiss_drawer(0.04, 0.0, 0.2));
+    }
+
+    #[test]
+    fn stationary_drag_does_not_schedule_another_layout() {
+        crate::core::reactivity::create_root(|| {
+            set_drawer_viewport_size(800.0, 800.0);
+            let open = Signal::new(true);
+            begin_drawer_drag(
+                "stationary".into(),
+                DrawerDirection::Down,
+                400.0,
+                200.0,
+                &[DrawerSnapPoint::Fraction(1.0)],
+                false,
+                open,
+                "stationary-handle".into(),
+                true,
+            );
+            let mut root = Element::new();
+            assert!(tick_drawer_drag(&mut root, 400.0, 230.0));
+            PENDING_DRAWER_LAYOUT_BUMP.with(|q| q.borrow_mut().clear());
+            assert!(!tick_drawer_drag(&mut root, 400.0, 230.0));
+            assert!(PENDING_DRAWER_LAYOUT_BUMP.with(|q| q.borrow().is_empty()));
+            DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
+        });
+    }
+
+    #[test]
+    fn secondary_button_does_not_start_drawer_drag() {
+        crate::core::reactivity::create_root(|| {
+            DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
+            let open = Signal::new(true);
+            let el = bind_drawer_drag_region(
+                Element::new(),
+                "right-click",
+                "right-click-handle",
+                open,
+                DrawerDirection::Down,
+                &[DrawerSnapPoint::Fraction(1.0)],
+                false,
+                true,
+            );
+            let e = PointerEvent::new(400.0, 200.0, winit::event::MouseButton::Right, 1);
+            el.on_mousedown.as_ref().unwrap().borrow_mut()(&e);
+            assert!(!is_drawer_dragging("right-click"));
+            DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
+        });
+    }
+
+    #[test]
+    fn explicit_handle_inherits_content_swipe_configuration() {
+        crate::core::reactivity::create_root(|| {
+            DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
+            let open = Signal::new(true);
+            provide_context(
+                drawer_context(),
+                DrawerCtx {
+                    open,
+                    id: "explicit-handle".into(),
+                },
+            );
+            provide_context(
+                drawer_swipe_context(),
+                DrawerSwipeConfig {
+                    direction: DrawerDirection::Left,
+                    snap_points: vec![
+                        DrawerSnapPoint::Fraction(0.25),
+                        DrawerSnapPoint::Fraction(1.0),
+                    ],
+                    sequential: true,
+                },
+            );
+            let handle = crate::ui! { <DrawerSwipeHandle /> };
+            let e = PointerEvent::new(100.0, 200.0, winit::event::MouseButton::Left, 1);
+            handle.on_mousedown.as_ref().unwrap().borrow_mut()(&e);
+            let drag = DRAWER_DRAG.with(|d| d.borrow().clone()).unwrap();
+            assert_eq!(drag.direction, DrawerDirection::Left);
+            assert_eq!(drag.snap_fracs, [0.25, 1.0]);
+            assert!(drag.snap_to_sequential);
+            DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
+            release_pointer_capture();
+        });
+    }
+
+    #[test]
+    fn invalid_snap_fraction_cannot_poison_nearest_snap() {
+        assert_eq!(
+            resolve_snap_fractions(&[DrawerSnapPoint::Fraction(f32::NAN)], 400.0),
+            [1.0]
+        );
+        assert_eq!(
+            resolve_snap_fractions(
+                &[
+                    DrawerSnapPoint::Fraction(f32::NAN),
+                    DrawerSnapPoint::Fraction(0.5)
+                ],
+                400.0
+            ),
+            [0.5]
+        );
+    }
+
+    #[test]
+    fn releasing_vertical_drawer_keeps_live_height_before_settling() {
+        crate::core::reactivity::create_root(|| {
+            set_drawer_viewport_size(800.0, 800.0);
+            let open = Signal::new(true);
+            let id = "release-height";
+            drawer_frac_signal(id).set(1.0);
+            begin_drawer_drag(
+                id.into(),
+                DrawerDirection::Down,
+                400.0,
+                100.0,
+                &[
+                    DrawerSnapPoint::Fraction(0.5),
+                    DrawerSnapPoint::Fraction(1.0),
+                ],
+                true,
+                open,
+                "release-height-handle".into(),
+                true,
+            );
+            let mut root = Element::new();
+            tick_drawer_drag(&mut root, 400.0, 100.0 + drawer_y_max_h(800.0) * 0.3);
+            let before = drawer_open_fraction(id);
+            clear_drawer_drag_if_any();
+            assert!(
+                (drawer_open_fraction(id) - before).abs() < 0.01,
+                "release must start at the dragged height, not jump to the snap target"
+            );
+            let started = DRAWER_Y_SETTLING.with(|s| s.borrow()[id].started);
+            assert!(tick_drawer_snaps_at(
+                started + std::time::Duration::from_millis(80)
+            ));
+            assert!(drawer_open_fraction(id) < before && drawer_open_fraction(id) > 0.5);
+            assert!(!tick_drawer_snaps_at(
+                started + std::time::Duration::from_millis(300)
+            ));
+            assert!((drawer_open_fraction(id) - 0.5).abs() < 0.001);
+            assert!(crate::app::pointer_capture_id().is_none());
+        });
+    }
+
+    #[test]
+    fn nested_control_keeps_its_pointer_gesture() {
+        use crate::app::pointer_events::{dispatch_pointer, HitPathEntry, PointerKind};
+        crate::core::reactivity::create_root(|| {
+            DRAWER_DRAG.with(|d| *d.borrow_mut() = None);
+            let panel = bind_drawer_drag_region(
+                Element::new(),
+                "controls",
+                "controls-panel",
+                Signal::new(true),
+                DrawerDirection::Down,
+                &[DrawerSnapPoint::Fraction(1.0)],
+                false,
+                false,
+            );
+            for focus in ["input-link", "scroll:controls__body"] {
+                let child = Element::new().focus_id(focus);
+                let path = [
+                    HitPathEntry::from_element(&panel, [0.0, 0.0, 800.0, 700.0]),
+                    HitPathEntry::from_element(&child, [10.0, 100.0, 300.0, 60.0]),
+                ];
+                let mut e = PointerEvent::new(30.0, 120.0, winit::event::MouseButton::Left, 1);
+                dispatch_pointer(&path, &mut e, PointerKind::Down);
+                assert!(
+                    !is_drawer_dragging("controls"),
+                    "nested {focus} must own dragging"
+                );
+            }
+        });
+    }
 
     #[test]
     fn drawer_direction_parses_shadcn_tokens() {
@@ -1776,9 +2081,9 @@ mod tests {
         // Tiny move stays on start snap.
         let stay = sequential_snap_target(&pts, 1.0, -0.1);
         assert!((stay - 1.0).abs() < 0.01);
-        let half = sequential_snap_target(&pts, 0.5, -0.2);
+        let half = sequential_snap_target(&pts, 0.2, -0.02);
         assert!(
-            (half - 0.5).abs() < 0.01,
+            (half - 0.2).abs() < 0.01,
             "small drag from the lowest snap must stay, got {half}"
         );
     }

@@ -59,16 +59,21 @@ fn gaussian1d(uv: vec2<f32>, texel: vec2<f32>, dir: vec2<f32>, sigma: f32) -> ve
     var acc = textureSample(src_tex, src_sampler, uv);
     var wsum = 1.0;
 
-    for (var i = 1; i <= 24; i = i + 1) {
+    // Adjacent taps share a hardware bilinear fetch at their weighted midpoint.
+    // This preserves the discrete Gaussian while nearly halving texture reads.
+    for (var i = 1; i <= 24; i = i + 2) {
         if (i > support) {
             break;
         }
         let x = f32(i);
-        let w = exp(-0.5 * (x / s) * (x / s));
-        let o = step_dir * x;
-        acc += textureSample(src_tex, src_sampler, uv + o) * w;
-        acc += textureSample(src_tex, src_sampler, uv - o) * w;
-        wsum += w * 2.0;
+        let w0 = exp(-0.5 * (x / s) * (x / s));
+        let x1 = x + 1.0;
+        let w1 = select(0.0, exp(-0.5 * (x1 / s) * (x1 / s)), i + 1 <= support);
+        let weight = w0 + w1;
+        let o = step_dir * (x + w1 / weight);
+        acc += textureSampleLevel(src_tex, src_sampler, uv + o, 0.0) * weight;
+        acc += textureSampleLevel(src_tex, src_sampler, uv - o, 0.0) * weight;
+        wsum += weight * 2.0;
     }
     return acc / wsum;
 }

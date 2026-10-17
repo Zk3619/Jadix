@@ -120,6 +120,8 @@ pub struct MouseEvent {
     pub region: Option<String>,
     /// [`MouseEvent.relatedTarget`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/relatedTarget) (`focus_id`).
     pub related_target: Option<String>,
+    /// Deepest focus identity on the original hit path; unchanged during propagation.
+    pub target_focus_id: Option<String>,
     consumed: Cell<bool>,
     default_prevented: Cell<bool>,
 }
@@ -150,6 +152,7 @@ impl MouseEvent {
             page_y: y,
             region: None,
             related_target: None,
+            target_focus_id: None,
             consumed: Cell::new(false),
             default_prevented: Cell::new(false),
         }
@@ -667,6 +670,7 @@ pub fn dispatch_pointer(path: &[HitPathEntry], event: &mut PointerEvent, kind: P
         return;
     }
 
+    event.target_focus_id = path_deepest_focus_id(path).map(str::to_owned);
     // Capture: root → parent of target
     event.phase = EventPhase::Capture;
     for entry in path.iter().take(path.len().saturating_sub(1)) {

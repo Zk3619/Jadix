@@ -4,6 +4,57 @@ use crate::core::reactivity::{create_effect, create_root};
 use crate::renderer::offscreen::readback_texture;
 use std::{cell::RefCell, rc::Rc};
 
+#[test]
+#[ignore = "requires a native Windows event loop and GPU surface"]
+fn primary_startup_presents_real_content_before_show() {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    use winit::window::WindowId;
+
+    struct Harness;
+    impl ApplicationHandler for Harness {
+        fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+            crate::init();
+            let (tx, rx) = std::sync::mpsc::channel();
+            crate::app::ui_bridge::install_proxy(event_loop.create_proxy(), tx);
+            let mut app = crate::app::lifecycle::create_app(
+                crate::app::WindowOptions::new().size(480.0, 320.0),
+                || {
+                    Element::new()
+                        .w("100%")
+                        .h("100%")
+                        .bg("background")
+                        .child(crate::prelude::text("Ready"))
+                },
+                event_loop.create_proxy(),
+                rx,
+            );
+            crate::app::with_ui_build_stack(|| app.can_create_surfaces(event_loop));
+            let state = app.state.borrow();
+            let state = state.as_ref().unwrap();
+            assert!(state.window.is_visible().unwrap_or(false));
+            assert!(
+                state.has_presented_frame,
+                "first show must have a presented UI frame"
+            );
+            assert!(!AppState::is_bootstrap_root(&state.root_element));
+            assert!(
+                !state.text_nodes.is_empty(),
+                "startup must paint real content"
+            );
+            event_loop.exit();
+        }
+        fn window_event(&mut self, _: &dyn ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    }
+    let mut builder = EventLoop::builder();
+    builder.with_any_thread(true);
+    builder.build().unwrap().run_app(Harness).unwrap();
+    crate::app::runtime::clear_app_runtime();
+    crate::app::reactive::reset_registered_anchors();
+}
+
 #[cfg(feature = "svg")]
 #[test]
 #[ignore = "requires a native Windows event loop and GPU surface"]

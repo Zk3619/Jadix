@@ -538,6 +538,7 @@ pub(crate) fn build_gallery_app() -> Element {
                 </SidebarInset>
             </SidebarProvider>
             <Toaster variant="stack" overflow="displace" limit={3} position="top-center" />
+            { crate::shared::gallery_performance_overlay() }
         </Box>
     }
 }

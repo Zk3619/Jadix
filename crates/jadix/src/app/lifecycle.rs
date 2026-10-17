@@ -702,7 +702,14 @@ impl super::App {
             });
             log::debug!("lifecycle: after root create_effect");
 
+            // Prime the real UI while hidden so ShowWindow never exposes the
+            // unpainted native client area. Some surfaces require a visible
+            // window: the normal redraw below remains their retry path.
+            #[cfg(target_os = "windows")]
+            self.handle_redraw_requested(window.id(), event_loop);
             window.set_visible(true);
+            window.focus_window();
+            window.request_redraw();
             crate::platform::glass_on_shown(window.as_ref());
             let composition = self
                 .state
@@ -990,6 +997,7 @@ impl ApplicationHandler for super::App {
         // queue many KeyDowns and they all land in one paint (batched glyphs).
         let text_edit_pump = super::input_controller::take_text_edit_force_immediate();
         crate::components::color_picker::drain_color_drag_apply();
+        let drawer_snap_needs_frame = crate::components::drawer::tick_drawer_snaps();
         crate::components::drawer::drain_drawer_layout_bumps();
         // Theme presentation is a window-level animation, independent of element CSS clocks.
         let can_animate = |window: &dyn winit::window::Window| {
@@ -1012,7 +1020,8 @@ impl ApplicationHandler for super::App {
         // Nested Select Expand (ColorPicker format menu) is not Dialog CSS. A one-shot
         // armed at floating Enter is consumed by the parent Fade; query live motion.
         let overlay_css_needs =
-            modal_css_needs || crate::utils::floating_motion::any_floating_motion_needs_frame();
+            modal_css_needs || drawer_snap_needs_frame
+                || crate::utils::floating_motion::any_floating_motion_needs_frame();
         let resize_followup = (*self.state.borrow())
             .as_ref()
             .is_some_and(|s| s.needs_resize_followup());

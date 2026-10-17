@@ -3,6 +3,10 @@ use super::*;
 use crate::app::{damage::*, draw_cull::*};
 use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 
+#[cfg(target_os = "windows")]
+#[path = "state_modal_animation_tests.rs"]
+mod modal_animation_tests;
+
 #[cfg(all(target_os = "windows", feature = "svg"))]
 #[path = "state_scroll_damage_tests.rs"]
 mod scroll_damage_tests;
@@ -3151,3 +3155,7 @@ fn sdf_vertex_clip_flags_preserve_every_world_clip_channel() {
 #[cfg(target_os = "windows")]
 #[path = "state_chart_present_tests.rs"]
 mod chart_present_tests;
+
+#[cfg(windows)]
+#[path = "state_drawer_interaction_tests.rs"]
+mod drawer_interaction_tests;

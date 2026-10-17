@@ -3,14 +3,93 @@
 use crate::core::tree::Element;
 use crate::layout::layout_tree::LayoutTree;
 use crate::layout::layout_tree::{
-    escapes_ancestor_overflow, hoist_portal_subtrees, ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL,
-    ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, ATTR_PORTAL_SLOT, PORTAL_LAYER_ID,
+    ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, ATTR_PORTAL_SLOT,
+    PORTAL_LAYER_ID, escapes_ancestor_overflow, hoist_portal_subtrees,
 };
 
 fn portal_layer(root: &Element) -> Option<&Element> {
     root.children
         .iter()
         .find(|c| c.template_id.as_deref() == Some(PORTAL_LAYER_ID))
+}
+
+#[test]
+fn persistent_hud_survives_floating_portal_and_reactive_refresh() {
+    use crate::core::reactivity::{create_effect, create_root, use_signal};
+    use std::{cell::RefCell, rc::Rc};
+    crate::init();
+    crate::app::reactive::reset_registered_anchors();
+    crate::app::portal_overlay::clear_overlay_stack();
+    let tree = Rc::new(RefCell::new(Element::new()));
+    crate::app::runtime::install_test_reconcile_root(tree.clone());
+    let (owner, (open, caption)) = create_root(|| {
+        let open = use_signal("hud-tip-open", || false);
+        let caption = use_signal("hud-caption", || "FPS 60".to_string());
+        let live = tree.clone();
+        create_effect(move || {
+            let tip = crate::components::tooltip::tooltip("hud-tip", "Tip")
+                .open_signal(open)
+                .trigger(|_| Element::new().w(100.0).h(30.0).text("Trigger"));
+            let hud = crate::utils::viewport_portal_stage(
+                "gallery-performance",
+                Element::new()
+                    .absolute()
+                    .right(12.0)
+                    .bottom(12.0)
+                    .w(280.0)
+                    .h(118.0)
+                    .template_id("perf-hud")
+                    .child(Element::new().template_id("perf-toggle").text("性能 / FPS"))
+                    .child(Element::new().text(caption.get())),
+                1_000_000,
+            );
+            let mut next = Element::new()
+                .w(960.0)
+                .h(640.0)
+                .child(tip)
+                .child(Element::new().w(0.0).h(0.0).child(hud));
+            let mut old = live.borrow_mut();
+            crate::app::test_support::reconcile_elements(&mut next, &mut old);
+            *old = next;
+        });
+        (open, caption)
+    });
+    let mut layout = LayoutTree::new();
+    for i in 0..5 {
+        if i == 1 {
+            open.set(true);
+        }
+        if i == 2 {
+            caption.set("FPS 48".into());
+        }
+        if i == 3 {
+            open.set(false);
+        }
+        crate::app::reactive::drain_deferred_view_remounts();
+        let mut root = tree.borrow_mut();
+        hoist_portal_subtrees(&mut root);
+        let (width, height) = if i < 2 {
+            (960.0, 640.0)
+        } else {
+            (1706.6666, 978.6667)
+        };
+        layout.build_and_layout_fast_ex(&mut root, width, height, [-1.0; 2], false, false, None);
+        let hud = find_by_tid(&root, "perf-hud").expect("HUD disappeared");
+        assert!(
+            (width - hud.layout_bounds[0] - hud.layout_bounds[2] - 12.0).abs() < 1.0
+                && (height - hud.layout_bounds[1] - hud.layout_bounds[3] - 12.0).abs() < 1.0,
+            "HUD must stay at viewport bottom-right step {i}: {:?} viewport={width}x{height}",
+            hud.layout_bounds
+        );
+        assert!(
+            find_by_tid(&root, "perf-toggle").is_some(),
+            "toggle disappeared at step {i}"
+        );
+    }
+    crate::app::runtime::clear_test_reconcile_root();
+    owner.dispose();
+    crate::app::reactive::reset_registered_anchors();
+    crate::app::portal_overlay::clear_overlay_stack();
 }
 
 fn count_in_layer(root: &Element) -> usize {
@@ -35,6 +114,35 @@ fn find_by_tid<'a>(node: &'a Element, id: &str) -> Option<&'a Element> {
         }
     }
     None
+}
+
+#[test]
+fn persistent_hud_keeps_viewport_edges_after_floating_follow_and_maximize() {
+    let hud = crate::utils::viewport_portal_stage(
+        "perf",
+        Element::new()
+            .absolute()
+            .right(12.0)
+            .bottom(12.0)
+            .w(280.0)
+            .h(118.0)
+            .template_id("perf-hud"),
+        1_000_000,
+    );
+    let mut root = Element::new().w("100%").h("100%").child(hud);
+    let mut tree = LayoutTree::new();
+    tree.build_and_layout(&mut root, 960.0, 640.0, [-1.0; 2]);
+    tree.relayout_overlay_follow_and_collect(&mut root, 960.0, 640.0, [-1.0; 2], true, false);
+    for (width, height) in [(1706.6666, 978.6667), (800.0, 600.0), (1706.6666, 978.6667)] {
+        tree.build_and_layout_fast_ex(&mut root, width, height, [-1.0; 2], true, false, None);
+        let hud = find_by_tid(&root, "perf-hud").unwrap();
+        assert!(
+            (width - hud.layout_bounds[0] - hud.layout_bounds[2] - 12.0).abs() < 1.0
+                && (height - hud.layout_bounds[1] - hud.layout_bounds[3] - 12.0).abs() < 1.0,
+            "HUD moved after maximize/restore: {:?} viewport={width}x{height}",
+            hud.layout_bounds
+        );
+    }
 }
 
 #[test]
@@ -340,9 +448,11 @@ fn hoist_unknown_mount_falls_back_to_root_layer() {
 
     assert_eq!(hoist_portal_subtrees(&mut root), 1);
     assert_eq!(count_in_layer(&root), 1);
-    assert!(find_by_tid(&root, "orphan-portal")
-        .map(|n| { n.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1") })
-        .unwrap_or(false));
+    assert!(
+        find_by_tid(&root, "orphan-portal")
+            .map(|n| { n.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1") })
+            .unwrap_or(false)
+    );
 }
 
 #[test]

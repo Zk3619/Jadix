@@ -418,10 +418,16 @@ pub fn scale_textured_draws(draws: &[TexturedDraw], scale: f32) -> Vec<ScaledTex
             t[4] *= scale;
             t[5] *= scale;
             let (clip_pos, clip_size) = if d.clip_size[0] >= 0.0 && d.clip_size[1] >= 0.0 {
-                (
-                    [d.clip_pos[0] * scale, d.clip_pos[1] * scale],
-                    [d.clip_size[0] * scale, d.clip_size[1] * scale],
-                )
+                // Match glyphon and scroll-copy bounds. Fractional fragment
+                // clips can admit a boundary row that scroll copies exclude.
+                let clip = prepare_text::integerize_clip_rect([
+                    d.clip_pos[0] * scale,
+                    d.clip_pos[1] * scale,
+                    d.clip_size[0] * scale,
+                    d.clip_size[1] * scale,
+                ])
+                .unwrap_or([0.0; 4]);
+                ([clip[0], clip[1]], [clip[2], clip[3]])
             } else {
                 (d.clip_pos, d.clip_size)
             };
@@ -683,6 +689,22 @@ mod textured_uv_tests {
         let scaled = scale_textured_draws(&[d], 2.0);
         assert!((scaled[0].clip_pos[0] - 4.0).abs() < 1e-4);
         assert!((scaled[0].clip_size[1] - 32.0).abs() < 1e-4);
+    }
+
+    #[test]
+    fn textured_overflow_matches_integer_text_and_scroll_clip() {
+        for scale in [1.0, 1.25, 1.5, 1.75, 2.0] {
+            for clip in [[8.0, 341.0, 239.0, 10.0], [8.0, 351.1, 239.0, 0.1]] {
+                let draw = TexturedDraw::clipped([16.0, 349.0, 16.0, 16.0], None, "icon", 1.0)
+                    .unwrap()
+                    .with_overflow_clip(Some(clip));
+                let scaled = scale_textured_draws(&[draw], scale);
+                let expected = super::prepare_text::integerize_clip_rect(clip.map(|v| v * scale))
+                    .unwrap_or([0.0; 4]);
+                assert_eq!(scaled[0].clip_pos, [expected[0], expected[1]]);
+                assert_eq!(scaled[0].clip_size, [expected[2], expected[3]]);
+            }
+        }
     }
 
     #[test]

@@ -364,6 +364,15 @@ pub(super) struct AppState {
     /// `backdrop_blur.full` still holds last local frost. Skip recapture when
     /// PartialLoad damage misses the host (gallery hover on another card).
     local_backdrop_valid: bool,
+    // Modal capture must not overwrite the local frost it samples.
+    modal_backdrop: Option<BackdropBlurPipeline>,
+    modal_source_fp: Option<u64>,
+    modal_source_text: Vec<crate::core::tree::TextLayoutInfo>,
+    modal_blur_radius: Option<u32>,
+    #[cfg(test)]
+    modal_capture_count: u64,
+    #[cfg(test)]
+    modal_blur_count: u64,
 }
 
 /// `queue.write_buffer` is executed before render pass during submit; the same buffer is written to offset 0 multiple times.
@@ -1977,6 +1986,14 @@ impl AppState {
             shader: None,
             path2d,
             backdrop_blur,
+            modal_backdrop: None,
+            modal_source_fp: None,
+            modal_source_text: Vec::new(),
+            modal_blur_radius: None,
+            #[cfg(test)]
+            modal_capture_count: 0,
+            #[cfg(test)]
+            modal_blur_count: 0,
             effect_pass,
             css_filter_pass,
             compute,
@@ -2265,6 +2282,7 @@ impl AppState {
         &mut self,
         overlay_visual: Option<[f32; 4]>,
         node_paints: &[crate::layout::layout_tree::NodePaint],
+        backdrop_regions: &[[f32; 4]],
     ) {
         if self.scroll_strip_blit.is_empty() {
             self.scroll_blit_pins.clear();
@@ -2282,6 +2300,10 @@ impl AppState {
             .collect();
         let nested = std::mem::take(&mut self.scroll_blit_pins);
         let mut sticky = Vec::new();
+        // A frost capture needs complete prefix glyphs, not just the exposed
+        // scroll strip's mesh. Reset/prepare its kernel footprint as one local
+        // repair so captured missing glyph rows cannot become retained stripes.
+        sticky.extend_from_slice(backdrop_regions);
         for id in &ids {
             if let Some(vp) = self.find_viewport_element(id) {
                 sticky.extend(super::damage::sticky_layout_bounds(vp));
@@ -6580,7 +6602,45 @@ impl AppState {
             &mut render_result.node_paints,
             &self.damage_nodes,
         );
-        self.collect_scroll_blit_pins(overlay_visual, &render_result.node_paints);
+        let backdrop_regions: Vec<_> = if self.scroll_strip_blit.is_empty() {
+            Vec::new()
+        } else {
+            overlay_split
+                .page_stack_band_ranges()
+                .iter()
+                .filter_map(|band| {
+                    let radius = band_instance_backdrop_blur(&scaled_instances, band);
+                    if radius <= 0.5 {
+                        return None;
+                    }
+                    local_backdrop_host_scissor_physical(
+                        &scaled_instances,
+                        band,
+                        self.config.width,
+                        self.config.height,
+                    )
+                    .map(|sc| {
+                        let (x, y, w, h) = expand_physical_scissor(
+                            sc,
+                            local_backdrop_kernel_pad_px(radius * ui_scale),
+                            self.config.width,
+                            self.config.height,
+                        );
+                        [
+                            x as f32 / ui_scale,
+                            y as f32 / ui_scale,
+                            w as f32 / ui_scale,
+                            h as f32 / ui_scale,
+                        ]
+                    })
+                })
+                .collect()
+        };
+        self.collect_scroll_blit_pins(
+            overlay_visual,
+            &render_result.node_paints,
+            &backdrop_regions,
+        );
         // Consumed by `force_full_redraw_after_chrome` / scrollbar gates this frame.
         // Clear here (not inside overlay occupancy) so `note_fit_relayout_followup`
         // can still arm the *next* chrome after text prepare.
@@ -6649,8 +6709,100 @@ impl AppState {
         if region_present && self.compositor_alpha {
             self.force_full_redraw = true;
         }
+        let max_backdrop_blur_logical = overlay_split
+            .bands
+            .iter()
+            .map(|b| b.backdrop_blur)
+            .fold(0.0_f32, f32::max);
+        // Only underlays that actually blur — the panel band is opacity=1 for the
+        // whole slide and would pin σ at full strength (instant blur, then pop off).
+        let modal_underlay_opacity = overlay_split
+            .bands
+            .iter()
+            .filter(|b| b.backdrop_blur > 0.5)
+            .map(|b| b.underlay_opacity)
+            .fold(0.0_f32, f32::max);
+        // A region repair would replay sharp page pixels into the retained
+        // blurred scene (notably the strip exposed by a shrinking Drawer).
+        // Recompose the cached modal backdrop before drawing its overlays.
+        if max_backdrop_blur_logical > 0.5 && modal_underlay_opacity > 0.001 {
+            self.force_full_redraw = true;
+        }
         let gpu_present = self.plan_gpu_present(ui_scale);
-
+        let allow_primitives = !(self.text_backend == TextRendererBackend::CpuTextHybrid
+            && Self::cpu_hybrid_text_only());
+        // Fullscreen modal underlay blur: capture page → blur → composite under overlays.
+        let use_backdrop_blur = allow_primitives
+            && max_backdrop_blur_logical > 0.5
+            && modal_underlay_opacity > 0.001
+            && overlay_inst_start > 0
+            && !gpu_present.use_partial_damage;
+        // Hash only the rendered page. Modal opacity/translation must not invalidate
+        // its source; changed page geometry, text, images and live textures must.
+        let modal_source_fp = if use_backdrop_blur {
+            use std::hash::{Hash, Hasher};
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            self.config.width.hash(&mut h);
+            self.config.height.hash(&mut h);
+            self.config.format.hash(&mut h);
+            self.compositor_alpha.hash(&mut h);
+            max_backdrop_blur_logical.to_bits().hash(&mut h);
+            ui_scale.to_bits().hash(&mut h);
+            h.write(bytemuck::cast_slice(&scaled_instances[..overlay_inst_start]));
+            h.write(bytemuck::cast_slice(&render_result.clip_polys[..overlay_inst_start]));
+            h.write(bytemuck::cast_slice(&scaled_input_chrome[..overlay_chrome_start]));
+            for op in &render_result.paint_ops[..overlay_paint_start] {
+                match op {
+                    crate::layout::layout_tree::PaintOp::Rects { start, count } => {
+                        0u8.hash(&mut h);
+                        start.hash(&mut h);
+                        count.hash(&mut h);
+                    }
+                    crate::layout::layout_tree::PaintOp::Textured { start, count } => {
+                        1u8.hash(&mut h);
+                        start.hash(&mut h);
+                        count.hash(&mut h);
+                    }
+                }
+            }
+            for band in overlay_split.page_stack_band_ranges() {
+                band.instance.hash(&mut h);
+                band.textured.hash(&mut h);
+                band.text.hash(&mut h);
+                band.chrome.hash(&mut h);
+                band.paint_ops.hash(&mut h);
+                band.stamp_key.hash(&mut h);
+            }
+            let mut dynamic = false;
+            for draw in &scaled_tex[..overlay_tex_start] {
+                use crate::renderer::resources::ResourceKind;
+                dynamic |= matches!(ResourceKind::from_key(&draw.texture_key),
+                    ResourceKind::Canvas | ResourceKind::Shader | ResourceKind::Scene3d
+                    | ResourceKind::Capture | ResourceKind::Effect);
+                draw.texture_key.hash(&mut h);
+                h.write(bytemuck::bytes_of(&draw.to_instance()));
+                if let Some(image) = self.image_textures.get(&draw.texture_key) {
+                    image._texture.hash(&mut h);
+                }
+            }
+            super::pending_images::dynamic_texture_epoch().hash(&mut h);
+            if dynamic {
+                self.image_textures.frame().hash(&mut h);
+            }
+            Some(h.finish())
+        } else {
+            None
+        };
+        let reuse_modal_source = modal_source_fp.is_some()
+            && modal_source_fp == self.modal_source_fp
+            && Self::text_nodes_equal(&self.text_nodes[..overlay_text_start], &self.modal_source_text)
+            && !self.text_nodes[..overlay_text_start].iter()
+                .any(|n| n.glyph_fx.as_deref().is_some_and(|fx| !fx.is_empty()))
+            && self.text_renderer.pending_warmup.is_empty();
+        if !use_backdrop_blur {
+            self.modal_source_fp = None;
+            self.modal_blur_radius = None;
+        }
         let cull_phys = gpu_present.cull_phys;
         let page_stack_band_ranges = overlay_split.page_stack_band_ranges();
         let has_page_stack_bands = !page_stack_band_ranges.is_empty();
@@ -6772,7 +6924,11 @@ impl AppState {
         } else {
             (Vec::new(), Vec::new())
         };
-        let (underline_instances, caret_instances, shadow_tex_draws) = if has_page_stack_bands {
+        let (underline_instances, caret_instances, shadow_tex_draws) = if reuse_modal_source {
+            page_stack_skip_glyphon = vec![true; page_stack_band_ranges.len()];
+            skip_page_glyphon = true;
+            (Vec::new(), self.last_caret_instances.clone(), Vec::new())
+        } else if has_page_stack_bands {
             let band_begin = Instant::now();
             band_new = self.ensure_page_stack_band_text_renderers(&page_stack_band_ranges);
             band_alloc_ms = band_begin.elapsed().as_secs_f32() * 1000.0;
@@ -7605,27 +7761,6 @@ impl AppState {
             || self.theme_transition.needs_frame();
         super::damage::note_frame_clear_policy(logical_policy);
 
-        let max_backdrop_blur_logical = overlay_split
-            .bands
-            .iter()
-            .map(|b| b.backdrop_blur)
-            .fold(0.0_f32, f32::max);
-        // Only underlays that actually blur — the panel band is opacity=1 for the
-        // whole slide and would pin σ at full strength (instant blur, then pop off).
-        let modal_underlay_opacity = overlay_split
-            .bands
-            .iter()
-            .filter(|b| b.backdrop_blur > 0.5)
-            .map(|b| b.underlay_opacity)
-            .fold(0.0_f32, f32::max);
-        let allow_primitives = !(self.text_backend == TextRendererBackend::CpuTextHybrid
-            && Self::cpu_hybrid_text_only());
-        // Fullscreen modal underlay blur: capture page → blur → composite under overlays.
-        let use_backdrop_blur = allow_primitives
-            && max_backdrop_blur_logical > 0.5
-            && modal_underlay_opacity > 0.001
-            && overlay_inst_start > 0
-            && !use_partial_damage;
         // Never `Load` a FLIP_DISCARD / GLES swapchain. Modal blur used to blit then Load
         // the surface; composite into retain and blit the finished frame instead.
         if use_backdrop_blur {
@@ -7701,7 +7836,9 @@ impl AppState {
         // glyphon is flushed to the scene RT before this frame encoder reuses the
         // same vertex buffers. Must run **before** modal frost: the modal scene pass
         // samples these bind groups so local + modal blurs stack.
-        if should_capture_page_stack_local_backdrops(allow_primitives, has_page_stack_bands) {
+        if !reuse_modal_source
+            && should_capture_page_stack_local_backdrops(allow_primitives, has_page_stack_bands)
+        {
             let scroll_source_moved = self.scroll_layer_clear || !self.scroll_strip_blit.is_empty();
             let mut dirty_logical: Vec<[f32; 4]> = Vec::new();
             if let Some(r) = self.damage_rect {
@@ -7790,14 +7927,19 @@ impl AppState {
         }
 
         if use_backdrop_blur {
-            self.backdrop_blur.ensure_size(
+            let modal = self.modal_backdrop.get_or_insert_with(|| {
+                self.backdrop_blur.new_target(&self.device)
+            });
+            modal.ensure_size(
                 &self.device,
                 self.config.width,
                 self.config.height,
                 self.config.format,
             );
-            if let Some(scene_view) = self.backdrop_blur.scene_view() {
-                {
+            if let Some(scene_view) = modal.scene_view() {
+                if !reuse_modal_source {
+                    #[cfg(test)]
+                    { self.modal_capture_count += 1; }
                     let mut page_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Backdrop Scene Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -8011,24 +8153,26 @@ impl AppState {
                     }
                     // I-beam is a swapchain overlay after retain blit.
                 }
-                // Ramp blur σ with overlay opacity (CSS `backdrop-filter` under a fading
-                // element). Keep the blit itself opaque — dimming is the underlay rect.
-                self.backdrop_blur.blur(
-                    &self.device,
-                    &self.queue,
-                    &mut encoder,
-                    max_backdrop_blur_logical * modal_underlay_opacity * ui_scale,
-                    if self.gpu_caps.compute {
-                        Some(&mut self.compute)
-                    } else {
-                        None
-                    },
-                );
+                let radius = max_backdrop_blur_logical * modal_underlay_opacity * ui_scale;
+                if !reuse_modal_source || self.modal_blur_radius != Some(radius.to_bits()) {
+                    #[cfg(test)]
+                    { self.modal_blur_count += 1; }
+                    modal.blur_modal(
+                        &self.device, &self.queue, &mut encoder, radius,
+                        max_backdrop_blur_logical * ui_scale,
+                        if self.gpu_caps.compute { Some(&mut self.compute) } else { None },
+                    );
+                    self.modal_blur_radius = Some(radius.to_bits());
+                }
+                self.modal_source_fp = modal_source_fp;
+                if !reuse_modal_source {
+                    self.modal_source_text = self.text_nodes[..overlay_text_start].to_vec();
+                }
                 // Same UV space as capture / TexturedQuadPipeline (rect top → uv.y = 0).
                 // Destination is retain (draw_to_retain forced above); never Load the swapchain.
                 let blur_dst = self.present_retain.color_view();
                 if let Some(dst) = blur_dst {
-                    self.backdrop_blur
+                    modal
                         .blit_to(&self.queue, &mut encoder, dst, 1.0, clear_color);
                 }
             }
@@ -8564,6 +8708,11 @@ impl AppState {
         let present_begin = Instant::now();
         self.queue.present(output);
         super::frame_stats::note_presented_frame();
+        super::frame_stats::note_frame_timings(
+            render_begin.elapsed().as_secs_f64() * 1000.0,
+            (layout_done - pre_done).as_secs_f64() * 1000.0,
+            (text_done - upload_done).as_secs_f64() * 1000.0,
+        );
         self.damage_rect = None;
         self.damage_nodes.clear();
         self.force_full_redraw = retain_unmoved_scroll;

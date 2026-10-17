@@ -1,4 +1,101 @@
 use crate::imports::*;
+
+static PERFORMANCE_OVERLAY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// A slow sampler keeps the HUD from driving a permanent animation loop.
+pub(crate) fn install_performance_overlay() {
+    use std::sync::atomic::Ordering;
+    if std::env::var("JADIX_PERF_OVERLAY").as_deref() == Ok("0")
+        || PERFORMANCE_OVERLAY.swap(true, Ordering::Relaxed)
+    {
+        return;
+    }
+    jadix::app::run_on_ui_thread(|| jadix::app::frame_stats::enable_frame_timings(true));
+    std::thread::spawn(|| {
+        let mut previous = std::time::Instant::now();
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(500));
+            let now = std::time::Instant::now();
+            let seconds = now.duration_since(previous).as_secs_f64();
+            previous = now;
+            jadix::app::run_on_ui_thread(move || {
+                let sample = jadix::app::frame_stats::take_frame_timings();
+                let visible = use_signal("gal-perf-visible", || true).peek();
+                if !visible {
+                    return;
+                }
+                // A HUD update itself presents one frame. Do not let that one
+                // frame keep changing the text and sustain redraws while idle.
+                let text = if sample.frames <= 1 {
+                    "Idle · 0 FPS\nCPU frame —\nLayout —  Text —".to_string()
+                } else {
+                    let n = sample.frames as f64;
+                    format!(
+                        "{:.0} FPS · {:.1} ms interval\nCPU {:.1} ms · max {:.1} ms\nLayout {:.1} ms · Text {:.1} ms",
+                        n / seconds,
+                        seconds * 1000.0 / n,
+                        sample.total_ms / n,
+                        sample.worst_ms,
+                        sample.layout_ms / n,
+                        sample.text_ms / n,
+                    )
+                };
+                let label = use_signal("gal-perf-text", String::new);
+                if label.peek() != text {
+                    label.set(text);
+                }
+            });
+        }
+    });
+}
+
+pub(crate) fn gallery_performance_overlay() -> Element {
+    if !PERFORMANCE_OVERLAY.load(std::sync::atomic::Ordering::Relaxed) {
+        return Element::new();
+    }
+    jadix::utils::mount_reactive_anchor("gallery:performance-host", gallery_performance_panel)
+}
+
+fn gallery_performance_panel() -> Element {
+    let visible = use_signal("gal-perf-visible", || true);
+    let text = use_signal("gal-perf-text", || "Measuring…".to_string());
+    let panel = ui! {
+        <VStack absolute={true} right="12px" bottom="12px" z_index={1000000} gap="4px" items="end">
+            <Button id="gal-perf-toggle" size="sm" variant="secondary"
+                on_click={move || visible.set(!visible.peek())}>"性能 / FPS"</Button>
+            <Show when={visible.get()} scope="gallery:performance">
+                <Box w="280px" h="82px" p="8px" bg="#111827dd" rounded="6px" pointer_events="none">
+                    <Label w="264px" h="66px" text_size="12px" color="#ffffff" leading="1.5">
+                        { text.get() }
+                    </Label>
+                </Box>
+            </Show>
+        </VStack>
+    };
+    // A viewport portal stays above retained scroll layers and modal captures.
+    Element::new()
+        .w(0.0)
+        .h(0.0)
+        .child(jadix::utils::viewport_portal_stage(
+            "gallery-performance",
+            panel,
+            1_000_000,
+        ))
+}
+
+/// Packaged resources live beside the executable; cargo run uses the source tree.
+pub(crate) fn gallery_resource_root() -> &'static std::path::Path {
+    static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+    ROOT.get_or_init(|| {
+        std::env::current_exe()
+            .ok()
+            .and_then(|exe| exe.parent().map(std::path::Path::to_path_buf))
+            .filter(|dir| dir.join("theme.toml").is_file())
+            .unwrap_or_else(|| std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")))
+    })
+}
+
 /// Stable `template_id` for fine-grained reconcile (must stay unique per mounted block).
 pub(crate) const PRIMITIVES_SHOWCASE_REACTIVE: &str =
     "examples/gallery/PrimitivesShowcase:controls";
