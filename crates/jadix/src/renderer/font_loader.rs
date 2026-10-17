@@ -159,6 +159,7 @@ fn thai_coverage_present(db: &Database) -> bool {
             "Tahoma",
             "Thonburi",
             "Noto Sans Thai",
+            "Tlwg Typo",
         ],
     )
 }
@@ -172,6 +173,8 @@ fn arabic_coverage_present(db: &Database) -> bool {
             "Traditional Arabic",
             "Geeza Pro",
             "Noto Naskh Arabic",
+            "DejaVu Sans",
+            "Liberation Sans",
         ],
     )
 }
@@ -197,6 +200,9 @@ fn symbols_coverage_present(db: &Database) -> bool {
             "Noto Sans Symbols",
             "Noto Sans Symbols 2",
             "Noto Sans Math",
+            // Unix's lazy symbol loader uses DejaVuSans.ttf. Recognize that
+            // same family or every symbol probe clears the shaping caches.
+            "DejaVu Sans",
         ],
     )
 }
@@ -273,8 +279,12 @@ fn find_font_file(file_name: &str) -> Option<PathBuf> {
 }
 
 fn db_has_font_path(db: &Database, path: &Path) -> bool {
-    db.faces()
-        .any(|face| matches!(&face.source, glyphon::fontdb::Source::File(p) if p.as_path() == path))
+    db.faces().any(|face| match &face.source {
+        glyphon::fontdb::Source::File(p) | glyphon::fontdb::Source::SharedFile(p, _) => {
+            p.as_path() == path
+        }
+        _ => false,
+    })
 }
 
 fn try_load_font_path(db: &mut Database, path: &Path, state: &mut LazyFontState) -> bool {
@@ -851,6 +861,62 @@ pub fn create_font_system() -> FontSystem {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unix_symbol_fallback_preserves_warm_font_caches() {
+        let needs = ScriptNeeds {
+            symbols: true,
+            ..Default::default()
+        };
+        let mut source = create_font_system();
+        ensure_scripts(&mut source, needs);
+        // Reuse a real face but project Unix's fallback family into its fontdb
+        // metadata, so this regression also runs on Windows build hosts.
+        let mut face = source.db().faces().next().expect("UI font").clone();
+        let language = face.families[0].1;
+        face.families = vec![("DejaVu Sans".into(), language)];
+        let mut db = Database::new();
+        db.push_face_info(face);
+        let mut fs = FontSystem::new_with_locale_and_db("en-US".into(), db);
+        let attrs = glyphon::Attrs::new().family(glyphon::Family::Name("DejaVu Sans"));
+        let matches = fs.get_font_matches(&attrs);
+        let faces = fs.db().len();
+        for _ in 0..100 {
+            ensure_coverage_for_text(&mut fs, "∑ → ★");
+            assert!(
+                std::sync::Arc::ptr_eq(&matches, &fs.get_font_matches(&attrs)),
+                "an already loaded Unix symbol fallback must not clear font matching every frame"
+            );
+            assert_eq!(
+                fs.db().len(),
+                faces,
+                "must not inject duplicate fallback faces"
+            );
+        }
+    }
+
+    #[test]
+    fn shared_font_file_is_not_loaded_again() {
+        let path = crate::platform::eager_ui_font_files()
+            .iter()
+            .find_map(|name| crate::platform::resolve_system_font(name))
+            .expect("system UI font");
+        let bytes = std::sync::Arc::new(std::fs::read(&path).unwrap());
+        let mut db = Database::new();
+        db.load_font_source(glyphon::fontdb::Source::SharedFile(path.clone(), bytes));
+        let faces = db.len();
+        assert!(faces > 0);
+        assert!(try_load_font_path(
+            &mut db,
+            &path,
+            &mut LazyFontState::default()
+        ));
+        assert_eq!(
+            db.len(),
+            faces,
+            "cosmic-text's shared file source must remain deduplicated"
+        );
+    }
 
     #[test]
     fn deferred_emoji_coverage_preserves_font_match_cache() {
