@@ -43,6 +43,10 @@ fn main() {
 
 主窗默认 label 为 `main`。副窗须在 `WindowOptions::window_label` 上命名才会被跟踪。
 
+通过 `Builder::install` 接入 Jadix 时，创建回调仅恢复几何等状态，首次显示和聚焦由
+渲染器负责，避免 GPU 初始化期间提前暴露空白窗口。保存的可见性仍保留；手动调用
+`WindowStateManager::restore` 时仍按 `StateFlags::VISIBLE` 恢复可见性。
+
 ```toml
 [windows.main]
 width = 1440

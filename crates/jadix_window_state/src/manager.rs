@@ -64,6 +64,25 @@ impl WindowStateManager {
 
     /// Restore `label` onto `window`. Unknown labels insert a live snapshot instead.
     pub fn restore(&self, label: &str, window: &(impl WindowView + ?Sized)) -> Result<()> {
+        self.restore_with_flags(label, window, self.flags)
+    }
+
+    /// Jadix creates hidden windows; its renderer owns the first show/focus.
+    #[cfg(any(feature = "jadix", test))]
+    pub(crate) fn restore_before_show(
+        &self,
+        label: &str,
+        window: &(impl WindowView + ?Sized),
+    ) -> Result<()> {
+        self.restore_with_flags(label, window, self.flags.difference(StateFlags::VISIBLE))
+    }
+
+    fn restore_with_flags(
+        &self,
+        label: &str,
+        window: &(impl WindowView + ?Sized),
+        flags: StateFlags,
+    ) -> Result<()> {
         let Some(mapped) = self.effective_label(label) else {
             return Ok(());
         };
@@ -81,7 +100,7 @@ impl WindowStateManager {
             g.windows.get(&mapped).copied()
         };
         if let Some(state) = snapshot.filter(|s| !s.is_placeholder()) {
-            state.apply_to(window, self.flags);
+            state.apply_to(window, flags);
         } else {
             self.capture(&mapped, window)?;
         }
@@ -459,6 +478,35 @@ mod tests {
         assert_eq!(dst.size.get(), (1440, 900));
         assert_eq!(dst.pos.get(), (80, 60));
         let _ = fs::remove_file(&path);
+    }
+
+    #[test]
+    fn startup_restore_keeps_window_hidden_and_preserves_saved_visibility() {
+        let path = unique_path();
+        let mgr = Builder::new()
+            .with_path(&path)
+            .with_autosave(false)
+            .build()
+            .unwrap();
+        let src = MockWindow::desktop();
+        src.size.set((1440, 900));
+        src.pos.set((80, 60));
+        mgr.capture("main", &src).unwrap();
+        let dst = MockWindow::desktop();
+        dst.visible.set(false);
+        mgr.restore_before_show("main", &dst).unwrap();
+        assert_eq!(dst.size.get(), (1440, 900));
+        assert_eq!(dst.pos.get(), (80, 60));
+        assert!(
+            !dst.visible.get(),
+            "startup restore must leave first show to the renderer"
+        );
+        assert!(mgr.get("main").unwrap().visible);
+        mgr.restore("main", &dst).unwrap();
+        assert!(
+            dst.visible.get(),
+            "explicit restore still restores visibility"
+        );
     }
 
     #[test]

@@ -349,7 +349,10 @@ impl WindowFlags {
         if self.contains(WindowFlags::MINIMIZED) {
             style |= WS_MINIMIZE;
         }
-        if self.contains(WindowFlags::MAXIMIZED) {
+        // WS_MAXIMIZE on a hidden restored-size HWND makes ShowWindow(SW_MAXIMIZE)
+        // think the maximize already happened: the style changes, geometry does not.
+        // Keep the intent in WindowFlags until the explicit show command sizes it.
+        if self.contains(WindowFlags::MAXIMIZED | WindowFlags::VISIBLE) {
             style |= WS_MAXIMIZE;
         }
         if self.contains(WindowFlags::IGNORE_CURSOR_EVENT) {
@@ -393,7 +396,13 @@ impl WindowFlags {
         }
 
         if new.contains(WindowFlags::VISIBLE) {
-            let flag = if !self.contains(WindowFlags::MARKER_ACTIVATE) {
+            // Show directly in the requested state. SW_SHOW followed by
+            // SW_MAXIMIZE exposes the restored-size HWND between the calls.
+            let flag = if new.contains(WindowFlags::MAXIMIZED) {
+                SW_MAXIMIZE
+            } else if diff.contains(WindowFlags::MAXIMIZED) {
+                SW_RESTORE
+            } else if !self.contains(WindowFlags::MARKER_ACTIVATE) {
                 self.set(WindowFlags::MARKER_ACTIVATE, true);
                 SW_SHOWNOACTIVATE
             } else {
@@ -424,18 +433,6 @@ impl WindowFlags {
                     SWP_ASYNCWINDOWPOS | SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                 );
                 InvalidateRgn(window, ptr::null_mut(), false.into());
-            }
-        }
-
-        if diff.contains(WindowFlags::MAXIMIZED) || new.contains(WindowFlags::MAXIMIZED) {
-            unsafe {
-                ShowWindow(
-                    window,
-                    match new.contains(WindowFlags::MAXIMIZED) {
-                        true => SW_MAXIMIZE,
-                        false => SW_RESTORE,
-                    },
-                );
             }
         }
 

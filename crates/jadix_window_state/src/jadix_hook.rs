@@ -39,7 +39,7 @@ impl WindowLifecycleHook for JadixWindowStateHook {
             .lock()
             .unwrap_or_else(|p| p.into_inner())
             .insert(window.id(), label.to_string());
-        if let Err(e) = self.manager.restore(label, window) {
+        if let Err(e) = self.manager.restore_before_show(label, window) {
             log::warn!("jadix_window_state: restore `{label}`: {e}");
         }
     }

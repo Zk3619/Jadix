@@ -23,6 +23,17 @@ Local changes:
 - Native caption double-click and SC_MAXIMIZE recheck fixed/fullscreen/button
   policy, covering Snap and system-menu routes. Programmatic set_maximized remains
   available through the existing ShowWindow path.
+- Hidden maximize changes retain the intent in `WindowFlags` without setting
+  `WS_MAXIMIZE` or calling `ShowWindow`. Staging that native style on normal
+  bounds makes the later maximize command skip resizing. Explicit show applies
+  maximization and actual monitor geometry, preserving the first-show boundary.
+  Regression: `cargo test -p jadix_winit --lib native_hidden_maximize -- --ignored
+  --test-threads=1` observes visibility and actual work-area coverage. The Gallery
+  process/persistence regression is `python scripts/window-restore-check.py`.
+  Explicit show uses `SW_MAXIMIZE` directly when restoring maximization; it must
+  never expose normal geometry via an earlier `SW_SHOW`. The native observer
+  rejects visible normal-size `WM_WINDOWPOSCHANGED` events, and the persistence
+  script samples from the first visible HWND rather than waiting for startup.
 
 Reference: GPUI Kit TitleBar at `2963d6d880b9dffe59b48b0533bdc83c03201209`
 uses GPUI WindowControlArea; GPUI's Windows implementation maps those areas to
