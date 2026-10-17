@@ -8,6 +8,50 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+/// CPU-side frame work, including surface acquire/submit/present waits. GPU
+/// execution itself is asynchronous; these are deliberately not GPU timings.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FrameTimings {
+    pub frames: u64,
+    pub total_ms: f64,
+    pub worst_ms: f64,
+    pub layout_ms: f64,
+    pub text_ms: f64,
+}
+
+thread_local! {
+    static TIMINGS: std::cell::Cell<Option<FrameTimings>> = const { std::cell::Cell::new(None) };
+}
+
+/// Enable inexpensive timing accumulation on this UI thread.
+pub fn enable_frame_timings(enabled: bool) {
+    TIMINGS.with(|t| t.set(enabled.then(FrameTimings::default)));
+}
+
+/// Drain the current sample. Reading never requests a frame.
+pub fn take_frame_timings() -> FrameTimings {
+    TIMINGS.with(|t| {
+        let sample = t.get();
+        if sample.is_some() {
+            t.set(Some(FrameTimings::default()));
+        }
+        sample.unwrap_or_default()
+    })
+}
+
+pub(crate) fn note_frame_timings(total_ms: f64, layout_ms: f64, text_ms: f64) {
+    TIMINGS.with(|t| {
+        if let Some(mut sample) = t.get() {
+            sample.frames += 1;
+            sample.total_ms += total_ms;
+            sample.worst_ms = sample.worst_ms.max(total_ms);
+            sample.layout_ms += layout_ms;
+            sample.text_ms += text_ms;
+            t.set(Some(sample));
+        }
+    });
+}
+
 static SKIPPED_SIBLINGS: AtomicU64 = AtomicU64::new(0);
 static PATCHED_DL: AtomicU64 = AtomicU64::new(0);
 static LAST_SKIPPED: AtomicU64 = AtomicU64::new(0);

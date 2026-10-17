@@ -39,12 +39,19 @@ impl FramePacer {
     }
 
     pub fn begin_frame(&mut self, now: Instant, interval: Option<Duration>) -> bool {
-        if self.deadline(now, interval) > now {
+        let deadline = self.deadline(now, interval);
+        if deadline > now {
             self.pending = true;
             return false;
         }
         self.pending = false;
-        self.last_frame = Some(now);
+        // Preserve the cadence through small timer delays instead of adding
+        // wake-up latency to every period. Rebase after idle / a missed period
+        // so slow frames never produce a burst of catch-up paints.
+        self.last_frame = Some(match interval {
+            Some(period) if now.duration_since(deadline) < period => deadline,
+            _ => now,
+        });
         true
     }
 }
@@ -52,6 +59,25 @@ impl FramePacer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn late_wakes_do_not_accumulate_into_a_lower_frame_rate() {
+        let mut pacer = FramePacer::default();
+        let start = Instant::now();
+        let period = Duration::from_secs_f64(1.0 / 60.0);
+        let interval = Some(period);
+        assert!(pacer.begin_frame(start, interval));
+        for frame in 1..=120 {
+            let wake = pacer.deadline(start, interval) + Duration::from_micros(500);
+            assert!(pacer.begin_frame(wake, interval));
+            assert_eq!(pacer.deadline(wake, interval), start + period * (frame + 1));
+        }
+        // After idle or a full missed frame, resume without a burst of catch-up paints.
+        let resume = start + Duration::from_secs(10);
+        assert!(pacer.begin_frame(resume, interval));
+        assert_eq!(pacer.deadline(resume, interval), resume + period);
+        assert!(!pacer.begin_frame(resume, interval));
+    }
 
     #[test]
     fn coalesces_until_deadline_without_postponing_it_on_input() {
