@@ -184,6 +184,7 @@ cargo build -j 2 -p gallery --release --locked \
 ```text
 gallery-ubuntu24.04-arm64/
 ├── gallery
+├── gallery.desktop           # examples/gallery/gallery.desktop
 ├── theme.toml                # examples/gallery/theme.toml
 ├── styles.toml               # examples/gallery/styles.toml
 ├── assets/firefox-logo.svg   # examples/gallery/assets/firefox-logo.svg
@@ -215,6 +216,48 @@ Gallery 默认在右下角显示实时性能 overlay（FPS、帧间隔、CPU 帧
 CPU 耗时包含获取表面和提交的等待，并非 GPU 执行时间；静止时显示 Idle，不强制连续渲染。
 Windows release 的启动与最大化重启回归见 [scripts/startup-bench.md](scripts/startup-bench.md)。
 交叉编译成功表示二进制可构建；树莓派 GPU、窗口、输入法和剪贴板仍需在实机验证。
+
+### 树莓派上的帧率、首次启动与桌面名称
+
+60 FPS 是绘制上限，每帧预算为 16.67 ms；约 23 ms 的帧间隔对应约 43 FPS。
+性能面板的 CPU 数字是主线程一帧的墙钟耗时，包含驱动等待；layout/text 属于其中的阶段，不能再叠加。
+`top` 默认以单核为 100%，四核 Pi 5 上的 102% 约为一个核心的工作量。
+
+在设备图形桌面终端分别运行 GLES 和 Vulkan 对照（构建时启用 `jadix/backend-vulkan`）：
+
+```sh
+JADIX_GPU_BACKEND=gl JADIX_RENDER_PROFILE=1 RUST_LOG=info ./gallery 2>&1 | tee gallery-gl.log
+JADIX_GPU_BACKEND=vulkan JADIX_RENDER_PROFILE=1 RUST_LOG=info ./gallery 2>&1 | tee gallery-vulkan.log
+```
+
+两次均在基础页以相同窗口尺寸滚动约 10 秒后退出。比较日志中的 adapter 名称、
+`render profile` 的 layout/text/encode/acquire/present，以及 `startup stage=…` 的耗时。
+启动阶段分别记录设备、表面、各管线、字体/文字渲染器和共享文字资源；
+`startup primary_ui_mounted_ms` 记录窗口创建至首次 UI 挂载的总耗时。
+它们不等同于显示器首帧可见时间。首次与第二次启动应分别保留日志。
+
+`inxi` 的 `llvmpipe` 表示该 OpenGL 会话使用软件渲染，不能据此确认 Gallery 的 Vulkan adapter。
+以 Gallery 的 `gpu backend` / `software adapter` 日志为准；Pi 硬件渲染通常显示 V3D/V3DV。
+自动选择会先尝试各后端的硬件 adapter，再接受软件 adapter；`JADIX_GPU_BACKEND`
+调整尝试顺序，不能强制不存在的硬件驱动出现。全为软件渲染时检查当前会话的
+`/dev/dri` 访问与 `LIBGL_ALWAYS_SOFTWARE`、`MESA_LOADER_DRIVER_OVERRIDE` 等环境覆盖。
+
+桌面显示名称由应用 ID 和 desktop entry 关联，独立于 `top` 中的进程名。
+Wayland 未显式配置 ID 时使用可执行文件名 `gallery`。在分发目录执行以下操作安装入口
+（二进制和分发目录应保留在此位置）：
+
+```sh
+mkdir -p "$HOME/.local/share/applications" "$HOME/.local/bin"
+ln -sfn "$(pwd)/gallery" "$HOME/.local/bin/gallery"
+cp gallery.desktop "$HOME/.local/share/applications/gallery.desktop"
+```
+
+确保 `$HOME/.local/bin` 位于桌面会话的 PATH。随后从应用菜单启动 **Jadix Gallery**。
+已有窗口可能需要关闭后重新启动才能更新名称。
+
+Ubuntu 智能拼音的候选文字按系统提供的 preedit 实时显示；`Preedit(_, None)` 隐藏光标，
+提供光标位置时恢复光标，真正的 Commit 事件才写入已提交值。使用
+`JADIX_IME_DIAG=1 RUST_LOG=jadix=debug ./gallery` 可记录事件；该日志包含输入内容，分享前请脱敏。
 可用 `file gallery`、`readelf -d gallery`、`readelf --version-info gallery` 检查 AArch64 架构、动态依赖和 glibc 要求。
 
 ---
