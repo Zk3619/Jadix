@@ -3,7 +3,7 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
 use crate::components::input::{
-    filter_insert_for_type, input_type_signal_key, strip_control_insert, InputType,
+    InputType, filter_insert_for_type, input_type_signal_key, strip_control_insert,
 };
 use crate::utils::clipboard::{
     consumes_undo_redo_letter, edit_shortcut_letter, get_text as clipboard_get_text,
@@ -1679,7 +1679,10 @@ impl super::App {
                             ime_support::clear_ime_end_drain();
                         }
                         let is_nl = t.as_str() == "\r" || t.as_str() == "\n";
-                        let allow = !ime_active.get()
+                        // Enabled means the OS accepts IME requests, not that a
+                        // composition owns this key. Wayland sends ordinary
+                        // key text while text-input-v3 remains enabled.
+                        let allow = (!ime_active.get() || pre.is_empty())
                             && !t.is_empty()
                             && !self.modifiers.control_key()
                             && (multiline || !is_nl);
@@ -1797,6 +1800,59 @@ impl super::App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "native event loop; run in a separate process"]
+    fn enabled_ime_without_preedit_accepts_keyboard_text() {
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+        let mut builder = winit::event_loop::EventLoop::builder();
+        builder.with_any_thread(true);
+        let event_loop = builder.build().unwrap();
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let mut app = crate::app::lifecycle::create_app(
+            crate::app::WindowOptions::new(),
+            crate::core::tree::Element::new,
+            event_loop.create_proxy(),
+            rx,
+        );
+        let rest = "ime-enabled-keyboard";
+        let focus = crate::core::reactivity::use_signal("__jadix_button_focus_id", String::new);
+        focus.set(format!("input:{rest}"));
+        crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false)
+            .set(true);
+        let key = Key::Character("a".into());
+        let event = KeyEvent {
+            physical_key: winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyA),
+            logical_key: key.clone(),
+            text: Some("a".into()),
+            location: winit::keyboard::KeyLocation::Standard,
+            state: ElementState::Pressed,
+            repeat: false,
+            text_with_all_modifiers: Some("a".into()),
+            key_without_modifiers: key,
+        };
+        app.handle_keyboard_text_signals(event.clone());
+        let value = crate::core::reactivity::use_signal(
+            &crate::components::input::input_value_signal_key(rest),
+            String::new,
+        );
+        assert_eq!(
+            value.peek(),
+            "a",
+            "IME Enabled is not an active composition"
+        );
+        crate::core::reactivity::use_signal(
+            &crate::components::input::input_preedit_signal_key(rest),
+            String::new,
+        )
+        .set("拼".into());
+        app.handle_keyboard_text_signals(event);
+        assert_eq!(value.peek(), "a", "composition key must not insert twice");
+        focus.set(String::new());
+        crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false)
+            .set(false);
+    }
 
     #[test]
     fn escape_and_function_keys_do_not_insert_text() {
