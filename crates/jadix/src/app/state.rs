@@ -1724,12 +1724,13 @@ impl AppState {
             wgpu::Device,
             wgpu::Queue,
         )> {
+            let started = Instant::now();
             let instance = crate::renderer::wgpu_compat::instance(backends);
             let Ok(surface) = instance.create_surface(window.clone()) else {
-                log::debug!("backend {name}: no surface");
+                log::warn!("backend {name}: surface creation failed; trying next backend");
                 return None;
             };
-            let adapter = instance
+            let adapter = match instance
                 .request_adapter(&wgpu::RequestAdapterOptions {
                     power_preference: wgpu::PowerPreference::LowPower,
                     compatible_surface: Some(&surface),
@@ -1737,7 +1738,13 @@ impl AppState {
                     ..Default::default()
                 })
                 .await
-                .ok()?;
+            {
+                Ok(adapter) => adapter,
+                Err(err) => {
+                    log::warn!("backend {name}: adapter request failed after {:.1}ms: {err}; trying next backend", started.elapsed().as_secs_f64() * 1000.0);
+                    return None;
+                }
+            };
             let required_limits = crate::renderer::limits_for(&adapter);
             let memory_hints = wgpu::MemoryHints::MemoryUsage;
             match adapter
@@ -1749,16 +1756,22 @@ impl AppState {
                 .await
             {
                 Ok((device, queue)) => {
-                    if force_fallback {
+                    let info = adapter.get_info();
+                    if info.device_type == wgpu::DeviceType::Cpu {
                         log::warn!(
-                            "falling back to software adapter: {}",
-                            adapter.get_info().name
+                            "software adapter: backend={name} name={} driver={} ({})",
+                            info.name,
+                            info.driver,
+                            info.driver_info
                         );
                     } else {
                         let caps = crate::renderer::probe_gpu_caps(&adapter);
                         log::info!(
-                            "gpu backend: {name} ({}) compute: {}",
-                            adapter.get_info().name,
+                            "gpu backend: {name} ({}) type={:?} driver={} ({}) compute: {}",
+                            info.name,
+                            info.device_type,
+                            info.driver,
+                            info.driver_info,
                             crate::renderer::compute_yes_no(caps)
                         );
                     }
@@ -1772,12 +1785,24 @@ impl AppState {
         }
 
         let candidates = crate::platform::gpu_backend_candidates(compositor_alpha);
+        let mut software = None;
         if !force_software {
             for (backends, name) in &candidates {
                 if let Some(gpu) = try_backend(window, *backends, name, false).await {
-                    return gpu;
+                    // force_fallback_adapter=false still permits llvmpipe. Try
+                    // the remaining backends before accepting CPU rendering.
+                    if gpu.2.get_info().device_type != wgpu::DeviceType::Cpu {
+                        return gpu;
+                    }
+                    if software.is_none() {
+                        software = Some(gpu);
+                    }
                 }
             }
+        }
+        if let Some(gpu) = software {
+            log::warn!("no hardware adapter found; using software rendering");
+            return gpu;
         }
 
         // WARP / llvmpipe last: only DX12 and Vulkan expose a fallback adapter.
@@ -1811,6 +1836,17 @@ impl AppState {
         window: Arc<dyn Window>,
         chrome: super::window_chrome::WindowOptions,
     ) -> Self {
+        let startup = Instant::now();
+        let mut previous_stage = startup;
+        let mut startup_stage = |stage: &str| {
+            let now = Instant::now();
+            log::info!(
+                "startup stage={stage} stage_ms={:.1} elapsed_ms={:.1}",
+                (now - previous_stage).as_secs_f64() * 1000.0,
+                (now - startup).as_secs_f64() * 1000.0,
+            );
+            previous_stage = now;
+        };
         let compositor_alpha = chrome.compositor_alpha();
         let mut root_element = Element::new().w("100%").h("100%");
         root_element.set_attr(Self::BOOTSTRAP_ROOT_ATTR, "1");
@@ -1843,6 +1879,7 @@ impl AppState {
             (i, s, a, Arc::new(d), Arc::new(q))
         };
         crate::renderer::wgpu_compat::install_device_error_handlers(&device);
+        startup_stage("gpu_device");
         let text_backend = if adapter.get_info().device_type == wgpu::DeviceType::Cpu {
             TextRendererBackend::CpuTextHybrid
         } else {
@@ -1904,12 +1941,18 @@ impl AppState {
         };
         surface.configure(&device, &config);
         super::window_chrome::apply_created_window(window.as_ref(), &chrome, composition_swapchain);
+        startup_stage("surface");
 
         let mut pipeline = JadixPipeline::new(&device, &config);
+        startup_stage("sdf_pipeline");
         let textured_pipeline = TexturedQuadPipeline::new(&device, &config);
+        startup_stage("textured_pipeline");
         let backdrop_blur = BackdropBlurPipeline::new(&device, config.format);
+        startup_stage("backdrop_pipeline");
         let effect_pass = crate::renderer::EffectPassGpu::new(&device, config.format);
+        startup_stage("effect_pipeline");
         let css_filter_pass = crate::renderer::CssFilterPassGpu::new(&device, config.format);
+        startup_stage("css_filter_pipelines");
         // Compile fixed path programs with the other window pipelines. Doing
         // this on the first visible path stalls a scroll frame in the driver.
         let path2d = if crate::renderer::gpu2d_enabled() {
@@ -1922,10 +1965,12 @@ impl AppState {
         } else {
             None
         };
+        startup_stage("path_pipeline");
         let theme_transition =
             crate::renderer::theme_transition::ThemeTransition::new(&device, config.format);
         let mut present_retain = PresentRetainPipeline::new(&device, config.format);
         let _ = present_retain.ensure_size(&device, config.width, config.height);
+        startup_stage("present_pipelines");
         let tex_inst_stride = std::mem::size_of::<TexturedInstanceInput>();
         let textured_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("Textured instance buffer"),
@@ -1959,6 +2004,7 @@ impl AppState {
         });
 
         let mut text_renderer = JadixTextRenderer::new(&device, &queue, &config);
+        startup_stage("fonts_and_text_renderer");
         // Layout measure and glyph shaping share one FontSystem (fontdb / coverage).
         crate::text::install_shared_font_system(text_renderer.font_system_mut());
         let capture_text_renderer =
@@ -1968,6 +2014,7 @@ impl AppState {
         let overlay_text_renderer =
             JadixTextRenderer::new_sharing_resources(&device, &queue, &config, &text_renderer);
         log::debug!("new_bootstrap: after text_renderer");
+        startup_stage("shared_text_renderers");
 
         Self {
             window,
@@ -5638,7 +5685,26 @@ impl AppState {
         // Hoist before skip_full_clear: bubble +N Show-mounts the portal in-tree, then this
         // pass lifts it. Membership must be set before StructureChanged decides FullClear,
         // otherwise overlay-only frames still wipe the gallery.
-        let portal_moves = hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
+        // Stable page scroll/hover cannot add portal slots. Reconciliation and
+        // reactive StructureChanged own membership changes; retain pruning is
+        // still needed while an overlay is open or finishing its exit.
+        let portal_moves = if !self.has_presented_frame
+            || matches!(pre_chrome_layout_status, LayoutStatus::StructureChanged)
+            || matches!(sync_impact, LayoutStatus::StructureChanged)
+            || self.portal_membership_dirty
+            || !self.last_overlay_stamps.is_empty()
+            || crate::utils::floating_motion::any_floating_motion_needs_frame()
+            || crate::utils::modal_motion::any_modal_css_needs_frame()
+        {
+            hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element)
+        } else {
+            // Drag-follow changes paint position without changing membership.
+            if crate::utils::drag::is_active() {
+                crate::utils::drag::overlay::sync_overlay_ghost_insets(&mut self.root_element);
+            }
+            crate::utils::anchored_overlay::sync_point_overlay_drag_insets(&mut self.root_element);
+            0
+        };
         if portal_moves > 0 {
             self.portal_membership_dirty = true;
         }
@@ -5979,6 +6045,15 @@ impl AppState {
             layout_prof_sum.collect_ms += p.collect_ms;
             layout_prof_sum.collect_stamp_ms += p.collect_stamp_ms;
         };
+        // Membership was checked above, before damage planning. Let structural
+        // frames reconcile again so moved, already-built nodes get reparented.
+        if !use_full_taffy_rebuild
+            && portal_moves == 0
+            && !self.portal_membership_dirty
+            && !matches!(layout_for_build, LayoutStatus::StructureChanged)
+        {
+            self.layout_tree.note_portals_prepared();
+        }
         let mut render_result = if use_full_taffy_rebuild {
             self.layout_tree.build_and_layout(
                 &mut self.root_element,

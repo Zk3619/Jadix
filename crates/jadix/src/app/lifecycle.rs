@@ -630,6 +630,7 @@ impl super::App {
 
     fn create_primary_if_needed(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.state.borrow().is_none() {
+            let startup = std::time::Instant::now();
             let attrs = self.window_options.to_window_attributes();
             let window = event_loop.create_window(attrs).expect("create window");
             #[cfg(feature = "a11y")]
@@ -701,6 +702,10 @@ impl super::App {
                 log::debug!("root_effect: body done (flush_deferred next)");
             });
             log::debug!("lifecycle: after root create_effect");
+            log::info!(
+                "startup primary_ui_mounted_ms={:.1}",
+                startup.elapsed().as_secs_f64() * 1000.0
+            );
 
             // Prime the real UI while hidden so ShowWindow never exposes the
             // unpainted native client area. Some surfaces require a visible

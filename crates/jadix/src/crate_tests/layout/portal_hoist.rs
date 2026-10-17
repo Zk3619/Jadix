@@ -1021,9 +1021,15 @@ fn second_portal_joins_existing_layer_without_slotmap_panic() {
     let mut root = Element::new().w(800.0).h(600.0).child(page).child(island);
 
     let mut tree = LayoutTree::new();
+    tree.note_portals_prepared();
     let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
     assert_eq!(count_in_layer(&root), 1);
     let rebuilds_after_cold = tree.full_rebuilds;
+
+    // A stable AppState frame skips its duplicate hoist, but that hint must
+    // expire before a subsequent standalone layout introduces a new portal.
+    tree.note_portals_prepared();
+    tree.build_and_layout_fast_ex(&mut root, 800.0, 600.0, [0.0, 0.0], true, true, None);
 
     let mut plus_n = Element::new()
         .w(72.0)

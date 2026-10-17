@@ -108,6 +108,33 @@ fn compare(s: &mut AppState, partial: &RgbaImage, label: &str, scrolling: bool) 
     diffs.len()
 }
 
+fn assert_sidebar_header_unchanged(s: &AppState, before: &RgbaImage, after: &RgbaImage) {
+    let header = crate::core::tree::find_by_template_id(&s.root_element, "gal-workspace")
+        .expect("Gallery workspace header")
+        .layout_bounds;
+    let scale = s.ui_scale();
+    let right = ((header[0] + header[2]) * scale).floor() as u32;
+    let top = (header[1] * scale).ceil() as u32;
+    let bottom = ((header[1] + header[3]) * scale).floor() as u32;
+    assert!(right > 0 && bottom > top, "header fixture must be visible");
+    // Include the space left of the icon, where the Pi report places the dirt.
+    let changed = (top..bottom)
+        .flat_map(|y| (0..right).map(move |x| (x, y)))
+        .filter(|&(x, y)| {
+            before
+                .pixel(x, y)
+                .unwrap()
+                .iter()
+                .zip(after.pixel(x, y).unwrap())
+                .any(|(a, b)| a.abs_diff(b) > 3)
+        })
+        .count();
+    assert_eq!(
+        changed, 0,
+        "scrolling must not alter the fixed Gallery header"
+    );
+}
+
 fn run(window: Arc<dyn Window>) {
     crate::init();
     crate::app::reactive::reset_registered_anchors();
@@ -212,7 +239,7 @@ fn run(window: Arc<dyn Window>) {
         let mut opt = state.borrow_mut();
         let s = opt.as_mut().unwrap();
         s.mark_full_redraw();
-        render(s, false);
+        let header_before = render(s, false);
         let copies_before = crate::app::damage::scroll_strip_blit_count();
         for (label, start, step, frames) in [
             ("near-top", 0.0, 1.0, 20),
@@ -228,22 +255,27 @@ fn run(window: Arc<dyn Window>) {
                 offset.set_silent(y);
                 s.update_scroll_offset_in_place(&rest, [0.0, y]);
                 partial = Some(render(s, true));
+                assert_sidebar_header_unchanged(s, &header_before, partial.as_ref().unwrap());
                 blits += usize::from(!s.scroll_strip_blit.is_empty());
             }
             if compare(s, &partial.unwrap(), label, true) > 0 {
                 failures.push(label.to_string());
             }
         }
-        assert!(blits > 0, "regression must exercise optimized strip copies");
         let copies = crate::app::damage::scroll_strip_blit_count() - copies_before;
         eprintln!("Gallery regression: {blits} scroll frames, {copies} GPU strip copies");
         // Bundled SVG icons add texture pins: the repair-cost policy may
         // choose a full frame where the glyph fallback still copies. Require
         // a substantial majority in either feature configuration.
-        assert!(
-            copies * 3 >= blits as u64 * 2,
-            "most scrolling frames must actually retain and copy the overlap: {copies}"
-        );
+        if crate::app::damage::scroll_strip_blit_enabled() {
+            assert!(blits > 0, "regression must exercise optimized strip copies");
+            assert!(
+                copies * 3 >= blits as u64 * 2,
+                "most scrolling frames must actually retain and copy the overlap: {copies}"
+            );
+        } else {
+            assert_eq!(copies, 0, "disabled strip copies must use viewport clears");
+        }
         let settled = render(s, false);
         if compare(s, &settled, "scroll-settled", true) > 0 {
             failures.push("scroll-settled".to_string());
@@ -323,6 +355,7 @@ fn run_sidebar_edge(window: Arc<dyn Window>) {
     }
     let mut failures = Vec::new();
     let mut clipped_ink = 0;
+    let header_before = render(state.borrow_mut().as_mut().unwrap(), false);
     let copies_before = crate::app::damage::scroll_strip_blit_count();
     for offset in [0.0, 0.666667, 1.333333, 2.0, 4.0, 8.0, 16.0, 24.0, 32.0] {
         let offset = super::super::super::scroll_support::snap_scroll_offset_to_device_px(
@@ -351,7 +384,8 @@ fn run_sidebar_edge(window: Arc<dyn Window>) {
                 )
                 .set_silent(y);
                 s.update_scroll_offset_in_place(&rest, [0.0, y]);
-                render(s, true);
+                let frame = render(s, true);
+                assert_sidebar_header_unchanged(s, &header_before, &frame);
             }
             rest
         };
@@ -409,6 +443,7 @@ fn run_sidebar_edge(window: Arc<dyn Window>) {
                 s.device.create_command_encoder(&Default::default()),
             )
             .unwrap();
+            assert_sidebar_header_unchanged(s, &header_before, &partial);
             let host = crate::core::tree::find_in_tree(&s.root_element, |el| {
                 el.attrs.get("data-slot").map(String::as_str) == Some("sidebar-content-host")
             })
@@ -473,10 +508,14 @@ fn run_sidebar_edge(window: Arc<dyn Window>) {
     crate::app::reactive::reset_registered_anchors();
     crate::style::set_css_transition_virtual_timeline(false);
     crate::style::set_global_time_for_test(None);
-    assert!(
-        crate::app::damage::scroll_strip_blit_count() > copies_before,
-        "regression must execute GPU scroll copies"
-    );
+    if crate::app::damage::scroll_strip_blit_enabled() {
+        assert!(
+            crate::app::damage::scroll_strip_blit_count() > copies_before,
+            "regression must execute GPU scroll copies"
+        );
+    } else {
+        assert_eq!(crate::app::damage::scroll_strip_blit_count(), copies_before);
+    }
     assert!(
         clipped_ink > 50,
         "fixture must expose actual clipped text/icon ink at the bottom edge"

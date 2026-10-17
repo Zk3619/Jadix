@@ -2748,6 +2748,9 @@ pub struct LayoutTree {
     collect_scratch: CollectScratch,
     /// Cross-frame fingerprint DL for paint-only sibling skip.
     collect_skip: crate::layout::collect_cache::CollectSkipState,
+    /// AppState already reconciled portal membership before planning damage.
+    /// Consumed by the next layout pass; standalone layout callers still hoist.
+    portals_prepared: bool,
 }
 
 /// Layout-side resident structures (Taffy + measure metadata).
@@ -2759,6 +2762,10 @@ pub struct LayoutTreeStats {
 }
 
 impl LayoutTree {
+    pub(crate) fn note_portals_prepared(&mut self) {
+        self.portals_prepared = true;
+    }
+
     /// Wave P P.2.2: count Taffy nodes and text-measure metadata retained between frames.
     pub fn stats(&self) -> LayoutTreeStats {
         LayoutTreeStats {
@@ -3369,6 +3376,7 @@ impl LayoutTree {
         Self {
             taffy,
             root_node: None,
+            portals_prepared: false,
             viewport: [0.0, 0.0],
             text_measurements: HashMap::new(),
             measure_layout_cache: RefCell::new(HashMap::new()),
@@ -3822,6 +3830,7 @@ impl LayoutTree {
         .entered();
 
         // Invariant: never layout/paint unhoisted `jadix_portal` nodes (Solid keep-alive + body mount).
+        self.portals_prepared = false;
         let _ = hoist_portal_subtrees(root);
         let _ = crate::utils::anchored_overlay::take_point_overlay_commit_dirty();
         // Full rebuild may recycle Taffy `NodeId`s; fingerprint keys would alias.
@@ -3945,7 +3954,11 @@ impl LayoutTree {
     /// child-list change on the portal layer — [`Self::sync_taffy_children_from_elements`]
     /// reparents those ids without recycling page `NodeId`s.
     fn reconcile_portals_incremental(&mut self, root: &mut Element) -> usize {
-        let portal_dirty = hoist_portal_subtrees(root);
+        let portal_dirty = if std::mem::take(&mut self.portals_prepared) {
+            0
+        } else {
+            hoist_portal_subtrees(root)
+        };
         self.dirty_point_overlay_commit(root);
         let attached = Self::subtree_has_unbuilt_taffy_nodes(root);
         if attached {
