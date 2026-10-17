@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Jadix Gallery
+Comment=Jadix native UI component gallery
+Exec=gallery
+Icon=applications-graphics
+Terminal=false
+Categories=Development;
+StartupWMClass=gallery

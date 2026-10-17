@@ -7,6 +7,9 @@ DPI and common on the same exact source as jadix_winit. Package is unpublished.
 
 Local changes:
 
+- `window/mod.rs`: when no explicit application ID is supplied, use the executable
+  name as the `xdg_toplevel.app_id`, matching X11's default class. Ship a matching
+  `.desktop` entry (Gallery: `gallery.desktop`) for desktop-shell name resolution.
 - `window/chrome.rs`: Window::frame_state projects actual SCTK WindowConfigure
   into server decoration, per-edge tiling, minimize/maximize and menu capability.
   Returns None before configure or for popups, rather than inventing support.

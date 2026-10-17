@@ -122,8 +122,12 @@ impl Window {
         // Set the decorations hint.
         window_state.set_decorate(attributes.decorations);
 
-        // Set the app_id.
-        if let Some(name) = app_name.map(|name| name.general) {
+        // Match X11's executable-name default when no explicit app ID is set.
+        // Without an app_id, GNOME labels a directly launched window "Unknown".
+        if let Some(name) = app_name
+            .map(|name| name.general)
+            .or_else(|| std::env::current_exe().ok()?.file_stem()?.to_str().map(str::to_owned))
+        {
             window.set_app_id(name);
         }
 
