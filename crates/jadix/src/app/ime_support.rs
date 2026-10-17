@@ -653,8 +653,12 @@ pub(crate) fn resolve_preedit_chrome(
                     .min(text.len());
                 Some((b, b))
             }
-            None => None,
+            // Windows GCS_CURSORPOS absent means end-of-composition. Normalize
+            // it here so None elsewhere retains winit's "hide caret" meaning.
+            None => Some((text.len(), text.len())),
         }
+    } else if caret_unspecified {
+        Some((text.len(), text.len()))
     } else {
         map_preedit_cursor(winit_cursor, caret_unspecified)
     };
@@ -772,6 +776,20 @@ pub(crate) fn estimate_caret_x_in_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn preedit_hidden_cursor_and_windows_missing_position_are_distinct() {
+        let text = "你好";
+        assert_eq!(resolve_preedit_chrome(text, None, false, None, &[]).0, None);
+        assert_eq!(
+            resolve_preedit_chrome(text, None, false, Some(None), &[]).0,
+            Some((text.len(), text.len()))
+        );
+        assert_eq!(
+            resolve_preedit_chrome(text, Some((0, 0)), true, None, &[]).0,
+            Some((text.len(), text.len()))
+        );
+    }
 
     #[test]
     fn missing_composition_caret_is_not_byte_zero() {

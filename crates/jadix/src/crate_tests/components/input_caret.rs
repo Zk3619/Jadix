@@ -118,6 +118,144 @@ fn find_caret_leaf(el: &Element) -> Option<&Element> {
     el.children.iter().find_map(find_caret_leaf)
 }
 
+#[test]
+fn ime_reversed_range_keeps_input_and_textarea_caret_after_inline_candidates() {
+    use crate::components::input::{
+        input_caret_signal_key, input_ime_anchor_signal_key, input_preedit_sel_signal_key,
+        input_preedit_signal_key,
+    };
+    for multiline in [false, true] {
+        let id = if multiline {
+            "ime-range-ta"
+        } else {
+            "ime-range-input"
+        };
+        use_signal("__jadix_button_focus_id", String::new)
+            .set(focus_id_for_text_edit(id, multiline));
+        use_signal(&input_value_signal_key(id), String::new).set("前后".into());
+        use_signal(&input_caret_signal_key(id), || None::<usize>).set(Some(3));
+        use_signal(&input_ime_anchor_signal_key(id), || None::<usize>).set(Some(3));
+        let preedit = use_signal(&input_preedit_signal_key(id), String::new);
+        let cursor = use_signal(&input_preedit_sel_signal_key(id), || None::<(usize, usize)>);
+        preedit.set("甲乙丙".into());
+        cursor.set(Some((9, 3)));
+        let mut el: Element = if multiline {
+            textarea(id).into()
+        } else {
+            input(id).into()
+        };
+        let assert_caret = |el: &Element, at| {
+            let caret = find_caret_leaf(el)
+                .unwrap()
+                .text_style
+                .input_caret
+                .as_ref()
+                .unwrap();
+            assert_eq!(caret.caret_byte_index, at);
+        };
+        assert_caret(&el, 12);
+        let mut tree = LayoutTree::new();
+        for (candidate, range, at) in [("甲丁丙戊己庚", (18, 6), 21), ("甲丁丙戊己庚", (3, 3), 6)]
+        {
+            preedit.set(candidate.into());
+            cursor.set(Some(range));
+            sync_paint_like_app(&mut el, &mut tree, &mut LayoutStatus::Clean);
+            assert_caret(&el, at);
+            assert_eq!(
+                find_caret_leaf(&el).unwrap().text.as_deref(),
+                Some(format!("前{candidate}后").as_str())
+            );
+        }
+    }
+}
+
+#[test]
+fn ime_hidden_caret_stays_hidden_while_inline_candidates_change() {
+    use crate::components::input::{
+        input_caret_signal_key, input_ime_anchor_signal_key, input_preedit_sel_signal_key,
+        input_preedit_signal_key,
+    };
+
+    for multiline in [false, true] {
+        let id = if multiline {
+            "ime-inline-ta"
+        } else {
+            "ime-inline-input"
+        };
+        use_signal("__jadix_button_focus_id", String::new)
+            .set(focus_id_for_text_edit(id, multiline));
+        let value = use_signal(&input_value_signal_key(id), String::new);
+        value.set("前后".into());
+        let anchor = "前".len();
+        use_signal(&input_caret_signal_key(id), || None::<usize>).set(Some(anchor));
+        use_signal(&input_ime_anchor_signal_key(id), || None::<usize>).set(Some(anchor));
+        let preedit = use_signal(&input_preedit_signal_key(id), String::new);
+        let cursor = use_signal(&input_preedit_sel_signal_key(id), || None::<(usize, usize)>);
+        preedit.set("你".into());
+        cursor.set(None); // winit: IME requests a hidden cursor, not cursor-at-end.
+        let mut el: Element = if multiline {
+            textarea(id).into()
+        } else {
+            input(id).into()
+        };
+        let assert_hidden = |el: &Element| {
+            let leaf = find_caret_leaf(el).expect("keep composition underline and geometry");
+            let caret = leaf.text_style.input_caret.as_ref().unwrap();
+            assert_eq!(
+                caret.caret_color.unwrap()[3],
+                0,
+                "IME-hidden caret must not flash after a candidate"
+            );
+            assert!(caret.preedit_underline.is_some());
+        };
+        assert_hidden(&el); // Initial build must agree with subsequent paint sync.
+        let mut tree = LayoutTree::new();
+        for candidate in ["你好", "拟好", "你"] {
+            preedit.set(candidate.into());
+            let mut impact = LayoutStatus::Clean;
+            sync_paint_like_app(&mut el, &mut tree, &mut impact);
+            assert_hidden(&el);
+            assert_eq!(
+                find_caret_leaf(&el).unwrap().text.as_deref(),
+                Some(format!("前{candidate}后").as_str())
+            );
+            assert_eq!(
+                value.peek(),
+                "前后",
+                "candidate preview must not commit or overwrite text"
+            );
+        }
+        cursor.set(Some(("你".len(), "你".len())));
+        sync_paint_like_app(&mut el, &mut tree, &mut LayoutStatus::Clean);
+        assert_ne!(
+            find_caret_leaf(&el)
+                .unwrap()
+                .text_style
+                .input_caret
+                .as_ref()
+                .unwrap()
+                .caret_color
+                .unwrap()[3],
+            0
+        );
+        preedit.set(String::new());
+        cursor.set(None);
+        sync_paint_like_app(&mut el, &mut tree, &mut LayoutStatus::Clean);
+        assert_ne!(
+            find_caret_leaf(&el)
+                .unwrap()
+                .text_style
+                .input_caret
+                .as_ref()
+                .unwrap()
+                .caret_color
+                .unwrap()[3],
+            0,
+            "clearing preedit restores the ordinary caret"
+        );
+    }
+}
+
 fn rgba8_to_rgb_f32(c: [u8; 4]) -> [f32; 3] {
     [
         c[0] as f32 / 255.0,

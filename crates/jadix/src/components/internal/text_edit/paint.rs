@@ -500,7 +500,11 @@ fn sync_one_text_edit_paint(
                 overwrite_highlight,
                 preedit_underline,
                 drop_caret,
-                caret_color: Some(caret_color),
+                caret_color: Some(if strings.caret_hidden && !drop_caret {
+                    [0; 4]
+                } else {
+                    caret_color
+                }),
                 selection_foreground: Some(selection_foreground),
             })
         } else {

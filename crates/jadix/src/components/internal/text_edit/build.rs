@@ -388,7 +388,11 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             extra_preedit_underlines,
             preedit_ul,
             drop_caret: false,
-            caret_color: Some(caret_color),
+            caret_color: Some(if strings.caret_hidden {
+                [0; 4]
+            } else {
+                caret_color
+            }),
             selection_foreground: Some(selection_foreground),
         });
     }

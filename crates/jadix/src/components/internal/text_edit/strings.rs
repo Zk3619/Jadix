@@ -59,6 +59,8 @@ pub(crate) struct TextEditStrings {
     pub layout_measure_text: String,
     pub caret_in_real: usize,
     pub caret_byte: usize,
+    /// Winit `Preedit(_, None)` hides the caret while keeping inline candidates.
+    pub caret_hidden: bool,
     /// Display-text byte range of the live IME preedit (for the spaced underline).
     pub preedit_underline: Option<(usize, usize)>,
     pub extra_carets: Vec<usize>,
@@ -136,9 +138,12 @@ pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> Text
         if input.show_placeholder {
             0
         } else if !input.preedit.is_empty() {
+            // IMEs may report a reversed cursor/highlight range (Smart Pinyin
+            // sends (18, 6) while revising a six-Han preedit). A hairline belongs
+            // at its trailing edge, not whichever endpoint happened to be last.
             let end = input
                 .preedit_sel
-                .map(|(_, e)| e)
+                .map(|(a, b)| a.max(b))
                 .unwrap_or_else(|| input.preedit.len())
                 .min(input.preedit.len());
             preedit_display_caret(
@@ -207,7 +212,7 @@ pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> Text
         });
         let preedit_caret = input
             .preedit_sel
-            .map(|(_, e)| e)
+            .map(|(a, b)| a.max(b))
             .unwrap_or_else(|| input.preedit.len())
             .min(input.preedit.len());
         let preedit_caret = input.preedit.floor_char_boundary(preedit_caret);
@@ -255,6 +260,7 @@ pub(crate) fn compose_text_edit_strings(input: TextEditStringsInput<'_>) -> Text
         layout_measure_text,
         caret_in_real,
         caret_byte,
+        caret_hidden: !input.preedit.is_empty() && input.preedit_sel.is_none(),
         preedit_underline,
         extra_carets,
         extra_selections,
@@ -318,13 +324,43 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reversed_ime_cursor_range_keeps_caret_at_trailing_edge() {
+        // Smart Pinyin replay: candidates change in the middle while the
+        // composing cursor still spans to the end (UTF-8 bytes, not chars).
+        for (preedit, cursor) in [
+            ("甲", (3, 3)),
+            ("甲乙", (6, 6)),
+            ("甲丙丁", (9, 3)),
+            ("甲丙丁戊己庚", (18, 6)),
+        ] {
+            let s = compose_text_edit_strings(TextEditStringsInput {
+                committed: "前后",
+                preedit,
+                preedit_sel: Some(cursor),
+                preedit_marks: &[],
+                ime_anchor: Some(3),
+                extras: &[(6, 6)],
+                committed_caret: Some(3),
+                placeholder: "",
+                show_placeholder: false,
+                mask: false,
+                is_focused: true,
+                caret_override: None,
+            });
+            assert_eq!(s.caret_in_real, 3 + preedit.len());
+            assert_eq!(s.extra_carets, vec![6 + 2 * preedit.len()]);
+            assert!(!s.caret_hidden);
+        }
+    }
+
+    #[test]
     fn layout_measure_ignores_ime_preedit() {
         let m = text_edit_layout_measure_text(false, "hint", "你好世界", "nihaoshijie");
         assert_eq!(m, "你好世界");
     }
 
     #[test]
-    fn unspecified_preedit_caret_sits_after_syllable() {
+    fn hidden_preedit_caret_keeps_end_geometry_for_ime_anchor() {
         let committed = "가나";
         let preedit = "스";
         let anchor = committed.len();
@@ -344,6 +380,7 @@ mod tests {
         });
         assert_eq!(s.real_display, format!("{committed}{preedit}"));
         assert_eq!(s.caret_in_real, anchor + preedit.len());
+        assert!(s.caret_hidden);
         assert_eq!(s.preedit_underline, Some((anchor, anchor + preedit.len())));
     }
 
