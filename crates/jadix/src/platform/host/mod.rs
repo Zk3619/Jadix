@@ -12,6 +12,8 @@ pub use event_loop::{build_event_loop, ensure_winit_host};
 
 #[cfg(target_os = "android")]
 pub use event_loop::install_android_app;
+#[cfg(target_os = "android")]
+pub(crate) use event_loop::android_app;
 #[cfg(target_env = "ohos")]
 pub use event_loop::install_ohos_app;
 #[cfg(not(target_arch = "wasm32"))]

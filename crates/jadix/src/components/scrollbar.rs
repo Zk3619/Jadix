@@ -873,7 +873,9 @@ impl From<ScrollbarBuilder> for Element {
 
         let track = match builder.position {
             Position::Absolute => track.absolute(),
-            Position::Relative => track.relative(),
+            Position::Relative | Position::Sticky => track.relative(),
+            Position::Static => track.position("static"),
+            Position::Fixed => track.fixed(),
         };
 
         let mut track = track

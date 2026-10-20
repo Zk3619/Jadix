@@ -3,6 +3,39 @@
 use jadix::prelude::*;
 
 #[test]
+fn prelude_live_text_constructor_dual_surface() {
+    use jadix::core::reactivity::{create_effect, create_root};
+    use jadix::core::tree::IntoNodeText;
+
+    fn caption(value: impl IntoNodeText) -> Element {
+        text(value).into()
+    }
+
+    let (_owner, ()) = create_root(|| {
+        let count = create_signal(7);
+        create_effect(move || {
+            let builder: Element = vstack()
+                .child(text(count))
+                .child(TextBuilder::new(move || "borrowed caption"))
+                .child(caption(move || format!("Count: {}", count.get())))
+                .into();
+            assert_eq!(builder.children[0].text.as_deref(), Some("7"));
+            assert_eq!(
+                builder.children[1].text.as_deref(),
+                Some("borrowed caption")
+            );
+            assert_eq!(builder.children[2].text.as_deref(), Some("Count: 7"));
+            let _: Element = ui! {
+                <VStack>
+                    { Element::from(text(count)) }
+                    <Text>{count.get().to_string()}</Text>
+                </VStack>
+            };
+        });
+    });
+}
+
+#[test]
 fn prelude_builder_surface_compiles() {
     let el: Element = button("prelude-btn")
         .variant("outline")

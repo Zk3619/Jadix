@@ -437,6 +437,32 @@ pub fn viewport_modal_phase(id: &str, open: Signal<bool>) -> Option<PresencePhas
     sync_viewport_modal_portal(id, open, &presence).map(|p| p.phase)
 }
 
+/// A responsive surface returning to normal flow must release its modal stack immediately.
+pub(crate) fn dismiss_viewport_modal(id: &str, open: Signal<bool>) {
+    if open.try_peek() == Some(true) {
+        open.set(false);
+    }
+    let presence = use_modal_presence(id);
+    crate::utils::modal_motion::finish_modal_exit_immediate(&presence);
+    let _ = modal_sync_presence(id, open, mounted_signal(&presence));
+}
+
+/// Mount existing stateful content. The caller pumps presence each frame instead of
+/// installing a new reactive effect every time the content changes presentation.
+pub(crate) fn retained_viewport_modal_layer(
+    id: &str,
+    open: Signal<bool>,
+    overlay: &ModalOverlayOpts,
+    opts: ViewportModalLayerOpts,
+    panel: Element,
+) -> Element {
+    let presence = use_modal_presence(id);
+    bind_modal_open(&presence, open);
+    let portal = sync_viewport_modal_portal(id, open, &presence)
+        .expect("retained modal content is mounted only while open");
+    finish_viewport_modal_layer(id, open, overlay, opts, &presence, portal, panel)
+}
+
 #[cfg(test)]
 pub(crate) fn viewport_modal_clear_pending_enter(id: &str) {
     crate::utils::modal_motion::clear_pending_modal_enter(&use_modal_presence(id));

@@ -22,7 +22,7 @@ pub enum VariantSelector {
     Breakpoint {
         min_width: u32,
     },
-    /// `max-sm:` / `max-[599px]:` — matches when viewport width ≤ `max_width`.
+    /// `max-sm:` / `max-[600px]:` — matches when viewport width < `max_width`.
     MaxBreakpoint {
         max_width: u32,
     },
@@ -72,19 +72,19 @@ impl VariantSelector {
                 min_width: BREAKPOINT_2XL,
             }),
             "max-sm" => Some(Self::MaxBreakpoint {
-                max_width: BREAKPOINT_SM.saturating_sub(1),
+                max_width: BREAKPOINT_SM,
             }),
             "max-md" => Some(Self::MaxBreakpoint {
-                max_width: BREAKPOINT_MD.saturating_sub(1),
+                max_width: BREAKPOINT_MD,
             }),
             "max-lg" => Some(Self::MaxBreakpoint {
-                max_width: BREAKPOINT_LG.saturating_sub(1),
+                max_width: BREAKPOINT_LG,
             }),
             "max-xl" => Some(Self::MaxBreakpoint {
-                max_width: BREAKPOINT_XL.saturating_sub(1),
+                max_width: BREAKPOINT_XL,
             }),
             "max-2xl" => Some(Self::MaxBreakpoint {
-                max_width: BREAKPOINT_2XL.saturating_sub(1),
+                max_width: BREAKPOINT_2XL,
             }),
             "group-hover" => Some(Self::GroupHover { name: None }),
             "peer-hover" => Some(Self::PeerHover { name: None }),
@@ -337,7 +337,7 @@ mod tests {
         let named_max = parse_class_token("max-sm:flex-col");
         assert_eq!(
             named_max.variants,
-            vec![VariantSelector::MaxBreakpoint { max_width: 639 }]
+            vec![VariantSelector::MaxBreakpoint { max_width: 640 }]
         );
         assert!(parse_class_token("min-[50rem]:p-2").variants.is_empty());
     }

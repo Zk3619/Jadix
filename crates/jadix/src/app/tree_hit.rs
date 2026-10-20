@@ -358,7 +358,7 @@ fn push_z_hit_children<'a, Ctx: Copy>(
     }
 }
 
-/// Heap DFS hit-test. `enter` returns `(escaped_acc, next_acc, child_ctx)` or `None`
+/// Heap DFS hit-test. `enter` returns `(escaped_acc, next_acc, child_ctx, descend)` or `None`
 /// to skip the node. After children, `after` sees the first decisive child hit.
 fn hit_walk_layer<'a, T, Ctx: Copy>(
     root: &'a Element,
@@ -370,7 +370,7 @@ fn hit_walk_layer<'a, T, Ctx: Copy>(
         Ctx,
         crate::style::Mat2d,
         [f32; 2],
-    ) -> Option<([f32; 2], [f32; 2], Ctx)>,
+    ) -> Option<([f32; 2], [f32; 2], Ctx, bool)>,
     mut after: impl FnMut(
         &'a Element,
         [f32; 2],
@@ -395,7 +395,7 @@ fn hit_walk_layer<'a, T, Ctx: Copy>(
                 if !matches!(result, LayerHit::Miss) {
                     continue;
                 }
-                let Some((escaped, next_acc, child_ctx)) = enter(
+                let Some((escaped, next_acc, child_ctx, descend)) = enter(
                     frame.el,
                     frame.scroll_acc,
                     frame.ctx,
@@ -412,14 +412,16 @@ fn hit_walk_layer<'a, T, Ctx: Copy>(
                     ancestor_scale: frame.ancestor_scale,
                     phase: HitPhase::After,
                 });
-                push_z_hit_children(
-                    &mut stack,
-                    frame.el,
-                    next_acc,
-                    child_ctx,
-                    frame.ancestor_linear,
-                    frame.ancestor_scale,
-                );
+                if descend {
+                    push_z_hit_children(
+                        &mut stack,
+                        frame.el,
+                        next_acc,
+                        child_ctx,
+                        frame.ancestor_linear,
+                        frame.ancestor_scale,
+                    );
+                }
             }
             HitPhase::After => {
                 result = after(
@@ -732,7 +734,7 @@ fn pick_cursor_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> LayerH
         (),
         |el, scroll_acc, (), lin, sc| {
             let (escaped, next_acc) = hit_enter_clipped(el, x, y, scroll_acc, lin, sc)?;
-            Some((escaped, next_acc, ()))
+            Some((escaped, next_acc, (), true))
         },
         |el, scroll_acc, (), lin, sc, child_hit| {
             let bubbled = child_hit.bubble(el.cursor.clone());
@@ -988,7 +990,7 @@ fn find_focus_id_at_hit(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> L
         (),
         |el, scroll_acc, (), lin, sc| {
             let (escaped, next_acc) = hit_enter_clipped(el, x, y, scroll_acc, lin, sc)?;
-            Some((escaped, next_acc, ()))
+            Some((escaped, next_acc, (), true))
         },
         |el, scroll_acc, (), lin, sc, child_hit| {
             let bubbled = child_hit.bubble(el.focus_id.clone());
@@ -1110,7 +1112,7 @@ fn find_input_text_at_hit(
         |el, scroll_acc, text_edit_fid, lin, sc| {
             let (escaped, next_acc) = hit_enter_clipped(el, x, y, scroll_acc, lin, sc)?;
             let child_fid = inherit_text_edit_focus_id(el, text_edit_fid);
-            Some((escaped, next_acc, child_fid))
+            Some((escaped, next_acc, child_fid, true))
         },
         |el, scroll_acc, text_edit_fid, lin, sc, child_hit: LayerHit<Hit>| {
             if !matches!(child_hit, LayerHit::Miss) {
@@ -1382,7 +1384,7 @@ fn find_selectable_text_at_hit(
         (),
         |el, scroll_acc, (), lin, sc| {
             let (escaped, next_acc) = hit_enter_clipped(el, x, y, scroll_acc, lin, sc)?;
-            Some((escaped, next_acc, ()))
+            Some((escaped, next_acc, (), true))
         },
         |el, scroll_acc, (), lin, sc, child_hit| {
             if !matches!(child_hit, LayerHit::Miss) {
@@ -1437,18 +1439,37 @@ pub(crate) fn reconcile_pointer_hovers(
     cbs: &mut Vec<(HoverCb, bool)>,
     immediate_miss_leave: bool,
 ) {
-    // Drag collision/over feedback has its own hit testing. Ordinary hover must
-    // leave immediately, including sensor activation without CursorMoved.
+    let _ = reconcile_pointer_hovers_and_cursor(el, x, y, scroll_offset, cbs, immediate_miss_leave);
+}
+
+/// Resolve hover and cursor from the same topmost hit path after layout.
+pub(crate) fn reconcile_pointer_hovers_and_cursor(
+    el: &Element,
+    x: f32,
+    y: f32,
+    scroll_offset: [f32; 2],
+    cbs: &mut Vec<(HoverCb, bool)>,
+    immediate_miss_leave: bool,
+) -> Option<CursorValue> {
+    let hit = pick_hover_and_cursor(el, x, y, scroll_offset).into_option();
+    let cursor = hit.as_ref().and_then(|hit| hit.cursor.clone());
     let dragging = crate::utils::drag::is_active();
-    let immediate_miss_leave = immediate_miss_leave || dragging;
     let target = if dragging {
         None
     } else {
-        match pick_hover_target(el, x, y, scroll_offset) {
-            HoverHit::Hit(slot) => slot,
-            HoverHit::Miss => None,
-        }
+        hit.and_then(|hit| hit.hover)
     };
+    reconcile_hover_target(target, x, y, cbs, immediate_miss_leave || dragging);
+    cursor
+}
+
+fn reconcile_hover_target(
+    target: Option<HoverSlot>,
+    x: f32,
+    y: f32,
+    cbs: &mut Vec<(HoverCb, bool)>,
+    immediate_miss_leave: bool,
+) {
     crate::app::pointer_events::note_pointer_client(x, y);
     if let Some(slot) = target.as_ref() {
         crate::app::pointer_events::note_hover_target_bounds(slot.bounds);
@@ -1601,74 +1622,71 @@ pub(crate) fn clear_hover_tracking() {
     }
 }
 
-/// Result of hover hit-testing (distinct from “no handler”).
-///
-/// - [`HoverHit::Miss`]: pointer missed this subtree — try siblings.
-/// - [`HoverHit::Hit`]: pointer hit this subtree. `None` means absorb (block siblings
-///   below, e.g. modal underlay) but ancestors may still supply `on_hover`.
-enum HoverHit {
-    Miss,
-    Hit(Option<HoverSlot>),
+/// A geometric hit can absorb lower siblings even without either handler.
+#[derive(Default)]
+struct HoverAndCursor {
+    hover: Option<HoverSlot>,
+    cursor: Option<CursorValue>,
 }
 
-fn pick_hover_target(el: &Element, x: f32, y: f32, scroll_acc: [f32; 2]) -> HoverHit {
-    match hit_walk_layer(
+fn pick_hover_and_cursor(
+    el: &Element,
+    x: f32,
+    y: f32,
+    scroll_acc: [f32; 2],
+) -> LayerHit<HoverAndCursor> {
+    hit_walk_layer(
         el,
         scroll_acc,
         (),
         |el, scroll_acc, (), lin, sc| {
-            if pointer_events_blocked(el) {
-                return None;
-            }
-            let escaped = if el.template_id.as_deref()
-                == Some(crate::layout::layout_tree::PORTAL_LAYER_ID)
-                || el.style.position_fixed
-            {
-                [0.0_f32, 0.0_f32]
-            } else {
-                scroll_acc
-            };
-            let is_body_portal =
-                el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
-            if !is_body_portal
-                && !crate::core::tree::overflow_clip_contains_pointer(el, [x, y], escaped, lin, sc)
-            {
-                return None;
-            }
-            if !crate::core::tree::clip_path_contains_pointer(el, [x, y], escaped, lin, sc) {
-                return None;
-            }
-            let next_acc = if is_body_portal {
-                escaped
-            } else {
-                next_hit_scroll_acc(el, escaped)
-            };
-            Some((escaped, next_acc, ()))
+            let (escaped, next_acc) = hit_enter_clipped(el, x, y, scroll_acc, lin, sc)?;
+            // A hit inside a handler-free subtree can only bubble empty payloads.
+            // Do not skip on a miss: overflow-visible descendants may extend out.
+            // Zero hashes fall through after structure/handler invalidation.
+            let absorbed = el.collect_paint_hash != 0
+                && !el.subtree_hover_cursor
+                && element_self_pointer_hit_with(el, x, y, escaped, lin, sc);
+            Some((escaped, next_acc, (), !absorbed))
         },
         |el, scroll_acc, (), lin, sc, child_hit| {
-            let hit = crate::core::tree::visual_paint_aabb_with_ancestor(el, scroll_acc, lin, sc);
-            let mut bubbled = match child_hit {
-                LayerHit::Miss => LayerHit::Miss,
-                LayerHit::Hit(slot) => LayerHit::Hit(slot.or_else(|| hover_slot_for(el, hit))),
+            // Most list leaves have no hover handler. Only compute handler bounds
+            // when one exists; the geometric hit test already computes its own box.
+            let hover = || {
+                el.on_hover.as_ref()?;
+                hover_slot_for(
+                    el,
+                    crate::core::tree::visual_paint_aabb_with_ancestor(el, scroll_acc, lin, sc),
+                )
             };
-            if matches!(bubbled, LayerHit::Miss)
-                && element_self_pointer_hit_with(el, x, y, scroll_acc, lin, sc)
-            {
-                bubbled = LayerHit::Hit(hover_slot_for(el, hit));
-            }
+            let mut hit = match child_hit {
+                LayerHit::Hit(child) => {
+                    let child: HoverAndCursor = child.unwrap_or_default();
+                    HoverAndCursor {
+                        hover: child.hover.or_else(hover),
+                        cursor: child.cursor.or_else(|| el.cursor.clone()),
+                    }
+                }
+                LayerHit::Miss => {
+                    if !element_self_pointer_hit_with(el, x, y, scroll_acc, lin, sc) {
+                        return LayerHit::Miss;
+                    }
+                    HoverAndCursor {
+                        hover: hover(),
+                        cursor: el.cursor.clone(),
+                    }
+                }
+            };
             if el.attrs.get(ATTR_HOVER_REGION).map(String::as_str) == Some("1") {
-                if let LayerHit::Hit(Some(slot)) = &mut bubbled {
-                    if let Some(region) = hover_slot_for(el, hit) {
+                if let Some(slot) = &mut hit.hover {
+                    if let Some(region) = hover() {
                         slot.regions.push(region);
                     }
                 }
             }
-            bubbled
+            LayerHit::Hit(Some(hit))
         },
-    ) {
-        LayerHit::Miss => HoverHit::Miss,
-        LayerHit::Hit(slot) => HoverHit::Hit(slot),
-    }
+    )
 }
 
 pub(crate) fn find_click(
@@ -2232,6 +2250,83 @@ mod hover_occlusion_tests {
     use crate::primitives::interactive::interactive;
     use std::cell::Cell;
     use std::rc::Rc;
+
+    #[test]
+    fn combined_hover_cursor_matches_cursor_walk_with_occlusion_and_transforms() {
+        let mut below = Element::new()
+            .cursor_kind(CursorKind::Pointer)
+            .on_click(|| {});
+        below.layout_bounds = [0.0, 0.0, 120.0, 100.0];
+        let mut child = Element::new().on_click(|| {});
+        child.layout_bounds = [25.0, 20.0, 55.0, 40.0];
+        let mut above: Element = interactive(Element::new().cursor_kind(CursorKind::Text))
+            .on_hover(|_| {})
+            .into();
+        above.layout_bounds = [20.0, 10.0, 90.0, 80.0];
+        above.style.z_index = 5;
+        above.style.rotate_deg = 23.0;
+        above.style.scale = [1.2, 0.8];
+        above.children.push(child);
+        let mut root = Element::new().child(above).child(below);
+        root.layout_bounds = [0.0, 0.0, 140.0, 120.0];
+        for overflow in ["visible", "hidden"] {
+            root = root.overflow(overflow);
+            crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, false);
+            for scroll in [[0.0, 0.0], [11.0, 31.0]] {
+                for y in (-20..160).step_by(7) {
+                    for x in (-20..160).step_by(7) {
+                        let expected = pick_cursor(&root, x as f32, y as f32, scroll);
+                        let actual = pick_hover_and_cursor(&root, x as f32, y as f32, scroll)
+                            .into_option()
+                            .and_then(|hit| hit.cursor);
+                        assert_eq!(actual, expected, "{overflow} {scroll:?} at {x},{y}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn cached_static_hit_bubbles_and_invalidated_handler_is_discovered() {
+        use crate::layout::collect_cache::{
+            invalidate_collect_paint_hash_path, stamp_subtree_paint_hashes,
+        };
+        clear_hover_tracking();
+        let entered = Rc::new(Cell::new(0));
+        let entered_cb = entered.clone();
+        let mut child = Element::new();
+        child.layout_bounds = [20.0, 20.0, 30.0, 30.0];
+        let mut root: Element = interactive(Element::new().cursor_kind(CursorKind::Pointer))
+            .on_hover(move |on| {
+                if on {
+                    entered_cb.set(entered_cb.get() + 1)
+                }
+            })
+            .into();
+        root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+        root.children.push(child);
+        stamp_subtree_paint_hashes(&mut root, false);
+        assert!(!root.children[0].subtree_hover_cursor);
+        apply_pointer_hover_reconcile(&root, 25.0, 25.0, true);
+        assert_eq!(
+            entered.get(),
+            1,
+            "static child must bubble to parent's handler"
+        );
+        root.children[0].cursor = Some(CursorKind::Text.into());
+        invalidate_collect_paint_hash_path(&mut root, &[0]);
+        let hit = pick_hover_and_cursor(&root, 25.0, 25.0, [0.0, 0.0])
+            .into_option()
+            .unwrap();
+        assert_eq!(
+            hit.cursor,
+            Some(CursorKind::Text.into()),
+            "new cursor must bypass invalid summary"
+        );
+        stamp_subtree_paint_hashes(&mut root, true);
+        assert!(root.children[0].subtree_hover_cursor);
+        clear_hover_tracking();
+    }
 
     #[test]
     fn claiming_underlay_blocks_hover_on_content_below() {

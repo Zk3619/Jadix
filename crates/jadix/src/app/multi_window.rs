@@ -1,6 +1,7 @@
-//! Multi-window wired MVP.
+//! Multi-window UI, weak control handles and window lifecycle policies.
 //!
-//! Primary window still owns the full [`super::state::AppState`] / GPU path.
+//! The primary owns [`super::state::AppState`] while it is open; independent
+//! secondary windows retain only the shared GPU context and fonts after it closes.
 //! Secondary windows are created via [`open_secondary_window`] →
 //! [`super::JadixUserEvent::OpenWindow`] on the event-loop proxy, tracked in
 //! [`WindowRegistry`], and host an independent UI tree via
@@ -38,6 +39,8 @@ pub(super) struct WindowChromeState {
     pub inset: AtomicU64,
     pub hovered: AtomicBool,
     pub pressed: AtomicBool,
+    pub fullscreen_shortcuts: AtomicBool,
+    pub close_with_primary: AtomicBool,
 }
 
 impl WindowHandle {
@@ -77,6 +80,20 @@ impl WindowHandle {
         Ok(())
     }
 
+    /// Replace / clear the native window icon. Call on the UI thread.
+    /// macOS/mobile/Web launcher icons are configured in the application bundle.
+    pub fn set_icon(&self, icon: Option<super::AppIcon>) -> Result<(), String> {
+        let window = self.upgrade()?;
+        if !super::AppIcon::window_supported() {
+            return Err(
+                "native window icons are unsupported on this platform; configure the app bundle"
+                    .into(),
+            );
+        }
+        window.set_window_icon(icon.as_ref().map(super::AppIcon::to_winit));
+        Ok(())
+    }
+
     pub fn set_title(&self, title: &str) -> Result<(), String> {
         self.upgrade()?.set_title(title);
         Ok(())
@@ -91,6 +108,41 @@ impl WindowHandle {
         self.clear_resize_cursor();
         self.upgrade()?
             .set_fullscreen(enabled.then_some(winit::monitor::Fullscreen::Borderless(None)));
+        Ok(())
+    }
+
+    pub fn is_fullscreen(&self) -> Result<bool, String> {
+        Ok(self.upgrade()?.fullscreen().is_some())
+    }
+
+    pub fn toggle_fullscreen(&self) -> Result<(), String> {
+        self.set_fullscreen(!self.is_fullscreen()?)
+    }
+
+    pub fn set_fullscreen_shortcuts(&self, enabled: bool) -> Result<(), String> {
+        self.upgrade()?;
+        self.chrome.fullscreen_shortcuts.store(enabled, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn set_close_with_primary(&self, enabled: bool) -> Result<(), String> {
+        self.upgrade()?;
+        self.chrome.close_with_primary.store(enabled, Ordering::Relaxed);
+        Ok(())
+    }
+
+    pub fn closes_with_primary(&self) -> Result<bool, String> {
+        self.upgrade()?;
+        Ok(self.chrome.close_with_primary.load(Ordering::Relaxed))
+    }
+
+    /// Global window-manager priority, including over other applications.
+    pub fn set_always_on_top(&self, enabled: bool) -> Result<(), String> {
+        self.upgrade()?.set_window_level(if enabled {
+            winit::window::WindowLevel::AlwaysOnTop
+        } else {
+            winit::window::WindowLevel::Normal
+        });
         Ok(())
     }
 
@@ -320,6 +372,10 @@ impl WindowRegistry {
             return None;
         }
         self.slots.remove(&id)
+    }
+
+    pub(super) fn remove_primary(&mut self) -> Option<WindowSlot> {
+        self.primary.take().and_then(|id| self.slots.remove(&id))
     }
 
     pub fn is_secondary(&self, id: WindowId) -> bool {

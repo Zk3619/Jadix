@@ -64,9 +64,14 @@ pub fn limits_for_backend(backend: wgpu::Backend, adapter: &wgpu::Limits) -> wgp
     l.max_texture_dimension_3d = adapter
         .max_texture_dimension_3d
         .min(l.max_texture_dimension_3d.max(2048));
-    l.max_inter_stage_shader_variables = adapter
-        .max_inter_stage_shader_variables
-        .max(l.max_inter_stage_shader_variables);
+    l.max_inter_stage_shader_variables = adapter.max_inter_stage_shader_variables;
+    if backend == wgpu::Backend::Dx11 {
+        l.max_compute_workgroup_size_x = 0;
+        l.max_compute_workgroup_size_y = 0;
+        l.max_compute_workgroup_size_z = 0;
+        l.max_compute_invocations_per_workgroup = 0;
+        l.max_compute_workgroups_per_dimension = 0;
+    }
     if feature_enabled() && native_compute_backend(backend) {
         l.max_compute_workgroup_size_x = adapter.max_compute_workgroup_size_x;
         l.max_compute_workgroup_size_y = adapter.max_compute_workgroup_size_y;
@@ -143,6 +148,15 @@ mod tests {
             down.max_compute_workgroup_size_x
         );
         assert_eq!(l.max_texture_dimension_2d, adapter.max_texture_dimension_2d);
+    }
+
+    #[test]
+    fn varying_request_does_not_exceed_reported_limit() {
+        let mut adapter = wgpu::Limits::default();
+        adapter.max_inter_stage_shader_variables = 8;
+        let limits = limits_for_backend(wgpu::Backend::Gl, &adapter);
+        assert!(limits.check_limits(&adapter));
+        assert_eq!(limits.max_inter_stage_shader_variables, 8);
     }
 
     #[test]

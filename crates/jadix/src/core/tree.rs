@@ -980,6 +980,13 @@ pub struct ElementInner {
     pub(crate) css_hover_armed: bool,
     /// Cached presence of controls/selection needing per-frame chrome sync.
     pub(crate) subtree_paint_sync: bool,
+    /// Presence summaries refreshed with the paint fingerprint. Hash zero means unknown.
+    pub(crate) subtree_reactive_sync: bool,
+    pub(crate) subtree_floating_panel: bool,
+    /// Pending collapse measurement/damage, or a callback that can produce it.
+    pub(crate) subtree_collapse_work: bool,
+    /// Collect summary: hover/cursor payload exists on this node or a descendant.
+    pub(crate) subtree_hover_cursor: bool,
     /// Sticky / fixed descendant: scroll-translate replay would move viewport-pinned paint.
     pub(crate) collect_skip_scroll_pin: bool,
     /// This node or a descendant is a scroll viewport / has a nonzero offset.
@@ -1120,6 +1127,10 @@ fn blank_inner() -> ElementInner {
         css_scroll_active: false,
         css_hover_armed: false,
         subtree_paint_sync: false,
+        subtree_reactive_sync: false,
+        subtree_floating_panel: false,
+        subtree_collapse_work: false,
+        subtree_hover_cursor: false,
         collect_skip_scroll_pin: false,
         collect_skip_has_scroll: false,
         collect_skip_side_channel: false,
@@ -1514,9 +1525,10 @@ pub fn collect_ui(builders: impl IntoIterator<Item = fn() -> Element>) -> Vec<El
 }
 
 /// Argument to [`Element::text`]: a static string, or (via impls in `app/reactive`) a
-/// [`crate::core::reactivity::Signal`] / `FnMut() -> String` live binding.
+/// [`crate::core::reactivity::Signal`] / `FnMut() -> impl Into<String>` live binding.
 ///
-/// `.text(sig.get())` is a snapshot (already evaluated). `Memo` / `StoreField` are
+/// `.text(sig.get())` receives an already evaluated value; `get()` still tracks
+/// its enclosing effect, but this call creates no leaf binding. `Memo` / `StoreField` are
 /// not `IntoNodeText` — use `|| memo.get().to_string()` so the leaf effect tracks.
 pub trait IntoNodeText {
     fn apply_node_text(self, el: Element) -> Element;
@@ -1539,6 +1551,24 @@ impl IntoNodeText for &str {
 impl IntoNodeText for &String {
     fn apply_node_text(self, el: Element) -> Element {
         el.text(self.clone())
+    }
+}
+
+impl IntoNodeText for std::borrow::Cow<'_, str> {
+    fn apply_node_text(self, el: Element) -> Element {
+        el.text(self.into_owned())
+    }
+}
+
+impl IntoNodeText for Box<str> {
+    fn apply_node_text(self, el: Element) -> Element {
+        el.text(String::from(self))
+    }
+}
+
+impl IntoNodeText for char {
+    fn apply_node_text(self, el: Element) -> Element {
+        el.text(self.to_string())
     }
 }
 
@@ -4618,6 +4648,9 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
         let (child_acc, in_portal, clip_bounds, child_count, paint_changed) = {
             // SAFETY: exclusive subtree; children pointers are taken after this node's sync.
             let element = unsafe { &mut *ptr };
+            if element.collect_paint_hash != 0 && !element.subtree_reactive_sync {
+                continue;
+            }
             // Reactive paint synchronizers can move a floating panel during the
             // same frame as the pointer event. Its retained layout box may still
             // contain the previous offscreen position, so skipping it here leaves
@@ -4923,6 +4956,7 @@ mod p1_builder_tests {
             )
             .child(Element::new().child(Element::new()))
             .child(changed());
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, false);
         walk_elements_post_order_mut(&mut root, |el| el.collect_paint_hash = 42);
         let mut tree = LayoutTree::new();
         let mut impact = LayoutStatus::Clean;
@@ -4939,6 +4973,42 @@ mod p1_builder_tests {
         assert_eq!(root.children[1].collect_paint_hash, 42);
         assert_eq!(root.children[1].children[0].collect_paint_hash, 42);
         assert_eq!(root.children[2].collect_paint_hash, 0);
+    }
+
+    #[test]
+    fn reactive_sync_summary_tracks_invalidated_mounts() {
+        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
+        let mut root = Element::new().child(Element::new().child(Element::new()));
+        let mut tree = LayoutTree::new();
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, false);
+        assert!(!root.subtree_reactive_sync);
+        let counter = calls.clone();
+        root.children[0]
+            .children
+            .push(Element::new().reactive_sync(move |_, _| {
+                counter.set(counter.get() + 1);
+                LayoutStatus::Clean
+            }));
+        crate::layout::collect_cache::invalidate_collect_paint_hash_path(&mut root, &[0]);
+        let sync = |root: &mut Element, tree: &mut LayoutTree| {
+            let mut impact = LayoutStatus::Clean;
+            sync_reactive_elements_subtree(root, tree, &mut impact, 400.0, 300.0, [0.0; 2]);
+            assert_eq!(impact, LayoutStatus::Clean);
+        };
+        // A newly mounted callback must run even before the next stamp.
+        sync(&mut root, &mut tree);
+        assert_eq!(calls.get(), 1);
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, true);
+        assert!(root.subtree_reactive_sync);
+        assert!(!root.children[0].children[0].subtree_reactive_sync);
+        sync(&mut root, &mut tree);
+        assert_eq!(calls.get(), 2);
+        root.children[0].children.pop();
+        crate::layout::collect_cache::invalidate_collect_paint_hash_path(&mut root, &[0]);
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, true);
+        assert!(!root.subtree_reactive_sync);
+        sync(&mut root, &mut tree);
+        assert_eq!(calls.get(), 2);
     }
 
     #[test]

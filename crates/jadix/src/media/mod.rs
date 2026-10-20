@@ -10,6 +10,7 @@ mod animation;
 mod decode;
 pub mod gif;
 pub mod image;
+pub mod playback;
 pub(crate) mod remote;
 pub mod stream;
 #[cfg(feature = "svg")]
@@ -30,4 +31,5 @@ pub use remote::{
     remote_asset_fetcher_installed, set_remote_asset_fetcher, RemoteAssetFetcher,
 };
 pub use stream::{queue_media_frame, MediaFrame, MediaPlanes, PixelLayout, TextureColorSpace};
+pub use playback::*;
 pub use yuv::{bt709_yuv8_to_rgb, i420_frame, rgba8_to_i420};

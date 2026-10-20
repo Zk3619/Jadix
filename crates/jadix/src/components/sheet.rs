@@ -347,7 +347,9 @@ fn apply_sheet_shell_surface(
                 .h("100%")
                 .w(w)
                 .max_w("24rem")
+                .min_w(0.0)
                 .border_left(border, 1.0);
+            panel = crate::style::utility::with_default_class_list(panel, "max-sm:max-w-full");
         }
         SheetSide::Left => {
             let w = width.unwrap_or("75%");
@@ -359,7 +361,9 @@ fn apply_sheet_shell_surface(
                 .h("100%")
                 .w(w)
                 .max_w("24rem")
+                .min_w(0.0)
                 .border_right(border, 1.0);
+            panel = crate::style::utility::with_default_class_list(panel, "max-sm:max-w-full");
         }
         SheetSide::Top => {
             let h = height.unwrap_or("auto");
@@ -390,7 +394,7 @@ fn apply_sheet_shell_surface(
 }
 
 /// Chromed motion panel (no portal / presence).
-fn sheet_shell_panel(
+pub(crate) fn sheet_shell_panel(
     inner: Element,
     side: SheetSide,
     width: Option<&str>,
@@ -406,8 +410,9 @@ fn sheet_shell_panel(
     // that edge (`relative()` would lay it out at flex-start / the opposite edge).
     panel = swallow_clicks(panel);
     if let Some(mut close) = chrome_close {
-        // shadcn: absolute top-4 right-4
-        close = close.absolute().top("1rem").right("1rem").z_index(1);
+        // Include docking in the class baseline so hover resolution preserves it.
+        close = close.z_index(1);
+        crate::style::utility::extend_class_list(&mut close, "absolute top-4 right-4");
         panel = panel.child(close);
     }
     panel
@@ -602,7 +607,7 @@ pub fn sheet_content(opts: SheetContentOpts, body: impl Fn() -> Element + 'stati
     })
 }
 
-fn collect_sheet_focus_ids(el: &Element, out: &mut Vec<String>) {
+pub(crate) fn collect_sheet_focus_ids(el: &Element, out: &mut Vec<String>) {
     crate::core::tree::walk_elements(el, |el| {
         if el.focusable {
             if let Some(fid) = &el.focus_id {
@@ -781,6 +786,34 @@ mod tests {
             portal_nests_portal(&stage),
             "portal stage wrapping a panel_block_clicks child nests jadix_portal"
         );
+    }
+
+    #[test]
+    fn responsive_side_sheet_clamps_explicit_width_to_viewport() {
+        use crate::core::tree::LayoutTree;
+        use crate::style::{resolve_class_variants, VariantContext};
+
+        for side in [SheetSide::Left, SheetSide::Right] {
+            for width in [320.0, 375.0, 639.5, 640.0, 1024.0] {
+                let mut panel =
+                    apply_sheet_shell_surface(Element::new(), side, Some("50rem"), None)
+                        .class("shadow-none");
+                resolve_class_variants(
+                    &mut panel,
+                    &VariantContext {
+                        viewport_w: width,
+                        ..Default::default()
+                    },
+                );
+                let mut root = Element::new().relative().w(width).h(600.0).child(panel);
+                LayoutTree::new().build_and_layout(&mut root, width, 600.0, [-1.0, -1.0]);
+                let bounds = root.children[0].layout_bounds;
+                assert!(
+                    bounds[0] >= -0.5 && bounds[0] + bounds[2] <= width + 0.5,
+                    "side={side:?}, width={width}: {bounds:?}"
+                );
+            }
+        }
     }
 
     #[test]

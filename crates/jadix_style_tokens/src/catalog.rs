@@ -73,6 +73,8 @@ impl TwLength {
 /// Classified utility (without variant prefixes).
 #[derive(Clone, Debug, PartialEq)]
 pub enum KnownUtility<'a> {
+    DisplayNone,
+    DisplayFlex,
     FlexRow,
     FlexCol,
     FlexWrap,
@@ -542,7 +544,9 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     }
 
     match token {
-        "flex" | "flex-row" => return Some(KnownUtility::FlexRow),
+        "hidden" => return Some(KnownUtility::DisplayNone),
+        "flex" => return Some(KnownUtility::DisplayFlex),
+        "flex-row" => return Some(KnownUtility::FlexRow),
         "flex-col" => return Some(KnownUtility::FlexCol),
         "flex-wrap" | "wrap" => return Some(KnownUtility::FlexWrap),
         "flex-nowrap" | "nowrap" => return Some(KnownUtility::FlexNoWrap),

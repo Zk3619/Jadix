@@ -368,6 +368,7 @@ impl super::App {
     ) {
         super::window_scope::force_secondary_id(id);
         crate::style::flush_style_rebuild();
+        super::invalidation::begin_frame();
         super::input_controller::clear_text_edit_frame_mutated();
         let suspended = self.is_suspended;
         let (has_caret, render_ok) = {
@@ -556,6 +557,7 @@ impl super::App {
         ime_allowed_latched: &mut bool,
         ime_owner_window: &mut Option<WindowId>,
     ) {
+        let _work = super::frame_budget::begin_work(super::frame_budget::WorkKind::Ime);
         let focused = crate::core::reactivity::use_signal("__jadix_button_focus_id", String::new);
         let fid = focused.get();
         let ui_scale = window.scale_factor() as f32;
@@ -3294,6 +3296,7 @@ impl super::App {
         self.flush_pending_cursor_moved(id, event_loop);
         let _scope = super::window_scope::enter_primary();
         crate::style::flush_style_rebuild();
+        super::invalidation::begin_frame();
         crate::app::reactive::drain_deferred_view_remounts();
         crate::utils::modal_motion::drain_pending_modal_unmounts();
         crate::utils::floating_motion::drain_pending_floating_unmounts();
@@ -3471,11 +3474,11 @@ impl super::App {
             );
             #[cfg(feature = "svg")]
             {
-                animated
-                    || crate::utils::morph_icon::tick_morph_icons_subtree(
-                        &mut state.root_element,
-                        anim_dt,
-                    )
+                let morphing = crate::utils::morph_icon::tick_morph_icons_subtree(
+                    &mut state.root_element,
+                    anim_dt,
+                );
+                animated || morphing
             }
             #[cfg(not(feature = "svg"))]
             {
@@ -3901,6 +3904,7 @@ impl super::App {
         // clicking fields after scroll stops.
         let text_force_fast_mode = self.scrollbar_drag.is_some()
             || smooth_scroll_animating
+            || !rests_offset_moved.is_empty()
             || !self.scroll_accum.is_empty();
 
         let scrollbar_drag_active = self.scrollbar_drag.is_some();
@@ -3909,7 +3913,11 @@ impl super::App {
         // `sync_text_edit` / focus ring after scroll stops, so a click on Input sets focus_id
         // but the caret does not install until the bridge expires.
         // Unfocused Input prepare skip already covers the chrome hitch bridging targeted.
-        let scroll_paint_only = smooth_scroll_animating || scrollbar_drag_active;
+        // Jump wheel deltas have already been drained above. Use actual movement
+        // this frame, so discrete notches take the same path as smooth scrolling.
+        // The next stationary frame still restores focus/caret and full CSS sync.
+        let scroll_paint_only =
+            smooth_scroll_animating || scrollbar_drag_active || !rests_offset_moved.is_empty();
         crate::components::chart::set_chart_hover_frozen(scroll_paint_only);
         // Live scroll Polls via `paint_clock_active`. The first idle frame used to
         // plant caret WaitUntil; Windows then coalesced `request_redraw` and froze
@@ -4042,14 +4050,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // Keep the previous cache until post-render so a 0-max cull sample cannot
                 // clamp a nested scroller's offset before merge_scroll_metrics_cache runs.
 
-                // Prefer hit-test over paint-order `last_hover_cursor`: layout DFS can leave a
-                // sticky Pointer from gallery scrollbars when a claiming underlay has no cursor.
-                let hover_cursor_pick =
-                    super::tree_hit::pick_cursor(&state.root_element, hx, hy, [0.0, 0.0]);
                 let mut hover_to_run = Vec::new();
-                // Render already fired `on_hover` with the same mouse as CSS `:hover`.
-                // This post-layout pass is an idempotent Rc-refresh if Taffy moved the hit.
-                super::tree_hit::reconcile_pointer_hovers(
+                // Refresh post-layout hover and cursor from one geometric hit path.
+                let hover_cursor_pick = super::tree_hit::reconcile_pointer_hovers_and_cursor(
                     &state.root_element,
                     hx,
                     hy,
@@ -4589,6 +4592,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     || page_css_active
                     || ui_anim_active
                     || theme_anim_active;
+                super::frame_stats::note_window_animation_activity(window.id(), self.paint_clock_active);
                 if self.paint_clock_active || self.scrollbar_geometry_pending {
                     window.request_redraw();
                 } else if scrollbar_visibility_pending {

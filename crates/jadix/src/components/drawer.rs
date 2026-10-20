@@ -534,7 +534,9 @@ fn drawer_swipe_handle_element(
 /// 对齐 shadcn `cn-drawer-popup`：底滑默认顶圆角、`max-h: calc(100dvh - 6rem)`。
 /// `6rem` inset at 16px root ≈ 96px.
 fn drawer_y_max_h(vh: f32) -> f32 {
-    (vh - 6.0 * crate::layout::dimension::css_root_font_size_px()).max(120.0)
+    (vh - 6.0 * crate::layout::dimension::css_root_font_size_px())
+        .max(120.0)
+        .min(vh.max(1.0))
 }
 
 fn drawer_panel_axis(
@@ -544,7 +546,7 @@ fn drawer_panel_axis(
     width: Option<&str>,
     height: Option<&str>,
 ) -> f32 {
-    use crate::layout::dimension::{parse_css_dim, css_root_font_size_px, PercentAxis, UnitCtx};
+    use crate::layout::dimension::{css_root_font_size_px, parse_css_dim, PercentAxis, UnitCtx};
     let ctx =
         UnitCtx::new(vw, vh, css_root_font_size_px()).with_containing_block(Some(vw), Some(vh));
     let (value, axis, max, default) = if direction.is_vertical() {
@@ -572,7 +574,9 @@ fn drawer_panel_axis(
 /// Visible height for a Y-axis snap or drag (frac × max-h). Swipe follows this
 /// box size rather than laying out at max-h and translating the overflow away.
 fn drawer_y_visible_h(frac: f32, vh: f32) -> f32 {
-    (frac.clamp(0.0, 1.0) * drawer_y_max_h(vh)).max(64.0)
+    (frac.clamp(0.0, 1.0) * drawer_y_max_h(vh))
+        .max(64.0)
+        .min(drawer_y_max_h(vh))
 }
 
 /// `(visible_px, extra_translate)` for a vertical drawer.
@@ -608,7 +612,13 @@ fn apply_drawer_shell_surface(
                 .w("100%")
                 .min_h(0.0)
                 .overflow_y("hidden")
-                .max_h("calc(100dvh - 6rem)")
+                // Visible snap height already includes the top inset. A second
+                // calc cap can collapse the whole panel in a very short viewport.
+                .max_h(if visible_px.is_some() {
+                    "100dvh"
+                } else {
+                    "calc(100dvh - 6rem)"
+                })
                 .border_top(border, 1.0)
                 .border_top_left_radius(radius)
                 .border_top_right_radius(radius);
@@ -627,7 +637,11 @@ fn apply_drawer_shell_surface(
                 .w("100%")
                 .min_h(0.0)
                 .overflow_y("hidden")
-                .max_h("calc(100dvh - 6rem)")
+                .max_h(if visible_px.is_some() {
+                    "100dvh"
+                } else {
+                    "calc(100dvh - 6rem)"
+                })
                 .border_bottom(border, 1.0)
                 .border_bottom_left_radius(radius)
                 .border_bottom_right_radius(radius);
@@ -651,6 +665,7 @@ fn apply_drawer_shell_surface(
                 .border_left(border, 1.0)
                 .border_top_left_radius(radius)
                 .border_bottom_left_radius(radius);
+            panel = crate::style::utility::with_default_class_list(panel, "max-sm:max-w-full");
         }
         DrawerDirection::Left => {
             let w = width.unwrap_or("75%");
@@ -666,6 +681,7 @@ fn apply_drawer_shell_surface(
                 .border_right(border, 1.0)
                 .border_top_right_radius(radius)
                 .border_bottom_right_radius(radius);
+            panel = crate::style::utility::with_default_class_list(panel, "max-sm:max-w-full");
         }
     }
     panel
@@ -1855,6 +1871,62 @@ fn bind_drawer_drag_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn responsive_drawer_caps_sides_and_short_viewport_metrics() {
+        use crate::core::tree::LayoutTree;
+        use crate::style::{resolve_class_variants, VariantContext};
+        for direction in [DrawerDirection::Left, DrawerDirection::Right] {
+            for width in [200.0, 320.0, 639.5, 640.0, 1024.0] {
+                let mut panel = apply_drawer_shell_surface(
+                    Element::new(),
+                    direction,
+                    Some("50rem"),
+                    None,
+                    None,
+                )
+                .class("shadow-none");
+                resolve_class_variants(
+                    &mut panel,
+                    &VariantContext {
+                        viewport_w: width,
+                        ..Default::default()
+                    },
+                );
+                let mut root = Element::new().relative().w(width).h(600.0).child(panel);
+                LayoutTree::new().build_and_layout(&mut root, width, 600.0, [-1.0, -1.0]);
+                let bounds = root.children[0].layout_bounds;
+                assert!(
+                    bounds[0] >= -0.5 && bounds[0] + bounds[2] <= width + 0.5,
+                    "{direction:?} {width}: {bounds:?}"
+                );
+            }
+        }
+        for height in [20.0, 80.0, 120.0, 320.0, 800.0] {
+            for fraction in [0.0, 0.3, 1.0] {
+                assert!(drawer_y_max_h(height) <= height);
+                assert!(drawer_y_visible_h(fraction, height) <= height);
+                for direction in [DrawerDirection::Up, DrawerDirection::Down] {
+                    let panel = apply_drawer_shell_surface(
+                        Element::new(),
+                        direction,
+                        None,
+                        None,
+                        Some(drawer_y_visible_h(fraction, height)),
+                    );
+                    let mut root = Element::new().relative().w(320.0).h(height).child(panel);
+                    LayoutTree::new().build_and_layout(&mut root, 320.0, height, [-1.0, -1.0]);
+                    let bounds = root.children[0].layout_bounds;
+                    assert!(
+                        bounds[3] > 0.0
+                            && bounds[1] >= -0.5
+                            && bounds[1] + bounds[3] <= height + 0.5,
+                        "{direction:?} height={height}: {bounds:?}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn sequential_snap_crosses_neighbor_midpoint() {

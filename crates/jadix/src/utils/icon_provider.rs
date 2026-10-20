@@ -39,6 +39,8 @@ pub const DEFAULT_ICON_SIZE_PX: f32 = 16.0;
 const FALLBACK_GLYPH: &str = "\u{ea0e}";
 
 pub const ATTR_ICON_SRC: &str = "jadix_icon_src";
+pub(crate) const ATTR_ICON_HOVER_ANIMATION: &str = "jadix_icon_hover_animation";
+const ATTR_ICON_CHANGE_ANIMATION: &str = "jadix_icon_change_animation";
 
 /// What a name (or explicit `src`) paints as.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -176,12 +178,134 @@ pub fn icon_src(src: impl Into<String>) -> Element {
 /// Apply `size` on `<Icon>`: text size always; box size for raster / SVG `src` icons.
 pub fn with_icon_size(el: Element, px: f32) -> Element {
     let px = px.max(1.0);
-    let is_src = el.image_texture.is_some() || el.get_attr(ATTR_ICON_SRC).is_some();
+    let is_src = el.image_texture.is_some()
+        || el.get_attr(ATTR_ICON_SRC).is_some()
+        || el.get_attr(ATTR_ICON_CHANGE_ANIMATION).is_some()
+        || el.get_attr(crate::utils::ATTR_ANIMATED_ICON).is_some();
     let el = el.text_size(px);
     if is_src {
         icon_box(el, px)
     } else {
         el
+    }
+}
+
+/// Configure `<Icon>` motion. `hover` accepts `animated`, `none`, a built-in
+/// keyframe name (e.g. `spin`), or a CSS animation shorthand. `change="morph"`
+/// uses MorphIcon for Lucide and local stroke SVG sources (requires `svg`).
+/// Call before applying size/classes, as the macro does.
+pub fn with_icon_animations(
+    mut el: Element,
+    hover: impl AsRef<str>,
+    change: impl AsRef<str>,
+    id: impl AsRef<str>,
+    spring: impl AsRef<str>,
+) -> Element {
+    let hover = hover.as_ref().trim();
+    let name = el.get_attr(ATTR_ICON_NAME).cloned();
+    let source = el
+        .get_attr(ATTR_ICON_SRC)
+        .cloned()
+        .map(IconSource::Src)
+        .or_else(|| name.as_deref().and_then(resolve_icon));
+    let recipe = recipe_name(name.as_deref(), source.as_ref()).map(str::to_string);
+    #[cfg(feature = "svg")]
+    if change.as_ref() == "morph" {
+        let src = morph_source(name.as_deref(), source.as_ref());
+        el = crate::utils::morph_icon(src.as_deref().unwrap_or(""))
+            .id(id.as_ref())
+            .size_px(DEFAULT_ICON_SIZE_PX)
+            .spring(spring.as_ref())
+            .into();
+        el = el.pointer_events("bounding-box");
+        el.attrs.remove("aria-hidden");
+        if src.is_none() {
+            apply_resolved(&mut el, name.as_deref(), source.clone());
+        }
+        el.set_attr(ATTR_ICON_CHANGE_ANIMATION, "morph");
+        // Keep the provider/source identity separate from the normalized morph path.
+        if let Some(name) = &name {
+            el.set_attr(ATTR_ICON_NAME, name);
+        }
+        if let Some(IconSource::Src(src)) = &source {
+            el.set_attr(ATTR_ICON_SRC, src);
+        }
+    }
+    #[cfg(not(feature = "svg"))]
+    let _ = (change, spring);
+    if hover.is_empty() || hover == "none" || hover == "false" {
+        return el;
+    }
+    if el.template_id.is_none() {
+        el.template_id = Some(format!("icon-motion:{}", id.as_ref()));
+    }
+    el.set_attr(ATTR_ICON_HOVER_ANIMATION, hover);
+    el.set_attr(crate::utils::ATTR_ANIMATED_ICON_STATE, "normal");
+    if hover == "animated" {
+        if let Some(name) = recipe {
+            el.set_attr(crate::utils::ATTR_ANIMATED_ICON, name);
+        }
+    }
+    crate::utils::lucide_animated::with_animated_icon_hover(el.pointer_events("bounding-box"))
+}
+
+pub(crate) fn sync_icon_hover_animation(el: &mut Element, on: bool) {
+    let Some(spec) = el.get_attr(ATTR_ICON_HOVER_ANIMATION).cloned() else {
+        return;
+    };
+    if spec == "animated" {
+        return;
+    }
+    #[cfg(feature = "svg")]
+    let on = on && !crate::utils::morph_icon::blocks_hover_animation(el);
+    let on = on && !crate::style::prefers_reduced_motion();
+    let active = if on { "1" } else { "0" };
+    if el.get_attr("jadix_icon_hover_active").map(String::as_str) == Some(active) {
+        return;
+    }
+    el.set_attr("jadix_icon_hover_active", active);
+    // Reuse the CSS keyframe engine, including application-defined keyframes.
+    let spec = if spec.split_whitespace().count() == 1 {
+        format!(
+            "{} 1s linear infinite",
+            spec.strip_prefix("animate-").unwrap_or(&spec)
+        )
+    } else {
+        spec
+    };
+    el.style.animations = if on {
+        crate::core::tree::parse_animation_shorthand(&spec)
+    } else {
+        Vec::new()
+    };
+    let animations = el.style.animations.clone();
+    if let Some(base) = el.class_set.as_mut().and_then(|cs| cs.base_style.as_mut()) {
+        base.animations = animations;
+    }
+}
+
+#[cfg(feature = "svg")]
+fn morph_source(name: Option<&str>, source: Option<&IconSource>) -> Option<String> {
+    match source? {
+        IconSource::Glyph { family, glyph } if family == "lucide" => {
+            let name = name?;
+            if crate::utils::lucide::lucide_builtin_glyph(name).as_ref() != Some(glyph) {
+                return None;
+            }
+            crate::utils::lucide::lucide_svg_inner(name).map(|_| name.to_string())
+        }
+        IconSource::Src(src) => {
+            let bytes = if src.trim_start().starts_with('<') {
+                src.as_bytes().to_vec()
+            } else if src.starts_with("data:") {
+                crate::media::decode_data_url(src)?
+            } else {
+                std::fs::read(crate::media::resolve_asset_path(src)?).ok()?
+            };
+            let input = crate::utils::svg_to_icon(std::str::from_utf8(&bytes).ok()?).ok()?;
+            crate::utils::canonical_d(&input).ok()
+        }
+        _ => None,
     }
 }
 
@@ -207,6 +331,31 @@ fn apply_resolved(
     name: Option<&str>,
     source: Option<IconSource>,
 ) -> LayoutStatus {
+    #[cfg(feature = "svg")]
+    if el.get_attr(ATTR_ICON_CHANGE_ANIMATION).is_some() {
+        if let Some(src) = morph_source(name, source.as_ref()) {
+            let layout_changed = el.image_texture.is_some()
+                || el.text_style.font_family.as_deref() != Some("lucide");
+            let status = crate::utils::apply_bound_morph_icon(el, src);
+            el.image_texture = None;
+            el.text_style.font_family = Some("lucide".into());
+            el.attrs.remove(ATTR_ICON_SRC);
+            if let Some(name) = name {
+                el.set_attr(ATTR_ICON_NAME, name);
+            }
+            if let Some(IconSource::Src(src)) = &source {
+                el.set_attr(ATTR_ICON_SRC, src);
+            }
+            sync_icon_recipe(el, name, source.as_ref());
+            return status.merge(if layout_changed {
+                LayoutStatus::LayoutChanged
+            } else {
+                LayoutStatus::StyleChanged
+            });
+        }
+        el.attrs.remove(crate::utils::ATTR_MORPH_ICON);
+    }
+    sync_icon_recipe(el, name, source.as_ref());
     match source {
         Some(IconSource::Glyph { family, glyph }) => {
             let name_ok = match name {
@@ -247,6 +396,41 @@ fn apply_resolved(
             paint_glyph(el, name, "lucide", fallback);
             LayoutStatus::LayoutChanged
         }
+    }
+}
+
+fn sync_icon_recipe(el: &mut Element, name: Option<&str>, source: Option<&IconSource>) {
+    if el.get_attr(ATTR_ICON_HOVER_ANIMATION).map(String::as_str) != Some("animated") {
+        return;
+    }
+    let name = recipe_name(name, source);
+    if el
+        .get_attr(crate::utils::ATTR_ANIMATED_ICON)
+        .map(String::as_str)
+        == name
+    {
+        return;
+    }
+    if let Some(name) = name {
+        el.set_attr(crate::utils::ATTR_ANIMATED_ICON, name);
+    } else {
+        el.attrs.remove(crate::utils::ATTR_ANIMATED_ICON);
+    }
+    #[cfg(feature = "svg")]
+    crate::utils::lucide_animated::reset_animated_icon_playback(el);
+}
+
+fn recipe_name<'a>(name: Option<&'a str>, source: Option<&IconSource>) -> Option<&'a str> {
+    let name = name?;
+    match source? {
+        IconSource::Glyph { family, glyph }
+            if family == "lucide"
+                && crate::utils::lucide::lucide_builtin_glyph(name).as_ref() == Some(glyph)
+                && crate::utils::animated_icon_recipe(name).is_some() =>
+        {
+            Some(name)
+        }
+        _ => None,
     }
 }
 
@@ -346,6 +530,173 @@ fn with_icon_test<R>(f: impl FnOnce() -> R) -> R {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_hover_animation_uses_css_and_restores_idle() {
+        let mut el = with_icon_animations(
+            build_icon_named("settings"),
+            "spin",
+            "none",
+            "icon-spin-test",
+            "snappy",
+        )
+        .class("text-foreground");
+        assert!(el.style.animations.is_empty());
+        (el.on_hover.as_ref().unwrap().borrow_mut())(true);
+        crate::utils::sync_animated_icon_hover(&mut el);
+        assert_eq!(el.style.animations[0].name, "spin");
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        el.layout_bounds = [0.0, 0.0, 24.0, 24.0];
+        let mut impact = LayoutStatus::Clean;
+        crate::style::utility::sync_class_variants_subtree(
+            &mut el,
+            [10.0, 10.0],
+            "",
+            false,
+            200.0,
+            200.0,
+            &mut tree,
+            &mut impact,
+        );
+        assert_ne!(
+            impact,
+            LayoutStatus::Clean,
+            "CSS hover must reach the frame engine"
+        );
+        assert_eq!(
+            el.class_set
+                .as_ref()
+                .unwrap()
+                .base_style
+                .as_ref()
+                .unwrap()
+                .animations[0]
+                .name,
+            "spin"
+        );
+        (el.on_hover.as_ref().unwrap().borrow_mut())(false);
+        crate::utils::sync_animated_icon_hover(&mut el);
+        assert!(el.style.animations.is_empty());
+        let mut custom = with_icon_animations(
+            build_icon_named("heart"),
+            "pulse 700ms ease-in-out infinite",
+            "none",
+            "icon-custom-test",
+            "snappy",
+        );
+        sync_icon_hover_animation(&mut custom, true);
+        assert_eq!(custom.style.animations[0].name, "pulse");
+        let plain = with_icon_animations(
+            build_icon_named("sun"),
+            "none",
+            "none",
+            "icon-none-test",
+            "snappy",
+        );
+        assert!(plain.on_hover.is_none());
+    }
+
+    #[cfg(all(feature = "svg", feature = "bundled-lucide"))]
+    #[test]
+    fn icon_motion_macro_binds_name_and_arbitrates_hover_and_change() {
+        let mut el = crate::ui! {
+            <Icon name="sun" size="28px" hover_animation="animated" change_animation="morph" spring="smooth" />
+        };
+        assert_eq!(el.text_style.size, Some(28.0));
+        assert_eq!(
+            el.get_attr(crate::utils::morph_icon::ATTR_MORPH_SPRING)
+                .map(String::as_str),
+            Some("smooth")
+        );
+        assert_eq!(
+            el.get_attr(crate::utils::ATTR_ANIMATED_ICON)
+                .map(String::as_str),
+            Some("sun")
+        );
+        (el.on_hover.as_ref().unwrap().borrow_mut())(true);
+        crate::utils::sync_animated_icon_hover(&mut el);
+        assert_eq!(
+            apply_bound_icon_name(&mut el, "moon"),
+            LayoutStatus::StyleChanged
+        );
+        assert!(!crate::utils::lucide_animated::tick_animated_icon(
+            &mut el, 0.016
+        ));
+        assert!(crate::utils::morph_icon::tick_morph_icon(&mut el, 0.016));
+        assert_eq!(
+            el.get_attr(crate::utils::ATTR_ANIMATED_ICON)
+                .map(String::as_str),
+            Some("moon")
+        );
+
+        let mut spin = crate::ui! {
+            <Icon name="sun" size="28px" hover_animation="spin" change_animation="morph" />
+        };
+        (spin.on_hover.as_ref().unwrap().borrow_mut())(true);
+        crate::utils::sync_animated_icon_hover(&mut spin);
+        assert!(!spin.style.animations.is_empty());
+        apply_bound_icon_name(&mut spin, "moon");
+        crate::utils::sync_animated_icon_hover(&mut spin);
+        assert!(
+            spin.style.animations.is_empty(),
+            "morph owns the geometry during a change"
+        );
+        assert!(crate::utils::morph_icon::tick_morph_icon(&mut spin, 10.0));
+        crate::utils::sync_animated_icon_hover(&mut spin);
+        assert_eq!(spin.style.animations[0].name, "spin");
+    }
+
+    #[cfg(all(feature = "svg", feature = "bundled-lucide"))]
+    #[test]
+    fn icon_motion_morphs_svg_sources_and_falls_back_for_raster_and_custom_glyphs() {
+        let a = r#"<svg viewBox="0 0 24 24" fill="none"><path d="M4 12h16"/></svg>"#;
+        let b = r#"<svg viewBox="0 0 24 24" fill="none"><path d="M12 4v16"/></svg>"#;
+        let mut el = with_icon_animations(
+            build_icon_from_src(svg_markup_to_data_url(a)),
+            "spin",
+            "morph",
+            "icon-svg-test",
+            "snappy",
+        );
+        assert!(el.image_texture.is_none());
+        apply_bound_icon_src(&mut el, svg_markup_to_data_url(b));
+        assert!(crate::utils::subtree_needs_morph_icon_frame(&el));
+        assert!(el.image_texture.is_none());
+        apply_bound_icon_src(&mut el, RED_PNG);
+        assert!(el.image_texture.is_some());
+        assert!(el.get_attr(crate::utils::ATTR_MORPH_ICON).is_none());
+        sync_icon_hover_animation(&mut el, true);
+        assert_eq!(
+            el.style.animations[0].name, "spin",
+            "a stale SVG flight must not block raster hover"
+        );
+        apply_bound_icon_name(&mut el, "sun");
+        assert!(el.image_texture.is_none());
+        assert!(el.get_attr(crate::utils::ATTR_MORPH_ICON).is_some());
+        assert!(
+            !crate::utils::subtree_needs_morph_icon_frame(&el),
+            "raster to SVG snaps to the first morphable icon"
+        );
+
+        let mut custom = with_icon_animations(
+            build_icon_named("sun"),
+            "animated",
+            "morph",
+            "icon-glyph-test",
+            "snappy",
+        );
+        apply_resolved(
+            &mut custom,
+            Some("sun"),
+            Some(IconSource::Glyph {
+                family: "custom".into(),
+                glyph: "X".into(),
+            }),
+        );
+        assert_eq!(custom.text.as_deref(), Some("X"));
+        assert!(custom.get_attr(crate::utils::ATTR_ANIMATED_ICON).is_none());
+        assert!(custom.get_attr(crate::utils::ATTR_MORPH_ICON).is_none());
+    }
 
     /// 1×1 red PNG.
     const RED_PNG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==";

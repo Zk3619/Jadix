@@ -27,12 +27,12 @@ pub use markdown_inline::parse_markdown_inline;
 pub use measure::{
     bidi_soft_wrap_height, clear_shared_font_system, fit_cache_frame_tick, glyphon_fit_soft_wrap,
     glyphon_soft_wrap_line_count, install_shared_font_system, intrinsic_width,
-    invalidate_prepare_cache, layout, layout_lines, layout_text_fast_mode, layout_wrap_target,
-    layout_wrap_target_prewrap, measure_leaf, measure_prefix_advance, note_fit_needs_relayout,
-    prepare, prepare_rich, prepare_with_family, set_layout_text_fast_mode, shared_font_system_ptr,
-    shutdown_layout_text, snap_content_text_width, take_fit_needs_relayout,
-    try_glyphon_fit_soft_wrap, GlyphonFitSoftWrap, PreparedLine, PreparedText, TextLayoutMetrics,
-    LINE_WIDTH_EPS,
+    invalidate_prepare_cache, layout, layout_lines, layout_next_line, layout_text_fast_mode,
+    layout_wrap_target, layout_wrap_target_prewrap, measure_leaf, measure_prefix_advance,
+    note_fit_needs_relayout, prepare, prepare_rich, prepare_with_family, set_layout_text_fast_mode,
+    shared_font_system_ptr, shutdown_layout_text, snap_content_text_width, take_fit_needs_relayout,
+    try_glyphon_fit_soft_wrap, GlyphonFitSoftWrap, LayoutCursor, PreparedLine, PreparedText,
+    TextLayoutMetrics, LINE_WIDTH_EPS,
 };
 pub use uax14_wrap::{needs_logical_prewrap, soft_wrap_logical};
 pub use visual_lines::{
@@ -41,4 +41,7 @@ pub use visual_lines::{
     visual_line_cache_frame_tick, visual_selection_highlights, LineBreakSource, VirtHeightEstimate,
     VisualLineModel, WrapMode, VIRT_CHAR_THRESHOLD, VIRT_LINE_THRESHOLD, VIRT_WINDOW_LINES,
 };
-pub use wrap_variable::layout_lines_variable_width;
+pub use wrap_variable::{
+    layout_lines_variable_width, layout_text_flow, TextExclusion, TextFlowLayout, TextFlowLine,
+    TextFlowRect,
+};

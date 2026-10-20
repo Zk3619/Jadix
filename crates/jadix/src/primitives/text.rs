@@ -6,9 +6,12 @@ pub struct TextBuilder {
 }
 
 impl TextBuilder {
-    pub fn new(text: impl Into<String>) -> Self {
+    /// Static text, a Signal, or a live closure. Passing `get()`'s result creates no
+    /// leaf binding; the read still subscribes its enclosing effect/memo.
+    #[track_caller]
+    pub fn new(text: impl IntoNodeText) -> Self {
         Self {
-            el: Element::new().text(text.into()),
+            el: Element::new().text(text),
         }
     }
 
@@ -117,12 +120,14 @@ impl crate::core::tree::IntoElementList for TextBuilder {
     }
 }
 
-pub fn text(content: impl Into<String>) -> TextBuilder {
+/// Text leaf with the same live binding support as [`Element::text`].
+#[track_caller]
+pub fn text(content: impl IntoNodeText) -> TextBuilder {
     TextBuilder::new(content)
 }
 
 pub fn icon(glyph: impl Into<String>) -> TextBuilder {
-    let mut b = TextBuilder::new(glyph)
+    let mut b = TextBuilder::new(Into::<String>::into(glyph))
         .family("lucide")
         .color(crate::style::parse_text_color("foreground"));
     b.el = b.el.pointer_events("bounding-box");
@@ -133,6 +138,24 @@ pub fn icon(glyph: impl Into<String>) -> TextBuilder {
 mod tests {
     use super::*;
     use crate::renderer::{GlyphFxKind, ATTR_GLYPH_FX};
+
+    #[test]
+    fn text_constructor_keeps_owned_and_borrowed_static_inputs() {
+        let owned = "caption".to_string();
+        let leaves: [Element; 6] = [
+            text("caption").into(),
+            text(owned.clone()).into(),
+            text(&owned).into(),
+            text(std::borrow::Cow::Borrowed("caption")).into(),
+            text("caption".to_owned().into_boxed_str()).into(),
+            text('字').into(),
+        ];
+        for el in &leaves[..5] {
+            assert_eq!(el.text.as_deref(), Some("caption"));
+            assert!(el.template_id.is_none());
+        }
+        assert_eq!(leaves[5].text.as_deref(), Some("字"));
+    }
 
     #[test]
     fn glyph_fx_attr_roundtrip() {

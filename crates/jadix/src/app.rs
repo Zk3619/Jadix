@@ -15,8 +15,9 @@ pub(super) enum JadixUserEvent {
         options: Box<WindowOptions>,
         builder: SecondaryUiBuilder,
     },
-    /// Drop a secondary window (custom chrome Close).
+    /// Close a window through the lifecycle policy (custom chrome Close).
     CloseWindow { id: WindowId },
+    SecondInstance(instance::InstanceLaunch),
     #[cfg(feature = "a11y")]
     AccessKit(crate::a11y::winit_adapter::Event),
     /// Request a clean event-loop exit (tray Quit / [`ui_bridge::request_exit`]).
@@ -34,6 +35,7 @@ impl std::fmt::Debug for JadixUserEvent {
                 .field("builder", &"SecondaryUiBuilder(..)")
                 .finish(),
             Self::CloseWindow { id } => f.debug_struct("CloseWindow").field("id", id).finish(),
+            Self::SecondInstance(launch) => f.debug_tuple("SecondInstance").field(launch).finish(),
             #[cfg(feature = "a11y")]
             Self::AccessKit(ev) => f.debug_tuple("AccessKit").field(ev).finish(),
             Self::Exit => f.write_str("Exit"),
@@ -50,6 +52,7 @@ impl From<crate::a11y::winit_adapter::Event> for JadixUserEvent {
 
 pub mod damage;
 pub(crate) mod draw_cull;
+pub(crate) mod frame_budget;
 pub mod frame_stats;
 #[cfg(debug_assertions)]
 mod hmr_log;
@@ -64,14 +67,17 @@ pub use ime_support::{
 #[cfg(all(test, windows, feature = "native-menu"))]
 mod desktop_contract_tests;
 pub mod entry;
+pub mod instance;
 mod error_boundary;
 mod frame_pacing;
 mod glass_gpu;
 mod input_controller;
+pub mod icons;
+pub mod invalidation;
 pub mod keyed_list;
 mod lifecycle;
 #[cfg(any(
-    feature = "system-tray",
+    all(feature = "system-tray", any(windows, target_os = "macos", target_os = "linux")),
     all(feature = "native-menu", any(windows, target_os = "macos"))
 ))]
 mod menu_events;
@@ -105,6 +111,8 @@ pub(crate) mod tree_hit;
 pub mod ui_bridge;
 pub(crate) mod window_chrome;
 mod window_events;
+#[cfg(all(test, windows))]
+mod desktop_window_tests;
 pub mod window_keys;
 pub(crate) mod window_lifecycle;
 pub(crate) mod window_scope;
@@ -112,6 +120,8 @@ pub(crate) mod window_scope;
 pub use entry::{app, launch, AppBuilder, AppConfig};
 pub use error_boundary::{error_boundary, throw_error, throw_resource_error};
 pub use frame_pacing::set_frame_rate_limit;
+pub use icons::AppIcon;
+pub use instance::{set_second_instance_handler, InstanceLaunch, InstancePolicy};
 pub use multi_window::{
     current_window, open_secondary_window, open_secondary_window_title_only,
     open_secondary_window_with, shared_slot, windows, WindowHandle,
@@ -125,9 +135,9 @@ pub use router::Router;
 pub use tray::{system_tray_native, tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};
 pub use ui_bridge::{request_exit, run_on_ui_thread, spawn_blocking};
 pub use window_chrome::{
-    close_window, set_window_maximized, set_window_minimized, start_window_drag,
-    toggle_window_maximized, window_is_maximized, window_is_resizable, WindowBackdrop,
-    WindowOptions, PRIMARY_WINDOW_LABEL,
+    close_window, set_window_fullscreen, set_window_maximized, set_window_minimized, start_window_drag,
+    toggle_window_fullscreen, toggle_window_maximized, window_is_fullscreen, window_is_maximized,
+    window_is_resizable, WindowBackdrop, WindowOptions, PRIMARY_WINDOW_LABEL,
 };
 pub use window_lifecycle::{set_window_lifecycle_hook, WindowLifecycleHook};
 
@@ -160,6 +170,10 @@ struct LongPressTrack {
 }
 
 struct App {
+    detached_gpu: Option<lifecycle::DetachedGpu>,
+    primary_owner: Option<crate::core::reactivity::OwnerHandle>,
+    instance_guard: Option<instance::InstanceGuard>,
+    window_modifiers: std::collections::HashMap<WindowId, ModifiersState>,
     frame_pacers: std::collections::HashMap<WindowId, frame_pacing::FramePacer>,
     state: std::rc::Rc<std::cell::RefCell<Option<AppState>>>,
     is_suspended: bool,

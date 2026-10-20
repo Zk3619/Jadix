@@ -9,7 +9,7 @@ use super::generator::cycle_duration_clock;
 
 thread_local! {
     static CLOCK: RefCell<Option<Instant>> = const { RefCell::new(None) };
-    #[cfg(all(test, target_os = "windows", feature = "svg"))]
+    #[cfg(all(test, target_os = "windows"))]
     static TEST_TIME: std::cell::Cell<Option<f32>> = const { std::cell::Cell::new(None) };
     static TIMELINES: RefCell<Vec<Weak<RefCell<TimelineInner>>>> = const { RefCell::new(Vec::new()) };
 }
@@ -123,7 +123,7 @@ pub fn any_timeline_playing() -> bool {
     })
 }
 pub fn global_time_s() -> f32 {
-    #[cfg(all(test, target_os = "windows", feature = "svg"))]
+    #[cfg(all(test, target_os = "windows"))]
     if let Some(time) = TEST_TIME.with(|clock| clock.get()) {
         return time;
     }
@@ -134,7 +134,7 @@ pub fn global_time_s() -> f32 {
     })
 }
 
-#[cfg(all(test, target_os = "windows", feature = "svg"))]
+#[cfg(all(test, target_os = "windows"))]
 pub(crate) fn set_global_time_for_test(time: Option<f32>) {
     TEST_TIME.with(|clock| clock.set(time));
 }

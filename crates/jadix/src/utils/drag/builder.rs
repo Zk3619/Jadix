@@ -2336,6 +2336,7 @@ pub struct DroppableBuilder {
     accept: String,
     group: String,
     list: Option<String>,
+    sortable: bool,
     disabled: bool,
     opacity: Option<f32>,
     /// Sortable insert / FLIP axis for this list. `None` inherits the provider.
@@ -2349,6 +2350,7 @@ pub fn droppable(id: impl Into<String>) -> DroppableBuilder {
         accept: String::new(),
         group: String::new(),
         list: None,
+        sortable: true,
         disabled: false,
         opacity: None,
         direction: None,
@@ -2357,6 +2359,11 @@ pub fn droppable(id: impl Into<String>) -> DroppableBuilder {
 }
 
 impl DroppableBuilder {
+    /// Disable list packing and insert previews for a plain drop target.
+    pub fn sortable(mut self, sortable: bool) -> Self {
+        self.sortable = sortable;
+        self
+    }
     pub fn accept(mut self, accept: impl Into<String>) -> Self {
         self.accept = accept.into();
         self
@@ -2465,6 +2472,7 @@ fn assemble_droppable(
     let accept = cfg.accept;
     let group = cfg.group;
     let list = cfg.list.unwrap_or_else(|| id.clone());
+    let sortable = cfg.sortable;
     let disabled = cfg.disabled;
     let rest_opacity = cfg.opacity;
     let direction = cfg.direction;
@@ -2490,7 +2498,9 @@ fn assemble_droppable(
             el = el.opacity(o);
         }
         el.set_attr(ATTR_DRAG_DROPPABLE, &id_mark);
-        el.set_attr(ATTR_DRAG_LIST, &list);
+        if sortable {
+            el.set_attr(ATTR_DRAG_LIST, &list);
+        }
         if !accept.is_empty() {
             el.set_attr(ATTR_DRAG_ACCEPT, &accept);
         }
@@ -2516,7 +2526,7 @@ fn assemble_droppable(
             true,
             "",
             &accept,
-            Some(list.as_str()),
+            sortable.then_some(list.as_str()),
             None,
             &group,
             disabled,
@@ -2536,6 +2546,13 @@ fn assemble_droppable(
                 .as_ref()
                 .map(|p| p.run(el, lt))
                 .unwrap_or(LayoutStatus::Clean);
+            if !sortable {
+                let over = active_droppable.peek().as_deref() == Some(id_chrome.as_str());
+                if write_flag_attr(el, ATTR_DRAG_OVER, over) {
+                    st = st.merge(LayoutStatus::StyleChanged);
+                }
+                return st;
+            }
             st = st.merge(apply_live_droppable_chrome(
                 el,
                 &scope_chrome,

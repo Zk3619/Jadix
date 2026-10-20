@@ -2,6 +2,8 @@
 // mode: 0 copy, 1 colorMatrix, 2 blurH, 3 blurV, 4 offset, 5 flood,
 // 6 composite, 7 blend, 8 dilate, 9 erode, 10 convolve, 11 displacement,
 // 12 tile, 13 turbulence, 14 componentTransfer, 15 diffuse, 16 specular, 17 image
+// Specialize only the primitive being drawn; -1 retains the dynamic pixel oracle.
+override FILTER_MODE: f32 = -1.0;
 
 struct VertexInput {
     @location(0) position: vec2<f32>,
@@ -305,7 +307,7 @@ fn height_normal(uv: vec2<f32>, scale: f32) -> vec3<f32> {
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
-    let mode = u.mode;
+    let mode = select(u.mode, FILTER_MODE, FILTER_MODE >= 0.0);
     let uv = in.uv;
 
     if (mode < 0.5) {

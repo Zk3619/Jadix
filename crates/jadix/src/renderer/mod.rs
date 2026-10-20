@@ -1,6 +1,7 @@
 //! GPU 与文本渲染：管线、实例数据、glyphon 封装及每帧文本准备。
 
 pub mod backdrop_blur;
+pub(crate) mod buffer_upload;
 pub mod compute;
 pub mod cpu_text;
 pub mod css_filter;

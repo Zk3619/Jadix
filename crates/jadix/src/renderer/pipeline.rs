@@ -315,11 +315,11 @@ pub struct JadixPipeline {
     _dummy_backdrop_tex: wgpu::Texture,
     _dummy_backdrop_sampler: wgpu::Sampler,
     globals_clip_poly_buffer: wgpu::Buffer,
-    clip_poly_buffer: wgpu::Buffer,
+    clip_poly_buffer: super::buffer_upload::RetainedBuffer,
     clip_poly_none_buffer: wgpu::Buffer,
-    clip_poly_capacity: usize,
     main_clip_needed: Vec<bool>,
     premultiply: f32,
+    resolution: std::sync::Mutex<[u32; 2]>,
 }
 
 impl JadixPipeline {
@@ -385,11 +385,12 @@ impl JadixPipeline {
             contents: bytemuck::bytes_of(&clip_none),
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
-        let clip_poly_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Clip poly storage"),
-            contents: bytemuck::bytes_of(&clip_none),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
+        let clip_poly_buffer = super::buffer_upload::RetainedBuffer::new(
+            device,
+            "Clip poly storage",
+            wgpu::BufferUsages::STORAGE,
+            bytemuck::bytes_of(&clip_none),
+        );
 
         let bind_group_layout = Self::create_bind_group_layout(device);
         let backdrop_bgl = Self::create_backdrop_bind_group_layout(device);
@@ -405,7 +406,7 @@ impl JadixPipeline {
             device,
             &bind_group_layout,
             &globals_clip_poly_buffer,
-            &clip_poly_buffer,
+            &clip_poly_buffer.buffer,
         );
         let render_pipeline =
             Self::make_render_pipeline(device, config, &shader, &bind_group_layout, &backdrop_bgl);
@@ -480,9 +481,9 @@ impl JadixPipeline {
             globals_clip_poly_buffer,
             clip_poly_buffer,
             clip_poly_none_buffer,
-            clip_poly_capacity: 1,
             main_clip_needed: Vec::new(),
             premultiply,
+            resolution: std::sync::Mutex::new([config.width, config.height]),
         }
     }
 
@@ -756,27 +757,18 @@ impl JadixPipeline {
         polys: &[crate::style::GpuClipPoly],
     ) {
         self.main_clip_needed.clear();
-        let data: Vec<crate::style::GpuClipPoly> = if polys.is_empty() {
-            vec![crate::style::GpuClipPoly::NONE]
-        } else {
-            polys.to_vec()
-        };
-        let bytes = bytemuck::cast_slice(&data);
-        if data.len() > self.clip_poly_capacity {
-            self.clip_poly_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                label: Some("Clip poly storage"),
-                contents: bytes,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-            });
-            self.clip_poly_capacity = data.len();
+        let none = [crate::style::GpuClipPoly::NONE];
+        let data = if polys.is_empty() { &none[..] } else { polys };
+        if self
+            .clip_poly_buffer
+            .upload(device, queue, bytemuck::cast_slice(data))
+        {
             self.bind_group_clip_poly = Self::make_bind_group(
                 device,
                 &self.bind_group_layout,
                 &self.globals_clip_poly_buffer,
-                &self.clip_poly_buffer,
+                &self.clip_poly_buffer.buffer,
             );
-        } else {
-            queue.write_buffer(&self.clip_poly_buffer, 0, bytes);
         }
     }
 
@@ -809,7 +801,7 @@ impl JadixPipeline {
                 device,
                 &self.bind_group_layout,
                 &self.globals_clip_poly_buffer,
-                &self.clip_poly_buffer,
+                &self.clip_poly_buffer.buffer,
             );
             let render_pipeline = Self::make_render_pipeline(
                 device,
@@ -1061,6 +1053,10 @@ impl JadixPipeline {
     }
 
     pub fn update_resolution(&self, queue: &wgpu::Queue, width: u32, height: u32) {
+        let mut resolution = self.resolution.lock().unwrap();
+        if *resolution == [width, height] {
+            return;
+        }
         let globals = Globals::new(width as f32, height as f32, self.premultiply);
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::cast_slice(&[globals]));
         queue.write_buffer(
@@ -1071,6 +1067,7 @@ impl JadixPipeline {
                 ..globals
             }]),
         );
+        *resolution = [width, height];
     }
 }
 

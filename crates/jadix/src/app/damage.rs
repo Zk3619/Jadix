@@ -2544,6 +2544,101 @@ fn distant_culled_edges_must_not_repaint_the_middle_of_a_4k_viewport() {
     assert!(pins.iter().all(|r| r[3] <= 44.0));
 }
 
+/// Collection can reveal a new slot or resize a clipped texture as it enters
+/// the viewport. Previously clipped glyph rows may land inside the copied
+/// overlap, where the exposed strip cannot restore them. Repaint changed ink;
+/// ordinary translated slots keep their retained pixels. Only text/texture owners
+/// need resize repair: clipping an ancestor box does not rerasterize its ink.
+pub fn changed_scroll_blit_pins(
+    previous_slots: &[(u64, [f32; 4])],
+    current_slots: &[(u64, [f32; 4])],
+    raster_owners: &HashSet<u64>,
+    viewports: &[[f32; 4]],
+    deltas: &[[f32; 2]],
+) -> Vec<[f32; 4]> {
+    let previous: HashMap<u64, [f32; 4]> = previous_slots.iter().copied().collect();
+    let mut pins = Vec::new();
+    for (key, bounds) in current_slots {
+        let prev = previous.get(key);
+        if prev.is_some_and(|p| {
+            !raster_owners.contains(key)
+                || ((p[2] - bounds[2]).abs() <= 0.5 && (p[3] - bounds[3]).abs() <= 0.5)
+        }) {
+            continue;
+        }
+        for (i, viewport) in viewports.iter().enumerate() {
+            let current = intersect_rects(*bounds, *viewport);
+            let old = prev.and_then(|p| {
+                let delta = deltas.get(i).copied().unwrap_or([0.0; 2]);
+                intersect_rects([p[0] - delta[0], p[1] - delta[1], p[2], p[3]], *viewport)
+            });
+            if let Some(pin) = match (current, old) {
+                (Some(a), Some(b)) => Some(union_rects(a, b)),
+                (a, b) => a.or(b),
+            } {
+                pins.push(pin);
+            }
+        }
+    }
+    pins
+}
+
+#[cfg(test)]
+#[test]
+fn newly_collected_overflow_ink_repairs_the_retained_scroll_overlap() {
+    let viewport = [0.0, 0.0, 300.0, 240.0];
+    let previous = [(1, [0.0, 200.0, 300.0, 40.0])];
+    let current = [
+        (1, [0.0, 170.0, 300.0, 40.0]),
+        (2, [60.0, 192.0, 180.0, 80.0]),
+        (3, [0.0, 300.0, 300.0, 20.0]),
+    ];
+    assert_eq!(
+        changed_scroll_blit_pins(
+            &previous,
+            &current,
+            &HashSet::from([1]),
+            &[viewport],
+            &[[0.0, 30.0]]
+        ),
+        vec![[60.0, 192.0, 180.0, 48.0]],
+    );
+}
+
+#[cfg(test)]
+#[test]
+fn resized_clipped_ink_repairs_both_old_and_new_coverage() {
+    let viewport = [0.0, 0.0, 300.0, 240.0];
+    let previous = [
+        (1, [60.0, 210.0, 180.0, 40.0]),
+        (2, [20.0, 100.0, 30.0, 30.0]),
+    ];
+    let current = [
+        (1, [60.0, 180.0, 180.0, 60.0]),
+        (2, [20.0, 70.0, 30.0, 60.0]),
+    ];
+    assert_eq!(
+        changed_scroll_blit_pins(
+            &previous,
+            &current,
+            &HashSet::from([1]),
+            &[viewport],
+            &[[0.0, 30.0]]
+        ),
+        vec![[60.0, 180.0, 180.0, 60.0]],
+    );
+    assert_eq!(
+        changed_scroll_blit_pins(
+            &current,
+            &previous,
+            &HashSet::from([1]),
+            &[viewport],
+            &[[0.0, -30.0]]
+        ),
+        vec![[60.0, 210.0, 180.0, 30.0]],
+    );
+}
+
 /// True when some page slot translated but is not a named Node dirty (dest-reset
 /// cannot wipe its previous Y). Callers FullClear unless a scroll layer owns it.
 pub fn unnamed_translated_page_slots(
@@ -2922,13 +3017,18 @@ pub fn overlay_needs_scroll_blit_pin(overlay: [f32; 4], viewports: &[[f32; 4]]) 
 /// Sticky descendants of `root` with a non-empty layout box.
 pub fn sticky_layout_bounds(root: &Element) -> Vec<[f32; 4]> {
     let mut out = Vec::new();
-    crate::core::tree::walk_elements(root, |el| {
+    crate::core::tree::walk_elements_pruned(root, |el| {
+        // Collect already stamps this subtree summary. Unstamped callers still walk.
+        if el.collect_paint_hash != 0 && !el.collect_skip_scroll_pin {
+            return false;
+        }
         if el.style.position_sticky {
             let b = el.layout_bounds;
             if b[2] > 0.0 && b[3] > 0.0 {
                 out.push(b);
             }
         }
+        true
     });
     out
 }
@@ -3124,13 +3224,16 @@ pub fn focused_input_caret_scroll_blit_pins(
         return Vec::new();
     }
     let mut out = Vec::new();
-    crate::core::tree::walk_elements(root, |el| {
+    crate::core::tree::walk_elements_pruned(root, |el| {
+        if el.collect_paint_hash != 0 && !el.collect_skip_live {
+            return false;
+        }
         if el.text_style.input_caret.is_none() {
-            return;
+            return true;
         }
         let b = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
         if !overlay_needs_scroll_blit_pin(b, blit_viewports) {
-            return;
+            return true;
         }
         // Pad covers the I-beam hairline and a plain_chrome parent Hard-ring outset.
         let pad = 8.0;
@@ -3140,6 +3243,7 @@ pub fn focused_input_caret_scroll_blit_pins(
             (b[2] + pad * 2.0).max(0.0),
             (b[3] + pad * 2.0).max(0.0),
         ]);
+        true
     });
     out
 }
@@ -3158,28 +3262,34 @@ pub fn overlay_scrollbar_scroll_blit_pins(
         return Vec::new();
     }
     let mut out = Vec::new();
-    crate::core::tree::walk_elements(root, |el| {
+    crate::core::tree::walk_elements_pruned(root, |el| {
+        // The collect stamp includes scrollbar chrome, so idle content branches
+        // cannot contain a rail. Unstamped callers still search the whole tree.
+        if el.collect_paint_hash != 0 && !el.collect_skip_scroll_pin {
+            return false;
+        }
         let Some(fid) = el.focus_id.as_deref() else {
-            return;
+            return true;
         };
         let Some(rest_axis) =
             fid.strip_prefix(crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
         else {
-            return;
+            return true;
         };
         let (rest, _) = rest_axis.rsplit_once(':').unwrap_or((rest_axis, "y"));
         if !viewport_ids.iter().any(|id| id == rest) {
-            return;
+            return true;
         }
         let overlay = el.attrs.get("jadix_scrollbar_overlay").map(String::as_str) == Some("1")
             || el.style.position == taffy::style::Position::Absolute;
         if !overlay {
-            return;
+            return true;
         }
         let b = el.layout_bounds;
         if overlay_needs_scroll_blit_pin(b, blit_viewports) {
             out.push(b);
         }
+        true
     });
     out
 }
@@ -6856,6 +6966,22 @@ mod tests {
             disjoint.is_empty(),
             "rails of other viewports must not pin, got {disjoint:?}"
         );
+
+        // Layout-only ancestors must retain the rail in the subtree summary.
+        let mut root = Element::new()
+            .child(Element::new().child(root))
+            .child(Element::new().child(Element::new()));
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, false);
+        assert_eq!(
+            overlay_scrollbar_scroll_blit_pins(&root, &[String::from("sa-main")], &[vp]),
+            pins
+        );
+        let track = &mut root.children[0].children[0].children[0];
+        track.focus_id = None;
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, false);
+        assert!(
+            overlay_scrollbar_scroll_blit_pins(&root, &[String::from("sa-main")], &[vp]).is_empty()
+        );
     }
 
     #[test]
@@ -7022,5 +7148,30 @@ mod tests {
             focused_input_caret_scroll_blit_pins(&idle, &[vp]).is_empty(),
             "leaf without input_caret must not pin"
         );
+    }
+    #[test]
+    fn stamped_scroll_pins_match_unstamped_tree_after_content_changes() {
+        let mut sticky = Element::new();
+        sticky.style.position_sticky = true;
+        sticky.layout_bounds = [10.0, 20.0, 100.0, 30.0];
+        let mut caret = Element::new();
+        caret.layout_bounds = [40.0, 60.0, 120.0, 24.0];
+        caret.text_style.input_caret = Some(crate::style::InputCaretDraw::default());
+        let mut root = Element::new().child(Element::new().child(sticky).child(caret));
+        root.children.push(Element::new().child(Element::new()));
+        let viewport = [[0.0, 0.0, 400.0, 320.0]];
+        let expected_sticky = sticky_layout_bounds(&root);
+        let expected_caret = focused_input_caret_scroll_blit_pins(&root, &viewport);
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, false);
+        assert_eq!(sticky_layout_bounds(&root), expected_sticky);
+        assert_eq!(
+            focused_input_caret_scroll_blit_pins(&root, &viewport),
+            expected_caret
+        );
+        root.children[0].children[0].style.position_sticky = false;
+        root.children[0].children[1].text_style.input_caret = None;
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, false);
+        assert!(sticky_layout_bounds(&root).is_empty());
+        assert!(focused_input_caret_scroll_blit_pins(&root, &viewport).is_empty());
     }
 }

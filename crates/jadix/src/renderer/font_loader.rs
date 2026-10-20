@@ -12,6 +12,7 @@
 //! 3. Before shaping a string, [`ensure_coverage_for_text`] opens only the faces
 //!    required by the codepoints actually present.
 
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 #[cfg(any(
@@ -22,7 +23,6 @@ use std::path::{Path, PathBuf};
     feature = "bundled-symbols"
 ))]
 use std::sync::Arc;
-use std::sync::{Mutex, OnceLock};
 
 use glyphon::fontdb::Database;
 #[cfg(any(
@@ -110,7 +110,7 @@ impl ScriptNeeds {
 
 #[derive(Default)]
 struct LazyFontState {
-    /// Scripts we have already *tried* to open globally (avoid repeated failed FS scans).
+    /// Scripts already tried on this thread (avoid repeated failed filesystem scans).
     attempted: ScriptNeeds,
     /// Paths that opened successfully at least once (diagnostic / mmap hint).
     loaded_paths: HashSet<String>,
@@ -219,13 +219,15 @@ fn emoji_coverage_present(db: &Database) -> bool {
     )
 }
 
-fn lazy_state() -> std::sync::MutexGuard<'static, LazyFontState> {
-    static LAZY_STATE: OnceLock<Mutex<LazyFontState>> = OnceLock::new();
-    LAZY_STATE
-        .get_or_init(|| Mutex::new(LazyFontState::default()))
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
+// Font systems are independent; never serialize their I/O and parsing across threads.
+thread_local! {
+    static LAZY_STATE: RefCell<LazyFontState> = RefCell::default();
 }
+
+fn with_lazy_state<R>(f: impl FnOnce(&mut LazyFontState) -> R) -> R {
+    LAZY_STATE.with_borrow_mut(f)
+}
+
 #[cfg(any(
     feature = "bundled-lucide",
     feature = "bundled-cjk",
@@ -607,107 +609,110 @@ pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
         return;
     }
 
-    let mut state = lazy_state();
-    // Global attempted avoids re-scanning missing files every frame, but each FontSystem
-    // still needs faces injected into *its* Database.
-    let mut todo = needs.minus_attempted(state.attempted);
-    {
-        let db = font_system.db();
-        if needs.cjk && !cjk_coverage_present(db) {
-            todo.cjk = true;
-        }
-        if needs.hangul && !hangul_coverage_present(db) {
-            todo.hangul = true;
-        }
-        if needs.thai && !thai_coverage_present(db) {
-            todo.thai = true;
-        }
-        if needs.symbols && !symbols_coverage_present(db) {
-            todo.symbols = true;
-        }
-        if needs.arabic && !arabic_coverage_present(db) {
-            todo.arabic = true;
-        }
-        if needs.devanagari && !devanagari_coverage_present(db) {
-            todo.devanagari = true;
-        }
-        // Emoji always uses slot layout + CustomGlyph quads — never inject CBDT into
-        // the UI DB (glyphon ignores text-color alpha for Color glyphs → slot leak).
-        // Rasters come from the isolated fallback FS (`ensure_emoji_font_fallback`).
-        // `JADIX_LOAD_SYSTEM_EMOJI=1` is a rare debug escape hatch only.
-        if needs.emoji && env_flag_enabled("JADIX_LOAD_SYSTEM_EMOJI") && !emoji_coverage_present(db)
+    with_lazy_state(|state| {
+        // Thread-local attempted avoids repeated scans, but each FontSystem
+        // still needs faces injected into *its* Database.
+        let mut todo = needs.minus_attempted(state.attempted);
         {
-            todo.emoji = true;
+            let db = font_system.db();
+            if needs.cjk && !cjk_coverage_present(db) {
+                todo.cjk = true;
+            }
+            if needs.hangul && !hangul_coverage_present(db) {
+                todo.hangul = true;
+            }
+            if needs.thai && !thai_coverage_present(db) {
+                todo.thai = true;
+            }
+            if needs.symbols && !symbols_coverage_present(db) {
+                todo.symbols = true;
+            }
+            if needs.arabic && !arabic_coverage_present(db) {
+                todo.arabic = true;
+            }
+            if needs.devanagari && !devanagari_coverage_present(db) {
+                todo.devanagari = true;
+            }
+            // Emoji always uses slot layout + CustomGlyph quads — never inject CBDT into
+            // the UI DB (glyphon ignores text-color alpha for Color glyphs → slot leak).
+            // Rasters come from the isolated fallback FS (`ensure_emoji_font_fallback`).
+            // `JADIX_LOAD_SYSTEM_EMOJI=1` is a rare debug escape hatch only.
+            if needs.emoji
+                && env_flag_enabled("JADIX_LOAD_SYSTEM_EMOJI")
+                && !emoji_coverage_present(db)
+            {
+                todo.emoji = true;
+            }
         }
-    }
-    if todo.is_empty() {
-        return;
-    }
+        if todo.is_empty() {
+            return;
+        }
 
-    // Mark attempted up-front. Defer emoji on the UI FS unless explicitly eager —
-    // slots + isolated fallback own color emoji.
-    let mut mark = todo;
-    let eager_emoji = env_flag_enabled("JADIX_LOAD_SYSTEM_EMOJI");
-    if todo.emoji && !eager_emoji {
-        mark.emoji = false;
-        todo.emoji = false;
-    }
-    state.attempted.merge(mark);
+        // Mark attempted up-front. Defer emoji on the UI FS unless explicitly eager —
+        // slots + isolated fallback own color emoji.
+        let mut mark = todo;
+        let eager_emoji = env_flag_enabled("JADIX_LOAD_SYSTEM_EMOJI");
+        if todo.emoji && !eager_emoji {
+            mark.emoji = false;
+            todo.emoji = false;
+        }
+        state.attempted.merge(mark);
 
-    // Emoji slots use an isolated raster FontSystem. Calling db_mut without
-    // loading a face still clears cosmic-text's font match cache.
-    if todo.is_empty() {
-        return;
-    }
+        // Emoji slots use an isolated raster FontSystem. Calling db_mut without
+        // loading a face still clears cosmic-text's font match cache.
+        if todo.is_empty() {
+            return;
+        }
 
-    let db = font_system.db_mut();
-    let mut loaded_any = false;
-    if todo.cjk {
-        log::info!("lazy-loading CJK fonts for coverage");
-        load_lazy_cjk(db, &mut state);
-        loaded_any = true;
-    }
-    if todo.hangul {
-        log::info!("lazy-loading Hangul fonts for coverage");
-        load_lazy_hangul(db, &mut state);
-        loaded_any = true;
-    }
-    if todo.thai {
-        log::info!("lazy-loading Thai fonts for coverage");
-        load_lazy_thai(db, &mut state);
-        loaded_any = true;
-    }
-    if todo.emoji {
-        log::info!("lazy-loading emoji fonts into UI FS (JADIX_LOAD_SYSTEM_EMOJI debug)");
-        state.attempted.emoji = true;
-        load_lazy_emoji(db, &mut state);
-        loaded_any = true;
-    }
-    if todo.symbols {
-        log::info!("lazy-loading symbol fonts for coverage");
-        load_lazy_symbols(db, &mut state);
-        loaded_any = true;
-    }
-    if todo.arabic {
-        log::info!("lazy-loading Arabic fonts for coverage");
-        load_lazy_arabic(db, &mut state);
-        loaded_any = true;
-    }
-    if todo.devanagari {
-        log::info!("lazy-loading Devanagari fonts for coverage");
-        load_lazy_devanagari(db, &mut state);
-        loaded_any = true;
-    }
+        let db = font_system.db_mut();
+        let mut loaded_any = false;
+        if todo.cjk {
+            log::info!("lazy-loading CJK fonts for coverage");
+            load_lazy_cjk(db, state);
+            loaded_any = true;
+        }
+        if todo.hangul {
+            log::info!("lazy-loading Hangul fonts for coverage");
+            load_lazy_hangul(db, state);
+            loaded_any = true;
+        }
+        if todo.thai {
+            log::info!("lazy-loading Thai fonts for coverage");
+            load_lazy_thai(db, state);
+            loaded_any = true;
+        }
+        if todo.emoji {
+            log::info!("lazy-loading emoji fonts into UI FS (JADIX_LOAD_SYSTEM_EMOJI debug)");
+            state.attempted.emoji = true;
+            load_lazy_emoji(db, state);
+            loaded_any = true;
+        }
+        if todo.symbols {
+            log::info!("lazy-loading symbol fonts for coverage");
+            load_lazy_symbols(db, state);
+            loaded_any = true;
+        }
+        if todo.arabic {
+            log::info!("lazy-loading Arabic fonts for coverage");
+            load_lazy_arabic(db, state);
+            loaded_any = true;
+        }
+        if todo.devanagari {
+            log::info!("lazy-loading Devanagari fonts for coverage");
+            load_lazy_devanagari(db, state);
+            loaded_any = true;
+        }
 
-    apply_default_families(db);
-    if loaded_any {
-        crate::utils::font::clear_resolve_family_cache();
-        crate::text::measure::invalidate_prepare_cache();
-    }
-    log::info!(
-        "font database after lazy load: {} faces",
-        font_system.db().len()
-    );
+        apply_default_families(db);
+        if loaded_any {
+            crate::utils::font::clear_resolve_family_cache();
+            crate::text::measure::invalidate_prepare_cache();
+        }
+        log::info!(
+            "font database after lazy load: {} faces",
+            font_system.db().len()
+        );
+    })
 }
 
 /// Open system color-emoji on an isolated FontSystem used by emoji raster fallback
@@ -716,15 +721,16 @@ pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
 /// Do **not** call this on the UI/layout FontSystem: glyphon ignores text color alpha
 /// for `SwashContent::Color`, so CBDT faces in the main DB paint through “hidden” slots.
 pub fn ensure_emoji_font_fallback(font_system: &mut FontSystem) {
-    let mut state = lazy_state();
-    let missing_in_db = !emoji_coverage_present(font_system.db());
-    if state.attempted.emoji && !missing_in_db {
-        return;
-    }
-    state.attempted.emoji = true;
-    log::info!("emoji raster fallback — lazy-loading system/user emoji font");
-    load_lazy_emoji(font_system.db_mut(), &mut state);
-    apply_default_families(font_system.db_mut());
+    with_lazy_state(|state| {
+        let missing_in_db = !emoji_coverage_present(font_system.db());
+        if state.attempted.emoji && !missing_in_db {
+            return;
+        }
+        state.attempted.emoji = true;
+        log::info!("emoji raster fallback — lazy-loading system/user emoji font");
+        load_lazy_emoji(font_system.db_mut(), state);
+        apply_default_families(font_system.db_mut());
+    })
 }
 
 /// Emoji rasters own a separate database; UI/icon faces and UI layout caches
@@ -807,8 +813,9 @@ fn load_eager_bundled_fonts(db: &mut Database, state: &mut LazyFontState) {
 
 /// Kept for debug binaries / callers that already hold a `Database`.
 pub fn load_bundled_fonts(db: &mut Database) {
-    let mut state = lazy_state();
-    load_eager_bundled_fonts(db, &mut state);
+    with_lazy_state(|state| {
+        load_eager_bundled_fonts(db, state);
+    })
 }
 
 fn resolve_locale() -> String {
@@ -822,45 +829,73 @@ fn resolve_locale() -> String {
 /// Build a [`FontSystem`] without scanning the entire OS font directory.
 pub fn create_font_system() -> FontSystem {
     let mut db = Database::new();
-    let mut state = lazy_state();
-
-    if env_flag_enabled("JADIX_LOAD_SYSTEM_FONTS") {
-        log::warn!("JADIX_LOAD_SYSTEM_FONTS=1 — loading ALL system fonts (high memory use)");
-        db.load_system_fonts();
-        state.attempted = ScriptNeeds {
-            cjk: true,
-            hangul: true,
-            thai: true,
-            emoji: true,
-            symbols: true,
-            arabic: true,
-            devanagari: true,
-        };
-    } else {
-        load_eager_system_ui_fonts(&mut db, &mut state);
-        // Opt-in eager CJK/emoji (overrides lazy default).
-        if env_flag_enabled("JADIX_LOAD_SYSTEM_CJK") {
-            load_lazy_cjk(&mut db, &mut state);
-            state.attempted.cjk = true;
+    with_lazy_state(|state| {
+        if env_flag_enabled("JADIX_LOAD_SYSTEM_FONTS") {
+            log::warn!("JADIX_LOAD_SYSTEM_FONTS=1 — loading ALL system fonts (high memory use)");
+            db.load_system_fonts();
+            state.attempted = ScriptNeeds {
+                cjk: true,
+                hangul: true,
+                thai: true,
+                emoji: true,
+                symbols: true,
+                arabic: true,
+                devanagari: true,
+            };
+        } else {
+            load_eager_system_ui_fonts(&mut db, state);
+            // Opt-in eager CJK/emoji (overrides lazy default).
+            if env_flag_enabled("JADIX_LOAD_SYSTEM_CJK") {
+                load_lazy_cjk(&mut db, state);
+                state.attempted.cjk = true;
+            }
+            if env_flag_enabled("JADIX_LOAD_SYSTEM_EMOJI") {
+                load_lazy_emoji(&mut db, state);
+                state.attempted.emoji = true;
+            }
         }
-        if env_flag_enabled("JADIX_LOAD_SYSTEM_EMOJI") {
-            load_lazy_emoji(&mut db, &mut state);
-            state.attempted.emoji = true;
-        }
-    }
 
-    load_eager_bundled_fonts(&mut db, &mut state);
+        load_eager_bundled_fonts(&mut db, state);
 
-    let face_count = db.len();
-    log::info!("font database ready: {face_count} faces (eager UI only; CJK/emoji lazy on demand)");
+        let face_count = db.len();
+        log::info!(
+            "font database ready: {face_count} faces (eager UI only; CJK/emoji lazy on demand)"
+        );
 
-    drop(state);
-    FontSystem::new_with_locale_and_db(resolve_locale(), db)
+        FontSystem::new_with_locale_and_db(resolve_locale(), db)
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warm_coverage_does_not_wait_for_another_threads_font_load() {
+        use std::sync::mpsc;
+        use std::time::{Duration, Instant};
+
+        let mut fs = create_font_system();
+        ensure_coverage_for_text(&mut fs, "中文");
+        let (ready_tx, ready_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let loader = std::thread::spawn(move || {
+            with_lazy_state(|_state| {
+                ready_tx.send(()).unwrap();
+                let _ = release_rx.recv_timeout(Duration::from_secs(2));
+            });
+        });
+        ready_rx.recv().unwrap();
+        let start = Instant::now();
+        ensure_coverage_for_text(&mut fs, "中文");
+        let elapsed = start.elapsed();
+        let _ = release_tx.send(());
+        loader.join().unwrap();
+        assert!(
+            elapsed < Duration::from_millis(400),
+            "warm coverage blocked for {elapsed:?}"
+        );
+    }
 
     #[test]
     fn unix_symbol_fallback_preserves_warm_font_caches() {

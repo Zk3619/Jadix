@@ -347,8 +347,8 @@ fn poison_taffy_thumb_height(layout: &mut LayoutTree, thumb: &Element, height: f
     let nid = thumb.layout_node.expect("thumb taffy node");
     let mut st = layout.taffy.style(nid).cloned().expect("thumb style");
     st.size.height = taffy::style::Dimension::length(height);
-    st.min_size.height = taffy::style::Dimension::length(height);
-    st.max_size.height = taffy::style::Dimension::length(height);
+    st.min_size.height = taffy::style::LengthPercentageAuto::length(height);
+    st.max_size.height = taffy::style::LengthPercentageAuto::length(height);
     layout.taffy.set_style(nid, st).expect("set thumb style");
     let root = layout.root_node.expect("root");
     layout

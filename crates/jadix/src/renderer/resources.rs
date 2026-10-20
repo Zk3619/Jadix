@@ -238,6 +238,13 @@ impl TexturePool {
         &mut self.map
     }
 
+    pub(crate) fn invalidate_text_textures(&mut self) {
+        self.map
+            .retain(|key, _| ResourceKind::from_key(key) != ResourceKind::TextXform);
+        self.meta
+            .retain(|_, meta| meta.kind != ResourceKind::TextXform);
+    }
+
     pub fn evict_if_needed(&mut self) {
         if self.map.len() <= self.max_entries {
             return;

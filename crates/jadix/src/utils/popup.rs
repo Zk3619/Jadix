@@ -1841,6 +1841,35 @@ mod tests {
     }
 
     #[test]
+    fn floating_panel_summary_tracks_mount_and_removal() {
+        use crate::layout::collect_cache::{
+            invalidate_collect_paint_hash_path, stamp_subtree_paint_hashes,
+        };
+        let mut root = Element::new().child(Element::new()).child(Element::new());
+        stamp_subtree_paint_hashes(&mut root, false);
+        assert!(!root.subtree_floating_panel);
+        let mut panel = Element::new();
+        panel.set_attr("jadix_select_menu", "compat");
+        root.children[1].children.push(panel);
+        invalidate_collect_paint_hash_path(&mut root, &[1]);
+        for stamped in [false, true] {
+            if stamped {
+                stamp_subtree_paint_hashes(&mut root, true);
+                assert!(root.subtree_floating_panel);
+                assert!(!root.children[0].subtree_floating_panel);
+            }
+            let mut found = 0;
+            visit_floating_panels(&root, |_| found += 1);
+            assert_eq!(found, 1);
+        }
+        root.children[1].children.clear();
+        invalidate_collect_paint_hash_path(&mut root, &[1]);
+        stamp_subtree_paint_hashes(&mut root, true);
+        assert!(!root.subtree_floating_panel);
+        visit_floating_panels(&root, |_| panic!("removed panel"));
+    }
+
+    #[test]
     fn identity_floating_skips_xy_even_with_trigger() {
         let mut btn = Element::new().w(40.0).h(20.0);
         btn = btn.focus_id("hud-btn");

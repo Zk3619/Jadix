@@ -20,6 +20,9 @@ pub mod components;
 pub mod i18n;
 /// 可选运行时日志（`--features runtime-logging`）：控制台 + `JADIX_LOG_FILE`。
 pub mod logging;
+/// Optional frame timing and OS resource sampling capability.
+#[cfg(feature = "performance")]
+pub mod performance;
 /// OS hooks + winit event-loop host (Windows / macOS / iOS / Android / Web;
 /// HarmonyOS via [`platform::set_external_host`]).
 /// 架构见 `docs/engine/platform.md`。
@@ -40,9 +43,10 @@ pub mod utils;
 #[cfg(test)]
 mod crate_tests;
 
-// Native drag regressions mount the Gallery source, including every provider.
-#[cfg(all(test, feature = "svg"))]
+// ui! expansions in crate-local tests use the public crate name.
+#[cfg(test)]
 extern crate self as jadix;
+// Native drag regressions mount the Gallery source, including every provider.
 #[cfg(all(test, feature = "svg"))]
 #[path = "../../../examples/gallery/src/imports.rs"]
 mod imports;
@@ -54,6 +58,11 @@ mod pages;
 #[allow(dead_code, non_snake_case)]
 #[path = "../../../examples/gallery/src/shared.rs"]
 mod shared;
+#[cfg(all(test, feature = "svg"))]
+pub(crate) fn gallery_icon() -> crate::app::AppIcon {
+    crate::app::AppIcon::from_bytes(include_bytes!("../../../examples/gallery/assets/app-icon.png"))
+        .expect("bundled Gallery icon")
+}
 #[cfg(all(test, feature = "svg"))]
 pub(crate) mod gallery_drag {
     pub(crate) use super::pages::drag::*;
@@ -551,8 +560,9 @@ pub use app::damage::{
     reset_frame_policy_counters, suppress_policy_counts, take_policy_snapshot, PolicySnapshot,
 };
 pub use app::frame_stats::{
-    last_patched_dl, last_scene_batches, last_skipped_siblings, patched_dl_count,
-    reset_collect_skip_counters, skipped_siblings_count, SceneBatches,
+    last_patched_dl, last_scene_batches, last_scene_uploads, last_skipped_siblings,
+    patched_dl_count, reset_collect_skip_counters, skipped_siblings_count, SceneBatches,
+    SceneUploads,
 };
 pub use app::pointer_events::{EventPhase, MouseEvent, PointerEvent};
 pub use app::props::{

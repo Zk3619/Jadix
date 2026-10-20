@@ -4,12 +4,71 @@
 //! ([`crate::layout::collect_cache`]). Structure / layout still FullClear GPU present.
 //! Scroll invalidates the viewport layer (scissor Clear), not the whole window.
 //!
+//! Timing and per-window presentation APIs require the optional `performance` feature.
+//!
 //! Enable a `log::info` line with `JADIX_FRAME_STATS=1` (`--features runtime-logging`).
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
-/// CPU-side frame work, including surface acquire/submit/present waits. GPU
-/// execution itself is asynchronous; these are deliberately not GPU timings.
+#[cfg(feature = "performance")]
+pub use super::frame_budget::{
+    ApplicationFrameSample, ApplicationFrameTimings, enable_application_frame_timings,
+    take_application_frame_timings,
+};
+
+/// Upload work for retained rect, textured-instance and polygon-clip streams
+/// on the most recent render attempt on this UI thread (including skipped presents).
+/// Excludes glyph atlases, images, uniforms and temporary effect/capture buffers.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SceneUploads {
+    pub source_bytes: u64,
+    pub uploaded_bytes: u64,
+    pub write_calls: u64,
+    pub reallocations: u64,
+}
+
+thread_local! {
+    static UPLOADS: std::cell::Cell<SceneUploads> = const { std::cell::Cell::new(SceneUploads {
+        source_bytes: 0, uploaded_bytes: 0, write_calls: 0, reallocations: 0,
+    }) };
+}
+
+pub fn last_scene_uploads() -> SceneUploads {
+    UPLOADS.with(|s| s.get())
+}
+
+pub(crate) fn begin_scene_uploads() {
+    UPLOADS.with(|s| s.set(SceneUploads::default()));
+}
+
+pub(crate) fn note_scene_upload(stats: SceneUploads) {
+    UPLOADS.with(|s| {
+        let mut total = s.get();
+        total.source_bytes += stats.source_bytes;
+        total.uploaded_bytes += stats.uploaded_bytes;
+        total.write_calls += stats.write_calls;
+        total.reallocations += stats.reallocations;
+        s.set(total);
+    });
+}
+
+pub(crate) fn log_scene_uploads(presented: bool) {
+    if frame_stats_log_enabled() {
+        let s = last_scene_uploads();
+        log::info!(
+            "[jadix] scene_uploads presented={presented} source_bytes={} uploaded_bytes={} writes={} reallocations={}",
+            s.source_bytes,
+            s.uploaded_bytes,
+            s.write_calls,
+            s.reallocations
+        );
+    }
+}
+
+#[cfg(feature = "performance")]
+/// Render-call work, including surface acquire/submit/present waits.
+/// Excludes event dispatch and post-render IME/semantics; use application timings
+/// for the complete event-loop CPU budget. Neither API measures GPU execution.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct FrameTimings {
     pub frames: u64,
@@ -19,35 +78,61 @@ pub struct FrameTimings {
     pub text_ms: f64,
 }
 
+#[cfg(feature = "performance")]
 thread_local! {
-    static TIMINGS: std::cell::Cell<Option<FrameTimings>> = const { std::cell::Cell::new(None) };
+    static TIMINGS: std::cell::RefCell<Option<std::collections::HashMap<winit::window::WindowId, FrameTimings>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Enable inexpensive timing accumulation on this UI thread.
+#[cfg(feature = "performance")]
+/// Enable inexpensive per-window timing accumulation on this UI thread.
 pub fn enable_frame_timings(enabled: bool) {
-    TIMINGS.with(|t| t.set(enabled.then(FrameTimings::default)));
+    TIMINGS.with(|t| *t.borrow_mut() = enabled.then(std::collections::HashMap::new));
 }
 
-/// Drain the current sample. Reading never requests a frame.
+#[cfg(feature = "performance")]
+/// Drain all windows' render-call work. Reading never requests a frame.
 pub fn take_frame_timings() -> FrameTimings {
     TIMINGS.with(|t| {
-        let sample = t.get();
-        if sample.is_some() {
-            t.set(Some(FrameTimings::default()));
+        let mut total = FrameTimings::default();
+        if let Some(windows) = t.borrow_mut().as_mut() {
+            for (_, sample) in windows.drain() {
+                total.frames += sample.frames;
+                total.total_ms += sample.total_ms;
+                total.worst_ms = total.worst_ms.max(sample.worst_ms);
+                total.layout_ms += sample.layout_ms;
+                total.text_ms += sample.text_ms;
+            }
         }
-        sample.unwrap_or_default()
+        total
     })
 }
 
-pub(crate) fn note_frame_timings(total_ms: f64, layout_ms: f64, text_ms: f64) {
+#[cfg(feature = "performance")]
+/// Drain only this window. Other windows' samples remain available.
+pub fn take_window_frame_timings(window: winit::window::WindowId) -> FrameTimings {
     TIMINGS.with(|t| {
-        if let Some(mut sample) = t.get() {
+        t.borrow_mut()
+            .as_mut()
+            .and_then(|windows| windows.remove(&window))
+            .unwrap_or_default()
+    })
+}
+
+#[cfg(feature = "performance")]
+pub(crate) fn note_frame_timings(
+    window: winit::window::WindowId,
+    total_ms: f64,
+    layout_ms: f64,
+    text_ms: f64,
+) {
+    TIMINGS.with(|t| {
+        if let Some(windows) = t.borrow_mut().as_mut() {
+            let sample = windows.entry(window).or_default();
             sample.frames += 1;
             sample.total_ms += total_ms;
             sample.worst_ms = sample.worst_ms.max(total_ms);
             sample.layout_ms += layout_ms;
             sample.text_ms += text_ms;
-            t.set(Some(sample));
         }
     });
 }
@@ -56,16 +141,185 @@ static SKIPPED_SIBLINGS: AtomicU64 = AtomicU64::new(0);
 static PATCHED_DL: AtomicU64 = AtomicU64::new(0);
 static LAST_SKIPPED: AtomicU64 = AtomicU64::new(0);
 static LAST_PATCHED: AtomicU64 = AtomicU64::new(0);
+#[cfg(feature = "performance")]
 static PRESENTED_FRAMES: AtomicU64 = AtomicU64::new(0);
 
+#[cfg(feature = "performance")]
 /// Cumulative surface frames actually submitted for presentation (all windows).
 /// Redraw requests that skip presentation do not increment this counter.
 pub fn presented_frames_count() -> u64 {
     PRESENTED_FRAMES.load(Ordering::Relaxed)
 }
 
-pub(crate) fn note_presented_frame() {
-    PRESENTED_FRAMES.fetch_add(1, Ordering::Relaxed);
+#[cfg(feature = "performance")]
+/// Actual surface-presentation requests from one window over the last second.
+/// Includes partial paints and HUD paints. This does not measure display scanout.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WindowPresentationStats {
+    pub frames: u64,
+    pub animation_active: bool,
+    pub sample_frames: u64,
+    pub content_sample_frames: u64,
+    pub sample_seconds: f64,
+    /// Actual presents / elapsed wall time; zero when no frames were presented.
+    pub fps: Option<f64>,
+    /// Presents excluding a presentation caused solely by the performance HUD update.
+    pub content_fps: Option<f64>,
+}
+
+#[cfg(feature = "performance")]
+#[derive(Clone, Copy)]
+struct Presentation {
+    at: std::time::Instant,
+    content: bool,
+}
+
+#[cfg(feature = "performance")]
+#[derive(Default)]
+struct WindowPresentationClock {
+    frames: u64,
+    started: Option<std::time::Instant>,
+    continuous: bool,
+    overlay_update_pending: bool,
+    presents: std::collections::VecDeque<Presentation>,
+}
+
+#[cfg(feature = "performance")]
+impl WindowPresentationClock {
+    const SAMPLE_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
+
+    fn note(&mut self, now: std::time::Instant) {
+        self.frames += 1;
+        self.started.get_or_insert(now);
+        self.presents.push_back(Presentation {
+            at: now,
+            content: !self.overlay_update_pending,
+        });
+        self.overlay_update_pending = false;
+        while self
+            .presents
+            .front()
+            .is_some_and(|present| now.saturating_duration_since(present.at) >= Self::SAMPLE_WINDOW)
+        {
+            self.presents.pop_front();
+        }
+    }
+
+    fn sample(&self, now: std::time::Instant) -> WindowPresentationStats {
+        let elapsed = self
+            .started
+            .map(|start| now.saturating_duration_since(start))
+            .unwrap_or_default()
+            .min(Self::SAMPLE_WINDOW);
+        let seconds = elapsed.as_secs_f64();
+        // The first presentation is the initial baseline, matching a counter delta.
+        let sample_frames = self
+            .presents
+            .iter()
+            .filter(|present| {
+                self.started.is_some_and(|start| present.at > start)
+                    && now.saturating_duration_since(present.at) < elapsed
+            })
+            .count() as u64;
+        let content_sample_frames = self
+            .presents
+            .iter()
+            .filter(|present| {
+                present.content
+                    && self.started.is_some_and(|start| present.at > start)
+                    && now.saturating_duration_since(present.at) < elapsed
+            })
+            .count() as u64;
+        WindowPresentationStats {
+            frames: self.frames,
+            animation_active: self.continuous,
+            sample_frames,
+            content_sample_frames,
+            sample_seconds: seconds,
+            fps: (seconds > 0.0).then(|| sample_frames as f64 / seconds),
+            content_fps: (seconds > 0.0).then(|| content_sample_frames as f64 / seconds),
+        }
+    }
+}
+
+#[cfg(feature = "performance")]
+thread_local! {
+    static WINDOW_PRESENTS: std::cell::RefCell<std::collections::HashMap<winit::window::WindowId, WindowPresentationClock>> = std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+#[cfg(feature = "performance")]
+/// Per-window presentation cadence. Reading does not request a redraw.
+pub fn window_presentation_stats(window: winit::window::WindowId) -> WindowPresentationStats {
+    WINDOW_PRESENTS.with(|counts| {
+        counts
+            .borrow()
+            .get(&window)
+            .map(|clock| clock.sample(std::time::Instant::now()))
+            .unwrap_or_default()
+    })
+}
+
+#[cfg(feature = "performance")]
+/// Record scheduling metadata. Frame rate never depends on animation flags.
+pub(crate) fn note_window_animation_activity(window: winit::window::WindowId, active: bool) {
+    WINDOW_PRESENTS.with(|counts| {
+        let mut counts = counts.borrow_mut();
+        let clock = counts.entry(window).or_default();
+        clock.continuous = active;
+    });
+}
+
+#[cfg(not(feature = "performance"))]
+pub(crate) fn note_window_animation_activity(_window: winit::window::WindowId, _active: bool) {}
+
+#[cfg(feature = "performance")]
+/// Exclude the next presentation caused by refreshing the diagnostic HUD from the
+/// content cadence. The total surface-present count remains unchanged.
+pub fn note_performance_overlay_update(window: winit::window::WindowId) {
+    WINDOW_PRESENTS.with(|counts| {
+        counts
+            .borrow_mut()
+            .entry(window)
+            .or_default()
+            .overlay_update_pending = true;
+    });
+}
+
+#[cfg(feature = "performance")]
+/// Cumulative frames submitted for presentation by this window, including overlays.
+/// Skipped redraws and frames from other windows are excluded.
+pub fn window_presented_frames_count(window: winit::window::WindowId) -> u64 {
+    WINDOW_PRESENTS.with(|counts| {
+        counts
+            .borrow()
+            .get(&window)
+            .map(|clock| clock.frames)
+            .unwrap_or(0)
+    })
+}
+
+pub(crate) fn forget_window_presentations(_window: winit::window::WindowId) {
+    #[cfg(feature = "performance")]
+    {
+        let _ = take_window_frame_timings(_window);
+        WINDOW_PRESENTS.with(|counts| counts.borrow_mut().remove(&_window));
+    }
+}
+
+pub(crate) fn note_presented_frame(_window: winit::window::WindowId) {
+    #[cfg(feature = "performance")]
+    {
+        let window = _window;
+        WINDOW_PRESENTS.with(|counts| {
+            counts
+                .borrow_mut()
+                .entry(window)
+                .or_default()
+                .note(std::time::Instant::now())
+        });
+        super::frame_budget::note_presented();
+        PRESENTED_FRAMES.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// Cumulative clean-subtree collect skips (replayed previous-frame ops).
@@ -186,6 +440,125 @@ pub fn last_scene_batches() -> SceneBatches {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "performance")]
+    #[test]
+    fn window_presentations_exclude_other_windows() {
+        let first = winit::window::WindowId::from_raw(1001);
+        let second = winit::window::WindowId::from_raw(1002);
+        forget_window_presentations(first);
+        forget_window_presentations(second);
+        note_presented_frame(first);
+        note_presented_frame(second);
+        note_presented_frame(first);
+        assert_eq!(window_presented_frames_count(first), 2);
+        assert_eq!(window_presented_frames_count(second), 1);
+        forget_window_presentations(first);
+        assert_eq!(window_presented_frames_count(first), 0);
+        forget_window_presentations(second);
+    }
+
+    #[cfg(feature = "performance")]
+    #[test]
+    fn window_fps_drops_history_when_presenting_slows_down() {
+        let start = std::time::Instant::now();
+        let mut clock = WindowPresentationClock::default();
+        for frame in 0..101 {
+            clock.note(start + std::time::Duration::from_millis(frame * 10));
+        }
+        // No animation flag is needed: these are actual surface presents.
+        for frame in 1..=2 {
+            clock.note(start + std::time::Duration::from_millis(1000 + frame * 500));
+        }
+        let measured = clock.sample(start + std::time::Duration::from_millis(2000));
+        assert_eq!(measured.fps, Some(2.0), "old fast frames must expire");
+        assert_eq!(
+            clock.sample(start + std::time::Duration::from_secs(4)).fps,
+            Some(0.0),
+            "no presents means zero rendered frames"
+        );
+    }
+
+    #[cfg(feature = "performance")]
+    #[test]
+    fn genuinely_slow_animation_is_not_hidden_as_idle() {
+        let start = std::time::Instant::now();
+        let mut frames = WindowPresentationClock {
+            continuous: true,
+            ..Default::default()
+        };
+        for tick in 0..5 {
+            frames.note(start + std::time::Duration::from_millis(tick * 500));
+        }
+        assert_eq!(
+            frames
+                .sample(start + std::time::Duration::from_millis(2100))
+                .fps,
+            Some(2.0)
+        );
+    }
+
+    #[cfg(feature = "performance")]
+    #[test]
+    fn idle_hud_updates_count_as_actual_presentations() {
+        let mut frames = WindowPresentationClock::default();
+        let start = std::time::Instant::now();
+        for tick in 0..5 {
+            frames.note(start + std::time::Duration::from_millis(tick * 500));
+        }
+        let sample = frames.sample(start + std::time::Duration::from_millis(2100));
+        assert_eq!(sample.frames, 5);
+        assert_eq!(sample.fps, Some(2.0));
+        assert_eq!(sample.sample_frames, 2);
+        assert_eq!(sample.sample_seconds, 1.0);
+    }
+
+    #[cfg(feature = "performance")]
+    #[test]
+    fn performance_hud_refresh_is_excluded_from_page_cadence() {
+        let mut frames = WindowPresentationClock::default();
+        let start = std::time::Instant::now();
+        frames.note(start);
+        frames.overlay_update_pending = true;
+        frames.note(start + std::time::Duration::from_millis(500));
+        let sample = frames.sample(start + std::time::Duration::from_millis(1000));
+        assert_eq!(sample.sample_frames, 1);
+        assert_eq!(sample.content_sample_frames, 0);
+        assert_eq!(sample.fps, Some(1.0));
+        assert_eq!(sample.content_fps, Some(0.0));
+    }
+
+    #[cfg(feature = "performance")]
+    #[test]
+    fn window_fps_expires_by_time_without_animation_metadata() {
+        let mut frames = WindowPresentationClock::default();
+        let start = std::time::Instant::now();
+        for frame in 0..20 {
+            frames.note(start + std::time::Duration::from_millis(frame * 16));
+        }
+        let live = frames.sample(start + std::time::Duration::from_millis(304));
+        assert!((live.fps.unwrap() - 62.5).abs() < 0.01);
+        assert_eq!(
+            frames.sample(start + std::time::Duration::from_secs(2)).fps,
+            Some(0.0)
+        );
+    }
+
+    #[cfg(feature = "performance")]
+    #[test]
+    fn render_timings_drain_only_the_requested_window() {
+        let first = winit::window::WindowId::from_raw(1001);
+        let second = winit::window::WindowId::from_raw(1002);
+        enable_frame_timings(true);
+        note_frame_timings(first, 12.0, 3.0, 2.0);
+        note_frame_timings(second, 99.0, 20.0, 8.0);
+        let sample = take_window_frame_timings(first);
+        assert_eq!(sample.frames, 1);
+        assert_eq!(sample.total_ms, 12.0);
+        assert_eq!(take_window_frame_timings(first).frames, 0);
+        assert_eq!(take_window_frame_timings(second).total_ms, 99.0);
+        enable_frame_timings(false);
+    }
 
     #[test]
     fn note_collect_skip_counts() {

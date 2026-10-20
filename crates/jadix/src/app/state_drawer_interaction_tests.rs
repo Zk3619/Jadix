@@ -113,7 +113,7 @@ fn compare_full(state: &Rc<RefCell<Option<AppState>>>) {
 }
 
 fn run_drawer(window: Arc<dyn Window>, direction: crate::components::drawer::DrawerDirection) {
-    use crate::app::pointer_events::{PointerEvent, PointerKind, dispatch_pointer, hit_path};
+    use crate::app::pointer_events::{dispatch_pointer, hit_path, PointerEvent, PointerKind};
     use crate::components::button::{Button, ButtonProps};
     use crate::components::drawer::*;
     use crate::components::label::{Label, LabelProps};

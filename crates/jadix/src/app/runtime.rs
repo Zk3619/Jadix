@@ -148,9 +148,11 @@ pub fn set_app_runtime(rt: AppRuntime) {
 }
 
 pub fn clear_app_runtime() {
+    super::invalidation::reset();
     APP_RUNTIME.with(|c| *c.borrow_mut() = None);
     for window in window_handles() {
         super::entry::forget_window_config(window.id());
+        super::frame_stats::forget_window_presentations(window.id());
     }
     WINDOWS.with(|c| c.borrow_mut().clear());
     PRIMARY.with(|c| c.set(None));
@@ -167,8 +169,13 @@ pub(crate) fn register_window(window: &Arc<dyn Window>, primary: bool) {
 }
 
 pub(crate) fn unregister_window(id: WindowId) {
+    if PRIMARY.with(|p| p.get()) == Some(id) {
+        super::invalidation::forget(window_scope::WindowScope::Primary);
+        PRIMARY.with(|p| p.set(None));
+    }
     WINDOWS.with(|c| c.borrow_mut().remove(&id));
     super::entry::forget_window_config(id);
+    super::frame_stats::forget_window_presentations(id);
 }
 
 /// Returns [`None`] if no runtime is installed (e.g. before first `resumed` or after teardown).
@@ -268,6 +275,61 @@ pub fn request_redraw() {
     APP_RUNTIME.with(|c| {
         if let Some(rt) = c.borrow().as_ref() {
             rt.request_redraw();
+        }
+    });
+}
+
+pub(super) fn apply_frame_invalidation(present: bool, caches: bool, nodes: &HashMap<String, bool>) {
+    APP_RUNTIME.with(|slot| {
+        let rt = slot.borrow().clone();
+        let Some(rt) = rt else { return };
+        match window_scope::tree_home_for(window_scope::active()) {
+            TreeHome::AppState => {
+                let Some(state) = rt.state.upgrade() else {
+                    return;
+                };
+                let mut state = state.borrow_mut();
+                let Some(state) = state.as_mut() else { return };
+                state.force_present |= present;
+                if caches {
+                    state.bust_text_caches();
+                }
+                for (id, layout) in nodes {
+                    state.update_element_by_template_id(id, |el| {
+                        super::invalidation::patch_node(el, *layout)
+                    });
+                    if *layout {
+                        let want = id.replace('\\', "/").to_ascii_lowercase();
+                        state.mark_requested_layout(&want);
+                    }
+                }
+            }
+            TreeHome::SecondarySlot => {
+                let Some(id) = AppRuntime::secondary_slot_id() else {
+                    return;
+                };
+                let Some(secs) = rt.secondaries.upgrade() else {
+                    return;
+                };
+                let mut secs = secs.borrow_mut();
+                let Some(sec) = secs.get_mut(&id) else { return };
+                if caches {
+                    sec.bust_text_caches();
+                }
+                for (id, layout) in nodes {
+                    sec.update_element_by_template_id(id, |el| {
+                        super::invalidation::patch_node(el, *layout)
+                    });
+                    if *layout {
+                        let want = id.replace('\\', "/").to_ascii_lowercase();
+                        if let Some(el) =
+                            crate::core::tree::find_by_template_id_mut(&mut sec.root_element, &want)
+                        {
+                            sec.layout_tree.mark_subtree_layout_dirty(el);
+                        }
+                    }
+                }
+            }
         }
     });
 }

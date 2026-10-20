@@ -197,7 +197,7 @@ fn apply_dialog_shell_surface(mut panel: Element, hug_content: bool) -> Element 
         panel = panel
             .p(0.0)
             .w("32rem")
-            .max_w("90dvw")
+            .max_w("100%")
             .flex_shrink(1.0)
             .min_h(0.0)
             .overflow_x("hidden")
@@ -205,11 +205,13 @@ fn apply_dialog_shell_surface(mut panel: Element, hug_content: bool) -> Element 
         panel.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
     } else {
         panel = panel
-            .p("1.5rem")
-            .max_w("85dvw")
+            .p("1rem")
+            .min_w(0.0)
+            .max_w("100%")
             .w("100%")
             .overflow_y("hidden")
             .overflow_x("hidden");
+        panel = crate::style::utility::with_default_class_list(panel, "sm:p-6");
     }
     panel
 }
@@ -228,7 +230,7 @@ fn apply_semantic_dialog_shell_surface(
         panel = panel
             .p(0.0)
             .w("32rem")
-            .max_w("90dvw")
+            .max_w("100%")
             .flex_shrink(1.0)
             .min_h(0.0)
             .overflow_x("hidden")
@@ -236,11 +238,13 @@ fn apply_semantic_dialog_shell_surface(
         panel.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
     } else {
         panel = panel
-            .p("1.5rem")
-            .max_w("85dvw")
+            .p("1rem")
+            .min_w(0.0)
+            .max_w("100%")
             .w("100%")
             .overflow_y("hidden")
             .overflow_x("hidden");
+        panel = crate::style::utility::with_default_class_list(panel, "sm:p-6");
     }
     panel
 }
@@ -316,7 +320,7 @@ pub(crate) fn dialog_shell_panel(
         // `min(content, 85dvh)` so the list — not a fake footer — absorbs leftover space.
         vstack()
             .w(panel_w)
-            .max_w("90dvw")
+            .max_w("calc(100dvw - 2rem)")
             .max_h("85dvh")
             .min_h(0.0)
             .flex_shrink(0.0)
@@ -325,7 +329,7 @@ pub(crate) fn dialog_shell_panel(
     } else {
         vstack()
             .w(panel_w)
-            .max_w("85dvw")
+            .max_w("calc(100dvw - 2rem)")
             .max_h("85dvh")
             .flex_shrink(0.0)
             .min_h("0")
@@ -638,18 +642,23 @@ pub fn DialogBody(children: Option<Element>) -> Element {
         .into()
 }
 
-/// 固定底栏（不滚动）。
+/// 固定底栏：窄窗口纵向排列，`sm` 起横向排列并允许换行。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn DialogFooter(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    Element::from(
-        crate::primitives::r#box::hstack()
-            .w("100%")
-            .gap("0.5rem")
-            .justify("end")
-            .flex_shrink(0.0)
-            .children(kids),
+    crate::style::utility::with_default_class_list(
+        Element::from(
+            crate::primitives::r#box::vstack()
+                .w("100%")
+                .min_w(0.0)
+                .gap("0.5rem")
+                .items("stretch")
+                .flex_shrink(0.0)
+                .wrap("wrap")
+                .children(kids),
+        ),
+        "sm:flex-row sm:justify-end sm:items-center",
     )
 }
 
@@ -753,6 +762,106 @@ mod tests {
         default_modal_overlay_color, ShellOverlayOpts, DEFAULT_MODAL_OVERLAY_BLUR,
         DEFAULT_MODAL_OVERLAY_OPACITY,
     };
+
+    #[test]
+    fn responsive_modal_actions_fit_narrow_windows_and_restore_desktop_rows() {
+        use crate::style::{resolve_class_variants, VariantContext};
+        use taffy::style::FlexDirection;
+
+        crate::core::reactivity::create_root(|| {
+            let actions = || {
+                let mut pack = Element::new();
+                pack.set_attr("jadix_fragment", "1");
+                pack.children(vec![
+                    button("responsive-cancel").text("Cancel changes").into(),
+                    button("responsive-confirm").text("Save changes").into(),
+                ])
+            };
+            for mut footer in [
+                DialogFooter(DialogFooterProps {
+                    children: Some(actions()),
+                    base: None,
+                }),
+                crate::components::alert_dialog::AlertDialogFooter(
+                    crate::components::alert_dialog::AlertDialogFooterProps {
+                        children: Some(actions()),
+                        base: None,
+                    },
+                ),
+            ] {
+                footer = footer.class("gap-3");
+                let mut root = Element::new().child(footer);
+                let mut tree = LayoutTree::new();
+                for width in [320.0, 639.5, 640.0, 1024.0, 320.0] {
+                    resolve_class_variants(
+                        &mut root.children[0],
+                        &VariantContext {
+                            viewport_w: width,
+                            ..Default::default()
+                        },
+                    );
+                    assert_eq!(
+                        root.children[0].style.flex_direction,
+                        if width < 640.0 {
+                            FlexDirection::Column
+                        } else {
+                            FlexDirection::Row
+                        }
+                    );
+                    root = root.w(width - 64.0);
+                    tree.build_and_layout(&mut root, width, 800.0, [-1.0, -1.0]);
+                    let row = &root.children[0];
+                    for action in &row.children {
+                        assert!(action.layout_bounds[2] > 0.0);
+                        assert!(action.layout_bounds[0] >= row.layout_bounds[0] - 0.5);
+                        assert!(
+                            action.layout_bounds[0] + action.layout_bounds[2]
+                                <= row.layout_bounds[0] + row.layout_bounds[2] + 0.5,
+                            "action must stay reachable at {width}px: {:?}",
+                            action.layout_bounds
+                        );
+                    }
+                    if width < 640.0 {
+                        assert!(
+                            row.children[1].layout_bounds[1] > row.children[0].layout_bounds[1]
+                        );
+                    } else {
+                        assert!(
+                            (row.children[1].layout_bounds[1] - row.children[0].layout_bounds[1])
+                                .abs()
+                                < 0.5
+                        );
+                    }
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn responsive_dialog_panel_keeps_viewport_gutters() {
+        for width in [320.0, 375.0, 639.5, 640.0, 768.0, 1280.0] {
+            let panel = dialog_shell_panel(
+                "responsive-panel",
+                Element::new().h(80.0),
+                None,
+                false,
+                None,
+                None,
+                None,
+                None,
+                SlotChrome::default(),
+            );
+            let mut root = Element::new().w(width).child(panel);
+            LayoutTree::new().build_and_layout(&mut root, width, 800.0, [-1.0, -1.0]);
+            let panel = &root.children[0];
+            assert!(
+                (panel.layout_bounds[2] - (width - 32.0).min(512.0)).abs() < 0.5,
+                "width={width}: {:?}",
+                panel.layout_bounds
+            );
+            assert!((panel.children[0].layout_bounds[2] - panel.layout_bounds[2]).abs() < 0.5);
+        }
+    }
 
     #[test]
     fn dialog_shell_shadow_matches_elevation_xl() {

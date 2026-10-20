@@ -3,10 +3,10 @@ use std::num::NonZeroU32;
 use std::time::{Duration, Instant};
 
 thread_local! {
-    static FRAME_RATE_LIMIT: Cell<Option<NonZeroU32>> = const { Cell::new(NonZeroU32::new(60)) };
+    static FRAME_RATE_LIMIT: Cell<Option<NonZeroU32>> = const { Cell::new(NonZeroU32::new(120)) };
 }
 
-/// Limit redraws per window on this UI thread (default: 60 frames/s).
+/// Limit redraws per window on this UI thread (default: 120 frames/s).
 ///
 /// Input and UI tasks still run immediately. Only painting is coalesced, and the
 /// event loop sleeps until the next frame or input. Use `None` for display-paced
@@ -59,6 +59,16 @@ impl FramePacer {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_is_120_fps_and_can_be_overridden() {
+        assert_eq!(frame_interval(), Some(Duration::from_secs_f64(1.0 / 120.0)));
+        set_frame_rate_limit(NonZeroU32::new(90));
+        assert_eq!(frame_interval(), Some(Duration::from_secs_f64(1.0 / 90.0)));
+        set_frame_rate_limit(None);
+        assert_eq!(frame_interval(), None);
+        set_frame_rate_limit(NonZeroU32::new(120));
+    }
 
     #[test]
     fn late_wakes_do_not_accumulate_into_a_lower_frame_rate() {

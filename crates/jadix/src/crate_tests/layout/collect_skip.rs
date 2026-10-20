@@ -61,6 +61,249 @@ fn two_column_page() -> Element {
 }
 
 #[test]
+#[ignore = "CPU retained collect benchmark; run explicitly with --ignored --nocapture"]
+fn retained_collect_frame_budget() {
+    use std::time::Instant;
+    for workload in ["idle", "one-leaf", "all"] {
+        let mut root = Element::new().w(800.0).h(800.0).flex_col();
+        for _ in 0..256 {
+            let mut row = Element::new().w(800.0).h(2.0).bg([0.2, 0.4, 0.6, 1.0]);
+            for _ in 0..4 {
+                row = Element::new().w(800.0).h(2.0).child(row);
+            }
+            root.children.push(row);
+        }
+        let mut tree = LayoutTree::new();
+        tree.build_and_layout(&mut root, 800.0, 800.0, [-1.0; 2]);
+        tree.set_collect_skip_allowed(true);
+        let mut times = Vec::new();
+        for frame in 0..220 {
+            if workload != "idle" {
+                let count = if workload == "all" { 256 } else { 1 };
+                for row in root.children.iter_mut().take(count) {
+                    let mut leaf = row;
+                    for _ in 0..4 {
+                        leaf = &mut leaf.children[0];
+                    }
+                    leaf.style.bg_color = [0.2, (frame % 2) as f32, 0.6, 1.0];
+                }
+            }
+            let begin = Instant::now();
+            let result =
+                tree.build_and_layout_fast(&mut root, 800.0, 800.0, [-1.0; 2], false, false);
+            std::hint::black_box(&result);
+            if frame >= 20 {
+                times.push(begin.elapsed().as_secs_f64() * 1000.0);
+            }
+            assert_eq!(result.instances.len(), 256);
+            tree.recycle_collect_buffers(
+                result.instances,
+                result.textured_draws,
+                result.input_chrome_instances,
+            );
+        }
+        times.sort_by(f64::total_cmp);
+        eprintln!("retained-collect workload={workload} rows=256 depth=5 samples=200 p50_ms={:.4} p95_ms={:.4}", times[100], times[190]);
+    }
+}
+
+#[test]
+fn retained_collect_history_matches_uncached_output() {
+    fn assert_output(
+        a: &crate::layout::layout_tree::RenderResult,
+        b: &crate::layout::layout_tree::RenderResult,
+        frame: usize,
+    ) {
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&a.instances),
+            bytemuck::cast_slice::<_, u8>(&b.instances),
+            "instances frame {frame}"
+        );
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&a.clip_polys),
+            bytemuck::cast_slice::<_, u8>(&b.clip_polys),
+            "clips frame {frame}"
+        );
+        assert_eq!(
+            format!("{:?}", a.paint_ops),
+            format!("{:?}", b.paint_ops),
+            "paint order frame {frame}"
+        );
+        let texts = |r: &crate::layout::layout_tree::RenderResult| {
+            r.text_nodes
+                .iter()
+                .map(|n| {
+                    (
+                        n.text.clone(),
+                        [n.x, n.y, n.width, n.height],
+                        n.clip_bounds,
+                        format!("{:?}", n.style),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(a), texts(b), "text frame {frame}");
+        let slots = |r: &crate::layout::layout_tree::RenderResult| {
+            r.node_paints
+                .iter()
+                .map(|n| {
+                    (
+                        n.bounds,
+                        n.instance,
+                        n.textured,
+                        n.text,
+                        n.chrome,
+                        n.paint_ops,
+                        n.overflow_clip,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(slots(a), slots(b), "node ranges frame {frame}");
+    }
+    let mut cached_root = two_column_page();
+    let mut full_root = two_column_page();
+    let mut cached = LayoutTree::new();
+    let mut full = LayoutTree::new();
+    cached.build_and_layout(&mut cached_root, 160.0, 80.0, [-1.0; 2]);
+    full.build_and_layout(&mut full_root, 160.0, 80.0, [-1.0; 2]);
+    for frame in 0..80 {
+        for root in [&mut cached_root, &mut full_root] {
+            match frame % 10 {
+                2 => root.children[0].children[1].text = Some(format!("frame {frame}")),
+                3 => root.children[1].children[0].style.bg_color = [0.1, 0.8, 0.3, 0.5],
+                4 => root.children[0].style.opacity = 0.0,
+                5 => root.children[0].style.opacity = 1.0,
+                6 => root.children[1].children[0].style.bg_color = [0.0, 0.0, 1.0, 1.0],
+                _ => {}
+            }
+        }
+        let width = if frame % 10 == 7 { 240.0 } else { 160.0 };
+        cached.set_collect_skip_allowed(frame % 10 != 8);
+        full.set_collect_skip_allowed(false);
+        let a =
+            cached.build_and_layout_fast(&mut cached_root, width, 80.0, [-1.0; 2], false, false);
+        let b = full.build_and_layout_fast(&mut full_root, width, 80.0, [-1.0; 2], false, false);
+        assert_output(&a, &b, frame);
+        if frame % 10 == 1 {
+            assert!(
+                cached.last_collect_skip_counts().0 > 0,
+                "exercise actual replay"
+            );
+        }
+    }
+}
+
+#[test]
+fn retained_collect_structural_history_preserves_hits_and_reclaims_nodes() {
+    fn fixture() -> Element {
+        Element::new()
+            .w(320.0)
+            .h(240.0)
+            .flex_row()
+            .children((0..4).map(|column| {
+                Element::new()
+                    .w(80.0)
+                    .h(240.0)
+                    .flex_col()
+                    .children((0..3).map(|row| {
+                        Element::new()
+                            .w(80.0)
+                            .h(40.0)
+                            .flex_shrink(0.0)
+                            .template_id(format!("c{column}-r{row}"))
+                            .focus_id(format!("c{column}-r{row}"))
+                            .bg([column as f32 * 0.2, row as f32 * 0.3, 0.5, 1.0])
+                            .text(format!("{column}:{row}"))
+                    }))
+            }))
+    }
+    let mut roots = [fixture(), fixture()];
+    let mut trees = [LayoutTree::new(), LayoutTree::new()];
+    for (root, tree) in roots.iter_mut().zip(&mut trees) {
+        tree.build_and_layout(root, 320.0, 240.0, [-1.0; 2]);
+    }
+    for frame in 0..96 {
+        for root in &mut roots {
+            match frame % 8 {
+                1 => root.children.swap(0, 1),
+                2 => root.children[0].children.swap(0, 1),
+                3 => {
+                    let moved = root.children[0].children.remove(0);
+                    root.children[1].children.push(moved);
+                }
+                4 => {
+                    root.children[1].children.pop();
+                }
+                5 => root.children[0].children.push(
+                    Element::new()
+                        .w(80.0)
+                        .h(40.0)
+                        .flex_shrink(0.0)
+                        .focus_id(format!("insert-{frame}"))
+                        .bg([0.2, 0.8, 0.4, 1.0])
+                        .text(format!("new {frame}")),
+                ),
+                6 => root.children[2].style.opacity = 0.4,
+                7 => root.children[2].style.opacity = 1.0,
+                _ => {}
+            }
+        }
+        trees[0].set_collect_skip_allowed(frame % 16 != 15);
+        trees[1].set_collect_skip_allowed(false);
+        let a =
+            trees[0].build_and_layout_fast(&mut roots[0], 320.0, 240.0, [-1.0; 2], false, false);
+        let b =
+            trees[1].build_and_layout_fast(&mut roots[1], 320.0, 240.0, [-1.0; 2], false, false);
+        assert_eq!(
+            bytemuck::cast_slice::<_, u8>(&a.instances),
+            bytemuck::cast_slice::<_, u8>(&b.instances),
+            "rects frame {frame}"
+        );
+        assert_eq!(
+            format!("{:?}", a.paint_ops),
+            format!("{:?}", b.paint_ops),
+            "order frame {frame}"
+        );
+        let texts = |result: &crate::layout::layout_tree::RenderResult| {
+            result
+                .text_nodes
+                .iter()
+                .map(|n| {
+                    (
+                        &n.text,
+                        n.x.to_bits(),
+                        n.y.to_bits(),
+                        n.width.to_bits(),
+                        n.height.to_bits(),
+                    )
+                })
+                .map(|(text, x, y, w, h)| (text.clone(), x, y, w, h))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(texts(&a), texts(&b), "text frame {frame}");
+        for x in [20.0, 100.0, 180.0, 260.0] {
+            for y in [20.0, 60.0, 100.0, 140.0, 180.0] {
+                assert_eq!(
+                    crate::app::tree_hit::find_focus_id_at(&roots[0], x, y, [0.0; 2]),
+                    crate::app::tree_hit::find_focus_id_at(&roots[1], x, y, [0.0; 2]),
+                    "hit frame {frame}"
+                );
+            }
+        }
+        for (tree, root) in trees.iter().zip(&roots) {
+            let mut count = 0;
+            crate::core::tree::walk_elements(root, |_| count += 1);
+            assert_eq!(
+                tree.stats().taffy_nodes,
+                count,
+                "orphan retention frame {frame}"
+            );
+        }
+    }
+}
+
+#[test]
 fn paint_only_skips_clean_sibling_subtree() {
     reset_collect_skip_counters();
     let mut root = two_column_page();
@@ -3058,3 +3301,93 @@ fn straddling_card_internals_must_not_paint_at_rest_y() {
         border.y
     );
 }
+
+#[test]
+fn scroll_replay_rotated_text_matches_fresh_collect() {
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+    fn scene() -> Element {
+        let mut rotated = Element::new()
+            .w(96.0)
+            .h(56.0)
+            .flex_shrink(0.0)
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .bg("#dddddd")
+            .child(
+                Element::new()
+                    .w(72.0)
+                    .h(20.0)
+                    .text("Bake Ag")
+                    .text_size(16.0),
+            );
+        rotated.style.rotate_deg = 12.0;
+        let viewport = Element::new()
+            .w(300.0)
+            .h(240.0)
+            .flex_shrink(0.0)
+            .overflow_y("scroll")
+            .child(
+                Element::new()
+                    .w(300.0)
+                    .flex_col()
+                    .child(Element::new().w(300.0).h(100.0).flex_shrink(0.0))
+                    .child(rotated)
+                    .child(Element::new().w(300.0).h(1200.0).flex_shrink(0.0)),
+            );
+        Element::new()
+            .w(300.0)
+            .h(288.0)
+            .flex_col()
+            .rounded(12.0)
+            .overflow_x("hidden")
+            .overflow_y("hidden")
+            .child(Element::new().w(300.0).h(48.0).flex_shrink(0.0))
+            .child(viewport)
+    }
+    let mut root = scene();
+    let mut tree = LayoutTree::new();
+    tree.build_and_layout(&mut root, 300.0, 288.0, [-1.0; 2]);
+    tree.set_collect_skip_allowed(true);
+    tree.build_and_layout_fast(&mut root, 300.0, 288.0, [-1.0; 2], true, false);
+    for offset in [1.0, 8.0, 16.0, 45.0, 60.0, 100.0, 130.0, 100.0, 16.0, 0.0] {
+        root.children[1].scroll_offset[1] = offset;
+        let retained = tree.build_and_layout_fast(&mut root, 300.0, 288.0, [-1.0; 2], true, false);
+        let mut fresh_root = scene();
+        fresh_root.children[1].scroll_offset[1] = offset;
+        let fresh = LayoutTree::new().build_and_layout(&mut fresh_root, 300.0, 288.0, [-1.0; 2]);
+        if offset <= 60.0 {
+            assert!(
+                !fresh.textured_draws.is_empty(),
+                "fixture must exercise Bake"
+            );
+        }
+        assert_eq!(
+            retained.textured_draws.len(),
+            fresh.textured_draws.len(),
+            "bake count at {offset}"
+        );
+        for (a, b) in retained.textured_draws.iter().zip(&fresh.textured_draws) {
+            assert_eq!(a.texture_key, b.texture_key, "bake key at {offset}");
+            for (field, a, b) in [
+                ("rect", a.rect.as_slice(), b.rect.as_slice()),
+                (
+                    "rounded_clips",
+                    a.rounded_clips.as_flattened(),
+                    b.rounded_clips.as_flattened(),
+                ),
+                ("transform", a.transform.as_slice(), b.transform.as_slice()),
+                ("clip_pos", a.clip_pos.as_slice(), b.clip_pos.as_slice()),
+                ("clip_size", a.clip_size.as_slice(), b.clip_size.as_slice()),
+            ] {
+                assert!(
+                    a.iter().zip(b).all(|(a, b)| (a - b).abs() < 0.001),
+                    "{field} at {offset}: retained={a:?}, fresh={b:?}"
+                );
+            }
+        }
+    }
+}
+

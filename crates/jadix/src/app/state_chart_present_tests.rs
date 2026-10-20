@@ -298,7 +298,10 @@ fn run_chart_frames(window: Arc<dyn Window>) {
                         )
                         .unwrap();
                     }
-                    assert!((bar-label).abs() <= 0.7, "chart {kind} first visible frame {frame_index} category {category}: bar={bar} label={label}");
+                    assert!(
+                        (bar - label).abs() <= 0.7,
+                        "chart {kind} first visible frame {frame_index} category {category}: bar={bar} label={label}"
+                    );
                 }
             }
             assert!(

@@ -75,7 +75,9 @@ pub(super) fn run() {
                     "native adapter={:?} scale={} target={}x{} present={:?} event-loop=pumped period_ms={:.3}",
                     state.adapter.get_info(),
                     state.ui_scale(),
-                    state.config.width, state.config.height, state.config.present_mode,
+                    state.config.width,
+                    state.config.height,
+                    state.config.present_mode,
                     self.period.as_secs_f64() * 1000.0
                 );
                 assert_eq!(
@@ -394,13 +396,31 @@ impl Scan {
             let guard = app.state.borrow();
             let state = guard.as_ref().unwrap();
             let a = state.native_render_sample;
-            eprintln!("wheel/{} frame={frame} offset={:.1} total={ms:.2} images={:.2} paths={:.2} shader={:.2} effects={:.2} glyphs={:.2} band_alloc={:.2} band_new={} bands={} strips={} pins={}",
-                self.section, self.offset.peek(), a[4], a[8], a[9], a[0], a[1], a[10], a[11], a[7],
-                state.scroll_strip_blit.len(), state.scroll_blit_pins.len());
-            eprintln!("  wheel-stages pre={:.2} collect={:.2} prepare={:.2} encode={:.2} acquire={:.2} submit={:.2} present={:.2}",
-                state.render_prof_pre_ms-before[0], state.render_prof_layout_collect_ms-before[1],
-                state.render_prof_text_ms-before[2], state.render_prof_encode_ms-before[3],
-                state.render_prof_acquire_ms-before[4], state.render_prof_submit_ms-before[5], state.render_prof_present_ms-before[6]);
+            eprintln!(
+                "wheel/{} frame={frame} offset={:.1} total={ms:.2} images={:.2} paths={:.2} shader={:.2} effects={:.2} glyphs={:.2} band_alloc={:.2} band_new={} bands={} strips={} pins={}",
+                self.section,
+                self.offset.peek(),
+                a[4],
+                a[8],
+                a[9],
+                a[0],
+                a[1],
+                a[10],
+                a[11],
+                a[7],
+                state.scroll_strip_blit.len(),
+                state.scroll_blit_pins.len()
+            );
+            eprintln!(
+                "  wheel-stages pre={:.2} collect={:.2} prepare={:.2} encode={:.2} acquire={:.2} submit={:.2} present={:.2}",
+                state.render_prof_pre_ms - before[0],
+                state.render_prof_layout_collect_ms - before[1],
+                state.render_prof_text_ms - before[2],
+                state.render_prof_encode_ms - before[3],
+                state.render_prof_acquire_ms - before[4],
+                state.render_prof_submit_ms - before[5],
+                state.render_prof_present_ms - before[6]
+            );
             eprintln!(
                 "  wheel-measure calls={} misses={}",
                 state.layout_tree.text_measure_calls.get(),

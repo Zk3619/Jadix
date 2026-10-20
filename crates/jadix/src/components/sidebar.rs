@@ -33,6 +33,10 @@
 //! 轨宽是领域 prop `rail_w`（不是根布局 `w`）。RSX 写 `rail_w`；Builder `.w()` 是别名。
 //! 见 `docs/COMPONENT_LIBRARY.md` §1.1。
 //!
+//! Provider 内可折叠侧栏在 `<768px` 时改为 Sheet：同一 Trigger / Ctrl/Cmd+B
+//! 切换独立的 `use_sidebar().open_mobile`，保留桌面 `open`。`collapsible="none"`
+//! 仍为固定侧栏。移动面板复用原内容、遮罩、Esc、焦点约束与滑入/退场动画。
+//!
 //! ## 用法（双写法 · ADR-9）
 //! ```ignore
 //! // A · RSX / 复合标签
@@ -84,6 +88,7 @@ use crate::components::base::{ensure_data_slot, SlotChrome, SlotStyleFn};
 use crate::components::button::button;
 use crate::components::input::input;
 use crate::components::scrollbar::{scrollbar, ScrollbarOrientation};
+use crate::components::sheet::{collect_sheet_focus_ids, sheet_shell_panel, SheetSide};
 use crate::components::tree_view::{tree_view, TreeViewBuilder, TreeViewChrome, TreeViewVariant};
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
@@ -102,6 +107,10 @@ use crate::utils::resolve_instance_id;
 use crate::utils::roving::{attach_focus_roving, FocusRovingAxis};
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
+use crate::utils::viewport_modal::{
+    dismiss_viewport_modal, retained_viewport_modal_layer, viewport_modal_phase,
+    ViewportModalLayerOpts,
+};
 
 const ATTR_SLOT: &str = "data-slot";
 const ATTR_SIDEBAR: &str = "data-sidebar";
@@ -111,11 +120,15 @@ const ATTR_STATE: &str = "data-state";
 const ATTR_PROVIDER_ID: &str = "data-sidebar-provider-id";
 const ATTR_WIDTH_STORE: &str = "data-sidebar-width";
 const ATTR_COLLAPSIBLE: &str = "data-collapsible";
+const ATTR_MOBILE_ID: &str = "data-sidebar-mobile-id";
+const ATTR_MOBILE_PANEL: &str = "data-sidebar-mobile-panel";
 /// Stashed `flex-grow` while icon-collapse zeros label width.
 const ATTR_SAVED_GROW: &str = "data-sidebar-saved-grow";
 
 const SIDEBAR_WIDTH_DEFAULT: &str = "16rem";
 const SIDEBAR_WIDTH_ICON: &str = "3rem";
+const SIDEBAR_WIDTH_MOBILE: &str = "18rem";
+const SIDEBAR_MOBILE_BREAKPOINT: f32 = 768.0;
 /// ShadCN `transition-[width] duration-200 ease-linear`.
 const SIDEBAR_WIDTH_TRANSITION_MS: f32 = 200.0;
 /// ShadCN `group-data-[collapsible=icon]:size-8`.
@@ -383,8 +396,50 @@ impl From<&String> for SidebarMenuButtonSize {
 pub struct SidebarCtx {
     pub id: String,
     pub open: Signal<bool>,
+    /// 移动面板的独立开合状态；不改变桌面折叠偏好。
+    pub open_mobile: Signal<bool>,
+    /// 当前窗口是否小于 `md`（768 logical px）。
+    pub is_mobile: Signal<bool>,
     /// 由 [`Sidebar`] 写入；[`SidebarProvider`] / [`SidebarInset`] 读取 inset 壳样式。
     pub variant: Signal<String>,
+}
+
+impl PartialEq for SidebarCtx {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.open.id() == other.open.id()
+            && self.open_mobile.id() == other.open_mobile.id()
+            && self.is_mobile.id() == other.is_mobile.id()
+            && self.variant.id() == other.variant.id()
+    }
+}
+
+impl SidebarCtx {
+    pub fn toggle(&self) {
+        let is_mobile =
+            crate::utils::modal_motion::modal_viewport_size().0 < SIDEBAR_MOBILE_BREAKPOINT;
+        let _ = self.is_mobile.try_set_silent(is_mobile);
+        let open = if is_mobile {
+            self.open_mobile
+        } else {
+            self.open
+        };
+        if let Some(value) = open.try_peek() {
+            open.set(!value);
+            crate::app::runtime::request_redraw();
+        }
+    }
+}
+
+fn sidebar_state(id: &str) -> SidebarCtx {
+    use_signal::<SidebarCtx>(format!("{id}__context").as_str(), || SidebarCtx {
+        id: id.to_string(),
+        open: use_signal(format!("{id}__open").as_str(), || true),
+        open_mobile: use_signal(format!("{id}__open_mobile").as_str(), || false),
+        is_mobile: use_signal(format!("{id}__is_mobile").as_str(), || false),
+        variant: use_signal(format!("{id}__variant").as_str(), || "sidebar".into()),
+    })
+    .peek()
 }
 
 fn sidebar_context() -> Context<SidebarCtx> {
@@ -418,14 +473,6 @@ fn sidebar_horizontal_separator_element() -> Element {
 fn sidebar_provider_shell(kids: Vec<Element>) -> Element {
     match kids.len() {
         0 => hstack().w("100%").h("100%").min_h("100%").into(),
-        1 => kids
-            .into_iter()
-            .next()
-            .unwrap()
-            .flex_row()
-            .w("100%")
-            .h("100%")
-            .min_h("100%"),
         _ => {
             let mut row = hstack()
                 .w("100%")
@@ -467,11 +514,7 @@ pub fn try_toggle_sidebar_from_key(
 /// 切换侧栏开合（无 Provider 时为 no-op）。
 pub fn toggle_sidebar() {
     if let Some(ctx) = use_sidebar() {
-        if ctx.open.is_alive() {
-            let next = !ctx.open.peek();
-            let _ = ctx.open.set(next);
-            crate::app::runtime::request_redraw();
-        }
+        ctx.toggle();
     }
 }
 
@@ -480,14 +523,7 @@ fn bind_sidebar_toggle(on_click: Option<Handler<()>>) -> Handler<()> {
         return h;
     }
     if let Some(ctx) = use_sidebar() {
-        let open = ctx.open;
-        return Handler::new(move |_| {
-            if open.is_alive() {
-                let next = !open.peek();
-                let _ = open.set(next);
-                crate::app::runtime::request_redraw();
-            }
-        });
+        return Handler::new(move |_| ctx.toggle());
     }
     Handler::new(|_| toggle_sidebar())
 }
@@ -507,20 +543,27 @@ pub fn sidebar_provider_scope(
     if let Some(v) = shell_variant.filter(|s| !s.trim().is_empty()) {
         let _ = variant.try_set_silent(v.trim().to_string());
     }
-    provide_context(
-        sidebar_context(),
-        SidebarCtx {
-            id: id.clone(),
-            open,
-            variant: variant.clone(),
-        },
-    );
+    let open_mobile = use_signal(format!("{id}__open_mobile").as_str(), || false);
+    let is_mobile = use_signal(format!("{id}__is_mobile").as_str(), || {
+        crate::utils::modal_motion::modal_viewport_size().0 < SIDEBAR_MOBILE_BREAKPOINT
+    });
+    let ctx = SidebarCtx {
+        id: id.clone(),
+        open,
+        open_mobile,
+        is_mobile,
+        variant,
+    };
+    // Frame synchronization must use the actual controlled signal, not an inferred key.
+    use_signal(format!("{id}__context").as_str(), || ctx.clone()).try_set_silent(ctx.clone());
+    provide_context(sidebar_context(), ctx);
     let kids = take_packed(body());
     let mut root = sidebar_provider_shell(kids);
     if variant.is_alive() && variant.peek() == "inset" {
         root = root.bg(parse_color("sidebar"));
     }
     root.set_attr(ATTR_SLOT, SLOT_PROVIDER);
+    root.set_attr(ATTR_PROVIDER_ID, id.clone());
     if !id.trim().is_empty() {
         root.template_id = Some(format!("{id}__provider"));
     }
@@ -945,6 +988,11 @@ fn apply_sidebar_icon_chrome(el: &mut Element, t: f32) -> bool {
 fn apply_sidebar_rail_layout(el: &mut Element, open: bool, width: &str) -> LayoutStatus {
     use taffy::style::Overflow;
 
+    if el.attrs.contains_key(ATTR_MOBILE_ID)
+        && crate::utils::modal_motion::modal_viewport_size().0 < SIDEBAR_MOBILE_BREAKPOINT
+    {
+        return LayoutStatus::Clean;
+    }
     let collapsible = sidebar_collapsible_attr(el);
     let want_state = if open { "expanded" } else { "collapsed" };
     let want_w_css = rail_width_css_for_state(open, width, collapsible);
@@ -985,6 +1033,35 @@ fn apply_sidebar_rail_layout(el: &mut Element, open: bool, width: &str) -> Layou
             changed = true;
         }
     }
+    // Responsive class resolution runs after rail chrome. Preserve the live width
+    // so restoring the class baseline cannot undo a controlled collapse or resize.
+    let width = el.style.size.width;
+    let min_width = el.style.min_size.width;
+    let overflow = el.style.overflow;
+    if let Some(classes) = el.class_set.as_mut() {
+        if let Some(base) = classes.base_style.as_mut() {
+            if base.size.width != width
+                || base.min_size.width != min_width
+                || base.overflow != overflow
+            {
+                base.size.width = width;
+                base.min_size.width = min_width;
+                base.overflow = overflow;
+                classes.set_base_dimension(
+                    crate::style::UnitSlot::Width,
+                    crate::layout::dimension::CssDim::Px(
+                        crate::layout::dim_length_px(width).unwrap_or(target_px),
+                    ),
+                );
+                classes.set_base_dimension(
+                    crate::style::UnitSlot::MinWidth,
+                    crate::layout::dimension::CssDim::Px(
+                        crate::layout::dim_length_px(min_width).unwrap_or(target_px),
+                    ),
+                );
+            }
+        }
+    }
     if changed {
         LayoutStatus::LayoutChanged
     } else {
@@ -992,12 +1069,213 @@ fn apply_sidebar_rail_layout(el: &mut Element, open: bool, width: &str) -> Layou
     }
 }
 
-/// 每帧对齐 Provider `{id}__open` → rail 宽度（Gallery 静态壳无 bind effect 时仍生效）。
+fn sidebar_node_mut<'a>(el: &'a mut Element, attr: &str, value: &str) -> Option<&'a mut Element> {
+    if el.attrs.get(attr).map(String::as_str) == Some(value) {
+        return Some(el);
+    }
+    el.children
+        .iter_mut()
+        .find_map(|child| sidebar_node_mut(child, attr, value))
+}
+
+fn sidebar_restore_mobile_header(inner: &mut Element) {
+    if let Some(header) = sidebar_node_mut(inner, ATTR_SLOT, SLOT_HEADER) {
+        if let Some(index) = header.children.iter().position(|child| {
+            child
+                .attrs
+                .get("data-sidebar-mobile-header-row")
+                .map(String::as_str)
+                == Some("true")
+        }) {
+            let mut row = header.children.remove(index);
+            let mut content = row.children.remove(0);
+            header
+                .children
+                .splice(index..index, std::mem::take(&mut content.children));
+        }
+    }
+    fn remove_generated_header(el: &mut Element) {
+        el.children.retain(|child| {
+            child
+                .attrs
+                .get("data-sidebar-mobile-header")
+                .map(String::as_str)
+                != Some("true")
+        });
+        for child in &mut el.children {
+            remove_generated_header(child);
+        }
+    }
+    remove_generated_header(inner);
+}
+
+fn sidebar_mobile_header_with_close(mut inner: Element, close: Element) -> Element {
+    sidebar_restore_mobile_header(&mut inner);
+    let row = |children: Vec<Element>, close: Element| {
+        let mut row: Element = hstack()
+            .w("100%")
+            .items_center()
+            .children([
+                vstack().flex_grow(1.0).min_w(0.0).children(children).into(),
+                close.flex_shrink(0.0),
+            ])
+            .into();
+        row.set_attr("data-sidebar-mobile-header-row", "true");
+        row
+    };
+
+    if let Some(header) = sidebar_node_mut(&mut inner, ATTR_SLOT, SLOT_HEADER) {
+        let children = std::mem::take(&mut header.children);
+        header.children = vec![row(children, close)];
+    } else {
+        let mut header: Element = sidebar_header().child(row(Vec::new(), close)).into();
+        header.set_attr("data-sidebar-mobile-header", "true");
+        inner.children.insert(0, header);
+    }
+    inner
+}
+
+/// Move the original content, including hooks and reactive bindings, across the portal boundary.
+/// Keep the portal slot until the exit finishes so hoisting cannot prune that content early.
+fn sync_sidebar_mobile_subtree(root: &mut Element) -> bool {
+    let mobile = crate::utils::modal_motion::modal_viewport_size().0 < SIDEBAR_MOBILE_BREAKPOINT;
+    let mut rails = Vec::new();
+    crate::core::tree::walk_elements(root, |el| {
+        if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_PROVIDER) {
+            if let Some(provider) = el.attrs.get(ATTR_PROVIDER_ID) {
+                let ctx = sidebar_state(provider);
+                if ctx.is_mobile.peek() != mobile {
+                    ctx.is_mobile.set(mobile);
+                }
+            }
+        }
+        if let (Some(id), Some(provider)) =
+            (el.attrs.get(ATTR_MOBILE_ID), el.attrs.get(ATTR_PROVIDER_ID))
+        {
+            rails.push((id.clone(), sidebar_state(provider)));
+        }
+    });
+    let mut changed = false;
+    for (id, ctx) in rails {
+        if ctx.is_mobile.peek() != mobile {
+            ctx.is_mobile.set(mobile);
+        }
+        let owner = format!("sidebar:{id}");
+        let in_panel = sidebar_node_mut(root, ATTR_MOBILE_PANEL, &id).is_some();
+        if !mobile && (ctx.open_mobile.peek() || in_panel) {
+            dismiss_viewport_modal(&id, ctx.open_mobile);
+        }
+        if !mobile && !in_panel {
+            continue;
+        }
+        let mounted = viewport_modal_phase(&id, ctx.open_mobile).is_some();
+        if in_panel && (!mobile || !mounted) {
+            let panel = sidebar_node_mut(root, ATTR_MOBILE_PANEL, &id).unwrap();
+            let mut inner = panel.children.remove(0);
+            sidebar_restore_mobile_header(&mut inner);
+            let rail = sidebar_node_mut(root, ATTR_MOBILE_ID, &id).unwrap();
+            rail.children.clear();
+            rail.children.push(inner);
+            crate::utils::sync_focus_trap(&owner, false, "");
+            changed = true;
+        } else if mobile && ctx.open_mobile.peek() && !in_panel {
+            let rail = sidebar_node_mut(root, ATTR_MOBILE_ID, &id).unwrap();
+            apply_sidebar_icon_chrome(rail, 0.0);
+            let Some(index) = rail
+                .children
+                .iter()
+                .position(|c| c.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_INNER))
+            else {
+                continue;
+            };
+            let inner = rail.children.remove(index);
+            let side = if rail.attrs.get(ATTR_SIDE).map(String::as_str) == Some("right") {
+                SheetSide::Right
+            } else {
+                SheetSide::Left
+            };
+            let close: Element = button(format!("{id}:close"))
+                .variant("ghost")
+                .size("icon-sm")
+                .on_click(move || ctx.open_mobile.set(false))
+                .child(
+                    build_icon_text_node(lucide_glyph("x").unwrap_or_else(|| "×".into()))
+                        .text_size(16.0),
+                )
+                .into();
+            let close = close.aria_label(crate::tr_default_zh(
+                "jadix.sidebar.close",
+                "Close sidebar",
+                "关闭侧栏",
+            ));
+            let mut close = close;
+            close.set_attr("data-sidebar-mobile-close", "true");
+            let inner = sidebar_mobile_header_with_close(inner, close);
+            let mut panel = sheet_shell_panel(
+                inner,
+                side,
+                Some(SIDEBAR_WIDTH_MOBILE),
+                None,
+                None,
+                SlotChrome::default().class("bg-sidebar"),
+            );
+            panel.set_attr(ATTR_SLOT, "sidebar-mobile");
+            panel.set_attr(ATTR_SIDEBAR, "sidebar");
+            panel.set_attr(ATTR_MOBILE_PANEL, &id);
+            panel.set_attr("data-mobile", "true");
+            panel.set_attr("role", "dialog");
+            panel.set_attr("aria-modal", "true");
+            panel = panel.aria_label(crate::tr_default_zh(
+                "jadix.sidebar.title",
+                "Sidebar",
+                "侧栏",
+            ));
+            rail.children.push(retained_viewport_modal_layer(
+                &id,
+                ctx.open_mobile,
+                &crate::utils::modal_shell::ShellOverlayOpts::from_content_parts(
+                    None, None, true, None,
+                ),
+                ViewportModalLayerOpts::slide(
+                    side.to_surface_motion(),
+                    preview_width_px(SIDEBAR_WIDTH_MOBILE),
+                ),
+                panel,
+            ));
+            changed = true;
+        }
+        if let Some(panel) = sidebar_node_mut(root, ATTR_MOBILE_PANEL, &id) {
+            let (index, count) = crate::app::portal_overlay::modal_stack_metrics(&id);
+            let active = ctx.open_mobile.peek() && index + 1 == count;
+            let state = if active { "true" } else { "false" };
+            let mut ring = Vec::new();
+            if active {
+                collect_sheet_focus_ids(panel, &mut ring);
+                // SidebarRail is desktop-only even before this frame resolves max-md:hidden.
+                ring.retain(|id| !id.ends_with("__sidebar_rail"));
+            }
+            let ring = ring.join(",");
+            if panel.attrs.get("data-sidebar-trap").map(String::as_str) != Some(state)
+                || panel.attrs.get("data-sidebar-trap-ring") != Some(&ring)
+            {
+                crate::utils::sync_focus_trap(&owner, active, &ring);
+                panel.set_attr("data-sidebar-trap", state);
+                panel.set_attr("data-sidebar-trap-ring", ring);
+            }
+        }
+    }
+    changed
+}
+
+/// 每帧同步响应式呈现与 Provider 的桌面 rail 宽度。
 pub(crate) fn sync_sidebar_rail_subtree(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
+    if sync_sidebar_mobile_subtree(el) {
+        *impact = impact.merge(LayoutStatus::StructureChanged);
+    }
     RAIL_WIDTH_TWEEN_ACTIVE.set(false);
     crate::core::tree::walk_elements_mut(el, |el| {
         if el.attrs.get(ATTR_SLOT).map(String::as_str) != Some(SLOT_ROOT) {
@@ -1009,12 +1287,14 @@ pub(crate) fn sync_sidebar_rail_subtree(
         ) else {
             return;
         };
-        let open_key = format!("{_provider_id}__open");
-        let open_sig = use_signal(open_key.as_str(), || true);
+        let open_sig = sidebar_state(&_provider_id).open;
         if !open_sig.is_alive() {
             return;
         }
         let open = open_sig.peek();
+        if el.attrs.contains_key(ATTR_MOBILE_ID) && sidebar_state(&_provider_id).is_mobile.peek() {
+            return;
+        }
         let mut status = apply_sidebar_rail_layout(el, open, width.as_str());
         let running = rail_width_tween_running(el);
         if running {
@@ -1434,6 +1714,18 @@ pub fn Sidebar(
     if let Some(ctx) = sidebar_ctx {
         rail.set_attr(ATTR_PROVIDER_ID, ctx.id.clone());
         rail.set_attr(ATTR_WIDTH_STORE, width.clone());
+        if collapsible != SidebarCollapsible::None {
+            let mobile_id = format!("{}__mobile", resolve_instance_id(id, "sidebar"));
+            rail.set_attr(ATTR_MOBILE_ID, &mobile_id);
+            rail = crate::style::utility::with_default_class_list(rail, "max-md:hidden");
+            let open_mobile = ctx.open_mobile;
+            rail = rail.on_unmount(move || {
+                if open_mobile.is_alive() {
+                    dismiss_viewport_modal(&mobile_id, open_mobile);
+                    crate::utils::sync_focus_trap(&format!("sidebar:{mobile_id}"), false, "");
+                }
+            });
+        }
         if ctx.open.is_alive() {
             let open = ctx.open;
             let width_bind = width.clone();
@@ -1685,6 +1977,10 @@ pub fn SidebarInset(variant: Option<String>, children: Option<Element>) -> Eleme
             .box_shadow_offset_x(0.0)
             .box_shadow_offset_y(2.0)
             .box_shadow_spread(0.0);
+        el = crate::style::utility::with_default_class_list(
+            el,
+            "max-md:m-0 max-md:rounded-none max-md:shadow-none",
+        );
     }
     el
 }
@@ -1711,6 +2007,29 @@ pub fn SidebarTrigger(id: String, mut on_click: Option<Handler<()>>) -> Element 
     let mut el: Element = btn.into();
     el.set_attr(ATTR_SLOT, SLOT_TRIGGER);
     el.set_attr(ATTR_SIDEBAR, "trigger");
+    el = el.aria_label(crate::tr_default_zh(
+        "jadix.sidebar.toggle",
+        "Toggle sidebar",
+        "切换侧栏",
+    ));
+    if let Some(ctx) = use_sidebar() {
+        let key = format!("{}__trigger_state:{id}", ctx.id);
+        el = crate::app::reactive::bind_prop(
+            el,
+            key,
+            move || {
+                if ctx.is_mobile.get() {
+                    ctx.open_mobile.get()
+                } else {
+                    ctx.open.get()
+                }
+            },
+            |el, open| {
+                el.set_attr("aria-expanded", if open { "true" } else { "false" });
+                LayoutStatus::StyleChanged
+            },
+        );
+    }
     if !id.trim().is_empty() {
         el.template_id = Some(id);
     }
@@ -1764,7 +2083,7 @@ pub fn SidebarRail(mut on_click: Option<Handler<()>>) -> Element {
         "title",
         crate::tr_default_zh("jadix.sidebar.toggle", "Toggle Sidebar", "切换侧边栏"),
     );
-    hit
+    crate::style::utility::with_default_class_list(hit, "max-md:hidden")
 }
 
 impl_simple_slot_builder!(
@@ -2095,72 +2414,76 @@ impl From<SidebarBuilder> for Element {
             open,
         } = builder;
 
-        let parts: Vec<Element> = if let Some(body) = custom_body {
-            take_packed(body())
-        } else {
-            let mut parts: Vec<Element> = Vec::new();
-            if let Some(h) = header {
-                parts.push(ensure_data_slot(h, SLOT_HEADER, |el| {
-                    sidebar_header().child(el).into()
-                }));
-            }
-
-            let mut content_kids: Vec<Element> = Vec::new();
-            for g in groups {
-                content_kids.push(ensure_data_slot(g, SLOT_GROUP, |el| {
-                    sidebar_group().child(el).into()
-                }));
-            }
-            if !items.is_empty() {
-                let mut menu_items = Vec::new();
-                for item in items {
-                    menu_items.push(ensure_data_slot(item, SLOT_MENU_ITEM, |el| {
-                        sidebar_menu_item().child(el).into()
+        let provider_id = format!("{id}__provider");
+        let build = move || {
+            let parts: Vec<Element> = if let Some(body) = custom_body {
+                take_packed(body())
+            } else {
+                let mut parts: Vec<Element> = Vec::new();
+                if let Some(h) = header {
+                    parts.push(ensure_data_slot(h, SLOT_HEADER, |el| {
+                        sidebar_header().child(el).into()
                     }));
                 }
-                let mut frag = Element::new();
-                frag.set_attr("jadix_fragment", "1");
-                content_kids.push(sidebar_menu().child(frag.children(menu_items)).into());
-            }
-            content_kids.extend(trees);
 
-            if !content_kids.is_empty() {
-                let mut frag = Element::new();
-                frag.set_attr("jadix_fragment", "1");
-                parts.push(sidebar_content().child(frag.children(content_kids)).into());
-            }
+                let mut content_kids: Vec<Element> = Vec::new();
+                for g in groups {
+                    content_kids.push(ensure_data_slot(g, SLOT_GROUP, |el| {
+                        sidebar_group().child(el).into()
+                    }));
+                }
+                if !items.is_empty() {
+                    let mut menu_items = Vec::new();
+                    for item in items {
+                        menu_items.push(ensure_data_slot(item, SLOT_MENU_ITEM, |el| {
+                            sidebar_menu_item().child(el).into()
+                        }));
+                    }
+                    let mut frag = Element::new();
+                    frag.set_attr("jadix_fragment", "1");
+                    content_kids.push(sidebar_menu().child(frag.children(menu_items)).into());
+                }
+                content_kids.extend(trees);
 
-            if let Some(f) = footer {
-                parts.push(ensure_data_slot(f, SLOT_FOOTER, |el| {
-                    sidebar_footer().child(el).into()
-                }));
-            }
-            parts
+                if !content_kids.is_empty() {
+                    let mut frag = Element::new();
+                    frag.set_attr("jadix_fragment", "1");
+                    parts.push(sidebar_content().child(frag.children(content_kids)).into());
+                }
+
+                if let Some(f) = footer {
+                    parts.push(ensure_data_slot(f, SLOT_FOOTER, |el| {
+                        sidebar_footer().child(el).into()
+                    }));
+                }
+                parts
+            };
+
+            let mut frag = Element::new();
+            frag.set_attr("jadix_fragment", "1");
+            let mut rail = Sidebar(SidebarProps {
+                id: id.clone(),
+                rail_w: Some(width),
+                side: Some(side.as_str().into()),
+                variant: Some(variant.as_str().into()),
+                collapsible: Some(collapsible.as_str().into()),
+                children: Some(frag.children(parts)),
+                base: None,
+            });
+            rail = SlotChrome::from_opts(class, style).apply(rail);
+            rail
         };
-
-        let mut frag = Element::new();
-        frag.set_attr("jadix_fragment", "1");
-        let mut rail = Sidebar(SidebarProps {
-            id: id.clone(),
-            rail_w: Some(width),
-            side: Some(side.as_str().into()),
-            variant: Some(variant.as_str().into()),
-            collapsible: Some(collapsible.as_str().into()),
-            children: Some(frag.children(parts)),
-            base: None,
-        });
-        rail = SlotChrome::from_opts(class, style).apply(rail);
 
         if provider {
             sidebar_provider_scope(
-                format!("{id}__provider"),
+                provider_id,
                 open,
                 default_open,
                 Some(variant.as_str()),
-                move || rail,
+                build,
             )
         } else {
-            rail
+            build()
         }
     }
 }
@@ -2174,6 +2497,338 @@ impl crate::core::tree::IntoElementList for SidebarBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn responsive_frame(root: &mut Element, layout: &mut LayoutTree, width: f32) -> LayoutStatus {
+        crate::utils::modal_motion::set_modal_viewport_size(width, 600.0);
+        let mut impact = LayoutStatus::Clean;
+        sync_sidebar_rail_subtree(root, layout, &mut impact);
+        crate::layout::layout_tree::hoist_portal_subtrees(root);
+        crate::style::sync_class_variants_subtree(
+            root,
+            [-1.0, -1.0],
+            "",
+            false,
+            width,
+            600.0,
+            layout,
+            &mut impact,
+        );
+        layout.build_and_layout(root, width, 600.0, [-1.0, -1.0]);
+        impact
+    }
+
+    #[test]
+    fn responsive_sidebar_animation_finishes_through_class_resolution() {
+        use crate::utils::modal_motion::{
+            flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
+        };
+        crate::app::portal_overlay::clear_overlay_stack();
+        crate::style::utility::set_frame_dt(1.0 / 60.0);
+        let (_owner, _) = crate::core::reactivity::create_root(|| {
+            let mut root: Element = sidebar("animated-mobile")
+                .provider(true)
+                .collapsible("icon")
+                .header(sidebar_menu_button("animated-title").text("Jadix Gallery"))
+                .item(sidebar_menu_button("animated-nav").text("Navigation"))
+                .into();
+            let ctx = sidebar_state("animated-mobile__provider");
+            let mut layout = LayoutTree::new();
+            responsive_frame(&mut root, &mut layout, 600.0);
+            ctx.open_mobile.set(true);
+            for _ in 0..40 {
+                responsive_frame(&mut root, &mut layout, 600.0);
+                flush_modal_shell_motion_subtree(&mut root);
+                tick_hoisted_modal_css(&mut root);
+            }
+            let panel =
+                sidebar_node_mut(&mut root, ATTR_MOBILE_PANEL, "animated-mobile__mobile").unwrap();
+            assert!(
+                panel.style.translate_pct[0].abs() < 0.001,
+                "open must reach the viewport instead of restarting every frame: {:?}",
+                panel.style.translate_pct
+            );
+            let (close_bounds, close_position) = {
+                let close = sidebar_node_mut(panel, "data-sidebar-mobile-close", "true").unwrap();
+                (close.layout_bounds, close.style.position)
+            };
+            let title = sidebar_node_mut(panel, ATTR_SLOT, SLOT_MENU_BUTTON).unwrap();
+            let title_bounds = title.layout_bounds;
+            assert_eq!(close_position, taffy::style::Position::Relative);
+            assert!(close_bounds[0] > title_bounds[0]);
+            assert!(close_bounds[1] < 48.0, "close control: {close_bounds:?}");
+            assert!(
+                (close_bounds[1] - title_bounds[1]).abs() < 1.0,
+                "close and title must share a row: close={close_bounds:?}, title={title_bounds:?}"
+            );
+            assert!(
+                close_bounds[0] + close_bounds[2] > title_bounds[0] + title_bounds[2],
+                "close must stay to the right of the title: close={close_bounds:?}, title={title_bounds:?}"
+            );
+            ctx.open_mobile.set(false);
+            for _ in 0..40 {
+                responsive_frame(&mut root, &mut layout, 600.0);
+                flush_modal_shell_motion_subtree(&mut root);
+                tick_hoisted_modal_css(&mut root);
+            }
+            if let Some(panel) =
+                sidebar_node_mut(&mut root, ATTR_MOBILE_PANEL, "animated-mobile__mobile")
+            {
+                assert!(
+                    panel.style.translate_pct[0] < -0.999,
+                    "exit must finish sliding offscreen"
+                );
+            }
+            dismiss_viewport_modal("animated-mobile__mobile", ctx.open_mobile);
+        });
+        crate::app::portal_overlay::clear_overlay_stack();
+    }
+
+    #[test]
+    fn responsive_sidebar_moves_live_content_and_preserves_desktop_preference() {
+        use crate::core::reactivity::create_root;
+        use std::rc::Rc;
+        crate::app::portal_overlay::clear_overlay_stack();
+        crate::utils::modal_motion::set_modal_viewport_size(1024.0, 600.0);
+        let (_owner, _) = create_root(|| {
+            let desktop = Signal::new(false);
+            let clicks = Rc::new(Cell::new(0));
+            let count = clicks.clone();
+            let mut root = sidebar_provider_scope(
+                "responsive-provider",
+                Some(desktop),
+                true,
+                Some("inset"),
+                || {
+                    let nav: Element = sidebar("responsive-nav")
+                        .collapsible("icon")
+                        .item(
+                            sidebar_menu_button("responsive-action")
+                                .text("Navigation")
+                                .on_click(move || count.set(count.get() + 1)),
+                        )
+                        .into();
+                    let trigger = SidebarTrigger(SidebarTriggerProps {
+                        id: "responsive-trigger".into(),
+                        on_click: None,
+                        children: None,
+                        base: None,
+                    });
+                    let inset = SidebarInset(SidebarInsetProps {
+                        variant: Some("inset".into()),
+                        children: Some(trigger),
+                        base: None,
+                    });
+                    let mut fragment = Element::new();
+                    fragment.set_attr("jadix_fragment", "1");
+                    fragment.children(vec![nav, inset])
+                },
+            );
+            let ctx = sidebar_state("responsive-provider");
+            let mut layout = LayoutTree::new();
+            responsive_frame(&mut root, &mut layout, 1024.0);
+            crate::utils::modal_motion::set_modal_viewport_size(767.5, 600.0);
+            assert!(
+                !ctx.is_mobile.peek(),
+                "resize has not reached frame sync yet"
+            );
+            ctx.toggle();
+            assert!(
+                ctx.open_mobile.peek(),
+                "the first narrow-screen click opens the sheet"
+            );
+            assert!(
+                !desktop.peek(),
+                "mobile toggle must preserve desktop preference"
+            );
+            ctx.open_mobile.set(false);
+            crate::utils::modal_motion::set_modal_viewport_size(1024.0, 600.0);
+            responsive_frame(&mut root, &mut layout, 1024.0);
+            let id = "responsive-nav__mobile";
+            let action = sidebar_node_mut(&mut root, "data-slot", SLOT_MENU_BUTTON).unwrap();
+            let original_handler = action.on_click.clone().unwrap();
+            for width in [767.5, 320.0, 639.5, 640.0, 767.99] {
+                responsive_frame(&mut root, &mut layout, width);
+                assert!(ctx.is_mobile.peek());
+                assert!(!ctx.open_mobile.peek());
+                assert_eq!(
+                    sidebar_node_mut(&mut root, ATTR_MOBILE_ID, id)
+                        .unwrap()
+                        .style
+                        .display,
+                    taffy::style::Display::None
+                );
+                let inset = sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_INSET).unwrap();
+                assert!(
+                    inset.layout_bounds[0].abs() < 0.5
+                        && (inset.layout_bounds[2] - width).abs() < 0.5
+                );
+                let trigger = sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_TRIGGER).unwrap();
+                (trigger.on_click.as_ref().unwrap().borrow_mut())();
+                assert_eq!(
+                    responsive_frame(&mut root, &mut layout, width),
+                    LayoutStatus::StructureChanged
+                );
+                assert!(
+                    !desktop.peek(),
+                    "mobile toggle must not expand the desktop rail"
+                );
+                let panel = sidebar_node_mut(&mut root, ATTR_MOBILE_PANEL, id).unwrap();
+                let mut close_count = 0;
+                crate::core::tree::walk_elements(panel, |node| {
+                    if node
+                        .attrs
+                        .get("data-sidebar-mobile-close")
+                        .map(String::as_str)
+                        == Some("true")
+                    {
+                        close_count += 1;
+                    }
+                });
+                assert_eq!(close_count, 1, "each opening has exactly one close control");
+                assert!((panel.layout_bounds[2] - 288.0).abs() < 0.5);
+                assert!(
+                    panel.layout_bounds[0] >= -0.5
+                        && panel.layout_bounds[0] + panel.layout_bounds[2] <= width + 0.5
+                );
+                let action = sidebar_node_mut(panel, ATTR_SLOT, SLOT_MENU_BUTTON).unwrap();
+                assert!(
+                    action.layout_bounds[1] >= 48.0,
+                    "content must clear the close control"
+                );
+                assert!(Rc::ptr_eq(
+                    action.on_click.as_ref().unwrap(),
+                    &original_handler
+                ));
+                (action.on_click.as_ref().unwrap().borrow_mut())();
+                assert!(!crate::utils::focus_trap::focus_trap_ring_ids().is_empty());
+                if width == 767.5 {
+                    let parent_ring = crate::utils::focus_trap::focus_trap_ring_ids();
+                    let nested = Signal::new(true);
+                    crate::utils::modal_shell::modal_sync("responsive-nested", nested);
+                    crate::utils::sync_focus_trap("nested", true, "dialog-control");
+                    responsive_frame(&mut root, &mut layout, width);
+                    assert_eq!(
+                        crate::utils::focus_trap::focus_trap_ring_ids(),
+                        vec!["dialog-control"]
+                    );
+                    nested.set(false);
+                    crate::utils::modal_shell::modal_sync("responsive-nested", nested);
+                    crate::utils::sync_focus_trap("nested", false, "");
+                    responsive_frame(&mut root, &mut layout, width);
+                    assert_eq!(crate::utils::focus_trap::focus_trap_ring_ids(), parent_ring);
+                }
+                if width == 320.0 {
+                    crate::utils::popup::arm_underlay_close();
+                    let overlay = crate::core::tree::find_by_template_id_mut(
+                        &mut root,
+                        &format!("{id}__modal_overlay"),
+                    )
+                    .unwrap();
+                    (overlay.on_click.as_ref().unwrap().borrow_mut())();
+                } else {
+                    assert!(crate::app::portal_overlay::try_close_top());
+                }
+                responsive_frame(&mut root, &mut layout, width);
+                assert!(!ctx.open_mobile.peek());
+                assert!(
+                    sidebar_node_mut(&mut root, ATTR_MOBILE_PANEL, id).is_some(),
+                    "keep content throughout exit"
+                );
+                crate::utils::modal_motion::finish_modal_exit_for_test(
+                    &crate::utils::modal_motion::use_modal_presence(id),
+                );
+                responsive_frame(&mut root, &mut layout, width);
+                assert!(sidebar_node_mut(&mut root, ATTR_MOBILE_PANEL, id).is_none());
+                let rail = sidebar_node_mut(&mut root, ATTR_MOBILE_ID, id).unwrap();
+                assert!(
+                    sidebar_node_mut(rail, "data-sidebar-mobile-header", "true").is_none(),
+                    "generated mobile header must not remain in the rail"
+                );
+                assert!(crate::utils::focus_trap::focus_trap_ring_ids().is_empty());
+            }
+            assert_eq!(clicks.get(), 5);
+            ctx.toggle();
+            responsive_frame(&mut root, &mut layout, 375.0);
+            responsive_frame(&mut root, &mut layout, 768.0);
+            assert!(!ctx.is_mobile.peek() && !ctx.open_mobile.peek());
+            assert!(!desktop.peek());
+            assert!(sidebar_node_mut(&mut root, ATTR_MOBILE_PANEL, id).is_none());
+            assert!(
+                !crate::utils::viewport_modal::viewport_modal_motion_busy(id),
+                "returning to desktop must cancel pending enter motion"
+            );
+            assert!(crate::app::portal_overlay::top_stacked_panel_z().is_none());
+            let rail = sidebar_node_mut(&mut root, ATTR_MOBILE_ID, id).unwrap();
+            assert!(
+                (rail.layout_bounds[2] - 48.0).abs() < 0.5,
+                "rail bounds={:?}, width={:?}, display={:?}",
+                rail.layout_bounds,
+                rail.style.size.width,
+                rail.style.display
+            );
+            ctx.toggle();
+            assert!(
+                desktop.peek(),
+                "desktop toggle must use the externally controlled signal"
+            );
+        });
+        crate::utils::modal_motion::set_modal_viewport_size(800.0, 600.0);
+        crate::app::portal_overlay::clear_overlay_stack();
+    }
+
+    #[test]
+    fn responsive_sidebar_builder_provider_right_side_and_fixed_escape_hatch() {
+        use crate::core::reactivity::create_root;
+        crate::utils::modal_motion::set_modal_viewport_size(320.0, 600.0);
+        let (_owner, _) = create_root(|| {
+            let mut root: Element = sidebar("responsive-builder")
+                .provider(true)
+                .side("right")
+                .collapsible("offcanvas")
+                .header(SidebarRail(SidebarRailProps {
+                    on_click: None,
+                    children: None,
+                    base: None,
+                }))
+                .item(sidebar_menu_button("builder-item").text("Item"))
+                .into();
+            let ctx = sidebar_state("responsive-builder__provider");
+            assert!(ctx.is_mobile.peek());
+            ctx.toggle();
+            responsive_frame(&mut root, &mut LayoutTree::new(), 320.0);
+            assert!(!crate::utils::focus_trap::focus_trap_ring_ids()
+                .iter()
+                .any(|id| id.ends_with("__sidebar_rail")));
+            let panel =
+                sidebar_node_mut(&mut root, ATTR_MOBILE_PANEL, "responsive-builder__mobile")
+                    .unwrap();
+            assert!(
+                (panel.layout_bounds[0] - 32.0).abs() < 0.5,
+                "panel bounds={:?}",
+                panel.layout_bounds
+            );
+            let close = sidebar_node_mut(
+                panel,
+                "aria-label",
+                &crate::tr_default_zh("jadix.sidebar.close", "Close sidebar", "关闭侧栏"),
+            )
+            .unwrap();
+            (close.on_click.as_ref().unwrap().borrow_mut())();
+            assert!(!ctx.open_mobile.peek());
+            let mut fixed: Element = sidebar("responsive-fixed")
+                .provider(true)
+                .collapsible("none")
+                .into();
+            responsive_frame(&mut fixed, &mut LayoutTree::new(), 320.0);
+            assert!(
+                sidebar_node_mut(&mut fixed, ATTR_MOBILE_ID, "responsive-fixed__mobile").is_none()
+            );
+            let rail = sidebar_node_mut(&mut fixed, ATTR_SLOT, SLOT_ROOT).unwrap();
+            assert!((rail.layout_bounds[2] - 256.0).abs() < 0.5);
+        });
+        crate::utils::modal_motion::set_modal_viewport_size(800.0, 600.0);
+        crate::app::portal_overlay::clear_overlay_stack();
+    }
 
     fn sidebar_width_lerp(from: f32, to: f32, elapsed_ms: f32) -> f32 {
         let t = (elapsed_ms / SIDEBAR_WIDTH_TRANSITION_MS).clamp(0.0, 1.0);

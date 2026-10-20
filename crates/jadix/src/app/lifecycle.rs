@@ -15,6 +15,15 @@ use winit::{
 
 use crate::core::tree::Element;
 
+pub(super) struct DetachedGpu {
+    instance: wgpu::Instance,
+    adapter: wgpu::Adapter,
+    device: Arc<wgpu::Device>,
+    queue: Arc<wgpu::Queue>,
+    config: wgpu::SurfaceConfiguration,
+    _font_system: Option<Box<glyphon::FontSystem>>,
+}
+
 fn collect_scroll_rests(
     el: &crate::core::tree::Element,
     out: &mut std::collections::HashSet<String>,
@@ -105,7 +114,7 @@ impl super::App {
 
     pub(super) fn shutdown_renderer(&mut self) {
         // Idempotent: CloseRequested / Destroyed / exiting / post-run_app may all call us.
-        if self.state.borrow().is_none() && self.secondaries.borrow().is_empty() {
+        if self.state.borrow().is_none() && self.secondaries.borrow().is_empty() && self.detached_gpu.is_none() {
             return;
         }
         self.persist_window_state();
@@ -139,9 +148,8 @@ impl super::App {
         drop(self.window_registry.drain_secondaries());
         self.window_registry = Default::default();
 
-        let Some(state) = self.state.borrow_mut().take() else {
-            return;
-        };
+        let state = self.state.borrow_mut().take();
+        self.primary_owner.take();
         // End the `borrow_mut` guard before `state` drops. Dropping `AppState` runs
         // element `UnmountHook`s that may touch `self.state` via the shared Rc still held
         // by effect closures until `clear_effects` runs.
@@ -155,15 +163,21 @@ impl super::App {
         crate::text::shutdown_layout_text();
         // Drop effect closures before GPU/UI state so they cannot rebuild into a dead cell.
         crate::core::reactivity::clear_effects();
-        let window = state.window.clone();
+        let window = state.as_ref().map(|state| state.window.clone());
         drop(state);
-        crate::platform::glass_detach(window.as_ref());
+        self.detached_gpu.take();
+        self.instance_guard.take();
+        if let Some(window) = window {
+            crate::platform::glass_detach(window.as_ref());
+        }
         self.pointer_window = None;
     }
 
     fn drop_secondary(&mut self, id: WindowId) {
+        super::frame_budget::forget_window(id);
         super::native_menu::remove_window(id);
         self.frame_pacers.remove(&id);
+        self.window_modifiers.remove(&id);
         if let Some(window) = self.secondaries.borrow().get(&id).map(|s| s.window.clone()) {
             super::window_lifecycle::emit_closing(window.as_ref());
         }
@@ -201,21 +215,90 @@ impl super::App {
         super::runtime::unregister_window(id);
     }
 
-    fn request_close(&mut self, event_loop: &dyn ActiveEventLoop, id: Option<WindowId>) {
+    fn close_targets(&self, id: Option<WindowId>) -> Vec<WindowId> {
         let primary = self.window_registry.primary_id();
-        if id.is_some_and(|id| !self.window_registry.contains(id)) {
-            return;
-        }
-        let closing: Vec<_> = if id.is_none() || id == primary {
-            // Primary first, then remaining windows. No window is dropped on veto.
-            primary
+        if id.is_none() || id == primary {
+            super::windows()
                 .into_iter()
-                .chain(self.secondaries.borrow().keys().copied())
+                .filter(|window| {
+                    id.is_none()
+                        || Some(window.id()) == primary
+                        || window.closes_with_primary().unwrap_or(true)
+                })
+                .map(|window| window.id())
                 .collect()
         } else {
             id.into_iter().collect()
-        };
-        for wid in closing {
+        }
+    }
+
+    fn finish_close(&mut self, event_loop: &dyn ActiveEventLoop, closing: Vec<WindowId>) {
+        if closing.len() == self.window_registry.len() {
+            self.shutdown_renderer();
+            event_loop.exit();
+            return;
+        }
+        let primary = self.window_registry.primary_id();
+        for &id in &closing {
+            if Some(id) != primary {
+                self.drop_secondary(id);
+                if let Some(slot) = self.window_registry.remove_secondary(id) {
+                    slot.window.set_visible(false);
+                }
+            }
+        }
+        if primary.is_some_and(|id| closing.contains(&id)) {
+            let _scope = super::window_scope::enter_primary();
+            let state = self.state.borrow_mut().take();
+            self.primary_owner.take();
+            if let Some(state) = state {
+                let window = state.window.clone();
+                super::window_lifecycle::emit_closing(window.as_ref());
+                window.set_visible(false);
+                let id = window.id();
+                super::native_menu::remove_window(id);
+                super::frame_budget::forget_window(id);
+                self.frame_pacers.remove(&id);
+                self.window_modifiers.remove(&id);
+                super::runtime::unregister_window(id);
+                self.window_registry.remove_primary();
+                let mut scroll_rests = std::collections::HashSet::new();
+                collect_scroll_rests(&state.root_element, &mut scroll_rests);
+                for rest in scroll_rests {
+                    crate::core::scroll_viewport::remove_scroll_viewport_signals(&rest);
+                    super::scroll_support::cancel_scroll_item_into_view(&rest);
+                }
+                #[cfg(feature = "a11y")]
+                {
+                    self.accesskit_adapter = None;
+                }
+                self.detached_gpu = Some(DetachedGpu {
+                    instance: state.instance,
+                    adapter: state.adapter,
+                    device: state.device,
+                    queue: state.queue,
+                    config: state.config,
+                    _font_system: state.text_renderer.into_owned_font_system(),
+                });
+                super::portal_overlay::drop_overlay_stack(
+                    super::window_scope::WindowScope::Primary,
+                );
+                crate::platform::glass_detach(window.as_ref());
+                self.pointer_window = None;
+                self.ime_owner_window = None;
+                self.paint_clock_active = false;
+                self.force_redraw_count = 0;
+            }
+        }
+    }
+
+    fn request_close(&mut self, event_loop: &dyn ActiveEventLoop, id: Option<WindowId>) {
+        if id.is_some_and(|id| !self.window_registry.contains(id)) {
+            return;
+        }
+        let primary = self.window_registry.primary_id();
+        let closing = self.close_targets(id);
+        for &wid in &closing {
             let Some(window) = self.lifecycle_window(wid) else {
                 continue;
             };
@@ -228,14 +311,40 @@ impl super::App {
                 return;
             }
         }
-        if id.is_none() || id == primary {
-            self.shutdown_renderer();
-            event_loop.exit();
-        } else if let Some(id) = id {
-            self.drop_secondary(id);
-            if let Some(slot) = self.window_registry.remove_secondary(id) {
-                slot.window.set_visible(false);
-            }
+        self.finish_close(event_loop, closing);
+    }
+
+    fn create_secondary_state(
+        &self,
+        window: Arc<dyn Window>,
+        root: Element,
+        options: super::WindowOptions,
+    ) -> Result<super::secondary_window::SecondaryWindowState, String> {
+        let state = self.state.borrow();
+        if let Some(primary) = state.as_ref() {
+            super::secondary_window::SecondaryWindowState::new(
+                window,
+                primary.device.clone(),
+                primary.queue.clone(),
+                &primary.instance,
+                &primary.adapter,
+                &primary.config,
+                root,
+                options,
+            )
+        } else if let Some(gpu) = &self.detached_gpu {
+            super::secondary_window::SecondaryWindowState::new(
+                window,
+                gpu.device.clone(),
+                gpu.queue.clone(),
+                &gpu.instance,
+                &gpu.adapter,
+                &gpu.config,
+                root,
+                options,
+            )
+        } else {
+            Err("application GPU is not ready".into())
         }
     }
 
@@ -405,7 +514,11 @@ impl super::App {
                 }
                 let wants_glass = options.compositor_alpha();
                 let mut composition = options.wants_dcomp_swapchain();
-                let Ok(created) = event_loop.create_window(options.window_attributes(composition))
+                let Ok(created) =
+                    event_loop.create_window(super::window_lifecycle::prepare_attributes(
+                        options.window_attributes(composition),
+                        options.persistence_label(false),
+                    ))
                 else {
                     log::warn!("multi-window: create_window failed");
                     return;
@@ -444,9 +557,12 @@ impl super::App {
                                 drop(accesskit.take());
                             }
                             drop(window);
-                            let Ok(created) =
-                                event_loop.create_window(options.window_attributes(false))
-                            else {
+                            let Ok(created) = event_loop.create_window(
+                                super::window_lifecycle::prepare_attributes(
+                                    options.window_attributes(false),
+                                    options.persistence_label(false),
+                                ),
+                            ) else {
                                 log::warn!("multi-window: create_window failed");
                                 return;
                             };
@@ -469,21 +585,7 @@ impl super::App {
                                 options.persistence_label(false),
                             );
                         }
-                        let state_borrow = self.state.borrow();
-                        let Some(primary) = state_borrow.as_ref() else {
-                            log::warn!("multi-window: OpenWindow before primary AppState ready");
-                            return;
-                        };
-                        match super::secondary_window::SecondaryWindowState::new(
-                            window.clone(),
-                            Arc::clone(&primary.device),
-                            Arc::clone(&primary.queue),
-                            &primary.instance,
-                            &primary.adapter,
-                            &primary.config,
-                            placeholder,
-                            options.clone(),
-                        ) {
+                        match self.create_secondary_state(window.clone(), placeholder, options.clone()) {
                             Ok(s) => s,
                             Err(e) => {
                                 log::warn!("multi-window: secondary init failed: {e}");
@@ -492,21 +594,7 @@ impl super::App {
                         }
                     }
                 } else {
-                    let state_borrow = self.state.borrow();
-                    let Some(primary) = state_borrow.as_ref() else {
-                        log::warn!("multi-window: OpenWindow before primary AppState ready");
-                        return;
-                    };
-                    match super::secondary_window::SecondaryWindowState::new(
-                        window.clone(),
-                        Arc::clone(&primary.device),
-                        Arc::clone(&primary.queue),
-                        &primary.instance,
-                        &primary.adapter,
-                        &primary.config,
-                        placeholder,
-                        options.clone(),
-                    ) {
+                    match self.create_secondary_state(window.clone(), placeholder, options.clone()) {
                         Ok(s) => s,
                         Err(e) => {
                             log::warn!("multi-window: secondary init failed: {e}");
@@ -537,12 +625,17 @@ impl super::App {
                     let secondaries = secondaries.clone();
                     crate::core::reactivity::create_effect(move || {
                         let _scope = super::window_scope::enter_secondary_id(id);
+                        super::invalidation::register_root(
+                            crate::core::reactivity::current_effect_id().unwrap(),
+                        );
                         crate::style::track_style_changes();
                         let new_root = (builder_rc.borrow_mut())();
                         let new_root = crate::style::apply_stylesheet_rules_tree(new_root);
                         if let Some(sec) = secondaries.borrow_mut().get_mut(&id) {
                             sec.replace_root(new_root);
-                            sec.window.request_redraw();
+                            if !super::invalidation::in_prepass() {
+                                sec.window.request_redraw();
+                            }
                         }
                     });
                 });
@@ -565,6 +658,19 @@ impl super::App {
             }
             super::JadixUserEvent::Exit => {
                 self.request_close(event_loop, None);
+            }
+            super::JadixUserEvent::SecondInstance(launch) => {
+                if let Some(window) = super::windows().first() {
+                    let _scope = if self.window_registry.primary_id() == Some(window.id()) {
+                        super::window_scope::enter_primary()
+                    } else {
+                        super::window_scope::enter_secondary_id(window.id())
+                    };
+                    let _ = window.focus();
+                    super::instance::dispatch(launch);
+                } else {
+                    super::instance::dispatch(launch);
+                }
             }
             #[cfg(feature = "a11y")]
             super::JadixUserEvent::AccessKit(ev) => {
@@ -629,9 +735,12 @@ impl super::App {
     }
 
     fn create_primary_if_needed(&mut self, event_loop: &dyn ActiveEventLoop) {
-        if self.state.borrow().is_none() {
+        if self.state.borrow().is_none() && self.detached_gpu.is_none() {
             let startup = std::time::Instant::now();
-            let attrs = self.window_options.to_window_attributes();
+            let attrs = super::window_lifecycle::prepare_attributes(
+                self.window_options.to_window_attributes(),
+                self.window_options.persistence_label(true),
+            );
             let window = event_loop.create_window(attrs).expect("create window");
             #[cfg(feature = "a11y")]
             {
@@ -681,26 +790,37 @@ impl super::App {
                 crate::app::devtools::DevToolsState::enable_for_window();
             }
             let builder_ref = self.app_builder.clone();
-            crate::core::reactivity::mark_next_effect_as_ui_root();
-            crate::core::reactivity::create_effect(move || {
-                log::debug!("root_effect: before app_builder");
-                crate::style::track_style_changes();
-                let new_root = (builder_ref.borrow_mut())();
-                #[cfg(feature = "devtools")]
-                let new_root = crate::app::devtools::wrap_app(new_root);
-                let new_root = crate::style::apply_stylesheet_rules_tree(new_root);
-                log::debug!(
-                    "root_effect: after app_builder children={}",
-                    new_root.children.len()
-                );
-                if let Some(st) = (*state_ref.borrow_mut()).as_mut() {
-                    log::debug!("root_effect: before rebuild_ui");
-                    st.rebuild_ui(new_root);
-                    log::debug!("root_effect: after rebuild_ui");
-                    st.window.request_redraw();
-                }
-                log::debug!("root_effect: body done (flush_deferred next)");
+            let (owner, _) = crate::core::reactivity::create_root(|| {
+                crate::core::reactivity::mark_next_effect_as_ui_root();
+                crate::core::reactivity::create_effect(move || {
+                    if state_ref.borrow().is_none() {
+                        return;
+                    }
+                    super::invalidation::register_root(
+                        crate::core::reactivity::current_effect_id().unwrap(),
+                    );
+                    log::debug!("root_effect: before app_builder");
+                    crate::style::track_style_changes();
+                    let new_root = (builder_ref.borrow_mut())();
+                    #[cfg(feature = "devtools")]
+                    let new_root = crate::app::devtools::wrap_app(new_root);
+                    let new_root = crate::style::apply_stylesheet_rules_tree(new_root);
+                    log::debug!(
+                        "root_effect: after app_builder children={}",
+                        new_root.children.len()
+                    );
+                    if let Some(st) = (*state_ref.borrow_mut()).as_mut() {
+                        log::debug!("root_effect: before rebuild_ui");
+                        st.rebuild_ui(new_root);
+                        log::debug!("root_effect: after rebuild_ui");
+                        if !super::invalidation::in_prepass() {
+                            st.window.request_redraw();
+                        }
+                    }
+                    log::debug!("root_effect: body done (flush_deferred next)");
+                });
             });
+            self.primary_owner = Some(owner);
             log::debug!("lifecycle: after root create_effect");
             log::info!(
                 "startup primary_ui_mounted_ms={:.1}",
@@ -732,6 +852,7 @@ impl super::App {
 
 impl ApplicationHandler for super::App {
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let _work = super::frame_budget::begin_work(super::frame_budget::WorkKind::Shared);
         // A producer must not keep us in try_recv forever, starving OS input.
         const EVENT_BATCH: usize = 64;
         let mut processed = 0;
@@ -788,6 +909,7 @@ impl ApplicationHandler for super::App {
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let _work = super::frame_budget::begin_work(super::frame_budget::WorkKind::Shared);
         #[cfg(debug_assertions)]
         if self.hot_reload.has_pending() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
@@ -797,6 +919,29 @@ impl ApplicationHandler for super::App {
 
         let now = std::time::Instant::now();
         let mut next_wake: Option<std::time::Instant> = None;
+        #[cfg(all(feature = "webview", not(windows)))]
+        if let Some(state) = self.state.borrow_mut().as_mut() {
+            if state.webviews.pump(&state.window) {
+                next_wake = Some(now + std::time::Duration::from_millis(16));
+            }
+        }
+        // Follow-up requests made during WM_PAINT use the paced animation wake.
+        if super::invalidation::pending(super::window_scope::WindowScope::Primary) {
+            if let Some(state) = self.state.borrow().as_ref() {
+                self.frame_pacers
+                    .entry(state.window.id())
+                    .or_default()
+                    .pending = true;
+            }
+        }
+        for &id in self.secondaries.borrow().keys() {
+            let scope = super::window_scope::WindowScope::Secondary(
+                super::window_scope::token_for_secondary(id),
+            );
+            if super::invalidation::pending(scope) {
+                self.frame_pacers.entry(id).or_default().pending = true;
+            }
+        }
 
         // Scrollbar auto-hide: `WaitUntil` the hold deadline, then one redraw starts fade-out.
         // Expired keys MUST be removed — leaving them makes every later `about_to_wait`
@@ -1024,9 +1169,9 @@ impl ApplicationHandler for super::App {
         let modal_css_needs = crate::utils::modal_motion::any_modal_css_needs_frame();
         // Nested Select Expand (ColorPicker format menu) is not Dialog CSS. A one-shot
         // armed at floating Enter is consumed by the parent Fade; query live motion.
-        let overlay_css_needs =
-            modal_css_needs || drawer_snap_needs_frame
-                || crate::utils::floating_motion::any_floating_motion_needs_frame();
+        let overlay_css_needs = modal_css_needs
+            || drawer_snap_needs_frame
+            || crate::utils::floating_motion::any_floating_motion_needs_frame();
         let resize_followup = (*self.state.borrow())
             .as_ref()
             .is_some_and(|s| s.needs_resize_followup());
@@ -1108,6 +1253,10 @@ impl ApplicationHandler for super::App {
     }
 
     fn window_event(&mut self, event_loop: &dyn ActiveEventLoop, id: WindowId, event: WindowEvent) {
+        if !self.window_registry.contains(id) {
+            return;
+        }
+        let _frame = super::frame_budget::begin_event(id, &event);
         #[cfg(feature = "a11y")]
         {
             if let Some(adapter) = &mut self.accesskit_adapter {
@@ -1138,21 +1287,25 @@ impl ApplicationHandler for super::App {
         if self.handle_native_resize_border(id, &event, event_loop) {
             return;
         }
+        if let WindowEvent::KeyboardInput { event, is_synthetic: false, .. } = &event {
+            if self.handle_fullscreen_shortcut(id, event) {
+                return;
+            }
+        }
+        #[cfg(feature = "webview")]
+        {
+            let mut state = self.state.borrow_mut();
+            if let Some(state) = state.as_mut().filter(|state| state.window.id() == id) {
+                let _scope = super::window_scope::enter_primary();
+                if state.webviews.handle_event(&event) { return; }
+            }
+        }
         match event {
             WindowEvent::CloseRequested => {
                 self.request_close(event_loop, Some(id));
             }
             WindowEvent::Destroyed => {
-                let is_primary = self.window_registry.primary_id() == Some(id)
-                    || (*self.state.borrow())
-                        .as_ref()
-                        .is_some_and(|s| s.window.id() == id);
-                if !is_primary {
-                    self.drop_secondary(id);
-                    let _ = self.window_registry.remove_secondary(id);
-                    return;
-                }
-                self.shutdown_renderer();
+                self.finish_close(event_loop, self.close_targets(Some(id)));
             }
             WindowEvent::PointerMoved {
                 position, source, ..
@@ -1247,6 +1400,7 @@ impl ApplicationHandler for super::App {
             WindowEvent::DragDropped { .. } => {}
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.modifiers = modifiers.state();
+                self.window_modifiers.insert(id, modifiers.state());
             }
             WindowEvent::Ime(ime) => {
                 if self.is_secondary_window(id) {
@@ -1257,6 +1411,10 @@ impl ApplicationHandler for super::App {
                 }
             }
             WindowEvent::Focused(focused) => {
+                if !focused {
+                    self.window_modifiers.remove(&id);
+                    self.modifiers = ModifiersState::default();
+                }
                 if focused {
                     super::native_menu::focus_window(id);
                 }
@@ -1405,6 +1563,21 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
 ) {
     crate::logging::init();
 
+    let (user_tx, user_rx) = std::sync::mpsc::channel();
+    let launch_tx = user_tx.clone();
+    let instance_guard = match super::instance::start(&window_options.instance_policy, move |launch| {
+        let accepted = launch_tx.send(super::JadixUserEvent::SecondInstance(launch)).is_ok();
+        super::ui_bridge::wake();
+        accepted
+    }) {
+        Ok(None) if matches!(window_options.instance_policy, super::InstancePolicy::Single { .. }) => return,
+        Ok(guard) => guard,
+        Err(error) => {
+            log::error!("instance startup failed: {error}");
+            return;
+        }
+    };
+
     let window_options = crate::platform::apply_ohos_window_options(window_options);
     window_options.install_text_defaults();
     crate::init();
@@ -1415,10 +1588,11 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
     }
     let event_loop = crate::platform::build_event_loop();
     let event_loop_proxy = event_loop.create_proxy();
-    let (user_tx, user_rx) = std::sync::mpsc::channel();
     super::ui_bridge::install_proxy(event_loop_proxy.clone(), user_tx);
     event_loop.set_control_flow(ControlFlow::Wait);
-    let app = create_app(window_options, app_builder, event_loop_proxy, user_rx);
+    let mut app = create_app(window_options, app_builder, event_loop_proxy.clone(), user_rx);
+    app.instance_guard = instance_guard;
+    event_loop_proxy.wake_up();
     #[cfg(not(target_arch = "wasm32"))]
     crate::platform::run_winit_app(event_loop, app);
     #[cfg(target_arch = "wasm32")]
@@ -1432,6 +1606,10 @@ pub(super) fn create_app(
     user_rx: std::sync::mpsc::Receiver<super::JadixUserEvent>,
 ) -> super::App {
     super::App {
+        detached_gpu: None,
+        primary_owner: None,
+        instance_guard: None,
+        window_modifiers: Default::default(),
         frame_pacers: Default::default(),
         state: std::rc::Rc::new(std::cell::RefCell::new(None)),
         is_suspended: false,

@@ -250,6 +250,13 @@ fn lucide_seed(el: &mut Element, name: &str) {
     let glyph = crate::utils::lucide::lucide_glyph(name).unwrap_or_else(|| "\u{ea0e}".into());
     el.text = Some(glyph);
     el.set_attr(crate::utils::ATTR_ICON_NAME, name);
+    if el
+        .get_attr(crate::utils::ATTR_ANIMATED_ICON)
+        .is_some_and(|s| s != name)
+    {
+        el.set_attr(crate::utils::ATTR_ANIMATED_ICON, name);
+        crate::utils::lucide_animated::reset_animated_icon_playback(el);
+    }
 }
 
 fn color_css(rgba: [u8; 4]) -> String {
@@ -323,20 +330,21 @@ fn play_exists(key: u64) -> bool {
         .is_some_and(|m| m.contains_key(&key))
 }
 
-fn release_play(key: u64) {
+fn release_play(key: u64) -> bool {
     let Ok(mut map) = play_store().lock() else {
-        return;
+        return false;
     };
     let remove = match map.get_mut(&key) {
         Some(p) => {
             p.refs = p.refs.saturating_sub(1);
             p.refs == 0
         }
-        None => false,
+        None => true,
     };
     if remove {
         map.remove(&key);
     }
+    remove
 }
 
 /// Unregister this instance (morphicons `destroy`). Later [`morph_to`] births a
@@ -1079,12 +1087,41 @@ pub fn tick_morph_icon(el: &mut Element, dt: f32) -> bool {
         play.rest_d = rest_d_el(el, &play.to_key);
         play.live = None;
         play.plan = None;
+        drop(store);
+        // Keep one more frame alive for the hover timeline to take over, even
+        // when this was the last active morph in the tree.
+        if el
+            .get_attr(crate::utils::ATTR_ANIMATED_ICON_STATE)
+            .is_some_and(|s| s == "animate")
+            && el
+                .get_attr(crate::utils::ATTR_ANIMATED_ICON)
+                .and_then(|name| crate::utils::animated_icon_recipe(name))
+                .is_some_and(|recipe| recipe.animated)
+            && !should_skip_spring(el)
+        {
+            crate::utils::start_animated_icon(el);
+            return true;
+        }
+        if el
+            .get_attr(crate::utils::ATTR_ANIMATED_ICON_STATE)
+            .is_some_and(|s| s == "animate")
+            && el
+                .get_attr(crate::utils::icon_provider::ATTR_ICON_HOVER_ANIMATION)
+                .is_some_and(|s| s != "animated")
+            && !should_skip_spring(el)
+        {
+            return true;
+        }
         return false;
     }
     true
 }
 
 pub fn tick_morph_icons_subtree(el: &mut Element, dt: f32) -> bool {
+    // A zero hash still walks newly mounted or invalidated icon paths.
+    if el.collect_paint_hash != 0 && !el.collect_skip_live {
+        return false;
+    }
     let mut any = tick_morph_icon(el, dt);
     for c in &mut el.children {
         if tick_morph_icons_subtree(c, dt) {
@@ -1095,6 +1132,10 @@ pub fn tick_morph_icons_subtree(el: &mut Element, dt: f32) -> bool {
 }
 
 pub fn subtree_needs_morph_icon_frame(el: &Element) -> bool {
+    // A zero hash still walks newly mounted or invalidated icon paths.
+    if el.collect_paint_hash != 0 && !el.collect_skip_live {
+        return false;
+    }
     if el.get_attr(ATTR_MORPH_ICON).is_some() {
         let key = instance_key(el);
         if let Ok(map) = play_store().lock() {
@@ -1145,7 +1186,23 @@ fn current_d(el: &Element) -> String {
     rest_d_el(el, &to)
 }
 
-fn stroke_for_paint(el: &Element, size: f32) -> f32 {
+/// A controlled pair owns its geometry even at an endpoint. Hover playback
+/// starts afresh after an imperative or bound icon change has settled.
+pub(crate) fn blocks_hover_animation(el: &Element) -> bool {
+    if el.get_attr(ATTR_MORPH_ICON).is_none() {
+        return false;
+    }
+    if should_skip_spring(el) || is_controlled(el) {
+        return true;
+    }
+    play_store()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&instance_key(el)).map(|p| !p.settled))
+        .unwrap_or(false)
+}
+
+pub(crate) fn stroke_for_paint(el: &Element, size: f32) -> f32 {
     let sw = el
         .get_attr(ATTR_MORPH_STROKE)
         .and_then(|s| s.parse().ok())
@@ -1182,6 +1239,13 @@ pub fn ensure_morph_icon_texture(
     color: [u8; 4],
     dpr: f32,
 ) -> Option<(String, f32)> {
+    if el.get_attr(crate::utils::ATTR_ANIMATED_ICON).is_some() && !blocks_hover_animation(el) {
+        if let Some(texture) = crate::utils::lucide_animated::ensure_animated_icon_recipe_texture(
+            el, size_px, color, dpr,
+        ) {
+            return Some(texture);
+        }
+    }
     let d = current_d(el);
     if d.is_empty() {
         return None;
@@ -1218,6 +1282,7 @@ pub struct MorphIconBuilder {
     label: Option<String>,
     color: Option<[u8; 4]>,
     id: Option<String>,
+    hover_animation: bool,
 }
 
 pub fn morph_icon(icon: impl IntoMorphSrc) -> MorphIconBuilder {
@@ -1236,10 +1301,18 @@ pub fn morph_icon(icon: impl IntoMorphSrc) -> MorphIconBuilder {
         label: None,
         color: None,
         id: None,
+        hover_animation: false,
     }
 }
 
 impl MorphIconBuilder {
+    /// Use AnimatedIcon recipes on hover. Icon changes and controlled seeking
+    /// take priority; names without a recipe retain the static/morph rendering.
+    pub fn hover_animation(mut self, on: bool) -> Self {
+        self.hover_animation = on;
+        self
+    }
+
     pub fn from_icon(mut self, src: impl IntoMorphSrc) -> Self {
         self.from = Some(src.into_morph_src());
         self
@@ -1358,6 +1431,10 @@ impl From<MorphIconBuilder> for Element {
         el.set_attr(ATTR_MORPH_SPRING, &b.spring);
         el.set_attr(ATTR_MORPH_INTERP, &b.interp);
         el.set_attr(ATTR_MORPH_REDUCED, &b.reduced_motion);
+        if b.hover_animation {
+            el.set_attr(crate::utils::ATTR_ANIMATED_ICON, &display);
+            el.set_attr(crate::utils::ATTR_ANIMATED_ICON_STATE, "normal");
+        }
         if b.absolute_stroke_width {
             el.set_attr(ATTR_MORPH_ABS_STROKE, "1");
         }
@@ -1392,8 +1469,11 @@ impl From<MorphIconBuilder> for Element {
             format!("morph-icon:{tag}:{seq}")
         };
         el.template_id = Some(tid);
-        // Button parents need hits; MorphIcon itself is paint-only.
-        el = el.pointer_events("none");
+        el = el.pointer_events(if b.hover_animation {
+            "bounding-box"
+        } else {
+            "none"
+        });
         el = paint_morph_a11y(el, b.label.as_deref());
 
         let key = instance_key(&el);
@@ -1419,13 +1499,22 @@ impl From<MorphIconBuilder> for Element {
                 }
             }
         }
-        el = el.on_unmount(move || release_play(key));
+        let tid = el.template_id.clone().unwrap_or_default();
+        el = el.on_unmount(move || {
+            if release_play(key) {
+                crate::utils::lucide_animated::release_animated_icon(key, &tid);
+            }
+        });
         if pair {
             apply_controlled_pair(&mut el);
         } else if inserted && b.progress.is_some() {
             morph_seek_src(&mut el, &display, t0);
         }
-        el
+        if b.hover_animation {
+            crate::utils::lucide_animated::with_animated_icon_hover(el)
+        } else {
+            el
+        }
     }
 }
 
@@ -1492,6 +1581,37 @@ pub fn MorphIcon(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stamped_pump_keeps_active_and_newly_mounted_icons() {
+        use crate::layout::collect_cache::{
+            invalidate_collect_paint_hash_path, stamp_subtree_paint_hashes,
+        };
+        let mut root = Element::new().child(Element::new().text("static"));
+        stamp_subtree_paint_hashes(&mut root, false);
+        assert!(!root.collect_skip_live);
+        assert!(!tick_morph_icons_subtree(&mut root, 1.0 / 60.0));
+        assert!(!subtree_needs_morph_icon_frame(&root));
+
+        let mut icon: Element = morph_icon(IconInput::D("M0 12 L24 12".into()))
+            .id("stamped-pump-mounted")
+            .into();
+        morph_to(&mut icon, IconInput::D("M12 0 L12 24".into()));
+        root.children.push(icon);
+        invalidate_collect_paint_hash_path(&mut root, &[1]);
+        assert!(tick_morph_icons_subtree(&mut root, 1.0 / 60.0));
+        stamp_subtree_paint_hashes(&mut root, true);
+        assert!(root.collect_skip_live);
+        assert!(subtree_needs_morph_icon_frame(&root));
+        assert!(tick_morph_icons_subtree(&mut root, 1.0 / 60.0));
+
+        root.children.pop();
+        root.collect_paint_hash = 0;
+        stamp_subtree_paint_hashes(&mut root, true);
+        assert!(!root.collect_skip_live);
+        assert!(!tick_morph_icons_subtree(&mut root, 1.0 / 60.0));
+        assert!(!subtree_needs_morph_icon_frame(&root));
+    }
 
     #[test]
     fn builder_sets_attrs() {

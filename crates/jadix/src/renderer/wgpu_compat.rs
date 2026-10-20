@@ -12,6 +12,14 @@ pub(crate) enum SurfaceAcquireError {
 }
 
 pub(crate) fn instance(backends: wgpu::Backends) -> wgpu::Instance {
+    #[cfg(all(windows, feature = "backend-dx11"))]
+    if backends == wgpu::Backends::DX11 {
+        return unsafe {
+            wgpu::Instance::from_hal::<wgpu_hal::dx11::Api>(
+                wgpu_hal::dx11::Instance::new().expect("native D3D11 instance"),
+            )
+        };
+    }
     #[allow(unused_mut)] // D3D12 compiler policy is Windows-only.
     let mut descriptor = wgpu::InstanceDescriptor {
         backends,
@@ -21,6 +29,12 @@ pub(crate) fn instance(backends: wgpu::Backends) -> wgpu::Instance {
     // unoptimized shader debugging are explicit WGPU_VALIDATION/WGPU_DEBUG
     // opt-ins; wgpu-core and indirect-call validation remain enabled.
     descriptor.flags = wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL.with_env();
+    #[cfg(all(windows, feature = "backend-dx11-angle"))]
+    {
+        // D3D11 ANGLE exposes its storage-buffer path with an explicit ES 3.1
+        // request. Automatic picks ES 3.0, below Jadix's polygon-clip needs.
+        descriptor.backend_options.gl.gles_minor_version = wgpu::Gles3MinorVersion::Version1;
+    }
     #[cfg(all(windows, feature = "backend-dx12"))]
     {
         // Jadix needs SM5, not a PATH-discovered DXC/DXIL toolchain. The latter can

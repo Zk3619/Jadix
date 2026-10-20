@@ -871,6 +871,17 @@ fn max_duration(recipe: &AnimatedIconRecipe, state: &str) -> f32 {
 
 /// Advance playback; returns true if a redraw is still needed.
 pub fn tick_animated_icon(el: &mut Element, _dt: f32) -> bool {
+    #[cfg(feature = "svg")]
+    let morph = el
+        .get_attr(crate::utils::morph_icon::ATTR_MORPH_ICON)
+        .is_some();
+    #[cfg(not(feature = "svg"))]
+    let morph = false;
+    #[cfg(feature = "svg")]
+    if morph && crate::utils::morph_icon::blocks_hover_animation(el) {
+        reset_animated_icon_playback(el);
+        return false;
+    }
     let Some(name) = el.get_attr(ATTR_ANIMATED_ICON).cloned() else {
         return false;
     };
@@ -893,7 +904,7 @@ pub fn tick_animated_icon(el: &mut Element, _dt: f32) -> bool {
         state: state.to_string(),
         elapsed: 0.0,
         started_secs: now_secs(),
-        bridging: false,
+        bridging: morph && state != "normal",
     });
     if pb.state != state {
         // Attr changed without `set_animated_icon_state` — still treat as a bridge.
@@ -943,6 +954,23 @@ pub fn stop_animated_icon(el: &mut Element) {
     set_animated_icon_state(el, "normal");
 }
 
+#[cfg(feature = "svg")]
+pub(crate) fn reset_animated_icon_playback(el: &Element) {
+    if let Ok(mut map) = play_store().lock() {
+        map.remove(&instance_key(el));
+    }
+}
+
+#[cfg(feature = "svg")]
+pub(crate) fn release_animated_icon(key: u64, template_id: &str) {
+    if let Ok(mut map) = play_store().lock() {
+        map.remove(&key);
+    }
+    if let Ok(mut map) = hover_intent_map().lock() {
+        map.remove(template_id);
+    }
+}
+
 /// Rasterize current frame; returns texture key + logical size.
 pub fn ensure_animated_icon_texture(
     el: &Element,
@@ -950,8 +978,34 @@ pub fn ensure_animated_icon_texture(
     color: [u8; 4],
     dpr: f32,
 ) -> Option<(String, f32)> {
+    #[cfg(feature = "svg")]
+    if el
+        .get_attr(crate::utils::morph_icon::ATTR_MORPH_ICON)
+        .is_some()
+    {
+        return crate::utils::morph_icon::ensure_morph_icon_texture(el, size_px, color, dpr);
+    }
+    ensure_animated_icon_recipe_texture(el, size_px, color, dpr)
+}
+
+pub(crate) fn ensure_animated_icon_recipe_texture(
+    el: &Element,
+    size_px: f32,
+    color: [u8; 4],
+    dpr: f32,
+) -> Option<(String, f32)> {
     let name = el.get_attr(ATTR_ANIMATED_ICON)?;
     let recipe = animated_icon_recipe(name)?;
+    #[cfg(feature = "svg")]
+    let morph_recipe = el
+        .get_attr(crate::utils::morph_icon::ATTR_MORPH_ICON)
+        .map(|_| {
+            let mut recipe = recipe.clone();
+            recipe.stroke_width = crate::utils::morph_icon::stroke_for_paint(el, size_px);
+            recipe
+        });
+    #[cfg(feature = "svg")]
+    let recipe = morph_recipe.as_ref().unwrap_or(recipe);
     let state = el
         .get_attr(ATTR_ANIMATED_ICON_STATE)
         .map(|s| s.as_str())
@@ -1004,7 +1058,19 @@ pub fn ensure_animated_icon_texture(
 
 /// Whether any animated icon in the tree needs the frame pump.
 pub fn subtree_needs_animated_icon_frame(el: &Element) -> bool {
-    if el.get_attr(ATTR_ANIMATED_ICON).is_some() {
+    // Collect already summarizes animated descendants. An invalidated hash must
+    // fall through so newly mounted/bound icons are discovered before collection.
+    if el.collect_paint_hash != 0 && !el.collect_skip_live {
+        return false;
+    }
+    #[cfg(feature = "svg")]
+    let blocked = el
+        .get_attr(crate::utils::morph_icon::ATTR_MORPH_ICON)
+        .is_some()
+        && crate::utils::morph_icon::blocks_hover_animation(el);
+    #[cfg(not(feature = "svg"))]
+    let blocked = false;
+    if !blocked && el.get_attr(ATTR_ANIMATED_ICON).is_some() {
         let state = el
             .get_attr(ATTR_ANIMATED_ICON_STATE)
             .map(|s| s.as_str())
@@ -1034,6 +1100,11 @@ pub fn subtree_needs_animated_icon_frame(el: &Element) -> bool {
 
 /// Tick all animated icons under `el`.
 pub fn tick_animated_icons_subtree(el: &mut Element, dt: f32) -> bool {
+    // Collect already summarizes animated descendants. An invalidated hash must
+    // fall through so newly mounted/bound icons are discovered before collection.
+    if el.collect_paint_hash != 0 && !el.collect_skip_live {
+        return false;
+    }
     let mut any = tick_animated_icon(el, dt);
     for c in &mut el.children {
         if tick_animated_icons_subtree(c, dt) {
@@ -1135,13 +1206,16 @@ impl From<AnimatedIconBuilder> for Element {
         if controlled {
             return el;
         }
-        interactive(el)
-            .cursor("pointer")
-            .on_hover(move |on| {
-                hover_intent(tid.clone(), on);
-            })
-            .into()
+        with_animated_icon_hover(el)
     }
+}
+
+pub(crate) fn with_animated_icon_hover(el: Element) -> Element {
+    let tid = el.template_id.clone().expect("animated icon identity");
+    interactive(el)
+        .cursor("pointer")
+        .on_hover(move |on| hover_intent(tid.clone(), on))
+        .into()
 }
 
 fn hover_intent_map() -> &'static Mutex<HashMap<String, bool>> {
@@ -1166,22 +1240,35 @@ pub fn sync_animated_icon_hover(el: &mut Element) {
         .ok()
         .map(|m| m.clone())
         .unwrap_or_default();
-    sync_hover_rec(el, &intents);
+    if !intents.is_empty() {
+        sync_hover_rec(el, &intents);
+    }
 }
 
 fn sync_hover_rec(el: &mut Element, intents: &HashMap<String, bool>) {
-    if el.get_attr(ATTR_ANIMATED_ICON).is_some()
+    if el.collect_paint_hash != 0 && !el.collect_skip_live {
+        return;
+    }
+    if (el.get_attr(ATTR_ANIMATED_ICON).is_some()
+        || el
+            .get_attr(crate::utils::icon_provider::ATTR_ICON_HOVER_ANIMATION)
+            .is_some())
         && el.get_attr(ATTR_ANIMATED_ICON_CONTROLLED).is_none()
     {
         if let Some(tid) = el.template_id.clone() {
             if let Some(&on) = intents.get(&tid) {
+                crate::utils::icon_provider::sync_icon_hover_animation(el, on);
                 let want = if on { "animate" } else { "normal" };
                 let cur = el
                     .get_attr(ATTR_ANIMATED_ICON_STATE)
                     .map(|s| s.as_str())
                     .unwrap_or("normal");
                 if cur != want {
-                    set_animated_icon_state(el, want);
+                    if el.get_attr(ATTR_ANIMATED_ICON).is_some() {
+                        set_animated_icon_state(el, want);
+                    } else {
+                        el.set_attr(ATTR_ANIMATED_ICON_STATE, want);
+                    }
                 }
             }
         }
@@ -1210,6 +1297,140 @@ pub fn AnimatedIcon(name: impl AsRef<str>, size: Option<f32>, controlled: Option
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(all(feature = "svg", feature = "bundled-lucide"))]
+    #[test]
+    fn morph_hover_switches_renderers_and_restarts_after_settling() {
+        use crate::utils::morph_icon::{apply_bound_morph_icon, morph_to, tick_morph_icon};
+        let mut el: Element = crate::utils::morph_icon("sun")
+            .id("hybrid-hover-switch")
+            .hover_animation(true)
+            .label("Switch theme")
+            .into();
+        let key = instance_key(&el);
+        let color = [25, 45, 65, 255];
+        let texture = |el: &Element| {
+            ensure_animated_icon_texture(el, 24.0, color, 1.0)
+                .unwrap()
+                .0
+        };
+        assert!(!subtree_needs_animated_icon_frame(&el));
+        assert_eq!(
+            el.get_attr("accesskit_name").map(String::as_str),
+            Some("Switch theme")
+        );
+
+        (el.on_hover.as_ref().unwrap().borrow_mut())(true);
+        sync_animated_icon_hover(&mut el);
+        assert!(tick_animated_icon(&mut el, 0.016));
+        assert!(texture(&el).starts_with("jadix_lucide_anim:"));
+        // A nearly finished old recipe must not carry its playhead to the new icon.
+        play_store().lock().unwrap().get_mut(&key).unwrap().elapsed = 9.0;
+        apply_bound_morph_icon(&mut el, "moon");
+        assert_eq!(
+            el.get_attr(ATTR_ANIMATED_ICON).map(String::as_str),
+            Some("moon")
+        );
+        assert!(!tick_animated_icon(&mut el, 0.016));
+        assert!(!subtree_needs_animated_icon_frame(&el));
+        assert!(texture(&el).starts_with("jadix_morph_icon:"));
+        assert!(tick_morph_icon(&mut el, 0.016));
+        // Retarget while morphing, then finish while still hovered.
+        morph_to(&mut el, "heart");
+        assert!(
+            tick_morph_icon(&mut el, 10.0),
+            "handoff must wake another frame"
+        );
+        let pb = play_store().lock().unwrap().get(&key).unwrap().clone();
+        assert_eq!(pb.state, "animate");
+        assert_eq!(pb.elapsed, 0.0);
+        assert!(subtree_needs_animated_icon_frame(&el));
+        assert!(texture(&el).starts_with("jadix_lucide_anim:"));
+
+        (el.on_hover.as_ref().unwrap().borrow_mut())(false);
+        sync_animated_icon_hover(&mut el);
+        assert_eq!(
+            el.get_attr(ATTR_ANIMATED_ICON_STATE).map(String::as_str),
+            Some("normal")
+        );
+        // Deterministically finish the leave transition without sleeping.
+        play_store()
+            .lock()
+            .unwrap()
+            .get_mut(&key)
+            .unwrap()
+            .started_secs = now_secs() - 10.0;
+        assert!(!tick_animated_icon(&mut el, 0.016));
+        assert!(!subtree_needs_animated_icon_frame(&el));
+        let tid = el.template_id.clone().unwrap();
+        drop(el);
+        assert!(!play_store().lock().unwrap().contains_key(&key));
+        assert!(!hover_intent_map().lock().unwrap().contains_key(&tid));
+    }
+
+    #[cfg(all(feature = "svg", feature = "bundled-lucide"))]
+    #[test]
+    fn morph_hover_respects_controlled_geometry_reduced_motion_and_fallbacks() {
+        use crate::utils::morph_icon::{
+            apply_bound_morph_from, apply_bound_morph_reduced, morph_to,
+        };
+        let color = [50, 70, 90, 255];
+        let texture = |el: &Element| {
+            ensure_animated_icon_texture(el, 32.0, color, 1.0)
+                .unwrap()
+                .0
+        };
+        let mut el: Element = crate::utils::morph_icon("sun")
+            .id("hybrid-controlled")
+            .from_icon("sun")
+            .to_icon("moon")
+            .progress(0.5)
+            .hover_animation(true)
+            .into();
+        start_animated_icon(&mut el);
+        assert!(!tick_animated_icon(&mut el, 0.016));
+        assert!(texture(&el).starts_with("jadix_morph_icon:"));
+        apply_bound_morph_reduced(&mut el, "always");
+        apply_bound_morph_from(&mut el, "");
+        morph_to(&mut el, "heart");
+        assert!(!tick_animated_icon(&mut el, 0.016));
+        assert!(!subtree_needs_animated_icon_frame(&el));
+        assert!(texture(&el).starts_with("jadix_morph_icon:"));
+
+        apply_bound_morph_reduced(&mut el, "never");
+        morph_to(&mut el, "M4 12 L20 12");
+        crate::utils::morph_icon::tick_morph_icon(&mut el, 10.0);
+        assert!(!tick_animated_icon(&mut el, 0.016));
+        assert!(texture(&el).starts_with("jadix_morph_icon:"));
+        let plain: Element = crate::utils::morph_icon("sun").into();
+        assert!(plain.on_hover.is_none());
+        assert!(plain.get_attr(ATTR_ANIMATED_ICON).is_none());
+    }
+
+    #[test]
+    fn collect_summary_keeps_cold_and_new_animated_icons_live() {
+        use crate::layout::collect_cache::{
+            invalidate_collect_paint_hash_path, stamp_subtree_paint_hashes,
+        };
+        let mut root = Element::new().child(Element::new().text("static"));
+        stamp_subtree_paint_hashes(&mut root, false);
+        assert!(!subtree_needs_animated_icon_frame(&root));
+        assert!(!tick_animated_icons_subtree(&mut root, 0.016));
+        let mut icon: Element = animated_icon("menu").controlled(true).into();
+        set_animated_icon_state(&mut icon, "animate");
+        root.children[0] = icon;
+        invalidate_collect_paint_hash_path(&mut root, &[0]);
+        assert!(
+            subtree_needs_animated_icon_frame(&root),
+            "invalid summary must walk new icon"
+        );
+        stamp_subtree_paint_hashes(&mut root, true);
+        assert!(root.collect_skip_live);
+        assert!(
+            subtree_needs_animated_icon_frame(&root),
+            "cached summary must retain icon path"
+        );
+    }
 
     #[test]
     fn recipes_loaded() {

@@ -14,6 +14,28 @@ pub(crate) fn gpu_backend_order(compositor_alpha: bool) -> Vec<(wgpu::Backends, 
 pub(crate) fn with_requested_backend_front(
     mut order: Vec<(wgpu::Backends, &'static str)>,
 ) -> Vec<(wgpu::Backends, &'static str)> {
+    if std::env::var("JADIX_GPU_BACKEND").is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "dx11" | "d3d11" | "dx11-native"
+        )
+    }) {
+        assert!(
+            cfg!(all(windows, feature = "backend-dx11")),
+            "native dx11 requires Windows and feature backend-dx11"
+        );
+        return vec![(wgpu::Backends::DX11, "dx11-native")];
+    }
+    if std::env::var("JADIX_GPU_BACKEND")
+        .is_ok_and(|value| value.trim().eq_ignore_ascii_case("dx11-angle"))
+    {
+        assert!(
+            cfg!(all(windows, feature = "backend-dx11-angle")),
+            "dx11-angle requires Windows and feature backend-dx11-angle"
+        );
+        // A comparison must never silently fall back to WGL/DX12/software.
+        return vec![(wgpu::Backends::GL, "dx11-angle")];
+    }
     if let Some(front) = parse_requested_backend() {
         let label = order
             .iter()

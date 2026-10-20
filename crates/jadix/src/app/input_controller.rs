@@ -3,7 +3,7 @@ use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
 use crate::components::input::{
-    InputType, filter_insert_for_type, input_type_signal_key, strip_control_insert,
+    filter_insert_for_type, input_type_signal_key, strip_control_insert, InputType,
 };
 use crate::utils::clipboard::{
     consumes_undo_redo_letter, edit_shortcut_letter, get_text as clipboard_get_text,
@@ -186,6 +186,11 @@ pub(crate) fn named_key_blocks_text_insert(key: &Key) -> bool {
 
 impl super::App {
     pub(super) fn handle_ime_event(&mut self, ime: Ime, window_id: WindowId) {
+        let _work = super::frame_budget::begin_work(super::frame_budget::WorkKind::Ime);
+        crate::core::reactivity::batch(|| self.apply_ime_event(ime, window_id));
+    }
+
+    fn apply_ime_event(&mut self, ime: Ime, window_id: WindowId) {
         let focused = crate::core::reactivity::use_signal("__jadix_button_focus_id", String::new);
         let ime_active =
             crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false);
@@ -1800,6 +1805,79 @@ impl super::App {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    #[ignore = "native event loop; run in a separate process"]
+    fn ime_events_publish_atomic_unicode_edit_snapshots() {
+        use crate::core::reactivity::{create_effect, use_signal};
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+        let mut builder = winit::event_loop::EventLoop::builder();
+        builder.with_any_thread(true);
+        let event_loop = builder.build().unwrap();
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        let mut app = crate::app::lifecycle::create_app(
+            crate::app::WindowOptions::new(),
+            crate::core::tree::Element::new,
+            event_loop.create_proxy(),
+            receiver,
+        );
+        let rest = "ime-atomic-unicode";
+        let value = use_signal(
+            &crate::components::input::input_value_signal_key(rest),
+            String::new,
+        );
+        let preedit = use_signal(
+            &crate::components::input::input_preedit_signal_key(rest),
+            String::new,
+        );
+        let caret = use_signal(
+            &crate::components::input::input_caret_signal_key(rest),
+            || None::<usize>,
+        );
+        let selection = use_signal(
+            &crate::components::input::input_selection_signal_key(rest),
+            || None::<(usize, usize)>,
+        );
+        let focus = use_signal("__jadix_button_focus_id", String::new);
+        focus.set(format!("input:{rest}"));
+        value.set("ab中文z".into());
+        caret.set(Some(8));
+        selection.set(Some((2, 8)));
+        let observed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let output = observed.clone();
+        create_effect(move || {
+            output
+                .borrow_mut()
+                .push((value.get(), preedit.get(), caret.get()))
+        });
+        let window = WindowId::from_raw(10);
+        app.handle_ime_event(Ime::Preedit("拼".into(), Some((3, 3))), window);
+        assert_eq!(
+            observed.borrow().len(),
+            2,
+            "one settled notification per OS event"
+        );
+        assert_eq!(
+            observed.borrow().last().unwrap(),
+            &("abz".into(), "拼".into(), Some(2))
+        );
+        app.handle_ime_event(Ime::Preedit(String::new(), None), window);
+        let before_commit = observed.borrow().len();
+        app.handle_ime_event(Ime::Commit("👩‍💻".into()), window);
+        assert_eq!(observed.borrow().len(), before_commit + 1);
+        assert_eq!(value.peek(), "ab👩‍💻z");
+        assert_eq!(caret.peek(), Some(13));
+        assert!(preedit.peek().is_empty());
+        app.handle_ime_event(Ime::Commit(String::new()), window);
+        app.handle_ime_event(Ime::Disabled, window);
+        assert_eq!(
+            value.peek(),
+            "ab👩‍💻z",
+            "teardown must not duplicate or delete committed text"
+        );
+        focus.set(String::new());
+    }
 
     #[cfg(target_os = "windows")]
     #[test]

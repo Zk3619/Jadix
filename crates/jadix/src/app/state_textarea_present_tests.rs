@@ -623,7 +623,10 @@ fn check_focus_ring(
                             std::env::set_var("JADIX_TEXTAREA_TEST_OUTPUT", ".tmp/textarea-fade");
                             snapshot("failed-fade-baseline", &baseline);
                             snapshot("failed-fade-frame", &actual);
-                            panic!("fade cycle {cycle} entering={entering} tick={tick} alpha={} erased glyph at ({px},{py}): {pixel:?} != {expected:?}", visibility.peek());
+                            panic!(
+                                "fade cycle {cycle} entering={entering} tick={tick} alpha={} erased glyph at ({px},{py}): {pixel:?} != {expected:?}",
+                                visibility.peek()
+                            );
                         }
                     }
                 }

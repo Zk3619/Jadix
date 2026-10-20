@@ -571,6 +571,25 @@ fn build_node(el: &Element, for_map: &HashMap<String, String>) -> Node {
         node.set_live(live);
     }
 
+    if el.attrs.get("disabled").map(String::as_str) == Some("true") {
+        node.set_disabled();
+    }
+    if let Some(pressed) = el.attrs.get("aria-pressed").map(String::as_str) {
+        match pressed {
+            "true" => node.set_toggled(Toggled::True),
+            "false" => node.set_toggled(Toggled::False),
+            _ => {}
+        }
+    }
+    if role == Role::Slider {
+        let number = |name: &str| el.attrs.get(name)
+            .and_then(|value| value.parse::<f64>().ok()).filter(|value| value.is_finite());
+        if let Some(value) = number("aria-valuenow") { node.set_numeric_value(value); }
+        if let Some(value) = number("aria-valuemin") { node.set_min_numeric_value(value); }
+        if let Some(value) = number("aria-valuemax") { node.set_max_numeric_value(value); }
+        if let Some(value) = el.attrs.get("aria-valuetext") { node.set_value(value.clone()); }
+    }
+
     if el.on_click.is_some() {
         node.add_action(Action::Click);
     }

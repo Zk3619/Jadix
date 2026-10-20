@@ -697,7 +697,7 @@ pub struct Style {
     pub zoom: f32,
     /// CSS `aspect-ratio` (width / height). Passed to Taffy.
     pub aspect_ratio: Option<f32>,
-    /// Emulate CSS `position: fixed` (taffy has no Fixed): Absolute layout + ignore ancestor scroll.
+    /// Viewport-fixed positioning: portal hoisting + Absolute layout + ignore ancestor scroll.
     pub position_fixed: bool,
     /// Emulate CSS `position: sticky`: Relative layout + scroll-aware offset clamping.
     pub position_sticky: bool,
@@ -1581,15 +1581,15 @@ impl Style {
             display: self.display,
             flex_direction,
             flex_wrap: self.flex_wrap,
-            justify_content: self.justify_content,
-            align_items,
+            justify_content: self.justify_content.unwrap_or_default(),
+            align_items: align_items.unwrap_or_default(),
             align_self,
             justify_self: self.justify_self,
-            align_content,
-            justify_items,
+            align_content: align_content.unwrap_or_default(),
+            justify_items: justify_items.unwrap_or_default(),
             size,
-            min_size,
-            max_size,
+            min_size: min_size.map(dimension_constraint),
+            max_size: max_size.map(dimension_constraint),
             flex_grow: self.flex_grow,
             flex_shrink: self.flex_shrink,
             flex_basis,
@@ -1898,6 +1898,15 @@ fn zoom_rect_lpa(r: Rect<LengthPercentageAuto>, z: f32) -> Rect<LengthPercentage
         right: zoom_lpa_val(r.right, z),
         bottom: zoom_lpa_val(r.bottom, z),
         left: zoom_lpa_val(r.left, z),
+    }
+}
+
+// Jadix constraints retain the length/percentage/auto API used before Taffy 0.15.
+fn dimension_constraint(value: Dimension) -> LengthPercentageAuto {
+    match dim_kind(value) {
+        DimKind::Length(px) => LengthPercentageAuto::length(px),
+        DimKind::Percent(ratio) => LengthPercentageAuto::percent(ratio),
+        DimKind::Auto => LengthPercentageAuto::auto(),
     }
 }
 

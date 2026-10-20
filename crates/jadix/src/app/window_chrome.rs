@@ -63,6 +63,8 @@ pub const PRIMARY_WINDOW_LABEL: &str = "main";
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowOptions {
     pub title: String,
+    /// Native window icon; installation / launcher icons belong to the app bundle.
+    pub icon: Option<super::AppIcon>,
     /// Stable id for `jadix_window_state`. Primary defaults to [`PRIMARY_WINDOW_LABEL`];
     /// secondary windows without a label are not persisted.
     pub window_label: Option<String>,
@@ -80,7 +82,13 @@ pub struct WindowOptions {
     pub resize_border: f64,
     pub maximized: bool,
     pub fullscreen: bool,
+    /// Enable desktop fullscreen shortcuts for this window.
+    pub fullscreen_shortcuts: bool,
     pub always_on_top: bool,
+    /// Secondary windows close with the primary unless explicitly detached.
+    pub close_with_primary: bool,
+    /// Process startup policy; only read when launching the primary application.
+    pub instance_policy: super::instance::InstancePolicy,
     /// OS title bar / border. `false` = frameless (draw your own chrome).
     pub decorations: bool,
     /// Per-pixel alpha is composited with the desktop. Pair with translucent fills.
@@ -130,6 +138,7 @@ impl Default for WindowOptions {
     fn default() -> Self {
         Self {
             title: std::env::var("JADIX_WINDOW_TITLE").unwrap_or_else(|_| "Jadix Engine".into()),
+            icon: None,
             window_label: None,
             inner_width: None,
             inner_height: None,
@@ -140,7 +149,10 @@ impl Default for WindowOptions {
             resize_border: 0.0,
             maximized: false,
             fullscreen: false,
+            fullscreen_shortcuts: true,
             always_on_top: false,
+            close_with_primary: true,
+            instance_policy: Default::default(),
             decorations: true,
             transparent: false,
             blur: false,
@@ -173,6 +185,12 @@ impl WindowOptions {
 
     pub fn title(mut self, title: impl Into<String>) -> Self {
         self.title = title.into();
+        self
+    }
+
+    /// Set the initial native window icon (Windows / supported Linux compositors).
+    pub fn icon(mut self, icon: super::AppIcon) -> Self {
+        self.icon = Some(icon);
         self
     }
 
@@ -244,6 +262,26 @@ impl WindowOptions {
     pub fn fullscreen(mut self, enabled: bool) -> Self {
         self.fullscreen = enabled;
         self
+    }
+
+    pub fn fullscreen_shortcuts(mut self, enabled: bool) -> Self {
+        self.fullscreen_shortcuts = enabled;
+        self
+    }
+
+    /// Keep a secondary window alive after the primary closes when false.
+    pub fn close_with_primary(mut self, enabled: bool) -> Self {
+        self.close_with_primary = enabled;
+        self
+    }
+
+    pub fn instance_policy(mut self, policy: super::instance::InstancePolicy) -> Self {
+        self.instance_policy = policy;
+        self
+    }
+
+    pub fn single_instance(self, id: impl Into<String>) -> Self {
+        self.instance_policy(super::instance::InstancePolicy::Single { id: id.into() })
     }
 
     pub fn always_on_top(mut self, enabled: bool) -> Self {
@@ -502,6 +540,7 @@ impl WindowOptions {
         let mut attrs = WindowAttributes::default()
             .with_theme(Some(native_theme()))
             .with_title(&self.title)
+            .with_window_icon(self.icon.as_ref().map(super::AppIcon::to_winit))
             .with_visible(false)
             .with_resizable(self.resizable)
             .with_maximized(self.maximized)
@@ -667,7 +706,12 @@ pub(crate) fn apply_created_window(
     options: &WindowOptions,
     composition_swapchain: bool,
 ) {
-    window.set_theme(Some(native_theme()));
+    // Win32 refreshes caption colors by toggling WM_NCACTIVATE. Reapplying
+    // the same theme on every surface resize makes the title text flash.
+    let theme = native_theme();
+    if window.theme() != Some(theme) {
+        window.set_theme(Some(theme));
+    }
     crate::platform::apply_created_window(window, options, composition_swapchain);
 }
 
@@ -719,6 +763,22 @@ pub fn set_window_maximized(maximized: bool) {
 
 pub fn window_is_maximized() -> bool {
     with_active_window(|w| w.is_maximized()).unwrap_or(false)
+}
+
+pub fn set_window_fullscreen(fullscreen: bool) {
+    if let Some(window) = super::multi_window::current_window() {
+        let _ = window.set_fullscreen(fullscreen);
+    }
+}
+
+pub fn toggle_window_fullscreen() {
+    if let Some(window) = super::multi_window::current_window() {
+        let _ = window.toggle_fullscreen();
+    }
+}
+
+pub fn window_is_fullscreen() -> bool {
+    with_active_window(|w| w.fullscreen().is_some()).unwrap_or(false)
 }
 
 /// Whether the active window allows resizing. False when no window is active.

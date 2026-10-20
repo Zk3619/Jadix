@@ -16,40 +16,80 @@ pub fn file_dialog_paths(id: &str) -> Signal<Vec<PathBuf>> {
     use_signal(&file_dialog_paths_signal_key(id), Vec::<PathBuf>::new)
 }
 
-fn apply_accept(mut dlg: rfd::FileDialog, accept: &str) -> rfd::FileDialog {
-    if accept.is_empty() || accept == "*/*" {
-        return dlg;
+// rfd only supplies desktop dialogs. Keep the signal API available to mobile hosts.
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    all(target_os = "linux", not(target_env = "ohos"))
+))]
+mod native {
+    use super::PathBuf;
+    fn apply_accept(mut dlg: rfd::FileDialog, accept: &str) -> rfd::FileDialog {
+        if accept.is_empty() || accept == "*/*" {
+            return dlg;
+        }
+        if accept.contains("image/") {
+            return dlg.add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp"]);
+        }
+        let exts: Vec<&str> = accept
+            .split([',', ' '])
+            .map(|s| s.trim().trim_start_matches('.'))
+            .filter(|s| !s.is_empty() && !s.contains('/'))
+            .collect();
+        if !exts.is_empty() {
+            dlg = dlg.add_filter("Files", &exts);
+        }
+        dlg
     }
-    if accept.contains("image/") {
-        return dlg.add_filter("Images", &["png", "jpg", "jpeg", "gif", "webp", "bmp"]);
+
+    /// 打开单文件对话框；取消则 `None`。
+    pub fn pick_file(accept: &str) -> Option<PathBuf> {
+        apply_accept(rfd::FileDialog::new(), accept).pick_file()
     }
-    let exts: Vec<&str> = accept
-        .split([',', ' '])
-        .map(|s| s.trim().trim_start_matches('.'))
-        .filter(|s| !s.is_empty() && !s.contains('/'))
-        .collect();
-    if !exts.is_empty() {
-        dlg = dlg.add_filter("Files", &exts);
+
+    /// 打开多文件对话框；取消或未选则为空 `Vec`。
+    pub fn pick_files(accept: &str) -> Vec<PathBuf> {
+        apply_accept(rfd::FileDialog::new(), accept)
+            .pick_files()
+            .unwrap_or_default()
     }
-    dlg
-}
 
-/// 打开单文件对话框；取消则 `None`。
-pub fn pick_file(accept: &str) -> Option<PathBuf> {
-    apply_accept(rfd::FileDialog::new(), accept).pick_file()
+    /// 打开目录对话框；取消则 `None`。
+    pub fn pick_folder() -> Option<PathBuf> {
+        rfd::FileDialog::new().pick_folder()
+    }
 }
+#[cfg(any(
+    target_os = "windows",
+    target_os = "macos",
+    all(target_os = "linux", not(target_env = "ohos"))
+))]
+pub use native::{pick_file, pick_files, pick_folder};
 
-/// 打开多文件对话框；取消或未选则为空 `Vec`。
-pub fn pick_files(accept: &str) -> Vec<PathBuf> {
-    apply_accept(rfd::FileDialog::new(), accept)
-        .pick_files()
-        .unwrap_or_default()
+#[cfg(not(any(
+    target_os = "windows",
+    target_os = "macos",
+    all(target_os = "linux", not(target_env = "ohos"))
+)))]
+mod native {
+    use super::PathBuf;
+    pub fn pick_file(_: &str) -> Option<PathBuf> {
+        log::warn!("Native file dialogs require a platform document-picker bridge on this host");
+        None
+    }
+    pub fn pick_files(accept: &str) -> Vec<PathBuf> {
+        pick_file(accept).into_iter().collect()
+    }
+    pub fn pick_folder() -> Option<PathBuf> {
+        pick_file("")
+    }
 }
-
-/// 打开目录对话框；取消则 `None`。
-pub fn pick_folder() -> Option<PathBuf> {
-    rfd::FileDialog::new().pick_folder()
-}
+#[cfg(not(any(
+    target_os = "windows",
+    target_os = "macos",
+    all(target_os = "linux", not(target_env = "ohos"))
+)))]
+pub use native::{pick_file, pick_files, pick_folder};
 
 /// `pick_file` / `pick_files`，结果非空时写入 `file_dialog_paths(id)`。
 pub fn pick_files_into(id: &str, accept: &str, multiple: bool) -> Vec<PathBuf> {

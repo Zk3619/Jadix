@@ -153,8 +153,10 @@ fn run_frames(window: Arc<dyn Window>) {
             .zip(full.pixels.chunks_exact(4))
             .filter(|(a, b)| a.iter().zip(b.iter()).any(|(a, b)| a.abs_diff(*b) > 3))
             .count();
-        assert_eq!(differences, 0,
-            "frame={step}, angle={angle}, scroll={scroll}, scrolling={scrolling}: clipped rotation or stale pixels differ from full repaint");
+        assert_eq!(
+            differences, 0,
+            "frame={step}, angle={angle}, scroll={scroll}, scrolling={scrolling}: clipped rotation or stale pixels differ from full repaint"
+        );
     }
     crate::style::set_css_transition_virtual_timeline(false);
     crate::style::utility::set_frame_dt(0.016);

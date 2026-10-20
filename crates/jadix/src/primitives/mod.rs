@@ -20,6 +20,7 @@ pub mod r#box;
 pub mod canvas;
 pub mod effect_wrap;
 pub mod interactive;
+pub mod media;
 pub mod overlay;
 pub mod path;
 pub mod portal;
@@ -34,6 +35,7 @@ pub mod text;
 pub use canvas::{canvas, Canvas2D, CanvasBuilder, CanvasSize, ATTR_CANVAS_PAINT};
 pub use effect_wrap::{effect_wrap, EffectWrapBuilder};
 pub use interactive::{apply_disabled, interactive, InteractiveBuilder};
+pub use media::{audio, video, Audio, AudioBuilder, AudioProps, MediaAspectRatio, MediaFit, MediaRotation, Video, VideoBuilder, VideoProps};
 pub use overlay::{overlay, OverlayBuilder};
 pub use path::{
     attach_path, attach_polyline, decode_path_d, draw_polyline_batch, draw_polyline_batch_stub,

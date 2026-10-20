@@ -20,6 +20,7 @@ use jadix_macros::component;
 #[allow(non_snake_case)]
 pub fn App(
     title: Option<String>,
+    icon: Option<crate::app::AppIcon>,
     window_label: Option<String>,
     width: Option<f64>,
     height: Option<f64>,
@@ -33,6 +34,8 @@ pub fn App(
     resize_border: Option<f64>,
     maximized: Option<bool>,
     fullscreen: Option<bool>,
+    fullscreen_shortcuts: Option<bool>,
+    close_with_primary: Option<bool>,
     always_on_top: Option<bool>,
     decorations: Option<bool>,
     frameless: Option<bool>,
@@ -63,6 +66,7 @@ pub fn App(
 ) -> Element {
     let mut config = AppConfig {
         title,
+        icon,
         window_label,
         inner_width: width,
         inner_height: height,
@@ -73,6 +77,9 @@ pub fn App(
         resize_border,
         maximized,
         fullscreen,
+        fullscreen_shortcuts,
+        close_with_primary,
+        instance_policy: None,
         always_on_top,
         decorations,
         transparent,

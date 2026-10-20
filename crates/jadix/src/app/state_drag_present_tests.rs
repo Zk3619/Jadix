@@ -382,8 +382,10 @@ fn run_drag_frames(
                         let x = ((bounds[0] + delta[0] + 1.0) * scale) as u32;
                         let y = ((bounds[1] + delta[1] + 75.0) * scale) as u32;
                         let i = ((y * image.width + x) * 4) as usize;
-                        assert!(image.pixels[i..i + 3].iter().all(|c| *c < 80),
-                            "exposed top/bottom border must remain visible: source={source} bounds={bounds:?} delta={delta:?}");
+                        assert!(
+                            image.pixels[i..i + 3].iter().all(|c| *c < 80),
+                            "exposed top/bottom border must remain visible: source={source} bounds={bounds:?} delta={delta:?}"
+                        );
                     }
                     // Read both retained frames before the reference repaint,
                     // which would otherwise hide a one-frame erase/replay lag.
@@ -437,9 +439,9 @@ fn run_drag_frames(
                             }
                         }
                         assert_eq!(
-                        different, 0,
-                        "partial drag must match a full repaint: source={source} sample={sample} frame={frame_index} delta={delta:?} pixels={first_differences:?}"
-                    );
+                            different, 0,
+                            "partial drag must match a full repaint: source={source} sample={sample} frame={frame_index} delta={delta:?} pixels={first_differences:?}"
+                        );
                     }
                 }
                 sample += 1;

@@ -33,3 +33,147 @@ pub(super) fn try_dispatch_window_key(event: &KeyEvent) -> bool {
         }
     })
 }
+
+fn fullscreen_action(
+    key: &winit::keyboard::Key,
+    modifiers: winit::keyboard::ModifiersState,
+    macos: bool,
+    windows: bool,
+    fullscreen: bool,
+) -> Option<bool> {
+    use winit::keyboard::{Key, ModifiersState, NamedKey};
+    if !macos && modifiers.is_empty() && *key == Key::Named(NamedKey::F11) {
+        return Some(!fullscreen);
+    }
+    if windows && modifiers == ModifiersState::ALT && *key == Key::Named(NamedKey::Enter) {
+        return Some(!fullscreen);
+    }
+    if macos
+        && modifiers == (ModifiersState::CONTROL | ModifiersState::META)
+        && matches!(key, Key::Character(text) if text.eq_ignore_ascii_case("f"))
+    {
+        return Some(!fullscreen);
+    }
+    if fullscreen && modifiers.is_empty() && *key == Key::Named(NamedKey::Escape) {
+        return Some(false);
+    }
+    None
+}
+
+impl super::App {
+    pub(super) fn handle_fullscreen_shortcut(
+        &mut self,
+        id: winit::window::WindowId,
+        event: &KeyEvent,
+    ) -> bool {
+        if !cfg!(any(
+            windows,
+            target_os = "macos",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )) || event.state != winit::event::ElementState::Pressed
+        {
+            return false;
+        }
+        let Some(window) = super::runtime::window_handle(id) else {
+            return false;
+        };
+        if !window
+            .chrome
+            .fullscreen_shortcuts
+            .load(std::sync::atomic::Ordering::Relaxed)
+        {
+            return false;
+        }
+        let modifiers = self.window_modifiers.get(&id).copied().unwrap_or_default();
+        let Some(fullscreen) = fullscreen_action(
+            &event.logical_key,
+            modifiers,
+            cfg!(target_os = "macos"),
+            cfg!(windows),
+            window.is_fullscreen().unwrap_or(false),
+        ) else {
+            return false;
+        };
+        if event.repeat {
+            return true;
+        }
+        let _scope = if self.window_registry.primary_id() == Some(id) {
+            super::window_scope::enter_primary()
+        } else {
+            super::window_scope::enter_secondary_id(id)
+        };
+        if event.logical_key == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Escape)
+            && super::portal_overlay::try_close_top()
+        {
+            if let Ok(native) = window.upgrade() {
+                native.request_redraw();
+            }
+            return true;
+        }
+        if let Err(error) = window.set_fullscreen(fullscreen) {
+            log::warn!("fullscreen shortcut: {error}");
+        }
+        true
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use winit::keyboard::{Key, ModifiersState, NamedKey};
+
+    #[test]
+    fn fullscreen_shortcuts_follow_platform_and_modifier_contracts() {
+        let none = ModifiersState::empty();
+        let f11 = Key::Named(NamedKey::F11);
+        let enter = Key::Named(NamedKey::Enter);
+        let escape = Key::Named(NamedKey::Escape);
+        for windows in [true, false] {
+            assert_eq!(
+                fullscreen_action(&f11, none, false, windows, false),
+                Some(true)
+            );
+            assert_eq!(
+                fullscreen_action(&f11, none, false, windows, true),
+                Some(false)
+            );
+            assert_eq!(
+                fullscreen_action(&f11, ModifiersState::SHIFT, false, windows, false),
+                None
+            );
+        }
+        assert_eq!(
+            fullscreen_action(&enter, ModifiersState::ALT, false, true, false),
+            Some(true)
+        );
+        assert_eq!(
+            fullscreen_action(&enter, ModifiersState::ALT, false, false, false),
+            None
+        );
+        assert_eq!(fullscreen_action(&f11, none, true, false, false), None);
+        let mac = ModifiersState::CONTROL | ModifiersState::META;
+        assert_eq!(
+            fullscreen_action(&Key::Character("f".into()), mac, true, false, false),
+            Some(true)
+        );
+        assert_eq!(
+            fullscreen_action(&Key::Character("F".into()), mac, true, false, true),
+            Some(false)
+        );
+        assert_eq!(
+            fullscreen_action(&escape, none, true, false, true),
+            Some(false)
+        );
+        assert_eq!(fullscreen_action(&escape, none, false, true, false), None);
+        assert_eq!(
+            fullscreen_action(
+                &Key::Character("f".into()),
+                ModifiersState::CONTROL,
+                true,
+                false,
+                false
+            ),
+            None
+        );
+    }
+}

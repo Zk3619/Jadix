@@ -317,6 +317,32 @@ pub struct JadixTextRenderer {
 }
 
 impl JadixTextRenderer {
+    /// Explicit resource invalidation; never called by declaration rebuilds.
+    pub(crate) fn bust_caches(
+        &mut self,
+        device: &Device,
+        queue: &Queue,
+        config: &SurfaceConfiguration,
+    ) {
+        let fresh = Self::with_font_ptr(
+            device,
+            queue,
+            config,
+            self.font_system,
+            None,
+            self.gpu_cache.clone(),
+            self.swash_cache.clone(),
+        );
+        self.text_atlas = fresh.text_atlas;
+        self.text_renderer = fresh.text_renderer;
+        self.viewport = fresh.viewport;
+        self.shaped_cache.clear();
+        self.shaped_identity_pool.clear();
+        self.pending_warmup.clear();
+        self.emoji_cache = EmojiGlyphCache::default();
+        *self.swash_cache.borrow_mut() = SwashCache::new();
+    }
+
     #[inline]
     pub fn font_system_mut(&mut self) -> &mut FontSystem {
         unsafe { &mut *self.font_system }
@@ -330,6 +356,11 @@ impl JadixTextRenderer {
     /// Whether this renderer owns its FontSystem (primary) or shares the primary's.
     pub fn shares_font_system(&self) -> bool {
         self.owned_font_system.is_none()
+    }
+
+    /// Preserve shared font pointers while releasing a closed primary's GPU text resources.
+    pub(crate) fn into_owned_font_system(mut self) -> Option<Box<FontSystem>> {
+        self.owned_font_system.take()
     }
 
     pub fn new(device: &Device, queue: &Queue, config: &SurfaceConfiguration) -> Self {

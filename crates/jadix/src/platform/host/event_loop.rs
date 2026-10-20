@@ -29,7 +29,7 @@ pub fn install_android_app(app: AndroidApp) {
 }
 
 #[cfg(target_os = "android")]
-fn android_app() -> AndroidApp {
+pub(crate) fn android_app() -> AndroidApp {
     ANDROID_APP
         .get()
         .expect("call jadix::platform::install_android_app from android_main before run")

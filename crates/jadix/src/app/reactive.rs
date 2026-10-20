@@ -142,9 +142,14 @@ impl AnchorHook {
 struct AnchorRegistration {
     effect_id: Option<EffectId>,
     hook: AnchorHook,
+    scope: super::window_scope::WindowScope,
+    immediate: bool,
+    last_frame: u64,
 }
 
 struct BindingRegistration {
+    scope: super::window_scope::WindowScope,
+    last_frame: u64,
     effect_id: Option<EffectId>,
     hook: Weak<UnmountHook>,
 }
@@ -548,6 +553,9 @@ where
             AnchorRegistration {
                 effect_id: None,
                 hook: AnchorHook::Pending(Rc::clone(&hook)),
+                scope: super::window_scope::active(),
+                immediate: false,
+                last_frame: super::invalidation::frame_serial(),
             },
         );
     });
@@ -572,6 +580,11 @@ where
     let effect_window = super::window_scope::active_window_id();
     let effect_id = create_render_effect(move || {
         let _scope = restore_window_scope(effect_scope, effect_window);
+        REGISTERED_ANCHORS.with(|registry| {
+            if let Some(registration) = registry.borrow_mut().get_mut(&effect_registry_key) {
+                registration.last_frame = super::invalidation::frame_serial();
+            }
+        });
         if track_style {
             crate::style::track_style_changes();
         }
@@ -590,7 +603,9 @@ where
             if let Some(id) = crate::core::reactivity::current_effect_id() {
                 crate::core::reactivity::clear_idle_effect_retry(id);
             }
-            runtime::request_redraw();
+            if !super::invalidation::in_prepass() {
+                runtime::request_redraw();
+            }
         } else {
             // Miss: borrow held, or anchor not in the live tree yet. Do **not**
             // `schedule_effect` into the in-flight `flush_deferred` drain — that
@@ -635,6 +650,72 @@ where
     let id = anchor_id.into();
     reactive_anchor(id.clone(), render);
     reactive_placeholder(id)
+}
+
+/// Restate/diff only this structural subtree on each requested frame. The rest
+/// of the window stays retained; unchanged layout/text/glyph caches stay warm.
+///
+/// No permanent frame pump is installed. An animation/game clock calls
+/// [`super::invalidation::request_frame`] while active (including from `render`)
+/// and stops calling it when idle. Use leaf bindings for numeric/style changes.
+pub fn immediate_region<F>(anchor_id: impl Into<String>, render: F) -> Element
+where
+    F: FnMut() -> Element + 'static,
+{
+    let id = anchor_id.into();
+    let element = reactive_view(id.clone(), render);
+    let key = window_scoped_registry_key(&id);
+    REGISTERED_ANCHORS.with(|registry| {
+        if let Some(registration) = registry.borrow_mut().get_mut(&key) {
+            registration.immediate = true;
+        }
+    });
+    element
+}
+
+pub(super) fn tick_immediate_regions() {
+    let scope = super::window_scope::active();
+    let frame = super::invalidation::frame_serial();
+    let mut effects = REGISTERED_ANCHORS.with(|registry| {
+        registry
+            .borrow()
+            .values()
+            .filter(|r| r.scope == scope && r.immediate && r.last_frame != frame)
+            .filter_map(|r| r.effect_id)
+            .collect::<Vec<_>>()
+    });
+    effects.sort_unstable();
+    for effect in effects {
+        crate::core::reactivity::schedule_effect(effect);
+    }
+}
+
+pub(super) fn rebuild_registered_in_scope() {
+    let scope = super::window_scope::active();
+    let frame = super::invalidation::frame_serial();
+    let mut effects = REGISTERED_ANCHORS.with(|registry| {
+        registry
+            .borrow()
+            .values()
+            .filter(|r| r.scope == scope && r.last_frame != frame)
+            .filter_map(|r| r.effect_id)
+            .collect::<Vec<_>>()
+    });
+    effects.sort_unstable();
+    for effect in effects {
+        crate::core::reactivity::schedule_effect(effect);
+    }
+    let effects = REGISTERED_BINDINGS.with(|registry| {
+        registry
+            .borrow()
+            .values()
+            .filter(|r| r.scope == scope && r.last_frame != frame)
+            .filter_map(|r| r.effect_id)
+            .collect::<Vec<_>>()
+    });
+    for effect in effects {
+        crate::core::reactivity::schedule_effect(effect);
+    }
 }
 
 /// Like [`reactive_view`], but the placeholder uses explicit width/height (e.g. fixed-size SVG islands).
@@ -1074,6 +1155,8 @@ where
         registry.borrow_mut().insert(
             registry_key.clone(),
             BindingRegistration {
+                scope: super::window_scope::active(),
+                last_frame: super::invalidation::frame_serial(),
                 effect_id: None,
                 hook: Rc::downgrade(&hook),
             },
@@ -1097,17 +1180,23 @@ where
     });
 
     let effect_node_id = node_id;
+    let effect_registry_key = registry_key.clone();
     let effect_scope = super::window_scope::active();
     let effect_window = super::window_scope::active_window_id();
     let effect_id = create_render_effect(move || {
         let _scope = restore_window_scope(effect_scope, effect_window);
+        REGISTERED_BINDINGS.with(|registry| {
+            if let Some(registration) = registry.borrow_mut().get_mut(&effect_registry_key) {
+                registration.last_frame = super::invalidation::frame_serial();
+            }
+        });
         let next = compute();
         if let Some(status) =
             runtime::try_update_element_by_template_id(&effect_node_id, |mounted| {
                 sanitize_leaf_bind_status(apply(mounted, next))
             })
         {
-            if status != LayoutStatus::Clean {
+            if status != LayoutStatus::Clean && !super::invalidation::in_prepass() {
                 runtime::request_redraw();
             }
         } else {
@@ -1529,10 +1618,29 @@ where
     for_each(scope_id, &items_vec, render)
 }
 
+/// Builder auto identities are positional within the owner. Public `bind_prop`
+/// retains its explicit-key/idempotency contract for component and HMR callers.
+fn bind_node_prop<T, C, A>(mut el: Element, key: String, compute: C, apply: A) -> Element
+where
+    T: 'static,
+    C: FnMut() -> T + 'static,
+    A: Fn(&mut Element, T) -> LayoutStatus + 'static,
+{
+    if el.template_id.is_none() {
+        el.template_id = Some(crate::core::reactivity::next_binding_template_id(&key));
+    }
+    bind_prop(el, key, compute, apply)
+}
+
 impl<T: Clone + std::fmt::Display + 'static> IntoNodeText for Signal<T> {
+    #[track_caller]
     fn apply_node_text(self, el: Element) -> Element {
-        let id = format!("__jadix_text_sig:{:?}", self.id());
-        bind_prop(
+        let id = format!(
+            "__jadix_text_sig:{:?}:{}",
+            self.id(),
+            caller_bind_key("text")
+        );
+        bind_node_prop(
             el,
             id,
             move || self.get().to_string(),
@@ -1541,9 +1649,10 @@ impl<T: Clone + std::fmt::Display + 'static> IntoNodeText for Signal<T> {
     }
 }
 
-impl<F> IntoNodeText for F
+impl<F, S> IntoNodeText for F
 where
-    F: FnMut() -> String + 'static,
+    F: FnMut() -> S + 'static,
+    S: Into<String>,
 {
     #[track_caller]
     fn apply_node_text(self, el: Element) -> Element {
@@ -1552,7 +1661,8 @@ where
             .template_id
             .clone()
             .unwrap_or_else(|| format!("{}:{}:{}:bind_text", loc.file(), loc.line(), loc.column()));
-        bind_prop(el, id, self, apply_bound_text_value)
+        let mut compute = self;
+        bind_node_prop(el, id, move || compute().into(), apply_bound_text_value)
     }
 }
 
@@ -1563,9 +1673,19 @@ fn caller_bind_key(kind: &str) -> String {
 }
 
 impl<T: Clone + std::fmt::Display + 'static> IntoNodeClass for Signal<T> {
+    #[track_caller]
     fn apply_node_class(self, el: Element) -> Element {
-        let id = format!("__jadix_class_sig:{:?}", self.id());
-        bind_class(el, id, move || self.get().to_string())
+        let id = format!(
+            "__jadix_class_sig:{:?}:{}",
+            self.id(),
+            caller_bind_key("class")
+        );
+        bind_node_prop(
+            el,
+            id,
+            move || self.get().to_string(),
+            |el, classes| crate::style::apply_utility_classes(el, &classes),
+        )
     }
 }
 
@@ -1577,14 +1697,24 @@ where
     #[track_caller]
     fn apply_node_class(self, el: Element) -> Element {
         let mut compute = self;
-        bind_class(el, caller_bind_key("class"), move || compute().into())
+        bind_node_prop(
+            el,
+            caller_bind_key("class"),
+            move || compute().into(),
+            |el, classes: String| crate::style::apply_utility_classes(el, &classes),
+        )
     }
 }
 
 impl<T: Clone + IntoCssDim + 'static> IntoNodeSize for Signal<T> {
+    #[track_caller]
     fn apply_node_size(self, el: Element, axis: &'static str) -> Element {
-        let id = format!("__jadix_size_{axis}_sig:{:?}", self.id());
-        bind_prop(
+        let id = format!(
+            "__jadix_size_{axis}_sig:{:?}:{}",
+            self.id(),
+            caller_bind_key(axis)
+        );
+        bind_node_prop(
             el,
             id,
             move || self.get(),
@@ -1600,7 +1730,7 @@ where
 {
     #[track_caller]
     fn apply_node_size(self, el: Element, axis: &'static str) -> Element {
-        bind_prop(
+        bind_node_prop(
             el,
             caller_bind_key(&format!("size_{axis}")),
             self,
@@ -1610,9 +1740,10 @@ where
 }
 
 impl<T: Clone + IntoPaintColor + 'static> IntoNodeBg for Signal<T> {
+    #[track_caller]
     fn apply_node_bg(self, el: Element) -> Element {
-        let id = format!("__jadix_bg_sig:{:?}", self.id());
-        bind_prop(
+        let id = format!("__jadix_bg_sig:{:?}:{}", self.id(), caller_bind_key("bg"));
+        bind_node_prop(
             el,
             id,
             move || self.get().into_paint_color(),
@@ -1629,7 +1760,7 @@ where
     #[track_caller]
     fn apply_node_bg(self, el: Element) -> Element {
         let mut compute = self;
-        bind_prop(
+        bind_node_prop(
             el,
             caller_bind_key("bg"),
             move || compute().into_paint_color(),
@@ -1639,9 +1770,10 @@ where
 }
 
 impl<T: Clone + IntoTextColor + 'static> IntoNodeFg for Signal<T> {
+    #[track_caller]
     fn apply_node_fg(self, el: Element) -> Element {
-        let id = format!("__jadix_fg_sig:{:?}", self.id());
-        bind_prop(
+        let id = format!("__jadix_fg_sig:{:?}:{}", self.id(), caller_bind_key("fg"));
+        bind_node_prop(
             el,
             id,
             move || self.get().into_text_color(),
@@ -1658,7 +1790,7 @@ where
     #[track_caller]
     fn apply_node_fg(self, el: Element) -> Element {
         let mut compute = self;
-        bind_prop(
+        bind_node_prop(
             el,
             caller_bind_key("fg"),
             move || compute().into_text_color(),
@@ -1668,9 +1800,14 @@ where
 }
 
 impl<T: Clone + IntoOpacity + 'static> IntoNodeOpacity for Signal<T> {
+    #[track_caller]
     fn apply_node_opacity(self, el: Element) -> Element {
-        let id = format!("__jadix_opacity_sig:{:?}", self.id());
-        bind_prop(
+        let id = format!(
+            "__jadix_opacity_sig:{:?}:{}",
+            self.id(),
+            caller_bind_key("opacity")
+        );
+        bind_node_prop(
             el,
             id,
             move || self.get(),
@@ -1687,7 +1824,7 @@ where
     #[track_caller]
     fn apply_node_opacity(self, el: Element) -> Element {
         let mut compute = self;
-        bind_prop(
+        bind_node_prop(
             el,
             caller_bind_key("opacity"),
             move || compute(),

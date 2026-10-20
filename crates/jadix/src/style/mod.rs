@@ -174,7 +174,7 @@ pub use theme_override::{
     ThemeOverrides,
 };
 pub(crate) use theme_override::{restore_theme_overrides, snapshot_theme_overrides};
-#[cfg(all(test, target_os = "windows", feature = "svg"))]
+#[cfg(all(test, target_os = "windows"))]
 pub(crate) use timeline::set_global_time_for_test;
 pub use timeline::{
     any_timeline_playing, cubic_from_css, global_time_s, keyframe, lerp, tick_timelines, Repeat,

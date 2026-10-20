@@ -122,6 +122,7 @@ pub fn CardHeader(children: Option<Element>) -> Element {
             .justify("between")
             .gap(tokens::SPACE_4)
             .px(tokens::SPACE_6)
+            .wrap("wrap")
             .child(title_block)
             .children(actions),
     )
@@ -170,6 +171,9 @@ pub fn CardAction(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
     let mut el: Element = hstack()
         .items_center()
+        .min_w(0.0)
+        .max_w("100%")
+        .wrap("wrap")
         .gap(tokens::SPACE_2)
         .flex_shrink(0.0)
         .children(kids)
@@ -194,7 +198,7 @@ pub fn CardContent(children: Option<Element>) -> Element {
     )
 }
 
-/// 底栏（横向；默认左对齐，可用 `class` / `justify` 覆盖）。
+/// 底栏（横向换行；默认左对齐，可用 `class` / `justify` 覆盖）。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn CardFooter(children: Option<Element>) -> Element {
@@ -205,6 +209,7 @@ pub fn CardFooter(children: Option<Element>) -> Element {
             .max_w("100%")
             .min_w(0.0)
             .items_center()
+            .wrap("wrap")
             .gap(tokens::SPACE_2)
             .px(tokens::SPACE_6)
             .children(kids),
@@ -566,6 +571,22 @@ impl From<CardBuilder> for Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn responsive_card_footer_wraps_actions_without_horizontal_overflow() {
+        use crate::core::tree::LayoutTree;
+        let footer: Element = card_footer()
+            .child(Element::new().w(160.0).min_w(160.0).h(36.0))
+            .child(Element::new().w(160.0).min_w(160.0).h(36.0))
+            .into();
+        let mut root = Element::new().w(320.0).child(footer);
+        LayoutTree::new().build_and_layout(&mut root, 320.0, 600.0, [-1.0, -1.0]);
+        let footer = &root.children[0];
+        assert!(footer.children[1].layout_bounds[1] > footer.children[0].layout_bounds[1]);
+        for action in &footer.children {
+            assert!(action.layout_bounds[0] + action.layout_bounds[2] <= 320.5);
+        }
+    }
 
     #[test]
     fn card_title_picks_up_stylesheet_slot_rule() {

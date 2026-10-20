@@ -36,11 +36,16 @@ pub(crate) fn forget_window_config(id: winit::window::WindowId) {
 }
 
 pub(crate) fn seed_window_config(id: winit::window::WindowId, options: &WindowOptions) {
+    if let Some(handle) = super::runtime::window_handle(id) {
+        let _ = handle.set_fullscreen_shortcuts(options.fullscreen_shortcuts);
+        let _ = handle.set_close_with_primary(options.close_with_primary);
+    }
     WINDOW_PATCHES.with(|c| {
         c.borrow_mut().insert(
             id,
             AppConfig {
                 title: Some(options.title.clone()),
+                icon: options.icon.clone(),
                 inner_width: options.inner_width,
                 inner_height: options.inner_height,
                 min_size: options.min_size,
@@ -50,6 +55,8 @@ pub(crate) fn seed_window_config(id: winit::window::WindowId, options: &WindowOp
                 resize_border: Some(options.resize_border),
                 maximized: Some(options.maximized),
                 fullscreen: Some(options.fullscreen),
+                fullscreen_shortcuts: Some(options.fullscreen_shortcuts),
+                close_with_primary: Some(options.close_with_primary),
                 always_on_top: Some(options.always_on_top),
                 ..Default::default()
             },
@@ -61,6 +68,7 @@ pub(crate) fn seed_window_config(id: winit::window::WindowId, options: &WindowOp
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AppConfig {
     pub title: Option<String>,
+    pub icon: Option<super::AppIcon>,
     pub window_label: Option<String>,
     pub inner_width: Option<f64>,
     pub inner_height: Option<f64>,
@@ -71,6 +79,10 @@ pub struct AppConfig {
     pub resize_border: Option<f64>,
     pub maximized: Option<bool>,
     pub fullscreen: Option<bool>,
+    pub fullscreen_shortcuts: Option<bool>,
+    pub close_with_primary: Option<bool>,
+    /// Startup-only; set on the builder before mount/run.
+    pub instance_policy: Option<super::InstancePolicy>,
     pub always_on_top: Option<bool>,
     pub decorations: Option<bool>,
     pub transparent: Option<bool>,
@@ -107,6 +119,7 @@ impl AppConfig {
         if let Some(title) = self.title {
             o.title = title;
         }
+        o.icon = self.icon;
         o.window_label = self.window_label;
         o.min_size = self.min_size;
         o.max_size = self.max_size;
@@ -122,6 +135,15 @@ impl AppConfig {
         }
         if let Some(v) = self.fullscreen {
             o.fullscreen = v;
+        }
+        if let Some(v) = self.fullscreen_shortcuts {
+            o.fullscreen_shortcuts = v;
+        }
+        if let Some(v) = self.close_with_primary {
+            o.close_with_primary = v;
+        }
+        if let Some(v) = self.instance_policy {
+            o.instance_policy = v;
         }
         if let Some(v) = self.always_on_top {
             o.always_on_top = v;
@@ -242,6 +264,11 @@ impl AppConfig {
             let previous = WINDOW_PATCHES
                 .with(|c| c.borrow().get(&window.id()).cloned())
                 .unwrap_or_default();
+            if self.icon != previous.icon {
+                if let Some(icon) = &self.icon {
+                    window.set_window_icon(Some(icon.to_winit()));
+                }
+            }
             if self.title != previous.title {
                 if let Some(title) = &self.title {
                     window.set_title(title);
@@ -302,8 +329,21 @@ impl AppConfig {
             }
             if self.fullscreen != previous.fullscreen {
                 if let Some(v) = self.fullscreen {
-                    window
-                        .set_fullscreen(v.then_some(winit::monitor::Fullscreen::Borderless(None)));
+                    if let Some(handle) = super::runtime::current_window_handle() {
+                        let _ = handle.set_fullscreen(v);
+                    }
+                }
+            }
+            if let Some(handle) = super::runtime::current_window_handle() {
+                if self.fullscreen_shortcuts != previous.fullscreen_shortcuts {
+                    if let Some(v) = self.fullscreen_shortcuts {
+                        let _ = handle.set_fullscreen_shortcuts(v);
+                    }
+                }
+                if self.close_with_primary != previous.close_with_primary {
+                    if let Some(v) = self.close_with_primary {
+                        let _ = handle.set_close_with_primary(v);
+                    }
                 }
             }
             if self.always_on_top != previous.always_on_top {
@@ -370,6 +410,11 @@ impl AppBuilder {
         self
     }
 
+    pub fn icon(mut self, icon: super::AppIcon) -> Self {
+        self.config.icon = Some(icon);
+        self
+    }
+
     pub fn window_label(mut self, label: impl Into<String>) -> Self {
         let s = label.into();
         self.config.window_label = if s.trim().is_empty() { None } else { Some(s) };
@@ -419,6 +464,31 @@ impl AppBuilder {
 
     pub fn fullscreen(mut self, enabled: bool) -> Self {
         self.config.fullscreen = Some(enabled);
+        self
+    }
+
+    pub fn fullscreen_shortcuts(mut self, enabled: bool) -> Self {
+        self.config.fullscreen_shortcuts = Some(enabled);
+        self
+    }
+
+    pub fn close_with_primary(mut self, enabled: bool) -> Self {
+        self.config.close_with_primary = Some(enabled);
+        self
+    }
+
+    pub fn instance_policy(mut self, policy: super::InstancePolicy) -> Self {
+        self.config.instance_policy = Some(policy);
+        self
+    }
+
+    /// Use a stable application/profile id, independent of the executable path.
+    pub fn single_instance(self, id: impl Into<String>) -> Self {
+        self.instance_policy(super::InstancePolicy::Single { id: id.into() })
+    }
+
+    pub fn on_second_instance(self, handler: impl FnMut(super::InstanceLaunch) + 'static) -> Self {
+        super::set_second_instance_handler(handler);
         self
     }
 
@@ -666,6 +736,22 @@ mod tests {
         assert_eq!(options.position, Some([-20.0, 50.0]));
         assert!(!options.resizable);
         assert!(options.maximized && options.fullscreen && options.always_on_top);
+    }
+
+    #[test]
+    fn desktop_policies_are_explicit_and_default_to_compatible_lifetimes() {
+        let defaults = app().into_window_options();
+        assert!(defaults.fullscreen_shortcuts);
+        assert!(defaults.close_with_primary);
+        assert_eq!(defaults.instance_policy, super::super::InstancePolicy::Multiple);
+        let options = app().single_instance("org.jadix.editor:profile-a")
+            .fullscreen_shortcuts(false).close_with_primary(false).into_window_options();
+        assert!(!options.fullscreen_shortcuts);
+        assert!(!options.close_with_primary);
+        assert_eq!(options.instance_policy, super::super::InstancePolicy::Single { id: "org.jadix.editor:profile-a".into() });
+        let multiple = app().single_instance("org.jadix.editor")
+            .instance_policy(super::super::InstancePolicy::Multiple).into_window_options();
+        assert_eq!(multiple.instance_policy, super::super::InstancePolicy::Multiple);
     }
 
     #[test]

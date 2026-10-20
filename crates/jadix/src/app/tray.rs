@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 thread_local! {
     static MENU_CLICKS: RefCell<HashMap<String, Rc<dyn Fn()>>> = RefCell::new(HashMap::new());
-    #[cfg(feature = "system-tray")]
+    #[cfg(all(feature = "system-tray", any(windows, target_os = "macos", target_os = "linux")))]
     static NATIVE: RefCell<HashMap<u64, NativeTray>> = RefCell::new(HashMap::new());
 }
 
@@ -54,7 +54,10 @@ fn unregister_menu_callbacks(keys: &[String]) {
 
 /// Drop native icons and callbacks while the event loop / UI TLS are still alive.
 pub(crate) fn dispose_trays_for_shutdown() {
-    #[cfg(feature = "system-tray")]
+    #[cfg(all(
+        feature = "system-tray",
+        any(windows, target_os = "macos", target_os = "linux")
+    ))]
     {
         let natives = NATIVE
             .try_with(|m| std::mem::take(&mut *m.borrow_mut()))
@@ -79,7 +82,10 @@ pub(crate) fn dispatch_tray_menu_click(menu_id: &str) {
 
 /// `true` when this crate was built with native tray-icon wiring.
 pub const fn system_tray_native() -> bool {
-    cfg!(feature = "system-tray")
+    cfg!(all(
+        feature = "system-tray",
+        any(windows, target_os = "macos", target_os = "linux")
+    ))
 }
 
 /// 托盘菜单项。
@@ -118,12 +124,21 @@ pub struct TrayIconBuilder {
 pub struct TrayIcon {
     pub tooltip: String,
     pub menu: Vec<TrayMenuItem>,
-    #[cfg_attr(not(feature = "system-tray"), allow(dead_code))]
+    #[cfg_attr(
+        not(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        )),
+        allow(dead_code)
+    )]
     instance: u64,
     callback_keys: Vec<String>,
 }
 
-#[cfg(feature = "system-tray")]
+#[cfg(all(
+    feature = "system-tray",
+    any(windows, target_os = "macos", target_os = "linux")
+))]
 struct NativeTray {
     icon: tray_icon::TrayIcon,
     _items: Vec<tray_icon::menu::MenuItem>,
@@ -160,12 +175,48 @@ impl TrayIconBuilder {
         self
     }
 
+    /// Share the same decoded image with a native window.
+    pub fn icon(mut self, icon: super::AppIcon) -> Self {
+        self.icon_rgba = Some((icon.rgba().to_vec(), icon.width(), icon.height()));
+        self
+    }
+
+    /// Build a native tray or report the error (no silent stub fallback).
+    /// Invoke after the desktop event loop has started, on the UI thread.
+    pub fn try_build(self) -> Result<TrayIcon, String> {
+        #[cfg(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        ))]
+        {
+            let instance = next_instance();
+            super::menu_events::install();
+            let native = try_build_native(&self, instance)?;
+            let callback_keys = register_menu_callbacks(instance, &self.menu);
+            NATIVE.with(|m| m.borrow_mut().insert(instance, native));
+            Ok(TrayIcon {
+                tooltip: self.tooltip,
+                menu: self.menu,
+                instance,
+                callback_keys,
+            })
+        }
+        #[cfg(not(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        )))]
+        Err("native tray unavailable: enable system-tray on a supported desktop platform".into())
+    }
+
     /// 构建句柄。`system-tray` 开启时尝试注册原生托盘；失败则降为 stub 并打 warn。
     pub fn build(self) -> TrayIcon {
         let instance = next_instance();
         let callback_keys = register_menu_callbacks(instance, &self.menu);
 
-        #[cfg(feature = "system-tray")]
+        #[cfg(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        ))]
         {
             super::menu_events::install();
             match try_build_native(&self, instance) {
@@ -186,7 +237,10 @@ impl TrayIconBuilder {
                 }
             }
         }
-        #[cfg(not(feature = "system-tray"))]
+        #[cfg(not(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        )))]
         {
             let _ = &self.icon_rgba;
             log::debug!("jadix tray: stub TrayIcon (enable feature system-tray for native)");
@@ -201,9 +255,60 @@ impl TrayIconBuilder {
 }
 
 impl TrayIcon {
+    /// Whether this particular handle owns a native tray, including build failures.
+    pub fn is_native(&self) -> bool {
+        #[cfg(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        ))]
+        {
+            NATIVE
+                .try_with(|m| m.borrow().contains_key(&self.instance))
+                .unwrap_or(false)
+        }
+        #[cfg(not(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        )))]
+        {
+            false
+        }
+    }
+
+    /// Replace an existing native tray image on the UI thread.
+    pub fn set_icon(&self, icon: super::AppIcon) -> Result<(), String> {
+        #[cfg(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        ))]
+        {
+            let icon =
+                tray_icon::Icon::from_rgba(icon.rgba().to_vec(), icon.width(), icon.height())
+                    .map_err(|e| e.to_string())?;
+            NATIVE
+                .try_with(|m| {
+                    let m = m.borrow();
+                    let native = m.get(&self.instance).ok_or("tray has no native handle")?;
+                    native.icon.set_icon(Some(icon)).map_err(|e| e.to_string())
+                })
+                .map_err(|_| "tray UI thread has exited".to_string())?
+        }
+        #[cfg(not(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        )))]
+        {
+            let _ = icon;
+            Err("tray has no native handle".into())
+        }
+    }
+
     /// 显示托盘图标。stub 下为空操作。
     pub fn show(&self) {
-        #[cfg(feature = "system-tray")]
+        #[cfg(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        ))]
         {
             let _ = NATIVE.try_with(|m| {
                 if let Some(native) = m.borrow().get(&self.instance) {
@@ -217,7 +322,10 @@ impl TrayIcon {
 
     /// 隐藏托盘图标。stub 下为空操作。
     pub fn hide(&self) {
-        #[cfg(feature = "system-tray")]
+        #[cfg(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        ))]
         {
             let _ = NATIVE.try_with(|m| {
                 if let Some(native) = m.borrow().get(&self.instance) {
@@ -232,7 +340,10 @@ impl TrayIcon {
     /// 更新 tooltip。原生路径同步到系统托盘。
     pub fn set_tooltip(&mut self, s: impl Into<String>) {
         self.tooltip = s.into();
-        #[cfg(feature = "system-tray")]
+        #[cfg(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        ))]
         {
             let _ = NATIVE.try_with(|m| {
                 if let Some(native) = m.borrow().get(&self.instance) {
@@ -253,7 +364,10 @@ impl TrayIcon {
 impl Drop for TrayIcon {
     fn drop(&mut self) {
         unregister_menu_callbacks(&self.callback_keys);
-        #[cfg(feature = "system-tray")]
+        #[cfg(all(
+            feature = "system-tray",
+            any(windows, target_os = "macos", target_os = "linux")
+        ))]
         {
             let native = NATIVE
                 .try_with(|m| m.borrow_mut().remove(&self.instance))
@@ -264,7 +378,10 @@ impl Drop for TrayIcon {
     }
 }
 
-#[cfg(feature = "system-tray")]
+#[cfg(all(
+    feature = "system-tray",
+    any(windows, target_os = "macos", target_os = "linux")
+))]
 fn default_tray_rgba() -> (Vec<u8>, u32, u32) {
     const S: u32 = 32;
     let mut rgba = vec![0u8; (S * S * 4) as usize];
@@ -284,7 +401,10 @@ fn default_tray_rgba() -> (Vec<u8>, u32, u32) {
     (rgba, S, S)
 }
 
-#[cfg(feature = "system-tray")]
+#[cfg(all(
+    feature = "system-tray",
+    any(windows, target_os = "macos", target_os = "linux")
+))]
 fn try_build_native(builder: &TrayIconBuilder, instance: u64) -> Result<NativeTray, String> {
     use tray_icon::menu::{Menu, MenuItem};
     use tray_icon::{Icon, TrayIconBuilder as NativeBuilder};
@@ -317,6 +437,20 @@ fn try_build_native(builder: &TrayIconBuilder, instance: u64) -> Result<NativeTr
 mod tests {
     use super::*;
     use std::cell::Cell;
+
+    #[test]
+    fn shared_icon_builder_and_unavailable_native_updates() {
+        let icon = super::super::AppIcon::from_rgba(vec![42; 16], 2, 2).unwrap();
+        let builder = tray_icon().icon(icon.clone());
+        assert_eq!(builder.icon_rgba.as_ref().unwrap(), &(vec![42; 16], 2, 2));
+        #[cfg(not(feature = "system-tray"))]
+        {
+            assert!(builder.try_build().is_err());
+            let tray = tray_icon().build();
+            assert!(!tray.is_native());
+            assert!(tray.set_icon(icon).is_err());
+        }
+    }
 
     #[test]
     fn stub_build_stores_tooltip_and_menu() {
@@ -362,10 +496,19 @@ mod tests {
 
     #[test]
     fn system_tray_native_matches_feature() {
-        assert_eq!(system_tray_native(), cfg!(feature = "system-tray"));
+        assert_eq!(
+            system_tray_native(),
+            cfg!(all(
+                feature = "system-tray",
+                any(windows, target_os = "macos", target_os = "linux")
+            ))
+        );
     }
 
-    #[cfg(feature = "system-tray")]
+    #[cfg(all(
+        feature = "system-tray",
+        any(windows, target_os = "macos", target_os = "linux")
+    ))]
     #[test]
     fn default_icon_from_rgba_is_valid() {
         let (rgba, w, h) = default_tray_rgba();

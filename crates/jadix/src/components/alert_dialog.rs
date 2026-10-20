@@ -915,19 +915,24 @@ pub fn AlertDialogBody(children: Option<Element>) -> Element {
     el
 }
 
-/// Footer action row (Cancel + Action). Fixed; does not scroll.
+/// Footer actions stack in narrow windows and form a wrapping row from `sm` up.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn AlertDialogFooter(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let mut el: Element = hstack()
+    let mut el: Element = vstack()
         .w("100%")
+        .min_w(0.0)
         .gap("0.5rem")
-        .justify("end")
+        .items("stretch")
         .flex_shrink(0.0)
         .wrap("wrap")
         .children(kids)
         .into();
+    el = crate::style::utility::with_default_class_list(
+        el,
+        "sm:flex-row sm:justify-end sm:items-center",
+    );
     el.set_attr(ATTR_SLOT, SLOT_FOOTER);
     el
 }

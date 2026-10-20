@@ -88,6 +88,7 @@ pub mod command;
 pub mod context_menu;
 pub mod date_picker;
 pub mod dialog;
+pub mod dock;
 pub mod drawer;
 pub mod dropdown_menu;
 pub mod empty;
@@ -103,6 +104,7 @@ pub mod label;
 pub mod list;
 pub mod marker;
 pub mod menubar;
+pub mod media_player;
 pub mod message;
 pub mod message_scroller;
 pub mod navbar;
@@ -136,8 +138,13 @@ pub mod tooltip;
 pub mod tree_view;
 pub mod virtual_list;
 pub mod virtual_masonry;
+#[cfg(feature = "webview")]
+pub mod webview;
+#[cfg(feature = "webview")]
+pub use webview::{webview, webview_html, webview_status, webview_supported, WebView, WebViewProps, WebViewStatus};
 
 pub use crate::utils::text_field::SelectionOnBlur;
+pub use dock::{DockLayout, DockOrientation, DockPlacement, DockState, DockTab};
 pub use accordion::{
     accordion, accordion_content, accordion_item, accordion_item_scope, accordion_scope,
     accordion_trigger, accordion_use_grid_fr, set_accordion_use_grid_fr, use_accordion,
@@ -365,6 +372,7 @@ pub use hover_card::{
     HoverCardTriggerProps,
 };
 pub use image::{image, ui_image, Image, ImageBuilder, ImageProps, Img, ImgProps};
+pub use media_player::*;
 pub use input::{
     apply_bound_input_disabled, apply_bound_input_invalid, filter_email_insert,
     filter_insert_for_type, filter_number_insert, filter_password_insert, filter_tel_insert,

@@ -66,9 +66,9 @@ fn blur_then_blit_preserves_pass_uniforms() {
         pass.draw(0..3, 0..1);
     }
     queue.submit([encoder.finish()]);
-    let render = |blur: &mut BackdropBlurPipeline, split: bool| {
+    let render = |blur: &mut BackdropBlurPipeline, split: bool, radius, region| {
         let mut encoder = device.create_command_encoder(&Default::default());
-        blur.blur(device, queue, &mut encoder, 12.0, None);
+        blur.blur_with_region(device, queue, &mut encoder, radius, None, region);
         if split {
             queue.submit([encoder.finish()]);
             encoder = device.create_command_encoder(&Default::default());
@@ -103,8 +103,8 @@ fn blur_then_blit_preserves_pass_uniforms() {
         buffer.unmap();
         pixels
     };
-    let separate = render(&mut blur, true);
-    let combined = render(&mut blur, false);
+    let separate = render(&mut blur, true, 12.0, None);
+    let combined = render(&mut blur, false, 12.0, None);
     let changed = separate
         .iter()
         .zip(&combined)
@@ -118,6 +118,19 @@ fn blur_then_blit_preserves_pass_uniforms() {
         (40..215).contains(&combined[(64 * 128 + 64) * 4]),
         "edge must actually be blurred"
     );
+    // Gallery's local scrim uses a small radius. A cropped capture must keep
+    // the same pixels inside its host as a full-window blur, including alpha.
+    let full = render(&mut blur, false, 3.0, None);
+    let cropped = render(&mut blur, false, 3.0, Some((16, 16, 96, 96)));
+    for y in 48..80 {
+        for x in 48..80 {
+            for channel in 0..4 {
+                let index = (y * 128 + x) * 4 + channel;
+                assert!(full[index].abs_diff(cropped[index]) <= 1,
+                    "local blur seam at {x},{y}, channel {channel}");
+            }
+        }
+    }
     println!("blur + blit: identical pixels in combined/separate submissions");
 }
 

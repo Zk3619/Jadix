@@ -632,36 +632,37 @@ pub(crate) fn sync_message_scroller_follow_after_layout(
     // with their parent. The walk is exclusive — a node is popped before its
     // children are pushed, so no two entries alias.
     //
-    // Two passes: viewport follow publishes `content_h` / snaps offset *then*
+    // Viewport follow publishes `content_h` / snaps offset *then*
     // the jump button re-reads those signals. Pre-layout `reactive_sync` walks
     // the dock before the viewport (LIFO children), so a same-frame live-edge
     // snap left Latest at opacity 1. `request_redraw` is a no-op during render.
     let mut stack: Vec<*mut Element> = vec![el];
+    let mut buttons = Vec::new();
     while let Some(ptr) = stack.pop() {
         // SAFETY: exclusive tree walk — parent is popped before children are pushed.
         let node = unsafe { &mut *ptr };
+        if node.collect_paint_hash != 0 && !node.subtree_reactive_sync {
+            continue;
+        }
         if node.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_VIEWPORT) {
             if let Some(sync) = node.reactive_sync.clone() {
                 let _ = sync.run(node, layout_tree);
             }
         }
+        if node.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_BUTTON) {
+            buttons.push(ptr);
+        }
         for child in &mut node.children {
             stack.push(child);
         }
     }
-    stack.push(el);
-    while let Some(ptr) = stack.pop() {
-        // SAFETY: exclusive tree walk — parent is popped before children are pushed.
+    for ptr in buttons {
+        // SAFETY: viewport sync only changes scroll/style; the tree stays allocated.
         let node = unsafe { &mut *ptr };
-        if node.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_BUTTON) {
-            if let Some(sync) = node.reactive_sync.clone() {
-                if sync.run(node, layout_tree) == LayoutStatus::StyleChanged {
-                    crate::app::damage::push_frame_paint_element(node, node.paint_scroll_acc);
-                }
+        if let Some(sync) = node.reactive_sync.clone() {
+            if sync.run(node, layout_tree) == LayoutStatus::StyleChanged {
+                crate::app::damage::push_frame_paint_element(node, node.paint_scroll_acc);
             }
-        }
-        for child in &mut node.children {
-            stack.push(child);
         }
     }
 }

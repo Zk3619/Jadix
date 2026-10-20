@@ -565,6 +565,18 @@ fn build_handle(
     hit_pad = hit_pad.cursor_kind(cursor);
 
     let focus_id = format!("{group_id}__rz_h{handle_index}");
+    let highlight = if is_row {
+        Element::new().absolute().left(hit_expand - 1.0).top(0.0).bottom(0.0).w(3.0)
+    } else {
+        Element::new().absolute().top(hit_expand - 1.0).left(0.0).right(0.0).h(3.0)
+    };
+    let highlight = highlight
+        .bg([0.23, 0.51, 0.96, 1.0])
+        .shadow([0.23, 0.51, 0.96, 0.55], 8.0)
+        .pointer_events_none()
+        .class("opacity-0 transition-opacity duration-200 ease-in-out group-hover:opacity-100");
+    hit_pad.set_attr("jadix_group", "1");
+    hit_pad = hit_pad.child(highlight);
     let sizes_pd = sizes;
     let limits_pd = limits;
     let bounds_pd = group_bounds;
@@ -1183,6 +1195,11 @@ impl ResizableBuilder {
 
     pub fn height(mut self, h: f32) -> Self {
         self.height = Some(h);
+        self
+    }
+
+    pub fn fill(mut self) -> Self {
+        self.height = None;
         self
     }
 

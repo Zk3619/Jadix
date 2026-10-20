@@ -36,6 +36,34 @@ enum TextSegment {
 /// Embedded object slot — ~1em advance; must not be whitespace (see [`emoji_layout::EMOJI_LAYOUT_SLOT`]).
 const EMOJI_LAYOUT_SLOT: char = emoji_layout::EMOJI_LAYOUT_SLOT;
 
+fn stable_physical_text_y(y: f32) -> f32 {
+    // Nested device-pixel scroll offsets can leave an integer a few ulps below
+    // its true value. Cosmic-text truncates Y for hinting, so that noise would
+    // move fresh glyphs one pixel relative to retained scroll copies. Preserve
+    // intentional fractional placement; only remove sub-millipixel noise.
+    let nearest = y.round();
+    if (y - nearest).abs() <= 0.001 {
+        nearest
+    } else {
+        y
+    }
+}
+
+#[test]
+fn physical_text_y_removes_scroll_noise_without_rounding_fractional_layout() {
+    for (actual, expected) in [
+        (201.99998, 202.0),
+        (224.00002, 224.0),
+        (-201.99998, -202.0),
+        (-224.00002, -224.0),
+        (201.25, 201.25),
+        (201.75, 201.75),
+        (-201.75, -201.75),
+    ] {
+        assert_eq!(stable_physical_text_y(actual), expected);
+    }
+}
+
 /// Replace each emoji grapheme with a single-width slot so layout advance matches the
 /// custom glyph square. Keeps ZWJ/RI clusters from reserving 2–3× em of invisible Mask width.
 fn plan_emoji_layout(text: &str) -> (String, Vec<TextSegment>) {
@@ -868,17 +896,31 @@ fn take_pooled_entry(
 /// Live buffers always win: inserting them one-by-one into a full pool evicted
 /// the entries we were about to reclaim (`hits ≈ cap − leftover`, perpetual
 /// `shape_miss ≈ nodes − hits` while scrolling the gallery).
+#[cfg(test)]
 fn park_shaped_cache(cache: &mut Vec<super::text::ShapedTextEntry>, pool: &mut ShapedIdentityPool) {
     park_shaped_cache_with_cap(cache, pool, SHAPED_IDENTITY_POOL_CAP);
 }
 
+#[cfg(test)]
 fn park_shaped_cache_with_cap(
     cache: &mut Vec<super::text::ShapedTextEntry>,
     pool: &mut ShapedIdentityPool,
     cap: usize,
 ) {
+    park_shaped_suffix(cache, pool, 0, cap);
+}
+
+fn park_shaped_suffix(
+    cache: &mut Vec<super::text::ShapedTextEntry>,
+    pool: &mut ShapedIdentityPool,
+    start: usize,
+    cap: usize,
+) {
+    if start >= cache.len() {
+        return;
+    }
     let mut live = ShapedIdentityPool::new();
-    for entry in cache.drain(..) {
+    for entry in cache.drain(start..) {
         if entry.shape_hash == 0 {
             continue;
         }
@@ -900,29 +942,6 @@ fn park_shaped_cache_with_cap(
     *pool = live;
 }
 
-/// Pull a parked buffer for `shape_hash` into `cache[i]`.
-///
-/// Pool only — never swap two live slots (that painted button captions inside
-/// Inputs). `shape_hash` already includes requested weight / synthetic-bold so
-/// sidebar 「数据」 cannot reclaim the page-title buffer.
-fn reclaim_shaped_slot(
-    cache: &mut Vec<super::text::ShapedTextEntry>,
-    pool: &mut ShapedIdentityPool,
-    i: usize,
-    shape_hash: u64,
-) {
-    if shape_hash == 0 || i >= cache.len() {
-        return;
-    }
-    if cache[i].shape_hash == shape_hash {
-        return;
-    }
-    if let Some(reclaimed) = take_pooled_entry(pool, shape_hash) {
-        let displaced = std::mem::replace(&mut cache[i], reclaimed);
-        park_shaped_entry(pool, displaced);
-    }
-}
-
 fn assign_shaped_slot(
     cache: &mut Vec<super::text::ShapedTextEntry>,
     pool: &mut ShapedIdentityPool,
@@ -930,6 +949,12 @@ fn assign_shaped_slot(
     i: usize,
     shape_hash: u64,
 ) {
+    if i < cache.len() && cache[i].shape_hash != shape_hash {
+        // A membership/order change invalidates only the unvisited suffix.
+        // Park it before reclaiming so prefix drops and duplicate runs remain
+        // FIFO, without swapping a buffer already assigned to this frame.
+        park_shaped_suffix(cache, pool, i, SHAPED_IDENTITY_POOL_CAP);
+    }
     while cache.len() < i {
         cache.push(make_dummy_cache_entry(font_system));
     }
@@ -940,7 +965,6 @@ fn assign_shaped_slot(
         );
         return;
     }
-    reclaim_shaped_slot(cache, pool, i, shape_hash);
 }
 
 /// Scroll fast-path: Exact-hit idle Input may skip `shape_until_scroll`.
@@ -2346,11 +2370,13 @@ pub fn prepare_text_frame_at(
     // Compute growth before parking. First mount is not permission to shape the whole
     // document: keep the same bounded near-viewport prefetch used by later frames.
     let initial_preshape = text_renderer.shaped_cache.len() < text_nodes.len();
-    // Clip-strip submit and band-cull change membership/order every scroll frame.
-    // Index-aligned reuse then mass-misses; park everything and FIFO-reclaim by hash.
-    park_shaped_cache(
+    // Keep the matching prefix in place. Shrinking clips park their unused tail;
+    // assign_shaped_slot parks the remaining suffix at the first identity change.
+    park_shaped_suffix(
         &mut text_renderer.shaped_cache,
         &mut text_renderer.shaped_identity_pool,
+        text_nodes.len(),
+        SHAPED_IDENTITY_POOL_CAP,
     );
     let effective_margin = preshape_margin();
     let effective_budget = preshape_budget();
@@ -2375,11 +2401,10 @@ pub fn prepare_text_frame_at(
         // nodes completely outside the pre-shape margin are skipped cheaply.
         let scaled_w = info.width * ui_scale;
         let scaled_h = info.height * ui_scale;
-        // Do not round the origin: `round()` can shift paint up to 0.5px outside the
-        // layout box (sidebar labels looked like a 1px overflow). Device-pixel scroll
-        // already keeps the fractional part stable, so glyphon and synthetic-bold stay aligned.
+        // Preserve fractional layout origins (rounding can overflow the box).
+        // Remove only floating-point noise from device-pixel scroll arithmetic.
         let x = info.x * ui_scale;
-        let y = info.y * ui_scale;
+        let y = stable_physical_text_y(info.y * ui_scale);
         let scaled_clip = info.clip_bounds.map(|b| {
             [
                 b[0] * ui_scale,
@@ -2728,12 +2753,23 @@ pub fn prepare_text_frame_at(
             }
         };
         let resolve_paint_wrap = || -> f32 {
-            if nowrap || info.text.is_ascii() || info.prepared.is_none() {
+            if nowrap {
                 return soft_w_target;
             }
             // Prewrap hard-breaks are sized for the leaf; do not shrink buffer below leaf
             // (that reflows the last word on settle).
             if crate::text::needs_logical_prewrap(info.text.as_str()) {
+                return soft_w_target;
+            }
+            // Keep live resize on the same bounded width bucket as measurement, regardless
+            // of FIT_CACHE warmth, so a few subpixel changes cannot alternate wrapped lines.
+            if force_fast_mode {
+                if crate::text::layout_text_fast_mode() {
+                    return (crate::text::layout_wrap_target(layout_w, true) * ui_scale).max(1.0);
+                }
+                return soft_w_target;
+            }
+            if info.text.is_ascii() || info.prepared.is_none() {
                 return soft_w_target;
             }
             if let Some(fit) = crate::text::try_glyphon_fit_soft_wrap(
@@ -2744,9 +2780,6 @@ pub fn prepare_text_frame_at(
                 fit_lookup_w,
             ) {
                 return (fit.wrap_width * ui_scale).max(1.0);
-            }
-            if force_fast_mode {
-                return soft_w_target;
             }
             let fit = crate::text::glyphon_fit_soft_wrap(
                 info.text.as_str(),
@@ -5324,10 +5357,11 @@ mod input_shaping_stability_tests {
     fn reclaim_dummy(
         cache: &mut Vec<crate::renderer::text::ShapedTextEntry>,
         pool: &mut super::ShapedIdentityPool,
+        fs: &mut glyphon::FontSystem,
         i: usize,
         hash: u64,
     ) {
-        super::reclaim_shaped_slot(cache, pool, i, hash);
+        super::assign_shaped_slot(cache, pool, fs, i, hash);
     }
 
     fn grow_and_reclaim(
@@ -5336,8 +5370,69 @@ mod input_shaping_stability_tests {
         fs: &mut glyphon::FontSystem,
         hashes: &[u64],
     ) {
+        super::park_shaped_suffix(cache, pool, hashes.len(), super::SHAPED_IDENTITY_POOL_CAP);
         for (i, &hash) in hashes.iter().enumerate() {
             super::assign_shaped_slot(cache, pool, fs, i, hash);
+        }
+    }
+
+    #[test]
+    fn unchanged_prefix_survives_suffix_reorder_clip_and_restore() {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        let mut cache: Vec<_> = [0xA, 0xB, 0xC, 0xC, 0xD]
+            .into_iter()
+            .map(|hash| dummy_shaped(&mut fs, hash, hash as f32))
+            .collect();
+        let mut pool = super::ShapedIdentityPool::new();
+        let stable = [0xA, 0xB, 0xC, 0xC, 0xD];
+        grow_and_reclaim(&mut cache, &mut pool, &mut fs, &stable);
+        assert!(
+            pool.is_empty(),
+            "unchanged slots must stay outside the pool"
+        );
+        for hashes in [
+            &[0xA, 0xB, 0xD, 0xC, 0xC][..],
+            &[0xC, 0xD][..],
+            &stable[..],
+            &[0xA, 0xB, 0xC][..],
+            &stable[..],
+        ] {
+            grow_and_reclaim(&mut cache, &mut pool, &mut fs, hashes);
+            assert_eq!(cache.len(), hashes.len());
+            for (entry, &hash) in cache.iter().zip(hashes) {
+                assert_eq!(entry.shape_hash, hash, "existing runs must not reshape");
+                assert_eq!(entry.measured_text_w, hash as f32);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "isolated shaped-cache CPU comparison; run without concurrent workloads"]
+    fn shaped_slot_reuse_cost() {
+        let mut fs = crate::renderer::font_loader::create_font_system();
+        let hashes: Vec<_> = (1..=80).collect();
+        let mut cache: Vec<_> = hashes
+            .iter()
+            .map(|&hash| dummy_shaped(&mut fs, hash, hash as f32))
+            .collect();
+        let mut pool = super::ShapedIdentityPool::new();
+        for eager in [true, false] {
+            let start = std::time::Instant::now();
+            for _ in 0..2000 {
+                if eager {
+                    super::park_shaped_cache(&mut cache, &mut pool);
+                }
+                grow_and_reclaim(&mut cache, &mut pool, &mut fs, &hashes);
+            }
+            eprintln!(
+                "shaped-cache eager={eager} us/frame={:.3}",
+                start.elapsed().as_secs_f64() * 1_000_000.0 / 2000.0
+            );
+            assert!(pool.is_empty());
+            assert!(cache
+                .iter()
+                .zip(&hashes)
+                .all(|(entry, hash)| entry.shape_hash == *hash));
         }
     }
 
@@ -5347,7 +5442,7 @@ mod input_shaping_stability_tests {
         let mut cache = vec![dummy_shaped(&mut fs, 0xB0B, 7.0)];
         let mut pool = super::ShapedIdentityPool::new();
         super::park_shaped_entry(&mut pool, dummy_shaped(&mut fs, 0xA11CE, 42.0));
-        reclaim_dummy(&mut cache, &mut pool, 0, 0xA11CE);
+        reclaim_dummy(&mut cache, &mut pool, &mut fs, 0, 0xA11CE);
         assert_eq!(cache[0].shape_hash, 0xA11CE);
         assert_eq!(cache[0].measured_text_w, 42.0);
         assert!(pool.contains_key(&0xB0B));
@@ -5364,12 +5459,12 @@ mod input_shaping_stability_tests {
         ];
         let mut pool = super::ShapedIdentityPool::new();
         super::park_shaped_entry(&mut pool, dummy_shaped(&mut fs, 0xA, 1.0));
-        reclaim_dummy(&mut cache, &mut pool, 0, 0xA);
+        reclaim_dummy(&mut cache, &mut pool, &mut fs, 0, 0xA);
         assert_eq!(cache[0].shape_hash, 0xA);
         assert_eq!(cache[0].measured_text_w, 1.0);
-        reclaim_dummy(&mut cache, &mut pool, 1, 0xB);
+        reclaim_dummy(&mut cache, &mut pool, &mut fs, 1, 0xB);
         assert_eq!(cache[1].shape_hash, 0xB);
-        reclaim_dummy(&mut cache, &mut pool, 2, 0xC);
+        reclaim_dummy(&mut cache, &mut pool, &mut fs, 2, 0xC);
         assert_eq!(cache[2].shape_hash, 0xC);
     }
 

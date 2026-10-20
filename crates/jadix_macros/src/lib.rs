@@ -1339,6 +1339,8 @@ fn expand_node(
             // HTML / Solid 风格别名 → 规范名（`<Img>`/`<img>` → `Image`；`<div>`/`<Div>` → `Box`）。
             let name_str = match el.name.to_string().as_str() {
                 "Img" | "img" => "Image".to_string(),
+                "audio" => "Audio".to_string(),
+                "video" => "Video".to_string(),
                 "div" | "Div" => "Box".to_string(),
                 other => other.to_string(),
             };
@@ -7019,8 +7021,8 @@ fn expand_node(
 
             let mut element = if is_custom {
                 // Alias tags (`Img`/`img`) must call the canonical `Image` / `ImageProps`.
-                let name_ident = if matches!(el.name.to_string().as_str(), "Img" | "img") {
-                    syn::Ident::new("Image", el.name.span())
+                let name_ident = if matches!(el.name.to_string().as_str(), "Img" | "img" | "audio" | "video") {
+                    syn::Ident::new(&name_str, el.name.span())
                 } else {
                     el.name.clone()
                 };
@@ -8461,6 +8463,12 @@ fn expand_node(
                     }
                 }
 
+                if matches!(name_str.as_str(), "MediaPlayer" | "AudioPlayer" | "VideoPlayer") && !el.children.is_empty() {
+                    prop_names.push(syn::Ident::new("body", name_ident.span()));
+                    prop_values.push(quote! { Some(Box::new(move || (#children_expr).unwrap_or_default())) });
+                    children_expr = quote! { None };
+                }
+
                 let rest_ts = if let Some(spread) = spread_expr {
                     quote! { ..#spread }
                 } else {
@@ -8681,6 +8689,37 @@ fn expand_node(
                         jadix::utils::text_node::build_icon_text_node("\u{ea0e}")
                     };
                 }
+                let mut hover = quote! { "none" };
+                let mut change = quote! { "none" };
+                let mut spring = quote! { "snappy" };
+                let site_idx = *node_counter;
+                *node_counter += 1;
+                let mut motion_id =
+                    quote! { format!("{}:{}:Icon#{}", file!(), line!(), #site_idx) };
+                let mut motion = false;
+                for (attr, value) in &el.attributes {
+                    match attr.to_string().as_str() {
+                        "hover_animation" | "hoverAnimation" | "hover-animation" => {
+                            hover = quote! { #value };
+                            motion = true;
+                        }
+                        "change_animation" | "changeAnimation" | "change-animation" => {
+                            change = quote! { #value };
+                            motion = true;
+                        }
+                        "spring" => spring = quote! { #value },
+                        "id" => motion_id = quote! { #value },
+                        _ => {}
+                    }
+                }
+                if motion {
+                    element = quote! {
+                        jadix::utils::with_icon_animations(
+                            jadix::core::tree::Element::from(#element),
+                            #hover, #change, #motion_id, #spring,
+                        )
+                    };
+                }
             }
 
             if name_str == "AnimatedIcon" {
@@ -8758,6 +8797,7 @@ fn expand_node(
                 let mut label_chain = quote! {};
                 let mut label_bind: Option<&syn::Expr> = None;
                 let mut id_chain = quote! {};
+                let mut hover_chain = quote! {};
                 for (attr, value) in &el.attributes {
                     match attr.to_string().as_str() {
                         "icon" => {
@@ -8893,6 +8933,9 @@ fn expand_node(
                         }
                         "id" => {
                             id_chain = quote! { __b = __b.id((#value).to_string()); };
+                        }
+                        "hover_animation" | "hoverAnimation" | "hover-animation" => {
+                            hover_chain = quote! { __b = __b.hover_animation(#value); };
                         }
                         _ => {}
                     }
@@ -9053,6 +9096,7 @@ fn expand_node(
                             #view_box_chain
                             #label_chain
                             #id_chain
+                            #hover_chain
                             jadix::core::tree::Element::from(__b)
                         };
                         #(#binds)*
@@ -9869,6 +9913,10 @@ fn expand_node(
                             element = quote! { #element.text_size(jadix::core::tree::IntoF32::into_f32(#value)) }
                         }
                     }
+                    "hover_animation" | "hoverAnimation" | "hover-animation"
+                    | "change_animation" | "changeAnimation" | "change-animation" | "spring"
+                    | "id"
+                        if name_str == "Icon" => {}
                     "controlled" if name_str == "AnimatedIcon" => {}
                     "pointer_events" | "pointerEvents" | "pointer-events"
                         if name_str == "AnimatedIcon" => {}
@@ -9892,6 +9940,9 @@ fn expand_node(
                     | "viewBox"
                     | "view-box"
                     | "label"
+                    | "hover_animation"
+                    | "hoverAnimation"
+                    | "hover-animation"
                         if name_str == "MorphIcon" => {}
                     "text_size" | "font_size" => {
                         element = quote! { #element.text_size(jadix::core::tree::IntoF32::into_f32(#value)) }

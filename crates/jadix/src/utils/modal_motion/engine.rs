@@ -351,14 +351,20 @@ fn modal_motion_has_exit(motion: ModalSurfaceMotion) -> bool {
     }
 }
 
-fn finish_modal_exit_immediate(handle: &ModalPresenceHandle) {
+pub(crate) fn finish_modal_exit_immediate(handle: &ModalPresenceHandle) {
     let mounted_sig = mounted_signal(handle);
     {
         let mut c = handle.cell.borrow_mut();
         c.gate.force_absent();
+        c.needs_enter = false;
         c.exit_armed = false;
         c.needs_exit_anim = false;
         c.enter_active = false;
+        c.enter_started = None;
+        c.slide_settle = false;
+        c.slide_settle_from = None;
+        c.overlay_motion.reset();
+        c.panel_motion.reset();
         c.shell = None;
     }
     if mounted_sig.try_peek() == Some(true) {

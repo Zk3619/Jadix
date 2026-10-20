@@ -154,13 +154,17 @@ pub(crate) fn opaque_ink_rect(rgba: &[u8], w: u32, h: u32) -> Option<[u32; 4]> {
     ])
 }
 
-#[cfg(test)]
-fn cache_clear() {
+pub(crate) fn invalidate_text_texture_cache() {
     let _ = with_cache(|c| {
         c.map.clear();
         c.needed.clear();
         c.clock = 0;
     });
+}
+
+#[cfg(test)]
+fn cache_clear() {
+    invalidate_text_texture_cache();
 }
 
 #[cfg(test)]

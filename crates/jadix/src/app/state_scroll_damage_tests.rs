@@ -15,10 +15,15 @@ fn gallery_layout_and_scroll_damage_matches_full() {
     struct Harness;
     impl ApplicationHandler for Harness {
         fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+            let size = if std::env::var("JADIX_DAMAGE_CASE").as_deref() == Ok("nested-text") {
+                (810.0, 793.0)
+            } else {
+                (1600.0, 900.0)
+            };
             let window = event_loop
                 .create_window(
                     WindowAttributes::default()
-                        .with_surface_size(winit::dpi::LogicalSize::new(1600.0, 900.0))
+                        .with_surface_size(winit::dpi::LogicalSize::new(size.0, size.1))
                         .with_visible(false),
                 )
                 .unwrap();
@@ -55,6 +60,8 @@ fn render(s: &mut AppState, scroll: bool) -> RgbaImage {
 }
 
 fn compare(s: &mut AppState, partial: &RgbaImage, label: &str, scrolling: bool) -> usize {
+    // Recollect the reference so a stale cached clip cannot corrupt both images.
+    s.layout_tree.invalidate_collect_skip();
     s.mark_full_redraw();
     // Compare at the same text shaping mode: scrolling deliberately quantizes
     // layout bounds to reduce cache churn.
@@ -231,7 +238,10 @@ fn run(window: Arc<dyn Window>) {
         }
     }
     let mut blits = 0;
-    if std::env::var("JADIX_DAMAGE_CASE").as_deref() != Ok("layout") {
+    if !matches!(
+        std::env::var("JADIX_DAMAGE_CASE").as_deref(),
+        Ok("layout" | "nested-text")
+    ) {
         let rail =
             crate::style::use_ui_transition_cubic(&format!("scrollbar_spring_{rest}:y"), 0.0);
         rail.set(1.0);
@@ -248,15 +258,25 @@ fn run(window: Arc<dyn Window>) {
         ] {
             let mut partial = None;
             for frame in 1..=frames {
-                let y = super::super::super::scroll_support::snap_scroll_offset_to_device_px(
-                    start + frame as f32 * step,
-                    s.ui_scale(),
-                );
+                // Exercise raw jump offsets too: snapping the fixture first hid
+                // half-device-pixel copy drift at fractional display scales.
+                let y = start + frame as f32 * step;
                 offset.set_silent(y);
                 s.update_scroll_offset_in_place(&rest, [0.0, y]);
                 partial = Some(render(s, true));
                 assert_sidebar_header_unchanged(s, &header_before, partial.as_ref().unwrap());
                 blits += usize::from(!s.scroll_strip_blit.is_empty());
+                if std::env::var_os("JADIX_DAMAGE_EVERY_FRAME").is_some() {
+                    assert_eq!(
+                        compare(
+                            s,
+                            partial.as_ref().unwrap(),
+                            &format!("{label}-{frame}"),
+                            true
+                        ),
+                        0
+                    );
+                }
             }
             if compare(s, &partial.unwrap(), label, true) > 0 {
                 failures.push(label.to_string());
@@ -279,6 +299,90 @@ fn run(window: Arc<dyn Window>) {
         let settled = render(s, false);
         if compare(s, &settled, "scroll-settled", true) > 0 {
             failures.push("scroll-settled".to_string());
+        }
+    }
+    if std::env::var("JADIX_DAMAGE_CASE").as_deref() == Ok("nested-text") {
+        assert_eq!(section, "text");
+        let mut opt = state.borrow_mut();
+        let s = opt.as_mut().unwrap();
+        let inner_id = "gal-flow-preview";
+        let inner = s
+            .find_viewport_element(inner_id)
+            .expect("text flow viewport")
+            .layout_bounds;
+        let outer = s
+            .find_viewport_element(&rest)
+            .expect("page viewport")
+            .layout_bounds;
+        let start = (inner[1] - outer[1] - 40.0).max(0.0);
+        eprintln!("nested text: inner={inner:?}, outer={outer:?}, start={start}");
+        let inner_offset = use_signal(
+            &crate::core::scroll_viewport::scroll_offset_y_signal_key(inner_id),
+            || 0.0f32,
+        );
+        let copies_before = crate::app::damage::scroll_strip_blit_count();
+        for (frame, (outer_delta, inner_y)) in [
+            (0.0, 0.0),
+            (1.0, 0.0),
+            (8.0, 25.0),
+            (16.0, 25.0),
+            (45.0, 25.0),
+            (60.0, 25.0),
+            (120.0, 150.0),
+            (175.0, 150.0),
+            (200.0, 300.0),
+            (180.0, 300.0),
+            (130.0, 300.0),
+            (10.0, 300.0),
+            (0.0, 0.0),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let outer_y = start + outer_delta;
+            offset.set_silent(outer_y);
+            inner_offset.set_silent(inner_y);
+            s.update_scroll_offset_in_place(&rest, [0.0, outer_y]);
+            s.update_scroll_offset_in_place(inner_id, [0.0, inner_y]);
+            let partial = render(s, true);
+            blits += usize::from(!s.scroll_strip_blit.is_empty());
+            let label = format!("nested-text-{frame}");
+            if compare(s, &partial, &label, true) > 0 {
+                failures.push(label);
+            }
+        }
+        // Keep the retained surface through each entire sequence so a full
+        // reference between steps cannot hide accumulating copy errors.
+        for (label, outer_start, outer_step, inner_start, inner_step) in [
+            ("nested-continuous-down", start, 5.0, 0.0, 0.0),
+            ("nested-continuous-up", start + 200.0, -5.0, 0.0, 0.0),
+            ("nested-continuous-inner", start, 0.0, 0.0, 7.5),
+            ("nested-continuous-both", start, 5.0, 300.0, -7.5),
+        ] {
+            let mut partial = None;
+            for frame in 0..=40 {
+                let outer_y = outer_start + frame as f32 * outer_step;
+                let inner_y = inner_start + frame as f32 * inner_step;
+                offset.set_silent(outer_y);
+                inner_offset.set_silent(inner_y);
+                s.update_scroll_offset_in_place(&rest, [0.0, outer_y]);
+                s.update_scroll_offset_in_place(inner_id, [0.0, inner_y]);
+                partial = Some(render(s, true));
+                blits += usize::from(!s.scroll_strip_blit.is_empty());
+            }
+            if compare(s, &partial.unwrap(), label, true) > 0 {
+                failures.push(label.to_string());
+            }
+        }
+        let copies = crate::app::damage::scroll_strip_blit_count() - copies_before;
+        eprintln!("Gallery nested regression: {blits} optimized frames, {copies} GPU strip copies");
+        if crate::app::damage::scroll_strip_blit_enabled() {
+            assert!(
+                copies > 0,
+                "nested regression must execute GPU strip copies"
+            );
+        } else {
+            assert_eq!(copies, 0, "disabled strip copies must use viewport clears");
         }
     }
     crate::app::runtime::clear_app_runtime();
@@ -471,7 +575,9 @@ fn run_sidebar_edge(window: Arc<dyn Window>) {
                         .any(|(a, b)| a.abs_diff(b) > 3)
                 })
                 .count();
-            eprintln!("offset={offset} target={target} bottom={bottom} dark edge pixels={dark} edge changed pixels={diff}");
+            eprintln!(
+                "offset={offset} target={target} bottom={bottom} dark edge pixels={dark} edge changed pixels={diff}"
+            );
             s.mark_full_redraw();
             let full = render(s, false);
             let full_diff = (bottom.saturating_sub(8)..bottom + 2)

@@ -96,14 +96,21 @@ pub use crate::{
 // 核心类型（双书写面共用）
 // ---------------------------------------------------------------------------
 
+pub use crate::app::invalidation::{
+    bust_caches, invalidation_stats, node, rebuild_all, request_frame, InvalidationStats, UiNode,
+};
 pub use crate::app::pointer_events::{MouseEvent, PointerEvent};
 pub use crate::app::props::{children, resolve_children, Children, ChildrenAccessor, MergeProps};
+pub use crate::app::reactive::immediate_region;
 pub use crate::app::reactive::{for_keyed_reactive, index_reactive};
 pub use crate::app::with_ui_build_stack;
 pub use crate::app::{
     app, create_resource, error_boundary, launch, page_scroll_locked, parse_scroll_freeze,
     set_page_scroll_locked, set_scroll_freeze, suspense, throw_error, throw_resource_error,
-    AppBuilder, AppConfig, Resource, ResourceState, ScrollFreeze, WindowBackdrop, WindowOptions,
+    AppBuilder, AppConfig, AppIcon, InstanceLaunch, InstancePolicy, Resource, ResourceState,
+    ScrollFreeze, WindowBackdrop, WindowOptions,
+    current_window, open_secondary_window_with, set_second_instance_handler,
+    set_window_fullscreen, toggle_window_fullscreen, window_is_fullscreen, windows, WindowHandle,
 };
 pub use crate::core::reactivity::{
     component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
@@ -141,6 +148,9 @@ pub use crate::primitives::{
     Portal, PortalProps, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial,
     ShaderBuilder, TextBuilder,
 };
+pub use crate::primitives::media::{audio, video, Audio, AudioBuilder, AudioProps, MediaAspectRatio, MediaFit, MediaRotation, Video, VideoBuilder, VideoProps};
+pub use crate::media::playback::*;
+pub use crate::components::media_player::*;
 
 pub use crate::layout::dimension::{css_root_font_size_px, em, px, rem};
 pub use crate::utils::font::{
@@ -156,8 +166,8 @@ pub use crate::utils::{
 pub use crate::utils::{
     animated_icon, animated_icon_names, animated_icon_recipe, clear_icon_provider,
     clear_registered_icons, icon_named, icon_src, register_icon, set_icon_provider,
-    start_animated_icon, stop_animated_icon, unregister_icon, AnimatedIcon, AnimatedIconBuilder,
-    IconProvider, IconSource,
+    start_animated_icon, stop_animated_icon, unregister_icon, with_icon_animations, AnimatedIcon,
+    AnimatedIconBuilder, IconProvider, IconSource,
 };
 
 // ---------------------------------------------------------------------------
@@ -182,6 +192,9 @@ pub use crate::style::{
 // 产品组件：标签 + Builder/`fn`（低层 popup 除外）
 // ---------------------------------------------------------------------------
 
+pub use crate::components::dock::{DockLayout, DockOrientation, DockPlacement, DockState, DockTab};
+#[cfg(feature = "webview")]
+pub use crate::components::webview::{webview, webview_html, webview_status, webview_supported, WebView, WebViewProps, WebViewStatus};
 pub use crate::components::{
     // Accordion（复合标签 + Builder）
     accordion,

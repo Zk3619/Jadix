@@ -110,7 +110,7 @@ pub(crate) fn runtime_tls_alive() -> bool {
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SignalId(usize);
 
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EffectId(usize);
 
 thread_local! {
@@ -149,6 +149,8 @@ struct OwnerNode {
     contexts: HashMap<ContextId, Rc<dyn Any>>,
     /// Local-id → (SignalId, TypeId) for [`use_scoped_signal`].
     scoped_signals: HashMap<String, (SignalId, TypeId)>,
+    /// Anonymous UI binding occurrences in the current execution of this owner.
+    binding_slots: HashMap<String, usize>,
     /// Non-zero = secondary window signal-key token (see [`crate::app::window_scope`]).
     /// Inherited by child owners so nested effects keep the window without an enter guard.
     window_key_scope: u64,
@@ -370,6 +372,7 @@ fn ensure_owner(rt: &Runtime) -> OwnerId {
             cleanups: Vec::new(),
             contexts: HashMap::new(),
             scoped_signals: HashMap::new(),
+            binding_slots: HashMap::new(),
             window_key_scope: 0,
         },
     );
@@ -399,6 +402,7 @@ fn create_child_owner(rt: &Runtime, parent: OwnerId) -> OwnerId {
             cleanups: Vec::new(),
             contexts: HashMap::new(),
             scoped_signals: HashMap::new(),
+            binding_slots: HashMap::new(),
             window_key_scope,
         },
     );
@@ -580,6 +584,9 @@ fn run_effect(rt: &Runtime, effect_id: EffectId) {
 
     // Solid: dispose previous child scopes before re-running.
     dispose_owner_children(rt, owner);
+    if let Some(node) = rt.owners.borrow_mut().get_mut(&owner) {
+        node.binding_slots.clear();
+    }
 
     let old_deps = rt
         .effect_deps
@@ -1075,6 +1082,9 @@ impl<T: Clone + 'static> Signal<T> {
         })
     }
 
+    /// Read and subscribe the current effect/memo. The returned `T` is an ordinary
+    /// value: passing it to a Builder does not create a separate leaf subscription.
+    /// Pass the signal or a closure to the Builder; `ui!` can lower tracked reads.
     pub fn get(&self) -> T {
         self.try_get().expect("Signal::get on disposed signal")
     }
@@ -1567,6 +1577,7 @@ where
                 cleanups: Vec::new(),
                 contexts: HashMap::new(),
                 scoped_signals: HashMap::new(),
+                binding_slots: HashMap::new(),
                 window_key_scope: 0,
             },
         );
@@ -1776,6 +1787,21 @@ pub fn scoped_template_id(local: impl AsRef<str>) -> String {
     }
 }
 
+/// One anonymous leaf per owner/site/occurrence. Effect reruns restart occurrences;
+/// explicit template ids and keyed-list business keys remain separate identities.
+pub(crate) fn next_binding_template_id(site: &str) -> String {
+    RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        let owner = ensure_owner(&rt);
+        let mut owners = rt.owners.borrow_mut();
+        let node = owners.get_mut(&owner).expect("binding owner disposed");
+        let occurrence = node.binding_slots.entry(site.to_string()).or_default();
+        let id = format!("{}::bind:{site}:{}", node.path, *occurrence);
+        *occurrence += 1;
+        id
+    })
+}
+
 /// Owner-prefixed `focus_id` (WP-2.4). Use for focusable chrome that must not share the
 /// global focus namespace across independently disposed owners.
 ///
@@ -1872,6 +1898,17 @@ impl Drop for OwnerRestore {
             rt_rc.borrow().current_owner.replace(prev);
         });
     }
+}
+
+/// Allocate shared resources under their source owner rather than a transient reader.
+pub(crate) fn with_owner<R>(owner: OwnerId, f: impl FnOnce() -> R) -> R {
+    let prev = RUNTIME.with(|rt_rc| {
+        let rt = rt_rc.borrow();
+        assert!(rt.owners.borrow().contains_key(&owner), "owner disposed");
+        rt.current_owner.replace(Some(owner))
+    });
+    let _restore = OwnerRestore(prev);
+    f()
 }
 
 /// Run `f` as a **component-instance root** (Solid-style owner), then restore the previous owner.

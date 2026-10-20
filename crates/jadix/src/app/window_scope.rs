@@ -100,6 +100,7 @@ pub(crate) fn forget_secondary(id: WindowId) -> Option<u64> {
         .ok()
         .flatten();
     if let Some(t) = token {
+        super::invalidation::forget(WindowScope::Secondary(t));
         super::damage::clear_window_paint_nodes(WindowScope::Secondary(t));
         let _ = TOKEN_TO_WINDOW.try_with(|rev| {
             rev.borrow_mut().remove(&t);
@@ -123,9 +124,11 @@ impl Drop for WindowScopeGuard {
 
 pub(crate) fn enter(scope: WindowScope) -> WindowScopeGuard {
     let prev_window = ACTIVE_WINDOW_ID.try_with(|c| c.get()).unwrap_or(None);
-    if matches!(scope, WindowScope::Primary) {
-        let _ = ACTIVE_WINDOW_ID.try_with(|c| c.set(None));
-    }
+    let selected = match scope {
+        WindowScope::Primary => None,
+        WindowScope::Secondary(token) => TOKEN_TO_WINDOW.with(|m| m.borrow().get(&token).copied()),
+    };
+    let _ = ACTIVE_WINDOW_ID.try_with(|c| c.set(selected));
     let suffix = match scope {
         WindowScope::Primary => 0,
         WindowScope::Secondary(n) => n,

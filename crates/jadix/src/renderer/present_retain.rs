@@ -268,6 +268,31 @@ impl PresentRetainPipeline {
         self.retain.as_ref().map(|r| &r.texture)
     }
 
+    /// Replace final sampling when format/extent match and no overlay or theme fade is needed.
+    pub(crate) fn copy_to_surface(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        surface: &wgpu::Texture,
+    ) -> bool {
+        let Some(source) = self.color_texture() else {
+            return false;
+        };
+        if source.format() != surface.format()
+            || source.size() != surface.size()
+            || source.sample_count() != 1
+            || surface.sample_count() != 1
+            || !surface.usage().contains(wgpu::TextureUsages::COPY_DST)
+        {
+            return false;
+        }
+        encoder.copy_texture_to_texture(
+            source.as_image_copy(),
+            surface.as_image_copy(),
+            source.size(),
+        );
+        true
+    }
+
     #[cfg(test)]
     pub(crate) fn color_texture_for_test(&self) -> Option<&wgpu::Texture> {
         self.retain.as_ref().map(|r| &r.texture)
@@ -440,7 +465,12 @@ mod tests {
     #[test]
     #[ignore = "native GL texture-copy regression"]
     fn scroll_target_swap_preserves_outside_pixels_and_sequential_copies() {
-        let gpu = OffscreenGpu::with_backends(wgpu::Backends::GL).expect("GL adapter");
+        let backend = if std::env::var("JADIX_UPLOAD_BACKEND").as_deref() == Ok("dx11") {
+            wgpu::Backends::DX11
+        } else {
+            wgpu::Backends::GL
+        };
+        let gpu = OffscreenGpu::with_backends(backend).expect("requested adapter");
         let (w, h) = (64, 48);
         let mut retain =
             PresentRetainPipeline::new(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
@@ -530,6 +560,23 @@ mod tests {
             blit.pixels, expected,
             "blit bind group must follow the swapped texture"
         );
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        assert!(!retain.copy_to_surface(&mut encoder, &target), "missing COPY_DST must fall back");
+        let copy_target = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("retain-copy-dest"),
+            size: target.size(),
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: target.format(),
+            usage: target.usage() | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        assert!(retain.copy_to_surface(&mut encoder, &copy_target));
+        let copied = crate::renderer::offscreen::readback_texture(
+            &gpu.device, &gpu.queue, &copy_target, w, h, encoder,
+        ).unwrap();
+        assert_eq!(copied.pixels, blit.pixels, "copy preserves swapped sRGB content");
     }
 
     fn dest_view(

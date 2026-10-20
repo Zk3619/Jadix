@@ -43,6 +43,8 @@ pub use os::harmonyos::{
 
 #[cfg(target_os = "android")]
 pub use host::install_android_app;
+#[cfg(target_os = "android")]
+pub(crate) use host::android_app;
 #[cfg(target_env = "ohos")]
 pub use host::install_ohos_app;
 

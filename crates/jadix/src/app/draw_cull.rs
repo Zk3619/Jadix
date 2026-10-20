@@ -4,7 +4,7 @@
 //! swapchain would leave holes. Scroll / structure still FullClear (caller).
 
 use std::borrow::Cow;
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashSet};
 
 use crate::layout::layout_tree::{NodePaint, TextLayoutInfo};
 use crate::renderer::{
@@ -578,11 +578,18 @@ pub(crate) fn text_paint_bounds(n: &TextLayoutInfo) -> [f32; 4] {
     } else {
         0.0
     };
+    // Glyphon applies paint_scale separately from the residual paint matrix.
+    // The origin already includes CSS scaling; only the run's extent grows.
+    let scale = if n.paint_scale.is_finite() && n.paint_scale > 0.0 {
+        n.paint_scale
+    } else {
+        1.0
+    };
     let mut bounds = [
         n.x - extra,
         n.y - extra,
-        (n.width + pan + extra * 2.0).max(0.0),
-        (n.height + extra * 2.0).max(0.0),
+        ((n.width + pan) * scale + extra * 2.0).max(0.0),
+        (n.height * scale + extra * 2.0).max(0.0),
     ];
     if n.paint_scale != 1.0 || !transform_is_identity(&n.paint_transform) {
         bounds = aabb_of_centered_transform(bounds, &n.paint_transform);
@@ -3127,6 +3134,7 @@ fn text_run_ink_width(n: &TextLayoutInfo) -> Option<f32> {
 
 /// Page-node visual slots for `last_present_node_bounds` (logical px).
 /// Call **before** `scale_instances_in_place` / `take` — dest-reset scales prev by `ui_scale`.
+#[cfg(test)]
 pub(crate) fn last_present_visual_slots(
     node_paints: &[NodePaint],
     instances: &[InstanceInput],
@@ -3134,16 +3142,16 @@ pub(crate) fn last_present_visual_slots(
     texts: &[TextLayoutInfo],
     chrome: &[InstanceInput],
 ) -> Vec<(u64, [f32; 4])> {
-    #[cfg(test)]
-    if std::env::var_os("JADIX_VISUAL_SLOTS_REFERENCE").is_some() {
-        return last_present_visual_slots_reference(
-            node_paints,
-            instances,
-            textured,
-            texts,
-            chrome,
-        );
-    }
+    last_present_visual_slots_with_raster_owners(node_paints, instances, textured, texts, chrome).0
+}
+
+pub(crate) fn last_present_visual_slots_with_raster_owners(
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+    textured: &[ScaledTexturedDraw],
+    texts: &[TextLayoutInfo],
+    chrome: &[InstanceInput],
+) -> (Vec<(u64, [f32; 4])>, HashSet<u64>) {
     // Index each payload's candidate owners once. Testing a primitive's
     // ownership used to scan every paint slot, including unrelated siblings.
     let mut owners =
@@ -3156,21 +3164,30 @@ pub(crate) fn last_present_visual_slots(
             }
         }
     }
-    node_paints
+    let mut raster_owners = HashSet::new();
+    let slots = node_paints
         .iter()
         .filter(|p| !p.overlay)
         .filter_map(|p| {
+            let foreign_owns = |channel: usize, i: usize| {
+                owners[channel][i]
+                    .iter()
+                    .any(|q| is_nested_foreign_slot(p, q))
+            };
+            if (p.textured.0.min(textured.len())..p.textured.1.min(textured.len()))
+                .any(|i| !foreign_owns(1, i))
+                || (p.text.0.min(texts.len())..p.text.1.min(texts.len()))
+                    .any(|i| !foreign_owns(2, i))
+            {
+                raster_owners.insert(p.key);
+            }
             let b = node_paint_visual_bounds_with_ownership(
                 p,
                 instances,
                 textured,
                 texts,
                 chrome,
-                |channel, i| {
-                    owners[channel][i]
-                        .iter()
-                        .any(|q| is_nested_foreign_slot(p, q))
-                },
+                foreign_owns,
             );
             // Skip phantom `[layout_origin, 0×0]` (caret blink OFF). Recording that
             // origin made the next I-beam look translated from the flex leaf.
@@ -3180,7 +3197,15 @@ pub(crate) fn last_present_visual_slots(
                 Some((p.key, b))
             }
         })
-        .collect()
+        .collect();
+    #[cfg(test)]
+    if std::env::var_os("JADIX_VISUAL_SLOTS_REFERENCE").is_some() {
+        return (
+            last_present_visual_slots_reference(node_paints, instances, textured, texts, chrome),
+            raster_owners,
+        );
+    }
+    (slots, raster_owners)
 }
 
 #[cfg(test)]
@@ -10838,7 +10863,9 @@ mod tests {
         };
         let paints = [bar_p, chip_p, leaf_p];
         let instances = [page, fill];
-        let rest_slots = last_present_visual_slots(&paints, &instances, &[rest_bake], &[], &[]);
+        let (rest_slots, raster_owners) =
+            last_present_visual_slots_with_raster_owners(&paints, &instances, &[rest_bake], &[], &[]);
+        assert_eq!(raster_owners, HashSet::from([3]));
         let hover_slots = last_present_visual_slots(&paints, &instances, &[hover_bake], &[], &[]);
         let rest_bar = rest_slots
             .iter()
@@ -12453,6 +12480,35 @@ mod tests {
         assert_ne!(
             wipe_double, wipe,
             "recording after scale_instances_in_place would mis-scale prev and over-wipe\n logical_wipe={wipe:?} doubled={wipe_double:?}"
+        );
+    }
+
+    #[test]
+    fn scaled_text_damage_and_present_bounds_cover_the_painted_run() {
+        let mut text = sample_text("scaled", 565.5);
+        text.y = 819.0;
+        text.width = 43.0;
+        text.height = 12.0;
+        text.paint_scale = 3.0;
+        let bounds = [565.5, 819.0, 129.0, 36.0];
+        let paint = NodePaint {
+            key: 1,
+            bounds,
+            overlay: false,
+            instance: (0, 0),
+            textured: (0, 0),
+            text: (0, 1),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: None,
+            layered: false,
+            rest: None,
+        };
+        assert_eq!(text_paint_bounds(&text), bounds);
+        assert_eq!(
+            last_present_visual_slots(&[paint], &[], &[], &[text], &[]),
+            vec![(1, bounds)],
+            "scroll repairs must include the bottom of enlarged text",
         );
     }
 

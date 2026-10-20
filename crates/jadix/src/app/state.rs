@@ -1,4 +1,7 @@
 use std::borrow::Cow;
+#[cfg(all(test, target_os = "windows"))]
+#[path = "state_hybrid_tests.rs"]
+mod hybrid_tests;
 #[cfg(test)]
 #[path = "state_present_tests.rs"]
 mod present_pixel_tests;
@@ -18,35 +21,35 @@ use winit::window::Window;
 
 use crate::core::tree::{Element, LayoutProfileMs, LayoutTree};
 use crate::renderer::{
-    cpu_text::CpuTextProfiler, prepare_text_frame, scale_clip_polys_in_place, scale_instances,
-    scale_instances_in_place, scale_textured_draws, BackdropBlurPipeline, InstanceInput,
-    JadixPipeline, JadixTextRenderer, PresentRetainPipeline, ScaledTexturedDraw,
-    TexturedInstanceInput, TexturedQuadPipeline,
+    BackdropBlurPipeline, InstanceInput, JadixPipeline, JadixTextRenderer, PresentRetainPipeline,
+    ScaledTexturedDraw, TexturedInstanceInput, TexturedQuadPipeline, cpu_text::CpuTextProfiler,
+    prepare_text_frame, scale_clip_polys_in_place, scale_instances, scale_instances_in_place,
+    scale_textured_draws,
 };
 use crate::{
     components::{
         scrollbar::scrollbar_visibility_signal_key,
         scrollbar::{
+            ATTR_H_LANE_INSET, ATTR_H_LANE_V_CROSS, ATTR_SCROLLBAR_TRACK_FADES, SCROLLBAR_EDGE_PAD,
+            SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
             apply_scrollbar_visible_alpha, horizontal_lane_side_inset,
             normalize_scrollbar_base_for_auto, scrollbar_min_thumb_along_track,
-            vertical_scrollbar_occupies_lane, ATTR_H_LANE_INSET, ATTR_H_LANE_V_CROSS,
-            ATTR_SCROLLBAR_TRACK_FADES, SCROLLBAR_EDGE_PAD, SCROLLBAR_THUMB_FOCUS_PREFIX,
-            SCROLLBAR_TRACK_FOCUS_PREFIX,
+            vertical_scrollbar_occupies_lane,
         },
     },
     core::reactivity::use_signal,
     core::scroll_viewport::{
-        scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
-        scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
-        scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
-        scroll_scrollbar_y_side_signal_key, scroll_viewport_h_signal_key,
-        scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
+        SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_content_h_signal_key, scroll_content_w_signal_key,
+        scroll_offset_x_signal_key, scroll_offset_y_signal_key, scroll_overflow_x_signal_key,
+        scroll_overflow_y_signal_key, scroll_scrollbar_inset_x_signal_key,
+        scroll_scrollbar_inset_y_signal_key, scroll_scrollbar_y_side_signal_key,
+        scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
     },
 };
 use std::collections::hash_map::Entry;
+use std::sync::OnceLock;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::OnceLock;
 use std::time::Instant;
 use taffy::prelude::Dimension;
 
@@ -189,6 +192,8 @@ pub(super) enum TextRendererBackend {
 }
 
 pub(super) struct AppState {
+    #[cfg(feature = "webview")]
+    pub(super) webviews: crate::components::webview::native::NativeWebViews,
     // Field drop order is the reverse of declaration. wgpu Surface must drop while Device
     // and the winit Window/HWND are still alive (Windows GL/WGL otherwise panics in
     // make_current → workspace `panic = "abort"` → STATUS_STACK_BUFFER_OVERRUN 0xC0000409).
@@ -216,10 +221,9 @@ pub(super) struct AppState {
     present_retain: PresentRetainPipeline,
     pub(super) theme_transition: crate::renderer::theme_transition::ThemeTransition,
     image_textures: crate::renderer::TexturePool,
-    textured_instance_buffer: wgpu::Buffer,
-    textured_instance_capacity: usize,
-    pub(super) instance_buffer: wgpu::Buffer,
-    instance_buffer_capacity: usize,
+    textured_instance_buffer: crate::renderer::buffer_upload::RetainedBuffer,
+    pub(super) instance_buffer: crate::renderer::buffer_upload::RetainedBuffer,
+    scroll_clear_buffer: crate::renderer::buffer_upload::RetainedBuffer,
     pub(super) layout_tree: LayoutTree,
     pub(super) text_renderer: JadixTextRenderer,
     /// Dedicated glyphon pipeline for subtree-capture text (xform / fx). Must not share
@@ -243,6 +247,8 @@ pub(super) struct AppState {
     /// Extra glyphon pipelines for in-page stacking bands beyond the first (CarouselStack).
     /// Band 0 reuses [`Self::text_renderer`]; further bands share its FontSystem.
     page_stack_band_text_renderers: Vec<Option<JadixTextRenderer>>,
+    // Capture glyph buffers belong to the blur source, not surface damage.
+    local_backdrop_text_renderers: Vec<Option<JadixTextRenderer>>,
     page_stack_band_text_keys: Vec<u64>,
     pub(super) root_element: Element,
     /// `template_id` -> child-index path from [`Self::root_element`]. Validated on each use instead
@@ -262,6 +268,7 @@ pub(super) struct AppState {
     #[cfg(debug_assertions)]
     last_applied_template_hash: HashMap<String, String>,
     pub(super) last_render_scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
+    last_render_scroll_paint_bounds: HashMap<String, [f32; 4]>,
     pub(super) last_hover_cursor: Option<crate::core::tree::CursorValue>,
     pub(super) text_backend: TextRendererBackend,
     /// Latest `WindowEvent::Resized` size. `inner_size()` can briefly lag during maximize; merging
@@ -314,6 +321,7 @@ pub(super) struct AppState {
     /// Paint-only dirty **nodes** (never a cross-node union AABB).
     damage_nodes: Vec<super::damage::PaintDirty>,
     pub(super) force_full_redraw: bool,
+    pub(super) force_present: bool,
     /// Portal layer membership changed (popover / tooltip / menu hoist or close).
     /// Skip window FullClear; scissor to overlay bounds after layout.
     pub(super) portal_membership_dirty: bool,
@@ -364,6 +372,10 @@ pub(super) struct AppState {
     /// `backdrop_blur.full` still holds last local frost. Skip recapture when
     /// PartialLoad damage misses the host (gallery hover on another card).
     local_backdrop_valid: bool,
+    #[cfg(test)]
+    local_backdrop_capture_count: u64,
+    #[cfg(test)]
+    last_frame_partial: bool,
     // Modal capture must not overwrite the local frost it samples.
     modal_backdrop: Option<BackdropBlurPipeline>,
     modal_source_fp: Option<u64>,
@@ -373,32 +385,6 @@ pub(super) struct AppState {
     modal_capture_count: u64,
     #[cfg(test)]
     modal_blur_count: u64,
-}
-
-/// `queue.write_buffer` is executed before render pass during submit; the same buffer is written to offset 0 multiple times.
-/// Only the last time will be left (as soon as the pie chart enters the viewport, the polyline instance is covered into a pie chart rectangle). It must be packaged once and drawn according to instance range.
-pub(super) fn upload_textured_instance_buffer(
-    device: &wgpu::Device,
-    queue: &wgpu::Queue,
-    buffer: &mut wgpu::Buffer,
-    capacity: &mut usize,
-    insts: &[TexturedInstanceInput],
-) {
-    if insts.is_empty() {
-        return;
-    }
-    let stride = std::mem::size_of::<TexturedInstanceInput>();
-    if insts.len() > *capacity {
-        let new_cap = insts.len().max(256);
-        *buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Textured instance buffer"),
-            size: (stride * new_cap) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
-        *capacity = new_cap;
-    }
-    queue.write_buffer(buffer, 0, bytemuck::cast_slice(insts));
 }
 
 pub(super) fn draw_packed_textured_runs<'pass>(
@@ -425,15 +411,14 @@ pub(super) fn draw_packed_textured_runs<'pass>(
             ti += 1;
             continue;
         };
-        let run = if cull.is_some() {
-            1
-        } else {
-            scaled_tex[ti..end]
-                .iter()
-                .take_while(|d| d.texture_key == key)
-                .count()
-                .max(1)
-        };
+        // Cull splits runs at invisible instances, never at every visible one.
+        // Do not bridge a gap or sort by texture: alpha/painter order is fixed.
+        let run = scaled_tex[ti..end]
+            .iter()
+            .take_while(|d| {
+                d.texture_key == key && cull.is_none_or(|damage| damage.hits_textured(d))
+            })
+            .count();
         pass.set_pipeline(&pipeline.render_pipeline);
         pass.set_bind_group(0, &gpu_img.bind_group, &[]);
         pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
@@ -912,12 +897,26 @@ fn draw_scissor_clear_ex<'a>(
     clear: wgpu::Color,
     inflate: f32,
 ) {
+    let inst = scissor_clear_instance(rect, clear, inflate);
+    let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("Scroll layer clear"),
+        contents: bytemuck::cast_slice(&[inst]),
+        usage: wgpu::BufferUsages::VERTEX,
+    });
+    pipeline.bind_sdf(pass, false, pipeline.dummy_backdrop());
+    pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
+    pass.set_vertex_buffer(1, buf.slice(..));
+    pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
+    pass.draw_indexed(0..pipeline.num_indices, 0, 0..1);
+}
+
+fn scissor_clear_instance(rect: [f32; 4], clear: wgpu::Color, inflate: f32) -> InstanceInput {
     let rect = if inflate > 0.0 {
         super::draw_cull::padded_xywh(rect, inflate)
     } else {
         rect
     };
-    let inst = InstanceInput {
+    InstanceInput {
         rect_pos: [rect[0], rect[1]],
         rect_size: [rect[2], rect[3]],
         // Src-over with a=0 (compositor-alpha TRANSPARENT) is a no-op and leaves
@@ -936,17 +935,26 @@ fn draw_scissor_clear_ex<'a>(
         clip_size: InstanceInput::NO_CLIP_SIZE,
         border_extra: 0.0,
         backdrop_blur: 0.0,
-    };
-    let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-        label: Some("Scroll layer clear"),
-        contents: bytemuck::cast_slice(&[inst]),
-        usage: wgpu::BufferUsages::VERTEX,
-    });
+    }
+}
+
+fn draw_scroll_clear_instances<'a>(
+    pass: &mut wgpu::RenderPass<'a>,
+    pipeline: &'a JadixPipeline,
+    buffer: &'a wgpu::Buffer,
+    scissors: &[(u32, u32, u32, u32)],
+) {
+    if scissors.is_empty() {
+        return;
+    }
     pipeline.bind_sdf(pass, false, pipeline.dummy_backdrop());
     pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
-    pass.set_vertex_buffer(1, buf.slice(..));
+    pass.set_vertex_buffer(1, buffer.slice(..));
     pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
-    pass.draw_indexed(0..pipeline.num_indices, 0, 0..1);
+    for (i, &(x, y, w, h)) in scissors.iter().enumerate() {
+        pass.set_scissor_rect(x, y, w, h);
+        pass.draw_indexed(0..pipeline.num_indices, 0, i as u32..i as u32 + 1);
+    }
 }
 
 #[inline]
@@ -1133,11 +1141,13 @@ fn capture_page_stack_local_backdrop(
     image_textures: &HashMap<String, super::image_registry::GpuImageTexture>,
     scaled_tex: &[ScaledTexturedDraw],
     scaled_input_chrome: &[InstanceInput],
-    page_stack_band_underlines: &[Vec<InstanceInput>],
-    page_stack_band_shadows: &[Vec<crate::renderer::prepare_text::ShadowTexDraw>],
-    shadow_tex_cache: &HashMap<u64, super::image_registry::GpuImageTexture>,
+    shadow_tex_cache: &mut HashMap<u64, super::image_registry::GpuImageTexture>,
+    shadow_rect_cache: &mut HashMap<u64, [f32; 4]>,
     text_renderer: &crate::renderer::JadixTextRenderer,
-    page_stack_band_text_renderers: &[Option<crate::renderer::JadixTextRenderer>],
+    capture_text_renderers: &mut Vec<Option<crate::renderer::JadixTextRenderer>>,
+    text_nodes: &[crate::layout::layout_tree::TextLayoutInfo],
+    config: &wgpu::SurfaceConfiguration,
+    ui_scale: f32,
     compute: Option<&mut crate::renderer::ComputePipelines>,
     instances: &[InstanceInput],
     capture_region: Option<(u32, u32, u32, u32)>,
@@ -1148,9 +1158,73 @@ fn capture_page_stack_local_backdrop(
         super::draw_cull::CullRects::one([sc.0 as f32, sc.1 as f32, sc.2 as f32, sc.3 as f32])
     });
 
-    // Own encoder + submit, same as `effect_pass::render_capture`. Prefix glyphon and the
-    // later surface pass share vertex buffers / atlas; recording both into the frame encoder
-    // left the scene RT with SDF fills (host blue) and no glyphs on GLES.
+    // A surface repair may prepare only the HUD hole, or skip page text entirely.
+    // Build the backdrop from its own source runs and capture clip instead of
+    // replaying those transient surface glyph buffers.
+    capture_text_renderers.resize_with(band_i, || None);
+    let logical_cull = capture_region.map(|(x, y, w, h)| {
+        super::draw_cull::CullRects::one([
+            x as f32 / ui_scale,
+            y as f32 / ui_scale,
+            w as f32 / ui_scale,
+            h as f32 / ui_scale,
+        ])
+    });
+    let mut capture_underlines = Vec::with_capacity(band_i);
+    let mut capture_shadows = Vec::with_capacity(band_i);
+    for (j, prev) in page_stack_band_ranges.iter().enumerate().take(band_i) {
+        let source =
+            &text_nodes[prev.text.0.min(text_nodes.len())..prev.text.1.min(text_nodes.len())];
+        let runs = match logical_cull {
+            Some(cull) => super::draw_cull::clip_text_nodes_to_cull(source, cull),
+            None => source.to_vec(),
+        };
+        if capture_text_renderers[j].is_none() && !runs.is_empty() {
+            capture_text_renderers[j] = Some(JadixTextRenderer::new_sharing_resources(
+                device,
+                queue,
+                config,
+                text_renderer,
+            ));
+        }
+        let Some(renderer) = capture_text_renderers[j].as_mut() else {
+            capture_underlines.push(Vec::new());
+            capture_shadows.push(Vec::new());
+            continue;
+        };
+        let cached_keys = shadow_tex_cache.keys().copied().collect();
+        let prepared = prepare_text_frame(
+            renderer,
+            device,
+            queue,
+            config,
+            &runs,
+            ui_scale,
+            false,
+            &cached_keys,
+            shadow_rect_cache,
+        );
+        for bitmap in &prepared.shadow_new_bitmaps {
+            shadow_tex_cache.insert(
+                bitmap.cache_key,
+                super::image_registry::upload_rgba8(
+                    device,
+                    queue,
+                    textured_pipeline,
+                    &bitmap.rgba,
+                    bitmap.width,
+                    bitmap.height,
+                ),
+            );
+            shadow_rect_cache.insert(bitmap.cache_key, bitmap.draw_rect);
+        }
+        capture_underlines.push(prepared.underline_instances);
+        capture_shadows.push(prepared.shadow_tex_draws);
+    }
+
+    // Keep capture submission before surface encoding, as in `effect_pass::render_capture`.
+    // Capture and surface buffers share an atlas; GLES needs this ordering for
+    // atlas uploads and glyph draws. Their glyph vertex buffers stay independent.
     let mut cap_encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
         label: Some("Local Backdrop Capture Encoder"),
     });
@@ -1211,23 +1285,16 @@ fn capture_page_stack_local_backdrop(
                 scaled_tex,
                 scaled_input_chrome,
                 device,
-                page_stack_band_underlines,
-                page_stack_band_shadows,
+                &capture_underlines,
+                &capture_shadows,
                 shadow_tex_cache,
                 dummy,
                 instances,
                 capture_cull,
                 false,
             );
-            if prev.text.0 < prev.text.1 {
-                if j == 0 {
-                    text_renderer.render(&mut scene_pass);
-                } else {
-                    page_stack_band_text_renderers[j - 1]
-                        .as_ref()
-                        .expect("nonempty text band")
-                        .render(&mut scene_pass);
-                }
+            if let Some(renderer) = capture_text_renderers[j].as_ref() {
+                renderer.render(&mut scene_pass);
             }
         }
     }
@@ -1400,7 +1467,7 @@ fn local_backdrop_host_scissor_physical(
 }
 
 fn local_backdrop_kernel_pad_px(radius_px: f32) -> u32 {
-    (radius_px * 3.0).ceil() as u32 + 2
+    BackdropBlurPipeline::local_capture_pad_px(radius_px)
 }
 
 fn expand_physical_scissor(
@@ -1439,18 +1506,43 @@ fn logical_rect_hits_physical_scissor(
     !crate::renderer::aabbs_disjoint(phys, physical_scissor_aabb(host))
 }
 
+/// Damage to later paint layers cannot change a backdrop source, even where
+/// its screen bounds overlap the blur kernel. Missing membership stays conservative.
+fn local_backdrop_source_damage(
+    dirty: &super::damage::PaintDirty,
+    paints: &[crate::layout::layout_tree::NodePaint],
+    band: &crate::layout::layout_tree::OverlayBandRange,
+) -> bool {
+    use super::damage::PaintDirtyKind;
+    let Some(node) = paints.iter().find(|node| node.key == dirty.key) else {
+        return !matches!(
+            dirty.kind,
+            PaintDirtyKind::Overlay | PaintDirtyKind::OverlayRestore
+        );
+    };
+    !node.overlay
+        && [
+            (node.instance, band.instance.0),
+            (node.textured, band.textured.0),
+            (node.text, band.text.0),
+            (node.chrome, band.chrome.0),
+            (node.paint_ops, band.paint_ops.0),
+        ]
+        .iter()
+        .any(|(range, end)| range.0 < range.1 && range.0 < *end)
+}
+
 /// Recapture when the pixels *behind* the local scrim may have changed.
 /// Hover / overlay ticks elsewhere keep last frame's frost.
 fn local_backdrop_must_recapture(
     has_valid_blur: bool,
     use_partial_damage: bool,
     scroll_source_moved: bool,
-    overlay_restore_clear: bool,
     host: Option<(u32, u32, u32, u32)>,
     dirty_logical: &[[f32; 4]],
     ui_scale: f32,
 ) -> bool {
-    if !has_valid_blur || !use_partial_damage || scroll_source_moved || overlay_restore_clear {
+    if !has_valid_blur || !use_partial_damage || scroll_source_moved {
         return true;
     }
     let Some(host) = host else {
@@ -1477,6 +1569,54 @@ mod local_backdrop_capture_tests {
             backdrop_blur: 0.0,
             underlay_opacity: 1.0,
             stamp_key: 0,
+        }
+    }
+
+    #[test]
+    fn foreground_damage_does_not_invalidate_local_backdrop() {
+        use crate::app::damage::{PaintDirty, PaintDirtyKind};
+        let band = band_instances(10, 20);
+        let node = crate::layout::layout_tree::NodePaint {
+            key: 42,
+            bounds: [100.0, 200.0, 100.0, 100.0],
+            overlay: false,
+            instance: (2, 3),
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: None,
+            layered: false,
+            rest: None,
+        };
+        let dirty = PaintDirty {
+            key: 42,
+            bounds: node.bounds,
+            kind: PaintDirtyKind::Node,
+        };
+        assert!(local_backdrop_source_damage(&dirty, &[node], &band));
+        assert!(!local_backdrop_source_damage(
+            &dirty,
+            &[crate::layout::layout_tree::NodePaint {
+                overlay: true,
+                ..node
+            }],
+            &band
+        ));
+        assert!(!local_backdrop_source_damage(
+            &dirty,
+            &[crate::layout::layout_tree::NodePaint {
+                instance: (20, 21),
+                ..node
+            }],
+            &band
+        ));
+        for kind in [PaintDirtyKind::Overlay, PaintDirtyKind::OverlayRestore] {
+            assert!(!local_backdrop_source_damage(
+                &PaintDirty { kind, ..dirty },
+                &[],
+                &band
+            ));
         }
     }
 
@@ -1520,9 +1660,9 @@ mod local_backdrop_capture_tests {
     }
 
     #[test]
-    fn kernel_pad_covers_three_sigma() {
-        assert_eq!(local_backdrop_kernel_pad_px(2.0), 8);
-        assert_eq!(local_backdrop_kernel_pad_px(12.0), 38);
+    fn kernel_pad_covers_the_full_gaussian_support() {
+        assert_eq!(local_backdrop_kernel_pad_px(2.0), 10);
+        assert_eq!(local_backdrop_kernel_pad_px(12.0), 62);
     }
 
     #[test]
@@ -1541,7 +1681,6 @@ mod local_backdrop_capture_tests {
                 true,
                 true,
                 false,
-                false,
                 host,
                 &[[10.0, 10.0, 40.0, 20.0]],
                 1.0,
@@ -1553,7 +1692,6 @@ mod local_backdrop_capture_tests {
                 true,
                 true,
                 false,
-                false,
                 host,
                 &[[120.0, 220.0, 10.0, 10.0]],
                 1.0,
@@ -1561,15 +1699,15 @@ mod local_backdrop_capture_tests {
             "damage on the host must recapture"
         );
         assert!(
-            local_backdrop_must_recapture(true, true, true, false, host, &[], 1.0),
+            local_backdrop_must_recapture(true, true, true, host, &[], 1.0),
             "scroll blit moves pixels under the scrim"
         );
         assert!(
-            local_backdrop_must_recapture(false, true, false, false, host, &[], 1.0),
+            local_backdrop_must_recapture(false, true, false, host, &[], 1.0),
             "first frame has no cached frost"
         );
         assert!(
-            !local_backdrop_must_recapture(true, true, false, false, host, &[], 1.0),
+            !local_backdrop_must_recapture(true, true, false, host, &[], 1.0),
             "overlay-only PartialLoad with empty dirty keeps frost"
         );
     }
@@ -1705,6 +1843,7 @@ impl AppState {
         window: &Arc<dyn Window>,
         force_software: bool,
         compositor_alpha: bool,
+        composition_visual: Option<*mut std::ffi::c_void>,
     ) -> (
         wgpu::Instance,
         wgpu::Surface<'static>,
@@ -1717,6 +1856,7 @@ impl AppState {
             backends: wgpu::Backends,
             name: &str,
             force_fallback: bool,
+            composition_visual: Option<*mut std::ffi::c_void>,
         ) -> Option<(
             wgpu::Instance,
             wgpu::Surface<'static>,
@@ -1726,7 +1866,27 @@ impl AppState {
         )> {
             let started = Instant::now();
             let instance = crate::renderer::wgpu_compat::instance(backends);
-            let Ok(surface) = instance.create_surface(window.clone()) else {
+            let surface = if let Some(visual) = composition_visual {
+                #[cfg(all(windows, feature = "backend-dx12"))]
+                {
+                    if backends != wgpu::Backends::DX12 {
+                        return None;
+                    }
+                    unsafe {
+                        instance.create_surface_unsafe(
+                            wgpu::SurfaceTargetUnsafe::CompositionVisual(visual),
+                        )
+                    }
+                }
+                #[cfg(not(all(windows, feature = "backend-dx12")))]
+                {
+                    let _ = visual;
+                    return None;
+                }
+            } else {
+                instance.create_surface(window.clone())
+            };
+            let Ok(surface) = surface else {
                 log::warn!("backend {name}: surface creation failed; trying next backend");
                 return None;
             };
@@ -1741,10 +1901,20 @@ impl AppState {
             {
                 Ok(adapter) => adapter,
                 Err(err) => {
-                    log::warn!("backend {name}: adapter request failed after {:.1}ms: {err}; trying next backend", started.elapsed().as_secs_f64() * 1000.0);
+                    log::warn!(
+                        "backend {name}: adapter request failed after {:.1}ms: {err}; trying next backend",
+                        started.elapsed().as_secs_f64() * 1000.0
+                    );
                     return None;
                 }
             };
+            if name == "dx11-angle" {
+                let info = adapter.get_info();
+                assert!(
+                    info.backend == wgpu::Backend::Gl && info.name.contains("Direct3D11"),
+                    "dx11-angle selected an unexpected renderer: {info:?}"
+                );
+            }
             let required_limits = crate::renderer::limits_for(&adapter);
             let memory_hints = wgpu::MemoryHints::MemoryUsage;
             match adapter
@@ -1788,7 +1958,9 @@ impl AppState {
         let mut software = None;
         if !force_software {
             for (backends, name) in &candidates {
-                if let Some(gpu) = try_backend(window, *backends, name, false).await {
+                if let Some(gpu) =
+                    try_backend(window, *backends, name, false, composition_visual).await
+                {
                     // force_fallback_adapter=false still permits llvmpipe. Try
                     // the remaining backends before accepting CPU rendering.
                     if gpu.2.get_info().device_type != wgpu::DeviceType::Cpu {
@@ -1800,6 +1972,9 @@ impl AppState {
                 }
             }
         }
+        if candidates.iter().any(|(_, name)| *name == "dx11-angle") {
+            panic!("requested ANGLE hardware D3D11 renderer is unavailable; fallback is disabled");
+        }
         if let Some(gpu) = software {
             log::warn!("no hardware adapter found; using software rendering");
             return gpu;
@@ -1810,7 +1985,7 @@ impl AppState {
             (wgpu::Backends::DX12, "dx12-software"),
             (wgpu::Backends::VULKAN, "vulkan-software"),
         ] {
-            if let Some(gpu) = try_backend(window, backends, name, true).await {
+            if let Some(gpu) = try_backend(window, backends, name, true, composition_visual).await {
                 return gpu;
             }
         }
@@ -1847,7 +2022,12 @@ impl AppState {
             );
             previous_stage = now;
         };
-        let compositor_alpha = chrome.compositor_alpha();
+        let compositor_alpha = chrome.compositor_alpha() || cfg!(all(windows, feature = "webview"));
+        #[cfg(all(windows, feature = "webview"))]
+        let mut webviews = crate::components::webview::native::NativeWebViews::new(window.as_ref())
+            .expect("initialize WebView DirectComposition host");
+        #[cfg(all(not(windows), feature = "webview"))]
+        let webviews = crate::components::webview::native::NativeWebViews::new(window.as_ref());
         let mut root_element = Element::new().w("100%").h("100%");
         root_element.set_attr(Self::BOOTSTRAP_ROOT_ATTR, "1");
         let size = window.surface_size();
@@ -1859,6 +2039,19 @@ impl AppState {
         // user-mode drivers commit ~80 MB of private heaps at device creation, while
         // the OpenGL ICD commits ~5 MB for the same clear-screen workload. 2D UI does
         // not need what DX12 buys, so GL leads and the others stay as fallbacks.
+        #[cfg(all(windows, feature = "webview"))]
+        let (instance, surface, adapter, device, queue) = {
+            let (instance, surface, adapter, device, queue) =
+                Self::acquire_gpu(&window, force_software, true, Some(webviews.visual_ptr())).await;
+            (
+                instance,
+                surface,
+                adapter,
+                Arc::new(device),
+                Arc::new(queue),
+            )
+        };
+        #[cfg(not(all(windows, feature = "webview")))]
         let (instance, surface, adapter, device, queue) = if compositor_alpha {
             if let Some(gpu) = super::glass_gpu::try_acquire(&window, &chrome) {
                 (
@@ -1870,12 +2063,12 @@ impl AppState {
                 )
             } else {
                 let (i, s, a, d, q) =
-                    Self::acquire_gpu(&window, force_software, compositor_alpha).await;
+                    Self::acquire_gpu(&window, force_software, compositor_alpha, None).await;
                 (i, s, a, Arc::new(d), Arc::new(q))
             }
         } else {
             let (i, s, a, d, q) =
-                Self::acquire_gpu(&window, force_software, compositor_alpha).await;
+                Self::acquire_gpu(&window, force_software, compositor_alpha, None).await;
             (i, s, a, Arc::new(d), Arc::new(q))
         };
         crate::renderer::wgpu_compat::install_device_error_handlers(&device);
@@ -1929,7 +2122,14 @@ impl AppState {
         log::info!("surface present_mode: {present_mode:?} alpha_mode: {alpha_mode:?}");
 
         let config = wgpu::SurfaceConfiguration {
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | if adapter.get_info().backend == wgpu::Backend::Dx11
+                    && surface_caps.usages.contains(wgpu::TextureUsages::COPY_DST)
+                {
+                    wgpu::TextureUsages::COPY_DST
+                } else {
+                    wgpu::TextureUsages::empty()
+                },
             format: surface_format,
             width: size.width.max(1),
             height: size.height.max(1),
@@ -1940,6 +2140,12 @@ impl AppState {
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &config);
+        #[cfg(all(windows, feature = "webview"))]
+        {
+            webviews.configure(&device, config.format);
+            webviews.commit();
+        }
+        super::window_lifecycle::emit_gpu_ready(window.as_ref(), &adapter, &config);
         super::window_chrome::apply_created_window(window.as_ref(), &chrome, composition_swapchain);
         startup_stage("surface");
 
@@ -1971,13 +2177,18 @@ impl AppState {
         let mut present_retain = PresentRetainPipeline::new(&device, config.format);
         let _ = present_retain.ensure_size(&device, config.width, config.height);
         startup_stage("present_pipelines");
-        let tex_inst_stride = std::mem::size_of::<TexturedInstanceInput>();
-        let textured_instance_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: Some("Textured instance buffer"),
-            size: (tex_inst_stride * 256) as u64,
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-            mapped_at_creation: false,
-        });
+        let textured_instance_buffer = crate::renderer::buffer_upload::RetainedBuffer::new(
+            &device,
+            "Textured instance buffer",
+            wgpu::BufferUsages::VERTEX,
+            &[],
+        );
+        let scroll_clear_buffer = crate::renderer::buffer_upload::RetainedBuffer::new(
+            &device,
+            "Scroll repair clears",
+            wgpu::BufferUsages::VERTEX,
+            &[],
+        );
 
         let mut layout_tree = LayoutTree::new();
         let scale = window.scale_factor() as f32;
@@ -1995,13 +2206,16 @@ impl AppState {
         pipeline.ensure_clip_polys(&device, &queue, &clip_polys);
         let num_instances = render_result.instances.len() as u32;
         let last_render_scroll_metrics = render_result.scroll_metrics;
+        let last_render_scroll_paint_bounds =
+            render_result.scroll_paint_bounds.into_iter().collect();
         let last_hover_cursor = render_result.hover_cursor;
 
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Instance Buffer"),
-            contents: bytemuck::cast_slice(&scaled_instances),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
+        let instance_buffer = crate::renderer::buffer_upload::RetainedBuffer::new(
+            &device,
+            "Instance Buffer",
+            wgpu::BufferUsages::VERTEX,
+            bytemuck::cast_slice(&scaled_instances),
+        );
 
         let mut text_renderer = JadixTextRenderer::new(&device, &queue, &config);
         startup_stage("fonts_and_text_renderer");
@@ -2017,6 +2231,8 @@ impl AppState {
         startup_stage("shared_text_renderers");
 
         Self {
+            #[cfg(feature = "webview")]
+            webviews,
             window,
             instance,
             adapter,
@@ -2048,9 +2264,8 @@ impl AppState {
             theme_transition,
             image_textures: crate::renderer::TexturePool::new(),
             textured_instance_buffer,
-            textured_instance_capacity: 256,
             instance_buffer,
-            instance_buffer_capacity: scaled_instances.len(),
+            scroll_clear_buffer,
             layout_tree,
             text_renderer,
             capture_text_renderer,
@@ -2058,6 +2273,7 @@ impl AppState {
             overlay_text_renderer,
             overlay_band_text_renderers: Vec::new(),
             page_stack_band_text_renderers: Vec::new(),
+            local_backdrop_text_renderers: Vec::new(),
             page_stack_band_text_keys: Vec::new(),
             root_element,
             template_paths: HashMap::new(),
@@ -2071,6 +2287,7 @@ impl AppState {
             #[cfg(debug_assertions)]
             last_applied_template_hash: HashMap::new(),
             last_render_scroll_metrics,
+            last_render_scroll_paint_bounds,
             last_hover_cursor,
             text_backend,
             last_resized_event: None,
@@ -2114,6 +2331,7 @@ impl AppState {
             damage_rect: None,
             damage_nodes: Vec::new(),
             force_full_redraw: true,
+            force_present: false,
             portal_membership_dirty: false,
             page_geom_dirty: false,
             last_overlay_stamps: Vec::new(),
@@ -2135,20 +2353,39 @@ impl AppState {
             composition_swapchain,
             chrome,
             local_backdrop_valid: false,
+            #[cfg(test)]
+            local_backdrop_capture_count: 0,
+            #[cfg(test)]
+            last_frame_partial: false,
         }
     }
 
-    fn scroll_offsets_map(root: &Element) -> HashMap<String, [u32; 2]> {
+    fn scroll_offsets_map(root: &mut Element, ui_scale: f32) -> HashMap<String, [u32; 2]> {
         let mut map = HashMap::new();
-        crate::core::tree::walk_elements(root, |el| {
+        crate::core::tree::walk_elements_mut_pruned(root, |el| {
+            // Match the existing offset-sync walk: a stamped branch without
+            // scroll descendants cannot contribute to this snapshot.
+            if el.collect_paint_hash != 0 && !el.collect_skip_has_scroll {
+                return false;
+            }
             if let Some(fid) = el.focus_id.as_deref() {
                 if let Some(rest) = fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) {
+                    let rest = rest.to_string();
+                    // The copied overlap and freshly painted strip must use the same
+                    // integer device translation. Rounding each raw jump delta (25lp
+                    // at 150% = 37.5px) accumulates a pixel every other frame. Keep
+                    // input signals continuous; snap only the paint pose. Collect uses
+                    // the same grid when reading the live signals for child placement.
+                    el.scroll_offset = el.scroll_offset.map(|v| {
+                        super::scroll_support::snap_scroll_offset_to_device_px(v, ui_scale)
+                    });
                     map.insert(
-                        rest.to_string(),
+                        rest,
                         [el.scroll_offset[0].to_bits(), el.scroll_offset[1].to_bits()],
                     );
                 }
             }
+            true
         });
         map
     }
@@ -2165,12 +2402,7 @@ impl AppState {
             if prev.get(id) == Some(off) {
                 continue;
             }
-            let Some(bounds) = self
-                .last_render_scroll_metrics
-                .iter()
-                .find(|(rest, _, _, _)| rest == id)
-                .map(|(_, b, _, _)| *b)
-            else {
+            let Some(bounds) = self.last_render_scroll_paint_bounds.get(id).copied() else {
                 // Spawn: no prev clip to pin. Do not abort siblings that do have metrics.
                 if !prev.contains_key(id) {
                     continue;
@@ -2188,12 +2420,7 @@ impl AppState {
             if cur.contains_key(id) {
                 continue;
             }
-            if let Some(bounds) = self
-                .last_render_scroll_metrics
-                .iter()
-                .find(|(rest, _, _, _)| rest == id)
-                .map(|(_, b, _, _)| *b)
-            {
+            if let Some(bounds) = self.last_render_scroll_paint_bounds.get(id).copied() {
                 self.union_damage(bounds);
                 self.scroll_text_clip = Some(match self.scroll_text_clip {
                     Some(prev) => super::damage::union_rects(prev, bounds),
@@ -2262,12 +2489,7 @@ impl AppState {
         let mut candidates = Vec::new();
         let mut layer_clear = Vec::new();
         for (id, delta) in deltas {
-            let Some(bounds) = self
-                .last_render_scroll_metrics
-                .iter()
-                .find(|(rest, _, _, _)| rest == &id)
-                .map(|(_, b, _, _)| *b)
-            else {
+            let Some(bounds) = self.last_render_scroll_paint_bounds.get(&id).copied() else {
                 continue;
             };
             let Some(plan) = super::damage::plan_scroll_strip_blit(bounds, delta) else {
@@ -2309,12 +2531,7 @@ impl AppState {
             layer_clear.push(pin);
         }
         for id in super::damage::despawned_viewport_ids(prev, cur) {
-            if let Some(bounds) = self
-                .last_render_scroll_metrics
-                .iter()
-                .find(|(rest, _, _, _)| rest == &id)
-                .map(|(_, b, _, _)| *b)
-            {
+            if let Some(bounds) = self.last_render_scroll_paint_bounds.get(&id).copied() {
                 layer_clear.push(bounds);
             }
         }
@@ -2329,6 +2546,8 @@ impl AppState {
         &mut self,
         overlay_visual: Option<[f32; 4]>,
         node_paints: &[crate::layout::layout_tree::NodePaint],
+        current_slots: &[(u64, [f32; 4])],
+        raster_owners: &std::collections::HashSet<u64>,
         backdrop_regions: &[[f32; 4]],
     ) {
         if self.scroll_strip_blit.is_empty() {
@@ -2386,7 +2605,16 @@ impl AppState {
         ));
         sticky.extend(super::damage::clip_culled_scroll_blit_pins(
             &self.last_present_node_bounds,
-            self.layout_tree.last_clip_culled_paint_keys(),
+            &self
+                .layout_tree
+                .clip_culled_previous_paint_keys(&self.last_present_node_bounds),
+            &viewports,
+            &deltas,
+        ));
+        sticky.extend(super::damage::changed_scroll_blit_pins(
+            &self.last_present_node_bounds,
+            current_slots,
+            raster_owners,
             &viewports,
             &deltas,
         ));
@@ -2513,7 +2741,7 @@ impl AppState {
         let prev_stamps = self.last_overlay_stamps.clone();
         let had_occupancy = prev_occ.is_some();
         let cur_boxes: Vec<[f32; 4]> = cur_stamps.iter().map(|(_, b)| *b).collect();
-        let cur = crate::layout::layout_tree::hoisted_portal_damage(&self.root_element);
+        let cur = cur_boxes.iter().copied().reduce(super::damage::union_rects);
         let prev = self.last_portal_layer_damage;
         let membership = self.portal_membership_dirty;
         let measuring = crate::layout::layout_tree::hoisted_expand_measuring(&self.root_element);
@@ -3204,9 +3432,9 @@ impl AppState {
                                         band,
                                         paint_ops,
                                         &self.pipeline,
-                                        &self.instance_buffer,
+                                        &self.instance_buffer.buffer,
                                         &self.textured_pipeline,
-                                        &self.textured_instance_buffer,
+                                        &self.textured_instance_buffer.buffer,
                                         &self.image_textures,
                                         scaled_tex,
                                         scaled_input_chrome,
@@ -3248,9 +3476,9 @@ impl AppState {
                                     0,
                                     overlay_paint_start,
                                     &self.pipeline,
-                                    &self.instance_buffer,
+                                    &self.instance_buffer.buffer,
                                     &self.textured_pipeline,
-                                    &self.textured_instance_buffer,
+                                    &self.textured_instance_buffer.buffer,
                                     &self.image_textures,
                                     scaled_tex,
                                     dummy,
@@ -3273,7 +3501,7 @@ impl AppState {
                                     draw_packed_textured_runs(
                                         render_pass,
                                         &self.textured_pipeline,
-                                        &self.textured_instance_buffer,
+                                        &self.textured_instance_buffer.buffer,
                                         &self.image_textures,
                                         scaled_tex,
                                         0,
@@ -3374,7 +3602,7 @@ impl AppState {
                                                 draw_packed_textured_runs(
                                                     render_pass,
                                                     &self.textured_pipeline,
-                                                    &self.textured_instance_buffer,
+                                                    &self.textured_instance_buffer.buffer,
                                                     &self.image_textures,
                                                     scaled_tex,
                                                     t0,
@@ -3855,9 +4083,9 @@ impl AppState {
                         op_lo,
                         op_hi,
                         &self.pipeline,
-                        &self.instance_buffer,
+                        &self.instance_buffer.buffer,
                         &self.textured_pipeline,
-                        &self.textured_instance_buffer,
+                        &self.textured_instance_buffer.buffer,
                         &self.image_textures,
                         scaled_tex,
                         dummy,
@@ -3867,7 +4095,7 @@ impl AppState {
                 } else if inst_lo < inst_hi {
                     self.pipeline.bind_sdf(render_pass, true, dummy);
                     render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                    render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                    render_pass.set_vertex_buffer(1, self.instance_buffer.buffer.slice(..));
                     render_pass.set_index_buffer(
                         self.pipeline.index_buffer.slice(..),
                         wgpu::IndexFormat::Uint16,
@@ -3884,7 +4112,7 @@ impl AppState {
                         draw_packed_textured_runs(
                             render_pass,
                             &self.textured_pipeline,
-                            &self.textured_instance_buffer,
+                            &self.textured_instance_buffer.buffer,
                             &self.image_textures,
                             scaled_tex,
                             tex_lo,
@@ -4079,7 +4307,7 @@ impl AppState {
                     draw_packed_textured_runs(
                         render_pass,
                         &self.textured_pipeline,
-                        &self.textured_instance_buffer,
+                        &self.textured_instance_buffer.buffer,
                         &self.image_textures,
                         scaled_tex,
                         start,
@@ -4146,7 +4374,7 @@ impl AppState {
                             draw_packed_textured_runs(
                                 render_pass,
                                 &self.textured_pipeline,
-                                &self.textured_instance_buffer,
+                                &self.textured_instance_buffer.buffer,
                                 &self.image_textures,
                                 scaled_tex,
                                 start as usize,
@@ -4292,8 +4520,58 @@ impl AppState {
         for tr in &mut self.overlay_band_text_renderers {
             tr.trim_glyph_atlas();
         }
-        for tr in self.page_stack_band_text_renderers.iter_mut().flatten() {
+        for tr in self
+            .page_stack_band_text_renderers
+            .iter_mut()
+            .chain(self.local_backdrop_text_renderers.iter_mut())
+            .flatten()
+        {
             tr.trim_glyph_atlas();
+        }
+    }
+
+    pub(super) fn bust_text_caches(&mut self) {
+        for renderer in [
+            &mut self.text_renderer,
+            &mut self.capture_text_renderer,
+            &mut self.capture_underlay_text_renderer,
+            &mut self.overlay_text_renderer,
+        ] {
+            renderer.bust_caches(&self.device, &self.queue, &self.config);
+        }
+        for renderer in &mut self.overlay_band_text_renderers {
+            renderer.bust_caches(&self.device, &self.queue, &self.config);
+        }
+        for renderer in self
+            .page_stack_band_text_renderers
+            .iter_mut()
+            .chain(self.local_backdrop_text_renderers.iter_mut())
+            .flatten()
+        {
+            renderer.bust_caches(&self.device, &self.queue, &self.config);
+        }
+        self.last_text_nodes_cache.clear();
+        self.shadow_tex_cache.clear();
+        self.shadow_rect_cache.clear();
+        self.image_textures.invalidate_text_textures();
+        self.layout_tree
+            .invalidate_resource_caches(&mut self.root_element);
+        self.layout_status = self
+            .layout_status
+            .merge(crate::core::tree::LayoutStatus::LayoutChanged);
+        self.mark_full_redraw();
+    }
+
+    pub(super) fn mark_requested_layout(&mut self, template_id: &str) {
+        if let Some(el) =
+            crate::core::tree::find_by_template_id_mut(&mut self.root_element, template_id)
+        {
+            self.layout_tree.mark_subtree_layout_dirty(el);
+            crate::core::tree::collect_bind_layout_dirty(
+                el,
+                crate::core::tree::LayoutStatus::StructureChanged,
+                &mut self.pending_layout_dirty,
+            );
         }
     }
 
@@ -4346,7 +4624,7 @@ impl AppState {
                 &mut self.layout_tree,
             );
         }
-        self.layout_status = status;
+        self.layout_status = self.layout_status.merge(status);
         // Route / gallery page swaps must not PartialLoad over a stale retain buffer
         // (progressive unordered patches + scissor from off-screen old bounds).
         if matches!(
@@ -5170,12 +5448,16 @@ impl AppState {
     }
 
     pub(super) fn update_scroll_offset_in_place(&mut self, target_id: &str, offset: [f32; 2]) {
-        crate::core::tree::walk_elements_mut(&mut self.root_element, |el| {
+        crate::core::tree::walk_elements_mut_pruned(&mut self.root_element, |el| {
+            if el.collect_paint_hash != 0 && !el.collect_skip_has_scroll {
+                return false;
+            }
             if let Some(fid) = el.focus_id.as_deref() {
                 if fid.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX) == Some(target_id) {
                     el.scroll_offset = offset;
                 }
             }
+            true
         });
     }
 
@@ -5361,17 +5643,21 @@ impl AppState {
         // via `tick_active_css_transitions`.
         scroll_paint_only: bool,
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
+        super::frame_stats::begin_scene_uploads();
+        super::frame_stats::begin_scene_batches();
         self.gpu_presented_this_frame = false;
         // Collect / Taffy / GPU do not map tree depth onto the OS stack.
         // Construction (`app_builder`, `flush_pending` islands) grows at those sites.
-        self.render_inner(
+        let result = self.render_inner(
             mouse_pos,
             scrollbar_update,
             active_drag_rest,
             text_force_fast_mode,
             scrollbar_skip_flex_layout,
             scroll_paint_only,
-        )
+        );
+        super::frame_stats::log_scene_uploads(self.gpu_presented_this_frame);
+        result
     }
 
     #[inline(never)]
@@ -5384,9 +5670,8 @@ impl AppState {
         scrollbar_skip_flex_layout: bool,
         scroll_paint_only: bool,
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
-        // Scroll/drag fast path for prepare perf. Layout fit skip applies during live
-        // window resize and sidebar rail-width tweens — scrolling must still compute
-        // fit so bidi labels do not overflow.
+        // Scroll/drag may use fast paint preparation. Geometry changes always
+        // measure and paint with fitted wrapping, including live resize and rail tweens.
         // Settle is deferred one frame after `inner_size` matches the last Resized event so the
         // final drag frame stays fluid; that next frame must run with fast=false + LayoutChanged.
         if crate::components::sidebar::take_sidebar_rail_text_settle() {
@@ -5404,15 +5689,14 @@ impl AppState {
             // Fit remasure reflows the page. Named spin dirties must not keep PartialLoad.
             self.page_geom_dirty = true;
         }
-        // Sidebar width tweens reflow the app shell every frame — same wrap churn as live
-        // window resize. Fast-path FIT_CACHE for the 200ms tween, then settle once.
-        let layout_fast = self.last_resized_event.is_some() || rail_anim;
+        // Geometry changes need the same fitted line count and shaping as paint.
+        // Arithmetic resize measurement can report one line while glyphon paints two.
         // `take_fit_needs_relayout` runs after `page_geom_dirty` is cleared this frame.
         // Flag the next chrome so named spin cannot PartialLoad a page-wide Y shift.
         let page_fit_relayout =
-            super::damage::fit_relayout_is_page_geometry(layout_fast, viewport_resizing, settling);
-        crate::text::set_layout_text_fast_mode(layout_fast);
-        let text_fast = text_force_fast_mode || layout_fast;
+            super::damage::fit_relayout_is_page_geometry(rail_anim, viewport_resizing, settling);
+        crate::text::set_layout_text_fast_mode(false);
+        let text_fast = text_force_fast_mode && !viewport_resizing && !rail_anim && !settling;
         let _text_backend = self.text_backend;
         let render_begin = Instant::now();
         let idle_ms = self.last_render_at.elapsed().as_secs_f32() * 1000.0;
@@ -5599,6 +5883,9 @@ impl AppState {
                 &mut self.layout_tree,
                 &mut sync_impact,
             );
+            if crate::components::media_player::sync_media_presentation_subtree(&mut self.root_element) {
+                sync_impact = sync_impact.merge(LayoutStatus::StructureChanged);
+            }
             crate::components::bubble::sync_bubble_reactions_subtree(
                 &mut self.root_element,
                 &mut self.layout_tree,
@@ -5727,7 +6014,9 @@ impl AppState {
         let has_named = !self.damage_nodes.is_empty();
         #[cfg(test)]
         if std::env::var_os("JADIX_PERF_FRAME_DETAIL").is_some() {
-            eprintln!("present-input: pre={pre_chrome_layout_status:?} sync={sync_impact:?} geom={page_geom} portal_skip={portal_skip} named={has_named} region={has_region}");
+            eprintln!(
+                "present-input: pre={pre_chrome_layout_status:?} sync={sync_impact:?} geom={page_geom} portal_skip={portal_skip} named={has_named} region={has_region}"
+            );
         }
         // One gate for sync_impact **and** pre_chrome. A later pre_chrome
         // `mark_full_redraw` used to undo named-node PartialLoad (Input + spin).
@@ -5802,7 +6091,9 @@ impl AppState {
         // skip this check.
         // The exact offset snapshot already feeds damage planning. Compare it directly;
         // a second full-tree walk/hash duplicates work and can only lose information.
-        let cur_offsets = Self::scroll_offsets_map(&self.root_element);
+        let ui_scale = self.ui_scale();
+        self.layout_tree.scroll_paint_scale = Some(ui_scale);
+        let cur_offsets = Self::scroll_offsets_map(&mut self.root_element, ui_scale);
         let scroll_changed = self.has_presented_frame && cur_offsets != self.last_scroll_offsets;
         self.scroll_layer_clear = false;
         self.scroll_text_clip = None;
@@ -6237,19 +6528,27 @@ impl AppState {
         }
         drop(acc_layout_prof);
         let layout_done = Instant::now();
+        #[cfg(feature = "webview")]
+        self.webviews.sync(
+            &self.window,
+            &self.root_element,
+            self.ui_scale(),
+            [0.0, 0.0, logical_w, logical_h],
+        );
 
         let overlay_split = render_result.overlay_split;
         let ui_scale_now = self.ui_scale();
         // Logical visual slots *before* DPI scale + `take`. Dest-reset multiplies prev by
         // `ui_scale`; recording after scale would double-count, and after take the instance
         // / chrome outset (outline / extra-shadow / caret) is gone.
-        let next_last_present = super::draw_cull::last_present_visual_slots(
-            &render_result.node_paints,
-            &render_result.instances,
-            &scale_textured_draws(&render_result.textured_draws, 1.0),
-            &render_result.text_nodes,
-            &render_result.input_chrome_instances,
-        );
+        let (next_last_present, raster_owners) =
+            super::draw_cull::last_present_visual_slots_with_raster_owners(
+                &render_result.node_paints,
+                &render_result.instances,
+                &scale_textured_draws(&render_result.textured_draws, 1.0),
+                &render_result.text_nodes,
+                &render_result.input_chrome_instances,
+            );
         #[cfg(test)]
         if std::env::var_os("JADIX_PERF_SLOT_DETAIL").is_some() {
             let textured = scale_textured_draws(&render_result.textured_draws, 1.0);
@@ -6321,24 +6620,54 @@ impl AppState {
 
         // Export collected metrics and hover state for window_events.rs to avoid redundant traversals.
         self.last_render_scroll_metrics = render_result.scroll_metrics.clone();
+        let scroll_paint_bounds: HashMap<_, _> =
+            std::mem::take(&mut render_result.scroll_paint_bounds)
+                .into_iter()
+                .collect();
+        // A nested viewport may move with its scrolling ancestor in the same
+        // frame that its own contents scroll. Its previous clip alone does not
+        // cover the newly exposed destination; repair the current clip too.
+        let edge = 1.0 / self.ui_scale().max(0.001);
+        for (id, bounds) in &scroll_paint_bounds {
+            if self
+                .scroll_strip_blit
+                .iter()
+                .any(|job| job.viewport_id == *id)
+            {
+                continue;
+            }
+            for job in &self.scroll_strip_blit {
+                if cur_offsets.get(id) != self.last_scroll_offsets.get(id) {
+                    if let Some(hit) = super::damage::intersect_rects(*bounds, job.plan.viewport) {
+                        self.scroll_blit_pins.push(hit);
+                    }
+                } else if self.last_render_scroll_paint_bounds.get(id) != Some(bounds) {
+                    // At fractional scales a moving clip edge can land just
+                    // above or below a pixel center after float arithmetic.
+                    // Repaint that boundary while retaining the interior.
+                    let [x, y, w, h] = *bounds;
+                    for strip in [
+                        [x - edge, y - edge, w + 2.0 * edge, 2.0 * edge],
+                        [x - edge, y + h - edge, w + 2.0 * edge, 2.0 * edge],
+                        [x - edge, y - edge, 2.0 * edge, h + 2.0 * edge],
+                        [x + w - edge, y - edge, 2.0 * edge, h + 2.0 * edge],
+                    ] {
+                        if let Some(hit) = super::damage::intersect_rects(strip, job.plan.viewport)
+                        {
+                            self.scroll_blit_pins.push(hit);
+                        }
+                    }
+                }
+            }
+        }
+        self.last_render_scroll_paint_bounds = scroll_paint_bounds;
         self.last_hover_cursor = render_result.hover_cursor.clone();
 
-        if scaled_instances.len() > self.instance_buffer_capacity {
-            self.instance_buffer =
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Instance Buffer"),
-                        contents: bytemuck::cast_slice(&scaled_instances),
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    });
-            self.instance_buffer_capacity = scaled_instances.len();
-        } else {
-            self.queue.write_buffer(
-                &self.instance_buffer,
-                0,
-                bytemuck::cast_slice(&scaled_instances),
-            );
-        }
+        self.instance_buffer.upload(
+            &self.device,
+            &self.queue,
+            bytemuck::cast_slice(&scaled_instances),
+        );
         self.pipeline
             .ensure_clip_polys(&self.device, &self.queue, &render_result.clip_polys);
         self.pipeline
@@ -6614,12 +6943,10 @@ impl AppState {
         let scaled_tex = scale_textured_draws(&render_result.textured_draws, ui_scale);
         let tex_insts: Vec<TexturedInstanceInput> =
             scaled_tex.iter().map(|d| d.to_instance()).collect();
-        upload_textured_instance_buffer(
+        self.textured_instance_buffer.upload(
             &self.device,
             &self.queue,
-            &mut self.textured_instance_buffer,
-            &mut self.textured_instance_capacity,
-            &tex_insts,
+            bytemuck::cast_slice(&tex_insts),
         );
         let has_dynamic_text = self
             .text_nodes
@@ -6653,18 +6980,19 @@ impl AppState {
         // Expand's unconstrained measure frame still emits opacity-0 instances at
         // content height. That AABB is not occupancy (`hoisted_portal_paint_box`)
         // and must not become a scroll blit pin / dest-reset strip down the page.
-        let overlay_visual =
-            if crate::layout::layout_tree::hoisted_expand_measuring(&self.root_element) {
-                None
-            } else {
-                Self::overlay_visual_bounds_logical(
-                    &scaled_instances[overlay_inst_start..],
-                    &scaled_tex[overlay_tex_slice_start..],
-                    &self.text_nodes[overlay_text_start..],
-                    &scaled_input_chrome[overlay_chrome_start..],
-                    ui_scale,
-                )
-            };
+        let overlay_visual = if !overlay_present
+            || crate::layout::layout_tree::hoisted_expand_measuring(&self.root_element)
+        {
+            None
+        } else {
+            Self::overlay_visual_bounds_logical(
+                &scaled_instances[overlay_inst_start..],
+                &scaled_tex[overlay_tex_slice_start..],
+                &self.text_nodes[overlay_text_start..],
+                &scaled_input_chrome[overlay_chrome_start..],
+                ui_scale,
+            )
+        };
         crate::core::tree::push_display_reveal_regions(
             &self.root_element,
             &sync_collect.display_reveal_keys,
@@ -6714,6 +7042,8 @@ impl AppState {
         self.collect_scroll_blit_pins(
             overlay_visual,
             &render_result.node_paints,
+            &next_last_present,
+            &raster_owners,
             &backdrop_regions,
         );
         // Consumed by `force_full_redraw_after_chrome` / scrollbar gates this frame.
@@ -6736,7 +7066,9 @@ impl AppState {
                 &mut self.damage_nodes,
                 &next_last_present,
                 &self.last_present_node_bounds,
-                self.layout_tree.last_clip_culled_paint_keys(),
+                &self
+                    .layout_tree
+                    .clip_culled_previous_paint_keys(&self.last_present_node_bounds),
             );
         }
         // Scroll clears replay the painter list in their repair scissors; they
@@ -6769,7 +7101,7 @@ impl AppState {
                 &self.last_overlay_stamps,
             );
         }
-        let region_present =
+        let mut region_present =
             super::damage::portal_composite_damage(&self.damage_nodes, self.overlay_occupied)
                 .is_some()
                 || self.damage_nodes.iter().any(|d| {
@@ -6803,7 +7135,97 @@ impl AppState {
         if max_backdrop_blur_logical > 0.5 && modal_underlay_opacity > 0.001 {
             self.force_full_redraw = true;
         }
+        let page_stack_band_ranges = overlay_split.page_stack_band_ranges();
+        let has_page_stack_bands = !page_stack_band_ranges.is_empty();
+        let scroll_source_moved = self.scroll_layer_clear || !self.scroll_strip_blit.is_empty();
+        // Source damage also dirties the dependent blur output. Repainting only
+        // the source label's hole leaves old filtered pixels around that hole.
+        // Propagate to this mask, never escalate a local dependency to FullClear.
+        for band in &page_stack_band_ranges {
+            let radius = band_instance_backdrop_blur(&scaled_instances, band) * ui_scale;
+            if radius <= 0.5 {
+                continue;
+            }
+            let capture = local_backdrop_host_scissor_physical(
+                &scaled_instances,
+                band,
+                self.config.width,
+                self.config.height,
+            )
+            .map(|sc| {
+                expand_physical_scissor(
+                    sc,
+                    local_backdrop_kernel_pad_px(radius),
+                    self.config.width,
+                    self.config.height,
+                )
+            });
+            let source_damage: Vec<_> = self
+                .damage_rect
+                .into_iter()
+                .chain(
+                    self.damage_nodes
+                        .iter()
+                        .filter(|dirty| {
+                            local_backdrop_source_damage(dirty, &render_result.node_paints, band)
+                        })
+                        .map(|dirty| dirty.bounds),
+                )
+                .filter(|rect| {
+                    capture.is_none_or(|sc| logical_rect_hits_physical_scissor(*rect, ui_scale, sc))
+                })
+                .collect();
+            for instance in &scaled_instances[band.instance.0..band.instance.1] {
+                if instance.backdrop_blur <= 0.5 {
+                    continue;
+                }
+                let mut mask = [
+                    instance.rect_pos[0],
+                    instance.rect_pos[1],
+                    instance.rect_size[0],
+                    instance.rect_size[1],
+                ];
+                if instance.clip_size[0] > 0.5 && instance.clip_size[1] > 0.5 {
+                    let Some(clipped) = super::damage::intersect_rects(
+                        mask,
+                        [
+                            instance.clip_pos[0],
+                            instance.clip_pos[1],
+                            instance.clip_size[0],
+                            instance.clip_size[1],
+                        ],
+                    ) else {
+                        continue;
+                    };
+                    mask = clipped;
+                }
+                let mask = mask.map(|value| value / ui_scale);
+                let support = local_backdrop_kernel_pad_px(radius) as f32 / ui_scale;
+                for source in &source_damage {
+                    let affected = super::draw_cull::padded_xywh(*source, support);
+                    let Some(bounds) = super::damage::intersect_rects(mask, affected) else {
+                        continue;
+                    };
+                    self.damage_nodes.push(super::damage::PaintDirty {
+                        key: band.stamp_key,
+                        bounds,
+                        kind: super::damage::PaintDirtyKind::Region,
+                    });
+                    region_present = true;
+                }
+            }
+        }
+
+        #[cfg(all(windows, feature = "webview"))]
+        if self.webviews.has_visible() {
+            self.force_full_redraw = true;
+        }
         let gpu_present = self.plan_gpu_present(ui_scale);
+        #[cfg(test)]
+        {
+            self.last_frame_partial = gpu_present.use_partial_damage;
+        }
+
         let allow_primitives = !(self.text_backend == TextRendererBackend::CpuTextHybrid
             && Self::cpu_hybrid_text_only());
         // Fullscreen modal underlay blur: capture page → blur → composite under overlays.
@@ -6823,9 +7245,15 @@ impl AppState {
             self.compositor_alpha.hash(&mut h);
             max_backdrop_blur_logical.to_bits().hash(&mut h);
             ui_scale.to_bits().hash(&mut h);
-            h.write(bytemuck::cast_slice(&scaled_instances[..overlay_inst_start]));
-            h.write(bytemuck::cast_slice(&render_result.clip_polys[..overlay_inst_start]));
-            h.write(bytemuck::cast_slice(&scaled_input_chrome[..overlay_chrome_start]));
+            h.write(bytemuck::cast_slice(
+                &scaled_instances[..overlay_inst_start],
+            ));
+            h.write(bytemuck::cast_slice(
+                &render_result.clip_polys[..overlay_inst_start],
+            ));
+            h.write(bytemuck::cast_slice(
+                &scaled_input_chrome[..overlay_chrome_start],
+            ));
             for op in &render_result.paint_ops[..overlay_paint_start] {
                 match op {
                     crate::layout::layout_tree::PaintOp::Rects { start, count } => {
@@ -6851,9 +7279,14 @@ impl AppState {
             let mut dynamic = false;
             for draw in &scaled_tex[..overlay_tex_start] {
                 use crate::renderer::resources::ResourceKind;
-                dynamic |= matches!(ResourceKind::from_key(&draw.texture_key),
-                    ResourceKind::Canvas | ResourceKind::Shader | ResourceKind::Scene3d
-                    | ResourceKind::Capture | ResourceKind::Effect);
+                dynamic |= matches!(
+                    ResourceKind::from_key(&draw.texture_key),
+                    ResourceKind::Canvas
+                        | ResourceKind::Shader
+                        | ResourceKind::Scene3d
+                        | ResourceKind::Capture
+                        | ResourceKind::Effect
+                );
                 draw.texture_key.hash(&mut h);
                 h.write(bytemuck::bytes_of(&draw.to_instance()));
                 if let Some(image) = self.image_textures.get(&draw.texture_key) {
@@ -6870,8 +7303,12 @@ impl AppState {
         };
         let reuse_modal_source = modal_source_fp.is_some()
             && modal_source_fp == self.modal_source_fp
-            && Self::text_nodes_equal(&self.text_nodes[..overlay_text_start], &self.modal_source_text)
-            && !self.text_nodes[..overlay_text_start].iter()
+            && Self::text_nodes_equal(
+                &self.text_nodes[..overlay_text_start],
+                &self.modal_source_text,
+            )
+            && !self.text_nodes[..overlay_text_start]
+                .iter()
                 .any(|n| n.glyph_fx.as_deref().is_some_and(|fx| !fx.is_empty()))
             && self.text_renderer.pending_warmup.is_empty();
         if !use_backdrop_blur {
@@ -6879,8 +7316,6 @@ impl AppState {
             self.modal_blur_radius = None;
         }
         let cull_phys = gpu_present.cull_phys;
-        let page_stack_band_ranges = overlay_split.page_stack_band_ranges();
-        let has_page_stack_bands = !page_stack_band_ranges.is_empty();
         // Overlay glyphs use `overlay_text_renderer`. Full and Region presents prepare the
         // page/page-stack glyphon mesh here. Node Present is different: it clears only local
         // holes, so its page captions are restored by `capture_text_renderer` after primitive
@@ -7640,6 +8075,7 @@ impl AppState {
             });
         }
         let text_done = Instant::now();
+
         #[cfg(test)]
         {
             self.native_render_sample = [
@@ -7680,21 +8116,12 @@ impl AppState {
             let mut hasher = DefaultHasher::new();
             hasher.write(bytemuck::cast_slice(&scaled_instances));
             hasher.write(bytemuck::cast_slice(&scaled_input_chrome));
+            // Fingerprint the same bytes uploaded to the GPU, including UVs and
+            // overflow clips. A stable texture key can still change its sampling.
+            hasher.write(bytemuck::cast_slice(&tex_insts));
+            hasher.write(bytemuck::cast_slice(&render_result.clip_polys));
             for d in &scaled_tex {
                 d.texture_key.hash(&mut hasher);
-                d.opacity.to_bits().hash(&mut hasher);
-                for v in d.rect {
-                    v.to_bits().hash(&mut hasher);
-                }
-                // Dest AABB is often the rest pose; CSS scale/rotate lives here.
-                for v in d.transform {
-                    v.to_bits().hash(&mut hasher);
-                }
-                for layer in d.rounded_clips {
-                    for v in layer {
-                        v.to_bits().hash(&mut hasher);
-                    }
-                }
             }
             hash_present_underline_layers(
                 &mut hasher,
@@ -7769,6 +8196,7 @@ impl AppState {
             }
             let frame_fp = hasher.finish();
             if self.has_presented_frame
+                && !self.force_present
                 && !self.theme_transition.needs_frame()
                 && !(crate::style::theme_transition_config().enabled
                     && !self.present_retain.contents_valid())
@@ -7905,6 +8333,59 @@ impl AppState {
             scissor_physical = None;
         }
 
+        if render_profile_log_enabled() {
+            static CACHE_DIAGNOSTICS: OnceLock<bool> = OnceLock::new();
+            if *CACHE_DIAGNOSTICS
+                .get_or_init(|| std::env::var_os("JADIX_BENCH_CACHE_DIAGNOSTICS").is_some())
+            {
+                log::warn!(
+                    "jadix-cache partial={} retain={} copied={} copy_jobs={} repair_rects={} skipped={} patched={}",
+                    use_partial_damage,
+                    draw_to_retain,
+                    strip_copy_committed && !self.scroll_strip_blit.is_empty(),
+                    self.scroll_strip_blit.len(),
+                    cull_phys.map(|c| c.strips().count()).unwrap_or(0),
+                    super::frame_stats::last_skipped_siblings(),
+                    super::frame_stats::last_patched_dl(),
+                );
+            }
+        }
+
+        // Upload the repair clears once. Each rectangle keeps its own scissor,
+        // without allocating a GPU buffer for every hole on every scroll frame.
+        let mut scroll_clear_scissors = Vec::new();
+        let mut scroll_clear_instances = Vec::new();
+        if gpu_present.clear_damage && strip_copy_committed {
+            if let Some(cull) = cull_phys {
+                let rgb = crate::style::encode_linear_srgb_to_display_srgb([
+                    clear_color.r as f32,
+                    clear_color.g as f32,
+                    clear_color.b as f32,
+                ]);
+                let clear = wgpu::Color {
+                    r: rgb[0] as f64,
+                    g: rgb[1] as f64,
+                    b: rgb[2] as f64,
+                    a: clear_color.a,
+                };
+                for rect in cull.strips() {
+                    if let Some(scissor) = super::damage::physical_xywh_to_scissor(
+                        rect,
+                        self.config.width,
+                        self.config.height,
+                    ) {
+                        scroll_clear_scissors.push(scissor);
+                        scroll_clear_instances.push(scissor_clear_instance(rect, clear, 8.0));
+                    }
+                }
+                self.scroll_clear_buffer.upload(
+                    &self.device,
+                    &self.queue,
+                    bytemuck::cast_slice(&scroll_clear_instances),
+                );
+            }
+        }
+
         let mut live_backdrops: Vec<wgpu::BindGroup> = Vec::new();
         let mut band_backdrop_idx: Vec<Option<usize>> = vec![None; page_stack_band_ranges.len()];
         // Capture submits its own encoder (like subtree `render_capture`) so prefix
@@ -7914,14 +8395,6 @@ impl AppState {
         if !reuse_modal_source
             && should_capture_page_stack_local_backdrops(allow_primitives, has_page_stack_bands)
         {
-            let scroll_source_moved = self.scroll_layer_clear || !self.scroll_strip_blit.is_empty();
-            let mut dirty_logical: Vec<[f32; 4]> = Vec::new();
-            if let Some(r) = self.damage_rect {
-                dirty_logical.push(r);
-            }
-            for n in &self.damage_nodes {
-                dirty_logical.push(n.bounds);
-            }
             for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
                 // `render_result.instances` was `take`n into `scaled_instances` (physical).
                 // Sampling the empty buffer made local_blur always 0 — dummy backdrop, no frost.
@@ -7944,16 +8417,35 @@ impl AppState {
                         self.config.height,
                     )
                 });
+                let source_damage: Vec<_> = self
+                    .damage_rect
+                    .into_iter()
+                    .chain(
+                        self.damage_nodes
+                            .iter()
+                            .filter(|dirty| {
+                                local_backdrop_source_damage(
+                                    dirty,
+                                    &render_result.node_paints,
+                                    band,
+                                )
+                            })
+                            .map(|dirty| dirty.bounds),
+                    )
+                    .collect();
                 let recapture = local_backdrop_must_recapture(
                     self.local_backdrop_valid && self.backdrop_blur.blurred_view().is_some(),
                     use_partial_damage,
                     scroll_source_moved,
-                    self.overlay_restore_clear,
                     capture_region,
-                    &dirty_logical,
+                    &source_damage,
                     ui_scale,
                 );
                 if recapture {
+                    #[cfg(test)]
+                    {
+                        self.local_backdrop_capture_count += 1;
+                    }
                     capture_page_stack_local_backdrop(
                         &mut self.backdrop_blur,
                         &self.device,
@@ -7968,17 +8460,19 @@ impl AppState {
                         clear_color,
                         &render_result.paint_ops,
                         &self.pipeline,
-                        &self.instance_buffer,
+                        &self.instance_buffer.buffer,
                         &self.textured_pipeline,
-                        &self.textured_instance_buffer,
+                        &self.textured_instance_buffer.buffer,
                         &self.image_textures,
                         &scaled_tex,
                         &scaled_input_chrome,
-                        &page_stack_band_underlines,
-                        &page_stack_band_shadows,
-                        &self.shadow_tex_cache,
+                        &mut self.shadow_tex_cache,
+                        &mut self.shadow_rect_cache,
                         &self.text_renderer,
-                        &self.page_stack_band_text_renderers,
+                        &mut self.local_backdrop_text_renderers,
+                        &self.text_nodes[..overlay_text_start],
+                        &self.config,
+                        ui_scale,
                         if self.gpu_caps.compute {
                             Some(&mut self.compute)
                         } else {
@@ -8002,9 +8496,9 @@ impl AppState {
         }
 
         if use_backdrop_blur {
-            let modal = self.modal_backdrop.get_or_insert_with(|| {
-                self.backdrop_blur.new_target(&self.device)
-            });
+            let modal = self
+                .modal_backdrop
+                .get_or_insert_with(|| self.backdrop_blur.new_target(&self.device));
             modal.ensure_size(
                 &self.device,
                 self.config.width,
@@ -8014,7 +8508,9 @@ impl AppState {
             if let Some(scene_view) = modal.scene_view() {
                 if !reuse_modal_source {
                     #[cfg(test)]
-                    { self.modal_capture_count += 1; }
+                    {
+                        self.modal_capture_count += 1;
+                    }
                     let mut page_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                         label: Some("Backdrop Scene Pass"),
                         color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -8035,7 +8531,7 @@ impl AppState {
                     page_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
                     page_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                     page_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                    page_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                    page_pass.set_vertex_buffer(1, self.instance_buffer.buffer.slice(..));
                     page_pass.set_index_buffer(
                         self.pipeline.index_buffer.slice(..),
                         wgpu::IndexFormat::Uint16,
@@ -8056,9 +8552,9 @@ impl AppState {
                                     band.paint_ops.0,
                                     band.paint_ops.1,
                                     &self.pipeline,
-                                    &self.instance_buffer,
+                                    &self.instance_buffer.buffer,
                                     &self.textured_pipeline,
-                                    &self.textured_instance_buffer,
+                                    &self.textured_instance_buffer.buffer,
                                     &self.image_textures,
                                     &scaled_tex,
                                     band_backdrop,
@@ -8075,7 +8571,8 @@ impl AppState {
                                 page_pass.set_bind_group(1, band_backdrop, &[]);
                                 page_pass
                                     .set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                                page_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                                page_pass
+                                    .set_vertex_buffer(1, self.instance_buffer.buffer.slice(..));
                                 page_pass.set_index_buffer(
                                     self.pipeline.index_buffer.slice(..),
                                     wgpu::IndexFormat::Uint16,
@@ -8089,7 +8586,7 @@ impl AppState {
                                     draw_packed_textured_runs(
                                         &mut page_pass,
                                         &self.textured_pipeline,
-                                        &self.textured_instance_buffer,
+                                        &self.textured_instance_buffer.buffer,
                                         &self.image_textures,
                                         &scaled_tex,
                                         band.textured.0,
@@ -8164,9 +8661,9 @@ impl AppState {
                             0,
                             overlay_paint_start,
                             &self.pipeline,
-                            &self.instance_buffer,
+                            &self.instance_buffer.buffer,
                             &self.textured_pipeline,
-                            &self.textured_instance_buffer,
+                            &self.textured_instance_buffer.buffer,
                             &self.image_textures,
                             &scaled_tex,
                             self.pipeline.dummy_backdrop(),
@@ -8183,7 +8680,7 @@ impl AppState {
                             draw_packed_textured_runs(
                                 &mut page_pass,
                                 &self.textured_pipeline,
-                                &self.textured_instance_buffer,
+                                &self.textured_instance_buffer.buffer,
                                 &self.image_textures,
                                 &scaled_tex,
                                 0,
@@ -8231,11 +8728,20 @@ impl AppState {
                 let radius = max_backdrop_blur_logical * modal_underlay_opacity * ui_scale;
                 if !reuse_modal_source || self.modal_blur_radius != Some(radius.to_bits()) {
                     #[cfg(test)]
-                    { self.modal_blur_count += 1; }
+                    {
+                        self.modal_blur_count += 1;
+                    }
                     modal.blur_modal(
-                        &self.device, &self.queue, &mut encoder, radius,
+                        &self.device,
+                        &self.queue,
+                        &mut encoder,
+                        radius,
                         max_backdrop_blur_logical * ui_scale,
-                        if self.gpu_caps.compute { Some(&mut self.compute) } else { None },
+                        if self.gpu_caps.compute {
+                            Some(&mut self.compute)
+                        } else {
+                            None
+                        },
                     );
                     self.modal_blur_radius = Some(radius.to_bits());
                 }
@@ -8247,8 +8753,7 @@ impl AppState {
                 // Destination is retain (draw_to_retain forced above); never Load the swapchain.
                 let blur_dst = self.present_retain.color_view();
                 if let Some(dst) = blur_dst {
-                    modal
-                        .blit_to(&self.queue, &mut encoder, dst, 1.0, clear_color);
+                    modal.blit_to(&self.queue, &mut encoder, dst, 1.0, clear_color);
                 }
             }
         }
@@ -8313,29 +8818,15 @@ impl AppState {
             if let Some((x, y, w, h)) = scissor_physical {
                 render_pass.set_scissor_rect(x, y, w, h);
             }
-            super::frame_stats::begin_scene_batches();
-            if gpu_present.clear_damage && strip_copy_committed {
-                if let Some(cull) = cull_phys {
-                    for rect in cull.strips() {
-                        let Some((x, y, w, h)) = super::damage::physical_xywh_to_scissor(
-                            rect,
-                            self.config.width,
-                            self.config.height,
-                        ) else {
-                            continue;
-                        };
-                        render_pass.set_scissor_rect(x, y, w, h);
-                        draw_scissor_surface_clear(
-                            &mut render_pass,
-                            &self.pipeline,
-                            &self.device,
-                            rect,
-                            clear_color,
-                        );
-                    }
-                    if let Some((x, y, w, h)) = scissor_physical {
-                        render_pass.set_scissor_rect(x, y, w, h);
-                    }
+            draw_scroll_clear_instances(
+                &mut render_pass,
+                &self.pipeline,
+                &self.scroll_clear_buffer.buffer,
+                &scroll_clear_scissors,
+            );
+            if !scroll_clear_scissors.is_empty() {
+                if let Some((x, y, w, h)) = scissor_physical {
+                    render_pass.set_scissor_rect(x, y, w, h);
                 }
             }
 
@@ -8343,7 +8834,7 @@ impl AppState {
             self.pipeline
                 .bind_sdf(&mut render_pass, true, self.pipeline.dummy_backdrop());
             render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.instance_buffer.buffer.slice(..));
             render_pass.set_index_buffer(
                 self.pipeline.index_buffer.slice(..),
                 wgpu::IndexFormat::Uint16,
@@ -8418,9 +8909,9 @@ impl AppState {
                                 band,
                                 &render_result.paint_ops,
                                 &self.pipeline,
-                                &self.instance_buffer,
+                                &self.instance_buffer.buffer,
                                 &self.textured_pipeline,
-                                &self.textured_instance_buffer,
+                                &self.textured_instance_buffer.buffer,
                                 &self.image_textures,
                                 &scaled_tex,
                                 &scaled_input_chrome,
@@ -8460,9 +8951,9 @@ impl AppState {
                             0,
                             overlay_paint_start,
                             &self.pipeline,
-                            &self.instance_buffer,
+                            &self.instance_buffer.buffer,
                             &self.textured_pipeline,
-                            &self.textured_instance_buffer,
+                            &self.textured_instance_buffer.buffer,
                             &self.image_textures,
                             &scaled_tex,
                             self.pipeline.dummy_backdrop(),
@@ -8482,7 +8973,7 @@ impl AppState {
                             draw_packed_textured_runs(
                                 &mut render_pass,
                                 &self.textured_pipeline,
-                                &self.textured_instance_buffer,
+                                &self.textured_instance_buffer.buffer,
                                 &self.image_textures,
                                 &scaled_tex,
                                 0,
@@ -8625,6 +9116,14 @@ impl AppState {
                 render_pass.set_scissor_rect(0, 0, self.config.width, self.config.height);
             }
 
+            #[cfg(all(windows, feature = "webview"))]
+            if self.webviews.has_visible() {
+                self.webviews.clear_apertures(
+                    &mut render_pass,
+                    self.config.width,
+                    self.config.height,
+                );
+            }
             // Portal overlay: per-band `rects → text` so stacked panels occlude correctly
             // (still one Clear pass — no GLES LoadOp::Load).
             if !gpu_present.use_node_present {
@@ -8636,9 +9135,9 @@ impl AppState {
                             band.paint_ops.0,
                             band.paint_ops.1,
                             &self.pipeline,
-                            &self.instance_buffer,
+                            &self.instance_buffer.buffer,
                             &self.textured_pipeline,
-                            &self.textured_instance_buffer,
+                            &self.textured_instance_buffer.buffer,
                             &self.image_textures,
                             &scaled_tex,
                             self.pipeline.dummy_backdrop(),
@@ -8650,7 +9149,7 @@ impl AppState {
                         render_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
                         render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                         render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                        render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                        render_pass.set_vertex_buffer(1, self.instance_buffer.buffer.slice(..));
                         render_pass.set_index_buffer(
                             self.pipeline.index_buffer.slice(..),
                             wgpu::IndexFormat::Uint16,
@@ -8664,7 +9163,7 @@ impl AppState {
                             draw_packed_textured_runs(
                                 &mut render_pass,
                                 &self.textured_pipeline,
-                                &self.textured_instance_buffer,
+                                &self.textured_instance_buffer.buffer,
                                 &self.image_textures,
                                 &scaled_tex,
                                 band.textured.0,
@@ -8755,14 +9254,22 @@ impl AppState {
             let device = &self.device;
             let dummy = pipeline.dummy_backdrop();
             let chrome = scaled_input_chrome.as_slice();
-            if self.theme_transition.present(
-                &self.queue,
-                &mut encoder,
-                &self.present_retain,
-                &view,
-                clear_color,
-                |pass| draw_input_caret_overlay(pass, pipeline, device, dummy, chrome),
-            ) {
+            let copied = self.config.usage.contains(wgpu::TextureUsages::COPY_DST)
+                && chrome.is_empty()
+                && !self.theme_transition.needs_frame()
+                && self
+                    .present_retain
+                    .copy_to_surface(&mut encoder, &output.texture);
+            if !copied
+                && self.theme_transition.present(
+                    &self.queue,
+                    &mut encoder,
+                    &self.present_retain,
+                    &view,
+                    clear_color,
+                    |pass| draw_input_caret_overlay(pass, pipeline, device, dummy, chrome),
+                )
+            {
                 self.window.request_redraw();
             }
             self.present_retain.mark_contents_valid();
@@ -8782,8 +9289,10 @@ impl AppState {
         let submit_done = Instant::now();
         let present_begin = Instant::now();
         self.queue.present(output);
-        super::frame_stats::note_presented_frame();
+        super::frame_stats::note_presented_frame(self.window.id());
+        #[cfg(feature = "performance")]
         super::frame_stats::note_frame_timings(
+            self.window.id(),
             render_begin.elapsed().as_secs_f64() * 1000.0,
             (layout_done - pre_done).as_secs_f64() * 1000.0,
             (text_done - upload_done).as_secs_f64() * 1000.0,
@@ -8793,6 +9302,7 @@ impl AppState {
         self.force_full_redraw = retain_unmoved_scroll;
         self.last_present_node_bounds = next_last_present;
         self.has_presented_frame = true;
+        self.force_present = false;
         {
             let draw_done = Instant::now();
             self.render_prof_frames = self.render_prof_frames.saturating_add(1);
@@ -10150,7 +10660,7 @@ mod hot_reload_inject {
                 .template_id("examples/gallery/App:section_body")
                 .template_hash("old-nav")
                 .children(vec![
-                    Element::new().children(vec![Element::new().text("导航")])
+                    Element::new().children(vec![Element::new().text("导航")]),
                 ]);
             island.set_attr(
                 crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
@@ -10188,7 +10698,7 @@ mod hot_reload_inject {
                 .template_id("examples/gallery/App:section_body")
                 .template_hash("old-nav")
                 .children(vec![
-                    Element::new().children(vec![Element::new().text("导航")])
+                    Element::new().children(vec![Element::new().text("导航")]),
                 ]);
             island.set_attr(
                 crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
@@ -10301,10 +10811,12 @@ mod hot_reload_inject {
                 &["导航改"],
             );
 
-            let mut live = Element::new().children(vec![Element::new()
-                .template_id("examples/gallery/src/main.rs:100:9")
-                .template_hash("chrome")
-                .text("chrome")]);
+            let mut live = Element::new().children(vec![
+                Element::new()
+                    .template_id("examples/gallery/src/main.rs:100:9")
+                    .template_hash("chrome")
+                    .text("chrome"),
+            ]);
             apply_templates_to_tree(&mut live, std::slice::from_ref(&patch));
             assert_eq!(
                 live.children[0].text.as_deref(),
@@ -10315,11 +10827,13 @@ mod hot_reload_inject {
             let mut island = Element::new()
                 .template_id("examples/gallery/App:section_body")
                 .template_hash("compile-time-old")
-                .children(vec![Element::new()
-                    .focus_id("scroll:scroll-navigation")
-                    .children(vec![
-                        Element::new().children(vec![Element::new().text("导航")])
-                    ])]);
+                .children(vec![
+                    Element::new()
+                        .focus_id("scroll:scroll-navigation")
+                        .children(vec![
+                            Element::new().children(vec![Element::new().text("导航")]),
+                        ]),
+                ]);
             island.set_attr(
                 crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
                 "examples/gallery/src/main.rs:4334:21",
@@ -10336,7 +10850,7 @@ mod hot_reload_inject {
 
 #[cfg(test)]
 mod text_shadow_draw_slot_tests {
-    use super::{text_shadow_draw_slot, TextShadowDrawSlot};
+    use super::{TextShadowDrawSlot, text_shadow_draw_slot};
 
     #[test]
     fn page_stack_bands_require_per_band_shadow_slot() {
@@ -10655,7 +11169,7 @@ mod present_fingerprint_tests {
         use crate::core::reactivity::create_root;
         use crate::core::tree::{Element, LayoutStatus};
         use crate::layout::layout_tree::LayoutTree;
-        use crate::renderer::{offscreen::OffscreenGpu, prepare_text_frame, JadixTextRenderer};
+        use crate::renderer::{JadixTextRenderer, offscreen::OffscreenGpu, prepare_text_frame};
         use crate::style::sync_class_variants_subtree;
 
         const W: u32 = 400;

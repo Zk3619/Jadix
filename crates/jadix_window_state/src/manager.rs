@@ -62,6 +62,20 @@ impl WindowStateManager {
         g.windows.get(&mapped).copied()
     }
 
+    #[cfg(feature = "jadix")]
+    pub(crate) fn initial_state(&self, label: &str) -> Option<WindowState> {
+        let inner = self.lock();
+        let label = inner.effective_label(label)?;
+        if inner.skip_initial.contains(&label) {
+            return None;
+        }
+        inner
+            .windows
+            .get(&label)
+            .copied()
+            .filter(|state| !state.is_placeholder())
+    }
+
     /// Restore `label` onto `window`. Unknown labels insert a live snapshot instead.
     pub fn restore(&self, label: &str, window: &(impl WindowView + ?Sized)) -> Result<()> {
         self.restore_with_flags(label, window, self.flags)

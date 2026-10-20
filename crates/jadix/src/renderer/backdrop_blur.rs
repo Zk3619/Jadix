@@ -330,6 +330,19 @@ impl BackdropBlurPipeline {
         }
     }
 
+    pub(crate) fn local_capture_pad_px(radius_px: f32) -> u32 {
+        let radius = radius_px.clamp(0.5, 64.0);
+        let factor = Self::work_factor(radius);
+        let sigma_work = (radius / factor as f32).clamp(0.5, 32.0);
+        // Match gaussian1d's discrete tap support, including the optional second
+        // H/V pair. Also cover downsample and final bilinear sample footprints.
+        let support = (sigma_work * 3.0).ceil().clamp(1.0, 24.0) as u32
+            + if sigma_work > 4.0 {
+                (sigma_work * 0.55 * 3.0).ceil().clamp(1.0, 24.0) as u32
+            } else { 0 };
+        (support + 2) * factor + 2
+    }
+
     pub fn ensure_size(
         &mut self,
         device: &wgpu::Device,
@@ -1072,5 +1085,12 @@ mod map_scissor_tests {
             BackdropBlurPipeline::map_scissor((700, 500, 200, 200), 800, 600, 800, 600),
             Some((700, 500, 100, 100))
         );
+    }
+
+    #[test]
+    fn local_capture_pad_covers_each_gaussian_pass() {
+        assert_eq!(BackdropBlurPipeline::local_capture_pad_px(2.0), 10);
+        assert_eq!(BackdropBlurPipeline::local_capture_pad_px(12.0), 62);
+        assert_eq!(BackdropBlurPipeline::local_capture_pad_px(20.0), 106);
     }
 }

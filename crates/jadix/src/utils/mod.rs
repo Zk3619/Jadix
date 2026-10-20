@@ -88,8 +88,8 @@ pub use icon_morph::{
 pub use icon_provider::{
     apply_bound_icon_name, apply_bound_icon_src, build_icon_from_src, build_icon_named,
     clear_icon_provider, clear_registered_icons, glyph_for_name, icon_named, icon_src,
-    register_icon, resolve_icon, set_icon_provider, unregister_icon, with_icon_size, IconProvider,
-    IconSource, ATTR_ICON_SRC, DEFAULT_ICON_SIZE_PX,
+    register_icon, resolve_icon, set_icon_provider, unregister_icon, with_icon_animations,
+    with_icon_size, IconProvider, IconSource, ATTR_ICON_SRC, DEFAULT_ICON_SIZE_PX,
 };
 pub use instance_id::resolve_instance_id;
 pub use keyed_overlay::{

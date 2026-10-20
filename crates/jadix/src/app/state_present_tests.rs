@@ -3,6 +3,13 @@ use super::*;
 use crate::app::{damage::*, draw_cull::*};
 use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 
+#[path = "state_scene_submission_tests.rs"]
+mod scene_submission_tests;
+
+#[cfg(target_os = "windows")]
+#[path = "state_nested_scroll_tests.rs"]
+mod nested_scroll_tests;
+
 #[cfg(target_os = "windows")]
 #[path = "state_modal_animation_tests.rs"]
 mod modal_animation_tests;
@@ -500,7 +507,9 @@ fn run_color_picker_native_frames(window: Arc<dyn Window>, calendar: bool) {
                 if hovered != Some(true) {
                     hover_failures.push((cycle, opening, tick, hovered));
                 }
-                eprintln!("native cp cycle={cycle} opening={opening} tick={tick} outside={changed} boxes={excluded:?}");
+                eprintln!(
+                    "native cp cycle={cycle} opening={opening} tick={tick} outside={changed} boxes={excluded:?}"
+                );
                 if cycle == 0 {
                     snapshot(&image, &format!("open-{opening}-tick-{tick}"));
                 }
@@ -1003,7 +1012,13 @@ fn avatar_interrupted_expand_restores_caption_each_frame() {
             .take(12)
             .map(|(i, (a, b))| (i % 320, i / 320, a, b))
             .collect();
-        assert!(diffs.is_empty(), "interrupted avatar frame={frame}: caption differs; stamps={stamps:?} holes={holes:?} flush={flush:?} runs={:?} diffs={diffs:?}",runs.iter().map(|n|(&n.text,n.clip_bounds)).collect::<Vec<_>>());
+        assert!(
+            diffs.is_empty(),
+            "interrupted avatar frame={frame}: caption differs; stamps={stamps:?} holes={holes:?} flush={flush:?} runs={:?} diffs={diffs:?}",
+            runs.iter()
+                .map(|n| (&n.text, n.clip_bounds))
+                .collect::<Vec<_>>()
+        );
         previous = stamps;
         previous_visual = visual;
     }
@@ -1843,6 +1858,137 @@ fn fractional_overlay_restore_repaints_rounded_scissor_edge() {
         partial.pixel(40, 55),
         full.pixel(40, 55)
     );
+}
+
+#[test]
+#[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+fn scroll_clear_stream_matches_individual_repairs() {
+    let backend = if std::env::var("JADIX_UPLOAD_BACKEND").as_deref() == Ok("dx11") {
+        wgpu::Backends::DX11
+    } else {
+        wgpu::Backends::GL
+    };
+    let gpu = OffscreenGpu::with_backends(backend).expect("requested adapter");
+    let pipeline =
+        JadixPipeline::from_format(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb, 96, 64);
+    pipeline.update_resolution(&gpu.queue, 96, 64);
+    let targets: Vec<_> = (0..2)
+        .map(|_| {
+            gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("scroll clear stream oracle"),
+                size: wgpu::Extent3d {
+                    width: 96,
+                    height: 64,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            })
+        })
+        .collect();
+    let mut stream = crate::renderer::buffer_upload::RetainedBuffer::new(
+        &gpu.device,
+        "scroll clears test",
+        wgpu::BufferUsages::VERTEX,
+        &[],
+    );
+    let holes = [
+        [12.0, 16.0, 20.0, 12.0],
+        [60.0, 16.0, 20.0, 20.0],
+        [30.0, 45.0, 40.0, 8.0],
+    ];
+    for (frame, order) in [&[0][..], &[0, 1, 2], &[2, 0, 1], &[1], &[1], &[1, 2]]
+        .into_iter()
+        .enumerate()
+    {
+        let clear = wgpu::Color {
+            r: 0.1,
+            g: 0.3,
+            b: 0.6,
+            a: 0.0,
+        };
+        let rgb = crate::style::encode_linear_srgb_to_display_srgb([0.1, 0.3, 0.6]);
+        let color = wgpu::Color {
+            r: rgb[0] as f64,
+            g: rgb[1] as f64,
+            b: rgb[2] as f64,
+            a: clear.a,
+        };
+        let instances: Vec<_> = order
+            .iter()
+            .map(|&i| scissor_clear_instance(holes[i], color, 8.0))
+            .collect();
+        let scissors: Vec<_> = order
+            .iter()
+            .map(|&i| physical_xywh_to_scissor(holes[i], 96, 64).unwrap())
+            .collect();
+        crate::app::frame_stats::begin_scene_uploads();
+        stream.upload(&gpu.device, &gpu.queue, bytemuck::cast_slice(&instances));
+        let uploads = crate::app::frame_stats::last_scene_uploads();
+        assert!(uploads.write_calls <= 1, "one upload for every repair hole");
+        if frame >= 2 {
+            assert_eq!(uploads.reallocations, 0, "reuse capacity after growth");
+        }
+        if frame == 4 {
+            assert_eq!(uploads.write_calls, 0, "identical repairs reuse GPU bytes");
+        }
+        let mut encoder = gpu.device.create_command_encoder(&Default::default());
+        for (i, texture) in targets.iter().enumerate() {
+            let view = texture.create_view(&Default::default());
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: if frame == 0 {
+                            wgpu::LoadOp::Clear(wgpu::Color::BLACK)
+                        } else {
+                            wgpu::LoadOp::Load
+                        },
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            if i == 0 {
+                draw_scroll_clear_instances(&mut pass, &pipeline, &stream.buffer, &scissors);
+            } else {
+                for (&index, &(x, y, w, h)) in order.iter().zip(&scissors) {
+                    pass.set_scissor_rect(x, y, w, h);
+                    draw_scissor_surface_clear(
+                        &mut pass,
+                        &pipeline,
+                        &gpu.device,
+                        holes[index],
+                        clear,
+                    );
+                }
+            }
+        }
+        let actual =
+            readback_texture(&gpu.device, &gpu.queue, &targets[0], 96, 64, encoder).unwrap();
+        let expected = readback_texture(
+            &gpu.device,
+            &gpu.queue,
+            &targets[1],
+            96,
+            64,
+            gpu.device.create_command_encoder(&Default::default()),
+        )
+        .unwrap();
+        assert_eq!(
+            actual.pixels, expected.pixels,
+            "repair stream frame {frame}"
+        );
+        assert!(actual.pixels[..96 * 16 * 4]
+            .chunks_exact(4)
+            .all(|pixel| pixel == [0, 0, 0, 255]));
+    }
 }
 
 #[test]
@@ -3159,3 +3305,74 @@ mod chart_present_tests;
 #[cfg(windows)]
 #[path = "state_drawer_interaction_tests.rs"]
 mod drawer_interaction_tests;
+#[test]
+fn jump_scroll_snapshot_uses_the_painted_device_grid() {
+    use crate::app::scroll_support::snap_scroll_offset_to_device_px;
+    for scale in [1.0_f32, 1.25, 1.5, 1.75, 2.0] {
+        let mut viewport = Element::new();
+        viewport.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}jump-grid"));
+        let mut previous = 0.0;
+        let mut copied_pixels = 0_i32;
+        let mut layout = crate::layout::layout_tree::LayoutTree::new();
+        layout.scroll_paint_scale = Some(scale);
+        // Jump scrolling supplies raw logical offsets, including half device pixels.
+        for raw in (0..=60).chain((0..60).rev()).map(|i| i as f32 * 25.0) {
+            viewport.scroll_offset = [0.0, raw];
+            let signal = use_signal(&scroll_offset_y_signal_key("jump-grid"), || 0.0_f32);
+            signal.set_silent(raw);
+            let snapshot = AppState::scroll_offsets_map(&mut viewport, scale);
+            let painted = f32::from_bits(snapshot["jump-grid"][1]);
+            assert_eq!(painted, snap_scroll_offset_to_device_px(raw, scale));
+            assert_eq!(viewport.scroll_offset[1], painted);
+            assert_eq!(
+                layout.scroll_paint_axis_offset(&viewport, true, false),
+                painted,
+                "collect must use the same paint pose as the retained copy"
+            );
+            assert_eq!(
+                signal.peek(),
+                raw,
+                "paint must not feed rounding into input"
+            );
+            copied_pixels += ((painted - previous) * scale).round() as i32;
+            assert_eq!(copied_pixels, (painted * scale).round() as i32);
+            previous = painted;
+        }
+        assert_eq!(copied_pixels, 0, "round trip at scale {scale}");
+    }
+}
+
+#[test]
+fn scroll_snapshot_pruning_matches_full_walk_after_nested_insert_and_remove() {
+    fn check(root: &mut Element) {
+        recompute_scroll_viewport_flags(root);
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(root, false);
+        let snapshot = AppState::scroll_offsets_map(root, 1.5);
+        let mut expected = HashMap::new();
+        crate::core::tree::walk_elements(root, |el| {
+            if let Some(id) = el.focus_id.as_deref().and_then(|id| id.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX)) {
+                expected.insert(id.to_string(), el.scroll_offset.map(f32::to_bits));
+            }
+        });
+        assert_eq!(snapshot, expected);
+    }
+    let mut viewport = Element::new();
+    viewport.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}outer"));
+    viewport.scroll_offset = [0.0, 25.0];
+    for _ in 0..256 { viewport.children.push(Element::new().child(Element::new())); }
+    let mut root = Element::new().child(viewport).child(Element::new());
+    check(&mut root);
+    let mut nested = Element::new();
+    nested.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}inner"));
+    nested.scroll_offset = [13.0, 77.0];
+    root.children[0].children[120].children.push(nested);
+    check(&mut root);
+    root.children[0].children[120].children.pop();
+    check(&mut root);
+    root.children[0].children[120].collect_paint_hash = 0;
+    assert_eq!(AppState::scroll_offsets_map(&mut root, 1.5).len(), 1);
+}
+
+#[cfg(target_os = "windows")]
+#[path = "state_local_backdrop_tests.rs"]
+mod local_backdrop_tests;

@@ -25,7 +25,7 @@ pub(super) fn install_proxy(proxy: EventLoopProxy, tx: Sender<JadixUserEvent>) {
     }
 }
 
-fn wake() {
+pub(super) fn wake() {
     if let Some(proxy) = PROXY.get() {
         proxy.wake_up();
     }

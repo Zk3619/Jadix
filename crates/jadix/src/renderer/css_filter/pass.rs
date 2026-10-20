@@ -85,7 +85,11 @@ impl Default for FilterUniforms {
 pub struct CssFilterPassGpu {
     #[cfg(test)]
     force_named_snapshots: bool,
-    pipeline: wgpu::RenderPipeline,
+    #[cfg(test)]
+    force_dynamic_pipeline: bool,
+    pipelines: HashMap<u32, wgpu::RenderPipeline>,
+    pipeline_layout: wgpu::PipelineLayout,
+    shader: wgpu::ShaderModule,
     uniform_bgl: wgpu::BindGroupLayout,
     // Each encoded pass needs its own uniform snapshot until submission.
     uniform_buffer: wgpu::Buffer,
@@ -176,8 +180,6 @@ impl CssFilterPassGpu {
             immediate_size: 0,
         });
 
-        let pipeline = make_filter_pipeline(device, &pipeline_layout, &shader, "fs_main");
-
         let alignment = device.limits().min_uniform_buffer_offset_alignment as usize;
         let uniform_stride = std::mem::size_of::<FilterUniforms>().div_ceil(alignment) * alignment;
         let (uniform_buffer, uniform_bg) =
@@ -216,7 +218,11 @@ impl CssFilterPassGpu {
         Self {
             #[cfg(test)]
             force_named_snapshots: false,
-            pipeline,
+            #[cfg(test)]
+            force_dynamic_pipeline: false,
+            pipelines: HashMap::new(),
+            pipeline_layout,
+            shader,
             uniform_bgl,
             uniform_buffer,
             uniform_bg,
@@ -928,6 +934,7 @@ impl CssFilterPassGpu {
             ],
         });
         let slot = self.prepare_uniform_slot(device, queue, &u);
+        let mode = self.prepare_pipeline(device, u.mode);
         let encoder = self.pending_encoder.get_or_insert_with(|| {
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("jadix-css-filter-batch"),
@@ -950,7 +957,7 @@ impl CssFilterPassGpu {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(&self.pipelines[&mode]);
             pass.set_bind_group(0, &self.uniform_bg, &[slot]);
             pass.set_bind_group(1, &tex_bg, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
@@ -1037,6 +1044,7 @@ impl CssFilterPassGpu {
         });
 
         let slot = self.prepare_uniform_slot(device, queue, uniforms);
+        let mode = self.prepare_pipeline(device, uniforms.mode);
         let encoder = self.pending_encoder.get_or_insert_with(|| {
             device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("jadix-css-filter-batch"),
@@ -1059,7 +1067,7 @@ impl CssFilterPassGpu {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
-            pass.set_pipeline(&self.pipeline);
+            pass.set_pipeline(&self.pipelines[&mode]);
             pass.set_bind_group(0, &self.uniform_bg, &[slot]);
             pass.set_bind_group(1, &tex_bg, &[]);
             pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
@@ -1067,6 +1075,21 @@ impl CssFilterPassGpu {
             pass.draw_indexed(0..self.num_indices, 0, 0..1);
         }
         true
+    }
+
+    fn prepare_pipeline(&mut self, device: &wgpu::Device, mode: f32) -> u32 {
+        debug_assert!(mode >= 0.0 && mode <= 17.0 && mode.fract() == 0.0);
+        let mode = mode as u32;
+        #[cfg(test)]
+        let mode = if self.force_dynamic_pipeline {
+            u32::MAX
+        } else {
+            mode
+        };
+        self.pipelines.entry(mode).or_insert_with(|| {
+            make_filter_pipeline(device, &self.pipeline_layout, &self.shader, mode)
+        });
+        mode
     }
 }
 
@@ -1100,8 +1123,9 @@ fn make_filter_pipeline(
     device: &wgpu::Device,
     pipeline_layout: &wgpu::PipelineLayout,
     shader: &wgpu::ShaderModule,
-    fragment_entry: &str,
+    mode: u32,
 ) -> wgpu::RenderPipeline {
+    let constants = [("FILTER_MODE", f64::from(mode))];
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         label: Some("jadix-css-filter-pipeline"),
         layout: Some(pipeline_layout),
@@ -1113,14 +1137,17 @@ fn make_filter_pipeline(
         },
         fragment: Some(wgpu::FragmentState {
             module: shader,
-            entry_point: Some(fragment_entry),
+            entry_point: Some("fs_main"),
             // Must match capture / ping-pong RTs (`Rgba8UnormSrgb`), not the swapchain format.
             targets: &[Some(wgpu::ColorTargetState {
                 format: wgpu::TextureFormat::Rgba8UnormSrgb,
                 blend: Some(wgpu::BlendState::REPLACE),
                 write_mask: wgpu::ColorWrites::ALL,
             })],
-            compilation_options: Default::default(),
+            compilation_options: wgpu::PipelineCompilationOptions {
+                constants: if mode == u32::MAX { &[] } else { &constants },
+                ..Default::default()
+            },
         }),
         primitive: wgpu::PrimitiveState::default(),
         depth_stencil: None,
@@ -1258,6 +1285,163 @@ fn light_dir(light: &LightSource) -> (f32, f32, f32) {
 mod tests {
     use super::*;
     use crate::renderer::offscreen::{readback_texture, OffscreenGpu};
+
+    #[test]
+    #[ignore = "native GPU all filter modes versus dynamic shader; run explicitly"]
+    fn specialized_filter_modes_match_dynamic_shader() {
+        let backend = if std::env::var("JADIX_UPLOAD_BACKEND").as_deref() == Ok("dx11") {
+            wgpu::Backends::DX11
+        } else {
+            wgpu::Backends::GL
+        };
+        let gpu = OffscreenGpu::with_backends(backend).expect("requested GPU");
+        eprintln!("filter specialization adapter={:?}", gpu.adapter_info);
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            width: 16,
+            height: 16,
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 1,
+            alpha_mode: wgpu::CompositeAlphaMode::Auto,
+            color_space: Default::default(),
+            view_formats: vec![],
+        };
+        let textured = TexturedQuadPipeline::new(&gpu.device, &config);
+        let pixels: Vec<u8> = (0..16 * 16 * 4)
+            .map(|i| ((i * 73 ^ (i / 17)) & 255) as u8)
+            .collect();
+        let input = crate::app::image_registry::upload_rgba8(
+            &gpu.device,
+            &gpu.queue,
+            &textured,
+            &pixels,
+            16,
+            16,
+        );
+        let output = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("filter mode comparison"),
+            size: wgpu::Extent3d {
+                width: 16,
+                height: 16,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: config.format,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_SRC,
+            view_formats: &[],
+        });
+        let images = HashMap::from([
+            ("source".into(), input),
+            (
+                "output".into(),
+                GpuImageTexture {
+                    bind_group: textured.create_texture_bind_group(
+                        &gpu.device,
+                        &output.create_view(&Default::default()),
+                    ),
+                    _texture: output,
+                },
+            ),
+        ]);
+        let mut specialized = CssFilterPassGpu::new(&gpu.device, config.format);
+        let mut dynamic = CssFilterPassGpu::new(&gpu.device, config.format);
+        dynamic.force_dynamic_pipeline = true;
+        assert!(
+            specialized.pipelines.is_empty(),
+            "unused filters must not compile a pipeline"
+        );
+        assert!(!specialized.flush_filter_jobs(
+            &gpu.device,
+            &gpu.queue,
+            &textured,
+            &mut HashMap::new(),
+            &[],
+            1.0,
+            None
+        ));
+        assert!(specialized.pipelines.is_empty());
+        specialized.ensure_fallback(&gpu.device, &textured);
+        dynamic.ensure_fallback(&gpu.device, &textured);
+        for mode in (0..18).chain((0..18).rev()) {
+            let mut u = FilterUniforms {
+                mode: mode as f32,
+                p0: 1.0,
+                p1: 1.0,
+                texel: [1.0 / 16.0; 2],
+                color: [0.2, 0.4, 0.8, 0.7],
+                m0: [1.0, 0.0, 0.0, 0.0],
+                m1: [0.0, 1.0, 0.0, 0.0],
+                m2: [0.0, 0.0, 1.0, 0.0],
+                m3: [0.0, 0.0, 0.0, 1.0],
+                ..Default::default()
+            };
+            match mode {
+                2 | 3 => u.set_gaussian(1.2),
+                10 => {
+                    u.p0 = 3.0;
+                    u.p1 = 3.0;
+                    u.p2 = 1.0;
+                    u.p3 = 1.0;
+                    u.p4 = 9.0;
+                    u.k0 = [1.0; 4];
+                    u.k1 = [1.0; 4];
+                    u.k2 = [1.0, 0.0, 0.0, 0.0];
+                }
+                13 => {
+                    u.p0 = 0.04;
+                    u.p1 = 0.05;
+                    u.p2 = 2.0;
+                    u.p3 = 0.123;
+                }
+                15 | 16 => {
+                    u.p2 = 0.5;
+                    u.p3 = 1.0;
+                    u.p4 = 0.4;
+                    u.p5 = 3.0;
+                }
+                _ => {}
+            }
+            let run = |filter: &mut CssFilterPassGpu| {
+                assert!(filter.draw(
+                    &gpu.device,
+                    &gpu.queue,
+                    &textured,
+                    &images,
+                    "source",
+                    "source",
+                    "output",
+                    &u
+                ));
+                filter.submit_pending(&gpu.queue);
+                readback_texture(
+                    &gpu.device,
+                    &gpu.queue,
+                    &images["output"]._texture,
+                    16,
+                    16,
+                    gpu.device.create_command_encoder(&Default::default()),
+                )
+                .unwrap()
+                .pixels
+            };
+            let actual = run(&mut specialized);
+            let expected = run(&mut dynamic);
+            let delta = actual
+                .iter()
+                .zip(&expected)
+                .map(|(a, b)| a.abs_diff(*b))
+                .max()
+                .unwrap();
+            assert!(delta <= 1, "mode={mode} max byte delta={delta}");
+        }
+        assert_eq!(specialized.pipelines.len(), 18);
+        assert_eq!(dynamic.pipelines.len(), 1);
+    }
 
     #[test]
     #[ignore = "native GPU paired Gaussian versus original discrete taps; run explicitly"]

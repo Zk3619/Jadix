@@ -241,7 +241,7 @@ impl VariantContext<'_> {
             VariantSelector::MotionReduce => crate::style::prefers_reduced_motion(),
             VariantSelector::MotionSafe => !crate::style::prefers_reduced_motion(),
             VariantSelector::Breakpoint { min_width } => self.viewport_w >= *min_width as f32,
-            VariantSelector::MaxBreakpoint { max_width } => self.viewport_w <= *max_width as f32,
+            VariantSelector::MaxBreakpoint { max_width } => self.viewport_w < *max_width as f32,
             VariantSelector::GroupHover { name } => self.group_matches(name),
             VariantSelector::PeerHover { name } => self.peer_matches(name),
             VariantSelector::Data { key, value } => {
@@ -263,15 +263,55 @@ impl VariantContext<'_> {
 /// Base tokens are applied immediately and snapshotted. Variant tokens are stored on
 /// [`Element::class_set`] and re-applied by [`resolve_class_variants`].
 pub fn apply_class_list(el: &mut Element, classes: &str) -> LayoutStatus {
+    let caller_classes = classes;
+    let has_defaults = el.attrs.contains_key("jadix_default_class");
+    if has_defaults {
+        // A bound caller class can change after a resize. Snapshot authored values,
+        // not the last viewport's temporary responsive overlay.
+        let inner = &mut *el.inner;
+        if let Some(cs) = inner.class_set.as_ref() {
+            if let Some(style) = &cs.base_style {
+                *inner.style = style.clone();
+            }
+            if let Some(text_style) = &cs.base_text_style {
+                *inner.text_style = text_style.clone();
+            }
+        }
+    }
     let combined;
-    let classes = if let Some(sheet) = el.attrs.get("jadix_stylesheet_class") {
+    let classes = if let Some(defaults) = el.attrs.get("jadix_default_class") {
+        let sheet = el
+            .attrs
+            .get("jadix_stylesheet_class")
+            .map(String::as_str)
+            .unwrap_or("");
+        combined = format!("{defaults} {sheet} {classes}");
+        combined.as_str()
+    } else if let Some(sheet) = el.attrs.get("jadix_stylesheet_class") {
         combined = format!("{sheet} {classes}");
         combined.as_str()
     } else {
         classes
     };
     let parsed = parse_class_list(classes);
-    apply_parsed_class_list(el, parsed, classes)
+    // Sheet matching appends this attribute as caller classes. Keeping defaults in
+    // it would apply them a second time *after* the sheet and invert precedence.
+    apply_parsed_class_list(
+        el,
+        parsed,
+        if has_defaults {
+            caller_classes
+        } else {
+            classes
+        },
+    )
+}
+
+/// Component defaults survive caller `class` replacement, before sheet and caller utilities.
+pub(crate) fn with_default_class_list(mut el: Element, classes: &str) -> Element {
+    el.set_attr("jadix_default_class", classes);
+    apply_class_list(&mut el, "");
+    el
 }
 
 /// Backward-compatible alias used by [`crate::app::reactive::bind_class`].
@@ -480,13 +520,46 @@ pub fn patch_class_set_base_paint(
     }
 }
 
+pub(crate) fn patch_class_set_base_layout(element: &mut Element) {
+    let display = element.style.display;
+    let grow = element.style.flex_grow;
+    let basis = element.style.flex_basis;
+    let wrap = element.style.flex_wrap;
+    let min_height = element.style.min_size.height;
+    let ratio = element.style.aspect_ratio;
+    let Some(classes) = element.class_set.as_mut() else {
+        return;
+    };
+    let Some(base) = classes.base_style.as_mut() else {
+        return;
+    };
+    if base.display == display
+        && base.flex_grow == grow
+        && base.flex_basis == basis
+        && base.flex_wrap == wrap
+        && base.min_size.height == min_height
+        && base.aspect_ratio == ratio
+    {
+        return;
+    }
+    base.display = display;
+    base.flex_grow = grow;
+    base.flex_basis = basis;
+    base.flex_wrap = wrap;
+    base.min_size.height = min_height;
+    base.aspect_ratio = ratio;
+    classes.last_ctx_fp = None;
+}
+
 /// Keep `display` in the restore snapshot.
 ///
 /// Chrome [`resolve_class_variants`] clones `base_style` after `reactive_sync`.
 /// Questionnaire (and any hover-class node) that toggles `Display::None` would
 /// otherwise flash Flex for one frame whenever a `data-*` attr changes the
 /// variant fingerprint.
+
 pub fn patch_class_set_base_display(el: &mut Element) {
+
     let display = el.style.display;
     let Some(cs) = el.class_set.as_mut() else {
         return;
@@ -668,6 +741,21 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
     // Also keep the live border width. The class snapshot is taken before join
     // and still has the chip's 1px stroke; restoring it paints a per-item SDF
     // ring on top of the group frame.
+    // Modal motion is advanced after class resolution on the live portal tree.
+    // Responsive variants must not erase its keyframes/pose and restart enter/exit.
+    let shell_motion = crate::utils::modal_motion::modal_shell_defer_css_tick(
+        el.template_id.as_deref(),
+    )
+    .then(|| {
+        (
+            el.style.animations.clone(),
+            el.style.transition.clone(),
+            el.style.opacity,
+            el.style.scale,
+            el.style.translate,
+            el.style.translate_pct,
+        )
+    });
     let join_chrome = el.attrs.contains_key("jadix_button_group_edge").then(|| {
         (
             el.style.radii,
@@ -712,6 +800,14 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
         impact = impact.merge(apply_known_utility_ex(el, &util, false));
     }
     el.class_set = class_set;
+    if let Some((animations, transition, opacity, scale, translate, translate_pct)) = shell_motion {
+        el.style.animations = animations;
+        el.style.transition = transition;
+        el.style.opacity = opacity;
+        el.style.scale = scale;
+        el.style.translate = translate;
+        el.style.translate_pct = translate_pct;
+    }
     if let Some((r, t, z, bw, sides)) = join_chrome {
         if el.style.radii != r {
             el.style.radii = r;
@@ -1641,16 +1737,6 @@ fn resolve_scroll_hover_enter(
     local
 }
 
-/// Freeze offscreen-cull must still descend into a wrapper whose descendant is
-/// `:hover`. `last_pointer_hover` lives on the leaf; the wrapper itself is not
-/// `force_leave`.
-fn class_hover_subtree_armed(el: &Element) -> bool {
-    if el.class_set.as_ref().and_then(|cs| cs.last_pointer_hover) == Some(true) {
-        return true;
-    }
-    el.children.iter().any(class_hover_subtree_armed)
-}
-
 /// Already-hovered class variants whose paint AABB no longer contains the pointer.
 /// Used on the scroll-freeze path so springs / padding / scale can leave.
 /// Ancestor cascade matches the live hover walks (a parent rotate this frame must leave/stay
@@ -1885,8 +1971,6 @@ fn sync_class_variants_subtree_inner(
                 (frame.scroll_acc, frame.clip, frame.clip_round)
             };
 
-            let offscreen =
-                crate::core::tree::element_is_offscreen(el, scroll_acc, viewport_w, viewport_h);
             let has_spin = el.attrs.get("jadix_animate").map(|v| v.as_str()) == Some("spin");
             // Only wake the per-frame resolve/tick path while a tween is actually running,
             // variants may match, or spin / CSS animation needs a tick.
@@ -1897,22 +1981,10 @@ fn sync_class_variants_subtree_inner(
             let has_active_css = el.transition_snapshot.has_active_tweens();
             let css_needs =
                 super::animation::css_transition_needs_frame(&el.style, &el.transition_snapshot);
-            // Scroll frames (`tick_active_css_transitions_subtree`) still tick `has_spin`
-            // when offscreen. Idle sync matches that: the node itself advances, children
-            // of a truly offscreen parent stay culled — unless the parent is live
-            // (`collect_skip_live`: descendant spin / shimmer) or a descendant is still
-            // `:hover` (overflow-visible / scale leftover). Otherwise maximize /
-            // stop-scroll never notes `page_css` and `about_to_wait` sleeps.
-            if offscreen
-                && !has_spin
-                && !has_css_anim
-                && !has_active_css
-                && !css_needs
-                && !el.collect_skip_live
-                && !class_hover_subtree_armed(el)
-            {
-                continue;
-            }
+            // Resolve conditions before paint even for offscreen content. The scroll
+            // path only advances active effects, so deferring dark/responsive/data
+            // variants until reveal would paint the base snapshot for one frame.
+            // Unchanged contexts still use the fingerprint fast path below.
             if css_needs
                 || (crate::layout::collect_cache::node_paint_needs_frame(el)
                     && animation_frame_affects_viewport(
@@ -2505,6 +2577,14 @@ fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -
         return LayoutStatus::Clean;
     };
     match known {
+        KnownUtility::DisplayNone => {
+            el.style.display = taffy::style::Display::None;
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::DisplayFlex => {
+            el.style.display = taffy::style::Display::Flex;
+            LayoutStatus::LayoutChanged
+        }
         KnownUtility::FlexRow => {
             *el = std::mem::take(el).flex_row();
             LayoutStatus::LayoutChanged
@@ -5801,6 +5881,130 @@ mod p1_utility_tests {
     }
 
     #[test]
+    fn responsive_hidden_flex_preserves_direction_and_releases_layout_space() {
+        let mut el = Element::new()
+            .flex_col()
+            .w(200.0)
+            .h(100.0)
+            .class("hidden md:flex");
+        for (width, shown) in [
+            (320.0, false),
+            (767.5, false),
+            (768.0, true),
+            (320.0, false),
+        ] {
+            resolve_class_variants(
+                &mut el,
+                &VariantContext {
+                    viewport_w: width,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(
+                el.style.display,
+                if shown {
+                    taffy::style::Display::Flex
+                } else {
+                    taffy::style::Display::None
+                }
+            );
+            assert_eq!(el.style.flex_direction, taffy::style::FlexDirection::Column);
+            let mut tree = crate::core::tree::LayoutTree::new();
+            tree.build_and_layout(&mut el, width, 600.0, [-1.0, -1.0]);
+            assert_eq!(el.layout_bounds[2] > 0.0, shown);
+        }
+    }
+
+    #[test]
+    fn responsive_defaults_survive_class_binding_and_respect_stylesheet_overrides() {
+        let mut el = with_default_class_list(Element::new().flex_col(), "sm:flex-row");
+        resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                viewport_w: 800.0,
+                ..Default::default()
+            },
+        );
+        apply_class_list(&mut el, "gap-3");
+        resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                viewport_w: 320.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(el.style.flex_direction, taffy::style::FlexDirection::Column);
+
+        crate::style::clear_stylesheets();
+        crate::style::register_stylesheet(crate::style::parse_stylesheet(
+            "[[rule]]\nselectors = [\"[data-slot=responsive-default]\"]\nclasses = \"sm:flex-col\""
+        ).unwrap()).unwrap();
+        el.set_attr("data-slot", "responsive-default");
+        el = crate::style::apply_stylesheet_rules(el);
+        resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                viewport_w: 800.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(el.style.flex_direction, taffy::style::FlexDirection::Column);
+        apply_class_list(&mut el, "sm:flex-row gap-4");
+        resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                viewport_w: 800.0,
+                ..Default::default()
+            },
+        );
+        assert_eq!(el.style.flex_direction, taffy::style::FlexDirection::Row);
+        crate::style::clear_stylesheets();
+    }
+
+    #[test]
+    fn responsive_breakpoints_cover_fractional_widths_and_restore_on_resize() {
+        for (min, max, width) in [
+            ("sm", "max-sm", 640.0),
+            ("md", "max-md", 768.0),
+            ("lg", "max-lg", 1024.0),
+            ("xl", "max-xl", 1280.0),
+            ("2xl", "max-2xl", 1536.0),
+            ("min-[800px]", "max-[800px]", 800.0),
+        ] {
+            let min = VariantSelector::parse_prefix(min).unwrap();
+            let max = VariantSelector::parse_prefix(max).unwrap();
+            for viewport_w in [width - 0.5, width, width + 0.5] {
+                let ctx = VariantContext {
+                    viewport_w,
+                    ..Default::default()
+                };
+                assert_eq!(ctx.matches_selector(&min), viewport_w >= width);
+                assert_eq!(ctx.matches_selector(&max), viewport_w < width);
+                assert_ne!(ctx.matches_selector(&min), ctx.matches_selector(&max));
+            }
+        }
+        let mut el = Element::new();
+        apply_class_list(&mut el, "flex-col sm:flex-row md:flex-col");
+        for (viewport_w, expected) in [
+            (320.0, taffy::style::FlexDirection::Column),
+            (639.5, taffy::style::FlexDirection::Column),
+            (640.0, taffy::style::FlexDirection::Row),
+            (768.0, taffy::style::FlexDirection::Column),
+            (640.0, taffy::style::FlexDirection::Row),
+            (320.0, taffy::style::FlexDirection::Column),
+        ] {
+            resolve_class_variants(
+                &mut el,
+                &VariantContext {
+                    viewport_w,
+                    ..Default::default()
+                },
+            );
+            assert_eq!(el.style.flex_direction, expected, "width={viewport_w}");
+        }
+    }
+
+    #[test]
     fn resolve_arbitrary_min_max_breakpoints() {
         let mut el = Element::new();
         apply_class_list(&mut el, "bg-transparent min-[800px]:bg-accent");
@@ -5836,7 +6040,7 @@ mod p1_utility_tests {
         let _ = resolve_class_variants(
             &mut narrow,
             &VariantContext {
-                viewport_w: 599.0,
+                viewport_w: 598.5,
                 ..Default::default()
             },
         );

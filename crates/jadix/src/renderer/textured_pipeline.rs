@@ -126,6 +126,7 @@ pub struct TexturedQuadPipeline {
     pub sampler: wgpu::Sampler,
     pub sdf_sampler: wgpu::Sampler,
     premultiply: f32,
+    resolution: std::sync::Mutex<Option<[u32; 2]>>,
 }
 
 impl TexturedQuadPipeline {
@@ -278,12 +279,18 @@ impl TexturedQuadPipeline {
             sampler,
             sdf_sampler,
             premultiply,
+            resolution: std::sync::Mutex::new(Some([config.width, config.height])),
         }
     }
 
     pub fn update_resolution(&self, queue: &wgpu::Queue, width: u32, height: u32) {
+        let mut resolution = self.resolution.lock().unwrap();
+        if *resolution == Some([width, height]) {
+            return;
+        }
         let globals = Globals::new(width as f32, height as f32, self.premultiply);
         queue.write_buffer(&self.globals_buffer, 0, bytemuck::cast_slice(&[globals]));
+        *resolution = Some([width, height]);
     }
 
     /// Change resolution in command order, between captures in one submission.
@@ -295,6 +302,10 @@ impl TexturedQuadPipeline {
         width: u32,
         height: u32,
     ) {
+        // The encoded copy changes globals on submission. The next window draw
+        // must restore its dimensions even when its last queue upload matched.
+        let mut resolution = self.resolution.lock().unwrap();
+        *resolution = None;
         let globals = Globals::new(width as f32, height as f32, self.premultiply);
         let snapshot = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("capture resolution snapshot"),

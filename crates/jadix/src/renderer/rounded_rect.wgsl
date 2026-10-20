@@ -2,7 +2,6 @@
 
 struct VertexInput {
     @location(0) position: vec2<f32>,
-    @location(1) uv: vec2<f32>,
 };
 
 struct InstanceInput {
@@ -709,6 +708,20 @@ fn paint_rect(in: VertexOutput) -> vec4<f32> {
     // Large axis-aligned fills skip SDF; overflow still uses clip_poly + clip_pos.
     let flags = u32(in.extra_and_id.w);
     let simple_fill = (flags & 2u) != 0u;
+    // Derivatives must precede storage-dependent clip/discard control flow.
+    // ANGLE maps clip_polys to UAVs; FXC rejects gradients after those discards.
+    let packed = in.extra_and_id.x;
+    let param_enc = floor(packed / 256.0);
+    let rem = packed - param_enc * 256.0;
+    let shape_type = floor(rem / 16.0);
+    let bstyle = rem - shape_type * 16.0;
+    let shape_param = param_enc / 100.0;
+    var d = 0.0;
+    var aa = 1.0;
+    if (!simple_fill) {
+        d = sd_shaped_box(in.p, b, in.radii, shape_type, shape_param);
+        aa = shape_aa(in.p, b, in.radii, d, shape_type);
+    }
     // World overflow / clip-path (rotated descendants, restrict shells).
     if ((flags & 1u) != 0u && !clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) {
         discard;
@@ -736,24 +749,6 @@ fn paint_rect(in: VertexOutput) -> vec4<f32> {
             discard;
         }
     }
-
-    // Unpack border_extra: style + shape*16 + round(param*100)*256.
-    let packed = in.extra_and_id.x;
-    let param_enc = floor(packed / 256.0);
-    let rem = packed - param_enc * 256.0;
-    let shape_type = floor(rem / 16.0);
-    let bstyle = rem - shape_type * 16.0;
-    let shape_param = param_enc / 100.0;
-
-    // SDF distance to the edge of the shaped box
-    let d = sd_shaped_box(in.p, b, in.radii, shape_type, shape_param);
-
-    // Screen-space AA: fixed 1px fails under rotate/skew (derivatives stretch).
-    // Clamp to the vertex AA pad. Unbounded fwidth(d) on Intel iGPUs (DXIL
-    // derivatives after the clip discard) becomes tens of pixels, so alpha_bg
-    // is a ramp across the pill: thread text shows through Latest and glyphs
-    // look cut in half. Discrete GPUs keep fwidth ≈ 1px.
-    let aa = shape_aa(in.p, b, in.radii, d, shape_type);
 
     // Compute alpha for the inner rect body
     let alpha_bg = 1.0 - smoothstep(-aa, aa, d);
@@ -905,6 +900,12 @@ fn paint_rect(in: VertexOutput) -> vec4<f32> {
 @fragment
 fn fs_solid(in: VertexOutput) -> @location(0) vec4<f32> {
     let flags = u32(in.extra_and_id.w);
+    var d = 0.0;
+    var aa = 1.0;
+    if ((flags & 2u) == 0u) {
+        d = sd_shaped_box(in.p, in.rect_size * 0.5, in.radii, 0.0, 0.0);
+        aa = shape_aa(in.p, in.rect_size * 0.5, in.radii, d, 0.0);
+    }
     if ((flags & 1u) != 0u && !clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) {
         discard;
     }
@@ -918,8 +919,6 @@ fn fs_solid(in: VertexOutput) -> @location(0) vec4<f32> {
     var coverage = 1.0;
     var color = in.color;
     if ((flags & 2u) == 0u) {
-        let d = sd_shaped_box(in.p, in.rect_size * 0.5, in.radii, 0.0, 0.0);
-        let aa = shape_aa(in.p, in.rect_size * 0.5, in.radii, d, 0.0);
         coverage = 1.0 - smoothstep(-aa, aa, d);
         if (in.border_width > 0.0 && in.extra_and_id.x > 0.5) {
             let border_coverage = 1.0 - smoothstep(-aa, aa, d + in.border_width);

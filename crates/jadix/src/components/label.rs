@@ -237,12 +237,17 @@ pub fn Label(
 }
 
 pub fn label(id: impl Into<String>) -> LabelBuilder {
+    let id = id.into();
+    let mut el = apply_label_defaults(Element::new());
+    if !id.trim().is_empty() {
+        // Bindings register before `From<LabelBuilder>` runs. Seed the explicit
+        // identity now so repeated helper/list sites do not share an auto id.
+        el.template_id = Some(id.clone());
+    }
     LabelBuilder {
-        id: id.into(),
+        id,
         for_target: String::new(),
-        inner: TextBuilder {
-            el: apply_label_defaults(Element::new()),
-        },
+        inner: TextBuilder { el },
         chrome: SlotChrome::default(),
     }
 }
@@ -520,8 +525,17 @@ impl LabelBuilder {
     }
 
     /// 可选 `template_id` 槽；空串 / 省略 → 不写身份（展示型，WP-2.8）。
+    /// 在 live 绑定前设置；已注册的绑定或子叶身份不会被改名。
     pub fn id(mut self, id: impl Into<String>) -> Self {
+        if self.inner.el.on_unmount.is_none()
+            && self.inner.el.template_id.as_deref() == Some(self.id.as_str())
+        {
+            self.inner.el.template_id = None;
+        }
         self.id = id.into();
+        if self.inner.el.template_id.is_none() && !self.id.trim().is_empty() {
+            self.inner.el.template_id = Some(self.id.clone());
+        }
         self
     }
 }

@@ -13,9 +13,8 @@ use winit::window::Window;
 use crate::core::reactivity::OwnerHandle;
 use crate::core::tree::{Element, LayoutStatus, LayoutTree};
 use crate::renderer::{
+    JadixPipeline, JadixTextRenderer, ScaledTexturedDraw, TexturePool, TexturedQuadPipeline,
     prepare_text_frame, scale_clip_polys_in_place, scale_instances, scale_textured_draws,
-    JadixPipeline, JadixTextRenderer, ScaledTexturedDraw, TexturePool, TexturedInstanceInput,
-    TexturedQuadPipeline,
 };
 
 /// Factory for a secondary window's root [`Element`].
@@ -54,10 +53,8 @@ pub(super) struct SecondaryWindowState {
     /// window uploads these; secondaries (especially glass sidecars) must too.
     textured_pipeline: TexturedQuadPipeline,
     image_textures: TexturePool,
-    textured_instance_buffer: wgpu::Buffer,
-    textured_instance_capacity: usize,
-    instance_buffer: wgpu::Buffer,
-    instance_buffer_capacity: usize,
+    textured_instance_buffer: crate::renderer::buffer_upload::RetainedBuffer,
+    instance_buffer: crate::renderer::buffer_upload::RetainedBuffer,
     num_instances: u32,
     pub(super) layout_tree: LayoutTree,
     pub(super) text_renderer: JadixTextRenderer,
@@ -95,6 +92,20 @@ pub(super) struct SecondaryWindowState {
 }
 
 impl SecondaryWindowState {
+    pub(super) fn bust_text_caches(&mut self) {
+        self.image_textures.invalidate_text_textures();
+        self.text_renderer
+            .bust_caches(&self.device, &self.queue, &self.config);
+        self.overlay_text_renderer
+            .bust_caches(&self.device, &self.queue, &self.config);
+        for renderer in &mut self.overlay_band_text_renderers {
+            renderer.bust_caches(&self.device, &self.queue, &self.config);
+        }
+        self.layout_tree
+            .invalidate_resource_caches(&mut self.root_element);
+        self.layout_status = self.layout_status.merge(LayoutStatus::LayoutChanged);
+    }
+
     /// Best-effort memory trim before dropping the secondary window state.
     ///
     /// This helps RSS fall back faster after repeatedly opening/closing windows:
@@ -161,7 +172,7 @@ impl SecondaryWindowState {
         let present_retain = crate::renderer::PresentRetainPipeline::new(&device, config.format);
         let theme_transition =
             crate::renderer::theme_transition::ThemeTransition::new(&device, config.format);
-        let (textured_pipeline, textured_instance_buffer, textured_instance_capacity) =
+        let (textured_pipeline, textured_instance_buffer) =
             init_secondary_textured(&device, &config);
         let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
             JadixTextRenderer::new_sharing_font_system(&device, &queue, &config, shared)
@@ -190,11 +201,12 @@ impl SecondaryWindowState {
         pipeline.ensure_clip_polys(&device, &queue, &clip_polys);
         let num_instances = render_result.instances.len() as u32;
 
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Secondary Instance Buffer"),
-            contents: bytemuck::cast_slice(&scaled_instances),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
+        let instance_buffer = crate::renderer::buffer_upload::RetainedBuffer::new(
+            &device,
+            "Secondary Instance Buffer",
+            wgpu::BufferUsages::VERTEX,
+            bytemuck::cast_slice(&scaled_instances),
+        );
 
         Ok(Self {
             window,
@@ -211,9 +223,7 @@ impl SecondaryWindowState {
             textured_pipeline,
             image_textures: TexturePool::new(),
             textured_instance_buffer,
-            textured_instance_capacity,
             instance_buffer,
-            instance_buffer_capacity: scaled_instances.len().max(1),
             num_instances,
             layout_tree,
             text_renderer,
@@ -261,7 +271,7 @@ impl SecondaryWindowState {
         let present_retain = crate::renderer::PresentRetainPipeline::new(&device, config.format);
         let theme_transition =
             crate::renderer::theme_transition::ThemeTransition::new(&device, config.format);
-        let (textured_pipeline, textured_instance_buffer, textured_instance_capacity) =
+        let (textured_pipeline, textured_instance_buffer) =
             init_secondary_textured(&device, &config);
         let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
             JadixTextRenderer::new_sharing_font_system(&device, &queue, &config, shared)
@@ -290,11 +300,12 @@ impl SecondaryWindowState {
         let num_instances = render_result.instances.len() as u32;
         let size = PhysicalSize::new(config.width, config.height);
 
-        let instance_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Secondary Instance Buffer"),
-            contents: bytemuck::cast_slice(&scaled_instances),
-            usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        });
+        let instance_buffer = crate::renderer::buffer_upload::RetainedBuffer::new(
+            &device,
+            "Secondary Instance Buffer",
+            wgpu::BufferUsages::VERTEX,
+            bytemuck::cast_slice(&scaled_instances),
+        );
 
         Self {
             window,
@@ -311,9 +322,7 @@ impl SecondaryWindowState {
             textured_pipeline,
             image_textures: TexturePool::new(),
             textured_instance_buffer,
-            textured_instance_capacity,
             instance_buffer,
-            instance_buffer_capacity: scaled_instances.len().max(1),
             num_instances,
             layout_tree,
             text_renderer,
@@ -394,6 +403,10 @@ impl SecondaryWindowState {
         &mut self,
         mouse_pos: [f32; 2],
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
+        #[cfg(feature = "performance")]
+        let render_begin = std::time::Instant::now();
+        super::frame_stats::begin_scene_uploads();
+        super::frame_stats::begin_scene_batches();
         let inner = self.window.surface_size();
         if inner.width > 0
             && inner.height > 0
@@ -420,10 +433,6 @@ impl SecondaryWindowState {
         );
         self.pending_layout_dirty
             .extend(sync_collect.layout_dirty.drain(..));
-        let portal_only_layout = matches!(sync_impact, LayoutStatus::LayoutChanged)
-            && sync_collect.portal_layout_changed
-            && !sync_collect.page_layout_changed;
-
         // Same mouse as CSS `:hover` below (`[-1,-1]` when the pointer is off this window).
         crate::app::tree_hit::apply_pointer_hover_reconcile(
             &self.root_element,
@@ -483,31 +492,35 @@ impl SecondaryWindowState {
             &mut sync_impact,
         );
 
-        let use_full = self.layout_tree.root_node.is_none()
-            || matches!(
-                self.layout_status,
-                LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
-            )
-            || (sync_impact != LayoutStatus::Clean && !portal_only_layout);
+        let use_full =
+            self.layout_tree.root_node.is_none() || self.root_element.layout_node.is_none();
+        let impact = self.layout_status.merge(sync_impact);
+        let geometry_changed = matches!(
+            impact,
+            LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
+        );
+        let paint_only = impact == LayoutStatus::Clean && self.pending_layout_dirty.is_empty();
 
         if !use_full {
             let dirty: std::collections::HashSet<_> = self.pending_layout_dirty.drain(..).collect();
             if !dirty.is_empty() {
                 self.layout_tree
                     .mark_dirty_nodes_in_tree(&self.root_element, &dirty);
+            } else if geometry_changed {
+                // Resize or non-binding synchronizers may have no targeted ids.
+                // Keep the resident tree, but refresh all affected layout inputs.
+                self.layout_tree
+                    .mark_subtree_layout_dirty(&self.root_element);
             }
         } else {
             self.pending_layout_dirty.clear();
         }
 
-        self.layout_tree.set_collect_skip_allowed(
-            !use_full
-                && matches!(
-                    sync_impact,
-                    LayoutStatus::Clean | LayoutStatus::StyleChanged
-                ),
-        );
+        self.layout_tree
+            .set_collect_skip_allowed(!use_full && !geometry_changed);
 
+        #[cfg(feature = "performance")]
+        let layout_begin = std::time::Instant::now();
         let mut render_result = if use_full {
             self.layout_tree.build_and_layout(
                 &mut self.root_element,
@@ -521,7 +534,7 @@ impl SecondaryWindowState {
                 logical_w,
                 logical_h,
                 [0.0, 0.0],
-                false,
+                paint_only,
                 true,
             )
         };
@@ -551,6 +564,8 @@ impl SecondaryWindowState {
                 self.layout_tree
                     .collect_animation_frame(&mut self.root_element, mouse_pos, false);
         }
+        #[cfg(feature = "performance")]
+        let layout_ms = layout_begin.elapsed().as_secs_f64() * 1000.0;
         self.has_input_caret = render_result
             .text_nodes
             .iter()
@@ -574,12 +589,10 @@ impl SecondaryWindowState {
             .textured_start
             .min(scaled_tex.len());
         let textured_insts: Vec<_> = scaled_tex.iter().map(|d| d.to_instance()).collect();
-        super::state::upload_textured_instance_buffer(
+        self.textured_instance_buffer.upload(
             &self.device,
             &self.queue,
-            &mut self.textured_instance_buffer,
-            &mut self.textured_instance_capacity,
-            &textured_insts,
+            bytemuck::cast_slice(&textured_insts),
         );
         let mut clip_polys = render_result.clip_polys;
         scale_clip_polys_in_place(&mut clip_polys, scale);
@@ -587,22 +600,11 @@ impl SecondaryWindowState {
             clip_polys.push(crate::style::GpuClipPoly::NONE);
         }
 
-        if scaled_instances.len() > self.instance_buffer_capacity {
-            self.instance_buffer =
-                self.device
-                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                        label: Some("Secondary Instance Buffer"),
-                        contents: bytemuck::cast_slice(&scaled_instances),
-                        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-                    });
-            self.instance_buffer_capacity = scaled_instances.len().max(1);
-        } else {
-            self.queue.write_buffer(
-                &self.instance_buffer,
-                0,
-                bytemuck::cast_slice(&scaled_instances),
-            );
-        }
+        self.instance_buffer.upload(
+            &self.device,
+            &self.queue,
+            bytemuck::cast_slice(&scaled_instances),
+        );
         self.pipeline
             .ensure_clip_polys(&self.device, &self.queue, &clip_polys);
         self.layout_status = LayoutStatus::Clean;
@@ -621,6 +623,8 @@ impl SecondaryWindowState {
         );
         self.upload_pending_textures(&scaled_tex);
 
+        #[cfg(feature = "performance")]
+        let text_begin = std::time::Instant::now();
         let empty_keys = std::collections::HashSet::new();
         let empty_rects = std::collections::HashMap::new();
         let overlay_text_start = render_result
@@ -685,6 +689,8 @@ impl SecondaryWindowState {
             overlay_band_underlines.push(overlay_prep.underline_instances);
         }
 
+        #[cfg(feature = "performance")]
+        let text_done = std::time::Instant::now();
         self.text_renderer.trim_glyph_atlas();
         self.overlay_text_renderer.trim_glyph_atlas();
         for tr in &mut self.overlay_band_text_renderers {
@@ -741,7 +747,7 @@ impl SecondaryWindowState {
             render_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
             render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
             render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-            render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+            render_pass.set_vertex_buffer(1, self.instance_buffer.buffer.slice(..));
             render_pass.set_index_buffer(
                 self.pipeline.index_buffer.slice(..),
                 wgpu::IndexFormat::Uint16,
@@ -760,7 +766,7 @@ impl SecondaryWindowState {
                 super::state::draw_packed_textured_runs(
                     &mut render_pass,
                     &self.textured_pipeline,
-                    &self.textured_instance_buffer,
+                    &self.textured_instance_buffer.buffer,
                     &self.image_textures,
                     &scaled_tex,
                     0,
@@ -852,7 +858,7 @@ impl SecondaryWindowState {
                     render_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
                     render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
                     render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                    render_pass.set_vertex_buffer(1, self.instance_buffer.slice(..));
+                    render_pass.set_vertex_buffer(1, self.instance_buffer.buffer.slice(..));
                     render_pass.set_index_buffer(
                         self.pipeline.index_buffer.slice(..),
                         wgpu::IndexFormat::Uint16,
@@ -868,7 +874,7 @@ impl SecondaryWindowState {
                     super::state::draw_packed_textured_runs(
                         &mut render_pass,
                         &self.textured_pipeline,
-                        &self.textured_instance_buffer,
+                        &self.textured_instance_buffer.buffer,
                         &self.image_textures,
                         &scaled_tex,
                         band.textured.0,
@@ -953,6 +959,15 @@ impl SecondaryWindowState {
         }
         self.queue.submit(std::iter::once(encoder.finish()));
         self.queue.present(output);
+        super::frame_stats::note_presented_frame(self.window.id());
+        #[cfg(feature = "performance")]
+        super::frame_stats::note_frame_timings(
+            self.window.id(),
+            render_begin.elapsed().as_secs_f64() * 1000.0,
+            layout_ms,
+            (text_done - text_begin).as_secs_f64() * 1000.0,
+        );
+        super::frame_stats::log_scene_uploads(true);
         // This window redraws its complete surface; consume only its own damage.
         super::damage::clear_frame_paint_nodes();
 
@@ -1118,7 +1133,7 @@ impl SecondaryWindowState {
             return LayoutStatus::Clean;
         };
         self.layout_status = self.layout_status.merge(status);
-        if matches!(status, LayoutStatus::StyleChanged) {
+        if status != LayoutStatus::Clean {
             crate::layout::collect_cache::invalidate_collect_paint_hash_for_template(
                 &mut self.root_element,
                 &want,
@@ -1131,16 +1146,18 @@ impl SecondaryWindowState {
 fn init_secondary_textured(
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
-) -> (TexturedQuadPipeline, wgpu::Buffer, usize) {
+) -> (
+    TexturedQuadPipeline,
+    crate::renderer::buffer_upload::RetainedBuffer,
+) {
     let pipeline = TexturedQuadPipeline::new(device, config);
-    let stride = std::mem::size_of::<TexturedInstanceInput>();
-    let buffer = device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Secondary Textured instance buffer"),
-        size: (stride * 256) as u64,
-        usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
-        mapped_at_creation: false,
-    });
-    (pipeline, buffer, 256)
+    let buffer = crate::renderer::buffer_upload::RetainedBuffer::new(
+        device,
+        "Secondary Textured instance buffer",
+        wgpu::BufferUsages::VERTEX,
+        &[],
+    );
+    (pipeline, buffer)
 }
 
 fn find_template_mut<'a>(el: &'a mut Element, want_normalized: &str) -> Option<&'a mut Element> {

@@ -512,7 +512,14 @@ fn lookup_restrict_element(scope: &str, id: &str, hits: &[DragHit]) -> Option<[f
     hits.iter()
         .find(|h| h.id == id && h.scope_id == scope && h.rect.is_usable())
         .or_else(|| hits.iter().find(|h| h.id == id && h.rect.is_usable()))
-        .map(|h| h.rect.to_bounds())
+        .map(|h| {
+            // Collision uses the visible intersection; constraints retain the
+            // full author box and apply ancestor clipping separately.
+            let visible = h.rect.to_bounds();
+            last_draggable_bounds(&h.scope_id, id)
+                .filter(|raw| last_ancestor_overflow_clip(id).is_some_and(|clip| intersect_xywh(*raw, clip) == visible))
+                .unwrap_or(visible)
+        })
         .or_else(|| last_named_bounds(id))
         .or_else(|| last_hit_rect(scope, id))
 }
@@ -2913,6 +2920,13 @@ fn collect_hits_inner(
     };
     let drag_id = el.attrs.get(ATTR_DRAG_DRAGGABLE).cloned();
     let drop_id = el.attrs.get(ATTR_DRAG_DROPPABLE).cloned();
+    let hit_slot = if drop_id.is_some() {
+        overflow_clip
+            .map(|clip| intersect_xywh(slot, clip))
+            .unwrap_or(slot)
+    } else {
+        slot
+    };
     let named = el.template_id.as_deref().filter(|s| !s.is_empty());
     let attr_id = el
         .attrs
@@ -2958,7 +2972,7 @@ fn collect_hits_inner(
             scope_id,
             is_draggable: drag_id.is_some(),
             is_droppable: drop_id.is_some(),
-            rect: Rect::from_bounds(slot),
+            rect: Rect::from_bounds(hit_slot),
             item_type: el.attrs.get(ATTR_DRAG_TYPE).cloned().unwrap_or_default(),
             accept: el.attrs.get(ATTR_DRAG_ACCEPT).cloned().unwrap_or_default(),
             list_id: el.attrs.get(ATTR_DRAG_LIST).cloned(),
@@ -4957,6 +4971,21 @@ mod tests {
         let hits = collect_hits(&root);
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].id, "z");
+    }
+
+    #[test]
+    fn collect_droppable_rect_is_clipped_to_visible_ancestor() {
+        let mut target = Element::new();
+        target.layout_bounds = [-10.0, 10.0, 100.0, 50.0];
+        target.set_attr(ATTR_DRAG_DROPPABLE, "dock-body-clipped");
+        target.set_attr(ATTR_DRAG_SCOPE, "dock-clipped");
+        let mut root = Element::new().overflow("hidden");
+        root.layout_bounds = [0.0, 0.0, 80.0, 40.0];
+        root = root.child(target);
+        let hits = collect_hits(&root);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].rect.to_bounds(), [0.0, 10.0, 80.0, 30.0]);
+        assert_eq!(last_draggable_bounds("dock-clipped", "dock-body-clipped"), Some([-10.0, 10.0, 100.0, 50.0]));
     }
 
     /// `restrict="parent"` must skip the kit hug-content shell and bind the

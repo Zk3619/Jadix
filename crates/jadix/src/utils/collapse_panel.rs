@@ -422,7 +422,7 @@ pub fn apply_collapse_motion(
 
 /// Queue the new clip after layout as well as the previous clip before layout.
 pub(crate) fn flush_collapse_layout_damage(root: &mut Element) {
-    crate::core::tree::walk_elements_mut(root, |el| {
+    walk_collapse_work(root, &mut |el| {
         if el.attrs.remove("jadix_collapse_damage").is_some() {
             crate::app::damage::push_frame_region_paint(
                 crate::app::damage::paint_element_key(el),
@@ -432,13 +432,27 @@ pub(crate) fn flush_collapse_layout_damage(root: &mut Element) {
     });
 }
 
+fn walk_collapse_work(root: &mut Element, visit: &mut impl FnMut(&mut Element)) {
+    // Unknown/invalidated hashes must still discover newly mounted callbacks.
+    if root.collect_paint_hash != 0 && !root.subtree_collapse_work {
+        return;
+    }
+    crate::core::tree::walk_elements_mut_pruned(root, |el| {
+        if el.collect_paint_hash != 0 && !el.subtree_collapse_work {
+            return false;
+        }
+        visit(el);
+        true
+    });
+}
+
 /// Finish first-open measurement before presenting the unconstrained layout.
 pub(crate) fn seed_measured_collapse_panels(
     root: &mut Element,
     layout_tree: &mut LayoutTree,
 ) -> bool {
     let mut changed = false;
-    crate::core::tree::walk_elements_mut(root, |el| {
+    walk_collapse_work(root, &mut |el| {
         if !el.attrs.contains_key("jadix_collapse_measuring") || panel_content_height(el) < 1.0 {
             return;
         }
@@ -459,6 +473,86 @@ pub(crate) fn seed_measured_collapse_panels(
 mod tests {
     use super::*;
     use crate::core::reactivity::create_root;
+
+    #[test]
+    fn collapse_work_discovers_mount_before_restamp_and_consumes_damage() {
+        use crate::layout::collect_cache::{
+            invalidate_collect_paint_hash_path, stamp_subtree_paint_hashes,
+        };
+        let mut root = Element::new().child(Element::new()).child(Element::new());
+        let mut tree = LayoutTree::new();
+        stamp_subtree_paint_hashes(&mut root, false);
+        assert!(!root.subtree_collapse_work);
+        let mut visited = 0;
+        walk_collapse_work(&mut root, &mut |_| visited += 1);
+        assert_eq!(visited, 0);
+
+        let mut panel = Element::new().reactive_sync(|el, _| {
+            el.attrs.remove("jadix_collapse_measuring");
+            el.set_attr("jadix_collapse_damage", "1");
+            LayoutStatus::LayoutChanged
+        });
+        panel.layout_bounds[3] = 64.0;
+        panel.set_attr("jadix_collapse_measuring", "1");
+        root.children[1].children.push(panel);
+        invalidate_collect_paint_hash_path(&mut root, &[1]);
+        assert!(seed_measured_collapse_panels(&mut root, &mut tree));
+        stamp_subtree_paint_hashes(&mut root, true);
+        assert!(root.subtree_collapse_work);
+        assert!(!root.children[0].subtree_collapse_work);
+        flush_collapse_layout_damage(&mut root);
+        assert!(!root.children[1].children[0]
+            .attrs
+            .contains_key("jadix_collapse_damage"));
+
+        // Static custom nodes may queue damage without a synchronizer.
+        root.children[1].children.clear();
+        root.children[1].set_attr("jadix_collapse_damage", "1");
+        invalidate_collect_paint_hash_path(&mut root, &[1]);
+        stamp_subtree_paint_hashes(&mut root, true);
+        assert!(root.subtree_collapse_work);
+        flush_collapse_layout_damage(&mut root);
+        assert!(!root.children[1].attrs.contains_key("jadix_collapse_damage"));
+        invalidate_collect_paint_hash_path(&mut root, &[1]);
+        stamp_subtree_paint_hashes(&mut root, true);
+        assert!(!root.subtree_collapse_work);
+        crate::app::damage::clear_frame_paint_nodes();
+    }
+
+    #[test]
+    #[ignore = "isolated collapse discovery CPU comparison"]
+    fn collapse_static_walk_cost() {
+        let mut content = Element::new();
+        content.children = (0..1600).map(|_| Element::new()).collect();
+        let mut root = Element::new().child(
+            Element::new()
+                .reactive_sync(|_, _| LayoutStatus::Clean)
+                .child(content),
+        );
+        let mut tree = LayoutTree::new();
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, false);
+        for eager in [true, false] {
+            let begin = Instant::now();
+            for _ in 0..2000 {
+                if eager {
+                    // The original two discovery passes, on an idle static list.
+                    crate::core::tree::walk_elements_mut(&mut root, |el| {
+                        std::hint::black_box(el.attrs.contains_key("jadix_collapse_measuring"));
+                    });
+                    crate::core::tree::walk_elements_mut(&mut root, |el| {
+                        assert!(el.attrs.remove("jadix_collapse_damage").is_none());
+                    });
+                } else {
+                    assert!(!seed_measured_collapse_panels(&mut root, &mut tree));
+                    flush_collapse_layout_damage(&mut root);
+                }
+            }
+            eprintln!(
+                "collapse-discovery eager={eager} us/frame={:.3}",
+                begin.elapsed().as_secs_f64() * 1_000_000.0 / 2000.0
+            );
+        }
+    }
 
     #[test]
     fn reopen_after_finished_exit_cancels_pending_unmount() {

@@ -18,7 +18,9 @@ pub const LINE_WIDTH_EPS: f32 = 1.0;
 /// Opaque prepared paragraph: segment widths cached for arbitrary available widths.
 #[derive(Clone, Debug)]
 pub struct PreparedText {
-    segments: Vec<PreparedSegment>,
+    // Immutable measurement runs are shared by collect/display-list snapshots.
+    // Cloning a label must not allocate and copy every word on each scroll frame.
+    segments: std::sync::Arc<[PreparedSegment]>,
     pub size: f32,
     pub weight: u16,
     pub line_height: f32,
@@ -30,21 +32,6 @@ impl PreparedText {
     /// Number of measure/break segments (for tests and render hints).
     pub fn segment_count(&self) -> usize {
         self.segments.len()
-    }
-
-    /// Slice of segments `[start, end)` as a new prepared paragraph (for variable-width wrap).
-    pub(crate) fn sub_prepared(&self, start: usize, end: usize) -> PreparedText {
-        let end = end.min(self.segments.len());
-        let start = start.min(end);
-        let segments = self.segments[start..end].to_vec();
-        let max_segment_width = segments.iter().map(|s| s.width).fold(0.0_f32, f32::max);
-        PreparedText {
-            segments,
-            size: self.size,
-            weight: self.weight,
-            line_height: self.line_height,
-            max_segment_width,
-        }
     }
 }
 
@@ -75,6 +62,66 @@ pub struct PreparedLine {
     pub end_seg: usize,
     pub width: f32,
     pub text: String,
+}
+
+/// Position in an immutable prepared paragraph, reusable across widths and columns.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LayoutCursor {
+    pub segment_index: usize,
+}
+
+/// Lay out only the next line without copying or laying out the remaining paragraph.
+/// The returned cursor consumes a hard newline, while the line's range excludes it.
+/// Like [`layout_lines`], unbreakable segments stay whole even if wider than `avail_width`.
+pub fn layout_next_line(
+    prepared: &PreparedText,
+    start: LayoutCursor,
+    avail_width: f32,
+) -> Option<(PreparedLine, LayoutCursor)> {
+    if start.segment_index >= prepared.segments.len() {
+        return None;
+    }
+    let avail = avail_width.max(1.0);
+    let mut line = PreparedLine {
+        start_seg: start.segment_index,
+        end_seg: start.segment_index,
+        width: 0.0,
+        text: String::new(),
+    };
+    let mut can_break_after = false;
+    let mut last_segment_width = 0.0;
+    let mut last_segment_is_whitespace = false;
+    for (index, segment) in prepared
+        .segments
+        .iter()
+        .enumerate()
+        .skip(start.segment_index)
+    {
+        if segment.text == "\n" {
+            return Some((
+                line,
+                LayoutCursor {
+                    segment_index: index + 1,
+                },
+            ));
+        }
+        if line.width > 0.0 && can_break_after && line.width + segment.width > avail {
+            if last_segment_is_whitespace {
+                line.width = (line.width - last_segment_width).max(0.0);
+            }
+            break;
+        }
+        line.width += segment.width;
+        line.text.push_str(&segment.text);
+        line.end_seg = index + 1;
+        can_break_after = segment.break_after;
+        last_segment_width = segment.width;
+        last_segment_is_whitespace = segment.text.chars().all(char::is_whitespace);
+    }
+    let next = LayoutCursor {
+        segment_index: line.end_seg,
+    };
+    Some((line, next))
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -574,7 +621,7 @@ pub fn prepare_rich(
     });
 
     PreparedText {
-        segments,
+        segments: segments.into(),
         size: default_size,
         weight: default_weight,
         line_height,
@@ -642,7 +689,7 @@ pub fn prepare_with_family(
     });
 
     let prepared = PreparedText {
-        segments,
+        segments: segments.into(),
         size,
         weight,
         line_height,
@@ -698,7 +745,7 @@ struct FitKey {
     size_q: u16,
     line_height_q: u16,
     weight: u16,
-    target_q: u16,
+    target_bits: u32,
 }
 
 const FIT_CACHE_SOFT_MAX: usize = 1024;
@@ -779,20 +826,15 @@ pub fn layout_text_fast_mode() -> bool {
     LAYOUT_TEXT_FAST.with(|c| c.get())
 }
 
-/// Quantize wrap target during interactive resize so FIT_CACHE / shaped_cache reuse nearby widths.
+/// Keep actual width for both measurement and paint, including subpixel wrap thresholds.
 #[inline]
-pub fn layout_wrap_target(width: f32, fast: bool) -> f32 {
-    let w = width.max(1.0);
-    if fast && w > 8.0 {
-        ((w / 8.0).round() * 8.0).max(1.0)
-    } else {
-        w
-    }
+pub fn layout_wrap_target(width: f32, _fast: bool) -> f32 {
+    width.max(1.0)
 }
 
 /// 8px bucket for BiDi/WJ UAX#14 prewrap — always ≤ `width`.
 ///
-/// Rounding **up** (see [`layout_wrap_target`]) then painting at the real leaf with
+/// Rounding **up** then painting at the real leaf with
 /// `Wrap::Word` lets cosmic-text re-break inside a hard line and split Word Joiner
 /// pairs across BiDi level spans (Hebrew + EN digits). Floor + `Wrap::None` keeps
 /// hard `\n` as the only soft breaks.
@@ -825,8 +867,9 @@ fn fit_cache_key(text: &str, size: f32, weight: u16, line_height: f32, target: f
         size_q: (size * 10.0).clamp(0.0, u16::MAX as f32) as u16,
         line_height_q: (line_height * 10.0).clamp(0.0, u16::MAX as f32) as u16,
         weight,
-        // 1px buckets — scroll/resize stability without thrashing every subpixel.
-        target_q: target.round().clamp(0.0, u16::MAX as f32) as u16,
+        // A bucket may straddle a wrap threshold. Reusing whichever side was
+        // measured first makes identical widths depend on resize direction.
+        target_bits: target.to_bits(),
     }
 }
 
@@ -861,8 +904,8 @@ pub fn bidi_soft_wrap_height(
     metrics: &TextLayoutMetrics,
     nowrap: bool,
 ) -> f32 {
-    // Prefer segment arithmetic / FIT_CACHE. Resize drag (fast) never *computes* fit —
-    // only settle frames may glyphon_fit on miss (smooth resize vs correct resting height).
+    // Live resize always uses arithmetic so cache warmth cannot change the measured height.
+    // Settle frames may use FIT_CACHE or shape once on a miss for precise bidi height.
     let base = metrics.height.max(line_height);
     if nowrap {
         return base;
@@ -872,6 +915,9 @@ pub fn bidi_soft_wrap_height(
         return base;
     }
     let fast = layout_text_fast_mode();
+    if fast {
+        return base;
+    }
     // BiDi/WJ prewrap paint always floor-buckets width; keep layout height on the same key.
     let target = if super::uax14_wrap::needs_logical_prewrap(text) {
         layout_wrap_target_prewrap(layout_w)
@@ -885,9 +931,6 @@ pub fn bidi_soft_wrap_height(
         if let Some(fit) = try_glyphon_fit_soft_wrap(text, size, weight, line_height, layout_w) {
             return (line_height * fit.line_count.max(1) as f32).max(base);
         }
-    }
-    if fast {
-        return base;
     }
     let fit = glyphon_fit_soft_wrap(text, size, weight, line_height, target);
     (line_height * fit.line_count.max(1) as f32).max(base)
@@ -1086,7 +1129,7 @@ pub(crate) fn visual_line_ranges_from_segments(
     let prepared = prepare(text, size, weight, line_height);
     let mut seg_byte_start = Vec::with_capacity(prepared.segments.len());
     let mut byte = 0usize;
-    for seg in &prepared.segments {
+    for seg in prepared.segments.iter() {
         seg_byte_start.push(byte);
         byte = byte.saturating_add(seg.text.len()).min(text.len());
     }
@@ -1126,7 +1169,7 @@ pub fn layout(prepared: &PreparedText, avail_width: f32) -> TextLayoutMetrics {
     const MAX_EXTRA_LINES_PER_SEG: u32 = 64;
     const MAX_TOTAL_LINES: u32 = 4_096;
 
-    for seg in &prepared.segments {
+    for seg in prepared.segments.iter() {
         if seg.text == "\n" {
             max_line_width = max_line_width.max(line_w);
             line_count = (line_count + 1).min(MAX_TOTAL_LINES);
@@ -1187,7 +1230,7 @@ pub fn layout(prepared: &PreparedText, avail_width: f32) -> TextLayoutMetrics {
 pub fn intrinsic_width(prepared: &PreparedText) -> f32 {
     let mut line_w = 0.0_f32;
     let mut max_w = 0.0_f32;
-    for seg in &prepared.segments {
+    for seg in prepared.segments.iter() {
         if seg.text == "\n" {
             max_w = max_w.max(line_w);
             line_w = 0.0;
@@ -1248,7 +1291,8 @@ pub fn measure_leaf(
         intrinsic_w
     };
     let layout_w = if nowrap { intrinsic_w } else { width.max(1.0) };
-    let metrics = layout(&prepared, layout_w);
+    let wrap_w = layout_wrap_target(layout_w, !nowrap && layout_text_fast_mode());
+    let metrics = layout(&prepared, wrap_w);
     let height = bidi_soft_wrap_height(
         text,
         size,
@@ -1461,10 +1505,10 @@ mod tests {
         let miss = try_glyphon_fit_soft_wrap(text, size, 500, lh, 240.0);
         assert!(miss.is_none(), "empty cache must not trigger fit shaping");
         let fit = glyphon_fit_soft_wrap(text, size, 500, lh, 240.0);
-        let hit = try_glyphon_fit_soft_wrap(text, size, 500, lh, layout_wrap_target(243.0, true));
+        let hit = try_glyphon_fit_soft_wrap(text, size, 500, lh, layout_wrap_target(240.0, true));
         assert!(
             hit.is_some(),
-            "quantized resize target should reuse fit cache"
+            "identical widths should reuse the exact-width fit cache"
         );
         assert!(
             fit.wrap_width <= 240.0 + 1.0 || fit.max_ink <= 240.0 * 1.08 + 2.0,
@@ -1503,6 +1547,98 @@ mod tests {
                 .is_none()
         );
         set_layout_text_fast_mode(false);
+        shutdown_layout_text();
+    }
+
+    #[test]
+    fn fast_mode_layout_height_ignores_warm_fit_cache() {
+        invalidate_prepare_cache();
+        let text = "Bidirectional sample: English 123 - العربية ٤٥٦ - עברית 789";
+        let size = 14.0;
+        let lh = size * 1.5;
+        let prepared = prepare(text, size, 500, lh);
+        let avail = 240.0f32;
+        let metrics = layout(&prepared, avail);
+        let target = layout_wrap_target(avail, true);
+        let fit = glyphon_fit_soft_wrap(text, size, 500, lh, target);
+        assert!(fit.line_count > 0);
+        set_layout_text_fast_mode(true);
+        let h = bidi_soft_wrap_height(
+            text,
+            size,
+            500,
+            lh,
+            avail,
+            prepared.max_segment_width,
+            &metrics,
+            false,
+        );
+        assert_eq!(h, metrics.height.max(lh));
+        set_layout_text_fast_mode(false);
+        shutdown_layout_text();
+    }
+
+    #[test]
+    fn fast_word_wrap_uses_available_width_without_eight_pixel_steps() {
+        let text = "Measured word wrapping stays stable across small width changes during resize";
+        let size = 16.0;
+        let line_height = 24.0;
+        set_layout_text_fast_mode(true);
+        let (_, narrow) = measure_leaf(text, size, 400, line_height, Some(120.1), None, 0.0, false);
+        let (_, wider) = measure_leaf(text, size, 400, line_height, Some(127.9), None, 0.0, false);
+        let (_, next_bucket) =
+            measure_leaf(text, size, 400, line_height, Some(128.1), None, 0.0, false);
+        set_layout_text_fast_mode(false);
+
+        assert!(narrow > line_height, "fixture must exercise word wrapping");
+        assert_eq!(
+            narrow, wider,
+            "these widths should retain the same word breaks"
+        );
+        assert!(
+            next_bucket <= wider,
+            "increasing width must not add wrapped lines"
+        );
+        assert_eq!(layout_wrap_target(127.9, true), 127.9);
+        assert_eq!(layout_wrap_target(128.1, true), 128.1);
+    }
+
+    #[test]
+    fn gallery_titles_keep_paint_height_during_one_way_resize() {
+        set_layout_text_fast_mode(false);
+        for text in [
+            "ViewportModal 无头壳（居中 Dialog / 贴边 Sheet）",
+            "局部遮罩关键场景（Portal mount，非整窗 overlay）",
+        ] {
+            let mut ascending = Vec::new();
+            invalidate_prepare_cache();
+            for quarter in 1200..2160 {
+                let width = quarter as f32 / 4.0;
+                let (_, height) = measure_leaf(text, 20.0, 700, 30.0, Some(width), None, 0.0, false);
+                let fit = glyphon_fit_soft_wrap(text, 20.0, 700, 30.0, width);
+                assert!(
+                    height >= fit.line_count as f32 * 30.0,
+                    "undermeasured at {width}: {text}"
+                );
+                if let Some(&previous) = ascending.last() {
+                    assert!(
+                        height <= previous,
+                        "widening added a line at {width}: {text}"
+                    );
+                }
+                ascending.push(height);
+            }
+            invalidate_prepare_cache();
+            for quarter in (1200..2160).rev() {
+                let width = quarter as f32 / 4.0;
+                let (_, height) = measure_leaf(text, 20.0, 700, 30.0, Some(width), None, 0.0, false);
+                assert_eq!(
+                    height,
+                    ascending[quarter - 1200],
+                    "resize direction changed height at {width}: {text}"
+                );
+            }
+        }
         shutdown_layout_text();
     }
 
@@ -1654,7 +1790,8 @@ mod tests {
                 text: "爆炸".into(),
                 width: 16_384.0,
                 break_after: false,
-            }],
+            }]
+            .into(),
             size: 14.0,
             weight: 400,
             line_height: 21.0,
@@ -1891,5 +2028,21 @@ mod tests {
                 "{text:?} fast wrap {fast} must not add lines vs settle {mw}"
             );
         }
+    }
+    #[test]
+    fn cloned_prepared_text_shares_immutable_segments() {
+        let prepared = super::prepare(
+            "retained text copies share each measured word",
+            16.0,
+            400,
+            24.0,
+        );
+        let copy = prepared.clone();
+        assert!(std::sync::Arc::ptr_eq(&prepared.segments, &copy.segments));
+        assert_eq!(
+            super::intrinsic_width(&prepared),
+            super::intrinsic_width(&copy)
+        );
+        assert_eq!(super::layout(&prepared, 150.0), super::layout(&copy, 150.0));
     }
 }
