@@ -5,6 +5,83 @@ use crate::shared::*;
 use jadix::core::reactivity::{create_effect, create_root};
 
 #[test]
+fn responsive_gallery_navigation_changes_section_and_closes_mobile_sheet() {
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            let section = Signal::new("basics".to_string());
+            let open = Signal::new(true);
+            let menu = gallery_nav_menu(section, "gal-mobile-test", Some(open));
+            let action = gallery_find_by_tid(&menu, "gal-mobile-test-nav-forms").unwrap();
+            (action.on_click.as_ref().unwrap().borrow_mut())();
+            assert_eq!(section.peek(), "forms");
+            assert!(!open.peek());
+        });
+    });
+}
+
+#[test]
+fn responsive_gallery_showcase_reflows_at_viewport_breakpoints() {
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            create_effect(|| {
+                let mut root = ResponsiveShowcase(ResponsiveShowcaseProps::default());
+                let mut layout = jadix::core::tree::LayoutTree::new();
+                for width in [320.0, 639.5, 640.0, 767.5, 768.0, 1280.0, 320.0] {
+                    let mut impact = jadix::core::tree::LayoutStatus::Clean;
+                    jadix::style::sync_class_variants_subtree(
+                        &mut root,
+                        [-1.0, -1.0],
+                        "",
+                        false,
+                        width,
+                        1000.0,
+                        &mut layout,
+                        &mut impact,
+                    );
+                    layout.build_and_layout(&mut root, width, 1000.0, [-1.0, -1.0]);
+                    fn check_bounds(el: &Element, width: f32) {
+                        assert!(el.layout_bounds[0] >= -0.5);
+                        assert!(
+                            el.layout_bounds[0] + el.layout_bounds[2] <= width + 0.5,
+                            "width={width}, node={:?}, bounds={:?}",
+                            el.text,
+                            el.layout_bounds
+                        );
+                        for child in &el.children {
+                            check_bounds(child, width);
+                        }
+                    }
+                    check_bounds(&root, width);
+                    let grid = &root.children[1].children[1];
+                    assert_eq!(
+                        grid.style.grid_template_columns,
+                        jadix::layout::cols_equal_fr(if width >= 1280.0 {
+                            3
+                        } else if width >= 768.0 {
+                            2
+                        } else {
+                            1
+                        }),
+                        "width={width}"
+                    );
+                    if width < 768.0 {
+                        assert!(
+                            grid.children[1].layout_bounds[1] > grid.children[0].layout_bounds[1]
+                        );
+                    } else {
+                        assert!(
+                            (grid.children[1].layout_bounds[1] - grid.children[0].layout_bounds[1])
+                                .abs()
+                                < 0.5
+                        );
+                    }
+                }
+            });
+        });
+    });
+}
+
+#[test]
 fn anchored_overlay_pinned_attribute_matches_builder_dismiss_behavior() {
     run_on_gallery_build_stack(|| {
         for builder in [false, true] {
@@ -1939,6 +2016,20 @@ fn navigation_section_mounts_shell_router_view() {
     run_on_gallery_build_stack(|| {
         jadix::app::reactive::reset_registered_anchors();
         let (_handle, tree) = create_root(|| gallery_section_body("navigation"));
+        for id in [
+            "gal-desktop-fullscreen-toggle",
+            "gal-desktop-fullscreen-exit",
+            "gal-desktop-fullscreen-refresh",
+            "gal-desktop-fullscreen-shortcuts",
+            "gal-desktop-instance-single",
+            "gal-desktop-instance-profile",
+            "gal-desktop-instance-multiple",
+            "gal-desktop-window-dependent",
+            "gal-desktop-window-independent",
+            "gal-desktop-window-topmost",
+        ] {
+            assert!(find_tid(&tree, id), "navigation must mount {id}");
+        }
         assert!(
             find_tid(&tree, "gal_shell_router__router_view"),
             "WP-3.5: navigation section must mount Router.view() placeholder"
@@ -1977,6 +2068,89 @@ fn navigation_section_mounts_shell_router_view() {
         );
         jadix::app::reactive::reset_registered_anchors();
     });
+}
+
+#[test]
+fn desktop_demo_arguments_select_only_explicit_instance_modes() {
+    for (args, expected) in [
+        (vec![], None),
+        (vec!["--gallery-instance-demo=invalid"], None),
+        (vec!["single"], None),
+        (
+            vec!["--other", "--gallery-instance-demo=single"],
+            Some("single"),
+        ),
+        (vec!["--gallery-instance-demo=profile"], Some("profile")),
+        (vec!["--gallery-instance-demo=multiple"], Some("multiple")),
+    ] {
+        assert_eq!(
+            instance_demo_mode(args.into_iter().map(std::ffi::OsString::from)),
+            expected
+        );
+    }
+}
+
+#[test]
+fn desktop_demo_second_launch_updates_count_and_preserves_payload() {
+    run_on_gallery_build_stack(|| {
+        let working_directory = std::path::PathBuf::from("C:/Gallery 演示目录");
+        let (_owner, tree) = create_root(gallery_instance_demo_root);
+        assert!(find_tid(&tree, "gal-desktop-primary-close"));
+        for count in 1..=2 {
+            record_second_instance(jadix::app::InstanceLaunch {
+                args: vec!["gallery.exe".into(), format!("文档 {count}.txt").into()],
+                working_directory: working_directory.clone(),
+            });
+            let (_owner, tree) = create_root(gallery_instance_demo_root);
+            assert!(gallery_subtree_has_text(
+                &tree,
+                &format!("收到重复启动：{count} 次")
+            ));
+            assert!(gallery_subtree_has_text(
+                &tree,
+                &format!("文档 {count}.txt")
+            ));
+            assert!(gallery_subtree_has_text(
+                &tree,
+                working_directory.to_str().unwrap()
+            ));
+        }
+    });
+}
+
+#[test]
+fn desktop_demo_secondary_mounts_controls_and_preserves_initial_policy() {
+    for (independent, on_top) in [(false, false), (true, false), (true, true)] {
+        run_on_gallery_build_stack(move || {
+            let (_owner, tree) = create_root(|| gallery_desktop_window_root(independent, on_top));
+            for id in [
+                "gal-desktop-window-close",
+                "gal-desktop-window-quit",
+                "gal-desktop-window-independent",
+                "gal-desktop-fullscreen-toggle",
+            ] {
+                assert!(find_tid(&tree, id), "secondary must mount {id}");
+            }
+            let follow = gallery_find_by_tid(&tree, "gal-desktop-window-follow").unwrap();
+            assert!(gallery_subtree_has_text(
+                follow,
+                if independent {
+                    "独立存活"
+                } else {
+                    "随主窗关闭"
+                }
+            ));
+            let priority = gallery_find_by_tid(&tree, "gal-desktop-window-priority").unwrap();
+            assert!(gallery_subtree_has_text(
+                priority,
+                if on_top {
+                    "取消全局置顶"
+                } else {
+                    "启用全局置顶"
+                }
+            ));
+        });
+    }
 }
 
 fn subtree_nodes_with_class_util(el: &jadix::core::tree::Element, util: &str) -> usize {
@@ -2357,9 +2531,15 @@ fn gallery_scroll_segment_cost() {
                             );
                         }
                         times.sort_by(f32::total_cmp);
-                        eprintln!("scroll/{section} y={y:.0}/{max:.0}: wall={:.2}ms collect={:.2} stamp={:.2} inst={} text={}", times[1], stats.0, stats.1, stats.2, stats.3);
-                        assert!(times[1] < 10.0,
-                            "gallery/{section} scroll segment y={y:.0} costs {:.2}ms before GPU work", times[1]);
+                        eprintln!(
+                            "scroll/{section} y={y:.0}/{max:.0}: wall={:.2}ms collect={:.2} stamp={:.2} inst={} text={}",
+                            times[1], stats.0, stats.1, stats.2, stats.3
+                        );
+                        assert!(
+                            times[1] < 10.0,
+                            "gallery/{section} scroll segment y={y:.0} costs {:.2}ms before GPU work",
+                            times[1]
+                        );
                     }
                 }
             });

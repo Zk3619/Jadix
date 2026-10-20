@@ -21,8 +21,12 @@ winit = { workspace = true, optional = true }
 winit = { workspace = true }
 
 [features]
+default = ["webview", "performance"]
+# Gallery owns sampling policy and the HUD; the framework supplies telemetry.
+performance = ["jadix/performance"]
+webview = ["jadix/webview"]
 # Native CPU benchmark telemetry; uses the production Gallery and event loop.
-cpu-bench = ["dep:winit"]
+cpu-bench = ["dep:winit", "performance"]
 # Optional logger: console + JADIX_LOG_FILE (via jadix/runtime-logging).
 #   cargo run -p gallery --features runtime-logging
 #   $env:JADIX_LOG_FILE="jadix.log"; $env:RUST_LOG="info"

@@ -251,6 +251,7 @@ pub(crate) fn RouterShowcase() -> Element {
 
 thread_local! {
     static GAL_TRAY: RefCell<Option<jadix::app::TrayIcon>> = const { RefCell::new(None) };
+    static GAL_APP_ICON: RefCell<Option<jadix::app::AppIcon>> = const { RefCell::new(None) };
 }
 
 #[component]
@@ -276,6 +277,7 @@ pub(crate) fn TrayShowcase() -> Element {
                                 let mut g = slot.borrow_mut();
                                 if g.is_none() {
                                     let tray = tray_icon()
+                                        .icon(GAL_APP_ICON.with(|slot| slot.borrow().clone()).unwrap_or_else(crate::gallery_icon))
                                         .tooltip("Jadix Gallery")
                                         .menu_item(
                                             TrayMenuItem::new("ping", "Ping").on_click(|| {
@@ -325,6 +327,51 @@ pub(crate) fn TrayShowcase() -> Element {
                         }}
                     >
                         "Hide tray"
+                    </Button>
+                    <Button
+                        id="gal_shell_icon_pick"
+                        size="sm"
+                        variant="outline"
+                        on_click={move || {
+                            let Some(path) = jadix::utils::file_dialog::pick_file(".png,.ico,.webp,.jpg,.svg") else { return; };
+                            match jadix::app::AppIcon::from_path(path) {
+                                Ok(icon) => {
+                                    GAL_APP_ICON.with(|slot| *slot.borrow_mut() = Some(icon.clone()));
+                                    let result = jadix::app::current_window()
+                                        .ok_or_else(|| "No active window".to_string())
+                                        .and_then(|window| window.set_icon(Some(icon.clone())));
+                                    if let Err(e) = result { toast_push(&e, 3000); return; }
+                                    GAL_TRAY.with(|slot| {
+                                        if let Some(tray) = slot.borrow().as_ref().filter(|t| t.is_native()) {
+                                            if let Err(e) = tray.set_icon(icon) { toast_push(&e, 3000); }
+                                        }
+                                    });
+                                    toast_push("Window / existing tray icon updated", 2000);
+                                }
+                                Err(e) => { toast_push(&e, 3000); },
+                            }
+                        }}
+                    >
+                        "Choose icon…"
+                    </Button>
+                    <Button
+                        id="gal_shell_icon_reset"
+                        size="sm"
+                        variant="outline"
+                        on_click={move || {
+                            let icon = crate::gallery_icon();
+                            GAL_APP_ICON.with(|slot| *slot.borrow_mut() = None);
+                            if let Some(window) = jadix::app::current_window() {
+                                if let Err(e) = window.set_icon(Some(icon.clone())) { toast_push(&e, 3000); }
+                            }
+                            GAL_TRAY.with(|slot| {
+                                if let Some(tray) = slot.borrow().as_ref().filter(|t| t.is_native()) {
+                                    if let Err(e) = tray.set_icon(icon) { toast_push(&e, 3000); }
+                                }
+                            });
+                        }}
+                    >
+                        "Reset icon"
                     </Button>
                 </HStack>
             </VStack>

@@ -4,6 +4,37 @@ use crate::imports::*;
 use crate::shared::*;
 
 #[component]
+pub(crate) fn ResponsiveShowcase() -> Element {
+    ui! {
+        <MyCard title="响应式布局">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" color="muted-foreground" text_size="0.875rem">
+                    "缩放窗口：窄窗口单列，768px 起双列，1280px 起三列。"
+                </Label>
+                <GStack w="100%" min_w="0" class="grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+                    <VStack min_w="0" class="rounded-md bg-muted p-3 sm:p-4" gap="0.5rem">
+                        <Label font_weight="600">"内容优先"</Label>
+                        <Label w="100%">"使用流式宽度和自动换行，避免固定宽度挤压内容。"</Label>
+                    </VStack>
+                    <VStack min_w="0" class="rounded-md bg-muted p-3 sm:p-4" gap="0.5rem">
+                        <Label font_weight="600">"清晰的断点边界"</Label>
+                        <Label w="100%">"max-md 在 768px 以下生效，md 从 768px 开始生效。"</Label>
+                    </VStack>
+                    <VStack min_w="0" class="rounded-md bg-muted p-3 sm:p-4" gap="0.5rem">
+                        <Label font_weight="600">"操作始终可达"</Label>
+                        <Label w="100%">"操作按钮在窄窗口纵向排列，宽窗口恢复横向排列。"</Label>
+                    </VStack>
+                </GStack>
+                <DialogFooter>
+                    <Button variant="outline">"取消更改"</Button>
+                    <Button>"保存更改"</Button>
+                </DialogFooter>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
 pub(crate) fn ShadowShowcase() -> jadix::core::tree::Element {
     ui! {
         <MyCard title="12) Box-shadow & Text-shadow">
@@ -861,8 +892,8 @@ pub(crate) fn OutlineShowcase() -> jadix::core::tree::Element {
 /// ANIM 对齐：steps()、text color transition、layout 属性、reduced-motion。
 fn ensure_gallery_motion_extras() {
     use jadix::style::{
-        parse_clip_path, register_clip_path, register_keyframes, AnimatableValue, KeyframeStop,
-        PropertyId,
+        AnimatableValue, KeyframeStop, PropertyId, parse_clip_path, register_clip_path,
+        register_keyframes,
     };
     register_keyframes(
         "gal-linear-slide",
@@ -2158,7 +2189,7 @@ pub(crate) fn DamageShowcase() -> jadix::core::tree::Element {
 #[component]
 pub(crate) fn FgMatrixShowcase() -> jadix::core::tree::Element {
     use jadix::app::reactive::{bind_miss_count, unkeyed_for_rebuild_count};
-    use jadix::core::reactivity::{take_flushed_effects, ui_root_effect_dep_count, EffectPhase};
+    use jadix::core::reactivity::{EffectPhase, take_flushed_effects, ui_root_effect_dep_count};
 
     let n = use_signal("gal_fg_n", || 0_u32);
     let last_render = use_signal("gal_fg_render", || 0_usize);

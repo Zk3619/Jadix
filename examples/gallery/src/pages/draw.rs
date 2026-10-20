@@ -150,7 +150,7 @@ const MORPH_PLAYGROUND_ICONS: &[&str] = &[
 
 /// morphicons.com playground caption: `from → to` + Procrustes θ / residual.
 fn morph_plan_caption(from: &str, to: &str) -> (String, String, String) {
-    use jadix::utils::icon_morph::{build_plan, icon_input_from_src, resample_icon, SAMPLE_N};
+    use jadix::utils::icon_morph::{SAMPLE_N, build_plan, icon_input_from_src, resample_icon};
     let pair = format!("{from} → {to}");
     let empty = (pair.clone(), String::new(), String::new());
     let Some(a) = icon_input_from_src(from) else {
@@ -288,6 +288,44 @@ fn MorphPlayPauseButton() -> Element {
                 stroke_width={stroke.get().parse::<f32>().unwrap_or(2.0)}
             />
         </Button>
+    }
+}
+
+#[component]
+fn MorphHoverButton() -> Element {
+    let moon = use_signal("gal_morph_hover_moon", || false);
+    ui! {
+        <VStack items="center" gap="0.35rem">
+            <Button
+                id="gal-morph-hover-button"
+                variant="outline"
+                on_click={move || moon.set(!moon.peek())}
+            >
+                <Icon
+                    id="gal-morph-hover-icon"
+                    name={if moon.get() { "moon" } else { "sun" }}
+                    hover_animation="animated"
+                    change_animation="morph"
+                    size="28px"
+                    spring="smooth"
+                />
+                "切换日夜"
+            </Button>
+            <Label text_size="0.65rem" color="muted-foreground">
+                "悬停图标播放；点击切换时先形变，再播放新图标的悬停动画。"
+            </Label>
+            <HStack items="center" gap="1rem">
+                <Icon name="settings" size="28px" hover_animation="spin" />
+                <Icon name="heart" size="28px" hover_animation="pulse 700ms ease-in-out infinite" />
+                <Icon
+                    name={if moon.get() { "moon" } else { "sun" }}
+                    size="28px"
+                    hover_animation="spin 800ms linear infinite"
+                    change_animation="morph"
+                />
+                <Label text_size="0.65rem" color="muted-foreground">"spin / 自定义 CSS / spin + morph"</Label>
+            </HStack>
+        </VStack>
     }
 }
 
@@ -439,6 +477,9 @@ pub(crate) fn MorphIconShowcase() -> Element {
                 </VStack>
 
                 <Separator />
+
+                <Label font_weight="600" text_size="0.875rem">"MorphIcon + AnimatedIcon"</Label>
+                <MorphHoverButton />
 
                 <Label font_weight="600" text_size="0.875rem">"常见对 · 点击切换"</Label>
                 <HStack w="100%" gap="0.65rem" wrap="wrap" items="start">

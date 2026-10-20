@@ -6,7 +6,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use jadix::app::{set_window_lifecycle_hook, WindowLifecycleHook};
+use jadix::app::{WindowLifecycleHook, set_window_lifecycle_hook};
 use winit::{event::WindowEvent, window::Window};
 
 /// A fixed, non-virtualized ordinary list. Keep its workload stable across

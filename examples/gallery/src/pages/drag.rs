@@ -5,15 +5,15 @@ use crate::shared::*;
 use std::rc::Rc;
 
 use jadix::utils::drag::{
-    apply_event, apply_reorder_vec, apply_transfer, begin_draggable, detect, drag_overlay,
-    drag_scope, last_drag_extent, last_hit_rect, last_overlay_pos, last_pointer, run_scope_sensors,
-    set_debug_drag_hits, sortable_item, sortable_list, use_drag, Axis, CollisionAlg, DragCtx,
-    DragEvent, DragItemCtx, OverlayAlign, Restrict, RestrictAnchor, SnapGrid, SnapPointFn,
-    SnapTargets,
+    Axis, CollisionAlg, DragCtx, DragEvent, DragItemCtx, OverlayAlign, Restrict, RestrictAnchor,
+    SnapGrid, SnapPointFn, SnapTargets, apply_event, apply_reorder_vec, apply_transfer,
+    begin_draggable, detect, drag_overlay, drag_scope, last_drag_extent, last_hit_rect,
+    last_overlay_pos, last_pointer, run_scope_sensors, set_debug_drag_hits, sortable_item,
+    sortable_list, use_drag,
 };
 use jadix::utils::pointer_action::{
-    begin_resize, bind_resize_rect, last_gesture, resize_on_edges, set_gesture_opts, BoxRect,
-    Edges, GestureOpts, GestureState, Invert, ResizeOpts,
+    BoxRect, Edges, GestureOpts, GestureState, Invert, ResizeOpts, begin_resize, bind_resize_rect,
+    last_gesture, resize_on_edges, set_gesture_opts,
 };
 
 /// `reactive_sync` runs in the frame prepass with no provider owner.
@@ -1234,7 +1234,7 @@ fn corner_overlay_angle(scope: &str, arena: &str) -> f32 {
 mod drop_position_tests {
     use super::*;
     use jadix::core::reactivity::create_root;
-    use jadix::utils::drag::{begin, end, tick, BeginDrag};
+    use jadix::utils::drag::{BeginDrag, begin, end, tick};
 
     #[test]
     fn pull_clone_keeps_distinct_draggable_rows_after_drop() {
@@ -1414,7 +1414,7 @@ mod drop_position_tests {
 
     #[test]
     fn handled_resize_stays_in_content_and_never_scrolls_sibling() {
-        use jadix::app::pointer_events::{dispatch_pointer, hit_path, MouseEvent, PointerKind};
+        use jadix::app::pointer_events::{MouseEvent, PointerKind, dispatch_pointer, hit_path};
         use jadix::core::scroll_viewport::{
             scroll_content_h_signal_key, scroll_offset_y_signal_key, scroll_viewport_h_signal_key,
         };

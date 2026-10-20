@@ -1,0 +1,21 @@
+# Paths are relative to this configuration file. Supply a square PNG master.
+source = "../examples/gallery/assets/app-icon.png"
+
+[desktop]
+# windows = "windows.png"
+# macos = "macos.png"
+# linux = "linux.png"
+# tray = "tray.png" # transparent, high contrast; separate macOS template artwork as needed
+
+[android]
+background = "#ffffff"
+# foreground = "foreground.png" # transparent artwork fitted into central 66/108 region
+# monochrome = "monochrome.png" # alpha silhouette for themed launcher icons
+
+[ios]
+background = "#ffffff" # compositor removes alpha as required by launcher assets
+# primary = "ios.png"
+
+# Predeclared choices; runtime iOS selection requires UIApplication's native API.
+# [ios.alternates]
+# Dark = "dark.png"

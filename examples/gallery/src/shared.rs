@@ -1,63 +1,152 @@
 use crate::imports::*;
 
+#[cfg(feature = "performance")]
 static PERFORMANCE_OVERLAY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
 /// A slow sampler keeps the HUD from driving a permanent animation loop.
 pub(crate) fn install_performance_overlay() {
-    use std::sync::atomic::Ordering;
-    if std::env::var("JADIX_PERF_OVERLAY").as_deref() == Ok("0")
-        || PERFORMANCE_OVERLAY.swap(true, Ordering::Relaxed)
+    #[cfg(feature = "performance")]
     {
-        return;
-    }
-    jadix::app::run_on_ui_thread(|| jadix::app::frame_stats::enable_frame_timings(true));
-    std::thread::spawn(|| {
-        let mut previous = std::time::Instant::now();
-        loop {
-            std::thread::sleep(std::time::Duration::from_millis(500));
-            let now = std::time::Instant::now();
-            let seconds = now.duration_since(previous).as_secs_f64();
-            previous = now;
-            jadix::app::run_on_ui_thread(move || {
-                let sample = jadix::app::frame_stats::take_frame_timings();
-                let visible = use_signal("gal-perf-visible", || true).peek();
-                if !visible {
-                    return;
-                }
-                // A HUD update itself presents one frame. Do not let that one
-                // frame keep changing the text and sustain redraws while idle.
-                let text = if sample.frames <= 1 {
-                    "Idle · 0 FPS\nCPU frame —\nLayout —  Text —".to_string()
-                } else {
-                    let n = sample.frames as f64;
-                    format!(
-                        "{:.0} FPS · {:.1} ms interval\nCPU {:.1} ms · max {:.1} ms\nLayout {:.1} ms · Text {:.1} ms",
-                        n / seconds,
-                        seconds * 1000.0 / n,
-                        sample.total_ms / n,
-                        sample.worst_ms,
-                        sample.layout_ms / n,
-                        sample.text_ms / n,
-                    )
-                };
-                let label = use_signal("gal-perf-text", String::new);
-                if label.peek() != text {
-                    label.set(text);
+        use std::sync::atomic::Ordering;
+        if std::env::var("JADIX_PERF_OVERLAY").as_deref() == Ok("0")
+            || PERFORMANCE_OVERLAY.swap(true, Ordering::Relaxed)
+        {
+            return;
+        }
+        // Capture the actual UI thread, including when the installer is called off-thread.
+        jadix::app::run_on_ui_thread(|| {
+            jadix::app::frame_stats::enable_frame_timings(true);
+            let ui_thread = jadix::performance::current_thread_id();
+            std::thread::spawn(move || {
+                let mut resources = jadix::performance::Sampler::new(ui_thread);
+                loop {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                    jadix::app::run_on_ui_thread(move || {
+                        let snapshot = use_signal("gal-perf-window", || {
+                            jadix::app::current_window().map(|w| w.id())
+                        })
+                        .peek()
+                        .map(|window| {
+                            let presentation =
+                                jadix::app::frame_stats::window_presentation_stats(window);
+                            let timings =
+                                jadix::app::frame_stats::take_window_frame_timings(window);
+                            (window, presentation, timings)
+                        });
+                        let _ = tx.send(snapshot);
+                    });
+                    // Only one outstanding sample: a busy UI must not replay stale HUD updates.
+                    let Ok(snapshot) = rx.recv() else { break };
+                    let resource = resources.sample();
+                    let Some((window, presentation, timings)) = snapshot else {
+                        continue;
+                    };
+                    let cadence = presentation.fps.map_or_else(
+                    || "窗口呈现请求：采样中…".to_owned(),
+                    |fps| {
+                        let content = presentation
+                            .content_fps
+                            .map_or_else(|| "采样中".to_owned(), |value| format!("{value:.1}"));
+                        format!(
+                            "窗口呈现请求 {fps:.1} FPS · {} 次/{:.2}s\n页面呈现 {content} FPS · {} 次",
+                            presentation.sample_frames,
+                            presentation.sample_seconds,
+                            presentation.content_sample_frames,
+                        )
+                    },
+                );
+                    let work = if timings.frames == 0 {
+                        "渲染调用：本次无提交".to_owned()
+                    } else {
+                        let n = timings.frames as f64;
+                        format!(
+                            "渲染调用 {:.1} ms · 布局 {:.1} · 文本 {:.1}",
+                            timings.total_ms / n,
+                            timings.layout_ms / n,
+                            timings.text_ms / n
+                        )
+                    };
+                    let text = format!(
+                        "{cadence}\n{work}\n{}",
+                        performance_resource_text(&resource)
+                    );
+                    let (tx, rx) = std::sync::mpsc::sync_channel(1);
+                    jadix::app::run_on_ui_thread(move || {
+                        if use_signal("gal-perf-window", || Some(window)).peek() == Some(window)
+                            && use_signal("gal-perf-visible", || true).peek()
+                        {
+                            let label = use_signal("gal-perf-text", String::new);
+                            if label.peek() != text {
+                                jadix::app::frame_stats::note_performance_overlay_update(window);
+                                label.set(text);
+                            }
+                        }
+                        let _ = tx.send(());
+                    });
+                    if rx.recv().is_err() {
+                        break;
+                    }
                 }
             });
-        }
-    });
+        });
+    }
+}
+
+#[cfg(feature = "performance")]
+fn performance_resource_text(resources: &jadix::performance::Resources) -> String {
+    fn percent(value: Option<f64>) -> String {
+        value
+            .map(|v| format!("{v:.1}%"))
+            .unwrap_or_else(|| "N/A".into())
+    }
+    fn mib(value: Option<u64>) -> String {
+        value
+            .map(|v| format!("{:.0}", v as f64 / 1_048_576.0))
+            .unwrap_or_else(|| "N/A".into())
+    }
+    let cores = resources.logical_cpus.max(1);
+    let equivalent = resources
+        .process_percent
+        .map(|v| format!("{:.2}", v / 100.0))
+        .unwrap_or_else(|| "N/A".into());
+    let sample_window = if resources.sample_seconds > 0.0 {
+        format!("{:.2}s", resources.sample_seconds)
+    } else {
+        "N/A".to_owned()
+    };
+    format!(
+        "进程 PID {} · 资源采样 {}\nCPU 进程 {} / {} 逻辑核\nCPU UI 线程 {} / 单核 · 进程 {} 核\nGPU 进程 引擎峰值 {}\nGPU 进程 专用 {} · 共享 {} MiB\n内存 进程 工作集 {} · 私有 {} MiB",
+        resources.process_id,
+        sample_window,
+        percent(resources.process_percent.map(|v| v / cores as f64)),
+        cores,
+        percent(resources.ui_percent),
+        equivalent,
+        percent(resources.gpu_percent),
+        mib(resources.gpu_dedicated),
+        mib(resources.gpu_shared),
+        mib(resources.working_set),
+        mib(resources.private_bytes),
+    )
 }
 
 pub(crate) fn gallery_performance_overlay() -> Element {
-    if !PERFORMANCE_OVERLAY.load(std::sync::atomic::Ordering::Relaxed) {
-        return Element::new();
+    #[cfg(feature = "performance")]
+    if PERFORMANCE_OVERLAY.load(std::sync::atomic::Ordering::Relaxed) {
+        return jadix::utils::mount_reactive_anchor(
+            "gallery:performance-host",
+            gallery_performance_panel,
+        );
     }
-    jadix::utils::mount_reactive_anchor("gallery:performance-host", gallery_performance_panel)
+    Element::new()
 }
 
+#[cfg(feature = "performance")]
 fn gallery_performance_panel() -> Element {
+    let window = jadix::app::current_window().map(|w| w.id());
+    use_signal("gal-perf-window", || window).set_silent(window);
     let visible = use_signal("gal-perf-visible", || true);
     let text = use_signal("gal-perf-text", || "Measuring…".to_string());
     let panel = ui! {
@@ -65,8 +154,8 @@ fn gallery_performance_panel() -> Element {
             <Button id="gal-perf-toggle" size="sm" variant="secondary"
                 on_click={move || visible.set(!visible.peek())}>"性能 / FPS"</Button>
             <Show when={visible.get()} scope="gallery:performance">
-                <Box w="280px" h="82px" p="8px" bg="#111827dd" rounded="6px" pointer_events="none">
-                    <Label w="264px" h="66px" text_size="12px" color="#ffffff" leading="1.5">
+                <Box w="320px" max_w="calc(100dvw - 24px)" h="164px" p="8px" bg="#111827ee" rounded="6px" pointer_events="none">
+                    <Label w="100%" h="148px" text_size="12px" color="#ffffff" leading="1.5">
                         { text.get() }
                     </Label>
                 </Box>
@@ -188,8 +277,8 @@ pub(crate) fn MyCard(
 ) -> jadix::core::tree::Element {
     let child = children.unwrap_or_else(jadix::core::tree::Element::new);
     ui! {
-        <VStack w="100%" min_w="0" p="1rem" bg="background" gap="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.125" class="rounded-lg">
-            <Label w="100%" text_size="1.25rem" font_weight="700" leading="normal">{ title }</Label>
+        <VStack w="100%" min_w="0" max_w="100%" bg="background" gap="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.125" class="rounded-lg p-3 sm:p-4">
+            <Label w="100%" min_w="0" class="text-lg sm:text-xl" font_weight="700" leading="normal">{ title }</Label>
             { child }
         </VStack>
     }
@@ -223,4 +312,20 @@ pub(crate) fn gallery_feedback_toast(title: impl Into<String>, description: impl
 
 pub(crate) fn gallery_goto_section(key: &str) {
     use_signal("gal_nav_section", || "basics".to_string()).set(key.to_string());
+}
+
+#[cfg(all(test, feature = "performance"))]
+mod performance_tests {
+    #[test]
+    fn resource_text_distinguishes_core_usage_and_machine_capacity() {
+        let text = super::performance_resource_text(&jadix::performance::Resources {
+            process_percent: Some(400.0),
+            ui_percent: Some(80.0),
+            logical_cpus: 16,
+            ..Default::default()
+        });
+        assert!(text.contains("进程 4.00 核"));
+        assert!(text.contains("25.0% / 16 逻辑核"));
+        assert!(text.contains("GPU 进程 引擎峰值 N/A"));
+    }
 }

@@ -1,5 +1,14 @@
 # Gallery CPU benchmark (Windows)
 
+For the separate Jadix / GPUI Kit / GPUI Fast fixed-content calibration, see
+[gpui-compare/README.md](gpui-compare/README.md) and
+[the 2026-10-18 results](../development-docs/engine/gpui_same_content_20261018.md).
+`--calibration` explicitly permits paint-callback telemetry; it never converts
+that telemetry into successful presentation counts. `--client-size` fixes the
+physical client dimensions, `--screenshots` captures outside CPU intervals, and
+`--scroll-only` supports paired scrolling regressions without idle acceptance.
+The default production Gallery mode and its numeric thresholds remain unchanged.
+
 ```powershell
 cargo build -p gallery --release --features cpu-bench -j 1
 python scripts/cpu-bench.py --output .tmp/cpu-bench.json
@@ -44,6 +53,15 @@ at measurement boundaries have at most one frame of error. Windows CPU accountin
 is quantized; a reported zero means no CPU tick was charged in that interval,
 not a mathematical guarantee of zero work forever.
 
+`cpu_ms_per_present` divides total process CPU time by actual presented frames
+(null when none were observed). Phase summaries also include its median and
+`cpu_weighted_percent` (total CPU / total wall time); these descriptive fields
+do not change the original per-round gates or exit code. See the
+[2026-10-18 gate review](../development-docs/engine/cpu_gate_review_20261018.md)
+for budget calibration limits, long idle samples and the separate change
+regression criteria. The absolute 10%/25% targets still need hardware/workload
+calibration; passing a relative regression check does not satisfy them.
+
 For shorter diagnostics or stage timings:
 
 ```powershell
@@ -52,6 +70,60 @@ python scripts/cpu-bench.py --sections forms,layout --seconds 6 --rounds 1 --pro
 
 Do not use profiling runs as final acceptance measurements. Other options include
 `--exe`, `--warmup`, `--width` and `--height`; run `--help` for defaults.
+
+`--thread-cpu` adds native `GetThreadTimes` measurements for the thread owning
+the Gallery HWND. Each round reports UI CPU and the remaining process CPU
+(process total minus UI); it leaves the process CPU gate unchanged. These are
+diagnostics, with no stack or wakeup attribution. Windows accounting is
+quantized and the two counters are read sequentially, so very short intervals
+can even produce a negative remainder; values are preserved without clamping.
+Use longer, repeated intervals for idle attribution, and keep this diagnostic
+separate from uninstrumented acceptance runs.
+
+`--cpu-timeline` includes that UI split and records process/UI CPU deltas every
+half second in each result's `cpu_intervals`. Use consecutive rounds in the same
+process to compare first scrolling with later scrolling. `--warmup` is idle
+waiting; it does not warm scrolling. Preserve the first round when reporting
+cold behavior. These diagnostic intervals retain Windows accounting granularity
+and do not attribute CPU to a driver function or measure GPU execution.
+
+```powershell
+python scripts/cpu-bench.py --sections about,ordinary --seconds 15 --rounds 2 --thread-cpu --output .tmp/cpu-threads.json
+```
+
+## Complete application frame budget
+
+`--frame-budget-ms 16.667` enables the UI-thread event-loop budget instrumentation
+and saves `*.SECTION.budget.log` alongside the ordinary process-CPU results.
+This includes input callbacks, shared UI tasks, animation/reconcile, render,
+surface waits, and post-render IME/accessibility work, not only `AppState::render`.
+IME and semantic timings are subsets of that work; do not add them again.
+Shared event-loop work is charged once to the next presented window, so per-window
+values describe accounting rather than causal attribution. GPU execution, DWM,
+scanout, OS queue latency, and background workers are not UI-thread CPU timings.
+
+```powershell
+cargo build -p gallery --features cpu-bench,a11y
+python scripts/cpu-bench.py --exe target/debug/gallery.exe --sections ordinary --seconds 6 --rounds 1 --frame-budget-ms 16.667 --output .tmp/app-budget.json
+./scripts/application-frame-budget.ps1 -LogPath .tmp/app-budget.ordinary.budget.log -Scenario ordinary-wheel-60hz -ExecutablePath target/debug/gallery.exe -RequireInput
+```
+
+The additional gate rejects undersampled windows and requires p95 <= budget,
+p99 <= twice budget, and <= 1% budget misses by default. It excludes the first
+30 presented frames per window and requires 120 measured samples. Save cold
+startup separately. `-RequireIme` and `-RequireSemantics` fail unless the sampled
+history actually contains those events/active semantic factory calls. The wheel
+runner does not exercise an OS IME or activate a screen reader and cannot satisfy
+those gates by itself. Supply a separately captured real interaction history.
+
+Trace output is diagnostic I/O; do not mix its CPU percentages with uninstrumented
+release acceptance. Frame timing collection requires the opt-in `jadix/performance`
+feature (Gallery `cpu-bench` enables it). For lower-overhead product measurement, enable
+`jadix::app::frame_stats::enable_application_frame_timings(Some(16.667))` on the UI
+thread and periodically drain `take_application_frame_timings()`. Each window
+keeps at most 2048 recent samples and reports dropped samples plus all-frame
+budget counters. Draining preserves pending input until a frame presents.
+See [the five-point acceptance rubric](../development-docs/engine/frame5_acceptance.md).
 
 Production rendering coalesces paint at a default maximum of 60 FPS and sleeps
 between deadlines. All input events continue to be processed. Apps may call
@@ -86,3 +158,26 @@ are a general runtime optimization, not a Gallery section special case. This is
 separate from the 60 FPS cap, which reduces frame frequency and is an explicit
 scheduling tradeoff. Old uncapped baseline CPU percentages must not be presented
 as a same-frame-rate comparison of per-frame efficiency.
+
+## Acceptance checkpoint — 2026-10-18
+
+After `cargo clean`, Gallery dev/release builds and `cargo check --workspace
+--all-targets` passed. The final full `a11y` library run passed 3767 tests (53
+ignored), plus 48 macro/public-surface tests and two explicitly run native tests.
+Full logs and build parameters are in
+[the acceptance archive](../development-docs/engine/perf-20261018-acceptance/).
+
+The stock release profile (`cpu-bench,a11y`, fat LTO), without trace or profiling,
+completed three ten-second rounds per phase. All 21 phase samples were valid.
+Scrolling CPU medians were **17.65% / 27.34% / 36.56%** for ordinary/forms/layout;
+all three failed the unchanged **<10% / <25% / <25%** gates. About idle and Layout
+settled each also had one round above 0.5%, despite zero presentations throughout
+all idle/settled samples. The command returned 1; raw records are in
+`release-cpu.json` and its companion telemetry files in that archive.
+
+Separate dev and release traces passed the 16.667 ms application-frame gate for
+all three pages. Release p95 was **3.84 / 5.86 / 6.98 ms**; Forms had one
+over-budget frame (0.27%), within the unchanged 1% limit. These frame-work and
+whole-process CPU results measure different costs;
+neither substitutes for IME, active screen-reader, GPU or long-duration memory
+acceptance. See [the updated rubric](../development-docs/engine/frame5_acceptance.md).

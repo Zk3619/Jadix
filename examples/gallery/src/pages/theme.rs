@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use crate::imports::*;
 use crate::shared::*;
 use jadix::prelude::{
-    clear_stylesheets, clear_theme_overrides, install_theme_overrides,
+    ThemeMode, clear_stylesheets, clear_theme_overrides, install_theme_overrides,
     load_and_install_theme_overrides, parse_stylesheet, parse_theme_overrides_str,
     register_stylesheet, reload_stylesheets, theme_mode, theme_transition_config,
-    toggle_theme_mode, ThemeMode,
+    toggle_theme_mode,
 };
 
 const THEME_TOML: &str = include_str!("../../theme.toml");

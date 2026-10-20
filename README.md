@@ -39,6 +39,10 @@ Jadix is a pure Rust-native UI workspace aimed at building a modern, composable,
 - **细粒度响应式 | Fine-grained reactivity**  
   通过 `use_signal` 驱动状态更新，减少不必要重绘。
 
+- **保留与即时混合 | Retained and immediate regions**
+  默认保留树与 Signal 叶级更新；`immediate_region` 在所属窗口的请求帧重述动态子树。`jadix::prelude` 导出 L0–L4 失效 API：`request_frame`、`node(...).mark_paint/mark_layout`、`rebuild_all`、`bust_caches`。L3 保留文本与字形缓存，L4 显式重建；停止续帧后可回到空闲。详见[混合帧模型](development-docs/engine/hybrid_frame_model.md)。
+  Retained trees and signal bindings are the default. Immediate regions restate dynamic subtrees on requested frames; declaration rebuilds preserve expensive caches, while explicit cache invalidation resets text resources.
+
 - **组件与样式能力 | Components and styling**  
   内置 `Button`、`Input`、`Label`、`ScrollArea`、`Scrollbar` 等组件，支持类 utility 的样式属性写法。
 
@@ -98,6 +102,12 @@ cargo run -p gallery
 # cargo run -p gallery --features compute
 ```
 
+性能采样是框架的可选 `jadix/performance` feature，默认关闭。Gallery 默认启用其 `performance` feature，负责采样调度、显示文案和监控浮层；框架提供窗口呈现请求计数、CPU 耗时及进程资源原始数据。Windows 支持 CPU/GPU/内存采样，其他平台的不可用资源计数返回 `None`。窗口呈现请求频率不代表显示器扫描输出频率，GPU 和内存资源数据按进程统计。
+
+Gallery 的「布局」/「文本」分区包含可调页宽、栏高和障碍物的 [Pretext 式文字环绕与连续分栏](examples/gallery/src/pages/text_flow.rs) 示例。
+
+桌面窗口支持平台全屏快捷键、单例/多开控制和主窗关闭后独立存活的次窗；配置与生命周期契约见[桌面窗口手册](docs/desktop-windows.md)。
+
 ### 3) 启用开发期热重载（可选） | Enable dev hot reload (optional)
 
 在一个终端运行示例，在另一个终端运行监听器：  
@@ -115,7 +125,7 @@ By default, it connects to `127.0.0.1:39091`.
 ## Ubuntu 24.04 arm64 / 树莓派 5 交叉编译 | Cross-compilation
 
 目标为 **64 位 Ubuntu 24.04 Desktop**，Rust target 为 `aarch64-unknown-linux-gnu`。
-请按环境选择一种方式；下面的命令均在仓库根目录运行。首次构建建议至少预留 10GB 磁盘空间，内存紧张时使用 `-j 2`。
+请按环境选择一种方式；下面的命令均在仓库根目录运行。首次构建建议至少预留 10GB 磁盘空间，内存紧张时使用 `-j 2`。空间不足时可在仓库根目录执行 `cargo clean` 清理构建产物；需保留的基线可执行文件和验收日志先保存到 `target` 之外，清理后重新构建。
 
 | 方式 | 前置条件 | 适用场景 |
 |---|---|---|
@@ -317,6 +327,21 @@ fn toolbar() -> Element {
 
 ## 细粒度原语（阶段 3/4）| Fine-grained Primitives (Stage 3/4)
 
+Builder 文本入口直接接收 Signal 或闭包；`text(count)`、`TextBuilder::new(count)` 与 `label("id").text(count)` 都走叶子绑定。`get()` 会订阅当前 effect/Memo，但把其结果传给普通 Builder 不会另建叶子绑定；`ui!` 可以将 tracked 表达式自动降为叶子。Memo / StoreField 用闭包：`text(move || memo.get().to_string())`。
+
+```rust
+use jadix::prelude::*;
+
+let count = create_signal(0);
+let row: Element = vstack()
+    .child(text(count))
+    .child(text(move || format!("Count: {}", count.get())))
+    .child(button("increment").text("+").on_click(move || count.update(|n| *n += 1)))
+    .into();
+```
+
+以上代码放在 `app().mount(...)` 的构建闭包或组件体中。匿名叶子通过 Owner、调用位置和构建内序号自动隔离，同址 helper/固定顺序循环无需手写叶子 ID；可重排列表仍用业务 key。Store 整值 `set/update/produce` 比较已登记字段的投影，只通知变化路径；字段写入只检查相关路径。每次 Store 写入合批根与路径通知，多字段写入可再包 `batch`。完整契约与成本说明见[响应式手册](development-docs/ops/reactivity_and_hot_reload.md)。
+
 - **`reactive!`**：为一段子树创建独立 effect，并通过稳定 anchor 做子树级 reconcile。  
   Use `reactive!(id, || ui! { ... })` to localize updates to a subtree.
 - **`create_memo`**：派生只读值，依赖变化时重算；读者通过 `.get()` 订阅 memo 输出（见 `crates/jadix/src/core/reactivity.rs`）。
@@ -353,6 +378,8 @@ fn FineGrainedDemo() -> jadix::core::tree::Element {
 ---
 
 ## 架构目标 | Architecture Goals
+
+媒体 UI 提供无默认控件的 Audio / Video 原语，以及 shadcn 风格的 AudioPlayer / VideoPlayer 和可组合控制零件。独立 jadix_media 仅定义标准库契约；解码、设备输出、播放控制执行、时钟与音画同步由外部库负责。双 API、接入示例与生命周期见[媒体组件文档](crates/jadix_media/README.md)。Gallery 绘图页可查看受控状态与命令演示。
 
 - **中文**
   - 保留模式内部实现 + 声明式组件 API。

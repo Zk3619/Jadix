@@ -38,7 +38,13 @@ fn install_gallery_theme() {
     jadix::prelude::watch_stylesheets([theme, root.join("styles.toml")]);
 }
 
+pub(crate) fn gallery_icon() -> jadix::app::AppIcon {
+    jadix::app::AppIcon::from_bytes(include_bytes!("../assets/app-icon.png"))
+        .expect("bundled Gallery icon")
+}
+
 fn main() {
+    let instance_demo = pages::instance_demo_mode(std::env::args_os().skip(1));
     #[cfg(feature = "cpu-bench")]
     let benchmarking = cpu_bench::install();
     #[cfg(not(feature = "cpu-bench"))]
@@ -48,8 +54,7 @@ fn main() {
     }
     #[cfg(feature = "runtime-logging")]
     jadix::logging::init_with(jadix::logging::InitOptions {
-        default_filter:
-            "info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off,fontdb=error",
+        default_filter: "info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off,fontdb=error",
     });
     install_gallery_theme();
     let (rgba, w, h) = checker_rgba_texture();
@@ -76,7 +81,7 @@ fn main() {
         });
     }
 
-    if !benchmarking {
+    if !benchmarking && instance_demo.is_none() {
         if let Err(e) = jadix_window_state::Builder::new()
             .with_filename("gallery.window-state.toml")
             .install()
@@ -85,13 +90,27 @@ fn main() {
         }
     }
 
+    let options = jadix::app::WindowOptions::new().icon(gallery_icon());
+    let options = if let Some(mode) = instance_demo {
+        jadix::app::set_second_instance_handler(pages::record_second_instance);
+        let options = options
+            .title(format!("Jadix Gallery — 进程实例 {mode}"))
+            .size(800.0, 820.0);
+        match mode {
+            "single" => options.single_instance("org.jadix.gallery.instance-demo.a"),
+            "profile" => options.single_instance("org.jadix.gallery.instance-demo.b"),
+            _ => options.instance_policy(jadix::app::InstancePolicy::Multiple),
+        }
+    } else {
+        options
+    };
     #[cfg(feature = "devtools")]
-    jadix::app::run_with(
-        jadix::app::WindowOptions::new().devtools(true),
-        build_startup_scene,
-    );
-    #[cfg(not(feature = "devtools"))]
-    jadix::app::run(build_startup_scene);
+    let options = options.devtools(true);
+    if instance_demo.is_some() {
+        jadix::app::run_with(options, pages::gallery_instance_demo_root);
+    } else {
+        jadix::app::run_with(options, build_startup_scene);
+    }
 }
 
 #[cfg(test)]

@@ -2288,7 +2288,7 @@ fn gen_stagger_bar(on: Signal<bool>, index: usize, tone: &str) -> Element {
 #[component]
 pub(crate) fn GeneratorShowcase() -> jadix::core::tree::Element {
     use jadix::style::{
-        use_animated, AnimatedNumber, InertiaOptions, RepeatMode, TimingFunction, ValueDriver,
+        AnimatedNumber, InertiaOptions, RepeatMode, TimingFunction, ValueDriver, use_animated,
     };
 
     let travel = gen_track_travel_px();

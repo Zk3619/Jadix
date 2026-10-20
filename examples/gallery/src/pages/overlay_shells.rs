@@ -5,8 +5,8 @@ use crate::shared::*;
 use jadix::app::portal_overlay::OverlayKind;
 use jadix::primitives::r#box::vstack;
 use jadix::tokens;
-use jadix::utils::anchored_overlay::{anchored_overlay, drag_handle, FloatingStrategy, Placement};
-use jadix::utils::popup::{disarm_underlay_close, PopupPlacement};
+use jadix::utils::anchored_overlay::{FloatingStrategy, Placement, anchored_overlay, drag_handle};
+use jadix::utils::popup::{PopupPlacement, disarm_underlay_close};
 use jadix::utils::presence::presence;
 
 fn shell_panel(title: &str, body: &str, extra: Element) -> Element {

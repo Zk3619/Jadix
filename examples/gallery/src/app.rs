@@ -3,7 +3,17 @@
 use crate::imports::*;
 use crate::pages::*;
 
-pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
+pub(crate) fn gallery_nav_menu(
+    section: Signal<String>,
+    prefix: &str,
+    close: Option<Signal<bool>>,
+) -> Element {
+    let select = move |key: &str| {
+        section.set(key.to_string());
+        if let Some(open) = close {
+            open.set(false);
+        }
+    };
     ui! {
         <SidebarGroup>
             <SidebarGroupLabel>"导航"</SidebarGroupLabel>
@@ -11,9 +21,9 @@ pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
                 <SidebarMenu>
                     <SidebarMenuItem>
                         <SidebarMenuButton
-                            id="gal-nav-basics"
+                            id={format!("{prefix}-nav-basics")}
                             isActive={section.get() == "basics"}
-                            on_click={move || section.set("basics".into())}
+                            on_click={move || select("basics")}
                         >
                             <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
                                 <Icon name="layout-dashboard" size="16px" color="sidebar-foreground" pointer_events="none" />
@@ -23,9 +33,9 @@ pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
                     </SidebarMenuItem>
                     <SidebarMenuItem>
                         <SidebarMenuButton
-                            id="gal-nav-events"
+                            id={format!("{prefix}-nav-events")}
                             isActive={section.get() == "events"}
-                            on_click={move || section.set("events".into())}
+                            on_click={move || select("events")}
                         >
                             <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
                                 <Icon name="mouse-pointer-click" size="16px" color="sidebar-foreground" pointer_events="none" />
@@ -35,9 +45,9 @@ pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
                     </SidebarMenuItem>
                     <SidebarMenuItem>
                         <SidebarMenuButton
-                            id="gal-nav-forms"
+                            id={format!("{prefix}-nav-forms")}
                             isActive={section.get() == "forms"}
-                            on_click={move || section.set("forms".into())}
+                            on_click={move || select("forms")}
                         >
                             <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
                                 <Icon name="file-text" size="16px" color="sidebar-foreground" pointer_events="none" />
@@ -47,9 +57,9 @@ pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
                     </SidebarMenuItem>
                     <SidebarMenuItem>
                         <SidebarMenuButton
-                            id="gal-nav-overlays"
+                            id={format!("{prefix}-nav-overlays")}
                             isActive={section.get() == "overlays"}
-                            on_click={move || section.set("overlays".into())}
+                            on_click={move || select("overlays")}
                         >
                             <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
                                 <Icon name="layers" size="16px" color="sidebar-foreground" pointer_events="none" />
@@ -59,9 +69,9 @@ pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
                     </SidebarMenuItem>
                     <SidebarMenuItem>
                         <SidebarMenuButton
-                            id="gal-nav-data"
+                            id={format!("{prefix}-nav-data")}
                             isActive={section.get() == "data"}
-                            on_click={move || section.set("data".into())}
+                            on_click={move || select("data")}
                         >
                             <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
                                 <Icon name="table" size="16px" color="sidebar-foreground" pointer_events="none" />
@@ -71,9 +81,9 @@ pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
                     </SidebarMenuItem>
                     <SidebarMenuItem>
                         <SidebarMenuButton
-                            id="gal-nav-draw"
+                            id={format!("{prefix}-nav-draw")}
                             isActive={section.get() == "draw"}
-                            on_click={move || section.set("draw".into())}
+                            on_click={move || select("draw")}
                         >
                             <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
                                 <Icon name="pencil" size="16px" color="sidebar-foreground" pointer_events="none" />
@@ -83,21 +93,21 @@ pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
                     </SidebarMenuItem>
                     <SidebarMenuItem>
                         <SidebarMenuButton
-                            id="gal-nav-navigation"
+                            id={format!("{prefix}-nav-navigation")}
                             isActive={section.get() == "navigation"}
-                            on_click={move || section.set("navigation".into())}
+                            on_click={move || select("navigation")}
                         >
                             <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
                                 <Icon name="compass" size="16px" color="sidebar-foreground" pointer_events="none" />
-                                <Label grow="1" min_w="0" text_size="0.875rem" color="sidebar-foreground">"导航"</Label>
+                                <Label grow="1" min_w="0" text_size="0.875rem" color="sidebar-foreground">"导航 / 窗口"</Label>
                             </HStack>
                         </SidebarMenuButton>
                     </SidebarMenuItem>
                     <SidebarMenuItem>
                         <SidebarMenuButton
-                            id="gal-nav-layout"
+                            id={format!("{prefix}-nav-layout")}
                             isActive={section.get() == "layout"}
-                            on_click={move || section.set("layout".into())}
+                            on_click={move || select("layout")}
                         >
                             <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
                                 <Icon name="layout-grid" size="16px" color="sidebar-foreground" pointer_events="none" />
@@ -107,9 +117,9 @@ pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
                     </SidebarMenuItem>
                     <SidebarMenuItem>
                         <SidebarMenuButton
-                            id="gal-nav-text"
+                            id={format!("{prefix}-nav-text")}
                             isActive={section.get() == "text"}
-                            on_click={move || section.set("text".into())}
+                            on_click={move || select("text")}
                         >
                             <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
                                 <Icon name="type" size="16px" color="sidebar-foreground" pointer_events="none" />
@@ -119,9 +129,9 @@ pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
                     </SidebarMenuItem>
                     <SidebarMenuItem>
                         <SidebarMenuButton
-                            id="gal-nav-theme"
+                            id={format!("{prefix}-nav-theme")}
                             isActive={section.get() == "theme"}
-                            on_click={move || section.set("theme".into())}
+                            on_click={move || select("theme")}
                         >
                             <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
                                 <Icon name="sun" size="16px" color="sidebar-foreground" pointer_events="none" />
@@ -131,9 +141,9 @@ pub(crate) fn gallery_nav_menu(section: Signal<String>) -> Element {
                     </SidebarMenuItem>
                     <SidebarMenuItem>
                         <SidebarMenuButton
-                            id="gal-nav-about"
+                            id={format!("{prefix}-nav-about")}
                             isActive={section.get() == "about"}
-                            on_click={move || section.set("about".into())}
+                            on_click={move || select("about")}
                         >
                             <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
                                 <Icon name="info" size="16px" color="sidebar-foreground" pointer_events="none" />
@@ -152,7 +162,7 @@ pub(crate) fn GallerySectionForms() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-forms" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" gap="1rem" p="1.5rem">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
                     <InputShowcase />
                     <InputAdornmentShowcase />
                     <InputOTPShowcase />
@@ -175,7 +185,7 @@ pub(crate) fn GallerySectionEvents() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-events" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" gap="1rem" p="1.5rem">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
                     <MouseEventShowcase />
                     <CursorShowcase />
                 </VStack>
@@ -189,7 +199,7 @@ pub(crate) fn GallerySectionOverlays() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-overlays" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" gap="1rem" p="1.5rem">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
                     <ViewportModalShowcase />
                     <LocalOverlayShowcase />
                     <AnchoredOverlayShowcase />
@@ -208,12 +218,13 @@ pub(crate) fn GallerySectionDraw() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-draw" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" gap="1rem" p="1.5rem">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
                     <DrawingSvgShowcase />
                     <LucideAnimatedShowcase />
                     <MorphIconShowcase />
                     <DrawingCanvasShowcase />
                     <ImageStreamShowcase />
+                    <MediaPlayerShowcase />
                     <DrawingScene3dShowcase />
                     <DrawingBillboardShowcase />
                     <DrawingShaderShowcase />
@@ -228,7 +239,7 @@ pub(crate) fn GallerySectionData() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-data" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" gap="1rem" p="1.5rem">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
                     <TableShowcase />
                     <PaginationShowcase />
                     <TimelineShowcase />
@@ -245,7 +256,11 @@ pub(crate) fn GallerySectionNavigation() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-navigation" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" gap="1rem" p="1.5rem">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                    <FullscreenShowcase />
+                    <InstanceShowcase />
+                    <MultiWindowShowcase />
+                    <DockBrowserShowcase />
                     <SidebarShowcase />
                     <NavbarNavigationMenuShowcase />
                     <MenubarShowcase />
@@ -266,7 +281,9 @@ pub(crate) fn GallerySectionLayout() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-layout" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" gap="1rem" p="1.5rem">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                    <ResponsiveShowcase />
+                    <TextFlowShowcase />
                     <LayoutSubtreeShowcase />
                     <DamageShowcase />
                     <FgMatrixShowcase />
@@ -304,7 +321,8 @@ pub(crate) fn GallerySectionText() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-text" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" gap="1rem" p="1.5rem">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                    <TextFlowShowcase />
                     <FontOverrideShowcase />
                     <TextAlignShowcase />
                     <MsdfMultichannelShowcase />
@@ -323,7 +341,7 @@ pub(crate) fn GallerySectionAbout() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-about" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" gap="1rem" p="1.5rem" max_w="48rem">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" max_w="48rem">
                     <Box bg="secondary" p="1.5rem" rounded="0.75rem" w="100%">
                         <VStack gap="0.5rem">
                             <Label font_weight="700">"Technical Stack"</Label>
@@ -348,7 +366,7 @@ pub(crate) fn GallerySectionBasics() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-basics" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" gap="1rem" p="1.5rem">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
                     <ButtonShowcase />
                     <ButtonHoverEasingShowcase />
                     <BadgeShowcase />
@@ -380,6 +398,15 @@ pub(crate) fn GallerySectionBasics() -> Element {
 }
 
 pub(crate) fn build_gallery_app() -> Element {
+    let navigator = gallery_page_navigator();
+    let page_nav = navigator.clone();
+    navigation_host(navigator, move |route| match route {
+        GalleryPageRoute::Gallery => build_gallery_home(),
+        GalleryPageRoute::DockBrowser => dock_browser_page(page_nav.clone()),
+    }).into()
+}
+
+fn build_gallery_home() -> Element {
     let gallery_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     jadix::style::watch_stylesheets([
         gallery_dir.join("theme.toml"),
@@ -388,7 +415,6 @@ pub(crate) fn build_gallery_app() -> Element {
     let section = use_signal("gal_nav_section", || {
         std::env::var("JADIX_GALLERY_SECTION").unwrap_or_else(|_| "basics".to_string())
     });
-    let nav_menu = gallery_nav_menu(section);
 
     // Shell + a single root `<Toaster/>` (Sonner-style). Title / desc / body use `<Match scope>`
     // so island ids stay `examples/gallery/App:section_*` instead of drifting with `file:line`.
@@ -410,7 +436,7 @@ pub(crate) fn build_gallery_app() -> Element {
                     </SidebarHeader>
                     <SidebarSeparator />
                     <SidebarContent>
-                        { nav_menu }
+                        { gallery_nav_menu(section, "gal", use_sidebar().map(|ctx| ctx.open_mobile)) }
                     </SidebarContent>
                     <SidebarSeparator />
                     <SidebarFooter>
@@ -456,7 +482,7 @@ pub(crate) fn build_gallery_app() -> Element {
                                     <Label id="gal-section-title" w="100%" min_w="0" text_size="1.25rem" font_weight="700" text_overflow="ellipsis">"数据"</Label>
                                 </When>
                                 <When when={section.get() == "navigation"}>
-                                    <Label id="gal-section-title" w="100%" min_w="0" text_size="1.25rem" font_weight="700" text_overflow="ellipsis">"导航"</Label>
+                                    <Label id="gal-section-title" w="100%" min_w="0" text_size="1.25rem" font_weight="700" text_overflow="ellipsis">"导航 / 窗口"</Label>
                                 </When>
                                 <When when={section.get() == "layout"}>
                                     <Label id="gal-section-title" w="100%" min_w="0" text_size="1.25rem" font_weight="700" text_overflow="ellipsis">"布局"</Label>
