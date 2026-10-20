@@ -1,37 +1,28 @@
-# Jadix patch to Taffy 0.13.0
+# Jadix patch to Taffy 0.15.0
 
-Source: published `taffy` 0.13.0 from crates.io, commit `45a56299d366ddb383e593a1f0372158d00e8530` (MIT), unchanged version and dependencies.
+Source: published crates.io `taffy` 0.15.0, commit
+`eb6450694f33e2b7413e40677f230ff63f0fc194` (MIT).
 
-`TaffyView::cache_input` removes irrelevant parent dimensions from existing cache
-keys only for leaves and flex containers whose size/max-size are auto and min-size is auto/zero.
-Parent width is retained if any padding, border or margin is percentage/calc.
-Grid/block containers and explicit/percentage/min/max sizing retain upstream keys.
-Known dimensions, available space and requested axis are unchanged. No additional
-cache entries or prewarming are introduced. The raw layout algorithm receives the
-original input; only cache lookup/storage use the canonical input.
+Only the out-of-flow invalidation patch remains. `mark_dirty` invalidates final
+layout along the full ancestor chain while retaining intrinsic measurement slots
+after crossing an absolute/fixed boundary. Moving out-of-flow descendants changes
+placement and overflow, not their ancestors' intrinsic contributions. Position-mode
+changes explicitly invalidate the parent intrinsic chain; mixed marks always walk
+to the root. `dirty` requires a final layout, not merely a retained measurement.
+No cache entries, capacities, lookup keys, or upstream algorithms are changed.
 
-Regression: `scroll_viewport_relayout_does_not_measure_clean_text` in Jadix.
-Upstream source changes are limited to `src/tree/taffy_tree.rs` and `src/tree/cache.rs`; `Cargo.toml` adds
-an empty workspace declaration so this vendored crate can be tested independently.
+The old 0.13 intrinsic cache-key normalization is removed: on 0.15 it provided
+-0.7% to +1.3% changes in five rotated release microbenchmark rounds. The retained
+invalidation patch reduced the four absolute-marker update workloads by 62–65%
+(about 38us to 13–14us/update); this is a layout-only result, not whole-frame speed.
+See `development-docs/engine/taffy_015_vendor_fast_20261019.md` and raw evidence in
+`.tmp/taffy-015-20261019/`.
 
-Validation: 117 upstream unit tests and 46 Flex/Grid/Block constraint-resize
-cases pass. An offline old/new differential checks 512 deterministic trees,
-four mutations/constraints each, 16 nodes per tree (32,768 layout records,
-16 geometry fields each), with no differences above 0.001 logical pixels.
-The initial container-wide normalization experiment was rejected after finding
-120 geometry mismatches. The accepted patch is restricted to intrinsic flex nodes and leaves.
+Changes are confined to `src/tree/taffy_tree.rs` and `src/tree/cache.rs`;
+`Cargo.toml` adds an empty workspace for independent tests. Regression coverage
+moved to `crates/jadix/tests/taffy_cache.rs` so it survives a future fork removal.
 
-## Out-of-flow invalidation
-
-`mark_dirty` clears final layout along the complete ancestor chain. After crossing
-an absolute-position boundary, it retains the ancestors' intrinsic measure slots:
-these exclude out-of-flow descendants in Flex/Grid/Block. Placement and overflow
-are still recomputed from the app root. A position-mode change explicitly dirties
-the parent intrinsic chain, so entering/leaving normal flow remains correct.
-`dirty` checks final-layout validity; a retained size is not a completed layout.
-Mixed in-flow/out-of-flow marks always walk the full chain to permit escalation.
-No new caches or cache slots are added.
-
-Regression: constrained flow + absolute marker callback count 801 -> 1. Flex,
-Grid and Block (rounded/unrounded), overflow, visibility, percentage descendants,
-flow transitions and mixed dirty marks are compared with fresh layout.
+Validation on 0.15: 169 upstream unit tests and all four migrated Jadix
+integration tests pass, including absolute/fixed/normal-flow transitions.
+Randomized comparison of 32,768 geometry records against unpatched 0.15 found
+no differences above 0.001 logical pixels (fixed deterministic corpus).

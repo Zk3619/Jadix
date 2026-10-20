@@ -5,7 +5,7 @@ use crate::{
 use etagere::{size2, Allocation, BucketedAtlasAllocator};
 use lru::LruCache;
 use rustc_hash::FxHasher;
-use std::{collections::HashSet, hash::BuildHasherDefault};
+use std::hash::BuildHasherDefault;
 use wgpu::{
     BindGroup, DepthStencilState, Device, Extent3d, MultisampleState, Origin3d, Queue,
     RenderPipeline, TexelCopyBufferLayout, TexelCopyTextureInfo, Texture, TextureAspect,
@@ -101,7 +101,7 @@ pub(crate) struct InnerAtlas {
     pub packer: BucketedAtlasAllocator,
     pub size: u32,
     pub glyph_cache: LruCache<GlyphonCacheKey, GlyphDetails, Hasher>,
-    pub glyphs_in_use: HashSet<GlyphonCacheKey, Hasher>,
+    pub used_epoch: u64,
     pub max_texture_dimension_2d: u32,
     pixels: AtlasPixels,
 }
@@ -134,7 +134,6 @@ impl InnerAtlas {
         let texture_view = texture.create_view(&TextureViewDescriptor::default());
 
         let glyph_cache = LruCache::unbounded_with_hasher(Hasher::default());
-        let glyphs_in_use = HashSet::with_hasher(Hasher::default());
 
         Self {
             kind,
@@ -143,45 +142,20 @@ impl InnerAtlas {
             packer,
             size,
             glyph_cache,
-            glyphs_in_use,
+            used_epoch: 1,
             max_texture_dimension_2d,
             pixels: AtlasPixels::default(),
         }
     }
 
     pub(crate) fn try_allocate(&mut self, width: usize, height: usize) -> Option<Allocation> {
-        let size = size2(width as i32, height as i32);
-
-        loop {
-            let allocation = self.packer.allocate(size);
-
-            if allocation.is_some() {
-                return allocation;
-            }
-
-            // Try to free least recently used allocation
-            let (mut key, mut value) = self.glyph_cache.peek_lru()?;
-
-            // Find a glyph with an actual size
-            while value.atlas_id.is_none() {
-                // All sized glyphs are in use, cache is full
-                if self.glyphs_in_use.contains(key) {
-                    return None;
-                }
-
-                let _ = self.glyph_cache.pop_lru();
-
-                (key, value) = self.glyph_cache.peek_lru()?;
-            }
-
-            // All sized glyphs are in use, cache is full
-            if self.glyphs_in_use.contains(key) {
-                return None;
-            }
-
-            let (_, value) = self.glyph_cache.pop_lru().unwrap();
-            self.packer.deallocate(value.atlas_id.unwrap());
-        }
+        allocate_glyph(
+            &mut self.packer,
+            &mut self.glyph_cache,
+            self.used_epoch,
+            width,
+            height,
+        )
     }
 
     pub(crate) fn grow(
@@ -247,7 +221,46 @@ impl InnerAtlas {
     }
 
     fn trim(&mut self) {
-        self.glyphs_in_use.clear();
+        trim_glyph_cache(&mut self.glyph_cache, &mut self.used_epoch);
+    }
+}
+
+fn allocate_glyph(
+    packer: &mut BucketedAtlasAllocator,
+    glyph_cache: &mut LruCache<GlyphonCacheKey, GlyphDetails, Hasher>,
+    used_epoch: u64,
+    width: usize,
+    height: usize,
+) -> Option<Allocation> {
+    let size = size2(width as i32, height as i32);
+    loop {
+        if let Some(allocation) = packer.allocate(size) {
+            return Some(allocation);
+        }
+        // Preserve the LRU stop rule, including zero-size glyphs. Every renderer
+        // preparing against this atlas shares the epoch until the caller trims.
+        let (_, value) = glyph_cache.peek_lru()?;
+        if value.used_epoch == used_epoch {
+            return None;
+        }
+        let (_, value) = glyph_cache.pop_lru().unwrap();
+        if let Some(id) = value.atlas_id {
+            packer.deallocate(id);
+        }
+    }
+}
+
+fn trim_glyph_cache(
+    glyph_cache: &mut LruCache<GlyphonCacheKey, GlyphDetails, Hasher>,
+    used_epoch: &mut u64,
+) {
+    *used_epoch = used_epoch.wrapping_add(1);
+    if *used_epoch == 0 {
+        // An old epoch must never become current again after counter rollover.
+        for (_, details) in glyph_cache.iter_mut() {
+            details.used_epoch = 0;
+        }
+        *used_epoch = 1;
     }
 }
 
@@ -425,7 +438,81 @@ impl TextAtlas {
 
 #[cfg(test)]
 mod tests {
-    use super::AtlasPixels;
+    use super::*;
+
+    fn key(id: u16) -> GlyphonCacheKey {
+        GlyphonCacheKey::Custom(crate::custom_glyph::CustomGlyphCacheKey {
+            glyph_id: id,
+            width: 8,
+            height: 8,
+            x_bin: cosmic_text::SubpixelBin::Zero,
+            y_bin: cosmic_text::SubpixelBin::Zero,
+        })
+    }
+
+    fn details(atlas_id: Option<etagere::AllocId>, used_epoch: u64) -> GlyphDetails {
+        GlyphDetails {
+            width: 8,
+            height: 8,
+            gpu_cache: crate::GpuCacheStatus::SkipRasterization,
+            atlas_id,
+            top: 0,
+            left: 0,
+            used_epoch,
+        }
+    }
+
+    #[test]
+    fn glyph_epoch_protects_all_prepares_until_trim_and_preserves_lru() {
+        let mut packer = BucketedAtlasAllocator::new(size2(32, 32));
+        let mut cache = LruCache::unbounded_with_hasher(Hasher::default());
+        let mut epoch = 1;
+        let mut count = 0;
+        while let Some(allocation) = packer.allocate(size2(8, 8)) {
+            cache.put(key(count), details(Some(allocation.id), epoch));
+            count += 1;
+        }
+        assert!(count > 1);
+        assert!(allocate_glyph(&mut packer, &mut cache, epoch, 8, 8).is_none());
+        trim_glyph_cache(&mut cache, &mut epoch);
+        // Two prepares against the same atlas (including a repeated glyph) must
+        // retain all touched glyphs, not just the last renderer's glyphs.
+        cache.get_mut(&key(0)).unwrap().used_epoch = epoch;
+        cache.get_mut(&key(1)).unwrap().used_epoch = epoch;
+        cache.get_mut(&key(0)).unwrap().used_epoch = epoch;
+        let expected_order: Vec<_> = cache.iter().map(|(key, _)| *key).collect();
+        let oldest = *expected_order.last().unwrap();
+        let _allocation = allocate_glyph(&mut packer, &mut cache, epoch, 8, 8);
+        if count > 2 {
+            assert!(!cache.contains(&oldest));
+        }
+        assert!(cache.contains(&key(0)));
+        assert!(cache.contains(&key(1)));
+        trim_glyph_cache(&mut cache, &mut epoch);
+        assert!(allocate_glyph(&mut packer, &mut cache, epoch, 8, 8).is_some());
+        // A live zero-size glyph must stop eviction just like a sized glyph.
+        cache.clear();
+        cache.put(key(100), details(None, epoch));
+        while packer.allocate(size2(8, 8)).is_some() {}
+        assert!(allocate_glyph(&mut packer, &mut cache, epoch, 8, 8).is_none());
+        assert!(cache.contains(&key(100)));
+        trim_glyph_cache(&mut cache, &mut epoch);
+        assert!(allocate_glyph(&mut packer, &mut cache, epoch, 8, 8).is_none());
+        assert!(cache.is_empty());
+    }
+
+    #[test]
+    fn glyph_epoch_rollover_releases_old_marks_without_reordering() {
+        let mut cache = LruCache::unbounded_with_hasher(Hasher::default());
+        cache.put(key(0), details(None, 1));
+        cache.put(key(1), details(None, u64::MAX));
+        let order: Vec<_> = cache.iter().map(|(key, _)| *key).collect();
+        let mut epoch = u64::MAX;
+        trim_glyph_cache(&mut cache, &mut epoch);
+        assert_eq!(epoch, 1);
+        assert!(cache.iter().all(|(_, details)| details.used_epoch != epoch));
+        assert_eq!(cache.iter().map(|(key, _)| *key).collect::<Vec<_>>(), order);
+    }
 
     #[test]
     fn batched_writes_preserve_rows_and_union_dirty_bounds() {

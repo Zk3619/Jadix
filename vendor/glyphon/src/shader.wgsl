@@ -15,6 +15,14 @@ struct VertexOutput {
     @location(2) @interpolate(flat) content_type: u32,
 };
 
+// Fragment inputs do not need position. Inheriting the vertex-only invariant
+// attribute makes Naga emit `invariant gl_FragCoord`, rejected by ANGLE GLES.
+struct FragmentInput {
+    @location(0) color: vec4<f32>,
+    @location(1) uv: vec2<f32>,
+    @location(2) @interpolate(flat) content_type: u32,
+};
+
 struct Params {
     screen_resolution: vec2<u32>,
     _pad: vec2<u32>,
@@ -113,7 +121,7 @@ fn vs_main(in_vert: VertexInput) -> VertexOutput {
 }
 
 @fragment
-fn fs_main(in_frag: VertexOutput) -> @location(0) vec4<f32> {
+fn fs_main(in_frag: FragmentInput) -> @location(0) vec4<f32> {
     switch in_frag.content_type {
         case 0u: {
             return textureSampleLevel(color_atlas_texture, atlas_sampler, in_frag.uv, 0.0);

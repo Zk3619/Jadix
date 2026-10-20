@@ -49,6 +49,7 @@ pub(crate) struct GlyphDetails {
     atlas_id: Option<AllocId>,
     top: i16,
     left: i16,
+    used_epoch: u64,
 }
 
 #[repr(C)]

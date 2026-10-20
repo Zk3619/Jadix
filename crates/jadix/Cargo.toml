@@ -24,6 +24,9 @@ include = [
 [features]
 # Lean by default: no resvg. Theme/stylesheet files are always TOML (`toml` crate).
 default = ["backend-dx12"]
+# Framework performance sampling capability (enabled by Gallery for its diagnostics UI).
+# Applications that do not need performance telemetry leave this feature disabled.
+performance = []
 # Entire `src/i18n` module (catalogs, locale overlay, ICU4X format). Off by default.
 # Component chrome uses `tr_default` / `tr_with_default`, which return the source
 # string when this feature is off. Enable: cargo test -p jadix --lib --features i18n
@@ -46,12 +49,20 @@ tracing = ["dep:tracing"]
 system-tray = ["dep:tray-icon"]
 # OS menu bars on Windows/macOS. Linux winit windows are not GTK windows.
 native-menu = ["dep:muda"]
+webview = ["backend-dx12", "dep:webview2-com", "dep:wry", "dep:gtk", "dep:jni", "dep:objc2", "dep:objc2-foundation"]
 # Windows defaults to D3D12 for predictable presentation and 4K frame throughput.
 # GL remains the fallback; lean consumers can disable default features.
 # This adds native backend code and driver memory (ADR-3, 2026-10-16 update).
 backend-dx12 = ["wgpu/dx12", "dep:windows", "dep:windows-core", "dep:windows-numerics", "dep:windows-collections"]
 # Optional Vulkan backend (kept off by default to avoid multi-backend bloat on Windows).
 backend-vulkan = ["wgpu/vulkan"]
+# Translated D3D11: WGSL -> GLSL -> ANGLE -> hardware D3D11.
+# Native graphics HAL and ANGLE are independently selectable.
+# Experimental: native-window color and sustained presentation are not accepted yet.
+
+# Experimental native SM5 graphics subset; see vendor/wgpu-hal/JADIX_DX11_PATCH.md.
+backend-dx11 = ["dep:wgpu-hal", "wgpu-hal/dx11"]
+backend-dx11-angle = ["dep:wgpu-hal", "wgpu-hal/gles-angle"]
 # Embed lucide.ttf (~0.8MB). Prefer shipping assets/ beside the exe instead.
 bundled-lucide = []
 # Embed large fonts into the binary (single-file distro; dramatically increases size).
@@ -123,8 +134,10 @@ text-undo = []
 # text-undo-rope = ["text-undo", "dep:ropey"]
 
 [dependencies]
+jadix_media.workspace = true
 winit = { workspace = true }
 wgpu = { workspace = true }
+wgpu-hal = { version = "30", default-features = false, optional = true }
 taffy = { workspace = true }
 bytemuck = { workspace = true }
 glyphon = { workspace = true }
@@ -146,7 +159,6 @@ jadix_macros = { workspace = true }
 jadix_style_tokens = { workspace = true }
 stacker = { workspace = true }
 jadix_clipboard = { workspace = true }
-rfd = { workspace = true }
 accesskit = { workspace = true, optional = true }
 swash = { workspace = true }
 ttf-parser = { workspace = true }
@@ -154,13 +166,14 @@ unicode-segmentation = { workspace = true }
 unicode-linebreak = { workspace = true }
 image = { workspace = true }
 resvg = { workspace = true, optional = true }
-tray-icon = { workspace = true, optional = true }
+
 
 [target.'cfg(target_env = "ohos")'.dependencies]
 openharmony-ability = { workspace = true }
 jadix_accesskit_ohos = { path = "../jadix_accesskit_ohos", version = "0.1.0", optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
+jni = { workspace = true, optional = true }
 winit = { workspace = true, features = ["android-native-activity"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
@@ -182,11 +195,13 @@ libc = { workspace = true }
 muda = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
+webview2-com = { version = "0.39.1", optional = true }
 accesskit_windows = { version = "0.34.0", optional = true }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
+    "Win32_Security_Cryptography",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_LibraryLoader",
     "Win32_System_ProcessStatus",
@@ -198,6 +213,10 @@ windows-sys = { workspace = true, features = [
     "Win32_UI_WindowsAndMessaging",
 ] }
 windows = { workspace = true, optional = true, features = [
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_System_Com",
+    "Win32_UI_Shell",
     "Foundation",
     "Graphics_Effects",
     "System",
@@ -224,3 +243,21 @@ ropey = { workspace = true }
 [[bench]]
 name = "layout_baseline"
 harness = false
+
+[target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
+tray-icon = { workspace = true, optional = true }
+
+# System native WebViews. Windows retains composition for portal support.
+[target.'cfg(any(target_os = "macos", target_os = "ios", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
+wry = { workspace = true, optional = true }
+
+[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
+gtk = { workspace = true, optional = true }
+
+[target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
+objc2 = { workspace = true, optional = true }
+objc2-foundation = { workspace = true, optional = true, features = ["NSGeometry"] }
+
+
+[target.'cfg(any(target_os = "windows", target_os = "macos", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
+rfd = { workspace = true }

@@ -32,6 +32,22 @@ vendor/*
 !vendor/taffy/
 !vendor/taffy/**
 vendor/taffy/target/
+!vendor/naga/
+!vendor/naga/**
+vendor/naga/target/
+!vendor/wgpu-core/
+!vendor/wgpu-core/**
+vendor/wgpu-core/target/
+!vendor/wgpu-types/
+!vendor/wgpu-types/**
+vendor/wgpu-types/target/
+!vendor/wgpu-hal/
+!vendor/wgpu-hal/**
+vendor/wgpu-hal/target/
+!vendor/gpui-pre-windows-0.3.9/
+!vendor/gpui-pre-windows-0.3.9/**
+!vendor/gpui-fast-windows-0.1.9/
+!vendor/gpui-fast-windows-0.1.9/**
 # Small native API extensions, pinned to jadix_winit's upstream core revision.
 !vendor/winit-wayland/
 !vendor/winit-wayland/**
@@ -70,3 +86,9 @@ development-docs/
 **/tmp/
 **/tmp_*/
 **/*.diff
+
+# Public application icon configuration and integration guide.
+!docs/application-icons.md
+!docs/app-icons.example.toml
+!docs/desktop-windows.md
+scripts/__pycache__/

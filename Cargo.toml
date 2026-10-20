@@ -1,13 +1,29 @@
 [workspace]
 members = ["crates/*", "examples/*"]
-exclude = ["vendor/glyphon", "vendor/taffy", "vendor/winit-wayland", "vendor/winit-win32"]
+exclude = [
+    "vendor/glyphon",
+    "vendor/taffy",
+    "vendor/naga",
+    "vendor/wgpu-core",
+    "vendor/wgpu-types",
+    "vendor/wgpu-hal",
+    "vendor/gpui-pre-windows-0.3.9",
+    "vendor/gpui-fast-windows-0.1.9",
+    "vendor/winit-wayland",
+    "vendor/winit-win32",
+]
 resolver = "2"
 
 [patch.crates-io]
+naga = { path = "vendor/naga" }
+wgpu-core = { path = "vendor/wgpu-core" }
+wgpu-types = { path = "vendor/wgpu-types" }
+# Optional Windows EGL/ANGLE D3D11 path; default WGL/DX12 behavior is preserved.
+wgpu-hal = { path = "vendor/wgpu-hal" }
 # Batch on-demand glyph uploads; retain atlas pixels across growth instead of
 # rasterizing the same glyphs again. See vendor/glyphon/JADIX_PATCH.md.
 glyphon = { path = "vendor/glyphon" }
-# Normalize irrelevant parent constraints for intrinsic flex nodes; see JADIX_PATCH.md.
+# Retain intrinsic measurements across out-of-flow updates; see JADIX_PATCH.md.
 taffy = { path = "vendor/taffy" }
 # Some transitive crates also consume DPI types; keep those identical to Winit.
 dpi = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
@@ -32,11 +48,15 @@ jadix_macros = { path = "crates/jadix_macros", version = "0.1.0" }
 jadix_style_tokens = { path = "crates/jadix_style_tokens", version = "0.1.0" }
 jadix_window_state = { path = "crates/jadix_window_state", version = "0.1.0" }
 jadix_clipboard = { path = "crates/jadix_clipboard", version = "0.1.0", default-features = false }
+jadix_media = { path = "crates/jadix_media", version = "0.1.0" }
 
 # --- window / GPU ---
 # Local facade fork; backends/core are pinned together (see jadix_winit/README.md).
 winit = { package = "jadix_winit", path = "crates/jadix_winit", version = "0.31.0-beta.3-jadix.1" }
 winit-ohos = { git = "https://github.com/ohos-rs/winit-ohos.git", rev = "af4063b4e75b62b152a315d2606d799ca65bda84", version = "=0.31.0-beta.3", default-features = false }
+wry = "=0.57.0"
+gtk = "0.18"
+jni = "0.21.1"
 web-sys = "0.3"
 wasm-bindgen = "0.2"
 # HarmonyOS Ability (gpui-template / ohos-rs). Only used on `target_env = "ohos"`.
@@ -59,7 +79,7 @@ wgpu = { version = "30", default-features = false, features = [
 ] }
 
 # --- layout / text ---
-taffy = "0.13"
+taffy = "=0.15.0"
 bytemuck = { version = "1.25", features = ["derive"] }
 # Upstream glyphon 0.12 (Coverage only). CSS transform text uses Bake/Msdf offscreen path.
 glyphon = { version = "0.12", default-features = false }

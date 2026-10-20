@@ -1,0 +1,9 @@
+[package]
+name = "jadix_media"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Backend-neutral media playback contracts for Jadix and external adapters"
+
+[dependencies]
