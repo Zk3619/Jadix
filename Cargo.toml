@@ -49,6 +49,8 @@ jadix_style_tokens = { path = "crates/jadix_style_tokens", version = "0.1.0" }
 jadix_window_state = { path = "crates/jadix_window_state", version = "0.1.0" }
 jadix_clipboard = { path = "crates/jadix_clipboard", version = "0.1.0", default-features = false }
 jadix_media = { path = "crates/jadix_media", version = "0.1.0" }
+jadix_net = { path = "crates/jadix_net", version = "0.1.0", default-features = false }
+jadix_tasks = { path = "crates/jadix_tasks", version = "0.1.0" }
 
 # --- window / GPU ---
 # Local facade fork; backends/core are pinned together (see jadix_winit/README.md).
@@ -146,6 +148,7 @@ windows = "0.62"
 windows-core = "0.62"
 windows-numerics = "0.3"
 windows-collections = "0.3"
+find-msvc-tools = "0.1.9"
 
 [profile.release]
 codegen-units = 1

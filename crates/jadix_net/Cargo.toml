@@ -1,0 +1,17 @@
+[package]
+name = "jadix_net"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Backend-neutral networking contracts for Jadix and external adapters"
+readme = "README.md"
+
+[features]
+default = []
+json = ["dep:serde", "dep:serde_json"]
+
+[dependencies]
+jadix_tasks.workspace = true
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }

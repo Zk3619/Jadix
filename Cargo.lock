@@ -1460,6 +1460,7 @@ dependencies = [
 name = "gallery"
 version = "0.1.0"
 dependencies = [
+ "find-msvc-tools",
  "jadix",
  "jadix_window_state",
  "jadix_winit",
@@ -2515,13 +2516,16 @@ dependencies = [
  "jadix_clipboard",
  "jadix_macros",
  "jadix_media",
+ "jadix_net",
  "jadix_style_tokens",
+ "jadix_tasks",
  "jadix_winit",
  "jni",
  "libc",
  "log",
  "muda",
  "objc2 0.6.4",
+ "objc2-app-kit",
  "objc2-foundation 0.3.2",
  "openharmony-ability",
  "resvg",
@@ -2596,6 +2600,7 @@ dependencies = [
  "proc-macro2",
  "serde",
  "serde_json",
+ "toml",
 ]
 
 [[package]]
@@ -2614,7 +2619,20 @@ name = "jadix_media"
 version = "0.1.0"
 
 [[package]]
+name = "jadix_net"
+version = "0.1.0"
+dependencies = [
+ "jadix_tasks",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "jadix_style_tokens"
+version = "0.1.0"
+
+[[package]]
+name = "jadix_tasks"
 version = "0.1.0"
 
 [[package]]

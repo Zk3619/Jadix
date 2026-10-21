@@ -1,0 +1,10 @@
+[package]
+name = "jadix_tasks"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Runtime-neutral task cancellation, execution and event contracts for Jadix adapters"
+readme = "README.md"
+
+[dependencies]
