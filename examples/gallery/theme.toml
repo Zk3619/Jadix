@@ -1,6 +1,8 @@
 # Gallery demo — distinct destructive so Button / Badge / Bubble recolor without
 # touching component source. Edit this file and click「从磁盘重载」.
 
+preset = "shadcn"
+
 [transition]
 enabled = true
 duration-ms = 180

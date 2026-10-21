@@ -63,6 +63,28 @@ Gallery 已在启动时设置默认图标，并在“导航 → 系统托盘”�
 
 ## 桌面与移动端资源配置
 
+### 仓库默认图标与 Gallery
+
+默认主图为 `assets/logo.png`，配置为 `assets/app-icons.toml`，已生成的跨平台资源保存在 `assets/icons/`。
+修改主图后，在仓库根目录重新生成并验证：
+
+```sh
+python scripts/app-icons.py assets/app-icons.toml --output assets/icons
+python scripts/test-app-icons.py
+```
+
+Gallery 的主窗口、次级窗口、托盘及“Reset icon”共用生成的 `desktop/window.png`。
+Windows 构建通过 `examples/gallery/build.rs` 编译 `gallery.rc`，将多尺寸 ICO 嵌入 EXE；
+本机 MSVC 自动查找 Windows SDK 的 `rc.exe`，交叉编译可用 `RC` 指定资源编译器，GNU 目标默认使用 `windres`。
+macOS 的 `cargo-bundle` 图标入口已写入 Gallery 的 `package.metadata.bundle`，打包时使用 `desktop/app.icns`；普通 `cargo run` 不创建 `.app`，因此不会设置 Dock 的 bundle 图标。
+
+Linux 安装时将 `examples/gallery/gallery.desktop` 放入 `$XDG_DATA_HOME/applications/gallery.desktop`，
+将各尺寸的 `assets/icons/desktop/hicolor/<尺寸>/apps/app.png` 安装为 `$XDG_DATA_HOME/icons/hicolor/<尺寸>/apps/gallery.png`；
+`XDG_DATA_HOME` 未设置时使用 `~/.local/share`。`Icon=gallery` 与默认 Wayland application ID 及 desktop 文件名一致。
+Android 与 iOS 的资源和清单合并片段也已生成；Gallery 尚无完整移动端打包工程，需按下表合并至宿主工程，并在相应 SDK/设备上验证。
+
+### 其他应用的图标配置
+
 复制 `docs/app-icons.example.toml`，将 `source` 指向方形主图，建议至少 1024×1024 PNG。
 路径相对于 TOML 文件；桌面各平台、托盘、Android 前景和 iOS 主图可分别覆盖。
 脚本需要 Python 3.11+ 与 Pillow：

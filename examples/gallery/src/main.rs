@@ -5,7 +5,7 @@
 //! Jadix Gallery — 完整框架能力与组件 / 变体展示。
 //!
 //! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 绘制 · 导航（含 Router / 托盘 / 无边框窗） · 布局 · 文本 · 主题 · 关于。
-//! 运行：`cargo run -p gallery`；Inspector：`cargo run -p gallery --features devtools`（F12）；托盘原生：`--features system-tray`；远程图入口：`--features remote-asset`
+//! 运行：`cargo run -p gallery`；默认启用 Inspector（F12）与 hot-reload；监听：`cargo run -p jadix_hot_reload_cli -- .`；托盘原生：`--features system-tray`；远程图入口：`--features remote-asset`
 //!
 //! `main` 只做启动（主题、可选远程图、窗口几何持久化）；壳在 [`app`]；分区页面在 [`pages`]。
 
@@ -39,11 +39,12 @@ fn install_gallery_theme() {
 }
 
 pub(crate) fn gallery_icon() -> jadix::app::AppIcon {
-    jadix::app::AppIcon::from_bytes(include_bytes!("../assets/app-icon.png"))
+    jadix::app::AppIcon::from_bytes(include_bytes!("../../../assets/icons/desktop/window.png"))
         .expect("bundled Gallery icon")
 }
 
 fn main() {
+    jadix::set_chrome_locale(&std::env::var("JADIX_LOCALE").unwrap_or_else(|_| "zh-CN".into()));
     let instance_demo = pages::instance_demo_mode(std::env::args_os().skip(1));
     #[cfg(feature = "cpu-bench")]
     let benchmarking = cpu_bench::install();
@@ -54,7 +55,8 @@ fn main() {
     }
     #[cfg(feature = "runtime-logging")]
     jadix::logging::init_with(jadix::logging::InitOptions {
-        default_filter: "info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off,fontdb=error",
+        default_filter:
+            "info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off,fontdb=error",
     });
     install_gallery_theme();
     let (rgba, w, h) = checker_rgba_texture();
@@ -90,7 +92,7 @@ fn main() {
         }
     }
 
-    let options = jadix::app::WindowOptions::new().icon(gallery_icon());
+    let options = jadix::app::WindowOptions::new().icon(gallery_icon()).follow_theme(true);
     let options = if let Some(mode) = instance_demo {
         jadix::app::set_second_instance_handler(pages::record_second_instance);
         let options = options
@@ -104,8 +106,12 @@ fn main() {
     } else {
         options
     };
-    #[cfg(feature = "devtools")]
+    #[cfg(all(debug_assertions, feature = "devtools"))]
     let options = options.devtools(true);
+    #[cfg(all(debug_assertions, feature = "devtools"))]
+    if std::env::var("JADIX_DEVTOOLS_OPEN").as_deref() == Ok("1") {
+        jadix::app::devtools::DevToolsState::set_open(true);
+    }
     if instance_demo.is_some() {
         jadix::app::run_with(options, pages::gallery_instance_demo_root);
     } else {
@@ -115,3 +121,12 @@ fn main() {
 
 #[cfg(test)]
 mod mount_tests;
+
+#[cfg(test)]
+#[test]
+fn gallery_default_icon_decodes_generated_logo() {
+    let icon = gallery_icon();
+    assert_eq!((icon.width(), icon.height()), (256, 256));
+    assert_eq!(icon.rgba()[3], 0);
+    assert!(icon.rgba().chunks_exact(4).any(|pixel| pixel[3] == 255));
+}

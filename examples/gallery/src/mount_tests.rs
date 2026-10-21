@@ -5,6 +5,31 @@ use crate::shared::*;
 use jadix::core::reactivity::{create_effect, create_root};
 
 #[test]
+fn window_session_showcase_mounts_and_reports_missing_session() {
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            let root = crate::pages::desktop_windows::WindowSessionShowcase(
+                crate::pages::desktop_windows::WindowSessionShowcaseProps::default(),
+            );
+            let send = gallery_find_by_tid(&root, "gal-session-send").unwrap();
+            (send.on_click.as_ref().unwrap().borrow_mut())();
+            assert_eq!(use_signal("gal-session-status", String::new).peek(), "请先打开会话次窗");
+        });
+    });
+}
+
+#[test]
+fn gallery_button_showcase_retains_ui_source() {
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            let root = crate::pages::basics::ButtonShowcase(crate::pages::basics::ButtonShowcaseProps::default());
+            let source = root.get_attr("jadix_ui_template_id").unwrap().replace('\\', "/");
+            assert!(source.starts_with("examples/gallery/src/pages/basics.rs:"), "{source}");
+        });
+    });
+}
+
+#[test]
 fn responsive_gallery_navigation_changes_section_and_closes_mobile_sheet() {
     run_on_gallery_build_stack(|| {
         create_root(|| {
@@ -21,7 +46,15 @@ fn responsive_gallery_navigation_changes_section_and_closes_mobile_sheet() {
 
 #[test]
 fn responsive_gallery_showcase_reflows_at_viewport_breakpoints() {
+    fn grid(element: &Element) -> Option<&Element> {
+        if !element.style.grid_template_columns.is_empty() && element.children.len() == 3 {
+            Some(element)
+        } else {
+            element.children.iter().find_map(grid)
+        }
+    }
     run_on_gallery_build_stack(|| {
+        jadix::style::set_prefers_reduced_motion(Some(true));
         create_root(|| {
             create_effect(|| {
                 let mut root = ResponsiveShowcase(ResponsiveShowcaseProps::default());
@@ -40,7 +73,12 @@ fn responsive_gallery_showcase_reflows_at_viewport_breakpoints() {
                     );
                     layout.build_and_layout(&mut root, width, 1000.0, [-1.0, -1.0]);
                     fn check_bounds(el: &Element, width: f32) {
-                        assert!(el.layout_bounds[0] >= -0.5);
+                        assert!(
+                            el.layout_bounds[0] >= -0.5,
+                            "width={width}, node={:?}, bounds={:?}",
+                            el.text,
+                            el.layout_bounds
+                        );
                         assert!(
                             el.layout_bounds[0] + el.layout_bounds[2] <= width + 0.5,
                             "width={width}, node={:?}, bounds={:?}",
@@ -52,7 +90,7 @@ fn responsive_gallery_showcase_reflows_at_viewport_breakpoints() {
                         }
                     }
                     check_bounds(&root, width);
-                    let grid = &root.children[1].children[1];
+                    let grid = grid(&root).unwrap();
                     assert_eq!(
                         grid.style.grid_template_columns,
                         jadix::layout::cols_equal_fr(if width >= 1280.0 {
@@ -78,6 +116,7 @@ fn responsive_gallery_showcase_reflows_at_viewport_breakpoints() {
                 }
             });
         });
+        jadix::style::set_prefers_reduced_motion(None);
     });
 }
 
@@ -128,6 +167,168 @@ fn anchored_overlay_pinned_attribute_matches_builder_dismiss_behavior() {
         }
         jadix::app::portal_overlay::clear_overlay_stack();
         jadix::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
+fn responsive_gallery_breakpoint_keeps_previous_presented_cards() {
+    fn grid(element: &Element) -> Option<&Element> {
+        if !element.style.grid_template_columns.is_empty() && element.children.len() == 3 {
+            Some(element)
+        } else {
+            element.children.iter().find_map(grid)
+        }
+    }
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            create_effect(|| {
+                let mut root = ResponsiveShowcase(ResponsiveShowcaseProps::default());
+                let mut tree = jadix::core::tree::LayoutTree::new();
+                for width in [700.0, 900.0] {
+                    let mut impact = jadix::core::tree::LayoutStatus::Clean;
+                    jadix::style::sync_class_variants_subtree(
+                        &mut root,
+                        [-1.0; 2],
+                        "",
+                        false,
+                        width,
+                        1000.0,
+                        &mut tree,
+                        &mut impact,
+                    );
+                    let old = grid(&root).unwrap().children[1].layout_bounds;
+                    let frame = tree.build_and_layout(&mut root, width, 1000.0, [-1.0; 2]);
+                    if width == 900.0 {
+                        assert!(frame.instances.iter().any(|instance| {
+                            (instance.rect_pos[0] - old[0]).abs() < 0.1
+                                && (instance.rect_pos[1] - old[1]).abs() < 0.1
+                                && (instance.rect_size[0] - old[2]).abs() < 0.1
+                                && (instance.rect_size[1] - old[3]).abs() < 0.1
+                        }), "breakpoint change snapped instead of projecting the previous card: old={old:?}, paints={:?}", frame.instances.iter().map(|instance| (instance.rect_pos, instance.rect_size)).collect::<Vec<_>>());
+                    }
+                }
+            });
+        });
+    });
+}
+
+#[test]
+fn layout_motion_showcase_toggles_react_without_subscribing_animation_frames() {
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            let renders = Rc::new(Cell::new(0));
+            let kept = Rc::new(RefCell::new(None));
+            let count = renders.clone();
+            let content = kept.clone();
+            create_effect(move || {
+                count.set(count.get() + 1);
+                *content.borrow_mut() = Some(crate::pages::motion::build_layout_motion_showcase());
+            });
+            let click =
+                gallery_find_by_tid(kept.borrow().as_ref().unwrap(), "gal-motion-toggle-gap")
+                    .unwrap()
+                    .on_click
+                    .clone()
+                    .unwrap();
+            assert_eq!(renders.get(), 1);
+            (click.borrow_mut())();
+            assert_eq!(
+                renders.get(),
+                2,
+                "layout signal must rebuild its local island"
+            );
+            let mut root = kept.borrow_mut().take().unwrap();
+            let mut tree = jadix::layout::LayoutTree::new();
+            tree.build_and_layout(&mut root, 900.0, 900.0, [-1.0; 2]);
+            jadix::style::tick_animations(0.05);
+            assert_eq!(
+                renders.get(),
+                2,
+                "animation samples must not rebuild declarations"
+            );
+        });
+    });
+}
+
+#[test]
+fn theme_media_page_remount_preserves_live_presentation_signals() {
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            let revision = Signal::new(0);
+            create_effect(move || {
+                let _ = revision.get();
+                let _ = crate::pages::media::MediaPlayerShowcase(
+                    crate::pages::media::MediaPlayerShowcaseProps::default(),
+                );
+            });
+            for cycle in 1..4 {
+                revision.set(cycle);
+            }
+        });
+    });
+}
+
+#[test]
+fn responsive_gallery_shell_padding_starts_from_previous_spacing() {
+    fn content(element: &Element) -> Option<&Element> {
+        if element
+            .attrs
+            .get("jadix_utility_class")
+            .is_some_and(|class| class.contains("p-3 sm:p-4 lg:p-6"))
+        {
+            Some(element)
+        } else {
+            element.children.iter().find_map(content)
+        }
+    }
+    fn frame(root: &mut Element, tree: &mut jadix::layout::LayoutTree, width: f32) -> f32 {
+        let mut impact = jadix::core::tree::LayoutStatus::Clean;
+        jadix::style::sync_class_variants_subtree(
+            root,
+            [-1.0; 2],
+            "",
+            false,
+            width,
+            900.0,
+            tree,
+            &mut impact,
+        );
+        tree.build_and_layout(root, width, 900.0, [-1.0; 2]);
+        let content = content(root).unwrap();
+        content.children[0].layout_bounds[0] - content.layout_bounds[0]
+    }
+    run_on_gallery_build_stack(|| {
+        jadix::style::set_css_transition_virtual_timeline(true);
+        jadix::style::set_css_transition_timeline_ms(0.0);
+        create_root(|| {
+            create_effect(|| {
+                let mut root = GallerySectionAbout(GallerySectionAboutProps::default());
+                let mut tree = jadix::layout::LayoutTree::new();
+                let mut previous = frame(&mut root, &mut tree, 1100.0);
+                assert!((previous - 24.0).abs() < 0.1);
+                for (width, target) in
+                    [(1000.0, 16.0), (620.0, 12.0), (740.0, 16.0), (1100.0, 24.0)]
+                {
+                    let start = frame(&mut root, &mut tree, width);
+                    assert!(
+                        (start - previous).abs() < 0.1,
+                        "responsive padding must start at {previous}px, not snap to {start}px"
+                    );
+                    jadix::style::advance_css_transition_timeline_ms(100.0);
+                    let middle = frame(&mut root, &mut tree, width);
+                    assert!(middle > previous.min(target) && middle < previous.max(target),
+                        "expected a real padding intermediate frame: {previous} -> {middle} -> {target}");
+                    jadix::style::advance_css_transition_timeline_ms(100.0);
+                    let end = frame(&mut root, &mut tree, width);
+                    assert!((end - target).abs() < 0.1);
+                    previous = target;
+                }
+                jadix::style::set_prefers_reduced_motion(Some(true));
+                assert!((frame(&mut root, &mut tree, 620.0) - 12.0).abs() < 0.1);
+                jadix::style::set_prefers_reduced_motion(None);
+            });
+        });
+        jadix::style::set_css_transition_virtual_timeline(false);
     });
 }
 
@@ -185,6 +386,7 @@ fn gallery_section_body(section: &str) -> jadix::core::tree::Element {
         "data" => GallerySectionData(GallerySectionDataProps::default()),
         "navigation" => GallerySectionNavigation(GallerySectionNavigationProps::default()),
         "layout" => GallerySectionLayout(GallerySectionLayoutProps::default()),
+        "motion" => GallerySectionMotion(GallerySectionMotionProps::default()),
         "text" => GallerySectionText(GallerySectionTextProps::default()),
         "theme" => GallerySectionTheme(GallerySectionThemeProps::default()),
         "about" => GallerySectionAbout(GallerySectionAboutProps::default()),
@@ -1965,7 +2167,143 @@ fn theme_section_mounts_controls() {
             find_tid(&tree, "gal-theme-sheet") || gallery_find_attr(&tree, "id", "gal-theme-sheet"),
             "theme section must mount apply styles.toml"
         );
+        for control in [
+            "gal-theme-preset-shadcn",
+            "gal-theme-preset-fluent",
+            "gal-theme-preset-material3",
+            "gal-theme-preset-liquid-glass",
+            "gal-theme-density",
+            "gal-theme-radius",
+            "gal-theme-refraction",
+            "gal-theme-dispersion",
+            "gal-theme-opacity",
+            "gal-theme-preview-input",
+            "gal-theme-preview-popover",
+            "gal-theme-preview-dialog",
+            "gal-theme-group-top",
+            "gal-theme-group-middle",
+            "gal-theme-group-bottom",
+        ] {
+            assert!(
+                find_tid(&tree, control),
+                "theme studio must mount {control}"
+            );
+        }
         jadix::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
+fn theme_section_switches_all_presets_and_keeps_form_state() {
+    run_on_gallery_build_stack(|| {
+        let overrides = jadix::style::theme_overrides();
+        let previous_mode = jadix::style::theme_mode();
+        create_root(|| {
+            let checked = use_signal("gal_theme_preview_checked", || true);
+            checked.set(false);
+            for mode in [
+                jadix::style::ThemeMode::Light,
+                jadix::style::ThemeMode::Dark,
+            ] {
+                jadix::style::set_theme_mode(mode);
+                for preset in jadix::style::ThemePreset::ALL {
+                    let tree = ThemeStyleShowcase(ThemeStyleShowcaseProps::default());
+                    let id = format!("gal-theme-preset-{}", preset.name());
+                    let button = gallery_find_by_tid(&tree, &id).expect("preset button");
+                    (button.on_click.as_ref().unwrap().borrow_mut())();
+                    assert_eq!(jadix::style::theme_preset(), preset);
+                    assert!(!checked.peek());
+                    let tree = ThemeStyleShowcase(ThemeStyleShowcaseProps::default());
+                    assert!(find_tid(&tree, "gal-theme-preview-primary"));
+                    assert!(
+                        find_tid(&tree, "gal-theme-design-note")
+                            || gallery_find_attr(&tree, "id", "gal-theme-design-note")
+                    );
+                }
+            }
+        });
+        jadix::style::install_theme_overrides(overrides).unwrap();
+        jadix::style::set_theme_mode(previous_mode);
+    });
+}
+
+#[test]
+fn themed_buttons_and_motion_labels_keep_their_first_layout_geometry() {
+    run_on_gallery_build_stack(|| {
+        let previous = jadix::style::get_theme();
+        let overrides = jadix::style::theme_overrides();
+        let mut fonts = jadix::renderer::font_loader::create_font_system();
+        jadix::renderer::font_loader::apply_default_families(fonts.db_mut());
+        jadix::text::install_shared_font_system(&mut fonts);
+        for preset in [jadix::style::ThemePreset::Fluent, jadix::style::ThemePreset::LiquidGlass] {
+            jadix::style::set_theme_preset(preset);
+            for motion in [false, true] {
+                let (owner, mut tree) = create_root(|| if motion {
+                    crate::pages::motion::build_layout_motion_showcase()
+                } else { ThemeStyleShowcase(Default::default()) });
+                let mut layout = jadix::layout::LayoutTree::new();
+                let first = layout.build_and_layout(&mut tree, 1280.0, 1600.0, [-1.0; 2]);
+                let next = layout.build_and_layout(&mut tree, 1280.0, 1600.0, [-1.0; 2]);
+                let needles: &[&str] = if motion { &["Card 1", "Card 2", "Card 3"] } else { &["Fluent", "Liquid Glass"] };
+                for needle in needles {
+                    let initial = first.text_nodes.iter().find(|text| text.text.contains(needle)).unwrap_or_else(|| panic!("{preset:?} first frame misses {needle}"));
+                    let settled = next.text_nodes.iter().find(|text| text.text == initial.text).unwrap();
+                    assert!(initial.width > 0.0 && initial.height > 0.0 && initial.style.color_resolved()[3] > 0, "{needle} must have visible ink");
+                    assert!((initial.x - settled.x).abs() < 0.1 && (initial.y - settled.y).abs() < 0.1,
+                        "{preset:?}/{needle} first frame ({},{}) differs from ({},{})", initial.x, initial.y, settled.x, settled.y);
+                }
+                owner.dispose();
+                jadix::app::reactive::reset_registered_anchors();
+            }
+        }
+        jadix::style::install_theme_overrides(overrides).unwrap();
+        jadix::style::set_theme(previous);
+    });
+}
+
+#[test]
+fn theme_section_glass_covers_controls_and_supports_opaque_fallback() {
+    run_on_gallery_build_stack(|| {
+        let overrides = jadix::style::theme_overrides();
+        let previous_mode = jadix::style::theme_mode();
+        jadix::style::install_theme_overrides(
+            jadix::style::parse_theme_overrides_str("preset = 'liquid-glass'").unwrap(),
+        )
+        .unwrap();
+        create_root(|| {
+            for mode in [
+                jadix::style::ThemeMode::Light,
+                jadix::style::ThemeMode::Dark,
+            ] {
+                jadix::style::set_theme_mode(mode);
+                let tree = ThemeStyleShowcase(ThemeStyleShowcaseProps::default());
+                let content = gallery_find_slot(&tree, "card").unwrap();
+                assert!(content.style.glass.is_some());
+                assert!(content.style.bg_color[3] < 1.0);
+                let mut stack = vec![&tree];
+                let mut glass_count = 0;
+                while let Some(element) = stack.pop() {
+                    glass_count += usize::from(element.style.glass.is_some());
+                    stack.extend(element.children.iter());
+                }
+                assert!(glass_count > 10, "cards and ordinary controls share the optical material");
+                assert!(gallery_find_by_tid(&tree, "gal-theme-optical-stage").is_some());
+                assert!(gallery_find_by_tid(&tree, "gal-theme-optical-grid").is_some());
+                let toggle = gallery_find_by_tid(&tree, "gal-theme-opacity").unwrap();
+                (toggle.on_click.as_ref().unwrap().borrow_mut())();
+                let opaque = ThemeStyleShowcase(ThemeStyleShowcaseProps::default());
+                let mut stack = vec![&opaque];
+                while let Some(element) = stack.pop() {
+                    assert!(element.style.glass.is_none());
+                    assert_eq!(element.style.backdrop_blur, 0.0);
+                    stack.extend(element.children.iter());
+                }
+                let toggle = gallery_find_by_tid(&opaque, "gal-theme-opacity").unwrap();
+                (toggle.on_click.as_ref().unwrap().borrow_mut())();
+            }
+        });
+        jadix::style::install_theme_overrides(overrides).unwrap();
+        jadix::style::set_theme_mode(previous_mode);
     });
 }
 

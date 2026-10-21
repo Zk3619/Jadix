@@ -45,11 +45,7 @@ pub(crate) fn MediaPlayerShowcase() -> Element {
     let command_log = use_signal("gallery-media-command", || "尚未发送媒体命令".to_string());
     let audio_state = use_signal("gallery-media-audio", || demo_snapshot(false));
     let video_state = use_signal("gallery-media-video", || demo_snapshot(true));
-    let presentation = use_signal(
-        "gallery-media-presentation",
-        MediaPresentationController::default,
-    )
-    .get();
+    let presentation = use_media_presentation("gallery-media-presentation");
     let display = presentation.state();
     let audio_controller = MediaController::new(audio_state, move |command| {
         command_log.set(format!("Audio → {command:?}"));

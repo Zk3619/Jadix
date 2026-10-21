@@ -5,26 +5,33 @@ use crate::shared::*;
 
 #[component]
 pub(crate) fn ResponsiveShowcase() -> Element {
+    let panels = [
+        ("内容优先", "使用流式宽度和自动换行，避免固定宽度挤压内容。"),
+        ("清晰的断点边界", "max-md 在 768px 以下生效，md 从 768px 开始生效。"),
+        ("操作始终可达", "操作按钮在窄窗口纵向排列，宽窗口恢复横向排列。"),
+    ].into_iter().enumerate().map(|(index, (title, description))| {
+        use jadix::motion::{use_layout_motion, LayoutAnimation};
+        let title = ui! { <Label font_weight="600">{ title }</Label> }
+            .layout_motion(&use_layout_motion(&format!("gal-responsive-title-{index}"), LayoutAnimation::Position));
+        let description = ui! { <Label w="100%">{ description }</Label> }
+            .layout_motion(&use_layout_motion(&format!("gal-responsive-body-{index}"), LayoutAnimation::Position));
+        Element::new().template_id(format!("gal-responsive-panel-{index}"))
+            .flex_col().min_w(0.0).class("rounded-md bg-muted p-3 sm:p-4").gap("0.5rem")
+            .children([title, description])
+            .layout_motion(&use_layout_motion(&format!("gal-responsive-panel-{index}"), LayoutAnimation::Both))
+    }).collect::<Vec<_>>();
+    let grid = ui! {
+        <GStack w="100%" min_w="0" class="grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
+            { panels }
+        </GStack>
+    }.layout_motion(&jadix::motion::use_layout_motion("gal-responsive-grid", jadix::motion::LayoutAnimation::Position));
     ui! {
         <MyCard title="响应式布局">
             <VStack w="100%" min_w="0" gap="0.75rem">
                 <Label w="100%" color="muted-foreground" text_size="0.875rem">
-                    "缩放窗口：窄窗口单列，768px 起双列，1280px 起三列。"
+                    "缩放窗口：窄窗口单列，768px 起双列，1280px 起三列；卡片位置、尺寸与间距平滑过渡，文字不随投影拉伸。"
                 </Label>
-                <GStack w="100%" min_w="0" class="grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
-                    <VStack min_w="0" class="rounded-md bg-muted p-3 sm:p-4" gap="0.5rem">
-                        <Label font_weight="600">"内容优先"</Label>
-                        <Label w="100%">"使用流式宽度和自动换行，避免固定宽度挤压内容。"</Label>
-                    </VStack>
-                    <VStack min_w="0" class="rounded-md bg-muted p-3 sm:p-4" gap="0.5rem">
-                        <Label font_weight="600">"清晰的断点边界"</Label>
-                        <Label w="100%">"max-md 在 768px 以下生效，md 从 768px 开始生效。"</Label>
-                    </VStack>
-                    <VStack min_w="0" class="rounded-md bg-muted p-3 sm:p-4" gap="0.5rem">
-                        <Label font_weight="600">"操作始终可达"</Label>
-                        <Label w="100%">"操作按钮在窄窗口纵向排列，宽窗口恢复横向排列。"</Label>
-                    </VStack>
-                </GStack>
+                { grid }
                 <DialogFooter>
                     <Button variant="outline">"取消更改"</Button>
                     <Button>"保存更改"</Button>

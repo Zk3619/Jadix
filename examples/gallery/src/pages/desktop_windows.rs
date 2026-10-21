@@ -172,6 +172,78 @@ fn open_desktop_window(independent: bool, on_top: bool) {
 }
 
 #[component]
+pub(crate) fn WindowSessionShowcase() -> Element {
+    use jadix::app::WindowSession;
+    let status = use_signal("gal-session-status", || "尚未打开会话次窗".to_string());
+    let session_slot = std::rc::Rc::new(std::cell::RefCell::new(
+        None::<WindowSession<String, String, String>>,
+    ));
+    let opened_slot = session_slot.clone();
+    let send_slot = session_slot.clone();
+    ui! {
+        <MyCard title="主次窗传参 / 双向通信 / 关闭回传">
+            <VStack w="100%" min_w="0" gap="0.5rem">
+                <Label id="gal-session-status" text_size="0.875rem">{status.get()}</Label>
+                <HStack w="100%" gap="0.5rem" wrap="wrap">
+                    <Button id="gal-session-open" size="sm" on_click={move || {
+                        if let Some(window) = opened_slot.borrow().as_ref().and_then(WindowSession::window) {
+                            let _ = window.focus();
+                            return;
+                        }
+                        let session = WindowSession::<String, String, String>::new("Gallery launch argument".into());
+                        session.on_opened(move |_| { status.try_set("次窗已打开：可以发送消息".into()); });
+                        session.on_child_message(move |message| {
+                            log::info!(target: "gallery::window_session", "child message: {message}");
+                            status.try_set(message);
+                        });
+                        session.on_closed(move |event| {
+                            let result = event.result.unwrap_or_else(|| "原生关闭，无返回值".into());
+                            log::info!(target: "gallery::window_session", "closed: {result}");
+                            status.try_set(format!("次窗已关闭：{result}"));
+                        });
+                        let result = session.open(
+                            WindowOptions::new().title("Jadix WindowSession").size(540.0, 340.0),
+                            |context| {
+                                let value = use_signal("gal-session-received", || "等待主窗消息".to_string());
+                                context.on_parent_message(move |message| {
+                                    log::info!(target: "gallery::window_session", "parent message: {message}");
+                                    value.try_set(message);
+                                });
+                                let args = context.args().clone();
+                                let reply = context.clone();
+                                let finish = context.clone();
+                                ui! {
+                                    <VStack w="100%" h="100%" p="1rem" gap="0.75rem" bg="background" color="foreground">
+                                        <Label font_weight="600">{format!("启动参数：{args}")}</Label>
+                                        <Input id="gal-session-value" w="100%" value={value} />
+                                        <HStack gap="0.5rem" wrap="wrap">
+                                            <Button id="gal-session-reply" size="sm" on_click={move || {
+                                                let _ = reply.send_to_parent(format!("次窗回复：{}", value.peek()));
+                                            }}>"发送给主窗"</Button>
+                                            <Button id="gal-session-return" size="sm" variant="outline" on_click={move || {
+                                                let _ = finish.close_with_result(value.peek());
+                                            }}>"返回结果并关闭"</Button>
+                                        </HStack>
+                                    </VStack>
+                                }
+                            },
+                        );
+                        if let Err(error) = result { status.try_set(error); }
+                        *opened_slot.borrow_mut() = Some(session);
+                    }}>"打开会话次窗"</Button>
+                    <Button id="gal-session-send" size="sm" variant="outline" on_click={move || {
+                        let result = send_slot.borrow().as_ref()
+                            .ok_or_else(|| "请先打开会话次窗".to_string())
+                            .and_then(|session| session.send_to_child("Hello from parent".into()));
+                        if let Err(error) = result { status.try_set(error); }
+                    }}>"向次窗发送消息"</Button>
+                </HStack>
+            </VStack>
+        </MyCard>
+    }
+}
+
+#[component]
 pub(crate) fn MultiWindowShowcase() -> Element {
     ui! {
         <MyCard title="多窗口与生命周期">

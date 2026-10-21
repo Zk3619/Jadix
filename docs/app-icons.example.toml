@@ -1,5 +1,5 @@
 # Paths are relative to this configuration file. Supply a square PNG master.
-source = "../examples/gallery/assets/app-icon.png"
+source = "../assets/logo.png"
 
 [desktop]
 # windows = "windows.png"

@@ -379,6 +379,10 @@ fn FineGrainedDemo() -> jadix::core::tree::Element {
 
 ## 架构目标 | Architecture Goals
 
+网络采用与媒体相同的外部适配边界：独立 `jadix_net` 定义 HTTP 请求/响应、命令/事件及状态契约，只依赖本地 std-only `jadix_tasks`；可选 `net` / `net-json` 提供 UI 线程回投与 owner 生命周期桥接。实际网络、TLS、运行时及原生取消由应用的第三方库适配器负责，不内置 Reqwest。见[网络适配契约](crates/jadix_net/README.md)。
+
+异步采用同步 UI 核心与可插拔后台执行：`TaskScope` 统一 owner 取消、Future/阻塞任务、窗口作用域恢复和有界事件订阅；资源加载复用既有 Resource/Suspense。执行器、协议后端与共享资产缓存的实现边界见[异步架构](docs/async-architecture.md)与[公共任务契约](crates/jadix_tasks/README.md)。
+
 媒体 UI 提供无默认控件的 Audio / Video 原语，以及 shadcn 风格的 AudioPlayer / VideoPlayer 和可组合控制零件。独立 jadix_media 仅定义标准库契约；解码、设备输出、播放控制执行、时钟与音画同步由外部库负责。双 API、接入示例与生命周期见[媒体组件文档](crates/jadix_media/README.md)。Gallery 绘图页可查看受控状态与命令演示。
 
 - **中文**
@@ -406,6 +410,8 @@ fn FineGrainedDemo() -> jadix::core::tree::Element {
 ---
 
 ## 组件作者约定 | Component authoring
+
+主题支持 shadcn、Microsoft Fluent、Google MD3 和 Liquid Glass 四种风格，覆盖颜色、排版、尺寸、圆角、阴影、组件 slot 及玻璃光学材质。配置与优先级见[主题系统](crates/jadix/THEMES.md)，Gallery 的主题工作台可实时切换和调参。
 
 新增 `#[component]`、改 RSX 属性或宏 `own_prop` 时，遵循 [docs/COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) §1（属性分层与改名）。CSS 短名（`w` / `h` / `class`）留给根节点 chrome；领域测量用 `plot_h` / `col_w` / `rail_w` 这类专名。
 

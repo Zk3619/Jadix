@@ -5,6 +5,18 @@ edition.workspace = true
 license.workspace = true
 publish = false
 
+[package.metadata.bundle]
+name = "Jadix Gallery"
+identifier = "org.jadix.gallery"
+icon = [
+    "../../assets/icons/desktop/app.icns",
+    "../../assets/icons/desktop/hicolor/256x256/apps/app.png",
+    "../../assets/icons/desktop/hicolor/512x512/apps/app.png",
+]
+
+[build-dependencies]
+find-msvc-tools = { workspace = true }
+
 [dependencies]
 # Keep lucide embedded so Icon PUA glyphs never tofu when cwd ≠ workspace.
 jadix = { workspace = true, features = [
@@ -21,7 +33,7 @@ winit = { workspace = true, optional = true }
 winit = { workspace = true }
 
 [features]
-default = ["webview", "performance"]
+default = ["webview", "performance", "devtools", "hot-reload"]
 # Gallery owns sampling policy and the HUD; the framework supplies telemetry.
 performance = ["jadix/performance"]
 webview = ["jadix/webview"]
@@ -38,6 +50,7 @@ system-tray = ["jadix/system-tray"]
 remote-asset = ["jadix/remote-asset"]
 # B1 Inspector (F12). cargo run -p gallery --features devtools
 devtools = ["jadix/devtools"]
+hot-reload = ["jadix/hot-reload"]
 # WP-3.13 rotating cube. Off by default.
 #   cargo run -p gallery --features scene3d
 scene3d = ["jadix/scene3d"]
@@ -49,7 +62,7 @@ image-stream = ["jadix/image-stream"]
 compute = ["jadix/compute"]
 # Windows custom DComp glass recipes (Blur / Aero / tunable Acrylic). Enables DX12.
 #   cargo run -p gallery --features glass
-glass = ["jadix/backend-dx12"]
+glass = ["jadix/backend-dx12", "jadix/native-materials"]
 # Locale overlays. cargo run -p gallery --features i18n
 i18n = ["jadix/i18n"]
 # AccessKit bridge. cargo run -p gallery --features a11y

@@ -128,6 +128,14 @@ pub(crate) fn gallery_nav_menu(
                         </SidebarMenuButton>
                     </SidebarMenuItem>
                     <SidebarMenuItem>
+                        <SidebarMenuButton id={format!("{prefix}-nav-motion")} isActive={section.get() == "motion"} on_click={move || select("motion")}>
+                            <HStack w="100%" items="center" gap="0.5rem" grow="1" min_w="0">
+                                <Icon name="move" size="16px" color="sidebar-foreground" pointer_events="none" />
+                                <Label grow="1" min_w="0" text_size="0.875rem" color="sidebar-foreground">"动画"</Label>
+                            </HStack>
+                        </SidebarMenuButton>
+                    </SidebarMenuItem>
+                    <SidebarMenuItem>
                         <SidebarMenuButton
                             id={format!("{prefix}-nav-theme")}
                             isActive={section.get() == "theme"}
@@ -162,7 +170,7 @@ pub(crate) fn GallerySectionForms() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-forms" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" transition="padding 200ms ease-out">
                     <InputShowcase />
                     <InputAdornmentShowcase />
                     <InputOTPShowcase />
@@ -185,7 +193,7 @@ pub(crate) fn GallerySectionEvents() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-events" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" transition="padding 200ms ease-out">
                     <MouseEventShowcase />
                     <CursorShowcase />
                 </VStack>
@@ -199,7 +207,7 @@ pub(crate) fn GallerySectionOverlays() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-overlays" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" transition="padding 200ms ease-out">
                     <ViewportModalShowcase />
                     <LocalOverlayShowcase />
                     <AnchoredOverlayShowcase />
@@ -218,7 +226,7 @@ pub(crate) fn GallerySectionDraw() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-draw" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" transition="padding 200ms ease-out">
                     <DrawingSvgShowcase />
                     <LucideAnimatedShowcase />
                     <MorphIconShowcase />
@@ -239,7 +247,7 @@ pub(crate) fn GallerySectionData() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-data" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" transition="padding 200ms ease-out">
                     <TableShowcase />
                     <PaginationShowcase />
                     <TimelineShowcase />
@@ -256,7 +264,8 @@ pub(crate) fn GallerySectionNavigation() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-navigation" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" transition="padding 200ms ease-out">
+                    <WindowSessionShowcase />
                     <FullscreenShowcase />
                     <InstanceShowcase />
                     <MultiWindowShowcase />
@@ -281,7 +290,7 @@ pub(crate) fn GallerySectionLayout() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-layout" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" transition="padding 200ms ease-out">
                     <ResponsiveShowcase />
                     <TextFlowShowcase />
                     <LayoutSubtreeShowcase />
@@ -321,7 +330,7 @@ pub(crate) fn GallerySectionText() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-text" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" transition="padding 200ms ease-out">
                     <TextFlowShowcase />
                     <FontOverrideShowcase />
                     <TextAlignShowcase />
@@ -337,11 +346,26 @@ pub(crate) fn GallerySectionText() -> Element {
 }
 
 #[component]
+pub(crate) fn GallerySectionMotion() -> Element {
+    jadix::core::reactivity::isolate_reads(|| {
+        ui! {
+            <ScrollArea id="scroll-motion" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="hidden" scroll_behavior="smooth">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" transition="padding 200ms ease-out">
+                    <LayoutMotionShowcase />
+                    <ResponsiveShowcase />
+                    <RetainedMotionShowcase />
+                </VStack>
+            </ScrollArea>
+        }
+    })
+}
+
+#[component]
 pub(crate) fn GallerySectionAbout() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-about" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" max_w="48rem">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" transition="padding 200ms ease-out" max_w="48rem">
                     <Box bg="secondary" p="1.5rem" rounded="0.75rem" w="100%">
                         <VStack gap="0.5rem">
                             <Label font_weight="700">"Technical Stack"</Label>
@@ -366,7 +390,7 @@ pub(crate) fn GallerySectionBasics() -> Element {
     jadix::core::reactivity::isolate_reads(|| {
         ui! {
             <ScrollArea id="scroll-basics" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
-                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" transition="padding 200ms ease-out">
                     <ButtonShowcase />
                     <ButtonHoverEasingShowcase />
                     <BadgeShowcase />
@@ -390,6 +414,7 @@ pub(crate) fn GallerySectionBasics() -> Element {
                     <AnimationShowcase />
                     <WaapiShowcase />
                     <GeneratorShowcase />
+                    <RetainedMotionShowcase />
                     <TypographyShowcase />
                 </VStack>
             </ScrollArea>
@@ -490,6 +515,9 @@ fn build_gallery_home() -> Element {
                                 <When when={section.get() == "text"}>
                                     <Label id="gal-section-title" w="100%" min_w="0" text_size="1.25rem" font_weight="700" text_overflow="ellipsis">"文本"</Label>
                                 </When>
+                                <When when={section.get() == "motion"}>
+                                    <Label id="gal-section-title" w="100%" min_w="0" text_size="1.25rem" font_weight="700">"动画"</Label>
+                                </When>
                                 <When when={section.get() == "theme"}>
                                     <Label id="gal-section-title" w="100%" min_w="0" text_size="1.25rem" font_weight="700" text_overflow="ellipsis">"主题"</Label>
                                 </When>
@@ -501,6 +529,9 @@ fn build_gallery_home() -> Element {
                                 </When>
                             </Match>
                             <Match scope="examples/gallery/App:section_desc">
+                                <When when={section.get() == "motion"}>
+                                    <Label id="gal-section-desc" w="100%" min_w="0" text_size="0.875rem" color="muted-foreground">"响应式布局投影 · 可中断共享 layout_id · 嵌套反向缩放 · 交互与矢量动画"</Label>
+                                </When>
                                 <When when={section.get() == "events"}>
                                     <Label id="gal-section-desc" w="100%" min_w="0" text_size="0.875rem" color="muted-foreground" text_overflow="ellipsis">
                                         "crates/jadix/src/app/pointer_events.rs：MouseEvent 字段、捕获/冒泡、click LCA"
@@ -549,6 +580,9 @@ fn build_gallery_home() -> Element {
                             </When>
                             <When when={section.get() == "text"}>
                                 <GallerySectionText />
+                            </When>
+                            <When when={section.get() == "motion"}>
+                                <GallerySectionMotion />
                             </When>
                             <When when={section.get() == "theme"}>
                                 <GallerySectionTheme />

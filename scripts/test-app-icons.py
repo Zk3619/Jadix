@@ -13,6 +13,18 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 
 class IconAssets(unittest.TestCase):
+    def test_repository_default_icons_are_reproducible(self):
+        root = Path(__file__).resolve().parents[1]
+        with tempfile.TemporaryDirectory() as temp:
+            output = Path(temp)
+            files = module.generate(root/'assets/app-icons.toml', output, ['desktop','android','ios'])
+            for name in files:
+                with self.subTest(asset=name):
+                    self.assertEqual((output/name).read_bytes(), (root/'assets/icons'/name).read_bytes())
+            with Image.open(output/'desktop/window.png') as icon:
+                self.assertEqual(icon.size, (256,256))
+                self.assertEqual(icon.getpixel((0,0))[3], 0)
+
     def test_all_platform_assets_and_alternate(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)

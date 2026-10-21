@@ -72,9 +72,37 @@ fn open_tool() {
 
 独立次窗不依赖主窗的响应式根执行。捕获到次窗的业务状态必须拥有应用级生命周期；窗口局部组件 Signal 不应当被当作跨窗口业务存储。现有 `shared_slot` 或应用级状态适合跨窗协作。
 
+## 类型化窗口会话
+
+`WindowSession<Args, Message, Result>` 从 `jadix::app` 或 prelude 导入，只能在 UI 线程创建/使用，不需要序列化或额外依赖。
+
+```rust
+use jadix::prelude::*;
+
+fn open_editor() -> Result<(), String> {
+    let session = WindowSession::<String, String, String>::new("document.rs".into());
+    session.on_child_message(|message| println!("child: {message}"));
+    session.on_closed(|event| println!("result: {:?}", event.result));
+    session.open(WindowOptions::new().title("Editor"), |context| {
+        let text = use_signal("editor-text", || context.args().clone());
+        context.on_parent_message(move |message| { text.try_set(message); });
+        Element::new().text(context.args().clone()).on_click(move || {
+            let _ = context.close_with_result(text.peek());
+        })
+    })
+}
+```
+
+- `args()` 提供启动参数；`parent()`、`window()` 返回弱句柄，创建未完成时 `window()` 为 None。`on_opened` 在窗口就绪后通知父窗。
+- 父窗安装 `on_child_message`，子窗安装 `on_parent_message`；用 `send_to_parent` / `send_to_child` 发送。消息 FIFO 入队，在后续事件循环中、接收方窗口作用域执行，避免输入处理重入。未就绪、接收器未安装或已关闭时返回错误；关闭后未投递消息取消。
+- `close_with_result(value)` 请求关闭并保存结果；真正关闭后 `on_closed` 至多调用一次，包含父/子弱句柄及可选结果。原生关闭通常为 None；创建失败也通知，子窗句柄为 None。每个 session 只能 open 一次，保留 session 不会保活原生窗口。
+- 父窗已退出时不要更新已销毁组件状态，可用 `Signal::try_set` 或应用级存储。回调避免强引用捕获同一 session，防止自行形成 Rc 引用环。仍遵守关闭否决和 `close_with_primary` 策略；不是跨进程 IPC。
+
 ## Gallery 交互展示
 
-运行 `cargo run -p gallery`，打开侧栏「导航 / 窗口」，前三张卡片提供：
+运行 `cargo run -p gallery`，打开侧栏「导航 / 窗口」，提供：
+
+- **主次窗传参 / 双向通信 / 关闭回传**：读取启动参数；主窗发送消息更新次窗输入框；次窗回复主窗，或将输入框内容作为结果关闭；原生关闭显示“无返回值”。
 
 - **桌面全屏**：切换、退出、读取原生状态，以及按窗口启用或禁用全屏快捷键；主窗和次窗都可操作。
 - **单例与多开（进程）**：启动单例 A、使用不同应用 ID 的单例 B、或允许多开的新进程。重复点击同一单例按钮，观察原窗口激活、PID 保持不变、接收次数递增，以及参数与工作目录回传。演示进程使用独立入口，不写 Gallery 主窗的几何持久化文件。

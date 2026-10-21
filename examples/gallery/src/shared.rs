@@ -277,10 +277,12 @@ pub(crate) fn MyCard(
 ) -> jadix::core::tree::Element {
     let child = children.unwrap_or_else(jadix::core::tree::Element::new);
     ui! {
-        <VStack w="100%" min_w="0" max_w="100%" bg="background" gap="0.5rem" borderStyle="solid" borderColor="border" borderWidth="0.125" class="rounded-lg p-3 sm:p-4">
-            <Label w="100%" min_w="0" class="text-lg sm:text-xl" font_weight="700" leading="normal">{ title }</Label>
-            { child }
-        </VStack>
+        <Card>
+            <CardHeader>
+                <CardTitle>{ title }</CardTitle>
+            </CardHeader>
+            <CardContent>{ child }</CardContent>
+        </Card>
     }
 }
 
