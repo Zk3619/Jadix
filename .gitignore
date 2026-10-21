@@ -17,6 +17,7 @@ crates/jadix/tmp_stack_crumb.txt
 !.gitignore
 
 !README.md
+!CONTEXT.md
 !LICENSE
 !NOTICE
 
@@ -67,6 +68,7 @@ vendor/winit-win32/target/
 !docs/
 docs/*
 !docs/.gitkeep
+!docs/async-architecture.md
 development-docs/
 
 !scripts/
@@ -91,4 +93,12 @@ development-docs/
 !docs/application-icons.md
 !docs/app-icons.example.toml
 !docs/desktop-windows.md
+!docs/devtools.md
 scripts/__pycache__/
+
+!assets/
+assets/*
+!assets/logo.png
+!assets/app-icons.toml
+!assets/icons/
+!assets/icons/**

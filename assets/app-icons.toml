@@ -1,0 +1,7 @@
+source = "logo.png"
+
+[android]
+background = "#ffffff"
+
+[ios]
+background = "#ffffff"
