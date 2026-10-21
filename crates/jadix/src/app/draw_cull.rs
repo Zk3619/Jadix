@@ -6304,11 +6304,13 @@ mod tests {
             shadow_blur: 0.0,
             shadow_spread: 0.0,
             shadow_inset: 0.0,
+            backdrop_fade: 0.0,
             transform: MAT2D_IDENTITY,
             clip_pos: [0.0, 0.0],
             clip_size: InstanceInput::NO_CLIP_SIZE,
             border_extra: 0.0,
             backdrop_blur: 0.0,
+            glass: [0.0; 4],
         }
     }
 

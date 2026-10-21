@@ -1,4 +1,4 @@
-//! 设计令牌与主题系统（ShadCN v4 + Tailwind v4 `@theme` OKLCH → display sRGB）。
+//! 设计令牌、可组合样式和 shadcn / Fluent / Material 3 / Liquid Glass 主题。
 //!
 //! 语义色源：`apps/v4/app/globals.css`（`:root` / `.dark`）；`chart-*` 引用 Tailwind v4
 //! `theme.css` 的 `--color-blue-*`。组件 chrome（如 Button `/10` 叠底）在组件层用 token
@@ -160,6 +160,9 @@ mod tw_blue {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
     pub mode: ThemeMode,
+    pub preset: super::ThemePreset,
+    pub styles: super::ThemeStyles,
+    pub components: std::collections::BTreeMap<String, String>,
     pub colors: DesignTokens,
     pub focus_ring_style: FocusRingStyle,
     /// Logical px used as Hard `spread` or Soft `blur`. Default [`DEFAULT_FOCUS_RING_WIDTH`].
@@ -174,6 +177,9 @@ impl Theme {
         let surface = oklch_to_display_srgba(0.98, 0.0, 0.0, 1.0);
         Self {
             mode: ThemeMode::Light,
+            preset: super::ThemePreset::Shadcn,
+            styles: super::ThemeStyles::default(),
+            components: Default::default(),
             focus_ring_style: FocusRingStyle::Hard,
             focus_ring_width: DEFAULT_FOCUS_RING_WIDTH,
             colors: DesignTokens {
@@ -239,6 +245,9 @@ impl Theme {
         let surface_fg = oklch_to_display_srgba(0.708, 0.0, 0.0, 1.0);
         Self {
             mode: ThemeMode::Dark,
+            preset: super::ThemePreset::Shadcn,
+            styles: super::ThemeStyles::default(),
+            components: Default::default(),
             focus_ring_style: FocusRingStyle::Hard,
             focus_ring_width: DEFAULT_FOCUS_RING_WIDTH,
             colors: DesignTokens {
@@ -320,7 +329,7 @@ pub fn with_theme<R>(f: impl FnOnce(&Theme) -> R) -> R {
     CURRENT_THEME.with(|t| f(&t.borrow()))
 }
 
-/// Snapshot of the current theme (cheap: tokens are Copy-ish via Clone).
+/// Snapshot of the current palette, style tokens and component overrides.
 pub fn get_theme() -> Theme {
     CURRENT_THEME.with(|t| t.borrow().clone())
 }

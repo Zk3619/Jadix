@@ -5,6 +5,7 @@ struct VertexInput {
 };
 
 struct InstanceInput {
+    @location(1) glass: vec4<f32>,
     @location(2) rect_pos: vec2<f32>,
     @location(3) rect_size: vec2<f32>,
     @location(4) color: vec4<f32>,
@@ -13,7 +14,7 @@ struct InstanceInput {
     @location(7) border_width: f32,
     @location(8) shadow_color: vec4<f32>,
     @location(9) shadow_offset: vec2<f32>,
-    @location(10) shadow_params: vec3<f32>, // x=blur, y=spread, z=inset
+    @location(10) shadow_params: vec4<f32>,
     @location(11) transform_ab: vec2<f32>,   // [a, b] of 2D affine
     @location(12) transform_cd: vec2<f32>,   // [c, d] of 2D affine
     @location(13) transform_txty: vec2<f32>, // [tx, ty] of 2D affine
@@ -36,8 +37,8 @@ struct VertexOutput {
     @location(8) @interpolate(flat) shadow_spread: f32,
     @location(9) @interpolate(flat) shadow_inset: f32,
     @location(10) p: vec2<f32>, // local point relative to rect center (unrotated)
-    @location(11) @interpolate(flat) clip_pos: vec2<f32>,
-    @location(12) @interpolate(flat) clip_size: vec2<f32>,
+    @location(11) @interpolate(flat) clip_rect: vec4<f32>,
+    @location(12) @interpolate(flat) glass: vec4<f32>,
     @location(13) frag_px: vec2<f32>,
     /// x = border_extra; y = clip index; z = backdrop blur; w = world-clip / fast-fill flags.
     /// Must stay ≤ location 14 (`max_inter_stage_shader_variables` is 0..=14).
@@ -73,6 +74,8 @@ var<storage, read> clip_polys: array<GpuClipPoly>;
 var backdrop_tex: texture_2d<f32>;
 @group(1) @binding(1)
 var backdrop_samp: sampler;
+@group(1) @binding(2)
+var optical_source_tex: texture_2d<f32>;
 
 // Apply the linear part (2x2) of the affine transform.
 fn affine_linear(v: vec2<f32>, ab: vec2<f32>, cd: vec2<f32>) -> vec2<f32> {
@@ -184,8 +187,8 @@ fn rect_vertex(
     out.shadow_inset = shadow_inset;
     // Overflow clip is the ancestor layout box in `rect_pos` space. FS tests `in.p`
     // (already affine-inverted) against clip shifted to this instance's center.
-    out.clip_pos = instance.clip_pos - center;
-    out.clip_size = instance.clip_size_and_extra.xy;
+    out.clip_rect = vec4<f32>(instance.clip_pos - center, instance.clip_size_and_extra.xy);
+    out.glass = instance.glass;
     out.frag_px = physical_pos;
     // Bind groups distinguish unclipped draws from polygon-clipped draws.
     // The flag comes from the uniform; storage stays fragment-only on GLES.
@@ -196,7 +199,7 @@ fn rect_vertex(
         f32(instance_idx),
         instance.clip_size_and_extra.w,
         select(0.0, 1.0, has_world_clip) + select(0.0, 2.0, fast_fill)
-            + select(0.0, 4.0, plain_fill),
+            + select(0.0, 4.0, plain_fill) + clamp(instance.shadow_params.w, 0.0, 1.0) * 0.5,
     );
 
     return out;
@@ -339,6 +342,18 @@ fn linearize_srgb_rgb(rgb: vec3<f32>) -> vec3<f32> {
         linearize_srgb_channel(rgb.y),
         linearize_srgb_channel(rgb.z),
     );
+}
+
+fn display_srgb_channel(value: f32) -> f32 {
+    let channel = max(value, 0.0);
+    if (channel <= 0.0031308) {
+        return channel * 12.92;
+    }
+    return 1.055 * pow(channel, 1.0 / 2.4) - 0.055;
+}
+
+fn display_srgb_rgb(rgb: vec3<f32>) -> vec3<f32> {
+    return vec3<f32>(display_srgb_channel(rgb.r), display_srgb_channel(rgb.g), display_srgb_channel(rgb.b));
 }
 
 // CSS 3D border tones: mix toward black / white so a dark `primary` still shows a bevel.
@@ -703,7 +718,50 @@ fn clip_layer_contains(p: vec2<f32>, count: u32, fill: u32, inst_id: u32, second
     return w != 0;
 }
 
+fn optical_glass(in: VertexOutput, distance: f32, local_dx: vec2<f32>, local_dy: vec2<f32>) -> vec4<f32> {
+    let uv = in.frag_px / globals.resolution;
+    let half_size = in.rect_size * 0.5;
+    let packed = in.extra_and_id.x;
+    let encoded_param = floor(packed / 256.0);
+    let shape = floor((packed - encoded_param * 256.0) / 16.0);
+    let epsilon = 0.25;
+    let gradient = vec2<f32>(
+        sd_shaped_box(in.p + vec2<f32>(epsilon, 0.0), half_size, in.radii, shape, encoded_param / 100.0)
+            - sd_shaped_box(in.p - vec2<f32>(epsilon, 0.0), half_size, in.radii, shape, encoded_param / 100.0),
+        sd_shaped_box(in.p + vec2<f32>(0.0, epsilon), half_size, in.radii, shape, encoded_param / 100.0)
+            - sd_shaped_box(in.p - vec2<f32>(0.0, epsilon), half_size, in.radii, shape, encoded_param / 100.0)
+    );
+    let screen_gradient = vec2<f32>(dot(gradient, local_dx), dot(gradient, local_dy));
+    let outward = screen_gradient / max(length(screen_gradient), 0.0001);
+    let depth = max(-distance, 0.0);
+    let edge_width = max(min(in.glass.y * 2.0, min(half_size.x, half_size.y)), 0.5);
+    let slope = (1.0 - smoothstep(0.0, edge_width, depth)) * 0.98;
+    let normal = vec3<f32>(outward * slope, sqrt(max(1.0 - slope * slope, 0.0001)));
+    let ray = refract(vec3<f32>(0.0, 0.0, -1.0), normal, 1.0 / in.glass.x);
+    let pixel_scale = inverseSqrt(max(length(local_dx) * length(local_dy), 0.0001));
+    let displacement = ray.xy / max(abs(ray.z), 0.05) * in.glass.y * pixel_scale / globals.resolution;
+    let uv_min = vec2<f32>(0.5) / globals.resolution;
+    let uv_max = vec2<f32>(1.0) - uv_min;
+    let red = textureSampleLevel(backdrop_tex, backdrop_samp, clamp(uv + displacement * (1.0 + in.glass.z), uv_min, uv_max), 0.0);
+    let green = textureSampleLevel(backdrop_tex, backdrop_samp, clamp(uv + displacement, uv_min, uv_max), 0.0);
+    let blue = textureSampleLevel(backdrop_tex, backdrop_samp, clamp(uv + displacement * (1.0 - in.glass.z), uv_min, uv_max), 0.0);
+    let base_reflectance = pow((in.glass.x - 1.0) / (in.glass.x + 1.0), 2.0);
+    let fresnel = base_reflectance + (1.0 - base_reflectance) * pow(1.0 - normal.z, 5.0);
+    let light = normalize(vec3<f32>(-0.45, -0.65, 0.6));
+    let reflected = reflect(vec3<f32>(0.0, 0.0, -1.0), normal);
+    let specular = pow(max(dot(reflected, light), 0.0), 48.0);
+    let rim = exp(-depth / 1.25) * max(dot(outward, normalize(light.xy)), 0.0);
+    let reflection_uv = clamp(uv + reflected.xy * in.glass.y * pixel_scale / globals.resolution, uv_min, uv_max);
+    let environment = textureSampleLevel(backdrop_tex, backdrop_samp, reflection_uv, 0.0).rgb;
+    var rgb = vec3<f32>(red.r, green.g, blue.b);
+    rgb = mix(rgb, environment, fresnel * in.glass.w);
+    rgb = rgb + vec3<f32>((specular * 0.18 + rim * 0.2) * in.glass.w);
+    return vec4<f32>(clamp(rgb, vec3<f32>(0.0), vec3<f32>(1.0)), green.a);
+}
+
 fn paint_rect(in: VertexOutput) -> vec4<f32> {
+    let local_dx = dpdx(in.p);
+    let local_dy = dpdy(in.p);
     let b = in.rect_size * 0.5;
     // Large axis-aligned fills skip SDF; overflow still uses clip_poly + clip_pos.
     let flags = u32(in.extra_and_id.w);
@@ -727,10 +785,10 @@ fn paint_rect(in: VertexOutput) -> vec4<f32> {
         discard;
     }
     if (simple_fill) {
-        if (in.clip_size.x >= 0.0 && in.clip_size.y >= 0.0) {
-            let c1 = in.clip_pos + in.clip_size;
-            if (in.p.x < in.clip_pos.x || in.p.x >= c1.x
-                || in.p.y < in.clip_pos.y || in.p.y >= c1.y) {
+        if (in.clip_rect.z >= 0.0 && in.clip_rect.w >= 0.0) {
+            let c1 = in.clip_rect.xy + in.clip_rect.zw;
+            if (in.p.x < in.clip_rect.xy.x || in.p.x >= c1.x
+                || in.p.y < in.clip_rect.xy.y || in.p.y >= c1.y) {
                 discard;
             }
         }
@@ -742,10 +800,10 @@ fn paint_rect(in: VertexOutput) -> vec4<f32> {
     }
 
     // Axis-aligned overflow: local border box (same space as SDF `in.p`).
-    if (in.clip_size.x >= 0.0 && in.clip_size.y >= 0.0) {
-        let c1 = in.clip_pos + in.clip_size;
-        if (in.p.x < in.clip_pos.x || in.p.x >= c1.x
-            || in.p.y < in.clip_pos.y || in.p.y >= c1.y) {
+    if (in.clip_rect.z >= 0.0 && in.clip_rect.w >= 0.0) {
+        let c1 = in.clip_rect.xy + in.clip_rect.zw;
+        if (in.p.x < in.clip_rect.xy.x || in.p.x >= c1.x
+            || in.p.y < in.clip_rect.xy.y || in.p.y >= c1.y) {
             discard;
         }
     }
@@ -837,15 +895,19 @@ fn paint_rect(in: VertexOutput) -> vec4<f32> {
     // this instance's background/border on top. SDF `alpha_bg` still clips to radii.
     if (in.extra_and_id.z > 0.5) {
         let uv = in.frag_px / globals.resolution;
-        let blurred = textureSampleLevel(backdrop_tex, backdrop_samp, uv, 0.0);
-        let src_a = final_color.a;
+        var blurred = textureSampleLevel(backdrop_tex, backdrop_samp, uv, 0.0);
+        if (in.glass.x >= 1.0 && in.glass.y > 0.0) {
+            blurred = optical_glass(in, d, local_dx, local_dy);
+        }
+        let material_opacity = 1.0 - fract(in.extra_and_id.w) * 2.0;
+        let src_a = clamp(final_color.a / max(material_opacity, 0.00001), 0.0, 1.0);
         // Page capture is opaque → frost α=1 (CSS backdrop-filter). Dummy / empty
         // capture has α=0 → keep the scrim's own α so already-drawn glyphs are not
         // punched out by an opaque black hole.
         let out_a = src_a + (1.0 - src_a) * blurred.a;
         final_color = vec4<f32>(
-            blurred.rgb * (1.0 - src_a) + final_color.rgb * src_a,
-            out_a
+            display_srgb_rgb((blurred.rgb * blurred.a * (1.0 - src_a) + linearize_srgb_rgb(final_color.rgb) * src_a) / max(out_a, 0.00001)),
+            out_a * material_opacity
         );
     }
 
@@ -909,10 +971,10 @@ fn fs_solid(in: VertexOutput) -> @location(0) vec4<f32> {
     if ((flags & 1u) != 0u && !clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) {
         discard;
     }
-    if (in.clip_size.x >= 0.0 && in.clip_size.y >= 0.0) {
-        let c1 = in.clip_pos + in.clip_size;
-        if (in.p.x < in.clip_pos.x || in.p.x >= c1.x
-            || in.p.y < in.clip_pos.y || in.p.y >= c1.y) {
+    if (in.clip_rect.z >= 0.0 && in.clip_rect.w >= 0.0) {
+        let c1 = in.clip_rect.xy + in.clip_rect.zw;
+        if (in.p.x < in.clip_rect.xy.x || in.p.x >= c1.x
+            || in.p.y < in.clip_rect.xy.y || in.p.y >= c1.y) {
             discard;
         }
     }
@@ -945,9 +1007,9 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
 fn fs_interior(in: VertexOutput) -> @location(0) vec4<f32> {
     let flags = u32(in.extra_and_id.w);
     if ((flags & 1u) != 0u && !clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) { discard; }
-    if (in.clip_size.x >= 0.0 && in.clip_size.y >= 0.0) {
-        let c1 = in.clip_pos + in.clip_size;
-        if (in.p.x < in.clip_pos.x || in.p.x >= c1.x || in.p.y < in.clip_pos.y || in.p.y >= c1.y) { discard; }
+    if (in.clip_rect.z >= 0.0 && in.clip_rect.w >= 0.0) {
+        let c1 = in.clip_rect.xy + in.clip_rect.zw;
+        if (in.p.x < in.clip_rect.xy.x || in.p.x >= c1.x || in.p.y < in.clip_rect.xy.y || in.p.y >= c1.y) { discard; }
     }
     // CPU dispatch proves full opacity and coverage, without inset shadow,
     // backdrop sampling or a transformed edge. Color was decoded in the VS.

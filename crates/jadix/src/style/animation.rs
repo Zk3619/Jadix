@@ -2065,6 +2065,22 @@ fn duration_tween_elapsed_ms(tween: &mut PropertyTween, now_ms: f64) -> f32 {
     elapsed as f32
 }
 
+fn tween_sample_for_property(
+    tween: &mut PropertyTween,
+    property: TransitionProperty,
+    now_ms: f64,
+    dt_secs: f32,
+) -> ([f32; 8], f32) {
+    let (value, progress) = tween_sample(tween, now_ms, dt_secs);
+    let value = if progress < 1.0 && is_color_transition_prop(property) && !tween.timing.is_spring()
+    {
+        lerp_packed_color(&tween.from, &tween.to, tween.timing.eval(progress))
+    } else {
+        value
+    };
+    (value, progress)
+}
+
 fn tween_sample(tween: &mut PropertyTween, now_ms: f64, dt_secs: f32) -> ([f32; 8], f32) {
     if prefers_reduced_motion() {
         return (tween.to, 1.0);
@@ -2747,7 +2763,7 @@ pub fn tick_element_transitions_locked(
         if target_changed {
             tween.components = comps;
             if tween.active {
-                let (mid, _) = tween_sample(tween, now_ms, dt_secs);
+                let (mid, _) = tween_sample_for_property(tween, prop, now_ms, dt_secs);
                 tween.from = mid;
             }
             // Inactive: `from` already equals last settled `to`.
@@ -2766,7 +2782,7 @@ pub fn tick_element_transitions_locked(
             continue;
         }
 
-        let (interpolated, linear_t) = tween_sample(tween, now_ms, dt_secs);
+        let (interpolated, linear_t) = tween_sample_for_property(tween, prop, now_ms, dt_secs);
         let written = if linear_t >= 1.0 - 1e-6 {
             tween.active = false;
             tween.from = tween.to;
@@ -2775,12 +2791,7 @@ pub fn tick_element_transitions_locked(
             tween.to
         } else {
             any_active = true;
-            if is_color_transition_prop(prop) && !tween.timing.is_spring() {
-                let eased = tween.timing.eval(linear_t);
-                lerp_packed_color(&tween.from, &tween.to, eased)
-            } else {
-                interpolated
-            }
+            interpolated
         };
         write_prop(style, prop, &written, tween.components);
         tween.written = Some(written);

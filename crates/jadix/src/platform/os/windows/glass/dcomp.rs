@@ -3,26 +3,26 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use windows::core::{Interface, HSTRING};
 use windows::Foundation::TimeSpan;
 use windows::System::{DispatcherQueue, DispatcherQueueController};
-use windows::Win32::Foundation::{HANDLE, HWND};
-use windows::Win32::Graphics::DirectComposition::DCompositionCreateSurfaceHandle;
-use windows::Win32::System::WinRT::Composition::{ICompositorDesktopInterop, ICompositorInterop};
-use windows::Win32::System::WinRT::{
-    CreateDispatcherQueueController, DispatcherQueueOptions, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT,
-};
 use windows::UI::Color;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::{
     CompositionBrush, CompositionColorBrush, CompositionEasingFunction, Compositor,
     ContainerVisual, SpriteVisual,
 };
+use windows::Win32::Foundation::{HANDLE, HWND};
+use windows::Win32::Graphics::DirectComposition::DCompositionCreateSurfaceHandle;
+use windows::Win32::System::WinRT::Composition::{ICompositorDesktopInterop, ICompositorInterop};
+use windows::Win32::System::WinRT::{
+    CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
+};
+use windows::core::{HSTRING, Interface};
 use windows_numerics::{Vector2, Vector3};
 
-use crate::app::glass_params::aero_overlay;
 use crate::app::WindowBackdrop;
 use crate::app::WindowOptions;
+use crate::app::glass_params::aero_overlay;
 
 use super::recipes::{create_recipe_brush, gaussian_host_brush};
 
@@ -103,6 +103,31 @@ fn ensure_dispatcher_queue() -> windows::core::Result<()> {
             }
         }
     }
+}
+
+#[cfg(test)]
+#[test]
+#[ignore = "requires Windows system composition effects; run explicitly with --ignored"]
+fn theme_window_recipes_use_supported_sdk_effects_without_fallback() {
+    ensure_dispatcher_queue().unwrap();
+    let previous = crate::style::get_theme();
+    let compositor = Compositor::new().unwrap();
+    for preset in [
+        crate::style::ThemePreset::Fluent,
+        crate::style::ThemePreset::LiquidGlass,
+    ] {
+        crate::style::set_theme_preset(preset);
+        for mode in [
+            crate::style::ThemeMode::Light,
+            crate::style::ThemeMode::Dark,
+        ] {
+            crate::style::set_theme_mode(mode);
+            let options = WindowOptions::new().follow_theme(true).themed();
+            create_recipe_brush(&compositor, &options, true, crate::style::is_dark_theme())
+                .unwrap();
+        }
+    }
+    crate::style::set_theme(previous);
 }
 
 fn wash_color(rgb: [u8; 3], opacity: f32) -> Color {
@@ -270,6 +295,16 @@ fn recipe_or_fallback(
     active: bool,
     dark: bool,
 ) -> windows::core::Result<CompositionBrush> {
+    let themed = options.themed();
+    let options = &themed;
+    if !options.blur {
+        return Interface::cast(&compositor.CreateColorBrushWithColor(Color {
+            A: 0,
+            R: 0,
+            G: 0,
+            B: 0,
+        })?);
+    }
     match create_recipe_brush(compositor, options, active, dark) {
         Ok(b) => Ok(b),
         Err(e) => {
@@ -306,9 +341,13 @@ fn try_new(
     }
     let backdrop = compositor.CreateSpriteVisual()?;
     backdrop.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })?;
-    let dark = os_dark || crate::style::is_dark_theme();
+    let dark = if options.follow_theme {
+        crate::style::is_dark_theme()
+    } else {
+        os_dark || crate::style::is_dark_theme()
+    };
     let mut current_brush = None;
-    if options.blur {
+    if options.blur || options.follow_theme {
         let brush = recipe_or_fallback(&compositor, options, true, dark)?;
         backdrop.SetBrush(&brush)?;
         current_brush = Some(brush);
@@ -337,7 +376,7 @@ fn try_new(
     let surface_brush = compositor.CreateSurfaceBrushWithSurface(&surface)?;
     content.SetBrush(&surface_brush)?;
     let children = root.Children()?;
-    if options.blur {
+    if options.blur || options.follow_theme {
         children.InsertAtBottom(&backdrop)?;
         if let Some(ref vis) = tint_overlay {
             children.InsertAtTop(vis)?;
@@ -393,7 +432,11 @@ fn set_host_dark(host: &mut DcompGlassHost, os_dark: Option<bool>, animate: bool
     if let Some(os) = os_dark {
         host.os_dark = os;
     }
-    let dark = host.os_dark || crate::style::is_dark_theme();
+    let dark = if host.options.follow_theme {
+        crate::style::is_dark_theme()
+    } else {
+        host.os_dark || crate::style::is_dark_theme()
+    };
     let changed = host.dark != dark;
     host.dark = dark;
     if changed {
@@ -482,6 +525,9 @@ pub fn sync_jadix_theme() {
         let mut map = h.borrow_mut();
         for host in map.values_mut() {
             set_host_dark(host, None, false);
+            if host.options.follow_theme {
+                refresh_brush(host, false);
+            }
         }
     });
 }

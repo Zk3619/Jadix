@@ -621,11 +621,13 @@ pub fn decode_path_d(d: &str) -> Vec<PathCommand> {
 pub fn flatten_path(cmds: &[PathCommand]) -> Vec<PathCommand> {
     let mut out = Vec::with_capacity(cmds.len());
     let mut cur = (0.0f32, 0.0f32);
+    let mut subpath_start = cur;
     for cmd in cmds {
         match *cmd {
             PathCommand::MoveTo(p) => {
                 out.push(PathCommand::MoveTo(p));
                 cur = p;
+                subpath_start = p;
             }
             PathCommand::LineTo(p) => {
                 out.push(PathCommand::LineTo(p));
@@ -660,6 +662,7 @@ pub fn flatten_path(cmds: &[PathCommand]) -> Vec<PathCommand> {
             }
             PathCommand::Close => {
                 out.push(PathCommand::Close);
+                cur = subpath_start;
             }
         }
     }

@@ -706,8 +706,8 @@ pub(crate) fn subtree_is_skippable(el: &Element) -> bool {
 
 fn node_is_scrollbar_chrome(el: &Element) -> bool {
     el.focus_id.as_deref().is_some_and(|fid| {
-        fid.starts_with(crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX)
-            || fid.starts_with(crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
+        fid.starts_with(crate::core::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX)
+            || fid.starts_with(crate::core::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
     })
 }
 
@@ -735,6 +735,16 @@ fn node_collect_is_live(el: &Element) -> bool {
 
 /// Local continuously sampled paint, excluding descendants and timer-driven carets.
 pub(crate) fn node_paint_needs_frame(el: &Element) -> bool {
+    if el.liquid_flow.as_ref().is_some_and(crate::style::liquid_flow::LiquidFlow::is_active) {
+        return true;
+    }
+    if el
+        .layout_motion
+        .as_ref()
+        .is_some_and(crate::motion::LayoutMotion::is_active)
+    {
+        return true;
+    }
     if el.attrs.get("jadix_animate").is_some_and(|v| {
         matches!(
             v.as_str(),
@@ -923,6 +933,7 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
             || el.attrs.get("data-slot").map(String::as_str) == Some("sidebar-menu-button")
             || el.attrs.contains_key("jadix_tree_row_chrome");
         let mut reactive_sync = el.reactive_sync.is_some();
+        let mut layout_motion = el.layout_motion.is_some() || el.liquid_flow.is_some();
         let mut collapse_work = reactive_sync
             || el.attrs.contains_key("jadix_collapse_measuring")
             || el.attrs.contains_key("jadix_collapse_damage");
@@ -938,6 +949,7 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
             hover_armed |= child.css_hover_armed;
             paint_sync |= child.subtree_paint_sync;
             reactive_sync |= child.subtree_reactive_sync;
+            layout_motion |= child.subtree_layout_motion;
             collapse_work |= child.subtree_collapse_work;
             floating_panel |= child.subtree_floating_panel;
             hover_cursor |= child.subtree_hover_cursor;
@@ -952,6 +964,7 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
         el.css_hover_armed = hover_armed;
         el.subtree_paint_sync = paint_sync;
         el.subtree_reactive_sync = reactive_sync;
+        el.subtree_layout_motion = layout_motion;
         el.subtree_collapse_work = collapse_work;
         el.subtree_floating_panel = floating_panel;
         el.subtree_hover_cursor = hover_cursor;
@@ -1015,12 +1028,21 @@ fn node_seeds_scroll_skip(el: &Element) -> bool {
 }
 
 fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
+    el.attrs.contains_key(crate::style::liquid_flow::ITEM).hash(h);
+    if let Some(sample) = el.liquid_flow.as_ref().and_then(crate::style::liquid_flow::LiquidFlow::sample) {
+        hash_f32s(h, &sample);
+    }
+    if el.layout_motion.is_some() {
+        hash_f32s(h, &crate::motion::presentation_translate(el));
+        hash_f32s(h, &crate::motion::presentation_scale(el));
+    }
     // Do not hash `layout_bounds`: collect stamps them after this pass, so
     // frame N's fingerprint would never match frame N+1. Position/size live in GeomKey.
     hash_f32s(h, &el.scroll_offset);
     el.text.hash(h);
     el.template_id.hash(h);
     el.image_texture.hash(h);
+    el.attrs.get(crate::primitives::path::ATTR_PATH_D).hash(h);
     el.attrs.get("jadix_video_size").hash(h);
     el.attrs.get("jadix_video_fit").hash(h);
     el.attrs.get("jadix_video_content_ratio").hash(h);
@@ -1034,12 +1056,12 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
     el.style.opacity.to_bits().hash(h);
     // Auto scrollbar cubic is not baked into `bg_color`. Hash the live peek so
     // fingerprint skip busts the rail without disabling collect-skip for the page.
-    if let Some(v) = crate::components::scrollbar::auto_scrollbar_live_paint_alpha(el) {
+    if let Some(v) = crate::core::scrollbar::auto_scrollbar_live_paint_alpha(el) {
         v.to_bits().hash(h);
     }
     // Overlay thumbs are signal-driven (ViewportsOnly does not write Taffy margin).
     // Hash live offset / metrics or skip replays a frozen rail while the list scrolls.
-    if let Some(bits) = crate::components::scrollbar::scrollbar_live_geometry_bits(el) {
+    if let Some(bits) = crate::core::scrollbar::scrollbar_live_geometry_bits(el) {
         bits.hash(h);
     }
     hash_f32s(h, &el.style.radii);
@@ -1090,6 +1112,8 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
     }
     hash_f32s(h, &el.style.bg_position);
     el.style.backdrop_blur.to_bits().hash(h);
+    el.style.glass.is_some().hash(h);
+    if let Some(glass) = el.style.glass { hash_f32s(h, &glass.gpu_params()); }
     match el.style.transform.as_ref() {
         Some(list) => {
             true.hash(h);
@@ -2276,7 +2300,7 @@ mod tests {
         let mut thumb = Element::new().w(8.0).h(24.0);
         thumb.focus_id = Some(format!(
             "{}sa:y",
-            crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX
+            crate::core::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX
         ));
         assert!(
             !subtree_is_skippable(&thumb),
@@ -2285,7 +2309,7 @@ mod tests {
         let mut track = Element::new().w(8.0).h(120.0);
         track.focus_id = Some(format!(
             "{}sa:y",
-            crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX
+            crate::core::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX
         ));
         assert!(!subtree_is_skippable(&track));
     }
@@ -2648,6 +2672,26 @@ mod tests {
             self_paint_hash(&el),
             "backdrop_blur must bust paint-hash skip"
         );
+    }
+
+    #[test]
+    fn paint_hash_includes_glass_optical_parameters() {
+        let mut element = Element::new().bg("card");
+        let plain = self_paint_hash(&element);
+        element.style.glass = Some(crate::style::GlassMaterial::default());
+        let glass = self_paint_hash(&element);
+        assert_ne!(plain, glass);
+        for field in 0..4 {
+            let mut material = crate::style::GlassMaterial::default();
+            match field {
+                0 => material.refraction_index = 1.8,
+                1 => material.thickness = 24.0,
+                2 => material.dispersion = 0.1,
+                _ => material.highlight = 0.9,
+            }
+            element.style.glass = Some(material);
+            assert_ne!(glass, self_paint_hash(&element));
+        }
     }
 
     #[test]

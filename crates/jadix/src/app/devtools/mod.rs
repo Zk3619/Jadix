@@ -1,9 +1,15 @@
 //! Runtime Inspector (B1): Elements pick/highlight + Reactivity graph + Layout/CSSOM.
 
+pub(crate) mod controls;
 mod overlay;
+mod device;
+pub(crate) use device::viewport_size as preview_viewport_size;
+mod locale;
 mod panel;
+mod presentation;
 mod reactivity_panel;
 mod snapshot;
+mod source;
 mod state;
 mod style_edit;
 
@@ -28,7 +34,36 @@ pub(crate) use overlay::{
     scroll_elements_tree_row_into_center, set_highlight_collect_root, stamped_highlight_abs_rect,
     sync_box_model_visuals, sync_tree_row_hovers, HIGHLIGHT_SLOT_ID,
 };
-pub(crate) use panel::{sync_inspector_applied_cssom, sync_overlay, wrap_app};
+pub(crate) use device::scope_portals as scope_preview_portals;
+pub(crate) use device::PORTAL_HOST as DEVICE_PORTAL_HOST;
+pub(crate) use panel::{sync_inspector_applied_cssom, sync_overlay_layout, wrap_app};
+pub use presentation::{is_detached, toggle_detached};
+pub(crate) use presentation::window_resized as detached_window_resized;
+pub(crate) use presentation::is_detached_window;
+
+pub(crate) fn sync_secondary_chrome(root: &mut crate::core::tree::Element) -> bool {
+    overlay::patch_detached_row_hovers(root)
+}
+
+#[cfg(test)]
+fn set_test_scroll_offset(element: &mut crate::core::tree::Element, offset: [f32; 2]) {
+    element.scroll_offset = offset;
+    if let Some(rest) = element
+        .focus_id
+        .as_deref()
+        .and_then(|id| id.strip_prefix("scroll:"))
+    {
+        use crate::core::{reactivity::use_signal, scroll_viewport};
+        use_signal(&scroll_viewport::scroll_offset_x_signal_key(rest), || {
+            0.0_f32
+        })
+        .set_silent(offset[0]);
+        use_signal(&scroll_viewport::scroll_offset_y_signal_key(rest), || {
+            0.0_f32
+        })
+        .set_silent(offset[1]);
+    }
+}
 
 pub(crate) fn try_toggle_from_key(
     event: &winit::event::KeyEvent,
@@ -43,6 +78,12 @@ pub(crate) fn try_toggle_from_key(
     use winit::keyboard::{Key, NamedKey};
     match &event.logical_key {
         Key::Named(NamedKey::F12) => {
+            DevToolsState::toggle_open();
+            true
+        }
+        Key::Character(c)
+            if c.eq_ignore_ascii_case("i") && modifiers.control_key() && modifiers.shift_key() =>
+        {
             DevToolsState::toggle_open();
             true
         }
@@ -242,7 +283,7 @@ mod tests {
     }
 
     #[test]
-    fn pick_commit_keeps_overlay_on_selected_node() {
+    fn pick_commit_clears_overlay_until_tree_row_hover() {
         use super::overlay::{refresh_highlight, stamped_highlight_abs_rect, HIGHLIGHT_SLOT_ID};
         use super::snapshot::find_element_by_template_mut;
 
@@ -276,16 +317,12 @@ mod tests {
 
         assert!(try_pick_click(&root, 15.0, 15.0));
         assert!(!DevToolsState::is_pick());
-        // Commit pins the overlay to the selection (Chrome-style), not a blank page.
         assert!(!DevToolsState::selected_path_key().is_empty());
-        assert_eq!(
-            DevToolsState::overlay_path_key(),
-            DevToolsState::selected_path_key()
-        );
+        assert!(DevToolsState::overlay_path_key().is_empty());
         let _ = sync_highlight_after_pick_commit(&mut root);
         let _ = refresh_highlight(&mut root);
         let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
-        assert!(stamped_highlight_abs_rect(&slot.children[4]).is_some());
+        assert!(stamped_highlight_abs_rect(&slot.children[4]).is_none());
     }
 
     #[test]
@@ -386,6 +423,7 @@ mod tests {
             let col = Element::new()
                 .flex_col()
                 .w(200.0)
+                .h(1400.0)
                 .flex_shrink(0.0)
                 .children(vec![spacer, target]);
 
@@ -395,7 +433,7 @@ mod tests {
                 .overflow_y("scroll")
                 .focus_id("scroll:pick-main")
                 .child(col);
-            viewport.scroll_offset = [0.0, 200.0];
+            crate::app::devtools::set_test_scroll_offset(&mut viewport, [0.0, 200.0]);
 
             let app = Element::new().w("100%").h("100%").child(viewport);
             let mut root = wrap_app(app);

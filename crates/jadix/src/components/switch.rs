@@ -406,6 +406,8 @@ impl From<SwitchBuilder> for Element {
             track = track.cursor_kind(crate::core::tree::CursorKind::Pointer);
         }
         track.template_id = Some(id.clone());
+        if disabled && !has_caption { track.set_attr("disabled", "true"); }
+        track = crate::components::base::stamp_slot(track, "switch");
 
         if !has_caption {
             return chrome.apply(track);
@@ -431,7 +433,8 @@ impl From<SwitchBuilder> for Element {
         if disabled {
             root = root.opacity(0.5).cursor_not_allowed();
         }
-        chrome.apply(root)
+        if disabled { root.set_attr("disabled", "true"); }
+        crate::components::base::paint_slot(root, "switch-group", &chrome)
     }
 }
 

@@ -9,8 +9,7 @@ use crate::app::portal_overlay::{
 use crate::core::reactivity::Signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::primitives::overlay::overlay;
-use crate::style::{parse_color, semantic_modal_overlay_scrim, SemanticTone};
-use crate::tokens;
+use crate::style::{semantic_modal_overlay_scrim, SemanticTone};
 
 /// 模态遮罩默认不透明度（alpha）。
 pub const DEFAULT_MODAL_OVERLAY_OPACITY: f32 = 0.25;
@@ -75,17 +74,10 @@ impl ShellOverlayOpts {
     }
 }
 
-/// `color`: semantic color / hex; the default is RGB of `background`.  
+/// `color`: semantic color / hex; the default follows the preset's neutral scrim.
 /// `opacity`：遮罩 alpha，缺省 [`DEFAULT_MODAL_OVERLAY_OPACITY`]。
 pub fn default_modal_overlay_color(color: Option<&str>, opacity: Option<f32>) -> [f32; 4] {
-    let mut c = match color {
-        Some(s) if !s.is_empty() => parse_color(s),
-        _ => tokens::background(),
-    };
-    c[3] = opacity
-        .unwrap_or(DEFAULT_MODAL_OVERLAY_OPACITY)
-        .clamp(0.0, 1.0);
-    c
+    semantic_modal_overlay_scrim(SemanticTone::Default, color, opacity)
 }
 
 pub fn modal_sync(id: &str, open: Signal<bool>) -> Option<ModalShellZs> {

@@ -176,6 +176,7 @@ pub fn scale_instances_in_place(instances: &mut [InstanceInput], scale: f32) {
         out.shadow_offset[1] *= scale;
         out.shadow_blur *= scale;
         out.shadow_spread *= scale;
+        out.glass[1] *= scale;
         // Origin txty is logical px (same space as rect_pos). Linear 2×2 stays.
         out.transform[4] *= scale;
         out.transform[5] *= scale;

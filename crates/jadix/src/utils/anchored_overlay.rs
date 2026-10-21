@@ -9,7 +9,7 @@ use std::sync::OnceLock;
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized, retained_reactive_anchor};
 use crate::utils::floating_motion::{
     apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
     FloatingPresenceHandle,
@@ -189,6 +189,11 @@ fn overlay_context() -> Context<AnchoredOverlayCtx> {
     *CTX.get_or_init(create_context::<AnchoredOverlayCtx>)
 }
 
+fn retained_overlay_context() -> Context<bool> {
+    static CTX: OnceLock<Context<bool>> = OnceLock::new();
+    *CTX.get_or_init(create_context::<bool>)
+}
+
 pub fn use_anchored_overlay() -> Option<AnchoredOverlayCtx> {
     use_context(overlay_context())
 }
@@ -207,6 +212,7 @@ pub fn provide_anchored_overlay_context(
             trigger_fid,
         },
     );
+    provide_context(retained_overlay_context(), false);
 }
 
 fn require_anchored_overlay(part: &str) -> AnchoredOverlayCtx {
@@ -219,6 +225,23 @@ pub fn anchored_overlay_scope(
     id: impl Into<String>,
     open: Option<Signal<bool>>,
     body: impl FnOnce() -> Element,
+) -> Element {
+    anchored_overlay_scope_impl(id, open, body, false)
+}
+
+pub fn retained_anchored_overlay_scope(
+    id: impl Into<String>,
+    open: Option<Signal<bool>>,
+    body: impl FnOnce() -> Element,
+) -> Element {
+    anchored_overlay_scope_impl(id, open, body, true)
+}
+
+fn anchored_overlay_scope_impl(
+    id: impl Into<String>,
+    open: Option<Signal<bool>>,
+    body: impl FnOnce() -> Element,
+    retained: bool,
 ) -> Element {
     let id = crate::utils::resolve_instance_id(id, "anchored_overlay");
     let open = open.unwrap_or_else(|| use_signal(format!("{id}__ao_open").as_str(), || false));
@@ -234,6 +257,7 @@ pub fn anchored_overlay_scope(
                 trigger_fid,
             },
         );
+        provide_context(retained_overlay_context(), retained);
         body()
     });
     if root.template_id.is_none() {
@@ -253,6 +277,7 @@ pub struct AnchoredOverlayBuilder {
     kind: Option<OverlayKind>,
     motion: Option<FloatingMotionKind>,
     mode: OverlayMode,
+    retained: bool,
     match_trigger_width: bool,
     max_h: Option<String>,
     width: Option<String>,
@@ -273,6 +298,7 @@ pub fn anchored_overlay(id: impl Into<String>) -> AnchoredOverlayBuilder {
         kind: None,
         motion: None,
         mode: OverlayMode::Stacked,
+        retained: false,
         match_trigger_width: false,
         max_h: None,
         width: None,
@@ -315,6 +341,11 @@ impl AnchoredOverlayBuilder {
         } else {
             OverlayMode::Stacked
         };
+        self
+    }
+
+    pub fn retained(mut self) -> Self {
+        self.retained = true;
         self
     }
 
@@ -383,13 +414,23 @@ impl AnchoredOverlayBuilder {
                 lock_page_scroll: self.lock_page_scroll,
                 scroll_freeze: self.scroll_freeze,
             };
-            anchored_overlay_scope(self.id, self.open, move || {
+            let scope = if self.retained {
+                retained_anchored_overlay_scope
+            } else {
+                anchored_overlay_scope
+            };
+            scope(self.id, self.open, move || {
                 let mut frag = Element::new();
                 frag.set_attr("jadix_fragment", "1");
                 frag.children(vec![anchored_overlay_content(opts, body)])
             })
         } else {
-            anchored_overlay_scope(self.id, self.open, body)
+            let scope = if self.retained {
+                retained_anchored_overlay_scope
+            } else {
+                anchored_overlay_scope
+            };
+            scope(self.id, self.open, body)
         }
     }
 
@@ -558,15 +599,10 @@ pub fn anchored_overlay_content(
     let open = ctx.open;
     let id = ctx.id.clone();
     let trigger_fid = ctx.trigger_fid;
+    let retained = use_context(retained_overlay_context()).unwrap_or(false);
     let view_id = format!("{id}__view");
     let presence = use_floating_presence(&id, opts.motion);
-
-    reactive_anchor(view_id.clone(), move || {
-        // Do not build `body()` until the portal still wants a panel. ColorPicker
-        // hex Input binds a scoped `out`; TabsContent dispose kills it while a
-        // leftover hoist can still paint. `open.try_peek()` alone is not enough:
-        // gallery `<ColorPicker>` keeps `open` on a child owner that dies with
-        // the tab, but `assemble_panel` used to evaluate `body()` first.
+    let render = move || {
         if open.try_peek().is_none() {
             let _ = floating_portal_phase(
                 &id,
@@ -598,8 +634,15 @@ pub fn anchored_overlay_content(
             phase,
             oz,
         )
-    });
-    flow_hidden_portal_host(reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none())
+    };
+    if retained {
+        retained_reactive_anchor(view_id.clone(), render);
+    } else {
+        reactive_anchor(view_id.clone(), render);
+    }
+    flow_hidden_portal_host(
+        reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none(),
+    )
 }
 
 /// RSX `<AnchoredOverlayContent>` entry (same implementation as [`anchored_overlay_content`]).
@@ -1202,6 +1245,32 @@ mod tests {
             .get(key)
             .map(String::as_str)
             .or_else(|| el.children.iter().find_map(|c| find_attr(c, key)))
+    }
+
+    #[test]
+    fn retained_builder_registers_from_untracked_tree_construction() {
+        use crate::app::reactive::{registered_anchor_count, reset_registered_anchors};
+
+        reset_registered_anchors();
+        let before = registered_anchor_count();
+        let (_owner, tree) = create_root(|| {
+            let open = use_signal("retained-overlay-test-open", || false);
+            let tree = anchored_overlay("retained-overlay-test")
+                .open(open)
+                .retained()
+                .placement(Placement::trigger(
+                    "retained-overlay-test-trigger",
+                    PopupPlacement::BottomStart,
+                    4.0,
+                    FloatingStrategy::Auto,
+                ))
+                .child(|| Element::new().text("Option"));
+            assert_eq!(registered_anchor_count(), before + 1);
+            tree
+        });
+        assert!(find_attr(&tree, "jadix_fragment").is_some());
+        reset_registered_anchors();
+        clear_overlay_stack();
     }
 
     #[test]

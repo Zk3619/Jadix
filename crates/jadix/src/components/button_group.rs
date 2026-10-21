@@ -231,7 +231,11 @@ fn positive_radius(el: &Element) -> f32 {
         .filter(|v| *v > 0.0)
         .fold(0.0_f32, f32::max);
     if m > 0.0 {
-        m
+        [el.style.size.width, el.style.size.height]
+            .into_iter()
+            .filter_map(crate::layout::dim_length_px)
+            .filter(|size| *size > 0.0)
+            .fold(m, |radius, size| radius.min(size * 0.5))
     } else {
         JOIN_RADIUS_PX
     }
@@ -292,6 +296,7 @@ fn paint_seam(el: &mut Element, color: [f32; 4]) {
     el.style.min_size.height = zero_min;
     el.style.translate = [0.0, 0.0];
     el.style.bg_color = color;
+    el.style.border_color = color;
     el.style.set_uniform_border_width(0.0);
     el.style.radii = [0.0; 4];
     el.style.z_index = 1;
@@ -323,6 +328,76 @@ pub(crate) fn paint_join_frame(el: &mut Element, frame: &JoinFrame) {
     el.style.border_color_sides = None;
     el.style.set_uniform_border_width(JOIN_BORDER_PX);
     el.style.radii = [frame.radius; 4];
+}
+
+pub(crate) fn sync_join_seams(
+    group: &mut Element,
+    hit_nodes: &std::collections::HashSet<*const Element>,
+) -> bool {
+    if !matches!(slot_of(group), Some(SLOT_ROOT | "toggle-group"))
+        || !group.children.iter().any(is_separator_slot)
+    {
+        return false;
+    }
+    let hovered = group
+        .children
+        .iter()
+        .position(|item| hit_nodes.contains(&(item as *const Element)));
+    let previous_hovered = group
+        .attrs
+        .get("jadix_button_group_hover_index")
+        .and_then(|value| value.parse::<usize>().ok());
+    let hover_changed = hovered != previous_hovered;
+    if hover_changed {
+        if let Some(index) = hovered {
+            group.set_attr("jadix_button_group_hover_index", index.to_string());
+        } else {
+            group.attrs.remove("jadix_button_group_hover_index");
+        }
+    }
+    let mut changed = false;
+    for index in 1..group.children.len().saturating_sub(1) {
+        if !is_separator_slot(&group.children[index]) {
+            continue;
+        }
+        let adjacent = [&group.children[index - 1], &group.children[index + 1]];
+        let enabled = |item: &&Element| {
+            item.attrs.get("aria-disabled").map(String::as_str) != Some("true")
+                && item
+                    .attrs
+                    .get("disabled")
+                    .map(String::as_str)
+                    .is_none_or(|value| value == "false")
+        };
+        let fill = adjacent
+            .iter()
+            .copied()
+            .filter(enabled)
+            .find(|item| hit_nodes.contains(&(*item as *const Element)))
+            .or_else(|| {
+                adjacent.iter().copied().filter(enabled).find(|item| {
+                    matches!(
+                        item.attrs.get("data-state").map(String::as_str),
+                        Some("on" | "active")
+                    ) || item.attrs.get("data-active").map(String::as_str) == Some("true")
+                })
+            })
+            .map(|item| item.style.bg_color);
+        let seam = &mut group.children[index];
+        let color = fill.unwrap_or(seam.style.border_color);
+        if seam.style.bg_color != color {
+            seam.style.bg_color = color;
+            seam.collect_paint_hash = 0;
+            changed = true;
+        }
+    }
+    let transitioning = group.children.iter().any(|item| {
+        item.transition_snapshot.has_active_tweens() || item.transition_snapshot.settled_this_tick()
+    });
+    if changed || transitioning || hover_changed {
+        crate::app::damage::push_frame_paint_element(group, group.paint_scroll_acc);
+    }
+    changed || transitioning || hover_changed
 }
 
 /// Fuse corners and, when any segment had a stroke, return the frame to paint
@@ -771,6 +846,83 @@ mod tests {
             el.attrs.get("data-orientation").map(String::as_str),
             Some("vertical")
         );
+    }
+
+    #[test]
+    fn vertical_pill_groups_use_segment_radius_not_whole_group_radius() {
+        use crate::style::{set_theme, set_theme_preset, theme_preset, ThemePreset};
+        let previous = crate::style::get_theme();
+        for preset in [ThemePreset::LiquidGlass, ThemePreset::Material3] {
+            set_theme_preset(preset);
+            crate::core::reactivity::create_root(|| {
+                let group: Element = button_group()
+                    .orientation("vertical")
+                    .child(button("pill-top").variant("outline").text("Top"))
+                    .child(button("pill-middle").variant("outline").text("Middle"))
+                    .child(button("pill-bottom").variant("outline").text("Bottom"))
+                    .into();
+                let height =
+                    crate::layout::dim_length_px(segments(&group)[0].style.size.height).unwrap();
+                assert!(group.style.radii[0] <= height * 0.5,
+                    "{preset:?} group radius must match its end segment, not the entire stack: {:?}", group.style.radii);
+                assert!(segments(&group)[0].style.radii[0] <= height * 0.5);
+                assert_eq!(theme_preset(), preset);
+            });
+        }
+        set_theme(previous);
+    }
+
+    #[test]
+    fn hovered_joined_segment_covers_adjacent_seam() {
+        crate::core::reactivity::create_root(|| {
+            let mut root = Element::new().w(240.0).h(160.0).child(Element::from(
+                button_group()
+                    .orientation("vertical")
+                    .child(button("seam-top").variant("outline").text("Top"))
+                    .child(button("seam-middle").variant("outline").text("Middle")),
+            ));
+            let mut layout = crate::layout::layout_tree::LayoutTree::new();
+            layout.build_and_layout(&mut root, 240.0, 160.0, [-1.0; 2]);
+            let bounds = root.children[0].children[0].layout_bounds;
+            let mouse = [bounds[0] + bounds[2] * 0.5, bounds[1] + bounds[3] * 0.5];
+            let mut impact = crate::core::tree::LayoutStatus::Clean;
+            crate::style::sync_class_variants_subtree(
+                &mut root,
+                mouse,
+                "",
+                false,
+                240.0,
+                160.0,
+                &mut layout,
+                &mut impact,
+            );
+            let group = &root.children[0];
+            assert_eq!(
+                group.children[1].style.bg_color, group.children[0].style.bg_color,
+                "an occupied seam must continue the hovered fill, not leave a neutral hairline"
+            );
+        });
+    }
+
+    #[test]
+    fn hovering_selected_segment_repaints_group_even_with_unchanged_seam_color() {
+        crate::core::reactivity::create_root(|| {
+            let mut group: Element = button_group()
+                .child(button("selected-top").variant("outline").text("Top"))
+                .child(button("selected-middle").variant("outline").text("Middle"))
+                .into();
+            group.children[2].set_attr("data-state", "on");
+            group.children[2].style.bg_color = [0.25, 0.25, 0.25, 1.0];
+            let idle = std::collections::HashSet::new();
+            assert!(sync_join_seams(&mut group, &idle));
+            assert!(!sync_join_seams(&mut group, &idle));
+            let color = group.children[1].style.bg_color;
+            let hovered = std::collections::HashSet::from([&group.children[2] as *const Element]);
+            assert!(sync_join_seams(&mut group, &hovered));
+            assert_eq!(group.children[1].style.bg_color, color);
+            assert!(!sync_join_seams(&mut group, &hovered));
+            assert!(sync_join_seams(&mut group, &idle));
+        });
     }
 
     #[test]

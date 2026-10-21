@@ -19,7 +19,5 @@ pub(crate) fn apply_created_window(
     composition_swapchain: bool,
 ) {
     let _ = composition_swapchain;
-    if options.blur {
-        window.set_blur(true);
-    }
+    window.set_blur(options.blur);
 }

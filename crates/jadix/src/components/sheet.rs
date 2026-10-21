@@ -405,6 +405,7 @@ pub(crate) fn sheet_shell_panel(
     // Swallow clicks only — nesting `panel_block_clicks` under stage nests `jadix_portal`.
     let mut panel: Element = vstack().w("100%").min_h("0").child(inner).into();
     panel = apply_sheet_shell_surface(panel, side, width, height);
+    panel.set_attr("data-slot", "sheet-content");
     panel = panel_chrome.apply(panel);
     // Keep `position: absolute` so the sheet docks on `side` and slides in from
     // that edge (`relative()` would lay it out at flex-start / the opposite edge).

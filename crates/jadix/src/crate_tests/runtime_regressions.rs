@@ -932,14 +932,14 @@ fn plain_input_blur_repairs_selection_not_only_ibeam() {
         let mut tree = LayoutTree::new();
         tree.build_and_layout(&mut root, 300.0, 40.0, [-1.0, -1.0]);
         let mut status = LayoutStatus::Clean;
-        crate::components::internal::text_edit::sync_text_edit_paint_subtree(
+        crate::utils::text_edit::sync_text_edit_paint_subtree(
             &mut root,
             &mut tree,
             &mut status,
         );
         let _ = take_frame_paint_nodes();
         focus.set(String::new());
-        crate::components::internal::text_edit::sync_text_edit_paint_subtree(
+        crate::utils::text_edit::sync_text_edit_paint_subtree(
             &mut root,
             &mut tree,
             &mut status,
@@ -982,7 +982,7 @@ fn cached_scroll_viewport_keeps_metrics_for_next_scroll_repair() {
 }
 #[test]
 fn paint_synced_input_refreshes_warmed_idle_cache() {
-    use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+    use crate::utils::text_edit::sync_text_edit_paint_subtree;
     use crate::core::reactivity::use_signal;
     use crate::core::tree::{Element, LayoutStatus};
     use crate::layout::layout_tree::LayoutTree;

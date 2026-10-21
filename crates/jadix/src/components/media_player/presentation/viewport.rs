@@ -1,11 +1,9 @@
 use super::*;
 use crate::primitives::vstack;
 use crate::{
-    app::{
-        portal_overlay::{portal_sync, OverlayKind, OverlayMode},
-        window_scope::{self, WindowScope},
-    },
+    app::window_scope::{self, WindowScope},
     core::reactivity::on_cleanup,
+    utils::modal_shell::modal_sync,
 };
 use std::{cell::RefCell, collections::HashMap};
 
@@ -90,12 +88,7 @@ pub(crate) fn sync_media_presentation_subtree(root: &mut Element) -> bool {
         if mounted.open.try_peek() != Some(expanded) {
             mounted.open.try_set(expanded);
         }
-        let z = portal_sync(
-            &panel_id,
-            mounted.open,
-            OverlayKind::Modal,
-            OverlayMode::Stacked,
-        );
+        let z = modal_sync(&panel_id, mounted.open);
         let focus_owner = format!("media:{id}");
         if !expanded && in_panel {
             let panel = find_node(root, "data-media-expanded", &id).unwrap();
@@ -152,7 +145,7 @@ pub(crate) fn sync_media_presentation_subtree(root: &mut Element) -> bool {
             panel.set_attr("role", "dialog");
             panel.set_attr("aria-modal", "true");
             panel = panel.aria_label(crate::tr_default("media.video", "Video"));
-            panel.style.z_index = z.map_or(1001, |z| z.panel);
+            panel.style.z_index = z.as_ref().map_or(1001, |z| z.panel);
             host.children.push(panel);
             changed = true;
         }

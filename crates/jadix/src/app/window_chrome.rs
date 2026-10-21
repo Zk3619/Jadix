@@ -98,6 +98,7 @@ pub struct WindowOptions {
     pub blur: bool,
     /// Windows material when [`Self::blur`] is set.
     pub backdrop: WindowBackdrop,
+    pub follow_theme: bool,
     /// Custom Gaussian radius. `None` = [`DEFAULT_BLUR_AMOUNT`] when a recipe needs it.
     pub blur_amount: Option<f32>,
     /// ARGB overlay (`[a,r,g,b]`). `None` = recipe default (translucent white / black).
@@ -118,7 +119,7 @@ pub struct WindowOptions {
     /// Parallax of the Aero specular vs the monitor (0 = locked to the window).
     pub aero_parallax: Option<f32>,
     /// Enable runtime Inspector (F12). Requires `jadix` crate feature `devtools`.
-    #[cfg(feature = "devtools")]
+    #[cfg(all(debug_assertions, feature = "devtools"))]
     pub devtools: bool,
     /// CSS `font-family` list applied as the document default (overrides `JADIX_FONT_FAMILY`).
     pub default_font_family: Option<String>,
@@ -157,6 +158,7 @@ impl Default for WindowOptions {
             transparent: false,
             blur: false,
             backdrop: WindowBackdrop::Acrylic,
+            follow_theme: false,
             blur_amount: None,
             glass_tint: None,
             glass_tint_dark: None,
@@ -167,7 +169,7 @@ impl Default for WindowOptions {
             aero_afterglow: None,
             aero_reflection: None,
             aero_parallax: None,
-            #[cfg(feature = "devtools")]
+            #[cfg(all(debug_assertions, feature = "devtools"))]
             devtools: false,
             default_font_family: None,
             default_font_size: None,
@@ -307,6 +309,25 @@ impl WindowOptions {
     pub fn backdrop(mut self, backdrop: WindowBackdrop) -> Self {
         self.backdrop = backdrop;
         self
+    }
+
+    pub fn follow_theme(mut self, enabled: bool) -> Self {
+        self.follow_theme = enabled;
+        self
+    }
+
+    pub(crate) fn themed(&self) -> Self {
+        let mut options = self.clone();
+        if self.follow_theme {
+            options.blur = matches!(crate::style::theme_preset(), crate::style::ThemePreset::Fluent | crate::style::ThemePreset::LiquidGlass);
+            options.transparent = options.blur;
+            options.backdrop = match crate::style::theme_preset() {
+                crate::style::ThemePreset::Fluent => WindowBackdrop::Mica,
+                crate::style::ThemePreset::LiquidGlass => WindowBackdrop::Acrylic,
+                _ => WindowBackdrop::None,
+            };
+        }
+        options
     }
 
     /// Custom blur radius in D2D standard-deviation units (clamped 0..=250).
@@ -450,7 +471,7 @@ impl WindowOptions {
     }
 
     /// Enable runtime Inspector ([`super::devtools`], F12). Requires crate feature `devtools`.
-    #[cfg(feature = "devtools")]
+    #[cfg(all(debug_assertions, feature = "devtools"))]
     pub fn devtools(mut self, enabled: bool) -> Self {
         self.devtools = enabled;
         self
@@ -507,7 +528,7 @@ impl WindowOptions {
 
     /// Surface / clear color must expose alpha (transparent **or** blur).
     pub fn compositor_alpha(&self) -> bool {
-        self.transparent || self.blur
+        self.transparent || self.blur || self.follow_theme
     }
 
     /// `WS_EX_NOREDIRECTIONBITMAP` + DXGI composition surface.
@@ -555,7 +576,7 @@ impl WindowOptions {
             })
             .with_decorations(self.decorations)
             .with_transparent(self.compositor_alpha())
-            .with_blur(self.blur && !self.wants_dcomp_swapchain());
+            .with_blur(self.themed().blur && !self.wants_dcomp_swapchain());
 
         if let (Some(w), Some(h)) = (self.inner_width, self.inner_height) {
             if valid_size([w, h]) {
@@ -586,7 +607,7 @@ impl WindowOptions {
         if let Some([x, y]) = self.position.filter(|p| p.iter().all(|v| v.is_finite())) {
             attrs = attrs.with_position(winit::dpi::LogicalPosition::new(x, y));
         }
-        attrs = crate::platform::decorate_window_attributes(attrs, self, composition_swapchain);
+        attrs = crate::platform::decorate_window_attributes(attrs, &self.themed(), composition_swapchain);
         attrs
     }
 }
@@ -712,7 +733,7 @@ pub(crate) fn apply_created_window(
     if window.theme() != Some(theme) {
         window.set_theme(Some(theme));
     }
-    crate::platform::apply_created_window(window, options, composition_swapchain);
+    crate::platform::apply_created_window(window, &options.themed(), composition_swapchain);
 }
 
 pub(crate) fn native_theme() -> winit::window::Theme {
@@ -808,6 +829,26 @@ pub fn close_window() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn following_theme_keeps_alpha_and_resolves_material_without_losing_explicit_options() {
+        let previous = crate::style::get_theme();
+        let options = super::WindowOptions::new().follow_theme(true);
+        for (preset, backdrop, blur) in [
+            (crate::style::ThemePreset::Fluent, super::WindowBackdrop::Mica, true),
+            (crate::style::ThemePreset::LiquidGlass, super::WindowBackdrop::Acrylic, true),
+            (crate::style::ThemePreset::Material3, super::WindowBackdrop::None, false),
+            (crate::style::ThemePreset::Shadcn, super::WindowBackdrop::None, false),
+        ] {
+            crate::style::set_theme_preset(preset);
+            let resolved = options.themed();
+            assert_eq!(resolved.backdrop, backdrop);
+            assert_eq!(resolved.blur, blur);
+            assert!(options.compositor_alpha());
+        }
+        let explicit = super::WindowOptions::new().blur(true).backdrop(super::WindowBackdrop::Aero);
+        assert_eq!(explicit.themed().backdrop, super::WindowBackdrop::Aero);
+        crate::style::set_theme(previous);
+    }
     use super::*;
 
     #[test]

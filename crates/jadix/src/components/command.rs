@@ -593,6 +593,8 @@ fn command_overlay_panel(inner: Element, overlay_id: &str) -> Element {
         .pb("0.5rem");
     // Avoid `overflow:hidden`: Taffy treats the node as a scroll box and crushes the list main axis to 0 under auto height
     //(only the flex_shrink:0 search row remains). Corner radius is painted by the panel SDF, not by clipping.
+    panel.set_attr("data-slot", "command-overlay-content");
+    panel = crate::style::apply_stylesheet_rules(panel);
     panel.set_attr(ATTR_ESCAPE_OVERFLOW_CLIP, "1");
     panel.template_id = Some(format!("{overlay_id}__modal_zoom"));
     // Stage is already portaled; do not wrap `panel_block_clicks` (nested `jadix_portal` would hoist the panel out of the centered stage).

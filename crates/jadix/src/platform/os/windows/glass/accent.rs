@@ -99,10 +99,12 @@ pub fn apply_accent_policy(hwnd: windows_sys::Win32::Foundation::HWND, options: 
     };
     let build = nt_build_number();
     // Official system backdrop on 22H2+ is enough for stock Acrylic/Mica.
-    if build >= BUILD_WIN11_22H2 && !options.wants_custom_dcomp() {
+    if options.blur && build >= BUILD_WIN11_22H2 && !options.wants_custom_dcomp() {
         return;
     }
-    let accent_state = if build >= BUILD_WIN11_22H2 {
+    let accent_state = if !options.blur {
+        0
+    } else if build >= BUILD_WIN11_22H2 {
         ACCENT_ENABLE_ACRYLICBLURBEHIND
     } else if matches!(
         options.backdrop,

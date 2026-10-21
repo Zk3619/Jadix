@@ -1747,6 +1747,21 @@ pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
             if tick_hoisted_shell_css(motion_el, step) {
                 any = true;
             }
+            if shell.motion == ModalSurfaceMotion::DialogFade
+                && shell.phase == PresencePhase::Present
+                && !motion_el.style.animations.is_empty()
+                && !dialog_css_animating(overlay, motion_el)
+            {
+                apply_dialog_css_keyframe_motion(
+                    &shell.modal_id,
+                    overlay,
+                    motion_el,
+                    shell.phase,
+                    &ModalPresenceHandle {
+                        cell: Rc::clone(cell_rc),
+                    },
+                );
+            }
             if crate::style::css_animation_needs_frame(&overlay.style, &overlay.animation_snapshot)
                 || crate::style::css_animation_needs_frame(
                     &motion_el.style,

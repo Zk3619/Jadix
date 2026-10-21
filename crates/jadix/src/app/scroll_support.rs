@@ -605,11 +605,11 @@ fn collect_descendant_extent(
 
 pub(super) fn parse_scrollbar_focus_id(focus_id: &str) -> Option<(String, ScrollAxis, bool)> {
     let (prefix, is_thumb) = if let Some(rest) =
-        focus_id.strip_prefix(crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX)
+        focus_id.strip_prefix(crate::core::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX)
     {
         (rest, true)
     } else if let Some(rest) =
-        focus_id.strip_prefix(crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
+        focus_id.strip_prefix(crate::core::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
     {
         (rest, false)
     } else {

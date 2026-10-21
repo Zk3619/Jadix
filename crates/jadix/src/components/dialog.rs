@@ -293,9 +293,9 @@ pub(crate) fn dialog_shell_panel(
     } else {
         apply_dialog_shell_surface(card, hug_content)
     };
-    card = panel_chrome.apply(card);
     let slot_name = content_slot.unwrap_or("dialog-content");
     card.set_attr("data-slot", slot_name);
+    card = panel_chrome.apply(card);
     card = card.accesskit_role(if slot_name.contains("alert") {
         "alertdialog"
     } else {
@@ -307,7 +307,8 @@ pub(crate) fn dialog_shell_panel(
     card.template_id = Some(format!("{modal_id}__modal_zoom"));
     // Close sits on the padded surface (`absolute top-4 right-4`), not in the header flow.
     if let Some(mut close) = chrome_close {
-        close = close.absolute().top("1rem").right("1rem").z_index(2);
+        close = close.z_index(2);
+        crate::style::extend_class_list(&mut close, "absolute top-4 right-4");
         card = card.relative().child(close);
     }
     // Swallow on the visible card only — `panel_block_clicks` would nest a second
@@ -626,20 +627,24 @@ pub fn DialogBody(children: Option<Element>) -> Element {
     let ctx = require_dialog("DialogBody");
     let child = children.unwrap_or_else(Element::new);
     let scroll_id = format!("{}__body", ctx.id);
+    let (ring_blur, ring_spread) = crate::style::focus_ring_params(crate::style::focus_ring_style());
+    let ring_gutter = (ring_blur * 2.0 + ring_spread + 2.0).max(4.0);
     // Prefer flex sizing over the ScrollArea default `h: 100%` — percentage height
     // against an unresolved portal stage can leave body metrics at "no overflow"
     // until a later dirty (e.g. opening a nested Select).
-    scroll_area(scroll_id.as_str())
+    let body: Element = scroll_area(scroll_id.as_str())
         .overflow_x("hidden")
         .overflow_y("auto")
         .scrollbar_visibility("auto")
-        .w("100%")
+        .w("auto")
         .h("auto")
+        .p(ring_gutter)
         .min_h("0")
         .flex_grow(1.0)
         .flex_shrink(1.0)
         .child(child)
-        .into()
+        .into();
+    body.m(-ring_gutter)
 }
 
 /// 固定底栏：窄窗口纵向排列，`sm` 起横向排列并允许换行。
@@ -762,6 +767,56 @@ mod tests {
         default_modal_overlay_color, ShellOverlayOpts, DEFAULT_MODAL_OVERLAY_BLUR,
         DEFAULT_MODAL_OVERLAY_OPACITY,
     };
+
+    #[test]
+    fn themed_close_button_keeps_absolute_position_after_variant_resolution() {
+        use crate::style::{
+            get_theme, resolve_class_variants, set_theme, Theme, ThemeMode, ThemePreset,
+            VariantContext,
+        };
+        use taffy::style::{LengthPercentageAuto, Position};
+
+        let previous = get_theme();
+        crate::core::reactivity::create_root(|| {
+            for preset in [
+                ThemePreset::Shadcn,
+                ThemePreset::Fluent,
+                ThemePreset::Material3,
+                ThemePreset::LiquidGlass,
+            ] {
+                set_theme(Theme::preset(preset, ThemeMode::Light));
+                let mut panel = dialog_shell_panel(
+                    "themed-close",
+                    Element::new(),
+                    Some(button("themed-close:chrome_close").into()),
+                    false,
+                    None,
+                    None,
+                    None,
+                    None,
+                    SlotChrome::default(),
+                );
+                let close = crate::core::tree::find_in_tree_mut(&mut panel, |element| {
+                    element.focus_id.as_deref() == Some("themed-close:chrome_close")
+                })
+                .expect("dialog close button");
+                resolve_class_variants(close, &VariantContext::default());
+                assert_eq!(close.style.position, Position::Absolute, "{preset:?}");
+                assert_eq!(
+                    close.style.inset.top,
+                    LengthPercentageAuto::length(16.0),
+                    "{preset:?}"
+                );
+                assert_eq!(
+                    close.style.inset.right,
+                    LengthPercentageAuto::length(16.0),
+                    "{preset:?}"
+                );
+                assert_eq!(close.style.z_index, 2, "{preset:?}");
+            }
+        });
+        set_theme(previous);
+    }
 
     #[test]
     fn responsive_modal_actions_fit_narrow_windows_and_restore_desktop_rows() {

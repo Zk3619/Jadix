@@ -1,8 +1,4 @@
-//! Input / Textarea 共享 chrome（[`crate::components::internal`]，不进公开 API / prelude）。
-//!
-//! 产品面：[`crate::components::input`] / [`crate::components::textarea`]；
-//! Editing capabilities: [`crate::utils::text_field`].
-
+pub(crate) mod field;
 mod build;
 mod paint;
 mod strings;

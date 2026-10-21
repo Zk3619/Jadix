@@ -4,6 +4,7 @@
 //! input/render may already hold `AppState`. Cells + `request_redraw` avoid that.
 
 use std::cell::{Cell, RefCell};
+use std::collections::{HashSet, VecDeque};
 
 use super::snapshot::{key_to_path, path_to_key, ElementPath};
 
@@ -27,10 +28,19 @@ thread_local! {
     static HOVER_REL: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
     /// Snapshot border-box size for the active overlay target (`0` = unset).
     static OVERLAY_SIZE_HINT: Cell<(f32, f32)> = const { Cell::new((0.0, 0.0)) };
-    static PANEL_W: Cell<f32> = const { Cell::new(380.0) };
+    static PANEL_W: Cell<f32> = const { Cell::new(640.0) };
+    static COLLAPSED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static TREE_FILTER: RefCell<String> = const { RefCell::new(String::new()) };
+    static COMPUTED: Cell<bool> = const { Cell::new(false) };
+    static TREE_LIMIT: Cell<usize> = const { Cell::new(400) };
+    static CHANGES: RefCell<VecDeque<(String, String)>> = const { RefCell::new(VecDeque::new()) };
+    static BODY_GEN: Cell<u32> = const { Cell::new(0) };
+    static OUTLINE_GEN: Cell<u32> = const { Cell::new(0) };
+    static DETAILS_GEN: Cell<u32> = const { Cell::new(0) };
     static GEN: Cell<u32> = const { Cell::new(0) };
     static LAST_SYNC_GEN: Cell<u32> = const { Cell::new(u32::MAX) };
     static HL_LAYER: Cell<u8> = const { Cell::new(0) };
+    static HL_HOVER_LAYER: Cell<Option<u8>> = const { Cell::new(None) };
 }
 
 /// 0 = Elements, 1 = Reactivity, 2 = Layout
@@ -39,6 +49,8 @@ pub enum DevToolsTab {
     Elements = 0,
     Reactivity = 1,
     Layout = 2,
+    Sources = 3,
+    Changes = 4,
 }
 
 impl DevToolsTab {
@@ -46,6 +58,8 @@ impl DevToolsTab {
         match i {
             1 => Self::Reactivity,
             2 => Self::Layout,
+            3 => Self::Sources,
+            4 => Self::Changes,
             _ => Self::Elements,
         }
     }
@@ -87,7 +101,29 @@ impl DevToolsState {
     }
 
     pub fn bump() {
+        BODY_GEN.set(BODY_GEN.get().wrapping_add(1));
+        OUTLINE_GEN.set(OUTLINE_GEN.get().wrapping_add(1));
+        DETAILS_GEN.set(DETAILS_GEN.get().wrapping_add(1));
+        Self::bump_chrome();
+    }
+
+    pub(super) fn revisions() -> [u32; 3] {
+        [BODY_GEN.get(), OUTLINE_GEN.get(), DETAILS_GEN.get()]
+    }
+
+    pub(super) fn refresh_outline() {
+        OUTLINE_GEN.set(OUTLINE_GEN.get().wrapping_add(1));
+        Self::bump_chrome();
+    }
+
+    fn refresh_details() {
+        DETAILS_GEN.set(DETAILS_GEN.get().wrapping_add(1));
+        Self::bump_chrome();
+    }
+
+    pub(super) fn bump_chrome() {
         GEN.set(GEN.get().wrapping_add(1));
+        crate::app::runtime::request_redraw_all();
     }
 
     pub fn generation() -> u32 {
@@ -107,13 +143,17 @@ impl DevToolsState {
     }
 
     pub fn toggle_open() {
-        OPEN.set(!OPEN.get());
-        Self::bump();
+        Self::set_open(!OPEN.get());
     }
 
     pub fn set_open(open: bool) {
         if OPEN.get() != open {
             OPEN.set(open);
+            if !open {
+                PICK.set(false);
+                super::device::disable();
+                Self::clear_hover_highlight();
+            }
             Self::bump();
         }
     }
@@ -124,17 +164,16 @@ impl DevToolsState {
 
     pub fn toggle_pick() {
         PICK.set(!PICK.get());
-        Self::bump();
+        Self::bump_chrome();
     }
 
     pub fn set_pick(on: bool) {
         if PICK.get() != on {
             PICK.set(on);
             if !on {
-                // Drop transient pick hover; keep overlay on the committed selection.
-                Self::sync_overlay_to_selection();
+                Self::clear_hover_highlight();
             }
-            Self::bump();
+            Self::bump_chrome();
         }
     }
 
@@ -156,55 +195,32 @@ impl DevToolsState {
         SEL_REL.with(|r| r.borrow().clone())
     }
 
-    /// Whether tree / pick hover currently overrides the selection overlay.
+    /// Whether a tree row or pick target currently owns the page overlay.
     pub fn has_hover_highlight() -> bool {
         HOVER_PATH.with(|h| !h.borrow().is_empty())
             || HOVER_IDENTITY.with(|id| !id.borrow().is_empty())
     }
 
-    /// Page overlay target: transient hover if set, otherwise the selected node.
-    ///
-    /// Styles follows selection; the blue page box must not stick to a stale pick/tree
-    /// hover while the Elements row shows a different selected path.
+    /// Page overlay target owned by a tree-row or pick hover.
     pub fn overlay_path() -> ElementPath {
-        if Self::has_hover_highlight() {
-            HOVER_PATH.with(|h| key_to_path(&h.borrow()))
-        } else {
-            Self::selected_path()
-        }
+        HOVER_PATH.with(|h| key_to_path(&h.borrow()))
     }
 
     pub fn overlay_path_key() -> String {
-        if Self::has_hover_highlight() {
-            Self::hover_path_key()
-        } else {
-            Self::selected_path_key()
-        }
+        Self::hover_path_key()
     }
 
     pub fn overlay_identity() -> String {
-        if Self::has_hover_highlight() {
-            Self::hover_identity()
-        } else {
-            Self::selected_identity()
-        }
+        Self::hover_identity()
     }
 
     pub fn overlay_relative_path() -> ElementPath {
-        if Self::has_hover_highlight() {
-            Self::hover_relative_path()
-        } else {
-            Self::selected_relative_path()
-        }
+        Self::hover_relative_path()
     }
 
-    /// Snapshot border-box `[width, height]` for the current overlay target (`0` = unset).
+    /// Snapshot border-box size for the current overlay target (zero when unset).
     pub fn overlay_size_hint() -> (f32, f32) {
-        if Self::has_hover_highlight() {
-            OVERLAY_SIZE_HINT.get()
-        } else {
-            SEL_SIZE.get()
-        }
+        OVERLAY_SIZE_HINT.get()
     }
 
     /// Child-index path for the page overlay (may be stale; prefer [`Self::overlay_identity`]).
@@ -222,19 +238,9 @@ impl DevToolsState {
         HOVER_REL.with(|r| r.borrow().clone())
     }
 
-    /// Align transient hover with the current selection (keeps identity + size hint).
+    /// Clear the page overlay when no pointer-owned inspector target remains.
     pub fn sync_overlay_to_selection() {
-        let key = Self::selected_path_key();
-        if key.is_empty() {
-            Self::clear_hover_highlight();
-            return;
-        }
-        Self::set_hover_highlight(
-            Self::selected_path(),
-            Self::selected_identity(),
-            Self::selected_relative_path(),
-            SEL_SIZE.get(),
-        );
+        Self::clear_hover_highlight();
     }
 
     pub fn set_hover_highlight_path(path: ElementPath) {
@@ -290,7 +296,7 @@ impl DevToolsState {
             changed = true;
         }
         if changed {
-            crate::app::runtime::request_redraw();
+            crate::app::runtime::request_redraw_all();
         }
     }
 
@@ -319,7 +325,7 @@ impl DevToolsState {
             changed = true;
         }
         if changed {
-            crate::app::runtime::request_redraw();
+            crate::app::runtime::request_redraw_all();
         }
     }
 
@@ -332,7 +338,7 @@ impl DevToolsState {
                 HOVER_IDENTITY.with(|id| id.borrow_mut().clear());
                 HOVER_REL.with(|r| r.borrow_mut().clear());
                 OVERLAY_SIZE_HINT.set((0.0, 0.0));
-                crate::app::runtime::request_redraw();
+                crate::app::runtime::request_redraw_all();
             }
         });
     }
@@ -354,6 +360,20 @@ impl DevToolsState {
         size_hint: (f32, f32),
     ) {
         let key = path_to_key(&path);
+        if Self::hover_path_key() != key {
+            Self::clear_hover_highlight();
+        }
+        let expanded = COLLAPSED.with(|collapsed| {
+            let mut collapsed = collapsed.borrow_mut();
+            let mut expanded = false;
+            for depth in 0..path.len() {
+                expanded |= collapsed.remove(&path_to_key(&path[..depth]));
+            }
+            expanded
+        });
+        if expanded {
+            Self::refresh_outline();
+        }
         let identity = identity.into();
         let size_hint = (size_hint.0.max(0.0), size_hint.1.max(0.0));
         let mut changed = false;
@@ -361,7 +381,7 @@ impl DevToolsState {
             if *p.borrow() != key {
                 *p.borrow_mut() = key.clone();
                 HL_LAYER.set(0);
-                DevToolsState::bump();
+                Self::refresh_details();
                 changed = true;
             }
         });
@@ -381,10 +401,8 @@ impl DevToolsState {
             SEL_SIZE.set(size_hint);
             changed = true;
         }
-        // Keep page overlay in lockstep with Styles (selection), not a stale pick hover.
-        Self::set_hover_highlight(path, identity, relative, size_hint);
         if changed {
-            crate::app::runtime::request_redraw();
+            crate::app::runtime::request_redraw_all();
         }
     }
 
@@ -405,22 +423,111 @@ impl DevToolsState {
     }
 
     pub fn set_panel_width(w: f32) {
-        let w = w.clamp(280.0, 720.0);
+        let w = if w.is_finite() {
+            w.clamp(320.0, 1100.0)
+        } else {
+            640.0
+        };
         if (PANEL_W.get() - w).abs() > 0.5 {
+            let reflow = (PANEL_W.get() >= 600.0) != (w >= 600.0);
             PANEL_W.set(w);
-            Self::bump();
+            if reflow { Self::bump(); } else { Self::bump_chrome(); }
         }
     }
 
     pub fn highlight_layer() -> HighlightLayer {
-        HighlightLayer::from_u8(HL_LAYER.get())
+        HighlightLayer::from_u8(HL_HOVER_LAYER.get().unwrap_or_else(|| HL_LAYER.get()))
+    }
+
+    pub(crate) fn is_collapsed(path: &[usize]) -> bool {
+        COLLAPSED.with(|collapsed| collapsed.borrow().contains(&path_to_key(path)))
+    }
+
+    pub(crate) fn toggle_collapsed(path: &[usize]) {
+        COLLAPSED.with(|collapsed| {
+            let mut collapsed = collapsed.borrow_mut();
+            let key = path_to_key(path);
+            if !collapsed.remove(&key) {
+                collapsed.insert(key);
+            }
+        });
+        Self::refresh_outline();
+    }
+
+    pub(crate) fn tree_filter() -> String {
+        TREE_FILTER.with(|filter| filter.borrow().clone())
+    }
+
+    pub(crate) fn tree_limit() -> usize {
+        TREE_LIMIT.get()
+    }
+
+    pub(crate) fn set_tree_limit(limit: usize) {
+        TREE_LIMIT.set(limit);
+        Self::refresh_outline();
+    }
+
+    pub(crate) fn set_tree_filter(value: String) {
+        TREE_FILTER.with(|filter| *filter.borrow_mut() = value);
+        Self::refresh_outline();
+    }
+
+    pub(crate) fn show_computed() -> bool {
+        COMPUTED.get()
+    }
+
+    pub(crate) fn set_computed(value: bool) {
+        COMPUTED.set(value);
+        Self::refresh_details();
+    }
+
+    pub(crate) fn record_change(kind: &str, detail: impl Into<String>) {
+        CHANGES.with(|changes| {
+            let mut changes = changes.borrow_mut();
+            if changes.len() >= 128 {
+                changes.pop_front();
+            }
+            changes.push_back((kind.into(), detail.into()));
+        });
+        Self::refresh_if_visible();
+    }
+
+    pub(crate) fn changes() -> Vec<(String, String)> {
+        CHANGES.with(|changes| changes.borrow().iter().rev().cloned().collect())
+    }
+
+    pub(crate) fn clear_changes() {
+        CHANGES.with(|changes| changes.borrow_mut().clear());
+        Self::refresh_if_visible();
+    }
+
+    pub(crate) fn refresh() {
+        if Self::active_tab() == DevToolsTab::Sources {
+            BODY_GEN.set(BODY_GEN.get().wrapping_add(1));
+        }
+        Self::bump_chrome();
+    }
+
+    fn refresh_if_visible() {
+        if Self::active_tab() == DevToolsTab::Changes {
+            BODY_GEN.set(BODY_GEN.get().wrapping_add(1));
+        }
+        Self::bump_chrome();
     }
 
     pub fn set_highlight_layer(layer: HighlightLayer) {
-        let v = layer as u8;
-        if HL_LAYER.get() != v {
-            HL_LAYER.set(v);
-            crate::app::runtime::request_redraw();
+        let value = layer as u8;
+        if HL_LAYER.get() != value {
+            HL_LAYER.set(value);
+            Self::bump_chrome();
+        }
+    }
+
+    pub fn set_highlight_hover_layer(layer: Option<HighlightLayer>) {
+        let value = layer.map(|layer| layer as u8);
+        if HL_HOVER_LAYER.get() != value {
+            HL_HOVER_LAYER.set(value);
+            Self::bump_chrome();
         }
     }
 }

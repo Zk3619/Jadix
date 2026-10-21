@@ -4,7 +4,7 @@
 use crate::components::input::{
     focus_id_for_input, input, input_selection_signal_key, input_value_signal_key,
 };
-use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+use crate::utils::text_edit::sync_text_edit_paint_subtree;
 use crate::components::label::sync_label_selection_paint_subtree;
 use crate::components::textarea::textarea;
 use crate::core::reactivity::use_signal;

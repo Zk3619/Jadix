@@ -261,11 +261,11 @@ fn fmt_ids(ids: &[usize]) -> String {
 fn section_title(text: &str) -> Element {
     Element::from(
         r#box().w("100%").pt("0.5rem").pb("0.25rem").child(
-            crate::components::label(text)
-                .text(text)
+            super::controls::label(text)
+                .text(super::locale::text(text))
                 .text_size("0.75rem")
                 .font_weight("700")
-                .color(parse_text_color("muted-foreground")),
+                .text_color(parse_text_color("muted-foreground")),
         ),
     )
 }
@@ -276,14 +276,14 @@ fn label_line(key: &str, val: &str) -> Element {
             if key.is_empty() {
                 Element::new()
             } else {
-                crate::components::label(key)
-                    .text(key)
+                super::controls::label(key)
+                    .text(super::locale::text(key))
                     .text_size("0.6875rem")
-                    .color(parse_text_color("muted-foreground"))
+                    .text_color(parse_text_color("muted-foreground"))
                     .into()
             },
-            crate::components::label(val)
-                .text(val)
+            super::controls::label(val)
+                .text(super::locale::text(val))
                 .text_size("0.75rem")
                 .font_weight("500")
                 .w("100%")
@@ -295,15 +295,15 @@ fn label_line(key: &str, val: &str) -> Element {
 fn edge_row(left: &str, right: &str) -> Element {
     Element::from(
         hstack().w("100%").gap("0.25rem").py("0.125rem").children([
-            crate::components::label(left)
+            super::controls::label(left)
                 .text(left)
                 .text_size("0.6875rem")
                 .font_weight("600")
                 .into(),
-            crate::components::label(right)
+            super::controls::label(right)
                 .text(right)
                 .text_size("0.6875rem")
-                .color(parse_text_color("muted-foreground"))
+                .text_color(parse_text_color("muted-foreground"))
                 .w("100%")
                 .into(),
         ]),

@@ -1073,11 +1073,26 @@ fn apply_floating_menus(
     el: &mut Element,
     triggers: &[(String, [f32; 4])],
     viewport: [f32; 2],
+    point_space: Option<[f32; 4]>,
     changed: &mut bool,
 ) {
+    #[cfg(all(debug_assertions, feature = "devtools"))]
+    if el.template_id.as_deref() == Some(crate::app::devtools::DEVICE_PORTAL_HOST) {
+        let bounds = crate::core::tree::visual_paint_aabb(el, [0.0; 2]);
+        let size = [el.layout_bounds[2].max(1.0), el.layout_bounds[3].max(1.0)];
+        let scale = [(bounds[2] / size[0]).max(0.01), (bounds[3] / size[1]).max(0.01)];
+        let local: Vec<_> = triggers.iter().map(|(id, rect)| (id.clone(), [
+            (rect[0] - bounds[0]) / scale[0], (rect[1] - bounds[1]) / scale[1],
+            rect[2] / scale[0], rect[3] / scale[1],
+        ])).collect();
+        for child in &mut el.children {
+            apply_floating_menus(child, &local, size, Some([bounds[0], bounds[1], scale[0], scale[1]]), changed);
+        }
+        return;
+    }
     let Some(id) = floating_id_of(el) else {
         for c in &mut el.children {
-            apply_floating_menus(c, triggers, viewport, changed);
+            apply_floating_menus(c, triggers, viewport, point_space, changed);
         }
         return;
     };
@@ -1152,7 +1167,7 @@ fn apply_floating_menus(
             }
         }
         for c in &mut el.children {
-            apply_floating_menus(c, triggers, viewport, changed);
+            apply_floating_menus(c, triggers, viewport, point_space, changed);
         }
         return;
     }
@@ -1161,7 +1176,7 @@ fn apply_floating_menus(
     // would remount-fight and flip/clamp the grab point away from the pointer.
     if crate::utils::anchored_overlay::floating_panel_drag_id().as_deref() == Some(id.as_str()) {
         for c in &mut el.children {
-            apply_floating_menus(c, triggers, viewport, changed);
+            apply_floating_menus(c, triggers, viewport, point_space, changed);
         }
         return;
     }
@@ -1175,12 +1190,16 @@ fn apply_floating_menus(
     let is_select = el.attrs.contains_key("jadix_select_menu");
     if !has_point && !has_placement_attr && !is_select {
         for c in &mut el.children {
-            apply_floating_menus(c, triggers, viewport, changed);
+            apply_floating_menus(c, triggers, viewport, point_space, changed);
         }
         return;
     }
 
-    let point = floating_point_of(el);
+    let point = floating_point_of(el).map(|point| {
+        if let Some([x, y, sx, sy]) = point_space {
+            [(point[0] - x) / sx, (point[1] - y) / sy]
+        } else { point }
+    });
     let trigger_fid = floating_trigger_of(el);
     let tb = if let Some(pt) = point {
         Some([pt[0], pt[1], 0.0, 0.0])
@@ -1411,7 +1430,7 @@ fn apply_floating_menus(
     }
 
     for c in &mut el.children {
-        apply_floating_menus(c, triggers, viewport, changed);
+        apply_floating_menus(c, triggers, viewport, point_space, changed);
     }
 }
 
@@ -1424,7 +1443,7 @@ pub fn sync_floating_placement(root: &mut Element, viewport_w: f32, viewport_h: 
     let mut triggers = Vec::new();
     collect_focus_bounds(root, [0.0, 0.0], &mut triggers);
     let mut changed = false;
-    apply_floating_menus(root, &triggers, [viewport_w, viewport_h], &mut changed);
+    apply_floating_menus(root, &triggers, [viewport_w, viewport_h], None, &mut changed);
     changed
 }
 
@@ -3330,6 +3349,30 @@ mod tests {
             (top - (180.0 + 36.0 + FLOATING_TRIGGER_GAP)).abs() < 0.5,
             "first sync must place Y below the trigger; top={top}"
         );
+    }
+
+    #[test]
+    #[cfg(all(debug_assertions, feature = "devtools"))]
+    fn device_preview_positions_popups_in_local_logical_coordinates() {
+        crate::core::reactivity::create_root(|| {
+            let mut trigger = Element::new().focus_id("device-popup-trigger");
+            trigger.layout_bounds = [110.0, 120.0, 50.0, 20.0];
+            let mut panel = Element::new().absolute();
+            mark_floating(&mut panel, "device-popup-menu", "device-popup-trigger", PopupPlacement::BottomStart);
+            panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
+            panel.set_attr(ATTR_FLOATING_W, "100px");
+            panel.layout_bounds = [0.0, 0.0, 100.0, 60.0];
+            let mut scope = Element::new().template_id(crate::app::devtools::DEVICE_PORTAL_HOST)
+                .scale(0.5).transform_origin("left top").child(panel);
+            scope.layout_bounds = [100.0, 100.0, 400.0, 800.0];
+            let mut root = Element::new().children([trigger, scope]);
+            assert!(sync_floating_placement(&mut root, 1600.0, 1000.0));
+            let popup = &root.children[1].children[0];
+            let left = inset_length(popup.style.inset.left).unwrap();
+            let top = inset_length(popup.style.inset.top).unwrap();
+            assert!((left - 20.0).abs() < 0.5, "local x={left}");
+            assert!((top - 80.0 - FLOATING_TRIGGER_GAP).abs() < 0.5, "local y={top}");
+        });
     }
 
     #[test]

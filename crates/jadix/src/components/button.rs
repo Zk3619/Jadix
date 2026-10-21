@@ -37,10 +37,9 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
 use crate::primitives::r#box::{hstack, BoxBuilder};
 use crate::style::{
-    apply_focus_ring_shadow, apply_focus_ring_shadow_color, button_soft_semantic_chrome,
-    color_mix_over_background, ensure_class_list, extend_class_list, focus_ring_border_color,
-    focus_ring_color, focus_ring_destructive_color, focus_ring_shadow_matches_color, is_dark_theme,
-    lerp_paint_chrome, ClassSet, PaintChrome, SemanticTone, ATTR_SYNC_LABEL_FG,
+    apply_focus_ring_shadow, apply_focus_ring_shadow_color, ensure_class_list, extend_class_list, focus_ring_border_color,
+    focus_ring_color, focus_ring_destructive_color, focus_ring_shadow_matches_color,
+    ClassSet, ATTR_SYNC_LABEL_FG,
 };
 use crate::utils::take_packed;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
@@ -60,16 +59,6 @@ fn is_preserved_button_child_slot(el: &Element) -> bool {
 /// Tailwind v4 `shadow-xs` (constants reserved for documentation/reference; current Button variants no longer have shadow by default).
 #[allow(dead_code)]
 const SHADOW_XS: &str = "0 1px 2px 0 #0000000d";
-
-trait ColorExt {
-    fn with_alpha(self, alpha: f32) -> [f32; 4];
-}
-impl ColorExt for [f32; 4] {
-    fn with_alpha(mut self, alpha: f32) -> [f32; 4] {
-        self[3] = alpha;
-        self
-    }
-}
 
 /// Fallback ring color for Button (theme `ring`, or destructive). Authored
 /// [`Style::focus_ring_color`] still wins inside [`apply_focus_ring_shadow_color`].
@@ -106,122 +95,7 @@ fn color4_near(a: [f32; 4], b: [f32; 4]) -> bool {
     (0..4).all(|i| (a[i] - b[i]).abs() <= 1e-4)
 }
 
-/// 文档站 Aria Button 采样配方（透明度叠底 → 不透明等价色）：
-/// - default: `bg-primary` → hover `primary/80`
-/// - secondary: `bg-secondary` → hover `secondary/80`
-/// - success / warning / destructive: soft tint via [`button_soft_semantic_chrome`] / [`SemanticTone`]
-/// - outline / ghost / link: see each branch
-pub(crate) fn button_chrome_for_variant(
-    variant: &str,
-    hover_t: f32,
-) -> ([f32; 4], [u8; 4], Option<[f32; 4]>) {
-    let t = hover_t.clamp(0.0, 1.0);
-    let dark = is_dark_theme();
-    if let Some(tone) = match variant {
-        "success" | "warning" | "destructive" | "info" => Some(SemanticTone::parse(variant)),
-        _ => None,
-    } {
-        if tone.is_semantic() {
-            return button_soft_semantic_chrome(tone, t);
-        }
-    }
-    match variant {
-        "default" => {
-            let fg = parse_text_color("primary-foreground");
-            let c = lerp_paint_chrome(
-                PaintChrome {
-                    bg: parse_color("primary"),
-                    fg,
-                    border: None,
-                },
-                PaintChrome {
-                    bg: color_mix_over_background(parse_color("primary"), 0.8),
-                    fg,
-                    border: None,
-                },
-                t,
-            );
-            (c.bg, c.fg, c.border)
-        }
-        "secondary" => {
-            let fg = parse_text_color("secondary-foreground");
-            let c = lerp_paint_chrome(
-                PaintChrome {
-                    bg: parse_color("secondary"),
-                    fg,
-                    border: None,
-                },
-                PaintChrome {
-                    bg: parse_color("secondary/80"),
-                    fg,
-                    border: None,
-                },
-                t,
-            );
-            (c.bg, c.fg, c.border)
-        }
-        "outline" => {
-            let (rest_bg, hover_bg, border) = if dark {
-                (
-                    color_mix_over_background(parse_color("input"), 0.3),
-                    color_mix_over_background(parse_color("input"), 0.5),
-                    parse_color("input"),
-                )
-            } else {
-                (
-                    parse_color("background"),
-                    parse_color("accent"),
-                    parse_color("border"),
-                )
-            };
-            let fg = parse_text_color("foreground");
-            let c = lerp_paint_chrome(
-                PaintChrome {
-                    bg: rest_bg,
-                    fg,
-                    border: Some(border),
-                },
-                PaintChrome {
-                    bg: hover_bg,
-                    fg,
-                    border: Some(border),
-                },
-                t,
-            );
-            (c.bg, c.fg, c.border)
-        }
-        "ghost" => {
-            let hover_bg = if dark {
-                parse_color("accent").with_alpha(0.5)
-            } else {
-                parse_color("accent")
-            };
-            // 与 hover 同 RGB、α=0：CSS 非预乘插值只动 alpha，避免透明黑→有色脏闪。
-            // Do not use `lerp_premultiplied` (it will fold into black when α≈0), the endpoints must retain RGB.
-            let rest_bg = [hover_bg[0], hover_bg[1], hover_bg[2], 0.0];
-            let bg = if t >= 0.5 { hover_bg } else { rest_bg };
-            (bg, parse_text_color("foreground"), None)
-        }
-        "link" => ([0.0; 4], parse_text_color("primary"), None),
-        _ => {
-            let fg = parse_text_color("primary-foreground");
-            let c = lerp_paint_chrome(
-                PaintChrome {
-                    bg: parse_color("primary"),
-                    fg,
-                    border: None,
-                },
-                PaintChrome {
-                    bg: color_mix_over_background(parse_color("primary"), 0.8),
-                    fg,
-                    border: None,
-                },
-                t,
-            );
-            (c.bg, c.fg, c.border)
-        }
-    }
-}
+pub(crate) use crate::style::button_chrome::button_chrome_for_variant;
 
 /// ShadCN Button CVA color classes. Hover/disabled go through class variants
 /// (same path as Tabs/Toggle), so author `class="hover:bg-*"` wins by CSS order.
@@ -1088,6 +962,10 @@ impl From<ButtonBuilder> for Element {
         }
         let variant_key = builder.variant.as_paint_key();
         let explicit_fg = builder.explicit_text_color;
+        el.set_attr("data-slot", "button");
+        el.set_attr("data-size", builder.size.as_str());
+        el.set_attr("data-variant", variant_key);
+        if disabled { el.set_attr("disabled", "true"); }
         let mut el = chrome.apply(el);
         if let Some(off) = caption_underline_offset {
             el.text_style.underline_offset = Some(off);

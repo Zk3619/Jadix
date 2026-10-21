@@ -465,6 +465,27 @@ impl Default for MediaPresentationController {
     }
 }
 
+/// Named presentation state that survives transient view owners, like `use_signal`.
+/// The default host rejects system fullscreen/PiP; the caller owns the key namespace.
+/// Use `MediaPresentationController::new` for owner-scoped host callbacks instead.
+pub fn use_media_presentation(id: &str) -> MediaPresentationController {
+    use crate::core::reactivity::use_signal;
+
+    use_signal(id, || MediaPresentationController {
+        state: use_signal(&format!("{id}::state"), MediaPresentationState::default),
+        capabilities: use_signal(
+            &format!("{id}::capabilities"),
+            MediaPresentationCapabilities::default,
+        ),
+        pending: use_signal(&format!("{id}::pending"), || None),
+        error: use_signal(&format!("{id}::error"), || None),
+        next_request: Rc::new(Cell::new(0)),
+        return_layout: Rc::new(Cell::new(MediaLayoutMode::Inline)),
+        host: Rc::new(|_| Err(crate::media::MediaError::unsupported("presentation host"))),
+    })
+    .peek()
+}
+
 impl MediaPresentationController {
     pub fn new(
         capabilities: MediaPresentationCapabilities,

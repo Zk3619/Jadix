@@ -8617,14 +8617,24 @@ mod tests {
                 .map(|h| (h.id.clone(), h.index, h.rect.height))
                 .collect::<Vec<_>>()
         );
-        for h in &item_hits {
+        let tree = live.borrow();
+        for hit in &item_hits {
+            let row = find_draggable(&tree, &hit.id).expect("sortable row");
             assert!(
-                h.rect.height > 8.0 && h.rect.height < 80.0,
-                "row slot must be a chip, not the list shell; {} h={}",
-                h.id,
-                h.rect.height
+                (row.layout_bounds[3] - 32.0).abs() < 0.1,
+                "row slot must keep its full chip height; {} bounds={:?}",
+                hit.id,
+                row.layout_bounds
+            );
+            let expected_height = (176.0 - hit.index.unwrap() as f32 * 38.0).clamp(0.0, 32.0);
+            assert!(
+                (hit.rect.height - expected_height).abs() < 0.1,
+                "drop target must be clipped to the scroll viewport; {} h={} expected={expected_height}",
+                hit.id,
+                hit.rect.height
             );
         }
+        drop(tree);
 
         let src = item_hits
             .iter()

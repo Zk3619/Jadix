@@ -22,6 +22,8 @@ mod element_style;
 pub mod filter;
 mod focus_ring;
 mod generator;
+mod glass;
+pub(crate) mod liquid_flow;
 pub(crate) mod gradient;
 mod into_value;
 pub mod keyframes;
@@ -36,6 +38,7 @@ mod tailwind_leading;
 mod text_style;
 mod theme;
 mod theme_override;
+mod theme_style;
 pub mod timeline;
 mod timing;
 pub mod transform;
@@ -48,6 +51,10 @@ mod writing_mode;
 pub use animatable::{
     parse_background_position, parse_fr_tracks, AnimatableValue, LayoutImpact, PropertyId,
     PropertySet,
+};
+pub(crate) use animatable::{
+    read_value as read_animatable_value, values_close as animatable_values_close,
+    write_value as write_animatable_value,
 };
 pub(crate) use animation::css_timeline_now_ms;
 pub(crate) use animation::note_page_css_needs_frame;
@@ -161,6 +168,8 @@ pub use text_style::{
     TextDirection, TextOverflow, TextSpan, TextSpanKind, TextStyle, WhiteSpace,
 };
 pub(crate) use theme::theme_generation;
+pub use glass::GlassMaterial;
+pub use theme_style::{set_theme_preset, theme_preset, ThemePreset, ThemeStyles};
 pub use theme::{
     focus_ring_style, focus_ring_width, get_theme, is_dark_theme, set_focus_ring_style,
     set_focus_ring_width, set_theme, set_theme_mode, theme_mode, toggle_theme_mode, with_theme,
@@ -170,7 +179,7 @@ pub use theme::{
 pub use theme_override::{
     apply_theme_patch, clear_theme_overrides, compose_theme, install_theme_overrides,
     load_and_install_theme_overrides, load_theme_overrides, parse_theme_overrides_str,
-    set_theme_transition_config, theme_transition_config, DesignTokensPatch, ThemeOverrideError,
+    set_theme_transition_config, theme_transition_config, theme_overrides, DesignTokensPatch, ThemeOverrideError,
     ThemeOverrides,
 };
 pub(crate) use theme_override::{restore_theme_overrides, snapshot_theme_overrides};
@@ -211,3 +220,5 @@ pub use variant_override::{
 };
 pub use waapi::{get_animations, Animation, ComputedTiming, Keyframe, KeyframeEffect};
 pub use writing_mode::{PhysicalSide, WritingMode};
+
+pub(crate) mod button_chrome;

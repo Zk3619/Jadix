@@ -1,26 +1,23 @@
 //! D2D effect wrappers for Windows.UI.Composition `CreateEffectFactory`.
 
-use windows::core::{implement, Interface, GUID, HSTRING, PCWSTR};
 use windows::Foundation::{IPropertyValue, PropertyValue};
 use windows::Graphics::Effects::{
-    IGraphicsEffect, IGraphicsEffectSource, IGraphicsEffectSource_Impl, IGraphicsEffect_Impl,
+    IGraphicsEffect, IGraphicsEffect_Impl, IGraphicsEffectSource, IGraphicsEffectSource_Impl,
 };
 use windows::Win32::System::WinRT::Graphics::Direct2D::{
-    IGraphicsEffectD2D1Interop, IGraphicsEffectD2D1Interop_Impl, GRAPHICS_EFFECT_PROPERTY_MAPPING,
-    GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR4, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT,
-    GRAPHICS_EFFECT_PROPERTY_MAPPING_UNKNOWN,
+    GRAPHICS_EFFECT_PROPERTY_MAPPING, GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR4,
+    GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT, GRAPHICS_EFFECT_PROPERTY_MAPPING_UNKNOWN,
+    IGraphicsEffectD2D1Interop, IGraphicsEffectD2D1Interop_Impl,
 };
+use windows::core::{GUID, HSTRING, Interface, PCWSTR, implement};
 
-pub const CLSID_GAUSSIAN_BLUR: GUID = GUID::from_u128(0x1feb6d69_2fe6_4ac5_9d66_a79502f7d0f0);
-pub const CLSID_FLOOD: GUID = GUID::from_u128(0x61c23c20_ae69_4d8e_94cf_50078df638f2);
-pub const CLSID_OPACITY: GUID = GUID::from_u128(0x811d79a4_de28_4454_8094_c64685f8bd4c);
-pub const CLSID_COMPOSITE: GUID = GUID::from_u128(0x48fc9f51_f6ac_48f1_8b58_3b28ac46f76d);
-pub const CLSID_BLEND: GUID = GUID::from_u128(0x81c5b77b_cb08_4c25_af93_002d81462403);
-pub const CLSID_SATURATION: GUID = GUID::from_u128(0x5cb2d2d3_0974_4d39_9976_165324bf621e);
-pub const CLSID_BORDER: GUID = GUID::from_u128(0x2a2d49c0_4acf_433c_8013_b44bb8823147);
-pub const CLSID_TINT: GUID = GUID::from_u128(0x36312b17_f7ee_4b43_865c_c36d33c0e80b);
-pub const CLSID_TURBULENCE: GUID = GUID::from_u128(0xcf2bb6ae_889a_4ad7_ba29_a2fd732c9fc9);
-pub const CLSID_CROSSFADE: GUID = GUID::from_u128(0x12f575e5_4dc7_4cd0_9e83_2c9c7600798f);
+pub use windows::Win32::Graphics::Direct2D::{
+    CLSID_D2D1Blend as CLSID_BLEND, CLSID_D2D1Border as CLSID_BORDER,
+    CLSID_D2D1Composite as CLSID_COMPOSITE, CLSID_D2D1CrossFade as CLSID_CROSSFADE,
+    CLSID_D2D1Flood as CLSID_FLOOD, CLSID_D2D1GaussianBlur as CLSID_GAUSSIAN_BLUR,
+    CLSID_D2D1Opacity as CLSID_OPACITY, CLSID_D2D1Saturation as CLSID_SATURATION,
+    CLSID_D2D1Tint as CLSID_TINT, CLSID_D2D1Turbulence as CLSID_TURBULENCE,
+};
 
 #[allow(dead_code)]
 pub const BLEND_MULTIPLY: u32 = 0;

@@ -4,7 +4,7 @@ use crate::components::input::{
     input_ime_anchor_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key,
     input_value_signal_key,
 };
-use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+use crate::utils::text_edit::sync_text_edit_paint_subtree;
 use crate::components::textarea::textarea;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};

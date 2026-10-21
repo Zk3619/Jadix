@@ -126,6 +126,9 @@ pub enum KnownUtility<'a> {
     FontFamilyMono,
     /// Tailwind `leading-*` unitless scale (`none` / `tight` / …).
     Leading(f32),
+    LeadingPx(f32),
+    BorderWidth(f32),
+    BoxShadow(&'a str),
     AlignSelf(&'a str),
     Opacity(f32),
     /// Visual translate X in logical px (`translate-x-*`).
@@ -272,6 +275,7 @@ pub enum KnownUtility<'a> {
     FilterNone,
     /// Tailwind `backdrop-blur-*` → `backdrop-filter: blur(...)` (same v4 scale as `blur-*`).
     BackdropBlur(TwLength),
+    Glass([f32; 4]),
     /// shadcn `shimmer` — streaming-text highlight (`background-clip: text` analog).
     Shimmer,
     /// `shimmer-once` — one sweep then settle (`shimmer-count-1`).
@@ -536,6 +540,29 @@ fn is_negatable_spacing_token(token: &str) -> bool {
 
 /// Classify a bare utility token (no `hover:` / `dark:` prefixes).
 pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
+    if token == "shadow-none" {
+        return Some(KnownUtility::BoxShadow("none"));
+    }
+    if let Some(inner) = token
+        .strip_prefix("shadow-[")
+        .and_then(|value| value.strip_suffix(']'))
+    {
+        if !inner.is_empty() {
+            return Some(KnownUtility::BoxShadow(inner));
+        }
+    }
+    if token == "border" {
+        return Some(KnownUtility::BorderWidth(1.0));
+    }
+    if let Some(rest) = token.strip_prefix("border-") {
+        let value = rest
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix("px]"))
+            .unwrap_or(rest);
+        if let Ok(width) = value.parse::<f32>() {
+            return (width.is_finite() && width >= 0.0).then_some(KnownUtility::BorderWidth(width));
+        }
+    }
     // Negative spacing: `-m-4`, `-translate-x-2`, …
     if let Some(rest) = token.strip_prefix('-') {
         if is_negatable_spacing_token(rest) {
@@ -776,6 +803,16 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         };
     }
     if let Some(rest) = token.strip_prefix("leading-") {
+        if let Some(pixels) = rest
+            .strip_prefix('[')
+            .and_then(|value| value.strip_suffix("px]"))
+        {
+            return pixels
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(KnownUtility::LeadingPx);
+        }
         return leading_scale_token(rest).map(KnownUtility::Leading);
     }
     if let Some(rest) = token.strip_prefix("overflow-x-") {
@@ -1048,6 +1085,32 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
     }
     if token == "backdrop-blur" {
         return Some(KnownUtility::BackdropBlur(TwLength::Px(8.0)));
+    }
+    if token == "glass" {
+        return Some(KnownUtility::Glass([1.46, 12.0, 0.025, 0.6]));
+    }
+    if token == "glass-none" {
+        return Some(KnownUtility::Glass([0.0; 4]));
+    }
+    if let Some(rest) = token
+        .strip_prefix("glass-[")
+        .and_then(|rest| rest.strip_suffix(']'))
+    {
+        let values = rest
+            .split('_')
+            .map(str::parse::<f32>)
+            .collect::<Result<Vec<_>, _>>()
+            .ok()?;
+        let values: [f32; 4] = values.try_into().ok()?;
+        if values.iter().all(|value| value.is_finite())
+            && (1.0..=2.5).contains(&values[0])
+            && (0.0..=64.0).contains(&values[1])
+            && (0.0..=0.2).contains(&values[2])
+            && (0.0..=1.0).contains(&values[3])
+        {
+            return Some(KnownUtility::Glass(values));
+        }
+        return None;
     }
     if let Some(rest) = token.strip_prefix("backdrop-blur-") {
         return match classify_tw_blur_rest(rest)? {
@@ -1428,6 +1491,37 @@ pub fn is_known_utility(token: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn glass_utilities_validate_optical_ranges() {
+        assert_eq!(
+            classify_utility("leading-[24px]"),
+            Some(KnownUtility::LeadingPx(24.0))
+        );
+        assert!(!is_known_utility("leading-[nanpx]"));
+        assert_eq!(
+            classify_utility("glass"),
+            Some(KnownUtility::Glass([1.46, 12.0, 0.025, 0.6]))
+        );
+        assert_eq!(
+            classify_utility("glass-none"),
+            Some(KnownUtility::Glass([0.0; 4]))
+        );
+        assert_eq!(
+            classify_utility("glass-[1.8_24_0.1_0.8]"),
+            Some(KnownUtility::Glass([1.8, 24.0, 0.1, 0.8]))
+        );
+        for invalid in [
+            "glass-[nan_12_0_0]",
+            "glass-[0.5_12_0_0]",
+            "glass-[1.5_-1_0_0]",
+            "glass-[1.5_12_1_0]",
+            "glass-[1.5_12_0_2]",
+            "glass-[1.5_12]",
+        ] {
+            assert!(!is_known_utility(invalid), "{invalid}");
+        }
+    }
 
     #[test]
     fn known_basics() {

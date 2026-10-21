@@ -14,6 +14,7 @@ include = [
   "/Cargo.toml",
   "/LICENSE",
   "/NOTICE",
+  "/MOTION.md",
   "/src/**/*",
   "/assets/**/*",
   "/benches/**/*",
@@ -23,7 +24,8 @@ include = [
 
 [features]
 # Lean by default: no resvg. Theme/stylesheet files are always TOML (`toml` crate).
-default = ["backend-dx12"]
+default = ["backend-dx12", "native-materials"]
+native-materials = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit"]
 # Framework performance sampling capability (enabled by Gallery for its diagnostics UI).
 # Applications that do not need performance telemetry leave this feature disabled.
 performance = []
@@ -125,6 +127,8 @@ devtools = []
 # Allow `<Image src="https://…">` / Avatar / Icon to call an app-installed
 # [`RemoteAssetFetcher`] (no HTTP crate). See docs/ops/remote_asset.md.
 remote-asset = []
+net = ["dep:jadix_net"]
+net-json = ["net", "jadix_net/json"]
 # Input/Textarea undo+redo history. Off by default (lean crate). Gallery enables it.
 # See docs/plans/text_undo_redo.md. Workspace feature unification: do not enable
 # from calculator / gpu_probe; package-specific `cargo test -p jadix --lib` stays off.
@@ -135,6 +139,8 @@ text-undo = []
 
 [dependencies]
 jadix_media.workspace = true
+jadix_tasks.workspace = true
+jadix_net = { workspace = true, optional = true }
 winit = { workspace = true }
 wgpu = { workspace = true }
 wgpu-hal = { version = "30", default-features = false, optional = true }
@@ -190,6 +196,7 @@ wgpu = { workspace = true, features = ["webgpu", "webgl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true }
+objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = ["std", "NSView", "NSWindow", "NSResponder", "NSGraphics"] }
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 muda = { workspace = true, optional = true }

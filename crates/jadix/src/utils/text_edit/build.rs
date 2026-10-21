@@ -1,15 +1,8 @@
 //! 树装配：单行 hstack chrome / 多行 scroll + 可选 resize 斜线手柄。
 
 use super::strings::{compose_text_edit_strings, finish_selection_draw, TextEditStringsInput};
-use crate::components::input::{
-    effective_invalid, input_adornment_button, input_caret_signal_key, input_clear_template_id,
-    input_ime_anchor_signal_key, input_number_dec_template_id, input_number_inc_template_id,
-    input_number_step_button, input_number_steppers_column, input_overwrite_signal_key,
-    input_password_reveal_signal_key, input_preedit_marks_signal_key, input_preedit_sel_signal_key,
-    input_preedit_signal_key, input_reveal_template_id, input_selection_signal_key,
-    input_text_template_id, input_type_signal_key, input_value_signal_key,
-    map_byte_range_to_masked, resolve_placeholder, set_adornment_visible, InputType,
-};
+use super::field::{effective_invalid, input_adornment_button, input_number_step_button, input_number_steppers_column, map_byte_range_to_masked, resolve_placeholder, set_adornment_visible, InputType};
+use crate::utils::text_field::{input_caret_signal_key, input_clear_template_id, input_ime_anchor_signal_key, input_number_dec_template_id, input_number_inc_template_id, input_overwrite_signal_key, input_password_reveal_signal_key, input_preedit_marks_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id, input_selection_signal_key, input_text_template_id, input_type_signal_key, input_value_signal_key};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_color, parse_text_color, Element, TextEditPaintSync};
 use crate::primitives::interactive::interactive;
@@ -476,7 +469,7 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         let rest = scroll_rest
             .as_deref()
             .expect("multiline text edit always has scroll_rest");
-        use crate::components::scrollbar::{scrollbar, ScrollbarOrientation};
+        use crate::core::scrollbar::{scrollbar, ScrollbarOrientation};
         use crate::core::scroll_viewport::scroll_scrollbar_inset_y_signal_key;
         use_signal(&scroll_scrollbar_inset_y_signal_key(rest), || {
             "inside".to_string()
@@ -510,14 +503,14 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
                 .overlay(true)
                 .z_index(1000)
                 .left(4.0)
-                .right(crate::components::scrollbar::SCROLLBAR_EDGE_PAD)
+                .right(crate::core::scrollbar::SCROLLBAR_EDGE_PAD)
                 .bottom(2.0)
                 .into();
             hbar.set_attr(
-                crate::components::scrollbar::ATTR_H_LANE_INSET,
-                crate::components::scrollbar::SCROLLBAR_EDGE_PAD.to_string(),
+                crate::core::scrollbar::ATTR_H_LANE_INSET,
+                crate::core::scrollbar::SCROLLBAR_EDGE_PAD.to_string(),
             );
-            hbar.set_attr(crate::components::scrollbar::ATTR_H_LANE_V_CROSS, "8");
+            hbar.set_attr(crate::core::scrollbar::ATTR_H_LANE_V_CROSS, "8");
             el = el.child(hbar);
         }
     }
@@ -725,6 +718,9 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         if invalid {
             out.set_attr("data-invalid", "true");
         }
+    } else {
+        out.set_attr("data-slot", if multiline { "textarea" } else { "input" });
     }
+    if disabled { out.set_attr("disabled", "true"); }
     attach_text_edit_field_lifecycle(out, &field_id, drop_undo_on_unmount)
 }

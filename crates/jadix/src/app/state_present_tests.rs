@@ -7,6 +7,10 @@ use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 mod scene_submission_tests;
 
 #[cfg(target_os = "windows")]
+#[path = "state_glass_present_tests.rs"]
+mod glass_present_tests;
+
+#[cfg(target_os = "windows")]
 #[path = "state_nested_scroll_tests.rs"]
 mod nested_scroll_tests;
 

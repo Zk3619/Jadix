@@ -780,6 +780,7 @@ fn drawer_shell_panel(
     };
 
     panel = apply_drawer_shell_surface(panel, direction, width, height, visible_px);
+    panel.set_attr("data-slot", "drawer-content");
     panel = panel_chrome.apply(panel);
     // Keep `position: absolute` from the shell surface — `relative()` would put the
     // panel in stage flow (flex-start / opposite edge) so enter looked like it

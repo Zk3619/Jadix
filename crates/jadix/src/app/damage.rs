@@ -3033,9 +3033,9 @@ pub fn sticky_layout_bounds(root: &Element) -> Vec<[f32; 4]> {
     out
 }
 
-/// Rounded ancestor clips are fixed chrome in the retained composite. Their
+/// Ancestor borders and rounded clips are fixed chrome in the retained composite. Their
 /// edge pixels cannot ride a rectangular scroll copy with the content.
-pub fn rounded_scroll_clip_blit_pins(
+pub fn scroll_ancestor_chrome_blit_pins(
     root: &Element,
     viewport_id: &str,
     viewport: [f32; 4],
@@ -3054,14 +3054,20 @@ pub fn rounded_scroll_clip_blit_pins(
         }
         let radius = el.style.radii.into_iter().fold(0.0_f32, f32::max);
         let (clip_x, clip_y) = crate::core::tree::overflow_clip_axes(el);
-        if radius > 0.0 && (clip_x || clip_y) {
+        let [bt, br, bb, bl] = el.style.resolved_border_widths();
+        let border_pad = |width: f32| if width > 0.0 { width + 1.0 } else { 0.0 };
+        let rounded_pad = if radius > 0.0 && (clip_x || clip_y) {
+            radius + 2.0
+        } else {
+            0.0
+        };
+        if rounded_pad > 0.0 || [bt, br, bb, bl].into_iter().any(|width| width > 0.0) {
             let [x, y, w, h] = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
-            let pad = radius + 2.0;
             for edge in [
-                [x, y, pad.min(w), h],
-                [x + (w - pad).max(0.0), y, pad.min(w), h],
-                [x, y, w, pad.min(h)],
-                [x, y + (h - pad).max(0.0), w, pad.min(h)],
+                [x, y, rounded_pad.max(border_pad(bl)).min(w), h],
+                [x + (w - rounded_pad.max(border_pad(br))).max(0.0), y, rounded_pad.max(border_pad(br)).min(w), h],
+                [x, y, w, rounded_pad.max(border_pad(bt)).min(h)],
+                [x, y + (h - rounded_pad.max(border_pad(bb))).max(0.0), w, rounded_pad.max(border_pad(bb)).min(h)],
             ] {
                 if let Some(hit) = intersect_rects(edge, viewport) {
                     push_scroll_blit_pin(pins, hit);
@@ -3189,8 +3195,8 @@ fn walk_out_of_flow_scroll_blit_pins(
         && el.style.opacity > 0.05
         && node_has_own_dest_ink(el)
         && el.focus_id.as_deref().is_none_or(|fid| {
-            !fid.starts_with(crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX)
-                && !fid.starts_with(crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
+            !fid.starts_with(crate::core::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX)
+                && !fid.starts_with(crate::core::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
         })
     {
         let b = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
@@ -3272,7 +3278,7 @@ pub fn overlay_scrollbar_scroll_blit_pins(
             return true;
         };
         let Some(rest_axis) =
-            fid.strip_prefix(crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
+            fid.strip_prefix(crate::core::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
         else {
             return true;
         };
@@ -3285,7 +3291,7 @@ pub fn overlay_scrollbar_scroll_blit_pins(
         if !overlay {
             return true;
         }
-        let b = el.layout_bounds;
+        let b = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
         if overlay_needs_scroll_blit_pin(b, blit_viewports) {
             out.push(b);
         }
@@ -6949,7 +6955,7 @@ mod tests {
         let mut track = Element::new();
         track.focus_id = Some(format!(
             "{}sa-main:y",
-            crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX
+            crate::core::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX
         ));
         track.set_attr("jadix_scrollbar_overlay", "1");
         track.layout_bounds = [392.0, 8.0, 8.0, 280.0];
@@ -6985,6 +6991,30 @@ mod tests {
     }
 
     #[test]
+    fn nested_scrollbar_pins_follow_the_ancestor_scroll_transform() {
+        let mut rail = Element::new().absolute().focus_id("scrollbar-track:inner:y");
+        rail.layout_bounds = [180.0, 120.0, 10.0, 140.0];
+        rail.paint_scroll_acc = [0.0, 80.0];
+        let root = Element::new().child(rail);
+        let pins = overlay_scrollbar_scroll_blit_pins(&root, &["inner".into()], &[[0.0, 0.0, 200.0, 100.0]]);
+        assert_eq!(pins, vec![[180.0, 40.0, 10.0, 140.0]]);
+    }
+
+    #[test]
+    fn rectangular_ancestor_border_keeps_antialiasing_out_of_scroll_copy() {
+        let viewport = [10.0, 10.0, 200.0, 160.0];
+        let mut child = Element::new().focus_id("scroll:bordered");
+        child.layout_bounds = viewport;
+        child.contains_scroll_viewport = true;
+        let mut root = Element::new().border([0.5, 0.5, 0.5, 1.0], 1.0).child(child);
+        root.layout_bounds = viewport;
+        root.contains_scroll_viewport = true;
+        let pins = scroll_ancestor_chrome_blit_pins(&root, "bordered", viewport);
+        assert!(pins.contains(&[10.0, 10.0, 200.0, 2.0]));
+        assert!(pins.iter().all(|pin| intersect_rects(*pin, [50.0, 50.0, 100.0, 40.0]).is_none()));
+    }
+
+    #[test]
     fn rounded_ancestor_edges_and_copied_imprints_are_repaired() {
         let vp = [10.0, 40.0, 200.0, 160.0];
         let mut viewport = Element::new();
@@ -6999,7 +7029,7 @@ mod tests {
             .child(viewport);
         shell.contains_scroll_viewport = true;
         shell.layout_bounds = [10.0, 10.0, 200.0, 190.0];
-        let pins = rounded_scroll_clip_blit_pins(&shell, "rounded", vp);
+        let pins = scroll_ancestor_chrome_blit_pins(&shell, "rounded", vp);
         assert_eq!(
             pins.len(),
             3,
@@ -7008,7 +7038,7 @@ mod tests {
         assert!(pins
             .iter()
             .all(|pin| intersect_rects(*pin, vp) == Some(*pin)));
-        assert!(rounded_scroll_clip_blit_pins(&shell, "other", vp).is_empty());
+        assert!(scroll_ancestor_chrome_blit_pins(&shell, "other", vp).is_empty());
         let smear = smear_out_of_flow_after_strip_blit(&pins, &[vp], &[[0.0, 30.0]]);
         assert!(
             smear.contains(&[10.0, 156.0, 200.0, 14.0]),

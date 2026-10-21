@@ -1,7 +1,7 @@
 //! # Textarea
 //!
 //! 多行文本输入的 **样式壳**：编辑能力在 [`crate::utils::text_field`]，
-//! 共享 chrome 构建/绘制在 [`crate::components::internal::text_edit`]。
+//! 共享 chrome 构建/绘制在 [`crate::utils::text_edit`]。
 //! `focus_id` 为 `textarea:{id}`；Enter 插入换行（见 `input_controller`）。
 //!
 //! ## Wrap modes ([`crate::text::WrapMode`])
@@ -24,7 +24,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::components::base::SlotChrome;
 use crate::components::input::InputType;
-use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
+use crate::utils::text_edit::{build_text_edit_element, TextEditBuildParams};
 use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
 use crate::utils::text_field::TextareaWrapMode;

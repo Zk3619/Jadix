@@ -6,7 +6,7 @@
 
 use crate::components::base::SlotChrome;
 use crate::components::input::InputType;
-use crate::components::internal::text_edit::{build_text_edit_element, TextEditBuildParams};
+use crate::utils::text_edit::{build_text_edit_element, TextEditBuildParams};
 use crate::core::reactivity::Signal;
 use crate::core::tree::Element;
 use crate::utils::document_registry::{

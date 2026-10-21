@@ -1,7 +1,7 @@
 //! Regression: Textarea leaf height must grow with hard `\n` after paint sync.
 
 use crate::components::input::input_value_signal_key;
-use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+use crate::utils::text_edit::sync_text_edit_paint_subtree;
 use crate::components::textarea::textarea;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
@@ -816,7 +816,7 @@ fn textarea_newline_at_bottom_scrolls_last_line_fully_visible() {
 
 #[test]
 fn textarea_trailing_newline_scrolls_before_content_h_signal_refreshes() {
-    use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+    use crate::utils::text_edit::sync_text_edit_paint_subtree;
     use crate::core::scroll_viewport::{scroll_content_h_signal_key, scroll_offset_y_signal_key};
 
     let mut fs = font_loader::create_font_system();
@@ -1264,7 +1264,7 @@ fn textarea_overflow_content_enables_y_scroll_metrics() {
 /// layout collect, but post-render clamped `sy` to a smaller `raw_max_y`.
 #[test]
 fn textarea_five_lines_max_scroll_matches_signal_extent() {
-    use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+    use crate::utils::text_edit::sync_text_edit_paint_subtree;
     use crate::core::scroll_viewport::{
         scroll_content_h_signal_key, scroll_offset_y_signal_key, scroll_viewport_h_signal_key,
     };
@@ -1392,7 +1392,7 @@ fn textarea_scroll_extent_includes_bottom_padding() {
 
 #[test]
 fn textarea_paint_sync_does_not_clamp_scroll_below_padding_inclusive_max() {
-    use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+    use crate::utils::text_edit::sync_text_edit_paint_subtree;
     use crate::core::scroll_viewport::{
         scroll_content_h_signal_key, scroll_offset_y_signal_key, scroll_viewport_h_signal_key,
     };

@@ -392,6 +392,16 @@ pub fn semantic_modal_overlay_scrim(
             .clamp(0.0, 1.0);
         return c;
     }
+    if super::theme_preset() != super::ThemePreset::Shadcn {
+        return [
+            0.0,
+            0.0,
+            0.0,
+            explicit_opacity
+                .unwrap_or(MODAL_OVERLAY_OPACITY_NEUTRAL)
+                .clamp(0.0, 1.0),
+        ];
+    }
     if !tone.is_semantic() {
         let mut c = parse_color("background");
         c[3] = explicit_opacity

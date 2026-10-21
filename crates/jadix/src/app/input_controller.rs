@@ -2,9 +2,8 @@ use winit::event::{ElementState, Ime, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
 use winit::window::WindowId;
 
-use crate::components::input::{
-    filter_insert_for_type, input_type_signal_key, strip_control_insert, InputType,
-};
+use crate::utils::text_edit::field::{filter_insert_for_type, strip_control_insert, InputType};
+use crate::utils::text_field::input_type_signal_key;
 use crate::utils::clipboard::{
     consumes_undo_redo_letter, edit_shortcut_letter, get_text as clipboard_get_text,
     is_redo_shortcut, is_undo_shortcut, sanitize_pasted_line, set_text as clipboard_set_text,
@@ -193,7 +192,7 @@ impl super::App {
     fn apply_ime_event(&mut self, ime: Ime, window_id: WindowId) {
         let focused = crate::core::reactivity::use_signal("__jadix_button_focus_id", String::new);
         let ime_active =
-            crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false);
+            crate::core::reactivity::use_signal(crate::utils::text_edit::field::IME_ACTIVE_SIGNAL, || false);
         let fid = focused.get();
         // Lone Shift 中/英 may have left Imm/preedit without a Commit/Disabled.
         ime_support::drain_pending_ime_shift_compose_finish(&fid);
@@ -271,13 +270,13 @@ impl super::App {
                     &attrs,
                 );
                 if let Some(rest) = text_edit_rest(&fid) {
-                    let vk = crate::components::input::input_value_signal_key(rest);
+                    let vk = crate::utils::text_field::input_value_signal_key(rest);
                     let val_sig = crate::core::reactivity::use_signal(&vk, String::new);
-                    let pk = crate::components::input::input_preedit_signal_key(rest);
-                    let sk = crate::components::input::input_preedit_sel_signal_key(rest);
-                    let tsk = crate::components::input::input_selection_signal_key(rest);
-                    let ck = crate::components::input::input_caret_signal_key(rest);
-                    let ak = crate::components::input::input_ime_anchor_signal_key(rest);
+                    let pk = crate::utils::text_field::input_preedit_signal_key(rest);
+                    let sk = crate::utils::text_field::input_preedit_sel_signal_key(rest);
+                    let tsk = crate::utils::text_field::input_selection_signal_key(rest);
+                    let ck = crate::utils::text_field::input_caret_signal_key(rest);
+                    let ak = crate::utils::text_field::input_ime_anchor_signal_key(rest);
                     let pre = crate::core::reactivity::use_signal(&pk, String::new);
                     let sel =
                         crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None);
@@ -332,7 +331,7 @@ impl super::App {
                     // 避免 Win 上 Preedit("") 紧接 Commit 时丢锚点。
                     pre.set(s.clone());
                     sel.set(cursor);
-                    let mk = crate::components::input::input_preedit_marks_signal_key(rest);
+                    let mk = crate::utils::text_field::input_preedit_marks_signal_key(rest);
                     crate::core::reactivity::use_signal(&mk, Vec::<(usize, usize, u8)>::new)
                         .set(marks);
                     if !s.is_empty() {
@@ -356,7 +355,7 @@ impl super::App {
                         Self::clear_ime_compose_state(rest);
                     }
                 } else if let Some(rest) = text_edit_rest(&fid) {
-                    let vk = crate::components::input::input_value_signal_key(rest);
+                    let vk = crate::utils::text_field::input_value_signal_key(rest);
                     let val_sig = crate::core::reactivity::use_signal(&vk, String::new);
                     let mut v = val_sig.get();
                     let cs = crate::utils::text_field::load_text_cursors(rest, &v);
@@ -364,11 +363,11 @@ impl super::App {
                     let filtered = if multi {
                         filter_typed_insert(rest, &v, &s)
                     } else {
-                        let ak = crate::components::input::input_ime_anchor_signal_key(rest);
+                        let ak = crate::utils::text_field::input_ime_anchor_signal_key(rest);
                         let ime_anchor_sig =
                             crate::core::reactivity::use_signal(&ak, || None::<usize>);
                         let mut anchor = ime_anchor_sig.get().unwrap_or_else(|| {
-                            let ck = crate::components::input::input_caret_signal_key(rest);
+                            let ck = crate::utils::text_field::input_caret_signal_key(rest);
                             crate::core::reactivity::use_signal(&ck, || None::<usize>)
                                 .get()
                                 .unwrap_or(v.len())
@@ -377,7 +376,7 @@ impl super::App {
                         anchor = v.floor_char_boundary(anchor);
                         filter_typed_insert(rest, &v[..anchor], &s)
                     };
-                    let ck = crate::components::input::input_caret_signal_key(rest);
+                    let ck = crate::utils::text_field::input_caret_signal_key(rest);
                     let caret_sig = crate::core::reactivity::use_signal(&ck, || None::<usize>);
                     let new_caret = if filtered.is_empty() && !s.is_empty() {
                         caret_sig.get().unwrap_or(v.len()).min(v.len())
@@ -397,7 +396,7 @@ impl super::App {
                             .or_else(|| caret_sig.get())
                             .unwrap_or(0)
                     } else {
-                        let ak = crate::components::input::input_ime_anchor_signal_key(rest);
+                        let ak = crate::utils::text_field::input_ime_anchor_signal_key(rest);
                         let ime_anchor_sig =
                             crate::core::reactivity::use_signal(&ak, || None::<usize>);
                         let mut anchor = ime_anchor_sig
@@ -469,15 +468,15 @@ impl super::App {
     }
 
     fn clear_ime_compose_state(rest: &str) {
-        let pk = crate::components::input::input_preedit_signal_key(rest);
-        let sk = crate::components::input::input_preedit_sel_signal_key(rest);
-        let tsk = crate::components::input::input_selection_signal_key(rest);
-        let ak = crate::components::input::input_ime_anchor_signal_key(rest);
+        let pk = crate::utils::text_field::input_preedit_signal_key(rest);
+        let sk = crate::utils::text_field::input_preedit_sel_signal_key(rest);
+        let tsk = crate::utils::text_field::input_selection_signal_key(rest);
+        let ak = crate::utils::text_field::input_ime_anchor_signal_key(rest);
         crate::core::reactivity::use_signal(&pk, String::new).set(String::new());
         crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None).set(None);
         crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>).set(None);
         crate::core::reactivity::use_signal(&ak, || None::<usize>).set(None);
-        let mk = crate::components::input::input_preedit_marks_signal_key(rest);
+        let mk = crate::utils::text_field::input_preedit_marks_signal_key(rest);
         crate::core::reactivity::use_signal(&mk, Vec::<(usize, usize, u8)>::new).set(Vec::new());
         ime_support::on_ime_composition_ended();
     }
@@ -493,7 +492,7 @@ impl super::App {
 
     fn handle_keyboard_input_ex(&mut self, event: KeyEvent, allow_primary_tree: bool) -> bool {
         if event.state == ElementState::Pressed {
-            #[cfg(feature = "devtools")]
+            #[cfg(all(debug_assertions, feature = "devtools"))]
             if crate::app::devtools::try_toggle_from_key(&event, self.modifiers) {
                 crate::app::runtime::request_redraw();
                 return true;
@@ -560,7 +559,7 @@ impl super::App {
                 let focused =
                     crate::core::reactivity::use_signal("__jadix_button_focus_id", String::new);
                 let ime_active = crate::core::reactivity::use_signal(
-                    crate::components::IME_ACTIVE_SIGNAL,
+                    crate::utils::text_edit::field::IME_ACTIVE_SIGNAL,
                     || false,
                 );
                 let fid = focused.get();
@@ -673,10 +672,10 @@ impl super::App {
                 }
 
                 let edit_target = fid
-                    .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
+                    .strip_prefix(crate::utils::text_field::INPUT_FOCUS_PREFIX)
                     .map(|r| (r, false))
                     .or_else(|| {
-                        fid.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX)
+                        fid.strip_prefix(crate::utils::text_field::TEXTAREA_FOCUS_PREFIX)
                             .map(|r| (r, true))
                     });
                 if let Some((rest, multiline)) = edit_target {
@@ -689,13 +688,13 @@ impl super::App {
                     {
                         return true;
                     }
-                    let value_key = crate::components::input::input_value_signal_key(rest);
+                    let value_key = crate::utils::text_field::input_value_signal_key(rest);
                     let val_sig = crate::core::reactivity::use_signal(&value_key, String::new);
-                    let pk = crate::components::input::input_preedit_signal_key(rest);
+                    let pk = crate::utils::text_field::input_preedit_signal_key(rest);
                     let preedit_sig = crate::core::reactivity::use_signal(&pk, String::new);
-                    let ck = crate::components::input::input_caret_signal_key(rest);
+                    let ck = crate::utils::text_field::input_caret_signal_key(rest);
                     let caret_sig = crate::core::reactivity::use_signal(&ck, || None::<usize>);
-                    let tsk = crate::components::input::input_selection_signal_key(rest);
+                    let tsk = crate::utils::text_field::input_selection_signal_key(rest);
                     let text_sel_sig =
                         crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>);
                     let pref_x_key =
@@ -1500,7 +1499,7 @@ impl super::App {
                                 }
                                 Key::Named(NamedKey::Insert) => {
                                     let ow_key =
-                                        crate::components::input::input_overwrite_signal_key(rest);
+                                        crate::utils::text_field::input_overwrite_signal_key(rest);
                                     let ow = crate::core::reactivity::use_signal(&ow_key, || false);
                                     ow.set(!ow.get());
                                     nav_handled = true;
@@ -1751,7 +1750,7 @@ impl super::App {
                                     // rejected by type filter
                                 } else {
                                     let ow_key =
-                                        crate::components::input::input_overwrite_signal_key(rest);
+                                        crate::utils::text_field::input_overwrite_signal_key(rest);
                                     let overwrite_sig =
                                         crate::core::reactivity::use_signal(&ow_key, || false);
                                     let overwrite = overwrite_sig.get();
@@ -1824,19 +1823,19 @@ mod tests {
         );
         let rest = "ime-atomic-unicode";
         let value = use_signal(
-            &crate::components::input::input_value_signal_key(rest),
+            &crate::utils::text_field::input_value_signal_key(rest),
             String::new,
         );
         let preedit = use_signal(
-            &crate::components::input::input_preedit_signal_key(rest),
+            &crate::utils::text_field::input_preedit_signal_key(rest),
             String::new,
         );
         let caret = use_signal(
-            &crate::components::input::input_caret_signal_key(rest),
+            &crate::utils::text_field::input_caret_signal_key(rest),
             || None::<usize>,
         );
         let selection = use_signal(
-            &crate::components::input::input_selection_signal_key(rest),
+            &crate::utils::text_field::input_selection_signal_key(rest),
             || None::<(usize, usize)>,
         );
         let focus = use_signal("__jadix_button_focus_id", String::new);
@@ -1897,7 +1896,7 @@ mod tests {
         let rest = "ime-enabled-keyboard";
         let focus = crate::core::reactivity::use_signal("__jadix_button_focus_id", String::new);
         focus.set(format!("input:{rest}"));
-        crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false)
+        crate::core::reactivity::use_signal(crate::utils::text_edit::field::IME_ACTIVE_SIGNAL, || false)
             .set(true);
         let key = Key::Character("a".into());
         let event = KeyEvent {
@@ -1912,7 +1911,7 @@ mod tests {
         };
         app.handle_keyboard_text_signals(event.clone());
         let value = crate::core::reactivity::use_signal(
-            &crate::components::input::input_value_signal_key(rest),
+            &crate::utils::text_field::input_value_signal_key(rest),
             String::new,
         );
         assert_eq!(
@@ -1921,14 +1920,14 @@ mod tests {
             "IME Enabled is not an active composition"
         );
         crate::core::reactivity::use_signal(
-            &crate::components::input::input_preedit_signal_key(rest),
+            &crate::utils::text_field::input_preedit_signal_key(rest),
             String::new,
         )
         .set("拼".into());
         app.handle_keyboard_text_signals(event);
         assert_eq!(value.peek(), "a", "composition key must not insert twice");
         focus.set(String::new());
-        crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false)
+        crate::core::reactivity::use_signal(crate::utils::text_edit::field::IME_ACTIVE_SIGNAL, || false)
             .set(false);
     }
 

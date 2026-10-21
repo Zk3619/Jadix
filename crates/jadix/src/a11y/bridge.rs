@@ -241,15 +241,21 @@ fn union_rect(a: Rect, b: Rect) -> Rect {
     }
 }
 
-/// Prefer this node's layout box; otherwise union descendants (text often lays out on children).
+/// Prefer this node's painted box; otherwise union descendants (text often lays out on children).
 fn effective_bounds(el: &Element) -> Option<Rect> {
-    if let Some(r) = bounds_from_layout(el.layout_bounds) {
+    if let Some(r) = bounds_from_layout(crate::core::tree::visual_paint_aabb(
+        el,
+        el.paint_scroll_acc,
+    )) {
         return Some(r);
     }
     let mut acc: Option<Rect> = None;
     let mut stack: Vec<&Element> = el.children.iter().rev().collect();
     while let Some(node) = stack.pop() {
-        if let Some(r) = bounds_from_layout(node.layout_bounds) {
+        if let Some(r) = bounds_from_layout(crate::core::tree::visual_paint_aabb(
+            node,
+            node.paint_scroll_acc,
+        )) {
             acc = Some(match acc {
                 None => r,
                 Some(a) => union_rect(a, r),
@@ -259,6 +265,30 @@ fn effective_bounds(el: &Element) -> Option<Rect> {
         }
     }
     acc
+}
+
+#[cfg(test)]
+mod motion_projection_tests {
+    #[test]
+    fn accessibility_bounds_follow_layout_projection() {
+        use crate::core::tree::Element;
+        use crate::motion::{LayoutAnimation, LayoutMotion};
+        use crate::style::{tick_animations, TimingFunction, ValueDriver};
+
+        let motion = LayoutMotion::new(LayoutAnimation::Both)
+            .transition(ValueDriver::tween(100.0, TimingFunction::Linear));
+        motion.update([20.0, 10.0, 100.0, 60.0]);
+        motion.update([120.0, 10.0, 200.0, 60.0]);
+        let mut element = Element::new().layout_motion(&motion);
+        element.layout_bounds = [120.0, 10.0, 200.0, 60.0];
+        let initial = super::effective_bounds(&element).unwrap();
+        assert!((initial.x0 - 20.0).abs() < 0.01);
+        assert!((initial.x1 - initial.x0 - 100.0).abs() < 0.01);
+        tick_animations(0.05);
+        let middle = super::effective_bounds(&element).unwrap();
+        assert!((middle.x0 - 70.0).abs() < 0.01);
+        assert!((middle.x1 - middle.x0 - 150.0).abs() < 0.01);
+    }
 }
 
 /// Visible text on this element and descendants (Button captions live on child text nodes).

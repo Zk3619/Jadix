@@ -930,11 +930,13 @@ fn scissor_clear_instance(rect: [f32; 4], clear: wgpu::Color, inflate: f32) -> I
         shadow_blur: 0.0,
         shadow_spread: 0.0,
         shadow_inset: 0.0,
+        backdrop_fade: 0.0,
         transform: crate::style::transform::MAT2D_IDENTITY,
         clip_pos: [0.0, 0.0],
         clip_size: InstanceInput::NO_CLIP_SIZE,
         border_extra: 0.0,
         backdrop_blur: 0.0,
+        glass: [0.0; 4],
     }
 }
 
@@ -1131,6 +1133,8 @@ fn capture_page_stack_local_backdrop(
     band: &crate::layout::layout_tree::OverlayBandRange,
     page_stack_band_ranges: &[crate::layout::layout_tree::OverlayBandRange],
     band_i: usize,
+    backdrop_indices: &[Option<usize>],
+    live_backdrops: &[wgpu::BindGroup],
     radius_px: f32,
     clear_color: wgpu::Color,
     paint_ops: &[crate::layout::layout_tree::PaintOp],
@@ -1288,7 +1292,7 @@ fn capture_page_stack_local_backdrop(
                 &capture_underlines,
                 &capture_shadows,
                 shadow_tex_cache,
-                dummy,
+                page_stack_band_backdrop(j, backdrop_indices, live_backdrops, dummy),
                 instances,
                 capture_cull,
                 false,
@@ -1429,7 +1433,7 @@ fn local_backdrop_host_scissor_physical(
         if inst.backdrop_blur <= 0.5 {
             continue;
         }
-        let (x, y, w, h) = if inst.clip_size[0] > 0.5 && inst.clip_size[1] > 0.5 {
+        let (x, y, w, h) = if inst.glass[0] < 1.0 && inst.clip_size[0] > 0.5 && inst.clip_size[1] > 0.5 {
             (
                 inst.clip_pos[0],
                 inst.clip_pos[1],
@@ -1448,10 +1452,11 @@ fn local_backdrop_host_scissor_physical(
             continue;
         }
         found = true;
-        min_x = min_x.min(x);
-        min_y = min_y.min(y);
-        max_x = max_x.max(x + w);
-        max_y = max_y.max(y + h);
+        let optical_pad = if inst.glass[0] >= 1.0 { inst.glass[1] * 2.0 * (1.0 + inst.glass[2]) } else { 0.0 };
+        min_x = min_x.min(x - optical_pad);
+        min_y = min_y.min(y - optical_pad);
+        max_x = max_x.max(x + w + optical_pad);
+        max_y = max_y.max(y + h + optical_pad);
     }
     if !found {
         return None;
@@ -1657,6 +1662,18 @@ mod local_backdrop_capture_tests {
         let band = band_instances(0, 1);
         let sc = local_backdrop_host_scissor_physical(&[inst], &band, 800, 600).expect("scissor");
         assert_eq!(sc, (100, 200, 220, 140));
+    }
+
+    #[test]
+    fn optical_capture_is_local_and_includes_refracted_samples() {
+        let mut instance = InstanceInput::zeroed();
+        instance.backdrop_blur = 2.0;
+        instance.glass = [1.46, 10.0, 0.1, 0.6];
+        instance.rect_pos = [100.0, 120.0];
+        instance.rect_size = [200.0, 80.0];
+        instance.clip_size = [800.0, 600.0];
+        let scissor = local_backdrop_host_scissor_physical(&[instance], &band_instances(0, 1), 800, 600);
+        assert_eq!(scissor, Some((78, 98, 244, 124)));
     }
 
     #[test]
@@ -2576,7 +2593,7 @@ impl AppState {
             }
         }
         for (id, viewport) in ids.iter().zip(&viewports) {
-            sticky.extend(super::damage::rounded_scroll_clip_blit_pins(
+            sticky.extend(super::damage::scroll_ancestor_chrome_blit_pins(
                 &self.root_element,
                 id,
                 *viewport,
@@ -4617,7 +4634,7 @@ impl AppState {
         log::debug!("[rebuild_ui] END status={:?}", status);
         self.root_element = root_element;
         recompute_scroll_viewport_flags(&mut self.root_element);
-        #[cfg(feature = "devtools")]
+        #[cfg(all(debug_assertions, feature = "devtools"))]
         {
             let _ = crate::app::devtools::reapply_inspector_overrides(
                 &mut self.root_element,
@@ -5006,6 +5023,11 @@ impl AppState {
         }
 
         new_el.layout_node = old_el.layout_node;
+        if new_el.liquid_flow.is_none()
+            && new_el.attrs.get("data-slot") == old_el.attrs.get("data-slot")
+        {
+            new_el.liquid_flow = old_el.liquid_flow.take();
+        }
         // Keep dispose hooks alive across root rebuilds that recreate the same template_id.
         if new_el.on_unmount.is_none() {
             new_el.on_unmount = old_el.on_unmount.clone();
@@ -5246,7 +5268,7 @@ impl AppState {
     }
 
     /// Inspector live style edit (B1 P1): patch one node by child-index path.
-    #[cfg(feature = "devtools")]
+    #[cfg(all(debug_assertions, feature = "devtools"))]
     pub(super) fn patch_devtools_element_at_path(
         &mut self,
         path: &[usize],
@@ -5275,7 +5297,7 @@ impl AppState {
     }
 
     /// Inspector CSSOM text apply (B1 P2). Returns canonical dump after apply.
-    #[cfg(feature = "devtools")]
+    #[cfg(all(debug_assertions, feature = "devtools"))]
     pub(super) fn patch_devtools_cssom_at_path(
         &mut self,
         path: &[usize],
@@ -5732,7 +5754,7 @@ impl AppState {
             sync_viewport_scroll_offsets_from_signals(&mut self.root_element);
         }
 
-        #[cfg(feature = "devtools")]
+        #[cfg(all(debug_assertions, feature = "devtools"))]
         {
             // Apply queued CSSOM edits before chrome sync; committed map is reasserted after.
             for edit in crate::app::devtools::take_pending_inspector_edits() {
@@ -5795,12 +5817,12 @@ impl AppState {
             // Defer class-hover while the dock is open and waiting for sync.
             // `is_enabled()` alone (feature on, panel closed) must not pin the mouse to a
             // sentinel — that interacted badly with layout-page CSS transitions.
-            #[cfg(feature = "devtools")]
+            #[cfg(all(debug_assertions, feature = "devtools"))]
             let panel_pending = crate::app::devtools::DevToolsState::is_enabled()
                 && crate::app::devtools::DevToolsState::is_open()
                 && crate::app::devtools::DevToolsState::generation()
                     != crate::app::devtools::DevToolsState::last_sync_gen();
-            #[cfg(not(feature = "devtools"))]
+            #[cfg(not(all(debug_assertions, feature = "devtools")))]
             let panel_pending = false;
             structure_dirty || panel_pending
         };
@@ -5940,7 +5962,7 @@ impl AppState {
         // (caret-less); skipping reinstall drops `input_caret` from `text_nodes`,
         // `caret_wake_at` dies, and Windows coalesces the settle redraw with Wait.
         if chrome_sync_needed {
-            crate::components::internal::text_edit::sync_text_edit_paint_subtree_in_viewport(
+            crate::utils::text_edit::sync_text_edit_paint_subtree_in_viewport(
                 &mut self.root_element,
                 &mut self.layout_tree,
                 &mut sync_impact,
@@ -5954,7 +5976,7 @@ impl AppState {
             );
         }
 
-        #[cfg(feature = "devtools")]
+        #[cfg(all(debug_assertions, feature = "devtools"))]
         {
             // Chrome sync (button hover / class variants) restores authored snapshots and
             // would wipe live Inspector Set/Apply edits — reassert committed overrides.
@@ -6033,9 +6055,9 @@ impl AppState {
         let layout_for_build_base =
             Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
         // `layout_for_build` will only be merged once for `devtools`; no mut is required for non-devtools builds.
-        #[cfg(feature = "devtools")]
+        #[cfg(all(debug_assertions, feature = "devtools"))]
         let mut layout_for_build = layout_for_build_base;
-        #[cfg(not(feature = "devtools"))]
+        #[cfg(not(all(debug_assertions, feature = "devtools")))]
         let layout_for_build = layout_for_build_base;
 
         crate::components::drawer::sync_drawer_background_scale(&mut self.root_element);
@@ -6157,7 +6179,7 @@ impl AppState {
             }
         }
 
-        #[cfg(feature = "devtools")]
+        #[cfg(all(debug_assertions, feature = "devtools"))]
         {
             // App tree StructureChanged (route / reactive_view) does not bump Inspector GEN by
             // itself — without this the Elements panel keeps a stale snapshot after page switches.
@@ -6178,18 +6200,16 @@ impl AppState {
                 // Stale pick/tree hover paths refer to the previous page.
                 crate::app::devtools::DevToolsState::clear_hover_highlight();
             }
-            if crate::app::devtools::sync_overlay(&mut self.root_element) {
-                layout_for_build = Self::merge_layout_status(
-                    layout_for_build,
-                    crate::core::tree::LayoutStatus::StructureChanged,
-                );
-                self.mark_full_redraw();
+            let inspector_impact = crate::app::devtools::sync_overlay_layout(&mut self.root_element, &mut self.layout_tree);
+            layout_for_build = layout_for_build.merge(inspector_impact);
+            if inspector_impact == LayoutStatus::StructureChanged {
                 // Panel rebuild replaces every `on_hover` Rc. Soft-invalidate so the next
                 // post-render hover pass re-asserts by focus_id without leave→spring(0) thrash.
                 crate::app::tree_hit::invalidate_hover_handlers();
             }
             let _ = crate::app::devtools::sync_box_model_visuals(&mut self.root_element);
-            let _ = crate::app::devtools::sync_tree_row_hovers(&mut self.root_element);
+            crate::app::devtools::sync_tree_row_hovers(&mut self.root_element);
+            self.damage_nodes.extend(super::damage::take_frame_paint_nodes());
         }
 
         let (logical_w, logical_h) = self.logical_size();
@@ -6956,7 +6976,7 @@ impl AppState {
         if has_dynamic_text && self.last_caret_blink_phase != caret_phase {
             // I-beam on/off is the focused field's chrome. FullClear here wiped every
             // other node dirty (Marker spin) and contradicted Solid-style present.
-            crate::components::internal::text_edit::push_focused_text_edit_caret_damage(
+            crate::utils::text_edit::push_focused_text_edit_caret_damage(
                 &self.root_element,
             );
         }
@@ -7218,6 +7238,9 @@ impl AppState {
 
         #[cfg(all(windows, feature = "webview"))]
         if self.webviews.has_visible() {
+            self.force_full_redraw = true;
+        }
+        if self.theme_transition.needs_frame() || scaled_instances.iter().any(|instance| instance.glass[0] >= 1.0 && instance.glass[1] > 0.0) {
             self.force_full_redraw = true;
         }
         let gpu_present = self.plan_gpu_present(ui_scale);
@@ -8388,14 +8411,34 @@ impl AppState {
 
         let mut live_backdrops: Vec<wgpu::BindGroup> = Vec::new();
         let mut band_backdrop_idx: Vec<Option<usize>> = vec![None; page_stack_band_ranges.len()];
+        let mut overlay_backdrop_idx = vec![None; overlay_band_ranges.len()];
+        let mut capture_bands = page_stack_band_ranges.clone();
+        if capture_bands.is_empty() && !overlay_band_ranges.is_empty() {
+            capture_bands.push(crate::layout::layout_tree::OverlayBandRange {
+                instance: (0, overlay_inst_start),
+                textured: (0, overlay_tex_start),
+                text: (0, overlay_text_start),
+                chrome: (0, overlay_chrome_start),
+                paint_ops: (0, overlay_split.paint_op_start),
+                backdrop_blur: 0.0,
+                underlay_opacity: 1.0,
+                stamp_key: 0,
+            });
+        }
+        let capture_page_count = capture_bands.len();
+        capture_bands.extend_from_slice(&overlay_band_ranges);
+        let mut capture_backdrop_idx = vec![None; capture_bands.len()];
         // Capture submits its own encoder (like subtree `render_capture`) so prefix
         // glyphon is flushed to the scene RT before this frame encoder reuses the
         // same vertex buffers. Must run **before** modal frost: the modal scene pass
         // samples these bind groups so local + modal blurs stack.
-        if !reuse_modal_source
-            && should_capture_page_stack_local_backdrops(allow_primitives, has_page_stack_bands)
+        if should_capture_page_stack_local_backdrops(allow_primitives, !capture_bands.is_empty())
         {
-            for (band_i, band) in page_stack_band_ranges.iter().enumerate() {
+            for (band_i, band) in capture_bands.iter().enumerate() {
+                let optical = scaled_instances[band.instance.0..band.instance.1].iter().any(|instance| instance.glass[0] >= 1.0 && instance.glass[1] > 0.0);
+                if (band_i >= capture_page_count || reuse_modal_source) && !optical {
+                    continue;
+                }
                 // `render_result.instances` was `take`n into `scaled_instances` (physical).
                 // Sampling the empty buffer made local_blur always 0 — dummy backdrop, no frost.
                 let local_blur = band_instance_backdrop_blur(&scaled_instances, band);
@@ -8433,7 +8476,7 @@ impl AppState {
                             .map(|dirty| dirty.bounds),
                     )
                     .collect();
-                let recapture = local_backdrop_must_recapture(
+                let recapture = optical || local_backdrop_must_recapture(
                     self.local_backdrop_valid && self.backdrop_blur.blurred_view().is_some(),
                     use_partial_damage,
                     scroll_source_moved,
@@ -8441,21 +8484,25 @@ impl AppState {
                     &source_damage,
                     ui_scale,
                 );
+                let mut optical_target = optical.then(|| self.backdrop_blur.new_target(&self.device));
+                let backdrop = optical_target.as_mut().unwrap_or(&mut self.backdrop_blur);
                 if recapture {
                     #[cfg(test)]
                     {
                         self.local_backdrop_capture_count += 1;
                     }
                     capture_page_stack_local_backdrop(
-                        &mut self.backdrop_blur,
+                        backdrop,
                         &self.device,
                         &self.queue,
                         self.config.width,
                         self.config.height,
                         self.config.format,
                         band,
-                        &page_stack_band_ranges,
+                        &capture_bands,
                         band_i,
+                        &capture_backdrop_idx,
+                        &live_backdrops,
                         radius_px,
                         clear_color,
                         &render_result.paint_ops,
@@ -8470,7 +8517,7 @@ impl AppState {
                         &mut self.shadow_rect_cache,
                         &self.text_renderer,
                         &mut self.local_backdrop_text_renderers,
-                        &self.text_nodes[..overlay_text_start],
+                        &self.text_nodes,
                         &self.config,
                         ui_scale,
                         if self.gpu_caps.compute {
@@ -8481,16 +8528,28 @@ impl AppState {
                         &scaled_instances,
                         capture_region,
                     );
-                    self.local_backdrop_valid = self.backdrop_blur.blurred_view().is_some();
+                    if !optical {
+                        self.local_backdrop_valid = backdrop.blurred_view().is_some();
+                    }
                 }
-                if let Some(view) = self.backdrop_blur.blurred_view() {
+                if let Some(view) = backdrop.blurred_view() {
                     let idx = live_backdrops.len();
-                    live_backdrops.push(self.pipeline.make_backdrop_bind_group(
+                    live_backdrops.push(self.pipeline.make_optical_backdrop_bind_group(
                         &self.device,
                         view,
-                        self.backdrop_blur.sampler(),
+                        if optical {
+                            backdrop.scene_view().unwrap_or(view)
+                        } else {
+                            view
+                        },
+                        backdrop.sampler(),
                     ));
-                    band_backdrop_idx[band_i] = Some(idx);
+                    capture_backdrop_idx[band_i] = Some(idx);
+                    if band_i >= capture_page_count {
+                        overlay_backdrop_idx[band_i - capture_page_count] = Some(idx);
+                    } else if band_i < band_backdrop_idx.len() {
+                        band_backdrop_idx[band_i] = Some(idx);
+                    }
                 }
             }
         }
@@ -9128,6 +9187,7 @@ impl AppState {
             // (still one Clear pass — no GLES LoadOp::Load).
             if !gpu_present.use_node_present {
                 for (band_i, band) in overlay_band_ranges.iter().enumerate() {
+                    let backdrop = page_stack_band_backdrop(band_i, &overlay_backdrop_idx, &live_backdrops, self.pipeline.dummy_backdrop());
                     if allow_primitives && band.paint_ops.0 < band.paint_ops.1 {
                         draw_paint_ops(
                             &mut render_pass,
@@ -9140,14 +9200,14 @@ impl AppState {
                             &self.textured_instance_buffer.buffer,
                             &self.image_textures,
                             &scaled_tex,
-                            self.pipeline.dummy_backdrop(),
+                            backdrop,
                             &scaled_instances,
                             None,
                         );
                     } else if allow_primitives && band.instance.0 < band.instance.1 {
                         render_pass.set_pipeline(&self.pipeline.render_pipeline);
                         render_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
-                        render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
+                        render_pass.set_bind_group(1, backdrop, &[]);
                         render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
                         render_pass.set_vertex_buffer(1, self.instance_buffer.buffer.slice(..));
                         render_pass.set_index_buffer(
@@ -10222,6 +10282,66 @@ mod hot_reload_inject {
                                 changed = true;
                             }
                         }
+                        "class" => {
+                            let _ = crate::style::apply_class_list(target, v);
+                            changed = true;
+                        }
+                        "animation" => {
+                            *target = std::mem::take(target).animation(v);
+                            changed = true;
+                        }
+                        "animation_name" => {
+                            *target = std::mem::take(target).animation_name(v);
+                            changed = true;
+                        }
+                        "animation_duration" => {
+                            *target = std::mem::take(target).animation_duration(v);
+                            changed = true;
+                        }
+                        "animation_delay" => {
+                            *target = std::mem::take(target).animation_delay(v);
+                            changed = true;
+                        }
+                        "animation_timing_function" => {
+                            *target = std::mem::take(target).animation_timing_function(v);
+                            changed = true;
+                        }
+                        "animation_iteration_count" => {
+                            *target = std::mem::take(target).animation_iteration_count(v);
+                            changed = true;
+                        }
+                        "animation_direction" => {
+                            *target = std::mem::take(target).animation_direction(v);
+                            changed = true;
+                        }
+                        "animation_fill_mode" => {
+                            *target = std::mem::take(target).animation_fill_mode(v);
+                            changed = true;
+                        }
+                        "animation_play_state" => {
+                            *target = std::mem::take(target).animation_play_state(v);
+                            changed = true;
+                        }
+                        "transition" => {
+                            *target = std::mem::take(target).transition(v);
+                            changed = true;
+                        }
+                        "transition_property" => {
+                            *target = std::mem::take(target).transition_property(v);
+                            changed = true;
+                        }
+                        "transition_duration" => {
+                            *target = std::mem::take(target).transition_duration(v);
+                            changed = true;
+                        }
+                        "transition_delay" => {
+                            *target = std::mem::take(target).transition_delay(v);
+                            changed = true;
+                        }
+                        "transition_timing_function" => {
+                            *target = std::mem::take(target).transition_timing_function(v);
+                            changed = true;
+                        }
                         _ => {}
                     }
                 }
@@ -10236,8 +10356,8 @@ mod hot_reload_inject {
     /// `element_index` so `text_size` landed on VStack instead of Label.
     fn hot_reload_style_omit(el: &Element) -> bool {
         if let Some(fid) = el.focus_id.as_deref() {
-            if fid.starts_with(crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX)
-                || fid.starts_with(crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
+            if fid.starts_with(crate::core::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX)
+                || fid.starts_with(crate::core::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX)
             {
                 return true;
             }
@@ -10629,6 +10749,33 @@ mod hot_reload_inject {
         }
 
         #[test]
+        fn text_replacement_crosses_component_identity_but_not_nested_ui() {
+            let component = Element::new()
+                .template_id("examples/gallery/src/main.rs:188:Button#1")
+                .children(vec![Element::new().text("Secondary")]);
+            let nested = Element::new()
+                .template_id("examples/gallery/src/shared.rs:275:5")
+                .template_hash("nested")
+                .text("Secondary");
+            let mut root = Element::new()
+                .template_id("examples/gallery/src/main.rs:188:9")
+                .children(vec![component, nested]);
+            let mut patch = tpl(
+                "examples/gallery/src/main.rs:188:9",
+                "changed",
+                &[],
+            );
+            patch.text_replacements = vec![crate::app::hot_reload::TextReplacement {
+                index: 0,
+                from: "Secondary".into(),
+                to: "Updated".into(),
+            }];
+            apply_templates_to_tree(&mut root, &[patch]);
+            assert_eq!(root.children[0].children[0].text.as_deref(), Some("Updated"));
+            assert_eq!(root.children[1].text.as_deref(), Some("Secondary"));
+        }
+
+        #[test]
         fn apply_follows_small_line_shift_to_same_column_block() {
             let mut root = Element::new().children(vec![
                 Element::new()
@@ -10706,6 +10853,7 @@ mod hot_reload_inject {
             );
             let nested = Element::new()
                 .template_id("examples/gallery/src/main.rs:4179:5")
+                .template_hash("nested-showcase")
                 .text("navbar");
             island.children[0].children.push(nested);
             let mut root = Element::new().children(vec![island]);
@@ -10798,6 +10946,22 @@ mod hot_reload_inject {
                 Some(expected),
                 "explicit size must survive cascade and not be overwritten"
             );
+        }
+
+        #[test]
+        fn live_class_and_animation_updates_use_framework_parsers() {
+            let mut root = Element::new().template_id("live.rs:1:1").text("content");
+            let attrs = vec![
+                crate::app::hot_reload::StyleAttr { element_index: 0, name: "class".into(), value: "p-4 bg-red-500".into() },
+                crate::app::hot_reload::StyleAttr { element_index: 0, name: "animation".into(), value: "spin 2s linear infinite".into() },
+                crate::app::hot_reload::StyleAttr { element_index: 0, name: "transition".into(), value: "opacity 300ms ease-in".into() },
+            ];
+            assert!(inject_style_attrs_by_id(&mut root, "live.rs:1:1", &attrs));
+            assert_eq!(root.style.animations.len(), 1);
+            assert_eq!(root.style.animations[0].name, "spin");
+            assert!(!root.style.transition.is_empty());
+            assert_eq!(root.text.as_deref(), Some("content"));
+            assert!(root.class_set.is_some());
         }
 
         #[test]

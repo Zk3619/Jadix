@@ -71,11 +71,13 @@ pub fn quads_to_instances(
                 shadow_blur: 0.0,
                 shadow_spread: 0.0,
                 shadow_inset: 0.0,
+                backdrop_fade: 0.0,
                 transform: crate::style::transform::mat2d_rotate(q.rotate_deg.to_radians()),
                 clip_pos,
                 clip_size,
                 border_extra: 0.0,
                 backdrop_blur: 0.0,
+                glass: [0.0; 4],
             }
         })
         .collect()

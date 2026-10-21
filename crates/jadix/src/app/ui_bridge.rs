@@ -72,6 +72,7 @@ pub fn request_exit() {
 /// Run one FIFO batch, outside the mutex. Nested posts run on a later turn.
 /// Re-arm a wake while work remains, giving OS input/paint a turn between batches.
 pub(crate) fn drain_ui_tasks() -> usize {
+    let window_tasks = super::window_session::drain_tasks();
     let tasks: Vec<Box<dyn FnOnce() + Send>> = {
         let mut q = PENDING.lock().unwrap_or_else(|e| e.into_inner());
         let count = q.len().min(UI_TASK_BATCH);
@@ -84,7 +85,7 @@ pub(crate) fn drain_ui_tasks() -> usize {
     if !PENDING.lock().unwrap_or_else(|e| e.into_inner()).is_empty() {
         wake();
     }
-    count
+    count + window_tasks
 }
 
 /// Serialize tests that drain the global UI task queue (resource / ui_bridge).

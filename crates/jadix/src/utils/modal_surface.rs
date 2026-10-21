@@ -38,6 +38,8 @@ pub fn set_modal_viewport_size(w: f32, h: f32) {
 }
 
 pub fn modal_viewport_size() -> (f32, f32) {
+    #[cfg(all(debug_assertions, feature = "devtools"))]
+    if let Some(size) = crate::app::devtools::preview_viewport_size() { return size; }
     MODAL_VIEWPORT.with(|v| *v.borrow())
 }
 

@@ -104,13 +104,18 @@ pub use crate::app::props::{children, resolve_children, Children, ChildrenAccess
 pub use crate::app::reactive::immediate_region;
 pub use crate::app::reactive::{for_keyed_reactive, index_reactive};
 pub use crate::app::with_ui_build_stack;
+pub use crate::app::tasks::{
+    CancellationToken, EventSendError, EventSink, TaskError, TaskErrorKind, TaskHandle, TaskScope,
+};
 pub use crate::app::{
-    app, create_resource, error_boundary, launch, page_scroll_locked, parse_scroll_freeze,
+    app, create_async_resource, create_resource, create_resource_on, error_boundary, launch,
+    page_scroll_locked, parse_scroll_freeze,
     set_page_scroll_locked, set_scroll_freeze, suspense, throw_error, throw_resource_error,
     AppBuilder, AppConfig, AppIcon, InstanceLaunch, InstancePolicy, Resource, ResourceState,
     ScrollFreeze, WindowBackdrop, WindowOptions,
     current_window, open_secondary_window_with, set_second_instance_handler,
     set_window_fullscreen, toggle_window_fullscreen, window_is_fullscreen, windows, WindowHandle,
+    WindowClosed, WindowSession,
 };
 pub use crate::core::reactivity::{
     component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
@@ -150,9 +155,16 @@ pub use crate::primitives::{
 };
 pub use crate::primitives::media::{audio, video, Audio, AudioBuilder, AudioProps, MediaAspectRatio, MediaFit, MediaRotation, Video, VideoBuilder, VideoProps};
 pub use crate::media::playback::*;
+#[cfg(feature = "net")]
+pub use crate::net::*;
 pub use crate::components::media_player::*;
 
 pub use crate::layout::dimension::{css_root_font_size_px, em, px, rem};
+pub use crate::motion::{
+    bind_path_follow, bind_path_morph, bind_path_reveal, use_layout_motion, use_motion,
+    LayoutAnimation, LayoutMotion, Motion, MotionState, MotionTarget, PathMorph, PathMorphError,
+    PathSample, PreparedPath,
+};
 pub use crate::utils::font::{
     default_ui_mono_family_list, default_ui_sans_family_list, default_ui_serif_family_list,
     root_font_size_px, set_root_font_size, set_text_defaults, text_defaults, TextDefaults,
@@ -185,7 +197,7 @@ pub use crate::style::{
     FocusRingStyle, IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent, IntoOverflow,
     IntoPaintColor, IntoTextColor, LineStyle, MatchedStyleRule, Selector, StyleRule, Stylesheet,
     StylesheetError, TextAlign, TextOverflow, Theme, ThemeMode, ThemeOverrideError, ThemeOverrides,
-    ThemeTransitionConfig, TRANSPARENT,
+    ThemeTransitionConfig, ThemePreset, ThemeStyles, GlassMaterial, set_theme_preset, theme_preset, theme_overrides, TRANSPARENT,
 };
 
 // ---------------------------------------------------------------------------

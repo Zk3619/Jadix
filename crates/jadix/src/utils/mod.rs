@@ -167,3 +167,5 @@ pub use virtual_masonry::{
     height_from_cache, masonry_column_width, pack_masonry, visible_masonry_indices,
     MasonryItemFrame, MasonryLayout,
 };
+
+pub(crate) mod text_edit;

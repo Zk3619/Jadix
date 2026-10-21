@@ -704,6 +704,7 @@ pub struct Style {
     /// CSS-like `backdrop-filter: blur(Npx)` radius in logical px. `0` = off.
     /// Consumed by fullscreen modal underlays ([`crate::primitives::overlay`]); general elements TBD.
     pub backdrop_blur: f32,
+    pub glass: Option<super::GlassMaterial>,
     /// CSS `filter`: ordered filter functions. `None` = `none`.
     pub filter: Option<super::filter::FilterList>,
     /// CSS `transition` entries. Each entry specifies which property to animate,
@@ -1393,6 +1394,7 @@ impl Default for Style {
             position_fixed: false,
             position_sticky: false,
             backdrop_blur: 0.0,
+            glass: None,
             filter: None,
             transition: Vec::new(),
             animations: Vec::new(),

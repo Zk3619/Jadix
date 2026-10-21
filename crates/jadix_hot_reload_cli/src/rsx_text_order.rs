@@ -163,7 +163,15 @@ impl<'a> Parser<'a> {
                 self.skip_brace_group();
                 None
             }
-            _ => None,
+            _ => {
+                while self.peek().is_some_and(|value| {
+                    !value.is_ascii_whitespace() && value != b'>'
+                        && !(value == b'/' && self.src.get(self.i + 1) == Some(&b'>'))
+                }) {
+                    self.i += 1;
+                }
+                None
+            }
         }
     }
 

@@ -1,14 +1,8 @@
 //! 每帧 chrome sync（边框 / 焦点环 / 文本 / caret / 多行高度与滚入视口）。
 
 use super::strings::{compose_text_edit_strings, finish_selection_draw, TextEditStringsInput};
-use crate::components::input::{
-    effective_invalid, input_caret_signal_key, input_clear_template_id,
-    input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key,
-    input_preedit_marks_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key,
-    input_reveal_template_id, input_selection_signal_key, input_text_template_id,
-    input_value_signal_key, map_byte_index_to_masked, map_byte_range_to_masked,
-    resolve_placeholder, set_adornment_visible, InputType,
-};
+use super::field::{effective_invalid, map_byte_index_to_masked, map_byte_range_to_masked, resolve_placeholder, set_adornment_visible, InputType};
+use crate::utils::text_field::{input_caret_signal_key, input_clear_template_id, input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key, input_preedit_marks_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id, input_selection_signal_key, input_text_template_id, input_value_signal_key};
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{parse_color, parse_text_color, Element, InputPaintSync, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
@@ -719,7 +713,7 @@ fn sync_one_text_edit_paint(
         let reveal_tid = input_reveal_template_id(&desc.base_id);
         if let Some(btn) = find_descendant_by_template_id_mut(el, &reveal_tid) {
             let name = if reveal { "eye-off" } else { "eye" };
-            if crate::components::input::set_adornment_icon_name(btn, name) {
+            if crate::utils::text_edit::field::set_adornment_icon_name(btn, name) {
                 adorn_style = true;
             }
             if set_adornment_visible(btn, is_focused && !desc.disabled) {

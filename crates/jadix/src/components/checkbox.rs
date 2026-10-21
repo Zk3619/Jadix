@@ -397,6 +397,8 @@ impl From<CheckboxBuilder> for Element {
             control = control.cursor_kind(crate::core::tree::CursorKind::Pointer);
         }
         control.template_id = Some(id.clone());
+        if disabled && !has_caption { control.set_attr("disabled", "true"); }
+        control = crate::components::base::stamp_slot(control, "checkbox");
 
         if !has_caption {
             return chrome.apply(control);
@@ -431,7 +433,8 @@ impl From<CheckboxBuilder> for Element {
         } else {
             root = root.cursor_kind(crate::core::tree::CursorKind::Pointer);
         }
-        chrome.apply(root)
+        if disabled { root.set_attr("disabled", "true"); }
+        crate::components::base::paint_slot(root, "checkbox-group", &chrome)
     }
 }
 

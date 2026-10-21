@@ -785,7 +785,7 @@ pub(crate) fn first_text_leaf(root: &Element) -> String {
         .unwrap_or_default()
 }
 
-/// Pre-order heap DFS that does not enter nested `template_id` children.
+/// Pre-order heap DFS that does not enter nested `ui!` template roots.
 /// `root` is always visited (hot-reload patches a template island from the island root).
 /// Callers live in `#[cfg(debug_assertions)]` HMR inject (`app/state.rs`).
 #[cfg(debug_assertions)]
@@ -794,7 +794,7 @@ pub(crate) fn walk_within_template<'a>(root: &'a Element, mut visit: impl FnMut(
     while let Some(el) = stack.pop() {
         visit(el);
         for child in el.children.iter().rev() {
-            if child.template_id.is_some() {
+            if child.template_hash.is_some() {
                 continue;
             }
             stack.push(child);
@@ -802,7 +802,7 @@ pub(crate) fn walk_within_template<'a>(root: &'a Element, mut visit: impl FnMut(
     }
 }
 
-/// Mutable pre-order heap DFS with the same nested-`template_id` boundary as
+/// Mutable pre-order heap DFS with the same nested-template boundary as
 /// [`walk_within_template`]. `visit` returning `true` stops the walk.
 #[cfg(debug_assertions)]
 pub(crate) fn walk_within_template_mut(
@@ -818,7 +818,7 @@ pub(crate) fn walk_within_template_mut(
         }
         let n = el.children.len();
         for i in (0..n).rev() {
-            if el.children[i].template_id.is_some() {
+            if el.children[i].template_hash.is_some() {
                 continue;
             }
             stack.push(std::ptr::addr_of_mut!(el.children[i]));
@@ -982,6 +982,7 @@ pub struct ElementInner {
     pub(crate) subtree_paint_sync: bool,
     /// Presence summaries refreshed with the paint fingerprint. Hash zero means unknown.
     pub(crate) subtree_reactive_sync: bool,
+    pub(crate) subtree_layout_motion: bool,
     pub(crate) subtree_floating_panel: bool,
     /// Pending collapse measurement/damage, or a callback that can produce it.
     pub(crate) subtree_collapse_work: bool,
@@ -1013,15 +1014,17 @@ pub struct ElementInner {
     /// with the VS `ancestor_linear` even when Taffy origin is unchanged (centered child).
     pub(crate) paint_ancestor_linear: crate::style::Mat2d,
     /// Last collect `render_rect` (paint space). DevTools highlight prefers this over abs−scroll.
-    #[cfg(feature = "devtools")]
+    #[cfg(all(debug_assertions, feature = "devtools"))]
     pub(crate) paint_visual_bounds: [f32; 4],
     /// Generation of [`Self::paint_visual_bounds`] (matches current highlight collect gen).
-    #[cfg(feature = "devtools")]
+    #[cfg(all(debug_assertions, feature = "devtools"))]
     pub(crate) paint_visual_gen: u32,
     /// Per-element CSS transition tween state (persists across frames).
     pub transition_snapshot: crate::style::TransitionSnapshot,
     /// Per-element CSS `@keyframes` animation runtime.
     pub animation_snapshot: crate::style::AnimationSnapshot,
+    pub(crate) layout_motion: Option<crate::motion::LayoutMotion>,
+    pub(crate) liquid_flow: Option<crate::style::liquid_flow::LiquidFlow>,
     /// Author-specified animatable values (not polluted by tick present writes).
     pub specified_present: crate::style::SpecifiedPresent,
     /// Layout-pass used sizes for `max-height: auto` → content px keyframes.
@@ -1076,7 +1079,7 @@ pub struct ElementInner {
     pub template_id: Option<String>,
     /// 若存在，则每帧由 `sync_button_hover_paint_subtree` 根据 `{focus_id}_hover` 与全局焦点信号刷新样式（避免 `hover.get()` / `focused.get()` 订阅根 effect）。
     pub button_hover_paint: Option<ButtonHoverPaint>,
-    /// 若存在，则每帧由 [`crate::components::internal::text_edit::sync_text_edit_paint_subtree`] 刷新（`peek` 全部输入相关信号）。
+    /// 若存在，则每帧由 [`crate::utils::text_edit::sync_text_edit_paint_subtree`] 刷新（`peek` 全部输入相关信号）。
     pub input_paint_sync: Option<TextEditPaintSync>,
     /// Switch track: [`crate::components::switch::sync_switch_checked_subtree`] reads `checked` and animates track bg + thumb translate.
     pub switch_checked_sync: Option<Signal<bool>>,
@@ -1128,6 +1131,7 @@ fn blank_inner() -> ElementInner {
         css_hover_armed: false,
         subtree_paint_sync: false,
         subtree_reactive_sync: false,
+        subtree_layout_motion: false,
         subtree_floating_panel: false,
         subtree_collapse_work: false,
         subtree_hover_cursor: false,
@@ -1139,12 +1143,14 @@ fn blank_inner() -> ElementInner {
         paint_overlay_stamp: None,
         paint_ancestor_scale: [1.0, 1.0],
         paint_ancestor_linear: crate::style::MAT2D_IDENTITY,
-        #[cfg(feature = "devtools")]
+        #[cfg(all(debug_assertions, feature = "devtools"))]
         paint_visual_bounds: [0.0, 0.0, 0.0, 0.0],
-        #[cfg(feature = "devtools")]
+        #[cfg(all(debug_assertions, feature = "devtools"))]
         paint_visual_gen: 0,
         transition_snapshot: Default::default(),
         animation_snapshot: Default::default(),
+        layout_motion: None,
+        liquid_flow: None,
         specified_present: Default::default(),
         used_layout: Default::default(),
         on_click: None,
@@ -4100,13 +4106,14 @@ struct PaintVis {
 }
 
 fn resolved_style_scale(el: &Element) -> [f32; 2] {
-    let sx = if el.style.scale[0].is_finite() && el.style.scale[0] > 0.0 {
-        el.style.scale[0]
+    let scale = crate::motion::presentation_scale(el);
+    let sx = if scale[0].is_finite() && scale[0] > 0.0 {
+        scale[0]
     } else {
         1.0
     };
-    let sy = if el.style.scale[1].is_finite() && el.style.scale[1] > 0.0 {
-        el.style.scale[1]
+    let sy = if scale[1].is_finite() && scale[1] > 0.0 {
+        scale[1]
     } else {
         1.0
     };
@@ -4175,8 +4182,9 @@ fn paint_vis(
         el.style.overflow.y == taffy::style::Overflow::Visible,
     );
     let offset = crate::style::offset_path::sample(&el.style, [b[2], b[3]]);
-    let tx = el.style.translate[0] + b[2] * el.style.translate_pct[0] + offset.translate[0];
-    let ty = el.style.translate[1] + b[3] * el.style.translate_pct[1] + offset.translate[1];
+    let translate = crate::motion::presentation_translate(el);
+    let tx = translate[0] + b[2] * el.style.translate_pct[0] + offset.translate[0];
+    let ty = translate[1] + b[3] * el.style.translate_pct[1] + offset.translate[1];
     let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0] + tx;
     let vy = b[1] - scroll_acc[1] + el.sticky_visual_offset[1] + ty;
     let [paint_sx, paint_sy] = paint_scale_with_ancestor(el, ancestor_scale);

@@ -5,7 +5,7 @@ use winit::{
 };
 
 use super::state::ScrollbarUpdateMode;
-use crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
+use crate::core::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
 use crate::renderer::wgpu_compat::SurfaceAcquireError;
 
 /// Edge auto-scroll + selection update for an active input text drag.
@@ -1394,6 +1394,7 @@ impl super::App {
         } else {
             super::pointer_events::hit_path(&state.root_element, x, y)
         };
+        let captured_move_path = super::pointer_events::captured_path(&state.root_element);
         let pointer_path_unchanged = super::pointer_events::hit_path_identity_eq(
             self.last_mouse_path.as_deref().unwrap_or(&[]),
             &mouse_path,
@@ -1652,7 +1653,10 @@ impl super::App {
             .then(|| self.click_press_path.clone())
             .flatten()
             .filter(|p| p.iter().any(|e| e.canvas_paint.is_some()));
-        let move_path = canvas_press_path.as_deref().unwrap_or(&mouse_path);
+        let move_path = captured_move_path
+            .as_deref()
+            .or(canvas_press_path.as_deref())
+            .unwrap_or(&mouse_path);
         self.dispatch_mouse_path(
             move_path,
             x,
@@ -1869,7 +1873,7 @@ impl super::App {
         }
 
         // Pick hover must run after tree-row on_hover callbacks (see try_pick_hover docs).
-        #[cfg(feature = "devtools")]
+        #[cfg(all(debug_assertions, feature = "devtools"))]
         if crate::app::devtools::DevToolsState::is_pick() {
             let mut state_borrow = self.state.borrow_mut();
             if let Some(state) = (*state_borrow).as_mut() {
@@ -1882,19 +1886,7 @@ impl super::App {
                     let _ = crate::app::devtools::refresh_highlight(&mut state.root_element);
                     let _ = crate::app::devtools::sync_tree_row_hovers(&mut state.root_element);
                 }
-                // Center the Elements row only when the hovered path changes. Doing this on
-                // every move fights smooth metrics and used to feedback into scroll→re-pick.
-                let mut scrolled = false;
                 if hover_changed {
-                    let key = crate::app::devtools::DevToolsState::hover_path_key();
-                    if !key.is_empty() {
-                        scrolled = crate::app::devtools::scroll_elements_tree_row_into_center(
-                            &state.root_element,
-                            &key,
-                        );
-                    }
-                }
-                if hover_changed || scrolled {
                     window.request_redraw();
                 }
             }
@@ -1919,7 +1911,7 @@ impl super::App {
 
         self.cursor_inside_window = false;
 
-        #[cfg(feature = "devtools")]
+        #[cfg(all(debug_assertions, feature = "devtools"))]
         if crate::app::devtools::DevToolsState::is_pick() {
             crate::app::devtools::DevToolsState::clear_hover_highlight();
             if let Some(state) = (*self.state.borrow_mut()).as_mut() {
@@ -1981,7 +1973,7 @@ impl super::App {
         let x = self.cursor_pos.x as f32 / scale.max(1.0);
         let y = self.cursor_pos.y as f32 / scale.max(1.0);
 
-        #[cfg(feature = "devtools")]
+        #[cfg(all(debug_assertions, feature = "devtools"))]
         if element_state == ElementState::Pressed
             && crate::app::devtools::try_pick_click(&state.root_element, x, y)
         {
@@ -2113,13 +2105,13 @@ impl super::App {
                         };
                         let track_fid = format!(
                             "{}{}:{}",
-                            crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX,
+                            crate::core::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX,
                             rest,
                             axis_ch
                         );
                         let thumb_fid = format!(
                             "{}{}:{}",
-                            crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX,
+                            crate::core::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX,
                             rest,
                             axis_ch
                         );
@@ -3337,6 +3329,12 @@ impl super::App {
         {
             let hot_reload = self.hot_reload.drain_pending();
             if hot_reload.count > 0 {
+                #[cfg(all(debug_assertions, feature = "devtools"))]
+                super::devtools::DevToolsState::record_change("HMR", format!(
+                    "{} · {} templates · {} assets · {} stylesheets",
+                    hot_reload.last_patch_file, hot_reload.merged_templates.len(),
+                    hot_reload.asset_paths.len(), hot_reload.stylesheet_paths.len(),
+                ));
                 let assets_reloaded = state.reload_wgsl_assets(&hot_reload.asset_paths);
 
                 let merged = &hot_reload.merged_templates;
@@ -3966,12 +3964,12 @@ impl super::App {
                         );
                         let thx = format!(
                             "{}{}:x",
-                            crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX,
+                            crate::core::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX,
                             rest
                         );
                         let thy = format!(
                             "{}{}:y",
-                            crate::components::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX,
+                            crate::core::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX,
                             rest
                         );
                         let bx = super::tree_hit::find_bounds_by_focus_id(

@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
-use crate::components::label;
+use super::controls::label;
 use crate::core::tree::Element;
 use crate::primitives::r#box;
 use crate::style::{parse_color, parse_text_color, LineStyle};
@@ -460,7 +460,7 @@ pub(crate) fn stamped_highlight_abs_rect(el: &Element) -> Option<[f32; 4]> {
 }
 
 thread_local! {
-    static LAST_HOVER_ROW_KEY: RefCell<String> = const { RefCell::new(String::new()) };
+    static LAST_TREE_ROW_STATE: RefCell<(String, String)> = const { RefCell::new((String::new(), String::new())) };
 }
 
 /// Patch tree-row background colours when the hover key changes, without rebuilding the panel.
@@ -469,21 +469,46 @@ pub fn sync_tree_row_hovers(root: &mut Element) -> bool {
         return false;
     }
     let hover_key = DevToolsState::hover_path_key();
-    let already = LAST_HOVER_ROW_KEY.with(|c| c.borrow().clone());
-    if hover_key == already {
+    // Selection and hover are independent inputs: when the pointer stays over a row while
+    // selection changes, the live row must still switch back to the selected palette.
+    let selected_key = DevToolsState::selected_path_key();
+    let state = (hover_key.clone(), selected_key.clone());
+    let already = LAST_TREE_ROW_STATE.with(|c| c.borrow().clone());
+    if state == already {
         return false;
     }
-    LAST_HOVER_ROW_KEY.with(|c| *c.borrow_mut() = hover_key.clone());
-    // Use the raw PATH key — `path_to_key(selected_path())` collapses “none” and root to the same value.
-    let selected_key = DevToolsState::selected_path_key();
-    let muted = parse_color("muted");
-    let accent = parse_color("accent");
-    let transparent = [0.0_f32; 4];
+    LAST_TREE_ROW_STATE.with(|c| *c.borrow_mut() = state);
+    let muted = tree_row_color(false);
+    let accent = tree_row_color(true);
+    let transparent = parse_color("background");
     patch_row_bgs(root, &hover_key, &selected_key, muted, accent, transparent)
 }
 
 pub fn reset_tree_row_hover_cache() {
-    LAST_HOVER_ROW_KEY.with(|c| *c.borrow_mut() = "\x00".to_string());
+    LAST_TREE_ROW_STATE.with(|c| *c.borrow_mut() = ("\x00".to_string(), "\x00".to_string()));
+}
+
+pub(super) fn tree_row_color(selected: bool) -> [f32; 4] {
+    let background = parse_color("background");
+    let accent = parse_color("#2563eb");
+    let alpha = if selected { 0.18 } else { 0.07 };
+    [
+        background[0] * (1.0 - alpha) + accent[0] * alpha,
+        background[1] * (1.0 - alpha) + accent[1] * alpha,
+        background[2] * (1.0 - alpha) + accent[2] * alpha,
+        1.0,
+    ]
+}
+
+pub(super) fn patch_detached_row_hovers(root: &mut Element) -> bool {
+    patch_row_bgs(
+        root,
+        &DevToolsState::hover_path_key(),
+        &DevToolsState::selected_path_key(),
+        tree_row_color(false),
+        tree_row_color(true),
+        parse_color("background"),
+    )
 }
 
 fn patch_row_bgs(
@@ -496,7 +521,8 @@ fn patch_row_bgs(
 ) -> bool {
     let mut changed = false;
     crate::core::tree::walk_elements_mut(el, |el| {
-        if let Some(id) = el.template_id.as_deref() {
+        let row_id = el.attrs.get("id").map(String::as_str).or(el.template_id.as_deref());
+        if let Some(id) = row_id {
             if let Some(row_key) = id.strip_prefix("dt-row-") {
                 let want = if !selected_key.is_empty() && row_key == selected_key {
                     accent
@@ -507,6 +533,11 @@ fn patch_row_bgs(
                 };
                 if el.style.bg_color != want {
                     el.style.bg_color = want;
+                    crate::app::damage::push_frame_paint_key(
+                        crate::app::damage::paint_element_key(el),
+                        if el.paint_visual_bounds[2] > 0.0 { el.paint_visual_bounds } else { el.layout_bounds },
+                    );
+                    el.collect_paint_hash = 0;
                     changed = true;
                 }
             }
@@ -743,11 +774,7 @@ pub fn box_model_diagram(bm: &BoxModelSnapshot, active: HighlightLayer) -> Eleme
     crate::primitives::interactive::interactive(diagram.into())
         .on_hover(|on| {
             if !on {
-                DevToolsState::set_highlight_layer(HighlightLayer::All);
-                let selected = DevToolsState::selected_path();
-                if !selected.is_empty() {
-                    DevToolsState::clear_hover_highlight_if_path(&selected);
-                }
+                DevToolsState::set_highlight_hover_layer(None);
             }
         })
         .into()
@@ -773,7 +800,7 @@ fn edge_label(id: &str, text: String) -> Element {
     label(id)
         .text(text)
         .text_size("0.625rem")
-        .color(parse_text_color("foreground"))
+        .text_color(parse_text_color("foreground"))
         .into()
 }
 
@@ -848,7 +875,7 @@ fn ring_shell(
     let cap: Element = label(format!("dt-bm-cap-{caption}"))
         .text(caption)
         .text_size("0.625rem")
-        .color(parse_text_color("foreground"))
+        .text_color(parse_text_color("foreground"))
         .into();
 
     // Normal flow: padding creates the ring gap, inner nests naturally.
@@ -886,20 +913,11 @@ fn ring_shell(
 fn wrap_ring_interactive(el: Element, layer: HighlightLayer) -> Element {
     crate::primitives::interactive::interactive(el)
         .on_click(move || {
+            DevToolsState::set_highlight_hover_layer(None);
             DevToolsState::set_highlight_layer(layer);
-            let selected = DevToolsState::selected_path();
-            if !selected.is_empty() {
-                DevToolsState::set_hover_highlight_path(selected);
-            }
         })
         .on_hover(move |on| {
-            if on {
-                DevToolsState::set_highlight_layer(layer);
-                let selected = DevToolsState::selected_path();
-                if !selected.is_empty() {
-                    DevToolsState::set_hover_highlight_path(selected);
-                }
-            }
+            DevToolsState::set_highlight_hover_layer(on.then_some(layer));
         })
         .into()
 }
@@ -970,7 +988,7 @@ mod tests {
         let mut viewport = Element::new();
         viewport.focus_id = Some("scroll:main".into());
         viewport.style.overflow.y = Overflow::Scroll;
-        viewport.scroll_offset = [0.0, 100.0];
+        crate::app::devtools::set_test_scroll_offset(&mut viewport, [0.0, 100.0]);
         viewport.layout_bounds = [0.0, 0.0, 400.0, 200.0];
         viewport = viewport.child(target);
 
@@ -1016,7 +1034,7 @@ mod tests {
         let mut viewport = Element::new();
         viewport.focus_id = Some("scroll:main".into());
         viewport.style.overflow.y = taffy::style::Overflow::Scroll;
-        viewport.scroll_offset = [0.0, 180.0];
+        crate::app::devtools::set_test_scroll_offset(&mut viewport, [0.0, 180.0]);
         viewport = viewport.child(target);
 
         let mut host = Element::new().children(vec![viewport, highlight_slot()]);
@@ -1076,7 +1094,7 @@ mod tests {
         let mut viewport = Element::new().children(vec![outline, card]);
         viewport.focus_id = Some("scroll:main".into());
         viewport.style.overflow.y = taffy::style::Overflow::Scroll;
-        viewport.scroll_offset = [0.0, 40.0];
+        crate::app::devtools::set_test_scroll_offset(&mut viewport, [0.0, 40.0]);
 
         let mut host = Element::new().children(vec![viewport, highlight_slot()]);
         host.template_id = Some("__jadix_app_host".into());
@@ -1142,7 +1160,7 @@ mod tests {
         let mut viewport = Element::new().children(vec![outline, card]);
         viewport.focus_id = Some("scroll:main".into());
         viewport.style.overflow.y = taffy::style::Overflow::Scroll;
-        viewport.scroll_offset = [0.0, 40.0];
+        crate::app::devtools::set_test_scroll_offset(&mut viewport, [0.0, 40.0]);
 
         let mut host = Element::new().children(vec![viewport, highlight_slot()]);
         host.template_id = Some("__jadix_app_host".into());
@@ -1185,7 +1203,7 @@ mod tests {
     }
 
     #[test]
-    fn selecting_node_replaces_stale_pick_hover_on_overlay() {
+    fn selecting_node_clears_stale_pick_hover_overlay() {
         // Repro: Styles shows the clicked 1b card (128×298) while the page overlay still
         // stamps a leftover Ghost/Outline hover from pick / a previous tree row.
         DevToolsState::enable_for_window();
@@ -1204,7 +1222,7 @@ mod tests {
         let mut viewport = Element::new().children(vec![ghost, card]);
         viewport.focus_id = Some("scroll:main".into());
         viewport.style.overflow.y = taffy::style::Overflow::Scroll;
-        viewport.scroll_offset = [0.0, 40.0];
+        crate::app::devtools::set_test_scroll_offset(&mut viewport, [0.0, 40.0]);
 
         let mut host = Element::new().children(vec![viewport, highlight_slot()]);
         host.template_id = Some("__jadix_app_host".into());
@@ -1232,17 +1250,9 @@ mod tests {
 
         let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
         slot.layout_bounds = [0.0, 0.0, 680.0, 800.0];
-        assert!(refresh_highlight_slot(slot));
-        let border = stamped_highlight_abs_rect(&slot.children[2]).expect("border");
-        assert!(
-            (border[1] - 320.0).abs() < 0.5 && (border[3] - 334.0).abs() < 0.5,
-            "selection must replace stale Ghost hover; got {:?}",
-            border
-        );
-        assert!(
-            (border[3] - 36.0).abs() > 10.0,
-            "must not keep the Ghost-sized overlay"
-        );
+        assert!(!DevToolsState::has_hover_highlight());
+        let _ = refresh_highlight_slot(slot);
+        assert!(stamped_highlight_abs_rect(&slot.children[2]).is_none());
 
         clear_highlight_collect_root();
         DevToolsState::clear_hover_highlight();
@@ -1310,7 +1320,7 @@ mod tests {
         let mut viewport = Element::new().children(vec![outline, card]);
         viewport.focus_id = Some("scroll:main".into());
         viewport.style.overflow.y = taffy::style::Overflow::Scroll;
-        viewport.scroll_offset = [0.0, 40.0];
+        crate::app::devtools::set_test_scroll_offset(&mut viewport, [0.0, 40.0]);
 
         let mut host = Element::new().children(vec![viewport, highlight_slot()]);
         host.template_id = Some("__jadix_app_host".into());
@@ -1362,7 +1372,7 @@ mod tests {
         let mut viewport = Element::new().child(target);
         viewport.focus_id = Some("scroll:main".into());
         viewport.style.overflow.y = taffy::style::Overflow::Scroll;
-        viewport.scroll_offset = [0.0, 120.0];
+        crate::app::devtools::set_test_scroll_offset(&mut viewport, [0.0, 120.0]);
         viewport.layout_bounds = [0.0, 0.0, 400.0, 500.0];
 
         let mut host = Element::new().children(vec![viewport, highlight_slot()]);
@@ -1452,7 +1462,7 @@ mod tests {
                 .children(vec![row, label, spacer]);
 
             // Real ScrollArea (signal-backed offset) — gallery uses this, not a bare overflow node.
-            let scroll: Element = crate::components::scroll_area("gallery-narrow")
+            let scroll: Element = crate::app::devtools::controls::scroll_area("gallery-narrow")
                 .w("100%")
                 .h("100%")
                 .overflow_x("auto")
@@ -1577,7 +1587,7 @@ mod tests {
                 .p(8.0)
                 .children(vec![spacer, row]);
 
-            let scroll: Element = crate::components::scroll_area("gallery-cull")
+            let scroll: Element = crate::app::devtools::controls::scroll_area("gallery-cull")
                 .w("100%")
                 .h("100%")
                 .overflow_x("auto")
@@ -1705,7 +1715,7 @@ mod tests {
                 .overflow_y("scroll")
                 .focus_id("scroll:gallery-main")
                 .child(col);
-            viewport.scroll_offset = [0.0, 180.0];
+            crate::app::devtools::set_test_scroll_offset(&mut viewport, [0.0, 180.0]);
 
             let app = Element::new().w("100%").h("100%").child(viewport);
             let mut root = wrap_app(app);
@@ -1765,8 +1775,8 @@ mod tests {
         DevToolsState::set_selected_path(vec![0]);
         reset_tree_row_hover_cache();
 
-        let muted = parse_color("muted");
-        let accent = parse_color("accent");
+        let muted = tree_row_color(false);
+        let accent = tree_row_color(true);
         let transparent = [0.0_f32; 4];
         let root_id = format!("dt-row-{}", crate::app::devtools::snapshot::ROOT_PATH_KEY);
         let mut root = Element::new().children(vec![
@@ -1792,13 +1802,14 @@ mod tests {
         reset_tree_row_hover_cache();
         DevToolsState::set_hover_highlight_path(vec![0, 1]);
         let _ = sync_tree_row_hovers(&mut root);
-        assert_eq!(root.children[0].style.bg_color, transparent);
+        let background = crate::style::parse_color("background");
+        assert_eq!(root.children[0].style.bg_color, background);
         assert_eq!(root.children[1].style.bg_color, muted);
 
         DevToolsState::clear_hover_highlight();
         assert!(sync_tree_row_hovers(&mut root));
-        assert_eq!(root.children[0].style.bg_color, transparent);
-        assert_eq!(root.children[1].style.bg_color, transparent);
+        assert_eq!(root.children[0].style.bg_color, background);
+        assert_eq!(root.children[1].style.bg_color, background);
     }
 
     #[test]

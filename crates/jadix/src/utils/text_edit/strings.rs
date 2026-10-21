@@ -1,6 +1,6 @@
 //! Shared Input / Textarea display vs layout-measure string derivation.
 
-use crate::components::input::{map_byte_index_to_masked, map_byte_range_to_masked, mask_password};
+use crate::utils::text_edit::field::{map_byte_index_to_masked, map_byte_range_to_masked, mask_password};
 
 pub(super) fn finish_selection_draw(
     draw: Option<crate::style::InputCaretDraw>,

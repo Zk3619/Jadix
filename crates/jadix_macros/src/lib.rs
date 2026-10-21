@@ -496,9 +496,11 @@ fn wrap_ui_expansion(
         jadix::core::tree::build_ui_root(|| {
             let mut __jadix_root: jadix::core::tree::Element = (#expanded).into();
             __jadix_root = __jadix_root.template_hash(#template_hash_lit);
+            let __jadix_source = format!("{}:{}:{}", file!(), line!(), column!());
             if __jadix_root.template_id.is_none() {
-                __jadix_root = __jadix_root.template_id(format!("{}:{}:{}", file!(), line!(), column!()));
+                __jadix_root = __jadix_root.template_id(__jadix_source.clone());
             }
+            __jadix_root.set_attr("jadix_ui_template_id", __jadix_source);
             __jadix_root
         })
     }

@@ -669,8 +669,8 @@ pub fn dropdown_menu_content(
             .border_color(tokens::border())
             .popup_shadow()
             .absolute();
-        panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_CONTENT);
+        panel = chrome.apply(panel);
         panel.accesskit_role("menu")
     })
 }
@@ -1285,8 +1285,8 @@ pub(crate) fn dropdown_menu_sub_content_ex(
             .border_color(tokens::border())
             .popup_shadow()
             .absolute();
-        panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_SUB_CONTENT);
+        panel = chrome.apply(panel);
         let fid = trigger_fid.peek();
         log::debug!(
             target: "jadix::menu_sub",

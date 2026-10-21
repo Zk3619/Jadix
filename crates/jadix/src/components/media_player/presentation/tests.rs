@@ -391,6 +391,8 @@ fn window_fullscreen_moves_original_content_and_restores_layout_and_focus() {
         let bounds = panel_bounds.unwrap();
         assert!((bounds[2] - 900.0).abs() < 0.1, "{bounds:?}");
         assert!((bounds[3] - 600.0).abs() < 0.1, "{bounds:?}");
+        assert!(!sync_media_presentation_subtree(&mut root));
+        assert!(crate::app::portal_overlay::page_scroll_locked());
         assert!(crate::app::portal_overlay::try_close_top());
         assert!(sync_media_presentation_subtree(&mut root));
         layout.build_and_layout(&mut root, 900.0, 600.0, [-1.0; 2]);
@@ -407,6 +409,19 @@ fn window_fullscreen_moves_original_content_and_restores_layout_and_focus() {
             original_focus
         );
         assert!((slot(&root, "media-player").unwrap().layout_bounds[2] - 320.0).abs() < 0.1);
+        assert!(!crate::app::portal_overlay::page_scroll_locked());
+        assert!(!crate::app::portal_overlay::try_close_top());
+        presentation.set_layout(MediaLayoutMode::WindowFullscreen);
+        assert!(sync_media_presentation_subtree(&mut root));
+        assert!(crate::app::portal_overlay::try_close_top());
+        assert!(sync_media_presentation_subtree(&mut root));
+        assert_eq!(presentation.current().layout, MediaLayoutMode::Inline);
+        assert_eq!(factories.get(), 1);
+        assert!(Rc::ptr_eq(
+            &original,
+            slot(&root, "media-play").unwrap().on_click.as_ref().unwrap()
+        ));
+        assert!(!crate::app::portal_overlay::try_close_top());
     });
 }
 
@@ -542,6 +557,23 @@ fn mounted_presentation_updates_sidebar_picture_and_accessibility_without_comman
     assert_eq!(commands.get(), 0);
     clear_test_reconcile_root();
     reset_registered_anchors();
+}
+
+#[test]
+fn named_presentation_survives_view_owner_disposal_and_keeps_state() {
+    let (owner, controller) = create_root(|| use_media_presentation("presentation-remount"));
+    controller.set_layout(MediaLayoutMode::Wide);
+    controller.set_mirror(true, false);
+    drop(owner);
+    let (remount, restored) = create_root(|| use_media_presentation("presentation-remount"));
+    assert_eq!(restored.state().get().layout, MediaLayoutMode::Wide);
+    assert!(restored.current().mirror_horizontal);
+    assert!(restored.capabilities().is_alive());
+    assert!(restored.pending().is_alive());
+    assert!(restored.request_error().is_alive());
+    restored.set_layout(MediaLayoutMode::Inline);
+    assert_eq!(controller.current().layout, MediaLayoutMode::Inline);
+    drop(remount);
 }
 
 #[test]

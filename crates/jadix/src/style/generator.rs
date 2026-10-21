@@ -1102,6 +1102,21 @@ impl AnimatedNumber {
         start_segment(&mut s, from, to, Some(driver));
     }
 
+    pub(crate) fn restart_from(&self, from: f32, to: f32, velocity: f32, driver: ValueDriver) {
+        let signal = {
+            let mut state = self.0.borrow_mut();
+            state.queue.clear();
+            state.pending_target = None;
+            state.repeat = RepeatMode::Once;
+            state.repeats_left = Some(0);
+            state.value = from;
+            state.velocity = velocity;
+            start_segment(&mut state, from, to, Some(driver));
+            state.signal
+        };
+        let _ = signal.try_set(from);
+    }
+
     /// Coalesced retarget (Motion `FollowAnimation.setTarget`). Applied on the
     /// next tick from the live position/velocity — many `set`s in one frame
     /// cost one retarget.
@@ -1143,6 +1158,31 @@ impl AnimatedNumber {
         s.velocity = 0.0;
         s.queue.clear();
         let _ = s.finished.try_set(true);
+    }
+
+    /// Set a presentation value immediately, cancelling playback and velocity.
+    pub fn jump(&self, value: f32) {
+        assert!(value.is_finite(), "animation values must be finite");
+        let (signal, finished) = {
+            let mut state = self.0.borrow_mut();
+            state.value = value;
+            state.from = value;
+            state.target = value;
+            state.home = value;
+            state.velocity = 0.0;
+            state.elapsed_ms = 0.0;
+            state.delay_ms = 0.0;
+            state.active = false;
+            state.paused = false;
+            state.pending_target = None;
+            state.follow = None;
+            state.queue.clear();
+            state.spring = None;
+            state.inertia = None;
+            (state.signal, state.finished)
+        };
+        let _ = signal.try_set(value);
+        let _ = finished.try_set(true);
     }
 
     pub fn get(&self) -> f32 {

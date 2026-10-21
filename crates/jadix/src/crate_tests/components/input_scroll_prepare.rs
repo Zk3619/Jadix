@@ -2,7 +2,7 @@
 //! unfocused (gallery forms Input / Form rows). Multiline Textarea never hits this path.
 
 use crate::components::input::input;
-use crate::components::internal::text_edit::{
+use crate::utils::text_edit::{
     sync_text_edit_paint_subtree, take_input_scroll_prepare_calls,
 };
 use crate::core::reactivity::use_signal;

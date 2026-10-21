@@ -39,7 +39,7 @@
 //! }
 //! ```
 
-use crate::components::base::{packed_children, SlotChrome};
+use crate::components::base::{packed_children, stamp_slot, SlotChrome};
 use crate::core::tree::{parse_color, Element};
 use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::{hstack, vstack};
@@ -68,7 +68,7 @@ fn is_card_action(el: &Element) -> bool {
 #[allow(non_snake_case)]
 pub fn Card(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    Element::from(
+    stamp_slot(Element::from(
         vstack()
             .w("100%")
             .max_w("100%")
@@ -82,7 +82,7 @@ pub fn Card(children: Option<Element>) -> Element {
             .rounded(tokens::RADIUS_LG)
             .shadow(tokens::shadow_rgba(tokens::Elevation::Sm), 4.0)
             .children(kids),
-    )
+    ), "card")
 }
 
 /// 顶栏：标题 / 说明；若含 [`CardAction`] 则右侧并排放置。
@@ -93,7 +93,7 @@ pub fn CardHeader(children: Option<Element>) -> Element {
     let (actions, rest): (Vec<_>, Vec<_>) = kids.into_iter().partition(|c| is_card_action(c));
 
     if actions.is_empty() {
-        return Element::from(
+        return stamp_slot(Element::from(
             vstack()
                 .w("100%")
                 .max_w("100%")
@@ -101,7 +101,7 @@ pub fn CardHeader(children: Option<Element>) -> Element {
                 .gap("0.375rem")
                 .px(tokens::SPACE_6)
                 .children(rest),
-        );
+        ), "card-header");
     }
 
     // Don't use `w(100%)` when side by side with Action: percentage width + side button will make the Header burst out of the parent.
@@ -113,7 +113,7 @@ pub fn CardHeader(children: Option<Element>) -> Element {
         .children(rest)
         .into();
 
-    Element::from(
+    stamp_slot(Element::from(
         hstack()
             .w("100%")
             .max_w("100%")
@@ -125,7 +125,7 @@ pub fn CardHeader(children: Option<Element>) -> Element {
             .wrap("wrap")
             .child(title_block)
             .children(actions),
-    )
+    ), "card-header")
 }
 
 /// 标题（`text-lg` / semibold / card-foreground）。
@@ -187,7 +187,7 @@ pub fn CardAction(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn CardContent(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    Element::from(
+    stamp_slot(Element::from(
         vstack()
             .w("100%")
             .max_w("100%")
@@ -195,7 +195,7 @@ pub fn CardContent(children: Option<Element>) -> Element {
             .gap(tokens::SPACE_4)
             .px(tokens::SPACE_6)
             .children(kids),
-    )
+    ), "card-content")
 }
 
 /// 底栏（横向换行；默认左对齐，可用 `class` / `justify` 覆盖）。
@@ -203,7 +203,7 @@ pub fn CardContent(children: Option<Element>) -> Element {
 #[allow(non_snake_case)]
 pub fn CardFooter(children: Option<Element>) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    Element::from(
+    stamp_slot(Element::from(
         hstack()
             .w("100%")
             .max_w("100%")
@@ -213,7 +213,7 @@ pub fn CardFooter(children: Option<Element>) -> Element {
             .gap(tokens::SPACE_2)
             .px(tokens::SPACE_6)
             .children(kids),
-    )
+    ), "card-footer")
 }
 
 // ---------------------------------------------------------------------------

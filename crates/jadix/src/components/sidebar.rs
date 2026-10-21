@@ -129,6 +129,12 @@ const SIDEBAR_WIDTH_DEFAULT: &str = "16rem";
 const SIDEBAR_WIDTH_ICON: &str = "3rem";
 const SIDEBAR_WIDTH_MOBILE: &str = "18rem";
 const SIDEBAR_MOBILE_BREAKPOINT: f32 = 768.0;
+
+fn sidebar_viewport_width() -> f32 {
+    #[cfg(all(debug_assertions, feature = "devtools"))]
+    if let Some((width, _)) = crate::app::devtools::preview_viewport_size() { return width; }
+    crate::utils::modal_motion::modal_viewport_size().0
+}
 /// ShadCN `transition-[width] duration-200 ease-linear`.
 const SIDEBAR_WIDTH_TRANSITION_MS: f32 = 200.0;
 /// ShadCN `group-data-[collapsible=icon]:size-8`.
@@ -417,7 +423,7 @@ impl PartialEq for SidebarCtx {
 impl SidebarCtx {
     pub fn toggle(&self) {
         let is_mobile =
-            crate::utils::modal_motion::modal_viewport_size().0 < SIDEBAR_MOBILE_BREAKPOINT;
+            sidebar_viewport_width() < SIDEBAR_MOBILE_BREAKPOINT;
         let _ = self.is_mobile.try_set_silent(is_mobile);
         let open = if is_mobile {
             self.open_mobile
@@ -545,7 +551,7 @@ pub fn sidebar_provider_scope(
     }
     let open_mobile = use_signal(format!("{id}__open_mobile").as_str(), || false);
     let is_mobile = use_signal(format!("{id}__is_mobile").as_str(), || {
-        crate::utils::modal_motion::modal_viewport_size().0 < SIDEBAR_MOBILE_BREAKPOINT
+        sidebar_viewport_width() < SIDEBAR_MOBILE_BREAKPOINT
     });
     let ctx = SidebarCtx {
         id: id.clone(),
@@ -988,20 +994,22 @@ fn apply_sidebar_icon_chrome(el: &mut Element, t: f32) -> bool {
 fn apply_sidebar_rail_layout(el: &mut Element, open: bool, width: &str) -> LayoutStatus {
     use taffy::style::Overflow;
 
-    if el.attrs.contains_key(ATTR_MOBILE_ID)
-        && crate::utils::modal_motion::modal_viewport_size().0 < SIDEBAR_MOBILE_BREAKPOINT
-    {
-        return LayoutStatus::Clean;
-    }
+    let mobile = el.attrs.contains_key(ATTR_MOBILE_ID)
+        && sidebar_viewport_width() < SIDEBAR_MOBILE_BREAKPOINT;
     let collapsible = sidebar_collapsible_attr(el);
     let want_state = if open { "expanded" } else { "collapsed" };
     let want_w_css = rail_width_css_for_state(open, width, collapsible);
-    let target_px = preview_width_px(want_w_css);
-    let visually_collapsed = !open
-        && matches!(
-            collapsible,
-            SidebarCollapsible::Offcanvas | SidebarCollapsible::Icon
-        );
+    let target_px = if mobile {
+        0.0
+    } else {
+        preview_width_px(want_w_css)
+    };
+    let visually_collapsed = mobile
+        || (!open
+            && matches!(
+                collapsible,
+                SidebarCollapsible::Offcanvas | SidebarCollapsible::Icon
+            ));
 
     let mut changed = assign_rail_width_target(el, target_px);
     let was_running = rail_width_tween_running(el);
@@ -1011,6 +1019,15 @@ fn apply_sidebar_rail_layout(el: &mut Element, open: bool, width: &str) -> Layou
     let anim_running = rail_width_tween_running(el);
     if was_running && !anim_running {
         RAIL_ANIM_NEEDS_SETTLE.set(true);
+    }
+    let display = if mobile && !anim_running {
+        taffy::style::Display::None
+    } else {
+        taffy::style::Display::Flex
+    };
+    if el.style.display != display {
+        el.style.display = display;
+        changed = true;
     }
     let want_overflow = if visually_collapsed || anim_running {
         Overflow::Hidden
@@ -1025,7 +1042,7 @@ fn apply_sidebar_rail_layout(el: &mut Element, open: bool, width: &str) -> Layou
     if el.attrs.get(ATTR_STATE).map(String::as_str) != Some(want_state) {
         el.set_attr(ATTR_STATE, want_state);
     }
-    if collapsible == SidebarCollapsible::Icon {
+    if !mobile && collapsible == SidebarCollapsible::Icon {
         let expanded_px = preview_width_px(width);
         let collapsed_px = preview_width_px(SIDEBAR_WIDTH_ICON);
         let chrome_t = icon_collapse_progress(el, expanded_px, collapsed_px, !open);
@@ -1043,10 +1060,12 @@ fn apply_sidebar_rail_layout(el: &mut Element, open: bool, width: &str) -> Layou
             if base.size.width != width
                 || base.min_size.width != min_width
                 || base.overflow != overflow
+                || base.display != display
             {
                 base.size.width = width;
                 base.min_size.width = min_width;
                 base.overflow = overflow;
+                base.display = display;
                 classes.set_base_dimension(
                     crate::style::UnitSlot::Width,
                     crate::layout::dimension::CssDim::Px(
@@ -1138,7 +1157,7 @@ fn sidebar_mobile_header_with_close(mut inner: Element, close: Element) -> Eleme
 /// Move the original content, including hooks and reactive bindings, across the portal boundary.
 /// Keep the portal slot until the exit finishes so hoisting cannot prune that content early.
 fn sync_sidebar_mobile_subtree(root: &mut Element) -> bool {
-    let mobile = crate::utils::modal_motion::modal_viewport_size().0 < SIDEBAR_MOBILE_BREAKPOINT;
+    let mobile = sidebar_viewport_width() < SIDEBAR_MOBILE_BREAKPOINT;
     let mut rails = Vec::new();
     crate::core::tree::walk_elements(root, |el| {
         if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_PROVIDER) {
@@ -1251,7 +1270,6 @@ fn sync_sidebar_mobile_subtree(root: &mut Element) -> bool {
             let mut ring = Vec::new();
             if active {
                 collect_sheet_focus_ids(panel, &mut ring);
-                // SidebarRail is desktop-only even before this frame resolves max-md:hidden.
                 ring.retain(|id| !id.ends_with("__sidebar_rail"));
             }
             let ring = ring.join(",");
@@ -1292,10 +1310,7 @@ pub(crate) fn sync_sidebar_rail_subtree(
             return;
         }
         let open = open_sig.peek();
-        if el.attrs.contains_key(ATTR_MOBILE_ID) && sidebar_state(&_provider_id).is_mobile.peek() {
-            return;
-        }
-        let mut status = apply_sidebar_rail_layout(el, open, width.as_str());
+        let status = apply_sidebar_rail_layout(el, open, width.as_str());
         let running = rail_width_tween_running(el);
         if running {
             RAIL_WIDTH_TWEEN_ACTIVE.set(true);
@@ -1305,14 +1320,6 @@ pub(crate) fn sync_sidebar_rail_subtree(
             crate::app::runtime::request_redraw();
         } else if RAIL_ANIM_NEEDS_SETTLE.get() {
             crate::app::runtime::request_redraw();
-        }
-        if sidebar_collapsible_attr(el) == SidebarCollapsible::Icon {
-            let expanded_px = preview_width_px(width.as_str());
-            let collapsed_px = preview_width_px(SIDEBAR_WIDTH_ICON);
-            let t = icon_collapse_progress(el, expanded_px, collapsed_px, !open);
-            if apply_sidebar_icon_chrome(el, t) {
-                status = status.merge(LayoutStatus::LayoutChanged);
-            }
         }
         if status == LayoutStatus::LayoutChanged && el.layout_node.is_some() {
             layout_tree.mark_element_layout_dirty(el);
@@ -1717,7 +1724,6 @@ pub fn Sidebar(
         if collapsible != SidebarCollapsible::None {
             let mobile_id = format!("{}__mobile", resolve_instance_id(id, "sidebar"));
             rail.set_attr(ATTR_MOBILE_ID, &mobile_id);
-            rail = crate::style::utility::with_default_class_list(rail, "max-md:hidden");
             let open_mobile = ctx.open_mobile;
             rail = rail.on_unmount(move || {
                 if open_mobile.is_alive() {
@@ -1971,6 +1977,7 @@ pub fn SidebarInset(variant: Option<String>, children: Option<Element>) -> Eleme
         el = el
             .m("0.5rem")
             .rounded("0.75rem")
+            .transition("margin 200ms linear, border-radius 200ms linear")
             .overflow("hidden")
             .box_shadow_color(tokens::shadow_rgba(tokens::Elevation::Md))
             .box_shadow_blur(8.0)
@@ -2518,6 +2525,129 @@ mod tests {
     }
 
     #[test]
+    fn responsive_sidebar_breakpoint_preserves_exit_start_width() {
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+        crate::utils::modal_motion::set_modal_viewport_size(1000.0, 600.0);
+        let (_owner, _) = crate::core::reactivity::create_root(|| {
+            let mut root: Element = sidebar("breakpoint-nav")
+                .provider(true)
+                .collapsible("icon")
+                .item(sidebar_menu_button("breakpoint-action").text("Navigation"))
+                .into();
+            let mut layout = LayoutTree::new();
+            responsive_frame(&mut root, &mut layout, 1000.0);
+            let width = sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_ROOT).unwrap().layout_bounds[2];
+            assert!(width > 200.0);
+            responsive_frame(&mut root, &mut layout, 740.0);
+            let rail = sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_ROOT).unwrap();
+            assert!((rail.layout_bounds[2] - width).abs() < 0.1,
+                "breakpoint exit must start at the previous width, not disappear: {:?}", rail.layout_bounds);
+            assert_eq!(rail.style.display, taffy::style::Display::Flex);
+            crate::style::advance_css_transition_timeline_ms(100.0);
+            responsive_frame(&mut root, &mut layout, 740.0);
+            let middle = sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_ROOT).unwrap().layout_bounds[2];
+            assert!(middle > 0.0 && middle < width);
+            responsive_frame(&mut root, &mut layout, 1000.0);
+            let reversed = sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_ROOT).unwrap().layout_bounds[2];
+            assert!((reversed - middle).abs() < 0.1);
+            crate::style::advance_css_transition_timeline_ms(100.0);
+            responsive_frame(&mut root, &mut layout, 1000.0);
+            let returning = sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_ROOT).unwrap().layout_bounds[2];
+            assert!(returning > middle && returning < width);
+            responsive_frame(&mut root, &mut layout, 740.0);
+            assert!((sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_ROOT).unwrap().layout_bounds[2] - returning).abs() < 0.1);
+            crate::style::advance_css_transition_timeline_ms(200.0);
+            responsive_frame(&mut root, &mut layout, 740.0);
+            assert_eq!(sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_ROOT).unwrap().style.display, taffy::style::Display::None);
+            assert!(sidebar_state("breakpoint-nav__provider").open.peek());
+            responsive_frame(&mut root, &mut layout, 1000.0);
+            let rail = sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_ROOT).unwrap();
+            assert_eq!(rail.style.display, taffy::style::Display::Flex);
+            assert!(rail.layout_bounds[2] < 4.0);
+            crate::style::advance_css_transition_timeline_ms(200.0);
+            responsive_frame(&mut root, &mut layout, 1000.0);
+            assert!((sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_ROOT).unwrap().layout_bounds[2] - width).abs() < 0.1);
+            crate::style::set_prefers_reduced_motion(Some(true));
+            responsive_frame(&mut root, &mut layout, 740.0);
+            assert_eq!(sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_ROOT).unwrap().style.display, taffy::style::Display::None);
+            responsive_frame(&mut root, &mut layout, 1000.0);
+            assert!((sidebar_node_mut(&mut root, ATTR_SLOT, SLOT_ROOT).unwrap().layout_bounds[2] - width).abs() < 0.1);
+            crate::style::set_prefers_reduced_motion(None);
+        });
+        crate::style::set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn responsive_sidebar_sheet_keeps_labels_after_desktop_exit() {
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+        crate::utils::modal_motion::set_modal_viewport_size(1000.0, 600.0);
+        crate::app::portal_overlay::clear_overlay_stack();
+        let (_owner, _) = crate::core::reactivity::create_root(|| {
+            let mut root: Element = sidebar("breakpoint-sheet")
+                .provider(true)
+                .collapsible("icon")
+                .item(sidebar_menu_button("breakpoint-sheet-action").text("Navigation"))
+                .into();
+            let mut layout = LayoutTree::new();
+            responsive_frame(&mut root, &mut layout, 1000.0);
+            responsive_frame(&mut root, &mut layout, 740.0);
+            crate::style::advance_css_transition_timeline_ms(200.0);
+            responsive_frame(&mut root, &mut layout, 740.0);
+            let ctx = sidebar_state("breakpoint-sheet__provider");
+            ctx.open_mobile.set(true);
+            for _ in 0..3 {
+                responsive_frame(&mut root, &mut layout, 740.0);
+                let panel = sidebar_node_mut(&mut root, ATTR_MOBILE_PANEL, "breakpoint-sheet__mobile").unwrap();
+                let mut found = false;
+                crate::core::tree::walk_elements(panel, |node| {
+                    if node.text.as_deref() == Some("Navigation") {
+                        found = true;
+                        assert!(node.style.opacity > 0.99, "desktop width must not hide sheet labels");
+                        assert!(node.style.size.width.is_auto(), "sheet labels must not retain zero width");
+                    }
+                });
+                assert!(found);
+            }
+            ctx.open_mobile.set(false);
+            responsive_frame(&mut root, &mut layout, 1000.0);
+        });
+        crate::style::set_css_transition_virtual_timeline(false);
+        crate::app::portal_overlay::clear_overlay_stack();
+    }
+
+    #[test]
+    fn responsive_sidebar_inset_margin_has_intermediate_layout() {
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+        let (_owner, _) = crate::core::reactivity::create_root(|| {
+            let mut root = SidebarInset(SidebarInsetProps {
+                variant: Some("inset".into()),
+                children: None,
+                base: None,
+            });
+            let mut layout = LayoutTree::new();
+            responsive_frame(&mut root, &mut layout, 1000.0);
+            assert!((root.layout_bounds[0] - 8.0).abs() < 0.1);
+            responsive_frame(&mut root, &mut layout, 740.0);
+            assert!((root.layout_bounds[0] - 8.0).abs() < 0.1);
+            crate::style::advance_css_transition_timeline_ms(100.0);
+            responsive_frame(&mut root, &mut layout, 740.0);
+            assert!(root.layout_bounds[0] > 0.0 && root.layout_bounds[0] < 8.0);
+            crate::style::advance_css_transition_timeline_ms(100.0);
+            responsive_frame(&mut root, &mut layout, 740.0);
+            assert!(root.layout_bounds[0].abs() < 0.1);
+            responsive_frame(&mut root, &mut layout, 1000.0);
+            assert!(root.layout_bounds[0].abs() < 0.1);
+            crate::style::advance_css_transition_timeline_ms(200.0);
+            responsive_frame(&mut root, &mut layout, 1000.0);
+            assert!((root.layout_bounds[0] - 8.0).abs() < 0.1);
+        });
+        crate::style::set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
     fn responsive_sidebar_animation_finishes_through_class_resolution() {
         use crate::utils::modal_motion::{
             flush_modal_shell_motion_subtree, tick_hoisted_modal_css,
@@ -2587,6 +2717,8 @@ mod tests {
     fn responsive_sidebar_moves_live_content_and_preserves_desktop_preference() {
         use crate::core::reactivity::create_root;
         use std::rc::Rc;
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
         crate::app::portal_overlay::clear_overlay_stack();
         crate::utils::modal_motion::set_modal_viewport_size(1024.0, 600.0);
         let (_owner, _) = create_root(|| {
@@ -2647,6 +2779,8 @@ mod tests {
             let action = sidebar_node_mut(&mut root, "data-slot", SLOT_MENU_BUTTON).unwrap();
             let original_handler = action.on_click.clone().unwrap();
             for width in [767.5, 320.0, 639.5, 640.0, 767.99] {
+                responsive_frame(&mut root, &mut layout, width);
+                crate::style::advance_css_transition_timeline_ms(200.0);
                 responsive_frame(&mut root, &mut layout, width);
                 assert!(ctx.is_mobile.peek());
                 assert!(!ctx.open_mobile.peek());
@@ -2750,6 +2884,8 @@ mod tests {
             ctx.toggle();
             responsive_frame(&mut root, &mut layout, 375.0);
             responsive_frame(&mut root, &mut layout, 768.0);
+            crate::style::advance_css_transition_timeline_ms(200.0);
+            responsive_frame(&mut root, &mut layout, 768.0);
             assert!(!ctx.is_mobile.peek() && !ctx.open_mobile.peek());
             assert!(!desktop.peek());
             assert!(sidebar_node_mut(&mut root, ATTR_MOBILE_PANEL, id).is_none());
@@ -2772,6 +2908,7 @@ mod tests {
                 "desktop toggle must use the externally controlled signal"
             );
         });
+        crate::style::set_css_transition_virtual_timeline(false);
         crate::utils::modal_motion::set_modal_viewport_size(800.0, 600.0);
         crate::app::portal_overlay::clear_overlay_stack();
     }

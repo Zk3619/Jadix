@@ -3,7 +3,7 @@
 
 use crate::app::ime_support::{painted_ime_field_in_overflow_clip, painted_text_edit_node};
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
-use crate::components::internal::text_edit::{
+use crate::utils::text_edit::{
     sync_text_edit_paint_subtree, sync_text_edit_paint_subtree_in_viewport,
 };
 use crate::components::scroll_area::scroll_area;

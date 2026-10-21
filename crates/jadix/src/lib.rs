@@ -5,6 +5,9 @@
 pub mod core;
 pub mod layout;
 pub mod media;
+#[cfg(feature = "net")]
+pub mod net;
+pub mod motion;
 pub mod renderer;
 pub mod style;
 
@@ -147,8 +150,8 @@ pub fn tr_default_zh(key: &str, en_us: &str, zh_cn: &str) -> String {
     }
     #[cfg(not(feature = "i18n"))]
     {
-        let _ = (key, zh_cn);
-        String::from(en_us)
+        let _ = key;
+        String::from(if chrome_locale().starts_with("zh") { zh_cn } else { en_us })
     }
 }
 
@@ -173,9 +176,31 @@ pub fn tr_with_default_zh(key: &str, en_us: &str, zh_cn: &str, args: &[(&str, &s
     }
     #[cfg(not(feature = "i18n"))]
     {
-        let _ = (key, zh_cn);
-        i18n_interpolate(en_us, args)
+        let _ = key;
+        i18n_interpolate(if chrome_locale().starts_with("zh") { zh_cn } else { en_us }, args)
     }
+}
+
+thread_local! {
+    static CHROME_LOCALE: std::cell::RefCell<String> = std::cell::RefCell::new(
+        std::env::var("JADIX_LOCALE").unwrap_or_else(|_| "en-US".into()).to_ascii_lowercase()
+    );
+}
+
+/// Lightweight component language, available without the full i18n feature.
+pub fn chrome_locale() -> String {
+    #[cfg(feature = "i18n")]
+    { crate::i18n::locale().to_string() }
+    #[cfg(not(feature = "i18n"))]
+    { CHROME_LOCALE.with(|locale| locale.borrow().clone()) }
+}
+
+/// Sets component language; with i18n enabled this also selects the catalog locale.
+pub fn set_chrome_locale(tag: &str) {
+    CHROME_LOCALE.with(|locale| *locale.borrow_mut() = tag.to_ascii_lowercase());
+    #[cfg(feature = "i18n")]
+    crate::i18n::set_locale(tag);
+    crate::app::runtime::request_redraw_all();
 }
 
 /// First weekday: 0 = Sunday. With `i18n`, follows CLDR / ICU for the active locale.

@@ -753,7 +753,7 @@ fn expand_contents_are_pinned(panel: &Element) -> bool {
 }
 
 fn set_expand_scrollbars_hidden(el: &mut Element, hidden: bool) {
-    use crate::components::scrollbar::{
+    use crate::core::scrollbar::{
         ATTR_SCROLLBAR_REVEAL_HIDDEN, SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
     };
     if el.focus_id.as_deref().is_some_and(|id| {

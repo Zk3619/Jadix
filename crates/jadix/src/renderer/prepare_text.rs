@@ -3701,11 +3701,13 @@ pub fn prepare_text_frame_at(
                         shadow_blur: 0.0,
                         shadow_spread: 0.0,
                         shadow_inset: 0.0,
+                        backdrop_fade: 0.0,
                         transform: crate::style::transform::MAT2D_IDENTITY,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
                         border_extra: 0.0,
                         backdrop_blur: 0.0,
+                        glass: [0.0; 4],
                     });
                 };
             for g in run.glyphs.iter() {
@@ -3910,11 +3912,13 @@ pub fn prepare_text_frame_at(
                         shadow_blur: 0.0,
                         shadow_spread: 0.0,
                         shadow_inset: 0.0,
+                        backdrop_fade: 0.0,
                         transform: crate::style::transform::MAT2D_IDENTITY,
                         clip_pos: [0.0, 0.0],
                         clip_size: InstanceInput::NO_CLIP_SIZE,
                         border_extra: 0.0,
                         backdrop_blur: 0.0,
+                        glass: [0.0; 4],
                     });
                 }
                 for g in &entry.glyphs {
@@ -3941,11 +3945,13 @@ pub fn prepare_text_frame_at(
                                 shadow_blur: 0.0,
                                 shadow_spread: 0.0,
                                 shadow_inset: 0.0,
+                                backdrop_fade: 0.0,
                                 transform: crate::style::transform::MAT2D_IDENTITY,
                                 clip_pos: [0.0, 0.0],
                                 clip_size: InstanceInput::NO_CLIP_SIZE,
                                 border_extra: 0.0,
                                 backdrop_blur: 0.0,
+                                glass: [0.0; 4],
                             });
                         }
                     }
@@ -4011,11 +4017,13 @@ pub fn prepare_text_frame_at(
                     shadow_blur: 0.0,
                     shadow_spread: 0.0,
                     shadow_inset: 0.0,
+                    backdrop_fade: 0.0,
                     transform: crate::style::transform::MAT2D_IDENTITY,
                     clip_pos: [0.0, 0.0],
                     clip_size: InstanceInput::NO_CLIP_SIZE,
                     border_extra: 0.0,
                     backdrop_blur: 0.0,
+                    glass: [0.0; 4],
                 });
             };
             let mut draw_at = |line_y: f32| match tb.decoration_style {

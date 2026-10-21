@@ -472,6 +472,12 @@ pub fn hit_path(el: &Element, x: f32, y: f32) -> Vec<HitPathEntry> {
         .collect()
 }
 
+pub(crate) fn captured_path(root: &Element) -> Option<Vec<HitPathEntry>> {
+    super::pointer_capture_id()
+        .and_then(|id| super::tree_hit::captured_pointer_hit(root, id.as_str()))
+        .map(|entry| vec![entry])
+}
+
 /// Exclusive pointer chain (root → leaf), same walk as [`hit_path`].
 ///
 /// CSS `:hover` must use this set: geometric AABB alone paints covered siblings

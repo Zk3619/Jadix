@@ -1,0 +1,241 @@
+use std::cell::{Cell, RefCell};
+
+use crate::app::{runtime, window_scope, WindowOptions, WindowSession};
+use crate::core::tree::Element;
+
+use super::{panel, DevToolsState};
+
+#[derive(Clone, Copy)]
+enum InspectorMessage {
+    Refresh,
+}
+
+thread_local! {
+    static SESSION: RefCell<Option<WindowSession<(), InspectorMessage>>> = const { RefCell::new(None) };
+    static REDOCKING: Cell<bool> = const { Cell::new(false) };
+    static RESIZE_START: Cell<Option<(f32, f32)>> = const { Cell::new(None) };
+    static RESIZE_HOVER: Cell<bool> = const { Cell::new(false) };
+}
+
+pub fn is_detached() -> bool {
+    SESSION.with(|session| session.borrow().is_some())
+}
+
+pub fn toggle_detached() {
+    if is_detached() {
+        REDOCKING.set(true);
+        close_secondary();
+        return;
+    }
+    let _scope = window_scope::enter_primary();
+    let session = WindowSession::new(());
+    session.on_child_message(|InspectorMessage::Refresh| {
+        DevToolsState::bump();
+    });
+    session.on_opened(|_| {
+        if REDOCKING.get() {
+            close_secondary();
+        }
+        DevToolsState::bump();
+    });
+    session.on_closed(|_| {
+        SESSION.with(|session| session.borrow_mut().take());
+        if !REDOCKING.replace(false) {
+            DevToolsState::set_open(false);
+        }
+        DevToolsState::bump();
+    });
+    SESSION.with(|slot| *slot.borrow_mut() = Some(session.clone()));
+    let result = session.open(
+        WindowOptions::new()
+            .title("Jadix DevTools")
+            .size(840.0, 760.0)
+            .min_size(400.0, 300.0),
+        |_| runtime::with_primary_root(panel::dock_panel_from_root).unwrap_or_else(Element::new),
+    );
+    if let Err(error) = result {
+        REDOCKING.set(true);
+        SESSION.with(|session| session.borrow_mut().take());
+        DevToolsState::record_change("DevTools", &error);
+    }
+    DevToolsState::bump();
+}
+
+fn close_secondary() {
+    let window = SESSION.with(|session| session.borrow().as_ref().and_then(WindowSession::window));
+    if let Some(window) = window {
+        let _ = window.close();
+    }
+}
+
+pub(crate) fn sync(root: &Element) {
+    if !DevToolsState::is_open() {
+        close_secondary();
+        return;
+    }
+    let window = SESSION.with(|session| session.borrow().as_ref().and_then(WindowSession::window));
+    if let Some(window) = window {
+        let _scope = window_scope::enter_secondary_id(window.id());
+        let panel = panel::dock_panel_from_root(root);
+        runtime::replace_secondary_root(window.id(), panel);
+    }
+}
+
+pub(crate) fn request_refresh_from_secondary() {
+    let session = SESSION.with(|session| session.borrow().clone());
+    if let Some(session) = session {
+        let _ = session.send_to_parent(InspectorMessage::Refresh);
+    }
+}
+
+pub(crate) fn is_detached_window(id: winit::window::WindowId) -> bool {
+    SESSION.with(|session| {
+        session
+            .borrow()
+            .as_ref()
+            .and_then(WindowSession::window)
+            .is_some_and(|window| window.id() == id)
+    })
+}
+
+pub(crate) fn window_resized(id: winit::window::WindowId) {
+    if is_detached_window(id) {
+        request_refresh_from_secondary();
+    }
+}
+
+pub(crate) fn panel_width() -> f32 {
+    if is_detached() {
+        if let Some(width) = runtime::with_active_winit_window(|window| {
+            window.surface_size().width as f32 / window.scale_factor() as f32
+        }) {
+            return width;
+        }
+    }
+    DevToolsState::panel_width()
+}
+
+fn stop_resize() {
+    if RESIZE_START.replace(None).is_some() {
+        crate::app::release_pointer_capture();
+    }
+}
+
+pub(crate) fn resize_handle() -> Element {
+    use crate::app::pointer_events::{EventPhase, PointerEvent};
+    Element::new()
+        .focus_id("__jadix_devtools_resize")
+        .absolute()
+        .z_index(20)
+        .left(0.0)
+        .top(0.0)
+        .w(6.0)
+        .h("100%")
+        .cursor_kind(crate::style::CursorKind::ColResize)
+        .bg([0.0; 4])
+        .on_hover(|inside| {
+            RESIZE_HOVER.set(inside);
+            runtime::request_redraw();
+        })
+        .on_pointer_down(|event: &PointerEvent| {
+            if event.phase == EventPhase::Capture || event.button != winit::event::MouseButton::Left
+            {
+                return;
+            }
+            RESIZE_START.set(Some((event.x, DevToolsState::panel_width())));
+            crate::app::set_pointer_capture("__jadix_devtools_resize");
+            event.stop_propagation();
+            event.prevent_default();
+        })
+        .on_mousemove(|event: &PointerEvent| {
+            if let Some((start, width)) = RESIZE_START.get() {
+                if event.buttons & 1 == 0 {
+                    stop_resize();
+                    return;
+                }
+                let available = runtime::with_active_winit_window(|window| {
+                    window.surface_size().width as f32 / window.scale_factor() as f32
+                })
+                .unwrap_or(1600.0);
+                DevToolsState::set_panel_width(
+                    (width + start - event.x).min((available - 180.0).max(320.0)),
+                );
+                event.stop_propagation();
+            }
+        })
+        .on_pointer_up(|_| stop_resize())
+}
+
+pub(super) fn sync_resize_hover(root: &mut Element) -> bool {
+    let Some(handle) = super::snapshot::find_element_by_identity(root, "__jadix_devtools_resize")
+    else {
+        return false;
+    };
+    let active = RESIZE_HOVER.get() || RESIZE_START.get().is_some();
+    let color = if active {
+        crate::style::parse_color("#2563eb")
+    } else {
+        [0.0; 4]
+    };
+    if handle.style.resolved_border_colors()[1] == color {
+        return false;
+    }
+    crate::core::tree::walk_elements_mut(root, |element| {
+        if element.focus_id.as_deref() == Some("__jadix_devtools_resize") {
+            element.style.bg_color = [0.0; 4];
+            element.style.set_border_side_color(1, color);
+            element.style.border_style = crate::style::LineStyle::Solid;
+            element
+                .style
+                .set_border_side_width(1, if active { 2.0 } else { 0.0 });
+            element.style.shadow_color = [0.0; 4];
+            element.style.shadow_blur = 0.0;
+        }
+    });
+    true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resize_drag_captures_pointer_updates_width_and_releases() {
+        crate::core::reactivity::create_root(|| {
+            use crate::app::pointer_events::{
+                dispatch_pointer, hit_path, PointerEvent, PointerKind,
+            };
+            use winit::event::MouseButton;
+            DevToolsState::set_panel_width(640.0);
+            let mut handle = resize_handle();
+            handle.layout_bounds = [800.0, 0.0, 6.0, 400.0];
+            let mut root = Element::new().child(handle);
+            root.layout_bounds = [0.0, 0.0, 1440.0, 700.0];
+            let mut event = PointerEvent::new(800.0, 100.0, MouseButton::Left, 1);
+            event.buttons = 1;
+            dispatch_pointer(
+                &hit_path(&root, event.x, event.y),
+                &mut event,
+                PointerKind::Down,
+            );
+            assert_eq!(
+                crate::app::pointer_capture_id().as_deref(),
+                Some("__jadix_devtools_resize")
+            );
+            event.x = 660.0;
+            assert!(!hit_path(&root, event.x, event.y)
+                .iter()
+                .any(|entry| { entry.focus_id.as_deref() == Some("__jadix_devtools_resize") }));
+            let path = crate::app::pointer_events::captured_path(&root).unwrap();
+            let mut event = PointerEvent::new(660.0, 100.0, MouseButton::Left, 0);
+            event.buttons = 1;
+            dispatch_pointer(&path, &mut event, PointerKind::Move);
+            assert_eq!(DevToolsState::panel_width(), 780.0);
+            let mut event = PointerEvent::new(660.0, 100.0, MouseButton::Left, 0);
+            dispatch_pointer(&path, &mut event, PointerKind::Up);
+            assert!(crate::app::pointer_capture_id().is_none());
+            assert!(crate::app::pointer_events::captured_path(&root).is_none());
+            assert!(RESIZE_START.get().is_none());
+        });
+    }
+}

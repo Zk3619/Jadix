@@ -109,7 +109,7 @@ pub struct AppConfig {
     pub i18n: Option<String>,
     /// IANA timezone (`Asia/Shanghai`). Separate from the message catalog.
     pub timezone: Option<String>,
-    #[cfg(feature = "devtools")]
+    #[cfg(all(debug_assertions, feature = "devtools"))]
     pub devtools: Option<bool>,
 }
 
@@ -200,7 +200,7 @@ impl AppConfig {
         o.default_font_size = self.font_size;
         o.default_font_weight = self.font_weight;
         o.synthetic_bold = self.synthetic_bold;
-        #[cfg(feature = "devtools")]
+        #[cfg(all(debug_assertions, feature = "devtools"))]
         if let Some(d) = self.devtools {
             o.devtools = d;
         }
@@ -622,7 +622,7 @@ impl AppBuilder {
     }
 
     /// Enable runtime Inspector (F12). Requires crate feature `devtools`.
-    #[cfg(feature = "devtools")]
+    #[cfg(all(debug_assertions, feature = "devtools"))]
     pub fn devtools(mut self, enabled: bool) -> Self {
         self.config.devtools = Some(enabled);
         self

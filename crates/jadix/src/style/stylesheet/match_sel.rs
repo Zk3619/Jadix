@@ -12,23 +12,33 @@ const ATTR_SHEET_APPLIED: &str = "data-jadix-sheet";
 ///
 /// Idempotent: a second call is a no-op (`data-jadix-sheet`).
 pub fn apply_stylesheet_rules(mut el: Element) -> Element {
-    if el.attrs.get(ATTR_SHEET_APPLIED).map(String::as_str) == Some("1") {
+    if registry_is_empty() && !el.attrs.contains_key("data-slot") {
         return el;
     }
-    if registry_is_empty() {
+    if el.attrs.get(ATTR_SHEET_APPLIED).map(String::as_str) == Some("1")
+        && el.attrs.get("data-jadix-sheet-slot") == el.attrs.get("data-slot")
+    {
+        return el;
+    }
+    let theme_classes = if super::super::theme_style::has_theme_styles() {
+        super::super::theme_style::slot_theme_classes(&mut el)
+    } else {
+        String::new()
+    };
+    if registry_is_empty() && theme_classes.is_empty() {
         return el;
     }
     let classes = collect_matching_classes(&el);
-    if !classes.is_empty() {
-        let sheet_classes = classes.clone();
+    if !classes.is_empty() || !theme_classes.is_empty() {
         // Tree mounts reach slots after caller classes have been applied. Keep those
         // utilities last, including their hover/dark rules, instead of replacing them.
-        let classes = match el.attrs.get("jadix_utility_class") {
-            Some(caller) if !caller.trim().is_empty() => format!("{classes} {caller}"),
-            _ => classes,
-        };
-        el = with_class_list(el, &classes);
-        el.set_attr("jadix_stylesheet_class", sheet_classes);
+        let caller = el.attrs.get("jadix_utility_class").cloned().unwrap_or_default();
+        el.set_attr("jadix_theme_class", theme_classes);
+        el.set_attr("jadix_stylesheet_class", classes);
+        el = with_class_list(el, &caller);
+    }
+    if let Some(slot) = el.attrs.get("data-slot").cloned() {
+        el.set_attr("data-jadix-sheet-slot", slot);
     }
     el.set_attr(ATTR_SHEET_APPLIED, "1");
     el
@@ -37,9 +47,9 @@ pub fn apply_stylesheet_rules(mut el: Element) -> Element {
 /// Walk `el` and every descendant. Covers slots stamped with `set_attr("data-slot")`
 /// inside a `#[component]` body (table cells, command rows, dialog chrome, …).
 ///
-/// Empty registry: identity. Already-stamped nodes (`data-jadix-sheet`) stay no-ops.
+/// Empty registry and theme style layer: identity. Already-stamped nodes stay no-ops.
 pub fn apply_stylesheet_rules_tree(el: Element) -> Element {
-    if registry_is_empty() {
+    if registry_is_empty() && !super::super::theme_style::has_theme_styles() {
         return el;
     }
     walk_stylesheet_rules(el)

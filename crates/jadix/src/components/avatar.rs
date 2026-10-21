@@ -369,7 +369,7 @@ fn style_fallback_subtree(el: &mut Element, px: f32, icon_px: f32, fg: [u8; 4]) 
     } else if el.text.is_some() {
         let is_lucide = el.text_style.font_family.as_deref() == Some("lucide");
         if is_lucide {
-            if el.text_style.size_resolved() <= 1.0 {
+            if el.text_style.size.is_none() {
                 el.text_style.size = Some(icon_px);
             }
             el.text_style.color = Some(fg);
@@ -615,7 +615,7 @@ fn build_avatar_fallback(
     el = el.bg(muted).display_flex().items_center().justify_center();
     el.set_attr(ATTR_SLOT, SLOT_FALLBACK);
     for mut c in children {
-        apply_fallback_metrics(&mut c, ctx.size);
+        style_fallback_subtree(&mut c, ctx.size.fallback_text_px(), ctx.size.fallback_icon_px(), parse_text_color("muted-foreground"));
         el = el.child(c);
     }
     if el.children.is_empty() {
@@ -2146,6 +2146,26 @@ mod tests {
             Some(SLOT_AVATAR)
         );
         assert_eq!(el.attrs.get(ATTR_SIZE).map(|s| s.as_str()), Some("lg"));
+    }
+
+    #[test]
+    fn fallback_icon_remains_a_centered_lucide_leaf_on_first_layout() {
+        for size in ["sm", "default", "lg"] {
+            crate::core::reactivity::create_root(|| {
+                let mut root: Element = avatar().size(size).fallback_icon("user").into();
+                let mut layout = crate::layout::LayoutTree::new();
+                layout.build_and_layout(&mut root, 200.0, 160.0, [-1.0; 2]);
+                let fallback = root.children.iter().find(|child| child.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_FALLBACK)).unwrap();
+                let icon = fallback.children.iter().find(|child| child.attrs.contains_key(crate::utils::ATTR_ICON_NAME)).unwrap();
+                assert!(icon.text.is_some(), "icon must keep its glyph on the Lucide leaf");
+                assert_eq!(icon.text_style.font_family.as_deref(), Some("lucide"));
+                for axis in 0..2 {
+                    let icon_center = icon.layout_bounds[axis] + icon.layout_bounds[axis + 2] * 0.5;
+                    let center = fallback.layout_bounds[axis] + fallback.layout_bounds[axis + 2] * 0.5;
+                    assert!((icon_center - center).abs() < 0.5, "{size} axis {axis}: {icon_center} vs {center}");
+                }
+            });
+        }
     }
 
     #[test]

@@ -5,7 +5,7 @@ use serde::Deserialize;
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
 use std::collections::HashMap;
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, Read};
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
 use std::net::TcpListener;
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
@@ -50,20 +50,28 @@ impl HotReloadState {
                         continue;
                     }
                 };
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
                 let mut reader = BufReader::new(stream);
                 let mut line = String::new();
                 loop {
                     line.clear();
-                    let n = match reader.read_line(&mut line) {
+                    let n = match reader
+                        .by_ref()
+                        .take(4 * 1024 * 1024 + 1)
+                        .read_line(&mut line)
+                    {
                         Ok(v) => v,
                         Err(_) => break,
                     };
-                    if n == 0 {
+                    if n == 0 || n > 4 * 1024 * 1024 {
                         break;
                     }
                     if let Some(cmd) = parse_command(line.trim()) {
                         pending_count_ref.fetch_add(1, Ordering::Relaxed);
-                        let _ = tx.send(cmd);
+                        if tx.send(cmd).is_err() {
+                            pending_count_ref.fetch_sub(1, Ordering::Relaxed);
+                            return;
+                        }
                         let _ = super::ui_bridge::send_user_event(JadixUserEvent::HotReloadWake);
                     }
                 }
@@ -101,6 +109,9 @@ impl HotReloadState {
             }
         }
         batch.merged_templates = by_template_id.into_values().collect();
+        batch
+            .merged_templates
+            .sort_by(|left, right| left.id.cmp(&right.id));
         batch.asset_paths = asset_paths;
         batch
     }

@@ -156,7 +156,8 @@ pub fn tooltip_bubble(mut body: Element) -> Element {
             .color(parse_text_color("popover-foreground"))
             .into();
     }
-    panel.child(body)
+    panel.set_attr("data-slot", "tooltip-content");
+    crate::style::apply_stylesheet_rules(panel.child(body))
 }
 
 fn chain_hover(

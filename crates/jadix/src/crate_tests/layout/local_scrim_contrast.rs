@@ -877,17 +877,40 @@ fn gallery_yellow_glyphon_prepare_is_not_culled() {
         let fy1 = (frost_inst.rect_pos[1] + frost_inst.rect_size[1])
             .ceil()
             .min(600.0) as u32;
-        // AABB corners sit outside the rounded SDF and stay Clear black — sample the
-        // interior, and treat BGRA readback the same as RGBA yellow.
         let cx = (fx0 + fx1) / 2;
         let cy = (fy0 + fy1) / 2;
         let frost_center = img_f.pixel(cx, cy).unwrap_or([0; 4]);
         let mut frost_smear = 0u32;
         let mut frost_sample = frost_center;
-        for y in fy0..fy1 {
-            for x in fx0..fx1 {
+        let decode = |channel: f32| {
+            if channel <= 0.04045 {
+                channel / 12.92
+            } else {
+                ((channel + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        let encode = |channel: f32| {
+            if channel <= 0.0031308 {
+                channel * 12.92
+            } else {
+                1.055 * channel.powf(1.0 / 2.4) - 0.055
+            }
+        };
+        let mut interior = 0;
+        for y in fy0 + 16..fy1 - 16 {
+            for x in fx0 + 16..fx1 - 16 {
                 if let Some(p) = img_f.pixel(x, y) {
-                    if pixel_is_yellow_smear(p) || (p[0] > p[2] && p[1] > 80 && p[3] > 8) {
+                    let source = img_blur.pixel(x, y).unwrap();
+                    let matches = (0..3).all(|channel| {
+                        let expected = encode(
+                            decode(f32::from(source[channel]) / 255.0)
+                                * (1.0 - frost_inst.color[3])
+                                + decode(frost_inst.color[channel]) * frost_inst.color[3],
+                        ) * 255.0;
+                        (f32::from(p[channel]) - expected).abs() <= 2.0
+                    });
+                    interior += 1;
+                    if matches && p[3] == 255 {
                         frost_smear += 1;
                         frost_sample = p;
                     }
@@ -902,8 +925,8 @@ fn gallery_yellow_glyphon_prepare_is_not_culled() {
             ),
         );
         assert!(
-            frost_smear > 10,
-            "frost composite has no yellowish smear (smear={frost_smear} center={frost_center:?} sample={frost_sample:?}) — UV/blend drops glyphs after a good capture\n{dump}"
+            frost_smear * 100 >= interior * 99,
+            "frost must preserve captured glyph detail with linear-light tint compositing (matched={frost_smear}/{interior} center={frost_center:?} sample={frost_sample:?})\n{dump}"
         );
 
         // RSX unitless `"16"` is 16rem (clamped to 64px). Gallery writes `"1"` (1rem = 16px).

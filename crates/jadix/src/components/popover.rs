@@ -348,7 +348,8 @@ pub fn popover_surface(mut body: Element, width: Option<&str>) -> Element {
             .color(parse_text_color("popover-foreground"))
             .into();
     }
-    panel.child(body)
+    panel.set_attr("data-slot", "popover-content");
+    crate::style::apply_stylesheet_rules(panel.child(body))
 }
 
 /// ShadCN `PopoverContent`：Portal + floating；仅在 open 时构建。

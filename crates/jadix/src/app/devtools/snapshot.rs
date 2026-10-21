@@ -507,7 +507,7 @@ pub fn inspector_authored_style(el: &Element) -> Style {
     if let Some(desc) = el.button_hover_paint.as_ref() {
         let mut style = el.style.as_ref().clone();
         let (bg, _, border) =
-            crate::components::button::button_chrome_for_variant(&desc.variant, 0.0);
+            crate::style::button_chrome::button_chrome_for_variant(&desc.variant, 0.0);
         style.bg_color = bg;
         match border {
             Some(b) => {
@@ -610,11 +610,32 @@ fn tag_hint_from(el: &Element) -> Option<String> {
         .get("data-slot")
         .cloned()
         .or_else(|| el.attrs.get("role").cloned())
-        .or_else(|| el.class_set.as_ref().and_then(|s| s.base.first().cloned()))
+        .or_else(|| {
+            Some(
+                if el.text.is_some() {
+                    "text"
+                } else if el.style.display == taffy::style::Display::Flex {
+                    if el.style.flex_direction == taffy::style::FlexDirection::Row {
+                        "hstack"
+                    } else {
+                        "vstack"
+                    }
+                } else {
+                    "box"
+                }
+                .to_string(),
+            )
+        })
 }
 
 fn text_preview_from(el: &Element) -> Option<String> {
+    if let Some(name) = el.attrs.get(crate::utils::lucide::ATTR_ICON_NAME) {
+        return Some(format!("[icon: {name}]"));
+    }
     if let Some(t) = &el.text {
+        if t.chars().any(|glyph| matches!(glyph as u32, 0xE000..=0xF8FF | 0xF0000..=0xFFFFD | 0x100000..=0x10FFFD)) {
+            return Some("[icon]".into());
+        }
         let s = t.chars().take(48).collect::<String>();
         return Some(if t.chars().count() > 48 {
             format!("{s}…")
@@ -1269,6 +1290,25 @@ mod tests {
     }
 
     #[test]
+    fn icon_previews_use_semantic_names_not_private_use_codepoints() {
+        let mut icon = Element::new().text("\u{e001}");
+        icon.set_attr(crate::utils::lucide::ATTR_ICON_NAME, "panels-top-left");
+        assert_eq!(
+            text_preview_from(&icon).as_deref(),
+            Some("[icon: panels-top-left]")
+        );
+        let anonymous_icon = Element::new().text("\u{e002}");
+        assert_eq!(
+            text_preview_from(&anonymous_icon).as_deref(),
+            Some("[icon]")
+        );
+        assert_eq!(
+            text_preview_from(&Element::new().text("表单")).as_deref(),
+            Some("表单")
+        );
+    }
+
+    #[test]
     fn snapshot_tree_depth_first() {
         let root = Element::new()
             .focus_id("root")
@@ -1340,7 +1380,7 @@ mod tests {
         let mut viewport = Element::new();
         viewport.focus_id = Some("scroll:main".into());
         viewport.style.overflow.y = Overflow::Scroll;
-        viewport.scroll_offset = [0.0, 100.0];
+        crate::app::devtools::set_test_scroll_offset(&mut viewport, [0.0, 100.0]);
         viewport.layout_bounds = [0.0, 0.0, 400.0, 200.0];
         viewport = viewport.child(target);
 
@@ -1402,7 +1442,7 @@ mod tests {
         let mut viewport = Element::new();
         viewport.focus_id = Some("scroll:gallery".into());
         viewport.style.overflow.y = Overflow::Scroll;
-        viewport.scroll_offset = [0.0, 120.0];
+        crate::app::devtools::set_test_scroll_offset(&mut viewport, [0.0, 120.0]);
         viewport.layout_bounds = [0.0, 0.0, 680.0, 800.0];
         viewport = viewport.child(target);
 

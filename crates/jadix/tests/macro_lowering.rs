@@ -32,6 +32,24 @@ fn collect_ids(el: &Element, out: &mut Vec<String>) {
     }
 }
 
+#[component]
+fn SourceIdentityWrapper() -> Element {
+    Element::new().template_id("component-stable-id")
+}
+
+#[test]
+fn ui_source_identity_survives_component_root_identity() {
+    create_root(|| {
+        let expected_line = line!() + 1;
+        let element = ui! { <SourceIdentityWrapper /> };
+        assert_eq!(element.template_id.as_deref(), Some("component-stable-id"));
+        assert_eq!(
+            element.get_attr("jadix_ui_template_id").map(String::as_str),
+            Some(format!("{}:{}:23", file!(), expected_line).as_str())
+        );
+    });
+}
+
 fn template_contains(el: &Element, needle: &str) -> bool {
     el.template_id
         .as_deref()

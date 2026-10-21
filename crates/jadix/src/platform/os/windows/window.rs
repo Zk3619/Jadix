@@ -69,6 +69,11 @@ pub(crate) fn apply_created_window(
         window.set_system_backdrop(winit::platform::windows::BackdropType::Auto);
         extend_dwm_frame(hwnd, false);
         enable_dwm_punch_through(hwnd);
+    } else {
+        set_use_host_backdrop_brush(hwnd, false);
+        window.set_system_backdrop(winit::platform::windows::BackdropType::None);
+        extend_dwm_frame(hwnd, false);
+        super::glass::apply_accent(hwnd, options);
     }
 }
 

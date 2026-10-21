@@ -47,7 +47,7 @@ pub(crate) fn queue_inspector_cssom(path: Vec<usize>, css: String) {
     PENDING_INSPECTOR_EDITS.with(|q| {
         q.borrow_mut().push(PendingInspectorCssom { path, css });
     });
-    crate::app::runtime::request_redraw();
+    crate::app::runtime::request_redraw_all();
 }
 
 pub(crate) fn take_pending_inspector_edits() -> Vec<PendingInspectorCssom> {
@@ -60,6 +60,7 @@ fn path_key(path: &[usize]) -> String {
 
 pub(crate) fn commit_inspector_cssom(path: &[usize], css: String) {
     let key = path_key(path);
+    super::DevToolsState::record_change("CSS", format!("{key}\n{css}"));
     COMMITTED_INSPECTOR_EDITS.with(|m| {
         m.borrow_mut()
             .insert(key, vec![CommittedInspectorOp::Cssom(css)]);
@@ -214,7 +215,7 @@ pub fn apply_cssom_text(el: &mut Element, css: &str) -> LayoutStatus {
     impact
 }
 
-fn parse_declarations(css: &str) -> Vec<(String, String)> {
+pub(super) fn parse_declarations(css: &str) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut stripped = String::new();
     let mut chars = css.chars().peekable();
@@ -1335,6 +1336,26 @@ mod tests {
         assert_eq!(dim_length_px(el.style.size.width), Some(120.0));
         apply_style_patch(&mut el, &StylePatch::Opacity(0.5));
         assert!((el.style.opacity - 0.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn selected_element_override_does_not_mutate_siblings_or_stylesheets() {
+        clear_committed_inspector_edits_for_test();
+        let mut left = Element::new();
+        let mut right = Element::new();
+        crate::style::apply_class_list(&mut left, "p-2 bg-red-500");
+        crate::style::apply_class_list(&mut right, "p-2 bg-red-500");
+        let original = right.style.clone();
+        let mut root = Element::new().children([left, right]);
+        commit_inspector_cssom(&[0], "padding: 23px; background: #00ff00;".into());
+        let mut tree = crate::core::tree::LayoutTree::new();
+        reapply_inspector_overrides(&mut root, &mut tree);
+        assert_eq!(lp_length_px(root.children[0].style.padding.top), Some(23.0));
+        assert_eq!(root.children[1].style, original);
+        let mut newly_mounted = Element::new();
+        crate::style::apply_class_list(&mut newly_mounted, "p-2 bg-red-500");
+        assert_eq!(newly_mounted.style, original);
+        clear_committed_inspector_edits_for_test();
     }
 
     #[test]

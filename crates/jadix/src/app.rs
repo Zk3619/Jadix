@@ -82,6 +82,8 @@ mod lifecycle;
 ))]
 mod menu_events;
 pub mod multi_window;
+pub mod window_session;
+pub use window_session::{WindowClosed, WindowSession};
 pub mod native_menu;
 pub mod navigator;
 pub mod pending_images;
@@ -101,13 +103,14 @@ pub(crate) use state::{
     hoist_portal_subtrees_refreshing_scroll_flags, recompute_scroll_viewport_flags,
     update_scrollbar_elements_for_test, ScrollbarUpdateMode,
 };
-#[cfg(feature = "devtools")]
+#[cfg(all(debug_assertions, feature = "devtools"))]
 pub mod devtools;
 pub(crate) mod glass_params;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod tray;
 pub(crate) mod tree_hit;
+pub mod tasks;
 pub mod ui_bridge;
 pub(crate) mod window_chrome;
 mod window_events;
@@ -130,9 +133,12 @@ pub use portal_overlay::{
     page_scroll_locked, parse_scroll_freeze, set_page_scroll_locked, set_scroll_freeze,
     ScrollFreeze,
 };
-pub use resource::{create_resource, suspense, Resource, ResourceState};
+pub use resource::{
+    create_async_resource, create_resource, create_resource_on, suspense, Resource, ResourceState,
+};
 pub use router::Router;
 pub use tray::{system_tray_native, tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};
+pub use tasks::TaskScope;
 pub use ui_bridge::{request_exit, run_on_ui_thread, spawn_blocking};
 pub use window_chrome::{
     close_window, set_window_fullscreen, set_window_maximized, set_window_minimized, start_window_drag,

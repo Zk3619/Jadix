@@ -454,6 +454,12 @@ impl SecondaryWindowState {
             &mut self.layout_tree,
             &mut sync_impact,
         );
+        #[cfg(all(debug_assertions, feature = "devtools"))]
+        if super::devtools::is_detached_window(self.window.id())
+            && super::devtools::sync_secondary_chrome(&mut self.root_element)
+        {
+            sync_impact = sync_impact.merge(LayoutStatus::StyleChanged);
+        }
 
         let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
 
@@ -479,7 +485,7 @@ impl SecondaryWindowState {
                 &mut sync_impact,
             );
         }
-        crate::components::internal::text_edit::sync_text_edit_paint_subtree_in_viewport(
+        crate::utils::text_edit::sync_text_edit_paint_subtree_in_viewport(
             &mut self.root_element,
             &mut self.layout_tree,
             &mut sync_impact,

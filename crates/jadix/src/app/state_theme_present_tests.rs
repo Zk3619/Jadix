@@ -93,7 +93,7 @@ fn gallery_forms_hover_receives_scheduled_redraw() {
             crate::core::reactivity::use_signal("gal_nav_section", String::new)
                 .set("basics".into());
             let options = crate::app::WindowOptions::new().size(869.0, 600.0);
-            #[cfg(feature = "devtools")]
+            #[cfg(all(debug_assertions, feature = "devtools"))]
             let options = options.devtools(true);
             let (tx, rx) = std::sync::mpsc::channel();
             crate::app::ui_bridge::install_proxy(event_loop.create_proxy(), tx);

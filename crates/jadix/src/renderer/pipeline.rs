@@ -62,6 +62,7 @@ pub struct InstanceInput {
     pub shadow_blur: f32,
     pub shadow_spread: f32,
     pub shadow_inset: f32,
+    pub backdrop_fade: f32,
     /// 2D affine transform `[a, b, c, d, tx, ty]`.
     /// Identity = `[1, 0, 0, 1, 0, 0]`.
     pub transform: [f32; 6],
@@ -77,6 +78,7 @@ pub struct InstanceInput {
     /// CSS `backdrop-filter: blur()` radius in logical px. Sampled by `rounded_rect.wgsl`
     /// against bind group 1 (blurred page capture). `0` skips sampling.
     pub backdrop_blur: f32,
+    pub glass: [f32; 4],
 }
 
 impl InstanceInput {
@@ -169,36 +171,41 @@ impl InstanceInput {
                 wgpu::VertexAttribute {
                     offset: 92,
                     shader_location: 10,
-                    format: wgpu::VertexFormat::Float32x3,
+                    format: wgpu::VertexFormat::Float32x4,
                 },
                 // transform_ab [a, b]
                 wgpu::VertexAttribute {
-                    offset: 104,
+                    offset: 108,
                     shader_location: 11,
                     format: wgpu::VertexFormat::Float32x2,
                 },
                 // transform_cd [c, d]
                 wgpu::VertexAttribute {
-                    offset: 112,
+                    offset: 116,
                     shader_location: 12,
                     format: wgpu::VertexFormat::Float32x2,
                 },
                 // transform_txty [tx, ty]
                 wgpu::VertexAttribute {
-                    offset: 120,
+                    offset: 124,
                     shader_location: 13,
                     format: wgpu::VertexFormat::Float32x2,
                 },
                 // clip_pos
                 wgpu::VertexAttribute {
-                    offset: 128,
+                    offset: 132,
                     shader_location: 14,
                     format: wgpu::VertexFormat::Float32x2,
                 },
                 // clip_size + border_extra + backdrop_blur
                 wgpu::VertexAttribute {
-                    offset: 136,
+                    offset: 140,
                     shader_location: 15,
+                    format: wgpu::VertexFormat::Float32x4,
+                },
+                wgpu::VertexAttribute {
+                    offset: 156,
+                    shader_location: 1,
                     format: wgpu::VertexFormat::Float32x4,
                 },
             ],
@@ -535,6 +542,16 @@ impl JadixPipeline {
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                     count: None,
                 },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
+                    count: None,
+                },
             ],
         })
     }
@@ -579,6 +596,10 @@ impl JadixPipeline {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&view),
                 },
             ],
         });
@@ -634,6 +655,8 @@ impl JadixPipeline {
         vertex_entry: &str,
         fragment_entry: &str,
     ) -> wgpu::RenderPipeline {
+        let mut vertex_layout = VertexInput::desc();
+        vertex_layout.attributes = &vertex_layout.attributes[..1];
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Jadix Render Pipeline Layout"),
@@ -647,7 +670,7 @@ impl JadixPipeline {
             vertex: wgpu::VertexState {
                 module: shader,
                 entry_point: Some(vertex_entry),
-                buffers: &[Some(VertexInput::desc()), Some(InstanceInput::desc())],
+                buffers: &[Some(vertex_layout), Some(InstanceInput::desc())],
                 compilation_options: Default::default(),
             },
             fragment: Some(wgpu::FragmentState {
@@ -982,17 +1005,31 @@ impl JadixPipeline {
         view: &wgpu::TextureView,
         sampler: &wgpu::Sampler,
     ) -> wgpu::BindGroup {
+        self.make_optical_backdrop_bind_group(device, view, view, sampler)
+    }
+
+    pub fn make_optical_backdrop_bind_group(
+        &self,
+        device: &wgpu::Device,
+        blurred: &wgpu::TextureView,
+        source: &wgpu::TextureView,
+        sampler: &wgpu::Sampler,
+    ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("SDF backdrop BG"),
             layout: &self.backdrop_bgl,
             entries: &[
                 wgpu::BindGroupEntry {
                     binding: 0,
-                    resource: wgpu::BindingResource::TextureView(view),
+                    resource: wgpu::BindingResource::TextureView(blurred),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(source),
                 },
             ],
         })
@@ -1096,11 +1133,13 @@ mod tests {
             shadow_blur: 12.0,
             shadow_spread: 0.0,
             shadow_inset: 0.0,
+            backdrop_fade: 0.0,
             transform: crate::style::transform::MAT2D_IDENTITY,
             clip_pos: [0.0; 2],
             clip_size: InstanceInput::NO_CLIP_SIZE,
             border_extra: 1.0,
             backdrop_blur: 0.0,
+            glass: [0.0; 4],
         };
         assert!(super::opaque_box_eligible(&inst));
         inst.shadow_inset = 1.0;
@@ -1153,11 +1192,13 @@ mod tests {
             shadow_blur: 0.0,
             shadow_spread: 0.0,
             shadow_inset: 0.0,
+            backdrop_fade: 0.0,
             transform: crate::style::transform::MAT2D_IDENTITY,
             clip_pos: [0.0; 2],
             clip_size: InstanceInput::NO_CLIP_SIZE,
             border_extra: 1.0,
             backdrop_blur: 0.0,
+            glass: [0.0; 4],
         };
         let clip = GpuClipPoly::from_rounded_rect([0.0, 0.0, 384.0, 384.0], [24.0; 4]);
         assert!(!instance_clip_needed(&inst, &clip));

@@ -146,6 +146,7 @@ impl super::App {
         self.ime_owner_window = None;
         // 2) Drop registry Arcs so OS windows are destroyed (not only SecondaryWindowState).
         drop(self.window_registry.drain_secondaries());
+        super::window_session::drain_tasks();
         self.window_registry = Default::default();
 
         let state = self.state.borrow_mut().take();
@@ -785,7 +786,7 @@ impl super::App {
             crate::app::reactive::reset_registered_anchors();
 
             log::debug!("lifecycle: before root create_effect");
-            #[cfg(feature = "devtools")]
+            #[cfg(all(debug_assertions, feature = "devtools"))]
             if self.window_options.devtools {
                 crate::app::devtools::DevToolsState::enable_for_window();
             }
@@ -802,7 +803,7 @@ impl super::App {
                     log::debug!("root_effect: before app_builder");
                     crate::style::track_style_changes();
                     let new_root = (builder_ref.borrow_mut())();
-                    #[cfg(feature = "devtools")]
+                    #[cfg(all(debug_assertions, feature = "devtools"))]
                     let new_root = crate::app::devtools::wrap_app(new_root);
                     let new_root = crate::style::apply_stylesheet_rules_tree(new_root);
                     log::debug!(
@@ -1195,12 +1196,12 @@ impl ApplicationHandler for super::App {
         }
 
         // Number input 增减触发器长按连发。
-        if crate::components::input::tick_number_step_hold() {
+        if crate::utils::text_edit::field::tick_number_step_hold() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
                 state.window.request_redraw();
             }
         }
-        if let Some(wake) = crate::components::input::number_step_hold_next_wake_at() {
+        if let Some(wake) = crate::utils::text_edit::field::number_step_hold_next_wake_at() {
             if wake <= now {
                 if let Some(state) = (*self.state.borrow()).as_ref() {
                     state.window.request_redraw();
@@ -1486,6 +1487,8 @@ impl ApplicationHandler for super::App {
                 }
             }
             WindowEvent::SurfaceResized(physical_size) => {
+                #[cfg(all(debug_assertions, feature = "devtools"))]
+                super::devtools::detached_window_resized(id);
                 let is_primary = (*self.state.borrow())
                     .as_ref()
                     .is_some_and(|state| state.window.id() == id);

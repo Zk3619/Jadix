@@ -518,6 +518,21 @@ where
     }
 }
 
+#[cfg(all(debug_assertions, feature = "devtools"))]
+pub(crate) fn replace_secondary_root(id: WindowId, root: Element) {
+    let secondaries = APP_RUNTIME.with(|runtime| {
+        runtime.borrow().as_ref().and_then(|runtime| runtime.secondaries.upgrade())
+    });
+    if let Some(secondaries) = secondaries {
+        if let Ok(mut windows) = secondaries.try_borrow_mut() {
+            if let Some(window) = windows.get_mut(&id) {
+                window.replace_root(root);
+                window.window.request_redraw();
+            }
+        }
+    }
+}
+
 /// Read-only access to the primary window UI root (Inspector snapshots).
 pub fn with_primary_root<F, R>(f: F) -> Option<R>
 where
@@ -535,7 +550,7 @@ where
 
 /// Apply Inspector style patch to a node by child-index path (P1).
 /// Returns whether the patch was applied (false if runtime/state busy or path missing).
-#[cfg(feature = "devtools")]
+#[cfg(all(debug_assertions, feature = "devtools"))]
 pub fn patch_devtools_style(path: &[usize], patch: crate::app::devtools::StylePatch) -> bool {
     APP_RUNTIME.with(|c| {
         let guard = c.borrow();
@@ -562,7 +577,7 @@ pub fn patch_devtools_style(path: &[usize], patch: crate::app::devtools::StylePa
 
 /// Apply Inspector CSSOM text to a node by child-index path (P2).
 /// Returns the canonical dump of the node's style after apply.
-#[cfg(feature = "devtools")]
+#[cfg(all(debug_assertions, feature = "devtools"))]
 pub fn patch_devtools_cssom(path: &[usize], css: &str) -> Option<String> {
     APP_RUNTIME.with(|c| {
         let guard = c.borrow();

@@ -9,7 +9,9 @@ use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 mod hmr_log;
+mod options;
 mod rsx_text_order;
+mod supervisor;
 
 const DEFAULT_ADDR: &str = "127.0.0.1:39091";
 /// 合并同一轮编辑器/fs 触发的多条 notify。
@@ -18,8 +20,6 @@ const DEBOUNCE_MS: u64 = 400;
 const POLL_DEBOUNCE_MS: u64 = 2500;
 /// 轮询只关心「最近刚动过」的源文件，window过长会与 notify 重复推送。
 const POLL_RECENT_MS: u64 = 1200;
-/// notify 路径为空时的兜底扫描window（略大于一次保存的抖动）。
-const NOTIFY_EMPTY_FALLBACK_MS: u64 = 800;
 
 fn display_watch_path(path: &Path, root: &Path) -> String {
     path.strip_prefix(root)
@@ -48,13 +48,9 @@ fn hmr_update_detail(
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let watch_path = std::env::args()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or(std::env::current_dir()?);
-    let addr = std::env::args()
-        .nth(2)
-        .unwrap_or_else(|| DEFAULT_ADDR.to_string());
+    let options = options::Options::parse(std::env::args().skip(1))?;
+    let watch_path = &options.root;
+    let addr = &options.addr;
 
     let (tx, rx) = mpsc::channel::<notify::Result<Event>>();
     let mut watcher = RecommendedWatcher::new(
@@ -63,134 +59,104 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         },
         Config::default(),
     )?;
-    watcher.watch(&watch_path, RecursiveMode::Recursive)?;
+    for path in &options.watch {
+        watcher.watch(path, RecursiveMode::Recursive)?;
+    }
 
+    let template_cache = build_initial_cache(watch_path);
     hmr_log::watching(&format!("{} -> {}", watch_path.display(), addr));
 
-    event_loop(rx, &addr, &watch_path);
+    let mut supervisor = supervisor::Supervisor::new(&options)?;
+    event_loop(rx, &options, template_cache, &mut supervisor);
     Ok(())
 }
 
-fn event_loop(rx: Receiver<notify::Result<Event>>, addr: &str, watch_path: &Path) {
-    let mut last_sent = Instant::now() - Duration::from_millis(DEBOUNCE_MS);
-    let mut last_poll_sent = Instant::now() - Duration::from_millis(POLL_DEBOUNCE_MS);
-    let mut last_wire_payload: Option<String> = None;
-    let mut template_cache: HashMap<String, Vec<TemplateFragment>> =
-        build_initial_cache(watch_path);
-    loop {
-        match rx.recv_timeout(Duration::from_millis(500)) {
+fn event_loop(
+    rx: Receiver<notify::Result<Event>>,
+    options: &options::Options,
+    mut template_cache: HashMap<String, Vec<TemplateFragment>>,
+    supervisor: &mut supervisor::Supervisor,
+) {
+    let addr = options.addr.as_str();
+    let watch_path = options.root.as_path();
+    let mut last_poll = Instant::now();
+    let mut changed = std::collections::BTreeSet::new();
+    let mut deadline = None;
+    let mut last_wire_payload = None;
+    while !supervisor::stop_requested() {
+        match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(event)) => {
-                let mut changed: Vec<PathBuf> = event
+                if !event.kind.is_modify() && !event.kind.is_create() && !event.kind.is_remove() {
+                    continue;
+                }
+                let paths: Vec<_> = event
                     .paths
-                    .iter()
-                    .filter(|p| is_tracked_project_file(p, watch_path))
-                    .cloned()
+                    .into_iter()
+                    .filter(|path| options.tracks(path))
                     .collect();
-                while let Ok(Ok(ev)) = rx.try_recv() {
-                    for p in ev.paths {
-                        if is_tracked_project_file(&p, watch_path) {
-                            changed.push(p);
-                        }
-                    }
-                }
-                changed.sort();
-                changed.dedup();
-                if changed.is_empty() {
-                    changed = collect_recent_tracked_files(watch_path, NOTIFY_EMPTY_FALLBACK_MS);
-                }
-                if changed.is_empty() {
-                    continue;
-                }
-                let now = Instant::now();
-                if now.duration_since(last_sent) < Duration::from_millis(DEBOUNCE_MS) {
-                    continue;
-                }
-                let (rust_files, wgsl_files, style_files) = partition_tracked(&changed, watch_path);
-                if rust_files.is_empty() && wgsl_files.is_empty() && style_files.is_empty() {
-                    continue;
-                }
-                match send_dev_batch(
-                    addr,
-                    &rust_files,
-                    &wgsl_files,
-                    &style_files,
-                    &mut template_cache,
-                    &mut last_wire_payload,
-                ) {
-                    Ok(SendOutcome::Sent {
-                        templates,
-                        wgsl,
-                        styles,
-                    }) => {
-                        hmr_log::update(&hmr_update_detail(
-                            &changed[0],
-                            watch_path,
-                            templates,
-                            wgsl,
-                            styles,
-                        ));
-                        last_sent = now;
-                    }
-                    Ok(SendOutcome::Empty | SendOutcome::Duplicate) => {
-                        // Editor/FS often emits a burst of notify events for one
-                        // save. The first send already patched; later parses find
-                        // no template diff. Stay quiet (Vite does not log these)
-                        // and refresh debounce so the burst does not re-parse.
-                        last_sent = now;
-                    }
-                    Err(err) => {
-                        hmr_log::error(&format!("send failed: {err}"));
-                    }
+                if !paths.is_empty() {
+                    changed.extend(paths);
+                    deadline = Some(Instant::now() + Duration::from_millis(DEBOUNCE_MS));
                 }
             }
-            Ok(Err(err)) => {
-                hmr_log::error(&format!("watch failed: {err}"));
-            }
-            Err(RecvTimeoutError::Timeout) => {
-                // Fallback polling: some editors/filesystems may miss notify events.
-                if last_poll_sent.elapsed() < Duration::from_millis(POLL_DEBOUNCE_MS) {
-                    continue;
-                }
-                let changed = collect_recent_tracked_files(watch_path, POLL_RECENT_MS);
-                if changed.is_empty() {
-                    continue;
-                }
-                let (rust_files, wgsl_files, style_files) = partition_tracked(&changed, watch_path);
-                if rust_files.is_empty() && wgsl_files.is_empty() && style_files.is_empty() {
-                    continue;
-                }
-                match send_dev_batch(
-                    addr,
-                    &rust_files,
-                    &wgsl_files,
-                    &style_files,
-                    &mut template_cache,
-                    &mut last_wire_payload,
-                ) {
-                    Ok(SendOutcome::Sent {
-                        templates,
-                        wgsl,
-                        styles,
-                    }) => {
-                        hmr_log::update(&hmr_update_detail(
-                            &changed[0],
-                            watch_path,
-                            templates,
-                            wgsl,
-                            styles,
-                        ));
-                        last_poll_sent = Instant::now();
-                        last_sent = Instant::now();
-                    }
-                    Ok(SendOutcome::Empty | SendOutcome::Duplicate) => {
-                        last_poll_sent = Instant::now();
-                    }
-                    Err(err) => {
-                        hmr_log::error(&format!("poll send failed: {err}"));
-                    }
-                }
-            }
+            Ok(Err(err)) => hmr_log::error(&format!("watch failed: {err}")),
             Err(RecvTimeoutError::Disconnected) => break,
+            Err(RecvTimeoutError::Timeout) => {}
+        }
+        if last_poll.elapsed() >= Duration::from_millis(POLL_DEBOUNCE_MS) {
+            for path in &options.watch {
+                changed.extend(
+                    collect_recent_tracked_files(path, POLL_DEBOUNCE_MS + POLL_RECENT_MS)
+                        .into_iter()
+                        .filter(|file| options.tracks(file)),
+                );
+            }
+            last_poll = Instant::now();
+            if !changed.is_empty() && deadline.is_none() {
+                deadline = Some(Instant::now() + Duration::from_millis(DEBOUNCE_MS));
+            }
+        }
+        if deadline.is_none_or(|when| Instant::now() < when) || changed.is_empty() {
+            continue;
+        }
+        let files: Vec<_> = changed.iter().cloned().collect();
+        if supervisor.needs_restart(&files) {
+            if let Err(error) = supervisor.restart() {
+                hmr_log::error(&format!("restart failed: {error}"));
+            }
+            template_cache = build_initial_cache(watch_path);
+            last_wire_payload = None;
+            changed.clear();
+            deadline = None;
+            continue;
+        }
+        let (rust_files, wgsl_files, style_files) = partition_tracked(&files, watch_path);
+        match send_dev_batch(
+            addr,
+            &rust_files,
+            &wgsl_files,
+            &style_files,
+            &mut template_cache,
+            &mut last_wire_payload,
+        ) {
+            Ok(outcome) => {
+                if let SendOutcome::Sent {
+                    templates,
+                    wgsl,
+                    styles,
+                } = outcome
+                {
+                    hmr_log::update(&hmr_update_detail(
+                        &files[0], watch_path, templates, wgsl, styles,
+                    ));
+                }
+                changed.clear();
+                deadline = None;
+            }
+            Err(err) => {
+                hmr_log::error(&format!("send failed (will retry): {err}"));
+                deadline = Some(Instant::now() + Duration::from_secs(1));
+            }
         }
     }
 }
@@ -274,18 +240,16 @@ fn is_rust_source(path: &Path) -> bool {
         .unwrap_or(false)
 }
 
-fn under_crates_or_examples(path: &Path, root: &Path) -> bool {
-    let rel = path.strip_prefix(root).ok().unwrap_or(path);
-    let mut comps = rel.components();
-    let head = comps
-        .next()
-        .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
-        .unwrap_or_default();
-    head == "crates" || head == "examples"
+fn within_workspace(path: &Path, root: &Path) -> bool {
+    (path.starts_with(root) || (root == Path::new(".") && path.is_relative()))
+        && !path
+            .components()
+            .any(|part| part == std::path::Component::ParentDir)
+        && !is_ignored_dir_path(path)
 }
 
 fn is_project_source_file(path: &Path, root: &Path) -> bool {
-    is_rust_source(path) && under_crates_or_examples(path, root)
+    is_rust_source(path) && within_workspace(path, root)
 }
 
 fn is_tracked_wgsl(path: &Path, root: &Path) -> bool {
@@ -293,7 +257,7 @@ fn is_tracked_wgsl(path: &Path, root: &Path) -> bool {
         .and_then(|e| e.to_str())
         .map(|e| e.eq_ignore_ascii_case("wgsl"))
         .unwrap_or(false)
-        && under_crates_or_examples(path, root)
+        && within_workspace(path, root)
 }
 
 fn is_stylesheet_name(path: &Path) -> bool {
@@ -325,13 +289,20 @@ fn is_tracked_stylesheet(path: &Path, root: &Path) -> bool {
     if !is_stylesheet_name(path) || is_ignored_dir_path(path) {
         return false;
     }
-    under_crates_or_examples(path, root) || path.starts_with(root)
+    within_workspace(path, root)
 }
 
 fn is_tracked_project_file(path: &Path, root: &Path) -> bool {
+    if is_ignored_dir_path(path) {
+        return false;
+    }
     is_project_source_file(path, root)
         || is_tracked_wgsl(path, root)
         || is_tracked_stylesheet(path, root)
+        || (path.starts_with(root)
+            && path
+                .file_name()
+                .is_some_and(|name| name == "Cargo.toml" || name == "Cargo.lock"))
 }
 
 fn partition_tracked(paths: &[PathBuf], root: &Path) -> (Vec<PathBuf>, Vec<PathBuf>, Vec<PathBuf>) {
@@ -353,7 +324,10 @@ fn partition_tracked(paths: &[PathBuf], root: &Path) -> (Vec<PathBuf>, Vec<PathB
 fn is_ignored_dir_path(path: &Path) -> bool {
     path.components().any(|c| {
         let s = c.as_os_str().to_string_lossy().to_ascii_lowercase();
-        s == "target" || s == "reference" || s == ".git"
+        matches!(
+            s.as_str(),
+            "target" | "reference" | ".git" | ".tmp" | ".codegraph" | "node_modules"
+        )
     })
 }
 
@@ -376,11 +350,13 @@ fn build_template_patch_msg(
                                  // Note: CLI `id` already contains key:line:column from collect_templates_for_file
 
                 let is_changed = if let Some(p_list) = prev {
-                    if let Some(old) = p_list.iter().find(|p| p.hash == cur.hash) {
+                    if let Some(old) = p_list.get(idx) {
                         // Same content hash, but check if styles or position changed in a way that needs update
                         // Actually if hash is same, the logic usually doesn't need re-injection unless it's a line shift
                         // We always send if it's the first time or if exact ID (line) changed to help runtime track shifts.
-                        old.id != cur.id || old.style_attrs != cur.style_attrs
+                        old.hash != cur.hash
+                            || old.id != cur.id
+                            || old.style_attrs != cur.style_attrs
                     } else {
                         true // Different hash
                     }
@@ -428,6 +404,7 @@ fn send_dev_batch(
     template_cache: &mut HashMap<String, Vec<TemplateFragment>>,
     last_wire_payload: &mut Option<String>,
 ) -> std::io::Result<SendOutcome> {
+    let mut next_cache = template_cache.clone();
     let mut wire_chunks: Vec<String> = Vec::new();
     let mut wgsl_n = 0usize;
     let mut style_n = 0usize;
@@ -460,7 +437,7 @@ fn send_dev_batch(
         style_n = style_files.len();
     }
     let template_count = if !rust_files.is_empty() {
-        let msg = build_template_patch_msg(rust_files, template_cache);
+        let msg = build_template_patch_msg(rust_files, &mut next_cache);
         let n = msg.templates.len();
         if n > 0 {
             let payload =
@@ -472,6 +449,7 @@ fn send_dev_batch(
         0
     };
     if wire_chunks.is_empty() {
+        *template_cache = next_cache;
         return Ok(SendOutcome::Empty);
     }
     let mut wire_fingerprint = String::new();
@@ -482,14 +460,15 @@ fn send_dev_batch(
     if last_wire_payload.as_ref() == Some(&wire_fingerprint) {
         return Ok(SendOutcome::Duplicate);
     }
-    *last_wire_payload = Some(wire_fingerprint);
-
     let mut stream = TcpStream::connect(addr)?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
     for chunk in &wire_chunks {
         stream.write_all(chunk.as_bytes())?;
         stream.write_all(b"\n")?;
     }
     stream.flush()?;
+    *template_cache = next_cache;
+    *last_wire_payload = Some(wire_fingerprint);
     Ok(SendOutcome::Sent {
         templates: template_count,
         wgsl: wgsl_n,
@@ -583,88 +562,74 @@ struct UiTemplateBlock {
 }
 
 fn extract_ui_templates(source: &str) -> Vec<UiTemplateBlock> {
-    let mut out = Vec::new();
-    let bytes = source.as_bytes();
-    let mut line_no = 1usize;
-    let mut line_start = 0usize;
-    let mut i = 0usize;
-    while i + 2 < bytes.len() {
-        if bytes[i] == b'\n' {
-            line_no += 1;
-            line_start = i + 1;
-            i += 1;
-            continue;
-        }
-        if bytes[i] == b'u' && bytes[i + 1] == b'i' && bytes[i + 2] == b'!' {
-            let macro_line = line_no;
-            let macro_column = source
-                .get(line_start..i)
-                .map(|s| s.chars().count() + 1)
-                .unwrap_or(1);
-            let mut j = i + 3;
-            while j < bytes.len() && bytes[j].is_ascii_whitespace() {
-                j += 1;
-            }
-            if j >= bytes.len() {
-                break;
-            }
-            let open = bytes[j];
-            let close = match open {
-                b'{' => b'}',
-                b'(' => b')',
-                b'[' => b']',
-                _ => {
-                    i += 1;
+    fn visit(source: &str, stream: proc_macro2::TokenStream, out: &mut Vec<UiTemplateBlock>) {
+        use proc_macro2::TokenTree;
+        let tokens: Vec<_> = stream.into_iter().collect();
+        let mut index = 0;
+        while index < tokens.len() {
+            if let (
+                Some(TokenTree::Ident(name)),
+                Some(TokenTree::Punct(bang)),
+                Some(TokenTree::Group(body)),
+            ) = (
+                tokens.get(index),
+                tokens.get(index + 1),
+                tokens.get(index + 2),
+            ) {
+                if name == "ui" && bang.as_char() == '!' {
+                    let position = name.span().start();
+                    let offset = name.span().byte_range().start;
+                    let column = source[..offset]
+                        .rsplit('\n')
+                        .next()
+                        .unwrap_or("")
+                        .chars()
+                        .count()
+                        + 1;
+                    out.push(UiTemplateBlock {
+                        line: position.line,
+                        column,
+                        body: source[body.span_open().byte_range().end
+                            ..body.span_close().byte_range().start]
+                            .trim()
+                            .to_string(),
+                    });
+                    index += 3;
                     continue;
                 }
-            };
-            let mut depth = 0usize;
-            let start = j + 1;
-            let mut k = j;
-            while k < bytes.len() {
-                let ch = bytes[k];
-                if ch == open {
-                    depth += 1;
-                } else if ch == close {
-                    depth = depth.saturating_sub(1);
-                    if depth == 0 {
-                        if let Some(body) = source.get(start..k) {
-                            out.push(UiTemplateBlock {
-                                line: macro_line,
-                                column: macro_column,
-                                body: body.trim().to_string(),
-                            });
-                        }
-                        i = k + 1;
-                        break;
-                    }
-                }
-                if ch == b'\n' {
-                    line_no += 1;
-                    line_start = k + 1;
-                }
-                k += 1;
             }
-            if k >= bytes.len() {
-                break;
+            if let TokenTree::Group(group) = &tokens[index] {
+                visit(source, group.stream(), out);
             }
-            continue;
+            index += 1;
         }
-        i += 1;
+    }
+    let mut out = Vec::new();
+    if let Ok(stream) = source.parse() {
+        visit(source, stream, &mut out);
     }
     out
 }
 
 fn normalize_path_for_id(path: &Path) -> String {
-    let path_s = path.to_string_lossy().replace('\\', "/");
+    let path_s = normalize_path_text(path);
     let Ok(cwd) = std::env::current_dir() else {
         return path_s;
     };
-    let cwd_s = cwd.to_string_lossy().replace('\\', "/");
+    let cwd_s = normalize_path_text(&cwd);
     strip_prefix_ci(&path_s, cwd_s.trim_end_matches('/'))
         .map(|rest| rest.trim_start_matches('/').to_string())
         .filter(|rest| !rest.is_empty())
         .unwrap_or(path_s)
+}
+
+fn normalize_path_text(path: &Path) -> String {
+    let text = path.to_string_lossy().replace('\\', "/");
+    if let Some(unc) = text.strip_prefix("//?/UNC/") {
+        format!("//{unc}")
+    } else {
+        text.strip_prefix("//?/").unwrap_or(&text).to_string()
+    }
 }
 
 fn strip_prefix_ci<'a>(path: &'a str, prefix: &str) -> Option<&'a str> {
@@ -694,9 +659,7 @@ fn collect_templates_for_file(file: &Path, key: &str) -> Vec<TemplateFragment> {
                     style_attrs: rsx_text_order::extract_style_attributes_tree_order(&tpl.body),
                 })
                 .collect();
-            if !templates.is_empty() {
-                return templates;
-            }
+            return templates;
         }
         if attempt + 1 < READ_RETRIES {
             std::thread::sleep(Duration::from_millis(RETRY_SLEEP_MS));
@@ -737,7 +700,57 @@ fn apply_text_replacements(prev: &[TemplateFragment], next: &mut [TemplateFragme
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_sources_are_not_limited_to_crates_and_examples() {
+        let root = Path::new("workspace");
+        for name in ["src/main.rs", "ui/widgets.rs", "shaders/app.wgsl"] {
+            assert!(is_tracked_project_file(&root.join(name), root), "{name}");
+        }
+        assert!(!is_tracked_project_file(
+            &root.join("target/generated.rs"),
+            root
+        ));
+    }
     use std::path::Path;
+
+    #[test]
+    fn gallery_button_template_extracts_text_replacement() {
+        let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../examples/gallery/src/pages/basics.rs");
+        let key = normalize_path_for_id(&file);
+        let previous = collect_templates_for_file(&file, &key);
+        let source = fs::read_to_string(&file).unwrap();
+        let changed = source.replacen(
+            "\"Secondary\"\n                    </Button>",
+            "\"HMR VERIFIED\"\n                    </Button>",
+            1,
+        );
+        let templates = extract_ui_templates(&changed);
+        let block = templates
+            .iter()
+            .enumerate()
+            .find(|(_, block)| block.body.contains("HMR VERIFIED"))
+            .unwrap();
+        let mut current = TemplateFragment {
+            id: format!("{}:{}:{}", key, block.1.line, block.1.column),
+            hash: stable_hash(&block.1.body),
+            len: block.1.body.len(),
+            index: block.0,
+            text_literals: rsx_text_order::extract_text_literals_tree_order(&block.1.body),
+            text_replacements: vec![],
+            style_attrs: vec![],
+        };
+        apply_text_replacements_single(&previous, &mut current);
+        assert!(
+            current
+                .text_replacements
+                .iter()
+                .any(|change| change.from == "Secondary" && change.to == "HMR VERIFIED"),
+            "{:?}",
+            current.text_literals
+        );
+    }
 
     #[test]
     fn strip_prefix_ci_ignores_drive_letter_case() {
@@ -765,6 +778,103 @@ mod tests {
     }
 
     #[test]
+    fn extraction_ignores_comments_strings_and_literal_braces() {
+        let source = r##"// ui! { fake }
+fn demo() {
+    let ignored = "ui! { fake }";
+    let ignored_raw = r#"ui! { fake }"#;
+    ui! { <Box><Label> "}" </Label><Label> "ui! { literal }" </Label></Box> }
+    ui! { <Box class="p-2" /> }
+}"##;
+        let blocks = extract_ui_templates(source);
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].line, 5);
+        assert_eq!(
+            blocks[0].body,
+            r#"<Box><Label> "}" </Label><Label> "ui! { literal }" </Label></Box>"#
+        );
+        assert_eq!(blocks[1].line, 6);
+        assert_eq!(
+            rsx_text_order::extract_text_literals_tree_order(&blocks[0].body),
+            vec!["}", "ui! { literal }"]
+        );
+    }
+
+    #[test]
+    fn extraction_preserves_unicode_columns_and_unspaced_tags() {
+        let blocks =
+            extract_ui_templates("fn demo() { let 中文 = 1; ui! { <Label> \"hi\" </Label> } }");
+        assert_eq!(blocks.len(), 1);
+        assert_eq!(blocks[0].column, 25);
+        assert!(blocks[0].body.starts_with("<Label>"));
+    }
+
+    #[test]
+    fn failed_send_keeps_cache_and_fingerprint_for_retry() {
+        use std::io::Read;
+        use std::net::TcpListener;
+        let root = std::env::temp_dir().join(format!("jadix-hmr-retry-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let file = root.join("source.rs");
+        fs::write(&file, r#"fn demo() { ui! { <Label> "old" </Label> } }"#).unwrap();
+        let files = vec![file.clone()];
+        let mut cache = HashMap::new();
+        build_template_patch_msg(&files, &mut cache);
+        let key = normalize_path_for_id(&file);
+        let old_hash = cache[&key][0].hash.clone();
+        fs::write(&file, r#"fn demo() { ui! { <Label> "new" </Label> } }"#).unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        drop(listener);
+        let mut fingerprint = None;
+        assert!(send_dev_batch(
+            &address.to_string(),
+            &files,
+            &[],
+            &[],
+            &mut cache,
+            &mut fingerprint
+        )
+        .is_err());
+        assert_eq!(cache[&key][0].hash, old_hash);
+        assert!(fingerprint.is_none());
+        let listener = TcpListener::bind(address).unwrap();
+        assert!(matches!(
+            send_dev_batch(
+                &address.to_string(),
+                &files,
+                &[],
+                &[],
+                &mut cache,
+                &mut fingerprint
+            ),
+            Ok(SendOutcome::Sent { templates: 1, .. })
+        ));
+        let (mut stream, _) = listener.accept().unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        let mut payload = String::new();
+        stream.read_to_string(&mut payload).unwrap();
+        assert!(payload.contains("new"));
+        assert_ne!(cache[&key][0].hash, old_hash);
+        assert!(fingerprint.is_some());
+        assert!(matches!(
+            send_dev_batch(
+                &address.to_string(),
+                &files,
+                &[],
+                &[],
+                &mut cache,
+                &mut fingerprint
+            ),
+            Ok(SendOutcome::Empty)
+        ));
+        fs::remove_file(file).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
+    #[test]
     fn tracks_gallery_theme_and_styles_not_cargo_toml() {
         let root = Path::new(".");
         assert!(is_stylesheet_name(Path::new("examples/gallery/theme.toml")));
@@ -785,5 +895,21 @@ mod tests {
             .join("main.rs");
         let key = normalize_path_for_id(&p);
         assert!(!key.contains('\\'));
+    }
+
+    #[test]
+    fn normalize_path_text_strips_windows_verbatim_prefixes() {
+        assert_eq!(
+            normalize_path_text(Path::new(r"\\?\C:\workspace\src\main.rs")),
+            "C:/workspace/src/main.rs"
+        );
+        assert_eq!(
+            normalize_path_text(Path::new(r"\\?\UNC\server\share\src\main.rs")),
+            "//server/share/src/main.rs"
+        );
+        assert_eq!(
+            normalize_path_text(Path::new(r"\\server\share\src\main.rs")),
+            "//server/share/src/main.rs"
+        );
     }
 }

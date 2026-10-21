@@ -1,20 +1,19 @@
 //! Blur / Aero / Acrylic / Mica composition brushes (independent reimplementation).
 
-use windows::core::{Interface, HSTRING};
 use windows::Graphics::Effects::IGraphicsEffect;
 use windows::UI::Composition::{CompositionBrush, CompositionEffectBrush, Compositor};
+use windows::core::{HSTRING, Interface};
 use windows_collections::IIterable;
 
 use crate::app::glass_params::{
-    clamp_unit, effective_luminosity_color, effective_tint_color, GlassTint,
+    GlassTint, clamp_unit, effective_luminosity_color, effective_tint_color,
 };
 use crate::app::{WindowBackdrop, WindowOptions};
 
 use super::effects::{
-    as_source, prop_f32, prop_u32, prop_vec4, source_param, D2dEffect, BLEND_COLOR,
-    BLEND_LUMINOSITY, BORDER_MODE_SOFT, CLSID_BLEND, CLSID_COMPOSITE, CLSID_FLOOD,
-    CLSID_GAUSSIAN_BLUR, CLSID_OPACITY, CLSID_SATURATION, COMPOSITE_SOURCE_OVER,
-    GAUSSIAN_OPT_QUALITY,
+    BLEND_COLOR, BLEND_LUMINOSITY, BORDER_MODE_SOFT, CLSID_BLEND, CLSID_COMPOSITE, CLSID_FLOOD,
+    CLSID_GAUSSIAN_BLUR, CLSID_OPACITY, CLSID_SATURATION, COMPOSITE_SOURCE_OVER, D2dEffect,
+    GAUSSIAN_OPT_QUALITY, as_source, prop_f32, prop_u32, prop_vec4, source_param,
 };
 
 pub fn create_recipe_brush(
@@ -97,13 +96,14 @@ fn composite(
 }
 
 fn blend(
+    name: &str,
     mode: u32,
     background: windows::Graphics::Effects::IGraphicsEffectSource,
     foreground: windows::Graphics::Effects::IGraphicsEffectSource,
 ) -> windows::core::Result<IGraphicsEffect> {
     Ok(D2dEffect::new(
         CLSID_BLEND,
-        "Blend",
+        name,
         vec![prop_u32(mode)?],
         vec![background, foreground],
     )
@@ -213,8 +213,14 @@ fn acrylic_brush(
     let lum = flood("LuminosityColor", lum_c)?;
     let blurred = gaussian(blur_amount, source_param("Backdrop")?)?;
     // D2D Color/Luminosity names are historically swapped in this graph.
-    let lum_blend = blend(BLEND_COLOR, as_source(blurred)?, as_source(lum)?)?;
+    let lum_blend = blend(
+        "LuminosityBlend",
+        BLEND_COLOR,
+        as_source(blurred)?,
+        as_source(lum)?,
+    )?;
     let color_blend = blend(
+        "TintBlend",
         BLEND_LUMINOSITY,
         as_source(lum_blend)?,
         as_source(flood("TintColor", tint_eff)?)?,
@@ -246,11 +252,13 @@ fn mica_brush(
         wallpaper
     };
     let lum_blend = blend(
+        "LuminosityBlend",
         BLEND_COLOR,
         backdrop_src,
         as_source(flood("LuminosityColor", lum_c)?)?,
     )?;
     let color_blend = blend(
+        "TintBlend",
         BLEND_LUMINOSITY,
         as_source(lum_blend)?,
         as_source(flood("TintColor", tint_eff)?)?,

@@ -484,7 +484,14 @@ pub fn reactive_anchor<F>(anchor_id: impl Into<String>, f: F)
 where
     F: FnMut() -> Element + 'static,
 {
-    reactive_anchor_impl(anchor_id, f, true);
+    reactive_anchor_impl(anchor_id, f, true, false);
+}
+
+pub(crate) fn retained_reactive_anchor<F>(anchor_id: impl Into<String>, f: F)
+where
+    F: FnMut() -> Element + 'static,
+{
+    reactive_anchor_impl(anchor_id, f, true, true);
 }
 
 // List owners rebuild their cached fragment on style changes. The consuming effect must
@@ -493,16 +500,19 @@ pub(super) fn cached_reactive_anchor<F>(anchor_id: impl Into<String>, f: F)
 where
     F: FnMut() -> Element + 'static,
 {
-    reactive_anchor_impl(anchor_id, f, false);
+    reactive_anchor_impl(anchor_id, f, false, false);
 }
 
-fn reactive_anchor_impl<F>(anchor_id: impl Into<String>, mut f: F, track_style: bool)
+fn reactive_anchor_impl<F>(
+    anchor_id: impl Into<String>,
+    mut f: F,
+    track_style: bool,
+    allow_untracked: bool,
+)
 where
     F: FnMut() -> Element + 'static,
 {
-    // Only register from tracked effect execution (root/parent effect run). This avoids
-    // registering during the non-tracked pre-runtime initial tree build.
-    if !crate::core::reactivity::is_tracking() {
+    if !allow_untracked && !crate::core::reactivity::is_tracking() {
         return;
     }
 
@@ -590,7 +600,7 @@ where
         }
         let mut fragment = crate::style::apply_stylesheet_rules_tree(f());
         if let Some(orig) = fragment.template_id.as_ref() {
-            if orig != &effect_anchor_id {
+            if orig != &effect_anchor_id && fragment.get_attr(ATTR_SOURCE_TEMPLATE_ID).is_none() {
                 fragment.set_attr(ATTR_SOURCE_TEMPLATE_ID, orig.clone());
             }
         }

@@ -319,7 +319,8 @@ pub fn hover_card_surface(mut body: Element, width: Option<&str>) -> Element {
             .color(parse_text_color("popover-foreground"))
             .into();
     }
-    panel.child(body)
+    panel.set_attr("data-slot", "hover-card-content");
+    crate::style::apply_stylesheet_rules(panel.child(body))
 }
 
 /// Write `opts.width` or a class-resolved length into [`ATTR_FLOATING_W`] so sync does not treat it as content-auto.

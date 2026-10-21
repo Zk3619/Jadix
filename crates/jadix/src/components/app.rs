@@ -103,10 +103,10 @@ pub fn App(
         locale: locale.or(lang),
         i18n,
         timezone,
-        #[cfg(feature = "devtools")]
+        #[cfg(all(debug_assertions, feature = "devtools"))]
         devtools,
     };
-    #[cfg(not(feature = "devtools"))]
+    #[cfg(not(all(debug_assertions, feature = "devtools")))]
     {
         let _ = devtools;
     }

@@ -6,3 +6,6 @@ pub mod store;
 pub(crate) mod texture_stats;
 pub mod tree;
 pub(crate) mod tree_stats;
+
+#[allow(non_snake_case)]
+pub mod scrollbar;

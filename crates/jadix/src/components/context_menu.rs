@@ -634,8 +634,8 @@ pub fn context_menu_content(
             .border_color(tokens::border())
             .popup_shadow()
             .absolute();
-        panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_CONTENT);
+        panel = chrome.apply(panel);
         panel.accesskit_role("menu")
     })
 }
@@ -1253,8 +1253,8 @@ pub fn context_menu_sub_content(
             .border_color(tokens::border())
             .popup_shadow()
             .absolute();
-        panel = chrome.apply(panel);
         panel.set_attr(ATTR_SLOT, SLOT_SUB_CONTENT);
+        panel = chrome.apply(panel);
         panel.accesskit_role("menu")
     })
 }

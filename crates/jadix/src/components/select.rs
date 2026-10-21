@@ -319,7 +319,9 @@ pub fn SelectTrigger(size: Option<String>, children: Option<Element>) -> Element
         // 命中盒大于可视盒，悬停在相邻 Select 间来回切。
         trigger = trigger.min_w(0.0).overflow("hidden").flex_shrink(1.0);
     }
-    trigger.accesskit_role("combobox")
+    trigger.set_attr("data-slot", "select-trigger");
+    trigger.attrs.remove("data-jadix-sheet");
+    crate::style::apply_stylesheet_rules(trigger).accesskit_role("combobox")
 }
 
 /// ShadCN Aria `SelectValue`：当前选中文案或 placeholder（`cn-select-value-aria`）。
@@ -515,6 +517,9 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
             .rounded("0.5rem")
             .outline(ring, 1.0)
             .popup_shadow();
+
+        menu.set_attr("data-slot", SLOT_CONTENT);
+        menu = crate::style::apply_stylesheet_rules(menu);
 
         menu.set_attr(
             ATTR_FLOATING_MATCH_TRIGGER,

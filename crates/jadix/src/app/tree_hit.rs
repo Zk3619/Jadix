@@ -677,7 +677,7 @@ pub(crate) fn collision_hit_box(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] 
 
 /// Visual border box for hit-testing / inspector pick.
 /// Prefers the last collect paint rect when it is still current (translate/sticky/scale).
-#[cfg(feature = "devtools")]
+#[cfg(all(debug_assertions, feature = "devtools"))]
 #[inline]
 pub(super) fn visual_border_box(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
     if el.paint_visual_gen != 0
@@ -2364,7 +2364,7 @@ mod hover_occlusion_tests {
 
     #[test]
     fn claiming_underlay_blocks_scrollbar_focus_and_cursor() {
-        use crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
+        use crate::core::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
         use crate::core::tree::CursorKind;
 
         let mut track = Element::new()
@@ -3728,7 +3728,7 @@ mod drag_select_bounds_tests {
 }
 
 /// Inspector pick: child-index path for the topmost hit target (logical coords).
-#[cfg(feature = "devtools")]
+#[cfg(all(debug_assertions, feature = "devtools"))]
 #[allow(dead_code)]
 pub(crate) fn pick_element_path(
     el: &Element,
@@ -3739,7 +3739,7 @@ pub(crate) fn pick_element_path(
     pick_element_path_acc(el, x, y, scroll_acc, Vec::new())
 }
 
-#[cfg(feature = "devtools")]
+#[cfg(all(debug_assertions, feature = "devtools"))]
 #[allow(dead_code)]
 fn pick_element_path_acc(
     el: &Element,

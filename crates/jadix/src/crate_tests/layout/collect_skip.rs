@@ -4,7 +4,7 @@
 use crate::app::frame_stats::{last_skipped_siblings, reset_collect_skip_counters};
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
 use crate::components::input_adornment::input_adornment;
-use crate::components::internal::text_edit::sync_text_edit_paint_subtree;
+use crate::utils::text_edit::sync_text_edit_paint_subtree;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX};

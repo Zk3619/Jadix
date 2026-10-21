@@ -109,6 +109,13 @@ pub struct DesignTokensPatch {
 #[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
 #[serde(default)]
 pub struct ThemeOverrides {
+    pub preset: super::ThemePreset,
+    pub styles: super::ThemeStyles,
+    #[serde(rename = "light-styles", alias = "light_styles")]
+    pub light_styles: super::ThemeStyles,
+    #[serde(rename = "dark-styles", alias = "dark_styles")]
+    pub dark_styles: super::ThemeStyles,
+    pub components: std::collections::BTreeMap<String, String>,
     pub light: DesignTokensPatch,
     pub dark: DesignTokensPatch,
     pub focus_ring_style: Option<String>,
@@ -139,10 +146,13 @@ pub fn set_theme_transition_config(mut config: ThemeTransitionConfig) {
 /// Compose built-in defaults + stored user patch for `mode`.
 pub fn compose_theme(mode: ThemeMode) -> Theme {
     let overrides = USER_OVERRIDES.with(|o| o.borrow().clone());
-    let mut theme = match mode {
-        ThemeMode::Light => Theme::light(),
-        ThemeMode::Dark => Theme::dark(),
-    };
+    let mut theme = Theme::preset(overrides.preset, mode);
+    theme.styles.merge(&overrides.styles);
+    theme.styles.merge(match mode {
+        ThemeMode::Light => &overrides.light_styles,
+        ThemeMode::Dark => &overrides.dark_styles,
+    });
+    theme.components = overrides.components.clone();
     let patch = match mode {
         ThemeMode::Light => &overrides.light,
         ThemeMode::Dark => &overrides.dark,
@@ -155,8 +165,13 @@ pub fn compose_theme(mode: ThemeMode) -> Theme {
 
 /// Validate, store overrides, and refresh the active [`Theme`].
 pub fn install_theme_overrides(overrides: ThemeOverrides) -> Result<(), ThemeOverrideError> {
-    validate_patch(&Theme::light().colors, &overrides.light)?;
-    validate_patch(&Theme::dark().colors, &overrides.dark)?;
+    validate_patch(&Theme::preset(overrides.preset, ThemeMode::Light).colors, &overrides.light)?;
+    validate_patch(&Theme::preset(overrides.preset, ThemeMode::Dark).colors, &overrides.dark)?;
+    for styles in [&overrides.styles, &overrides.light_styles, &overrides.dark_styles] {
+        styles.validate().map_err(ThemeOverrideError::InvalidStyles)?;
+    }
+    super::theme_style::validate_component_styles(&overrides.components)
+        .map_err(ThemeOverrideError::InvalidStyles)?;
     if overrides.focus_ring_style.is_some()
         && parse_focus_ring_style(overrides.focus_ring_style.as_deref()).is_none()
     {
@@ -232,6 +247,10 @@ pub(crate) fn snapshot_theme_overrides() -> ThemeOverrides {
     USER_OVERRIDES.with(|o| o.borrow().clone())
 }
 
+pub fn theme_overrides() -> ThemeOverrides {
+    snapshot_theme_overrides()
+}
+
 /// Restore a previous [`snapshot_theme_overrides`] and recompose the active theme.
 pub(crate) fn restore_theme_overrides(overrides: ThemeOverrides) {
     USER_OVERRIDES.with(|o| *o.borrow_mut() = overrides);
@@ -244,7 +263,22 @@ pub(crate) fn refresh_active_theme() {
     let fallback_width = t.focus_ring_width;
     let mode = theme_mode();
     let mut next = compose_theme(mode);
-    apply_stored_focus_ring(&mut next, fallback_ring, fallback_width);
+    if next.preset == t.preset {
+        apply_stored_focus_ring(&mut next, fallback_ring, fallback_width);
+    } else {
+        let ring = next.focus_ring_style;
+        let width = next.focus_ring_width;
+        apply_stored_focus_ring(&mut next, ring, width);
+    }
+    set_theme(next);
+}
+
+pub(crate) fn change_theme_preset(preset: super::ThemePreset) {
+    USER_OVERRIDES.with(|overrides| overrides.borrow_mut().preset = preset);
+    let mut next = compose_theme(theme_mode());
+    let ring = next.focus_ring_style;
+    let width = next.focus_ring_width;
+    apply_stored_focus_ring(&mut next, ring, width);
     set_theme(next);
 }
 
@@ -347,10 +381,8 @@ fn resolve_patch_color(raw: &str, tokens: &DesignTokens) -> Option<[f32; 4]> {
     let prior = get_theme();
     super::theme::with_temporary_theme(
         Theme {
-            mode: prior.mode,
-            focus_ring_style: prior.focus_ring_style,
-            focus_ring_width: prior.focus_ring_width,
             colors: *tokens,
+            ..prior
         },
         || try_parse_color(raw),
     )
@@ -376,11 +408,13 @@ pub enum ThemeOverrideError {
     UnknownFocusRingStyle { value: String },
     InvalidTransitionDuration(f32),
     InvalidTransitionEasing(String),
+    InvalidStyles(String),
 }
 
 impl std::fmt::Display for ThemeOverrideError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::InvalidStyles(value) => write!(f, "invalid theme styles: {value}"),
             Self::Io(e) => write!(f, "read theme file: {e}"),
             Self::Toml(e) => write!(f, "parse theme TOML: {e}"),
             Self::UnsupportedExtension(ext) => {

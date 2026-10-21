@@ -103,17 +103,26 @@ impl super::App {
 
         let input_drag_active = self.input_drag_rest.is_some() && self.left_button_down;
 
-        let (x, y, path, cursor_pick, hover_cbs, window) = {
+        let (x, y, path, captured_move_path, cursor_pick, hover_cbs, window) = {
             let mut secs = self.secondaries.borrow_mut();
             let Some(sec) = secs.get_mut(&id) else {
                 return;
             };
             let path = super::pointer_events::hit_path(&sec.root_element, x, y);
+            let captured_move_path = super::pointer_events::captured_path(&sec.root_element);
             let cursor_pick = super::tree_hit::pick_cursor(&sec.root_element, x, y, [0.0, 0.0]);
             let mut hover_cbs = Vec::new();
             super::tree_hit::update_hovers(&sec.root_element, x, y, [0.0, 0.0], &mut hover_cbs);
             let window = sec.window.clone();
-            (x, y, path, cursor_pick, hover_cbs, window)
+            (
+                x,
+                y,
+                path,
+                captured_move_path,
+                cursor_pick,
+                hover_cbs,
+                window,
+            )
         };
 
         super::tree_hit::apply_cursor(
@@ -129,7 +138,7 @@ impl super::App {
         self.sync_mouse_enter_leave(x, y, &path, MouseButton::Left);
         let mut pev = self.build_mouse_event(x, y, MouseButton::Left, 0, "mousemove", None);
         super::pointer_events::dispatch_pointer(
-            &path,
+            captured_move_path.as_deref().unwrap_or(&path),
             &mut pev,
             super::pointer_events::PointerKind::Move,
         );
@@ -237,7 +246,10 @@ impl super::App {
                     let (path, input_drag, label_drag) = {
                         let mut secs = self.secondaries.borrow_mut();
                         let sec = secs.get_mut(&id).unwrap();
-                        let path = super::pointer_events::hit_path(&sec.root_element, x, y);
+                        let path = super::pointer_events::captured_path(&sec.root_element)
+                            .unwrap_or_else(|| {
+                                super::pointer_events::hit_path(&sec.root_element, x, y)
+                            });
                         let input_drag = super::tree_hit::find_input_text_at(
                             &sec.root_element,
                             None,
@@ -611,7 +623,10 @@ impl super::App {
                         let Some(sec) = secs.get(&id) else {
                             return;
                         };
-                        let path = super::pointer_events::hit_path(&sec.root_element, x, y);
+                        let path = super::pointer_events::captured_path(&sec.root_element)
+                            .unwrap_or_else(|| {
+                                super::pointer_events::hit_path(&sec.root_element, x, y)
+                            });
                         let click_path = match self.click_press_path.take() {
                             Some(down) => {
                                 let scrolled = std::mem::take(&mut self.click_press_scrolled);
@@ -763,6 +778,12 @@ impl super::App {
     pub(super) fn handle_secondary_keyboard(&mut self, id: WindowId, event: KeyEvent) {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
+        #[cfg(all(debug_assertions, feature = "devtools"))]
+        if super::devtools::is_detached_window(id)
+            && super::devtools::try_toggle_from_key(&event, self.modifiers)
+        {
+            return;
+        }
         if event.state != ElementState::Pressed {
             return;
         }

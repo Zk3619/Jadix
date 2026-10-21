@@ -79,6 +79,7 @@ fn style_needs_taffy_sync(before: &Style, after: &Style) -> bool {
         s.offset_path = crate::style::OffsetPath::None;
         s.will_change = crate::style::WillChangeHint::Auto;
         s.backdrop_blur = 0.0;
+        s.glass = None;
     }
     a != b
 }
@@ -264,7 +265,9 @@ impl VariantContext<'_> {
 /// [`Element::class_set`] and re-applied by [`resolve_class_variants`].
 pub fn apply_class_list(el: &mut Element, classes: &str) -> LayoutStatus {
     let caller_classes = classes;
-    let has_defaults = el.attrs.contains_key("jadix_default_class");
+    let has_defaults = el.attrs.contains_key("jadix_default_class")
+        || el.attrs.contains_key("jadix_theme_class")
+        || el.attrs.contains_key("jadix_stylesheet_class");
     if has_defaults {
         // A bound caller class can change after a resize. Snapshot authored values,
         // not the last viewport's temporary responsive overlay.
@@ -279,16 +282,23 @@ pub fn apply_class_list(el: &mut Element, classes: &str) -> LayoutStatus {
         }
     }
     let combined;
-    let classes = if let Some(defaults) = el.attrs.get("jadix_default_class") {
+    let classes = if has_defaults {
+        let defaults = el
+            .attrs
+            .get("jadix_default_class")
+            .map(String::as_str)
+            .unwrap_or("");
+        let theme = el
+            .attrs
+            .get("jadix_theme_class")
+            .map(String::as_str)
+            .unwrap_or("");
         let sheet = el
             .attrs
             .get("jadix_stylesheet_class")
             .map(String::as_str)
             .unwrap_or("");
-        combined = format!("{defaults} {sheet} {classes}");
-        combined.as_str()
-    } else if let Some(sheet) = el.attrs.get("jadix_stylesheet_class") {
-        combined = format!("{sheet} {classes}");
+        combined = format!("{defaults} {theme} {sheet} {classes}");
         combined.as_str()
     } else {
         classes
@@ -426,6 +436,7 @@ fn apply_parsed_class_list(
     el.class_set = Some(class_set);
     el.attrs
         .insert("jadix_utility_class".to_string(), raw_classes.to_string());
+    sync_chip_typography(el);
     impact
 }
 
@@ -465,6 +476,7 @@ pub fn extend_class_list(el: &mut Element, classes: &str) -> LayoutStatus {
         _ => extra.to_string(),
     };
     el.attrs.insert("jadix_utility_class".to_string(), merged);
+    sync_chip_typography(el);
     impact
 }
 
@@ -559,7 +571,6 @@ pub(crate) fn patch_class_set_base_layout(element: &mut Element) {
 /// variant fingerprint.
 
 pub fn patch_class_set_base_display(el: &mut Element) {
-
     let display = el.style.display;
     let Some(cs) = el.class_set.as_mut() else {
         return;
@@ -662,6 +673,7 @@ pub fn patch_class_set_base_motion(el: &mut Element) {
 pub const ATTR_SYNC_LABEL_FG: &str = "jadix_sync_label_fg";
 
 fn sync_chip_label_fg(el: &mut Element) {
+    sync_chip_typography(el);
     let parent = el.text_style.clone();
     let sync_fg = el.attrs.get(ATTR_SYNC_LABEL_FG).map(String::as_str) == Some("1");
     if !sync_fg && parent.underline.is_none() && parent.underline_offset.is_none() {
@@ -670,6 +682,45 @@ fn sync_chip_label_fg(el: &mut Element) {
     let fg = if sync_fg { parent.color } else { None };
     for child in &mut el.children {
         paint_label_text_tree(child, fg, &parent);
+    }
+}
+
+fn sync_chip_typography(el: &mut Element) {
+    if !matches!(
+        el.attrs.get("data-slot").map(String::as_str),
+        Some("button" | "badge")
+    ) {
+        return;
+    }
+    let parent = el.text_style.clone();
+    for child in &mut el.children {
+        paint_label_typography(child, &parent);
+    }
+}
+
+fn paint_label_typography(el: &mut Element, parent: &TextStyle) {
+    if el.attrs.contains_key("data-slot") || el.text_style.font_family.as_deref() == Some("lucide")
+    {
+        return;
+    }
+    if el.text.is_some() {
+        if let Some(size) = parent.size {
+            el.text_style.size = Some(size);
+        }
+        if let Some(weight) = parent.weight {
+            el.text_style.weight = Some(weight);
+        }
+        if parent.font_family.is_some() {
+            el.text_style.font_family = parent.font_family.clone();
+        }
+        if parent.line_height_px.is_some() || parent.line_height_scale.is_some() {
+            el.text_style.line_height_px = parent.line_height_px;
+            el.text_style.line_height_scale = parent.line_height_scale;
+            el.text_style.line_height_specified = parent.line_height_specified;
+        }
+    }
+    for child in &mut el.children {
+        paint_label_typography(child, parent);
     }
 }
 
@@ -1284,12 +1335,14 @@ pub fn tick_active_css_transitions_subtree(
             local = resolve_stale_class_hover_leave(el, focused_id, dark, viewport_w);
             // Color `:hover` is geometric. Button `transition-colors` would otherwise
             // write the last used hover fill back after snapshot restore.
-            let inner = &mut *el.inner;
-            super::animation::settle_hover_paint_tweens(
-                &inner.style,
-                &mut inner.text_style,
-                &mut inner.transition_snapshot,
-            );
+            if super::theme_preset() != super::ThemePreset::LiquidGlass {
+                let inner = &mut *el.inner;
+                super::animation::settle_hover_paint_tweens(
+                    &inner.style,
+                    &mut inner.text_style,
+                    &mut inner.transition_snapshot,
+                );
+            }
         } else if force_hover_enter {
             // Seed idle transform tween slots from the used (rest) value *before*
             // overlaying `hover:scale`. Otherwise `tick` would `or_insert` with
@@ -1306,12 +1359,14 @@ pub fn tick_active_css_transitions_subtree(
                 );
             }
             local = resolve_scroll_hover_enter(el, focused_id, dark, viewport_w);
-            let inner = &mut *el.inner;
-            super::animation::settle_hover_paint_tweens(
-                &inner.style,
-                &mut inner.text_style,
-                &mut inner.transition_snapshot,
-            );
+            if super::theme_preset() != super::ThemePreset::LiquidGlass {
+                let inner = &mut *el.inner;
+                super::animation::settle_hover_paint_tweens(
+                    &inner.style,
+                    &mut inner.text_style,
+                    &mut inner.transition_snapshot,
+                );
+            }
         }
 
         if has_spin
@@ -1902,6 +1957,7 @@ fn sync_class_variants_subtree_inner(
 ) {
     struct Frame {
         ptr: *mut Element,
+        responsive_width: f32,
         scroll_acc: [f32; 2],
         clip: Option<[f32; 4]>,
         clip_round: OverflowRoundClip,
@@ -1925,6 +1981,7 @@ fn sync_class_variants_subtree_inner(
     }
     let mut stack = vec![Frame {
         ptr: el as *mut Element,
+        responsive_width: viewport_w,
         scroll_acc,
         clip,
         clip_round: None,
@@ -1955,6 +2012,9 @@ fn sync_class_variants_subtree_inner(
         if !frame.started {
             // SAFETY: exclusive subtree walk of the `el` passed to this function.
             let el = unsafe { &mut *ptr };
+            if let Some(width) = el.attrs.get("data-jadix-viewport-width").and_then(|value| value.parse::<f32>().ok()).filter(|width| width.is_finite() && *width > 0.0) {
+                frame.responsive_width = width;
+            }
             // Clone names so later `frame.*` writes do not fight borrows into the Frame.
             let ancestor_owned = frame.ancestor_groups.clone();
             let peer_owned = frame.peer.clone();
@@ -2058,7 +2118,7 @@ fn sync_class_variants_subtree_inner(
                     focused,
                     disabled,
                     dark,
-                    viewport_w,
+                    frame.responsive_width,
                     &ancestor_group_hovered,
                     &peer_hovered,
                     &el.attrs,
@@ -2087,20 +2147,45 @@ fn sync_class_variants_subtree_inner(
                         disabled,
                         active: false,
                         dark,
-                        viewport_w,
+                        viewport_w: frame.responsive_width,
                         group_hovered: &ancestor_group_hovered,
                         peer_hovered: &peer_hovered,
                         attrs: Some(&attrs_snapshot),
                     };
                     let before = el.style.clone();
                     let before_text = el.text_style.clone();
-                    // Empty snapshot or_inserts `from=current`. Capture rest *before*
-                    // `:hover` / `:focus` overlay so `transition-transform` can tween.
-                    if !el.transition_snapshot.has_any_tweens() && !el.style.transition.is_empty() {
-                        super::animation::snap_element_transitions_to_current(
-                            &el.inner.style,
-                            &mut el.inner.transition_snapshot,
-                        );
+                    if !el.transition_snapshot.has_any_tweens() {
+                        let rest = VariantContext {
+                            hovered: false,
+                            focused: false,
+                            active: false,
+                            group_hovered: &[],
+                            peer_hovered: &[],
+                            ..ctx.clone()
+                        };
+                        let initial: Vec<String> = el
+                            .class_set
+                            .as_ref()
+                            .map(|classes| {
+                                classes.variants.iter()
+                                    .filter(|(selectors, _)| {
+                                        selectors.iter().all(|selector| rest.matches_selector(selector))
+                                    })
+                                    .map(|(_, utility)| utility.clone())
+                                    .collect()
+                            })
+                            .unwrap_or_default();
+                        let classes = el.class_set.take();
+                        for utility in initial {
+                            apply_known_utility_ex(el, &utility, false);
+                        }
+                        el.class_set = classes;
+                        if !el.style.transition.is_empty() {
+                            super::animation::snap_element_transitions_to_current(
+                                &el.inner.style,
+                                &mut el.inner.transition_snapshot,
+                            );
+                        }
                     }
                     let local = resolve_class_variants(el, &ctx);
                     let spun = tick_animate_spin(el);
@@ -2278,6 +2363,12 @@ fn sync_class_variants_subtree_inner(
         let el = unsafe { &mut *ptr };
         let n = el.inner.children.len();
         if frame.next_child >= n {
+            let seams_changed = crate::components::button_group::sync_join_seams(el, hit_nodes);
+            let flow_changed = super::liquid_flow::sync(el, hit_nodes);
+            if seams_changed || flow_changed {
+                *impact = impact.merge(LayoutStatus::StyleChanged);
+                queue_paint_hash_spine(&mut paint_hash_spines, layout_tree, el, false);
+            }
             continue;
         }
         if frame.next_child > 0 {
@@ -2309,9 +2400,11 @@ fn sync_class_variants_subtree_inner(
         let child_named = frame.child_named.clone();
         let child_scroll_progress = frame.child_scroll_progress;
         let child_ptr = std::ptr::addr_of_mut!(el.inner.children[i]);
+        let responsive_width = frame.responsive_width;
         stack.push(frame);
         stack.push(Frame {
             ptr: child_ptr,
+            responsive_width,
             scroll_acc: child_scroll_acc,
             clip: child_clip,
             clip_round: child_clip_round,
@@ -2844,6 +2937,30 @@ fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -
                 LayoutStatus::Clean
             }
         }
+        KnownUtility::BorderWidth(width) => {
+            el.style.set_uniform_border_width(width);
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::BoxShadow(value) => {
+            let shadows = crate::style::parse_box_shadows(value.replace('_', " "));
+            el.style.set_shadows_from_parsed(&shadows);
+            LayoutStatus::StyleChanged
+        }
+        KnownUtility::LeadingPx(height) => {
+            if mark_overrides {
+                mark_variant_style_override(el, VariantStyleField::Leading);
+            }
+            if el.text_style.line_height_px == Some(height)
+                && el.text_style.line_height_scale.is_none()
+            {
+                LayoutStatus::Clean
+            } else {
+                el.text_style.line_height_px = Some(height);
+                el.text_style.line_height_scale = None;
+                el.text_style.line_height_specified = true;
+                LayoutStatus::LayoutChanged
+            }
+        }
         KnownUtility::Leading(scale) => {
             if mark_overrides {
                 mark_variant_style_override(el, VariantStyleField::Leading);
@@ -3349,6 +3466,19 @@ fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -
                 el.style.backdrop_blur = px;
                 LayoutStatus::StyleChanged
             }
+        }
+        KnownUtility::Glass(params) => {
+            el.style.glass = (params[0] >= 1.0).then_some(crate::style::GlassMaterial {
+                refraction_index: params[0],
+                thickness: params[1],
+                dispersion: params[2],
+                highlight: params[3],
+            });
+            if el.style.glass.is_some() {
+                el.style.backdrop_blur = el.style.backdrop_blur.max(0.6);
+                el.set_attr("data-stacking-context", "1");
+            }
+            LayoutStatus::StyleChanged
         }
         KnownUtility::FilterBrightness(v) => {
             set_single_filter(el, crate::style::FilterFunction::Brightness(Some(v)))
@@ -5220,6 +5350,30 @@ mod p1_utility_tests {
             got, fg,
             "hover:text-destructive must leave foreground, got {got:?}"
         );
+        crate::style::set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn responsive_padding_mount_seeds_resolved_breakpoint_before_animation() {
+        crate::style::set_css_transition_virtual_timeline(true);
+        crate::style::set_css_transition_timeline_ms(0.0);
+        let mut tree = crate::layout::LayoutTree::new();
+        for _ in 0..3 {
+            let mut element = with_class_list(
+                Element::new().w(400.0).h(200.0).transition("padding 200ms linear"),
+                "p-3 sm:p-4 lg:p-6",
+            );
+            let mut impact = LayoutStatus::Clean;
+            sync_class_variants_subtree(&mut element, [-1.0; 2], "", false, 1100.0, 600.0, &mut tree, &mut impact);
+            assert_eq!(crate::layout::lp_kind(element.style.padding.top), crate::layout::DimKind::Length(24.0),
+                "mounting a page must not animate from the unselected base breakpoint");
+            assert!(!element.transition_snapshot.has_active_tweens());
+            sync_class_variants_subtree(&mut element, [-1.0; 2], "", false, 900.0, 600.0, &mut tree, &mut impact);
+            assert_eq!(crate::layout::lp_kind(element.style.padding.top), crate::layout::DimKind::Length(24.0));
+            crate::style::advance_css_transition_timeline_ms(100.0);
+            sync_class_variants_subtree(&mut element, [-1.0; 2], "", false, 900.0, 600.0, &mut tree, &mut impact);
+            assert_eq!(crate::layout::lp_kind(element.style.padding.top), crate::layout::DimKind::Length(20.0));
+        }
         crate::style::set_css_transition_virtual_timeline(false);
     }
 

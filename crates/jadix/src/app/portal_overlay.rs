@@ -441,6 +441,9 @@ fn portal_sync_inner(
             // Capture scope once: unmount Drop must not re-read TLS after a window switch.
             let scope = window_scope::active();
             let (z, to_close) = with_stack_mut_in(scope, |stack| {
+                let closing_modal = !active
+                    && matches!(kind, OverlayKind::Modal)
+                    && stack.iter().any(|layer| layer.id == id);
                 let mut to_close = prune_closed(stack);
                 if active {
                     if let Some(pos) = stack.iter().position(|l| l.id == id) {
@@ -508,7 +511,7 @@ fn portal_sync_inner(
                             drain_layer_and_nested_children(stack, pos, &mut to_close);
                         }
                     }
-                    if matches!(kind, OverlayKind::Modal) {
+                    if closing_modal {
                         stack.retain(|l| {
                             if is_exclusive_surface(l.kind) {
                                 to_close.push(l.open);
@@ -881,6 +884,26 @@ mod tests {
         let _ = stacked_menu_or_modal_open();
         let _ = try_close_top();
         assert_eq!(depth(), 0, "disposed layers must prune off the stack");
+        clear();
+    }
+
+    #[test]
+    fn inactive_modal_does_not_dismiss_live_exclusive_surfaces() {
+        for kind in [
+            OverlayKind::Menu,
+            OverlayKind::Popover,
+            OverlayKind::Tooltip,
+        ] {
+            clear();
+            let open = Signal::new(true);
+            let modal = Signal::new(false);
+            assert!(portal_sync("live", open, kind, OverlayMode::Stacked).is_some());
+            assert!(
+                portal_sync("sidebar", modal, OverlayKind::Modal, OverlayMode::Stacked).is_none()
+            );
+            assert!(open.peek(), "inactive modal must not dismiss {kind:?}");
+            assert_eq!(depth(), 1);
+        }
         clear();
     }
 
