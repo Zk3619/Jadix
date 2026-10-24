@@ -47,6 +47,7 @@ pub struct VirtualListBuilder {
     item_count: usize,
     item_count_fn: Option<Rc<dyn Fn() -> usize>>,
     data_key_fn: Option<Rc<dyn Fn() -> String>>,
+    content_width_fn: Option<Rc<dyn Fn() -> f32>>,
     item_height: f32,
     overscan: usize,
     height: f32,
@@ -61,6 +62,7 @@ pub fn virtual_list(id: impl Into<String>) -> VirtualListBuilder {
         item_count: 0,
         item_count_fn: None,
         data_key_fn: None,
+        content_width_fn: None,
         item_height: 32.0,
         overscan: 2,
         height: 240.0,
@@ -92,6 +94,12 @@ impl VirtualListBuilder {
 
     pub fn item_height(mut self, h: f32) -> Self {
         self.item_height = h.max(1.0);
+        self
+    }
+
+    /// Enables horizontal scrolling with a minimum body width polled each frame.
+    pub fn content_width_fn(mut self, width: impl Fn() -> f32 + 'static) -> Self {
+        self.content_width_fn = Some(Rc::new(width));
         self
     }
 
@@ -306,6 +314,7 @@ impl From<VirtualListBuilder> for Element {
             item_count,
             item_count_fn,
             data_key_fn,
+            content_width_fn,
             item_height,
             overscan,
             height,
@@ -338,6 +347,10 @@ impl From<VirtualListBuilder> for Element {
         body.attrs.insert(REUSED_ATTR.to_string(), "0".into());
         body.attrs.insert(CREATED_ATTR.to_string(), "0".into());
         body.attrs.insert(DROPPED_ATTR.to_string(), "0".into());
+        let horizontal_scroll = content_width_fn.is_some();
+        if let Some(width) = &content_width_fn {
+            body = body.min_w(width().max(0.0));
+        }
         body = body.reactive_sync(move |root, _layout| {
             let sy_sig = use_signal(&scroll_offset_y_signal_key(&scroll_id_sync), || 0.0_f32);
             let vh_sig = use_signal(&scroll_viewport_h_signal_key(&scroll_id_sync), || height);
@@ -350,7 +363,7 @@ impl From<VirtualListBuilder> for Element {
                 .unwrap_or(item_count);
             let data_key = data_key_fn_sync.as_ref().map(|f| f()).unwrap_or_default();
             let (start, end) = visible_item_range(sy, vh, item_height, count, overscan);
-            apply_body_window(
+            let mut status = apply_body_window(
                 root,
                 &list_id_sync,
                 count,
@@ -359,13 +372,22 @@ impl From<VirtualListBuilder> for Element {
                 start,
                 end,
                 render_for_sync.as_ref(),
-            )
+            );
+            if let Some(width) = &content_width_fn {
+                let width = width().max(0.0);
+                let previous = root.style.min_size.width;
+                *root = std::mem::take(root).min_w(width);
+                if root.style.min_size.width != previous && status == LayoutStatus::Clean {
+                    status = LayoutStatus::LayoutChanged;
+                }
+            }
+            status
         });
 
         chrome.apply(
             scroll_area(&scroll_id)
                 .overflow_y("auto")
-                .overflow_x("hidden")
+                .overflow_x(if horizontal_scroll { "auto" } else { "hidden" })
                 .scroll_behavior("jump")
                 .scrollbar_visibility(scrollbar_visibility)
                 .w("100%")

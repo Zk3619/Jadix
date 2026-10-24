@@ -637,6 +637,7 @@ fn node_has_collect_side_channel(el: &Element) -> bool {
     el.focus_id.as_deref().is_some_and(|id| {
         id.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX)
     }) || el.template_id.as_deref() == Some(PORTAL_LAYER_ID)
+        || el.template_id.as_deref() == Some("__jadix_devtools_highlight")
         || el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
         || el.attrs.get("jadix_portal").map(String::as_str) == Some("1")
         || el.attrs.contains_key(crate::utils::drag::ATTR_DRAG_OVERLAY)
@@ -725,6 +726,9 @@ fn node_clips_descendants(el: &Element) -> bool {
 }
 
 fn node_collect_is_live(el: &Element) -> bool {
+    if crate::primitives::canvas::canvas_paint_is_dirty(&el.attrs) {
+        return true;
+    }
     // Caret on/off is a global clock, not a hash field. Skip would freeze the
     // last hairline (solid or hidden) until the next typed character.
     if el.text_style.input_caret.is_some() {
@@ -883,6 +887,22 @@ pub(crate) fn invalidate_collect_paint_hash_for_template(
 /// frames. `hash_paint_self` on every wrapper was the collect floor (~9ms). Live
 /// and scroll-viewport paths still rehash so spin / `scroll_offset` stay fresh.
 pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
+    fn invalidate_dirty_canvases(el: &mut Element) -> bool {
+        if el.collect_paint_hash != 0 && !el.collect_skip_has_canvas {
+            return false;
+        }
+        let mut dirty = crate::primitives::canvas::canvas_paint_is_dirty(&el.attrs);
+        for child in &mut el.children {
+            dirty |= invalidate_dirty_canvases(child);
+        }
+        if dirty {
+            el.collect_paint_hash = 0;
+        }
+        dirty
+    }
+    if crate::primitives::canvas::has_dirty_canvases() {
+        invalidate_dirty_canvases(root);
+    }
     fn rec(el: &mut Element, reuse_idle: bool, ancestor_live: bool) -> u64 {
         let node_live = node_collect_is_live(el);
         let self_live = ancestor_live || node_live;
@@ -917,6 +937,7 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
             || node_is_scrollbar_chrome(el)
             || el.attrs.get(ATTR_ESCAPE_OVERFLOW_CLIP).map(String::as_str) == Some("1");
         let mut has_scroll = node_seeds_scroll_skip(el);
+        let mut has_canvas = el.attrs.contains_key(crate::primitives::canvas::ATTR_CANVAS_PAINT);
         let mut css_active = node_paint_needs_frame(el)
             || !el.style.transition.is_empty()
             || el
@@ -945,6 +966,7 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
             side |= child.collect_skip_side_channel;
             scroll_pin |= child.collect_skip_scroll_pin;
             has_scroll |= child.collect_skip_has_scroll;
+            has_canvas |= child.collect_skip_has_canvas;
             css_active |= child.css_scroll_active;
             hover_armed |= child.css_hover_armed;
             paint_sync |= child.subtree_paint_sync;
@@ -960,6 +982,7 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
         el.collect_skip_side_channel = side;
         el.collect_skip_scroll_pin = scroll_pin;
         el.collect_skip_has_scroll = has_scroll;
+        el.collect_skip_has_canvas = has_canvas;
         el.css_scroll_active = css_active;
         el.css_hover_armed = hover_armed;
         el.subtree_paint_sync = paint_sync;

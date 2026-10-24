@@ -1,20 +1,8 @@
-//! # Scrollbar
+//! Scrollbar runtime contracts shared by layout, paint and input.
 //!
-//! 可挂到某滚动视口（`target` = viewport rest id，如 滚动视口的 `id`）的独立滚动条。
-//! **多数场景不必单独用**——`ScrollArea` 已内建横/纵条；本组件用于自定义摆放或拆分布局。
-//!
-//! ## Usage
-//! ```ignore
-//! <Scrollbar target="sa-main" orientation="vertical" visibility="auto" thickness="10" />
-//! // Element::from(scrollbar("sb").target("sa-main").orientation(Vertical).variant("capsule"))
-//! ```
-//!
-//! ## Notes
-//! - `target` 必须与对应视口的 `id` 一致。
-//! - `visibility`: auto | always | never（never 仍可能可滚内容）。
-//! - `children` 当前忽略。
-//! - 主题色：`scrollbar-track` / `scrollbar-thumb` / `scrollbar-track-border` / `scrollbar-thumb-border`。
-//! - `auto` 显隐：仅拇指（及有色的边框）参与淡入；透明轨道不参与。
+//! Signal keys, focus identifiers, geometry and live visibility live here.
+//! The themed widget, variants, builder and RSX tag belong to the component
+//! library, not these runtime contracts.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -24,88 +12,100 @@ use crate::core::scroll_viewport::{
     scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
     scroll_offset_y_signal_key, scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
 };
-use crate::core::tree::{parse_color, Element, IntoDimension, IntoF32};
-use jadix_macros::component;
-use taffy::prelude::*;
+use crate::core::tree::Element;
 
-// Overlay MVP: `overlay(true)` / `jadix_scrollbar_overlay=1` sets absolute + zero flex grow/shrink
-// so the track paints over the viewport edge instead of consuming cross-axis flex space.
-// Deeper ScrollArea-builtin overlay + inset sync remains future work.
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ScrollbarOrientation {
-    Horizontal,
-    Vertical,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ScrollbarVariant {
-    #[default]
-    Capsule,
-    Rect,
-}
-
-impl ScrollbarVariant {
-    pub fn parse(raw: &str) -> Self {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "rect" | "rectangle" => Self::Rect,
-            _ => Self::Capsule,
-        }
+/// Bind caller-owned track and thumb elements to the scrolling runtime.
+///
+/// Initializes logical geometry, focus identifiers and visibility signals only;
+/// colors, borders, radii, track placement and composition remain with the caller.
+/// `axis` is `x` for horizontal scrolling and `y` otherwise. An unmeasured
+/// viewport keeps real parts so the runtime can update them after first layout.
+pub fn configure_scrollbar_parts(
+    track: &mut Element,
+    thumb: &mut Element,
+    target: Option<&str>,
+    axis: &str,
+    visibility: &str,
+    thickness: f32,
+) {
+    let horizontal = axis == "x";
+    let axis = if horizontal { "x" } else { "y" };
+    let visibility = if visibility.eq_ignore_ascii_case("always") {
+        "always"
+    } else if visibility.eq_ignore_ascii_case("never") {
+        "never"
+    } else {
+        "auto"
+    };
+    let (viewport, content, offset) = target.map_or((0.0, 0.0, 0.0), |target| {
+        let (viewport_key, content_key, offset_key) = if horizontal {
+            (
+                scroll_viewport_w_signal_key(target),
+                scroll_content_w_signal_key(target),
+                scroll_offset_x_signal_key(target),
+            )
+        } else {
+            (
+                scroll_viewport_h_signal_key(target),
+                scroll_content_h_signal_key(target),
+                scroll_offset_y_signal_key(target),
+            )
+        };
+        use_signal(&scrollbar_visibility_signal_key(target, axis), || {
+            visibility.to_string()
+        })
+        .set(visibility.to_string());
+        track.focus_id = Some(format!("{SCROLLBAR_TRACK_FOCUS_PREFIX}{target}:{axis}"));
+        thumb.focus_id = Some(format!("{SCROLLBAR_THUMB_FOCUS_PREFIX}{target}:{axis}"));
+        (
+            use_signal(&viewport_key, || 0.0_f32).peek(),
+            use_signal(&content_key, || 0.0_f32).peek(),
+            use_signal(&offset_key, || 0.0_f32).peek(),
+        )
+    });
+    let cross = thickness.max(2.0);
+    let thumb_cross = (cross - 2.0).max(1.0);
+    let main = if viewport > 1.0 { viewport } else { 120.0 };
+    let minimum = scrollbar_min_thumb_along_track(main);
+    let total = content.max(viewport);
+    let ratio = if total > 0.0 { viewport / total } else { 0.0 };
+    let thumb_main = (main * ratio.clamp(0.0, 1.0)).clamp(minimum, main.max(minimum));
+    let max_offset = (content - viewport).max(0.0);
+    let progress = if max_offset > 0.0 {
+        offset / max_offset
+    } else {
+        0.0
+    };
+    let position = (main - thumb_main).max(0.0) * progress.clamp(0.0, 1.0);
+    let (track_w, track_h, thumb_w, thumb_h, left, top) = if horizontal {
+        (main, cross, thumb_main, thumb_cross, position, 1.0)
+    } else {
+        (cross, main, thumb_cross, thumb_main, 1.0, position)
+    };
+    let geometry = Element::new()
+        .w(track_w)
+        .h(track_h)
+        .min_w(track_w)
+        .min_h(track_h);
+    track.style.size = geometry.style.size;
+    track.style.min_size = geometry.style.min_size;
+    if horizontal {
+        track.style.max_size.height = taffy::style::Dimension::length(cross);
+    } else {
+        track.style.max_size.width = taffy::style::Dimension::length(cross);
     }
-}
-
-impl From<&str> for ScrollbarVariant {
-    fn from(s: &str) -> Self {
-        Self::parse(s)
-    }
-}
-
-impl From<String> for ScrollbarVariant {
-    fn from(s: String) -> Self {
-        Self::parse(&s)
-    }
-}
-
-impl From<&String> for ScrollbarVariant {
-    fn from(s: &String) -> Self {
-        Self::parse(s)
-    }
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum ScrollbarVisibility {
-    #[default]
-    Auto,
-    Always,
-    Never,
-}
-
-impl ScrollbarVisibility {
-    pub fn parse(raw: &str) -> Self {
-        match raw.trim().to_ascii_lowercase().as_str() {
-            "always" => Self::Always,
-            "never" => Self::Never,
-            _ => Self::Auto,
-        }
-    }
-}
-
-impl From<&str> for ScrollbarVisibility {
-    fn from(s: &str) -> Self {
-        Self::parse(s)
-    }
-}
-
-impl From<String> for ScrollbarVisibility {
-    fn from(s: String) -> Self {
-        Self::parse(&s)
-    }
-}
-
-impl From<&String> for ScrollbarVisibility {
-    fn from(s: &String) -> Self {
-        Self::parse(s)
-    }
+    let geometry = Element::new()
+        .absolute()
+        .w(thumb_w)
+        .h(thumb_h)
+        .min_w(thumb_cross)
+        .min_h(thumb_cross)
+        .ml(left)
+        .mt(top);
+    thumb.style.position = geometry.style.position;
+    thumb.style.size = geometry.style.size;
+    thumb.style.min_size = geometry.style.min_size;
+    thumb.style.margin = geometry.style.margin;
 }
 
 pub fn scrollbar_visibility_signal_key(target_id: &str, axis: &str) -> String {
@@ -119,31 +119,7 @@ pub(crate) const ATTR_SCROLLBAR_TRACK_FADES: &str = "jadix_scrollbar_track_fades
 /// Height reveal clips content temporarily; it must not expose scrollbar chrome or hit slabs.
 pub(crate) const ATTR_SCROLLBAR_REVEAL_HIDDEN: &str = "jadix_scrollbar_reveal_hidden";
 
-const CHROME_ALPHA_EPS: f32 = 0.01;
-
-#[inline]
-pub(crate) fn scrollbar_chrome_has_alpha(color: [f32; 4]) -> bool {
-    color[3] > CHROME_ALPHA_EPS
-}
-
-#[inline]
-pub(crate) fn scrollbar_track_fades(track_bg: [f32; 4], track_border: [f32; 4]) -> bool {
-    scrollbar_chrome_has_alpha(track_bg) || scrollbar_chrome_has_alpha(track_border)
-}
-
-#[inline]
-pub(crate) fn scrollbar_border_width(color: [f32; 4], explicit: Option<f32>) -> f32 {
-    match explicit {
-        Some(w) => w.max(0.0),
-        None => {
-            if scrollbar_chrome_has_alpha(color) {
-                1.0
-            } else {
-                0.0
-            }
-        }
-    }
-}
+pub(crate) const CHROME_ALPHA_EPS: f32 = 0.01;
 
 /// Restore base alpha after build-time `auto` zeroing; skip intentionally transparent track chrome.
 #[inline]
@@ -225,6 +201,9 @@ pub(crate) fn auto_scrollbar_live_paint_alpha(el: &Element) -> Option<f32> {
         "auto".to_string()
     })
     .peek();
+    if vis.trim().eq_ignore_ascii_case("never") {
+        return Some(0.0);
+    }
     if !vis.trim().eq_ignore_ascii_case("auto") {
         return None;
     }
@@ -360,30 +339,7 @@ pub(crate) fn scrollbar_track_content_inset(track: &Element) -> f32 {
     scrollbar_track_content_inset_px(pad, track.style.border_width, has_border)
 }
 
-pub struct ScrollbarBuilder {
-    _id: String,
-    orientation: ScrollbarOrientation,
-    target_id: Option<String>,
-    variant: ScrollbarVariant,
-    visibility: ScrollbarVisibility,
-    thickness: f32,
-    track_color: [f32; 4],
-    thumb_color: [f32; 4],
-    track_border_color: [f32; 4],
-    thumb_border_color: [f32; 4],
-    track_border_width: Option<f32>,
-    thumb_border_width: Option<f32>,
-    flex_grow: f32,
-    flex_shrink: f32,
-    position: Position,
-    inset: Rect<LengthPercentageAuto>,
-    z_index: i32,
-    /// When true, track is absolute-positioned and does not consume flex cross size.
-    overlay: bool,
-    inline_end: Option<f32>,
-}
-
-/// Along-track minimum thumb size (see [`scrollbar_min_thumb_along_track`]).
+/// Baseline cross-axis size used by scrollbar runtime fallbacks.
 pub const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
 
 /// Gap between an overlay track and the scroll-area edge (and the other bar).
@@ -489,438 +445,6 @@ pub(crate) fn scrollbar_overlay_main_insets(
     }
 }
 
-pub fn scrollbar(id: &str) -> ScrollbarBuilder {
-    ScrollbarBuilder {
-        _id: id.to_string(),
-        orientation: ScrollbarOrientation::Vertical,
-        target_id: None,
-        variant: ScrollbarVariant::Capsule,
-        visibility: ScrollbarVisibility::Auto,
-        thickness: 10.0,
-        track_color: parse_color("scrollbar-track"),
-        thumb_color: parse_color("scrollbar-thumb"),
-        track_border_color: parse_color("scrollbar-track-border"),
-        thumb_border_color: parse_color("scrollbar-thumb-border"),
-        track_border_width: None,
-        thumb_border_width: None,
-        flex_grow: 0.0,
-        flex_shrink: 0.0, // Scrollbars usually shouldn't shrink by default if they have a fixed cross size.
-        position: Position::Relative,
-        inset: Rect::auto(),
-        z_index: 0,
-        overlay: false,
-        inline_end: None,
-    }
-}
-
-// Alias for macro lowercase mapping: <Scrollbar> -> components::scrollbar(...)
-pub fn scrollbarbuilder() -> ScrollbarBuilder {
-    scrollbar("scrollbar")
-}
-
-/// Scrollbar component for fine-grained scroll control.
-#[component(crate_path = "crate")]
-#[allow(non_snake_case)]
-pub fn Scrollbar(
-    target: String,
-    orientation: String,
-    visibility: Option<String>,
-    thickness: Option<f32>,
-    children: Option<Element>,
-) -> Element {
-    let mut builder = scrollbar("scrollbar").target(target);
-
-    if orientation.eq_ignore_ascii_case("horizontal") {
-        builder = builder.orientation(ScrollbarOrientation::Horizontal);
-    } else {
-        builder = builder.orientation(ScrollbarOrientation::Vertical);
-    }
-
-    if let Some(v) = visibility {
-        builder = builder.visibility(v);
-    }
-    if let Some(t) = thickness {
-        builder = builder.thickness(t);
-    }
-
-    if let Some(c) = children {
-        builder = builder.child(c);
-    }
-
-    builder.into()
-}
-
-impl ScrollbarBuilder {
-    pub fn orientation(mut self, orientation: ScrollbarOrientation) -> Self {
-        self.orientation = orientation;
-        self
-    }
-
-    pub fn target(mut self, id: impl Into<String>) -> Self {
-        self.target_id = Some(id.into());
-        self
-    }
-
-    pub fn variant(mut self, variant: impl Into<ScrollbarVariant>) -> Self {
-        self.variant = variant.into();
-        self
-    }
-
-    pub fn capsule(mut self) -> Self {
-        self.variant = ScrollbarVariant::Capsule;
-        self
-    }
-
-    pub fn rect(mut self) -> Self {
-        self.variant = ScrollbarVariant::Rect;
-        self
-    }
-
-    pub fn visibility(mut self, mode: impl Into<ScrollbarVisibility>) -> Self {
-        self.visibility = mode.into();
-        self
-    }
-
-    pub fn auto(mut self) -> Self {
-        self.visibility = ScrollbarVisibility::Auto;
-        self
-    }
-
-    pub fn always(mut self) -> Self {
-        self.visibility = ScrollbarVisibility::Always;
-        self
-    }
-
-    pub fn never(mut self) -> Self {
-        self.visibility = ScrollbarVisibility::Never;
-        self
-    }
-
-    pub fn thickness(mut self, thickness: impl IntoF32) -> Self {
-        self.thickness = thickness.into_f32().max(2.0);
-        self
-    }
-
-    pub fn track_color(mut self, color: [f32; 4]) -> Self {
-        self.track_color = color;
-        self
-    }
-
-    pub fn thumb_color(mut self, color: [f32; 4]) -> Self {
-        self.thumb_color = color;
-        self
-    }
-
-    pub fn track_border_color(mut self, color: [f32; 4]) -> Self {
-        self.track_border_color = color;
-        self
-    }
-
-    pub fn thumb_border_color(mut self, color: [f32; 4]) -> Self {
-        self.thumb_border_color = color;
-        self
-    }
-
-    pub fn track_border_width(mut self, width: impl IntoF32) -> Self {
-        self.track_border_width = Some(width.into_f32().max(0.0));
-        self
-    }
-
-    pub fn thumb_border_width(mut self, width: impl IntoF32) -> Self {
-        self.thumb_border_width = Some(width.into_f32().max(0.0));
-        self
-    }
-
-    pub fn flex_grow(mut self, grow: impl crate::core::tree::IntoF32Raw) -> Self {
-        self.flex_grow = grow.into_f32_raw();
-        self
-    }
-
-    pub fn flex_shrink(mut self, shrink: impl crate::core::tree::IntoF32Raw) -> Self {
-        self.flex_shrink = shrink.into_f32_raw();
-        self
-    }
-
-    pub fn child(self, _child: impl Into<Element>) -> Self {
-        // Scrollbar currently doesn't support children
-        self
-    }
-    pub fn absolute(mut self) -> Self {
-        self.position = Position::Absolute;
-        self
-    }
-    pub fn relative(mut self) -> Self {
-        self.position = Position::Relative;
-        self
-    }
-    pub fn top(mut self, val: impl IntoDimension) -> Self {
-        self.inset.top = Element::into_margin_auto(val);
-        self
-    }
-    pub fn right(mut self, val: impl IntoDimension) -> Self {
-        self.inset.right = Element::into_margin_auto(val);
-        self
-    }
-    pub fn bottom(mut self, val: impl IntoDimension) -> Self {
-        self.inset.bottom = Element::into_margin_auto(val);
-        self
-    }
-    pub fn left(mut self, val: impl IntoDimension) -> Self {
-        self.inset.left = Element::into_margin_auto(val);
-        self
-    }
-    pub fn inset_inline_end(mut self, val: impl IntoF32) -> Self {
-        self.inline_end = Some(val.into_f32());
-        self
-    }
-    pub fn inset(mut self, val: impl IntoDimension) -> Self {
-        let dim = Element::into_margin_auto(val);
-        self.inset = Rect {
-            left: dim,
-            right: dim,
-            top: dim,
-            bottom: dim,
-        };
-        self
-    }
-    pub fn z_index(mut self, z: i32) -> Self {
-        self.z_index = z;
-        self
-    }
-
-    /// Overlay mode: absolute track that does not consume sibling flex width/height.
-    ///
-    /// Also sets attr `jadix_scrollbar_overlay=1` on the built element for runtime detection.
-    pub fn overlay(mut self, enabled: bool) -> Self {
-        self.overlay = enabled;
-        if enabled {
-            self.position = Position::Absolute;
-            self.flex_grow = 0.0;
-            self.flex_shrink = 0.0;
-            if self.z_index == 0 {
-                self.z_index = 10;
-            }
-        }
-        self
-    }
-}
-
-impl From<ScrollbarBuilder> for Element {
-    fn from(builder: ScrollbarBuilder) -> Element {
-        let (vw, vh, cw, ch, sx, sy) = if let Some(id) = builder.target_id.as_ref() {
-            let vw = use_signal(&scroll_viewport_w_signal_key(id), || 0.0_f32).peek();
-            let vh = use_signal(&scroll_viewport_h_signal_key(id), || 0.0_f32).peek();
-            let cw = use_signal(&scroll_content_w_signal_key(id), || 0.0_f32).peek();
-            let ch = use_signal(&scroll_content_h_signal_key(id), || 0.0_f32).peek();
-            let sx = use_signal(&scroll_offset_x_signal_key(id), || 0.0_f32).peek();
-            let sy = use_signal(&scroll_offset_y_signal_key(id), || 0.0_f32).peek();
-            (vw, vh, cw, ch, sx, sy)
-        } else {
-            (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
-        };
-
-        if builder.visibility == ScrollbarVisibility::Never {
-            return Element::new().w(0.0).h(0.0);
-        }
-
-        // IMPORTANT:
-        // Do not short-circuit `auto && !can_scroll` at build time.
-        // First frame metrics are often still zero; collapsing here makes the track node disappear,
-        // then later hover/scroll updates cannot drive visibility/geometry until an unrelated rebuild.
-        // Runtime path (`update_scrollbar_elements`) owns can_scroll gating.
-
-        // Persist visibility mode for runtime updates (avoid rebuild dependency).
-        let axis = match builder.orientation {
-            ScrollbarOrientation::Horizontal => "x",
-            ScrollbarOrientation::Vertical => "y",
-        };
-        if let Some(id) = builder.target_id.as_ref() {
-            let vk = scrollbar_visibility_signal_key(id, axis);
-            let raw = match builder.visibility {
-                ScrollbarVisibility::Always => "always",
-                ScrollbarVisibility::Never => "never",
-                ScrollbarVisibility::Auto => "auto",
-            };
-            use_signal(&vk, || raw.to_string()).set(raw.to_string());
-        }
-
-        // Auto + can_scroll: keep a real track in the tree even when v≈0 so hit-testing and
-        // `update_scrollbar_elements` can attach a hit-slab each frame (see `state.rs`).
-        let initial_alpha = match builder.visibility {
-            ScrollbarVisibility::Always => 1.0_f32,
-            ScrollbarVisibility::Auto | ScrollbarVisibility::Never => 0.0_f32,
-        };
-        let track_fades = scrollbar_track_fades(builder.track_color, builder.track_border_color);
-        let track_border_w =
-            scrollbar_border_width(builder.track_border_color, builder.track_border_width);
-        let thumb_border_w =
-            scrollbar_border_width(builder.thumb_border_color, builder.thumb_border_width);
-        let mut track_color = builder.track_color;
-        if track_fades {
-            track_color[3] *= initial_alpha;
-        }
-        let mut thumb_color = builder.thumb_color;
-        thumb_color[3] *= initial_alpha;
-        let mut track_border_color = builder.track_border_color;
-        if track_fades {
-            track_border_color[3] *= initial_alpha;
-        }
-        let mut thumb_border_color = builder.thumb_border_color;
-        if scrollbar_chrome_has_alpha(thumb_border_color) {
-            thumb_border_color[3] *= initial_alpha;
-        }
-
-        let inset = 1.0_f32;
-        let base_cross = builder.thickness.max(2.0);
-        // Keep constant cross size; visibility is alpha-only.
-        let track_cross = base_cross;
-        let thumb_cross = (track_cross - inset * 2.0).max(1.0);
-        let (track_w_px, track_h_px, thumb_w, thumb_h, thumb_ml, thumb_mt) =
-            match builder.orientation {
-                ScrollbarOrientation::Horizontal => {
-                    let track = if vw > 1.0 { vw } else { 120.0 };
-                    let ratio = (vw / cw.max(vw)).clamp(0.0, 1.0);
-                    let min_thumb = scrollbar_min_thumb_along_track(track);
-                    let tw = (track * ratio).clamp(min_thumb, track.max(min_thumb));
-                    let max_offset = (cw - vw).max(0.0);
-                    let t = if max_offset > 0.0 {
-                        sx / max_offset
-                    } else {
-                        0.0
-                    };
-                    let ml = (track - tw).max(0.0) * t.clamp(0.0, 1.0);
-                    (track, track_cross, tw, thumb_cross, ml, inset)
-                }
-                ScrollbarOrientation::Vertical => {
-                    let track = if vh > 1.0 { vh } else { 120.0 };
-                    let ratio = (vh / ch.max(vh)).clamp(0.0, 1.0);
-                    let min_thumb = scrollbar_min_thumb_along_track(track);
-                    let th = (track * ratio).clamp(min_thumb, track.max(min_thumb));
-                    let max_offset = (ch - vh).max(0.0);
-                    let t = if max_offset > 0.0 {
-                        sy / max_offset
-                    } else {
-                        0.0
-                    };
-                    let mt = (track - th).max(0.0) * t.clamp(0.0, 1.0);
-                    (track_cross, track, thumb_cross, th, inset, mt)
-                }
-            };
-
-        let thumb_focus = builder
-            .target_id
-            .as_ref()
-            .map(|id| format!("{SCROLLBAR_THUMB_FOCUS_PREFIX}{id}:{axis}"));
-        let track_focus = builder
-            .target_id
-            .as_ref()
-            .map(|id| format!("{SCROLLBAR_TRACK_FOCUS_PREFIX}{id}:{axis}"));
-
-        let (track_radius, thumb_radius) = match builder.variant {
-            // Capsule radius derives from the actual cross size.
-            ScrollbarVariant::Capsule => (track_cross * 0.5, thumb_cross * 0.5),
-            ScrollbarVariant::Rect => (0.0_f32, 0.0_f32),
-        };
-
-        let mut thumb = Element::new()
-            // The track owns its size. Moving its thumb must not invalidate
-            // intrinsic measurements of the surrounding scrolling content.
-            .absolute()
-            .w(thumb_w)
-            .h(thumb_h)
-            .min_w(thumb_cross)
-            .min_h(thumb_cross)
-            .ml(thumb_ml)
-            .mt(thumb_mt)
-            .rounded(thumb_radius)
-            .bg(thumb_color)
-            .border(thumb_border_color, thumb_border_w)
-            .cursor_kind(crate::core::tree::CursorKind::Pointer);
-        if let Some(fid) = thumb_focus {
-            thumb = thumb.focus_id(fid);
-        }
-
-        let mut track = Element::new()
-            .flex_grow(builder.flex_grow)
-            .flex_shrink(builder.flex_shrink)
-            .rounded(track_radius)
-            .bg(track_color)
-            .border(track_border_color, track_border_w);
-        match builder.orientation {
-            ScrollbarOrientation::Horizontal => {
-                let w = if track_w_px > 0.0 { track_w_px } else { 120.0 };
-                // Store base thickness in max block size for runtime updates.
-                track = track
-                    .w(w)
-                    .min_w(w)
-                    .h(track_h_px)
-                    .min_h(track_h_px)
-                    .max_h(base_cross);
-            }
-            ScrollbarOrientation::Vertical => {
-                let h = if track_h_px > 0.0 { track_h_px } else { 120.0 };
-                track = track
-                    .w(track_w_px)
-                    .min_w(track_w_px)
-                    .h(h)
-                    .min_h(h)
-                    .max_w(base_cross);
-            }
-        }
-        if let Some(fid) = track_focus {
-            track = track.focus_id(fid);
-        }
-
-        let track = match builder.position {
-            Position::Absolute => track.absolute(),
-            Position::Relative | Position::Sticky => track.relative(),
-            Position::Static => track.position("static"),
-            Position::Fixed => track.fixed(),
-        };
-
-        let mut track = track
-            .inset_rect(builder.inset)
-            .z_index(builder.z_index)
-            .child(thumb);
-        if builder.overlay {
-            track.set_attr("jadix_scrollbar_overlay", "1");
-            match builder.orientation {
-                ScrollbarOrientation::Vertical => {
-                    track = track.absolute().inset_inline_end(0.0).top(0.0).bottom(0.0);
-                    track.style.size.height = taffy::style::Dimension::auto();
-                    track.style.min_size.height = taffy::style::Dimension::length(0.0);
-                }
-                ScrollbarOrientation::Horizontal => {
-                    track = track.absolute().left(0.0).right(0.0).bottom(0.0);
-                    track.style.size.width = taffy::style::Dimension::auto();
-                    track.style.min_size.width = taffy::style::Dimension::length(0.0);
-                }
-            }
-            // Explicit caller insets override overlay defaults.
-            if !builder.inset.left.is_auto() {
-                track.style.inset.left = builder.inset.left;
-            }
-            if !builder.inset.right.is_auto() {
-                track.style.inset.right = builder.inset.right;
-            }
-            if !builder.inset.top.is_auto() {
-                track.style.inset.top = builder.inset.top;
-            }
-            if !builder.inset.bottom.is_auto() {
-                track.style.inset.bottom = builder.inset.bottom;
-            }
-        }
-        if let Some(end) = builder.inline_end {
-            track = track.inset_inline_end(end);
-        }
-        track.set_attr(
-            ATTR_SCROLLBAR_TRACK_FADES,
-            if track_fades { "1" } else { "0" },
-        );
-        track
-    }
-}
-
 #[cfg(test)]
 mod chrome_tests {
     use super::*;
@@ -1007,6 +531,29 @@ mod chrome_tests {
     }
 
     #[test]
+    fn dynamically_hidden_scrollbars_suppress_track_and_thumb_paint() {
+        crate::core::reactivity::create_root(|| {
+            let visibility =
+                use_signal(&scrollbar_visibility_signal_key("hidden-bar", "y"), || {
+                    "always".to_string()
+                });
+            let mut track = Element::new().focus_id("scrollbar-track:hidden-bar:y");
+            track.set_attr(ATTR_SCROLLBAR_TRACK_FADES, "0");
+            let thumb = Element::new().focus_id("scrollbar-thumb:hidden-bar:y");
+            assert_eq!(auto_scrollbar_live_paint_alpha(&track), None);
+            assert_eq!(auto_scrollbar_live_paint_alpha(&thumb), None);
+            visibility.set("never".to_string());
+            assert_eq!(auto_scrollbar_live_paint_alpha(&track), Some(0.0));
+            assert_eq!(auto_scrollbar_live_paint_alpha(&thumb), Some(0.0));
+            assert!(auto_scrollbar_needs_node_present(&track));
+            assert!(auto_scrollbar_needs_node_present(&thumb));
+            visibility.set("always".to_string());
+            assert_eq!(auto_scrollbar_live_paint_alpha(&track), None);
+            assert_eq!(auto_scrollbar_live_paint_alpha(&thumb), None);
+        });
+    }
+
+    #[test]
     fn auto_hide_must_retarget_cubic_before_tick_or_collect_stays_opaque() {
         use crate::core::reactivity::create_root;
         use crate::style::{any_ui_animation_active, tick_animations, use_ui_transition_cubic};
@@ -1042,12 +589,6 @@ mod chrome_tests {
                 "paint-only hide must tick after retarget so collect leaves 1, got {collect_after_retarget}"
             );
         });
-    }
-
-    #[test]
-    fn transparent_border_has_zero_width_by_default() {
-        assert_eq!(scrollbar_border_width([0.0; 4], None), 0.0);
-        assert_eq!(scrollbar_border_width([1.0, 1.0, 1.0, 1.0], None), 1.0);
     }
 }
 
@@ -1115,5 +656,101 @@ mod overlay_main_inset_tests {
         assert!((overlay_main_length_when_unlaid(240.0, 4.0, 2.0).unwrap() - 234.0).abs() < 0.01);
         // Unmeasured viewport must not invent a bar.
         assert!(overlay_main_length_when_unlaid(0.0, 4.0, 2.0).is_none());
+    }
+}
+
+#[cfg(test)]
+mod part_configuration_tests {
+    use super::*;
+
+    #[test]
+    fn configuration_binds_runtime_geometry_without_assembling_or_styling_a_widget() {
+        let (_owner, _) = crate::core::reactivity::create_root(|| {
+            for axis in ["x", "y"] {
+                let target = format!("foundation-parts-{axis}");
+                for key in [
+                    scroll_viewport_w_signal_key(&target),
+                    scroll_viewport_h_signal_key(&target),
+                ] {
+                    use_signal(&key, || 100.0_f32);
+                }
+                for key in [
+                    scroll_content_w_signal_key(&target),
+                    scroll_content_h_signal_key(&target),
+                ] {
+                    use_signal(&key, || 400.0_f32);
+                }
+                for key in [
+                    scroll_offset_x_signal_key(&target),
+                    scroll_offset_y_signal_key(&target),
+                ] {
+                    use_signal(&key, || 50.0_f32);
+                }
+                let mut track = Element::new()
+                    .bg([0.1, 0.2, 0.3, 1.0])
+                    .border([0.4, 0.5, 0.6, 1.0], 2.0)
+                    .absolute()
+                    .right(3.0);
+                let original_style = track.style.clone();
+                let mut thumb = Element::new().bg([0.7, 0.8, 0.9, 1.0]);
+                configure_scrollbar_parts(
+                    &mut track,
+                    &mut thumb,
+                    Some(&target),
+                    axis,
+                    "always",
+                    10.0,
+                );
+                assert_eq!(track.style.bg_color, original_style.bg_color);
+                assert_eq!(track.style.border_width, original_style.border_width);
+                assert_eq!(track.style.inset, original_style.inset);
+                assert_eq!(thumb.style.bg_color, [0.7, 0.8, 0.9, 1.0]);
+                assert!(track.children.is_empty());
+                assert_eq!(
+                    track.focus_id.as_deref(),
+                    Some(format!("scrollbar-track:{target}:{axis}").as_str())
+                );
+                let (main, thumb_main, position) = if axis == "x" {
+                    (
+                        track.style.size.width,
+                        thumb.style.size.width,
+                        thumb.style.margin.left,
+                    )
+                } else {
+                    (
+                        track.style.size.height,
+                        thumb.style.size.height,
+                        thumb.style.margin.top,
+                    )
+                };
+                assert_eq!(crate::layout::dim_length_px(main), Some(100.0));
+                assert_eq!(crate::layout::dim_length_px(thumb_main), Some(25.0));
+                assert!((crate::layout::lpa_length_px(position).unwrap() - 12.5).abs() < 0.001);
+                assert_eq!(
+                    use_signal(&scrollbar_visibility_signal_key(&target, axis), String::new).peek(),
+                    "always"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn unmeasured_parts_keep_finite_initial_geometry() {
+        let (_owner, _) = crate::core::reactivity::create_root(|| {
+            for target in [None, Some("unmeasured-foundation-parts")] {
+                let mut track = Element::new();
+                let mut thumb = Element::new();
+                configure_scrollbar_parts(&mut track, &mut thumb, target, "y", "auto", 8.0);
+                for size in [
+                    track.style.size.width,
+                    track.style.size.height,
+                    thumb.style.size.width,
+                    thumb.style.size.height,
+                ] {
+                    let value = crate::layout::dim_length_px(size).unwrap();
+                    assert!(value.is_finite() && value > 0.0);
+                }
+            }
+        });
     }
 }

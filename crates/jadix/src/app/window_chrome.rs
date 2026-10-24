@@ -319,11 +319,30 @@ impl WindowOptions {
     pub(crate) fn themed(&self) -> Self {
         let mut options = self.clone();
         if self.follow_theme {
-            options.blur = matches!(crate::style::theme_preset(), crate::style::ThemePreset::Fluent | crate::style::ThemePreset::LiquidGlass);
+            let preset = crate::style::theme_preset();
+            let windows_material = {
+                #[cfg(target_os = "windows")]
+                {
+                    crate::platform::windows::glass::system_backdrop_available()
+                }
+                #[cfg(not(target_os = "windows"))]
+                {
+                    true
+                }
+            };
+            let liquid_material = cfg!(not(target_os = "windows"))
+                || cfg!(all(target_os = "windows", feature = "backend-dx12"));
+            options.blur = match preset {
+                crate::style::ThemePreset::Fluent => windows_material,
+                crate::style::ThemePreset::LiquidGlass => liquid_material,
+                _ => false,
+            };
             options.transparent = options.blur;
-            options.backdrop = match crate::style::theme_preset() {
-                crate::style::ThemePreset::Fluent => WindowBackdrop::Mica,
-                crate::style::ThemePreset::LiquidGlass => WindowBackdrop::Acrylic,
+            options.backdrop = match preset {
+                crate::style::ThemePreset::Fluent if windows_material => WindowBackdrop::Mica,
+                crate::style::ThemePreset::LiquidGlass if liquid_material => {
+                    WindowBackdrop::Acrylic
+                }
                 _ => WindowBackdrop::None,
             };
         }
@@ -447,6 +466,11 @@ impl WindowOptions {
 
     /// Custom DComp recipes: Blur / Aero, or Acrylic/Mica with overridden recipe knobs.
     pub fn wants_custom_dcomp(&self) -> bool {
+        if self.follow_theme
+            && crate::style::theme_preset() == crate::style::ThemePreset::LiquidGlass
+        {
+            return cfg!(all(windows, feature = "backend-dx12"));
+        }
         if !self.blur {
             return false;
         }
@@ -467,7 +491,8 @@ impl WindowOptions {
 
     /// Win11 `DWMWA_SYSTEMBACKDROP_TYPE` path (no custom recipe knobs).
     pub(crate) fn uses_system_backdrop(&self) -> bool {
-        self.blur && !self.wants_custom_dcomp()
+        let options = self.themed();
+        options.blur && !options.wants_custom_dcomp()
     }
 
     /// Enable runtime Inspector ([`super::devtools`], F12). Requires crate feature `devtools`.
@@ -526,16 +551,16 @@ impl WindowOptions {
         crate::utils::font::set_text_defaults(d);
     }
 
-    /// Surface / clear color must expose alpha (transparent **or** blur).
+    /// GPU alpha must remain available across runtime theme changes. This does
+    /// not require Win32's native transparent-window initialization.
     pub fn compositor_alpha(&self) -> bool {
         self.transparent || self.blur || self.follow_theme
     }
 
     /// `WS_EX_NOREDIRECTIONBITMAP` + DXGI composition surface.
     ///
-    /// With `backend-dx12`, every compositor-alpha window presents through a
-    /// DComp visual tree (recipes on a backdrop sprite, UI on a SurfaceHandle).
-    /// DX12 HWND swapchains only advertise `Opaque`, so they cannot show glass.
+    /// Reserve the composition surface before a following theme changes to
+    /// glass. GPU alpha is independent of Win32's native transparent flag.
     pub(crate) fn wants_dcomp_swapchain(&self) -> bool {
         self.compositor_alpha() && cfg!(all(windows, feature = "backend-dx12"))
     }
@@ -556,10 +581,10 @@ impl WindowOptions {
 
     /// `composition_swapchain`: Windows `WS_EX_NOREDIRECTIONBITMAP` so a DXGI
     /// composition surface / Vulkan premul swapchain can composite over the desktop.
-    /// Must stay **off** for DWM SystemBackdrop and the shared GL path.
+    /// The shared GL fallback keeps redirection enabled.
     pub(crate) fn window_attributes(&self, composition_swapchain: bool) -> WindowAttributes {
         let mut attrs = WindowAttributes::default()
-            .with_theme(Some(native_theme()))
+            .with_theme(native_theme_preference())
             .with_title(&self.title)
             .with_window_icon(self.icon.as_ref().map(super::AppIcon::to_winit))
             .with_visible(false)
@@ -575,7 +600,13 @@ impl WindowOptions {
                 winit::window::WindowLevel::Normal
             })
             .with_decorations(self.decorations)
-            .with_transparent(self.compositor_alpha())
+            // On Windows, blur/follow-theme owns the DWM/DComp backdrop and
+            // must keep the native transparent flag off. The GPU surface can
+            // still use premultiplied alpha through `compositor_alpha()`.
+            .with_transparent(
+                self.transparent
+                    || (cfg!(not(windows)) && (self.blur || self.follow_theme)),
+            )
             .with_blur(self.themed().blur && !self.wants_dcomp_swapchain());
 
         if let (Some(w), Some(h)) = (self.inner_width, self.inner_height) {
@@ -607,7 +638,11 @@ impl WindowOptions {
         if let Some([x, y]) = self.position.filter(|p| p.iter().all(|v| v.is_finite())) {
             attrs = attrs.with_position(winit::dpi::LogicalPosition::new(x, y));
         }
-        attrs = crate::platform::decorate_window_attributes(attrs, &self.themed(), composition_swapchain);
+        attrs = crate::platform::decorate_window_attributes(
+            attrs,
+            &self.themed(),
+            composition_swapchain,
+        );
         attrs
     }
 }
@@ -719,9 +754,8 @@ impl super::App {
 ///
 /// Idempotent: call again after the GPU surface is configured / resized / shown.
 ///
-/// `composition_swapchain` is set when the window presents a premultiplied Vulkan/DXGI
-/// swapchain (`WS_EX_NOREDIRECTIONBITMAP`). In that case DWM empty-region blur-behind
-/// is skipped — it targets the redirection bitmap we just disabled.
+/// `composition_swapchain` describes the GPU alpha surface, not ownership of
+/// its background: a WebView composition target can still use SystemBackdrop.
 pub(crate) fn apply_created_window(
     window: &dyn Window,
     options: &WindowOptions,
@@ -731,7 +765,7 @@ pub(crate) fn apply_created_window(
     // the same theme on every surface resize makes the title text flash.
     let theme = native_theme();
     if window.theme() != Some(theme) {
-        window.set_theme(Some(theme));
+        window.set_theme(native_theme_preference());
     }
     crate::platform::apply_created_window(window, &options.themed(), composition_swapchain);
 }
@@ -741,6 +775,22 @@ pub(crate) fn native_theme() -> winit::window::Theme {
         winit::window::Theme::Dark
     } else {
         winit::window::Theme::Light
+    }
+}
+
+pub(crate) fn native_theme_preference() -> Option<winit::window::Theme> {
+    match crate::style::theme_preference() {
+        crate::style::ThemePreference::System => None,
+        _ => Some(native_theme()),
+    }
+}
+
+pub(crate) fn update_system_theme(theme: Option<winit::window::Theme>) {
+    if let Some(theme) = theme {
+        crate::style::update_system_theme(match theme {
+            winit::window::Theme::Light => crate::style::ThemeMode::Light,
+            winit::window::Theme::Dark => crate::style::ThemeMode::Dark,
+        });
     }
 }
 
@@ -834,18 +884,42 @@ mod tests {
         let previous = crate::style::get_theme();
         let options = super::WindowOptions::new().follow_theme(true);
         for (preset, backdrop, blur) in [
-            (crate::style::ThemePreset::Fluent, super::WindowBackdrop::Mica, true),
-            (crate::style::ThemePreset::LiquidGlass, super::WindowBackdrop::Acrylic, true),
-            (crate::style::ThemePreset::Material3, super::WindowBackdrop::None, false),
-            (crate::style::ThemePreset::Shadcn, super::WindowBackdrop::None, false),
+            (
+                crate::style::ThemePreset::Fluent,
+                super::WindowBackdrop::Mica,
+                true,
+            ),
+            (
+                crate::style::ThemePreset::LiquidGlass,
+                super::WindowBackdrop::Acrylic,
+                true,
+            ),
+            (
+                crate::style::ThemePreset::Material3,
+                super::WindowBackdrop::None,
+                false,
+            ),
+            (
+                crate::style::ThemePreset::Shadcn,
+                super::WindowBackdrop::None,
+                false,
+            ),
         ] {
             crate::style::set_theme_preset(preset);
             let resolved = options.themed();
             assert_eq!(resolved.backdrop, backdrop);
             assert_eq!(resolved.blur, blur);
             assert!(options.compositor_alpha());
+            assert_eq!(
+                options.wants_dcomp_swapchain(),
+                cfg!(all(windows, feature = "backend-dx12"))
+            );
+            #[cfg(windows)]
+            assert!(!options.to_window_attributes().transparent);
         }
-        let explicit = super::WindowOptions::new().blur(true).backdrop(super::WindowBackdrop::Aero);
+        let explicit = super::WindowOptions::new()
+            .blur(true)
+            .backdrop(super::WindowBackdrop::Aero);
         assert_eq!(explicit.themed().backdrop, super::WindowBackdrop::Aero);
         crate::style::set_theme(previous);
     }
@@ -923,7 +997,7 @@ mod tests {
         assert!(o.compositor_alpha());
         let attrs = o.to_window_attributes();
         assert!(!attrs.decorations);
-        assert!(attrs.transparent);
+        assert_eq!(attrs.transparent, !cfg!(windows));
         assert_eq!(attrs.blur, !cfg!(all(windows, feature = "backend-dx12")));
         assert_eq!(attrs.title, "Glass");
     }

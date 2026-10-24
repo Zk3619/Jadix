@@ -105,8 +105,8 @@ pub(crate) fn button_variant_color_classes(variant: &str) -> &'static str {
             "bg-secondary text-secondary-foreground hover:bg-secondary/80 disabled:opacity-50"
         }
         "outline" => {
-            "bg-background text-foreground hover:bg-accent hover:text-foreground \
-             dark:bg-input/30 dark:hover:bg-input/50 dark:hover:text-foreground \
+            "bg-transparent text-foreground hover:bg-accent hover:text-foreground \
+             dark:hover:bg-input/50 dark:hover:text-foreground \
              disabled:opacity-50"
         }
         "ghost" => {
@@ -1418,6 +1418,29 @@ mod chrome_tests {
 
     fn luminance(c: [f32; 4]) -> f32 {
         0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]
+    }
+
+    #[test]
+    fn scaled_preview_visible_button_updates_hover_below_logical_viewport() {
+        crate::core::reactivity::create_root(|| {
+            set_theme_mode(ThemeMode::Light);
+            let mut button: Element = button("scaled-preview-hover").text("Hover").into();
+            button.class_set = None;
+            button.style.transition.clear();
+            let mut root = Element::new().w(680.0).h(720.0).child(
+                Element::new().absolute().left(0.0).top(0.0).w(390.0).h(2500.0)
+                    .scale(0.25).transform_origin("left top")
+                    .child(button.absolute().top(2000.0).w(120.0).h(32.0)));
+            let mut layout = crate::core::tree::LayoutTree::new();
+            layout.build_and_layout(&mut root, 680.0, 720.0, [-1.0; 2]);
+            let before = root.children[0].children[0].style.bg_color;
+            crate::core::reactivity::use_signal("scaled-preview-hover_hover", || false).set_silent(true);
+            let mut impact = LayoutStatus::Clean;
+            super::sync_button_hover_paint_subtree(
+                &mut root, &mut layout, &mut impact, 680.0, 720.0, [0.0; 2]);
+            assert_ne!(root.children[0].children[0].style.bg_color, before,
+                "a visually visible scaled button must receive hover paint");
+        });
     }
 
     #[test]

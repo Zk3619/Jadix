@@ -35,10 +35,11 @@
 
 use crate::components::base::BaseComponentBuilder;
 use crate::components::scrollbar::{
-    scrollbar, ScrollbarBuilder, ScrollbarOrientation, SCROLLBAR_EDGE_PAD,
+    scrollbar, ScrollbarBuilder, ScrollbarOrientation,
 };
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::activate_scroll_viewport;
+use crate::core::scrollbar::SCROLLBAR_EDGE_PAD;
 use crate::core::tree::{parse_color, Element, IntoCssDim, IntoF32};
 use jadix_macros::component;
 
@@ -567,7 +568,7 @@ impl From<ScrollAreaBuilder> for Element {
         let h_top = builder.scrollbar_x_side.trim().eq_ignore_ascii_case("top");
         let cross_px = builder
             .scrollbar_thickness
-            .unwrap_or(crate::components::scrollbar::SCROLLBAR_DEFAULT_CROSS_PX)
+            .unwrap_or_else(crate::components::scrollbar::default_scrollbar_cross_px)
             .max(2.0);
         let vis_x = if vis == "auto" && inset_outside_x {
             "always"
@@ -602,7 +603,7 @@ impl From<ScrollAreaBuilder> for Element {
             v_scroll = v_scroll.relative().flex_shrink(0.0).flex_grow(0.0);
         } else {
             // Overlay L-join: vertical owns the corner; horizontal yields lane width.
-            let (top, bottom) = crate::components::scrollbar::scrollbar_overlay_main_insets(
+            let (top, bottom) = crate::core::scrollbar::scrollbar_overlay_main_insets(
                 "y",
                 false,
                 show_h,
@@ -624,7 +625,7 @@ impl From<ScrollAreaBuilder> for Element {
             // permanent H gutter (wrap=off / H-only). `always` may reserve the lane.
             // Prepass adds `v_cross` when Y actually occupies the corner.
             let bake_v_lane = show_v && vis == "always";
-            let (left, right) = crate::components::scrollbar::scrollbar_overlay_main_insets(
+            let (left, right) = crate::core::scrollbar::scrollbar_overlay_main_insets(
                 "x",
                 false,
                 bake_v_lane,
@@ -758,11 +759,11 @@ impl From<ScrollAreaBuilder> for Element {
             if show_h && !inset_outside_x {
                 if let Some(mut h) = h_opt.take() {
                     h.set_attr(
-                        crate::components::scrollbar::ATTR_H_LANE_INSET,
+                        crate::core::scrollbar::ATTR_H_LANE_INSET,
                         SCROLLBAR_EDGE_PAD.to_string(),
                     );
                     h.set_attr(
-                        crate::components::scrollbar::ATTR_H_LANE_V_CROSS,
+                        crate::core::scrollbar::ATTR_H_LANE_V_CROSS,
                         cross_px.to_string(),
                     );
                     outer = outer.child(h);
@@ -778,11 +779,11 @@ impl From<ScrollAreaBuilder> for Element {
             if let Some(mut h) = h_opt.take() {
                 if show_h && !inset_outside_x {
                     h.set_attr(
-                        crate::components::scrollbar::ATTR_H_LANE_INSET,
+                        crate::core::scrollbar::ATTR_H_LANE_INSET,
                         SCROLLBAR_EDGE_PAD.to_string(),
                     );
                     h.set_attr(
-                        crate::components::scrollbar::ATTR_H_LANE_V_CROSS,
+                        crate::core::scrollbar::ATTR_H_LANE_V_CROSS,
                         cross_px.to_string(),
                     );
                 }

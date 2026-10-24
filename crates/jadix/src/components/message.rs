@@ -23,8 +23,7 @@
 //!     │   └── MessageContent          // w-full · children self-end when end
 //!     │       ├── MessageHeader?
 //!     │       └── Bubble / surface
-//!     └── message-footer-row          // w-full · ghost spacer + footer
-//!         ├── avatar-ghost
+//!     └── message-footer-row          // w-full · avatar-column padding
 //!         └── MessageFooter           // status / actions
 //! ```
 //!
@@ -92,8 +91,8 @@
 //! - Empty [`MessageAvatar`] is a 2rem spacer (same as default Avatar) so
 //!   grouped turns stay aligned without repeating the portrait.
 //! - When a footer is present the row splits: avatar sits beside header+bubble
-//!   (`items-end`), and actions live on a second row under the bubble (ghost
-//!   spacer matches the avatar column).
+//!   (`items-end`), and actions live on a second row under the bubble (padding
+//!   matches the avatar column).
 
 use taffy::style::{AlignSelf, FlexDirection};
 
@@ -115,13 +114,13 @@ const SLOT_ROOT: &str = "message";
 const SLOT_UPPER: &str = "message-upper";
 const SLOT_FOOTER_ROW: &str = "message-footer-row";
 const SLOT_AVATAR: &str = "message-avatar";
-const SLOT_AVATAR_GHOST: &str = "message-avatar-ghost";
 const SLOT_CONTENT: &str = "message-content";
 const SLOT_HEADER: &str = "message-header";
 const SLOT_FOOTER: &str = "message-footer";
 
 /// Default Avatar `size-8` so an empty avatar slot still reserves a column.
 const AVATAR_MIN: &str = "2rem";
+const FOOTER_AVATAR_INDENT: &str = "2.5rem";
 
 const HEADER_SIZE_PX: f32 = 14.0;
 const HEADER_WEIGHT: u16 = 500;
@@ -256,7 +255,6 @@ fn absorb_message_child(mut child: Element, parts: &mut MessageParts) {
                 absorb_message_child(nested, parts);
             }
         }
-        Some(SLOT_AVATAR_GHOST) => {}
         Some(SLOT_AVATAR) => parts.avatar = Some(child),
         Some(SLOT_FOOTER) => parts.footers.push(child),
         _ => parts.surface.push(child),
@@ -273,20 +271,6 @@ fn collect_message_parts(el: &mut Element) -> MessageParts {
         absorb_message_child(child, &mut parts);
     }
     parts
-}
-
-fn make_avatar_ghost() -> Element {
-    let mut el: Element = hstack()
-        .flex_shrink(0.0)
-        .w(AVATAR_MIN)
-        .h(AVATAR_MIN)
-        .min_w(AVATAR_MIN)
-        .min_h(AVATAR_MIN)
-        .into();
-    el = el.opacity(0.0).pointer_events_none();
-    el.set_attr(ATTR_SLOT, SLOT_AVATAR_GHOST);
-    el.set_attr("aria-hidden", "true");
-    el
 }
 
 /// Pack surface children to the message side and prevent stretch-to-full-width.
@@ -340,7 +324,7 @@ fn wrap_upper(align: MessageAlign, kids: Vec<Element>) -> Element {
     el
 }
 
-fn wrap_footer_row(align: MessageAlign, kids: Vec<Element>) -> Element {
+fn wrap_footer_row(align: MessageAlign, kids: Vec<Element>, has_avatar: bool) -> Element {
     let mut el: Element = hstack()
         .items_center()
         .justify("start")
@@ -357,7 +341,20 @@ fn wrap_footer_row(align: MessageAlign, kids: Vec<Element>) -> Element {
     };
     el.set_attr(ATTR_SLOT, SLOT_FOOTER_ROW);
     el.set_attr(ATTR_ALIGN, align.as_str());
+    if has_avatar {
+        el.set_attr("data-message-footer-avatar-column", "1");
+        paint_footer_indent(&mut el, align);
+    }
     el
+}
+
+fn paint_footer_indent(el: &mut Element, align: MessageAlign) {
+    let element = std::mem::take(el);
+    *el = if align.is_end() {
+        element.pl(0.0).pr(FOOTER_AVATAR_INDENT)
+    } else {
+        element.pl(FOOTER_AVATAR_INDENT).pr(0.0)
+    };
 }
 
 /// Split footer onto its own row so the avatar bottom-aligns with the bubble.
@@ -373,12 +370,7 @@ fn ensure_message_chrome(el: &mut Element, align: MessageAlign) {
     }
     let mut kids = vec![wrap_upper(align, upper_kids)];
     if !parts.footers.is_empty() {
-        let mut row = Vec::new();
-        if has_avatar {
-            row.push(make_avatar_ghost());
-        }
-        row.extend(parts.footers);
-        kids.push(wrap_footer_row(align, row));
+        kids.push(wrap_footer_row(align, parts.footers, has_avatar));
     }
     el.children = kids;
 }
@@ -453,6 +445,9 @@ fn paint_message_slots(el: &mut Element, align: MessageAlign) {
             }
             Some(SLOT_FOOTER_ROW) => {
                 paint_row_dir(child, align, SLOT_FOOTER_ROW);
+                if child.attrs.contains_key("data-message-footer-avatar-column") {
+                    paint_footer_indent(child, align);
+                }
                 paint_message_slots(child, align);
             }
             Some(SLOT_AVATAR) => paint_avatar_slot(child),
@@ -462,7 +457,6 @@ fn paint_message_slots(el: &mut Element, align: MessageAlign) {
             }
             Some(SLOT_HEADER) => paint_header_slot(child, align),
             Some(SLOT_FOOTER) => paint_footer_slot(child, align),
-            Some(SLOT_AVATAR_GHOST) => {}
             _ => paint_message_slots(child, align),
         }
     }
@@ -1433,7 +1427,32 @@ mod tests {
         assert!(find_slot(upper, SLOT_FOOTER).is_none());
         let footer_row = find_slot(&el, SLOT_FOOTER_ROW).expect("footer row");
         assert!(find_slot(footer_row, SLOT_FOOTER).is_some());
-        assert!(find_slot(footer_row, SLOT_AVATAR_GHOST).is_some());
+        assert!(find_slot(footer_row, "message-avatar-ghost").is_none());
+        assert!(find_slot(footer_row, SLOT_AVATAR).is_none());
+        assert_eq!(footer_row.children.len(), 1);
+    }
+
+    #[test]
+    fn footer_indent_follows_the_avatar_column_after_align_changes() {
+        let mut root: Element = message()
+            .avatar(Element::new().text("OL"))
+            .content_child(Element::new().text("Send the report."))
+            .footer("Copy")
+            .into();
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        for align in ["start", "end", "start"] {
+            apply_bound_message_align(&mut root, align);
+            tree.build_and_layout(&mut root, 400.0, 240.0, [-1.0; 2]);
+            let content = find_slot(&root, SLOT_CONTENT).expect("content");
+            let footer = find_slot(&root, SLOT_FOOTER).expect("footer");
+            let delta = if align == "end" {
+                rect_right(content) - rect_right(footer)
+            } else {
+                content.layout_bounds[0] - footer.layout_bounds[0]
+            };
+            assert!(delta.abs() < 0.1,
+                "{align}: content={:?}, footer={:?}", content.layout_bounds, footer.layout_bounds);
+        }
     }
 
     #[test]

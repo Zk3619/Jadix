@@ -965,6 +965,9 @@ pub struct ElementInner {
     /// 仅参与 glyph 排版（`set_text` / 宽度估计），不计入 `text` 的字节长度；用于减轻纯中文 IME 下 cosmic-text 行高随拼音 bbox 抖动。
     pub text_shape_suffix: Option<String>,
     pub text_style: Box<TextStyle>,
+    pub(crate) inherited_text_style: Option<Box<TextStyle>>,
+    #[cfg(all(debug_assertions, feature = "devtools"))]
+    pub(crate) inspector_instance_id: u64,
     pub layout_bounds: [f32; 4],
     /// Last fully collected subtree extent (`max_right`, `max_bottom`) in abs layout px.
     /// `scroll_only` sibling band cull reuses this so content height / thumb geometry stay stable.
@@ -993,6 +996,7 @@ pub struct ElementInner {
     /// This node or a descendant is a scroll viewport / has a nonzero offset.
     /// Stamp reuse must still walk this path so `scroll_offset` fingerprints stay live.
     pub(crate) collect_skip_has_scroll: bool,
+    pub(crate) collect_skip_has_canvas: bool,
     /// Portal / stacking side-channel on self or a descendant. Collect must not
     /// skip-replay this node as a unit (overlay cursors live outside the DL), but
     /// stamp `reuse_idle` may still reuse a stable paint hash when only a **sibling**
@@ -1122,6 +1126,12 @@ fn blank_inner() -> ElementInner {
         text_spans: None,
         text_shape_suffix: None,
         text_style: Box::new(TextStyle::default()),
+        inherited_text_style: None,
+        #[cfg(all(debug_assertions, feature = "devtools"))]
+        inspector_instance_id: {
+            static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+            NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        },
         layout_bounds: [0.0, 0.0, 0.0, 0.0],
         collect_extent: [0.0, 0.0],
         collect_extent_valid: false,
@@ -1137,6 +1147,7 @@ fn blank_inner() -> ElementInner {
         subtree_hover_cursor: false,
         collect_skip_scroll_pin: false,
         collect_skip_has_scroll: false,
+        collect_skip_has_canvas: false,
         collect_skip_side_channel: false,
         sticky_visual_offset: [0.0, 0.0],
         paint_scroll_acc: [0.0, 0.0],
@@ -1190,6 +1201,7 @@ fn clone_static_node_shallow(src: &Element) -> Element {
     let mut dst = Element::new();
     *dst.style = (*src.style).clone();
     *dst.text_style = (*src.text_style).clone();
+    dst.inherited_text_style = src.inherited_text_style.clone();
     dst.text = src.text.clone();
     dst.text_spans = src.text_spans.clone();
     dst.text_shape_suffix = src.text_shape_suffix.clone();
@@ -1262,6 +1274,10 @@ impl DerefMut for Element {
 }
 
 impl Element {
+    pub(crate) fn specified_text_style(&self) -> TextStyle {
+        self.text_style.without_inherited(self.inherited_text_style.as_deref())
+    }
+
     /// Split-borrow style + animation snapshot (Deref cannot).
     #[inline]
     pub(crate) fn tick_css_animations(&mut self, dt: f32) -> bool {
@@ -2166,6 +2182,9 @@ impl Element {
         classes.apply_node_class(self)
     }
     pub fn font_family(mut self, family: impl Into<String>) -> Self {
+        if let Some(inherited) = self.inherited_text_style.as_mut() {
+            inherited.font_family = None;
+        }
         self.text_style.font_family = Some(family.into());
         self.attrs
             .insert("font_family".to_string(), "1".to_string());
@@ -2175,10 +2194,16 @@ impl Element {
     /// [`IntoNodeFg`] on builders. Direct [`IntoTextColor`] here is a snapshot:
     /// `text_color(sig.get())` does not subscribe.
     pub fn text_color(mut self, color: impl IntoTextColor) -> Self {
+        if let Some(inherited) = self.inherited_text_style.as_mut() {
+            inherited.color = None;
+        }
         self.text_style.color = Some(color.into_text_color());
         self
     }
     pub fn text_size(mut self, size: impl IntoF32) -> Self {
+        if let Some(inherited) = self.inherited_text_style.as_mut() {
+            inherited.size = None;
+        }
         let px = size.into_f32();
         self.text_style.size = Some(px);
         if let Some(sync) = self.input_paint_sync.as_mut() {
@@ -2187,6 +2212,9 @@ impl Element {
         self
     }
     pub fn font_weight(mut self, weight: impl IntoF32Raw) -> Self {
+        if let Some(inherited) = self.inherited_text_style.as_mut() {
+            inherited.weight = None;
+        }
         let w = weight.into_f32_raw().round().clamp(100.0, 900.0) as u16;
         self.text_style.weight = Some(w);
         self
@@ -4155,11 +4183,12 @@ pub(crate) fn child_paint_ancestor(
     let b = parent.layout_bounds;
     let vis_wh = [b[2] * paint_s[0], b[3] * paint_s[1]];
     let offset = crate::style::offset_path::sample(&parent.style, [b[2], b[3]]);
-    let local_unwrapped = crate::style::rotate_and_list_mat2d(
+    let local_unwrapped = crate::style::transform::rotate_and_list_mat2d_in_paint_space(
         parent.style.rotate_deg + offset.rotate_deg,
         parent.style.transform.as_ref(),
         vis_wh[0],
         vis_wh[1],
+        ancestor_scale,
     );
     let local_linear = crate::style::mat2d_linear(&local_unwrapped);
     (
@@ -4182,9 +4211,9 @@ fn paint_vis(
         el.style.overflow.y == taffy::style::Overflow::Visible,
     );
     let offset = crate::style::offset_path::sample(&el.style, [b[2], b[3]]);
-    let translate = crate::motion::presentation_translate(el);
-    let tx = translate[0] + b[2] * el.style.translate_pct[0] + offset.translate[0];
-    let ty = translate[1] + b[3] * el.style.translate_pct[1] + offset.translate[1];
+    let translate = crate::motion::presentation_translate_in_paint_space(el, ancestor_scale);
+    let tx = translate[0] + (b[2] * el.style.translate_pct[0] + offset.translate[0]) * ancestor_scale[0];
+    let ty = translate[1] + (b[3] * el.style.translate_pct[1] + offset.translate[1]) * ancestor_scale[1];
     let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0] + tx;
     let vy = b[1] - scroll_acc[1] + el.sticky_visual_offset[1] + ty;
     let [paint_sx, paint_sy] = paint_scale_with_ancestor(el, ancestor_scale);
@@ -4226,11 +4255,12 @@ fn paint_vis(
         };
     }
     let origin_in_vis = [origin[0] - (vis[0] - vx), origin[1] - (vis[1] - vy)];
-    let local_unwrapped = crate::style::rotate_and_list_mat2d(
+    let local_unwrapped = crate::style::transform::rotate_and_list_mat2d_in_paint_space(
         rotate_deg,
         el.style.transform.as_ref(),
         vis[2],
         vis[3],
+        ancestor_scale,
     );
     let local_linear = crate::style::mat2d_linear(&local_unwrapped);
     let list_t = [local_unwrapped[4], local_unwrapped[5]];
@@ -4280,6 +4310,33 @@ pub(crate) fn visual_paint_aabb(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] 
         el.paint_ancestor_linear,
         el.paint_ancestor_scale,
     )
+}
+
+pub(crate) fn rest_paint_aabb(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
+    let bounds = el.layout_bounds;
+    let origin = crate::style::origin_px(&el.style.transform_origin, bounds[2], bounds[3]);
+    let rest = [
+        bounds[0] - scroll_acc[0],
+        bounds[1] - scroll_acc[1],
+        bounds[2].max(0.0),
+        bounds[3].max(0.0),
+    ];
+    let visual = crate::style::scale_box_about_origin(
+        rest,
+        origin,
+        resolved_ancestor_scale(el.paint_ancestor_scale),
+    );
+    if crate::style::mat2d_is_identity(&el.paint_ancestor_linear) {
+        return visual;
+    }
+    let transform = crate::style::mat2d_world_center_pivot_with_shift(
+        &el.paint_ancestor_linear,
+        &crate::style::MAT2D_IDENTITY,
+        [origin[0] - (visual[0] - rest[0]), origin[1] - (visual[1] - rest[1])],
+        [visual[2], visual[3]],
+        [0.0; 2],
+    );
+    crate::style::aabb_of_centered_transform(visual, &transform)
 }
 
 #[inline]
@@ -4534,11 +4591,12 @@ pub(crate) fn child_scroll_accumulation(el: &Element, scroll_acc: [f32; 2]) -> [
         .as_deref()
         .is_some_and(|f| f.starts_with(crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX));
     let mut next = scroll_acc;
+    let scale = paint_scale_with_ancestor(el, el.paint_ancestor_scale);
     if is_scroll_viewport || matches!(el.style.overflow.x, taffy::style::Overflow::Scroll) {
-        next[0] += el.scroll_offset[0];
+        next[0] += el.scroll_offset[0] * scale[0];
     }
     if is_scroll_viewport || matches!(el.style.overflow.y, taffy::style::Overflow::Scroll) {
-        next[1] += el.scroll_offset[1];
+        next[1] += el.scroll_offset[1] * scale[1];
     }
     next
 }
@@ -4672,6 +4730,7 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
             let in_portal = in_portal
                 || element.template_id.as_deref()
                     == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
+            let ancestor_clip = clip_bounds;
             let in_clip = clip_bounds.is_some() || element_clips_overflow(element);
             let clip_bounds = if element_clips_overflow(element) {
                 let b = visual_paint_aabb(element, scroll_acc);
@@ -4819,6 +4878,7 @@ pub(crate) fn sync_reactive_elements_subtree_ex(
                                 scroll_acc,
                                 before_opacity,
                                 Some(before),
+                                ancestor_clip,
                             );
                         }
                     }
@@ -4981,6 +5041,52 @@ mod p1_builder_tests {
         assert_eq!(root.children[1].collect_paint_hash, 42);
         assert_eq!(root.children[1].children[0].collect_paint_hash, 42);
         assert_eq!(root.children[2].collect_paint_hash, 0);
+    }
+
+    #[test]
+    fn reactive_hover_damage_stays_inside_scrolled_viewport() {
+        crate::core::reactivity::create_root(|| {
+            let mut row = Element::new().reactive_sync(|element, _| {
+                element.style.bg_color = [0.2, 0.3, 0.4, 1.0];
+                LayoutStatus::StyleChanged
+            });
+            row.layout_bounds = [100.0, 210.0, 600.0, 22.0];
+            let mut root = Element::new()
+                .focus_id(crate::core::scroll_viewport::focus_id_for_scroll_viewport(
+                    "hover-damage",
+                ))
+                .overflow("hidden")
+                .child(row);
+            root.layout_bounds = [100.0, 100.0, 160.0, 100.0];
+            root.scroll_offset = [80.0, 100.0];
+            let mut tree = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            crate::app::damage::take_frame_paint_nodes();
+            for (offset, expected) in [
+                ([80.0, 100.0], Some([100.0, 110.0, 160.0, 22.0])),
+                ([400.0, 90.0], Some([100.0, 120.0, 160.0, 22.0])),
+                ([400.0, 125.0], Some([100.0, 100.0, 160.0, 7.0])),
+                ([400.0, 400.0], None),
+            ] {
+                root.scroll_offset = offset;
+                sync_reactive_elements_subtree(
+                    &mut root,
+                    &mut tree,
+                    &mut impact,
+                    800.0,
+                    600.0,
+                    [0.0; 2],
+                );
+                let damage = crate::app::damage::take_frame_paint_nodes();
+                if let Some(bounds) = expected {
+                    assert_eq!(damage.len(), 1);
+                    assert_eq!(damage[0].bounds, bounds);
+                    assert_eq!(damage[0].kind, crate::app::damage::PaintDirtyKind::Region);
+                } else {
+                    assert!(damage.is_empty());
+                }
+            }
+        });
     }
 
     #[test]

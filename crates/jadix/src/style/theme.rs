@@ -19,6 +19,14 @@ pub enum ThemeMode {
     Dark,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+pub enum ThemePreference {
+    Light,
+    Dark,
+    #[default]
+    System,
+}
+
 /// Default Hard spread / Soft blur in logical px (ShadCN `ring-[3px]`).
 pub const DEFAULT_FOCUS_RING_WIDTH: f32 = 3.0;
 
@@ -318,6 +326,9 @@ impl Default for Theme {
 thread_local! {
     static CURRENT_THEME: RefCell<Theme> = RefCell::new(Theme::light());
     static THEME_GENERATION: Cell<u64> = const { Cell::new(0) };
+    static THEME_PREFERENCE: Cell<ThemePreference> = const { Cell::new(ThemePreference::System) };
+    static SYSTEM_THEME: Cell<ThemeMode> = const { Cell::new(ThemeMode::Light) };
+    static SYSTEM_THEME_REFRESH: Cell<bool> = const { Cell::new(true) };
 }
 
 pub(crate) fn theme_generation() -> u64 {
@@ -336,6 +347,37 @@ pub fn get_theme() -> Theme {
 
 pub fn theme_mode() -> ThemeMode {
     CURRENT_THEME.with(|t| t.borrow().mode)
+}
+
+pub fn theme_preference() -> ThemePreference {
+    THEME_PREFERENCE.with(Cell::get)
+}
+
+pub fn set_theme_preference(preference: ThemePreference) {
+    let previous = THEME_PREFERENCE.with(|current| current.replace(preference));
+    if preference == ThemePreference::System && previous != preference {
+        SYSTEM_THEME_REFRESH.with(|refresh| refresh.set(true));
+    }
+    let mode = match preference {
+        ThemePreference::Light => ThemeMode::Light,
+        ThemePreference::Dark => ThemeMode::Dark,
+        ThemePreference::System => SYSTEM_THEME.with(Cell::get),
+    };
+    apply_theme_mode(mode);
+    if previous != preference {
+        super::stylesheet::watch::mark_style_hot_rebuild();
+    }
+}
+
+pub(crate) fn take_system_theme_refresh() -> bool {
+    SYSTEM_THEME_REFRESH.with(|refresh| refresh.replace(false))
+}
+
+pub(crate) fn update_system_theme(mode: ThemeMode) {
+    SYSTEM_THEME.with(|current| current.set(mode));
+    if theme_preference() == ThemePreference::System && theme_mode() != mode {
+        apply_theme_mode(mode);
+    }
 }
 
 pub fn is_dark_theme() -> bool {
@@ -378,7 +420,6 @@ pub fn set_theme(theme: Theme) {
         return;
     }
     THEME_GENERATION.with(|generation| generation.set(generation.get().wrapping_add(1)));
-    crate::platform::glass_sync_jadix_theme();
     super::stylesheet::watch::mark_style_hot_rebuild();
 }
 
@@ -397,6 +438,13 @@ pub(crate) fn with_temporary_theme<R>(theme: Theme, f: impl FnOnce() -> R) -> R 
 /// Switch light/dark tokens while preserving the current [`FocusRingStyle`] /
 /// width unless [`ThemeOverrides`] sets them.
 pub fn set_theme_mode(mode: ThemeMode) {
+    set_theme_preference(match mode {
+        ThemeMode::Light => ThemePreference::Light,
+        ThemeMode::Dark => ThemePreference::Dark,
+    });
+}
+
+fn apply_theme_mode(mode: ThemeMode) {
     let fallback_ring = focus_ring_style();
     let fallback_width = focus_ring_width();
     let mut next = crate::style::theme_override::compose_theme(mode);
@@ -416,6 +464,47 @@ pub fn toggle_theme_mode() -> ThemeMode {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_preference_follows_changes_and_manual_modes_override_them() {
+        let previous_theme = get_theme();
+        let previous_preference = theme_preference();
+        let previous_system = SYSTEM_THEME.with(Cell::get);
+        let previous_overrides = crate::style::snapshot_theme_overrides();
+        crate::style::set_theme_preset(crate::style::ThemePreset::Fluent);
+        let mut overrides = crate::style::theme_overrides();
+        overrides.styles.control_height = Some(39.0);
+        crate::style::install_theme_overrides(overrides).unwrap();
+        set_focus_ring_style(FocusRingStyle::Soft);
+        set_focus_ring_width(7.0);
+        set_theme_preference(ThemePreference::System);
+        for mode in [ThemeMode::Dark, ThemeMode::Light, ThemeMode::Dark] {
+            update_system_theme(mode);
+            assert_eq!(theme_preference(), ThemePreference::System);
+            assert_eq!(theme_mode(), mode);
+            assert_eq!(get_theme().preset, crate::style::ThemePreset::Fluent);
+            assert_eq!(get_theme().styles.control_height, Some(39.0));
+            assert_eq!(focus_ring_style(), FocusRingStyle::Soft);
+            assert_eq!(focus_ring_width(), 7.0);
+        }
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            set_theme_mode(mode);
+            update_system_theme(if mode == ThemeMode::Light { ThemeMode::Dark } else { ThemeMode::Light });
+            assert_eq!(theme_mode(), mode);
+            assert_ne!(theme_preference(), ThemePreference::System);
+        }
+        set_theme_preference(ThemePreference::System);
+        assert!(take_system_theme_refresh());
+        assert!(!take_system_theme_refresh());
+        assert_eq!(theme_mode(), ThemeMode::Light);
+        let generation = theme_generation();
+        update_system_theme(ThemeMode::Light);
+        assert_eq!(theme_generation(), generation);
+        crate::style::restore_theme_overrides(previous_overrides);
+        SYSTEM_THEME.with(|current| current.set(previous_system));
+        set_theme_preference(previous_preference);
+        set_theme(previous_theme);
+    }
 
     #[test]
     fn set_theme_mode_preserves_focus_ring_style() {

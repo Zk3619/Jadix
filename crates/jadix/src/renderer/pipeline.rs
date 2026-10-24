@@ -222,6 +222,7 @@ fn solid_fill_eligible(instance: &InstanceInput) -> bool {
     // Small chrome saves little fragment work and alternating its pipeline can
     // cost more than the shader branch. Restrict specialization to large fills.
     instance.rect_size[0] * instance.rect_size[1] >= 65_536.0
+        && instance.glass[0] >= 0.0
         && instance.border_extra >= 0.0
         && instance.border_extra < 1.5
         && instance.backdrop_blur <= 0.5
@@ -280,6 +281,7 @@ fn instance_clip_needed(i: &InstanceInput, clip: &crate::style::GpuClipPoly) -> 
 
 fn opaque_box_eligible(i: &InstanceInput) -> bool {
     if i.color[3] != 1.0
+        || i.glass[0] < 0.0
         || i.rect_size[0] * i.rect_size[1] < 262_144.0
         || i.border_extra < 0.0
         || i.border_extra >= 1.5
@@ -1174,6 +1176,12 @@ mod tests {
             !super::opaque_box_eligible(&inst),
             "round body has no opaque rectangular center"
         );
+        inst.radii = [8.0; 4];
+        inst.shadow_color = [0.0; 4];
+        assert!(super::solid_fill_eligible(&inst));
+        inst.glass = [-1.0, 0.5, 0.22, 0.0];
+        assert!(!super::solid_fill_eligible(&inst), "a sweep is not a constant fill");
+        assert!(!super::opaque_box_eligible(&inst), "a sweep has transparent edges");
     }
 
     #[test]

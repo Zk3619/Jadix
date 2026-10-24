@@ -26,6 +26,7 @@ pub enum StylePatch {
 #[derive(Clone, Debug)]
 pub(crate) struct PendingInspectorCssom {
     pub path: Vec<usize>,
+    pub instance_id: u64,
     pub css: String,
 }
 
@@ -34,18 +35,29 @@ thread_local! {
         const { RefCell::new(Vec::new()) };
     /// Session-lived Inspector edits, re-applied after chrome sync / rebuild so hover
     /// paint and class-variant restore cannot wipe live CSSOM Apply changes.
-    static COMMITTED_INSPECTOR_EDITS: RefCell<HashMap<String, Vec<CommittedInspectorOp>>> =
+    static COMMITTED_INSPECTOR_EDITS: RefCell<HashMap<String, CommittedInspectorEdit>> =
         RefCell::new(HashMap::new());
 }
 
 #[derive(Clone, Debug)]
-enum CommittedInspectorOp {
-    Cssom(String),
+struct CommittedInspectorEdit {
+    instance_id: u64,
+    identity: Option<InspectorIdentity>,
+    css: String,
 }
 
-pub(crate) fn queue_inspector_cssom(path: Vec<usize>, css: String) {
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InspectorIdentity {
+    focus_id: Option<String>,
+    template_id: Option<String>,
+    source: Option<String>,
+    data_slot: Option<String>,
+    has_text: bool,
+}
+
+pub(crate) fn queue_inspector_cssom(path: Vec<usize>, instance_id: u64, css: String) {
     PENDING_INSPECTOR_EDITS.with(|q| {
-        q.borrow_mut().push(PendingInspectorCssom { path, css });
+        q.borrow_mut().push(PendingInspectorCssom { path, instance_id, css });
     });
     crate::app::runtime::request_redraw_all();
 }
@@ -58,24 +70,43 @@ fn path_key(path: &[usize]) -> String {
     super::snapshot::path_to_key(path)
 }
 
-pub(crate) fn commit_inspector_cssom(path: &[usize], css: String) {
+fn inspector_identity(el: &Element) -> Option<InspectorIdentity> {
+    let source = el
+        .attrs
+        .get(crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID)
+        .cloned();
+    if el.focus_id.is_none() && el.template_id.is_none() && source.is_none() {
+        return None;
+    }
+    Some(InspectorIdentity {
+        focus_id: el.focus_id.clone(),
+        template_id: el.template_id.clone(),
+        source,
+        data_slot: el.attrs.get("data-slot").cloned(),
+        has_text: el.text.is_some(),
+    })
+}
+
+pub(crate) fn commit_inspector_cssom(root: &Element, path: &[usize], css: String) {
+    let Some(el) = super::snapshot::find_element_by_path(root, path) else { return; };
     let key = path_key(path);
     super::DevToolsState::record_change("CSS", format!("{key}\n{css}"));
     COMMITTED_INSPECTOR_EDITS.with(|m| {
         m.borrow_mut()
-            .insert(key, vec![CommittedInspectorOp::Cssom(css)]);
+            .insert(key, CommittedInspectorEdit {
+                instance_id: el.inspector_instance_id,
+                identity: inspector_identity(el),
+                css,
+            });
     });
 }
 
 /// Last CSSOM text applied via Inspector for `path`, if any this session.
-pub(crate) fn committed_inspector_cssom(path: &[usize]) -> Option<String> {
+pub(crate) fn committed_inspector_cssom(path: &[usize], instance_id: u64) -> Option<String> {
     let key = path_key(path);
     COMMITTED_INSPECTOR_EDITS.with(|m| {
-        m.borrow().get(&key).and_then(|ops| {
-            ops.iter().rev().find_map(|op| match op {
-                CommittedInspectorOp::Cssom(css) => Some(css.clone()),
-            })
-        })
+        m.borrow().get(&key).filter(|edit| edit.instance_id == instance_id)
+            .map(|edit| edit.css.clone())
     })
 }
 
@@ -89,22 +120,39 @@ pub(crate) fn reapply_inspector_overrides(
         return LayoutStatus::Clean;
     }
     let mut impact = LayoutStatus::Clean;
-    for (key, ops) in committed {
-        let path = super::snapshot::key_to_path(&key);
+    let mut resolved = HashMap::new();
+    for (_, mut edit) in committed {
+        let mut exact = None;
+        let mut candidates = Vec::new();
+        let mut stack = vec![(root as &Element, Vec::new())];
+        while let Some((el, path)) = stack.pop() {
+            if el.inspector_instance_id == edit.instance_id {
+                exact = Some(path);
+                break;
+            }
+            if edit.identity.is_some() && inspector_identity(el) == edit.identity {
+                candidates.push(path.clone());
+            }
+            for (index, child) in el.children.iter().enumerate() {
+                let mut child_path = path.clone();
+                child_path.push(index);
+                stack.push((child, child_path));
+            }
+        }
+        let Some(path) = exact.or_else(|| (candidates.len() == 1).then(|| candidates.remove(0))) else {
+            continue;
+        };
         let Some(el) = find_element_by_path_mut(root, &path) else {
             continue;
         };
-        for op in ops {
-            match op {
-                CommittedInspectorOp::Cssom(css) => {
-                    impact = impact.merge(apply_cssom_text(el, &css));
-                }
-            }
-        }
+        edit.instance_id = el.inspector_instance_id;
+        impact = impact.merge(apply_cssom_text(el, &edit.css));
         if el.layout_node.is_some() {
             layout_tree.update_taffy_node_style(el);
         }
+        resolved.insert(path_key(&path), edit);
     }
+    COMMITTED_INSPECTOR_EDITS.with(|edits| *edits.borrow_mut() = resolved);
     impact
 }
 
@@ -176,7 +224,7 @@ pub fn apply_style_patch(el: &mut Element, patch: &StylePatch) -> LayoutStatus {
 /// Keep utility-class base snapshots aligned with live style after Inspector edits.
 fn sync_class_set_base_from_live(el: &mut Element) {
     let style = el.style.as_ref().clone();
-    let text_style = el.text_style.as_ref().clone();
+    let text_style = el.specified_text_style();
     if let Some(cs) = el.class_set.as_mut() {
         if cs.base_style.is_some() {
             cs.base_style = Some(style);
@@ -724,6 +772,9 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
             .unwrap_or(LayoutStatus::Clean),
         "color" => {
             let c = parse_cssom_color(value);
+            if let Some(inherited) = el.inherited_text_style.as_mut() {
+                inherited.color = None;
+            }
             el.text_style.color = Some([
                 (c[0] * 255.0).round() as u8,
                 (c[1] * 255.0).round() as u8,
@@ -734,6 +785,9 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
         }
         "font-size" | "font_size" => {
             if let Ok(v) = parse_f32(value) {
+                if let Some(inherited) = el.inherited_text_style.as_mut() {
+                    inherited.size = None;
+                }
                 el.text_style.size = Some(v.max(1.0));
                 LayoutStatus::LayoutChanged
             } else {
@@ -742,6 +796,9 @@ fn apply_cssom_decl(el: &mut Element, prop: &str, value: &str) -> LayoutStatus {
         }
         "font-weight" | "font_weight" => {
             if let Ok(v) = value.trim().parse::<u16>() {
+                if let Some(inherited) = el.inherited_text_style.as_mut() {
+                    inherited.weight = None;
+                }
                 el.text_style.weight = Some(v);
                 LayoutStatus::StyleChanged
             } else {
@@ -1293,9 +1350,56 @@ mod tests {
     use crate::layout::dimension::{dim_length_px, lp_length_px};
 
     #[test]
+    fn committed_override_follows_a_unique_authored_node_after_rebuild() {
+        clear_committed_inspector_edits_for_test();
+        let root = Element::new().child(Element::new().template_id("source:12:4").text("before"));
+        commit_inspector_cssom(&root, &[0], "padding: 23px;".into());
+        let mut rebuilt = Element::new().children([
+            Element::new().template_id("source:11:4"),
+            Element::new().template_id("source:12:4").text("after"),
+        ]);
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        reapply_inspector_overrides(&mut rebuilt, &mut tree);
+        assert_ne!(lp_length_px(rebuilt.children[0].style.padding.top), Some(23.0));
+        assert_eq!(lp_length_px(rebuilt.children[1].style.padding.top), Some(23.0));
+        assert!(committed_inspector_cssom(&[1], rebuilt.children[1].inspector_instance_id).is_some());
+        clear_committed_inspector_edits_for_test();
+    }
+
+    #[test]
+    fn committed_override_skips_ambiguous_or_anonymous_remounts() {
+        for identified in [false, true] {
+            clear_committed_inspector_edits_for_test();
+            let make = || {
+                if identified { Element::new().template_id("repeated") } else { Element::new() }
+            };
+            let root = Element::new().child(make());
+            commit_inspector_cssom(&root, &[0], "padding: 23px;".into());
+            let mut rebuilt = Element::new().children([make(), make()]);
+            let mut tree = crate::layout::layout_tree::LayoutTree::new();
+            reapply_inspector_overrides(&mut rebuilt, &mut tree);
+            assert!(rebuilt.children.iter().all(|el| lp_length_px(el.style.padding.top) != Some(23.0)));
+        }
+        clear_committed_inspector_edits_for_test();
+    }
+
+    #[test]
+    fn committed_override_does_not_leak_to_a_replacement_at_the_same_path() {
+        clear_committed_inspector_edits_for_test();
+        let mut root = Element::new().child(Element::new().focus_id("original"));
+        commit_inspector_cssom(&root, &[0], "padding: 23px;".into());
+        let mut tree = crate::layout::layout_tree::LayoutTree::new();
+        reapply_inspector_overrides(&mut root, &mut tree);
+        root.children[0] = Element::new().focus_id("replacement");
+        reapply_inspector_overrides(&mut root, &mut tree);
+        assert_ne!(lp_length_px(root.children[0].style.padding.top), Some(23.0));
+        clear_committed_inspector_edits_for_test();
+    }
+
+    #[test]
     fn pending_inspector_edits_queue_and_take() {
         let _ = take_pending_inspector_edits(); // clear
-        queue_inspector_cssom(vec![2], "padding: 8px;".into());
+        queue_inspector_cssom(vec![2], 7, "padding: 8px;".into());
         let edits = take_pending_inspector_edits();
         assert_eq!(edits.len(), 1);
         assert_eq!(edits[0].path, vec![2]);
@@ -1309,7 +1413,7 @@ mod tests {
         let mut child = Element::new();
         let _ = crate::style::apply_class_list(&mut child, "p-2");
         let mut root = Element::new().child(child);
-        commit_inspector_cssom(&[0], "padding: 20px;".into());
+        commit_inspector_cssom(&root, &[0], "padding: 20px;".into());
         // Simulate chrome / variant restore wiping live style back to class base.
         if let Some(cs) = root.children[0].class_set.as_ref() {
             if let Some(base) = cs.base_style.as_ref() {
@@ -1347,7 +1451,7 @@ mod tests {
         crate::style::apply_class_list(&mut right, "p-2 bg-red-500");
         let original = right.style.clone();
         let mut root = Element::new().children([left, right]);
-        commit_inspector_cssom(&[0], "padding: 23px; background: #00ff00;".into());
+        commit_inspector_cssom(&root, &[0], "padding: 23px; background: #00ff00;".into());
         let mut tree = crate::core::tree::LayoutTree::new();
         reapply_inspector_overrides(&mut root, &mut tree);
         assert_eq!(lp_length_px(root.children[0].style.padding.top), Some(23.0));

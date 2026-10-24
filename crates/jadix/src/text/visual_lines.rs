@@ -855,13 +855,13 @@ fn sample_virt_avg_line_height(
     };
     let bytes = text.len().max(1);
     let chunk = (bytes / 8).clamp(256, 4096);
-    let (l0, b0) = take(&text[..chunk.min(text.len())]);
+    let (l0, b0) = take(&text[..text.floor_char_boundary(chunk.min(text.len()))]);
     let mid = bytes / 2;
     let mid_end = (mid + chunk).min(text.len());
     let mid_start = mid.saturating_sub(chunk / 2).min(mid_end);
-    let (l1, b1) = take(&text[mid_start..mid_end]);
+    let (l1, b1) = take(&text[text.floor_char_boundary(mid_start)..text.floor_char_boundary(mid_end)]);
     let tail_start = text.len().saturating_sub(chunk);
-    let (l2, b2) = take(&text[tail_start..]);
+    let (l2, b2) = take(&text[text.floor_char_boundary(tail_start)..]);
     let lines = (l0 + l1 + l2) as f32;
     let bs = (b0 + b1 + b2) as f32;
     VirtSample {

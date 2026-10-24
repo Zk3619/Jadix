@@ -26,6 +26,8 @@ pub fn code_editor(uri: impl Into<String>) -> CodeEditorBuilder {
         wrap_mode: TextareaWrapMode::None,
         value: None,
         initial: None,
+        line_numbers: true,
+        language: None,
         chrome: SlotChrome::default(),
         #[cfg(feature = "text-undo")]
         undo: crate::utils::text_edit_history::TextUndoConfig::textarea_default(),
@@ -39,6 +41,8 @@ pub struct CodeEditorBuilder {
     wrap_mode: TextareaWrapMode,
     value: Option<Signal<String>>,
     initial: Option<String>,
+    line_numbers: bool,
+    language: Option<String>,
     chrome: SlotChrome,
     #[cfg(feature = "text-undo")]
     undo: crate::utils::text_edit_history::TextUndoConfig,
@@ -46,6 +50,8 @@ pub struct CodeEditorBuilder {
 
 impl CodeEditorBuilder {
     crate::impl_slot_chrome_methods!();
+    pub fn line_numbers(mut self, enabled: bool) -> Self { self.line_numbers = enabled; self }
+    pub fn language(mut self, language: impl Into<String>) -> Self { self.language = Some(language.into()); self }
 
     pub fn registry(mut self, registry: DocumentRegistry) -> Self {
         self.registry = Some(registry);
@@ -89,6 +95,8 @@ impl From<CodeEditorBuilder> for Element {
             wrap_mode,
             value,
             initial,
+            line_numbers,
+            language,
             chrome,
             #[cfg(feature = "text-undo")]
             undo,
@@ -102,8 +110,8 @@ impl From<CodeEditorBuilder> for Element {
             .map(|h| h.field_id().to_string())
             .unwrap_or_else(|| document_field_id(&uri));
 
-        chrome.apply(build_text_edit_element(TextEditBuildParams {
-            field_id,
+        let editor = build_text_edit_element(TextEditBuildParams {
+            field_id: field_id.clone(),
             placeholder: String::new(),
             disabled: false,
             invalid: false,
@@ -140,7 +148,8 @@ impl From<CodeEditorBuilder> for Element {
                     crate::utils::text_edit_history::TextUndoConfig::textarea_default()
                 }
             },
-        }))
+        });
+        chrome.apply(crate::components::editor_chrome::decorate_editor(editor, &field_id, line_numbers, language, 1))
     }
 }
 

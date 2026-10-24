@@ -877,10 +877,17 @@ mod tests {
                         );
                     }
                     if width < 640.0 {
+                        for action in &row.children {
+                            assert!((action.layout_bounds[2] - row.layout_bounds[2]).abs() < 0.5,
+                                "narrow footer actions must fill the row at {width}px");
+                        }
                         assert!(
                             row.children[1].layout_bounds[1] > row.children[0].layout_bounds[1]
                         );
                     } else {
+                        let last = row.children.last().unwrap().layout_bounds;
+                        assert!((last[0] + last[2] - row.layout_bounds[0] - row.layout_bounds[2]).abs() < 0.5,
+                            "desktop footer actions must align right at {width}px: last={last:?} row={:?}", row.layout_bounds);
                         assert!(
                             (row.children[1].layout_bounds[1] - row.children[0].layout_bounds[1])
                                 .abs()

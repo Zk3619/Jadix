@@ -166,7 +166,7 @@ fn overlay_auto_fade_paints_cubic_without_rewriting_hit_slab() {
 }
 
 #[test]
-fn overlay_auto_fade_must_dest_reset_on_alpha_change_not_idle_rest() {
+fn overlay_auto_fade_replays_underlay_on_alpha_change_not_idle_rest() {
     const REST: &str = "diag-auto-fade-present";
     let (_handle, _) = create_root(|| {
         create_effect(|| {
@@ -247,6 +247,14 @@ fn overlay_auto_fade_must_dest_reset_on_alpha_change_not_idle_rest() {
                 !fade_dirty.is_empty(),
                 "in-flight fade must dest-reset or PartialLoad keeps the previous alpha"
             );
+            for dirty in &fade_dirty {
+                assert_eq!(dirty.kind, crate::app::damage::PaintDirtyKind::Region);
+                assert!(!crate::app::draw_cull::region_replays_own_chrome_only(
+                    dirty.key,
+                    dirty.bounds,
+                    &mid.node_paints,
+                ));
+            }
 
             settle_cubic(REST, "y", 0.0);
             let hidden =
@@ -261,38 +269,17 @@ fn overlay_auto_fade_must_dest_reset_on_alpha_change_not_idle_rest() {
                 !hide_dirty.is_empty(),
                 "settle-to-zero must dest-reset or retain keeps the last gray pixels"
             );
-            let thumb_key = find_focus_mut(&mut root, SCROLLBAR_THUMB_FOCUS_PREFIX, ":y")
-                .and_then(|el| el.layout_node)
-                .map(u64::from)
-                .expect("thumb taffy");
-            let prev = crate::app::draw_cull::last_present_visual_slots(
-                &shown.node_paints,
-                &shown.instances,
-                &[],
-                &shown.text_nodes,
-                &[],
-            );
             let mut covered = false;
             for d in &hide_dirty {
-                if d.kind != crate::app::damage::PaintDirtyKind::Node {
-                    continue;
-                }
-                let reset = crate::app::draw_cull::node_present_dest_reset_full(
+                assert_eq!(d.kind, crate::app::damage::PaintDirtyKind::Region);
+                assert!(!crate::app::draw_cull::region_replays_own_chrome_only(
                     d.key,
                     d.bounds,
                     &hidden.node_paints,
-                    &hidden.instances,
-                    &[],
-                    &[],
-                    1.0,
-                    prev.iter().find(|(k, _)| *k == d.key).map(|(_, b)| *b),
-                );
-                let Some(reset) = reset else {
-                    continue;
-                };
-                let wipe = reset.rect;
+                ));
+                let wipe = d.bounds;
                 let overlaps_thumb = crate::app::damage::intersect_rects(wipe, thumb).is_some();
-                if d.key == thumb_key || overlaps_thumb {
+                if overlaps_thumb {
                     let covers = wipe[0] <= thumb[0] + 1.5
                         && wipe[1] <= thumb[1] + 1.5
                         && wipe[0] + wipe[2] + 1.5 >= thumb[0] + thumb[2]
@@ -831,7 +818,7 @@ fn rect_covers(outer: [f32; 4], inner: [f32; 4]) -> bool {
 /// the track that was on screen. A wipe shrunk to the sliver outside the field
 /// leaves that rectangle in PartialLoad.
 #[test]
-fn horizontal_auto_hide_dest_reset_covers_the_painted_track() {
+fn horizontal_auto_hide_replay_covers_the_painted_track() {
     const REST: &str = "diag-h-fade";
     let (_handle, _) = create_root(|| {
         create_effect(|| {
@@ -874,50 +861,28 @@ fn horizontal_auto_hide_dest_reset_covers_the_painted_track() {
                 track[2] > 40.0 && track[3] > 4.0,
                 "shown horizontal track must be a real bar, got {track:?}"
             );
+            assert!(thumb_fill_alpha(&shown, track) > 0.99);
             let _ = take_frame_paint_nodes();
 
             settle_cubic(REST, "x", 0.0);
             let hidden =
                 layout.build_and_layout_fast(&mut root, 220.0, 96.0, [-1.0, -1.0], true, true);
             let hide_dirty = take_frame_paint_nodes();
-            let prev = crate::app::draw_cull::last_present_visual_slots(
-                &shown.node_paints,
-                &shown.instances,
-                &[],
-                &shown.text_nodes,
-                &[],
-            );
             let mut covered_track = false;
-            let mut wipes = Vec::new();
             for d in &hide_dirty {
-                if d.kind != crate::app::damage::PaintDirtyKind::Node {
-                    continue;
-                }
-                let Some(reset) = crate::app::draw_cull::node_present_dest_reset_full(
+                assert_eq!(d.kind, crate::app::damage::PaintDirtyKind::Region);
+                assert!(!crate::app::draw_cull::region_replays_own_chrome_only(
                     d.key,
                     d.bounds,
                     &hidden.node_paints,
-                    &hidden.instances,
-                    &[],
-                    &[],
-                    1.0,
-                    prev.iter().find(|(k, _)| *k == d.key).map(|(_, b)| *b),
-                ) else {
-                    continue;
-                };
-                wipes.push((d.key, d.bounds, reset.rect, reset.clear, reset.replay));
-                if rect_covers(reset.rect, track) {
+                ));
+                if rect_covers(d.bounds, track) {
                     covered_track = true;
-                    assert!(
-                        reset.clear[0] > 0.98 && reset.clear[1] > 0.98 && reset.clear[2] > 0.98,
-                        "hide clear must be the field fill, not the track\n clear={:?} track={track:?}",
-                        reset.clear
-                    );
                 }
             }
             assert!(
                 covered_track,
-                "horizontal hide dest-reset must cover the last painted track\n track={track:?} thumb={thumb:?} field={bounds:?}\n wipes={wipes:?}\n dirties={hide_dirty:?}"
+                "horizontal hide replay must cover the last painted track\n track={track:?} thumb={thumb:?} field={bounds:?}\n dirties={hide_dirty:?}"
             );
             let hidden_track_a = thumb_fill_alpha(&hidden, track);
             assert!(

@@ -34,6 +34,24 @@ impl super::App {
         let x = position.x as f32 / scale.max(1.0);
         let y = position.y as f32 / scale.max(1.0);
 
+        if self.left_button_down {
+            if let Some(drag) = self.scrollbar_drag.as_ref() {
+                let pointer = if drag.axis == super::scroll_support::ScrollAxis::X { x } else { y };
+                let span = (drag.track_len - drag.thumb_len).max(1.0);
+                let target = ((pointer - drag.track_start - drag.grab_offset) / span)
+                    .clamp(0.0, 1.0) * drag.max_offset;
+                let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(&drag.rest);
+                let mut offset = [use_signal(&keys.offset_x, || 0.0_f32).peek(),
+                    use_signal(&keys.offset_y, || 0.0_f32).peek()];
+                offset[if drag.axis == super::scroll_support::ScrollAxis::X { 0 } else { 1 }] = target;
+                super::scroll_support::set_scroll_offset_with_behavior(&drag.rest, offset[0], offset[1], true);
+                if let Some(sec) = self.secondaries.borrow().get(&id) {
+                    sec.window.request_redraw();
+                }
+                return;
+            }
+        }
+
         let drag_sel_update: Option<(String, usize, usize, usize, bool)> = if self.left_button_down
         {
             let mut secs = self.secondaries.borrow_mut();
@@ -220,6 +238,22 @@ impl super::App {
         };
         let x = self.cursor_pos.x as f32 / scale.max(1.0);
         let y = self.cursor_pos.y as f32 / scale.max(1.0);
+
+        if button == MouseButton::Left {
+            if element_state == ElementState::Released {
+                if let Some(drag) = self.scrollbar_drag.take() {
+                    let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(&drag.rest);
+                    use_signal(&keys.hover_axis_x, || false).set_silent(false);
+                    use_signal(&keys.hover_axis_y, || false).set_silent(false);
+                    if let Some(sec) = self.secondaries.borrow().get(&id) {
+                        sec.window.request_redraw();
+                    }
+                    return;
+                }
+            } else if self.begin_secondary_scrollbar_drag(id, x, y) {
+                return;
+            }
+        }
 
         match button {
             MouseButton::Left => {
@@ -725,6 +759,49 @@ impl super::App {
         }
     }
 
+    fn begin_secondary_scrollbar_drag(&mut self, id: WindowId, x: f32, y: f32) -> bool {
+        let drag = {
+            let windows = self.secondaries.borrow();
+            let Some(window) = windows.get(&id) else { return false };
+            let Some(focus) = super::tree_hit::find_focus_id_at(&window.root_element, x, y, [0.0; 2])
+                else { return false };
+            let Some((rest, axis, is_thumb)) = super::scroll_support::parse_scrollbar_focus_id(&focus)
+                else { return false };
+            let Some((_, maximum, _)) = window.scroll_metrics_cache.get(&rest)
+                else { return false };
+            let index = if axis == super::scroll_support::ScrollAxis::X { 0 } else { 1 };
+            let Some((track, thumb)) = super::scroll_support::scrollbar_drag_bounds(&window.root_element, &rest, axis)
+                else { return false };
+            let pointer = if index == 0 { x } else { y };
+            super::scroll_support::ScrollbarDragState {
+                rest, axis,
+                track_start: track[index],
+                track_len: track[index + 2],
+                thumb_len: thumb[index + 2],
+                max_offset: maximum[index],
+                grab_offset: if is_thumb {
+                    (pointer - thumb[index]).clamp(0.0, thumb[index + 2])
+                } else { thumb[index + 2] * 0.5 },
+            }
+        };
+        let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(&drag.rest);
+        let pointer = if drag.axis == super::scroll_support::ScrollAxis::X { x } else { y };
+        let target = ((pointer - drag.track_start - drag.grab_offset)
+            / (drag.track_len - drag.thumb_len).max(1.0)).clamp(0.0, 1.0) * drag.max_offset;
+        let mut offset = [use_signal(&keys.offset_x, || 0.0_f32).peek(),
+            use_signal(&keys.offset_y, || 0.0_f32).peek()];
+        let horizontal = drag.axis == super::scroll_support::ScrollAxis::X;
+        offset[if horizontal { 0 } else { 1 }] = target;
+        use_signal(if horizontal { &keys.hover_axis_x } else { &keys.hover_axis_y }, || false).set_silent(true);
+        super::scroll_support::set_scroll_offset_with_behavior(&drag.rest, offset[0], offset[1], true);
+        self.click_press_path = None;
+        self.scrollbar_drag = Some(drag);
+        if let Some(window) = self.secondaries.borrow().get(&id) {
+            window.window.request_redraw();
+        }
+        true
+    }
+
     pub(super) fn handle_secondary_mouse_wheel(&mut self, id: WindowId, delta: MouseScrollDelta) {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
@@ -751,11 +828,14 @@ impl super::App {
             let Some((_, [max_x, max_y], _)) = metrics.get(&rest) else {
                 continue;
             };
+            let (dx, dy) =
+                super::scroll_support::wheel_delta_for_scroll_range(dx, dy, *max_x, *max_y);
             if *max_y > 0.5 && dy.abs() > f32::EPSILON {
                 let key = crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest);
                 let cur = use_signal(&key, || 0.0f32).peek();
                 let next = (cur - dy).clamp(0.0, *max_y);
-                use_signal(&key, || 0.0f32).set(next);
+                let horizontal = use_signal(&crate::core::scroll_viewport::scroll_offset_x_signal_key(&rest), || 0.0_f32).peek();
+                super::scroll_support::set_scroll_offset_with_behavior(&rest, horizontal, next, true);
                 scrolled = true;
                 break;
             }
@@ -763,7 +843,8 @@ impl super::App {
                 let key = crate::core::scroll_viewport::scroll_offset_x_signal_key(&rest);
                 let cur = use_signal(&key, || 0.0f32).peek();
                 let next = (cur - dx).clamp(0.0, *max_x);
-                use_signal(&key, || 0.0f32).set(next);
+                let vertical = use_signal(&crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest), || 0.0_f32).peek();
+                super::scroll_support::set_scroll_offset_with_behavior(&rest, next, vertical, true);
                 scrolled = true;
                 break;
             }

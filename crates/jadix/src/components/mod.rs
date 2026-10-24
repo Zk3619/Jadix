@@ -11,7 +11,8 @@
 //! 私有 chrome 在 [`internal`]（Input/Textarea → `text_edit`；弹出菜单共享 → `menu`）；
 //! Dialog 模态壳在本目录 [`dialog`] 内，不进 prelude / 产品清单；后续分 crate 时随本目录迁到组件库。
 //! 滚动视口契约（信号键 / `scroll:` focus）在 [`crate::core::scroll_viewport`]；本目录仅保留
-//! [`ScrollArea`] / [`Scrollbar`] / RSX [`ScrollViewport`] 等产品层封装。
+//! [`ScrollArea`] / [`Scrollbar`] / [`ScrollViewport`] 的 Builder、RSX 与外观封装。
+//! 缩放视口能力在 [`crate::core::scaled_viewport`]；预览容器 [`ScalePreview`] 在本目录。
 //! 函数名故意与 RSX 标签一致，故关闭 `non_snake_case`。
 //!
 //! ## Cross-cutting convention
@@ -81,6 +82,7 @@ pub mod carousel;
 pub mod chart;
 pub mod checkbox;
 pub mod code_editor;
+mod editor_chrome;
 pub mod collapsible;
 pub mod color_picker;
 pub mod combobox;
@@ -88,6 +90,7 @@ pub mod command;
 pub mod context_menu;
 pub mod date_picker;
 pub mod dialog;
+pub mod diff_view;
 pub mod dock;
 pub mod drawer;
 pub mod dropdown_menu;
@@ -115,6 +118,7 @@ pub mod progress;
 pub mod questionnaire;
 pub mod radio_group;
 pub mod resizable;
+pub mod scale_preview;
 pub mod scroll_area;
 pub mod scroll_viewport;
 pub mod scrollbar;
@@ -129,6 +133,14 @@ pub mod switch;
 pub mod table;
 pub mod tabs;
 pub mod textarea;
+pub mod text_view;
+pub mod text_editor;
+mod document_viewport;
+pub mod document_view;
+pub mod document_editor;
+pub mod math_view;
+pub mod molecule_view;
+pub mod protein_view;
 pub mod timeline;
 pub mod title_bar;
 pub mod toast;
@@ -140,6 +152,8 @@ pub mod virtual_list;
 pub mod virtual_masonry;
 #[cfg(feature = "webview")]
 pub mod webview;
+#[cfg(feature = "webview")]
+pub mod html_document;
 #[cfg(feature = "webview")]
 pub use webview::{webview, webview_html, webview_status, webview_supported, WebView, WebViewProps, WebViewStatus};
 
@@ -534,6 +548,7 @@ pub use resizable::{
     ResizableOrientation, ResizablePanel, ResizablePanelBuilder, ResizablePanelGroup,
     ResizablePanelGroupProps, ResizablePanelProps,
 };
+pub use scale_preview::{scale_preview, ScalePreview, ScalePreviewBuilder, ScalePreviewProps};
 pub use scroll_area::{
     scroll_area, scroll_into_view, scroll_into_view_when, scroll_item_into_view,
     scroll_item_into_view_when, scrollarea, ScrollArea, ScrollAreaBuilder, ScrollAreaProps,
@@ -654,4 +669,12 @@ pub use tree_view::{
     TreeViewItemCtx, TreeViewVariant,
 };
 pub use virtual_list::{virtual_list, VirtualListBuilder};
+pub use text_view::{text_view, TextView, TextViewBuilder, TextViewProps};
+pub use text_editor::{text_editor, TextEditor, TextEditorBuilder, TextEditorProps};
+pub use document_view::{document_view, DocumentView, DocumentViewBuilder, DocumentViewProps, DocumentBlockRenderer};
+pub use document_editor::{document_editor, DocumentEditor, DocumentEditorBuilder, DocumentEditorProps};
+pub use math_view::{math_view, chemistry_view, MathView, ChemistryView, MathViewBuilder, MathViewProps, ChemistryViewProps};
+pub use molecule_view::{molecule_view, MoleculeView, MoleculeViewProps, MoleculeViewBuilder, MoleculeCamera};
+pub use protein_view::protein_view;
+pub use diff_view::{diff_view, DiffView, DiffViewBuilder, DiffViewProps};
 pub use virtual_masonry::{virtual_masonry, VirtualMasonryBuilder};

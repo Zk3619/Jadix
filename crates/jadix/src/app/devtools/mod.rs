@@ -1,9 +1,8 @@
 //! Runtime Inspector (B1): Elements pick/highlight + Reactivity graph + Layout/CSSOM.
 
 pub(crate) mod controls;
-mod overlay;
 mod device;
-pub(crate) use device::viewport_size as preview_viewport_size;
+mod overlay;
 mod locale;
 mod panel;
 mod presentation;
@@ -12,6 +11,25 @@ mod snapshot;
 mod source;
 mod state;
 mod style_edit;
+
+pub(crate) fn content_viewport_size(window_size: (f32, f32)) -> (f32, f32) {
+    if !DevToolsState::is_enabled()
+        || !DevToolsState::is_open()
+        || crate::app::window_scope::active() != crate::app::window_scope::WindowScope::Primary
+    {
+        return window_size;
+    }
+    if let Some(size) = device::viewport_size() {
+        return size;
+    }
+    if presentation::is_detached() {
+        return window_size;
+    }
+    (
+        (window_size.0 - DevToolsState::panel_width()).max(1.0),
+        window_size.1,
+    )
+}
 
 pub use snapshot::{
     box_model_snapshot, cssom_text_from_element, cssom_text_from_style, find_element_by_path,
@@ -27,23 +45,21 @@ pub(crate) use style_edit::{
     take_pending_inspector_edits,
 };
 
+pub(crate) use device::scope_portals as scope_preview_portals;
+#[cfg(test)]
+pub(crate) use device::PORTAL_HOST as DEVICE_PORTAL_HOST;
 pub(crate) use overlay::{
     begin_highlight_collect, clear_highlight_collect_root, finalize_highlight_after_collect,
     highlight_paint_gen, note_element_paint_visual, note_element_paint_visual_from_abs,
-    refresh_highlight, refresh_highlight_slot, reset_tree_row_hover_cache,
-    scroll_elements_tree_row_into_center, set_highlight_collect_root, stamped_highlight_abs_rect,
-    sync_box_model_visuals, sync_tree_row_hovers, HIGHLIGHT_SLOT_ID,
+    refresh_highlight, refresh_highlight_slot,
+    set_highlight_collect_root, stamped_highlight_abs_rect, HIGHLIGHT_SLOT_ID,
 };
-pub(crate) use device::scope_portals as scope_preview_portals;
-pub(crate) use device::PORTAL_HOST as DEVICE_PORTAL_HOST;
-pub(crate) use panel::{sync_inspector_applied_cssom, sync_overlay_layout, wrap_app};
-pub use presentation::{is_detached, toggle_detached};
-pub(crate) use presentation::window_resized as detached_window_resized;
+pub(crate) use panel::{
+    sync_content_viewport, sync_inspector_applied_cssom, sync_overlay_layout, wrap_app,
+};
 pub(crate) use presentation::is_detached_window;
-
-pub(crate) fn sync_secondary_chrome(root: &mut crate::core::tree::Element) -> bool {
-    overlay::patch_detached_row_hovers(root)
-}
+pub(crate) use presentation::window_resized as detached_window_resized;
+pub use presentation::{is_detached, toggle_detached};
 
 #[cfg(test)]
 fn set_test_scroll_offset(element: &mut crate::core::tree::Element, offset: [f32; 2]) {
@@ -119,17 +135,16 @@ pub(crate) fn try_pick_click(root: &crate::core::tree::Element, x: f32, y: f32) 
         })
         .unwrap_or_default();
     DevToolsState::set_selected(path.clone(), identity, Vec::new(), size_hint);
-    let _ = scroll_elements_tree_row_into_center(root, &path_to_key(&path));
+    DevToolsState::request_tree_reveal(&path);
     DevToolsState::set_pick(false);
+    DevToolsState::set_hover_highlight_path(path);
+    DevToolsState::defer_pick_highlight_clear();
     true
 }
 
-/// Flush page overlay + Elements tree row paints after pick selection (hover cleared).
+/// Flush the page overlay after pick selection (hover cleared).
 pub(crate) fn sync_highlight_after_pick_commit(root: &mut crate::core::tree::Element) -> bool {
-    let overlay = refresh_highlight(root);
-    reset_tree_row_hover_cache();
-    let rows = sync_tree_row_hovers(root);
-    overlay || rows
+    refresh_highlight(root)
 }
 
 /// While pick mode is active, follow the pointer and drive the page overlay highlight.
@@ -283,7 +298,7 @@ mod tests {
     }
 
     #[test]
-    fn pick_commit_clears_overlay_until_tree_row_hover() {
+    fn pick_commit_temporarily_highlights_without_clearing_selection() {
         use super::overlay::{refresh_highlight, stamped_highlight_abs_rect, HIGHLIGHT_SLOT_ID};
         use super::snapshot::find_element_by_template_mut;
 
@@ -318,9 +333,18 @@ mod tests {
         assert!(try_pick_click(&root, 15.0, 15.0));
         assert!(!DevToolsState::is_pick());
         assert!(!DevToolsState::selected_path_key().is_empty());
-        assert!(DevToolsState::overlay_path_key().is_empty());
+        assert_eq!(DevToolsState::overlay_path_key(), DevToolsState::selected_path_key());
         let _ = sync_highlight_after_pick_commit(&mut root);
         let _ = refresh_highlight(&mut root);
+        let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
+        assert!(stamped_highlight_abs_rect(&slot.children[4]).is_some());
+        let selected = DevToolsState::selected_path_key();
+        let deadline = DevToolsState::pick_highlight_deadline().unwrap();
+        assert!(!DevToolsState::expire_pick_highlight(deadline - std::time::Duration::from_millis(1)));
+        assert!(DevToolsState::expire_pick_highlight(deadline));
+        assert!(!DevToolsState::has_hover_highlight());
+        assert_eq!(DevToolsState::selected_path_key(), selected);
+        refresh_highlight(&mut root);
         let slot = find_element_by_template_mut(&mut root, HIGHLIGHT_SLOT_ID).unwrap();
         assert!(stamped_highlight_abs_rect(&slot.children[4]).is_none());
     }

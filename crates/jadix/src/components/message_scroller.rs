@@ -1121,10 +1121,10 @@ pub fn MessageScrollerItem(
     apply_base(el, base_builder)
 }
 
-/// Jump button product default is Button `outline` / `sm` (empty RSX attr → these).
+/// Jump button product default is Button `secondary` / `sm` (empty RSX attr → these).
 fn jump_button_variant(raw: &str) -> ButtonVariant {
     if raw.trim().is_empty() {
-        ButtonVariant::Outline
+        ButtonVariant::Secondary
     } else {
         raw.into()
     }
@@ -1518,7 +1518,7 @@ pub struct MessageScrollerButtonBuilder {
 pub fn message_scroller_button() -> MessageScrollerButtonBuilder {
     MessageScrollerButtonBuilder {
         direction: MessageScrollerDirection::End,
-        variant: ButtonVariant::Outline,
+        variant: ButtonVariant::Secondary,
         size: ButtonSize::Sm,
         chrome: SlotChrome::default(),
         children: Vec::new(),
@@ -1573,6 +1573,22 @@ impl From<MessageScrollerButtonBuilder> for Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn latest_button_has_a_filled_default_and_accepts_explicit_variants() {
+        crate::core::reactivity::create_root(|| {
+            for mode in [crate::style::ThemeMode::Light, crate::style::ThemeMode::Dark] {
+                crate::style::set_theme_mode(mode);
+                let button = message_scroller_scope("filled-latest", true,
+                    MessageScrollerDefaultPosition::End, DEFAULT_EDGE_THRESHOLD,
+                    DEFAULT_PREVIOUS_PEEK, || Element::from(message_scroller_button()));
+                assert!(button.children[0].style.bg_color[3] > 0.0, "{mode:?}: Latest needs a background");
+                assert_eq!(jump_button_variant(""), ButtonVariant::Secondary);
+                assert_eq!(jump_button_variant("outline"), ButtonVariant::Outline);
+            }
+            crate::style::set_theme_mode(crate::style::ThemeMode::Light);
+        });
+    }
 
     #[test]
     fn viewport_builder_style_sticks() {

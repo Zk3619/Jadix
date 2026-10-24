@@ -1,8 +1,11 @@
 //! 树装配：单行 hstack chrome / 多行 scroll + 可选 resize 斜线手柄。
 
+use super::field::{
+    effective_invalid, input_adornment_button, input_number_step_button,
+    input_number_steppers_column, map_byte_range_to_masked, resolve_placeholder,
+    set_adornment_visible, InputType,
+};
 use super::strings::{compose_text_edit_strings, finish_selection_draw, TextEditStringsInput};
-use super::field::{effective_invalid, input_adornment_button, input_number_step_button, input_number_steppers_column, map_byte_range_to_masked, resolve_placeholder, set_adornment_visible, InputType};
-use crate::utils::text_field::{input_caret_signal_key, input_clear_template_id, input_ime_anchor_signal_key, input_number_dec_template_id, input_number_inc_template_id, input_overwrite_signal_key, input_password_reveal_signal_key, input_preedit_marks_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id, input_selection_signal_key, input_text_template_id, input_type_signal_key, input_value_signal_key};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::{parse_color, parse_text_color, Element, TextEditPaintSync};
 use crate::primitives::interactive::interactive;
@@ -12,6 +15,13 @@ use crate::tokens;
 use crate::utils::text_field::{
     attach_text_edit_field_lifecycle, bind_controlled_value, extra_carets_signal,
     focus_id_for_text_edit,
+};
+use crate::utils::text_field::{
+    input_caret_signal_key, input_clear_template_id, input_ime_anchor_signal_key,
+    input_number_dec_template_id, input_number_inc_template_id, input_overwrite_signal_key,
+    input_password_reveal_signal_key, input_preedit_marks_signal_key, input_preedit_sel_signal_key,
+    input_preedit_signal_key, input_reveal_template_id, input_selection_signal_key,
+    input_text_template_id, input_type_signal_key, input_value_signal_key,
 };
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 pub(crate) struct TextEditBuildParams {
@@ -469,23 +479,12 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         let rest = scroll_rest
             .as_deref()
             .expect("multiline text edit always has scroll_rest");
-        use crate::core::scrollbar::{scrollbar, ScrollbarOrientation};
         use crate::core::scroll_viewport::scroll_scrollbar_inset_y_signal_key;
         use_signal(&scroll_scrollbar_inset_y_signal_key(rest), || {
             "inside".to_string()
         })
         .set("inside".to_string());
-        let vbar: Element = scrollbar(&format!("__jadix_v_scrollbar_{rest}"))
-            .target(rest.to_string())
-            .orientation(ScrollbarOrientation::Vertical)
-            .visibility("auto")
-            .thickness(8.0)
-            .overlay(true)
-            .z_index(1000)
-            .top(4.0)
-            .bottom(2.0) // minimal inset; resize grip overlays the corner (z below track)
-            .right(2.0)
-            .into();
+        let vbar = scrollbar_track(rest, "y").top(4.0).bottom(2.0).right(2.0);
         el = el.child(vbar);
         if !wrap_mode.soft_wrap() {
             use crate::core::scroll_viewport::scroll_scrollbar_inset_x_signal_key;
@@ -495,17 +494,10 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
             .set("inside".to_string());
             // Edge pad only — do not bake the vertical thickness into `right`.
             // Runtime adds the L-join lane when Y actually occupies the corner.
-            let mut hbar: Element = scrollbar(&format!("__jadix_h_scrollbar_{rest}"))
-                .target(rest.to_string())
-                .orientation(ScrollbarOrientation::Horizontal)
-                .visibility("auto")
-                .thickness(8.0)
-                .overlay(true)
-                .z_index(1000)
+            let mut hbar = scrollbar_track(rest, "x")
                 .left(4.0)
                 .right(crate::core::scrollbar::SCROLLBAR_EDGE_PAD)
-                .bottom(2.0)
-                .into();
+                .bottom(2.0);
             hbar.set_attr(
                 crate::core::scrollbar::ATTR_H_LANE_INSET,
                 crate::core::scrollbar::SCROLLBAR_EDGE_PAD.to_string(),
@@ -721,6 +713,65 @@ pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     } else {
         out.set_attr("data-slot", if multiline { "textarea" } else { "input" });
     }
-    if disabled { out.set_attr("disabled", "true"); }
+    if disabled {
+        out.set_attr("disabled", "true");
+    }
     attach_text_edit_field_lifecycle(out, &field_id, drop_undo_on_unmount)
+}
+
+fn scrollbar_track(target: &str, axis: &str) -> Element {
+    let cross = 8.0_f32;
+    let visibility = "auto";
+    let mut track_bg = parse_color("scrollbar-track");
+    let mut thumb_bg = parse_color("scrollbar-thumb");
+    let mut track_border = parse_color("scrollbar-track-border");
+    let mut thumb_border = parse_color("scrollbar-thumb-border");
+    let track_border_width = if track_border[3] > 0.01 { 1.0 } else { 0.0 };
+    let thumb_border_width = if thumb_border[3] > 0.01 { 1.0 } else { 0.0 };
+    let track_fades = track_bg[3] > 0.01 || track_border[3] > 0.01;
+    crate::core::scrollbar::apply_scrollbar_visible_alpha(
+        if visibility == "always" { 1.0 } else { 0.0 },
+        track_fades,
+        thumb_border[3] > 0.01,
+        &mut track_bg,
+        &mut thumb_bg,
+        &mut track_border,
+        &mut thumb_border,
+    );
+    let mut track = Element::new()
+        .flex_grow(0.0)
+        .flex_shrink(0.0)
+        .rounded(cross * 0.5)
+        .bg(track_bg)
+        .border(track_border, track_border_width)
+        .absolute()
+        .z_index(1000);
+    let mut thumb = Element::new()
+        .rounded((cross - 2.0).max(1.0) * 0.5)
+        .bg(thumb_bg)
+        .border(thumb_border, thumb_border_width)
+        .cursor_kind(crate::core::tree::CursorKind::Pointer);
+    crate::core::scrollbar::configure_scrollbar_parts(
+        &mut track,
+        &mut thumb,
+        Some(target),
+        axis,
+        visibility,
+        cross,
+    );
+    track.set_attr(
+        crate::core::scrollbar::ATTR_SCROLLBAR_TRACK_FADES,
+        if track_fades { "1" } else { "0" },
+    );
+    track.set_attr("jadix_scrollbar_overlay", "1");
+    if axis == "x" {
+        track = track.left(0.0).right(0.0).bottom(0.0);
+        track.style.size.width = taffy::style::Dimension::auto();
+        track.style.min_size.width = taffy::style::Dimension::length(0.0);
+    } else {
+        track = track.inset_inline_end(0.0).top(0.0).bottom(0.0);
+        track.style.size.height = taffy::style::Dimension::auto();
+        track.style.min_size.height = taffy::style::Dimension::length(0.0);
+    }
+    track.child(thumb)
 }

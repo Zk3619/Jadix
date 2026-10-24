@@ -167,13 +167,14 @@ pub use text_style::{
     parse_text_shadow, InputCaretDraw, TextAlign, TextAlignDeclaration, TextDecorationStyle,
     TextDirection, TextOverflow, TextSpan, TextSpanKind, TextStyle, WhiteSpace,
 };
-pub(crate) use theme::theme_generation;
+pub(crate) use theme::{take_system_theme_refresh, theme_generation, update_system_theme};
 pub use glass::GlassMaterial;
 pub use theme_style::{set_theme_preset, theme_preset, ThemePreset, ThemeStyles};
 pub use theme::{
     focus_ring_style, focus_ring_width, get_theme, is_dark_theme, set_focus_ring_style,
-    set_focus_ring_width, set_theme, set_theme_mode, theme_mode, toggle_theme_mode, with_theme,
-    DesignTokens, FocusRingStyle, Theme, ThemeMode, ThemeTransitionConfig,
+    set_focus_ring_width, set_theme, set_theme_mode, set_theme_preference, theme_mode,
+    theme_preference, toggle_theme_mode, with_theme,
+    DesignTokens, FocusRingStyle, Theme, ThemeMode, ThemePreference, ThemeTransitionConfig,
     DEFAULT_FOCUS_RING_WIDTH,
 };
 pub use theme_override::{

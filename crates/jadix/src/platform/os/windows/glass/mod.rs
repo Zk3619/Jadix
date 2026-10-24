@@ -21,9 +21,14 @@ pub fn apply_accent(hwnd: windows_sys::Win32::Foundation::HWND, options: &Window
     accent::apply_accent_policy(hwnd, options);
 }
 
+/// Documented system backdrops require Windows 11 22H2 or newer.
+pub fn system_backdrop_available() -> bool {
+    accent::nt_build_number() >= accent::BUILD_WIN11_SYSTEM_BACKDROP
+}
+
 #[cfg(feature = "backend-dx12")]
 pub fn try_init_custom(window: &dyn Window, options: &WindowOptions) -> bool {
-    if !options.compositor_alpha() {
+    if !(options.wants_custom_dcomp() || options.wants_dcomp_swapchain()) {
         return false;
     }
     let Some(hwnd) = super::window::hwnd(window) else {

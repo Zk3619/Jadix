@@ -273,9 +273,13 @@ pub(crate) fn apply_pending_scroll_align(
         }
         return false;
     }
-    let Some(effective_vh) =
-        effective_scroll_viewport_h_when(rest, viewport_h, content_h, pending.when)
-    else {
+    let effective_vh =
+        effective_scroll_viewport_h_when(rest, viewport_h, content_h, pending.when).or_else(|| {
+            (matches!(pending.target, PendingAlignTarget::Descendant { .. })
+                && content_w > viewport_w + 0.5)
+                .then_some(viewport_h)
+        });
+    let Some(effective_vh) = effective_vh else {
         pending.clip_waits = pending.clip_waits.saturating_add(1);
         if pending.clip_waits < 36 {
             PENDING_SCROLL_ITEM_ALIGN.with(|m| {
@@ -401,6 +405,7 @@ fn find_scroll_target_bounds(
         target: &str,
         want: &str,
         in_vp: bool,
+        scroll_acc: [f32; 2],
         inside: &mut Option<[f32; 4]>,
         anywhere: &mut Option<[f32; 4]>,
     ) {
@@ -409,17 +414,30 @@ fn find_scroll_target_bounds(
             let b = el.layout_bounds;
             if b[2] > 0.5 && b[3] > 0.5 {
                 if in_vp {
-                    *inside = Some(b);
+                    *inside = Some([b[0] - scroll_acc[0], b[1] - scroll_acc[1], b[2], b[3]]);
                 } else if anywhere.is_none() {
                     *anywhere = Some(b);
                 }
             }
         }
+        let child_acc = if in_vp {
+            crate::core::tree::child_scroll_accumulation(el, scroll_acc)
+        } else {
+            scroll_acc
+        };
         for c in &el.children {
-            walk(c, target, want, in_vp, inside, anywhere);
+            walk(c, target, want, in_vp, child_acc, inside, anywhere);
         }
     }
-    walk(root, target, &want, false, &mut inside, &mut anywhere);
+    walk(
+        root,
+        target,
+        &want,
+        false,
+        [0.0; 2],
+        &mut inside,
+        &mut anywhere,
+    );
     inside.or(anywhere)
 }
 
@@ -455,6 +473,102 @@ pub(super) struct ScrollbarDragState {
     pub(super) grab_offset: f32,
 }
 
+pub(super) fn scrollbar_drag_bounds(
+    root: &Element,
+    rest: &str,
+    axis: ScrollAxis,
+) -> Option<([f32; 4], [f32; 4])> {
+    let axis = if axis == ScrollAxis::X { "x" } else { "y" };
+    let track_id = format!(
+        "{}{rest}:{axis}",
+        crate::core::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX
+    );
+    let thumb_id = format!(
+        "{}{rest}:{axis}",
+        crate::core::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX
+    );
+    let (track, _) = super::tree_hit::find_paint_aabb_by_focus_id(root, &track_id, [0.0; 2])?;
+    let (thumb, _) = super::tree_hit::find_paint_aabb_by_focus_id(root, &thumb_id, [0.0; 2])?;
+    Some((track, thumb))
+}
+
+#[cfg(test)]
+mod scrollbar_drag_tests {
+    use super::*;
+
+    #[test]
+    fn scaled_scrollbar_drag_preserves_the_grab_point_on_both_axes() {
+        crate::core::reactivity::create_root(|| {
+            for zoom in [0.35, 0.57, 1.0, 1.5] {
+                for axis in [ScrollAxis::X, ScrollAxis::Y] {
+                    let index = if axis == ScrollAxis::X { 0 } else { 1 };
+                    let name = if index == 0 { "x" } else { "y" };
+                    let track_id = format!("scrollbar-track:scaled-drag:{name}");
+                    let thumb_id = format!("scrollbar-thumb:scaled-drag:{name}");
+                    let thumb = Element::new()
+                        .focus_id(&thumb_id)
+                        .absolute()
+                        .left(if index == 0 { 80.0 } else { 0.0 })
+                        .top(if index == 1 { 80.0 } else { 0.0 })
+                        .w(if index == 0 { 40.0 } else { 10.0 })
+                        .h(if index == 1 { 40.0 } else { 10.0 });
+                    let track = Element::new()
+                        .focus_id(&track_id)
+                        .relative()
+                        .w(if index == 0 { 240.0 } else { 10.0 })
+                        .h(if index == 1 { 240.0 } else { 10.0 })
+                        .child(thumb);
+                    let mut root = Element::new()
+                        .w(600.0)
+                        .h(600.0)
+                        .scale(1.25)
+                        .transform_origin("left top")
+                        .child(
+                            Element::new()
+                                .absolute()
+                                .left(70.0)
+                                .top(50.0)
+                                .w(300.0)
+                                .h(300.0)
+                                .scale(zoom / 1.25)
+                                .transform_origin("left top")
+                                .child(track),
+                        );
+                    let mut layout = crate::core::tree::LayoutTree::new();
+                    layout.build_and_layout(&mut root, 600.0, 600.0, [-1.0; 2]);
+                    let visual_track = super::super::tree_hit::find_paint_aabb_by_focus_id(
+                        &root, &track_id, [0.0; 2],
+                    )
+                    .unwrap()
+                    .0;
+                    let visual_thumb = super::super::tree_hit::find_paint_aabb_by_focus_id(
+                        &root, &thumb_id, [0.0; 2],
+                    )
+                    .unwrap()
+                    .0;
+                    let (track, thumb) = scrollbar_drag_bounds(&root, "scaled-drag", axis).unwrap();
+                    let pointer = visual_thumb[index] + visual_thumb[index + 2] * 0.37;
+                    let grab = (pointer - thumb[index]).clamp(0.0, thumb[index + 2]);
+                    let span = track[index + 2] - thumb[index + 2];
+                    for delta in [0.0, 7.0, 14.0, -7.0] {
+                        let offset = ((pointer + delta - track[index] - grab) / span)
+                            .clamp(0.0, 1.0)
+                            * 1000.0;
+                        let expected = 400.0 + delta / (200.0 * zoom) * 1000.0;
+                        assert!(
+                            (offset - expected).abs() < 0.01,
+                            "zoom={zoom} axis={axis:?} delta={delta}: offset={offset}, expected={expected}"
+                        );
+                        let projected = visual_track[index]
+                            + offset / 1000.0 * (visual_track[index + 2] - visual_thumb[index + 2])
+                            + visual_thumb[index + 2] * 0.37;
+                        assert!((projected - pointer - delta).abs() < 0.01);
+                    }
+                }
+            }
+        });
+    }
+}
 /// Primary-pointer content pan over a scroll viewport (touch; optional mouse → fling).
 ///
 /// Mouse arming is gated by [`crate::app::mouse_content_pan_enabled`] (default off).
@@ -647,11 +761,12 @@ pub(super) fn collect_scroll_areas_at(
     }
 
     let mut next_acc = scroll_acc;
+    let scale = crate::core::tree::paint_scale_with_ancestor(el, el.paint_ancestor_scale);
     if el.style.overflow.x != taffy::style::Overflow::Visible {
-        next_acc[0] += el.scroll_offset[0];
+        next_acc[0] += el.scroll_offset[0] * scale[0];
     }
     if el.style.overflow.y != taffy::style::Overflow::Visible {
-        next_acc[1] += el.scroll_offset[1];
+        next_acc[1] += el.scroll_offset[1] * scale[1];
     }
 
     for child in el.children.iter().rev() {
@@ -752,11 +867,12 @@ fn collect_scroll_hit_walk(
                 }
                 let mut next_acc = escaped;
                 if !is_body_portal {
+                    let scale = crate::core::tree::paint_scale_with_ancestor(frame.el, frame.el.paint_ancestor_scale);
                     if frame.el.style.overflow.x != taffy::style::Overflow::Visible {
-                        next_acc[0] += frame.el.scroll_offset[0];
+                        next_acc[0] += frame.el.scroll_offset[0] * scale[0];
                     }
                     if frame.el.style.overflow.y != taffy::style::Overflow::Visible {
-                        next_acc[1] += frame.el.scroll_offset[1];
+                        next_acc[1] += frame.el.scroll_offset[1] * scale[1];
                     }
                 }
                 stack.push(Frame {
@@ -1211,11 +1327,43 @@ pub(crate) fn wheel_delta_logical_px(
     }
 }
 
+pub(crate) fn wheel_delta_for_scroll_range(dx: f32, dy: f32, max_x: f32, max_y: f32) -> (f32, f32) {
+    if max_x > 0.5 && max_y <= 0.5 && dx.abs() <= f32::EPSILON {
+        (dy, 0.0)
+    } else {
+        (dx, dy)
+    }
+}
+
 #[cfg(test)]
 mod wheel_delta_tests {
-    use super::{wheel_delta_logical_px, WHEEL_LINE_HEIGHT_PX};
+    use super::{wheel_delta_for_scroll_range, wheel_delta_logical_px, WHEEL_LINE_HEIGHT_PX};
     use winit::dpi::PhysicalPosition;
     use winit::event::MouseScrollDelta;
+
+    #[test]
+    fn vertical_wheel_moves_horizontal_only_viewports() {
+        assert_eq!(
+            wheel_delta_for_scroll_range(0.0, -75.0, 300.0, 0.0),
+            (-75.0, 0.0)
+        );
+        assert_eq!(
+            wheel_delta_for_scroll_range(0.0, 75.0, 300.0, 0.0),
+            (75.0, 0.0)
+        );
+    }
+
+    #[test]
+    fn wheel_preserves_vertical_and_explicit_horizontal_input() {
+        for (dx, dy, max_x, max_y) in [
+            (0.0, -75.0, 0.0, 300.0),
+            (0.0, -75.0, 300.0, 300.0),
+            (-25.0, -75.0, 300.0, 0.0),
+            (0.0, -75.0, 0.0, 0.0),
+        ] {
+            assert_eq!(wheel_delta_for_scroll_range(dx, dy, max_x, max_y), (dx, dy));
+        }
+    }
 
     #[test]
     fn line_delta_is_lines_not_notches_times_spi() {
@@ -1876,6 +2024,56 @@ mod scroll_item_align_tests {
                 (sy - expected).abs() < 0.5,
                 "descendant align must use layout box, got {sy} expected {expected}"
             );
+        });
+    }
+
+    #[test]
+    fn descendant_alignment_is_stable_after_scrolling() {
+        use crate::core::tree::Element;
+
+        create_root(|| {
+            let rest = "repeat-descendant-align";
+            let mut row = Element::new().template_id("repeat-target");
+            row.layout_bounds = [410.0, 420.0, 40.0, 32.0];
+            let mut viewport = Element::new()
+                .focus_id(crate::core::scroll_viewport::focus_id_for_scroll_viewport(
+                    rest,
+                ))
+                .child(row);
+            viewport.layout_bounds = [10.0, 20.0, 120.0, 200.0];
+            for _ in 0..3 {
+                super::request_scroll_descendant_into_view(
+                    rest,
+                    "repeat-target",
+                    ScrollItemAlign::Center,
+                );
+                let found = super::resolve_pending_descendant_bounds(&viewport);
+                assert!(super::apply_pending_scroll_align(
+                    rest,
+                    viewport.layout_bounds,
+                    1000.0,
+                    1000.0,
+                    found.get(rest).copied(),
+                ));
+                let offset = [
+                    crate::core::reactivity::use_signal(
+                        &crate::core::scroll_viewport::scroll_offset_x_signal_key(rest),
+                        || 0.0_f32,
+                    )
+                    .peek(),
+                    crate::core::reactivity::use_signal(
+                        &crate::core::scroll_viewport::scroll_offset_y_signal_key(rest),
+                        || 0.0_f32,
+                    )
+                    .peek(),
+                ];
+                assert_eq!(
+                    offset,
+                    [360.0, 316.0],
+                    "repeated alignment must not accumulate offsets"
+                );
+                viewport.scroll_offset = offset;
+            }
         });
     }
 

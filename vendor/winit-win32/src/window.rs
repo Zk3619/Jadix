@@ -1175,7 +1175,10 @@ impl CoreWindow for Window {
     }
 
     fn set_theme(&self, theme: Option<Theme>) {
-        self.window_state_lock().current_theme = try_theme(self.window.hwnd(), theme, true);
+        let current_theme = try_theme(self.window.hwnd(), theme, true);
+        let mut state = self.window_state_lock();
+        state.preferred_theme = theme;
+        state.current_theme = current_theme;
     }
 
     fn theme(&self) -> Option<Theme> {

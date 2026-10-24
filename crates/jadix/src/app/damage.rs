@@ -152,7 +152,7 @@ pub(crate) fn push_frame_paint_element_change(
     scroll_acc: [f32; 2],
     previous_opacity: f32,
 ) {
-    push_frame_paint_element_change_from_before(el, scroll_acc, previous_opacity, None);
+    push_frame_paint_element_change_from_before(el, scroll_acc, previous_opacity, None, None);
 }
 
 /// Record a paint-only change together with the visual box occupied before the
@@ -164,6 +164,7 @@ pub(crate) fn push_frame_paint_element_change_from_before(
     scroll_acc: [f32; 2],
     previous_opacity: f32,
     previous_visual: Option<[f32; 4]>,
+    overflow_clip: Option<[f32; 4]>,
 ) {
     // Entering at opacity≈0 has no dest-ink. Dest-reset of the empty
     // fill+shadow AABB punches underlay. Hide-settle still dest-resets
@@ -194,20 +195,35 @@ pub(crate) fn push_frame_paint_element_change_from_before(
     } else {
         0.0
     };
-    let pad = element_paint_outset_pad(el, rot_pad);
-    let kind = paint_kind_for_element(el);
-    let key = if kind == PaintDirtyKind::Overlay {
+    let mut kind = paint_kind_for_element(el);
+    let composite_scrollbar = kind == PaintDirtyKind::Region
+        && crate::core::scrollbar::auto_scrollbar_live_paint_alpha(el).is_some();
+    let pad = element_paint_outset_pad(el, rot_pad)
+        .max(if composite_scrollbar { 2.0 } else { 0.0 });
+    let key = if el.attrs.get("jadix_devtools_composite").map(String::as_str) == Some("1")
+        || composite_scrollbar
+    {
+        bounds_key(b)
+    } else if kind == PaintDirtyKind::Overlay {
         el.paint_overlay_stamp
             .filter(|k| *k != 0)
             .unwrap_or_else(|| crate::layout::layout_tree::overlay_portal_stamp_key(el))
     } else {
         paint_element_key(el)
     };
-    push_paint_dirty(
-        key,
-        [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0],
-        kind,
-    );
+    let mut bounds = [b[0] - pad, b[1] - pad, b[2] + pad * 2.0, b[3] + pad * 2.0];
+    if kind == PaintDirtyKind::Node {
+        if let Some(clip) = overflow_clip {
+            let Some(clipped) = intersect_rects(bounds, clip) else {
+                return;
+            };
+            if clipped != bounds {
+                kind = PaintDirtyKind::Region;
+            }
+            bounds = clipped;
+        }
+    }
+    push_paint_dirty(key, bounds, kind);
 }
 
 fn is_table_row_fill_dest_reset(el: &Element) -> bool {
@@ -262,7 +278,8 @@ fn element_paint_outset_pad(el: &Element, rot_pad: f32) -> f32 {
     if halo <= 0.0 {
         rot_pad
     } else {
-        halo + rot_pad
+        let scale = crate::core::tree::paint_scale_with_ancestor(el, el.paint_ancestor_scale);
+        halo * scale[0].max(scale[1]) + rot_pad
     }
 }
 
@@ -296,7 +313,9 @@ pub fn paint_kind_for_element(el: &Element) -> PaintDirtyKind {
     // Node dest-reset would clear the page color and leave a white band until
     // the next full repaint. Treat their retained movement as a tiny Region:
     // the present pass clears and replays the page band in the same scissor.
-    if el.attrs.get("jadix_chart_overlay").map(String::as_str) == Some("1") {
+    if el.attrs.get("jadix_chart_overlay").map(String::as_str) == Some("1")
+        || el.attrs.get("jadix_devtools_composite").map(String::as_str) == Some("1")
+    {
         return PaintDirtyKind::Region;
     }
     if el.paint_overlay_stamp.is_some_and(|k| k != 0) {
@@ -304,6 +323,9 @@ pub fn paint_kind_for_element(el: &Element) -> PaintDirtyKind {
     }
     if el.attrs.get("jadix_hoisted_portal").map(String::as_str) == Some("1") {
         return PaintDirtyKind::Overlay;
+    }
+    if crate::core::scrollbar::auto_scrollbar_live_paint_alpha(el).is_some() {
+        return PaintDirtyKind::Region;
     }
     match el.template_id.as_deref() {
         Some(t)
@@ -313,6 +335,13 @@ pub fn paint_kind_for_element(el: &Element) -> PaintDirtyKind {
                 || t.ends_with("__floating_panel") =>
         {
             PaintDirtyKind::Overlay
+        }
+        _ if el
+            .paint_ancestor_scale
+            .iter()
+            .any(|scale| scale.abs() > 1e-6 && (*scale - 1.0).abs() > 1e-6) =>
+        {
+            PaintDirtyKind::Region
         }
         _ => PaintDirtyKind::Node,
     }
@@ -364,6 +393,10 @@ pub fn push_frame_overlay_restore(bounds: [f32; 4]) {
 /// Nested Structure island / list clip: region Clear (Wave 46/49), not node dest-reset.
 pub fn push_frame_region_paint(key: u64, bounds: [f32; 4]) {
     push_paint_dirty(key, bounds, PaintDirtyKind::Region);
+}
+
+pub(crate) fn push_frame_region_damage(bounds: [f32; 4]) {
+    push_frame_region_paint(bounds_key(bounds), bounds);
 }
 
 /// Dest-reset a frame around `inner` (Hard ring / 1px border) without wiping the
@@ -3593,6 +3626,15 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn scaled_preview_damage_includes_scaled_outline_outset() {
+        let mut element = Element::new().outline([0.0, 0.0, 0.0, 1.0], 3.0).outline_offset(2.0);
+        for scale in [0.35, 0.57, 1.0, 1.5] {
+            element.paint_ancestor_scale = [scale; 2];
+            assert!((element_paint_outset_pad(&element, 0.0) - 5.0 * scale).abs() < 0.001);
+        }
+    }
+
+    #[test]
     fn clean_chrome_preserves_retain_for_scroll_strip_copy() {
         assert!(!force_full_redraw_after_chrome(
             LayoutStatus::Clean,
@@ -3658,6 +3700,35 @@ mod tests {
             PaintDirtyKind::Region,
             "moving a local tooltip/crosshair must replay the chart underlay"
         );
+    }
+
+    #[test]
+    fn scaled_page_animation_replays_its_composite() {
+        let mut node = Element::new();
+        assert_eq!(paint_kind_for_element(&node), PaintDirtyKind::Node);
+        node.paint_ancestor_scale = [0.57; 2];
+        assert_eq!(paint_kind_for_element(&node), PaintDirtyKind::Region);
+        node.paint_ancestor_scale = [1.25; 2];
+        assert_eq!(paint_kind_for_element(&node), PaintDirtyKind::Region);
+        node.paint_overlay_stamp = Some(42);
+        assert_eq!(paint_kind_for_element(&node), PaintDirtyKind::Overlay);
+    }
+
+    #[test]
+    fn fading_scrollbar_replays_its_fringe_and_preserves_portal_membership() {
+        crate::core::reactivity::create_root(|| {
+            let mut thumb = Element::new().focus_id("scrollbar-thumb:composite-fade:y");
+            thumb.layout_bounds = [90.0, 10.0, 8.0, 60.0];
+            assert_eq!(paint_kind_for_element(&thumb), PaintDirtyKind::Region);
+            let _ = take_frame_paint_nodes();
+            push_frame_paint_element(&thumb, [0.0; 2]);
+            let dirty = take_frame_paint_nodes();
+            assert_eq!(dirty.len(), 1);
+            assert_eq!(dirty[0].kind, PaintDirtyKind::Region);
+            assert_eq!(dirty[0].bounds, [88.0, 8.0, 12.0, 64.0]);
+            thumb.paint_overlay_stamp = Some(42);
+            assert_eq!(paint_kind_for_element(&thumb), PaintDirtyKind::Overlay);
+        });
     }
 
     #[test]

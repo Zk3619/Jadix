@@ -38,9 +38,10 @@ pub fn set_modal_viewport_size(w: f32, h: f32) {
 }
 
 pub fn modal_viewport_size() -> (f32, f32) {
+    let size = MODAL_VIEWPORT.with(|v| *v.borrow());
     #[cfg(all(debug_assertions, feature = "devtools"))]
-    if let Some(size) = crate::app::devtools::preview_viewport_size() { return size; }
-    MODAL_VIEWPORT.with(|v| *v.borrow())
+    let size = crate::app::devtools::content_viewport_size(size);
+    size
 }
 
 /// Pre-layout fallback: Sheet/Drawer pass viewport; `0` collapses travel to 1px

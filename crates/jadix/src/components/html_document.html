@@ -1,0 +1,28 @@
+<!doctype html><html><head><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline' https:; font-src data: https:; frame-src 'self' about:; img-src data: https:;">
+<style>html,body{margin:0;height:100%;font:14px system-ui;background:#f5f5f5;color:#222}body{display:flex;flex-direction:column}nav{padding:10px;display:flex;gap:8px;border-bottom:1px solid #ddd}button{padding:6px 12px;border:1px solid #ccc;background:white;border-radius:4px}iframe{border:0;flex:1;width:100%;background:white}</style></head>
+<body><nav id="tools"><button data-command="bold">Bold</button><button data-command="italic">Italic</button><button data-command="underline">Underline</button><button data-command="insertUnorderedList">List</button><button data-command="undo">Undo</button><button data-command="redo">Redo</button></nav>
+<iframe id="document" sandbox="allow-same-origin" title="HTML document"></iframe>
+<script>
+const fragment=false;
+const localImages={};
+const editable=__EDITABLE__, revealSource=__REVEAL_SOURCE__, source=__DOCUMENT_SOURCE__, frame=document.getElementById('document');
+const notify=message=>{if(window.chrome?.webview)window.chrome.webview.postMessage(message);else window.ipc?.postMessage(message)};
+if(!editable)document.getElementById('tools').remove();
+const parsed=new DOMParser().parseFromString(source,'text/html');
+parsed.querySelectorAll('img[src]').forEach(image=>{const original=image.getAttribute('src');if(Object.hasOwn(localImages,original)){image.dataset.jadixOriginalSrc=original;image.src=localImages[original]}});
+if(fragment){const style=parsed.createElement('style');style.textContent='html,body{margin:0;padding:0;font:16px/1.5 system-ui;color:#222;overflow-wrap:anywhere}body{display:flow-root}p{margin:0}h1,h2,h3,h4,h5,h6{margin:.3em 0}img{max-width:100%;height:auto}table{border-collapse:collapse;width:100%}td,th{border:1px solid #ddd;padding:6px}pre{overflow:auto;background:#f4f4f4;padding:12px}li>input{margin-right:6px}';parsed.head.append(style);frame.style.flex='none';frame.style.height='100%';}
+const policy=parsed.createElement('meta');policy.httpEquiv='Content-Security-Policy';policy.content="default-src 'none'; script-src 'none'; style-src 'unsafe-inline' https:; img-src data: https:; font-src data: https:; form-action 'none'; base-uri 'none'";parsed.head.prepend(policy);
+frame.addEventListener('load',()=>{
+ const doc=frame.contentDocument;
+ if(fragment){let previous=0;const measure=()=>{const height=Math.ceil(doc.body.getBoundingClientRect().height);if(height!==previous){previous=height;notify('height:'+height)}};new ResizeObserver(measure).observe(doc.body);doc.querySelectorAll('img').forEach(image=>image.addEventListener('load',measure));measure();}
+ if(revealSource)doc.addEventListener('dblclick',()=>notify('reveal-source'));
+ doc.addEventListener('click',event=>{if(event.target.closest('a'))event.preventDefault()});
+ if(!editable)return;
+ doc.body.contentEditable='true';doc.body.spellcheck=true;
+ const publish=()=>{const clone=doc.documentElement.cloneNode(true);clone.querySelectorAll('img[data-jadix-original-src]').forEach(image=>{image.src=image.dataset.jadixOriginalSrc;delete image.dataset.jadixOriginalSrc});clone.querySelector('body').removeAttribute('contenteditable');clone.querySelector('body').removeAttribute('spellcheck');clone.querySelector('meta[http-equiv="Content-Security-Policy"]')?.remove();notify(JSON.stringify('<!doctype html>\n'+clone.outerHTML));};
+ doc.addEventListener('input',publish);
+ document.querySelectorAll('[data-command]').forEach(button=>{button.addEventListener('mousedown',event=>event.preventDefault());button.addEventListener('click',()=>{doc.execCommand(button.dataset.command);publish()})});
+});
+frame.srcdoc='<!doctype html>'+parsed.documentElement.outerHTML;
+</script></body></html>

@@ -22,6 +22,7 @@ thread_local! {
     static SEL_SIZE: Cell<(f32, f32)> = const { Cell::new((0.0, 0.0)) };
     /// Tree / pick hover drives the page overlay (child-index path; may drift after rebuilds).
     static HOVER_PATH: RefCell<String> = const { RefCell::new(String::new()) };
+    static HIGHLIGHT_UNTIL: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
     /// Stable identity for the hover anchor (`template_id`, else `focus_id`).
     static HOVER_IDENTITY: RefCell<String> = const { RefCell::new(String::new()) };
     /// Child indices from the identity anchor down to the hovered node (empty = anchor itself).
@@ -29,10 +30,10 @@ thread_local! {
     /// Snapshot border-box size for the active overlay target (`0` = unset).
     static OVERLAY_SIZE_HINT: Cell<(f32, f32)> = const { Cell::new((0.0, 0.0)) };
     static PANEL_W: Cell<f32> = const { Cell::new(640.0) };
-    static COLLAPSED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static EXPANDED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static TREE_REVEAL: RefCell<Option<String>> = const { RefCell::new(None) };
     static TREE_FILTER: RefCell<String> = const { RefCell::new(String::new()) };
     static COMPUTED: Cell<bool> = const { Cell::new(false) };
-    static TREE_LIMIT: Cell<usize> = const { Cell::new(400) };
     static CHANGES: RefCell<VecDeque<(String, String)>> = const { RefCell::new(VecDeque::new()) };
     static BODY_GEN: Cell<u32> = const { Cell::new(0) };
     static OUTLINE_GEN: Cell<u32> = const { Cell::new(0) };
@@ -187,6 +188,14 @@ impl DevToolsState {
         PATH.with(|p| p.borrow().clone())
     }
 
+    pub(super) fn is_selected_path_key(key: &str) -> bool {
+        PATH.with(|path| !key.is_empty() && path.borrow().as_str() == key)
+    }
+
+    pub(super) fn is_hover_path_key(key: &str) -> bool {
+        HOVER_PATH.with(|path| !key.is_empty() && path.borrow().as_str() == key)
+    }
+
     pub fn selected_identity() -> String {
         SEL_IDENTITY.with(|id| id.borrow().clone())
     }
@@ -269,6 +278,7 @@ impl DevToolsState {
         relative: ElementPath,
         size_hint: (f32, f32),
     ) {
+        HIGHLIGHT_UNTIL.set(None);
         let key = path_to_key(&path);
         let identity = identity.into();
         let size_hint = (size_hint.0.max(0.0), size_hint.1.max(0.0));
@@ -300,7 +310,25 @@ impl DevToolsState {
         }
     }
 
+    pub(crate) fn expire_pick_highlight(now: std::time::Instant) -> bool {
+        if HIGHLIGHT_UNTIL.get().is_some_and(|until| now >= until) {
+            Self::clear_hover_highlight();
+            true
+        } else {
+            false
+        }
+    }
+
+    pub(crate) fn pick_highlight_deadline() -> Option<std::time::Instant> {
+        HIGHLIGHT_UNTIL.get()
+    }
+
+    pub(super) fn defer_pick_highlight_clear() {
+        HIGHLIGHT_UNTIL.set(Some(std::time::Instant::now() + std::time::Duration::from_millis(1200)));
+    }
+
     pub fn clear_hover_highlight() {
+        HIGHLIGHT_UNTIL.set(None);
         let mut changed = false;
         HOVER_PATH.with(|h| {
             if !h.borrow().is_empty() {
@@ -363,11 +391,11 @@ impl DevToolsState {
         if Self::hover_path_key() != key {
             Self::clear_hover_highlight();
         }
-        let expanded = COLLAPSED.with(|collapsed| {
-            let mut collapsed = collapsed.borrow_mut();
+        let expanded = EXPANDED.with(|expanded| {
+            let mut paths = expanded.borrow_mut();
             let mut expanded = false;
             for depth in 0..path.len() {
-                expanded |= collapsed.remove(&path_to_key(&path[..depth]));
+                expanded |= paths.insert(path_to_key(&path[..depth]));
             }
             expanded
         });
@@ -431,7 +459,11 @@ impl DevToolsState {
         if (PANEL_W.get() - w).abs() > 0.5 {
             let reflow = (PANEL_W.get() >= 600.0) != (w >= 600.0);
             PANEL_W.set(w);
-            if reflow { Self::bump(); } else { Self::bump_chrome(); }
+            if reflow {
+                Self::bump();
+            } else {
+                Self::bump_chrome();
+            }
         }
     }
 
@@ -440,15 +472,15 @@ impl DevToolsState {
     }
 
     pub(crate) fn is_collapsed(path: &[usize]) -> bool {
-        COLLAPSED.with(|collapsed| collapsed.borrow().contains(&path_to_key(path)))
+        EXPANDED.with(|expanded| !expanded.borrow().contains(&path_to_key(path)))
     }
 
     pub(crate) fn toggle_collapsed(path: &[usize]) {
-        COLLAPSED.with(|collapsed| {
-            let mut collapsed = collapsed.borrow_mut();
+        EXPANDED.with(|expanded| {
+            let mut expanded = expanded.borrow_mut();
             let key = path_to_key(path);
-            if !collapsed.remove(&key) {
-                collapsed.insert(key);
+            if !expanded.remove(&key) {
+                expanded.insert(key);
             }
         });
         Self::refresh_outline();
@@ -458,13 +490,17 @@ impl DevToolsState {
         TREE_FILTER.with(|filter| filter.borrow().clone())
     }
 
-    pub(crate) fn tree_limit() -> usize {
-        TREE_LIMIT.get()
+    pub(crate) fn request_tree_reveal(path: &[usize]) {
+        TREE_REVEAL.with(|pending| *pending.borrow_mut() = Some(path_to_key(path)));
+        Self::refresh_outline();
     }
 
-    pub(crate) fn set_tree_limit(limit: usize) {
-        TREE_LIMIT.set(limit);
-        Self::refresh_outline();
+    pub(super) fn pending_tree_reveal() -> Option<String> {
+        TREE_REVEAL.with(|pending| pending.borrow().clone())
+    }
+
+    pub(super) fn finish_tree_reveal() {
+        TREE_REVEAL.with(|pending| pending.borrow_mut().take());
     }
 
     pub(crate) fn set_tree_filter(value: String) {
@@ -519,7 +555,7 @@ impl DevToolsState {
         let value = layer as u8;
         if HL_LAYER.get() != value {
             HL_LAYER.set(value);
-            Self::bump_chrome();
+            crate::app::runtime::request_redraw_all();
         }
     }
 
@@ -527,7 +563,7 @@ impl DevToolsState {
         let value = layer.map(|layer| layer as u8);
         if HL_HOVER_LAYER.get() != value {
             HL_HOVER_LAYER.set(value);
-            Self::bump_chrome();
+            crate::app::runtime::request_redraw_all();
         }
     }
 }

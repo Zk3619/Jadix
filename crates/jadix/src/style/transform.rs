@@ -495,6 +495,21 @@ pub fn resolve_transform_matrix(
 /// Collect / VS bake scale into the instance rect and independent translate into
 /// `render_x/y`. Origin lives in [`mat2d_center_pivot_origin_tx_ty`]. The remaining
 /// matrix translation is list `translate()` / `translateX/Y` the VS must keep.
+pub(crate) fn rotate_and_list_mat2d_in_paint_space(
+    rotate_deg: f32,
+    transform_list: Option<&TransformList>,
+    box_w: f32,
+    box_h: f32,
+    ancestor_scale: [f32; 2],
+) -> Mat2d {
+    let scale = ancestor_scale.map(|scale| if scale.is_finite() && scale > 0.0 { scale } else { 1.0 });
+    let mut matrix = rotate_and_list_mat2d(rotate_deg, transform_list,
+        box_w / scale[0], box_h / scale[1]);
+    matrix[4] *= scale[0];
+    matrix[5] *= scale[1];
+    matrix
+}
+
 pub fn rotate_and_list_mat2d(
     rotate_deg: f32,
     transform_list: Option<&TransformList>,

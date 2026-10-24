@@ -11,6 +11,8 @@ pub(crate) struct LiquidFlow {
     pub motion: LayoutMotion,
     pub visibility: AnimatedNumber,
     visible: bool,
+    target_selected: bool,
+    target_path: Option<Vec<usize>>,
     sample: Option<[f32; 5]>,
 }
 
@@ -20,12 +22,18 @@ impl LiquidFlow {
             motion: LayoutMotion::new(LayoutAnimation::Both),
             visibility: AnimatedNumber::follow(0.0),
             visible: false,
+            target_selected: false,
+            target_path: None,
             sample: None,
         }
     }
 
     pub fn is_active(&self) -> bool {
         self.motion.is_active() || self.visibility.is_active()
+    }
+
+    pub fn target_selected(&self) -> bool {
+        self.target_selected
     }
 
     pub fn sample(&self) -> Option<[f32; 5]> {
@@ -143,8 +151,23 @@ pub(crate) fn sync(root: &mut Element, hits: &HashSet<*const Element>) -> bool {
                 .find(|(_, _, selected)| !multiple && *selected)
         })
         .filter(|(_, _, selected)| !multiple || !selected);
+    let target = target.map(|(path, _, selected)| (path.clone(), *selected));
     let visible = target.is_some();
-    if let Some((path, _, _)) = target {
+    for (path, _, selected) in &candidates {
+        let is_target = target
+            .as_ref()
+            .is_some_and(|(target_path, _)| target_path == path);
+        if !multiple && *selected && !is_target {
+            let mut element = &mut *root;
+            for &index in path {
+                element = &mut element.children[index];
+            }
+            if element.attrs.remove(ITEM).is_some() {
+                element.collect_paint_hash = 0;
+            }
+        }
+    }
+    if let Some((path, _)) = &target {
         let mut element = &mut *root;
         for &index in path {
             element = &mut element.children[index];
@@ -152,6 +175,12 @@ pub(crate) fn sync(root: &mut Element, hits: &HashSet<*const Element>) -> bool {
         element.set_attr(TARGET, "1");
     }
     let flow = root.liquid_flow.get_or_insert_with(LiquidFlow::new);
+    let target_path = target.as_ref().map(|(path, _)| path.clone());
+    let target_changed = flow.target_path != target_path;
+    let selected_changed =
+        flow.target_selected != target.as_ref().is_some_and(|(_, selected)| *selected);
+    flow.target_path = target_path;
+    flow.target_selected = target.as_ref().is_some_and(|(_, selected)| *selected);
     if flow.visible != visible {
         let opacity = if visible { 1.0 } else { 0.0 };
         if super::prefers_reduced_motion() {
@@ -167,7 +196,7 @@ pub(crate) fn sync(root: &mut Element, hits: &HashSet<*const Element>) -> bool {
     if flow.is_active() {
         crate::app::invalidation::request_frame();
     }
-    changed || flow.is_active()
+    target_changed || selected_changed || changed || flow.is_active()
 }
 
 pub(crate) fn measure(root: &mut Element, layout: &taffy::TaffyTree<()>) {
@@ -264,12 +293,46 @@ mod tests {
         assert!(!group.children[2].attrs.contains_key(ITEM));
         let hits = HashSet::from([&group.children[0] as *const Element]);
         sync(&mut group, &hits);
+        assert!(group
+            .children
+            .iter()
+            .all(|item| !item.attrs.contains_key(TARGET)));
+        super::super::set_theme(previous);
+    }
+
+    #[test]
+    fn selected_surface_stays_visible_while_hover_glass_moves_to_another_item() {
+        let previous = super::super::get_theme();
+        super::super::set_theme_preset(ThemePreset::LiquidGlass);
+        let mut group = Element::new();
+        group.set_attr("data-slot", "toggle-group");
+        for state in ["on", "off"] {
+            let mut item = Element::new();
+            item.set_attr("data-slot", "toggle-group-item");
+            item.set_attr("data-state", state);
+            item.style.bg_color = if state == "on" {
+                [0.4, 0.4, 0.4, 1.0]
+            } else {
+                [0.0; 4]
+            };
+            group.children.push(item);
+        }
+
+        let hovered = HashSet::from([&group.children[1] as *const Element]);
+        sync(&mut group, &hovered);
+
         assert!(
-            group
-                .children
-                .iter()
-                .all(|item| !item.attrs.contains_key(TARGET))
+            !group.children[0].attrs.contains_key(ITEM),
+            "the selected item must keep its own selected surface while hover glass moves"
         );
+        assert!(group.children[1].attrs.contains_key(ITEM));
+        assert!(group.children[1].attrs.contains_key(TARGET));
+        assert!(!group.liquid_flow.as_ref().unwrap().target_selected());
+        assert_eq!(group.children[0].style.bg_color[3], 1.0);
+
+        let selected_hit = HashSet::from([&group.children[0] as *const Element]);
+        sync(&mut group, &selected_hit);
+        assert!(group.liquid_flow.as_ref().unwrap().target_selected());
         super::super::set_theme(previous);
     }
 

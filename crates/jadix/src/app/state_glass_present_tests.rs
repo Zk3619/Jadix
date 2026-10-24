@@ -235,14 +235,42 @@ fn run_window_material_frames(window: Arc<dyn Window>) {
             crate::style::set_theme_preset(preset);
             crate::style::set_theme_mode(mode);
             state.sync_window_theme();
+            if crate::platform::windows::glass::system_backdrop_available() {
+                use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                let RawWindowHandle::Win32(handle) = state.window.window_handle().unwrap().as_raw() else {
+                    panic!("expected a Win32 window");
+                };
+                let mut backdrop = 0_i32;
+                let result = unsafe {
+                    windows_sys::Win32::Graphics::Dwm::DwmGetWindowAttribute(
+                        handle.hwnd.get() as _,
+                        windows_sys::Win32::Graphics::Dwm::DWMWA_SYSTEMBACKDROP_TYPE as u32,
+                        &mut backdrop as *mut i32 as _,
+                        std::mem::size_of_val(&backdrop) as u32,
+                    )
+                };
+                assert_eq!(result, 0);
+                assert_eq!(backdrop, if preset == crate::style::ThemePreset::Fluent { 2 } else { 1 },
+                    "{preset:?} {mode:?} must update the compositor's native material");
+            }
             let (_, root) = crate::core::reactivity::create_root(|| {
                 Element::new()
                     .w("100%")
                     .h("100%")
                     .child(crate::components::button("native-window-material").text(preset.name()))
+                    .child(crate::components::scroll_area("native-material-scroll")
+                        .w(200.0)
+                        .h(100.0)
+                        .scrollbar_visibility("always")
+                        .child(Element::new().h(300.0)))
             });
             state.rebuild_ui(root);
             capture(&mut state, [-1.0; 2], true);
+            state.render([-1.0; 2], ScrollbarUpdateMode::Full, None, false, false, false).unwrap();
+            let scrollbar = &state.scrollbar_base_style["native-material-scroll:y"];
+            assert_eq!(scrollbar.track_bg, crate::style::get_theme().colors.scrollbar_track,
+                "{preset:?} {mode:?} must discard the previous theme's scrollbar rail");
+            assert_eq!(scrollbar.thumb_bg, crate::style::get_theme().colors.scrollbar_thumb);
             assert_eq!(
                 crate::platform::custom_glass_surface_handle(state.window.as_ref()),
                 Some(surface)

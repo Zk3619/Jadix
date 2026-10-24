@@ -757,12 +757,6 @@ fn fire_handler(entry: &HitPathEntry, event: &PointerEvent, kind: PointerKind) {
         }
         PointerKind::DoubleClick => {
             fire_mouse(&entry.on_double_click, event);
-            // Also fire legacy on_click on target/bubble for convenience when detail>=2
-            if event.phase != EventPhase::Capture {
-                if let Some(cb) = &entry.on_click {
-                    (*cb.borrow_mut())();
-                }
-            }
         }
         PointerKind::Click => {
             // Legacy on_click: only at target (deepest with handler) — fire once when we
@@ -820,6 +814,32 @@ pub fn resolve_click_from_path(
 mod tests {
     use super::*;
     use crate::core::tree::Element;
+
+    #[test]
+    fn rapid_clicks_activate_once_per_release_without_double_click_bubbling() {
+        let activations = Rc::new(Cell::new(0));
+        let mut control = Element::new().on_click({
+            let activations = activations.clone();
+            move || activations.set(activations.get() + 1)
+        });
+        control.layout_bounds = [0.0, 0.0, 24.0, 24.0];
+        let mut indicator = Element::new();
+        indicator.layout_bounds = [4.0, 4.0, 16.0, 16.0];
+        control.children.push(indicator);
+        let path = hit_path(&control, 8.0, 8.0);
+        for detail in 1..=6 {
+            let mut release = PointerEvent::new(8.0, 8.0, MouseButton::Left, detail);
+            dispatch_pointer(&path, &mut release, PointerKind::Up);
+            if detail >= 2 {
+                let mut double = PointerEvent::new(8.0, 8.0, MouseButton::Left, detail);
+                dispatch_pointer(&path, &mut double, PointerKind::DoubleClick);
+            }
+            assert_eq!(activations.get(), detail - 1);
+            let (callback, _) = resolve_click_from_path(&control, &path);
+            (*callback.unwrap().borrow_mut())();
+            assert_eq!(activations.get(), detail);
+        }
+    }
 
     #[test]
     fn hit_path_orders_root_to_leaf() {

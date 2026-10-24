@@ -17,6 +17,43 @@ use crate::style::sync_class_variants_subtree;
 use crate::text::install_shared_font_system;
 
 #[test]
+fn dirty_canvas_repaints_without_scroll_or_style_changes() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+    let paints = Rc::new(Cell::new(0));
+    let count = paints.clone();
+    let canvas: Element = crate::primitives::canvas::canvas()
+        .w(64.0)
+        .h(32.0)
+        .paint(move |ctx, _| {
+            count.set(count.get() + 1);
+            ctx.clear("red");
+            LayoutStatus::Clean
+        })
+        .into();
+    let paint_id = canvas.attrs[crate::primitives::canvas::ATTR_CANVAS_PAINT].clone();
+    let sibling = Element::new().w(32.0).h(32.0).bg("blue")
+        .child(Element::new().w(12.0).h(12.0).bg("green"));
+    let mut root = Element::new().w(128.0).h(64.0).child(canvas).child(sibling);
+    let mut tree = LayoutTree::new();
+    tree.set_collect_skip_allowed(true);
+    tree.build_and_layout(&mut root, 128.0, 64.0, [-1.0; 2]);
+    for _ in 0..3 {
+        tree.build_and_layout_fast(&mut root, 128.0, 64.0, [-1.0; 2], true, false);
+    }
+    let before = paints.get();
+    reset_collect_skip_counters();
+    crate::primitives::canvas::mark_canvas_dirty_hex(&paint_id);
+    tree.build_and_layout_fast(&mut root, 128.0, 64.0, [-1.0; 2], true, false);
+    assert_eq!(paints.get(), before + 1, "pointer damage must reach canvas paint immediately");
+    assert!(last_skipped_siblings() >= 1, "clean siblings must retain their display lists");
+    for _ in 0..3 {
+        tree.build_and_layout_fast(&mut root, 128.0, 64.0, [-1.0; 2], true, false);
+    }
+    assert_eq!(paints.get(), before + 1, "a clean canvas must stop repainting");
+}
+
+#[test]
 fn transparent_canvas_defers_paint_until_visible() {
     use std::cell::Cell;
     use std::rc::Rc;

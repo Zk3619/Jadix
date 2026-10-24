@@ -337,7 +337,24 @@ pub(crate) fn painted_ime_field_in_overflow_clip(
     if n.style.input_caret.is_none() {
         return false;
     }
-    idle_ime_may_push_imm([n.x, n.y, n.width, n.height], n.clip_bounds, win_w, win_h)
+    let scale = if n.paint_scale.is_finite() && n.paint_scale > 0.0 {
+        n.paint_scale
+    } else {
+        1.0
+    };
+    let bounds = [n.x, n.y, n.width * scale, n.height * scale];
+    let mut visual = [f32::INFINITY, f32::INFINITY, f32::NEG_INFINITY, f32::NEG_INFINITY];
+    for corner in [[bounds[0], bounds[1]], [bounds[0] + bounds[2], bounds[1]],
+        [bounds[0], bounds[1] + bounds[3]], [bounds[0] + bounds[2], bounds[1] + bounds[3]]] {
+        let point = paint_space_ime_origin(corner, &n.paint_transform, n.paint_origin);
+        visual[0] = visual[0].min(point[0]);
+        visual[1] = visual[1].min(point[1]);
+        visual[2] = visual[2].max(point[0]);
+        visual[3] = visual[3].max(point[1]);
+    }
+    visual[2] -= visual[0];
+    visual[3] -= visual[1];
+    idle_ime_may_push_imm(visual, n.clip_bounds, win_w, win_h)
 }
 
 /// Strip IME syllable-separator apostrophes from a preedit string before force-commit.
@@ -1259,6 +1276,18 @@ mod tests {
             painted_ime_field_in_overflow_clip(&[in_clip], "input:search", 400.0, 300.0),
             "focused caret fully inside overflow clip may Imm"
         );
+    }
+
+    #[test]
+    fn scaled_ime_caret_uses_painted_extent_for_overflow_clip() {
+        let mut node = test_text_node("scaled", 120.0, 180.0, 300.0, 24.0,
+            Some([100.0, 160.0, 195.0, 80.0]), true);
+        node.paint_scale = 0.57;
+        assert!(painted_ime_field_in_overflow_clip(&[node.clone()], "input:scaled", 800.0, 600.0),
+            "the complete scaled field is inside the preview clip");
+        node.clip_bounds = Some([100.0, 160.0, 150.0, 80.0]);
+        assert!(!painted_ime_field_in_overflow_clip(&[node], "input:scaled", 800.0, 600.0),
+            "an actually clipped scaled field must still suppress Imm updates");
     }
 
     #[test]

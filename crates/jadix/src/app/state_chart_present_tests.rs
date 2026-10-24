@@ -153,7 +153,7 @@ fn run_chart_frames(window: Arc<dyn Window>) {
                     let chart = root.children[0].children.remove(0);
                     root.children.clear();
                     root = root.child(
-                        crate::core::scroll_viewport::scroll_viewport("native-bar-scroll")
+                        crate::components::scroll_viewport::scroll_viewport("native-bar-scroll")
                             .w("100%")
                             .h("100%")
                             .overflow_y("scroll")

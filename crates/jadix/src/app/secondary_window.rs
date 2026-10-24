@@ -70,6 +70,9 @@ pub(super) struct SecondaryWindowState {
     pub(super) last_hover_cursor: Option<crate::core::tree::CursorValue>,
     pub(super) last_render_scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
     pub(super) scroll_metrics_cache: HashMap<String, ([f32; 4], [f32; 2], [f32; 2])>,
+    scrollbar_base_style: HashMap<String, super::state::ScrollbarBaseStyle>,
+    scrollbar_activity: HashMap<String, ([f32; 2], [std::time::Instant; 2])>,
+    last_frame_at: std::time::Instant,
     #[allow(dead_code)]
     pub(super) damage_rect: Option<[f32; 4]>,
     pub(super) ime_allowed_latched: bool,
@@ -169,9 +172,9 @@ impl SecondaryWindowState {
         super::window_chrome::apply_created_window(window.as_ref(), &chrome, false);
 
         let mut pipeline = JadixPipeline::new(&device, &config);
-        let present_retain = crate::renderer::PresentRetainPipeline::new(&device, config.format);
+        let present_retain = crate::renderer::PresentRetainPipeline::new_for_surface(&device, &config);
         let theme_transition =
-            crate::renderer::theme_transition::ThemeTransition::new(&device, config.format);
+            crate::renderer::theme_transition::ThemeTransition::new_for_surface(&device, &config);
         let (textured_pipeline, textured_instance_buffer) =
             init_secondary_textured(&device, &config);
         let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
@@ -236,6 +239,9 @@ impl SecondaryWindowState {
             last_hover_cursor: None,
             last_render_scroll_metrics: Vec::new(),
             scroll_metrics_cache: HashMap::new(),
+            scrollbar_base_style: HashMap::new(),
+            scrollbar_activity: HashMap::new(),
+            last_frame_at: std::time::Instant::now(),
             damage_rect: None,
             ime_allowed_latched: false,
             os_focused: false,
@@ -268,9 +274,9 @@ impl SecondaryWindowState {
         super::window_chrome::apply_created_window(window.as_ref(), &chrome, composition_swapchain);
 
         let mut pipeline = JadixPipeline::new(&device, &config);
-        let present_retain = crate::renderer::PresentRetainPipeline::new(&device, config.format);
+        let present_retain = crate::renderer::PresentRetainPipeline::new_for_surface(&device, &config);
         let theme_transition =
-            crate::renderer::theme_transition::ThemeTransition::new(&device, config.format);
+            crate::renderer::theme_transition::ThemeTransition::new_for_surface(&device, &config);
         let (textured_pipeline, textured_instance_buffer) =
             init_secondary_textured(&device, &config);
         let mut text_renderer = if let Some(shared) = crate::text::shared_font_system_ptr() {
@@ -335,6 +341,9 @@ impl SecondaryWindowState {
             last_hover_cursor: None,
             last_render_scroll_metrics: Vec::new(),
             scroll_metrics_cache: HashMap::new(),
+            scrollbar_base_style: HashMap::new(),
+            scrollbar_activity: HashMap::new(),
+            last_frame_at: std::time::Instant::now(),
             damage_rect: None,
             ime_allowed_latched: false,
             os_focused: false,
@@ -386,12 +395,20 @@ impl SecondaryWindowState {
         );
     }
 
-    pub(super) fn sync_window_theme(&self) {
+    pub(super) fn sync_window_theme(&mut self) {
+        self.window.set_theme(super::window_chrome::native_theme_preference());
+        self.scrollbar_base_style.clear();
         super::window_chrome::apply_created_window(
             self.window.as_ref(),
             &self.chrome,
             self.composition_swapchain,
         );
+        // Theme changes may alter text metrics/raster mode without changing the
+        // string list. Rebuild glyph caches before the first themed frame.
+        // Secondary windows do not retain a page cache, so invalidate the
+        // renderer/layout resources directly.
+        self.bust_text_caches();
+        crate::platform::glass_sync_jadix_theme();
         self.window.request_redraw();
     }
 
@@ -418,6 +435,16 @@ impl SecondaryWindowState {
         let scale = self.window.scale_factor() as f32;
         let logical_w = self.config.width as f32 / scale.max(1.0);
         let logical_h = self.config.height as f32 / scale.max(1.0);
+
+        let now = std::time::Instant::now();
+        let frame_dt = now.duration_since(self.last_frame_at).as_secs_f32().clamp(1.0 / 240.0, 0.05);
+        crate::style::utility::set_frame_dt(frame_dt);
+        sync_secondary_scrollbars(&self.last_render_scroll_metrics, mouse_pos, &mut self.scrollbar_activity);
+        if self.scrollbar_activity.values().any(|(_, deadlines)| deadlines.iter().any(|until| *until > now)) {
+            self.window.request_redraw();
+        }
+        crate::style::tick_animations(frame_dt);
+        self.last_frame_at = now;
 
         let mut sync_impact = LayoutStatus::Clean;
         let mut sync_collect = crate::core::tree::ReactiveSyncCollect::default();
@@ -454,13 +481,6 @@ impl SecondaryWindowState {
             &mut self.layout_tree,
             &mut sync_impact,
         );
-        #[cfg(all(debug_assertions, feature = "devtools"))]
-        if super::devtools::is_detached_window(self.window.id())
-            && super::devtools::sync_secondary_chrome(&mut self.root_element)
-        {
-            sync_impact = sync_impact.merge(LayoutStatus::StyleChanged);
-        }
-
         let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
 
         // Same chrome pass as primary [`AppState::render`]: Input/Textarea ring + caret are
@@ -498,6 +518,14 @@ impl SecondaryWindowState {
             &mut sync_impact,
         );
 
+        super::state::update_scrollbar_elements(
+            &mut self.root_element,
+            &mut self.scrollbar_base_style,
+            &mut self.layout_tree,
+            super::state::ScrollbarUpdateMode::Full,
+            None,
+        );
+
         let use_full =
             self.layout_tree.root_node.is_none() || self.root_element.layout_node.is_none();
         let impact = self.layout_status.merge(sync_impact);
@@ -505,7 +533,10 @@ impl SecondaryWindowState {
             impact,
             LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
         );
-        let paint_only = impact == LayoutStatus::Clean && self.pending_layout_dirty.is_empty();
+        let geometry_dirty = self.layout_tree.root_node
+            .is_some_and(|node| self.layout_tree.taffy.dirty(node).unwrap_or(false));
+        let paint_only = impact == LayoutStatus::Clean
+            && self.pending_layout_dirty.is_empty() && !geometry_dirty;
 
         if !use_full {
             let dirty: std::collections::HashSet<_> = self.pending_layout_dirty.drain(..).collect();
@@ -532,14 +563,14 @@ impl SecondaryWindowState {
                 &mut self.root_element,
                 logical_w,
                 logical_h,
-                [0.0, 0.0],
+                mouse_pos,
             )
         } else {
             self.layout_tree.build_and_layout_fast(
                 &mut self.root_element,
                 logical_w,
                 logical_h,
-                [0.0, 0.0],
+                mouse_pos,
                 paint_only,
                 true,
             )
@@ -570,8 +601,36 @@ impl SecondaryWindowState {
                 self.layout_tree
                     .collect_animation_frame(&mut self.root_element, mouse_pos, false);
         }
+        let floating_needs_frame = crate::utils::floating_motion::flush_floating_motion_subtree(
+            &mut self.root_element,
+        );
+        let floating_css_ticking = crate::utils::floating_motion::tick_hoisted_floating_css(
+            &mut self.root_element,
+        );
+        if crate::utils::floating_motion::floating_motion_needs_relayout() {
+            crate::utils::floating_motion::mark_floating_panels_layout_dirty(
+                &self.root_element,
+                &mut self.layout_tree,
+            );
+            render_result = self.layout_tree.relayout_overlay_follow_and_collect(
+                &mut self.root_element, logical_w, logical_h, mouse_pos, false, false,
+            );
+        } else if floating_css_ticking {
+            render_result = self.layout_tree.collect_animation_frame(
+                &mut self.root_element, mouse_pos, false,
+            );
+        }
+        if floating_needs_frame || floating_css_ticking {
+            self.window.request_redraw();
+        }
         #[cfg(feature = "performance")]
         let layout_ms = layout_begin.elapsed().as_secs_f64() * 1000.0;
+        if sync_secondary_scroll_metrics(&self.root_element, &render_result.scroll_metrics) {
+            self.window.request_redraw();
+        }
+        if crate::style::any_ui_animation_active() {
+            self.window.request_redraw();
+        }
         self.has_input_caret = render_result
             .text_nodes
             .iter()
@@ -715,7 +774,8 @@ impl SecondaryWindowState {
             });
 
         let draw_to_retain =
-            crate::style::theme_transition_config().enabled || self.theme_transition.needs_frame();
+            self.present_retain.needs_compositor_encoding()
+                || crate::style::theme_transition_config().enabled || self.theme_transition.needs_frame();
         if draw_to_retain {
             self.present_retain
                 .ensure_size(&self.device, self.config.width, self.config.height);
@@ -1149,6 +1209,81 @@ impl SecondaryWindowState {
     }
 }
 
+fn sync_secondary_scroll_metrics(
+    root: &Element,
+    metrics: &[(String, [f32; 4], [f32; 2], [f32; 2])],
+) -> bool {
+    use crate::core::reactivity::use_signal;
+    use crate::core::scroll_viewport::ScrollViewportSignalKeys;
+
+    let pending = super::scroll_support::resolve_pending_descendant_bounds(root);
+    let mut changed = false;
+    for (rest, bounds, max_scroll, content) in metrics {
+        let keys = ScrollViewportSignalKeys::new(rest);
+        for (key, value) in [
+            (&keys.viewport_w, bounds[2]),
+            (&keys.viewport_h, bounds[3]),
+            (&keys.content_w, content[0]),
+            (&keys.content_h, content[1]),
+        ] {
+            let signal = use_signal(key, || 0.0_f32);
+            if (signal.peek() - value).abs() > 0.1 {
+                signal.set_silent(value.max(0.0));
+                changed = true;
+            }
+        }
+        for (key, maximum) in [(&keys.offset_x, max_scroll[0]), (&keys.offset_y, max_scroll[1])] {
+            let signal = use_signal(key, || 0.0_f32);
+            let value = signal.peek().clamp(0.0, maximum.max(0.0));
+            if (signal.peek() - value).abs() > 0.1 {
+                signal.set_silent(value);
+                changed = true;
+            }
+        }
+        changed |= super::scroll_support::apply_pending_scroll_align(
+            rest, *bounds, content[0], content[1], pending.get(rest).copied(),
+        );
+    }
+    changed
+}
+
+fn sync_secondary_scrollbars(
+    metrics: &[(String, [f32; 4], [f32; 2], [f32; 2])],
+    mouse_pos: [f32; 2],
+    activity: &mut HashMap<String, ([f32; 2], [std::time::Instant; 2])>,
+) {
+    use crate::core::reactivity::use_signal;
+    use crate::core::scroll_viewport::ScrollViewportSignalKeys;
+
+    let now = std::time::Instant::now();
+    for (rest, bounds, maximum, _) in metrics {
+        let keys = ScrollViewportSignalKeys::new(rest);
+        let inside = mouse_pos[0] >= bounds[0] && mouse_pos[0] < bounds[0] + bounds[2]
+            && mouse_pos[1] >= bounds[1] && mouse_pos[1] < bounds[1] + bounds[3];
+        let offsets = [use_signal(&keys.offset_x, || 0.0_f32).peek(), use_signal(&keys.offset_y, || 0.0_f32).peek()];
+        let (previous, deadlines) = activity.entry(rest.clone()).or_insert((offsets, [now; 2]));
+        for (axis, (visibility, spring, axis_hover, extent)) in [
+            (&keys.scrollbar_visibility_x, &keys.spring_x, &keys.hover_axis_x, maximum[0]),
+            (&keys.scrollbar_visibility_y, &keys.spring_y, &keys.hover_axis_y, maximum[1]),
+        ].into_iter().enumerate() {
+            if (previous[axis] - offsets[axis]).abs() > 0.1 {
+                deadlines[axis] = now + std::time::Duration::from_millis(700);
+            }
+            let hovered = inside && if axis == 0 {
+                mouse_pos[1] >= bounds[1] + bounds[3] - 12.0
+            } else {
+                mouse_pos[0] >= bounds[0] + bounds[2] - 12.0
+            };
+            let mode = use_signal(visibility, || "auto".to_string()).peek();
+            let dragging = use_signal(axis_hover, || false).peek();
+            let shown = extent > 0.5 && (mode == "always" || (mode != "never" && (hovered || dragging || deadlines[axis] > now)));
+            crate::style::use_ui_transition_cubic(spring, 0.0)
+                .set_at_frame_start(if shown { 1.0 } else { 0.0 });
+        }
+        *previous = offsets;
+    }
+}
+
 fn init_secondary_textured(
     device: &wgpu::Device,
     config: &wgpu::SurfaceConfiguration,
@@ -1172,4 +1307,54 @@ fn find_template_mut<'a>(el: &'a mut Element, want_normalized: &str) -> Option<&
 
 fn element_contains_jadix_portal(el: &Element) -> bool {
     crate::core::tree::find_by_attr(el, "jadix_portal", "1").is_some()
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+    use crate::core::reactivity::{create_root, use_signal};
+    use crate::core::scroll_viewport::{activate_scroll_viewport, ScrollViewportSignalKeys};
+
+    #[test]
+    fn secondary_metrics_enable_scrollbars_and_apply_alignment_in_the_owning_window() {
+        create_root(|| {
+            let rest = "secondary-metrics-test";
+            let keys = ScrollViewportSignalKeys::new(rest);
+            let primary = use_signal("__jadix_scroll_y_primary-app-content", || 17.0_f32);
+            let _scope = crate::app::window_scope::enter(crate::app::window_scope::WindowScope::Secondary(9017));
+            let mut viewport = activate_scroll_viewport(
+                Element::new().w(200.0).h(100.0).flex_col().child(
+                    Element::new().w(600.0).h(1000.0).min_h(1000.0).flex_shrink(0.0).child(
+                        Element::new().template_id("secondary-target").absolute()
+                            .top(600.0).left(400.0).w(20.0).h(20.0),
+                    ),
+                ), rest, "auto", "auto", "jump", "scrollbar",
+            );
+            let mut layout = LayoutTree::new();
+            let result = layout.build_and_layout(&mut viewport, 200.0, 100.0, [-1.0; 2]);
+            super::super::scroll_support::request_scroll_descendant_into_view_when(
+                rest, "secondary-target",
+                super::super::scroll_support::ScrollItemAlign::Center,
+                super::super::scroll_support::ScrollAlignWhen::Before,
+            );
+            assert!(sync_secondary_scroll_metrics(&viewport, &result.scroll_metrics));
+            assert_eq!(use_signal(&keys.viewport_h, || 0.0_f32).peek(), 100.0);
+            assert_eq!(use_signal(&keys.content_h, || 0.0_f32).peek(), 1000.0);
+            assert_eq!(use_signal(&keys.offset_y, || 0.0_f32).peek(), 560.0);
+            assert_eq!(use_signal(&keys.offset_x, || 0.0_f32).peek(), 310.0);
+            assert_eq!(primary.peek(), 17.0, "must not scroll the primary window");
+            let mut activity = HashMap::new();
+            sync_secondary_scrollbars(&result.scroll_metrics, [199.0, 50.0], &mut activity);
+            for _ in 0..12 {
+                crate::style::tick_animations(0.05);
+            }
+            assert!(crate::style::use_ui_transition_cubic(&keys.spring_y, 0.0).peek() > 0.9);
+            assert!(crate::style::use_ui_transition_cubic(&keys.spring_x, 0.0).peek() < 0.01);
+            sync_secondary_scrollbars(&result.scroll_metrics, [-1.0, -1.0], &mut activity);
+            for _ in 0..12 {
+                crate::style::tick_animations(0.05);
+            }
+            assert!(crate::style::use_ui_transition_cubic(&keys.spring_y, 0.0).peek() < 0.01);
+        });
+    }
 }

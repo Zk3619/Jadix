@@ -150,3 +150,66 @@ fn crossfade_samples_pixels_and_reverses_without_snapping() {
         check_crossfade(&gl);
     }
 }
+
+#[cfg(windows)]
+#[test]
+fn compositor_receives_display_premultiplied_pixels_through_theme_fades() {
+    let gpu = OffscreenGpu::with_backends(wgpu::Backends::DX12).expect("DX12 adapter");
+    let previous_theme = get_theme();
+    let previous_preference = theme_preference();
+    let previous_config = theme_transition_config();
+    set_theme_transition_config(ThemeTransitionConfig {
+        enabled: true,
+        duration_ms: 180.0,
+        easing: "linear".into(),
+    });
+    set_css_transition_virtual_timeline(true);
+    set_prefers_reduced_motion(Some(false));
+    let config = wgpu::SurfaceConfiguration {
+        usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        width: 8,
+        height: 8,
+        present_mode: wgpu::PresentMode::Fifo,
+        alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
+        color_space: wgpu::SurfaceColorSpace::Auto,
+        view_formats: vec![],
+        desired_maximum_frame_latency: 1,
+    };
+    for alpha in [0.0, 0.18, 0.35, 1.0] {
+        for tint in [1.0, 0.15] {
+            set_css_transition_timeline_ms(0.0);
+            let mut content = PresentRetainPipeline::new_for_surface(&gpu.device, &config);
+            content.ensure_size(&gpu.device, 8, 8);
+            let mut fade = ThemeTransition::new_for_surface(&gpu.device, &config);
+            let linear = linearize_display_srgb_component(tint) as f64 * alpha;
+            let color = wgpu::Color { r: linear, g: linear, b: linear, a: alpha };
+            let expected = [(tint as f64 * alpha * 255.0).round() as u8; 3];
+            let check = |pixel: [u8; 4]| {
+                for channel in 0..3 {
+                    assert!(pixel[channel].abs_diff(expected[channel]) <= 3,
+                        "alpha={alpha} tint={tint} pixel={pixel:?} expected={expected:?}");
+                }
+                assert!(pixel[3].abs_diff((alpha * 255.0).round() as u8) <= 1);
+            };
+            check(frame(&gpu, &mut fade, &mut content, color).0);
+            toggle_theme_mode();
+            let (pixel, running) = frame(&gpu, &mut fade, &mut content, color);
+            check(pixel);
+            assert!(running);
+            set_css_transition_timeline_ms(90.0);
+            check(frame(&gpu, &mut fade, &mut content, color).0);
+            toggle_theme_mode();
+            check(frame(&gpu, &mut fade, &mut content, color).0);
+            set_css_transition_timeline_ms(300.0);
+            let (pixel, running) = frame(&gpu, &mut fade, &mut content, color);
+            check(pixel);
+            assert!(!running);
+        }
+    }
+    set_css_transition_virtual_timeline(false);
+    set_prefers_reduced_motion(None);
+    set_theme_transition_config(previous_config);
+    set_theme_preference(previous_preference);
+    set_theme(previous_theme);
+}

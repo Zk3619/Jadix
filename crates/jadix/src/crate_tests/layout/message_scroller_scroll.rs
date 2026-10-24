@@ -353,6 +353,35 @@ fn gallery_reactive_island_nested_root(rows: Element) -> Element {
 }
 
 #[test]
+fn scaled_message_scroller_end_keeps_messages_in_view() {
+    create_root(|| {
+        let mut root = Element::new().w(800.0).h(700.0).child(
+            gallery_like_message_scroller_root()
+                .scale(0.57)
+                .transform_origin("left top"),
+        );
+        let mut tree = LayoutTree::new();
+        for frame in 0..6 {
+            let mut impact = LayoutStatus::Clean;
+            sync_reactive_elements_subtree(
+                &mut root, &mut tree, &mut impact, 800.0, 700.0, [0.0, 0.0],
+            );
+            let result = tree.build_and_layout(&mut root, 800.0, 700.0, [-1.0, -1.0]);
+            publish_scroll_metrics(&result.scroll_metrics);
+            if frame >= 2 {
+                let viewport = find_slot_ms(&root, "message-scroller-viewport").expect("viewport");
+                let viewport = crate::core::tree::visual_paint_aabb(viewport, viewport.paint_scroll_acc);
+                assert!(result.text_nodes.iter().any(|text| {
+                    text.text.contains("MessageScrollerContent sets role")
+                        && text.y < viewport[1] + viewport[3]
+                        && text.y + text.height * text.paint_scale > viewport[1]
+                }), "frame {frame}: scaled live edge must contain message text");
+            }
+        }
+    });
+}
+
+#[test]
 fn message_scroller_end_scroll_paints_visible_rows() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {

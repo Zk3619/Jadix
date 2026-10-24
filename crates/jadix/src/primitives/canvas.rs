@@ -226,6 +226,16 @@ pub fn mark_canvas_dirty_hex(hex: &str) {
     }
 }
 
+pub(crate) fn canvas_paint_is_dirty(attrs: &HashMap<String, String>) -> bool {
+    attrs.get(ATTR_CANVAS_PAINT)
+        .and_then(|hex| u64::from_str_radix(hex.trim(), 16).ok())
+        .is_some_and(|id| PAINT_DIRTY.with(|dirty| dirty.borrow().contains(&id)))
+}
+
+pub(crate) fn has_dirty_canvases() -> bool {
+    PAINT_DIRTY.with(|dirty| !dirty.borrow().is_empty())
+}
+
 /// `CursorMoved` / 按下 在 dispatch 之后取走：需要 `window.request_redraw`。
 ///
 /// Also take **after** layout collect / `render`: `request_frame` sets the flag

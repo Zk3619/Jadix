@@ -73,6 +73,7 @@ pub fn Card(children: Option<Element>) -> Element {
             .w("100%")
             .max_w("100%")
             .min_w(0.0)
+            .flex_shrink(0.0)
             .gap(tokens::SPACE_6)
             .py(tokens::SPACE_6)
             .bg(parse_color("card"))

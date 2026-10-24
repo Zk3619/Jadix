@@ -131,8 +131,6 @@ const SIDEBAR_WIDTH_MOBILE: &str = "18rem";
 const SIDEBAR_MOBILE_BREAKPOINT: f32 = 768.0;
 
 fn sidebar_viewport_width() -> f32 {
-    #[cfg(all(debug_assertions, feature = "devtools"))]
-    if let Some((width, _)) = crate::app::devtools::preview_viewport_size() { return width; }
     crate::utils::modal_motion::modal_viewport_size().0
 }
 /// ShadCN `transition-[width] duration-200 ease-linear`.
@@ -1415,12 +1413,39 @@ fn apply_sidebar_menu_button_chrome(
     is_hovered: bool,
 ) -> LayoutStatus {
     let highlighted = is_active || is_hovered;
-    let want_bg = if highlighted {
+    let fluent_material = crate::style::with_theme(|theme| {
+        if theme.preset != crate::style::ThemePreset::Fluent {
+            return None;
+        }
+        let opacity = theme.styles.surface_opacity.unwrap_or(1.0);
+        let mut color = theme.colors.card;
+        if is_hovered && opacity == 1.0 {
+            for channel in &mut color[..3] {
+                *channel += (1.0 - *channel) * 0.08;
+            }
+        }
+        color[3] *= if !highlighted {
+            0.0
+        } else if is_hovered {
+            opacity + (1.0 - opacity) * 0.08
+        } else {
+            opacity
+        };
+        let blur = if highlighted && opacity < 1.0 {
+            theme.styles.backdrop_blur.unwrap_or(0.0)
+        } else {
+            0.0
+        };
+        Some((color, blur))
+    });
+    let want_bg = if let Some((color, _)) = fluent_material {
+        color
+    } else if highlighted {
         parse_color("sidebar-accent")
     } else {
         [0.0, 0.0, 0.0, 0.0]
     };
-    let want_fg = if highlighted {
+    let want_fg = if highlighted && fluent_material.is_none() {
         parse_text_color("sidebar-accent-foreground")
     } else {
         parse_text_color("sidebar-foreground")
@@ -1438,6 +1463,12 @@ fn apply_sidebar_menu_button_chrome(
     el.text_style.line_height_specified = true;
 
     let mut status = LayoutStatus::Clean;
+    if let Some((_, blur)) = fluent_material {
+        if el.style.backdrop_blur != blur {
+            el.style.backdrop_blur = blur;
+            status = LayoutStatus::StyleChanged;
+        }
+    }
     if el.style.bg_color != want_bg {
         el.style.bg_color = want_bg;
         if let Some(lt) = layout_tree.as_mut() {
@@ -3877,6 +3908,45 @@ mod tests {
             find_scrollbar_for(host, "prov-scroll__sidebar-content"),
             "overlay track must be a descendant of the content host"
         );
+    }
+
+    #[test]
+    fn fluent_selection_matches_card_material_and_hover_is_brighter() {
+        use crate::style::{ThemeMode, ThemePreset, set_theme_mode, set_theme_preset};
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            set_theme_mode(mode);
+            set_theme_preset(ThemePreset::Fluent);
+            crate::core::reactivity::create_root(|| {
+                let card: Element = crate::components::card().into();
+                let mut button: Element = sidebar_menu_button("fluent-material-item")
+                    .text("Navigation").is_active(true).into();
+                assert_eq!(button.style.bg_color, card.style.bg_color);
+                assert_eq!(button.style.backdrop_blur, card.style.backdrop_blur);
+                assert_eq!(button.style.glass, card.style.glass);
+                let selected = button.style.bg_color;
+                let mut layout = LayoutTree::new();
+                let mut impact = LayoutStatus::Clean;
+                let hovered = use_signal("fluent-material-item_hover", || false);
+                for active in [true, false] {
+                    hovered.set(true);
+                    super::apply_bound_sidebar_menu_button_active(&mut button, active);
+                    super::sync_sidebar_menu_button_paint_subtree(&mut button, &mut layout, &mut impact);
+                    let hover = button.style.bg_color;
+                    assert!(hover[3] > selected[3]);
+                    assert_eq!(&hover[..3], &selected[..3]);
+                    assert_eq!(button.style.backdrop_blur, card.style.backdrop_blur);
+                }
+                hovered.set(false);
+                super::sync_sidebar_menu_button_paint_subtree(&mut button, &mut layout, &mut impact);
+                assert_eq!(button.style.bg_color[3], 0.0);
+                assert_eq!(button.style.backdrop_blur, 0.0);
+                super::apply_bound_sidebar_menu_button_active(&mut button, true);
+                assert_eq!(button.style.bg_color, selected);
+                assert_eq!(button.style.backdrop_blur, card.style.backdrop_blur);
+            });
+        }
+        set_theme_preset(ThemePreset::Shadcn);
+        set_theme_mode(ThemeMode::Light);
     }
 
     #[test]

@@ -210,10 +210,10 @@ mod tests {
     }
 
     #[test]
-    fn page_and_navigation_surfaces_have_preset_geometry_without_glass_in_content() {
+    fn page_and_navigation_surfaces_follow_preset_materials() {
         reset();
         for (preset, radius) in [
-            (ThemePreset::Fluent, 8.0),
+            (ThemePreset::Fluent, 0.0),
             (ThemePreset::Material3, 28.0),
             (ThemePreset::LiquidGlass, 20.0),
         ] {
@@ -230,10 +230,40 @@ mod tests {
                     ))
                 });
                 assert_eq!(page.style.radii, [radius; 4], "{preset:?} page shell");
-                assert_eq!(page.style.bg_color, get_theme().colors.background);
-                assert!(page.style.glass.is_none());
-                assert_eq!(page.style.backdrop_blur, 0.0);
+                if preset == ThemePreset::LiquidGlass {
+                    assert_eq!(
+                        &page.style.bg_color[..3],
+                        &get_theme().colors.popover[..3],
+                        "Liquid Glass page shell tint"
+                    );
+                    assert_eq!(
+                        page.style.bg_color[3],
+                        get_theme().styles.surface_opacity.unwrap()
+                    );
+                    assert!(page.style.glass.is_some(), "Liquid Glass page shell");
+                    assert!(page.style.backdrop_blur > 0.0);
+                } else if preset == ThemePreset::Fluent {
+                    assert_eq!(
+                        page.style.bg_color[3], 0.0,
+                        "Fluent page shell exposes Mica"
+                    );
+                    assert!(page.style.glass.is_none());
+                    assert_eq!(page.style.backdrop_blur, 0.0);
+                } else {
+                    assert_eq!(page.style.bg_color, get_theme().colors.background);
+                    assert!(page.style.glass.is_none());
+                    assert_eq!(page.style.backdrop_blur, 0.0);
+                }
                 assert_eq!(page.style.shadow_blur, 0.0);
+                let mut sidebar = Element::new().bg(get_theme().colors.sidebar);
+                sidebar.set_attr("data-slot", "sidebar");
+                let sidebar = apply_stylesheet_rules(sidebar);
+                if matches!(preset, ThemePreset::Fluent | ThemePreset::LiquidGlass) {
+                    assert_eq!(
+                        sidebar.style.bg_color[3], 0.0,
+                        "outer rail exposes the window material"
+                    );
+                }
                 let mut navigation = Element::new();
                 navigation.set_attr("data-slot", "sidebar-inner");
                 let navigation = apply_stylesheet_rules(navigation);
@@ -242,20 +272,246 @@ mod tests {
                 } else {
                     get_theme().colors.sidebar
                 };
-                assert_eq!(&navigation.style.bg_color[..3], &expected[..3]);
+                if preset != ThemePreset::Fluent {
+                    assert_eq!(&navigation.style.bg_color[..3], &expected[..3]);
+                }
                 assert_eq!(
                     navigation.style.bg_color[3],
                     match preset {
-                        ThemePreset::Fluent => 0.76,
+                        ThemePreset::Fluent => 0.0,
                         ThemePreset::LiquidGlass => get_theme().styles.surface_opacity.unwrap(),
                         _ => 1.0,
                     }
+                );
+                assert_eq!(
+                    navigation.style.glass.is_some(),
+                    preset == ThemePreset::LiquidGlass,
+                    "{preset:?} sidebar material"
                 );
                 assert_ne!(
                     get_theme().colors.sidebar,
                     get_theme().colors.card,
                     "navigation and content are distinct surfaces"
                 );
+            }
+        }
+        reset();
+    }
+
+    #[test]
+    fn cards_use_glass_surface_only_for_liquid_glass() {
+        reset();
+        for preset in ThemePreset::ALL {
+            set_theme_preset(preset);
+            let (_, card) = crate::core::reactivity::create_root(|| {
+                apply_stylesheet_rules_tree(crate::components::Card(crate::components::CardProps {
+                    children: None,
+                    ..Default::default()
+                }))
+            });
+            assert_eq!(
+                card.style.glass.is_some(),
+                preset == ThemePreset::LiquidGlass,
+                "{preset:?} card material"
+            );
+            if preset == ThemePreset::Fluent {
+                assert_eq!(card.style.radii, [4.0; 4], "Fluent card corners");
+            }
+            if preset == ThemePreset::LiquidGlass {
+                assert_eq!(
+                    card.style.bg_color[3],
+                    get_theme().styles.surface_opacity.unwrap()
+                );
+            } else if preset == ThemePreset::Fluent {
+                assert_eq!(
+                    card.style.bg_color[3],
+                    get_theme().styles.surface_opacity.unwrap(),
+                    "Fluent cards tint the Mica backdrop"
+                );
+            }
+        }
+        reset();
+    }
+
+    #[test]
+    fn fluent_scrollbars_are_thumb_only_over_the_material() {
+        reset();
+        set_theme_preset(ThemePreset::Fluent);
+        let colors = get_theme().colors;
+        assert_eq!(colors.scrollbar_track, [0.0; 4]);
+        assert_eq!(colors.scrollbar_track_border, [0.0; 4]);
+        assert!((colors.scrollbar_thumb[3] - 0.72).abs() < f32::EPSILON);
+        assert_eq!(colors.scrollbar_thumb_border, [0.0; 4]);
+        crate::core::reactivity::create_root(|| {
+            for orientation in [
+                crate::components::scrollbar::ScrollbarOrientation::Vertical,
+                crate::components::scrollbar::ScrollbarOrientation::Horizontal,
+            ] {
+                let mut bar: Element = crate::components::scrollbar("fluent-bar")
+                    .orientation(orientation)
+                    .always()
+                    .into();
+                let mut layout = crate::layout::LayoutTree::new();
+                layout.build_and_layout(&mut bar, 200.0, 200.0, [-1.0; 2]);
+                assert_eq!(bar.style.bg_color[3], 0.0);
+                assert_eq!(bar.style.border_color[3], 0.0);
+                let cross_axis = match orientation {
+                    crate::components::scrollbar::ScrollbarOrientation::Vertical => 2,
+                    crate::components::scrollbar::ScrollbarOrientation::Horizontal => 3,
+                };
+                assert_eq!(bar.layout_bounds[cross_axis], 8.0);
+                assert_eq!(bar.children[0].layout_bounds[cross_axis], 6.0);
+            }
+            let mut area: Element = crate::components::scroll_area("fluent-area")
+                .w(200.0)
+                .h(150.0)
+                .overflow("scroll")
+                .scrollbar_visibility("always")
+                .child(Element::new().min_w(400.0).min_h(300.0))
+                .into();
+            let mut layout = crate::layout::LayoutTree::new();
+            layout.build_and_layout(&mut area, 200.0, 150.0, [-1.0; 2]);
+            for axis in ["x", "y"] {
+                let focus = format!("scrollbar-track:fluent-area:{axis}");
+                let bar = area.children.iter().find(|child| {
+                    child.focus_id.as_deref() == Some(focus.as_str())
+                }).unwrap();
+                assert_eq!(bar.style.bg_color[3], 0.0);
+                assert_eq!(bar.layout_bounds[if axis == "y" { 2 } else { 3 }], 8.0);
+            }
+            let mut explicit: Element = crate::components::scrollbar("explicit-fluent-bar")
+                .thickness(14.0)
+                .track_color(parse_color("#123456"))
+                .always()
+                .into();
+            layout.build_and_layout(&mut explicit, 200.0, 200.0, [-1.0; 2]);
+            assert_eq!(explicit.layout_bounds[2], 14.0);
+            assert_eq!(explicit.style.bg_color, parse_color("#123456"));
+        });
+        reset();
+    }
+
+    #[test]
+    fn fluent_cards_blend_over_a_clear_borderless_sidebar() {
+        reset();
+        for mode in [ThemeMode::Light, ThemeMode::Dark] {
+            set_theme_mode(mode);
+            set_theme_preset(ThemePreset::Fluent);
+            crate::core::reactivity::create_root(|| {
+                let card: Element = crate::components::card().into();
+                let sidebar = apply_stylesheet_rules_tree(
+                    crate::components::sidebar("fluent-navigation").into()
+                );
+                fn inner(element: &Element) -> Option<&Element> {
+                    if element.attrs.get("data-slot").map(String::as_str) == Some("sidebar-inner") {
+                        return Some(element);
+                    }
+                    element.children.iter().find_map(inner)
+                }
+                assert!(card.style.bg_color[3] > 0.0 && card.style.bg_color[3] <= 0.35);
+                assert!(card.style.backdrop_blur > 0.0);
+                assert!(card.style.glass.is_none());
+                let control: Element = crate::components::button("fluent-neutral-control")
+                    .variant("outline").into();
+                assert_eq!(control.style.bg_color[3], 0.0);
+                let navigation = inner(&sidebar).unwrap();
+                assert_eq!(navigation.style.bg_color[3], 0.0);
+                assert_eq!(navigation.style.backdrop_blur, 0.0);
+                assert_eq!(navigation.style.resolved_border_widths(), [0.0; 4]);
+                assert_eq!(sidebar.style.bg_color[3], 0.0);
+                assert_eq!(sidebar.style.resolved_border_widths(), [0.0; 4]);
+            });
+        }
+        reset();
+    }
+
+    #[test]
+    fn outline_buttons_stay_clear_across_presets_and_interactions() {
+        reset();
+        for preset in ThemePreset::ALL {
+            for mode in [ThemeMode::Light, ThemeMode::Dark] {
+                set_theme_mode(mode);
+                set_theme_preset(preset);
+                crate::core::reactivity::create_root(|| {
+                    let mut button: Element = crate::components::button("clear-outline")
+                        .variant("outline")
+                        .text("Outline")
+                        .into();
+                    for hovered in [false, true, false] {
+                        resolve_class_variants(
+                            &mut button,
+                            &VariantContext { hovered, ..Default::default() },
+                        );
+                        if !hovered {
+                            assert_eq!(button.style.bg_color[3], 0.0, "{preset:?} {mode:?}");
+                            assert_eq!(button.style.backdrop_blur, 0.0);
+                            assert!(button.style.glass.is_none());
+                        }
+                    }
+                    let disabled: Element = crate::components::button("clear-disabled-outline")
+                        .variant("outline").disabled(true).into();
+                    assert_eq!(disabled.style.bg_color[3], 0.0, "{preset:?} {mode:?}");
+                    let explicit = with_class_list(button, "bg-#123456");
+                    assert_eq!(explicit.style.bg_color, parse_color("#123456"));
+                    assert_eq!(
+                        crate::components::button::button_chrome_for_variant("outline", 0.0).0[3],
+                        0.0,
+                    );
+                });
+            }
+        }
+        reset();
+    }
+
+    #[test]
+    fn transparent_surfaces_keep_explicit_tints_and_opaque_fallback() {
+        reset();
+        for preset in [ThemePreset::Fluent, ThemePreset::LiquidGlass] {
+            for mode in [ThemeMode::Light, ThemeMode::Dark] {
+                set_theme_mode(mode);
+                set_theme_preset(preset);
+                assert_eq!(
+                    get_theme().styles.surface_opacity,
+                    Some(if preset == ThemePreset::Fluent {
+                        if mode == ThemeMode::Dark { 0.18 } else { 0.35 }
+                    } else if mode == ThemeMode::Dark {
+                        0.38
+                    } else {
+                        0.44
+                    })
+                );
+                for opacity in [0.0, 0.4, 1.0] {
+                    let mut overrides = theme_overrides();
+                    overrides.styles.surface_opacity = Some(opacity);
+                    install_theme_overrides(overrides).unwrap();
+                    for slot in ["card", "sidebar-inner", "popover-content", "sidebar-inset"] {
+                        let mut surface = Element::new().bg(get_theme().colors.card);
+                        surface.set_attr("data-slot", slot);
+                        let surface = apply_stylesheet_rules(surface);
+                        assert_eq!(
+                            surface.style.bg_color[3],
+                            if preset == ThemePreset::Fluent && matches!(slot, "sidebar-inset" | "sidebar-inner") {
+                                0.0
+                            } else {
+                                opacity
+                            },
+                            "{preset:?} {mode:?} {slot} opacity={opacity}"
+                        );
+                        assert_eq!(
+                            surface.style.glass.is_some(),
+                            preset == ThemePreset::LiquidGlass && opacity < 1.0
+                        );
+                        assert_eq!(surface.style.backdrop_blur,
+                            if opacity == 1.0 || (preset == ThemePreset::Fluent && matches!(slot, "sidebar-inset" | "sidebar-inner")) {
+                                0.0
+                            } else {
+                                get_theme().styles.backdrop_blur.unwrap()
+                            });
+                        let surface = with_class_list(surface, "bg-#123456");
+                        assert_eq!(surface.style.bg_color, parse_color("#123456"));
+                    }
+                }
+                reset();
             }
         }
         reset();
@@ -694,7 +950,7 @@ mod tests {
         crate::core::reactivity::create_root(|| {
             let popover = crate::components::popover_surface(Element::new().text("Popover"), None);
             assert!(popover.style.glass.is_some());
-            assert!((popover.style.bg_color[3] - 0.44).abs() < 0.001);
+            assert_eq!(popover.style.bg_color[3], 0.44);
             assert_eq!(
                 popover.attrs.get("data-slot").map(String::as_str),
                 Some("popover-content")
@@ -713,7 +969,7 @@ mod tests {
                 panel.style.glass.is_some(),
                 "late slot must not be skipped as already styled"
             );
-            assert!(panel.style.bg_color[3] < 1.0);
+            assert_eq!(panel.style.bg_color[3], 0.44);
             let mut root = Element::new()
                 .w(400.0)
                 .h(300.0)
@@ -1028,9 +1284,15 @@ impl Theme {
                 super::parse_color(if dark { "#601410" } else { "#ffffff" });
         }
         if preset == ThemePreset::Fluent {
+            colors.card = super::parse_color(if dark { "#5a5a64" } else { "#ffffff" });
             colors.secondary = super::parse_color(if dark { "#383838" } else { "#f5f5f5" });
             colors.muted = colors.secondary;
             colors.surface = colors.secondary;
+            // WinUI overlay bars have no painted rail or outline; only the thumb is visible.
+            colors.scrollbar_track = [0.0; 4];
+            colors.scrollbar_track_border = [0.0; 4];
+            colors.scrollbar_thumb[3] = 0.72;
+            colors.scrollbar_thumb_border = [0.0; 4];
         }
         colors.sidebar = super::parse_color(match (preset, dark) {
             (ThemePreset::Fluent, false) => "#f5f5f5",
@@ -1042,7 +1304,7 @@ impl Theme {
             _ => unreachable!(),
         });
         let (panel_radius, height, padding, blur, opacity) = match preset {
-            ThemePreset::Fluent => (8.0, 32.0, 12.0, 0.0, 1.0),
+            ThemePreset::Fluent => (8.0, 32.0, 12.0, 20.0, if dark { 0.18 } else { 0.35 }),
             ThemePreset::Material3 => (28.0, 40.0, 24.0, 0.0, 1.0),
             ThemePreset::LiquidGlass => (24.0, 36.0, 16.0, 8.0, if dark { 0.38 } else { 0.44 }),
             ThemePreset::Shadcn => unreachable!(),
@@ -1123,7 +1385,7 @@ fn button_theme_classes(theme: &Theme, variant: &str) -> String {
         "secondary" => (colors.secondary, colors.secondary_foreground),
         "destructive" => (colors.destructive, colors.destructive_foreground),
         "outline" => (
-            if material { [0.0; 4] } else { colors.card },
+            [0.0; 4],
             if material {
                 colors.primary
             } else {
@@ -1230,8 +1492,20 @@ fn preset_slot_styles(preset: ThemePreset, slot: &str) -> ThemeStyles {
     );
     let material_field = preset == ThemePreset::Material3 && field;
     ThemeStyles {
-        font_size: Some(if material_field { 16.0 } else { 14.0 }),
-        line_height: Some(if material_field { 24.0 } else { 20.0 }),
+        font_size: Some(if material_field {
+            16.0
+        } else if preset == ThemePreset::Fluent && slot == "badge" {
+            12.0
+        } else {
+            14.0
+        }),
+        line_height: Some(if material_field {
+            24.0
+        } else if preset == ThemePreset::Fluent && slot == "badge" {
+            16.0
+        } else {
+            20.0
+        }),
         font_weight: Some(match (preset, label) {
             (ThemePreset::Fluent, true) => 600,
             (ThemePreset::Material3 | ThemePreset::LiquidGlass, true) => 500,
@@ -1268,6 +1542,7 @@ fn preset_slot_styles(preset: ThemePreset, slot: &str) -> ThemeStyles {
         }),
         panel_radius: Some(match preset {
             ThemePreset::LiquidGlass if matches!(slot, "sidebar-inset" | "sidebar-inner") => 20.0,
+            ThemePreset::Fluent if slot == "sidebar-inset" => 0.0,
             ThemePreset::Fluent if slot == "card" => 4.0,
             ThemePreset::Fluent => {
                 if slot == "tooltip-content" {
@@ -1342,10 +1617,16 @@ pub(crate) fn slot_theme_classes(el: &mut Element) -> String {
         );
         let inline = el.attrs.get("data-size").map(String::as_str) == Some("inline");
         let glass_chrome = theme.preset == ThemePreset::LiquidGlass
+            && !(slot == "button"
+                && el.attrs.get("data-variant").map(String::as_str) == Some("outline"))
             && (control
                 || matches!(
                     slot.as_str(),
-                    "sidebar-inner" | "tabs-list" | "button-group" | "toggle-group"
+                    "sidebar-inset"
+                        | "sidebar-inner"
+                        | "tabs-list"
+                        | "button-group"
+                        | "toggle-group"
                 ));
         let material_surface =
             (panel && !matches!(slot.as_str(), "tooltip-content" | "command")) || glass_chrome;
@@ -1460,6 +1741,13 @@ pub(crate) fn slot_theme_classes(el: &mut Element) -> String {
                 } else {
                     theme.colors.popover
                 };
+                // Component constructors provide a direct `bg-*` value. Keep
+                // that value reactive to preset changes before utility classes
+                // are applied, otherwise the constructor's opaque fill wins
+                // over the theme's translucent surface utility.
+                if theme.preset != ThemePreset::Shadcn {
+                    el.style.bg_color = [color[0], color[1], color[2], color[3] * opacity];
+                }
                 classes.push(format!(
                     "bg-rgba({},{},{},{})",
                     color[0] * 255.0,
@@ -1480,9 +1768,7 @@ pub(crate) fn slot_theme_classes(el: &mut Element) -> String {
                 ThemePreset::Fluent if modal => {
                     Some("0 24px 48px 0 #0000003d, 0 0 8px 0 #00000033")
                 }
-                ThemePreset::Fluent if slot == "card" => {
-                    Some("0 1px 2px 0 #00000024, 0 0 2px 0 #0000001f")
-                }
+                ThemePreset::Fluent if slot == "card" => Some("0 1px 2px 0 #00000024"),
                 ThemePreset::Fluent => Some("0 8px 16px 0 #00000024, 0 0 2px 0 #0000001f"),
                 ThemePreset::Material3 if matches!(slot.as_str(), "card" | "command") => {
                     Some("none")
@@ -1504,6 +1790,16 @@ pub(crate) fn slot_theme_classes(el: &mut Element) -> String {
         }
         if theme.preset != ThemePreset::Shadcn {
             match slot.as_str() {
+                "sidebar"
+                    if matches!(theme.preset, ThemePreset::Fluent | ThemePreset::LiquidGlass) =>
+                {
+                    el.style.bg_color[3] = 0.0;
+                    classes.push("bg-transparent".into());
+                    if theme.preset == ThemePreset::Fluent {
+                        el.style.set_uniform_border_width(0.0);
+                        classes.push("border-0".into());
+                    }
+                }
                 "sidebar-wrapper" => classes.push(
                     if matches!(theme.preset, ThemePreset::Fluent | ThemePreset::LiquidGlass) {
                         "bg-transparent"
@@ -1518,18 +1814,20 @@ pub(crate) fn slot_theme_classes(el: &mut Element) -> String {
                             classes.push(format!("rounded-[{radius}px] max-md:rounded-none"));
                         }
                     }
-                    classes.push("bg-background shadow-none".into());
+                    if matches!(theme.preset, ThemePreset::Fluent | ThemePreset::LiquidGlass) {
+                        el.style.bg_color[3] = 0.0;
+                        classes.push("bg-transparent shadow-none".into());
+                    } else {
+                        classes.push("bg-background shadow-none".into());
+                    }
                 }
                 "sidebar-inner" => {
-                    classes.push("bg-sidebar".into());
                     if theme.preset == ThemePreset::Fluent {
-                        let color = theme.colors.sidebar;
-                        classes.push(format!(
-                            "bg-rgba({},{},{},0.76)",
-                            color[0] * 255.0,
-                            color[1] * 255.0,
-                            color[2] * 255.0
-                        ));
+                        el.style.bg_color[3] = 0.0;
+                        el.style.set_uniform_border_width(0.0);
+                        classes.push("bg-transparent border-0 shadow-none backdrop-blur-none".into());
+                    } else {
+                        classes.push("bg-sidebar".into());
                     }
                     if el.style.radii.iter().any(|radius| *radius > 0.0) {
                         if let Some(radius) = styles.panel_radius {
@@ -1609,7 +1907,7 @@ pub(crate) fn slot_theme_classes(el: &mut Element) -> String {
             } else {
                 theme.colors.popover
             };
-            let opacity = styles.surface_opacity.unwrap_or(0.44);
+            let opacity = styles.surface_opacity.unwrap_or(0.0);
             let alpha = if slot == "button" && matches!(variant, "default" | "destructive") {
                 opacity.max(0.82)
             } else {

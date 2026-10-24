@@ -13,6 +13,10 @@
 
 这些是 Jadix 的跨平台风格预设，不是各平台原生控件或官方设计系统的逐像素实现。字体使用本机字体栈回退，不自动下载字体。
 
+Windows 的 GPU alpha 与原生透明窗口属性分开管理：`follow_theme(true)` 预留支持 alpha 的合成 surface，切换预设时复用同一个 HWND 和 surface；只有显式请求桌面穿透时才设置 winit 的原生透明属性。Gallery 默认启用 WebView，使用独立的 DirectComposition 内容树，Fluent 的系统 Mica 仍需通过 `DwmExtendFrameIntoClientArea` 扩展到客户区，不能因 swapchain 支持 alpha 而跳过。未启用 WebView 时，DX12 玻璃窗口使用自定义 DComp 背景与内容视觉树，不再叠加系统材质或 AccentPolicy。自定义配方不可用时按当前明暗模式的 `colors.background` token 回退。
+
+本地 DWMBlurGlass 参考实现有两条不同路径：`Section/DwmAPIEffect.cpp` 设置系统 `DWMWA_SYSTEMBACKDROP_TYPE`；`Backdrops/BackdropFactory.cpp` 的自定义配方则由注入 DWM 的视觉树承载。Jadix 在应用进程中合成，复用了配方思路，并不注入 DWM，也不需要创建额外的透明顶层窗口。原生回归：构建 Gallery 后运行 `python scripts/window-material-check.py`，检查 Fluent 的实际合成像素、明暗切换、resize、重新进入预设及 HWND 数量；PNG、日志和 JSON 写入 `.tmp/window-material/`。
+
 WinUI 3 是 Fluent 的 Windows 落地组件库，不再作为第五种设计语言。旧配置名仍可读取，重新序列化统一写为 `fluent`；`ThemePreset::WinUi3` 保留为弃用的源码兼容常量。统一预设不依赖 WinUI 或 windows-reactor 运行时，也不把跨平台阴影与模糊称为系统 Acrylic / Mica。Tooltip 使用 4px 圆角，内容 Card 使用 4px，常规浮层使用 8px；操作标签沿用 Fluent Semibold，正文保持 Regular。
 
 Material 3 明确采用 baseline 子集，而非完整 Expressive：胶囊按钮、14/20/500 操作标签、16/24/400 输入正文、4px 输入与菜单、12px 卡片和 28px 对话框。Hover/press 使用 on-color 8%/10% 的状态层；禁用填充容器和文字分别采用 on-surface 12%/38%，不对整个按钮乘 0.5。40px 是按钮视觉高度，不代表所有控件的移动端触摸命中区。调用方仍可覆盖这些尺度与状态。
@@ -34,6 +38,8 @@ install_theme_overrides(overrides)?;
 `set_theme_preset` 保留用户覆盖；`clear_theme_overrides` 清除覆盖并恢复 shadcn。独立构造主题可使用 `Theme::preset(preset, mode)`，再通过 `set_theme` 安装；需要明暗切换时保留定制，应使用 `ThemeOverrides`。
 
 字号、行高、字重和圆角先按组件角色确定默认值，再合并通用与明暗覆盖。对应的 `Theme.styles` 字段为 `None` 表示“使用角色默认”，不是所有组件都没有样式。显式覆盖即使数值恰好等于某个预设的基线，也仍然优先；不再用浮点默认值相等与否猜测用户意图。
+
+明暗偏好由 `ThemePreference::{Light, Dark, System}` 表示，默认 `System`。用 `set_theme_preference(ThemePreference::System)` 恢复跟随系统，启动时读取系统明暗，运行中响应系统主题变更并同步所有窗口。`set_theme_preference(Light / Dark)` 固定明暗；原有 `set_theme_mode(ThemeMode::Light / Dark)` 和 `toggle_theme_mode()` 也会进入手动模式。`theme_preference()` 返回用户选择，`theme_mode()` 返回已解析的实际明暗。预设、通用/明暗覆盖和焦点环设置在切换时保留；系统不提供主题时使用浅色。Gallery 主题页提供“浅色 / 深色 / 跟随系统”独立按钮。
 
 ## TOML 配置
 
@@ -89,11 +95,13 @@ easing = "ease-in-out"
 
 样式长度均为逻辑像素；`line-height` 是绝对行高；两项 opacity 为 0–1。旧的 `[light].radius` / `[dark].radius` 仍以 rem 表示。所有新样式字段均可省略，逐字段叠加到预设，不会因只改圆角而重置预设字体或阴影。`light-styles` / `dark-styles` 在通用 `styles` 之上覆盖。
 
-通用造型覆盖 Button、Badge、Input、Textarea、Select 触发器、Card 及其分区和已有 slot 的弹层（Dialog、Popover、Select、菜单等），以及 Sidebar 页壳、导航表面、导航项、Tabs 和菜单选项的角色造型。SidebarInset 的桌面圆角分别为 Fluent 8px、MD3 28px、Liquid Glass 20px；窄屏仍取消 inset 圆角。导航背景、页面背景、内容卡和功能浮层分别使用对应颜色角色；Liquid Glass 按本项目展示需求为 Card 与常用控件提供自动玻璃，页面根背景本身不自动折射。字体令牌主要作用于控件文字，保留 Lucide 字体和嵌套 slot；标题层级仍由组件自身定义。按钮 xs/sm/lg 和 icon 尺寸按基准高度缩放，inline 不强制高度，Textarea 不覆盖其行数高度。
+通用造型覆盖 Button、Badge、Input、Textarea、Select 触发器、Card 及其分区和已有 slot 的弹层（Dialog、Popover、Select、菜单等），以及 Sidebar 页壳、导航表面、导航项、Tabs 和菜单选项的角色造型。SidebarInset 的桌面圆角分别为 Fluent 0px、MD3 28px、Liquid Glass 20px；窄屏仍取消 inset 圆角。Fluent 默认 `surface-opacity` 浅色 `0.35`、深色 `0.18`，Card 和常规浮层结合低对比度半透明填色与 `20px` 背景模糊；侧栏外轨与内部背景完全透明、无边框，不额外叠加模糊，以露出窗口的 Mica 材质。Liquid Glass 默认浅色 `0.44`、深色 `0.38`，SidebarInset、导航与 Card 保留独立的玻璃参数、边框和阴影。Sidebar 外轨和 wrapper 透明，Fluent 页壳透明；DX12 合成宿主同步更新 DWM 材质，切换预设和明暗不重建窗口。Fluent 滚动条默认轨道宽 `8px`、滑块宽 `6px`，轨道与描边透明，切换主题时丢弃旧滚动条颜色缓存；显式宽度与颜色覆盖继续生效。透明填色不等于将整个组件的 opacity 设为 0；品牌操作、交互状态和模态遮罩仍有自己的颜色。显式 `surface-opacity`、组件样式和调用方背景覆盖继续生效，`surface-opacity = 1` 关闭面板的自动背景模糊。字体令牌主要作用于控件文字，保留 Lucide 字体和嵌套 slot；标题层级仍由组件自身定义。按钮 xs/sm/lg 和 icon 尺寸按基准高度缩放，inline 不强制高度，Textarea 不覆盖其行数高度。
 
 `components` 的键是精确的 `data-slot`，也可指定应用自建的 slot；值使用现有 utility 语法，包含 `hover:`、`focus:`、`disabled:`、`dark:` 和响应式变体。它与 `styles.toml` registry 独立，清除样式表不会移除主题。非法数值、玻璃参数和未知组件 utility 在安装前验证，失败不改变当前主题或已存覆盖。
 
 样式优先级从低到高：组件默认值 → 预设与通用/明暗令牌 → `components` slot utility → `styles.toml` → 调用方 `class` → 调用方 `.style()` / RSX 样式。支持运行时 `bind_class` 替换，不会丢失主题层。主题切换复用现有热重建和动画机制，切换动画遵循 reduced-motion。
+
+所有预设的 `Button variant="outline"` 在静止和禁用状态下均使用透明背景，Liquid Glass 不为它自动添加玻璃填色或背景模糊；悬停仍保留状态反馈，调用方显式背景覆盖继续生效。Fluent 侧栏选中项使用 Card 的填色、透明度与背景模糊，悬停时略微提高填色的不透明度，使其比选中态更亮，离开后恢复当前选中状态。
 
 ## 液态玻璃的光学路径
 

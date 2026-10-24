@@ -21,35 +21,32 @@ use winit::window::Window;
 
 use crate::core::tree::{Element, LayoutProfileMs, LayoutTree};
 use crate::renderer::{
-    BackdropBlurPipeline, InstanceInput, JadixPipeline, JadixTextRenderer, PresentRetainPipeline,
-    ScaledTexturedDraw, TexturedInstanceInput, TexturedQuadPipeline, cpu_text::CpuTextProfiler,
-    prepare_text_frame, scale_clip_polys_in_place, scale_instances, scale_instances_in_place,
-    scale_textured_draws,
+    cpu_text::CpuTextProfiler, prepare_text_frame, scale_clip_polys_in_place, scale_instances,
+    scale_instances_in_place, scale_textured_draws, BackdropBlurPipeline, InstanceInput,
+    JadixPipeline, JadixTextRenderer, PresentRetainPipeline, ScaledTexturedDraw,
+    TexturedInstanceInput, TexturedQuadPipeline,
 };
 use crate::{
-    components::{
-        scrollbar::scrollbar_visibility_signal_key,
-        scrollbar::{
-            ATTR_H_LANE_INSET, ATTR_H_LANE_V_CROSS, ATTR_SCROLLBAR_TRACK_FADES, SCROLLBAR_EDGE_PAD,
-            SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
-            apply_scrollbar_visible_alpha, horizontal_lane_side_inset,
-            normalize_scrollbar_base_for_auto, scrollbar_min_thumb_along_track,
-            vertical_scrollbar_occupies_lane,
-        },
+    core::scrollbar::{
+        apply_scrollbar_visible_alpha, horizontal_lane_side_inset,
+        normalize_scrollbar_base_for_auto, scrollbar_min_thumb_along_track,
+        scrollbar_visibility_signal_key, vertical_scrollbar_occupies_lane,
+        ATTR_H_LANE_INSET, ATTR_H_LANE_V_CROSS, ATTR_SCROLLBAR_TRACK_FADES,
+        SCROLLBAR_EDGE_PAD, SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX,
     },
     core::reactivity::use_signal,
     core::scroll_viewport::{
-        SCROLL_VIEWPORT_FOCUS_PREFIX, scroll_content_h_signal_key, scroll_content_w_signal_key,
-        scroll_offset_x_signal_key, scroll_offset_y_signal_key, scroll_overflow_x_signal_key,
-        scroll_overflow_y_signal_key, scroll_scrollbar_inset_x_signal_key,
-        scroll_scrollbar_inset_y_signal_key, scroll_scrollbar_y_side_signal_key,
-        scroll_viewport_h_signal_key, scroll_viewport_w_signal_key,
+        scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
+        scroll_offset_y_signal_key, scroll_overflow_x_signal_key, scroll_overflow_y_signal_key,
+        scroll_scrollbar_inset_x_signal_key, scroll_scrollbar_inset_y_signal_key,
+        scroll_scrollbar_y_side_signal_key, scroll_viewport_h_signal_key,
+        scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
     },
 };
 use std::collections::hash_map::Entry;
-use std::sync::OnceLock;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::OnceLock;
 use std::time::Instant;
 use taffy::prelude::Dimension;
 
@@ -1433,26 +1430,31 @@ fn local_backdrop_host_scissor_physical(
         if inst.backdrop_blur <= 0.5 {
             continue;
         }
-        let (x, y, w, h) = if inst.glass[0] < 1.0 && inst.clip_size[0] > 0.5 && inst.clip_size[1] > 0.5 {
-            (
-                inst.clip_pos[0],
-                inst.clip_pos[1],
-                inst.clip_size[0],
-                inst.clip_size[1],
-            )
-        } else {
-            (
-                inst.rect_pos[0],
-                inst.rect_pos[1],
-                inst.rect_size[0],
-                inst.rect_size[1],
-            )
-        };
+        let (x, y, w, h) =
+            if inst.glass[0] < 1.0 && inst.clip_size[0] > 0.5 && inst.clip_size[1] > 0.5 {
+                (
+                    inst.clip_pos[0],
+                    inst.clip_pos[1],
+                    inst.clip_size[0],
+                    inst.clip_size[1],
+                )
+            } else {
+                (
+                    inst.rect_pos[0],
+                    inst.rect_pos[1],
+                    inst.rect_size[0],
+                    inst.rect_size[1],
+                )
+            };
         if w <= 0.0 || h <= 0.0 {
             continue;
         }
         found = true;
-        let optical_pad = if inst.glass[0] >= 1.0 { inst.glass[1] * 2.0 * (1.0 + inst.glass[2]) } else { 0.0 };
+        let optical_pad = if inst.glass[0] >= 1.0 {
+            inst.glass[1] * 2.0 * (1.0 + inst.glass[2])
+        } else {
+            0.0
+        };
         min_x = min_x.min(x - optical_pad);
         min_y = min_y.min(y - optical_pad);
         max_x = max_x.max(x + w + optical_pad);
@@ -1672,7 +1674,8 @@ mod local_backdrop_capture_tests {
         instance.rect_pos = [100.0, 120.0];
         instance.rect_size = [200.0, 80.0];
         instance.clip_size = [800.0, 600.0];
-        let scissor = local_backdrop_host_scissor_physical(&[instance], &band_instances(0, 1), 800, 600);
+        let scissor =
+            local_backdrop_host_scissor_physical(&[instance], &band_instances(0, 1), 800, 600);
         assert_eq!(scissor, Some((78, 98, 244, 124)));
     }
 
@@ -2190,8 +2193,8 @@ impl AppState {
         };
         startup_stage("path_pipeline");
         let theme_transition =
-            crate::renderer::theme_transition::ThemeTransition::new(&device, config.format);
-        let mut present_retain = PresentRetainPipeline::new(&device, config.format);
+            crate::renderer::theme_transition::ThemeTransition::new_for_surface(&device, &config);
+        let mut present_retain = PresentRetainPipeline::new_for_surface(&device, &config);
         let _ = present_retain.ensure_size(&device, config.width, config.height);
         startup_stage("present_pipelines");
         let textured_instance_buffer = crate::renderer::buffer_upload::RetainedBuffer::new(
@@ -2393,12 +2396,14 @@ impl AppState {
                     // at 150% = 37.5px) accumulates a pixel every other frame. Keep
                     // input signals continuous; snap only the paint pose. Collect uses
                     // the same grid when reading the live signals for child placement.
-                    el.scroll_offset = el.scroll_offset.map(|v| {
-                        super::scroll_support::snap_scroll_offset_to_device_px(v, ui_scale)
+                    let paint_scale = crate::core::tree::paint_scale_with_ancestor(el, el.paint_ancestor_scale);
+                    el.scroll_offset = std::array::from_fn(|axis| {
+                        super::scroll_support::snap_scroll_offset_to_device_px(
+                            el.scroll_offset[axis], ui_scale * paint_scale[axis].abs())
                     });
                     map.insert(
                         rest,
-                        [el.scroll_offset[0].to_bits(), el.scroll_offset[1].to_bits()],
+                        std::array::from_fn(|axis| (el.scroll_offset[axis] * paint_scale[axis]).to_bits()),
                     );
                 }
             }
@@ -2991,6 +2996,14 @@ impl AppState {
         })
     }
 
+    /// A transparent swapchain is only needed while the active theme owns a
+    /// material backdrop. `follow_theme` reserves an alpha-capable surface so
+    /// switching into Fluent/LiquidGlass does not recreate the swapchain, but
+    /// opaque themes still need an opaque attachment clear during that period.
+    fn transparent_surface(&self) -> bool {
+        self.compositor_alpha && self.chrome.themed().blur
+    }
+
     fn plan_gpu_present(&self, ui_scale: f32) -> GpuPresentPlan {
         let (logical_w, logical_h) = self.logical_size();
         let viewport_logical = [0.0, 0.0, logical_w, logical_h];
@@ -3415,8 +3428,16 @@ impl AppState {
                         {
                             note_present_hole_chrome();
                             node_glyph_holes.push(cull_rect);
+                            draw_scissor_surface_clear(
+                                render_pass,
+                                &self.pipeline,
+                                &self.device,
+                                cull_rect,
+                                clear_color,
+                            );
                             self.draw_own_chrome_region(
                                 render_pass,
+                                paint_ops,
                                 node_paints,
                                 scaled_instances,
                                 clip_polys,
@@ -4256,6 +4277,7 @@ impl AppState {
     fn draw_own_chrome_region<'pass>(
         &'pass self,
         render_pass: &mut wgpu::RenderPass<'pass>,
+        paint_ops: &[crate::layout::layout_tree::PaintOp],
         node_paints: &[crate::layout::layout_tree::NodePaint],
         scaled_instances: &[InstanceInput],
         clip_polys: &[crate::style::GpuClipPoly],
@@ -4282,36 +4304,40 @@ impl AppState {
             insts.clear();
             polys.clear();
         }
-        for p in node_paints {
-            if p.overlay || super::damage::intersect_rects(p.bounds, scissor_logical).is_none() {
-                continue;
-            }
-            let (lo, hi) = super::draw_cull::slot_own_chrome_range(p, scaled_instances, ui_scale);
-            for i in lo..hi {
-                if let Some(c) = cull {
-                    if !c.hits_instance(&scaled_instances[i]) {
-                        continue;
+        for op in super::draw_cull::region_own_paint_ops(
+            paint_ops,
+            node_paints,
+            scaled_instances,
+            scaled_tex.len(),
+            scissor_logical,
+            ui_scale,
+        ) {
+            match op {
+                crate::layout::layout_tree::PaintOp::Rects { start, count } => {
+                    for i in start as usize..(start + count) as usize {
+                        if let Some(c) = cull {
+                            if !c.hits_instance(&scaled_instances[i]) {
+                                continue;
+                            }
+                        }
+                        batch_inst.push(scaled_instances[i]);
+                        batch_poly.push(
+                            clip_polys
+                                .get(i)
+                                .copied()
+                                .unwrap_or(crate::style::GpuClipPoly::NONE),
+                        );
                     }
                 }
-                batch_inst.push(scaled_instances[i]);
-                batch_poly.push(
-                    clip_polys
-                        .get(i)
-                        .copied()
-                        .unwrap_or(crate::style::GpuClipPoly::NONE),
-                );
-            }
-            super::draw_cull::for_each_own_textured_run(
-                p,
-                node_paints,
-                scaled_tex.len(),
-                |start, end| {
+                crate::layout::layout_tree::PaintOp::Textured { start, count } => {
+                    let start = start as usize;
+                    let end = start + count as usize;
                     let hits = match cull {
                         Some(c) => scaled_tex[start..end].iter().any(|d| c.hits_textured(d)),
                         None => start < end,
                     };
                     if !hits {
-                        return;
+                        continue;
                     }
                     flush(
                         render_pass,
@@ -4331,8 +4357,8 @@ impl AppState {
                         end,
                         cull,
                     );
-                },
-            );
+                }
+            }
         }
         flush(
             render_pass,
@@ -5023,6 +5049,12 @@ impl AppState {
         }
 
         new_el.layout_node = old_el.layout_node;
+        new_el.layout_bounds = old_el.layout_bounds;
+        new_el.paint_scroll_acc = old_el.paint_scroll_acc;
+        new_el.paint_overlay_stamp = old_el.paint_overlay_stamp;
+        new_el.paint_ancestor_scale = old_el.paint_ancestor_scale;
+        new_el.paint_ancestor_linear = old_el.paint_ancestor_linear;
+        new_el.sticky_visual_offset = old_el.sticky_visual_offset;
         if new_el.liquid_flow.is_none()
             && new_el.attrs.get("data-slot") == old_el.attrs.get("data-slot")
         {
@@ -5637,13 +5669,20 @@ impl AppState {
     }
 
     pub(super) fn sync_window_theme(&mut self) {
+        self.window.set_theme(super::window_chrome::native_theme_preference());
+        self.scrollbar_base_style.clear();
         super::window_chrome::apply_created_window(
             self.window.as_ref(),
             &self.chrome,
             self.composition_swapchain,
         );
         self.local_backdrop_valid = false;
+        // Theme presets can change font metrics and glyph raster mode while the
+        // text nodes keep the same strings. Drop glyphon CPU/GPU caches before
+        // the first themed frame so the retained page cannot reuse old shaping.
+        self.bust_text_caches();
         self.mark_full_redraw();
+        crate::platform::glass_sync_jadix_theme();
         self.window.request_redraw();
     }
 
@@ -5758,7 +5797,11 @@ impl AppState {
         {
             // Apply queued CSSOM edits before chrome sync; committed map is reasserted after.
             for edit in crate::app::devtools::take_pending_inspector_edits() {
-                crate::app::devtools::commit_inspector_cssom(&edit.path, edit.css.clone());
+                if !crate::app::devtools::find_element_by_path(&self.root_element, &edit.path)
+                    .is_some_and(|el| el.inspector_instance_id == edit.instance_id) {
+                    continue;
+                }
+                crate::app::devtools::commit_inspector_cssom(&self.root_element, &edit.path, edit.css.clone());
                 if self
                     .patch_devtools_cssom_at_path(&edit.path, &edit.css)
                     .is_some()
@@ -5772,6 +5815,8 @@ impl AppState {
         let mut sync_collect = crate::core::tree::ReactiveSyncCollect::default();
         let (viewport_w, viewport_h) = self.logical_size();
         crate::utils::modal_motion::set_modal_viewport_size(viewport_w, viewport_h);
+        #[cfg(all(debug_assertions, feature = "devtools"))]
+        crate::app::devtools::sync_content_viewport(&mut self.root_element);
         crate::components::carousel::begin_carousel_paint_frame();
         crate::core::tree::sync_reactive_elements_subtree_ex(
             &mut self.root_element,
@@ -5905,7 +5950,9 @@ impl AppState {
                 &mut self.layout_tree,
                 &mut sync_impact,
             );
-            if crate::components::media_player::sync_media_presentation_subtree(&mut self.root_element) {
+            if crate::components::media_player::sync_media_presentation_subtree(
+                &mut self.root_element,
+            ) {
                 sync_impact = sync_impact.merge(LayoutStatus::StructureChanged);
             }
             crate::components::bubble::sync_bubble_reactions_subtree(
@@ -6130,7 +6177,14 @@ impl AppState {
             // ScrollArea is not page scroll (`existing_scroll_offset_changed`).
             let prev_offsets = self.last_scroll_offsets.clone();
             if super::damage::existing_scroll_offset_changed(&prev_offsets, &cur_offsets) {
-                if !self.union_scrolled_viewport_damage(&prev_offsets, &cur_offsets) {
+                // A material surface has no opaque page color behind a repaired
+                // strip. Its retained clear quad would hide the DComp backdrop
+                // with a gray/white rectangle, so redraw the transparent
+                // attachment as a whole for this frame.
+                if self.transparent_surface() {
+                    self.mark_full_redraw();
+                    self.scroll_layer_clear = false;
+                } else if !self.union_scrolled_viewport_damage(&prev_offsets, &cur_offsets) {
                     self.mark_full_redraw();
                 } else {
                     self.scroll_layer_clear = true;
@@ -6200,16 +6254,18 @@ impl AppState {
                 // Stale pick/tree hover paths refer to the previous page.
                 crate::app::devtools::DevToolsState::clear_hover_highlight();
             }
-            let inspector_impact = crate::app::devtools::sync_overlay_layout(&mut self.root_element, &mut self.layout_tree);
+            let inspector_impact = crate::app::devtools::sync_overlay_layout(
+                &mut self.root_element,
+                &mut self.layout_tree,
+            );
             layout_for_build = layout_for_build.merge(inspector_impact);
             if inspector_impact == LayoutStatus::StructureChanged {
                 // Panel rebuild replaces every `on_hover` Rc. Soft-invalidate so the next
                 // post-render hover pass re-asserts by focus_id without leave→spring(0) thrash.
                 crate::app::tree_hit::invalidate_hover_handlers();
             }
-            let _ = crate::app::devtools::sync_box_model_visuals(&mut self.root_element);
-            crate::app::devtools::sync_tree_row_hovers(&mut self.root_element);
-            self.damage_nodes.extend(super::damage::take_frame_paint_nodes());
+            self.damage_nodes
+                .extend(super::damage::take_frame_paint_nodes());
         }
 
         let (logical_w, logical_h) = self.logical_size();
@@ -6758,6 +6814,8 @@ impl AppState {
         });
 
         let pending_images = super::pending_images::take_pending();
+        let updated_texture_keys: std::collections::HashSet<_> =
+            pending_images.iter().map(|(key, ..)| key.clone()).collect();
         #[cfg(test)]
         let pending_count = pending_images.len();
         for (id, rgba, w, h) in pending_images {
@@ -6976,9 +7034,7 @@ impl AppState {
         if has_dynamic_text && self.last_caret_blink_phase != caret_phase {
             // I-beam on/off is the focused field's chrome. FullClear here wiped every
             // other node dirty (Marker spin) and contradicted Solid-style present.
-            crate::utils::text_edit::push_focused_text_edit_caret_damage(
-                &self.root_element,
-            );
+            crate::utils::text_edit::push_focused_text_edit_caret_damage(&self.root_element);
         }
         // Size the retain RT before Load vs Clear so a recreate cannot cull into a discarded buffer.
         if Self::gpu_partial_damage_enabled() {
@@ -7020,6 +7076,12 @@ impl AppState {
         self.damage_nodes
             .extend(super::damage::take_frame_paint_nodes());
         self.apply_portal_overlay_damage(overlay_present, overlay_visual);
+        self.damage_nodes.extend(super::draw_cull::updated_texture_paint_nodes(
+            &render_result.node_paints,
+            &scaled_tex,
+            &updated_texture_keys,
+            &next_last_present,
+        ));
         super::draw_cull::restore_culled_dirty_clips(
             &self.root_element,
             &mut render_result.node_paints,
@@ -7133,7 +7195,7 @@ impl AppState {
                 });
         // A source-over clear quad cannot replace transparent destination alpha.
         // Preserve compositor transparency with a real attachment Clear.
-        if region_present && self.compositor_alpha {
+        if region_present && self.transparent_surface() {
             self.force_full_redraw = true;
         }
         let max_backdrop_blur_logical = overlay_split
@@ -7240,7 +7302,11 @@ impl AppState {
         if self.webviews.has_visible() {
             self.force_full_redraw = true;
         }
-        if self.theme_transition.needs_frame() || scaled_instances.iter().any(|instance| instance.glass[0] >= 1.0 && instance.glass[1] > 0.0) {
+        if self.theme_transition.needs_frame()
+            || scaled_instances
+                .iter()
+                .any(|instance| instance.glass[0] >= 1.0 && instance.glass[1] > 0.0)
+        {
             self.force_full_redraw = true;
         }
         let gpu_present = self.plan_gpu_present(ui_scale);
@@ -8283,6 +8349,7 @@ impl AppState {
         let logical_policy = gpu_present.logical_policy;
         let use_partial_damage = gpu_present.use_partial_damage;
         let mut draw_to_retain = gpu_present.draw_to_retain
+            || self.present_retain.needs_compositor_encoding()
             || crate::style::theme_transition_config().enabled
             || self.theme_transition.needs_frame();
         super::damage::note_frame_clear_policy(logical_policy);
@@ -8346,7 +8413,7 @@ impl AppState {
             !self.scroll_strip_blit.is_empty(),
             strip_copy_committed,
         );
-        let clear_color = crate::renderer::surface_clear_color(self.compositor_alpha);
+        let clear_color = crate::renderer::surface_clear_color(self.transparent_surface());
         let color_load = if use_partial_damage {
             wgpu::LoadOp::Load
         } else {
@@ -8398,7 +8465,16 @@ impl AppState {
                         self.config.height,
                     ) {
                         scroll_clear_scissors.push(scissor);
-                        scroll_clear_instances.push(scissor_clear_instance(rect, clear, 8.0));
+                        let repair_clear = if self.transparent_surface() {
+                            crate::renderer::surface_clear_color(false)
+                        } else {
+                            clear
+                        };
+                        scroll_clear_instances.push(scissor_clear_instance(
+                            rect,
+                            repair_clear,
+                            8.0,
+                        ));
                     }
                 }
                 self.scroll_clear_buffer.upload(
@@ -8432,10 +8508,11 @@ impl AppState {
         // glyphon is flushed to the scene RT before this frame encoder reuses the
         // same vertex buffers. Must run **before** modal frost: the modal scene pass
         // samples these bind groups so local + modal blurs stack.
-        if should_capture_page_stack_local_backdrops(allow_primitives, !capture_bands.is_empty())
-        {
+        if should_capture_page_stack_local_backdrops(allow_primitives, !capture_bands.is_empty()) {
             for (band_i, band) in capture_bands.iter().enumerate() {
-                let optical = scaled_instances[band.instance.0..band.instance.1].iter().any(|instance| instance.glass[0] >= 1.0 && instance.glass[1] > 0.0);
+                let optical = scaled_instances[band.instance.0..band.instance.1]
+                    .iter()
+                    .any(|instance| instance.glass[0] >= 1.0 && instance.glass[1] > 0.0);
                 if (band_i >= capture_page_count || reuse_modal_source) && !optical {
                     continue;
                 }
@@ -8476,15 +8553,17 @@ impl AppState {
                             .map(|dirty| dirty.bounds),
                     )
                     .collect();
-                let recapture = optical || local_backdrop_must_recapture(
-                    self.local_backdrop_valid && self.backdrop_blur.blurred_view().is_some(),
-                    use_partial_damage,
-                    scroll_source_moved,
-                    capture_region,
-                    &source_damage,
-                    ui_scale,
-                );
-                let mut optical_target = optical.then(|| self.backdrop_blur.new_target(&self.device));
+                let recapture = optical
+                    || local_backdrop_must_recapture(
+                        self.local_backdrop_valid && self.backdrop_blur.blurred_view().is_some(),
+                        use_partial_damage,
+                        scroll_source_moved,
+                        capture_region,
+                        &source_damage,
+                        ui_scale,
+                    );
+                let mut optical_target =
+                    optical.then(|| self.backdrop_blur.new_target(&self.device));
                 let backdrop = optical_target.as_mut().unwrap_or(&mut self.backdrop_blur);
                 if recapture {
                     #[cfg(test)]
@@ -8904,7 +8983,7 @@ impl AppState {
                 } else {
                     strip_draw_scissors.iter().copied().map(Some).collect()
                 };
-            for page_sc in page_scissor_passes {
+            for page_sc in page_scissor_passes.iter().copied() {
                 // Each repair is replayed under its own hardware scissor. Cull to
                 // that same rectangle, not to every hole on every replay: the latter
                 // resubmits all other holes' quads/textures N times for N repairs.
@@ -9186,67 +9265,40 @@ impl AppState {
             // Portal overlay: per-band `rects → text` so stacked panels occlude correctly
             // (still one Clear pass — no GLES LoadOp::Load).
             if !gpu_present.use_node_present {
-                for (band_i, band) in overlay_band_ranges.iter().enumerate() {
-                    let backdrop = page_stack_band_backdrop(band_i, &overlay_backdrop_idx, &live_backdrops, self.pipeline.dummy_backdrop());
-                    if allow_primitives && band.paint_ops.0 < band.paint_ops.1 {
-                        draw_paint_ops(
-                            &mut render_pass,
-                            &render_result.paint_ops,
-                            band.paint_ops.0,
-                            band.paint_ops.1,
-                            &self.pipeline,
-                            &self.instance_buffer.buffer,
-                            &self.textured_pipeline,
-                            &self.textured_instance_buffer.buffer,
-                            &self.image_textures,
-                            &scaled_tex,
-                            backdrop,
-                            &scaled_instances,
-                            None,
+                for overlay_scissor in page_scissor_passes {
+                    let (x, y, width, height) = overlay_scissor
+                        .or(scissor_physical)
+                        .unwrap_or((0, 0, self.config.width, self.config.height));
+                    render_pass.set_scissor_rect(x, y, width, height);
+                    for (band_i, band) in overlay_band_ranges.iter().enumerate() {
+                        let backdrop = page_stack_band_backdrop(
+                            band_i,
+                            &overlay_backdrop_idx,
+                            &live_backdrops,
+                            self.pipeline.dummy_backdrop(),
                         );
-                    } else if allow_primitives && band.instance.0 < band.instance.1 {
-                        render_pass.set_pipeline(&self.pipeline.render_pipeline);
-                        render_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
-                        render_pass.set_bind_group(1, backdrop, &[]);
-                        render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                        render_pass.set_vertex_buffer(1, self.instance_buffer.buffer.slice(..));
-                        render_pass.set_index_buffer(
-                            self.pipeline.index_buffer.slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        render_pass.draw_indexed(
-                            0..self.pipeline.num_indices,
-                            0,
-                            band.instance.0 as u32..band.instance.1 as u32,
-                        );
-                        if band.textured.0 < band.textured.1 {
-                            draw_packed_textured_runs(
+                        if allow_primitives && band.paint_ops.0 < band.paint_ops.1 {
+                            draw_paint_ops(
                                 &mut render_pass,
+                                &render_result.paint_ops,
+                                band.paint_ops.0,
+                                band.paint_ops.1,
+                                &self.pipeline,
+                                &self.instance_buffer.buffer,
                                 &self.textured_pipeline,
                                 &self.textured_instance_buffer.buffer,
                                 &self.image_textures,
                                 &scaled_tex,
-                                band.textured.0,
-                                band.textured.1,
+                                backdrop,
+                                &scaled_instances,
                                 None,
                             );
-                        }
-                    }
-
-                    if let Some(ul) = overlay_band_underlines.get(band_i) {
-                        if !ul.is_empty() {
+                        } else if allow_primitives && band.instance.0 < band.instance.1 {
                             render_pass.set_pipeline(&self.pipeline.render_pipeline);
-                            render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-                            render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
+                            render_pass.set_bind_group(0, &self.pipeline.bind_group_clip_poly, &[]);
+                            render_pass.set_bind_group(1, backdrop, &[]);
                             render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                            let underline_buffer =
-                                self.device
-                                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                        label: Some("Overlay Underline Buffer"),
-                                        contents: bytemuck::cast_slice(ul),
-                                        usage: wgpu::BufferUsages::VERTEX,
-                                    });
-                            render_pass.set_vertex_buffer(1, underline_buffer.slice(..));
+                            render_pass.set_vertex_buffer(1, self.instance_buffer.buffer.slice(..));
                             render_pass.set_index_buffer(
                                 self.pipeline.index_buffer.slice(..),
                                 wgpu::IndexFormat::Uint16,
@@ -9254,57 +9306,95 @@ impl AppState {
                             render_pass.draw_indexed(
                                 0..self.pipeline.num_indices,
                                 0,
-                                0..ul.len() as u32,
+                                band.instance.0 as u32..band.instance.1 as u32,
+                            );
+                            if band.textured.0 < band.textured.1 {
+                                draw_packed_textured_runs(
+                                    &mut render_pass,
+                                    &self.textured_pipeline,
+                                    &self.textured_instance_buffer.buffer,
+                                    &self.image_textures,
+                                    &scaled_tex,
+                                    band.textured.0,
+                                    band.textured.1,
+                                    None,
+                                );
+                            }
+                        }
+
+                        if let Some(ul) = overlay_band_underlines.get(band_i) {
+                            if !ul.is_empty() {
+                                render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                                render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                                render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
+                                render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                                let underline_buffer =
+                                    self.device
+                                        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                            label: Some("Overlay Underline Buffer"),
+                                            contents: bytemuck::cast_slice(ul),
+                                            usage: wgpu::BufferUsages::VERTEX,
+                                        });
+                                render_pass.set_vertex_buffer(1, underline_buffer.slice(..));
+                                render_pass.set_index_buffer(
+                                    self.pipeline.index_buffer.slice(..),
+                                    wgpu::IndexFormat::Uint16,
+                                );
+                                render_pass.draw_indexed(
+                                    0..self.pipeline.num_indices,
+                                    0,
+                                    0..ul.len() as u32,
+                                );
+                            }
+                        }
+
+                        if let Some(sds) = overlay_band_shadows.get(band_i) {
+                            draw_shadow_tex_draws(
+                                &mut render_pass,
+                                sds,
+                                &self.shadow_tex_cache,
+                                &self.textured_pipeline,
+                                &self.device,
+                                None,
                             );
                         }
-                    }
 
-                    if let Some(sds) = overlay_band_shadows.get(band_i) {
-                        draw_shadow_tex_draws(
-                            &mut render_pass,
-                            sds,
-                            &self.shadow_tex_cache,
-                            &self.textured_pipeline,
-                            &self.device,
-                            None,
-                        );
-                    }
-
-                    if band.text.0 < band.text.1 {
-                        if band_i == 0 {
-                            self.overlay_text_renderer.render(&mut render_pass);
-                        } else {
-                            self.overlay_band_text_renderers[band_i - 1].render(&mut render_pass);
+                        if band.text.0 < band.text.1 {
+                            if band_i == 0 {
+                                self.overlay_text_renderer.render(&mut render_pass);
+                            } else {
+                                self.overlay_band_text_renderers[band_i - 1].render(&mut render_pass);
+                            }
+                            super::frame_stats::note_scene_batch(
+                                super::frame_stats::SceneKind::Text,
+                                1,
+                            );
                         }
-                        super::frame_stats::note_scene_batch(
-                            super::frame_stats::SceneKind::Text,
-                            1,
-                        );
-                    }
 
-                    if allow_primitives && !draw_to_retain && band.chrome.0 < band.chrome.1 {
-                        render_pass.set_pipeline(&self.pipeline.render_pipeline);
-                        render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
-                        render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
-                        render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
-                        let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
-                        let chrome_buffer =
-                            self.device
-                                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                                    label: Some("Overlay Input Chrome Buffer"),
-                                    contents: bytemuck::cast_slice(chrome_slice),
-                                    usage: wgpu::BufferUsages::VERTEX,
-                                });
-                        render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
-                        render_pass.set_index_buffer(
-                            self.pipeline.index_buffer.slice(..),
-                            wgpu::IndexFormat::Uint16,
-                        );
-                        render_pass.draw_indexed(
-                            0..self.pipeline.num_indices,
-                            0,
-                            0..chrome_slice.len() as u32,
-                        );
+                        if allow_primitives && !draw_to_retain && band.chrome.0 < band.chrome.1 {
+                            render_pass.set_pipeline(&self.pipeline.render_pipeline);
+                            render_pass.set_bind_group(0, &self.pipeline.bind_group, &[]);
+                            render_pass.set_bind_group(1, self.pipeline.dummy_backdrop(), &[]);
+                            render_pass.set_vertex_buffer(0, self.pipeline.vertex_buffer.slice(..));
+                            let chrome_slice = &scaled_input_chrome[band.chrome.0..band.chrome.1];
+                            let chrome_buffer =
+                                self.device
+                                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                                        label: Some("Overlay Input Chrome Buffer"),
+                                        contents: bytemuck::cast_slice(chrome_slice),
+                                        usage: wgpu::BufferUsages::VERTEX,
+                                    });
+                            render_pass.set_vertex_buffer(1, chrome_buffer.slice(..));
+                            render_pass.set_index_buffer(
+                                self.pipeline.index_buffer.slice(..),
+                                wgpu::IndexFormat::Uint16,
+                            );
+                            render_pass.draw_indexed(
+                                0..self.pipeline.num_indices,
+                                0,
+                                0..chrome_slice.len() as u32,
+                            );
+                        }
                     }
                 }
             }
@@ -9466,7 +9556,7 @@ impl AppState {
 }
 
 #[derive(Clone, Copy)]
-struct ScrollbarBaseStyle {
+pub(super) struct ScrollbarBaseStyle {
     track_bg: [f32; 4],
     thumb_bg: [f32; 4],
     track_border: [f32; 4],
@@ -9951,7 +10041,7 @@ pub(crate) fn update_scrollbar_elements_for_test(
     update_scrollbar_elements(el, &mut base, layout_tree, mode, None);
 }
 
-fn update_scrollbar_elements(
+pub(super) fn update_scrollbar_elements(
     el: &mut Element,
     base_style: &mut std::collections::HashMap<String, ScrollbarBaseStyle>,
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
@@ -10760,18 +10850,17 @@ mod hot_reload_inject {
             let mut root = Element::new()
                 .template_id("examples/gallery/src/main.rs:188:9")
                 .children(vec![component, nested]);
-            let mut patch = tpl(
-                "examples/gallery/src/main.rs:188:9",
-                "changed",
-                &[],
-            );
+            let mut patch = tpl("examples/gallery/src/main.rs:188:9", "changed", &[]);
             patch.text_replacements = vec![crate::app::hot_reload::TextReplacement {
                 index: 0,
                 from: "Secondary".into(),
                 to: "Updated".into(),
             }];
             apply_templates_to_tree(&mut root, &[patch]);
-            assert_eq!(root.children[0].children[0].text.as_deref(), Some("Updated"));
+            assert_eq!(
+                root.children[0].children[0].text.as_deref(),
+                Some("Updated")
+            );
             assert_eq!(root.children[1].text.as_deref(), Some("Secondary"));
         }
 
@@ -10807,7 +10896,7 @@ mod hot_reload_inject {
                 .template_id("examples/gallery/App:section_body")
                 .template_hash("old-nav")
                 .children(vec![
-                    Element::new().children(vec![Element::new().text("导航")]),
+                    Element::new().children(vec![Element::new().text("导航")])
                 ]);
             island.set_attr(
                 crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
@@ -10845,7 +10934,7 @@ mod hot_reload_inject {
                 .template_id("examples/gallery/App:section_body")
                 .template_hash("old-nav")
                 .children(vec![
-                    Element::new().children(vec![Element::new().text("导航")]),
+                    Element::new().children(vec![Element::new().text("导航")])
                 ]);
             island.set_attr(
                 crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
@@ -10952,9 +11041,21 @@ mod hot_reload_inject {
         fn live_class_and_animation_updates_use_framework_parsers() {
             let mut root = Element::new().template_id("live.rs:1:1").text("content");
             let attrs = vec![
-                crate::app::hot_reload::StyleAttr { element_index: 0, name: "class".into(), value: "p-4 bg-red-500".into() },
-                crate::app::hot_reload::StyleAttr { element_index: 0, name: "animation".into(), value: "spin 2s linear infinite".into() },
-                crate::app::hot_reload::StyleAttr { element_index: 0, name: "transition".into(), value: "opacity 300ms ease-in".into() },
+                crate::app::hot_reload::StyleAttr {
+                    element_index: 0,
+                    name: "class".into(),
+                    value: "p-4 bg-red-500".into(),
+                },
+                crate::app::hot_reload::StyleAttr {
+                    element_index: 0,
+                    name: "animation".into(),
+                    value: "spin 2s linear infinite".into(),
+                },
+                crate::app::hot_reload::StyleAttr {
+                    element_index: 0,
+                    name: "transition".into(),
+                    value: "opacity 300ms ease-in".into(),
+                },
             ];
             assert!(inject_style_attrs_by_id(&mut root, "live.rs:1:1", &attrs));
             assert_eq!(root.style.animations.len(), 1);
@@ -10975,12 +11076,10 @@ mod hot_reload_inject {
                 &["导航改"],
             );
 
-            let mut live = Element::new().children(vec![
-                Element::new()
-                    .template_id("examples/gallery/src/main.rs:100:9")
-                    .template_hash("chrome")
-                    .text("chrome"),
-            ]);
+            let mut live = Element::new().children(vec![Element::new()
+                .template_id("examples/gallery/src/main.rs:100:9")
+                .template_hash("chrome")
+                .text("chrome")]);
             apply_templates_to_tree(&mut live, std::slice::from_ref(&patch));
             assert_eq!(
                 live.children[0].text.as_deref(),
@@ -10991,13 +11090,11 @@ mod hot_reload_inject {
             let mut island = Element::new()
                 .template_id("examples/gallery/App:section_body")
                 .template_hash("compile-time-old")
-                .children(vec![
-                    Element::new()
-                        .focus_id("scroll:scroll-navigation")
-                        .children(vec![
-                            Element::new().children(vec![Element::new().text("导航")]),
-                        ]),
-                ]);
+                .children(vec![Element::new()
+                    .focus_id("scroll:scroll-navigation")
+                    .children(vec![
+                        Element::new().children(vec![Element::new().text("导航")])
+                    ])]);
             island.set_attr(
                 crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
                 "examples/gallery/src/main.rs:4334:21",
@@ -11014,7 +11111,7 @@ mod hot_reload_inject {
 
 #[cfg(test)]
 mod text_shadow_draw_slot_tests {
-    use super::{TextShadowDrawSlot, text_shadow_draw_slot};
+    use super::{text_shadow_draw_slot, TextShadowDrawSlot};
 
     #[test]
     fn page_stack_bands_require_per_band_shadow_slot() {
@@ -11071,6 +11168,42 @@ mod button_caption_damage_tests {
     use super::AppState;
     use crate::components::button::button;
     use crate::core::tree::Element;
+
+    #[test]
+    fn rebuilt_hovered_button_keeps_its_used_chrome() {
+        crate::core::reactivity::create_root(|| {
+            crate::style::set_css_transition_virtual_timeline(true);
+            crate::style::set_css_transition_timeline_ms(0.0);
+            let mut tree = crate::layout::LayoutTree::new();
+            let mut previous: Element = button("rebuild-hover").variant("outline").text("Toggle").into();
+            tree.build_and_layout(&mut previous, 240.0, 120.0, [-1.0; 2]);
+            for time in [0.0, 200.0, 400.0] {
+                crate::style::set_css_transition_timeline_ms(time);
+                let mut impact = crate::core::tree::LayoutStatus::Clean;
+                crate::style::sync_class_variants_subtree(&mut previous, [10.0, 10.0], "", false,
+                    240.0, 120.0, &mut tree, &mut impact);
+            }
+            let hovered = previous.style.bg_color;
+            let mut fresh: Element = button("rebuild-hover").variant("outline").text("Toggle").into();
+            AppState::reconcile_elements_for_test(&mut fresh, &mut previous);
+            for time in [416.0, 432.0, 448.0] {
+                crate::style::set_css_transition_timeline_ms(time);
+                let mut impact = crate::core::tree::LayoutStatus::Clean;
+                crate::style::sync_class_variants_subtree(&mut fresh, [10.0, 10.0], "", false,
+                    240.0, 120.0, &mut tree, &mut impact);
+                assert_eq!(fresh.style.bg_color, hovered, "rebuild must not restart hover chrome");
+            }
+            crate::style::set_css_transition_timeline_ms(700.0);
+            let mut impact = crate::core::tree::LayoutStatus::Clean;
+            crate::style::sync_class_variants_subtree(&mut fresh, [-1.0; 2], "", false,
+                240.0, 120.0, &mut tree, &mut impact);
+            crate::style::set_css_transition_timeline_ms(1000.0);
+            crate::style::sync_class_variants_subtree(&mut fresh, [-1.0; 2], "", false,
+                240.0, 120.0, &mut tree, &mut impact);
+            assert_eq!(fresh.style.bg_color[3], 0.0, "preserving geometry must not pin hover");
+            crate::style::set_css_transition_virtual_timeline(false);
+        });
+    }
 
     #[test]
     fn caption_layout_change_stays_local_to_button() {
@@ -11333,7 +11466,7 @@ mod present_fingerprint_tests {
         use crate::core::reactivity::create_root;
         use crate::core::tree::{Element, LayoutStatus};
         use crate::layout::layout_tree::LayoutTree;
-        use crate::renderer::{JadixTextRenderer, offscreen::OffscreenGpu, prepare_text_frame};
+        use crate::renderer::{offscreen::OffscreenGpu, prepare_text_frame, JadixTextRenderer};
         use crate::style::sync_class_variants_subtree;
 
         const W: u32 = 400;

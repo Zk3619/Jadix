@@ -36,10 +36,25 @@ pub struct PresentRetainPipeline {
     /// True when `retain` holds a complete frame (safe to `LoadOp::Load`).
     /// Cleared after surface-direct FullClear so the next PartialLoad warms the buffer.
     contents_valid: bool,
+    compositor_encode: bool,
+}
+
+pub(crate) fn surface_needs_compositor_encoding(config: &wgpu::SurfaceConfiguration) -> bool {
+    cfg!(windows)
+        && config.alpha_mode == wgpu::CompositeAlphaMode::PreMultiplied
+        && config.format.is_srgb()
 }
 
 impl PresentRetainPipeline {
     pub fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Self::with_compositor_encoding(device, format, false)
+    }
+
+    pub(crate) fn new_for_surface(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
+        Self::with_compositor_encoding(device, config.format, surface_needs_compositor_encoding(config))
+    }
+
+    fn with_compositor_encoding(device: &wgpu::Device, format: wgpu::TextureFormat, compositor_encode: bool) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Present Retain Blit Shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("present_retain.wgsl").into()),
@@ -84,7 +99,7 @@ impl PresentRetainPipeline {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some(if compositor_encode { "fs_compositor" } else { "fs_main" }),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: None,
@@ -154,7 +169,12 @@ impl PresentRetainPipeline {
             retain: None,
             format,
             contents_valid: false,
+            compositor_encode,
         }
+    }
+
+    pub(crate) fn needs_compositor_encoding(&self) -> bool {
+        self.compositor_encode
     }
 
     #[inline]
@@ -274,6 +294,9 @@ impl PresentRetainPipeline {
         encoder: &mut wgpu::CommandEncoder,
         surface: &wgpu::Texture,
     ) -> bool {
+        if self.compositor_encode {
+            return false;
+        }
         let Some(source) = self.color_texture() else {
             return false;
         };

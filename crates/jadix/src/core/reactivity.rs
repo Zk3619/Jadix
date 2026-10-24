@@ -426,6 +426,8 @@ fn owner_depth(rt: &Runtime, id: OwnerId) -> u32 {
 }
 
 fn dispose_owner(rt: &Runtime, id: OwnerId) {
+    *rt.batch_depth.borrow_mut() += 1;
+    let _guard = BatchGuard;
     // Iterative teardown: Gallery mounts create tall owner trees; recursive dispose
     // STATUS_STACK_OVERFLOW on Windows default stacks.
     let mut stack = vec![id];
@@ -2686,6 +2688,35 @@ mod tests {
             b.set(2);
         });
         assert_eq!(*runs.borrow(), 2);
+    }
+
+    #[test]
+    fn disposal_does_not_rerun_effects_with_removed_context() {
+        let open = Signal::new(true);
+        let internal_runs = Rc::new(Cell::new(0));
+        let external_runs = Rc::new(Cell::new(0));
+        let (_external_owner, ()) = create_root({
+            let runs = external_runs.clone();
+            move || {
+                create_effect(move || {
+                    let _ = open.get();
+                    runs.set(runs.get() + 1);
+                });
+            }
+        });
+        let (owner, ()) = create_root({
+            let runs = internal_runs.clone();
+            move || {
+                create_effect(move || {
+                    let _ = open.get();
+                    runs.set(runs.get() + 1);
+                });
+                on_cleanup(move || open.set(false));
+            }
+        });
+        owner.dispose();
+        assert_eq!(internal_runs.get(), 1);
+        assert_eq!(external_runs.get(), 2);
     }
 
     #[test]

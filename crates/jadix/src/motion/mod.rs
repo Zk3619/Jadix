@@ -486,6 +486,12 @@ fn read_baseline(element: &Element, property: PropertyId) -> AnimatableValue {
     }
 }
 
+pub(crate) fn presentation_translate_in_paint_space(element: &Element, ancestor_scale: [f32; 2]) -> [f32; 2] {
+    let translate = presentation_translate(element);
+    std::array::from_fn(|axis| translate[axis]
+        + element.style.translate[axis] * (ancestor_scale[axis] - 1.0))
+}
+
 pub(crate) fn presentation_translate(element: &Element) -> [f32; 2] {
     let Some(layout) = &element.layout_motion else {
         return element.style.translate;

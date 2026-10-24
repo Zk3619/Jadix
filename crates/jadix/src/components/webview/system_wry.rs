@@ -58,7 +58,18 @@ impl Browser {
         let pending_navigation = Arc::new(Mutex::new(None));
         let pending = pending_navigation.clone();
         let popup_wake = window.clone();
+        let message_id = spec.id.clone();
+        let messages = spec.messages;
+        let message_wake = window.clone();
+        let scope = crate::app::window_scope::active();
         let builder = WebViewBuilder::new()
+            .with_ipc_handler(move |request| {
+                if messages {
+                    let _scope = crate::app::window_scope::enter(scope);
+                    super::super::deliver_message(&message_id, request.body().clone());
+                    message_wake.request_redraw();
+                }
+            })
             .with_visible(false)
             .with_bounds(rect(spec.bounds))
             .with_new_window_req_handler(move |url, _| {

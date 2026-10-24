@@ -244,6 +244,14 @@ pub fn adopt_keyed_overlay(fresh: &mut Element, prev: &mut Element) {
 }
 
 fn adopt_overlay_node(fresh: &mut Element, prev: &mut Element) {
+    if fresh.template_id == prev.template_id {
+        fresh.layout_bounds = prev.layout_bounds;
+        fresh.paint_scroll_acc = prev.paint_scroll_acc;
+        fresh.paint_overlay_stamp = prev.paint_overlay_stamp;
+        fresh.paint_ancestor_scale = prev.paint_ancestor_scale;
+        fresh.paint_ancestor_linear = prev.paint_ancestor_linear;
+        fresh.sticky_visual_offset = prev.sticky_visual_offset;
+    }
     let tid_match = fresh.template_id.is_some() && fresh.template_id == prev.template_id;
     if tid_match {
         if fresh.on_unmount.is_none() {
@@ -763,5 +771,69 @@ mod tests {
         assert!(fresh.transition_snapshot.has_active_tweens());
 
         set_css_transition_virtual_timeline(false);
+    }
+
+    #[test]
+    fn hoisted_exit_keeps_close_button_hover_before_relayout() {
+        crate::core::reactivity::create_root(|| {
+            crate::style::set_css_transition_virtual_timeline(true);
+            let build = || {
+                Element::new()
+                    .template_id("close-hover__floating_panel")
+                    .w(220.0)
+                    .h(100.0)
+                    .p(8.0)
+                    .flex_col()
+                    .child(
+                        Element::from(crate::components::button::button("hoisted-close").text("Close"))
+                            .w(160.0)
+                            .h(32.0),
+                    )
+            };
+            let mut tree = crate::layout::LayoutTree::new();
+            let mut previous = build();
+            tree.build_and_layout(&mut previous, 240.0, 160.0, [-1.0; 2]);
+            for time in [0.0, 200.0, 400.0] {
+                crate::style::set_css_transition_timeline_ms(time);
+                let mut impact = crate::core::tree::LayoutStatus::Clean;
+                crate::style::sync_class_variants_subtree(
+                    &mut previous,
+                    [20.0, 20.0],
+                    "",
+                    false,
+                    240.0,
+                    160.0,
+                    &mut tree,
+                    &mut impact,
+                );
+            }
+            let hovered = previous.children[0].style.bg_color;
+            let bounds = previous.children[0].layout_bounds;
+            let mut fresh = build();
+            fresh.set_attr(crate::utils::popup::ATTR_FLOATING_EXITING, "1");
+            adopt_keyed_overlay(&mut fresh, &mut previous);
+            assert!(
+                fresh.children[0].layout_node.is_none(),
+                "hoist must allocate fresh Taffy nodes"
+            );
+            crate::style::set_css_transition_timeline_ms(416.0);
+            let mut impact = crate::core::tree::LayoutStatus::Clean;
+            crate::style::sync_class_variants_subtree(
+                &mut fresh,
+                [20.0, 20.0],
+                "",
+                false,
+                240.0,
+                160.0,
+                &mut tree,
+                &mut impact,
+            );
+            assert_eq!(
+                fresh.children[0].style.bg_color, hovered,
+                "exit must not reset hovered chrome"
+            );
+            assert_eq!(fresh.children[0].layout_bounds, bounds);
+            crate::style::set_css_transition_virtual_timeline(false);
+        });
     }
 }

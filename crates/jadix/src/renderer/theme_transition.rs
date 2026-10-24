@@ -15,6 +15,7 @@ struct Targets {
 /// Retains the actually presented image, including an interrupted crossfade.
 pub(crate) struct ThemeTransition {
     pipeline: wgpu::RenderPipeline,
+    surface_pipeline: Option<wgpu::RenderPipeline>,
     layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
     progress: wgpu::Buffer,
@@ -29,7 +30,16 @@ pub(crate) struct ThemeTransition {
 }
 
 impl ThemeTransition {
+    #[cfg(test)]
     pub(crate) fn new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
+        Self::with_compositor_encoding(device, format, false)
+    }
+
+    pub(crate) fn new_for_surface(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
+        Self::with_compositor_encoding(device, config.format, super::present_retain::surface_needs_compositor_encoding(config))
+    }
+
+    fn with_compositor_encoding(device: &wgpu::Device, format: wgpu::TextureFormat, compositor_encode: bool) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Theme transition layout"),
             entries: &[
@@ -80,7 +90,7 @@ impl ThemeTransition {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        let pipeline_for = |entry_point| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("Theme transition pipeline"),
             layout: Some(&pipeline_layout),
             vertex: wgpu::VertexState {
@@ -91,7 +101,7 @@ impl ThemeTransition {
             },
             fragment: Some(wgpu::FragmentState {
                 module: &shader,
-                entry_point: Some("fs_main"),
+                entry_point: Some(entry_point),
                 targets: &[Some(wgpu::ColorTargetState {
                     format,
                     blend: None,
@@ -105,6 +115,8 @@ impl ThemeTransition {
             multiview_mask: None,
             cache: None,
         });
+        let pipeline = pipeline_for("fs_main");
+        let surface_pipeline = compositor_encode.then(|| pipeline_for("fs_compositor"));
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: None,
             contents: bytemuck::cast_slice(&[
@@ -139,6 +151,7 @@ impl ThemeTransition {
         });
         Self {
             pipeline,
+            surface_pipeline,
             layout,
             sampler: device.create_sampler(&wgpu::SamplerDescriptor::default()),
             progress,
@@ -306,9 +319,10 @@ impl ThemeTransition {
                 &targets.presented_view,
                 &targets.binding,
                 clear,
+                false,
                 |_| {},
             );
-            self.draw(encoder, surface, &targets.binding, clear, overlay);
+            self.draw(encoder, surface, &targets.binding, clear, true, overlay);
         } else {
             content.blit_to_surface(encoder, surface, clear, overlay);
         }
@@ -337,6 +351,7 @@ impl ThemeTransition {
         view: &wgpu::TextureView,
         binding: &wgpu::BindGroup,
         clear: wgpu::Color,
+        compositor_output: bool,
         overlay: F,
     ) where
         F: FnOnce(&mut wgpu::RenderPass<'_>),
@@ -357,7 +372,11 @@ impl ThemeTransition {
             occlusion_query_set: None,
             multiview_mask: None,
         });
-        pass.set_pipeline(&self.pipeline);
+        pass.set_pipeline(if compositor_output {
+            self.surface_pipeline.as_ref().unwrap_or(&self.pipeline)
+        } else {
+            &self.pipeline
+        });
         pass.set_bind_group(0, binding, &[]);
         pass.set_vertex_buffer(0, self.vertices.slice(..));
         pass.set_index_buffer(self.indices.slice(..), wgpu::IndexFormat::Uint16);

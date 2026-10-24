@@ -39,7 +39,7 @@ pub fn tighten_horizontal_constraint(el: &Element, parent: Option<f32>) -> Optio
         });
     } else if let DimKind::Percent(p) = dim_kind(el.style.max_size.width) {
         if let Some(b) = budget {
-            budget = Some(b * (p / 100.0));
+            budget = Some(b * p);
         }
     }
 
@@ -77,5 +77,14 @@ mod tests {
             tighten_horizontal_constraint(&panel, Some(200.0)),
             Some(60.0)
         );
+    }
+
+    #[test]
+    fn percent_max_width_uses_fractional_taffy_units() {
+        let mut panel = Element::new().max_w("80%");
+        panel.layout_bounds[2] = 240.0;
+        assert_eq!(tighten_horizontal_constraint(&panel, Some(300.0)), Some(240.0));
+        panel = panel.max_w("100%");
+        assert_eq!(tighten_horizontal_constraint(&panel, Some(300.0)), Some(240.0));
     }
 }

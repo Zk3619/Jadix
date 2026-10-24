@@ -91,6 +91,9 @@ swash = "0.2.6"
 ttf-parser = "0.25"
 unicode-segmentation = "1.11.0"
 unicode-linebreak = "0.1.5"
+similar = { version = "2.7", default-features = false, features = ["text"] }
+pulldown-cmark = { version = "0.13.4", default-features = false }
+latex-rust = "=2.1.1"
 
 # --- logging / serde ---
 env_logger = "0.11"
@@ -160,77 +163,17 @@ split-debuginfo = "off"
 strip = "symbols"
 panic = "abort"
 
-# Font parsing, shaping and rasterization are on the first-popup critical path.
-# Keep application/framework code debuggable while avoiding multi-frame font
-# initialization stalls in the default `cargo run` Gallery build.
-[profile.dev.package.cosmic-text]
-opt-level = 2
+# Fast local iteration: light optimization keeps tests responsive without the
+# compile-time cost of many per-package optimization overrides.
+[profile.dev]
+opt-level = 1
+debug = 1
+codegen-units = 256
+incremental = true
 
-[profile.dev.package.swash]
-opt-level = 2
-
-[profile.dev.package.skrifa]
-opt-level = 2
-
-[profile.dev.package.read-fonts]
-opt-level = 2
-
-[profile.dev.package.harfrust]
-opt-level = 2
-
-# The engine's per-frame tree walks and paint planning must fit a frame budget
-# in the default Gallery build. Keep debug info and assertions enabled.
-[profile.dev.package.jadix]
-opt-level = 2
-
-# Flex/grid recomputation runs throughout sortable size animations.
-[profile.dev.package.taffy]
-opt-level = 2
-
-# Glyph packing and atlas preparation also run on every rendered text frame.
-[profile.dev.package.glyphon]
-opt-level = 2
-
-# GPU validation, command encoding and uploads are also on the frame path.
-# Keep their debug information and assertions while optimizing CPU execution.
-[profile.dev.package.wgpu-core]
-opt-level = 2
-
-[profile.dev.package.wgpu]
-opt-level = 2
-
-[profile.dev.package.wgpu-hal]
-opt-level = 2
-
-[profile.dev.package.wgpu-types]
-opt-level = 2
-
-# WGSL validation and GLSL translation happen lazily when shader/path leaves
-# first enter the viewport. Optimize the parser without changing demand loading.
-[profile.dev.package.naga]
-opt-level = 2
-
-[profile.dev.package.wgpu-naga-bridge]
-opt-level = 2
-
-# Atlas allocation/eviction is on the first-visible glyph path as well.
-[profile.dev.package.etagere]
-opt-level = 2
-
-# Unicode segmentation/bidi and font queries run beneath cosmic-text's first
-# visible shaping work. Keep their checks while optimizing the same algorithms.
-[profile.dev.package.unicode-bidi]
-opt-level = 2
-
-[profile.dev.package.unicode-segmentation]
-opt-level = 2
-
-[profile.dev.package.fontdb]
-opt-level = 2
-
-[profile.dev.package.ttf-parser]
-opt-level = 2
-
-# D3D12 suballocation also runs while first-visible filter targets are created.
-[profile.dev.package.gpu-allocator]
-opt-level = 2
+[profile.test]
+inherits = "dev"
+opt-level = 1
+debug = 1
+codegen-units = 256
+incremental = true

@@ -4951,6 +4951,50 @@ fn status_shimmer_marker() -> Element {
         .into()
 }
 
+#[test]
+fn scaled_status_animation_repair_covers_the_caption_ink() {
+    crate::core::reactivity::create_root(|| {
+        let mut root = Element::new().w(800.0).h(700.0).child(
+            Element::new().absolute().left(80.0).top(90.0).w(390.0).h(844.0)
+                .scale(0.57).transform_origin("left top").child(
+                    Element::new().flex_col().w(320.0).h(80.0)
+                        .child(Element::new().text("Status (Marker inside Message)"))
+                        .child(message().child(status_shimmer_marker()))));
+        let mut tree = LayoutTree::new();
+        tree.build_and_layout(&mut root, 800.0, 700.0, [-1.0; 2]);
+        take_frame_paint_nodes();
+        for _ in 0..6 {
+            crate::style::utility::set_frame_dt(1.0 / 60.0);
+            let mut impact = LayoutStatus::Clean;
+            tick_active_css_transitions_subtree(&mut root, [0.0; 2], "", false,
+                800.0, 700.0, [0.0; 2], &mut tree, &mut impact);
+            let dirty = take_frame_paint_nodes();
+            let result = tree.build_and_layout_fast(&mut root, 800.0, 700.0, [-1.0; 2], false, false);
+            let caption = caption_named(&result.text_nodes, "Oliver is typing").expect("caption");
+            let ink = crate::app::draw_cull::text_paint_bounds(caption);
+            let repairs: Vec<_> = dirty.iter().copied().filter(|candidate| {
+                !crate::app::draw_cull::skip_covered_nested_node_present(candidate, &dirty, false,
+                    &result.node_paints, &result.instances, 1.0)
+            }).collect();
+            let wipes: Vec<_> = repairs.iter()
+                .filter(|dirty| dirty.kind == PaintDirtyKind::Node)
+                .filter_map(|dirty| {
+                let wipe = node_present_dest_reset_full(dirty.key, dirty.bounds,
+                    &result.node_paints, &result.instances, &[], &result.input_chrome_instances,
+                    1.0, None)?.rect;
+                Some((dirty.key, node_present_glyph_clip_logical(dirty, Some(wipe), 1.0)))
+            }).collect();
+            let captured = node_present_clipped_capture_text_wipes(&repairs,
+                &result.text_nodes, &result.node_paints, &wipes);
+            let captured = caption_named(&captured, "Oliver is typing")
+                .unwrap_or_else(|| panic!("missing scaled caption: repairs={repairs:?} ink={ink:?}"));
+            let clip = captured.clip_bounds.expect("capture clip");
+            assert!(crate::app::damage::rect_contains_rect(clip, ink),
+                "scaled shimmer recapture clips ink: ink={ink:?} clip={clip:?} repairs={repairs:?}");
+        }
+    });
+}
+
 fn caption_named<'a>(
     texts: &'a [crate::layout::layout_tree::TextLayoutInfo],
     needle: &str,

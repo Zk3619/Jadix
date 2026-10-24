@@ -1024,15 +1024,16 @@ fn collect_focus_bounds(el: &Element, scroll_acc: [f32; 2], out: &mut Vec<(Strin
             out.push((fid.clone(), b));
         }
         let mut next_acc = scroll_acc;
+        let scale = crate::core::tree::paint_scale_with_ancestor(el, el.paint_ancestor_scale);
         let is_scroll_viewport = el
             .focus_id
             .as_deref()
             .is_some_and(|f| f.starts_with(SCROLL_VIEWPORT_FOCUS_PREFIX));
         if is_scroll_viewport || el.style.overflow.x != taffy::style::Overflow::Visible {
-            next_acc[0] += el.scroll_offset[0];
+            next_acc[0] += el.scroll_offset[0] * scale[0];
         }
         if is_scroll_viewport || el.style.overflow.y != taffy::style::Overflow::Visible {
-            next_acc[1] += el.scroll_offset[1];
+            next_acc[1] += el.scroll_offset[1] * scale[1];
         }
         for c in el.children.iter().rev() {
             stack.push((c, next_acc));
@@ -1076,8 +1077,7 @@ fn apply_floating_menus(
     point_space: Option<[f32; 4]>,
     changed: &mut bool,
 ) {
-    #[cfg(all(debug_assertions, feature = "devtools"))]
-    if el.template_id.as_deref() == Some(crate::app::devtools::DEVICE_PORTAL_HOST) {
+    if el.attrs.contains_key(crate::core::scaled_viewport::ATTR_PORTALS) {
         let bounds = crate::core::tree::visual_paint_aabb(el, [0.0; 2]);
         let size = [el.layout_bounds[2].max(1.0), el.layout_bounds[3].max(1.0)];
         let scale = [(bounds[2] / size[0]).max(0.01), (bounds[3] / size[1]).max(0.01)];
@@ -1659,6 +1659,24 @@ pub(crate) fn seed_floating_place_max_h_for_test(id: &str, max_h: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+
+    #[test]
+    fn scaled_anchor_follows_nested_scroll_in_paint_space() {
+        let mut target = Element::new().focus_id("scaled-anchor");
+        target.layout_bounds = [120.0, 180.0, 80.0, 24.0];
+        target.paint_ancestor_scale = [0.5; 2];
+        let mut inner = Element::new().overflow_y("scroll").child(target);
+        inner.paint_ancestor_scale = [0.5; 2];
+        inner.scroll_offset = [0.0, 40.0];
+        let mut outer = Element::new().scale(0.5).overflow_y("scroll").child(inner);
+        outer.scroll_offset = [0.0, 100.0];
+        let mut triggers = Vec::new();
+        collect_focus_bounds(&outer, [0.0; 2], &mut triggers);
+        let expected = crate::core::tree::visual_paint_aabb(
+            &outer.children[0].children[0], [0.0, 70.0]);
+        assert_eq!(floating_trigger_bounds(&triggers, "scaled-anchor"), Some(expected));
+    }
 
     fn menu_panel(id: &str, cursor: [f32; 2]) -> Element {
         let rows: Element = crate::primitives::vstack()
@@ -3352,8 +3370,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(all(debug_assertions, feature = "devtools"))]
-    fn device_preview_positions_popups_in_local_logical_coordinates() {
+    fn scaled_preview_positions_popups_in_local_logical_coordinates() {
         crate::core::reactivity::create_root(|| {
             let mut trigger = Element::new().focus_id("device-popup-trigger");
             trigger.layout_bounds = [110.0, 120.0, 50.0, 20.0];
@@ -3362,8 +3379,8 @@ mod tests {
             panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
             panel.set_attr(ATTR_FLOATING_W, "100px");
             panel.layout_bounds = [0.0, 0.0, 100.0, 60.0];
-            let mut scope = Element::new().template_id(crate::app::devtools::DEVICE_PORTAL_HOST)
-                .scale(0.5).transform_origin("left top").child(panel);
+            let mut scope = Element::new().scale(0.5).transform_origin("left top").child(panel);
+            scope.set_attr(crate::core::scaled_viewport::ATTR_PORTALS, "1");
             scope.layout_bounds = [100.0, 100.0, 400.0, 800.0];
             let mut root = Element::new().children([trigger, scope]);
             assert!(sync_floating_placement(&mut root, 1600.0, 1000.0));

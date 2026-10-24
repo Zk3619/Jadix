@@ -264,6 +264,8 @@ impl VariantContext<'_> {
 /// Base tokens are applied immediately and snapshotted. Variant tokens are stored on
 /// [`Element::class_set`] and re-applied by [`resolve_class_variants`].
 pub fn apply_class_list(el: &mut Element, classes: &str) -> LayoutStatus {
+    *el.text_style = el.specified_text_style();
+    el.inherited_text_style = None;
     let caller_classes = classes;
     let has_defaults = el.attrs.contains_key("jadix_default_class")
         || el.attrs.contains_key("jadix_theme_class")
@@ -692,7 +694,7 @@ fn sync_chip_typography(el: &mut Element) {
     ) {
         return;
     }
-    let parent = el.text_style.clone();
+    let parent = el.specified_text_style();
     for child in &mut el.children {
         paint_label_typography(child, &parent);
     }
@@ -1229,6 +1231,7 @@ pub fn tick_active_css_transitions_subtree(
         named: Vec<(String, f32)>,
         ancestor_linear: crate::style::Mat2d,
         ancestor_scale: [f32; 2],
+        responsive_width: f32,
     }
     let mut stack = vec![Frame {
         ptr: el as *mut Element,
@@ -1237,6 +1240,7 @@ pub fn tick_active_css_transitions_subtree(
         named: Vec::new(),
         ancestor_linear: crate::style::MAT2D_IDENTITY,
         ancestor_scale: [1.0, 1.0],
+        responsive_width: viewport_w,
     }];
     let hit_nodes =
         crate::app::pointer_events::pointer_hit_node_set(el, mouse_pos[0], mouse_pos[1]);
@@ -1247,6 +1251,12 @@ pub fn tick_active_css_transitions_subtree(
         if !el.css_scroll_active {
             continue;
         }
+        let responsive_width = el
+            .attrs
+            .get("data-jadix-viewport-width")
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|width| width.is_finite() && *width > 0.0)
+            .unwrap_or(frame.responsive_width);
         let is_portal =
             el.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID);
         let scroll_acc = if el.style.position_fixed || is_portal {
@@ -1332,7 +1342,7 @@ pub fn tick_active_css_transitions_subtree(
 
         let mut local = LayoutStatus::Clean;
         if force_leave {
-            local = resolve_stale_class_hover_leave(el, focused_id, dark, viewport_w);
+            local = resolve_stale_class_hover_leave(el, focused_id, dark, responsive_width);
             // Color `:hover` is geometric. Button `transition-colors` would otherwise
             // write the last used hover fill back after snapshot restore.
             if super::theme_preset() != super::ThemePreset::LiquidGlass {
@@ -1358,7 +1368,7 @@ pub fn tick_active_css_transitions_subtree(
                     frame_dt(),
                 );
             }
-            local = resolve_scroll_hover_enter(el, focused_id, dark, viewport_w);
+            local = resolve_scroll_hover_enter(el, focused_id, dark, responsive_width);
             if super::theme_preset() != super::ThemePreset::LiquidGlass {
                 let inner = &mut *el.inner;
                 super::animation::settle_hover_paint_tweens(
@@ -1385,6 +1395,7 @@ pub fn tick_active_css_transitions_subtree(
                     scroll: scroller_timeline_progress(el).unwrap_or(frame.scroll_progress),
                     view: view_timeline_progress(el, scroll_acc, viewport_h),
                 };
+                let was_active = el.animation_snapshot.has_active(&el.style);
                 let active = super::animation::tick_element_animations_ex_named(
                     &mut el.inner.style,
                     &mut el.inner.text_style,
@@ -1395,7 +1406,7 @@ pub fn tick_active_css_transitions_subtree(
                     &named,
                 );
                 el.inner.specified_present = el.inner.animation_snapshot.specified.clone();
-                active
+                active || was_active
             } else {
                 false
             };
@@ -1509,6 +1520,7 @@ pub fn tick_active_css_transitions_subtree(
                 named: named.clone(),
                 ancestor_linear: child_lin,
                 ancestor_scale: child_sc,
+                responsive_width,
             });
         }
     }
@@ -2205,6 +2217,7 @@ fn sync_class_variants_subtree_inner(
                             scroll: scroller_timeline_progress(el).unwrap_or(frame.scroll_progress),
                             view: view_timeline_progress(el, scroll_acc, viewport_h),
                         };
+                        let was_active = el.animation_snapshot.has_active(&el.style);
                         let active = super::animation::tick_element_animations_ex_named(
                             &mut el.inner.style,
                             &mut el.inner.text_style,
@@ -2215,7 +2228,7 @@ fn sync_class_variants_subtree_inner(
                             &named,
                         );
                         el.inner.specified_present = el.inner.animation_snapshot.specified.clone();
-                        active
+                        active || was_active
                     } else {
                         false
                     };
@@ -2704,6 +2717,10 @@ fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -
         }
         KnownUtility::JustifyCenter => {
             *el = std::mem::take(el).justify_center();
+            LayoutStatus::LayoutChanged
+        }
+        KnownUtility::JustifyEnd => {
+            *el = std::mem::take(el).justify_end();
             LayoutStatus::LayoutChanged
         }
         KnownUtility::Grow(v) => {
@@ -3652,6 +3669,99 @@ mod tests {
     use jadix_style_tokens::parse_class_token;
 
     #[test]
+    fn scaled_preview_scroll_hover_keeps_its_responsive_layout() {
+        crate::core::reactivity::create_root(|| {
+            let mut tile = Element::new().focus_id("scaled-hover-layout");
+            apply_class_list(&mut tile, "w-24 h-12 p-2 md:p-8 hover:bg-red-500");
+            let mut preview = Element::new().child(tile);
+            crate::core::scaled_viewport::configure_viewport(
+                &mut preview,
+                [390.0, 240.0],
+                0.57,
+                "scaled-hover-portals",
+            );
+            let mut root = Element::new().w(1600.0).h(900.0).child(preview);
+            let mut layout = crate::layout::LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            sync_class_variants_subtree(
+                &mut root,
+                [-1.0; 2],
+                "",
+                false,
+                1600.0,
+                900.0,
+                &mut layout,
+                &mut impact,
+            );
+            layout.build_and_layout(&mut root, 1600.0, 900.0, [-1.0; 2]);
+            let bounds = crate::app::tree_hit::find_paint_aabb_by_focus_id(
+                &root,
+                "scaled-hover-layout",
+                [0.0; 2],
+            )
+            .unwrap()
+            .0;
+            let pointer = [bounds[0] + bounds[2] * 0.5, bounds[1] + bounds[3] * 0.5];
+            impact = LayoutStatus::Clean;
+            sync_class_variants_subtree(
+                &mut root,
+                pointer,
+                "",
+                false,
+                1600.0,
+                900.0,
+                &mut layout,
+                &mut impact,
+            );
+            let padding = root.children[0].children[0].style.padding;
+            for mouse in [[-1.0; 2], pointer, [-1.0; 2]] {
+                impact = LayoutStatus::Clean;
+                tick_active_css_transitions_subtree(
+                    &mut root,
+                    mouse,
+                    "",
+                    false,
+                    1600.0,
+                    900.0,
+                    [0.0; 2],
+                    &mut layout,
+                    &mut impact,
+                );
+                assert_eq!(
+                    root.children[0].children[0].style.padding, padding,
+                    "scroll hover must use the preview width, not the window breakpoint"
+                );
+                assert!(!matches!(
+                    impact,
+                    LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged
+                ));
+            }
+        });
+    }
+
+    #[test]
+    fn scroll_hover_keeps_button_caption_size_and_padding() {
+        crate::core::reactivity::create_root(|| {
+            let mut root = Element::new().flex_col().w(400.0).h(200.0).text_size(22.0)
+                .child(Element::from(crate::components::button("scroll-caption")
+                    .variant("outline").size("sm").text("separator")));
+            let mut layout = crate::layout::LayoutTree::new();
+            layout.build_and_layout(&mut root, 400.0, 200.0, [-1.0; 2]);
+            let size = root.children[0].children[0].text_style.size;
+            let padding = root.children[0].style.padding;
+            for mouse in [[20.0, 10.0], [-1.0; 2], [20.0, 10.0], [-1.0; 2]] {
+                let mut impact = LayoutStatus::Clean;
+                tick_active_css_transitions_subtree(&mut root, mouse, "", false,
+                    400.0, 200.0, [0.0; 2], &mut layout, &mut impact);
+                assert_eq!(root.children[0].children[0].text_style.size, size,
+                    "scroll hover must preserve the authored caption size");
+                assert_eq!(root.children[0].style.padding, padding);
+                layout.build_and_layout_fast(&mut root, 400.0, 200.0, mouse, true, false);
+            }
+        });
+    }
+
+    #[test]
     fn classes_joins_skips_empty_and_class_list_tuples() {
         assert_eq!(classes(["flex", "gap-2"]), "flex gap-2");
         assert_eq!(classes(["flex", "", "p-4"]), "flex p-4");
@@ -4432,20 +4542,15 @@ mod p1_utility_tests {
         let mut tree = crate::layout::layout_tree::LayoutTree::new();
         let result = tree.build_and_layout(&mut root, 200.0, 48.0, [-1.0, -1.0]);
         let sheen =
-            |i: &crate::renderer::InstanceInput| i.color[3] >= 0.01 && i.rect_size[0] < 40.0;
+            |i: &crate::renderer::InstanceInput| i.color[3] >= 0.01 && i.glass[0] < 0.0;
         let in_chrome: Vec<_> = result
             .input_chrome_instances
             .iter()
             .filter(|i| sheen(i))
             .collect();
         let in_instances: Vec<_> = result.instances.iter().filter(|i| sheen(i)).collect();
-        assert!(
-            in_chrome.len() >= 5,
-            "soft column sheen in chrome (above glyphs), not 3 slabs; chrome_sheen={} chrome={} instances={}",
-            in_chrome.len(),
-            result.input_chrome_instances.len(),
-            result.instances.len()
-        );
+        assert_eq!(in_chrome.len(), 1, "one continuous sheen above glyphs, not overlapping strips");
+        assert_eq!(in_chrome[0].rect_size, [200.0, 48.0]);
         assert!(
             in_instances.is_empty(),
             "sheen must not ride the SDF fill band (that draws under glyphon)"

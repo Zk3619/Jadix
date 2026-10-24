@@ -3,18 +3,169 @@
 //! 引擎契约（信号键、`scroll:` focus、activate）见 [`crate::core::scroll_viewport`]。
 //! 带滚动条请用 [`crate::components::ScrollArea`]。
 
-pub use crate::core::scroll_viewport::{
-    scroll_viewport, scrollviewport, ScrollViewportBuilder, SCROLL_VIEWPORT_FOCUS_PREFIX,
-};
+pub use crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX;
+use crate::core::scroll_viewport::{activate_scroll_viewport, DEFAULT_SCROLL_BEHAVIOR};
 
 use crate::components::scroll_area::{
     scroll_into_view, scroll_into_view_when, scroll_item_into_view, scroll_item_into_view_when,
 };
-use crate::core::scroll_viewport::scroll_viewport as scroll_viewport_fn;
-use crate::core::tree::Element;
+use crate::core::tree::{Element, IntoCssDim, IntoF32Raw};
 use jadix_macros::component;
 
-impl crate::core::scroll_viewport::ScrollViewportBuilder {
+pub struct ScrollViewportBuilder {
+    pub(crate) id: String,
+    el: Element,
+    overflow_x: String,
+    overflow_y: String,
+    scroll_behavior: String,
+    hover_mode: String,
+}
+
+pub fn scroll_viewport(id: &str) -> ScrollViewportBuilder {
+    ScrollViewportBuilder {
+        id: id.to_string(),
+        el: Element::new().w("100%").h("100%"),
+        overflow_x: "auto".to_string(),
+        overflow_y: "auto".to_string(),
+        scroll_behavior: DEFAULT_SCROLL_BEHAVIOR.to_string(),
+        hover_mode: "scrollbar".to_string(),
+    }
+}
+
+pub fn scrollviewport(id: &str) -> ScrollViewportBuilder {
+    scroll_viewport(id)
+}
+
+impl ScrollViewportBuilder {
+    pub fn id(mut self, id: impl Into<String>) -> Self {
+        self.id = id.into();
+        self
+    }
+
+    pub fn overflow(mut self, mode: impl Into<String>) -> Self {
+        let mode = mode.into();
+        self.overflow_x = mode.clone();
+        self.overflow_y = mode;
+        self
+    }
+
+    pub fn overflow_x(mut self, mode: impl Into<String>) -> Self {
+        self.overflow_x = mode.into();
+        self
+    }
+
+    pub fn overflow_y(mut self, mode: impl Into<String>) -> Self {
+        self.overflow_y = mode.into();
+        self
+    }
+
+    /// `"smooth"` (default) or `"jump"` (instant).
+    pub fn scroll_behavior(mut self, mode: impl Into<String>) -> Self {
+        self.scroll_behavior = mode.into();
+        self
+    }
+
+    pub fn hover_mode(mut self, mode: impl Into<String>) -> Self {
+        self.hover_mode = mode.into();
+        self
+    }
+
+    pub fn w(mut self, width: impl IntoCssDim) -> Self {
+        self.el = self.el.w(width);
+        self
+    }
+
+    pub fn h(mut self, height: impl IntoCssDim) -> Self {
+        self.el = self.el.h(height);
+        self
+    }
+
+    pub fn flex_grow(mut self, grow: impl IntoF32Raw) -> Self {
+        self.el = self.el.flex_grow(grow);
+        self
+    }
+
+    pub fn flex_shrink(mut self, shrink: impl IntoF32Raw) -> Self {
+        self.el = self.el.flex_shrink(shrink);
+        self
+    }
+
+    pub fn min_w(mut self, w: impl IntoCssDim) -> Self {
+        self.el = self.el.min_w(w);
+        self
+    }
+
+    pub fn min_h(mut self, h: impl IntoCssDim) -> Self {
+        self.el = self.el.min_h(h);
+        self
+    }
+
+    pub fn p(mut self, padding: impl IntoCssDim) -> Self {
+        self.el = self.el.p(padding);
+        self
+    }
+
+    pub fn bg(mut self, bg: [f32; 4]) -> Self {
+        self.el = self.el.bg(bg);
+        self
+    }
+
+    pub fn flex_col(mut self) -> Self {
+        self.el = self.el.flex_col();
+        self
+    }
+
+    pub fn flex_row(mut self) -> Self {
+        self.el = self.el.flex_row();
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.el = self.el.child(child);
+        self
+    }
+
+    pub fn children(mut self, children: impl IntoIterator<Item = Element>) -> Self {
+        for c in children {
+            self = self.child(c);
+        }
+        self
+    }
+
+    /// 取出内部 Element（已含 children / 尺寸），供 ScrollArea 等再包一层。
+    pub fn into_inner_element(self) -> (String, Element, String, String, String, String) {
+        (
+            self.id,
+            self.el,
+            self.overflow_x,
+            self.overflow_y,
+            self.scroll_behavior,
+            self.hover_mode,
+        )
+    }
+}
+
+impl From<ScrollViewportBuilder> for Element {
+    fn from(builder: ScrollViewportBuilder) -> Element {
+        let ScrollViewportBuilder {
+            id,
+            el,
+            overflow_x,
+            overflow_y,
+            scroll_behavior,
+            hover_mode,
+        } = builder;
+        activate_scroll_viewport(el, &id, overflow_x, overflow_y, scroll_behavior, hover_mode)
+    }
+}
+
+impl crate::core::tree::IntoElementList for ScrollViewportBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
+}
+
+impl ScrollViewportBuilder {
     /// 见 [`scroll_into_view`]。
     pub fn scroll_into_view(self, target: impl AsRef<str>, align: impl AsRef<str>) -> Self {
         scroll_into_view(&self.id, target, align);
@@ -71,7 +222,7 @@ pub fn ScrollViewport(
     scroll_into_view_when: Option<String>,
     children: Option<Element>,
 ) -> Element {
-    let mut builder = scroll_viewport_fn(&id);
+    let mut builder = scroll_viewport(&id);
     if let Some(o) = overflow {
         builder = builder.overflow(o);
     }

@@ -703,6 +703,9 @@ impl super::App {
                         crate::core::reactivity::use_signal(&pref_x_key, || None::<f32>);
                     let pre = preedit_sig.get();
                     let composing = ime_active.get() && !pre.is_empty();
+                    if !composing && crate::components::text_editor::dispatch_editor_key(rest, &event, self.modifiers) {
+                        return true;
+                    }
                     let password_field = input_type_for(rest).is_password();
                     if !composing
                         && event.state == ElementState::Pressed

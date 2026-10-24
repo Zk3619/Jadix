@@ -132,6 +132,34 @@ fn blur_then_blit_preserves_pass_uniforms() {
         }
     }
     println!("blur + blit: identical pixels in combined/separate submissions");
+    for alpha in [0.0, 0.35, 1.0] {
+        let mut encoder = device.create_command_encoder(&Default::default());
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: blur.scene_view().unwrap(),
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: alpha * 0.4,
+                            g: alpha * 0.6,
+                            b: alpha * 0.8,
+                            a: alpha,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+        }
+        queue.submit([encoder.finish()]);
+        let pixels = render(&mut blur, false, 20.0, None);
+        let actual = pixels[(64 * 128 + 64) * 4 + 3];
+        let expected = (alpha * 255.0).round() as u8;
+        assert!(actual.abs_diff(expected) <= 2,
+            "blur must preserve material alpha {alpha}, got {actual}/255");
+    }
 }
 
 #[test]

@@ -8,8 +8,8 @@ use crate::app::WindowOptions;
 const WCA_ACCENT_POLICY: u32 = 19;
 const ACCENT_ENABLE_BLURBEHIND: u32 = 3;
 const ACCENT_ENABLE_ACRYLICBLURBEHIND: u32 = 4;
-/// Win11 22H2 (`22621`) removed `ACCENT_ENABLE_BLURBEHIND`.
-const BUILD_WIN11_22H2: u32 = 22621;
+/// DWMWA_SYSTEMBACKDROP_TYPE is documented from Windows 11 22H2 onward.
+pub(super) const BUILD_WIN11_SYSTEM_BACKDROP: u32 = 22621;
 
 #[repr(C)]
 struct AccentPolicy {
@@ -98,13 +98,13 @@ pub fn apply_accent_policy(hwnd: windows_sys::Win32::Foundation::HWND, options: 
         return;
     };
     let build = nt_build_number();
-    // Official system backdrop on 22H2+ is enough for stock Acrylic/Mica.
-    if options.blur && build >= BUILD_WIN11_22H2 && !options.wants_custom_dcomp() {
-        return;
-    }
-    let accent_state = if !options.blur {
+    // Switching from an Accent fallback to stock Mica must remove the previous
+    // accent; returning here would leave both backgrounds enabled.
+    let system_backdrop =
+        options.blur && build >= BUILD_WIN11_SYSTEM_BACKDROP && !options.wants_custom_dcomp();
+    let accent_state = if !options.blur || system_backdrop {
         0
-    } else if build >= BUILD_WIN11_22H2 {
+    } else if build >= BUILD_WIN11_SYSTEM_BACKDROP {
         ACCENT_ENABLE_ACRYLICBLURBEHIND
     } else if matches!(
         options.backdrop,
@@ -144,7 +144,7 @@ mod tests {
         assert_eq!(WCA_ACCENT_POLICY, 19);
         assert_eq!(ACCENT_ENABLE_BLURBEHIND, 3);
         assert_eq!(ACCENT_ENABLE_ACRYLICBLURBEHIND, 4);
-        assert_eq!(BUILD_WIN11_22H2, 22621);
+        assert_eq!(BUILD_WIN11_SYSTEM_BACKDROP, 22621);
         assert_eq!(tint_to_accent_abgr([0x64, 0xff, 0xff, 0xff]), 0x64FFFFFF);
     }
 

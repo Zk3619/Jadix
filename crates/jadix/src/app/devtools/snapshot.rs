@@ -1063,11 +1063,12 @@ pub fn cssom_text_from_element(el: &Element) -> String {
     }
 
     // Text chrome (authored base when class_set has text snapshot).
+    let specified_text = el.specified_text_style();
     let text = el
         .class_set
         .as_ref()
         .and_then(|cs| cs.base_text_style.as_ref())
-        .unwrap_or(&el.text_style);
+        .unwrap_or(&specified_text);
     if let Some(c) = text.color {
         push_decl(&mut lines, "color", &format_text_rgba(c));
     }
@@ -1185,7 +1186,7 @@ fn format_num(v: f32) -> String {
     }
 }
 
-fn format_text_rgba(c: [u8; 4]) -> String {
+pub(super) fn format_text_rgba(c: [u8; 4]) -> String {
     if c[3] == 0 {
         return "transparent".into();
     }
@@ -1306,6 +1307,15 @@ mod tests {
             text_preview_from(&Element::new().text("表单")).as_deref(),
             Some("表单")
         );
+    }
+
+    #[test]
+    fn inspector_pick_can_select_pointer_transparent_content() {
+        let mut content = Element::new().template_id("performance-hud").pointer_events("none");
+        content.layout_bounds = [10.0, 10.0, 80.0, 50.0];
+        let mut root = Element::new().child(content);
+        root.layout_bounds = [0.0, 0.0, 200.0, 100.0];
+        assert_eq!(pick_element_path(&root, 20.0, 20.0, [0.0; 2]), Some(vec![0]));
     }
 
     #[test]

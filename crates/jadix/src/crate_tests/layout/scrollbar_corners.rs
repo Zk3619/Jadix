@@ -2,9 +2,10 @@
 
 use crate::components::scroll_area::scroll_area;
 use crate::components::scrollbar::{
-    horizontal_lane_side_inset, SCROLLBAR_DEFAULT_CROSS_PX, SCROLLBAR_TRACK_FOCUS_PREFIX,
+    SCROLLBAR_DEFAULT_CROSS_PX, SCROLLBAR_TRACK_FOCUS_PREFIX,
 };
 use crate::core::reactivity::{create_effect, create_root};
+use crate::core::scrollbar::horizontal_lane_side_inset;
 use crate::core::tree::{Element, LayoutTree};
 
 fn find_track_mut<'a>(el: &'a mut Element, axis: &str) -> Option<&'a mut Element> {

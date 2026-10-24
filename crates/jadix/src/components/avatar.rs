@@ -101,9 +101,8 @@ use crate::utils::anchored_overlay::{
 use crate::utils::lucide::lucide_glyph;
 use crate::utils::overflow_fit::tighten_horizontal_constraint;
 use crate::utils::popup::{
-    mark_floating_with_gap, PopupPlacement, ATTR_FLOATING_EXPAND_CLIP_X,
-    ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_MATCH_TRIGGER,
-    ATTR_FLOATING_MIN_W, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W,
+    mark_floating_with_gap, PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W,
+    ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W,
 };
 use crate::utils::take_packed;
 use crate::utils::text_node::build_named_icon_text_node;
@@ -126,8 +125,6 @@ const ATTR_MAX_VISIBLE: &str = "data-avatar-max-visible";
 pub const DEFAULT_MAX_VISIBLE_AVATARS: usize = 3;
 /// Collapsed group overlap (`-space-x-2`).
 const GROUP_OVERLAP: &str = "-0.5rem";
-/// Expand chrome padding (equal on all sides); placement shifts by this so faces
-/// stay on the collapsed avatars instead of aligning the popover box to the group origin.
 const EXPAND_CHROME_PAD: &str = tokens::SPACE_2;
 const EXPAND_CHROME_BORDER: f32 = 1.0;
 
@@ -615,7 +612,12 @@ fn build_avatar_fallback(
     el = el.bg(muted).display_flex().items_center().justify_center();
     el.set_attr(ATTR_SLOT, SLOT_FALLBACK);
     for mut c in children {
-        style_fallback_subtree(&mut c, ctx.size.fallback_text_px(), ctx.size.fallback_icon_px(), parse_text_color("muted-foreground"));
+        style_fallback_subtree(
+            &mut c,
+            ctx.size.fallback_text_px(),
+            ctx.size.fallback_icon_px(),
+            parse_text_color("muted-foreground"),
+        );
         el = el.child(c);
     }
     if el.children.is_empty() {
@@ -806,7 +808,9 @@ fn default_expand_container(faces: Vec<Element>, expand_class: Option<&str>) -> 
         .overflow("hidden")
         .items_center()
         .justify("start")
-        .wrap("nowrap")
+        .wrap("wrap")
+        .max_h("20rem")
+        .overflow_y("auto")
         .gap(tokens::SPACE_1)
         .p(EXPAND_CHROME_PAD)
         .rounded("0.75rem")
@@ -827,10 +831,6 @@ fn expand_placement_from_attr(raw: &str) -> PopupPlacement {
     PopupPlacement::from_attr(raw.trim())
 }
 
-fn expand_cover_gap_for_group(trigger_h: f32) -> f32 {
-    -trigger_h.max(1.0)
-}
-
 struct AvatarGroupEntry {
     focus_id: String,
     faces: Vec<AvatarFaceSpec>,
@@ -838,24 +838,15 @@ struct AvatarGroupEntry {
     count_size: AvatarSize,
     manual_visible_n: usize,
     manual_has_count: bool,
-    /// Number of faces shown in the collapsed row (not nested under Count).
-    visible_n: usize,
-    has_count: bool,
     rendered_visible: Cell<usize>,
     expanded: Signal<bool>,
     placement: Cell<PopupPlacement>,
     expand_class: String,
-    group_hover: Cell<bool>,
-    panel_hover: Cell<bool>,
-    hover_armed: Cell<bool>,
 }
 
 thread_local! {
     static AVATAR_GROUPS: RefCell<HashMap<String, AvatarGroupEntry>> =
         RefCell::new(HashMap::new());
-    /// Smooth-scroll catch-up / fling frames: skip hover-open so +N does not
-    /// close→open every residual offset tick under a still pointer.
-    static EXPAND_HOVER_FROZEN: Cell<bool> = const { Cell::new(false) };
 }
 
 static AVATAR_GROUP_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -869,7 +860,6 @@ fn register_avatar_group_entry(
     manual_visible_n: usize,
     manual_has_count: bool,
     visible_n: usize,
-    has_count: bool,
     expanded: Signal<bool>,
     placement: PopupPlacement,
     expand_class: String,
@@ -884,15 +874,10 @@ fn register_avatar_group_entry(
                 count_size,
                 manual_visible_n,
                 manual_has_count,
-                visible_n,
-                has_count,
                 rendered_visible: Cell::new(visible_n),
                 expanded,
                 placement: Cell::new(placement),
                 expand_class,
-                group_hover: Cell::new(false),
-                panel_hover: Cell::new(false),
-                hover_armed: Cell::new(false),
             },
         );
     });
@@ -905,127 +890,28 @@ fn unregister_avatar_group(id: &str) {
 }
 
 fn open_avatar_group_expand(id: &str) {
-    open_avatar_group_expand_inner(id, false);
-}
-
-fn open_avatar_group_expand_from_click(id: &str) {
-    open_avatar_group_expand_inner(id, true);
-}
-
-fn open_avatar_group_expand_inner(id: &str, force: bool) {
-    let frozen = EXPAND_HOVER_FROZEN.get();
-    let (self_exp, others): (Option<Signal<bool>>, Vec<Signal<bool>>) = AVATAR_GROUPS.with(|m| {
-        let map = m.borrow();
-        let mut others = Vec::new();
-        let mut self_exp = None;
-        for (k, e) in map.iter() {
-            if k == id {
-                e.hover_armed.set(true);
-                self_exp = Some(e.expanded);
-                continue;
-            }
-            if e.expanded.peek() {
-                e.hover_armed.set(false);
-                e.group_hover.set(false);
-                e.panel_hover.set(false);
-                others.push(e.expanded);
-            }
-        }
-        (self_exp, others)
-    });
-    // Never try_set while AVATAR_GROUPS is borrowed — reactive rebuild re-enters the map.
-    if let Some(s) = self_exp {
-        if force || !frozen {
-            s.try_set(true);
-        }
-    }
-    for o in others {
-        o.try_set(false);
-    }
-}
-
-fn reopen_hovered_avatar_group_expands() -> bool {
-    let ids: Vec<String> = AVATAR_GROUPS.with(|m| {
-        m.borrow()
+    let (target, others) = AVATAR_GROUPS.with(|groups| {
+        let groups = groups.borrow();
+        let target = groups.get(id).map(|entry| entry.expanded);
+        let others: Vec<_> = groups
             .iter()
-            .filter(|(_, e)| e.group_hover.get() || e.panel_hover.get())
-            .map(|(k, _)| k.clone())
-            .collect()
+            .filter(|(key, entry)| key.as_str() != id && entry.expanded.peek())
+            .map(|(_, entry)| entry.expanded)
+            .collect();
+        (target, others)
     });
-    if ids.is_empty() {
-        return false;
+    for other in others {
+        other.try_set(false);
     }
-    let mut any = false;
-    for id in ids {
-        if let Some(s) = AVATAR_GROUPS.with(|m| m.borrow().get(&id).map(|e| e.expanded)) {
-            if s.try_set(true) {
-                any = true;
-            }
+    if let Some(target) = target {
+        let next = !target.peek();
+        if next {
+            crate::utils::popup::disarm_underlay_close();
         }
-    }
-    any
-}
-
-/// Wheel / smooth-scroll catch-up: block hover-open; on thaw, reopen if the pointer
-/// is still on +N / the panel (one open, not a close/open per residual frame).
-pub(crate) fn set_avatar_group_expand_hover_frozen(frozen: bool) -> bool {
-    let was = EXPAND_HOVER_FROZEN.replace(frozen);
-    if was && !frozen {
-        reopen_hovered_avatar_group_expands()
-    } else {
-        false
+        target.try_set(next);
     }
 }
 
-fn note_avatar_group_hover(id: &str, panel: bool, on: bool) {
-    AVATAR_GROUPS.with(|m| {
-        if let Some(e) = m.borrow().get(id) {
-            if panel {
-                e.panel_hover.set(on);
-            } else {
-                e.group_hover.set(on);
-            }
-            if on {
-                e.hover_armed.set(true);
-            }
-        }
-    });
-}
-
-fn dismiss_idle_avatar_group_hovers() -> bool {
-    let to_close: Vec<Signal<bool>> = AVATAR_GROUPS.with(|m| {
-        let mut out = Vec::new();
-        for e in m.borrow().values() {
-            if !e.expanded.peek() || !e.hover_armed.get() {
-                continue;
-            }
-            if e.group_hover.get() || e.panel_hover.get() {
-                continue;
-            }
-            e.hover_armed.set(false);
-            out.push(e.expanded);
-        }
-        out
-    });
-    let mut any = false;
-    for s in to_close {
-        if s.peek() && s.try_set(false) {
-            any = true;
-        }
-    }
-    any
-}
-
-/// Event-loop: collapse avatar +N expand when pointer leaves group and panel.
-pub(crate) fn flush_avatar_group_hover_dismiss() -> bool {
-    dismiss_idle_avatar_group_hovers()
-}
-
-/// Close every expanded avatar group when a scroll ancestor moves (fixed cover panels
-/// otherwise drift from trigger/text until the next full placement sync).
-///
-/// Hover flags stay: residual smooth-scroll frames would otherwise leave/enter +N
-/// and flicker the panel. Hover-open is gated by [`set_avatar_group_expand_hover_frozen`].
 pub(crate) fn dismiss_avatar_group_expands_on_scroll() -> bool {
     let to_close: Vec<Signal<bool>> = AVATAR_GROUPS.with(|m| {
         let mut out = Vec::new();
@@ -1147,11 +1033,6 @@ fn collapsed_group_row_width(face_size: f32, slots: usize) -> f32 {
     face_size + (n - 1.0) * (face_size + overlap)
 }
 
-fn expand_from_width(face_size: f32, visible_n: usize, has_count: bool) -> f32 {
-    let slots = visible_n + usize::from(has_count);
-    collapsed_group_row_width(face_size, slots) + 2.0 * expand_chrome_inset()
-}
-
 fn build_avatar_group_expand_panel(
     floating_id: &str,
     trigger_fid: &str,
@@ -1159,42 +1040,41 @@ fn build_avatar_group_expand_panel(
     faces: &[AvatarFaceSpec],
     expand_class: Option<&str>,
     trigger_h: f32,
-    visible_n: usize,
-    has_count: bool,
 ) -> Element {
-    let chips = expand_group_faces(faces);
-    let mut panel = default_expand_container(chips, expand_class);
-    // Pin to the gap row. `width: auto` in a full-size portal + wrap stretches the
-    // chrome past the last face; `jadix_floating_w=auto` is also parsed as trigger px.
-    let content_w = expand_content_width(trigger_h, faces.len());
-    panel = panel.w(content_w);
+    let content_w = expand_content_width(trigger_h, faces.len()).min(320.0);
+    let mut panel = default_expand_container(expand_group_faces(faces), expand_class)
+        .w(content_w)
+        .max_w("100%");
     panel.set_attr(ATTR_FLOATING_W, format!("{content_w}px"));
-    panel.set_attr("data-avatar-group-overlay", "1");
-    mark_floating_with_gap(
-        &mut panel,
-        floating_id,
-        trigger_fid,
-        placement,
-        expand_cover_gap_for_group(trigger_h),
-    );
+    panel.set_attr("data-avatar-group-popover", "1");
+    panel.set_attr("data-slot", "popover-content");
+    mark_floating_with_gap(&mut panel, floating_id, trigger_fid, placement, 6.0);
     panel.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
-    // Content-sized: do not stretch to a full-width group shell / trigger.
     panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
     panel.set_attr(ATTR_FLOATING_MIN_W, "0");
-    // Expand from the collapsed face height (same as BubbleReactions) so overflow-hidden
-    // does not clamp the first frame to max-height 0.
-    panel.set_attr(ATTR_FLOATING_EXPAND_FROM_H, format!("{trigger_h}"));
-    // Clip extra faces on the same 200ms as accordion: collapsed row (+N) → full gap layout.
-    let from_w = expand_from_width(trigger_h, visible_n, has_count);
-    panel.set_attr(ATTR_FLOATING_EXPAND_FROM_W, format!("{from_w}"));
-    panel.set_attr(ATTR_FLOATING_EXPAND_CLIP_X, "1");
-    // Cover placement pins the *panel box* to the trigger origin; shift by chrome so the
-    // first expanded face sits on the first collapsed face.
-    let inset = expand_chrome_inset();
-    panel
-        .translate(-inset, -inset)
-        .align_content_kw("flex-start")
-        .absolute()
+    panel.align_content_kw("flex-start").absolute()
+}
+
+fn avatar_group_count_trigger(group_id: &str, count: Element) -> Element {
+    let click_id = group_id.to_string();
+    let expanded = AVATAR_GROUPS.with(|groups| groups.borrow().get(group_id).unwrap().expanded);
+    let mut trigger: Element = interactive(count)
+        .focus_id(format!("{group_id}__focus"))
+        .focusable(true)
+        .cursor("pointer")
+        .on_click(move || open_avatar_group_expand(&click_id))
+        .into();
+    trigger.set_attr("role", "button");
+    trigger.set_attr("aria-haspopup", "dialog");
+    bind_attr(
+        trigger,
+        format!("{group_id}__aria_expanded"),
+        move || expanded.get(),
+        |element, open| {
+            element.set_attr("aria-expanded", if open { "true" } else { "false" });
+            LayoutStatus::StyleChanged
+        },
+    )
 }
 
 fn collect_count_faces(el: &Element, faces: &mut Vec<AvatarFaceSpec>) {
@@ -1236,24 +1116,12 @@ fn build_auto_group_count(
     overflow_faces: &[AvatarFaceSpec],
     size: AvatarSize,
 ) -> Element {
-    let open_id = group_id.to_string();
-    let click_id = group_id.to_string();
-    let hover_id = group_id.to_string();
     let mut kids = vec![Element::new().text(format!("+{overflow_n}"))];
     for spec in overflow_faces {
         kids.push(hide_overflow_avatar(rebuild_face(spec)));
     }
-    let mut count: Element = build_avatar_group_count(size, kids, None);
-    count = interactive(count)
-        .on_click(move || open_avatar_group_expand_from_click(&click_id))
-        .on_hover(move |h| {
-            note_avatar_group_hover(&hover_id, false, h);
-            if h {
-                open_avatar_group_expand(&open_id);
-            }
-        })
-        .into();
-    apply_group_ring(count)
+    let count = build_avatar_group_count(size, kids, None);
+    apply_group_ring(avatar_group_count_trigger(group_id, count))
 }
 
 fn build_avatar_group_row_element(
@@ -1356,9 +1224,6 @@ fn sync_avatar_group_shell(
         );
         if next_visible != entry.rendered_visible.get() {
             entry.rendered_visible.set(next_visible);
-            entry.visible_n = next_visible;
-            entry.has_count = entry.faces.len() > next_visible
-                || (entry.manual_has_count && entry.faces.len() <= entry.manual_visible_n);
             structure_changed = true;
         }
         let expanded = entry.expanded.peek();
@@ -1383,16 +1248,13 @@ fn sync_avatar_group_shell(
     structure_changed
 }
 
-/// 每帧按父级宽度与 `max_visible` 折叠头像行；指针离开组与浮层时收起展开。
+/// 每帧按父级宽度与 `max_visible` 折叠头像行。
 pub(crate) fn sync_avatar_group_subtree(
     el: &mut Element,
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
     impact: &mut LayoutStatus,
     viewport_w: f32,
 ) {
-    if flush_avatar_group_hover_dismiss() {
-        crate::app::runtime::request_redraw();
-    }
     let root_budget = (viewport_w > 0.0).then_some(viewport_w);
     walk_avatar_group_sync(el, root_budget, layout_tree, impact);
 }
@@ -1440,18 +1302,7 @@ fn build_avatar_group_row_manual(
         avatar_n += 1;
     }
     if let Some(mut count) = count_el {
-        let open_id = group_id.to_string();
-        let click_id = group_id.to_string();
-        let hover_id = group_id.to_string();
-        count = interactive(count)
-            .on_click(move || open_avatar_group_expand_from_click(&click_id))
-            .on_hover(move |h| {
-                note_avatar_group_hover(&hover_id, false, h);
-                if h {
-                    open_avatar_group_expand(&open_id);
-                }
-            })
-            .into();
+        count = avatar_group_count_trigger(group_id, count);
         count = apply_group_ring(count);
         if avatar_n > 0 {
             count = count.ml(GROUP_OVERLAP);
@@ -1492,7 +1343,6 @@ fn build_avatar_group(
         None,
         face_size,
     );
-    let has_count = faces.len() > rendered_visible || manual_has_count;
 
     register_avatar_group_entry(
         group_id.clone(),
@@ -1503,7 +1353,6 @@ fn build_avatar_group(
         manual_visible_n,
         manual_has_count,
         rendered_visible,
-        has_count,
         expanded,
         expand_placement,
         expand_class.clone(),
@@ -1524,11 +1373,11 @@ fn build_avatar_group(
         placement: Some(Placement::trigger(
             focus_id.clone(),
             expand_placement,
-            expand_cover_gap_for_group(face_size),
+            6.0,
             FloatingStrategy::Fixed,
         )),
         kind: OverlayKind::Popover,
-        motion: FloatingMotionKind::Expand,
+        motion: FloatingMotionKind::Fade,
         mode: OverlayMode::Stacked,
         // Content-sized. `"auto"` must not be written as `jadix_floating_w` (that attr is
         // an explicit px; parse fallback is trigger width → overlay locks to ~2 faces).
@@ -1541,28 +1390,23 @@ fn build_avatar_group(
     let placeholder = with_child_owner(|| {
         provide_anchored_overlay_context(expanded, group_id.clone(), trigger_fid);
         anchored_overlay_content(ao_opts, move || {
-            let (faces, fid, placement, expand_class, visible_n, has_count) =
-                AVATAR_GROUPS.with(|m| {
-                    let map = m.borrow();
-                    match map.get(&portal_id) {
-                        Some(e) => (
-                            e.faces.clone(),
-                            e.focus_id.clone(),
-                            e.placement.get(),
-                            e.expand_class.clone(),
-                            e.visible_n,
-                            e.has_count,
-                        ),
-                        None => (
-                            Vec::new(),
-                            String::new(),
-                            PopupPlacement::BottomStart,
-                            String::new(),
-                            0,
-                            false,
-                        ),
-                    }
-                });
+            let (faces, fid, placement, expand_class) = AVATAR_GROUPS.with(|m| {
+                let map = m.borrow();
+                match map.get(&portal_id) {
+                    Some(e) => (
+                        e.faces.clone(),
+                        e.focus_id.clone(),
+                        e.placement.get(),
+                        e.expand_class.clone(),
+                    ),
+                    None => (
+                        Vec::new(),
+                        String::new(),
+                        PopupPlacement::BottomStart,
+                        String::new(),
+                    ),
+                }
+            });
             let trigger_h = faces
                 .first()
                 .map(|f| IntoF32::into_f32(f.size.box_dim()))
@@ -1574,18 +1418,11 @@ fn build_avatar_group(
                 &faces,
                 Some(expand_class.as_str()).filter(|s| !s.is_empty()),
                 trigger_h,
-                visible_n,
-                has_count,
             );
-            let hover_id = portal_id.clone();
-            interactive(panel)
-                .focus_id(format!("{hover_id}__panel"))
-                .on_hover(move |h| note_avatar_group_hover(&hover_id, true, h))
-                .into()
+            panel
         })
     });
 
-    let hover_id = group_id.clone();
     let shell: Element = vstack()
         .w("auto")
         .flex_grow(0.0)
@@ -1596,10 +1433,7 @@ fn build_avatar_group(
         .child(row)
         .child(placeholder)
         .into();
-    let mut row_el: Element = interactive(shell)
-        .on_hover(move |h| note_avatar_group_hover(&hover_id, false, h))
-        .into();
-    row_el.focus_id = Some(focus_id.clone());
+    let mut row_el = shell;
     row_el.set_attr(ATTR_SLOT, SLOT_GROUP);
     row_el.set_attr(ATTR_GROUP_ID, &group_id);
     if max_visible != usize::MAX {
@@ -2043,8 +1877,8 @@ pub fn AvatarBadge(
 /// - `expand_placement`: floating expand side for `+N` (default `bottom-start`, in-place cover; faces align to collapsed faces).
 /// - `expand_class`: utility class for the expand container (default = popover / border / shadow tokens).
 /// - `max_visible`: 折叠前最多展示的头像数；未设置时保留手动 `AvatarGroupCount` 布局，但仍会在宽度不足时自动折叠。
-/// - Hover/click `AvatarGroupCount` opens a portal covering the group: all faces lay out as
-///   independent chips (equal gap, nowrap) inside popover chrome (content width, equal padding).
+/// - Clicking `AvatarGroupCount` toggles a popover anchored to `+N`, showing all faces.
+///   Hover does not open or close it; outside click and Escape use the shared popover lifecycle.
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn AvatarGroup(
@@ -2131,6 +1965,104 @@ mod tests {
     use super::*;
 
     #[test]
+    fn avatar_group_count_only_toggles_on_click_and_uses_popover_dismissal() {
+        use crate::app::portal_overlay::{
+            clear_overlay_stack, try_close_top, try_dismiss_outside_press,
+        };
+        use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+        use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+        use std::rc::Rc;
+
+        fn find_slot<'a>(element: &'a Element, slot: &str) -> Option<&'a Element> {
+            if element.attrs.get(ATTR_SLOT).map(String::as_str) == Some(slot) {
+                return Some(element);
+            }
+            element
+                .children
+                .iter()
+                .find_map(|child| find_slot(child, slot))
+        }
+        for manual in [false, true] {
+            clear_overlay_stack();
+            reset_registered_anchors();
+            let live = Rc::new(RefCell::new(Element::new()));
+            install_test_reconcile_root(Rc::clone(&live));
+            let (owner, _) = crate::core::reactivity::create_root(|| {
+                let live = Rc::clone(&live);
+                create_effect(move || {
+                    let mut children = vec![avatar_with_fallback("A"), avatar_with_fallback("B")];
+                    if manual {
+                        let mut packed = Element::new();
+                        packed.set_attr("jadix_fragment", "1");
+                        children.push(AvatarGroupCount(AvatarGroupCountProps {
+                            children: Some(
+                                packed.children([
+                                    Element::new().text("+1"),
+                                    avatar_with_fallback("C"),
+                                ]),
+                            ),
+                            ..Default::default()
+                        }));
+                    } else {
+                        children.push(avatar_with_fallback("C"));
+                    }
+                    *live.borrow_mut() = build_avatar_group(
+                        children,
+                        PopupPlacement::BottomStart,
+                        None,
+                        if manual { usize::MAX } else { 2 },
+                    );
+                });
+            });
+            drain_deferred_view_remounts();
+            let (expanded, click) = {
+                let group = live.borrow();
+                assert!(group.on_hover.is_none());
+                let group_id = group.attrs.get(ATTR_GROUP_ID).unwrap();
+                let expanded = AVATAR_GROUPS.with(|groups| groups.borrow()[group_id].expanded);
+                let count = find_slot(&group, SLOT_GROUP_COUNT).unwrap();
+                assert!(count.on_hover.is_none());
+                assert!(count.focusable);
+                assert_eq!(
+                    count.focus_id.as_deref(),
+                    Some(format!("{group_id}__focus").as_str())
+                );
+                (expanded, count.on_click.clone().unwrap())
+            };
+            assert!(!expanded.peek());
+            (click.borrow_mut())();
+            drain_deferred_view_remounts();
+            assert!(expanded.peek());
+            {
+                let group = live.borrow();
+                let panel = find_slot(&group, "popover-content").expect("mounted avatar popover");
+                assert_eq!(panel.children.len(), 3);
+                assert!(panel.on_hover.is_none());
+                assert!(!panel
+                    .attrs
+                    .contains_key(crate::utils::popup::ATTR_FLOATING_EXPAND_FROM_W));
+            }
+            (click.borrow_mut())();
+            drain_deferred_view_remounts();
+            assert!(!expanded.peek());
+            (click.borrow_mut())();
+            drain_deferred_view_remounts();
+            assert!(try_close_top());
+            assert!(!expanded.peek());
+            drain_deferred_view_remounts();
+            (click.borrow_mut())();
+            drain_deferred_view_remounts();
+            crate::utils::popup::arm_underlay_close();
+            assert!(try_dismiss_outside_press());
+            assert!(!expanded.peek());
+            drop(owner);
+            clear_test_reconcile_root();
+            clear_overlay_stack();
+            reset_registered_anchors();
+        }
+    }
+
+    #[test]
     fn avatar_size_parse_and_dims() {
         assert_eq!(AvatarSize::parse("SM"), AvatarSize::Sm);
         assert_eq!(AvatarSize::Sm.box_dim(), "1.5rem");
@@ -2155,14 +2087,31 @@ mod tests {
                 let mut root: Element = avatar().size(size).fallback_icon("user").into();
                 let mut layout = crate::layout::LayoutTree::new();
                 layout.build_and_layout(&mut root, 200.0, 160.0, [-1.0; 2]);
-                let fallback = root.children.iter().find(|child| child.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_FALLBACK)).unwrap();
-                let icon = fallback.children.iter().find(|child| child.attrs.contains_key(crate::utils::ATTR_ICON_NAME)).unwrap();
-                assert!(icon.text.is_some(), "icon must keep its glyph on the Lucide leaf");
+                let fallback = root
+                    .children
+                    .iter()
+                    .find(|child| {
+                        child.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_FALLBACK)
+                    })
+                    .unwrap();
+                let icon = fallback
+                    .children
+                    .iter()
+                    .find(|child| child.attrs.contains_key(crate::utils::ATTR_ICON_NAME))
+                    .unwrap();
+                assert!(
+                    icon.text.is_some(),
+                    "icon must keep its glyph on the Lucide leaf"
+                );
                 assert_eq!(icon.text_style.font_family.as_deref(), Some("lucide"));
                 for axis in 0..2 {
                     let icon_center = icon.layout_bounds[axis] + icon.layout_bounds[axis + 2] * 0.5;
-                    let center = fallback.layout_bounds[axis] + fallback.layout_bounds[axis + 2] * 0.5;
-                    assert!((icon_center - center).abs() < 0.5, "{size} axis {axis}: {icon_center} vs {center}");
+                    let center =
+                        fallback.layout_bounds[axis] + fallback.layout_bounds[axis + 2] * 0.5;
+                    assert!(
+                        (icon_center - center).abs() < 0.5,
+                        "{size} axis {axis}: {icon_center} vs {center}"
+                    );
                 }
             });
         }
@@ -2258,177 +2207,34 @@ mod tests {
     }
 
     #[test]
-    fn avatar_group_expand_panel_covers_down_and_wraps_faces() {
-        use crate::core::reactivity::create_root;
-        use crate::utils::popup::{
-            ATTR_FLOATING, ATTR_FLOATING_EXPAND_CLIP_X, ATTR_FLOATING_EXPAND_FROM_H,
-            ATTR_FLOATING_EXPAND_FROM_W, ATTR_FLOATING_GAP, ATTR_FLOATING_MATCH_TRIGGER,
-            ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W,
-        };
-
-        let (_owner, group) = create_root(|| {
-            let mut frag = Element::new();
-            frag.set_attr("jadix_fragment", "1");
-            frag = frag.children(vec![
-                avatar_with_fallback("A"),
-                avatar_with_fallback("B"),
-                AvatarGroupCount(AvatarGroupCountProps {
-                    children: Some({
-                        let mut f = Element::new();
-                        f.set_attr("jadix_fragment", "1");
-                        f = f.children(vec![Element::new().text("+1"), avatar_with_fallback("C")]);
-                        f
-                    }),
-                    ..Default::default()
-                }),
-            ]);
-            AvatarGroup(AvatarGroupProps {
-                expand_placement: Some("bottom-start".into()),
-                children: Some(frag),
-                ..Default::default()
-            })
-        });
-
-        fn find_group_slot<'a>(el: &'a Element) -> Option<&'a Element> {
-            if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_GROUP) {
-                return Some(el);
-            }
-            el.children.iter().find_map(find_group_slot)
-        }
-
-        assert!(
-            find_group_slot(&group).is_some(),
-            "avatar-group slot must live on the row trigger"
-        );
-
-        let group_id = AVATAR_GROUPS.with(|m| {
-            m.borrow()
-                .keys()
-                .next()
-                .cloned()
-                .expect("avatar group registry")
-        });
-        let faces = AVATAR_GROUPS.with(|m| {
-            let map = m.borrow();
-            let e = map.get(&group_id).expect("entry");
-            assert_eq!(e.faces.len(), 3, "visible A/B + nested C");
-            assert_eq!(e.visible_n, 2);
-            assert_eq!(e.placement.get(), PopupPlacement::BottomStart);
-            e.faces.clone()
-        });
-
-        let panel = build_avatar_group_expand_panel(
-            &group_id,
-            "fid",
-            PopupPlacement::BottomStart,
-            &faces,
-            None,
-            32.0,
-            2,
-            true,
-        );
-        assert_eq!(
-            panel
-                .attrs
-                .get("data-avatar-group-overlay")
-                .map(|s| s.as_str()),
-            Some("1")
-        );
-        assert_eq!(
-            panel.attrs.get(ATTR_FLOATING).map(|s| s.as_str()),
-            Some(group_id.as_str())
-        );
-        assert_eq!(
-            panel.attrs.get(ATTR_FLOATING_STRATEGY).map(|s| s.as_str()),
-            Some("fixed")
-        );
-        assert_eq!(
-            panel
-                .attrs
-                .get(ATTR_FLOATING_MATCH_TRIGGER)
-                .map(|s| s.as_str()),
-            Some("0"),
-            "expand width is auto, not stretched to the trigger"
-        );
-        let expected_w = super::expand_content_width(32.0, 3);
-        let floating_w = panel
-            .attrs
-            .get(ATTR_FLOATING_W)
-            .and_then(|s| s.trim().trim_end_matches("px").trim().parse::<f32>().ok());
-        assert_eq!(
-            floating_w,
-            Some(expected_w),
-            "expand panel must pin jadix_floating_w to the gap-row content width"
-        );
-        assert_eq!(
-            panel
-                .attrs
-                .get(ATTR_FLOATING_EXPAND_FROM_H)
-                .and_then(|s| s.parse::<f32>().ok()),
-            Some(32.0),
-            "expand motion must start from collapsed face height, not 0"
-        );
-        let expected_from_w = super::expand_from_width(32.0, 2, true);
-        assert_eq!(
-            panel
-                .attrs
-                .get(ATTR_FLOATING_EXPAND_FROM_W)
-                .and_then(|s| s.parse::<f32>().ok()),
-            Some(expected_from_w),
-            "expand motion must clip from collapsed row width so extra faces do not pop in"
-        );
-        assert_eq!(
-            panel
-                .attrs
-                .get(ATTR_FLOATING_EXPAND_CLIP_X)
-                .map(|s| s.as_str()),
-            Some("1"),
-            "avatar extra faces clip on the x axis (nowrap + max-width lerp)"
-        );
-        let inset = super::expand_chrome_inset();
-        assert!(
-            (panel.style.translate[0] + inset).abs() < 0.5
-                && (panel.style.translate[1] + inset).abs() < 0.5,
-            "cover panel must shift by chrome inset so faces align with faces, got translate={:?}",
-            panel.style.translate
-        );
-        let gap: f32 = panel
-            .attrs
-            .get(ATTR_FLOATING_GAP)
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(0.0);
-        assert!(gap < 0.0, "in-place cover uses negative gap, got {gap}");
-        assert_eq!(panel.children.len(), 3, "expand chrome wraps all faces");
-        let gap_px = IntoF32::into_f32(tokens::SPACE_1);
-        let panel_gap = crate::layout::lp_length_px(panel.style.gap.width).unwrap_or(0.0);
-        assert!(
-            (panel_gap - gap_px).abs() < 0.5,
-            "expand panel uses uniform gap between all faces, got {panel_gap}"
-        );
-        for (i, child) in panel.children.iter().enumerate().skip(1) {
-            let ml = crate::layout::lpa_length_px(child.style.margin.left).unwrap_or(0.0);
-            assert!(
-                ml.abs() < 0.5,
-                "expand faces must not keep collapsed overlap margin (child {i}), got {ml}"
+    fn avatar_group_popover_is_offset_and_wraps_all_faces() {
+        let (_owner, _) = crate::core::reactivity::create_root(|| {
+            let faces = vec![extract_face_spec(&avatar_with_fallback("A")).unwrap(); 12];
+            let panel = build_avatar_group_expand_panel(
+                "group",
+                "trigger",
+                PopupPlacement::BottomStart,
+                &faces,
+                None,
+                32.0,
             );
-        }
-        let pad_l = crate::layout::lp_length_px(panel.style.padding.left).unwrap_or(0.0);
-        let pad_r = crate::layout::lp_length_px(panel.style.padding.right).unwrap_or(0.0);
-        let pad_t = crate::layout::lp_length_px(panel.style.padding.top).unwrap_or(0.0);
-        let pad_b = crate::layout::lp_length_px(panel.style.padding.bottom).unwrap_or(0.0);
-        assert!(
-            (pad_l - pad_r).abs() < 0.5 && (pad_t - pad_b).abs() < 0.5 && pad_l > 0.0,
-            "expand chrome uses equal padding so faces sit centered, got L{pad_l} R{pad_r} T{pad_t} B{pad_b}"
-        );
-        assert_eq!(
-            panel.style.justify_content,
-            Some(taffy::style::JustifyContent::FLEX_START)
-        );
-        assert_eq!(
-            panel.style.flex_wrap,
-            taffy::style::FlexWrap::NoWrap,
-            "cover panel is a single gap row; wrap would stretch to the portal parent"
-        );
+            assert_eq!(panel.children.len(), 12);
+            assert_eq!(panel.style.flex_wrap, taffy::style::FlexWrap::Wrap);
+            assert_eq!(panel.style.translate, [0.0; 2]);
+            assert_eq!(
+                panel
+                    .attrs
+                    .get(crate::utils::popup::ATTR_FLOATING_GAP)
+                    .unwrap(),
+                "6"
+            );
+            assert!(!panel
+                .attrs
+                .contains_key(crate::utils::popup::ATTR_FLOATING_EXPAND_FROM_W));
+            assert!(!panel
+                .attrs
+                .contains_key(crate::utils::popup::ATTR_FLOATING_EXPAND_FROM_H));
+        });
     }
 
     #[test]
@@ -2449,8 +2255,6 @@ mod tests {
             &faces,
             None,
             32.0,
-            3,
-            true,
         );
         let mut host = Element::new().relative().w(400.0).h(200.0).child(panel);
         let mut tree = LayoutTree::new();
@@ -2555,7 +2359,6 @@ mod tests {
                 .expect("avatar group registry")
         });
         // Synchronous signal writes used to borrow_mut the registry and panic on re-enter.
-        note_avatar_group_hover(&group_id, false, true);
         open_avatar_group_expand(&group_id);
         AVATAR_GROUPS.with(|m| {
             assert!(m.borrow().get(&group_id).unwrap().expanded.peek());
@@ -2598,8 +2401,14 @@ mod tests {
         });
         let group = find_group(&root).expect("avatar group row");
         assert!(
-            group.focus_id.is_some(),
-            "row trigger carries focus_id for floating placement"
+            find_avatar_group_row(group)
+                .unwrap()
+                .children
+                .last()
+                .unwrap()
+                .focus_id
+                .is_some(),
+            "+N carries focus_id for floating placement"
         );
         assert!(
             find_placeholder(group),
@@ -2643,104 +2452,6 @@ mod tests {
         AVATAR_GROUPS.with(|m| {
             assert!(!m.borrow().get(&group_id).unwrap().expanded.peek());
         });
-    }
-
-    #[test]
-    fn avatar_group_residual_scroll_does_not_flicker_expand() {
-        use crate::core::reactivity::create_root;
-
-        let _ = super::set_avatar_group_expand_hover_frozen(false);
-        let (_owner, _group) = create_root(|| {
-            let mut frag = Element::new();
-            frag.set_attr("jadix_fragment", "1");
-            frag = frag.children(vec![
-                avatar_with_fallback("A"),
-                AvatarGroupCount(AvatarGroupCountProps {
-                    children: Some(Element::new().text("+1")),
-                    ..Default::default()
-                }),
-            ]);
-            AvatarGroup(AvatarGroupProps {
-                children: Some(frag),
-                ..Default::default()
-            })
-        });
-        let group_id = AVATAR_GROUPS.with(|m| {
-            m.borrow()
-                .keys()
-                .next()
-                .cloned()
-                .expect("avatar group registry")
-        });
-        note_avatar_group_hover(&group_id, false, true);
-        open_avatar_group_expand(&group_id);
-        AVATAR_GROUPS.with(|m| {
-            assert!(m.borrow().get(&group_id).unwrap().expanded.peek());
-        });
-
-        // Residual catch-up frames: close once, hover-enter must not reopen until thaw.
-        assert!(!super::set_avatar_group_expand_hover_frozen(true));
-        for _ in 0..4 {
-            super::dismiss_avatar_group_expands_on_scroll();
-            note_avatar_group_hover(&group_id, false, true);
-            open_avatar_group_expand(&group_id);
-            let now_open =
-                AVATAR_GROUPS.with(|m| m.borrow().get(&group_id).unwrap().expanded.peek());
-            assert!(
-                !now_open,
-                "hover must not reopen expand while smooth-scroll is catching up"
-            );
-        }
-
-        assert!(super::set_avatar_group_expand_hover_frozen(false));
-        AVATAR_GROUPS.with(|m| {
-            assert!(
-                m.borrow().get(&group_id).unwrap().expanded.peek(),
-                "pointer still on +N after settle: open once"
-            );
-        });
-        let _ = super::set_avatar_group_expand_hover_frozen(false);
-    }
-
-    #[test]
-    fn avatar_group_hover_opens_after_idle_unfreeze() {
-        use crate::core::reactivity::create_root;
-
-        let _ = super::set_avatar_group_expand_hover_frozen(false);
-        let (_owner, _group) = create_root(|| {
-            let mut frag = Element::new();
-            frag.set_attr("jadix_fragment", "1");
-            frag = frag.children(vec![
-                avatar_with_fallback("A"),
-                AvatarGroupCount(AvatarGroupCountProps {
-                    children: Some(Element::new().text("+1")),
-                    ..Default::default()
-                }),
-            ]);
-            AvatarGroup(AvatarGroupProps {
-                children: Some(frag),
-                ..Default::default()
-            })
-        });
-        let group_id = AVATAR_GROUPS.with(|m| {
-            m.borrow()
-                .keys()
-                .next()
-                .cloned()
-                .expect("avatar group registry")
-        });
-        // Residual freeze must not stay on: idle hover/click still open.
-        assert!(!super::set_avatar_group_expand_hover_frozen(true));
-        assert!(!super::set_avatar_group_expand_hover_frozen(false));
-        note_avatar_group_hover(&group_id, false, true);
-        open_avatar_group_expand(&group_id);
-        AVATAR_GROUPS.with(|m| {
-            assert!(
-                m.borrow().get(&group_id).unwrap().expanded.peek(),
-                "+N hover must open once freeze is cleared"
-            );
-        });
-        let _ = super::set_avatar_group_expand_hover_frozen(false);
     }
 
     #[test]

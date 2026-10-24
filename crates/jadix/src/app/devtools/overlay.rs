@@ -4,13 +4,13 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 use super::controls::label;
-use crate::core::tree::Element;
+use crate::core::tree::{Element, LayoutStatus};
 use crate::primitives::r#box;
 use crate::style::{parse_color, parse_text_color, LineStyle};
 
 use super::snapshot::{
     border_box_size_matches, box_model_snapshot, find_element_by_identity_near_size,
-    find_element_by_path, find_element_by_size_near, find_element_by_template,
+    find_element_by_path, find_element_by_size_near,
     find_element_by_template_mut, is_inspector_chrome, BoxModelSnapshot,
 };
 use super::state::{DevToolsState, HighlightLayer};
@@ -33,11 +33,6 @@ const BM_RING_MARGIN: &str = "dt-bm-ring-margin";
 const BM_RING_BORDER: &str = "dt-bm-ring-border";
 const BM_RING_PADDING: &str = "dt-bm-ring-padding";
 const BM_RING_CONTENT: &str = "dt-bm-ring-content";
-
-thread_local! {
-    static BM_PATCHED_LAYER: Cell<u8> = const { Cell::new(u8::MAX) };
-    static BM_PATCHED_GEN: Cell<u32> = const { Cell::new(u32::MAX) };
-}
 
 thread_local! {
     /// Set for the duration of layout collect so highlight sync can resolve paths.
@@ -64,6 +59,9 @@ impl HighlightCollectCache {
 
 /// Clear cached highlight geometry at the start of each layout collect pass.
 pub(crate) fn begin_highlight_collect() {
+    if crate::app::window_scope::active() != crate::app::window_scope::WindowScope::Primary {
+        return;
+    }
     HIGHLIGHT_COLLECT_CACHE.with(|c| c.borrow_mut().clear());
     HIGHLIGHT_PAINT_GEN.set(HIGHLIGHT_PAINT_GEN.get().wrapping_add(1).max(1));
 }
@@ -103,13 +101,10 @@ pub(crate) fn note_element_paint_visual_from_abs(
 ) {
     let w = size[0].max(0.0);
     let h = size[1].max(0.0);
-    let tx = el.style.translate[0] + w * el.style.translate_pct[0];
-    let ty = el.style.translate[1] + h * el.style.translate_pct[1];
-    let vx = abs[0] - scroll_acc[0] + el.sticky_visual_offset[0] + tx;
-    let vy = abs[1] - scroll_acc[1] + el.sticky_visual_offset[1] + ty;
-    note_element_paint_visual(el, [vx, vy, w, h]);
     // Keep abs layout in sync so size-hint matching sees the same border box.
     el.layout_bounds = [abs[0], abs[1], w, h];
+    let visual = crate::core::tree::visual_paint_aabb(el, scroll_acc);
+    note_element_paint_visual(el, visual);
 }
 
 /// After layout collect finishes, re-stamp the highlight using final paint_visual / abs−scroll.
@@ -135,6 +130,18 @@ fn highlight_collect_root() -> Option<&'static Element> {
 
 fn box_model_at_visual_border(el: &Element, border: [f32; 4]) -> BoxModelSnapshot {
     let mut bm = box_model_snapshot(el);
+    let scale_x = border[2] / el.layout_bounds[2].max(0.001);
+    let scale_y = border[3] / el.layout_bounds[3].max(0.001);
+    for value in [&mut bm.margin_top, &mut bm.margin_bottom, &mut bm.border_top,
+        &mut bm.border_bottom, &mut bm.padding_top, &mut bm.padding_bottom,
+        &mut bm.position_top, &mut bm.position_bottom] {
+        *value *= scale_y;
+    }
+    for value in [&mut bm.margin_left, &mut bm.margin_right, &mut bm.border_left,
+        &mut bm.border_right, &mut bm.padding_left, &mut bm.padding_right,
+        &mut bm.position_left, &mut bm.position_right] {
+        *value *= scale_x;
+    }
     bm.x = border[0];
     bm.y = border[1];
     bm.width = border[2].max(0.0);
@@ -173,19 +180,29 @@ fn highlight_box_model(tree_root: &Element, path: &[usize]) -> Option<BoxModelSn
         // Wrap reflow mix: paint size/pos from an old flex line while layout_bounds are new
         // (or the reverse). Trust abs−scroll whenever paint and layout visual disagree and
         // the node is not scaled (scale is the main reason paint may legitimately differ).
-        let scaled =
-            (el.style.scale[0] - 1.0).abs() > 0.01 || (el.style.scale[1] - 1.0).abs() > 0.01;
+        let scaled = (0..=live_path.len()).any(|depth| {
+            find_element_by_path(tree_root, &live_path[..depth]).is_some_and(|ancestor| {
+                (ancestor.style.scale[0] - 1.0).abs() > 0.01
+                    || (ancestor.style.scale[1] - 1.0).abs() > 0.01
+            })
+        });
         let paint_layout_mismatch = !scaled
             && ((from_paint.x - from_scroll.x).abs() > 2.0
                 || (from_paint.y - from_scroll.y).abs() > 2.0
                 || (from_paint.width - from_scroll.width).abs() > 2.0
                 || (from_paint.height - from_scroll.height).abs() > 2.0);
-        if paint_forgot_scroll || paint_forgot_scroll_x || paint_layout_mismatch {
+        if !scaled && (paint_forgot_scroll || paint_forgot_scroll_x || paint_layout_mismatch) {
             return Some(from_scroll);
         }
         return Some(from_paint);
     }
-    Some(from_scroll)
+    let scaled = el.paint_ancestor_scale.iter().any(|scale| (*scale - 1.0).abs() > 0.01)
+        || el.style.scale.iter().any(|scale| (*scale - 1.0).abs() > 0.01);
+    if scaled {
+        Some(box_model_at_visual_border(el, crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc)))
+    } else {
+        Some(from_scroll)
+    }
 }
 
 /// Resolve the live node for the page overlay.
@@ -225,6 +242,7 @@ pub fn highlight_slot() -> Element {
         .w("100%")
         .h("100%")
         .pointer_events("none")
+        .z_index(i32::MAX)
         .template_id(HIGHLIGHT_SLOT_ID);
     layer = layer.child(empty_rect(HL_POSITION));
     layer = layer.child(empty_rect(HL_MARGIN));
@@ -250,6 +268,7 @@ fn empty_rect(id: &str) -> Element {
 /// Also fills [`HIGHLIGHT_COLLECT_CACHE`] so paint via [`stamped_highlight_abs_rect`]
 /// works even when this is called outside layout collect (e.g. pick hover).
 pub fn refresh_highlight(root: &mut Element) -> bool {
+    let clip = highlight_clip(root);
     let selection_key = DevToolsState::overlay_path_key();
     let bm = if DevToolsState::is_open() && !selection_key.is_empty() {
         let path = DevToolsState::highlight_path();
@@ -269,7 +288,7 @@ pub fn refresh_highlight(root: &mut Element) -> bool {
                 cache.selection_key = selection_key;
                 cache.layers.clear();
             });
-            apply_layers(slot, &bm, origin, DevToolsState::highlight_layer())
+            apply_layers(slot, &bm, origin, DevToolsState::highlight_layer(), clip)
         }
         _ => clear_rects(slot),
     }
@@ -284,6 +303,7 @@ pub fn refresh_highlight_slot(slot: &mut Element) -> bool {
 }
 
 fn refresh_highlight_slot_with_root(tree_root: &Element, slot: &mut Element) -> bool {
+    let clip = highlight_clip(tree_root);
     let origin = [slot.layout_bounds[0], slot.layout_bounds[1]];
     let selection_key = DevToolsState::overlay_path_key();
     let bm = if DevToolsState::is_open() && !selection_key.is_empty() {
@@ -300,21 +320,29 @@ fn refresh_highlight_slot_with_root(tree_root: &Element, slot: &mut Element) -> 
     });
     match bm {
         Some(bm) if bm.width > 0.0 || bm.height > 0.0 => {
-            apply_layers(slot, &bm, origin, DevToolsState::highlight_layer())
+            apply_layers(slot, &bm, origin, DevToolsState::highlight_layer(), clip)
         }
         _ => clear_rects(slot),
     }
+}
+
+fn highlight_clip(root: &Element) -> Option<[f32; 4]> {
+    let host = super::snapshot::find_element_by_template(root, "__jadix_app_host")?;
+    let app = host.children.first().filter(|app| app.attrs.contains_key("data-jadix-device-preview"))?;
+    let bounds = crate::core::tree::visual_paint_aabb(app, app.paint_scroll_acc);
+    (bounds[2] > 0.0 && bounds[3] > 0.0).then_some(bounds)
 }
 
 fn clear_rects(slot: &mut Element) -> bool {
     HIGHLIGHT_COLLECT_CACHE.with(|c| c.borrow_mut().clear());
     let mut changed = false;
     for child in &mut slot.children {
-        if child.layout_bounds[2] > 0.0 || child.layout_bounds[3] > 0.0 {
-            changed = true;
-        }
-        stamp_rect(child, 0.0, 0.0, 0.0, 0.0, [0.0, 0.0], [0.0, 0.0, 0.0, 0.0]);
+        changed |= stamp_rect(child, 0.0, 0.0, 0.0, 0.0, [0.0, 0.0], [0.0, 0.0, 0.0, 0.0]);
+        changed |= child.style.border_width > 0.0;
+        child.style.border_width = 0.0;
+        child.style.border_color = [0.0; 4];
         child.attrs.remove("data-jadix-devtools-hl-stamped");
+        child.attrs.remove("data-jadix-devtools-hl-style");
     }
     changed
 }
@@ -324,6 +352,7 @@ fn apply_layers(
     bm: &BoxModelSnapshot,
     origin: [f32; 2],
     layer: HighlightLayer,
+    clip: Option<[f32; 4]>,
 ) -> bool {
     let margin = [
         bm.x - bm.margin_left,
@@ -363,6 +392,9 @@ fn apply_layers(
             _ => continue,
         };
         let layer_id = id.to_string();
+        let rect = if let Some(clip) = clip {
+            crate::app::damage::intersect_rects(rect, clip).unwrap_or([0.0; 4])
+        } else { rect };
         let show = layer == HighlightLayer::All || layer == this_layer;
         let a = if show {
             if layer == HighlightLayer::All {
@@ -418,7 +450,10 @@ fn stamp_rect(
     let changed = (el.layout_bounds[0] - abs_x).abs() > 0.5
         || (el.layout_bounds[1] - abs_y).abs() > 0.5
         || (el.layout_bounds[2] - w).abs() > 0.5
-        || (el.layout_bounds[3] - h).abs() > 0.5;
+        || (el.layout_bounds[3] - h).abs() > 0.5
+        || el.style.bg_color != fill;
+    let previous = el.layout_bounds;
+    let was_visible = el.style.bg_color[3] > 0.0 || el.style.border_width > 0.0;
     el.style.position = taffy::style::Position::Absolute;
     el.style.set_css_dim(
         crate::style::UnitSlot::InsetL,
@@ -439,6 +474,15 @@ fn stamp_rect(
     el.style.bg_color = fill;
     el.layout_bounds = [abs_x, abs_y, w.max(0.0), h.max(0.0)];
     el.set_attr("data-jadix-devtools-hl-stamped", "1");
+    el.set_attr("jadix_devtools_composite", "1");
+    if changed {
+        if was_visible {
+            crate::app::damage::push_frame_region_damage(previous);
+        }
+        if fill[3] > 0.0 {
+            crate::app::damage::push_frame_region_damage(el.layout_bounds);
+        }
+    }
     changed
 }
 
@@ -459,95 +503,8 @@ pub(crate) fn stamped_highlight_abs_rect(el: &Element) -> Option<[f32; 4]> {
     })
 }
 
-thread_local! {
-    static LAST_TREE_ROW_STATE: RefCell<(String, String)> = const { RefCell::new((String::new(), String::new())) };
-}
-
-/// Patch tree-row background colours when the hover key changes, without rebuilding the panel.
-pub fn sync_tree_row_hovers(root: &mut Element) -> bool {
-    if !DevToolsState::is_open() {
-        return false;
-    }
-    let hover_key = DevToolsState::hover_path_key();
-    // Selection and hover are independent inputs: when the pointer stays over a row while
-    // selection changes, the live row must still switch back to the selected palette.
-    let selected_key = DevToolsState::selected_path_key();
-    let state = (hover_key.clone(), selected_key.clone());
-    let already = LAST_TREE_ROW_STATE.with(|c| c.borrow().clone());
-    if state == already {
-        return false;
-    }
-    LAST_TREE_ROW_STATE.with(|c| *c.borrow_mut() = state);
-    let muted = tree_row_color(false);
-    let accent = tree_row_color(true);
-    let transparent = parse_color("background");
-    patch_row_bgs(root, &hover_key, &selected_key, muted, accent, transparent)
-}
-
-pub fn reset_tree_row_hover_cache() {
-    LAST_TREE_ROW_STATE.with(|c| *c.borrow_mut() = ("\x00".to_string(), "\x00".to_string()));
-}
-
-pub(super) fn tree_row_color(selected: bool) -> [f32; 4] {
-    let background = parse_color("background");
-    let accent = parse_color("#2563eb");
-    let alpha = if selected { 0.18 } else { 0.07 };
-    [
-        background[0] * (1.0 - alpha) + accent[0] * alpha,
-        background[1] * (1.0 - alpha) + accent[1] * alpha,
-        background[2] * (1.0 - alpha) + accent[2] * alpha,
-        1.0,
-    ]
-}
-
-pub(super) fn patch_detached_row_hovers(root: &mut Element) -> bool {
-    patch_row_bgs(
-        root,
-        &DevToolsState::hover_path_key(),
-        &DevToolsState::selected_path_key(),
-        tree_row_color(false),
-        tree_row_color(true),
-        parse_color("background"),
-    )
-}
-
-fn patch_row_bgs(
-    el: &mut Element,
-    hover_key: &str,
-    selected_key: &str,
-    muted: [f32; 4],
-    accent: [f32; 4],
-    transparent: [f32; 4],
-) -> bool {
-    let mut changed = false;
-    crate::core::tree::walk_elements_mut(el, |el| {
-        let row_id = el.attrs.get("id").map(String::as_str).or(el.template_id.as_deref());
-        if let Some(id) = row_id {
-            if let Some(row_key) = id.strip_prefix("dt-row-") {
-                let want = if !selected_key.is_empty() && row_key == selected_key {
-                    accent
-                } else if !hover_key.is_empty() && row_key == hover_key {
-                    muted
-                } else {
-                    transparent
-                };
-                if el.style.bg_color != want {
-                    el.style.bg_color = want;
-                    crate::app::damage::push_frame_paint_key(
-                        crate::app::damage::paint_element_key(el),
-                        if el.paint_visual_bounds[2] > 0.0 { el.paint_visual_bounds } else { el.layout_bounds },
-                    );
-                    el.collect_paint_hash = 0;
-                    changed = true;
-                }
-            }
-        }
-    });
-    changed
-}
-
-/// Scroll id for the Elements-tree card (`inspector_card("Elements")`).
-pub(crate) const ELEMENTS_TREE_SCROLL_ID: &str = "devtools-card-elements";
+/// Scroll id for the Elements-tree card (`inspector_card("Element tree")`).
+pub(crate) const ELEMENTS_TREE_SCROLL_ID: &str = "devtools-card-element-tree";
 
 /// Target scroll offset that centers `[item_top, item_top+item_h)` in the viewport.
 pub(crate) fn scroll_offset_to_center_rect(
@@ -561,127 +518,16 @@ pub(crate) fn scroll_offset_to_center_rect(
     (center - viewport_h * 0.5).clamp(0.0, max_sy)
 }
 
-/// Scroll the Elements tree so the row for `path_key` sits near the viewport center.
-///
-/// Uses laid-out bounds + scroll metrics signals. Returns `true` when the scroll
-/// target changed (caller should request a paint frame).
-pub(crate) fn scroll_elements_tree_row_into_center(root: &Element, path_key: &str) -> bool {
-    if path_key.is_empty() {
-        return false;
-    }
-    let row_id = format!("dt-row-{path_key}");
-    let Some(row) = find_element_by_template(root, &row_id) else {
-        return false;
-    };
-    let focus = crate::core::scroll_viewport::focus_id_for_scroll_viewport(ELEMENTS_TREE_SCROLL_ID);
-    let Some(viewport) = find_element_by_focus_id(root, &focus) else {
-        return false;
-    };
-
-    let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(ELEMENTS_TREE_SCROLL_ID);
-    let vh_sig = crate::core::reactivity::use_signal(keys.viewport_h.as_str(), || 0.0_f32).peek();
-    let ch_sig = crate::core::reactivity::use_signal(keys.content_h.as_str(), || 0.0_f32).peek();
-    let sx = crate::core::reactivity::use_signal(keys.offset_x.as_str(), || 0.0_f32).peek();
-    let sy = crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32).peek();
-
-    let viewport_h = if vh_sig > 1.0 {
-        vh_sig
-    } else {
-        viewport.layout_bounds[3]
-    };
-    let content_h = if ch_sig > 1.0 {
-        ch_sig
-    } else {
-        // Fallback before metrics settle: at least cover the hovered row.
-        (row.layout_bounds[1] - viewport.layout_bounds[1] + row.layout_bounds[3] + viewport_h)
-            .max(viewport_h)
-    };
-    if viewport_h <= 1.0 {
-        return false;
-    }
-
-    // layout_bounds are unscrolled absolute; content Y is relative to the viewport top.
-    let item_top = row.layout_bounds[1] - viewport.layout_bounds[1];
-    let item_h = row.layout_bounds[3].max(1.0);
-    let target = scroll_offset_to_center_rect(item_top, item_h, viewport_h, content_h);
-    if (sy - target).abs() < 1.0 {
-        return false;
-    }
-    // Immediate jump so pick hover can track the pointer without lagging smooth scroll.
-    crate::app::scroll_support::set_scroll_offset_with_behavior(
-        ELEMENTS_TREE_SCROLL_ID,
-        sx,
-        target,
-        true,
-    );
-    true
-}
-
-fn find_element_by_focus_id<'a>(root: &'a Element, id: &str) -> Option<&'a Element> {
-    crate::core::tree::find_in_tree(root, |el| el.focus_id.as_deref() == Some(id))
-}
-
-/// Invalidate cached box-model ring fills after the inspector panel rebuilds.
-pub fn reset_box_model_visual_cache() {
-    BM_PATCHED_LAYER.set(u8::MAX);
-}
-
-/// Patch box-model ring fills when [`HighlightLayer`] changes without rebuilding the panel.
-pub fn sync_box_model_visuals(root: &mut Element) -> bool {
-    if !DevToolsState::is_open() {
-        return false;
-    }
-    let gen = DevToolsState::generation();
-    if BM_PATCHED_GEN.get() != gen {
-        BM_PATCHED_GEN.set(gen);
-        BM_PATCHED_LAYER.set(u8::MAX);
-    }
-    let active = DevToolsState::highlight_layer();
-    let v = active as u8;
-    if BM_PATCHED_LAYER.get() == v {
-        return false;
-    }
-    let rings = [
-        ("position", HighlightLayer::Position, POSITION_C),
-        ("margin", HighlightLayer::Margin, MARGIN_C),
-        ("border", HighlightLayer::Border, BORDER_C),
-        ("padding", HighlightLayer::Padding, PADDING_C),
-    ];
-    let mut changed = false;
-    for (caption, layer, color) in rings {
-        changed |= sync_ring_strip_fills(root, caption, layer, color, active);
-    }
-    if let Some(el) = find_element_by_template_mut(root, BM_RING_CONTENT) {
-        let fill = ring_fill(CONTENT_C, active, HighlightLayer::Content);
-        if el.style.bg_color != fill {
-            el.style.bg_color = fill;
-            changed = true;
-        }
-    }
-    BM_PATCHED_LAYER.set(v);
-    changed
-}
-
-fn sync_ring_strip_fills(
-    root: &mut Element,
-    caption: &str,
-    layer: HighlightLayer,
-    color: [f32; 4],
-    active: HighlightLayer,
-) -> bool {
-    let fill = ring_fill(color, active, layer);
-    let mut changed = false;
-    for suffix in ["t", "b", "l", "r"] {
-        let id = format!("dt-bm-fill-{caption}-{suffix}");
-        let Some(el) = find_element_by_template_mut(root, &id) else {
-            continue;
-        };
-        if el.style.bg_color != fill {
-            el.style.bg_color = fill;
-            changed = true;
-        }
-    }
-    changed
+pub(super) fn tree_row_color(selected: bool) -> [f32; 4] {
+    let background = parse_color("background");
+    let accent = parse_color("#2563eb");
+    let alpha = if selected { 0.18 } else { 0.07 };
+    [
+        background[0] * (1.0 - alpha) + accent[0] * alpha,
+        background[1] * (1.0 - alpha) + accent[1] * alpha,
+        background[2] * (1.0 - alpha) + accent[2] * alpha,
+        1.0,
+    ]
 }
 
 fn content_size(bm: &BoxModelSnapshot) -> (f32, f32) {
@@ -796,6 +642,17 @@ fn ring_fill(color: [f32; 4], active: HighlightLayer, layer: HighlightLayer) -> 
     [color[0], color[1], color[2], a]
 }
 
+fn sync_ring_fill(element: &mut Element, color: [f32; 4], layer: HighlightLayer) -> LayoutStatus {
+    let fill = ring_fill(color, DevToolsState::highlight_layer(), layer);
+    if element.style.bg_color == fill {
+        LayoutStatus::Clean
+    } else {
+        element.style.bg_color = fill;
+        element.set_attr("jadix_devtools_composite", "1");
+        LayoutStatus::StyleChanged
+    }
+}
+
 fn edge_label(id: &str, text: String) -> Element {
     label(id)
         .text(text)
@@ -826,6 +683,7 @@ fn content_box(bm: &BoxModelSnapshot, active: HighlightLayer) -> Element {
                 .text_center(),
         );
     wrap_ring_interactive(shell.into(), HighlightLayer::Content)
+        .reactive_sync(|element, _| sync_ring_fill(element, CONTENT_C, HighlightLayer::Content))
 }
 
 fn ring_fill_strip(
@@ -892,10 +750,14 @@ fn ring_shell(
         .border_color(border_c)
         .border_style(ring_border_style(layer))
         .children([
-            ring_fill_strip(caption, "t", fill, "t", sides[0], pad),
-            ring_fill_strip(caption, "b", fill, "b", sides[2], pad),
-            ring_fill_strip(caption, "l", fill, "l", sides[3], pad),
-            ring_fill_strip(caption, "r", fill, "r", sides[1], pad),
+            ring_fill_strip(caption, "t", fill, "t", sides[0], pad)
+                .reactive_sync(move |element, _| sync_ring_fill(element, color, layer)),
+            ring_fill_strip(caption, "b", fill, "b", sides[2], pad)
+                .reactive_sync(move |element, _| sync_ring_fill(element, color, layer)),
+            ring_fill_strip(caption, "l", fill, "l", sides[3], pad)
+                .reactive_sync(move |element, _| sync_ring_fill(element, color, layer)),
+            ring_fill_strip(caption, "r", fill, "r", sides[1], pad)
+                .reactive_sync(move |element, _| sync_ring_fill(element, color, layer)),
             Element::from(
                 r#box()
                     .absolute(true)
@@ -917,7 +779,17 @@ fn wrap_ring_interactive(el: Element, layer: HighlightLayer) -> Element {
             DevToolsState::set_highlight_layer(layer);
         })
         .on_hover(move |on| {
-            DevToolsState::set_highlight_hover_layer(on.then_some(layer));
+            if on {
+                let path = DevToolsState::selected_path();
+                if !DevToolsState::selected_path_key().is_empty() {
+                    DevToolsState::set_hover_highlight_path(path);
+                }
+                DevToolsState::set_highlight_hover_layer(Some(layer));
+            } else {
+                DevToolsState::set_highlight_hover_layer(None);
+                let path = DevToolsState::selected_path();
+                DevToolsState::clear_hover_highlight_if_path(&path);
+            }
         })
         .into()
 }
@@ -925,7 +797,7 @@ fn wrap_ring_interactive(el: Element, layer: HighlightLayer) -> Element {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::app::devtools::snapshot::find_element_by_path_mut;
+    use crate::app::devtools::snapshot::{find_element_by_path_mut, find_element_by_template};
     use crate::app::devtools::state::DevToolsState;
 
     fn test_tree() -> Element {
@@ -938,6 +810,208 @@ mod tests {
         let mut host = Element::new().children(vec![app, highlight_slot()]);
         host.template_id = Some("__jadix_app_host".into());
         Element::new().child(host)
+    }
+
+    #[test]
+    fn retained_highlight_stamps_include_inherited_preview_scale() {
+        let mut target = Element::new();
+        target.paint_ancestor_scale = [0.25, 0.25];
+        begin_highlight_collect();
+        note_element_paint_visual_from_abs(&mut target, [100.0, 200.0], [100.0, 40.0], [0.0; 2]);
+        assert_eq!(target.paint_visual_bounds, [137.5, 215.0, 25.0, 10.0]);
+        assert_eq!(target.layout_bounds, [100.0, 200.0, 100.0, 40.0]);
+    }
+
+    #[test]
+    fn scaled_highlight_survives_retained_layout_and_inspector_window_collect() {
+        crate::core::reactivity::create_root(|| {
+            let _scope = crate::app::window_scope::enter_primary();
+            DevToolsState::enable_for_window();
+            DevToolsState::set_open(true);
+            let target = Element::new().template_id("scaled-retained-target").w(100.0).h(40.0);
+            let mut root = Element::new().w(800.0).h(600.0).child(
+                Element::new().absolute().left(100.0).top(80.0).w(400.0).h(400.0)
+                    .scale(0.25).transform_origin("left top").child(target));
+            DevToolsState::set_selected_path(vec![0, 0]);
+            DevToolsState::set_hover_highlight_path(vec![0, 0]);
+            let mut layout = crate::core::tree::LayoutTree::new();
+            for _ in 0..3 {
+                layout.build_and_layout(&mut root, 800.0, 600.0, [-1.0; 2]);
+                let model = highlight_box_model(&root, &[0, 0]).unwrap();
+                assert!((model.width - 25.0).abs() < 0.1, "scaled model: {model:?}");
+                {
+                    let _secondary = crate::app::window_scope::enter(crate::app::window_scope::WindowScope::Secondary(412));
+                    begin_highlight_collect();
+                }
+                let model = highlight_box_model(&root, &[0, 0]).unwrap();
+                assert!((model.width - 25.0).abs() < 0.1, "secondary overwrote page stamps: {model:?}");
+            }
+            DevToolsState::set_open(false);
+        });
+    }
+
+    #[test]
+    fn highlight_uses_scaled_ancestor_paint_geometry_and_scales_box_edges() {
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(true);
+        let mut target = Element::new().template_id("preview-highlight-test").p(8.0);
+        target.layout_bounds = [100.0, 200.0, 200.0, 100.0];
+        let mut root = Element::new().scale(0.25).child(target);
+        root.layout_bounds = [0.0, 0.0, 800.0, 600.0];
+        DevToolsState::set_selected_path(vec![0]);
+        DevToolsState::clear_hover_highlight();
+        DevToolsState::set_hover_highlight_path(vec![0]);
+        begin_highlight_collect();
+        note_element_paint_visual(&mut root.children[0], [25.0, 50.0, 50.0, 25.0]);
+        let model = highlight_box_model(&root, &[0]).unwrap();
+        assert_eq!([model.x, model.y, model.width, model.height], [25.0, 50.0, 50.0, 25.0]);
+        assert_eq!(model.padding_top, 2.0);
+        assert_eq!(model.padding_left, 2.0);
+        DevToolsState::set_open(false);
+    }
+
+    #[test]
+    fn scaled_highlight_fallback_keeps_collected_geometry_after_tree_rebuild() {
+        crate::core::reactivity::create_root(|| {
+            DevToolsState::enable_for_window();
+            DevToolsState::set_open(true);
+            let mut root = Element::new().w(680.0).h(720.0).child(
+                Element::new().absolute().left(100.0).top(80.0).w(390.0).h(844.0)
+                    .scale(0.5).transform_origin("left top").child(
+                        Element::new().focus_id("scaled-perf-button").w(140.0).h(28.0).p(8.0)));
+            DevToolsState::set_hover_highlight_path(vec![0, 0]);
+            let mut layout = crate::core::tree::LayoutTree::new();
+            layout.build_and_layout(&mut root, 680.0, 720.0, [-1.0; 2]);
+            let expected = root.children[0].children[0].paint_visual_bounds;
+            begin_highlight_collect();
+            let model = highlight_box_model(&root, &[0, 0]).unwrap();
+            assert_eq!([model.x, model.y, model.width, model.height], expected);
+            assert_eq!(model.padding_left, 4.0);
+            DevToolsState::set_open(false);
+        });
+    }
+
+    #[test]
+    fn highlight_damage_replays_content_beneath_its_own_layer() {
+        crate::core::reactivity::create_root(|| {
+            let mut root = Element::new().w(200.0).h(100.0)
+                .child(highlight_slot());
+            let mut layout = crate::core::tree::LayoutTree::new();
+            layout.build_and_layout(&mut root, 200.0, 100.0, [-1.0; 2]);
+            crate::app::damage::take_frame_paint_nodes();
+            let content = &mut root.children[0].children[4];
+            stamp_rect(content, 20.0, 20.0, 100.0, 28.0, [0.0; 2], [0.2; 4]);
+            let damage = crate::app::damage::take_frame_paint_nodes();
+            assert!(!damage.is_empty());
+            assert!(damage.iter().all(|dirty| dirty.key != crate::app::damage::paint_element_key(content)));
+        });
+    }
+
+    #[test]
+    fn highlight_slot_keeps_ancestors_live_for_hover_only_collects() {
+        let mut root = test_tree();
+        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, false);
+        assert!(!crate::layout::collect_cache::subtree_is_skippable(&root));
+        assert!(!crate::layout::collect_cache::subtree_is_skippable(&root.children[0]));
+        assert!(crate::layout::collect_cache::subtree_is_skippable(
+            &root.children[0].children[0],
+        ));
+    }
+
+    #[test]
+    fn highlight_changes_restore_the_composite_under_old_and_new_rects() {
+        crate::core::reactivity::create_root(|| {
+            use crate::app::damage::{clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind};
+
+            DevToolsState::enable_for_window();
+            DevToolsState::set_open(true);
+            DevToolsState::set_highlight_hover_layer(None);
+            DevToolsState::set_highlight_layer(HighlightLayer::All);
+            let mut root = test_tree();
+            DevToolsState::set_selected_path(vec![0, 0, 0]);
+            DevToolsState::set_hover_highlight_path(vec![0, 0, 0]);
+            refresh_highlight(&mut root);
+            clear_frame_paint_nodes();
+            DevToolsState::set_selected_path(vec![0, 0, 1]);
+            DevToolsState::set_hover_highlight_path(vec![0, 0, 1]);
+            assert!(refresh_highlight(&mut root));
+            let dirties = take_frame_paint_nodes();
+            for point in [[50.0, 30.0], [50.0, 90.0]] {
+                assert!(dirties.iter().any(|dirty| {
+                    dirty.kind == PaintDirtyKind::Region
+                        && point[0] >= dirty.bounds[0]
+                        && point[1] >= dirty.bounds[1]
+                        && point[0] < dirty.bounds[0] + dirty.bounds[2]
+                        && point[1] < dirty.bounds[1] + dirty.bounds[3]
+                }), "highlight left unreplayed pixels at {point:?}: {dirties:?}");
+            }
+            DevToolsState::set_highlight_layer(HighlightLayer::Content);
+            assert!(refresh_highlight(&mut root), "fill-only change must invalidate paint");
+            assert!(take_frame_paint_nodes().iter().all(|dirty| dirty.kind == PaintDirtyKind::Region));
+            assert!(!refresh_highlight(&mut root));
+            assert!(take_frame_paint_nodes().is_empty());
+            DevToolsState::set_open(false);
+            assert!(refresh_highlight(&mut root));
+            assert!(!take_frame_paint_nodes().is_empty(), "hiding must restore old pixels");
+            let slot = find_element_by_template(&root, HIGHLIGHT_SLOT_ID).unwrap();
+            for layer in &slot.children {
+                assert_eq!(layer.style.border_width, 0.0, "hidden highlight must not paint a stale Taffy stroke");
+                assert_eq!(layer.style.border_color[3], 0.0);
+                assert_eq!(layer.style.bg_color[3], 0.0);
+            }
+        });
+    }
+
+    #[test]
+    fn box_model_fill_hover_replays_dimension_text_as_a_composite() {
+        crate::core::reactivity::create_root(|| {
+            use crate::app::damage::{clear_frame_paint_nodes, take_frame_paint_nodes, PaintDirtyKind};
+
+            DevToolsState::enable_for_window();
+            DevToolsState::set_highlight_hover_layer(None);
+            DevToolsState::set_highlight_layer(HighlightLayer::All);
+            let bm = crate::app::devtools::snapshot::box_model_snapshot(
+                find_element_by_path(&test_tree(), &[0, 0, 0]).unwrap(),
+            );
+            let mut diagram = box_model_diagram(&bm, HighlightLayer::All);
+            let mut layout = crate::core::tree::LayoutTree::new();
+            layout.build_and_layout(&mut diagram, 320.0, 200.0, [-1.0; 2]);
+            clear_frame_paint_nodes();
+            DevToolsState::set_highlight_hover_layer(Some(HighlightLayer::Padding));
+            let mut impact = LayoutStatus::Clean;
+            crate::app::test_support::sync_reactive_elements_subtree(
+                &mut diagram, &mut layout, &mut impact,
+            );
+            let dirties = take_frame_paint_nodes();
+            assert!(!dirties.is_empty());
+            assert!(dirties.iter().all(|dirty| dirty.kind == PaintDirtyKind::Region),
+                "ring fill must replay intersecting labels, not only its plate: {dirties:?}");
+        });
+    }
+
+    #[test]
+    fn box_model_ring_hover_targets_the_selected_element() {
+        crate::core::reactivity::create_root(|| {
+            DevToolsState::enable_for_window();
+            DevToolsState::set_open(true);
+            DevToolsState::set_selected_path(vec![0, 0, 0]);
+            let diagram = box_model_diagram(
+                &crate::app::devtools::snapshot::box_model_snapshot(
+                    find_element_by_path(&test_tree(), &[0, 0, 0]).unwrap(),
+                ),
+                HighlightLayer::All,
+            );
+            let ring = find_element_by_template(&diagram, BM_RING_CONTENT).unwrap();
+            ring.on_hover.as_ref().unwrap().borrow_mut()(true);
+            assert_eq!(
+                DevToolsState::hover_path_key(),
+                DevToolsState::selected_path_key()
+            );
+            assert_eq!(DevToolsState::highlight_layer(), HighlightLayer::Content);
+            ring.on_hover.as_ref().unwrap().borrow_mut()(false);
+            assert!(!DevToolsState::has_hover_highlight());
+            assert_eq!(DevToolsState::highlight_layer(), HighlightLayer::All);
+        });
     }
 
     #[test]
@@ -1764,52 +1838,6 @@ mod tests {
         });
 
         DevToolsState::clear_hover_highlight();
-    }
-
-    #[test]
-    fn sync_tree_row_hovers_does_not_stick_root_when_none_selected() {
-        DevToolsState::enable_for_window();
-        DevToolsState::set_open(true);
-        DevToolsState::clear_hover_highlight();
-        // Non-root selection so selected_path_key is not empty and not ROOT_PATH_KEY.
-        DevToolsState::set_selected_path(vec![0]);
-        reset_tree_row_hover_cache();
-
-        let muted = tree_row_color(false);
-        let accent = tree_row_color(true);
-        let transparent = [0.0_f32; 4];
-        let root_id = format!("dt-row-{}", crate::app::devtools::snapshot::ROOT_PATH_KEY);
-        let mut root = Element::new().children(vec![
-            Element::new().template_id(root_id.as_str()),
-            Element::new().template_id("dt-row-0,1"),
-        ]);
-
-        // Empty selected_key must never match the root row (the original bug).
-        assert!(patch_row_bgs(
-            &mut root,
-            "0,1",
-            "",
-            muted,
-            accent,
-            transparent
-        ));
-        assert_eq!(root.children[0].style.bg_color, transparent);
-        assert_eq!(root.children[1].style.bg_color, muted);
-
-        // Leave hover via state sync: sticky root must clear; only the hovered child stays muted.
-        root.children[0].style.bg_color = muted;
-        root.children[1].style.bg_color = muted;
-        reset_tree_row_hover_cache();
-        DevToolsState::set_hover_highlight_path(vec![0, 1]);
-        let _ = sync_tree_row_hovers(&mut root);
-        let background = crate::style::parse_color("background");
-        assert_eq!(root.children[0].style.bg_color, background);
-        assert_eq!(root.children[1].style.bg_color, muted);
-
-        DevToolsState::clear_hover_highlight();
-        assert!(sync_tree_row_hovers(&mut root));
-        assert_eq!(root.children[0].style.bg_color, background);
-        assert_eq!(root.children[1].style.bg_color, background);
     }
 
     #[test]

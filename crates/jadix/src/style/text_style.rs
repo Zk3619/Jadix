@@ -580,6 +580,36 @@ impl Default for TextStyle {
 }
 
 impl TextStyle {
+    pub(crate) fn without_inherited(&self, inherited: Option<&Self>) -> Self {
+        let mut specified = self.clone();
+        if let Some(inherited) = inherited {
+            macro_rules! restore {
+                ($($field:ident),+ $(,)?) => {$(
+                    if inherited.$field.is_some() && specified.$field == inherited.$field {
+                        specified.$field = None;
+                    }
+                )+};
+            }
+            restore!(color, size, weight, font_family, align, underline, overline,
+                line_through, decoration_style, decoration_thickness, underline_offset);
+        }
+        specified
+    }
+
+    pub(crate) fn inherited_fields(&self, resolved: &Self) -> Self {
+        let mut inherited = Self::default();
+        macro_rules! remember {
+            ($($field:ident),+ $(,)?) => {$(
+                if self.$field.is_none() {
+                    inherited.$field = resolved.$field.clone();
+                }
+            )+};
+        }
+        remember!(color, size, weight, font_family, align, underline, overline,
+            line_through, decoration_style, decoration_thickness, underline_offset);
+        inherited
+    }
+
     /// Root ancestor defaults when no parent supplies inheritable values.
     pub fn cascade_root() -> Self {
         let defaults = crate::utils::font::text_defaults();

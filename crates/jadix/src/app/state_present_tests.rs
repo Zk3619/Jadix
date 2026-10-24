@@ -3,6 +3,10 @@ use super::*;
 use crate::app::{damage::*, draw_cull::*};
 use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 
+#[cfg(target_os = "windows")]
+#[path = "state_dynamic_texture_tests.rs"]
+mod dynamic_texture_tests;
+
 #[path = "state_scene_submission_tests.rs"]
 mod scene_submission_tests;
 
@@ -13,6 +17,10 @@ mod glass_present_tests;
 #[cfg(target_os = "windows")]
 #[path = "state_nested_scroll_tests.rs"]
 mod nested_scroll_tests;
+
+#[cfg(target_os = "windows")]
+#[path = "state_scaled_preview_tests.rs"]
+mod scaled_preview_tests;
 
 #[cfg(target_os = "windows")]
 #[path = "state_modal_animation_tests.rs"]

@@ -54,6 +54,15 @@ pub(crate) fn apply_created_window(
         return;
     };
     if composition_swapchain || super::glass::has_host(hwnd) {
+        let system_backdrop = options.uses_system_backdrop()
+            && super::glass::system_backdrop_available();
+        set_use_host_backdrop_brush(hwnd, options.blur && !system_backdrop);
+        window.set_system_backdrop(if system_backdrop {
+            backdrop_type(options.backdrop)
+        } else {
+            winit::platform::windows::BackdropType::None
+        });
+        extend_dwm_frame(hwnd, system_backdrop);
         return;
     }
     if options.blur {

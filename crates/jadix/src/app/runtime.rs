@@ -67,7 +67,7 @@ impl AppRuntime {
             TreeHome::SecondarySlot => {
                 let id = Self::secondary_slot_id()?;
                 let secs = self.secondaries.upgrade()?;
-                let mut secs = secs.borrow_mut();
+                let mut secs = secs.try_borrow_mut().ok()?;
                 let sec = secs.get_mut(&id)?;
                 sec.reconcile_subtree(anchor_id, new_fragment)
             }
@@ -135,7 +135,7 @@ impl AppRuntime {
             TreeHome::SecondarySlot => {
                 let id = Self::secondary_slot_id()?;
                 let secs = self.secondaries.upgrade()?;
-                let mut secs = secs.borrow_mut();
+                let mut secs = secs.try_borrow_mut().ok()?;
                 let sec = secs.get_mut(&id)?;
                 Some(sec.update_element_by_template_id(template_id, patch))
             }
@@ -347,8 +347,8 @@ pub(crate) fn sync_window_theme() {
             }
         }
         if let Some(secondaries) = rt.secondaries.upgrade() {
-            if let Ok(secondaries) = secondaries.try_borrow() {
-                for secondary in secondaries.values() {
+            if let Ok(mut secondaries) = secondaries.try_borrow_mut() {
+                for secondary in secondaries.values_mut() {
                     secondary.sync_window_theme();
                 }
             }
@@ -621,5 +621,24 @@ mod tests {
             request_redraw();
             request_redraw_all();
         });
+    }
+
+    #[test]
+    fn secondary_updates_defer_while_window_tree_is_mutably_borrowed() {
+        let state = std::rc::Rc::new(RefCell::new(None));
+        let secondaries = std::rc::Rc::new(RefCell::new(HashMap::new()));
+        let runtime = AppRuntime::new(
+            std::rc::Rc::downgrade(&state),
+            std::rc::Rc::downgrade(&secondaries),
+        );
+        let _scope = window_scope::enter_secondary_id(WindowId::from_raw(987654));
+        let _borrow = secondaries.borrow_mut();
+
+        assert!(runtime
+            .try_reconcile_subtree("tooltip", crate::primitives::r#box().into())
+            .is_none());
+        assert!(runtime
+            .try_update_element_by_template_id("tooltip", |_| panic!("tree remains borrowed"))
+            .is_none());
     }
 }

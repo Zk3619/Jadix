@@ -114,6 +114,7 @@ fn rect_vertex(
         && instance.radii.z <= 0.0 && instance.radii.w <= 0.0
         && instance.border_width <= 0.0
         && instance.shadow_color.a <= 0.001
+        && instance.glass.x >= 0.0
         && instance.clip_size_and_extra.w <= 0.5
         && instance.clip_size_and_extra.z < 0.5;
     let plain_fill = instance.border_width <= 0.0
@@ -810,6 +811,16 @@ fn paint_rect(in: VertexOutput) -> vec4<f32> {
 
     // Compute alpha for the inner rect body
     let alpha_bg = 1.0 - smoothstep(-aa, aa, d);
+    if (in.glass.x < 0.0) {
+        let u = in.p.x / max(in.rect_size.x, 1.0) + 0.5 + in.glass.w;
+        let band = max(1.0 - abs(u - in.glass.y) / in.glass.z, 0.0);
+        let alpha = in.color.a * alpha_bg * band * band;
+        var rgb = in.color.rgb;
+        if (globals.premultiply > 0.5) {
+            rgb = rgb * alpha;
+        }
+        return vec4<f32>(rgb, alpha);
+    }
     // Radius changes coverage, not the fill RGB. Decode a constant fill once
     // per vertex instead of three pow() calls for each pixel of rounded panels.
     if ((flags & 4u) != 0u) {

@@ -269,6 +269,8 @@ pub(crate) fn adjust_overlay_collect_origin(
     el: &mut Element,
     measured: [f32; 2],
 ) -> Option<[f32; 2]> {
+    let scale = crate::core::tree::paint_scale_with_ancestor(el, el.paint_ancestor_scale);
+    let measured = [measured[0] * scale[0], measured[1] * scale[1]];
     if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
         return peek_restrict_clip()
             .filter(|b| b[2] > 0.5 && b[3] > 0.5)
@@ -2174,6 +2176,39 @@ mod tests {
             crate::layout::dim_length_px(el.style.size.height).is_none(),
             "source drag_extent must not become the overlay height"
         );
+    }
+
+    #[test]
+    fn scaled_ghost_follows_world_pointer_without_scaling_motion_twice() {
+        use crate::utils::drag::{begin, drag_overlay, drag_scope, end, tick, BeginDrag};
+        let (_owner, ()) = crate::core::reactivity::create_root(|| {
+            let _scope: Element = drag_scope("scaled-ghost")
+                .threshold(0.0).child(|| Element::from(drag_overlay()));
+            begin(BeginDrag {
+                scope_id: "scaled-ghost".into(), draggable_id: "chip".into(),
+                pointer: [40.0, 16.0], grab_offset: [10.0, 8.0],
+                start_bounds: [30.0, 8.0, 40.0, 16.0], from_list: None,
+                from_index: None, item_type: String::new(), group: String::new(),
+                capture_id: "cap".into(),
+            });
+            let mut root = Element::new().w(400.0).h(300.0).scale(0.5)
+                .transform_origin("left top").child(place_drag_ghost(
+                    Element::new().w(80.0).h(32.0).bg([1.0, 0.0, 0.0, 1.0]),
+                    "scaled-ghost__ghost", [30.0, 8.0], None));
+            let mut layout = crate::core::tree::LayoutTree::new();
+            for pointer in [[90.0, 70.0], [140.0, 100.0], [60.0, 40.0]] {
+                assert!(tick(pointer[0], pointer[1], &[], [400.0, 300.0]));
+                let expected = crate::utils::drag::last_overlay_pos("scaled-ghost").unwrap();
+                let result = layout.build_and_layout(&mut root, 400.0, 300.0, [-1.0; 2]);
+                let fill = result.instances.iter().find(|fill| fill.color[0] > 0.9).unwrap();
+                for axis in 0..2 {
+                    assert!((fill.rect_pos[axis] - expected[axis]).abs() < 0.1,
+                        "pointer={pointer:?}, painted={:?}, expected={expected:?}", fill.rect_pos);
+                }
+                assert_eq!(fill.rect_size, [40.0, 16.0]);
+            }
+            let _ = end(&[]);
+        });
     }
 
     #[test]

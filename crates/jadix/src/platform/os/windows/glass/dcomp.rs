@@ -3,26 +3,26 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
+use windows::core::{Interface, HSTRING};
 use windows::Foundation::TimeSpan;
 use windows::System::{DispatcherQueue, DispatcherQueueController};
+use windows::Win32::Foundation::{HANDLE, HWND};
+use windows::Win32::Graphics::DirectComposition::DCompositionCreateSurfaceHandle;
+use windows::Win32::System::WinRT::Composition::{ICompositorDesktopInterop, ICompositorInterop};
+use windows::Win32::System::WinRT::{
+    CreateDispatcherQueueController, DispatcherQueueOptions, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT,
+};
 use windows::UI::Color;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::{
     CompositionBrush, CompositionColorBrush, CompositionEasingFunction, Compositor,
     ContainerVisual, SpriteVisual,
 };
-use windows::Win32::Foundation::{HANDLE, HWND};
-use windows::Win32::Graphics::DirectComposition::DCompositionCreateSurfaceHandle;
-use windows::Win32::System::WinRT::Composition::{ICompositorDesktopInterop, ICompositorInterop};
-use windows::Win32::System::WinRT::{
-    CreateDispatcherQueueController, DQTAT_COM_NONE, DQTYPE_THREAD_CURRENT, DispatcherQueueOptions,
-};
-use windows::core::{HSTRING, Interface};
 use windows_numerics::{Vector2, Vector3};
 
+use crate::app::glass_params::aero_overlay;
 use crate::app::WindowBackdrop;
 use crate::app::WindowOptions;
-use crate::app::glass_params::aero_overlay;
 
 use super::recipes::{create_recipe_brush, gaussian_host_brush};
 
@@ -43,6 +43,7 @@ pub struct DcompGlassHost {
     afterglow_overlay: Option<SpriteVisual>,
     afterglow_brush: Option<CompositionColorBrush>,
     reflection: Option<SpriteVisual>,
+    fallback_glow: Option<SpriteVisual>,
     _content: SpriteVisual,
     surface_handle: HANDLE,
     options: WindowOptions,
@@ -284,9 +285,12 @@ fn update_reflection(host: &DcompGlassHost) {
     });
 }
 
-fn apply_brush(host: &mut DcompGlassHost, new_brush: CompositionBrush) {
+fn apply_brush(host: &mut DcompGlassHost, new_brush: CompositionBrush, fallback: bool) {
     let _ = host.backdrop.SetBrush(&new_brush);
     host.current_brush = Some(new_brush);
+    if let Some(glow) = host.fallback_glow.as_ref() {
+        let _ = glow.SetIsVisible(fallback);
+    }
 }
 
 fn recipe_or_fallback(
@@ -294,30 +298,56 @@ fn recipe_or_fallback(
     options: &WindowOptions,
     active: bool,
     dark: bool,
-) -> windows::core::Result<CompositionBrush> {
+) -> windows::core::Result<(CompositionBrush, bool)> {
     let themed = options.themed();
     let options = &themed;
+    if options.uses_system_backdrop() && super::system_backdrop_available() {
+        return Ok((
+            Interface::cast(&compositor.CreateColorBrushWithColor(Color {
+                A: 0,
+                R: 0,
+                G: 0,
+                B: 0,
+            })?)?,
+            false,
+        ));
+    }
     if !options.blur {
-        return Interface::cast(&compositor.CreateColorBrushWithColor(Color {
-            A: 0,
-            R: 0,
-            G: 0,
-            B: 0,
-        })?);
+        let background = crate::style::get_theme().colors.background;
+        return Ok((
+            Interface::cast(&compositor.CreateColorBrushWithColor(Color {
+                A: 255,
+                R: (background[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+                G: (background[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+                B: (background[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+            })?)?,
+            true,
+        ));
     }
     match create_recipe_brush(compositor, options, active, dark) {
-        Ok(b) => Ok(b),
+        Ok(b) => Ok((b, false)),
         Err(e) => {
             glass_fail(&format!(
                 "recipe failed ({e}); using Gaussian(HostBackdrop)"
             ));
-            gaussian_host_brush(compositor, options.resolved_blur_amount()).or_else(|_| {
-                Interface::cast(
-                    &compositor
-                        .CreateHostBackdropBrush()
-                        .or_else(|_| compositor.CreateBackdropBrush())?,
-                )
-            })
+            if let Ok(brush) = gaussian_host_brush(compositor, options.resolved_blur_amount()) {
+                return Ok((brush, false));
+            }
+            if let Ok(brush) = compositor
+                .CreateHostBackdropBrush()
+                .or_else(|_| compositor.CreateBackdropBrush())
+                .and_then(|brush| Interface::cast(&brush))
+            {
+                return Ok((brush, false));
+            }
+            let background = crate::style::get_theme().colors.background;
+            let brush = compositor.CreateColorBrushWithColor(Color {
+                A: 255,
+                R: (background[0].clamp(0.0, 1.0) * 255.0).round() as u8,
+                G: (background[1].clamp(0.0, 1.0) * 255.0).round() as u8,
+                B: (background[2].clamp(0.0, 1.0) * 255.0).round() as u8,
+            })?;
+            Ok((Interface::cast(&brush)?, true))
         }
     }
 }
@@ -347,10 +377,12 @@ fn try_new(
         os_dark || crate::style::is_dark_theme()
     };
     let mut current_brush = None;
+    let mut fallback = false;
     if options.blur || options.follow_theme {
-        let brush = recipe_or_fallback(&compositor, options, true, dark)?;
+        let (brush, was_fallback) = recipe_or_fallback(&compositor, options, true, dark)?;
         backdrop.SetBrush(&brush)?;
         current_brush = Some(brush);
+        fallback = was_fallback;
     }
     let is_aero = options.blur && options.backdrop == WindowBackdrop::Aero;
     let (tint_overlay, tint_brush, afterglow_overlay, afterglow_brush) = if is_aero {
@@ -371,6 +403,18 @@ fn try_new(
     } else {
         None
     };
+    let fallback_glow = if options.blur || options.follow_theme {
+        let visual = compositor.CreateSpriteVisual()?;
+        visual.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })?;
+        visual.SetIsHitTestVisible(false)?;
+        visual.SetOpacity(if fallback { 1.0 } else { 0.0 })?;
+        if let Ok(brush) = make_reflection_brush(&compositor, 0.35) {
+            visual.SetBrush(&brush)?;
+        }
+        Some(visual)
+    } else {
+        None
+    };
     let content = compositor.CreateSpriteVisual()?;
     content.SetRelativeSizeAdjustment(Vector2 { X: 1.0, Y: 1.0 })?;
     let surface_brush = compositor.CreateSurfaceBrushWithSurface(&surface)?;
@@ -387,6 +431,9 @@ fn try_new(
         if let Some(ref vis) = reflection {
             children.InsertAtTop(vis)?;
         }
+        if let Some(ref vis) = fallback_glow {
+            children.InsertAtTop(vis)?;
+        }
     }
     children.InsertAtTop(&content)?;
     target.SetRoot(&root)?;
@@ -401,6 +448,7 @@ fn try_new(
         afterglow_overlay,
         afterglow_brush,
         reflection,
+        fallback_glow,
         _content: content,
         surface_handle: handle,
         options: options.clone(),
@@ -422,7 +470,7 @@ fn refresh_brush(host: &mut DcompGlassHost, animate: bool) {
         return;
     }
     match recipe_or_fallback(&host.compositor, &host.options, host.active, host.dark) {
-        Ok(brush) => apply_brush(host, brush),
+        Ok((brush, fallback)) => apply_brush(host, brush, fallback),
         Err(e) => glass_fail(&format!("dcomp recipe refresh: {e}")),
     }
     update_reflection(host);

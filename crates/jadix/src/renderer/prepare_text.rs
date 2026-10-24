@@ -556,6 +556,24 @@ fn node_shape_hash(
     node_shape_key_from_identity(identity, scaled_w, scaled_h, force_fast_mode)
 }
 
+fn rich_shape_identity_hash(base: u64, spans: Option<&[crate::style::TextSpan]>) -> u64 {
+    let Some(spans) = spans.filter(|spans| !spans.is_empty()) else { return base; };
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    base.hash(&mut hash);
+    spans.len().hash(&mut hash);
+    for span in spans {
+        span.text.len().hash(&mut hash);
+        span.color.hash(&mut hash);
+        span.weight.hash(&mut hash);
+        span.size.map(f32::to_bits).hash(&mut hash);
+        span.italic.hash(&mut hash);
+        span.monospace.hash(&mut hash);
+        span.background.hash(&mut hash);
+        std::mem::discriminant(&span.kind).hash(&mut hash);
+    }
+    hash.finish()
+}
+
 /// Bounds half of the Exact key — avoids re-hashing full text when identity is known.
 fn node_shape_key_from_identity(
     identity: u64,
@@ -1264,6 +1282,47 @@ fn emoji_sequence_content_hash(text: &str) -> u64 {
 /// Match `EmojiCacheKey` docs: coarse wrap buckets so 1px soft-width jitter does not miss.
 fn emoji_wrap_width_q(buffer_soft_w: f32) -> u16 {
     (buffer_soft_w / 8.0).floor().clamp(0.0, u16::MAX as f32) as u16
+}
+
+fn set_document_rich_text(
+    buffer: &mut glyphon::Buffer,
+    spans: &[(String, glyphon::Attrs<'_>)],
+    attrs: &glyphon::Attrs<'_>,
+    shaping: glyphon::Shaping,
+) {
+    if !spans.iter().any(|(text, _)| text.contains('\r')) {
+        buffer.set_rich_text(
+            spans.iter().map(|(text, attributes)| (text.as_str(), attributes.clone())),
+            attrs,
+            shaping,
+            None,
+        );
+        return;
+    }
+    let text: String = spans.iter().map(|(text, _)| text.as_str()).collect();
+    buffer.set_text(&text, attrs, shaping, None);
+    let mut span_index = 0;
+    let mut span_start = 0;
+    let mut line_start = 0;
+    for line in &mut buffer.lines {
+        let line_end = line_start + line.text().len();
+        let mut attributes = glyphon::AttrsList::new(attrs);
+        while let Some((body, style)) = spans.get(span_index) {
+            let span_end = span_start + body.len();
+            let start = span_start.max(line_start);
+            let end = span_end.min(line_end);
+            if start < end {
+                attributes.add_span(start - line_start..end - line_start, style);
+            }
+            if span_end > line_end {
+                break;
+            }
+            span_start = span_end;
+            span_index += 1;
+        }
+        line_start = line_end + line.ending().as_str().len();
+        line.set_attrs_list(attributes);
+    }
 }
 
 /// Isolate an explicit RTL paragraph. LTR/Auto must not inject U+200E: many CJK
@@ -2707,6 +2766,7 @@ pub fn prepare_text_frame_at(
             requested_weight,
             resolved_face.synthetic_bold,
         );
+        shape_hash = rich_shape_identity_hash(shape_hash, info.spans.as_deref());
         // Glyph recolor is baked into Attrs; Exact reuse must miss when the range/color moves.
         if let Some(caret) = st.input_caret.as_ref() {
             let ranges = caret.selection_recolor_ranges();
@@ -3221,9 +3281,7 @@ pub fn prepare_text_frame_at(
                         }
                         owned.push((body, a));
                     }
-                    let rich: Vec<(&str, glyphon::Attrs)> =
-                        owned.iter().map(|(t, a)| (t.as_str(), a.clone())).collect();
-                    buffer.set_rich_text(rich, &attrs, shaping, None);
+                    set_document_rich_text(&mut buffer, &owned, &attrs, shaping);
                 } else {
                     let paint_text = prewrapped.as_deref().unwrap_or_else(|| shape_text.as_ref());
                     let mapped: Vec<((usize, usize), [u8; 4])> = st
@@ -3608,7 +3666,7 @@ pub fn prepare_text_frame_at(
             y,
             box_w: scaled_w,
             box_h: scaled_h,
-            dy: glyph_dy,
+            dy: glyph_dy * info.paint_scale,
             text_size: scaled_size,
             paint_scale: if info.paint_scale.is_finite() && info.paint_scale > 0.0 {
                 info.paint_scale
@@ -4644,6 +4702,30 @@ mod shape_cache_key_tests {
     use crate::style::TextDirection;
     use std::borrow::Cow;
     use std::time::Instant;
+
+    #[test]
+    fn document_rich_text_preserves_crlf_lines_and_attributes() {
+        let mut fonts = glyphon::FontSystem::new();
+        let mut buffer = glyphon::Buffer::new(&mut fonts, glyphon::Metrics::new(14.0, 21.0));
+        let attrs = glyphon::Attrs::new();
+        let accent = attrs.clone().color(glyphon::Color::rgb(90, 120, 210));
+        let spans = vec![("fn\r".into(), accent), ("\nmain\r\n".into(), attrs.clone())];
+        super::set_document_rich_text(&mut buffer, &spans, &attrs, glyphon::Shaping::Advanced);
+        assert_eq!(buffer.lines.len(), 3);
+        assert_eq!(buffer.lines[0].text(), "fn");
+        assert_eq!(buffer.lines[1].text(), "main");
+        assert_eq!(buffer.lines[0].ending().as_str(), "\r\n");
+        assert_eq!(buffer.lines[1].ending().as_str(), "\r\n");
+        assert_ne!(buffer.lines[0].attrs_list(), buffer.lines[1].attrs_list());
+    }
+
+    #[test]
+    fn document_span_colors_invalidate_shape_identity() {
+        let original = vec![crate::style::TextSpan::new("fn").color([90, 120, 210, 255])];
+        let changed = vec![crate::style::TextSpan::new("fn").color([190, 90, 110, 255])];
+        assert_ne!(super::rich_shape_identity_hash(1, Some(&original)), super::rich_shape_identity_hash(1, Some(&changed)));
+        assert_ne!(super::rich_shape_identity_hash(1, None), super::rich_shape_identity_hash(1, Some(&original)));
+    }
 
     #[test]
     fn ltr_and_auto_do_not_inject_lrm() {

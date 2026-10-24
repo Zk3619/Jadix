@@ -55,15 +55,13 @@ pub(crate) fn button_chrome_for_variant(
             (c.bg, c.fg, c.border)
         }
         "outline" => {
-            let (rest_bg, hover_bg, border) = if dark {
+            let (hover_bg, border) = if dark {
                 (
-                    color_mix_over_background(parse_color("input"), 0.3),
                     color_mix_over_background(parse_color("input"), 0.5),
                     parse_color("input"),
                 )
             } else {
                 (
-                    parse_color("background"),
                     parse_color("accent"),
                     parse_color("border"),
                 )
@@ -71,7 +69,7 @@ pub(crate) fn button_chrome_for_variant(
             let fg = parse_text_color("foreground");
             let c = lerp_paint_chrome(
                 PaintChrome {
-                    bg: rest_bg,
+                    bg: [0.0; 4],
                     fg,
                     border: Some(border),
                 },

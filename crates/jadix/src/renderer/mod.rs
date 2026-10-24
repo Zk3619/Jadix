@@ -176,7 +176,9 @@ pub fn scale_instances_in_place(instances: &mut [InstanceInput], scale: f32) {
         out.shadow_offset[1] *= scale;
         out.shadow_blur *= scale;
         out.shadow_spread *= scale;
-        out.glass[1] *= scale;
+        if out.glass[0] >= 0.0 {
+            out.glass[1] *= scale;
+        }
         // Origin txty is logical px (same space as rect_pos). Linear 2×2 stays.
         out.transform[4] *= scale;
         out.transform[5] *= scale;
@@ -479,6 +481,21 @@ mod textured_uv_tests {
         scale_instances_in_place(&mut v, 1.0);
         assert_eq!(v[0].rect_pos, [10.0, 20.0]);
         assert_eq!(v[0].rect_size, [3.0, 4.0]);
+    }
+
+    #[test]
+    fn scale_instances_preserves_normalized_shimmer_phase() {
+        use super::{scale_instances, InstanceInput};
+        use bytemuck::Zeroable;
+        let mut shimmer = InstanceInput::zeroed();
+        shimmer.glass = [-1.0, 0.5, 0.22, 0.02];
+        let mut glass = InstanceInput::zeroed();
+        glass.glass = [1.46, 8.0, 0.1, 0.6];
+        for dpi in [0.75, 1.0, 1.25, 1.5, 2.0] {
+            let scaled = scale_instances(&[shimmer, glass], dpi);
+            assert_eq!(scaled[0].glass, shimmer.glass, "sweep phase must not scale with DPI");
+            assert_eq!(scaled[1].glass[1], 8.0 * dpi, "glass thickness still uses physical pixels");
+        }
     }
 
     #[test]

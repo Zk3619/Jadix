@@ -12,7 +12,6 @@ use super::{locale::text, snapshot::find_element_by_template_mut, DevToolsState}
 const TOOLBAR: &str = "__jadix_devtools_device_toolbar";
 pub(crate) const PORTAL_HOST: &str = "__jadix_device_portals";
 const FRAME: &str = "__jadix_devtools_device_frame";
-const SCOPED: &str = "data-jadix-device-portal";
 const ACTIVE: &str = "data-jadix-device-preview";
 const BAR_HEIGHT: f32 = 78.0;
 const PRESETS: &[(&str, f32, f32)] = &[
@@ -39,6 +38,7 @@ thread_local! {
     static ORIGINAL: RefCell<Option<Box<ElementStyle>>> = const { RefCell::new(None) };
     static LAST_PRESET: RefCell<String> = RefCell::new("Responsive".into());
     static PAINT_SCALE: Cell<f32> = const { Cell::new(1.0) };
+    static RESIZE_LIMIT: Cell<[f32; 2]> = const { Cell::new([7680.0, 4320.0]) };
 }
 
 pub(super) fn enabled() -> bool {
@@ -194,69 +194,21 @@ fn toolbar() -> Element {
 }
 
 pub(crate) fn scope_portals(root: &mut Element) -> bool {
-    use crate::layout::layout_tree::{ATTR_HOISTED_MOUNT, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT};
-    let active = enabled() && DevToolsState::is_open();
-    let mut keys = std::collections::HashSet::new();
-    fn collect(node: &Element, inside: bool, keys: &mut std::collections::HashSet<String>) {
-        let inside = inside || node.attrs.contains_key(ACTIVE);
-        if inside {
-            if let Some(key) = node.attrs.get("jadix_portal_slot") {
-                keys.insert(key.clone());
+    use crate::core::scaled_viewport::ATTR_SCOPE;
+    fn configure(node: &mut Element, active: bool, preview: bool) {
+        if matches!(node.template_id.as_deref(), Some("__jadix_app_host") | Some(TOOLBAR)) {
+            if active {
+                let mount = if preview && node.template_id.as_deref() != Some(TOOLBAR) { PORTAL_HOST } else { "__jadix_app_host" };
+                node.set_attr(ATTR_SCOPE, mount);
+            } else {
+                node.attrs.remove(ATTR_SCOPE);
             }
         }
-        for child in &node.children {
-            collect(child, inside, keys);
-        }
+        for child in &mut node.children { configure(child, active, preview); }
     }
-    if active {
-        collect(root, false, &mut keys);
-    }
-    fn apply(
-        node: &mut Element,
-        inside: bool,
-        active: bool,
-        keys: &std::collections::HashSet<String>,
-        changed: &mut bool,
-    ) {
-        let scoped = node.attrs.contains_key(SCOPED);
-        let inside = active
-            && (inside
-                || node.attrs.contains_key(ACTIVE)
-                || node
-                    .attrs
-                    .get(ATTR_PORTAL_KEY)
-                    .is_some_and(|key| keys.contains(key))
-                || scoped);
-        let fresh = node
-            .attrs
-            .get("jadix_portal")
-            .is_some_and(|value| value == "1");
-        let hoisted = node.attrs.contains_key("jadix_hoisted_portal");
-        let mount_attr = if fresh {
-            ATTR_PORTAL_MOUNT
-        } else {
-            ATTR_HOISTED_MOUNT
-        };
-        let implicit = node.attrs.get(mount_attr).is_none_or(String::is_empty);
-        if inside && (fresh || hoisted) && implicit && !scoped {
-            node.set_attr(mount_attr, PORTAL_HOST);
-            node.set_attr(SCOPED, "1");
-            node.style.position_fixed = false;
-            *changed = true;
-        } else if !active && scoped {
-            node.attrs.remove(SCOPED);
-            node.attrs.remove(ATTR_PORTAL_MOUNT);
-            node.attrs.remove(ATTR_HOISTED_MOUNT);
-            node.style.position_fixed = hoisted;
-            *changed = true;
-        }
-        for child in &mut node.children {
-            apply(child, inside, active, keys, changed);
-        }
-    }
-    let mut changed = false;
-    apply(root, false, active, &keys, &mut changed);
-    changed
+    let active = DevToolsState::is_open();
+    configure(root, active, enabled() && active);
+    crate::core::scaled_viewport::scope_portals(root)
 }
 
 fn stop_resize() {
@@ -295,12 +247,12 @@ fn resize_grip(id: &'static str, horizontal: bool, vertical: bool) -> Element {
                 }
                 let next = Viewport {
                     width: if horizontal {
-                        (start.width + 2.0 * (event.x - x) / scale).clamp(240.0, 7680.0)
+                        (start.width + 2.0 * (event.x - x) / scale).clamp(1.0, RESIZE_LIMIT.get()[0])
                     } else {
                         start.width
                     },
                     height: if vertical {
-                        (start.height + (event.y - y) / scale).clamp(240.0, 4320.0)
+                        (start.height + (event.y - y) / scale).clamp(1.0, RESIZE_LIMIT.get()[1])
                     } else {
                         start.height
                     },
@@ -407,6 +359,10 @@ pub(super) fn sync(root: &mut Element, tree: &mut LayoutTree) -> LayoutStatus {
         if let Some(app) = host.children.first_mut() {
             if app.attrs.remove(ACTIVE).is_some() {
                 app.attrs.remove("data-jadix-viewport-width");
+                app.attrs.remove(crate::core::scaled_viewport::ATTR_SCOPE);
+                if let Some(host) = app.children.iter_mut().find(|child| child.template_id.as_deref() == Some(PORTAL_HOST)) {
+                    host.attrs.remove(crate::core::scaled_viewport::ATTR_PORTALS);
+                }
                 if let Some(original) = ORIGINAL.with(|saved| saved.borrow_mut().take()) {
                     app.style.position = original.position;
                     app.style.inset = original.inset;
@@ -470,17 +426,21 @@ pub(super) fn sync(root: &mut Element, tree: &mut LayoutTree) -> LayoutStatus {
         });
     }
     let viewport = VIEWPORT.get();
-    let available = host.layout_bounds[2].max(320.0);
-    let height = host.layout_bounds[3].max(300.0);
+    let available = host.layout_bounds[2].max(1.0);
+    let height = host.layout_bounds[3].max(1.0);
     let fit = ((available - 32.0) / viewport.width)
         .min((height - BAR_HEIGHT - 32.0) / viewport.height)
-        .clamp(0.1, 1.0);
+        .clamp(0.001, 8.0);
     let scale = if viewport.zoom > 0.0 {
-        viewport.zoom
+        viewport.zoom.min(fit)
     } else {
-        fit
+        fit.min(1.0)
     };
     PAINT_SCALE.set(scale);
+    if RESIZE.get().is_none() {
+        RESIZE_LIMIT.set([((available - 32.0) / scale).max(1.0).min(7680.0),
+            ((height - BAR_HEIGHT - 32.0) / scale).max(1.0).min(4320.0)]);
+    }
     let previous_frame = host.children.iter().find(|child| child.template_id.as_deref() == Some(FRAME))
         .or_else(|| host.children.first()).map(|element| crate::core::tree::visual_paint_aabb(element, element.paint_scroll_acc));
     let mut changed = false;
@@ -488,28 +448,11 @@ pub(super) fn sync(root: &mut Element, tree: &mut LayoutTree) -> LayoutStatus {
         if first {
             ORIGINAL.with(|saved| *saved.borrow_mut() = Some(app.style.clone()));
             app.attrs.insert(ACTIVE.into(), "1".into());
-            if !app
-                .children
-                .iter()
-                .any(|child| child.template_id.as_deref() == Some(PORTAL_HOST))
-            {
-                app.children.push(
-                    Element::new()
-                        .template_id(PORTAL_HOST)
-                        .absolute()
-                        .inset(0.0)
-                        .w("100%")
-                        .h("100%")
-                        .z_index(1000)
-                        .pointer_events_box_none(),
-                );
-            }
         }
         let mut style = app.style.clone();
-        app.attrs.insert(
-            "data-jadix-viewport-width".into(),
-            viewport.width.to_string(),
-        );
+        let previous_style = style.clone();
+        crate::core::scaled_viewport::configure_viewport(app, [viewport.width, viewport.height], scale, PORTAL_HOST);
+        let viewport_style = app.style.clone();
         let frame = Element::new()
             .absolute()
             .w(viewport.width)
@@ -520,14 +463,13 @@ pub(super) fn sync(root: &mut Element, tree: &mut LayoutTree) -> LayoutStatus {
             .transform_origin("left top");
         style.position = frame.style.position;
         style.inset = frame.style.inset;
-        style.size = frame.style.size;
-        style.min_size = frame.style.size;
-        style.max_size = frame.style.size;
-        style.scale = frame.style.scale;
-        style.overflow.x = taffy::style::Overflow::Hidden;
-        style.overflow.y = taffy::style::Overflow::Hidden;
-        style.transform_origin = frame.style.transform_origin.clone();
-        if app.style != style {
+        style.size = viewport_style.size;
+        style.min_size = viewport_style.min_size;
+        style.max_size = viewport_style.max_size;
+        style.scale = viewport_style.scale;
+        style.overflow = viewport_style.overflow;
+        style.transform_origin = viewport_style.transform_origin;
+        if previous_style != style {
             app.style = style;
             tree.mark_element_layout_dirty(app);
             changed = true;
@@ -630,6 +572,32 @@ mod tests {
     }
 
     #[test]
+    fn preview_toolbar_portals_stay_outside_the_scaled_host() {
+        crate::core::reactivity::create_root(|| {
+            use crate::layout::layout_tree::ATTR_PORTAL_MOUNT;
+            disable();
+            DevToolsState::enable_for_window();
+            DevToolsState::set_open(true);
+            toggle();
+            let mut toolbar_popup = Element::new().template_id("toolbar-menu");
+            toolbar_popup.set_attr("jadix_portal", "1");
+            let mut app_popup = Element::new().template_id("app-menu");
+            app_popup.set_attr("jadix_portal", "1");
+            let mut root = Element::new().template_id("__jadix_app_host")
+                .child(Element::new().child(app_popup))
+                .child(Element::new().template_id(TOOLBAR).child(toolbar_popup));
+            assert!(scope_portals(&mut root));
+            assert_eq!(root.children[0].children[0].attrs.get(ATTR_PORTAL_MOUNT)
+                .map(String::as_str), Some(PORTAL_HOST));
+            assert_eq!(root.children[1].children[0].attrs.get(ATTR_PORTAL_MOUNT)
+                .map(String::as_str), Some("__jadix_app_host"));
+            assert!(!scope_portals(&mut root));
+            disable();
+            DevToolsState::set_open(false);
+        });
+    }
+
+    #[test]
     fn preview_moves_open_portals_locally_and_restores_them_on_close() {
         crate::core::reactivity::create_root(|| {
             use super::super::snapshot::find_element_by_template;
@@ -648,12 +616,8 @@ mod tests {
             let mut tree = LayoutTree::new();
             super::super::panel::sync_overlay_layout(&mut root, &mut tree);
             tree.build_and_layout(&mut root, 1200.0, 800.0, [-1.0; 2]);
-            assert!(
-                find_element_by_template(&root, "preview-test-popup")
-                    .unwrap()
-                    .style
-                    .position_fixed
-            );
+            assert_eq!(find_element_by_template(&root, "preview-test-popup").unwrap()
+                .attrs.get(ATTR_HOISTED_MOUNT).map(String::as_str), Some("__jadix_app_host"));
             toggle();
             super::super::panel::sync_overlay_layout(&mut root, &mut tree);
             assert!(hoist_portal_subtrees(&mut root) > 0);
@@ -673,10 +637,13 @@ mod tests {
             super::super::panel::sync_overlay_layout(&mut root, &mut tree);
             assert!(hoist_portal_subtrees(&mut root) > 0);
             let popup = find_element_by_template(&root, "preview-test-popup").unwrap();
-            assert!(popup.style.position_fixed);
-            assert!(!popup.attrs.contains_key(ATTR_HOISTED_MOUNT));
+            assert_eq!(popup.attrs.get(ATTR_HOISTED_MOUNT).map(String::as_str), Some("__jadix_app_host"));
             assert!(find_element_by_template(&root, FRAME).is_none());
             DevToolsState::set_open(false);
+            assert!(hoist_portal_subtrees(&mut root) > 0);
+            let popup = find_element_by_template(&root, "preview-test-popup").unwrap();
+            assert!(popup.style.position_fixed);
+            assert!(!popup.attrs.contains_key(ATTR_HOISTED_MOUNT));
         });
     }
 
@@ -693,6 +660,7 @@ mod tests {
                 zoom: 0.5,
             });
             PAINT_SCALE.set(0.5);
+            RESIZE_LIMIT.set([500.0, 910.0]);
             let mut grip = resize_grip("dt-device-resize-test", true, true)
                 .w(14.0)
                 .h(14.0);
@@ -712,7 +680,13 @@ mod tests {
             dispatch_pointer(&path, &mut event, PointerKind::Move);
             assert_eq!(VIEWPORT.get().width, 490.0);
             assert_eq!(VIEWPORT.get().height, 904.0);
+            let mut event = PointerEvent::new(5000.0, 5000.0, MouseButton::Left, 0);
+            event.buttons = 1;
+            dispatch_pointer(&path, &mut event, PointerKind::Move);
+            assert_eq!(VIEWPORT.get().width, 500.0);
+            assert_eq!(VIEWPORT.get().height, 910.0);
             dispatch_pointer(&path, &mut event, PointerKind::Up);
+            RESIZE_LIMIT.set([7680.0, 4320.0]);
             assert!(RESIZE.get().is_none());
             assert!(crate::app::pointer_capture_id().is_none());
             VIEWPORT.set(Viewport {
@@ -765,6 +739,56 @@ mod tests {
             root.children[0].children[0].style.size.width,
             taffy::style::Dimension::length(128.0)
         );
+    }
+
+    #[test]
+    fn device_preview_overrides_the_docked_content_viewport() {
+        crate::core::reactivity::create_root(|| {
+            DevToolsState::enable_for_window();
+            DevToolsState::set_open(true);
+            DevToolsState::set_panel_width(640.0);
+            crate::utils::modal_motion::set_modal_viewport_size(1500.0, 900.0);
+            let app = Element::new()
+                .w("100%")
+                .h("100%")
+                .child(Element::new().class("w-24 md:w-48"));
+            let mut root = super::super::panel::wrap_app(app);
+            let mut tree = LayoutTree::new();
+            for (preview, expected_viewport, expected_width) in [
+                (false, (860.0, 900.0), 192.0),
+                (true, (390.0, 844.0), 96.0),
+                (false, (860.0, 900.0), 192.0),
+            ] {
+                ENABLED.set(preview);
+                VIEWPORT.set(Viewport {
+                    width: 390.0,
+                    height: 844.0,
+                    zoom: 0.0,
+                });
+                super::super::panel::sync_overlay_layout(&mut root, &mut tree);
+                let mut impact = LayoutStatus::Clean;
+                crate::style::sync_class_variants_subtree(
+                    &mut root,
+                    [-1.0; 2],
+                    "",
+                    false,
+                    1500.0,
+                    900.0,
+                    &mut tree,
+                    &mut impact,
+                );
+                assert_eq!(
+                    crate::utils::modal_motion::modal_viewport_size(),
+                    expected_viewport
+                );
+                assert_eq!(
+                    root.children[0].children[0].children[0].style.size.width,
+                    taffy::style::Dimension::length(expected_width)
+                );
+                tree.build_and_layout(&mut root, 1500.0, 900.0, [-1.0; 2]);
+            }
+            DevToolsState::set_open(false);
+        });
     }
 
     #[test]

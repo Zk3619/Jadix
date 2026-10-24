@@ -15,6 +15,7 @@ include = [
   "/LICENSE",
   "/NOTICE",
   "/MOTION.md",
+  "/SCALE_PREVIEW.md",
   "/src/**/*",
   "/assets/**/*",
   "/benches/**/*",
@@ -51,7 +52,7 @@ tracing = ["dep:tracing"]
 system-tray = ["dep:tray-icon"]
 # OS menu bars on Windows/macOS. Linux winit windows are not GTK windows.
 native-menu = ["dep:muda"]
-webview = ["backend-dx12", "dep:webview2-com", "dep:wry", "dep:gtk", "dep:jni", "dep:objc2", "dep:objc2-foundation"]
+webview = ["backend-dx12", "dep:webview2-com", "dep:wry", "dep:gtk", "dep:jni", "dep:objc2", "dep:objc2-foundation", "dep:html5ever", "dep:base64"]
 # Windows defaults to D3D12 for predictable presentation and 4K frame throughput.
 # GL remains the fallback; lean consumers can disable default features.
 # This adds native backend code and driver memory (ADR-3, 2026-10-16 update).
@@ -80,6 +81,8 @@ fonts-emoji = []
 # Public `<svg>` / SMIL / resvg raster (Image · CSS cursor · AnimatedIcon frames) + MorphIcon.
 # Not in default. Path kernel (Chart, ProgressCircle) stays without this feature.
 svg = ["dep:resvg"]
+document-math = ["svg", "dep:latex-rust"]
+syntax-highlighting = ["dep:syntect"]
 # Twemoji SVG via the same resvg (PNG fallback remains without it).
 emoji-svg = ["svg"]
 # Extra raster codecs (off by default; see `image` dep for the core set).
@@ -170,6 +173,12 @@ swash = { workspace = true }
 ttf-parser = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-linebreak = { workspace = true }
+similar = { workspace = true }
+pulldown-cmark = { workspace = true, features = ["html"] }
+syntect = { version = "5.3", optional = true, default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
+html5ever = { version = "0.39", optional = true }
+base64 = { version = "0.22", optional = true }
+latex-rust = { workspace = true, optional = true }
 image = { workspace = true }
 resvg = { workspace = true, optional = true }
 

@@ -43,6 +43,59 @@ pub(crate) fn slot_paint_ops(
     })
 }
 
+pub(crate) fn region_own_paint_ops(
+    ops: &[crate::layout::layout_tree::PaintOp],
+    node_paints: &[NodePaint],
+    instances: &[InstanceInput],
+    texture_count: usize,
+    bounds: [f32; 4],
+    ui_scale: f32,
+) -> Vec<crate::layout::layout_tree::PaintOp> {
+    use crate::layout::layout_tree::PaintOp;
+    let mut rectangles = Vec::new();
+    let mut textures = Vec::new();
+    let bounds = padded_xywh(bounds, 2.0 / ui_scale.max(0.001));
+    for slot in node_paints {
+        if slot.overlay || intersect_rects(slot.bounds, bounds).is_none() {
+            continue;
+        }
+        rectangles.push(slot_own_chrome_range(slot, instances, ui_scale));
+        for_each_own_textured_run(slot, node_paints, texture_count, |start, end| {
+            textures.push((start, end));
+        });
+    }
+    rectangles.sort_unstable();
+    textures.sort_unstable();
+    let mut result = Vec::new();
+    for op in ops {
+        let (start, count, ranges) = match *op {
+            PaintOp::Rects { start, count } => (start, count, &rectangles),
+            PaintOp::Textured { start, count } => (start, count, &textures),
+        };
+        let mut cursor = start as usize;
+        let end = cursor + count as usize;
+        for &(range_start, range_end) in ranges {
+            let lo = cursor.max(range_start);
+            let hi = end.min(range_end);
+            if lo >= hi {
+                continue;
+            }
+            result.push(match op {
+                PaintOp::Rects { .. } => PaintOp::Rects {
+                    start: lo as u32,
+                    count: (hi - lo) as u32,
+                },
+                PaintOp::Textured { .. } => PaintOp::Textured {
+                    start: lo as u32,
+                    count: (hi - lo) as u32,
+                },
+            });
+            cursor = hi;
+        }
+    }
+    result
+}
+
 /// Same pad as scissor (`AppState::DAMAGE_SCISSOR_PAD_LOGICAL`) so cull ≥ clip.
 pub(crate) const DAMAGE_CULL_PAD_LOGICAL: f32 = 16.0;
 
@@ -272,6 +325,21 @@ pub(crate) fn scroll_repair_rects_physical(
         let y = r[1].floor();
         let r = [x, y, (r[0] + r[2]).ceil() - x, (r[1] + r[3]).ceil() - y];
         crate::app::damage::push_disjoint_rect(&mut rects, r);
+    }
+    for job in jobs {
+        let viewport = scale_xywh(job.plan.viewport, scale);
+        let left = viewport[0].floor();
+        let top = viewport[1].floor();
+        let right = viewport[0] + viewport[2];
+        let bottom = viewport[1] + viewport[3];
+        if right.ceil() > right.floor() {
+            crate::app::damage::push_disjoint_rect(
+                &mut rects, [right.floor(), top, 1.0, bottom.ceil() - top]);
+        }
+        if bottom.ceil() > bottom.floor() {
+            crate::app::damage::push_disjoint_rect(
+                &mut rects, [left, bottom.floor(), right.ceil() - left, 1.0]);
+        }
     }
     #[cfg(test)]
     let merge = std::env::var("JADIX_PERF_REPAIR_MERGE").as_deref() != Ok("0");
@@ -882,10 +950,21 @@ fn text_run_unchanged(a: &TextLayoutInfo, b: &TextLayoutInfo) -> bool {
         && a.shape_suffix == b.shape_suffix
         && a.template_id == b.template_id
         && a.style == b.style
+        && a.spans == b.spans
+        && a.glyph_fx == b.glyph_fx
+        && a.shimmer == b.shimmer
+        && std::mem::discriminant(&a.glyph_raster) == std::mem::discriminant(&b.glyph_raster)
         && approx_f32(a.x, b.x, POS)
         && approx_f32(a.y, b.y, POS)
         && approx_f32(a.width, b.width, SIZE)
         && approx_f32(a.height, b.height, SIZE)
+        && approx_f32(a.paint_scale, b.paint_scale, 0.002)
+        && a.paint_transform
+            .iter()
+            .zip(b.paint_transform.iter())
+            .all(|(x, y)| approx_f32(*x, *y, 0.002))
+        && approx_f32(a.paint_origin[0], b.paint_origin[0], POS)
+        && approx_f32(a.paint_origin[1], b.paint_origin[1], POS)
 }
 
 /// Glyphon payload for one page-stack band.
@@ -3145,6 +3224,31 @@ pub(crate) fn last_present_visual_slots(
     last_present_visual_slots_with_raster_owners(node_paints, instances, textured, texts, chrome).0
 }
 
+pub(crate) fn updated_texture_paint_nodes(
+    paints: &[NodePaint],
+    textured: &[ScaledTexturedDraw],
+    updated: &HashSet<String>,
+    visual_slots: &[(u64, [f32; 4])],
+) -> Vec<PaintDirty> {
+    if updated.is_empty() {
+        return Vec::new();
+    }
+    paints.iter().filter_map(|paint| {
+        let changed = (paint.textured.0.min(textured.len())..paint.textured.1.min(textured.len()))
+            .any(|index| updated.contains(&textured[index].texture_key)
+                && !paints.iter().any(|child| {
+                    range_contains_index(child.textured, index)
+                        && is_nested_foreign_slot(paint, child)
+                }));
+        changed.then_some(PaintDirty {
+            key: paint.key,
+            bounds: visual_slots.iter().find(|(key, _)| *key == paint.key)
+                .map(|(_, bounds)| *bounds).unwrap_or(paint.bounds),
+            kind: if paint.overlay { PaintDirtyKind::Overlay } else { PaintDirtyKind::Node },
+        })
+    }).collect()
+}
+
 pub(crate) fn last_present_visual_slots_with_raster_owners(
     node_paints: &[NodePaint],
     instances: &[InstanceInput],
@@ -4971,6 +5075,13 @@ pub(crate) fn layered_src_over_skips_dest_reset(
     if has_prev {
         return false;
     }
+    let has_keyed = paints_has_keyed_slot(dirty_key, dirty_bounds, node_paints);
+    if !node_paints.iter().any(|paint| {
+        slot_matches_dirty(dirty_key, dirty_bounds, paint, has_keyed)
+            && (paint.instance.0 < paint.instance.1 || paint.textured.0 < paint.textured.1)
+    }) {
+        return false;
+    }
     // Hide settle has no dest-ink and often no last-present on the hidden
     // collect. Still dest-reset the leftover AABB. First visible paint (pill
     // in the draw list) src-overs wrapping that is still in retain.
@@ -5415,22 +5526,14 @@ fn clip_minus_foreign_opaque_plates(
         }
         let inst_lo = paint.instance.0.min(instances.len());
         let inst_hi = paint.instance.1.min(instances.len());
-        let mut plate: Option<[f32; 4]> = None;
         for inst in &instances[inst_lo..inst_hi] {
-            let Some(bounds) = logical_opaque_fill_aabb(inst, ui_scale) else {
+            let Some(plate) = logical_opaque_fill_aabb(inst, ui_scale) else {
                 continue;
             };
-            plate = Some(match plate {
-                Some(prev) => union_xywh(prev, bounds),
-                None => bounds,
-            });
-        }
-        let Some(plate) = plate else {
-            continue;
-        };
-        clips = subtract_plate_from_clips(clips, plate);
-        if clips.is_empty() {
-            return clips;
+            clips = subtract_plate_from_clips(clips, plate);
+            if clips.is_empty() {
+                return clips;
+            }
         }
     }
     // A stacking ancestor's text range includes the wrapping run, so the loop
@@ -5848,7 +5951,9 @@ fn text_wrap_extent(n: &TextLayoutInfo) -> [f32; 4] {
     let mut w = n.width.max(0.0);
     let mut h = n.height.max(0.0);
     let line = n.height.max(n.style.size_resolved() * 1.4).max(12.0);
-    if let Some(c) = n.clip_bounds {
+    if let Some(prepared) = n.prepared.as_ref() {
+        h = h.max(crate::text::layout(prepared, n.width).height);
+    } else if let Some(c) = n.clip_bounds {
         if clip_is_leaf_wrap_box(n, c) {
             w = w.max((c[0] + c[2] - n.x).max(0.0));
             h = h.max((c[1] + c[3] - n.y).max(0.0));
@@ -6907,6 +7012,55 @@ mod tests {
     }
 
     #[test]
+    fn measured_single_line_text_must_not_overlap_later_layered_rows() {
+        let page_text: Vec<_> = ["Thinking...", "Reading 4 files", "Generating response…"]
+            .into_iter()
+            .enumerate()
+            .map(|(index, caption)| {
+                let mut text = sample_text(caption, 40.0);
+                text.y = 40.0 + index as f32 * 32.0;
+                text.height = 20.0;
+                let prepared = crate::text::prepare(caption, 14.0, 400, 20.0);
+                text.width = crate::text::intrinsic_width(&prepared).ceil();
+                text.prepared = Some(prepared);
+                text
+            })
+            .collect();
+        let paints: Vec<_> = page_text
+            .iter()
+            .enumerate()
+            .map(|(index, text)| {
+                let mut paint = slot(
+                    index as u64 + 1,
+                    [text.x, text.y, text.width, text.height],
+                    (index, index + 1),
+                );
+                paint.layered = true;
+                paint
+            })
+            .collect();
+        let dirties: Vec<_> = paints
+            .iter()
+            .map(|paint| PaintDirty {
+                key: paint.key,
+                bounds: paint.bounds,
+                kind: PaintDirtyKind::Node,
+            })
+            .collect();
+        assert!(!glyph_hits_layered_hole(&page_text[0], paints[2].bounds));
+        let captured = node_present_clipped_capture_text_wipes_excluding_overlay(
+            &dirties, &page_text, &paints, &[], &[], &[], 1.0,
+        );
+        assert_eq!(
+            captured
+                .iter()
+                .map(|text| text.text.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Thinking...", "Reading 4 files", "Generating response…"],
+        );
+    }
+
+    #[test]
     fn layered_underlay_must_recapture_wrap_lines_below_first_strut() {
         // Gallery `<Label>` under Latest: collect height is the first-line
         // strut; later wrap lines live in clip_bounds. Hide-settle dest-reset
@@ -7127,6 +7281,62 @@ mod tests {
             1.0,
         );
         assert_eq!(parts, vec![clip], "selection must preserve selected glyphs");
+    }
+
+    #[test]
+    fn layered_text_wrapper_resets_glyphs_owned_by_its_leaf() {
+        let bounds = [40.0, 48.0, 100.0, 20.0];
+        let mut text = sample_text("Thinking...", bounds[0]);
+        text.y = bounds[1];
+        text.width = bounds[2];
+        text.height = bounds[3];
+        text.glyph_fx = Some("shimmer".into());
+        let mut leaf = slot(1, bounds, (0, 1));
+        leaf.instance = (1, 1);
+        leaf.layered = true;
+        leaf.rest = Some(bounds);
+        let mut wrapper = leaf.clone();
+        wrapper.key = 2;
+        let paints = [leaf, wrapper];
+        let mut card = blank_instance(0.0, 0.0, 320.0, 240.0);
+        card.color = [0.09, 0.09, 0.09, 1.0];
+        let instances = [card];
+        let previous = last_present_visual_slots(&paints, &instances, &[], &[text], &[]);
+        assert!(previous.iter().any(|(key, _)| *key == 1));
+        let wrapper_previous = previous
+            .iter()
+            .find(|(key, _)| *key == 2)
+            .map(|(_, bounds)| *bounds);
+        assert!(wrapper_previous.is_none());
+        let reset = node_present_dest_reset_full(
+            2,
+            bounds,
+            &paints,
+            &instances,
+            &[],
+            &[],
+            1.0,
+            wrapper_previous,
+        )
+        .expect("a text wrapper without its own last-present ink must still clear retained glyphs");
+        assert_eq!(reset.rect, bounds);
+        assert_eq!(reset.clear, [0.09, 0.09, 0.09, 1.0]);
+        let mut dirties = vec![PaintDirty {
+            key: 2,
+            bounds,
+            kind: PaintDirtyKind::Node,
+        }];
+        prepare_node_present_dirties(
+            &mut dirties,
+            &paints,
+            &previous,
+            &instances,
+            &[],
+            &[],
+            1.0,
+            None,
+        );
+        assert_eq!(dirties[0].kind, PaintDirtyKind::Node);
     }
 
     #[test]
@@ -8048,6 +8258,24 @@ mod tests {
             page_stack_band_needs_glyphon(&prev, &curr, 2, 4, Some(CullRects::one(ms)), true),
             "inner follow Clear must submit the message band"
         );
+    }
+
+    #[test]
+    fn retained_shimmer_text_only_replays_inside_cleared_damage() {
+        let mut animated = sample_text("Thinking...", 260.0);
+        animated.glyph_fx = Some("shimmer".into());
+        animated.shimmer = Some(crate::renderer::ShimmerParams::default());
+        let caption = sample_text("Gallery", 8.0);
+        let previous = vec![caption.clone(), animated.clone()];
+        let current = vec![caption, animated];
+        for _ in 0..4 {
+            assert!(page_stack_band_submit_text(&previous, &current, 0, 2, None, true).is_none());
+        }
+        let damage = CullRects::one([250.0, 0.0, 200.0, 200.0]);
+        let submitted = page_stack_band_submit_text(&previous, &current, 0, 2, Some(damage), true)
+            .expect("a cleared shimmer hole must replay the current animated ink");
+        assert_eq!(submitted.len(), 1);
+        assert_eq!(submitted[0].text, "Thinking...");
     }
 
     #[test]
@@ -12295,6 +12523,50 @@ mod tests {
     }
 
     #[test]
+    fn region_own_paint_includes_antialias_from_adjacent_slots() {
+        use crate::layout::layout_tree::PaintOp;
+        let mut adjacent = slot(1, [0.0, 11.0, 20.0, 10.0], (0, 0));
+        adjacent.instance = (0, 1);
+        let ops = region_own_paint_ops(
+            &[PaintOp::Rects { start: 0, count: 1 }],
+            &[adjacent],
+            &[blank_instance(0.0, 11.0, 20.0, 10.0)],
+            0,
+            [0.0, 9.0, 20.0, 1.0],
+            1.0,
+        );
+        assert!(matches!(ops.as_slice(), [PaintOp::Rects { start: 0, count: 1 }]));
+    }
+
+    #[test]
+    fn region_own_paint_replays_parent_track_before_child_thumb() {
+        use crate::layout::layout_tree::PaintOp;
+        let mut track = slot(1, [10.0, 10.0, 12.0, 200.0], (0, 0));
+        track.instance = (0, 2);
+        let mut thumb = slot(2, [10.0, 10.0, 12.0, 40.0], (0, 0));
+        thumb.instance = (1, 2);
+        let instances = [
+            blank_instance(10.0, 10.0, 12.0, 200.0),
+            blank_instance(10.0, 10.0, 12.0, 40.0),
+        ];
+        let ops = region_own_paint_ops(
+            &[PaintOp::Rects { start: 0, count: 2 }],
+            &[thumb, track],
+            &instances,
+            0,
+            thumb.bounds,
+            1.0,
+        );
+        assert!(matches!(
+            ops.as_slice(),
+            [
+                PaintOp::Rects { start: 0, count: 1 },
+                PaintOp::Rects { start: 1, count: 1 },
+            ]
+        ));
+    }
+
+    #[test]
     fn overlay_restore_must_cover_intersecting_page_caption() {
         let hole = [303.0, 990.0, 176.0, 232.0];
         let caption = slot(8, [450.0, 1010.0, 300.0, 22.0], (0, 1));
@@ -12483,6 +12755,41 @@ mod tests {
             wipe_double, wipe,
             "recording after scale_instances_in_place would mis-scale prev and over-wipe\n logical_wipe={wipe:?} doubled={wipe_double:?}"
         );
+    }
+
+    #[test]
+    fn scaled_preview_hover_capture_preserves_caption_clip() {
+        crate::core::reactivity::create_root(|| {
+            let button: crate::core::tree::Element = crate::components::button("preview-hover")
+                .text("Destructive").into();
+            let preview = crate::core::tree::Element::new().w(390.0).h(844.0).absolute().left(40.0).top(40.0)
+                .scale(0.65).transform_origin("left top").overflow("hidden")
+                .child(button.w(120.0).h(32.0));
+            let frame = crate::core::tree::Element::new().absolute().left(40.0).top(40.0)
+                .w(267.0).h(562.0).z_index(1)
+                .child(crate::core::tree::Element::new().absolute().left(253.0).top(0.0)
+                    .w(14.0).h(548.0).bg([0.8, 0.8, 0.8, 1.0]))
+                .child(crate::core::tree::Element::new().absolute().left(0.0).top(548.0)
+                    .w(267.0).h(14.0).bg([0.8, 0.8, 0.8, 1.0]));
+            let mut root = crate::core::tree::Element::new().w(680.0).h(720.0)
+                .children([preview, frame]);
+            let mut tree = crate::core::tree::LayoutTree::new();
+            let result = tree.build_and_layout(&mut root, 680.0, 720.0, [-1.0; 2]);
+            let button = &root.children[0].children[0];
+            let dirty = PaintDirty {
+                key: crate::app::damage::paint_element_key(button),
+                bounds: crate::core::tree::visual_paint_aabb(button, [0.0; 2]),
+                kind: PaintDirtyKind::Node,
+            };
+            let caption = result.text_nodes.iter().find(|node| node.text == "Destructive").unwrap();
+            let capture = node_present_clipped_capture_text_wipes_excluding_overlay(
+                &[dirty], &result.text_nodes, &result.node_paints, &[], &[], &result.instances, 1.0);
+            let captured = capture.iter().find(|node| node.text == "Destructive").expect("hover must recapture caption");
+            let ink = text_paint_bounds(caption);
+            let clip = captured.clip_bounds.unwrap();
+            assert!(clip[1] <= ink[1] && clip[1] + clip[3] >= ink[1] + ink[3],
+                "caption ink={ink:?} clip={clip:?} dirty={dirty:?} paints={:?}", result.node_paints);
+        });
     }
 
     #[test]

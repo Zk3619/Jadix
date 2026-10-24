@@ -42,6 +42,47 @@ fn thumb_paint_y(result: &RenderResult, thumb: [f32; 4]) -> Option<f32> {
 }
 
 #[test]
+fn scaled_overlay_thumb_geometry_is_invariant_in_track_space() {
+    let (_owner, _) = create_root(|| {
+        let mut baseline = None;
+        for zoom in [1.0, 0.35, 0.57, 1.5] {
+            let rest = format!("scaled-overlay-{zoom}");
+            let content = Element::new().w("100%").h(1200.0).flex_shrink(0.0);
+            let area: Element = scroll_area(&rest).w(220.0).h(300.0)
+                .overflow_x("hidden").scrollbar_visibility("always")
+                .scrollbar_thumb_color("#00ff00").child(content).into();
+            let mut root = Element::new().w(400.0).h(600.0).scale(zoom)
+                .transform_origin("left top").child(area);
+            let mut tree = LayoutTree::new();
+            let full = tree.build_and_layout(&mut root, 400.0, 600.0, [-1.0; 2]);
+            let (_, bounds, _, size) = full.scroll_metrics.iter().find(|(id, ..)| id == &rest).unwrap();
+            use_signal(&scroll_viewport_w_signal_key(&rest), || 0.0_f32).set(bounds[2]);
+            use_signal(&scroll_viewport_h_signal_key(&rest), || 0.0_f32).set(bounds[3]);
+            use_signal(&scroll_content_w_signal_key(&rest), || 0.0_f32).set(size[0]);
+            use_signal(&scroll_content_h_signal_key(&rest), || 0.0_f32).set(size[1]);
+            use_signal(&scroll_offset_y_signal_key(&rest), || 0.0_f32).set(360.0);
+            let result = tree.build_and_layout_fast(&mut root, 400.0, 600.0, [-1.0; 2], true, true);
+            let track = crate::core::tree::find_in_tree(&root,
+                |node| node.focus_id.as_deref().is_some_and(|id| id.starts_with(SCROLLBAR_TRACK_FOCUS_PREFIX) && id.ends_with(":y"))).unwrap();
+            let bounds = crate::core::tree::visual_paint_aabb(track, [0.0; 2]);
+            let thumb = result.instances.iter().find(|quad| quad.color[1] > 0.9 && quad.color[0] < 0.1).unwrap();
+            let actual = [(thumb.rect_pos[0] - bounds[0]) / zoom,
+                (thumb.rect_pos[1] - bounds[1]) / zoom,
+                thumb.rect_size[0] / zoom, thumb.rect_size[1] / zoom];
+            if let Some(expected) = baseline {
+                let expected: [f32; 4] = expected;
+                for axis in 0..4 {
+                    assert!((actual[axis] - expected[axis]).abs() < 0.1,
+                        "zoom={zoom}, actual={actual:?}, expected={expected:?}");
+                }
+            } else {
+                baseline = Some(actual);
+            }
+        }
+    });
+}
+
+#[test]
 fn overlay_collect_y_thumb_matches_full_taffy_origin() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {

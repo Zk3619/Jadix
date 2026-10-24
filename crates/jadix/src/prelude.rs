@@ -192,11 +192,12 @@ pub use crate::style::{
     focus_ring_width, get_theme, install_theme_overrides, is_dark_theme,
     load_and_install_theme_overrides, load_stylesheet, load_theme_overrides, parse_stylesheet,
     parse_theme_overrides_str, register_stylesheet, reload_stylesheets, set_focus_ring_style,
-    set_focus_ring_width, set_theme_mode, set_theme_transition_config, theme_mode,
+    set_focus_ring_width, set_theme_mode, set_theme_preference, set_theme_transition_config, theme_mode,
+    theme_preference,
     theme_transition_config, toggle_theme_mode, watch_stylesheets, ClassPart, DesignTokensPatch,
     FocusRingStyle, IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent, IntoOverflow,
     IntoPaintColor, IntoTextColor, LineStyle, MatchedStyleRule, Selector, StyleRule, Stylesheet,
-    StylesheetError, TextAlign, TextOverflow, Theme, ThemeMode, ThemeOverrideError, ThemeOverrides,
+    StylesheetError, TextAlign, TextOverflow, Theme, ThemeMode, ThemePreference, ThemeOverrideError, ThemeOverrides,
     ThemeTransitionConfig, ThemePreset, ThemeStyles, GlassMaterial, set_theme_preset, theme_preset, theme_overrides, TRANSPARENT,
 };
 
@@ -204,9 +205,25 @@ pub use crate::style::{
 // 产品组件：标签 + Builder/`fn`（低层 popup 除外）
 // ---------------------------------------------------------------------------
 
+pub use crate::components::scale_preview::{
+    scale_preview, ScalePreview, ScalePreviewBuilder, ScalePreviewProps,
+};
 pub use crate::components::dock::{DockLayout, DockOrientation, DockPlacement, DockState, DockTab};
+pub use crate::components::text_view::{text_view, TextView, TextViewBuilder, TextViewProps};
+pub use crate::components::text_editor::{text_editor, TextEditor, TextEditorBuilder, TextEditorProps};
+pub use crate::components::document_view::{document_view, DocumentView, DocumentViewBuilder, DocumentViewProps, DocumentBlockRenderer};
+pub use crate::components::document_editor::{document_editor, DocumentEditor, DocumentEditorBuilder, DocumentEditorProps};
+pub use crate::components::math_view::{math_view, chemistry_view, MathView, ChemistryView, MathViewBuilder, MathViewProps, ChemistryViewProps};
+pub use crate::components::molecule_view::{molecule_view, MoleculeView, MoleculeViewProps, MoleculeViewBuilder, MoleculeCamera};
+pub use crate::text::{DocumentEditorState, DocumentEditorSnapshot, DocumentSelection, DocumentEditMode, DocumentMark, Molecule, MoleculeAtom, MoleculeBond, MoleculeData};
+pub use crate::text::{RichTextBlock, RichTextSpan};
+pub use crate::text::{Document, DocumentFormat, DocumentBlock, DocumentBlockKind, DocumentInline, DocumentInlineKind, DocumentInlineStyle, DocumentHeightIndex, DocumentScrollAnchor};
+pub use crate::components::diff_view::{diff_view, DiffView, DiffViewBuilder, DiffViewProps};
+pub use crate::text::{TextDocument, DiffDocument, DiffMode, DiffLineKind, DiffRow};
 #[cfg(feature = "webview")]
 pub use crate::components::webview::{webview, webview_html, webview_status, webview_supported, WebView, WebViewProps, WebViewStatus};
+#[cfg(feature = "webview")]
+pub use crate::components::html_document::{html_document_editor, html_document_view};
 pub use crate::components::{
     // Accordion（复合标签 + Builder）
     accordion,

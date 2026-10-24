@@ -8,6 +8,7 @@ use webview2_com::{
     CreateCoreWebView2CompositionControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, Microsoft::Web::WebView2::Win32::*,
     NavigationCompletedEventHandler, NewWindowRequestedEventHandler,
+    WebMessageReceivedEventHandler,
 };
 use windows::core::{Interface, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
@@ -271,8 +272,24 @@ impl NativeWebViews {
                         composition.SetRootVisualTarget(&visual)?;
                         controller.SetIsVisible(false)?;
                         let settings = webview.Settings()?;
-                        settings.SetIsWebMessageEnabled(false)?;
+                        settings.SetIsWebMessageEnabled(entry.spec.borrow().messages)?;
                         let mut token = 0;
+                        if entry.spec.borrow().messages {
+                            let message_id = entry.spec.borrow().id.clone();
+                            let message_window = window.clone();
+                            webview.add_WebMessageReceived(&WebMessageReceivedEventHandler::create(Box::new(move |_, args| {
+                                if let Some(args) = args {
+                                    let mut message = PWSTR::null();
+                                    if args.TryGetWebMessageAsString(&mut message).is_ok() {
+                                        let message = webview2_com::take_pwstr(message);
+                                        let _scope = crate::app::window_scope::enter(scope);
+                                        super::deliver_message(&message_id, message);
+                                        message_window.request_redraw();
+                                    }
+                                }
+                                Ok(())
+                            })), &mut token)?;
+                        }
                         webview.add_NewWindowRequested(&NewWindowRequestedEventHandler::create(Box::new(move |sender, args| {
                             if let Some(args) = args {
                                 args.SetHandled(true)?;

@@ -14,6 +14,17 @@
 //! Static BiDi labels may still use UAX#14 prewrap + `Wrap::None` via
 //! [`LineBreakSource::BiDiPrewrap`].
 
+pub mod diff;
+pub mod syntax;
+pub mod document;
+pub mod document_layout;
+pub mod semantic_document;
+pub mod document_editor;
+pub mod molecule;
+#[cfg(feature = "document-math")]
+pub mod math;
+pub mod protein;
+pub mod rich_text;
 pub mod markdown;
 pub mod markdown_inline;
 pub mod measure;
@@ -22,6 +33,13 @@ pub mod visual_lines;
 pub mod wrap_variable;
 
 pub use crate::renderer::JadixTextRenderer;
+pub use document::{DocumentEditError, TextDocument};
+pub use document_layout::{DocumentHeightIndex, DocumentScrollAnchor};
+pub use semantic_document::{Document, DocumentFormat, DocumentBlock, DocumentBlockKind, DocumentInline, DocumentInlineKind, DocumentInlineStyle};
+pub use document_editor::{DocumentEditorState, DocumentEditorSnapshot, DocumentSelection, DocumentEditMode, DocumentMark};
+pub use molecule::{Molecule, MoleculeAtom, MoleculeBond, MoleculeData};
+pub use rich_text::{RichTextBlock, RichTextSpan};
+pub use diff::{DiffDocument, DiffLineKind, DiffMode, DiffRow};
 pub use markdown::parse_markdown_blocks;
 pub use markdown_inline::parse_markdown_inline;
 pub use measure::{

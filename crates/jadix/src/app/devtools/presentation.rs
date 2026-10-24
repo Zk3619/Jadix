@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 
 use crate::app::{runtime, window_scope, WindowOptions, WindowSession};
-use crate::core::tree::Element;
+use crate::core::tree::{Element, LayoutStatus};
 
 use super::{panel, DevToolsState};
 
@@ -164,40 +164,66 @@ pub(crate) fn resize_handle() -> Element {
             }
         })
         .on_pointer_up(|_| stop_resize())
-}
-
-pub(super) fn sync_resize_hover(root: &mut Element) -> bool {
-    let Some(handle) = super::snapshot::find_element_by_identity(root, "__jadix_devtools_resize")
-    else {
-        return false;
-    };
-    let active = RESIZE_HOVER.get() || RESIZE_START.get().is_some();
-    let color = if active {
-        crate::style::parse_color("#2563eb")
-    } else {
-        [0.0; 4]
-    };
-    if handle.style.resolved_border_colors()[1] == color {
-        return false;
-    }
-    crate::core::tree::walk_elements_mut(root, |element| {
-        if element.focus_id.as_deref() == Some("__jadix_devtools_resize") {
-            element.style.bg_color = [0.0; 4];
-            element.style.set_border_side_color(1, color);
-            element.style.border_style = crate::style::LineStyle::Solid;
-            element
-                .style
-                .set_border_side_width(1, if active { 2.0 } else { 0.0 });
-            element.style.shadow_color = [0.0; 4];
-            element.style.shadow_blur = 0.0;
-        }
-    });
-    true
+        .reactive_sync(|handle, _| {
+            let active = RESIZE_HOVER.get() || RESIZE_START.get().is_some();
+            let color = if active {
+                crate::style::parse_color("#2563eb")
+            } else {
+                [0.0; 4]
+            };
+            let width = if active { 2.0 } else { 0.0 };
+            if handle.style.resolved_border_colors()[3] == color
+                && (handle.style.resolved_border_widths()[3] - width).abs() < 0.01
+            {
+                LayoutStatus::Clean
+            } else {
+                handle.style.bg_color = [0.0; 4];
+                handle.style.set_border_side_color(3, color);
+                handle.style.border_style = crate::style::LineStyle::Solid;
+                handle.style.set_border_side_width(3, width);
+                handle.style.shadow_color = [0.0; 4];
+                handle.style.shadow_blur = 0.0;
+                LayoutStatus::StyleChanged
+            }
+        })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn detached_and_secondary_windows_keep_their_full_content_viewport() {
+        crate::core::reactivity::create_root(|| {
+            DevToolsState::enable_for_window();
+            DevToolsState::set_open(true);
+            DevToolsState::set_panel_width(640.0);
+            super::super::device::disable();
+            crate::utils::modal_motion::set_modal_viewport_size(1200.0, 900.0);
+            assert_eq!(
+                crate::utils::modal_motion::modal_viewport_size(),
+                (560.0, 900.0)
+            );
+            SESSION.with(|session| *session.borrow_mut() = Some(WindowSession::new(())));
+            assert_eq!(
+                crate::utils::modal_motion::modal_viewport_size(),
+                (1200.0, 900.0)
+            );
+            SESSION.with(|session| session.borrow_mut().take());
+            {
+                let _scope = window_scope::enter(window_scope::WindowScope::Secondary(73));
+                assert_eq!(
+                    crate::utils::modal_motion::modal_viewport_size(),
+                    (1200.0, 900.0)
+                );
+            }
+            assert_eq!(
+                crate::utils::modal_motion::modal_viewport_size(),
+                (560.0, 900.0)
+            );
+            DevToolsState::set_open(false);
+        });
+    }
 
     #[test]
     fn resize_drag_captures_pointer_updates_width_and_releases() {

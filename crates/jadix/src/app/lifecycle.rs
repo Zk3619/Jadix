@@ -737,6 +737,7 @@ impl super::App {
 
     fn create_primary_if_needed(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.state.borrow().is_none() && self.detached_gpu.is_none() {
+            super::window_chrome::update_system_theme(event_loop.system_theme());
             let startup = std::time::Instant::now();
             let attrs = super::window_lifecycle::prepare_attributes(
                 self.window_options.to_window_attributes(),
@@ -911,6 +912,9 @@ impl ApplicationHandler for super::App {
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
         let _work = super::frame_budget::begin_work(super::frame_budget::WorkKind::Shared);
+        if crate::style::take_system_theme_refresh() {
+            super::window_chrome::update_system_theme(event_loop.system_theme());
+        }
         #[cfg(debug_assertions)]
         if self.hot_reload.has_pending() {
             if let Some(state) = (*self.state.borrow()).as_ref() {
@@ -920,6 +924,18 @@ impl ApplicationHandler for super::App {
 
         let now = std::time::Instant::now();
         let mut next_wake: Option<std::time::Instant> = None;
+        #[cfg(all(debug_assertions, feature = "devtools"))]
+        if let Some(deadline) = super::devtools::DevToolsState::pick_highlight_deadline() {
+            if deadline <= now {
+                if super::devtools::DevToolsState::expire_pick_highlight(now) {
+                    if let Some(state) = self.state.borrow().as_ref() {
+                        state.window.request_redraw();
+                    }
+                }
+            } else {
+                next_wake = Some(deadline);
+            }
+        }
         #[cfg(all(feature = "webview", not(windows)))]
         if let Some(state) = self.state.borrow_mut().as_mut() {
             if state.webviews.pump(&state.window) {
@@ -1257,6 +1273,9 @@ impl ApplicationHandler for super::App {
         if !self.window_registry.contains(id) {
             return;
         }
+        if crate::style::take_system_theme_refresh() {
+            super::window_chrome::update_system_theme(event_loop.system_theme());
+        }
         let _frame = super::frame_budget::begin_event(id, &event);
         #[cfg(feature = "a11y")]
         {
@@ -1323,6 +1342,9 @@ impl ApplicationHandler for super::App {
                 }
             }
             WindowEvent::PointerLeft { .. } => {
+                if self.pointer_window != Some(id) {
+                    return;
+                }
                 if self.is_secondary_window(id) {
                     self.handle_secondary_cursor_left(id, event_loop);
                 } else {
@@ -1532,6 +1554,7 @@ impl ApplicationHandler for super::App {
                 }
             }
             WindowEvent::ThemeChanged(theme) => {
+                super::window_chrome::update_system_theme(Some(theme));
                 crate::platform::glass_on_os_theme(matches!(theme, winit::window::Theme::Dark));
             }
             WindowEvent::RedrawRequested => {

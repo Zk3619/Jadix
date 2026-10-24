@@ -212,7 +212,11 @@ impl super::App {
         // primary redraw (animation / shared signals) cannot re-hit-test with secondary
         // client coords still sitting in `cursor_pos`.
         if let Some(prev_id) = prev {
-            if !self.is_secondary_window(prev_id) && self.is_secondary_window(id) {
+            if self.is_secondary_window(prev_id) {
+                if let Some(previous) = self.secondaries.borrow().get(&prev_id) {
+                    previous.window.request_redraw();
+                }
+            } else if self.is_secondary_window(id) {
                 self.clear_primary_hovers_out_of_window();
             }
         }
@@ -250,9 +254,6 @@ impl super::App {
         crate::utils::modal_motion::drain_pending_modal_unmounts();
         crate::utils::floating_motion::drain_pending_floating_unmounts();
         if crate::components::bubble::flush_reaction_hover_dismiss() {
-            window.request_redraw();
-        }
-        if crate::components::avatar::flush_avatar_group_hover_dismiss() {
             window.request_redraw();
         }
     }
@@ -484,6 +485,14 @@ impl super::App {
             (has_caret, render_ok)
         };
 
+        crate::app::reactive::drain_deferred_view_remounts();
+
+        if crate::utils::floating_motion::tick_floating_presence() {
+            if let Some(secondary) = self.secondaries.borrow().get(&id) {
+                secondary.window.request_redraw();
+            }
+        }
+
         if has_caret {
             let wake = crate::renderer::caret_blink_next_toggle_at();
             self.caret_wake_at = Some(wake);
@@ -641,6 +650,12 @@ impl super::App {
                         caret_visual_y,
                         line_h,
                     );
+                    let paint_scale = if source == "painted" {
+                        super::ime_support::painted_text_edit_node(text_nodes, &fid_clone)
+                            .map_or(1.0, |node| node.paint_scale)
+                    } else { 1.0 };
+                    let line_h = line_h * paint_scale;
+                    let caret_w = (caret_w * paint_scale).max(1.0 / ui_scale.max(0.001));
                     let ay = super::ime_support::clamp_ime_anchor_y(ay, line_h, win_h);
                     let ax = ax.clamp(0.0, (win_w - 1.0).max(0.0));
                     let (px, py, pw, ph) = super::ime_support::physical_ime_cursor_area(
@@ -907,7 +922,8 @@ impl super::App {
         if source == "painted" {
             if let Some(n) = super::ime_support::painted_text_edit_node(text_nodes, fid) {
                 return super::ime_support::paint_space_ime_origin(
-                    [n.x + compose_x_in_field, caret_visual_y],
+                    [n.x + compose_x_in_field * n.paint_scale,
+                        n.y + (n.height - line_h).max(0.0) * 0.5 * n.paint_scale],
                     &n.paint_transform,
                     n.paint_origin,
                 );
@@ -958,11 +974,11 @@ impl super::App {
     /// submitted; static pages then slept (`any_ui_animation_active` gated on
     /// `force_redraw_count`) and the bar stayed at cubic 1.
     fn apply_overlay_scrollbar_fade_targets(&mut self, now: std::time::Instant) {
-        let rests: Vec<(String, f32, f32)> = self
-            .scroll_metrics_cache
-            .iter()
-            .map(|(rest, (_, [mx, my], _))| (rest.clone(), *mx, *my))
-            .collect();
+        let rests: Vec<(String, f32, f32)> = self.state.borrow().as_ref()
+            .map(|state| state.last_render_scroll_metrics.iter()
+                .map(|(rest, _, [maximum_x, maximum_y], _)| (rest.clone(), *maximum_x, *maximum_y))
+                .collect())
+            .unwrap_or_default();
         for (rest, raw_max_x, raw_max_y) in rests {
             self.retarget_overlay_scrollbar_cubics(&rest, now, raw_max_x, raw_max_y);
         }
@@ -992,8 +1008,6 @@ impl super::App {
         if !axis_x_enabled && !axis_y_enabled {
             return;
         }
-        let is_hover =
-            crate::core::reactivity::use_signal(keys.hover_legacy.as_str(), || false).peek();
         let is_hover_x =
             crate::core::reactivity::use_signal(keys.hover_axis_x.as_str(), || false).peek();
         let is_hover_y =
@@ -1028,9 +1042,9 @@ impl super::App {
                 .as_ref()
                 .is_some_and(|id| crate::utils::text_field::textarea_scroll_rest(id) == rest);
         let keep_visible_x =
-            (is_hover || is_hover_x) || is_dragging_x || now < visible_until_x || text_drag_on_rest;
+            is_hover_x || is_dragging_x || now < visible_until_x || text_drag_on_rest;
         let keep_visible_y =
-            (is_hover || is_hover_y) || is_dragging_y || now < visible_until_y || text_drag_on_rest;
+            is_hover_y || is_dragging_y || now < visible_until_y || text_drag_on_rest;
         let vis_x =
             crate::core::reactivity::use_signal(keys.scrollbar_visibility_x.as_str(), || {
                 "auto".to_string()
@@ -1849,9 +1863,6 @@ impl super::App {
         if crate::components::bubble::flush_reaction_hover_dismiss() {
             window.request_redraw();
         }
-        if crate::components::avatar::flush_avatar_group_hover_dismiss() {
-            window.request_redraw();
-        }
 
         // Utility-class `:hover` (e.g. gallery `hover:scale-x-150`) has no `on_hover`.
         // Wake a frame when pointer geometry would change those samples — otherwise enter
@@ -1884,7 +1895,6 @@ impl super::App {
                     crate::app::devtools::try_pick_hover(&state.root_element, px, py);
                 if hover_changed {
                     let _ = crate::app::devtools::refresh_highlight(&mut state.root_element);
-                    let _ = crate::app::devtools::sync_tree_row_hovers(&mut state.root_element);
                 }
                 if hover_changed {
                     window.request_redraw();
@@ -1916,7 +1926,6 @@ impl super::App {
             crate::app::devtools::DevToolsState::clear_hover_highlight();
             if let Some(state) = (*self.state.borrow_mut()).as_mut() {
                 let _ = crate::app::devtools::refresh_highlight(&mut state.root_element);
-                let _ = crate::app::devtools::sync_tree_row_hovers(&mut state.root_element);
                 window.request_redraw();
             }
         }
@@ -2099,37 +2108,9 @@ impl super::App {
                 {
                     let metrics = self.scroll_metrics_cache.get(&rest).copied();
                     if let Some((_area_bounds, [max_x, max_y], _)) = metrics {
-                        let axis_ch = match axis {
-                            super::scroll_support::ScrollAxis::X => "x",
-                            super::scroll_support::ScrollAxis::Y => "y",
-                        };
-                        let track_fid = format!(
-                            "{}{}:{}",
-                            crate::core::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX,
-                            rest,
-                            axis_ch
-                        );
-                        let thumb_fid = format!(
-                            "{}{}:{}",
-                            crate::core::scrollbar::SCROLLBAR_THUMB_FOCUS_PREFIX,
-                            rest,
-                            axis_ch
-                        );
-                        if let (
-                            Some((track_bounds, track_scroll)),
-                            Some((thumb_bounds, thumb_scroll)),
-                        ) = (
-                            super::tree_hit::find_bounds_by_focus_id(
-                                &state.root_element,
-                                &track_fid,
-                                [0.0, 0.0],
-                            ),
-                            super::tree_hit::find_bounds_by_focus_id(
-                                &state.root_element,
-                                &thumb_fid,
-                                [0.0, 0.0],
-                            ),
-                        ) {
+                        if let Some((track_bounds, thumb_bounds)) =
+                            super::scroll_support::scrollbar_drag_bounds(&state.root_element, &rest, axis)
+                        {
                             // Page scrollbar is outside the floating panel. Dismiss *before*
                             // applying scroll so the overlay does not follow the trigger then
                             // close on mouse-up. Overlay-owned bars (Select list) stay.
@@ -2145,20 +2126,20 @@ impl super::App {
                                 thumb_start,
                             ) = match axis {
                                 super::scroll_support::ScrollAxis::X => (
-                                    track_bounds[0] - track_scroll[0],
+                                    track_bounds[0],
                                     track_bounds[2].max(1.0),
                                     thumb_bounds[2].max(1.0),
                                     max_x,
                                     x,
-                                    thumb_bounds[0] - thumb_scroll[0],
+                                    thumb_bounds[0],
                                 ),
                                 super::scroll_support::ScrollAxis::Y => (
-                                    track_bounds[1] - track_scroll[1],
+                                    track_bounds[1],
                                     track_bounds[3].max(1.0),
                                     thumb_bounds[3].max(1.0),
                                     max_y,
                                     y,
-                                    thumb_bounds[1] - thumb_scroll[1],
+                                    thumb_bounds[1],
                                 ),
                             };
                             drop(state_borrow);
@@ -2966,6 +2947,8 @@ impl super::App {
                         crate::core::reactivity::use_signal(keys.target_x.as_str(), || sx).peek();
                     let by =
                         crate::core::reactivity::use_signal(keys.target_y.as_str(), || sy).peek();
+                    let (dx, dy) =
+                        super::scroll_support::wheel_delta_for_scroll_range(dx, dy, max_x, max_y);
                     let can_move_x = (dx > 0.0 && bx > 0.0) || (dx < 0.0 && bx < max_x);
                     let can_move_y = (dy > 0.0 && by > 0.0) || (dy < 0.0 && by < max_y);
                     if can_move_x || can_move_y {
@@ -3043,6 +3026,8 @@ impl super::App {
 
             // Scroll Trapping: If the scroll area can move at all in the requested direction,
             // it consumes the entire delta and we stop bubbling to parents.
+            let (dx, dy) =
+                super::scroll_support::wheel_delta_for_scroll_range(dx, dy, max_x, max_y);
             let can_move_x = (dx > 0.0 && bx > 0.0) || (dx < 0.0 && bx < max_x);
             let can_move_y = (dy > 0.0 && by > 0.0) || (dy < 0.0 && by < max_y);
 
@@ -3330,11 +3315,16 @@ impl super::App {
             let hot_reload = self.hot_reload.drain_pending();
             if hot_reload.count > 0 {
                 #[cfg(all(debug_assertions, feature = "devtools"))]
-                super::devtools::DevToolsState::record_change("HMR", format!(
-                    "{} · {} templates · {} assets · {} stylesheets",
-                    hot_reload.last_patch_file, hot_reload.merged_templates.len(),
-                    hot_reload.asset_paths.len(), hot_reload.stylesheet_paths.len(),
-                ));
+                super::devtools::DevToolsState::record_change(
+                    "HMR",
+                    format!(
+                        "{} · {} templates · {} assets · {} stylesheets",
+                        hot_reload.last_patch_file,
+                        hot_reload.merged_templates.len(),
+                        hot_reload.asset_paths.len(),
+                        hot_reload.stylesheet_paths.len(),
+                    ),
+                );
                 let assets_reloaded = state.reload_wgsl_assets(&hot_reload.asset_paths);
 
                 let merged = &hot_reload.merged_templates;
@@ -3643,6 +3633,11 @@ impl super::App {
         const SMOOTH_SCROLL_EDGE_SNAP_PX: f32 = 0.45;
 
         let mut pre_render_data = Vec::new();
+        let secondary_rests: std::collections::HashSet<_> = self.secondaries.borrow().values()
+            .flat_map(|secondary| secondary.last_render_scroll_metrics.iter().map(|(rest, _, _, _)| rest.clone()))
+            .collect();
+        self.scroll_metrics_cache.retain(|rest, _| !secondary_rests.contains(rest));
+        self.smooth_scroll_motion.retain(|rest, _| !secondary_rests.contains(rest));
         for (rest, (_, [mx, my], _)) in &self.scroll_metrics_cache {
             let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
                 rest,
@@ -3846,14 +3841,8 @@ impl super::App {
         for rest in &rests_offset_moved {
             self.bump_smooth_active_until(rest, now);
         }
-        // Only freeze while this frame actually moved ≥0.5px. Tying freeze to
-        // `smooth_scroll_animating` (any viewport catching up, including a 0.06px tail)
-        // left hover-open stuck: +N enter fires once, `same_identity` will not re-enter.
         if overlay_scroll_moved {
             let _ = crate::components::avatar::dismiss_avatar_group_expands_on_scroll();
-        }
-        if crate::components::avatar::set_avatar_group_expand_hover_frozen(overlay_scroll_moved) {
-            crate::app::runtime::request_redraw();
         }
 
         let mut re_borrow = match self.state.try_borrow_mut() {
@@ -4402,15 +4391,14 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         });
 
                     // Independent per-axis visibility.
-                    // - hover over content: allow both
                     // - hover over scrollbar: only that axis
                     // - wheel: axis-specific visible_until
                     // - text drag-select edge auto-scroll: keep bars visible while scrolling
-                    let keep_visible_x = (is_hover || is_hover_x)
+                    let keep_visible_x = is_hover_x
                         || is_dragging_x
                         || now < visible_until_x
                         || text_drag_on_rest;
-                    let keep_visible_y = (is_hover || is_hover_y)
+                    let keep_visible_y = is_hover_y
                         || is_dragging_y
                         || now < visible_until_y
                         || text_drag_on_rest;
@@ -4590,7 +4578,10 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     || page_css_active
                     || ui_anim_active
                     || theme_anim_active;
-                super::frame_stats::note_window_animation_activity(window.id(), self.paint_clock_active);
+                super::frame_stats::note_window_animation_activity(
+                    window.id(),
+                    self.paint_clock_active,
+                );
                 if self.paint_clock_active || self.scrollbar_geometry_pending {
                     window.request_redraw();
                 } else if scrollbar_visibility_pending {
@@ -4612,9 +4603,6 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 crate::utils::modal_motion::drain_pending_modal_unmounts();
                 crate::utils::floating_motion::drain_pending_floating_unmounts();
                 if crate::components::bubble::flush_reaction_hover_dismiss() {
-                    window.request_redraw();
-                }
-                if crate::components::avatar::flush_avatar_group_hover_dismiss() {
                     window.request_redraw();
                 }
                 if crate::primitives::interactive::take_hover_paint_dirty() {
@@ -4721,6 +4709,13 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                     None => [visual[0] + compose_x_in_field, caret_visual_y],
                                 }
                             };
+                            let paint_scale = if source == "painted" {
+                                self.state.borrow().as_ref().and_then(|state|
+                                    super::ime_support::painted_text_edit_node(&state.text_nodes, &fid_clone)
+                                        .map(|node| node.paint_scale)).unwrap_or(1.0)
+                            } else { 1.0 };
+                            let line_h = line_h * paint_scale;
+                            let caret_w = (caret_w * paint_scale).max(1.0 / ui_scale.max(0.001));
                             let ay = super::ime_support::clamp_ime_anchor_y(ay, line_h, win_h);
                             let ax = ax.clamp(0.0, (win_w - 1.0).max(0.0));
                             // IME area / candidate anchor = composition origin (not the advancing
@@ -4985,20 +4980,17 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     }
                     // Legacy `on_click` / Label `for`: fire on pointer up (DOM click timing).
                     if !pev.is_consumed() {
-                        let via_label = label_for_focus.is_some();
-                        if via_label || detail < 2 {
-                            if let Some(fid) = label_for_focus {
-                                crate::core::reactivity::use_signal(
-                                    "__jadix_button_focus_id",
-                                    String::new,
-                                )
-                                .set(fid);
-                            }
-                            if let Some(cb) = cb_to_run {
-                                (*cb.borrow_mut())();
-                            }
-                            crate::app::reactive::drain_deferred_view_remounts();
+                        if let Some(fid) = label_for_focus {
+                            crate::core::reactivity::use_signal(
+                                "__jadix_button_focus_id",
+                                String::new,
+                            )
+                            .set(fid);
                         }
+                        if let Some(cb) = cb_to_run {
+                            (*cb.borrow_mut())();
+                        }
+                        crate::app::reactive::drain_deferred_view_remounts();
                     }
                     // Use the pre-click path. Re-hitting after on_click is wrong: opening is
                     // already gated by `disarm_underlay_close`, and a nested Select item click

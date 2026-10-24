@@ -6,6 +6,51 @@ use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use crate::primitives::r#box::vstack;
 use jadix_macros::component;
+use std::{cell::RefCell, collections::HashMap, rc::Rc};
+
+thread_local! {
+    static MESSAGES: RefCell<HashMap<(crate::app::window_scope::WindowScope, String), Rc<dyn Fn(String)>>> = RefCell::new(HashMap::new());
+}
+
+pub(crate) fn deliver_message(id: &str, message: String) {
+    if message.len() > 16 * 1024 * 1024 {
+        return;
+    }
+    let key = (crate::app::window_scope::active(), id.to_string());
+    let handler = MESSAGES.with(|handlers| handlers.borrow().get(&key).cloned());
+    if let Some(handler) = handler {
+        handler(message);
+    }
+}
+
+pub(crate) fn webview_html_with_messages(
+    id: String,
+    html: String,
+    handler: impl Fn(String) + 'static,
+) -> Element {
+    let id = crate::utils::resolve_instance_id(id, "webview");
+    let key = (crate::app::window_scope::active(), id.clone());
+    let handler: Rc<dyn Fn(String)> = Rc::new(handler);
+    MESSAGES.with(|handlers| handlers.borrow_mut().insert(key.clone(), handler.clone()));
+    let mut element = build_webview(id.clone(), String::new(), Some(html));
+    element.set_attr("jadix_webview_messages", "1");
+    let lifetime = Element::new()
+        .w(0.0)
+        .h(0.0)
+        .pointer_events_none()
+        .on_unmount(move || {
+            MESSAGES.with(|handlers| {
+                let mut handlers = handlers.borrow_mut();
+                if handlers
+                    .get(&key)
+                    .is_some_and(|current| Rc::ptr_eq(current, &handler))
+                {
+                    handlers.remove(&key);
+                }
+            });
+        });
+    element.child(lifetime)
+}
 
 #[cfg(windows)]
 pub(crate) mod native;
@@ -115,6 +160,7 @@ pub(crate) struct WebViewSpec {
     pub id: String,
     pub url: String,
     pub html: Option<String>,
+    pub messages: bool,
     pub bounds: [f32; 4],
     pub clip: [f32; 4],
     pub visible: bool,
@@ -153,6 +199,7 @@ pub(crate) fn collect_specs(root: &Element, viewport: [f32; 4]) -> Vec<WebViewSp
                     .cloned()
                     .unwrap_or_default(),
                 html: element.get_attr("jadix_webview_html").cloned(),
+                messages: element.get_attr("jadix_webview_messages").is_some(),
                 bounds,
                 clip: clipped,
                 visible: visible && clipped[2] > 0.0 && clipped[3] > 0.0,
@@ -182,6 +229,24 @@ fn intersect(left: [f32; 4], right: [f32; 4]) -> [f32; 4] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn html_message_handler_survives_reactive_root_hook_replacement() {
+        let (_owner, ()) = crate::core::reactivity::create_root(|| {
+            let received = Signal::new(String::new());
+            let element = webview_html_with_messages(
+                "message-lifetime".into(),
+                "<p>test</p>".into(),
+                move |message| received.set(message),
+            );
+            let element = element.on_unmount(|| {});
+            deliver_message("message-lifetime", "saved".into());
+            assert_eq!(received.peek(), "saved");
+            drop(element);
+            deliver_message("message-lifetime", "stale".into());
+            assert_eq!(received.peek(), "saved");
+        });
+    }
 
     #[test]
     fn geometry_preserves_document_size_and_clips_the_visible_region() {

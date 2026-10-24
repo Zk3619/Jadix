@@ -514,6 +514,23 @@ mod tests {
     }
 
     #[test]
+    fn fluent_badge_uses_compact_caption_metrics() {
+        use crate::style::{set_theme_preset, ThemePreset};
+
+        let previous = crate::style::get_theme();
+        set_theme_preset(ThemePreset::Fluent);
+        let el: Element = badge().text("Default").into();
+        let caption = el
+            .children
+            .iter()
+            .find(|child| child.text.is_some())
+            .unwrap();
+        assert_eq!(caption.text_style.size, Some(12.0));
+        assert_eq!(caption.text_style.line_height_px, Some(16.0));
+        crate::style::set_theme(previous);
+    }
+
+    #[test]
     fn badge_content_sized_shrinks_with_shorter_label() {
         use crate::primitives::r#box::hstack;
         let mut long: Element = hstack()

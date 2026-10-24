@@ -685,9 +685,7 @@ pub(super) fn visual_border_box(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] 
     {
         return el.paint_visual_bounds;
     }
-    let [vx, vy] = visual_xy(el, scroll_acc);
-    let b = el.layout_bounds;
-    [vx, vy, b[2], b[3]]
+    crate::core::tree::visual_paint_aabb(el, scroll_acc)
 }
 
 /// Same scroll contribution rule as layout collect: `scroll:` viewports always
@@ -1330,13 +1328,7 @@ fn find_selectable_text_leaf_for_key_acc(
         scroll_acc,
         (),
         |el, scroll_acc, (), _lin, _sc| {
-            let mut next_acc = scroll_acc;
-            if el.style.overflow.x != taffy::style::Overflow::Visible {
-                next_acc[0] += el.scroll_offset[0];
-            }
-            if el.style.overflow.y != taffy::style::Overflow::Visible {
-                next_acc[1] += el.scroll_offset[1];
-            }
+            let next_acc = next_hit_scroll_acc(el, scroll_acc);
             Some((scroll_acc, next_acc, ()))
         },
         |el, scroll_acc, (), _lin, _sc, child_hit| {
@@ -3769,9 +3761,6 @@ fn pick_element_path_acc(
         match frame.phase {
             Phase::Enter => {
                 if result.is_some() {
-                    continue;
-                }
-                if pointer_events_blocked(frame.el) {
                     continue;
                 }
                 if frame.el.template_id.as_deref() == Some(crate::app::devtools::HIGHLIGHT_SLOT_ID)
