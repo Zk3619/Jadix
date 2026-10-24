@@ -190,19 +190,7 @@ they do not certify an operating-system IME candidate-window session. Mixed
 text/object inline layout currently wraps between runs; full typographic inline
 flow and cross-block preview selection remain follow-up work.
 
-## Word-style editing
+## Development follow-ups
 
-Keep document semantics, transactions, selection/history and embedded scientific
-objects in the document layer. Add a dedicated paginated editor/view for paper
-size, margins, page breaks, headers/footers, sections and print layout. The current
-flat Markdown display rows are not a sufficient Word document schema: nested
-tables, merged cells, paragraph/run properties, floating objects and structural
-selection need a richer document tree. Share those semantics with the existing
-editor where they apply; do not put pagination into `Textarea`, `TextView`, or
-Markdown's source-reveal logic. A future `PagedDocumentEditor` should own page
-layout and page-level interaction while reusing the document editing services.
-DOCX import/export and Word-compatible pagination are not implemented here.
-
-See [Document products and format adapters](DOCUMENT_PRODUCTS.md) for the Word,
-PowerPoint, spreadsheet and PDF product boundaries. Pagination names describe
-proposed components, not public APIs implemented by this change.
+Future model and pagination directions are maintained in [the development notes](../../development-docs/engine/document-model-followups.md).
+These are design directions, not currently available component APIs.

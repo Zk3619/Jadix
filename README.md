@@ -30,6 +30,12 @@ Jadix is a pure Rust-native UI workspace aimed at building a modern, composable,
 
 ## 核心特性 | Key Features
 
+按用途选择依赖：[框架能力与 Feature 表格式清单](docs/FEATURES.md)，区分已拆成 feature、仍保留的核心、后续拆分候选、默认状态和兼容别名。
+按包理解职责：[框架 Crate 拆分表格式清单](development-docs/engine/CRATES.md)，区分已独立的 crate、仍在框架内的实现和后续 crate 候选；独立包不等于可选依赖或已经发布。
+实施与验收：[Feature 与 Crate 拆分流程](development-docs/plans/SPLITTING.md)，涵盖已有拆分优化、拖拽和宏的耦合整改，以及后续迁移步骤。
+开发期测试/文档整理见 [测试治理](development-docs/plans/testing-governance.md)、[文档治理](development-docs/plans/documentation-governance.md)，执行顺序统一见 [development-docs 路线](development-docs/AUTHORITY.md#framework-governance)。开发文档是独立仓库内容，公开能力表与正常构建不依赖其检出。
+默认 Shadcn；代码编辑、Markdown、语法高亮、LSP、Motion、缩放预览与自定义 DComp 按需启用，GPU 后端统一为 `backend-*`。
+
 - **分层架构 | Layered architecture**  
   基于 `winit`（窗口/事件）、`wgpu`（GPU 渲染）、`taffy`（Flex/Grid 布局）、`glyphon`（文本）构建。
 
@@ -80,8 +86,14 @@ jadix/
 │  ├─ jadix/                  # 核心运行时与组件系统 | Core runtime and components
 │  ├─ jadix_macros/           # #[component] / ui! 宏 | Proc-macro crate
 │  ├─ jadix_style_tokens/     # utility 真源 | Shared style tokens
+│  ├─ jadix_tasks/            # 必选任务契约 | Runtime-neutral task contracts
+│  ├─ jadix_media/            # 必选媒体契约 | Backend-neutral media contracts
+│  ├─ jadix_net/              # 可选网络契约 | Optional networking contracts
+│  ├─ jadix_clipboard/        # 原生剪贴板实现 | Native clipboard adapter
+│  ├─ jadix_winit/            # 窗口维护叉（依赖别名 winit）| Window facade fork
+│  ├─ jadix_accesskit_ohos/   # 可选 OHOS 无障碍桥 | Optional OHOS accessibility
 │  ├─ jadix_hot_reload_cli/   # 热重载监听器 | Hot reload watcher
-│  └─ jadix_window_state/   # 可选：窗口几何 TOML 持久化 | Optional window-state crate
+│  └─ jadix_window_state/     # 应用另选：窗口几何持久化 | App-selected persistence helper
 └─ examples/
    ├─ gallery/              # 组件与能力展示 | Component gallery
    ├─ calculator/           # 体积 / 内存基线 | Size/memory baseline
@@ -228,7 +240,7 @@ env -u DISPLAY ./gallery                           # Wayland，保留 WAYLAND_DI
 Gallery 默认在右下角显示实时性能 overlay（FPS、帧间隔、CPU 帧耗时、布局与文字准备耗时），
 每 500 ms 更新；点击“性能 / FPS”收起，`JADIX_PERF_OVERLAY=0` 完全关闭采样。
 CPU 耗时包含获取表面和提交的等待，并非 GPU 执行时间；静止时显示 Idle，不强制连续渲染。
-Windows release 的启动与最大化重启回归见 [scripts/startup-bench.md](scripts/startup-bench.md)。
+Windows release 的启动与最大化重启回归见 [开发期启动验证记录](development-docs/ops/startup-bench.md)。
 交叉编译成功表示二进制可构建；树莓派 GPU、窗口、输入法和剪贴板仍需在实机验证。
 
 ### 树莓派上的帧率、首次启动与桌面名称

@@ -148,11 +148,6 @@ let slots = MediaPlayerSlots::new().replace(MediaPlayerSlot::Timeline, move || {
 
 MediaBackend、Audio / Video 原语和会话过滤契约不因 UI 扩展而耦合插件包。编码媒体、网络密钥和翻译凭证不应放进样式或任意 HTML 字符串；本设计只接受受类型约束的元素、值与闭包。
 
-## 验证
+## 开发验证
 
-- cargo test -p jadix --test media_customization --features a11y
-- cargo test -p jadix --test media_player --test media_sessions --features a11y
-- cargo test -p jadix --lib components::media_player::tests --features a11y
-- cargo check -p gallery
-
-Gallery 的绘图页包含自定义字幕占位层、时间轴预览时间、受控画质 / 字幕选项与选集侧栏。请求只记日志，另有明确命名的“模拟后端确认”按钮；不会隐式播放、加载字幕或下载雪碧图。
+测试命令、Gallery 验证边界集中见 [媒体开发验证记录](../../development-docs/ops/media-validation.md)。

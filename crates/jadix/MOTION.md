@@ -1,5 +1,11 @@
 # Jadix 组件级 Motion 动画
 
+启用 `animation-ex` 使用交互 Motion 与自动布局投影；`animation` 是包含基础层与增强层的聚合入口。
+路径跟随／描边／morph 另需 `animation-path`，它传递开启增强层但不要求 SVG。
+默认仅开启 `animation-base`，包含 CSS 动画、Spring/tween/inertia、AnimatedNumber 与 Timeline。
+关闭基础层时应用静态目标并立即完成 presence；未开启增强层时布局和 SVG 图标自动 morph 直接应用目标。
+SVG 图标绘制仍需独立的 `svg`。完整能力边界见仓库 `docs/FEATURES.md`。
+
 `jadix::motion` 在现有 CSS transition / keyframes、`AnimatedNumber`、spring / inertia、
 timeline 和 retained 元素树之上提供组件绑定，不另起时钟，也不引入依赖。
 
@@ -10,7 +16,9 @@ timeline 和 retained 元素树之上提供组件绑定，不另起时钟，也�
 
 ## 交互与绘制样式
 
-```rust
+```rust,no_run
+# #[cfg(feature = "animation-ex")]
+# {
 use jadix::prelude::*;
 use jadix::style::{SpringOptions, ValueDriver};
 
@@ -27,6 +35,7 @@ let button = Element::new()
             .while_tap(MotionTarget::new().scale(0.96))
             .while_focus(MotionTarget::new().border_radius(12.0))
             .transition(ValueDriver::Spring(SpringOptions::visual(0.3, 0.15))));
+# }
 ```
 
 - 优先级：普通目标 < 键盘焦点 < hover < tap < drag。不同属性叠加，同一属性由高优先级接管。
@@ -44,11 +53,14 @@ let button = Element::new()
 
 ## 布局位置与大小
 
-```rust
+```rust,no_run
+# #[cfg(feature = "animation-ex")]
+# {
 use jadix::prelude::*;
 
 let layout = use_layout_motion("card-layout", LayoutAnimation::Both);
 let card = Element::new().w(240.0).h(100.0).layout_motion(&layout);
+# }
 ```
 
 保持每个列表 key 对应独立且稳定的 `LayoutMotion`，正常修改 flex/grid 排列、间距、尺寸或顺序即可。
@@ -64,7 +76,7 @@ let card = Element::new().w(240.0).h(100.0).layout_motion(&layout);
 
 ### 跨父容器共享元素
 
-```rust
+```rust,no_run
 use jadix::prelude::*;
 
 let chip = Element::new().w(120.0).h(48.0).layout_id("selected-chip");
@@ -86,7 +98,9 @@ Gallery 新增“动画”分区（`JADIX_GALLERY_SECTION=motion`），可切换
 
 ## 矢量绘制
 
-```rust
+```rust,no_run
+# #[cfg(feature = "animation-path")]
+# {
 use jadix::prelude::*;
 use jadix::primitives::path::{attach_path, PathCommand, PathStyle};
 use jadix::style::{AnimatedNumber, TimingFunction};
@@ -102,6 +116,7 @@ let drawing = attach_path(Element::new().w(128.0).h(80.0), &commands,
     &PathStyle::stroke([0.2, 0.5, 0.9, 1.0], 3.0));
 let drawing = bind_path_reveal(drawing, path.clone(), progress.clone());
 let follower = bind_path_follow(Element::new().w(8.0).h(8.0), path, progress, true);
+# }
 ```
 
 - `PreparedPath` 一次展平/测长，采样按弧长二分定位，不连接多个 `MoveTo` 子路径，并计入闭合边。
@@ -136,4 +151,4 @@ Gallery 所有分区的 `p-3 sm:p-4 lg:p-6` 容器显式声明 `padding 200ms ea
 全局 `prefers_reduced_motion` 对这些绑定即时生效，包括正在播放的动画；路径绑定直接到末态。
 `AnimatedNumber::jump(value)` 立即设置值，取消队列、pending target、跟随、速度和播放状态，保持信号身份。
 
-验证：`cargo test -p jadix --lib motion:: -- --test-threads=1`。
+验证：`cargo test -p jadix --lib --features animation-path motion:: -- --test-threads=1`。

@@ -79,20 +79,7 @@ in these new views. Diff source text excludes line numbers and change markers
 when copied. Change color is supplemented by `+` / `-` in both modes;
 split rows expose `data-change`, source-line and line-ending attributes.
 
-## Next stages and ownership
+## Development follow-ups
 
-1. Document-scoped selection/search and source-position mappings across virtual
-   rows, including unmounted rows, accessible navigation and keyboard copy.
-2. A reusable edit controller using the existing IME, grapheme/BiDi, visual-line
-   and undo machinery; do not route a document editor through Textarea chrome.
-   Measure large-edit latency before selecting a Rope/Piece Table implementation.
-3. Variable-height document blocks and anchored height indexing for Markdown
-   and rich text, reusing the existing Markdown parsers and rich shaping support.
-4. Dedicated inline/block math and chemistry renderers, and separate molecular
-   graphics editors. Formula trees and molecular graphs are not plain text lines.
-
-The local GPUI Kit implementation was consulted for separation of document
-state and presentation, scrollable TextView virtualization, diff source-side
-coordinates and missing-newline handling. No GPUI types or renderer code are
-copied or added as dependencies. Jadix keeps its own VirtualList, ScrollArea,
-Label selection and Glyphon text path.
+Future model and pagination directions are maintained in [the development notes](../../development-docs/engine/document-model-followups.md).
+These are design directions, not currently available component APIs.

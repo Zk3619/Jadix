@@ -16,7 +16,7 @@ $output = if ([IO.Path]::IsPathRooted($OutputDirectory)) {
 New-Item -ItemType Directory -Path $output -Force | Out-Null
 if ($Mode -eq 'Build') {
     $env:CARGO_INCREMENTAL = '0'
-    cargo build --release --locked -p jadix-frame-compare --features dx11-angle -j 2
+    cargo build --release --locked -p jadix-frame-compare --features backend-dx11-angle -j 2
     if ($LASTEXITCODE) { throw 'Jadix build failed' }
     Copy-Item -LiteralPath target/release/jadix-frame-compare.exe -Destination "$output/jadix.exe"
     cargo build --release --locked --manifest-path scripts/gpui-compare/Cargo.toml -j 2

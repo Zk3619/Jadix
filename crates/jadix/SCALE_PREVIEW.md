@@ -1,5 +1,9 @@
 # ScalePreview
 
+Enable `scale-preview` for the component and viewport configuration API.
+It is off by default; `devtools` enables it automatically. Ordinary transforms
+and responsive layout stay in the core without either feature.
+
 `ScalePreview` is a reusable component built on framework-level scaled-viewport
 capabilities, not a layout primitive or a DevTools-only feature. Both layers are
 available in normal and release builds without enabling `devtools`.

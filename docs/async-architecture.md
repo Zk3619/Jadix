@@ -183,13 +183,4 @@ fn start(
 | WS/SSE/串口/USB/IPC 协议、重连与心跳 | 已设计接入，未实现后端 |
 | !Send / spawn_local、浏览器运行桥接 | 未实现，不承诺 |
 
-回归重点：取消注册竞态、重复取消、共享 token、防止派发拒绝仍回调、执行器释放任务、阻塞 panic、窗口/owner 恢复、关闭后排队结果、订阅容量与分批、公平消费、自取消无锁死、资源 refetch 取消、HTTP 替换与拒绝。
-
-```text
-cargo test -p jadix_tasks -p jadix_net --all-features
-cargo test -p jadix --features net-json --lib app::tasks::tests
-cargo test -p jadix --features net-json --lib app::resource::tests
-cargo test -p jadix --features net-json --lib net::tests
-cargo test -p jadix --features net-json --test net
-cargo tree -p jadix_tasks -p jadix_net -e normal
-```
+开发回归范围与测试命令见 [异步验证入口](../development-docs/ops/async-validation.md)；本页保留消费者所需的公共契约与可用性边界。
