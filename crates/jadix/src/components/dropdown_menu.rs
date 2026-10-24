@@ -1608,6 +1608,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn rsx_dropdown_keeps_content_height_placement_and_shadow_through_expansion() {
         use crate as jadix;
         use crate::app::portal_overlay::clear_overlay_stack;

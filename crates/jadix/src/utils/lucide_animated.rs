@@ -11,11 +11,12 @@ use serde::Deserialize;
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
+pub use super::icon_provider::sync_icon_hover as sync_animated_icon_hover;
+pub(crate) use super::icon_provider::with_icon_hover as with_animated_icon_hover;
 use crate::core::tree::{Element, IntoElementList};
-use crate::primitives::interactive::interactive;
 
 pub const ATTR_ANIMATED_ICON: &str = "jadix_animated_icon";
-pub const ATTR_ANIMATED_ICON_STATE: &str = "jadix_animated_icon_state";
+pub const ATTR_ANIMATED_ICON_STATE: &str = super::icon_provider::ATTR_ICON_ANIMATION_STATE;
 pub const ATTR_ANIMATED_ICON_CONTROLLED: &str = "jadix_animated_icon_controlled";
 pub const ATTR_ANIMATED_ICON_SIZE: &str = "jadix_animated_icon_size";
 
@@ -966,9 +967,7 @@ pub(crate) fn release_animated_icon(key: u64, template_id: &str) {
     if let Ok(mut map) = play_store().lock() {
         map.remove(&key);
     }
-    if let Ok(mut map) = hover_intent_map().lock() {
-        map.remove(template_id);
-    }
+    super::icon_provider::release_icon_hover(template_id);
 }
 
 /// Rasterize current frame; returns texture key + logical size.
@@ -1210,74 +1209,6 @@ impl From<AnimatedIconBuilder> for Element {
     }
 }
 
-pub(crate) fn with_animated_icon_hover(el: Element) -> Element {
-    let tid = el.template_id.clone().expect("animated icon identity");
-    interactive(el)
-        .cursor("pointer")
-        .on_hover(move |on| hover_intent(tid.clone(), on))
-        .into()
-}
-
-fn hover_intent_map() -> &'static Mutex<HashMap<String, bool>> {
-    static M: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
-    M.get_or_init(|| Mutex::new(HashMap::new()))
-}
-
-fn hover_intent(template_id: String, on: bool) {
-    if let Ok(mut m) = hover_intent_map().lock() {
-        m.insert(template_id, on);
-    }
-    // Mirror Button: without this, CursorMoved only updates intents and never wakes a frame,
-    // so sync_animated_icon_hover / texture bake never run until an unrelated redraw.
-    crate::primitives::interactive::mark_hover_paint_dirty();
-    crate::app::runtime::request_redraw();
-}
-
-/// Apply pending hover intents onto matching animated icons in the tree.
-pub fn sync_animated_icon_hover(el: &mut Element) {
-    let intents = hover_intent_map()
-        .lock()
-        .ok()
-        .map(|m| m.clone())
-        .unwrap_or_default();
-    if !intents.is_empty() {
-        sync_hover_rec(el, &intents);
-    }
-}
-
-fn sync_hover_rec(el: &mut Element, intents: &HashMap<String, bool>) {
-    if el.collect_paint_hash != 0 && !el.collect_skip_live {
-        return;
-    }
-    if (el.get_attr(ATTR_ANIMATED_ICON).is_some()
-        || el
-            .get_attr(crate::utils::icon_provider::ATTR_ICON_HOVER_ANIMATION)
-            .is_some())
-        && el.get_attr(ATTR_ANIMATED_ICON_CONTROLLED).is_none()
-    {
-        if let Some(tid) = el.template_id.clone() {
-            if let Some(&on) = intents.get(&tid) {
-                crate::utils::icon_provider::sync_icon_hover_animation(el, on);
-                let want = if on { "animate" } else { "normal" };
-                let cur = el
-                    .get_attr(ATTR_ANIMATED_ICON_STATE)
-                    .map(|s| s.as_str())
-                    .unwrap_or("normal");
-                if cur != want {
-                    if el.get_attr(ATTR_ANIMATED_ICON).is_some() {
-                        set_animated_icon_state(el, want);
-                    } else {
-                        el.set_attr(ATTR_ANIMATED_ICON_STATE, want);
-                    }
-                }
-            }
-        }
-    }
-    for c in &mut el.children {
-        sync_hover_rec(c, intents);
-    }
-}
-
 impl IntoElementList for AnimatedIconBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
@@ -1297,6 +1228,8 @@ pub fn AnimatedIcon(name: impl AsRef<str>, size: Option<f32>, controlled: Option
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(all(feature = "svg", feature = "bundled-lucide"))]
+    use crate::utils::icon_provider::hover_intent_map;
 
     #[cfg(all(feature = "svg", feature = "bundled-lucide"))]
     #[test]

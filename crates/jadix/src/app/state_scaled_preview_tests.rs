@@ -1,3 +1,5 @@
+#![cfg(feature = "scale-preview")]
+
 use super::*;
 
 #[test]

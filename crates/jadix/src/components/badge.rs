@@ -513,6 +513,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "theme-fluent")]
     #[test]
     fn fluent_badge_uses_compact_caption_metrics() {
         use crate::style::{set_theme_preset, ThemePreset};

@@ -2,17 +2,17 @@
 
 mod accent;
 
-#[cfg(feature = "backend-dx12")]
+#[cfg(feature = "windows-dcomp")]
 mod dcomp;
-#[cfg(feature = "backend-dx12")]
+#[cfg(feature = "windows-dcomp")]
 mod effects;
-#[cfg(feature = "backend-dx12")]
+#[cfg(feature = "windows-dcomp")]
 mod recipes;
 
 use crate::app::WindowOptions;
 use winit::window::Window;
 
-#[cfg(feature = "backend-dx12")]
+#[cfg(feature = "windows-dcomp")]
 fn is_os_dark(window: &dyn Window) -> bool {
     matches!(window.theme(), Some(winit::window::Theme::Dark))
 }
@@ -26,7 +26,7 @@ pub fn system_backdrop_available() -> bool {
     accent::nt_build_number() >= accent::BUILD_WIN11_SYSTEM_BACKDROP
 }
 
-#[cfg(feature = "backend-dx12")]
+#[cfg(feature = "windows-dcomp")]
 pub fn try_init_custom(window: &dyn Window, options: &WindowOptions) -> bool {
     if !(options.wants_custom_dcomp() || options.wants_dcomp_swapchain()) {
         return false;
@@ -40,29 +40,29 @@ pub fn try_init_custom(window: &dyn Window, options: &WindowOptions) -> bool {
     dcomp::try_init(hwnd as isize, options, is_os_dark(window))
 }
 
-#[cfg(not(feature = "backend-dx12"))]
+#[cfg(not(feature = "windows-dcomp"))]
 pub fn try_init_custom(_window: &dyn Window, _options: &WindowOptions) -> bool {
     false
 }
 
-#[cfg(feature = "backend-dx12")]
+#[cfg(feature = "windows-dcomp")]
 pub fn has_host(hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
     dcomp::has_host(hwnd as isize)
 }
 
-#[cfg(not(feature = "backend-dx12"))]
+#[cfg(not(feature = "windows-dcomp"))]
 pub fn has_host(_hwnd: windows_sys::Win32::Foundation::HWND) -> bool {
     false
 }
 
-#[cfg(feature = "backend-dx12")]
+#[cfg(feature = "windows-dcomp")]
 pub fn composition_surface_handle(window: &dyn Window) -> Option<*mut std::ffi::c_void> {
     let hwnd = super::window::hwnd(window)?;
     dcomp::surface_handle(hwnd as isize)
 }
 
 pub fn detach_window(window: &dyn Window) {
-    #[cfg(feature = "backend-dx12")]
+    #[cfg(feature = "windows-dcomp")]
     if let Some(hwnd) = super::window::hwnd(window) {
         dcomp::detach(hwnd as isize);
     }
@@ -70,7 +70,7 @@ pub fn detach_window(window: &dyn Window) {
 }
 
 pub fn on_focus(window: &dyn Window, focused: bool) {
-    #[cfg(feature = "backend-dx12")]
+    #[cfg(feature = "windows-dcomp")]
     if let Some(hwnd) = super::window::hwnd(window) {
         dcomp::set_active(hwnd as isize, focused);
     }
@@ -78,7 +78,7 @@ pub fn on_focus(window: &dyn Window, focused: bool) {
 }
 
 pub fn on_shown(window: &dyn Window) {
-    #[cfg(feature = "backend-dx12")]
+    #[cfg(feature = "windows-dcomp")]
     if let Some(hwnd) = super::window::hwnd(window) {
         dcomp::refresh(hwnd as isize);
     }
@@ -86,19 +86,19 @@ pub fn on_shown(window: &dyn Window) {
 }
 
 pub fn on_moved(window: &dyn Window) {
-    #[cfg(feature = "backend-dx12")]
+    #[cfg(feature = "windows-dcomp")]
     if let Some(hwnd) = super::window::hwnd(window) {
         dcomp::on_moved(hwnd as isize);
     }
     let _ = window;
 }
 
-#[cfg(feature = "backend-dx12")]
+#[cfg(feature = "windows-dcomp")]
 pub fn sync_jadix_theme() {
     dcomp::sync_jadix_theme();
 }
 
-#[cfg(feature = "backend-dx12")]
+#[cfg(feature = "windows-dcomp")]
 pub fn set_os_dark_all(os_dark: bool) {
     dcomp::set_os_dark_all(os_dark);
 }

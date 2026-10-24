@@ -185,6 +185,7 @@ impl Document {
         })))
     }
 
+    #[cfg(feature = "document-editing")]
     pub(crate) fn with_rich_heading(&self, byte: usize, level: u8) -> Self {
         let mut blocks = self.blocks().to_vec();
         if let Some(index) = self.block_at(byte) {

@@ -1947,8 +1947,10 @@ pub(crate) fn apply_modal_shell_motion(
 mod tests {
     use super::*;
     use crate::core::reactivity::{create_effect, create_root};
+    #[cfg(feature = "animation-base")]
     use crate::style::{set_css_transition_timeline_ms, set_css_transition_virtual_timeline};
     use crate::utils::popup::{mount_modal_layer, mount_viewport_portal_stage};
+    #[cfg(feature = "animation-base")]
     use std::time::{Duration, Instant};
 
     fn attach_dialog_zoom_shell(modal_id: &str, panel: &mut Element) {
@@ -2014,13 +2016,13 @@ mod tests {
             );
             assert_eq!(sync_modal_presence(&handle, true), PresencePhase::Present);
             assert_eq!(runs.get(), 2, "already-open sync must not remount");
-            assert_eq!(sync_modal_presence(&handle, false), PresencePhase::Exiting);
-            assert!(mounted.get(), "Exiting stays mounted");
+            let animated = cfg!(feature = "animation-base");
             assert_eq!(
-                runs.get(),
-                2,
-                "close must not notify mounted; that rebuild is the exit hitch"
+                sync_modal_presence(&handle, false),
+                if animated { PresencePhase::Exiting } else { PresencePhase::Absent }
             );
+            assert_eq!(mounted.get(), animated);
+            assert_eq!(runs.get(), if animated { 2 } else { 3 });
         });
     }
 
@@ -2310,6 +2312,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn dialog_enter_layout_delay_must_not_skip_to_settled() {
         create_root(|| {
             crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -2468,6 +2471,7 @@ mod tests {
     /// out of step with the overlay. Overlay and panel must fade together while the panel
     /// scales up.
     #[test]
+    #[cfg(feature = "animation-base")]
     fn dialog_enter_fades_overlay_and_panel_together() {
         create_root(|| {
             let mut root = Element::new();
@@ -2526,6 +2530,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn tick_hoisted_modal_css_exit_dirties_overlay_paint() {
         create_root(|| {
             crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -2571,6 +2576,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn dialog_exit_opacity_keeps_moving_until_css_finishes() {
         create_root(|| {
             crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -2653,6 +2659,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn dialog_exit_finish_tick_dirties_end_pose() {
         create_root(|| {
             crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -2774,6 +2781,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn tick_hoisted_modal_css_first_frame_leaves_seed_without_settling() {
         create_root(|| {
             crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -2826,6 +2834,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn tick_hoisted_modal_css_idle_jump_does_not_settle_enter() {
         create_root(|| {
             crate::style::utility::set_frame_dt(2.0);
@@ -2860,6 +2869,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn dialog_enter_timeline_hitch_must_not_skip_fade() {
         create_root(|| {
             set_css_transition_virtual_timeline(true);
@@ -2924,6 +2934,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn dialog_exit_timeline_hitch_must_not_skip_fade() {
         create_root(|| {
             set_css_transition_virtual_timeline(true);
@@ -2999,6 +3010,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn dialog_exit_seeds_fade_and_zoom_out() {
         create_root(|| {
             let mut root = Element::new();
@@ -3054,6 +3066,7 @@ mod tests {
     /// empty keyframes as "done" and unmounts — overlay dest-resets first,
     /// then the card pops off (no fade / zoom-out).
     #[test]
+    #[cfg(feature = "animation-base")]
     fn dialog_exit_reseeds_when_rebuild_drops_keyframes() {
         create_root(|| {
             crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -3139,6 +3152,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "animation-base")]
     fn mark_dialog_css_runs_finished(el: &mut Element) {
         let n = el.style.animations.len().max(1);
         let baseline = crate::style::AnimationBaseline::from_style(&el.style);
@@ -3153,6 +3167,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn dialog_exit_must_not_finish_while_open_pose_has_stale_snapshot() {
         create_root(|| {
             crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -3223,6 +3238,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn dialog_exit_hold_seed_does_not_seek_stale_enter_elapsed() {
         create_root(|| {
             crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -3497,6 +3513,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn slide_exit_keeps_needs_exit_anim_until_flush() {
         create_root(|| {
             set_css_transition_virtual_timeline(true);
@@ -3571,6 +3588,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn slide_overlay_exit_clamps_idle_frame_dt() {
         crate::style::utility::set_frame_dt(2.0);
         create_root(|| {
@@ -3644,6 +3662,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn slide_exit_second_flush_does_not_restart_tween() {
         create_root(|| {
             set_css_transition_virtual_timeline(true);
@@ -3748,6 +3767,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn slide_exit_reseeds_transform_when_rebuild_drops_transition() {
         create_root(|| {
             set_css_transition_virtual_timeline(true);
@@ -3830,6 +3850,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn slide_exit_plays_inbetween_frames_not_viewport_jump() {
         crate::style::utility::set_frame_dt(2.0);
         create_root(|| {
@@ -3907,6 +3928,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn slide_settle_starts_from_drag_pose_not_closed() {
         create_root(|| {
             set_css_transition_virtual_timeline(true);

@@ -50,31 +50,31 @@ mod crate_tests;
 #[cfg(test)]
 extern crate self as jadix;
 // Native drag regressions mount the Gallery source, including every provider.
-#[cfg(all(test, feature = "svg"))]
+#[cfg(all(test, feature = "gallery-tests"))]
 #[path = "../../../examples/gallery/src/imports.rs"]
 mod imports;
-#[cfg(all(test, feature = "svg"))]
+#[cfg(all(test, feature = "gallery-tests"))]
 #[allow(dead_code, non_snake_case)]
 #[path = "../../../examples/gallery/src/pages/mod.rs"]
 mod pages;
-#[cfg(all(test, feature = "svg"))]
+#[cfg(all(test, feature = "gallery-tests"))]
 #[allow(dead_code, non_snake_case)]
 #[path = "../../../examples/gallery/src/shared.rs"]
 mod shared;
-#[cfg(all(test, feature = "svg"))]
+#[cfg(all(test, feature = "gallery-tests"))]
 pub(crate) fn gallery_icon() -> crate::app::AppIcon {
     crate::app::AppIcon::from_bytes(include_bytes!("../../../examples/gallery/assets/app-icon.png"))
         .expect("bundled Gallery icon")
 }
-#[cfg(all(test, feature = "svg"))]
+#[cfg(all(test, feature = "gallery-tests"))]
 pub(crate) mod gallery_drag {
     pub(crate) use super::pages::drag::*;
 }
-#[cfg(all(test, feature = "svg"))]
+#[cfg(all(test, feature = "gallery-tests"))]
 #[allow(dead_code, non_snake_case)]
 #[path = "../../../examples/gallery/src/app.rs"]
 mod gallery_app;
-#[cfg(all(test, feature = "svg"))]
+#[cfg(all(test, feature = "gallery-tests"))]
 #[allow(dead_code)]
 #[path = "../../../examples/gallery/src/styles.rs"]
 mod styles;

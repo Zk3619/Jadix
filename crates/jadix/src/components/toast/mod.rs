@@ -2134,6 +2134,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn overflow_displace_caps_concurrent_exiting() {
         toast_set_overflow("displace");
         toast_set_limit(2);

@@ -1634,6 +1634,7 @@ fn collect_skip_must_not_replay_animate_spin() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn css_spin_must_keep_rotating_after_maximize_skip() {
     reset_collect_skip_counters();
     crate::style::utility::set_frame_dt(1.0 / 30.0);

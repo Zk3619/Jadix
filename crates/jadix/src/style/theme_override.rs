@@ -165,6 +165,12 @@ pub fn compose_theme(mode: ThemeMode) -> Theme {
 
 /// Validate, store overrides, and refresh the active [`Theme`].
 pub fn install_theme_overrides(overrides: ThemeOverrides) -> Result<(), ThemeOverrideError> {
+    if overrides.preset != super::ThemePreset::Shadcn && !overrides.preset.is_enabled() {
+        return Err(ThemeOverrideError::InvalidStyles(format!(
+            "theme preset {} is not enabled",
+            overrides.preset.name()
+        )));
+    }
     validate_patch(&Theme::preset(overrides.preset, ThemeMode::Light).colors, &overrides.light)?;
     validate_patch(&Theme::preset(overrides.preset, ThemeMode::Dark).colors, &overrides.dark)?;
     for styles in [&overrides.styles, &overrides.light_styles, &overrides.dark_styles] {

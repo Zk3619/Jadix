@@ -2883,6 +2883,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn sortable_shift_flip_animates_mid_then_snaps_on_session_end() {
         use crate::style::{
             set_css_transition_timeline_ms, set_css_transition_virtual_timeline,

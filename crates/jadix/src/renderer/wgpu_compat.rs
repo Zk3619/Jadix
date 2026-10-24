@@ -12,7 +12,7 @@ pub(crate) enum SurfaceAcquireError {
 }
 
 pub(crate) fn instance(backends: wgpu::Backends) -> wgpu::Instance {
-    #[cfg(all(windows, feature = "backend-dx11"))]
+    #[cfg(all(windows, feature = "backend-dx11-native"))]
     if backends == wgpu::Backends::DX11 {
         return unsafe {
             wgpu::Instance::from_hal::<wgpu_hal::dx11::Api>(

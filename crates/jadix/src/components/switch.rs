@@ -235,18 +235,7 @@ fn find_thumb_mut(el: &mut Element) -> Option<&mut Element> {
 }
 
 fn push_switch_paint_damage(el: &Element) {
-    let b = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
-    if b[2] <= 0.0 || b[3] <= 0.0 {
-        return;
-    }
-    // 拇指阴影 + 焦点环余量
-    let pad = 8.0;
-    crate::app::damage::push_frame_paint_damage([
-        b[0] - pad,
-        b[1] - pad,
-        b[2] + pad * 2.0,
-        b[3] + pad * 2.0,
-    ]);
+    crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
 }
 
 pub struct SwitchBuilder {
@@ -515,6 +504,29 @@ pub(crate) fn sync_switch_checked_subtree(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn checked_sync_preserves_track_damage_identity() {
+        crate::core::reactivity::create_root(|| {
+            let checked = crate::core::reactivity::use_signal("switch-damage-regression", || false);
+            let mut root: Element = switch("damage-switch").checked_signal(checked).into();
+            let mut tree = LayoutTree::new();
+            tree.build_and_layout(&mut root, 240.0, 80.0, [-1.0; 2]);
+            let bounds = root.layout_bounds;
+            crate::app::damage::take_frame_paint_nodes();
+            checked.set(true);
+            let mut impact = LayoutStatus::Clean;
+            sync_switch_checked_subtree(&mut root, &mut tree, &mut impact);
+            let dirties = crate::app::damage::take_frame_paint_nodes();
+            assert!(
+                dirties
+                    .iter()
+                    .any(|dirty| dirty.key == crate::app::damage::paint_element_key(&root))
+            );
+            assert_eq!(root.layout_bounds, bounds);
+            assert_eq!(impact, LayoutStatus::StyleChanged);
+        });
+    }
+
     #[cfg(feature = "a11y")]
     use crate::a11y::bridge::{node_id_for_key, tree_update_from_elements};
     use crate::components::label::{label, ATTR_LABEL_FOR};

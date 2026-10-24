@@ -446,9 +446,10 @@ impl crate::core::tree::IntoElementList for CheckboxBuilder {
 
 pub(crate) fn sync_checkbox_checked_subtree(
     el: &mut Element,
-    layout_tree: &mut LayoutTree,
+    _layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
+    let mut dirty_nodes = Vec::new();
     crate::core::tree::walk_elements_mut(el, |el| {
         if let Some(sig) = el.checkbox_sync {
             if !sig.is_alive() {
@@ -484,26 +485,21 @@ pub(crate) fn sync_checkbox_checked_subtree(
                     apply_indicator_state(indicator, want_fg)
                 } else {
                     el.children.insert(0, build_indicator(want_fg));
+                    *impact = impact.merge(LayoutStatus::StructureChanged);
                     true
                 };
 
                 if chrome_changed || indicator_changed {
-                    if el.layout_node.is_some() {
-                        layout_tree.update_taffy_node_style(el);
+                    if let Some(node) = el.layout_node {
+                        dirty_nodes.push(node);
                     }
-                    if let Some(indicator) = find_indicator_mut(el) {
-                        if indicator.layout_node.is_some() {
-                            layout_tree.update_taffy_node_style(indicator);
-                        }
-                    }
-                    // 与 Switch 一致：选中态切换必须 LayoutChanged，否则 StyleChanged 的局部 damage
-                    // It is possible not to rerun glyphs/not to expand the dirty area, which appears as "black background without check mark".
                     crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
-                    *impact = impact.merge(LayoutStatus::LayoutChanged);
+                    *impact = impact.merge(LayoutStatus::StyleChanged);
                 }
             }
         }
     });
+    crate::layout::collect_cache::invalidate_collect_paint_hash_spines(el, &dirty_nodes);
 }
 
 #[cfg(test)]

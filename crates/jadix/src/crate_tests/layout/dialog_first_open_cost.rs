@@ -210,6 +210,15 @@ fn dialog_first_vs_second_open_cpu_after_cjk_warm() {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn dialog_first_gpu_blur_and_capture_text_ms() {
     use std::collections::{HashMap, HashSet};
 

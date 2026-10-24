@@ -95,6 +95,16 @@ impl CubicTween {
 
     fn retarget(&self, target: f32, at_frame_start: bool) {
         let mut s = self.0.borrow_mut();
+        if !cfg!(feature = "animation-base") {
+            s.target = target;
+            s.value = target;
+            s.from_value = target;
+            s.elapsed = 0.0;
+            s.active = false;
+            s.skip_frame_dt = false;
+            let _ = s.signal.try_set_silent(target);
+            return;
+        }
         // 目标未变时不要重置 `elapsed`：chrome sync 每帧会再 `set` 同一目标，
         // 若此处重启，有效时长会远长于 `duration`（asymptotic crawl）。
         if (s.target - target).abs() < 1e-5 {
@@ -136,6 +146,12 @@ pub struct AnimationTick {
 }
 
 pub fn tick_animations(dt: f32) -> AnimationTick {
+    if !cfg!(feature = "animation-base") {
+        return AnimationTick {
+            any: false,
+            scrollbar_overlay: false,
+        };
+    }
     // 与滚动同口径：首屏连帧 / Wait 后首帧的 raw `dt` 常为 ≈0 或数秒。
     // 不夹紧时：≈0 → 动画看似失效；过大 → 一帧瞬跳到目标。
     const DT_MIN: f32 = 1.0 / 240.0;
@@ -197,6 +213,9 @@ pub fn tick_animations(dt: f32) -> AnimationTick {
 /// chrome sync（Switch 等）常在本帧 `tick_animations` **之后**才 `set` 目标；
 /// render 结束后用此查询补 `request_redraw`，避免动画停在第 0 帧。
 pub fn any_ui_animation_active() -> bool {
+    if !cfg!(feature = "animation-base") {
+        return false;
+    }
     CUBIC_TWEENS.with(|anim| {
         anim.borrow()
             .iter()
@@ -217,7 +236,7 @@ pub(crate) fn begin_page_css_frame() {
 }
 
 pub(crate) fn note_page_css_needs_frame() {
-    PAGE_CSS_NEEDS_FRAME.with(|c| c.set(true));
+    PAGE_CSS_NEEDS_FRAME.with(|c| c.set(cfg!(feature = "animation-base")));
 }
 
 /// Infinite CSS / spin / shimmer still sampling. Same role as [`crate::utils::modal_motion::any_modal_css_needs_frame`].
@@ -378,6 +397,9 @@ pub fn set_prefers_reduced_motion(on: Option<bool>) {
 
 /// CSS `prefers-reduced-motion: reduce` — durations snap to the end of the interval.
 pub fn prefers_reduced_motion() -> bool {
+    if !cfg!(feature = "animation-base") {
+        return true;
+    }
     if let Some(v) = PREFERS_REDUCED_MOTION.get() {
         return v;
     }
@@ -1002,6 +1024,28 @@ pub fn tick_element_animations_ex_named(
             continue;
         };
 
+        if !cfg!(feature = "animation-base") {
+            let local = match entry.iteration_count {
+                AnimationIterationCount::Infinite => direction_local_t(entry.direction, 0, 1.0),
+                AnimationIterationCount::Finite(_) => {
+                    entry_timing_model(entry).resolve(f32::MAX).local_t
+                }
+            };
+            apply_animation_sample(
+                style,
+                text,
+                &stops,
+                local,
+                TimingFunction::Linear,
+                &kf_base,
+                &mut lock,
+                entry.composition,
+            );
+            snap.runs[i].finished = true;
+            observe_playback(playback_id, &snap.runs[i]);
+            continue;
+        }
+
         let (elapsed_ms, finished_before, paused) = {
             let run = &snap.runs[i];
             (
@@ -1204,7 +1248,7 @@ pub fn tick_element_animations_ex_named(
 ///
 /// Presence exit gates depend on active runs, not on a retained forwards fill.
 pub fn animation_run_active(style: &super::Style, snap: &AnimationSnapshot) -> bool {
-    if style.animations.is_empty() {
+    if !cfg!(feature = "animation-base") || style.animations.is_empty() {
         return false;
     }
     snap.has_active(style)
@@ -1223,6 +1267,9 @@ fn animation_sample_t(
 
 /// True when this element should keep the animation frame pump alive.
 pub fn css_animation_needs_frame(style: &super::Style, snap: &AnimationSnapshot) -> bool {
+    if !cfg!(feature = "animation-base") {
+        return false;
+    }
     style.animations.iter().enumerate().any(|(i, entry)| {
         if let Some(id) = entry.playback_id {
             return super::waapi::needs_frame(id, snap.runs.get(i));
@@ -1977,6 +2024,9 @@ const ALL_PROPS: &[TransitionProperty] = &[
 /// Nodes without class variants must still advance CSS transitions (e.g. Carousel track).
 /// 有活跃 tween，或目标相对已记录的 `to` 已变，或尚未建档需要 seed。
 pub fn css_transition_needs_frame(style: &super::Style, snapshot: &TransitionSnapshot) -> bool {
+    if !cfg!(feature = "animation-base") {
+        return false;
+    }
     if style.transition.is_empty() {
         return false;
     }
@@ -2482,6 +2532,10 @@ pub fn tick_element_transitions_locked(
     lock: AnimationLock,
     dt_secs: f32,
 ) -> bool {
+    if !cfg!(feature = "animation-base") {
+        *snapshot = TransitionSnapshot::default();
+        return false;
+    }
     if style.transition.is_empty() {
         let was_active = snapshot.has_active_tweens();
         if !snapshot.tweens.is_empty() {
@@ -2812,6 +2866,7 @@ mod css_transition_dt_tests {
     use crate::style::TimingFunction;
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn spring_transition_retargets_from_current_value() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
@@ -2843,6 +2898,7 @@ mod css_transition_dt_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn monotonic_timeline_ignores_dt_storm() {
         set_css_transition_virtual_timeline(false);
         let mut style = crate::style::Style::default();
@@ -2878,6 +2934,7 @@ mod css_transition_dt_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn duration_authored_css_spring_finishes_at_its_declared_time() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
@@ -2895,6 +2952,7 @@ mod css_transition_dt_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn virtual_timeline_advances_only_when_seeked() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
@@ -2934,6 +2992,7 @@ mod css_transition_dt_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn retarget_continues_from_current_computed_value() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
@@ -2973,6 +3032,7 @@ mod css_transition_dt_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn transform_transition_includes_translate() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
@@ -3010,6 +3070,7 @@ mod css_transition_dt_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn duration_tween_idle_instant_jump_keeps_a_mid_frame() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_max_step_ms(Some(1000.0 / 60.0));
@@ -3042,6 +3103,7 @@ mod css_transition_dt_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn spring_tween_idle_instant_jump_keeps_a_mid_frame() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_max_step_ms(Some(1000.0 / 60.0));
@@ -3074,6 +3136,7 @@ mod css_transition_dt_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn bind_specified_translate_commit_keeps_first_paint_at_start() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
@@ -3101,6 +3164,7 @@ mod css_transition_dt_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn translate_transition_interpolates_percent() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
@@ -3128,6 +3192,7 @@ mod css_transition_dt_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn duration_tween_sub_idle_frame_is_realtime() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_max_step_ms(Some(1000.0 / 60.0));
@@ -3156,6 +3221,7 @@ mod css_transition_dt_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn snap_baseline_then_new_target_still_animates() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
@@ -3187,6 +3253,7 @@ mod css_transition_dt_tests {
     /// bugs.md: `transition: translate` after snap baseline should still tween,
     /// same as the verified `transform` path above.
     #[test]
+    #[cfg(feature = "animation-base")]
     fn snap_baseline_then_new_target_still_animates_with_translate() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
@@ -3254,6 +3321,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn cubic_set_same_target_does_not_restart_elapsed() {
         let tw = CubicTween::new_ui_transition(0.0);
         tw.set(1.0);
@@ -3279,6 +3347,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn tick_clamps_near_zero_dt_so_first_frames_still_advance() {
         let tw = CubicTween::new_ui_transition(0.0);
         tw.set(1.0);
@@ -3294,6 +3363,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn tick_clamps_huge_dt_so_idle_wake_does_not_teleport() {
         let tw = CubicTween::new_ui_transition(0.0);
         tw.set(1.0);
@@ -3311,6 +3381,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn tick_element_animations_spin_advances_rotate() {
         use crate::style::{AnimationEntry, AnimationIterationCount, TimingFunction};
         let mut style = crate::style::Style::default();
@@ -3334,6 +3405,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn tick_element_animations_zero_dt_storm_uses_monotonic_clock() {
         // Gallery Marker: CursorMoved over the row requests extra paints with dt≈0.
         // Summing that froze loader-circle; flooring it would fast-forward during the storm.
@@ -3378,6 +3450,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn late_frame_must_not_drop_spin_time() {
         // Pointer motion blocks the GUI thread. The next present is late by
         // hundreds of ms and still reports a tiny frame dt. Capping the gap at
@@ -3408,6 +3481,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn tick_element_animations_respects_paused() {
         use crate::style::{
             AnimationEntry, AnimationIterationCount, AnimationPlayState, TimingFunction,
@@ -3431,6 +3505,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn pause_resume_preserves_elapsed() {
         use crate::style::{
             AnimationEntry, AnimationIterationCount, AnimationPlayState, TimingFunction,
@@ -3499,6 +3574,7 @@ mod tests {
     /// value the engine wrote. Reading that back as a new target used to retarget the
     /// tween to itself each frame, freezing it a few percent from the start.
     #[test]
+    #[cfg(feature = "animation-base")]
     fn transition_runs_to_completion_without_being_respecified() {
         use crate::style::{TimingFunction, TransitionEntry, TransitionProperty};
         set_css_transition_virtual_timeline(true);
@@ -3598,6 +3674,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn width_length_tweens_auto_stays_discrete() {
         use taffy::style::Dimension;
         set_css_transition_virtual_timeline(true);
@@ -3678,6 +3755,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn assign_specified_does_not_clobber_mid_when_target_unchanged() {
         use taffy::style::Dimension;
         set_css_transition_virtual_timeline(true);
@@ -3715,6 +3793,7 @@ mod tests {
     /// property must not chase the animation's output (CSS: animation wins, and an
     /// animation-driven change never starts a transition).
     #[test]
+    #[cfg(feature = "animation-base")]
     fn animation_lock_parks_transition_on_owned_property() {
         use crate::style::{
             AnimationEntry, AnimationFillMode, AnimationIterationCount, TimingFunction,
@@ -3765,6 +3844,7 @@ mod tests {
     /// Keyframes are layered over the cascaded value and re-sampled from it every frame;
     /// dropping the animation hands that value back.
     #[test]
+    #[cfg(feature = "animation-base")]
     fn animation_resamples_from_base_and_restores_on_removal() {
         use crate::style::{AnimationEntry, AnimationIterationCount, TimingFunction};
         let mut style = crate::style::Style {
@@ -3801,6 +3881,7 @@ mod tests {
     /// properties its own keyframes declare, or the later one snaps the earlier one back to
     /// the base value.
     #[test]
+    #[cfg(feature = "animation-base")]
     fn stacked_animations_do_not_clobber_each_other() {
         use crate::style::{AnimationEntry, AnimationIterationCount, TimingFunction};
         let mut style = crate::style::Style {
@@ -3984,6 +4065,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn accordion_down_uses_used_layout_not_written_px() {
         use crate::style::UsedLayout;
         let mut style = crate::style::Style::default();
@@ -4014,6 +4096,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn color_transition_writes_text_style() {
         let mut style = crate::style::Style::default();
         style.transition.push(crate::style::TransitionEntry {
@@ -4059,6 +4142,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn grid_template_rows_transition_lerps_fr() {
         use crate::layout::{first_track_fr, track_fr};
         set_css_transition_virtual_timeline(true);
@@ -4087,6 +4171,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn grid_template_rows_transition_lerps_equal_length_list() {
         use crate::layout::{track_fr, tracks_fr_list};
         set_css_transition_virtual_timeline(true);
@@ -4163,6 +4248,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn interpolate_size_allow_keywords_tweens_auto_height() {
         use crate::style::{InterpolateSize, TransitionEntry, TransitionProperty, UsedLayout};
         set_css_transition_virtual_timeline(true);
@@ -4218,6 +4304,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn scroll_timeline_samples_progress_not_elapsed() {
         use crate::style::{AnimationFillMode, AnimationTimeline, TimingFunction};
         let mut style = crate::style::Style::default();
@@ -4252,6 +4339,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn background_position_and_clip_path_lerp() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
@@ -4299,6 +4387,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn named_scroll_timeline_drives_descendant_animation() {
         use crate::core::tree::Element;
         use crate::style::{push_named_timelines, AnimationFillMode, AnimationTimeline};
@@ -4396,6 +4485,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn clip_path_polygon_keyframes_lerp_vertices() {
         use crate::style::{
             register_keyframes, AnimatableValue, AnimationFillMode, ClipCoord, ClipPath,

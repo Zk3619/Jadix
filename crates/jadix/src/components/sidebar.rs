@@ -2556,6 +2556,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn responsive_sidebar_breakpoint_preserves_exit_start_width() {
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
@@ -2649,6 +2650,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn responsive_sidebar_inset_margin_has_intermediate_layout() {
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
@@ -2896,8 +2898,9 @@ mod tests {
                 responsive_frame(&mut root, &mut layout, width);
                 assert!(!ctx.open_mobile.peek());
                 assert!(
-                    sidebar_node_mut(&mut root, ATTR_MOBILE_PANEL, id).is_some(),
-                    "keep content throughout exit"
+                    sidebar_node_mut(&mut root, ATTR_MOBILE_PANEL, id).is_some()
+                        == cfg!(feature = "animation-base"),
+                    "only animated exit retains mobile content"
                 );
                 crate::utils::modal_motion::finish_modal_exit_for_test(
                     &crate::utils::modal_motion::use_modal_presence(id),
@@ -3636,6 +3639,7 @@ mod tests {
         assert!((el.style.opacity - 0.5).abs() < 0.02);
     }
 
+    #[cfg(feature = "animation-base")]
     fn paint_icon_rail_with_provider(provider_id: &str, width: &str) -> Element {
         let mut rail = paint_sidebar_rail(
             width,
@@ -3650,6 +3654,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn rebuild_fragment_does_not_skip_expand_tween() {
         use crate::style::{set_css_transition_timeline_ms, set_css_transition_virtual_timeline};
         use crate::utils::keyed_overlay::preserve_keyed_motion_on_reconcile;
@@ -3694,6 +3699,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn rebuild_fragment_does_not_skip_collapse_or_clobber_rest() {
         use crate::style::{set_css_transition_timeline_ms, set_css_transition_virtual_timeline};
         use crate::utils::keyed_overlay::preserve_keyed_motion_on_reconcile;
@@ -3910,6 +3916,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "theme-fluent")]
     #[test]
     fn fluent_selection_matches_card_material_and_hover_is_brighter() {
         use crate::style::{ThemeMode, ThemePreset, set_theme_mode, set_theme_preset};

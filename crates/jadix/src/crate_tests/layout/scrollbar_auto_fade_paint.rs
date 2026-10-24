@@ -166,6 +166,7 @@ fn overlay_auto_fade_paints_cubic_without_rewriting_hit_slab() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn overlay_auto_fade_replays_underlay_on_alpha_change_not_idle_rest() {
     const REST: &str = "diag-auto-fade-present";
     let (_handle, _) = create_root(|| {

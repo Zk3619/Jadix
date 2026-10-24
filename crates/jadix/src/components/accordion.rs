@@ -1164,6 +1164,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn accordion_exit_run_inactive_after_keyframes_finish() {
         let mut el = Element::new();
         el.layout_bounds = [0.0, 0.0, 100.0, 48.0];
@@ -1378,6 +1379,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn grid_fr_enter_does_not_wait_for_used_height() {
         use crate::core::tree::LayoutTree;
         let (_h, ()) = create_root(|| {

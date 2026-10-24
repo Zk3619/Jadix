@@ -21,8 +21,8 @@ pub(crate) fn with_requested_backend_front(
         )
     }) {
         assert!(
-            cfg!(all(windows, feature = "backend-dx11")),
-            "native dx11 requires Windows and feature backend-dx11"
+            cfg!(all(windows, feature = "backend-dx11-native")),
+            "native dx11 requires Windows and feature backend-dx11-native"
         );
         return vec![(wgpu::Backends::DX11, "dx11-native")];
     }

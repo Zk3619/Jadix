@@ -94,6 +94,8 @@ development-docs/
 !docs/app-icons.example.toml
 !docs/desktop-windows.md
 !docs/devtools.md
+!docs/FEATURES.md
+!docs/README.md
 scripts/__pycache__/
 
 !assets/

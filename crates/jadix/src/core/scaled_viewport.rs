@@ -1,22 +1,28 @@
 //! Scaled logical viewports: responsive sizing, transforms and local portal routing.
 //!
 //! This module contains framework mechanics, not a rendered component. For a
-//! ready-made preview frame, use [`crate::components::ScalePreview`].
+//! ready-made preview frame, enable `scale-preview` and use `components::ScalePreview`.
 
+#[cfg(feature = "scale-preview")]
 use crate::core::tree::Element;
+#[cfg(feature = "scale-preview")]
 use crate::layout::layout_tree::{
     ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, ATTR_PORTAL_SLOT,
 };
+#[cfg(feature = "scale-preview")]
 use std::collections::HashMap;
 
+#[cfg(feature = "scale-preview")]
 pub(crate) const ATTR_SCOPE: &str = "data-jadix-preview-scope";
 pub(crate) const ATTR_PORTALS: &str = "data-jadix-preview-portals";
+#[cfg(feature = "scale-preview")]
 const ATTR_SCOPED: &str = "data-jadix-preview-mount";
 
 /// Configure an existing element as a scaled logical viewport with a local portal host.
 ///
 /// `size` and `scale` must be finite and positive. `mount` must be unique in the
 /// element tree. The caller owns positioning and the surrounding layout footprint.
+#[cfg(feature = "scale-preview")]
 pub fn configure_viewport(element: &mut Element, size: [f32; 2], scale: f32, mount: &str) {
     let frame = Element::new()
         .w(size[0])
@@ -57,6 +63,7 @@ pub fn configure_viewport(element: &mut Element, size: [f32; 2], scale: f32, mou
     }
 }
 
+#[cfg(feature = "scale-preview")]
 pub(crate) fn scope_portals(root: &mut Element) -> bool {
     fn collect(node: &Element, scope: Option<&str>, keys: &mut HashMap<String, Option<String>>) {
         let scope = node

@@ -5,7 +5,23 @@ use serde::{Deserialize, Serialize};
 use super::{Theme, ThemeMode};
 use crate::core::tree::Element;
 
-#[cfg(test)]
+#[cfg(feature = "theme-fluent")]
+#[path = "themes/fluent.rs"]
+mod fluent;
+#[cfg(feature = "theme-liquid-glass")]
+#[path = "themes/liquid_glass.rs"]
+mod liquid_glass;
+#[cfg(feature = "theme-material3")]
+#[path = "themes/material3.rs"]
+mod material3;
+
+#[cfg(all(
+    test,
+    feature = "theme-shadcn",
+    feature = "theme-fluent",
+    feature = "theme-material3",
+    feature = "theme-liquid-glass"
+))]
 mod tests {
     use super::*;
     use crate::style::*;
@@ -48,11 +64,9 @@ mod tests {
             let config = parse_theme_overrides_str(&format!("preset = \"{name}\"")).unwrap();
             assert_eq!(config.preset, ThemePreset::Fluent);
             assert_eq!(config.preset.name(), "fluent");
-            assert!(
-                toml::to_string(&config)
-                    .unwrap()
-                    .contains("preset = \"fluent\"")
-            );
+            assert!(toml::to_string(&config)
+                .unwrap()
+                .contains("preset = \"fluent\""));
         }
     }
 
@@ -373,9 +387,11 @@ mod tests {
             layout.build_and_layout(&mut area, 200.0, 150.0, [-1.0; 2]);
             for axis in ["x", "y"] {
                 let focus = format!("scrollbar-track:fluent-area:{axis}");
-                let bar = area.children.iter().find(|child| {
-                    child.focus_id.as_deref() == Some(focus.as_str())
-                }).unwrap();
+                let bar = area
+                    .children
+                    .iter()
+                    .find(|child| child.focus_id.as_deref() == Some(focus.as_str()))
+                    .unwrap();
                 assert_eq!(bar.style.bg_color[3], 0.0);
                 assert_eq!(bar.layout_bounds[if axis == "y" { 2 } else { 3 }], 8.0);
             }
@@ -400,7 +416,7 @@ mod tests {
             crate::core::reactivity::create_root(|| {
                 let card: Element = crate::components::card().into();
                 let sidebar = apply_stylesheet_rules_tree(
-                    crate::components::sidebar("fluent-navigation").into()
+                    crate::components::sidebar("fluent-navigation").into(),
                 );
                 fn inner(element: &Element) -> Option<&Element> {
                     if element.attrs.get("data-slot").map(String::as_str) == Some("sidebar-inner") {
@@ -412,7 +428,8 @@ mod tests {
                 assert!(card.style.backdrop_blur > 0.0);
                 assert!(card.style.glass.is_none());
                 let control: Element = crate::components::button("fluent-neutral-control")
-                    .variant("outline").into();
+                    .variant("outline")
+                    .into();
                 assert_eq!(control.style.bg_color[3], 0.0);
                 let navigation = inner(&sidebar).unwrap();
                 assert_eq!(navigation.style.bg_color[3], 0.0);
@@ -440,7 +457,10 @@ mod tests {
                     for hovered in [false, true, false] {
                         resolve_class_variants(
                             &mut button,
-                            &VariantContext { hovered, ..Default::default() },
+                            &VariantContext {
+                                hovered,
+                                ..Default::default()
+                            },
                         );
                         if !hovered {
                             assert_eq!(button.style.bg_color[3], 0.0, "{preset:?} {mode:?}");
@@ -449,7 +469,9 @@ mod tests {
                         }
                     }
                     let disabled: Element = crate::components::button("clear-disabled-outline")
-                        .variant("outline").disabled(true).into();
+                        .variant("outline")
+                        .disabled(true)
+                        .into();
                     assert_eq!(disabled.style.bg_color[3], 0.0, "{preset:?} {mode:?}");
                     let explicit = with_class_list(button, "bg-#123456");
                     assert_eq!(explicit.style.bg_color, parse_color("#123456"));
@@ -473,7 +495,11 @@ mod tests {
                 assert_eq!(
                     get_theme().styles.surface_opacity,
                     Some(if preset == ThemePreset::Fluent {
-                        if mode == ThemeMode::Dark { 0.18 } else { 0.35 }
+                        if mode == ThemeMode::Dark {
+                            0.18
+                        } else {
+                            0.35
+                        }
                     } else if mode == ThemeMode::Dark {
                         0.38
                     } else {
@@ -490,7 +516,9 @@ mod tests {
                         let surface = apply_stylesheet_rules(surface);
                         assert_eq!(
                             surface.style.bg_color[3],
-                            if preset == ThemePreset::Fluent && matches!(slot, "sidebar-inset" | "sidebar-inner") {
+                            if preset == ThemePreset::Fluent
+                                && matches!(slot, "sidebar-inset" | "sidebar-inner")
+                            {
                                 0.0
                             } else {
                                 opacity
@@ -501,12 +529,17 @@ mod tests {
                             surface.style.glass.is_some(),
                             preset == ThemePreset::LiquidGlass && opacity < 1.0
                         );
-                        assert_eq!(surface.style.backdrop_blur,
-                            if opacity == 1.0 || (preset == ThemePreset::Fluent && matches!(slot, "sidebar-inset" | "sidebar-inner")) {
+                        assert_eq!(
+                            surface.style.backdrop_blur,
+                            if opacity == 1.0
+                                || (preset == ThemePreset::Fluent
+                                    && matches!(slot, "sidebar-inset" | "sidebar-inner"))
+                            {
                                 0.0
                             } else {
                                 get_theme().styles.backdrop_blur.unwrap()
-                            });
+                            }
+                        );
                         let surface = with_class_list(surface, "bg-#123456");
                         assert_eq!(surface.style.bg_color, parse_color("#123456"));
                     }
@@ -650,12 +683,10 @@ mod tests {
                 .into();
             let mut layout = crate::layout::layout_tree::LayoutTree::new();
             let result = layout.build_and_layout(&mut root, 400.0, 300.0, [-1.0; 2]);
-            assert!(
-                result
-                    .instances
-                    .iter()
-                    .any(|instance| instance.glass[0] > 1.0 && instance.backdrop_blur > 0.5)
-            );
+            assert!(result
+                .instances
+                .iter()
+                .any(|instance| instance.glass[0] > 1.0 && instance.backdrop_blur > 0.5));
             assert!(!result.overlay_split.page_stack_bands.is_empty());
         });
         reset();
@@ -976,11 +1007,9 @@ mod tests {
                 .child(crate::utils::portal_panel(panel.w(200.0).h(120.0), 900));
             let mut layout = crate::layout::layout_tree::LayoutTree::new();
             let result = layout.build_and_layout(&mut root, 400.0, 300.0, [-1.0; 2]);
-            assert!(
-                result.instances[result.overlay_split.instance_start..]
-                    .iter()
-                    .any(|instance| instance.glass[0] > 1.0)
-            );
+            assert!(result.instances[result.overlay_split.instance_start..]
+                .iter()
+                .any(|instance| instance.glass[0] > 1.0));
             assert!(
                 result
                     .overlay_split
@@ -1046,9 +1075,8 @@ mod tests {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ThemePreset {
-    #[default]
     #[serde(rename = "shadcn")]
     Shadcn,
     #[serde(
@@ -1057,11 +1085,20 @@ pub enum ThemePreset {
         alias = "winui3",
         alias = "winui-3"
     )]
+    #[cfg_attr(not(feature = "theme-fluent"), serde(skip_deserializing))]
     Fluent,
     #[serde(rename = "material3", alias = "md3", alias = "google-md3")]
+    #[cfg_attr(not(feature = "theme-material3"), serde(skip_deserializing))]
     Material3,
     #[serde(rename = "liquid-glass", alias = "apple-liquid-glass")]
+    #[cfg_attr(not(feature = "theme-liquid-glass"), serde(skip_deserializing))]
     LiquidGlass,
+}
+
+impl Default for ThemePreset {
+    fn default() -> Self {
+        Self::ALL.first().copied().unwrap_or(Self::Shadcn)
+    }
 }
 
 impl ThemePreset {
@@ -1069,12 +1106,29 @@ impl ThemePreset {
     #[deprecated(note = "Use Fluent; WinUI 3 is the Windows implementation of Fluent")]
     pub const WinUi3: Self = Self::Fluent;
 
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self;
+        cfg!(feature = "theme-shadcn") as usize
+            + cfg!(feature = "theme-fluent") as usize
+            + cfg!(feature = "theme-material3") as usize
+            + cfg!(feature = "theme-liquid-glass") as usize] = [
+        #[cfg(feature = "theme-shadcn")]
         Self::Shadcn,
+        #[cfg(feature = "theme-fluent")]
         Self::Fluent,
+        #[cfg(feature = "theme-material3")]
         Self::Material3,
+        #[cfg(feature = "theme-liquid-glass")]
         Self::LiquidGlass,
     ];
+
+    pub const fn is_enabled(self) -> bool {
+        match self {
+            Self::Shadcn => cfg!(feature = "theme-shadcn"),
+            Self::Fluent => cfg!(feature = "theme-fluent"),
+            Self::Material3 => cfg!(feature = "theme-material3"),
+            Self::LiquidGlass => cfg!(feature = "theme-liquid-glass"),
+        }
+    }
 
     pub fn name(self) -> &'static str {
         match self {
@@ -1201,6 +1255,11 @@ pub fn theme_preset() -> ThemePreset {
 
 impl Theme {
     pub fn preset(preset: ThemePreset, mode: ThemeMode) -> Self {
+        assert!(
+            preset == ThemePreset::Shadcn || preset.is_enabled(),
+            "theme preset {} is not enabled; enable its theme-* feature",
+            preset.name()
+        );
         let mut theme = match mode {
             ThemeMode::Light => Self::light(),
             ThemeMode::Dark => Self::dark(),
@@ -1209,32 +1268,30 @@ impl Theme {
         if preset == ThemePreset::Shadcn {
             return theme;
         }
+        #[cfg(any(
+            feature = "theme-fluent",
+            feature = "theme-material3",
+            feature = "theme-liquid-glass"
+        ))]
+        theme.apply_preset(preset, mode);
+        theme
+    }
+
+    #[cfg(any(
+        feature = "theme-fluent",
+        feature = "theme-material3",
+        feature = "theme-liquid-glass"
+    ))]
+    fn apply_preset(&mut self, preset: ThemePreset, mode: ThemeMode) {
+        let theme = self;
         let dark = mode == ThemeMode::Dark;
         let palette = match (preset, dark) {
-            (ThemePreset::Fluent, false) => [
-                "#fafafa", "#242424", "#ffffff", "#0f6cbd", "#ffffff", "#ebf3fc", "#616161",
-                "#d1d1d1",
-            ],
-            (ThemePreset::Fluent, true) => [
-                "#1f1f1f", "#ffffff", "#292929", "#115ea3", "#ffffff", "#213951", "#bdbdbd",
-                "#525252",
-            ],
-            (ThemePreset::Material3, false) => [
-                "#fef7ff", "#1d1b20", "#f3edf7", "#6750a4", "#ffffff", "#e8def8", "#49454f",
-                "#79747e",
-            ],
-            (ThemePreset::Material3, true) => [
-                "#141218", "#e6e0e9", "#211f26", "#d0bcff", "#381e72", "#4a4458", "#cac4d0",
-                "#938f99",
-            ],
-            (ThemePreset::LiquidGlass, false) => [
-                "#f5f5f7", "#1d1d1f", "#ffffff", "#007aff", "#ffffff", "#e8e8ed", "#6e6e73",
-                "#d2d2d7",
-            ],
-            (ThemePreset::LiquidGlass, true) => [
-                "#1e1e20", "#f5f5f7", "#2c2c2e", "#0a84ff", "#ffffff", "#3a3a3c", "#a1a1a6",
-                "#48484a",
-            ],
+            #[cfg(feature = "theme-fluent")]
+            (ThemePreset::Fluent, dark) => fluent::palette(dark),
+            #[cfg(feature = "theme-material3")]
+            (ThemePreset::Material3, dark) => material3::palette(dark),
+            #[cfg(feature = "theme-liquid-glass")]
+            (ThemePreset::LiquidGlass, dark) => liquid_glass::palette(dark),
             _ => unreachable!(),
         }
         .map(super::parse_color);
@@ -1276,75 +1333,31 @@ impl Theme {
         colors.selection_foreground = palette[4];
         colors.scrollbar_track = palette[5];
         colors.scrollbar_thumb = palette[6];
-        if preset == ThemePreset::Material3 {
-            colors.popover = super::parse_color(if dark { "#2b2930" } else { "#ece6f0" });
-            colors.border = super::parse_color(if dark { "#49454f" } else { "#cac4d0" });
-            colors.destructive = super::parse_color(if dark { "#f2b8b5" } else { "#b3261e" });
-            colors.destructive_foreground =
-                super::parse_color(if dark { "#601410" } else { "#ffffff" });
-        }
-        if preset == ThemePreset::Fluent {
-            colors.card = super::parse_color(if dark { "#5a5a64" } else { "#ffffff" });
-            colors.secondary = super::parse_color(if dark { "#383838" } else { "#f5f5f5" });
-            colors.muted = colors.secondary;
-            colors.surface = colors.secondary;
-            // WinUI overlay bars have no painted rail or outline; only the thumb is visible.
-            colors.scrollbar_track = [0.0; 4];
-            colors.scrollbar_track_border = [0.0; 4];
-            colors.scrollbar_thumb[3] = 0.72;
-            colors.scrollbar_thumb_border = [0.0; 4];
-        }
-        colors.sidebar = super::parse_color(match (preset, dark) {
-            (ThemePreset::Fluent, false) => "#f5f5f5",
-            (ThemePreset::Fluent, true) => "#242424",
-            (ThemePreset::Material3, false) => "#f7f2fa",
-            (ThemePreset::Material3, true) => "#1d1b20",
-            (ThemePreset::LiquidGlass, false) => "#ececee",
-            (ThemePreset::LiquidGlass, true) => "#262628",
-            _ => unreachable!(),
-        });
-        let (panel_radius, height, padding, blur, opacity) = match preset {
-            ThemePreset::Fluent => (8.0, 32.0, 12.0, 20.0, if dark { 0.18 } else { 0.35 }),
-            ThemePreset::Material3 => (28.0, 40.0, 24.0, 0.0, 1.0),
-            ThemePreset::LiquidGlass => (24.0, 36.0, 16.0, 8.0, if dark { 0.38 } else { 0.44 }),
-            ThemePreset::Shadcn => unreachable!(),
-        };
-        colors.radius = panel_radius / 16.0;
-        theme.focus_ring_width = if preset == ThemePreset::Material3 {
-            3.0
-        } else {
-            2.0
-        };
+        theme.focus_ring_width = 2.0;
         theme.styles = ThemeStyles {
-            font_family: Some(
-                match preset {
-                    ThemePreset::Fluent => "Segoe UI Variable, Segoe UI, sans-serif",
-                    ThemePreset::Material3 => "Roboto, sans-serif",
-                    _ => "SF Pro Text, Segoe UI, sans-serif",
-                }
-                .into(),
-            ),
-            font_size: None,
-            font_weight: None,
-            line_height: None,
-            control_height: Some(height),
-            control_padding_x: Some(padding),
-            control_radius: None,
-            panel_radius: None,
             panel_padding: Some(24.0),
             gap: Some(8.0),
             border_width: Some(1.0),
-            shadow: None,
-            backdrop_blur: Some(blur),
-            surface_opacity: Some(opacity),
-            disabled_opacity: None,
-            glass: (preset == ThemePreset::LiquidGlass).then(super::GlassMaterial::default),
+            ..ThemeStyles::default()
         };
-        theme
+        match preset {
+            #[cfg(feature = "theme-fluent")]
+            ThemePreset::Fluent => fluent::configure(theme, dark),
+            #[cfg(feature = "theme-material3")]
+            ThemePreset::Material3 => material3::configure(theme, dark),
+            #[cfg(feature = "theme-liquid-glass")]
+            ThemePreset::LiquidGlass => liquid_glass::configure(theme, dark),
+            _ => unreachable!(),
+        }
     }
 }
 
 pub fn set_theme_preset(preset: ThemePreset) {
+    assert!(
+        preset == ThemePreset::Shadcn || preset.is_enabled(),
+        "theme preset {} is not enabled; enable its theme-* feature",
+        preset.name()
+    );
     super::theme_override::change_theme_preset(preset);
 }
 
@@ -1825,7 +1838,8 @@ pub(crate) fn slot_theme_classes(el: &mut Element) -> String {
                     if theme.preset == ThemePreset::Fluent {
                         el.style.bg_color[3] = 0.0;
                         el.style.set_uniform_border_width(0.0);
-                        classes.push("bg-transparent border-0 shadow-none backdrop-blur-none".into());
+                        classes
+                            .push("bg-transparent border-0 shadow-none backdrop-blur-none".into());
                     } else {
                         classes.push("bg-sidebar".into());
                     }

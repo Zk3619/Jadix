@@ -4002,6 +4002,7 @@ impl Element {
     }
 
     /// Parse markdown-inspired inline markup into [`Self::text_spans`].
+    #[cfg(feature = "markdown")]
     pub fn markdown_inline(self, src: impl AsRef<str>) -> Self {
         self.text_spans(crate::text::parse_markdown_inline(src.as_ref()))
     }

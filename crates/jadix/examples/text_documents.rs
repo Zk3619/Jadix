@@ -1,4 +1,4 @@
-//! cargo run -p jadix --example text_documents
+//! cargo run -p jadix --example text_documents --features document-diff
 
 use jadix::prelude::*;
 

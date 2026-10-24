@@ -754,6 +754,7 @@ pub(crate) fn anchored_overlay_is_mounted(id: &str, opts: &AnchoredOverlayConten
 
 /// Smoke: apply panel motion without exposing the presence handle.
 #[cfg(test)]
+#[cfg(feature = "animation-base")]
 pub(crate) fn apply_anchored_overlay_panel_motion(
     id: &str,
     panel: &mut Element,
@@ -1894,13 +1895,17 @@ mod tests {
             open.set(false);
             assert_eq!(
                 anchored_overlay_phase("ao-phase", open, &opts),
-                Some(PresencePhase::Exiting)
+                cfg!(feature = "animation-base").then_some(PresencePhase::Exiting)
             );
-            assert!(anchored_overlay_is_mounted("ao-phase", &opts));
+            assert_eq!(
+                anchored_overlay_is_mounted("ao-phase", &opts),
+                cfg!(feature = "animation-base")
+            );
         });
         clear_overlay_stack();
     }
 
+    #[cfg(feature = "animation-base")]
     fn has_portal(el: &Element) -> bool {
         el.attrs.get("jadix_portal").map(String::as_str) == Some("1")
             || el.children.iter().any(has_portal)
@@ -1966,6 +1971,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn wave2_canary_close_keeps_portal_while_exiting() {
         use crate::utils::presence::PresencePhase;
 
@@ -2387,6 +2393,7 @@ mod tests {
     /// TabsContent dispose kills the overlay owner. The hoisted panel must still
     /// play Fade exit (`fade-out-0`) instead of being pruned on the same frame.
     #[test]
+    #[cfg(feature = "animation-base")]
     fn tab_unmount_plays_configured_floating_exit() {
         use std::cell::RefCell;
         use std::rc::Rc;

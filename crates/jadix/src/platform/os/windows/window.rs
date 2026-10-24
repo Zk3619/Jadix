@@ -2,7 +2,9 @@
 
 use winit::window::{Window, WindowAttributes};
 
-use crate::app::{WindowBackdrop, WindowOptions};
+use crate::app::WindowOptions;
+#[cfg(feature = "windows-dwm")]
+use crate::app::WindowBackdrop;
 
 pub(crate) fn decorate_window_attributes(
     attrs: WindowAttributes,
@@ -16,6 +18,7 @@ pub(crate) fn decorate_window_attributes(
             .with_undecorated_shadow(true)
             .with_corner_preference(CornerPreference::Round);
     }
+    #[cfg(feature = "windows-dwm")]
     if options.windows_extends_dwm_frame() {
         win = win.with_system_backdrop(backdrop_type(options.backdrop));
     }
@@ -25,6 +28,7 @@ pub(crate) fn decorate_window_attributes(
     attrs.with_platform_attributes(Box::new(win))
 }
 
+#[cfg(feature = "windows-dwm")]
 fn backdrop_type(kind: WindowBackdrop) -> winit::platform::windows::BackdropType {
     use winit::platform::windows::BackdropType;
     match kind {
@@ -43,6 +47,7 @@ fn backdrop_type(kind: WindowBackdrop) -> winit::platform::windows::BackdropType
 /// `composition_swapchain` is set when the window presents a premultiplied
 /// Vulkan/DXGI swapchain (`WS_EX_NOREDIRECTIONBITMAP`). DWM empty-region
 /// blur-behind is then skipped — it targets the redirection bitmap we disabled.
+#[cfg(feature = "windows-dwm")]
 pub(crate) fn apply_created_window(
     window: &dyn Window,
     options: &WindowOptions,
@@ -86,6 +91,14 @@ pub(crate) fn apply_created_window(
     }
 }
 
+#[cfg(not(feature = "windows-dwm"))]
+pub(crate) fn apply_created_window(
+    _window: &dyn Window,
+    _options: &WindowOptions,
+    _composition_swapchain: bool,
+) {
+}
+
 pub(crate) fn hwnd(window: &dyn Window) -> Option<windows_sys::Win32::Foundation::HWND> {
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
@@ -96,6 +109,7 @@ pub(crate) fn hwnd(window: &dyn Window) -> Option<windows_sys::Win32::Foundation
     Some(h.hwnd.get() as windows_sys::Win32::Foundation::HWND)
 }
 
+#[cfg(feature = "windows-dwm")]
 fn extend_dwm_frame(hwnd: windows_sys::Win32::Foundation::HWND, into_client: bool) {
     use windows_sys::Win32::Graphics::Dwm::DwmExtendFrameIntoClientArea;
     use windows_sys::Win32::UI::Controls::MARGINS;
@@ -116,6 +130,7 @@ fn extend_dwm_frame(hwnd: windows_sys::Win32::Foundation::HWND, into_client: boo
 /// pixels composite over the desktop (or the system backdrop). Same trick
 /// winit uses for `with_transparent(true)` — re-applied after WGL/DXGI
 /// surface creation, which otherwise drops the region.
+#[cfg(feature = "windows-dwm")]
 fn enable_dwm_punch_through(hwnd: windows_sys::Win32::Foundation::HWND) {
     use windows_sys::Win32::Foundation::TRUE;
     use windows_sys::Win32::Graphics::Dwm::{
@@ -136,6 +151,7 @@ fn enable_dwm_punch_through(hwnd: windows_sys::Win32::Foundation::HWND) {
     }
 }
 
+#[cfg(feature = "windows-dwm")]
 pub(crate) fn set_use_host_backdrop_brush(
     hwnd: windows_sys::Win32::Foundation::HWND,
     enable: bool,

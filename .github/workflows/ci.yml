@@ -59,6 +59,34 @@ jobs:
       - name: Window backend dependency identities
         shell: pwsh
         run: ./scripts/check-window-deps.ps1
+      - name: Isolated capabilities and minimal dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          ./scripts/check-features.ps1
+          cargo test -p jadix --no-default-features --lib -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p jadix --no-default-features --test feature_contracts --test animation_features --test text_document_views -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($capability in @('theme-fluent', 'theme-material3', 'theme-liquid-glass', 'code', 'markdown', 'syntax-highlighting', 'code-lsp', 'scale-preview', 'windows-dwm', 'windows-dcomp', 'lucide-animated', 'svg', 'svg,bundled-lucide,lucide-animated')) {
+            cargo test -p jadix --no-default-features --features $capability --test feature_contracts
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          foreach ($capability in @('animation-base', 'animation-ex', 'animation', 'animation-path', 'svg', 'svg,animation-base', 'svg,animation-ex')) {
+            cargo test -p jadix --no-default-features --features $capability --test animation_features -- --test-threads=1
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          cargo test -p jadix --no-default-features --features svg,bundled-lucide --lib utils::morph_icon -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p jadix --no-default-features --features svg,bundled-lucide,lucide-animated --lib utils::icon_provider::tests -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p jadix --lib anim_freeze -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p jadix --no-default-features --features code-lsp --lib text::lsp::tests
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p jadix --no-default-features --features scale-preview --test scale_preview
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p jadix --features themes,animation-path,document-editing,document-diff,document-science --test feature_contracts --test document_editing --test document_extensions --test document_quality --test text_document_views
       - name: Wayland configure capability projection
         if: runner.os == 'Linux'
         run: cargo test -p winit-wayland --lib projects_real_configure
@@ -66,7 +94,7 @@ jobs:
         run: cargo test --workspace
       - name: Native menu contracts (Windows)
         if: runner.os == 'Windows'
-        run: cargo test -p jadix --lib --features native-menu,system-tray native_menu:: -- --test-threads=1
+        run: 'cargo test -p jadix --lib --features native-menu,system-tray native_menu:: -- --test-threads=1'
       - name: Native menu bridge + example (all hosts)
         run: cargo check -p jadix --features native-menu --example desktop_shell
       - name: AccessKit bridge and OHOS node identities
@@ -160,4 +188,6 @@ jobs:
       - name: ImageStream YUV (WP-M.3)
         run: cargo test -p jadix --lib --features image-stream yuv -- --nocapture
       - name: Text undo/redo history (text-undo)
-        run: cargo test -p jadix --lib --features text-undo text_edit_history document_registry -- --nocapture
+        run: cargo test -p jadix --lib --features text-undo text_edit_history -- --nocapture
+      - name: Document registry history (text-undo)
+        run: cargo test -p jadix --lib --features text-undo document_registry -- --nocapture

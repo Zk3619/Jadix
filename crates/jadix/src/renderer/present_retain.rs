@@ -675,6 +675,15 @@ mod tests {
     /// (FLIP_DISCARD). Gallery on Windows is GL-first; D3D12 offscreen numbers
     /// do not represent the live path.
     #[test]
+    #[cfg_attr(
+        not(any(
+            all(windows, feature = "backend-dx12"),
+            all(target_vendor = "apple", feature = "backend-metal"),
+            feature = "backend-gles",
+            feature = "backend-vulkan",
+        )),
+        ignore = "requires a wgpu backend for this target"
+    )]
     fn present_retain_full_blit_cost_grows_with_window() {
         let Some(gpu) = OffscreenGpu::new() else {
             eprintln!("skip present_retain_full_blit_cost_grows_with_window: no wgpu adapter");
@@ -724,6 +733,15 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(any(
+            all(windows, feature = "backend-dx12"),
+            all(target_vendor = "apple", feature = "backend-metal"),
+            feature = "backend-gles",
+            feature = "backend-vulkan",
+        )),
+        ignore = "requires a wgpu backend for this target"
+    )]
     fn simple_fill_vertex_color_decode_matches_small_sdf_and_alpha_blend() {
         let Some(gpu) = OffscreenGpu::new() else {
             return;
@@ -764,6 +782,15 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(any(
+            all(windows, feature = "backend-dx12"),
+            all(target_vendor = "apple", feature = "backend-metal"),
+            feature = "backend-gles",
+            feature = "backend-vulkan",
+        )),
+        ignore = "requires a wgpu backend for this target"
+    )]
     fn rounded_edges_are_invariant_under_integer_pixel_scroll() {
         let Some(gpu) = OffscreenGpu::with_backends(wgpu::Backends::GL) else {
             return;
@@ -798,6 +825,15 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(any(
+            all(windows, feature = "backend-dx12"),
+            all(target_vendor = "apple", feature = "backend-metal"),
+            feature = "backend-gles",
+            feature = "backend-vulkan",
+        )),
+        ignore = "requires a wgpu backend for this target"
+    )]
     fn rounded_fill_fast_path_matches_general_shader_pixels() {
         let Some(gpu) = OffscreenGpu::new() else {
             return;
@@ -833,6 +869,15 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(any(
+            all(windows, feature = "backend-dx12"),
+            all(target_vendor = "apple", feature = "backend-metal"),
+            feature = "backend-gles",
+            feature = "backend-vulkan",
+        )),
+        ignore = "requires a wgpu backend for this target"
+    )]
     fn solid_pipeline_matches_general_for_borders_and_mixed_painter_order() {
         let Some(gpu) = OffscreenGpu::with_backends(wgpu::Backends::GL).or_else(OffscreenGpu::new)
         else {
@@ -1040,6 +1085,15 @@ mod tests {
     /// Gallery maximize: same overlapping card stack, stretched to the window.
     /// SDF + box-shadow fill on Intel GL is the work that scales with pixels.
     #[test]
+    #[cfg_attr(
+        not(any(
+            all(windows, feature = "backend-dx12"),
+            all(target_vendor = "apple", feature = "backend-metal"),
+            feature = "backend-gles",
+            feature = "backend-vulkan",
+        )),
+        ignore = "requires a wgpu backend for this target"
+    )]
     fn rounded_rect_fill_cost_grows_with_window() {
         let Some(gpu) = OffscreenGpu::with_backends(wgpu::Backends::GL).or_else(OffscreenGpu::new)
         else {

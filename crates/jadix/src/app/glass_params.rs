@@ -58,13 +58,14 @@ pub fn parse_glass_tint(s: &str) -> Option<GlassTint> {
 }
 
 /// AccentPolicy `nColor` packing: alpha << 24 | B << 16 | G << 8 | R.
+#[cfg(any(test, all(windows, feature = "windows-dwm")))]
 pub fn tint_to_accent_abgr(tint: GlassTint) -> u32 {
     let [a, r, g, b] = tint;
     (a as u32) << 24 | (b as u32) << 16 | (g as u32) << 8 | r as u32
 }
 
 /// WinUI Acrylic: suppress max tint opacity at extreme luminosity, restore with saturation.
-#[cfg_attr(not(feature = "backend-dx12"), allow(dead_code))]
+#[cfg_attr(not(feature = "windows-dcomp"), allow(dead_code))]
 pub fn tint_opacity_modifier(tint: GlassTint) -> f64 {
     const MID: f64 = 0.50;
     const WHITE_MAX: f64 = 0.45;
@@ -165,7 +166,7 @@ fn rgba_bytes(r: f64, g: f64, b: f64, a: f64) -> GlassTint {
 ///
 /// When `luminosity_opacity` is `None`, V is clamped to 0.125–0.965 and alpha is
 /// mapped from the tint's alpha (0.15–1.03, then capped at 1).
-#[cfg_attr(not(any(test, feature = "backend-dx12")), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "windows-dcomp")), allow(dead_code))]
 pub fn luminosity_color(tint: GlassTint, luminosity_opacity: Option<f32>) -> GlassTint {
     let (r, g, b) = rgb01(tint);
     if let Some(op) = luminosity_opacity {
@@ -187,7 +188,7 @@ pub fn luminosity_color(tint: GlassTint, luminosity_opacity: Option<f32>) -> Gla
 }
 
 /// Tint alpha applied first (WinUI `GetEffectiveLuminosityColor`), then [`luminosity_color`].
-#[cfg_attr(not(any(test, feature = "backend-dx12")), allow(dead_code))]
+#[cfg_attr(not(any(test, feature = "windows-dcomp")), allow(dead_code))]
 pub fn effective_luminosity_color(
     tint: GlassTint,
     tint_opacity: f32,
@@ -201,7 +202,7 @@ pub fn effective_luminosity_color(
 }
 
 /// Effective tint after user opacity and (optional) luminosity-driven modifier.
-#[cfg_attr(not(feature = "backend-dx12"), allow(dead_code))]
+#[cfg_attr(not(feature = "windows-dcomp"), allow(dead_code))]
 pub fn effective_tint_color(
     tint: GlassTint,
     tint_opacity: f32,
@@ -227,7 +228,7 @@ pub fn aero_inactive_balances(color_balance: f32, blur_balance: f32) -> (f32, f3
 }
 
 /// Sprite-overlay Aero (WUC cannot host D2D Tint / Composite-PLUS).
-#[cfg(any(test, feature = "backend-dx12"))]
+#[cfg(any(test, feature = "windows-dcomp"))]
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct AeroOverlay {
     /// RGB of the color wash.
@@ -239,14 +240,14 @@ pub struct AeroOverlay {
     pub reflection: f32,
 }
 
-#[cfg(any(test, feature = "backend-dx12"))]
+#[cfg(any(test, feature = "windows-dcomp"))]
 fn lerp_u8(a: u8, b: u8, t: f32) -> u8 {
     let t = t.clamp(0.0, 1.0);
     (a as f32 + (b as f32 - a as f32) * t).round() as u8
 }
 
 /// SOURCE-OVER veil over HostBackdrop frost. Keep it thin — a 0.6 sheet hides the blur.
-#[cfg(any(test, feature = "backend-dx12"))]
+#[cfg(any(test, feature = "windows-dcomp"))]
 pub fn aero_overlay(
     tint: GlassTint,
     glow: GlassTint,

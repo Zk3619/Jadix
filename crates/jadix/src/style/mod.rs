@@ -52,6 +52,7 @@ pub use animatable::{
     parse_background_position, parse_fr_tracks, AnimatableValue, LayoutImpact, PropertyId,
     PropertySet,
 };
+#[cfg(feature = "animation-ex")]
 pub(crate) use animatable::{
     read_value as read_animatable_value, values_close as animatable_values_close,
     write_value as write_animatable_value,

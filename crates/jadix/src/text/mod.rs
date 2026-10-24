@@ -14,33 +14,49 @@
 //! Static BiDi labels may still use UAX#14 prewrap + `Wrap::None` via
 //! [`LineBreakSource::BiDiPrewrap`].
 
+#[cfg(feature = "document-diff")]
 pub mod diff;
-pub mod syntax;
 pub mod document;
-pub mod document_layout;
-pub mod semantic_document;
+#[cfg(feature = "document-editing")]
 pub mod document_editor;
-pub mod molecule;
+#[cfg(feature = "document")]
+pub mod document_layout;
+#[cfg(feature = "code-lsp")]
+pub mod lsp;
+#[cfg(feature = "markdown")]
+pub mod markdown;
+#[cfg(feature = "markdown")]
+pub mod markdown_inline;
 #[cfg(feature = "document-math")]
 pub mod math;
-pub mod protein;
-pub mod rich_text;
-pub mod markdown;
-pub mod markdown_inline;
 pub mod measure;
+#[cfg(feature = "document-science")]
+pub mod molecule;
+#[cfg(feature = "document-science")]
+pub mod protein;
+#[cfg(feature = "markdown")]
+pub mod rich_text;
+#[cfg(feature = "markdown")]
+pub mod semantic_document;
+#[cfg(feature = "syntax-highlighting")]
+pub mod syntax;
 pub mod uax14_wrap;
 pub mod visual_lines;
 pub mod wrap_variable;
 
 pub use crate::renderer::JadixTextRenderer;
-pub use document::{DocumentEditError, TextDocument};
-pub use document_layout::{DocumentHeightIndex, DocumentScrollAnchor};
-pub use semantic_document::{Document, DocumentFormat, DocumentBlock, DocumentBlockKind, DocumentInline, DocumentInlineKind, DocumentInlineStyle};
-pub use document_editor::{DocumentEditorState, DocumentEditorSnapshot, DocumentSelection, DocumentEditMode, DocumentMark};
-pub use molecule::{Molecule, MoleculeAtom, MoleculeBond, MoleculeData};
-pub use rich_text::{RichTextBlock, RichTextSpan};
+#[cfg(feature = "document-diff")]
 pub use diff::{DiffDocument, DiffLineKind, DiffMode, DiffRow};
+pub use document::{DocumentEditError, TextDocument};
+#[cfg(feature = "document-editing")]
+pub use document_editor::{
+    DocumentEditMode, DocumentEditorSnapshot, DocumentEditorState, DocumentMark, DocumentSelection,
+};
+#[cfg(feature = "document")]
+pub use document_layout::{DocumentHeightIndex, DocumentScrollAnchor};
+#[cfg(feature = "markdown")]
 pub use markdown::parse_markdown_blocks;
+#[cfg(feature = "markdown")]
 pub use markdown_inline::parse_markdown_inline;
 pub use measure::{
     bidi_soft_wrap_height, clear_shared_font_system, fit_cache_frame_tick, glyphon_fit_soft_wrap,
@@ -51,6 +67,15 @@ pub use measure::{
     shared_font_system_ptr, shutdown_layout_text, snap_content_text_width, take_fit_needs_relayout,
     try_glyphon_fit_soft_wrap, GlyphonFitSoftWrap, LayoutCursor, PreparedLine, PreparedText,
     TextLayoutMetrics, LINE_WIDTH_EPS,
+};
+#[cfg(feature = "document-science")]
+pub use molecule::{Molecule, MoleculeAtom, MoleculeBond, MoleculeData};
+#[cfg(feature = "markdown")]
+pub use rich_text::{RichTextBlock, RichTextSpan};
+#[cfg(feature = "markdown")]
+pub use semantic_document::{
+    Document, DocumentBlock, DocumentBlockKind, DocumentFormat, DocumentInline, DocumentInlineKind,
+    DocumentInlineStyle,
 };
 pub use uax14_wrap::{needs_logical_prewrap, soft_wrap_logical};
 pub use visual_lines::{

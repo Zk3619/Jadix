@@ -1,3 +1,5 @@
+#![cfg(feature = "gallery-tests")]
+
 //! Rotating overflow must composite identically on scrolling and retained frames.
 use super::*;
 

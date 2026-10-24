@@ -461,6 +461,15 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(any(
+            all(windows, feature = "backend-dx12"),
+            all(target_vendor = "apple", feature = "backend-metal"),
+            feature = "backend-gles",
+            feature = "backend-vulkan",
+        )),
+        ignore = "requires a wgpu backend for this target"
+    )]
     fn offscreen_clear_readback_golden() {
         let Some(gpu) = OffscreenGpu::new() else {
             eprintln!("skip: no wgpu adapter");
@@ -483,6 +492,15 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(any(
+            all(windows, feature = "backend-dx12"),
+            all(target_vendor = "apple", feature = "backend-metal"),
+            feature = "backend-gles",
+            feature = "backend-vulkan",
+        )),
+        ignore = "requires a wgpu backend for this target"
+    )]
     fn offscreen_clear_readback_smoke() {
         let Some(gpu) = OffscreenGpu::new() else {
             eprintln!("skip: no wgpu adapter");

@@ -1,4 +1,4 @@
-#![cfg(feature = "svg")]
+#![cfg(feature = "gallery-tests")]
 
 use super::*;
 

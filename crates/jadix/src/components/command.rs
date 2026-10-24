@@ -2198,6 +2198,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn command_dialog_session_reset_waits_for_unmount() {
         use crate::utils::presence::PresencePhase;
         use crate::utils::viewport_modal::{
@@ -2800,6 +2801,7 @@ mod tests {
     /// Remaining screen-space travel while fade is already visible is the
     /// `__modal_zoom` layer scaling about the card center (lower rows move down).
     #[test]
+    #[cfg(feature = "animation-base")]
     fn command_dialog_item_y_stable_across_enter_settle() {
         use crate::utils::modal_motion::{
             flush_modal_shell_motion_subtree, tick_hoisted_modal_css,

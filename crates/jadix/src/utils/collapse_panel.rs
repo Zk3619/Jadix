@@ -585,6 +585,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn reverse_exit_continues_from_current_clip() {
         let (_o, ()) = create_root(|| {
             let p = use_collapse_panel_presence("reverse_exit_clip");

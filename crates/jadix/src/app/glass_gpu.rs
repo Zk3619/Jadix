@@ -77,14 +77,14 @@ async fn try_acquire_async(
     None
 }
 
-#[cfg_attr(not(all(windows, feature = "backend-dx12")), allow(dead_code))]
+#[cfg_attr(not(all(windows, feature = "windows-dcomp")), allow(dead_code))]
 async fn try_acquire_dcomp(window: &Arc<dyn Window>) -> Option<CompositorGpu> {
-    #[cfg(all(windows, feature = "backend-dx12"))]
+    #[cfg(all(windows, feature = "windows-dcomp"))]
     {
         let handle = crate::platform::custom_glass_surface_handle(window.as_ref())?;
         try_acquire_named(window, wgpu::Backends::DX12, "dx12-dcomp", Some(handle)).await
     }
-    #[cfg(not(all(windows, feature = "backend-dx12")))]
+    #[cfg(not(all(windows, feature = "windows-dcomp")))]
     {
         let _ = window;
         None
@@ -99,7 +99,7 @@ async fn try_acquire_named(
 ) -> Option<CompositorGpu> {
     let instance = crate::renderer::wgpu_compat::instance(backends);
     let surface = if let Some(handle) = composition_handle {
-        #[cfg(all(windows, feature = "backend-dx12"))]
+        #[cfg(all(windows, feature = "windows-dcomp"))]
         {
             match unsafe {
                 instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::SurfaceHandle(handle))
@@ -111,7 +111,7 @@ async fn try_acquire_named(
                 }
             }
         }
-        #[cfg(not(all(windows, feature = "backend-dx12")))]
+        #[cfg(not(all(windows, feature = "windows-dcomp")))]
         {
             let _ = handle;
             return None;

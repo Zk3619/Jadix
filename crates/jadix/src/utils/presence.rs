@@ -93,8 +93,13 @@ impl ExitGate {
             (false, PresencePhase::Absent) => false,
             (false, PresencePhase::Exiting) => false,
             (false, PresencePhase::Present) => {
-                self.phase = PresencePhase::Exiting;
-                self.exit_started = Some(now);
+                if cfg!(feature = "animation-base") {
+                    self.phase = PresencePhase::Exiting;
+                    self.exit_started = Some(now);
+                } else {
+                    self.phase = PresencePhase::Absent;
+                    self.exit_started = None;
+                }
                 true
             }
         }
@@ -126,13 +131,13 @@ impl ExitGate {
 /// 墙钟是否已超过退场时长（队列式组件常用，无需整颗 [`ExitGate`]）。
 #[inline]
 pub fn exit_elapsed(started: Instant, duration: Duration) -> bool {
-    started.elapsed() >= duration
+    !cfg!(feature = "animation-base") || started.elapsed() >= duration
 }
 
 /// 与 [`exit_elapsed`] 相同，但用显式 `now`（便于测）。
 #[inline]
 pub fn exit_elapsed_at(started: Instant, duration: Duration, now: Instant) -> bool {
-    now.duration_since(started) >= duration
+    !cfg!(feature = "animation-base") || now.duration_since(started) >= duration
 }
 
 /// Stable `template_id` suffix for [`presence`] islands (`{id}__presence`).
@@ -249,6 +254,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn exit_gate_present_exit_absent() {
         let t0 = Instant::now();
         let mut g = ExitGate::new(true, Duration::from_millis(100));
@@ -275,7 +281,10 @@ mod tests {
     #[test]
     fn exit_elapsed_helpers() {
         let t0 = Instant::now();
-        assert!(!exit_elapsed_at(t0, Duration::from_millis(50), t0));
+        assert_eq!(
+            exit_elapsed_at(t0, Duration::from_millis(50), t0),
+            !cfg!(feature = "animation-base")
+        );
         assert!(exit_elapsed_at(
             t0,
             Duration::from_millis(50),
@@ -284,6 +293,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn generic_presence_exits_after_duration() {
         use crate::core::reactivity::{create_root, use_signal};
 
@@ -313,6 +323,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn generic_presence_tick_notifies_mounted_readers() {
         use crate::core::reactivity::{create_effect, create_root};
         use std::cell::Cell;

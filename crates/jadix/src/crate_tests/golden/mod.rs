@@ -50,6 +50,15 @@ fn assert_scene(name: &str, root: &mut Element, w: u32, h: u32) {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn golden_component_button_default() {
     let mut root = Element::new()
         .w(160.0)
@@ -68,6 +77,15 @@ fn golden_component_button_default() {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn golden_component_input_idle() {
     let mut root = Element::new()
         .w(240.0)
@@ -78,6 +96,15 @@ fn golden_component_input_idle() {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn golden_component_dialog_open() {
     let open = use_signal("golden-dialog__open", || true);
     let dialog_el = dialog("golden-dialog").open(open).child(|| {
@@ -109,6 +136,15 @@ fn golden_component_dialog_open() {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn golden_component_tabs_two() {
     let value = use_signal("golden-tabs__value", || "one".to_string());
     let el = tabs_scope(
@@ -166,6 +202,15 @@ fn golden_component_tabs_two() {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn golden_component_scroll_area() {
     let tall = Element::new()
         .w(120.0)

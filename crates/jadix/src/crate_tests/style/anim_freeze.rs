@@ -4,18 +4,24 @@
 //! Specified/Used, fill-mode, reduced-motion, `PropertyId` 64-slot bitmap, presence
 //! `animation_run_active` vs frame pump.
 
+#[cfg(feature = "animation-base")]
 use crate::layout::dim_length_px;
+#[cfg(feature = "animation-base")]
 use crate::layout::dimension::CssDim;
 use crate::style::{
-    animation_run_active, css_animation_needs_frame, keyframes_anim_entry, parse_filter,
-    register_keyframes, set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
-    set_prefers_reduced_motion, tick_element_animations, tick_element_animations_ex,
-    tick_element_transitions, tick_element_transitions_with_text, AnimatableValue, AnimationEntry,
-    AnimationFillMode, AnimationLock, AnimationSnapshot, ClipCoord, ClipPath, FilterFunction,
-    FilterList, KeyframeStop, PropertyId, TimingFunction, TransitionEntry, TransitionProperty,
-    TransitionSnapshot, UsedLayout,
+    animation_run_active, css_animation_needs_frame, keyframes_anim_entry, register_keyframes,
+    set_prefers_reduced_motion, tick_element_animations, AnimationFillMode, AnimationSnapshot,
+    KeyframeStop, PropertyId, TimingFunction, TransitionProperty,
+};
+#[cfg(feature = "animation-base")]
+use crate::style::{
+    parse_filter, set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
+    tick_element_animations_ex, tick_element_transitions, tick_element_transitions_with_text,
+    AnimatableValue, AnimationEntry, AnimationLock, ClipCoord, ClipPath, FilterFunction, FilterList,
+    TransitionEntry, TransitionSnapshot, UsedLayout,
 };
 
+#[cfg(feature = "animation-base")]
 fn linear_transition(prop: TransitionProperty, duration_ms: f32) -> TransitionEntry {
     TransitionEntry {
         property: prop,
@@ -42,6 +48,7 @@ fn from_css_recognizes_independent_scale_rotate() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn independent_scale_transition_lerps_without_transform_shorthand() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
@@ -67,6 +74,7 @@ fn independent_scale_transition_lerps_without_transform_shorthand() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn independent_rotate_transition_lerps() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
@@ -91,6 +99,7 @@ fn independent_rotate_transition_lerps() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn clip_path_polygon_transition_lerps_vertices() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
@@ -124,6 +133,7 @@ fn clip_path_polygon_transition_lerps_vertices() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn clip_path_inset_transition_uses_same_interpolator() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
@@ -149,6 +159,7 @@ fn clip_path_inset_transition_uses_same_interpolator() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn negative_animation_delay_seeks_into_cycle() {
     let mut style = crate::style::Style::default();
     style.animations.push(AnimationEntry {
@@ -168,6 +179,7 @@ fn negative_animation_delay_seeks_into_cycle() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn dual_engine_background_color_mid() {
     register_keyframes(
         "anim-freeze-bg",
@@ -219,6 +231,7 @@ fn dual_engine_background_color_mid() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn dual_engine_width_mid() {
     register_keyframes(
         "anim-freeze-width",
@@ -265,6 +278,7 @@ fn dual_engine_width_mid() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn dual_engine_border_radius_mid() {
     register_keyframes(
         "anim-freeze-radius",
@@ -319,6 +333,7 @@ fn dual_engine_border_radius_mid() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn dual_engine_filter_blur_mid() {
     let from = parse_filter("blur(0px)");
     let to = parse_filter("blur(10px)");
@@ -370,6 +385,7 @@ fn dual_engine_filter_blur_mid() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn dual_engine_text_color_mid() {
     register_keyframes(
         "anim-freeze-color",
@@ -435,6 +451,7 @@ fn dual_engine_text_color_mid() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn transform_origin_transition_lerps_fractions() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
@@ -459,6 +476,7 @@ fn transform_origin_transition_lerps_fractions() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn extra_shadows_list_lerps_equal_length() {
     use crate::style::BoxShadow;
     set_css_transition_virtual_timeline(true);
@@ -496,6 +514,7 @@ fn extra_shadows_list_lerps_equal_length() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn waapi_keyframe_objects_share_css_tick() {
     use crate::style::{Animation, Keyframe, KeyframeEffect};
     let anim = Animation::animate(
@@ -580,6 +599,7 @@ fn reduced_motion_snaps_keyframes_to_end() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn fill_mode_none_restores_specified_opacity() {
     register_keyframes(
         "anim-freeze-fade-out",
@@ -652,6 +672,7 @@ fn fill_mode_forwards_holds_end_opacity() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn specified_max_height_stays_auto_during_accordion_down() {
     let mut style = crate::style::Style::default();
     style.max_size.height = taffy::style::Dimension::auto();

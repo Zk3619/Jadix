@@ -453,6 +453,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn presence_wrapper_reconcile_keeps_exit_opacity_and_seeds_tween() {
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
@@ -610,6 +611,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn modal_shell_motion_preserves_enter_mid_on_hoist() {
         use crate::style::{
             set_css_transition_timeline_ms, set_css_transition_virtual_timeline, TimingFunction,
@@ -721,6 +723,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn preserve_copies_active_width_tween_on_non_keyed_node() {
         use crate::style::{
             set_css_transition_timeline_ms, set_css_transition_virtual_timeline, TimingFunction,

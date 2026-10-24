@@ -1495,6 +1495,7 @@ fn kbd_adornment_typing_must_keep_input_node_and_typed_glyphs() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn kbd_adornment_typing_must_not_capture_sidebar_or_wipe_spin() {
     let mut fs = font_loader::create_font_system();
     font_loader::apply_default_families(fs.db_mut());

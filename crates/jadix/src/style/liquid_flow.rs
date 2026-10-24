@@ -240,7 +240,7 @@ pub(crate) fn measure(root: &mut Element, layout: &taffy::TaffyTree<()>) {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "theme-liquid-glass"))]
 mod tests {
     use super::*;
 

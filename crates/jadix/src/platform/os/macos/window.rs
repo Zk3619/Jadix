@@ -6,14 +6,14 @@ pub(crate) fn apply_created_window(
     options: &WindowOptions,
     composition_swapchain: bool,
 ) {
-    #[cfg(feature = "native-materials")]
+    #[cfg(feature = "window-materials")]
     if apply_glass(window, options) {
         return;
     }
     crate::platform::desktop::apply_created_window(window, options, composition_swapchain);
 }
 
-#[cfg(feature = "native-materials")]
+#[cfg(feature = "window-materials")]
 fn apply_glass(window: &dyn Window, options: &WindowOptions) -> bool {
     use objc2::{
         MainThreadMarker, msg_send,

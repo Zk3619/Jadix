@@ -1444,7 +1444,7 @@ pub fn tick_active_css_transitions_subtree(
                     || css_anim
                     || css_trans
                     || hover_edge
-                    || (el.style.opacity - before.opacity).abs() > 1e-5
+                    || el.style != before
                 {
                     // Paint-only motion must be a node-present dirty. StyleChanged with an
                     // empty damage list FullClears; a sibling Input PartialLoad would skip
@@ -1460,10 +1460,7 @@ pub fn tick_active_css_transitions_subtree(
                     );
                 }
                 if css_trans
-                    || (el.style.scale[0] - before.scale[0]).abs() > 1e-5
-                    || (el.style.scale[1] - before.scale[1]).abs() > 1e-5
-                    || (el.style.rotate_deg - before.rotate_deg).abs() > 1e-5
-                    || (el.style.opacity - before.opacity).abs() > 1e-5
+                    || el.style != before
                     || hover_edge
                 {
                     // Hover color leave is paint-only on an idle chip. Passing
@@ -2254,11 +2251,7 @@ fn sync_class_variants_subtree_inner(
                         || el.text_style != before_text
                         || hover_edge
                     {
-                        *impact = impact.merge(if spun || css_anim || css_trans {
-                            local.merge(LayoutStatus::StyleChanged)
-                        } else {
-                            local
-                        });
+                        *impact = impact.merge(local.merge(LayoutStatus::StyleChanged));
                         // Paint-only CSS ticks must not set hover-dirty. Gallery pointer
                         // storms (`hover:scale` tiles, sidebar) `take()` this flag on
                         // every CursorMoved — extra `dt≈0` paints freeze Marker spin.
@@ -2274,7 +2267,8 @@ fn sync_class_variants_subtree_inner(
                             || css_anim
                             || css_trans
                             || hover_edge
-                            || (el.style.opacity - before.opacity).abs() > 1e-5
+                            || el.style != before
+                            || el.text_style != before_text
                         {
                             crate::app::damage::push_frame_paint_element_change(
                                 el,
@@ -2283,10 +2277,7 @@ fn sync_class_variants_subtree_inner(
                             );
                         }
                         if css_trans
-                            || (el.style.scale[0] - before.scale[0]).abs() > 1e-5
-                            || (el.style.scale[1] - before.scale[1]).abs() > 1e-5
-                            || (el.style.rotate_deg - before.rotate_deg).abs() > 1e-5
-                            || (el.style.opacity - before.opacity).abs() > 1e-5
+                            || el.style != before
                             || el.text_style != before_text
                             || hover_edge
                         {
@@ -3669,6 +3660,7 @@ mod tests {
     use jadix_style_tokens::parse_class_token;
 
     #[test]
+    #[cfg(feature = "scale-preview")]
     fn scaled_preview_scroll_hover_keeps_its_responsive_layout() {
         crate::core::reactivity::create_root(|| {
             let mut tile = Element::new().focus_id("scaled-hover-layout");
@@ -4150,7 +4142,7 @@ mod tests {
         crate::style::set_prefers_reduced_motion(Some(false));
         let _ = resolve_class_variants(&mut el, &VariantContext::default());
         assert!(
-            (el.style.opacity - 1.0).abs() < 0.01,
+            (el.style.opacity - if cfg!(feature = "animation-base") { 1.0 } else { 0.0 }).abs() < 0.01,
             "base opacity restored when motion-reduce is off; got {}",
             el.style.opacity
         );
@@ -4669,6 +4661,7 @@ mod p1_utility_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn scroll_paint_applies_hover_scale_from_pointer() {
         // CSS `:hover` is geometric: a tile sliding under a still cursor must enter
         // `hover:scale` on the freeze path (same overlay as color, no snapshot restore).
@@ -4920,6 +4913,7 @@ mod p1_utility_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn cached_css_branches_refresh_after_style_and_structure_invalidation() {
         use crate::layout::collect_cache::{
             invalidate_collect_paint_hash_path, stamp_subtree_paint_hashes,
@@ -5283,6 +5277,7 @@ mod p1_utility_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn scroll_paint_applies_color_and_scale_hover() {
         let mut chip = Element::new();
         apply_class_list(
@@ -5338,6 +5333,7 @@ mod p1_utility_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn scroll_paint_freeze_still_advances_active_tween() {
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
@@ -5459,6 +5455,7 @@ mod p1_utility_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn responsive_padding_mount_seeds_resolved_breakpoint_before_animation() {
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
@@ -5549,6 +5546,7 @@ mod p1_utility_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn scroll_paint_freeze_still_advances_spring() {
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);
@@ -5861,6 +5859,7 @@ mod p1_utility_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn hover_rotate_origin_left_leaves_old_layout_center() {
         crate::style::set_css_transition_virtual_timeline(true);
         crate::style::set_css_transition_timeline_ms(0.0);

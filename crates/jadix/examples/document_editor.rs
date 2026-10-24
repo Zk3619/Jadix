@@ -1,4 +1,4 @@
-//! cargo run -p jadix --example document_editor --features document-math,text-undo
+//! cargo run -p jadix --example document_editor --features document-editing,document-math,text-undo
 
 use jadix::prelude::*;
 

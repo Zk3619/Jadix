@@ -77,6 +77,7 @@ fn auto_height_editor_primes_native_viewport_before_caret_follow() {
 }
 
 #[test]
+#[cfg(feature = "document-diff")]
 fn diff_view_rsx_accepts_a_precomputed_model() {
     let diff = DiffDocument::new("before\n", "after\n");
     let view = ui! {
@@ -144,6 +145,7 @@ fn horizontal_extent_update_requests_layout_not_only_repaint() {
 }
 
 #[test]
+#[cfg(feature = "document-diff")]
 fn diff_view_same_row_count_snapshot_updates_do_not_reuse_stale_text() {
     let (_owner, ()) = create_root(|| {
         let model = use_signal("diff-snapshot-integration", || {

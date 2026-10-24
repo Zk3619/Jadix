@@ -852,7 +852,10 @@ mod tests {
     fn vertical_pill_groups_use_segment_radius_not_whole_group_radius() {
         use crate::style::{set_theme, set_theme_preset, theme_preset, ThemePreset};
         let previous = crate::style::get_theme();
-        for preset in [ThemePreset::LiquidGlass, ThemePreset::Material3] {
+        for preset in [ThemePreset::LiquidGlass, ThemePreset::Material3]
+            .into_iter()
+            .filter(|preset| preset.is_enabled())
+        {
             set_theme_preset(preset);
             crate::core::reactivity::create_root(|| {
                 let group: Element = button_group()
@@ -1233,7 +1236,10 @@ mod tests {
                 button_group()
                     .orientation("vertical")
                     .child(button("t").variant("outline").text("Top"))
-                    .child(button("m").variant("outline").text("Middle"))
+                    .child(
+                        Element::from(button("m").variant("outline").text("Middle"))
+                            .bg([0.8, 0.2, 0.2, 1.0]),
+                    )
                     .child(button("b").variant("outline").text("Bottom")),
             ));
             let mut layout = LayoutTree::new();

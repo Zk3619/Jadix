@@ -37,10 +37,15 @@ pub struct Timeline(Rc<RefCell<TimelineInner>>);
 
 impl Timeline {
     pub fn new(duration_s: f32) -> Self {
+        let duration_s = duration_s.max(1e-4);
         let inner = Rc::new(RefCell::new(TimelineInner {
-            duration_s: duration_s.max(1e-4),
-            elapsed_s: 0.0,
-            playing: true,
+            duration_s,
+            elapsed_s: if cfg!(feature = "animation-base") {
+                0.0
+            } else {
+                duration_s
+            },
+            playing: cfg!(feature = "animation-base"),
             repeat: Repeat::Once,
             reverse: false,
             bezier: [0.25, 0.1, 0.25, 1.0],
@@ -60,7 +65,11 @@ impl Timeline {
     }
 
     pub fn play(&self) {
-        self.0.borrow_mut().playing = true;
+        let mut state = self.0.borrow_mut();
+        state.playing = cfg!(feature = "animation-base");
+        if !state.playing {
+            state.elapsed_s = state.duration_s;
+        }
     }
 
     pub fn pause(&self) {
@@ -89,6 +98,9 @@ impl Timeline {
 
 /// Tick all live timelines. Returns true if any is still playing.
 pub fn tick_timelines(dt: f32) -> bool {
+    if !cfg!(feature = "animation-base") {
+        return false;
+    }
     let _ = now();
     let mut any = false;
     TIMELINES.with(|slot| {
@@ -116,6 +128,9 @@ pub fn tick_timelines(dt: f32) -> bool {
 
 /// Whether any timeline is still playing (does not advance time).
 pub fn any_timeline_playing() -> bool {
+    if !cfg!(feature = "animation-base") {
+        return false;
+    }
     TIMELINES.with(|slot| {
         slot.borrow()
             .iter()
@@ -171,6 +186,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn once_timeline_reaches_one() {
         let tl = Timeline::new(0.5);
         assert!(tick_timelines(0.6));

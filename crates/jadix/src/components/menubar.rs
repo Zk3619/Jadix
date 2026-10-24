@@ -172,6 +172,7 @@ fn open_neighbor_menu(bar_id: &str, from_ix: usize, delta: i32) {
     let Some(next) = roving_move(menus.len(), from_ix, delta) else {
         return;
     };
+    let underlay_armed = crate::utils::popup::underlay_close_is_armed();
     if let Some(cur) = menus.get(from_ix) {
         if cur.open.is_alive() {
             cur.open.set(false);
@@ -181,6 +182,9 @@ fn open_neighbor_menu(bar_id: &str, from_ix: usize, delta: i32) {
     if other.open.is_alive() {
         // Do not disarm — peer switch; underlay should stay armed from the first open.
         other.open.set(true);
+    }
+    if underlay_armed {
+        crate::utils::popup::arm_underlay_close();
     }
     focus_by_id(format!("{}__dd_trigger", other.id));
 }
@@ -524,6 +528,7 @@ pub fn MenubarTrigger(id: String, children: Option<Element>) -> Element {
             // Peer switch: keep underlay armed (portal_sync also skips disarm).
             // A rapidly revisited menu can still have an exiting portal entry;
             // portal_sync updates that entry without applying peer exclusivity.
+            let underlay_armed = crate::utils::popup::underlay_close_is_armed();
             crate::core::reactivity::batch(|| {
                 for menu in menus_of(&bar_h) {
                     if menu.open.is_alive() {
@@ -532,6 +537,9 @@ pub fn MenubarTrigger(id: String, children: Option<Element>) -> Element {
                 }
                 open_h.set(true);
             });
+            if underlay_armed {
+                crate::utils::popup::arm_underlay_close();
+            }
         }
     });
 

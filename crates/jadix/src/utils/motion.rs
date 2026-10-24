@@ -192,10 +192,9 @@ pub fn motion_sync_status(el: &Element, style_changed: bool, dragging: bool) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::style::{
-        set_css_transition_timeline_ms, set_css_transition_virtual_timeline, TimingFunction,
-        TransitionProperty,
-    };
+    use crate::style::{TimingFunction, TransitionProperty};
+    #[cfg(feature = "animation-base")]
+    use crate::style::{set_css_transition_timeline_ms, set_css_transition_virtual_timeline};
 
     #[test]
     fn motion_style_dedupes_target_unchanged() {
@@ -225,6 +224,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn snap_baseline_then_new_target_animates_via_motion_helpers() {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
@@ -254,6 +254,7 @@ mod tests {
         set_css_transition_virtual_timeline(false);
     }
 
+    #[cfg(feature = "animation-base")]
     fn flip_entry(prop: TransitionProperty) -> TransitionEntry {
         TransitionEntry {
             property: prop,
@@ -263,6 +264,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "animation-base")]
     fn ensure_after_snap_mid(prop: TransitionProperty) -> f32 {
         set_css_transition_virtual_timeline(true);
         set_css_transition_timeline_ms(0.0);
@@ -298,6 +300,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn ensure_after_snap_transform_tweens_from_old_translate() {
         let mid = ensure_after_snap_mid(TransitionProperty::Transform);
         assert!(
@@ -307,6 +310,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn ensure_after_snap_translate_tweens_from_old_translate() {
         let mid = ensure_after_snap_mid(TransitionProperty::Translate);
         assert!(

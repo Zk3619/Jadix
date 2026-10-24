@@ -3454,12 +3454,15 @@ impl super::App {
         };
 
         let window = state.window.clone();
-        crate::utils::lucide_animated::sync_animated_icon_hover(&mut state.root_element);
+        crate::utils::icon_provider::sync_icon_hover(&mut state.root_element);
         let anim_icons = {
+            #[cfg(feature = "lucide-animated")]
             let animated = crate::utils::lucide_animated::tick_animated_icons_subtree(
                 &mut state.root_element,
                 anim_dt,
             );
+            #[cfg(not(feature = "lucide-animated"))]
+            let animated = false;
             #[cfg(feature = "svg")]
             {
                 let morphing = crate::utils::morph_icon::tick_morph_icons_subtree(
@@ -4128,9 +4131,12 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 });
                 let svg_smil_active = crate::primitives::subtree_has_svg_smil(&state.root_element);
                 let anim_icon_active = {
+                    #[cfg(feature = "lucide-animated")]
                     let animated = crate::utils::lucide_animated::subtree_needs_animated_icon_frame(
                         &state.root_element,
                     );
+                    #[cfg(not(feature = "lucide-animated"))]
+                    let animated = false;
                     #[cfg(feature = "svg")]
                     {
                         animated
@@ -5105,11 +5111,13 @@ fn root_has_input_caret(el: &crate::core::tree::Element) -> bool {
 }
 
 #[cfg(test)]
+#[cfg(feature = "animation-base")]
 mod scrollbar_fade_clock_tests {
     use super::retarget_scrollbar_fade;
     use crate::style::{tick_animations, CubicTween};
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn scrollbar_hide_after_idle_keeps_its_first_frame_and_full_duration() {
         let fade = CubicTween::new_ui_transition(0.0);
         fade.set(1.0);
@@ -5137,6 +5145,7 @@ mod scrollbar_fade_clock_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn scrollbar_start_does_not_pause_other_cubics_or_jump_on_reversal() {
         let fade = CubicTween::new_ui_transition(1.0);
         let other = CubicTween::new_ui_transition(0.0);

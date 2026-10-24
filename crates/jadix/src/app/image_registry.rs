@@ -289,6 +289,15 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(any(
+            all(windows, feature = "backend-dx12"),
+            all(target_vendor = "apple", feature = "backend-metal"),
+            feature = "backend-gles",
+            feature = "backend-vulkan",
+        )),
+        ignore = "requires a wgpu backend for this target"
+    )]
     fn overwrite_requires_matching_slot() {
         let Some(gpu) = crate::renderer::offscreen::OffscreenGpu::new() else {
             eprintln!("skip overwrite_requires_matching_slot: no wgpu adapter");
@@ -353,6 +362,15 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(
+        not(any(
+            all(windows, feature = "backend-dx12"),
+            all(target_vendor = "apple", feature = "backend-metal"),
+            feature = "backend-gles",
+            feature = "backend-vulkan",
+        )),
+        ignore = "requires a wgpu backend for this target"
+    )]
     fn same_size_overwrite_does_not_recreate() {
         use crate::renderer::resources::TexturePool;
         use crate::renderer::textured_pipeline::TexturedQuadPipeline;

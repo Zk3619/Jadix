@@ -1,3 +1,5 @@
+#![cfg(feature = "gallery-tests")]
+
 use super::*;
 
 #[test]

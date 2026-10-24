@@ -24,13 +24,15 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 
 use crate::app::pending_images::{queue_image_from_src, texture_key_for_src};
 use crate::core::tree::{Element, IntoCssDim, LayoutStatus};
 use crate::style::UnitSlot;
 use crate::utils::lucide::{lucide_builtin_glyph, ATTR_ICON_NAME};
 use crate::utils::text_node::build_named_icon_text_node;
+
+pub(crate) const ATTR_ICON_ANIMATION_STATE: &str = "jadix_animated_icon_state";
 
 /// Default square size when `<Icon src>` / a registered raster has no explicit `size`.
 pub const DEFAULT_ICON_SIZE_PX: f32 = 16.0;
@@ -178,10 +180,14 @@ pub fn icon_src(src: impl Into<String>) -> Element {
 /// Apply `size` on `<Icon>`: text size always; box size for raster / SVG `src` icons.
 pub fn with_icon_size(el: Element, px: f32) -> Element {
     let px = px.max(1.0);
+    #[cfg(feature = "lucide-animated")]
+    let is_animated = el.get_attr(crate::utils::ATTR_ANIMATED_ICON).is_some();
+    #[cfg(not(feature = "lucide-animated"))]
+    let is_animated = false;
     let is_src = el.image_texture.is_some()
         || el.get_attr(ATTR_ICON_SRC).is_some()
         || el.get_attr(ATTR_ICON_CHANGE_ANIMATION).is_some()
-        || el.get_attr(crate::utils::ATTR_ANIMATED_ICON).is_some();
+        || is_animated;
     let el = el.text_size(px);
     if is_src {
         icon_box(el, px)
@@ -202,12 +208,15 @@ pub fn with_icon_animations(
     spring: impl AsRef<str>,
 ) -> Element {
     let hover = hover.as_ref().trim();
+    #[cfg(any(feature = "svg", feature = "lucide-animated"))]
     let name = el.get_attr(ATTR_ICON_NAME).cloned();
+    #[cfg(any(feature = "svg", feature = "lucide-animated"))]
     let source = el
         .get_attr(ATTR_ICON_SRC)
         .cloned()
         .map(IconSource::Src)
         .or_else(|| name.as_deref().and_then(resolve_icon));
+    #[cfg(feature = "lucide-animated")]
     let recipe = recipe_name(name.as_deref(), source.as_ref()).map(str::to_string);
     #[cfg(feature = "svg")]
     if change.as_ref() == "morph" {
@@ -236,17 +245,97 @@ pub fn with_icon_animations(
     if hover.is_empty() || hover == "none" || hover == "false" {
         return el;
     }
+    #[cfg(not(feature = "lucide-animated"))]
+    if hover == "animated" {
+        return el;
+    }
     if el.template_id.is_none() {
         el.template_id = Some(format!("icon-motion:{}", id.as_ref()));
     }
     el.set_attr(ATTR_ICON_HOVER_ANIMATION, hover);
-    el.set_attr(crate::utils::ATTR_ANIMATED_ICON_STATE, "normal");
+    el.set_attr(ATTR_ICON_ANIMATION_STATE, "normal");
+    #[cfg(feature = "lucide-animated")]
     if hover == "animated" {
         if let Some(name) = recipe {
             el.set_attr(crate::utils::ATTR_ANIMATED_ICON, name);
         }
     }
-    crate::utils::lucide_animated::with_animated_icon_hover(el.pointer_events("bounding-box"))
+    with_icon_hover(el.pointer_events("bounding-box"))
+}
+
+pub(crate) fn with_icon_hover(el: Element) -> Element {
+    let tid = el.template_id.clone().expect("icon identity");
+    crate::primitives::interactive::interactive(el)
+        .cursor("pointer")
+        .on_hover(move |on| {
+            if let Ok(mut map) = hover_intent_map().lock() {
+                map.insert(tid.clone(), on);
+            }
+            crate::primitives::interactive::mark_hover_paint_dirty();
+            crate::app::runtime::request_redraw();
+        })
+        .into()
+}
+
+pub(super) fn hover_intent_map() -> &'static Mutex<HashMap<String, bool>> {
+    static INTENTS: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
+    INTENTS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[cfg(feature = "lucide-animated")]
+pub(crate) fn release_icon_hover(template_id: &str) {
+    if let Ok(mut map) = hover_intent_map().lock() {
+        map.remove(template_id);
+    }
+}
+
+pub fn sync_icon_hover(el: &mut Element) {
+    let intents = hover_intent_map()
+        .lock()
+        .ok()
+        .map(|map| map.clone())
+        .unwrap_or_default();
+    if !intents.is_empty() {
+        sync_hover_rec(el, &intents);
+    }
+}
+
+fn sync_hover_rec(el: &mut Element, intents: &HashMap<String, bool>) {
+    if el.collect_paint_hash != 0 && !el.collect_skip_live {
+        return;
+    }
+    #[cfg(feature = "lucide-animated")]
+    let is_animated = el.get_attr(crate::utils::ATTR_ANIMATED_ICON).is_some();
+    #[cfg(not(feature = "lucide-animated"))]
+    let is_animated = false;
+    #[cfg(feature = "lucide-animated")]
+    let controlled = el
+        .get_attr(crate::utils::lucide_animated::ATTR_ANIMATED_ICON_CONTROLLED)
+        .is_some();
+    #[cfg(not(feature = "lucide-animated"))]
+    let controlled = false;
+    if (is_animated || el.get_attr(ATTR_ICON_HOVER_ANIMATION).is_some()) && !controlled {
+        if let Some(tid) = el.template_id.clone() {
+            if let Some(&on) = intents.get(&tid) {
+                sync_icon_hover_animation(el, on);
+                let want = if on { "animate" } else { "normal" };
+                let current = el
+                    .get_attr(ATTR_ICON_ANIMATION_STATE)
+                    .map(String::as_str)
+                    .unwrap_or("normal");
+                if current != want {
+                    el.set_attr(ATTR_ICON_ANIMATION_STATE, want);
+                    #[cfg(feature = "lucide-animated")]
+                    if is_animated {
+                        crate::utils::lucide_animated::set_animated_icon_state(el, want);
+                    }
+                }
+            }
+        }
+    }
+    for child in &mut el.children {
+        sync_hover_rec(child, intents);
+    }
 }
 
 pub(crate) fn sync_icon_hover_animation(el: &mut Element, on: bool) {
@@ -346,6 +435,7 @@ fn apply_resolved(
             if let Some(IconSource::Src(src)) = &source {
                 el.set_attr(ATTR_ICON_SRC, src);
             }
+            #[cfg(feature = "lucide-animated")]
             sync_icon_recipe(el, name, source.as_ref());
             return status.merge(if layout_changed {
                 LayoutStatus::LayoutChanged
@@ -355,6 +445,7 @@ fn apply_resolved(
         }
         el.attrs.remove(crate::utils::ATTR_MORPH_ICON);
     }
+    #[cfg(feature = "lucide-animated")]
     sync_icon_recipe(el, name, source.as_ref());
     match source {
         Some(IconSource::Glyph { family, glyph }) => {
@@ -399,6 +490,7 @@ fn apply_resolved(
     }
 }
 
+#[cfg(feature = "lucide-animated")]
 fn sync_icon_recipe(el: &mut Element, name: Option<&str>, source: Option<&IconSource>) {
     if el.get_attr(ATTR_ICON_HOVER_ANIMATION).map(String::as_str) != Some("animated") {
         return;
@@ -420,6 +512,7 @@ fn sync_icon_recipe(el: &mut Element, name: Option<&str>, source: Option<&IconSo
     crate::utils::lucide_animated::reset_animated_icon_playback(el);
 }
 
+#[cfg(feature = "lucide-animated")]
 fn recipe_name<'a>(name: Option<&'a str>, source: Option<&IconSource>) -> Option<&'a str> {
     let name = name?;
     match source? {
@@ -532,6 +625,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn icon_hover_animation_uses_css_and_restores_idle() {
         let mut el = with_icon_animations(
             build_icon_named("settings"),
@@ -543,7 +637,7 @@ mod tests {
         .class("text-foreground");
         assert!(el.style.animations.is_empty());
         (el.on_hover.as_ref().unwrap().borrow_mut())(true);
-        crate::utils::sync_animated_icon_hover(&mut el);
+        sync_icon_hover(&mut el);
         assert_eq!(el.style.animations[0].name, "spin");
         let mut tree = crate::layout::layout_tree::LayoutTree::new();
         el.layout_bounds = [0.0, 0.0, 24.0, 24.0];
@@ -575,7 +669,7 @@ mod tests {
             "spin"
         );
         (el.on_hover.as_ref().unwrap().borrow_mut())(false);
-        crate::utils::sync_animated_icon_hover(&mut el);
+        sync_icon_hover(&mut el);
         assert!(el.style.animations.is_empty());
         let mut custom = with_icon_animations(
             build_icon_named("heart"),
@@ -596,7 +690,11 @@ mod tests {
         assert!(plain.on_hover.is_none());
     }
 
-    #[cfg(all(feature = "svg", feature = "bundled-lucide"))]
+    #[cfg(all(
+        feature = "svg",
+        feature = "bundled-lucide",
+        feature = "lucide-animated"
+    ))]
     #[test]
     fn icon_motion_macro_binds_name_and_arbitrates_hover_and_change() {
         let mut el = crate::ui! {
@@ -619,10 +717,14 @@ mod tests {
             apply_bound_icon_name(&mut el, "moon"),
             LayoutStatus::StyleChanged
         );
-        assert!(!crate::utils::lucide_animated::tick_animated_icon(
-            &mut el, 0.016
-        ));
-        assert!(crate::utils::morph_icon::tick_morph_icon(&mut el, 0.016));
+        let recipe_tick = crate::utils::lucide_animated::tick_animated_icon(&mut el, 0.016);
+        if cfg!(feature = "animation-ex") {
+            assert!(!recipe_tick);
+        }
+        assert_eq!(
+            crate::utils::morph_icon::tick_morph_icon(&mut el, 0.016),
+            cfg!(feature = "animation-ex")
+        );
         assert_eq!(
             el.get_attr(crate::utils::ATTR_ANIMATED_ICON)
                 .map(String::as_str),
@@ -637,11 +739,15 @@ mod tests {
         assert!(!spin.style.animations.is_empty());
         apply_bound_icon_name(&mut spin, "moon");
         crate::utils::sync_animated_icon_hover(&mut spin);
-        assert!(
+        assert_eq!(
             spin.style.animations.is_empty(),
-            "morph owns the geometry during a change"
+            cfg!(feature = "animation-ex"),
+            "only an active morph owns the geometry during a change"
         );
-        assert!(crate::utils::morph_icon::tick_morph_icon(&mut spin, 10.0));
+        assert_eq!(
+            crate::utils::morph_icon::tick_morph_icon(&mut spin, 10.0),
+            cfg!(feature = "animation-ex")
+        );
         crate::utils::sync_animated_icon_hover(&mut spin);
         assert_eq!(spin.style.animations[0].name, "spin");
     }
@@ -660,16 +766,23 @@ mod tests {
         );
         assert!(el.image_texture.is_none());
         apply_bound_icon_src(&mut el, svg_markup_to_data_url(b));
-        assert!(crate::utils::subtree_needs_morph_icon_frame(&el));
+        assert_eq!(
+            crate::utils::subtree_needs_morph_icon_frame(&el),
+            cfg!(feature = "animation-ex")
+        );
         assert!(el.image_texture.is_none());
         apply_bound_icon_src(&mut el, RED_PNG);
         assert!(el.image_texture.is_some());
         assert!(el.get_attr(crate::utils::ATTR_MORPH_ICON).is_none());
         sync_icon_hover_animation(&mut el, true);
-        assert_eq!(
-            el.style.animations[0].name, "spin",
-            "a stale SVG flight must not block raster hover"
-        );
+        if cfg!(feature = "animation-base") {
+            assert_eq!(
+                el.style.animations[0].name, "spin",
+                "a stale SVG flight must not block raster hover"
+            );
+        } else {
+            assert!(el.style.animations.is_empty());
+        }
         apply_bound_icon_name(&mut el, "sun");
         assert!(el.image_texture.is_none());
         assert!(el.get_attr(crate::utils::ATTR_MORPH_ICON).is_some());
@@ -694,6 +807,7 @@ mod tests {
             }),
         );
         assert_eq!(custom.text.as_deref(), Some("X"));
+        #[cfg(feature = "lucide-animated")]
         assert!(custom.get_attr(crate::utils::ATTR_ANIMATED_ICON).is_none());
         assert!(custom.get_attr(crate::utils::ATTR_MORPH_ICON).is_none());
     }

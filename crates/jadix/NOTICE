@@ -54,14 +54,15 @@ Lucide icon font in `assets/lucide.ttf`:
 Bundled icon data
 -----------------
 
-Lucide name → codepoint maps in `assets/lucide.json` and `assets/lucide_paths.json`:
+Lucide name → codepoint map in `assets/lucide.json` and SVG paths in
+`assets/lucide_paths.json`:
 
   License: ISC License
   Copyright: Lucide Contributors
   https://github.com/lucide-icons/lucide
 
-Animated icon recipes in `assets/lucide_animated.json` (optional `lucide-animated`
-feature; extracted offline from pqoqubbw/icons):
+Animated icon recipes in `assets/lucide_animated.json` (extracted offline from
+pqoqubbw/icons; embedded when the `lucide-animated` feature is enabled):
 
   License: MIT License
   Copyright: pqoqubbw and contributors

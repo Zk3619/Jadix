@@ -469,6 +469,7 @@ pub(crate) fn viewport_modal_clear_pending_enter(id: &str) {
 }
 
 #[cfg(test)]
+#[cfg(feature = "animation-base")]
 pub(crate) fn viewport_modal_force_unmount(id: &str) {
     mounted_signal(&use_modal_presence(id)).set(false);
 }
@@ -746,6 +747,7 @@ mod tests {
         clear_overlay_stack();
     }
 
+    #[cfg(feature = "animation-base")]
     fn find_tid<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
         if el.template_id.as_deref() == Some(want) {
             return Some(el);
@@ -754,6 +756,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn dialog_fade_seeds_overlay_fade_in_on_flush() {
         use crate::utils::modal_motion::flush_modal_shell_motion_subtree;
         clear_overlay_stack();
@@ -800,6 +803,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn slide_from_right_seeds_offscreen_translate_on_flush() {
         use crate::utils::modal_motion::flush_modal_shell_motion_subtree;
         clear_overlay_stack();
@@ -865,6 +869,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn slide_exit_seeds_before_and_after_portal_hoist() {
         use crate::layout::layout_tree::{hoist_portal_subtrees, PORTAL_LAYER_ID};
         use crate::utils::modal_motion::flush_modal_shell_motion_subtree;
@@ -932,9 +937,12 @@ mod tests {
             open.set(false);
             assert_eq!(
                 viewport_modal_phase("vm-phase", open),
-                Some(PresencePhase::Exiting)
+                cfg!(feature = "animation-base").then_some(PresencePhase::Exiting)
             );
-            assert!(viewport_modal_is_mounted("vm-phase", open));
+            assert_eq!(
+                viewport_modal_is_mounted("vm-phase", open),
+                cfg!(feature = "animation-base")
+            );
         });
         clear_overlay_stack();
     }
@@ -1297,6 +1305,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn wave2_canary_close_keeps_portal_while_exiting() {
         use crate::utils::modal_motion::finish_modal_exit_for_test;
 
@@ -1428,6 +1437,7 @@ mod tests {
     /// TabsContent dispose kills the modal owner. The hoisted overlay must still
     /// play Dialog fade-out instead of being pruned on the same frame.
     #[test]
+    #[cfg(feature = "animation-base")]
     fn tab_unmount_plays_configured_modal_exit() {
         use std::cell::RefCell;
         use std::rc::Rc;

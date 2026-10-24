@@ -55,7 +55,7 @@ fn primary_startup_presents_real_content_before_show() {
     crate::app::reactive::reset_registered_anchors();
 }
 
-#[cfg(feature = "svg")]
+#[cfg(feature = "gallery-tests")]
 #[test]
 #[ignore = "requires a native Windows event loop and GPU surface"]
 fn gallery_forms_hover_receives_scheduled_redraw() {

@@ -30,6 +30,7 @@ pub mod keyed_overlay;
 pub mod layout_group;
 pub mod list_nav;
 pub mod lucide;
+#[cfg(feature = "lucide-animated")]
 pub mod lucide_animated;
 pub mod modal_motion;
 pub mod modal_shell;
@@ -92,8 +93,9 @@ pub use icon_morph::{
 pub use icon_provider::{
     apply_bound_icon_name, apply_bound_icon_src, build_icon_from_src, build_icon_named,
     clear_icon_provider, clear_registered_icons, glyph_for_name, icon_named, icon_src,
-    register_icon, resolve_icon, set_icon_provider, unregister_icon, with_icon_animations,
-    with_icon_size, IconProvider, IconSource, ATTR_ICON_SRC, DEFAULT_ICON_SIZE_PX,
+    register_icon, resolve_icon, set_icon_provider, sync_icon_hover, unregister_icon,
+    with_icon_animations, with_icon_size, IconProvider, IconSource, ATTR_ICON_SRC,
+    DEFAULT_ICON_SIZE_PX,
 };
 pub use instance_id::resolve_instance_id;
 pub use keyed_overlay::{
@@ -105,6 +107,7 @@ pub use layout_group::{
     linear_slot_offset, slot_list_pose, slot_visual_offset, LayoutGroup, SlotListConfig, SlotPose,
 };
 pub use lucide::{lucide_glyph, lucide_svg_inner, ATTR_ICON_NAME};
+#[cfg(feature = "lucide-animated")]
 pub use lucide_animated::{
     animated_icon, animated_icon_names, animated_icon_recipe, ensure_animated_icon_texture,
     start_animated_icon, stop_animated_icon, subtree_needs_animated_icon_frame,

@@ -250,6 +250,7 @@ fn lucide_seed(el: &mut Element, name: &str) {
     let glyph = crate::utils::lucide::lucide_glyph(name).unwrap_or_else(|| "\u{ea0e}".into());
     el.text = Some(glyph);
     el.set_attr(crate::utils::ATTR_ICON_NAME, name);
+    #[cfg(feature = "lucide-animated")]
     if el
         .get_attr(crate::utils::ATTR_ANIMATED_ICON)
         .is_some_and(|s| s != name)
@@ -393,6 +394,22 @@ fn is_first_icon(el: &Element, key: u64) -> bool {
 }
 
 fn start_morph(el: &Element, play: &mut MorphPlay, from_src: &str, to_src: &str, cfg: SpringCfg) {
+    if !cfg!(feature = "animation-ex") {
+        play.to_key = to_src.to_string();
+        play.from_key = from_src.to_string();
+        play.rest_d = rest_d_el(el, to_src);
+        play.x = 1.0;
+        play.v = 0.0;
+        play.k = cfg.k;
+        play.c = cfg.c;
+        play.gen = None;
+        play.settled = true;
+        play.controlled = false;
+        play.plan = None;
+        play.live = None;
+        invalidate_pair(play);
+        return;
+    }
     let dest = match sampled_src(el, to_src).filter(|d| !d.is_empty()) {
         Some(d) => d,
         None => {
@@ -1090,6 +1107,7 @@ pub fn tick_morph_icon(el: &mut Element, dt: f32) -> bool {
         drop(store);
         // Keep one more frame alive for the hover timeline to take over, even
         // when this was the last active morph in the tree.
+        #[cfg(feature = "lucide-animated")]
         if el
             .get_attr(crate::utils::ATTR_ANIMATED_ICON_STATE)
             .is_some_and(|s| s == "animate")
@@ -1103,7 +1121,7 @@ pub fn tick_morph_icon(el: &mut Element, dt: f32) -> bool {
             return true;
         }
         if el
-            .get_attr(crate::utils::ATTR_ANIMATED_ICON_STATE)
+            .get_attr(crate::utils::icon_provider::ATTR_ICON_ANIMATION_STATE)
             .is_some_and(|s| s == "animate")
             && el
                 .get_attr(crate::utils::icon_provider::ATTR_ICON_HOVER_ANIMATION)
@@ -1239,6 +1257,7 @@ pub fn ensure_morph_icon_texture(
     color: [u8; 4],
     dpr: f32,
 ) -> Option<(String, f32)> {
+    #[cfg(feature = "lucide-animated")]
     if el.get_attr(crate::utils::ATTR_ANIMATED_ICON).is_some() && !blocks_hover_animation(el) {
         if let Some(texture) = crate::utils::lucide_animated::ensure_animated_icon_recipe_texture(
             el, size_px, color, dpr,
@@ -1431,6 +1450,7 @@ impl From<MorphIconBuilder> for Element {
         el.set_attr(ATTR_MORPH_SPRING, &b.spring);
         el.set_attr(ATTR_MORPH_INTERP, &b.interp);
         el.set_attr(ATTR_MORPH_REDUCED, &b.reduced_motion);
+        #[cfg(feature = "lucide-animated")]
         if b.hover_animation {
             el.set_attr(crate::utils::ATTR_ANIMATED_ICON, &display);
             el.set_attr(crate::utils::ATTR_ANIMATED_ICON_STATE, "normal");
@@ -1499,9 +1519,11 @@ impl From<MorphIconBuilder> for Element {
                 }
             }
         }
+        #[cfg(feature = "lucide-animated")]
         let tid = el.template_id.clone().unwrap_or_default();
         el = el.on_unmount(move || {
             if release_play(key) {
+                #[cfg(feature = "lucide-animated")]
                 crate::utils::lucide_animated::release_animated_icon(key, &tid);
             }
         });
@@ -1510,11 +1532,11 @@ impl From<MorphIconBuilder> for Element {
         } else if inserted && b.progress.is_some() {
             morph_seek_src(&mut el, &display, t0);
         }
+        #[cfg(feature = "lucide-animated")]
         if b.hover_animation {
-            crate::utils::lucide_animated::with_animated_icon_hover(el)
-        } else {
-            el
+            return crate::utils::icon_provider::with_icon_hover(el);
         }
+        el
     }
 }
 
@@ -1599,11 +1621,20 @@ mod tests {
         morph_to(&mut icon, IconInput::D("M12 0 L12 24".into()));
         root.children.push(icon);
         invalidate_collect_paint_hash_path(&mut root, &[1]);
-        assert!(tick_morph_icons_subtree(&mut root, 1.0 / 60.0));
+        assert_eq!(
+            tick_morph_icons_subtree(&mut root, 1.0 / 60.0),
+            cfg!(feature = "animation-ex")
+        );
         stamp_subtree_paint_hashes(&mut root, true);
         assert!(root.collect_skip_live);
-        assert!(subtree_needs_morph_icon_frame(&root));
-        assert!(tick_morph_icons_subtree(&mut root, 1.0 / 60.0));
+        assert_eq!(
+            subtree_needs_morph_icon_frame(&root),
+            cfg!(feature = "animation-ex")
+        );
+        assert_eq!(
+            tick_morph_icons_subtree(&mut root, 1.0 / 60.0),
+            cfg!(feature = "animation-ex")
+        );
 
         root.children.pop();
         root.collect_paint_hash = 0;
@@ -1640,7 +1671,10 @@ mod tests {
             .into();
         morph_to(&mut el, "x");
         assert_eq!(el.get_attr(ATTR_MORPH_TO).map(|s| s.as_str()), Some("x"));
-        assert!(tick_morph_icon(&mut el, 1.0 / 60.0));
+        assert_eq!(
+            tick_morph_icon(&mut el, 1.0 / 60.0),
+            cfg!(feature = "animation-ex")
+        );
     }
 
     #[cfg(feature = "bundled-lucide")]
@@ -1679,6 +1713,7 @@ mod tests {
 
     #[cfg(feature = "bundled-lucide")]
     #[test]
+    #[cfg(feature = "animation-ex")]
     fn stable_id_does_not_reset_play() {
         let mut el: Element = morph_icon("menu").id("keep-flight").into();
         morph_to(&mut el, "x");
@@ -1915,7 +1950,10 @@ mod tests {
         let mut el: Element = morph_icon("menu").id("morph-handle-to").into();
         morph_to(&mut el, IconInput::from("x"));
         assert_eq!(el.get_attr(ATTR_MORPH_ICON).map(|s| s.as_str()), Some("x"));
-        assert!(tick_morph_icon(&mut el, 1.0 / 60.0));
+        assert_eq!(
+            tick_morph_icon(&mut el, 1.0 / 60.0),
+            cfg!(feature = "animation-ex")
+        );
     }
 
     #[test]
@@ -2018,9 +2056,10 @@ mod tests {
             "first icon on a lazy mount paints, no spring"
         );
         morph_to(&mut el, "x");
-        assert!(
+        assert_eq!(
             tick_morph_icon(&mut el, 1.0 / 60.0),
-            "second morph_to flies"
+            cfg!(feature = "animation-ex"),
+            "only enhanced animation plays the second morph_to"
         );
     }
 

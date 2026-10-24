@@ -363,6 +363,13 @@ impl Spring {
     }
 
     pub fn next(&self, t_ms: f32) -> GeneratorSample {
+        if !cfg!(feature = "animation-base") {
+            return GeneratorSample {
+                value: self.target as f32,
+                velocity: 0.0,
+                done: true,
+            };
+        }
         let t = (t_ms.max(0.0) as f64) / 1000.0;
         let (value, vel) = self.sample_secs(t);
         let done = if self.duration_resolved {
@@ -379,6 +386,9 @@ impl Spring {
 
     /// Walk the generator until rest (Motion `calcGeneratorDuration`).
     pub fn calculated_duration_ms(&self) -> f32 {
+        if !cfg!(feature = "animation-base") {
+            return 0.0;
+        }
         if let Some(d) = self.resolved_duration_ms {
             return d;
         }
@@ -458,6 +468,9 @@ pub fn spring_step_closed(
     damping: f32,
     mass: f32,
 ) -> (f32, f32, bool) {
+    if !cfg!(feature = "animation-base") {
+        return (target, 0.0, true);
+    }
     let dt = dt_secs.clamp(0.0, 0.064);
     if dt <= 0.0 {
         let settled = (pos - target).abs() < 8e-4 && vel.abs() < 8e-3;
@@ -664,6 +677,17 @@ impl Inertia {
     }
 
     pub fn next(&mut self, t_ms: f32) -> GeneratorSample {
+        if !cfg!(feature = "animation-base") {
+            let value = self
+                .target
+                .max(self.min.unwrap_or(f32::NEG_INFINITY))
+                .min(self.max.unwrap_or(f32::INFINITY));
+            return GeneratorSample {
+                value,
+                velocity: 0.0,
+                done: true,
+            };
+        }
         let t_ms = t_ms.max(0.0);
         if self.bounce.is_none() && self.boundary_ms.is_none() {
             let sample = self.friction(t_ms);
@@ -701,6 +725,13 @@ impl Default for TweenOptions {
 }
 
 pub fn tween_sample(from: f32, to: f32, t_ms: f32, opts: TweenOptions) -> GeneratorSample {
+    if !cfg!(feature = "animation-base") {
+        return GeneratorSample {
+            value: to,
+            velocity: 0.0,
+            done: true,
+        };
+    }
     let duration = opts.duration_ms.max(0.0);
     let done = duration <= 0.0 || t_ms >= duration;
     let t = if duration <= 0.0 {
@@ -979,7 +1010,13 @@ impl PartialEq for AnimatedNumber {
 
 impl AnimatedNumber {
     pub fn run(from: f32, to: f32, driver: ValueDriver) -> Self {
+        let from = if cfg!(feature = "animation-base") {
+            from
+        } else {
+            to
+        };
         let done = (from - to).abs() < 1e-5 && !matches!(driver, ValueDriver::Inertia(_));
+        let done = done || !cfg!(feature = "animation-base");
         let mut inner = AnimatedNumberInner {
             value: from,
             from,
@@ -1068,6 +1105,16 @@ impl AnimatedNumber {
 
     /// Chase `source` every tick (Motion follow). Coalesced with [`Self::set`].
     pub fn follow_signal(self, source: Signal<f32>) -> Self {
+        if !cfg!(feature = "animation-base") {
+            let state = Rc::downgrade(&self.0);
+            crate::core::reactivity::create_render_effect(move || {
+                let target = source.get();
+                if let Some(state) = state.upgrade() {
+                    AnimatedNumber(state).jump(target);
+                }
+            });
+            return self;
+        }
         {
             let mut s = self.0.borrow_mut();
             s.follow = Some(source);
@@ -1085,6 +1132,10 @@ impl AnimatedNumber {
 
     /// Queue another segment after the current one finishes (and after its repeats).
     pub fn then_to(self, to: f32, driver: ValueDriver) -> Self {
+        if !cfg!(feature = "animation-base") {
+            self.jump(to);
+            return self;
+        }
         self.0.borrow_mut().queue.push_back((to, driver));
         self
     }
@@ -1093,6 +1144,10 @@ impl AnimatedNumber {
     /// replace the handle (a `bind_prop` from the first mount would keep the
     /// old signal and look like a dead click).
     pub fn restart(&self, to: f32, driver: ValueDriver) {
+        if !cfg!(feature = "animation-base") {
+            self.jump(to);
+            return;
+        }
         let mut s = self.0.borrow_mut();
         s.queue.clear();
         s.pending_target = None;
@@ -1103,6 +1158,10 @@ impl AnimatedNumber {
     }
 
     pub(crate) fn restart_from(&self, from: f32, to: f32, velocity: f32, driver: ValueDriver) {
+        if !cfg!(feature = "animation-base") {
+            self.jump(to);
+            return;
+        }
         let signal = {
             let mut state = self.0.borrow_mut();
             state.queue.clear();
@@ -1121,6 +1180,10 @@ impl AnimatedNumber {
     /// next tick from the live position/velocity — many `set`s in one frame
     /// cost one retarget.
     pub fn set(&self, target: f32) {
+        if !cfg!(feature = "animation-base") {
+            self.jump(target);
+            return;
+        }
         let mut s = self.0.borrow_mut();
         if (s.target - target).abs() < 1e-5 && s.pending_target.is_none() && s.active {
             return;
@@ -1132,6 +1195,9 @@ impl AnimatedNumber {
     }
 
     pub fn play(&self) {
+        if !cfg!(feature = "animation-base") {
+            return;
+        }
         let mut s = self.0.borrow_mut();
         s.paused = false;
         if !s.active {
@@ -1147,6 +1213,9 @@ impl AnimatedNumber {
     }
 
     pub fn pause(&self) {
+        if !cfg!(feature = "animation-base") {
+            return;
+        }
         self.0.borrow_mut().paused = true;
     }
 
@@ -1429,6 +1498,9 @@ fn handle_needs_tick(s: &AnimatedNumberInner) -> bool {
 
 /// Advance programmatic [`AnimatedNumber`] handles. Returns whether any is live.
 pub fn tick_value_generators(dt_secs: f32) -> bool {
+    if !cfg!(feature = "animation-base") {
+        return false;
+    }
     let mut any = false;
     let mut updates = Vec::new();
     VALUE_ANIMS.with(|list| {
@@ -1454,6 +1526,9 @@ pub fn tick_value_generators(dt_secs: f32) -> bool {
 }
 
 pub fn any_value_generator_active() -> bool {
+    if !cfg!(feature = "animation-base") {
+        return false;
+    }
     VALUE_ANIMS.with(|list| {
         list.borrow()
             .iter()
@@ -1466,6 +1541,7 @@ mod tests {
     use super::*;
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn underdamped_overshoots_then_settles() {
         let spring = Spring::from_physics(
             0.0,
@@ -1514,6 +1590,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn overdamped_is_slower_than_critical() {
         let critical = Spring::from_physics(
             0.0,
@@ -1649,6 +1726,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn animate_handle_ticks_to_target() {
         let n = animate(0.0, 1.0);
         assert!(n.is_active());
@@ -1665,6 +1743,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn tween_driver_respects_duration() {
         let n = AnimatedNumber::tween(0.0, 10.0, 100.0, TimingFunction::Linear);
         let _ = tick_value_generators(0.05);
@@ -1676,6 +1755,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn set_retargets_from_live_value() {
         let n = AnimatedNumber::tween(0.0, 10.0, 200.0, TimingFunction::Linear);
         let _ = tick_value_generators(0.05);
@@ -1692,6 +1772,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn pause_freezes_play_resumes() {
         let n = AnimatedNumber::tween(0.0, 10.0, 200.0, TimingFunction::Linear);
         let _ = tick_value_generators(0.05);
@@ -1706,6 +1787,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn speed_scales_elapsed() {
         let n = AnimatedNumber::tween(0.0, 10.0, 200.0, TimingFunction::Linear).speed(2.0);
         let _ = tick_value_generators(0.05);
@@ -1714,6 +1796,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn pingpong_reverses() {
         let n = AnimatedNumber::tween(0.0, 10.0, 100.0, TimingFunction::Linear)
             .repeat(RepeatMode::PingPong);
@@ -1726,6 +1809,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn then_to_plays_next_segment() {
         let n = AnimatedNumber::tween(0.0, 10.0, 50.0, TimingFunction::Linear)
             .then_to(0.0, ValueDriver::tween(50.0, TimingFunction::Linear));
@@ -1757,6 +1841,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn finished_signal_flips() {
         let n = AnimatedNumber::tween(0.0, 1.0, 50.0, TimingFunction::Linear);
         assert!(!n.finished().peek());
@@ -1787,6 +1872,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn css_mid_is_spring_next_at_elapsed() {
         let p = SpringPhysics::default_css();
         let s = Spring::from_physics(0.0, 1.0, 0.0, p).with_rest(8e-3, 8e-4);
@@ -1799,6 +1885,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn cubic_ui_curve_is_tween_sample() {
         let opts = TweenOptions {
             duration_ms: 150.0,

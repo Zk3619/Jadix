@@ -778,12 +778,7 @@ mod tests {
 
         let previous = get_theme();
         crate::core::reactivity::create_root(|| {
-            for preset in [
-                ThemePreset::Shadcn,
-                ThemePreset::Fluent,
-                ThemePreset::Material3,
-                ThemePreset::LiquidGlass,
-            ] {
+            for preset in ThemePreset::ALL {
                 set_theme(Theme::preset(preset, ThemeMode::Light));
                 let mut panel = dialog_shell_panel(
                     "themed-close",
@@ -1155,7 +1150,7 @@ mod tests {
             "close must keep the live DialogContent tree through Exiting; rebuilding overlay/zoom is the exit hitch"
         );
 
-        {
+        if cfg!(feature = "animation-base") {
             let mut tree = live.borrow_mut();
             assert!(
                 flush_modal_shell_motion_subtree(&mut tree),
@@ -1179,6 +1174,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn dialog_open_first_paint_is_already_fading() {
         use std::cell::RefCell;
         use std::rc::Rc;

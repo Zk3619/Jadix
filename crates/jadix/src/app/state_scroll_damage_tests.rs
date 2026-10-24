@@ -1,3 +1,5 @@
+#![cfg(feature = "gallery-tests")]
+
 //! Compare real Gallery incremental frames with a fresh full composite.
 use super::*;
 use crate::core::reactivity::{create_effect, create_root, use_signal};

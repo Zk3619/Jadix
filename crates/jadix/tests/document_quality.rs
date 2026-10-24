@@ -1,3 +1,5 @@
+#![cfg(all(feature = "document-science", feature = "document-diff"))]
+
 use jadix::prelude::*;
 
 #[test]

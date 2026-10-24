@@ -714,6 +714,7 @@ fn message_scroller_jump_slot_survives_fingerprint_skip() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn message_scroller_jump_button_hides_latest_glyphs_at_live_edge() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {
@@ -821,6 +822,7 @@ fn message_scroller_jump_button_hides_latest_glyphs_at_live_edge() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn message_scroller_latest_follow_pass_must_not_clobber_css_enter_mid() {
     // Production: reactive_sync writes the shown target, CSS ticks mid, then
     // `sync_message_scroller_follow_after_layout` re-runs apply_button_active.
@@ -929,6 +931,7 @@ fn production_jump_chrome_pass(
 /// Enter is a 200ms CSS tween. Tests that need the settled pill snap the shown
 /// pose; follow now leaves collect at the hide `from` (opacity 0). Do not mix a
 /// virtual clock with tweens started on `Instant` — that samples hide at t≈1.
+#[cfg(feature = "animation-base")]
 fn settle_latest_hide_pose(root: &mut Element) {
     let Some(btn) = find_slot_ms_mut(root, "message-scroller-button") else {
         return;
@@ -956,6 +959,7 @@ fn settle_latest_jump_pose(root: &mut Element) {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn message_scroller_latest_class_restore_must_keep_css_enter_mid() {
     // Production: `button()` class snapshot is taken before hide pose / opacity
     // transition. `resolve_class_variants` used to clone that snapshot over the
@@ -1058,6 +1062,7 @@ fn message_scroller_latest_class_restore_must_keep_css_enter_mid() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn message_scroller_latest_css_hide_must_settle_hidden_at_live_edge() {
     // Production: hide writes opacity 0, CSS ticks `from` (~1) at t=0, follow
     // must not snap that back to the shown pose. After duration, Latest is gone.
@@ -1231,6 +1236,7 @@ fn message_scroller_latest_css_hide_must_settle_hidden_at_live_edge() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn message_scroller_latest_enter_t0_must_not_punch_thread_and_hide_must_fade() {
     // Production: follow writes the CSS *target* after the page tick. Collect then
     // painted opacity 1 + shadow dest-reset (blank white pill, no label). The next
@@ -1379,6 +1385,7 @@ fn message_scroller_latest_enter_t0_must_not_punch_thread_and_hide_must_fade() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn message_scroller_latest_enter_halo_must_wipe_and_hide_must_restore_thread() {
     // Production CSS enter: dest-reset smaller than the toast-matched SDF left
     // every fade frame in PartialLoad (stacked ring). Overlay rail occupancy
@@ -1649,6 +1656,7 @@ fn message_scroller_latest_enter_halo_must_wipe_and_hide_must_restore_thread() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn gallery_latest_hide_must_restore_wrapping_under_dest_reset() {
     // Gallery last turn wraps under Latest. Hide-settle dest-reset CLEARs that
     // pill hole; PartialLoad must recapture "removed from the tab order…".
@@ -1855,6 +1863,7 @@ fn gallery_latest_hide_must_restore_wrapping_under_dest_reset() {
 /// ("removed from the tab order…"). The Element.text hide canary stayed green
 /// because collect height / last-present / dirties differ from `<Label>`.
 #[test]
+#[cfg(feature = "animation-base")]
 fn gallery_label_latest_enter_exit_must_not_punch_wrap() {
     crate::style::set_css_transition_virtual_timeline(true);
     crate::style::set_css_transition_timeline_ms(0.0);
@@ -2006,6 +2015,7 @@ fn gallery_label_latest_enter_exit_must_not_punch_wrap() {
     crate::style::set_css_transition_virtual_timeline(false);
 }
 
+#[cfg(feature = "animation-base")]
 fn assert_latest_wipe_restores_wrap(
     phase: &str,
     dirties: &[crate::app::damage::PaintDirty],
@@ -2131,6 +2141,7 @@ fn assert_latest_wipe_restores_wrap(
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn message_scroller_jump_button_hides_after_follow_without_second_sync() {
     // Production: pre-layout reactive_sync walks the dock before the viewport, then
     // `sync_message_scroller_follow_after_layout` snaps offset to end. Without a
@@ -2224,6 +2235,7 @@ fn message_scroller_jump_button_hides_after_follow_without_second_sync() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn message_scroller_latest_must_collect_on_scroll_only_leave_live_edge() {
     // Wheel/smooth-scroll is `scroll_only` + `reuse_idle` hash. The jump dock is a
     // sibling of the viewport, so it was treated as an idle wrapper and skip-replayed
@@ -2312,6 +2324,7 @@ fn message_scroller_latest_must_collect_on_scroll_only_leave_live_edge() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn red_latest_scroll_entry_exit_keeps_button_background_instance() {
     crate::style::set_css_transition_virtual_timeline(true);
     crate::style::set_css_transition_timeline_ms(0.0);
@@ -2366,6 +2379,7 @@ fn red_latest_scroll_entry_exit_keeps_button_background_instance() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn red_latest_small_scroll_present_damage_stays_local() {
     crate::style::set_css_transition_virtual_timeline(true);
     crate::style::set_css_transition_timeline_ms(0.0);
@@ -5733,6 +5747,15 @@ fn plate_then_glyphs(
 }
 
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn message_scroller_latest_pill_pixels_hide_wrapping_line() {
     crate::style::set_css_transition_virtual_timeline(true);
     let (_handle, _) = create_root(|| {

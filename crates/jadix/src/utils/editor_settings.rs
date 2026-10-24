@@ -1,5 +1,9 @@
+#[cfg(feature = "code-lsp")]
+pub use crate::text::lsp::LanguageServerSettings;
 use serde::{Deserialize, Serialize};
-use std::{collections::BTreeMap, path::PathBuf};
+#[cfg(feature = "code-lsp")]
+use std::collections::BTreeMap;
+use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -16,17 +20,11 @@ impl Default for AutosaveSettings {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LanguageServerSettings {
-    pub command: String,
-    #[serde(default)]
-    pub args: Vec<String>,
-}
-
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct EditorSettings {
     pub autosave: AutosaveSettings,
+    #[cfg(feature = "code-lsp")]
     pub language_servers: BTreeMap<String, LanguageServerSettings>,
 }
 impl EditorSettings {

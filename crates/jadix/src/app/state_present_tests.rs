@@ -3,6 +3,14 @@ use super::*;
 use crate::app::{damage::*, draw_cull::*};
 use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 
+#[cfg(all(target_os = "windows", feature = "bundled-lucide"))]
+#[path = "state_toggle_motion_present_tests.rs"]
+mod toggle_motion_present_tests;
+
+#[cfg(all(target_os = "windows", feature = "bundled-lucide", feature = "gallery-tests"))]
+#[path = "state_gallery_continuous_present_tests.rs"]
+mod gallery_continuous_present_tests;
+
 #[cfg(target_os = "windows")]
 #[path = "state_dynamic_texture_tests.rs"]
 mod dynamic_texture_tests;

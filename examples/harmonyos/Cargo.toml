@@ -13,7 +13,7 @@ a11y = ["jadix/a11y"]
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-jadix = { workspace = true }
+jadix = { workspace = true, features = ["backend-dx12", "backend-gles", "backend-metal", "theme-shadcn"] }
 
 [target.'cfg(target_env = "ohos")'.dependencies]
 openharmony-ability = { workspace = true }

@@ -18,8 +18,8 @@ dx12 = ["wgpu/dx12"]
 
 [dependencies]
 winit = { workspace = true }
-# GL and Vulkan are on in the workspace wgpu features; DX12 still needs `dx12`.
-wgpu = { workspace = true }
+# This probe selects GL/Metal explicitly; DX12 still needs `dx12`.
+wgpu = { workspace = true, features = ["gles", "metal"] }
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { workspace = true, features = [

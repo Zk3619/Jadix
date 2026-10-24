@@ -1,3 +1,5 @@
+#![cfg(all(feature = "document-science", feature = "document-editing"))]
+
 use jadix::{
     core::reactivity::{create_root, Signal},
     prelude::*,
@@ -201,6 +203,7 @@ fn image_paths_resolve_from_document_directory_and_decode_url_spaces() {
 }
 
 #[test]
+#[cfg(feature = "syntax-highlighting")]
 fn syntax_colors_preserve_unicode_and_cross_line_comments() {
     let source: std::sync::Arc<str> =
         "/* comment\n still comment */\nfn main() { let 中文 = \"😀\"; }\n".into();
@@ -246,15 +249,17 @@ fn editing_a_fence_refreshes_shared_lexical_context_without_replacing_other_rows
         original.blocks()[1].payload.as_deref().unwrap(),
         "let value = 1;\nlet next = 2;\n"
     );
-    let before = jadix::text::syntax::highlight_block_line(
-        original.blocks()[1].payload.as_ref().unwrap(),
-        "rs",
-        false,
-        1,
-    );
-    let after = jadix::text::syntax::highlight_block_line(payload, "rs", false, 1);
     #[cfg(feature = "syntax-highlighting")]
-    assert_ne!(before[0].color, after[0].color);
+    {
+        let before = jadix::text::syntax::highlight_block_line(
+            original.blocks()[1].payload.as_ref().unwrap(),
+            "rs",
+            false,
+            1,
+        );
+        let after = jadix::text::syntax::highlight_block_line(payload, "rs", false, 1);
+        assert_ne!(before[0].color, after[0].color);
+    }
 }
 
 #[cfg(feature = "webview")]

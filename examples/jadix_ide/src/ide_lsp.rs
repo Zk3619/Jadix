@@ -76,7 +76,11 @@ pub fn install(workspace: &Rc<Workspace>) {
                         .unwrap_or(std::path::Path::new("."))
                         .to_path_buf()
                 });
-                match lsp::Session::start(settings, &root, feedback) {
+                match lsp::Session::start(settings, &root, move |value| {
+                    jadix::app::run_on_ui_thread(move || {
+                        feedback.try_set(Some(value));
+                    });
+                }) {
                     Ok(session) => {
                         clients.sessions.insert(language.clone(), session);
                     }

@@ -9,8 +9,7 @@
 use crate::app::damage::{
     clip_culled_scroll_blit_pins, expand_paint_dirties_for_clip_culled_slots,
     expand_paint_dirties_for_translated_slots, intersect_rects, paint_dirty_has_keyed_slot,
-    paint_dirty_matches_present_slot, paint_dirty_nested_in_larger_node,
-    paint_dirty_skips_node_dest_reset, paint_element_key, take_frame_paint_nodes, PaintDirtyKind,
+    paint_dirty_matches_present_slot, paint_element_key, take_frame_paint_nodes, PaintDirtyKind,
 };
 #[cfg(feature = "bundled-lucide")]
 use crate::app::draw_cull::skip_covered_nested_node_present;
@@ -19,7 +18,7 @@ use crate::app::draw_cull::{
     node_paint_visual_bounds, node_present_clipped_capture_text,
     node_present_clipped_capture_text_wipes, node_present_dest_reset_full,
     node_present_dest_reset_scaled, node_present_glyph_clip_logical, node_present_scissor_logical,
-    node_present_scissor_pad, slot_visual_exceeds_rest,
+    node_present_scissor_pad,
 };
 use crate::app::frame_stats::reset_collect_skip_counters;
 use crate::components::bubble::{bubble, bubble_content};
@@ -28,7 +27,12 @@ use crate::components::message::message;
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX};
 use crate::core::tree::{visual_paint_aabb, Element, LayoutStatus, LayoutTree};
+#[cfg(feature = "animation-base")]
 use crate::primitives::r#box::hstack;
+#[cfg(feature = "animation-base")]
+use crate::app::damage::{paint_dirty_nested_in_larger_node, paint_dirty_skips_node_dest_reset};
+#[cfg(feature = "animation-base")]
+use crate::app::draw_cull::slot_visual_exceeds_rest;
 use crate::style::{
     apply_class_list, set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
     sync_class_variants_subtree, tick_active_css_transitions_subtree,
@@ -38,11 +42,78 @@ use crate::style::{
 use crate::app::draw_cull::{textured_hits_damage, textured_paint_bounds};
 #[cfg(feature = "bundled-lucide")]
 use crate::renderer::scale_textured_draws;
-#[cfg(feature = "bundled-lucide")]
+#[cfg(all(feature = "animation-base", feature = "bundled-lucide"))]
 use crate::style::class_variant_hover_needs_frame;
 
 fn fmt_rect(r: [f32; 4]) -> String {
     format!("[{:.1},{:.1} {:.1}x{:.1}]", r[0], r[1], r[2], r[3])
+}
+
+#[test]
+#[cfg(feature = "animation-base")]
+fn completed_transform_and_color_transitions_still_register_local_damage() {
+    for fast in [false, true] {
+        set_css_transition_virtual_timeline(true);
+        set_css_transition_timeline_ms(0.0);
+        crate::style::utility::set_frame_dt(1.0 / 120.0);
+        let mut bar = Element::new()
+            .w(20.0)
+            .h(56.0)
+            .transition("transform 520ms spring(visual 0.28)");
+        bar.style.scale[1] = 0.2;
+        let color = Element::new()
+            .w(40.0)
+            .h(20.0)
+            .bg("primary")
+            .transition("background-color 150ms linear");
+        let mut root = Element::new().w(240.0).h(120.0).child(bar).child(color);
+        let mut tree = LayoutTree::new();
+        tree.build_and_layout(&mut root, 240.0, 120.0, [-1.0; 2]);
+        let tick = |root: &mut Element, tree: &mut LayoutTree, impact: &mut LayoutStatus| {
+            if fast {
+                tick_active_css_transitions_subtree(
+                    root, [-1.0; 2], "", false, 240.0, 120.0, [0.0; 2], tree, impact,
+                );
+            } else {
+                sync_class_variants_subtree(root, [-1.0; 2], "", false, 240.0, 120.0, tree, impact);
+            }
+        };
+        tick(&mut root, &mut tree, &mut LayoutStatus::Clean);
+        root.children[0].style.scale[1] = 1.0;
+        root.children[1].style.bg_color = [0.2, 0.3, 0.4, 1.0];
+        let mut settled_changes = 0;
+        for step in 0..120 {
+            set_css_transition_timeline_ms(step as f64 * 1000.0 / 120.0);
+            let before: Vec<_> = root
+                .children
+                .iter()
+                .map(|child| child.style.clone())
+                .collect();
+            take_frame_paint_nodes();
+            let mut impact = LayoutStatus::Clean;
+            tick(&mut root, &mut tree, &mut impact);
+            let dirties = take_frame_paint_nodes();
+            for (child, before) in root.children.iter().zip(before) {
+                if child.style != before {
+                    assert_ne!(impact, LayoutStatus::Clean, "fast={fast} step={step}");
+                    assert!(
+                        dirties
+                            .iter()
+                            .any(|dirty| dirty.key == paint_element_key(child)),
+                        "changed paint must register its own dirty: fast={fast} step={step}"
+                    );
+                    if !child.transition_snapshot.has_active_tweens() {
+                        settled_changes += 1;
+                    }
+                }
+            }
+        }
+        assert!(
+            settled_changes >= 2,
+            "both end frames must be exercised: fast={fast}"
+        );
+        set_css_transition_virtual_timeline(false);
+    }
 }
 
 #[test]
@@ -251,6 +322,7 @@ fn find_slot<'a>(el: &'a Element, slot: &str) -> Option<&'a Element> {
     el.children.iter().find_map(|c| find_slot(c, slot))
 }
 
+#[cfg(feature = "animation-base")]
 fn find_slot_mut<'a>(el: &'a mut Element, slot: &str) -> Option<&'a mut Element> {
     if el.attrs.get("data-slot").map(String::as_str) == Some(slot) {
         return Some(el);
@@ -277,6 +349,7 @@ fn apply_viewport_scroll_y(root: &mut Element, scroll_id: &str, y: f32) {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn idle_sync_must_tick_offscreen_animate_spin() {
     let _ = crate::primitives::interactive::take_hover_paint_dirty();
     crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -316,6 +389,7 @@ fn idle_sync_must_tick_offscreen_animate_spin() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn idle_sync_must_wake_visible_spin_under_offscreen_live_parent() {
     let _ = crate::primitives::interactive::take_hover_paint_dirty();
     crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -517,6 +591,7 @@ fn chrome_spin_dirty_must_cover_visual_instance_after_scroll() {
 /// Idle PartialLoad must bind the matching `clip_polys[i]` (0-based range copy);
 /// `bind_sdf(false)` left the spinner unclipped vs FullClear scroll frames.
 #[test]
+#[cfg(feature = "animation-base")]
 fn idle_spin_in_overflow_must_emit_world_clip_poly() {
     let _ = take_frame_paint_nodes();
     crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -592,6 +667,7 @@ fn idle_spin_in_overflow_must_emit_world_clip_poly() {
 /// `expand_paint_dirties_for_translated_slots` dirties the wrap every tick and
 /// PartialLoad src-overs the spinner twice (stacked loader while not scrolling).
 #[test]
+#[cfg(feature = "animation-base")]
 fn idle_marker_icon_spin_must_not_dirty_same_box_wrap() {
     let _ = take_frame_paint_nodes();
     crate::style::utility::set_frame_dt(1.0 / 30.0);
@@ -696,6 +772,7 @@ fn idle_marker_icon_spin_must_not_dirty_same_box_wrap() {
 /// `paint_dirty_nested_in_larger_node` skips the icon dest-reset → 残影, and
 /// PartialLoad src-overs the spinner twice → 卡顿.
 #[test]
+#[cfg(feature = "animation-base")]
 fn idle_marker_row_spin_must_not_dirty_content_row() {
     let _ = take_frame_paint_nodes();
     crate::style::utility::set_frame_dt(1.0 / 30.0);
@@ -818,6 +895,7 @@ fn idle_marker_row_spin_must_not_dirty_content_row() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn marker_hover_must_not_nested_skip_spin_dest_reset() {
     // Moving the pointer over MarkerContent (shimmer) used to dest-reset the row
     // and nested-skip the loader-circle — retain kept one angle (卡顿 / 停止).
@@ -926,7 +1004,7 @@ fn marker_hover_must_not_nested_skip_spin_dest_reset() {
     );
 }
 
-#[cfg(feature = "bundled-lucide")]
+#[cfg(all(feature = "animation-base", feature = "bundled-lucide"))]
 fn find_spin_el(el: &Element) -> Option<&Element> {
     if el.attrs.get("jadix_animate").map(String::as_str) == Some("spin")
         || el.style.animations.iter().any(|a| a.name == "spin")
@@ -936,7 +1014,7 @@ fn find_spin_el(el: &Element) -> Option<&Element> {
     el.children.iter().find_map(find_spin_el)
 }
 
-#[cfg(feature = "bundled-lucide")]
+#[cfg(all(feature = "animation-base", feature = "bundled-lucide"))]
 fn spin_elapsed_ms(el: &Element) -> f32 {
     el.animation_snapshot
         .runs
@@ -945,7 +1023,7 @@ fn spin_elapsed_ms(el: &Element) -> f32 {
         .unwrap_or(0.0)
 }
 
-#[cfg(feature = "bundled-lucide")]
+#[cfg(all(feature = "animation-base", feature = "bundled-lucide"))]
 fn dump_paints(paints: &[crate::layout::layout_tree::NodePaint], root: &Element) -> String {
     paints
         .iter()
@@ -967,6 +1045,7 @@ fn dump_paints(paints: &[crate::layout::layout_tree::NodePaint], root: &Element)
         .join("; ")
 }
 
+#[cfg(feature = "animation-base")]
 fn dump_dirties(dirty: &[crate::app::damage::PaintDirty], root: &Element) -> String {
     dirty
         .iter()
@@ -986,6 +1065,7 @@ fn dump_dirties(dirty: &[crate::app::damage::PaintDirty], root: &Element) -> Str
         .join("\n")
 }
 
+#[cfg(feature = "animation-base")]
 fn find_slot_by_key(el: &Element, key: u64) -> Option<&Element> {
     if paint_element_key(el) == key {
         return Some(el);
@@ -998,6 +1078,7 @@ fn find_slot_by_key(el: &Element, key: u64) -> Option<&Element> {
 /// even when the hovered tile is also a Node dirty — the pointer never has to
 /// enter the Marker.
 #[test]
+#[cfg(feature = "animation-base")]
 fn page_pointer_storm_must_keep_distant_marker_spinning() {
     let _ = take_frame_paint_nodes();
     set_css_transition_virtual_timeline(true);
@@ -1149,6 +1230,7 @@ fn page_pointer_storm_must_keep_distant_marker_spinning() {
 /// Lucide path/font raster needs `bundled-lucide` (same as gallery).
 #[cfg(feature = "bundled-lucide")]
 #[test]
+#[cfg(feature = "animation-base")]
 fn gallery_marker_pointer_storm_must_keep_spinning() {
     let _ = take_frame_paint_nodes();
     crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -1369,6 +1451,7 @@ fn gallery_marker_pointer_storm_must_keep_spinning() {
 /// content dest-reset, leaves PartialLoad stacking glyph alpha (叠影变粗).
 #[cfg(feature = "bundled-lucide")]
 #[test]
+#[cfg(feature = "animation-base")]
 fn gallery_marker_spin_must_not_thicken_thinking_caption() {
     use crate::app::draw_cull::{node_present_dest_reset_full, node_present_scissor_pad};
 
@@ -1586,6 +1669,7 @@ fn gallery_marker_spin_must_not_thicken_thinking_caption() {
 /// flicker — even after the hole was wide enough to recapture the full string.
 #[cfg(feature = "bundled-lucide")]
 #[test]
+#[cfg(feature = "animation-base")]
 fn message_status_shimmer_capture_must_keep_full_oliver_is_typing() {
     use crate::app::draw_cull::node_present_dest_reset_full;
 
@@ -4592,6 +4676,7 @@ fn gallery_ping_bounce_pulse_dest_reset_must_not_punch_captions() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn gallery_play_state_pause_dest_reset_must_cover_spin_circumcircle() {
     let _ = take_frame_paint_nodes();
     crate::style::utility::set_frame_dt(1.0 / 60.0);
@@ -4769,6 +4854,7 @@ fn gallery_play_state_pause_dest_reset_must_cover_spin_circumcircle() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn gallery_play_state_pause_must_not_hitch_sibling_css_animations() {
     // Click Play/Pause: play-state dest-reset must not punch bounce/fade, and
     // bounce must still advance on that frame (not a one-frame freeze).
@@ -4941,6 +5027,7 @@ fn gallery_play_state_pause_must_not_hitch_sibling_css_animations() {
     );
 }
 
+#[cfg(feature = "animation-base")]
 fn status_shimmer_marker() -> Element {
     let mut icon = Element::new().w(16.0).h(16.0).bg([0.15, 0.15, 0.15, 1.0]);
     apply_class_list(&mut icon, "animate-spin");
@@ -4952,6 +5039,7 @@ fn status_shimmer_marker() -> Element {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn scaled_status_animation_repair_covers_the_caption_ink() {
     crate::core::reactivity::create_root(|| {
         let mut root = Element::new().w(800.0).h(700.0).child(
@@ -4995,6 +5083,7 @@ fn scaled_status_animation_repair_covers_the_caption_ink() {
     });
 }
 
+#[cfg(feature = "animation-base")]
 fn caption_named<'a>(
     texts: &'a [crate::layout::layout_tree::TextLayoutInfo],
     needle: &str,
@@ -5006,6 +5095,7 @@ fn caption_named<'a>(
 /// full 「Oliver is typing...」 while MarkerContent ticks. Nested Message
 /// `min-w-0` / dest-reset used to clip it to 「Oliver i」 and flash the strip.
 #[test]
+#[cfg(feature = "animation-base")]
 fn message_status_shimmer_must_show_full_oliver_is_typing() {
     let _ = take_frame_paint_nodes();
     crate::style::utility::set_frame_dt(1.0 / 60.0);

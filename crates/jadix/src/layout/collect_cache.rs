@@ -773,9 +773,11 @@ pub(crate) fn node_paint_needs_frame(el: &Element) -> bool {
     {
         return true;
     }
-    if el.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON)
-        || el.attrs.contains_key(crate::utils::icon_provider::ATTR_ICON_HOVER_ANIMATION)
-    {
+    #[cfg(feature = "lucide-animated")]
+    if el.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON) {
+        return true;
+    }
+    if el.attrs.contains_key(crate::utils::icon_provider::ATTR_ICON_HOVER_ANIMATION) {
         return true;
     }
     #[cfg(feature = "svg")]

@@ -349,6 +349,7 @@ pub(crate) fn render_document_block(
                 )
         }
         DocumentBlockKind::Code { language } => {
+            #[cfg(feature = "syntax-highlighting")]
             let spans = if let (Some(payload), Some(range)) = (&block.payload, &block.edit_range) {
                 let first = document.source().line_at_byte(range.start).unwrap_or(0);
                 let current = document
@@ -377,6 +378,11 @@ pub(crate) fn render_document_block(
                     language,
                     crate::style::is_dark_theme(),
                 )
+            };
+            #[cfg(not(feature = "syntax-highlighting"))]
+            let spans = {
+                let _ = language;
+                vec![TextSpan::new(block.text())]
             };
             let mut code = Element::new()
                 .text_spans(spans)
@@ -448,12 +454,18 @@ pub(crate) fn render_document_block(
             .items_center()
             .py(8.0)
             .child(chemistry_view(block.payload.as_deref().unwrap_or(""))),
+        #[cfg(feature = "document-science")]
         DocumentBlockKind::Molecule { format } => {
             crate::components::molecule_view::render_molecule_source(
                 block.payload.as_deref().unwrap_or(""),
                 format,
             )
         }
+        #[cfg(not(feature = "document-science"))]
+        DocumentBlockKind::Molecule { .. } => render_diagnostic(
+            block.payload.as_deref().unwrap_or(""),
+            "Molecule rendering requires the document-science feature",
+        ),
         _ => render_inlines(&block.inlines, 16.0, asset_root).py(2.0),
     };
     result.set_attr("data-document-kind", format!("{:?}", block.kind));

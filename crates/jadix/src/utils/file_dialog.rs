@@ -17,10 +17,13 @@ pub fn file_dialog_paths(id: &str) -> Signal<Vec<PathBuf>> {
 }
 
 // rfd only supplies desktop dialogs. Keep the signal API available to mobile hosts.
-#[cfg(any(
-    target_os = "windows",
-    target_os = "macos",
-    all(target_os = "linux", not(target_env = "ohos"))
+#[cfg(all(
+    feature = "file-dialog",
+    any(
+        target_os = "windows",
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
 ))]
 mod native {
     use super::PathBuf;
@@ -59,22 +62,30 @@ mod native {
         rfd::FileDialog::new().pick_folder()
     }
 }
-#[cfg(any(
-    target_os = "windows",
-    target_os = "macos",
-    all(target_os = "linux", not(target_env = "ohos"))
+#[cfg(all(
+    feature = "file-dialog",
+    any(
+        target_os = "windows",
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
 ))]
 pub use native::{pick_file, pick_files, pick_folder};
 
-#[cfg(not(any(
-    target_os = "windows",
-    target_os = "macos",
-    all(target_os = "linux", not(target_env = "ohos"))
+#[cfg(not(all(
+    feature = "file-dialog",
+    any(
+        target_os = "windows",
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
 )))]
 mod native {
     use super::PathBuf;
     pub fn pick_file(_: &str) -> Option<PathBuf> {
-        log::warn!("Native file dialogs require a platform document-picker bridge on this host");
+        log::warn!(
+            "Native file dialogs require the file-dialog feature and a supported desktop host"
+        );
         None
     }
     pub fn pick_files(accept: &str) -> Vec<PathBuf> {
@@ -84,10 +95,13 @@ mod native {
         pick_file("")
     }
 }
-#[cfg(not(any(
-    target_os = "windows",
-    target_os = "macos",
-    all(target_os = "linux", not(target_env = "ohos"))
+#[cfg(not(all(
+    feature = "file-dialog",
+    any(
+        target_os = "windows",
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
 )))]
 pub use native::{pick_file, pick_files, pick_folder};
 

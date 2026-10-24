@@ -1739,6 +1739,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn fade_enter_seeds_once() {
         create_root(|| {
             let mut root = Element::new();
@@ -1811,6 +1812,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn fade_css_tick_does_not_request_second_layout() {
         create_root(|| {
             FLOATING_CSS_NEEDS_FRAME.with(|c| c.set(false));
@@ -1879,6 +1881,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn fade_exit_seeds_and_defers_unmount() {
         create_root(|| {
             let mut root = Element::new();
@@ -1934,6 +1937,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn expand_waits_for_measured_height() {
         create_root(|| {
             let mut root = Element::new();
@@ -1990,6 +1994,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn expand_enter_same_frame_css_tick_must_stay_at_zero() {
         create_root(|| {
             crate::style::utility::set_frame_dt(0.016);
@@ -2104,6 +2109,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn expand_with_from_h_starts_at_baseline_not_zero() {
         create_root(|| {
             let mut root = Element::new();
@@ -2151,6 +2157,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn expand_from_h_exit_collapses_to_chip_not_zero() {
         create_root(|| {
             let mut root = Element::new();
@@ -2586,6 +2593,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn expand_exit_reseed_continues_from_mid_height() {
         create_root(|| {
             let mut root = Element::new();
@@ -2654,6 +2662,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn expand_exit_hides_sliver_on_same_frame_as_finish() {
         create_root(|| {
             let mut root = Element::new();
@@ -2745,6 +2754,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn expand_exit_hides_chrome_hairline_before_animation_finishes() {
         // Inline ColorPicker format Select: the last accordion frames are a 1–2px
         // white/outline streak that PartialLoad leaves above 预设 after close.
@@ -2839,6 +2849,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn expand_exit_keeps_opacity_until_accordion_up_finishes() {
         create_root(|| {
             let mut root = Element::new();
@@ -2921,6 +2932,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn expand_exit_pins_child_min_height_so_list_overflows_instead_of_relayout() {
         create_root(|| {
             let mut root = Element::new();

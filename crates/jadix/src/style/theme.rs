@@ -319,12 +319,12 @@ impl Theme {
 
 impl Default for Theme {
     fn default() -> Self {
-        Self::light()
+        Self::preset(super::ThemePreset::default(), ThemeMode::Light)
     }
 }
 
 thread_local! {
-    static CURRENT_THEME: RefCell<Theme> = RefCell::new(Theme::light());
+    static CURRENT_THEME: RefCell<Theme> = RefCell::new(Theme::default());
     static THEME_GENERATION: Cell<u64> = const { Cell::new(0) };
     static THEME_PREFERENCE: Cell<ThemePreference> = const { Cell::new(ThemePreference::System) };
     static SYSTEM_THEME: Cell<ThemeMode> = const { Cell::new(ThemeMode::Light) };
@@ -465,6 +465,7 @@ pub fn toggle_theme_mode() -> ThemeMode {
 mod tests {
     use super::*;
 
+    #[cfg(feature = "theme-fluent")]
     #[test]
     fn system_preference_follows_changes_and_manual_modes_override_them() {
         let previous_theme = get_theme();

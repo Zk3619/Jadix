@@ -321,17 +321,17 @@ impl WindowOptions {
         if self.follow_theme {
             let preset = crate::style::theme_preset();
             let windows_material = {
-                #[cfg(target_os = "windows")]
+                #[cfg(all(target_os = "windows", feature = "windows-dwm"))]
                 {
                     crate::platform::windows::glass::system_backdrop_available()
                 }
-                #[cfg(not(target_os = "windows"))]
+                #[cfg(not(all(target_os = "windows", feature = "windows-dwm")))]
                 {
-                    true
+                    cfg!(all(not(target_os = "windows"), feature = "window-materials"))
                 }
             };
-            let liquid_material = cfg!(not(target_os = "windows"))
-                || cfg!(all(target_os = "windows", feature = "backend-dx12"));
+            let liquid_material = cfg!(all(not(target_os = "windows"), feature = "window-materials"))
+                || cfg!(all(target_os = "windows", feature = "windows-dcomp"));
             options.blur = match preset {
                 crate::style::ThemePreset::Fluent => windows_material,
                 crate::style::ThemePreset::LiquidGlass => liquid_material,
@@ -469,7 +469,7 @@ impl WindowOptions {
         if self.follow_theme
             && crate::style::theme_preset() == crate::style::ThemePreset::LiquidGlass
         {
-            return cfg!(all(windows, feature = "backend-dx12"));
+            return cfg!(all(windows, feature = "windows-dcomp"));
         }
         if !self.blur {
             return false;
@@ -490,6 +490,7 @@ impl WindowOptions {
     }
 
     /// Win11 `DWMWA_SYSTEMBACKDROP_TYPE` path (no custom recipe knobs).
+    #[cfg(any(test, all(windows, feature = "windows-dwm")))]
     pub(crate) fn uses_system_backdrop(&self) -> bool {
         let options = self.themed();
         options.blur && !options.wants_custom_dcomp()
@@ -562,15 +563,17 @@ impl WindowOptions {
     /// Reserve the composition surface before a following theme changes to
     /// glass. GPU alpha is independent of Win32's native transparent flag.
     pub(crate) fn wants_dcomp_swapchain(&self) -> bool {
-        self.compositor_alpha() && cfg!(all(windows, feature = "backend-dx12"))
+        self.compositor_alpha() && cfg!(all(windows, feature = "windows-dcomp"))
     }
 
     /// Win11: extend DWM glass into the client so Acrylic/Mica fills the window.
+    #[cfg(any(test, all(windows, feature = "windows-dwm")))]
     pub(crate) fn windows_extends_dwm_frame(&self) -> bool {
         self.uses_system_backdrop()
     }
 
     /// Win11: punch clear pixels through to the desktop (no system material).
+    #[cfg(any(test, all(windows, feature = "windows-dwm")))]
     pub(crate) fn windows_punch_through_desktop(&self) -> bool {
         self.transparent && !self.blur
     }
@@ -607,7 +610,14 @@ impl WindowOptions {
                 self.transparent
                     || (cfg!(not(windows)) && (self.blur || self.follow_theme)),
             )
-            .with_blur(self.themed().blur && !self.wants_dcomp_swapchain());
+            .with_blur(
+                self.themed().blur
+                    && !self.wants_dcomp_swapchain()
+                    && cfg!(any(
+                        all(windows, feature = "windows-dwm"),
+                        all(not(windows), feature = "window-materials")
+                    )),
+            );
 
         if let (Some(w), Some(h)) = (self.inner_width, self.inner_height) {
             if valid_size([w, h]) {
@@ -905,14 +915,30 @@ mod tests {
                 false,
             ),
         ] {
+            if !preset.is_enabled() {
+                continue;
+            }
             crate::style::set_theme_preset(preset);
             let resolved = options.themed();
+            let available = match preset {
+                crate::style::ThemePreset::Fluent => cfg!(any(
+                    all(windows, feature = "windows-dwm"),
+                    all(not(windows), feature = "window-materials")
+                )),
+                crate::style::ThemePreset::LiquidGlass => cfg!(any(
+                    all(windows, feature = "windows-dcomp"),
+                    all(not(windows), feature = "window-materials")
+                )),
+                _ => true,
+            };
+            let blur = blur && available;
+            let backdrop = if blur { backdrop } else { super::WindowBackdrop::None };
             assert_eq!(resolved.backdrop, backdrop);
             assert_eq!(resolved.blur, blur);
             assert!(options.compositor_alpha());
             assert_eq!(
                 options.wants_dcomp_swapchain(),
-                cfg!(all(windows, feature = "backend-dx12"))
+                cfg!(all(windows, feature = "windows-dcomp"))
             );
             #[cfg(windows)]
             assert!(!options.to_window_attributes().transparent);
@@ -998,7 +1024,10 @@ mod tests {
         let attrs = o.to_window_attributes();
         assert!(!attrs.decorations);
         assert_eq!(attrs.transparent, !cfg!(windows));
-        assert_eq!(attrs.blur, !cfg!(all(windows, feature = "backend-dx12")));
+        assert_eq!(attrs.blur, cfg!(any(
+            all(windows, feature = "windows-dwm", not(feature = "windows-dcomp")),
+            all(not(windows), feature = "window-materials")
+        )));
         assert_eq!(attrs.title, "Glass");
     }
 
@@ -1087,7 +1116,7 @@ mod tests {
     }
 
     #[test]
-    fn compositor_alpha_requests_dcomp_swapchain_with_dx12() {
+    fn compositor_alpha_requests_dcomp_swapchain_with_dcomp_feature() {
         let acrylic = WindowOptions::new()
             .blur(true)
             .backdrop(WindowBackdrop::Acrylic);
@@ -1095,11 +1124,14 @@ mod tests {
         let custom = WindowOptions::new()
             .blur(true)
             .backdrop(WindowBackdrop::Blur);
-        let expected = cfg!(all(windows, feature = "backend-dx12"));
+        let expected = cfg!(all(windows, feature = "windows-dcomp"));
         assert_eq!(acrylic.wants_dcomp_swapchain(), expected);
         assert_eq!(transparent.wants_dcomp_swapchain(), expected);
         assert_eq!(custom.wants_dcomp_swapchain(), expected);
-        assert_eq!(acrylic.to_window_attributes().blur, !expected);
+        assert_eq!(acrylic.to_window_attributes().blur, !expected && cfg!(any(
+            all(windows, feature = "windows-dwm"),
+            all(not(windows), feature = "window-materials")
+        )));
     }
 
     #[test]

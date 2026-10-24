@@ -12,7 +12,7 @@
 //! Dialog 模态壳在本目录 [`dialog`] 内，不进 prelude / 产品清单；后续分 crate 时随本目录迁到组件库。
 //! 滚动视口契约（信号键 / `scroll:` focus）在 [`crate::core::scroll_viewport`]；本目录仅保留
 //! [`ScrollArea`] / [`Scrollbar`] / [`ScrollViewport`] 的 Builder、RSX 与外观封装。
-//! 缩放视口能力在 [`crate::core::scaled_viewport`]；预览容器 [`ScalePreview`] 在本目录。
+//! 缩放视口能力在 [`crate::core::scaled_viewport`]；启用 `scale-preview` 使用预览容器 `ScalePreview`。
 //! 函数名故意与 RSX 标签一致，故关闭 `non_snake_case`。
 //!
 //! ## Cross-cutting convention
@@ -81,8 +81,8 @@ pub mod card;
 pub mod carousel;
 pub mod chart;
 pub mod checkbox;
+#[cfg(feature = "code")]
 pub mod code_editor;
-mod editor_chrome;
 pub mod collapsible;
 pub mod color_picker;
 pub mod combobox;
@@ -90,13 +90,23 @@ pub mod command;
 pub mod context_menu;
 pub mod date_picker;
 pub mod dialog;
+#[cfg(feature = "document-diff")]
 pub mod diff_view;
 pub mod dock;
+#[cfg(feature = "document-editing")]
+pub mod document_editor;
+#[cfg(feature = "document")]
+pub mod document_view;
+#[cfg(feature = "document")]
+mod document_viewport;
 pub mod drawer;
 pub mod dropdown_menu;
+mod editor_chrome;
 pub mod empty;
 pub mod form;
 pub mod hover_card;
+#[cfg(feature = "webview")]
+pub mod html_document;
 pub mod image;
 pub mod input;
 pub mod input_adornment;
@@ -106,18 +116,24 @@ pub mod kbd;
 pub mod label;
 pub mod list;
 pub mod marker;
-pub mod menubar;
+pub mod math_view;
 pub mod media_player;
+pub mod menubar;
 pub mod message;
 pub mod message_scroller;
+#[cfg(feature = "document-science")]
+pub mod molecule_view;
 pub mod navbar;
 pub mod navigation_menu;
 pub mod pagination;
 pub mod popover;
 pub mod progress;
+#[cfg(feature = "document-science")]
+pub mod protein_view;
 pub mod questionnaire;
 pub mod radio_group;
 pub mod resizable;
+#[cfg(feature = "scale-preview")]
 pub mod scale_preview;
 pub mod scroll_area;
 pub mod scroll_viewport;
@@ -132,15 +148,9 @@ pub mod stepper;
 pub mod switch;
 pub mod table;
 pub mod tabs;
-pub mod textarea;
-pub mod text_view;
 pub mod text_editor;
-mod document_viewport;
-pub mod document_view;
-pub mod document_editor;
-pub mod math_view;
-pub mod molecule_view;
-pub mod protein_view;
+pub mod text_view;
+pub mod textarea;
 pub mod timeline;
 pub mod title_bar;
 pub mod toast;
@@ -153,12 +163,11 @@ pub mod virtual_masonry;
 #[cfg(feature = "webview")]
 pub mod webview;
 #[cfg(feature = "webview")]
-pub mod html_document;
-#[cfg(feature = "webview")]
-pub use webview::{webview, webview_html, webview_status, webview_supported, WebView, WebViewProps, WebViewStatus};
+pub use webview::{
+    webview, webview_html, webview_status, webview_supported, WebView, WebViewProps, WebViewStatus,
+};
 
 pub use crate::utils::text_field::SelectionOnBlur;
-pub use dock::{DockLayout, DockOrientation, DockPlacement, DockState, DockTab};
 pub use accordion::{
     accordion, accordion_content, accordion_item, accordion_item_scope, accordion_scope,
     accordion_trigger, accordion_use_grid_fr, set_accordion_use_grid_fr, use_accordion,
@@ -282,6 +291,7 @@ pub use chart::{
     RadialChartProps, SceneLayer, TooltipIndicator,
 };
 pub use checkbox::{checkbox, Checkbox, CheckboxBuilder, CheckboxProps};
+#[cfg(feature = "code")]
 pub use code_editor::{code_editor, CodeEditor, CodeEditorBuilder};
 pub use collapsible::{
     collapsible, collapsible_content, collapsible_content_slot, collapsible_scope,
@@ -340,6 +350,17 @@ pub use dialog::{
     DialogHeaderBuilder, DialogHeaderProps, DialogTitle, DialogTitleBuilder, DialogTitleProps,
     DialogTrigger, DialogTriggerBuilder, DialogTriggerProps,
 };
+#[cfg(feature = "document-diff")]
+pub use diff_view::{diff_view, DiffView, DiffViewBuilder, DiffViewProps};
+pub use dock::{DockLayout, DockOrientation, DockPlacement, DockState, DockTab};
+#[cfg(feature = "document-editing")]
+pub use document_editor::{
+    document_editor, DocumentEditor, DocumentEditorBuilder, DocumentEditorProps,
+};
+#[cfg(feature = "document")]
+pub use document_view::{
+    document_view, DocumentBlockRenderer, DocumentView, DocumentViewBuilder, DocumentViewProps,
+};
 pub use drawer::{
     coerce_snap_point_list, coerce_snap_points, drawer, drawer_active_snap_point, drawer_body,
     drawer_close, drawer_close_part, drawer_content, drawer_content_slot, drawer_description,
@@ -386,7 +407,6 @@ pub use hover_card::{
     HoverCardTriggerProps,
 };
 pub use image::{image, ui_image, Image, ImageBuilder, ImageProps, Img, ImgProps};
-pub use media_player::*;
 pub use input::{
     apply_bound_input_disabled, apply_bound_input_invalid, filter_email_insert,
     filter_insert_for_type, filter_number_insert, filter_password_insert, filter_tel_insert,
@@ -438,6 +458,11 @@ pub use marker::{
     Marker, MarkerBuilder, MarkerContent, MarkerContentBuilder, MarkerContentProps, MarkerIcon,
     MarkerIconBuilder, MarkerIconProps, MarkerProps, MarkerVariant,
 };
+pub use math_view::{
+    chemistry_view, math_view, ChemistryView, ChemistryViewProps, MathView, MathViewBuilder,
+    MathViewProps,
+};
+pub use media_player::*;
 pub use menubar::{
     menubar, menubar_content, menubar_content_slot, menubar_group, menubar_item, menubar_label,
     menubar_menu, menubar_radio_group, menubar_scope, menubar_separator, menubar_shortcut,
@@ -470,6 +495,10 @@ pub use message_scroller::{
     MessageScrollerProps, MessageScrollerProvider, MessageScrollerProviderBuilder,
     MessageScrollerProviderProps, MessageScrollerScrollable, MessageScrollerViewport,
     MessageScrollerViewportBuilder, MessageScrollerViewportProps, MessageScrollerVisibility,
+};
+#[cfg(feature = "document-science")]
+pub use molecule_view::{
+    molecule_view, MoleculeCamera, MoleculeView, MoleculeViewBuilder, MoleculeViewProps,
 };
 pub use navbar::{
     navbar, navbar_actions, navbar_brand, navbar_center, Navbar, NavbarActions,
@@ -510,6 +539,8 @@ pub use progress::{
     ProgressOrientation, ProgressProps, ProgressTrack, ProgressTrackBuilder, ProgressTrackOpts,
     ProgressTrackProps, ProgressValue, ProgressValueBuilder, ProgressValueProps,
 };
+#[cfg(feature = "document-science")]
+pub use protein_view::protein_view;
 pub use questionnaire::{
     assign_shortcut, enabled_item_names, item_has_valid_answer, questionnaire,
     questionnaire_actions, questionnaire_choice, questionnaire_choice_description,
@@ -548,6 +579,7 @@ pub use resizable::{
     ResizableOrientation, ResizablePanel, ResizablePanelBuilder, ResizablePanelGroup,
     ResizablePanelGroupProps, ResizablePanelProps,
 };
+#[cfg(feature = "scale-preview")]
 pub use scale_preview::{scale_preview, ScalePreview, ScalePreviewBuilder, ScalePreviewProps};
 pub use scroll_area::{
     scroll_area, scroll_into_view, scroll_into_view_when, scroll_item_into_view,
@@ -626,6 +658,8 @@ pub use tabs::{
     TabsOrientation, TabsProps, TabsTrigger, TabsTriggerBuilder, TabsTriggerProps,
     TABSTRIP_FOCUS_PREFIX,
 };
+pub use text_editor::{text_editor, TextEditor, TextEditorBuilder, TextEditorProps};
+pub use text_view::{text_view, TextView, TextViewBuilder, TextViewProps};
 pub use textarea::{textarea, Textarea, TextareaBuilder, TextareaProps, TEXTAREA_FOCUS_PREFIX};
 pub use timeline::{
     bullet_glyph_px, timeline, timeline_bullet_active, timeline_entry, timeline_item,
@@ -669,12 +703,4 @@ pub use tree_view::{
     TreeViewItemCtx, TreeViewVariant,
 };
 pub use virtual_list::{virtual_list, VirtualListBuilder};
-pub use text_view::{text_view, TextView, TextViewBuilder, TextViewProps};
-pub use text_editor::{text_editor, TextEditor, TextEditorBuilder, TextEditorProps};
-pub use document_view::{document_view, DocumentView, DocumentViewBuilder, DocumentViewProps, DocumentBlockRenderer};
-pub use document_editor::{document_editor, DocumentEditor, DocumentEditorBuilder, DocumentEditorProps};
-pub use math_view::{math_view, chemistry_view, MathView, ChemistryView, MathViewBuilder, MathViewProps, ChemistryViewProps};
-pub use molecule_view::{molecule_view, MoleculeView, MoleculeViewProps, MoleculeViewBuilder, MoleculeCamera};
-pub use protein_view::protein_view;
-pub use diff_view::{diff_view, DiffView, DiffViewBuilder, DiffViewProps};
 pub use virtual_masonry::{virtual_masonry, VirtualMasonryBuilder};

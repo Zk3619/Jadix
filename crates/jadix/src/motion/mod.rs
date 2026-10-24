@@ -1,33 +1,40 @@
 //! Retained interaction variants, layout projection and vector animation.
 //!
-//! Keep [`MotionState`] and [`LayoutMotion`] between builds, or use [`use_motion`]
+//! Keep `MotionState` and [`LayoutMotion`] between builds, or use `use_motion`
 //! and [`use_layout_motion`]. Bindings sample the existing window animation clock
 //! without subscribing the root UI effect.
 
 #![doc = include_str!("../../MOTION.md")]
 
 mod layout;
+#[cfg(feature = "animation-path")]
 mod path;
+#[cfg(feature = "animation-ex")]
 mod target;
 
 pub(crate) use layout::LayoutRegistry;
-pub use layout::{LayoutAnimation, LayoutMotion, use_layout_motion};
+pub use layout::{use_layout_motion, LayoutAnimation, LayoutMotion};
+#[cfg(feature = "animation-path")]
 pub use path::{
-    PathMorph, PathMorphError, PathSample, PreparedPath, bind_path_follow, bind_path_morph,
-    bind_path_reveal,
+    bind_path_follow, bind_path_morph, bind_path_reveal, PathMorph, PathMorphError, PathSample,
+    PreparedPath,
 };
+#[cfg(feature = "animation-ex")]
 pub use target::MotionTarget;
 
-use std::cell::RefCell;
-use std::collections::BTreeMap;
-use std::rc::Rc;
+#[cfg(feature = "animation-ex")]
+use std::{cell::RefCell, collections::BTreeMap, rc::Rc};
 
-use crate::core::reactivity::use_signal;
-use crate::core::tree::{Element, LayoutStatus};
-use crate::style::{AnimatableValue, AnimatedNumber, PropertyId, ValueDriver};
+use crate::core::tree::Element;
+#[cfg(feature = "animation-ex")]
+use crate::{
+    core::{reactivity::use_signal, tree::LayoutStatus},
+    style::{AnimatableValue, AnimatedNumber, PropertyId, ValueDriver},
+};
 
 /// Partial variants compose in this order: animate, focus, hover, tap, drag.
 #[derive(Clone, Debug)]
+#[cfg(feature = "animation-ex")]
 pub struct Motion {
     target: MotionTarget,
     initial: MotionTarget,
@@ -40,6 +47,7 @@ pub struct Motion {
     disabled: bool,
 }
 
+#[cfg(feature = "animation-ex")]
 impl Motion {
     pub fn new(target: MotionTarget) -> Self {
         Self {
@@ -104,6 +112,7 @@ impl Motion {
 }
 
 #[derive(Default)]
+#[cfg(feature = "animation-ex")]
 struct MotionInner {
     motion: Option<Motion>,
     tracks: BTreeMap<PropertyId, Track>,
@@ -115,8 +124,10 @@ struct MotionInner {
 
 /// One element's retained presentation. Clones share ownership.
 #[derive(Clone, Default)]
+#[cfg(feature = "animation-ex")]
 pub struct MotionState(Rc<RefCell<MotionInner>>);
 
+#[cfg(feature = "animation-ex")]
 impl MotionState {
     pub fn new() -> Self {
         Self::default()
@@ -289,10 +300,12 @@ impl MotionState {
     }
 }
 
+#[cfg(feature = "animation-ex")]
 pub fn use_motion(id: &str) -> MotionState {
     use_signal(id, MotionState::new).peek()
 }
 
+#[cfg(feature = "animation-ex")]
 impl Element {
     /// Bind retained motion without replacing existing event or frame callbacks.
     pub fn motion(mut self, state: &MotionState, motion: Motion) -> Self {
@@ -368,6 +381,7 @@ impl Element {
     }
 }
 
+#[cfg(feature = "animation-ex")]
 struct Track {
     baseline: AnimatableValue,
     target: AnimatableValue,
@@ -375,6 +389,7 @@ struct Track {
     started: bool,
 }
 
+#[cfg(feature = "animation-ex")]
 impl Track {
     fn new(baseline: AnimatableValue, initial: AnimatableValue) -> Self {
         let channels = components(&initial)
@@ -454,6 +469,7 @@ impl Track {
     }
 }
 
+#[cfg(feature = "animation-ex")]
 fn components(value: &AnimatableValue) -> Vec<f32> {
     match value {
         AnimatableValue::Scalar(value) => vec![*value],
@@ -463,6 +479,7 @@ fn components(value: &AnimatableValue) -> Vec<f32> {
     }
 }
 
+#[cfg(feature = "animation-ex")]
 fn read_baseline(element: &Element, property: PropertyId) -> AnimatableValue {
     use crate::layout::dimension::IntoCssDim;
     let value = crate::style::read_animatable_value(&element.style, &element.text_style, property);
@@ -486,10 +503,14 @@ fn read_baseline(element: &Element, property: PropertyId) -> AnimatableValue {
     }
 }
 
-pub(crate) fn presentation_translate_in_paint_space(element: &Element, ancestor_scale: [f32; 2]) -> [f32; 2] {
+pub(crate) fn presentation_translate_in_paint_space(
+    element: &Element,
+    ancestor_scale: [f32; 2],
+) -> [f32; 2] {
     let translate = presentation_translate(element);
-    std::array::from_fn(|axis| translate[axis]
-        + element.style.translate[axis] * (ancestor_scale[axis] - 1.0))
+    std::array::from_fn(|axis| {
+        translate[axis] + element.style.translate[axis] * (ancestor_scale[axis] - 1.0)
+    })
 }
 
 pub(crate) fn presentation_translate(element: &Element) -> [f32; 2] {
@@ -513,5 +534,5 @@ pub(crate) fn presentation_scale(element: &Element) -> [f32; 2] {
     std::array::from_fn(|axis| element.style.scale[axis] * scale[axis])
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "animation-path"))]
 mod tests;

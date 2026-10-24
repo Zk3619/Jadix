@@ -957,8 +957,6 @@ pub fn color_mix_over_background(fg: [f32; 4], alpha: f32) -> [f32; 4] {
 ///
 /// Unknown tokens return `None` (callers may fall back). Prefer this over silent gray.
 pub fn try_parse_color(s: &str) -> Option<[f32; 4]> {
-    let theme = get_theme();
-    let colors = &theme.colors;
     let s = s.trim();
     if let Some(c) = parse_hex_color_rgba(s) {
         return Some(rgba_u8_to_f32(c));
@@ -976,6 +974,8 @@ pub fn try_parse_color(s: &str) -> Option<[f32; 4]> {
             }
         }
     }
+    let theme = get_theme();
+    let colors = &theme.colors;
     Some(match s {
         "background" => colors.background,
         // Tailwind v4 `text-foreground` → color token `foreground`.

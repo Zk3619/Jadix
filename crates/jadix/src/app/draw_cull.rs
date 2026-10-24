@@ -2595,14 +2595,7 @@ pub(crate) fn node_present_reset_rect(
             if nested_descendant_owns(p, node_paints, lo + off, |q| q.instance) {
                 continue;
             }
-            // Layered ping/bounce stay on the fill so occupancy can clip a
-            // rest-disjoint caption. Latest outset shadow must wipe the SDF halo
-            // or PartialLoad stacks every fade frame (enter ring / hide ghost).
-            let mut b = if layered && !instance_has_outset_shadow(inst) {
-                instance_fill_bounds(inst)
-            } else {
-                instance_paint_bounds(inst)
-            };
+            let mut b = instance_paint_bounds(inst);
             if b[2] <= 0.0 || b[3] <= 0.0 {
                 continue;
             }
@@ -2992,7 +2985,6 @@ fn occupancy_descendant_slot(parent: &NodePaint, child: &NodePaint) -> bool {
         && (parent_box[2] > child_box[2] + 2.5 || parent_box[3] > child_box[3] + 2.5)
 }
 
-#[cfg(test)]
 fn nested_foreign_owns(
     parent: &NodePaint,
     paints: &[NodePaint],
@@ -3090,11 +3082,7 @@ fn node_paint_visual_bounds_with_ownership(
         }
         // Layered last-present must cover the SDF halo so hide-settle dest-reset
         // can erase it. Occupancy still keeps the overlay rail out of the wipe.
-        let b = if p.layered && !instance_has_outset_shadow(inst) {
-            instance_fill_bounds(inst)
-        } else {
-            instance_paint_bounds(inst)
-        };
+        let b = instance_paint_bounds(inst);
         if b[2] <= 0.0 || b[3] <= 0.0 {
             continue;
         }
@@ -3532,6 +3520,7 @@ fn layered_cell_keeps_node_dest_reset(
     node_paints: &[NodePaint],
     instances: &[InstanceInput],
     last_present: &[(u64, [f32; 4])],
+    ui_scale: f32,
 ) -> bool {
     if !matching_slot_is_layered(key, bounds, node_paints)
         || textured_slot_has_later_overlapping_paint(key, bounds, node_paints)
@@ -3545,15 +3534,36 @@ fn layered_cell_keeps_node_dest_reset(
     let has_keyed = paints_has_keyed_slot(key, bounds, node_paints);
     if node_paints.iter().any(|owner| {
         slot_matches_dirty(key, bounds, owner, has_keyed)
-            && owner.rest.into_iter().chain(prev).any(|old| {
-                ((owner.bounds[0] - old[0]).abs() > 0.01 || (owner.bounds[1] - old[1]).abs() > 0.01)
-                    && (owner.bounds[2] - old[2]).abs() < 0.01
-                    && (owner.bounds[3] - old[3]).abs() < 0.01
-            })
             && slot_has_sdf_dest_ink(owner, instances)
             && node_paints
                 .iter()
                 .any(|child| is_nested_foreign_slot(owner, child) && slot_emits_paint(child))
+            && {
+                let lo = owner.instance.0.min(instances.len());
+                let hi = owner.instance.1.min(instances.len());
+                let visual = instances[lo..hi]
+                    .iter()
+                    .enumerate()
+                    .filter(|(offset, _)| {
+                        !nested_foreign_owns(owner, node_paints, lo + offset, |paint| {
+                            paint.instance
+                        })
+                    })
+                    .map(|(_, instance)| {
+                        scale_xywh(instance_paint_bounds(instance), 1.0 / ui_scale.max(1e-6))
+                    })
+                    .fold(owner.bounds, union_xywh);
+                owner
+                    .rest
+                    .into_iter()
+                    .map(|old| (owner.bounds, old))
+                    .chain(prev.map(|old| (visual, old)))
+                    .any(|(now, old)| {
+                        ((now[0] - old[0]).abs() > 0.01 || (now[1] - old[1]).abs() > 0.01)
+                            && (now[2] - old[2]).abs() < 0.01
+                            && (now[3] - old[3]).abs() < 0.01
+                    })
+            }
     }) {
         // A translated composite needs one ordered repair even when every
         // child is still Node and the old/new footprints overlap. Separate
@@ -3680,7 +3690,11 @@ pub(crate) fn prepare_node_present_dirties_ex(
             continue;
         }
         let prev = last_present_prev_for_dirty(dirty.kind, dirty.key, last_present);
-        if prev.is_none() && owner_is_only_culled_metadata(dirty.key, node_paints) {
+        if owner_is_only_culled_metadata(dirty.key, node_paints) {
+            if let Some(previous) = prev {
+                dirty.bounds = previous;
+                dirty.kind = PaintDirtyKind::Region;
+            }
             continue;
         }
         let visual = node_paints
@@ -3710,6 +3724,7 @@ pub(crate) fn prepare_node_present_dirties_ex(
                 node_paints,
                 instances,
                 last_present,
+                ui_scale,
             ) && (layered_src_over_skips_dest_reset(dirty.key, dirty.bounds, node_paints, prev)
                 || node_present_dest_reset_full(
                     dirty.key,
@@ -5977,7 +5992,9 @@ fn glyph_hits_layered_hole(n: &TextLayoutInfo, hole: [f32; 4]) -> bool {
     // A nowrap run already has its full measured height. The wrapping fallback
     // below invents extra lines beneath it and can classify a selected input as
     // underlay for its scrollbar, dropping the selection's normal glyph capture.
-    if n.style.white_space == crate::style::WhiteSpace::Nowrap {
+    if n.style.white_space == crate::style::WhiteSpace::Nowrap
+        || n.style.font_family.as_deref() == Some("lucide")
+    {
         return text_hits_damage(n, hole);
     }
     // Clip is a glyphon scissor, not the ink box. Intersecting first would
@@ -7969,6 +7986,7 @@ mod tests {
             fill.color = [1.0; 4];
             let mut rail = blank_instance(track[0], track[1], track[2], track[3]);
             rail.color = [0.96, 0.96, 0.96, alpha];
+            let rail_ink = instance_paint_bounds(&rail);
             let mut pill = blank_instance(thumb[0], thumb[1], thumb[2], thumb[3]);
             pill.color = [0.0, 0.0, 0.0, alpha];
             let reset = node_present_dest_reset_full(
@@ -7983,7 +8001,7 @@ mod tests {
             )
             .expect("track needs a reset through hide and re-entry");
             assert_eq!(
-                reset.rect, track,
+                reset.rect, rail_ink,
                 "alpha={alpha}: viewport carved the rail down to its right end"
             );
         }
@@ -11632,6 +11650,90 @@ mod tests {
     }
 
     #[test]
+    fn culled_paint_owner_restores_previous_ink_as_local_region() {
+        let previous = [22.5, 174.5, 24.0, 35.5];
+        let current = [24.5, 221.3, 20.0, 11.2];
+        let viewport = [0.0, 0.0, 320.0, 210.0];
+        let mut owner = slot(7, current, (0, 0));
+        owner.overflow_clip = Some(viewport);
+        let paints = [owner];
+        let background = [blank_instance(0.0, 0.0, 480.0, 315.0)];
+        let mut dirties = vec![PaintDirty {
+            key: 7,
+            bounds: current,
+            kind: PaintDirtyKind::Node,
+        }];
+        prepare_node_present_dirties(
+            &mut dirties,
+            &paints,
+            &[(7, previous)],
+            &background,
+            &[],
+            &[],
+            1.5,
+            None,
+        );
+        assert_eq!(dirties.len(), 1);
+        assert_eq!(dirties[0].kind, PaintDirtyKind::Region);
+        assert_eq!(dirties[0].bounds, previous);
+        assert_eq!(
+            node_present_scissor_logical(
+                dirties[0].kind,
+                7,
+                dirties[0].bounds,
+                &[(7, previous)],
+                &paints,
+                8.0,
+            ),
+            previous,
+        );
+    }
+
+    #[test]
+    fn layered_checkbox_icon_is_not_underlay_for_following_switch() {
+        let checkbox = [313.0, 139.66669, 16.0, 16.0];
+        let switch = [305.0, 159.66669, 60.0, 40.0];
+        let mut icon = sample_text("\u{e06c}", 315.0);
+        icon.y = 141.66669;
+        icon.width = 12.0;
+        icon.height = 12.0;
+        icon.style.size = Some(12.0);
+        icon.style.font_family = Some("lucide".into());
+        icon.clip_bounds = Some([264.0, 60.0, 728.0, 572.0]);
+        assert!(!glyph_hits_layered_hole(&icon, switch));
+        let mut check_paint = slot(7, checkbox, (0, 1));
+        check_paint.layered = true;
+        check_paint.instance = (0, 1);
+        let mut switch_paint = slot(8, switch, (1, 1));
+        switch_paint.layered = true;
+        switch_paint.instance = (1, 2);
+        let paints = [check_paint, switch_paint];
+        let dirties = [
+            PaintDirty {
+                key: 7,
+                bounds: checkbox,
+                kind: PaintDirtyKind::Node,
+            },
+            PaintDirty {
+                key: 8,
+                bounds: switch,
+                kind: PaintDirtyKind::Node,
+            },
+        ];
+        let captured = node_present_clipped_capture_text_wipes_excluding_overlay(
+            &dirties,
+            &[icon],
+            &paints,
+            &[(7, checkbox), (8, switch)],
+            &[],
+            &[],
+            1.5,
+        );
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].text, "\u{e06c}");
+    }
+
+    #[test]
     fn canvas_background_replays_overlapping_foreground_in_scene_order() {
         let board = [20.0, 20.0, 600.0, 160.0];
         let card = [36.0, 36.0, 176.0, 92.0];
@@ -12038,6 +12140,52 @@ mod tests {
             b[0] <= 8.0 && b[1] <= 8.0 && b[0] + b[2] >= 52.0 && b[1] + b[3] >= 32.0,
             "simple fill occupancy must include shader vertex AA (+2), got {b:?}"
         );
+    }
+
+    #[test]
+    fn layered_scale_reset_and_last_present_cover_sdf_antialiasing() {
+        for scale in [0.2, 0.34, 0.75, 1.0] {
+            let mut logical = blank_instance(40.0, 40.0, 20.0, 56.0);
+            logical.radii = [6.0; 4];
+            logical.transform = [1.0, 0.0, 0.0, scale, 0.0, 28.0 * (1.0 - scale)];
+            let bounds = instance_fill_bounds(&logical);
+            let ink = instance_paint_bounds(&logical);
+            let mut owner = paint_slot(7, bounds, Some([40.0, 40.0, 20.0, 56.0]), (1, 2));
+            owner.layered = true;
+            let paints = [owner];
+            let visual = node_paint_visual_bounds_in(
+                &paints[0],
+                &[blank_instance(0.0, 0.0, 200.0, 120.0), logical],
+                &[],
+                &[],
+                &[],
+                &paints,
+            );
+            assert!(
+                aabb_covers(visual, ink),
+                "scale={scale} visual={visual:?} ink={ink:?}"
+            );
+            let mut physical = blank_instance(60.0, 60.0, 30.0, 84.0);
+            physical.radii = [9.0; 4];
+            physical.transform = [1.0, 0.0, 0.0, scale, 0.0, 42.0 * (1.0 - scale)];
+            let physical_ink = instance_paint_bounds(&physical);
+            let wipe = node_present_reset_rect(
+                7,
+                bounds,
+                &paints,
+                &[blank_instance(0.0, 0.0, 300.0, 180.0), physical],
+                &[],
+                &[],
+                NODE_PRESENT_RESET_PAD_PHYSICAL,
+                1.5,
+                Some(bounds),
+            )
+            .unwrap();
+            assert!(
+                aabb_covers(wipe, physical_ink),
+                "scale={scale} wipe={wipe:?} ink={physical_ink:?}"
+            );
+        }
     }
 
     #[test]

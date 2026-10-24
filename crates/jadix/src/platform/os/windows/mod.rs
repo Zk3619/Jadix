@@ -3,6 +3,7 @@
 #[cfg(any(debug_assertions, test))]
 mod console;
 mod font_paths;
+#[cfg(feature = "windows-dwm")]
 pub(crate) mod glass;
 mod ime;
 mod process;

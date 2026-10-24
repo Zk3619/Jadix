@@ -5,7 +5,7 @@ mod hybrid_tests;
 #[cfg(test)]
 #[path = "state_present_tests.rs"]
 mod present_pixel_tests;
-#[cfg(all(test, target_os = "windows", feature = "svg"))]
+#[cfg(all(test, target_os = "windows", feature = "gallery-tests"))]
 #[path = "state_scroll_perf_tests.rs"]
 mod scroll_perf_tests;
 #[cfg(all(test, target_os = "windows"))]

@@ -441,8 +441,10 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
 
     #[cfg(all(debug_assertions, feature = "devtools"))]
     let remount = crate::app::devtools::scope_preview_portals(root);
-    #[cfg(not(all(debug_assertions, feature = "devtools")))]
+    #[cfg(all(feature = "scale-preview", not(all(debug_assertions, feature = "devtools"))))]
     let remount = crate::core::scaled_viewport::scope_portals(root);
+    #[cfg(not(feature = "scale-preview"))]
+    let remount = false;
     let pending = count_jadix_portal_nodes(root);
     let mut structure_dirty = dirty;
     if pending == 0 && !remount {
@@ -6933,7 +6935,10 @@ impl LayoutTree {
             } else {
                 text_x0 - text_style.scroll_x.max(0.0) * text_scale
             };
+            #[cfg(feature = "lucide-animated")]
             let is_animated_icon = element.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON);
+            #[cfg(not(feature = "lucide-animated"))]
+            let is_animated_icon = false;
             #[cfg(feature = "svg")]
             let is_morph_icon = element.attrs.contains_key(crate::utils::ATTR_MORPH_ICON);
             #[cfg(not(feature = "svg"))]
@@ -6968,7 +6973,8 @@ impl LayoutTree {
                 // Same VS affine as the SDF shell: linear about rect center + origin txty.
                 // Recomputing origin wrap on `side` and copying tx/ty made the icon orbit a corner.
                 let icon_xf = transform;
-                if element.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON) {
+                if is_animated_icon {
+                    #[cfg(feature = "lucide-animated")]
                     if let Some((tex_key, _)) =
                         crate::utils::lucide_animated::ensure_animated_icon_texture(
                             element,
@@ -12596,6 +12602,8 @@ mod portal_hoist_tests {
     #[test]
     fn modal_zoom_capture_includes_box_shadow_outset() {
         let _ = crate::renderer::take_capture_jobs();
+        let paint_scale = 0.90;
+        let expected_shadow_blur = 16.0 * paint_scale;
         let mut card = Element::new()
             .w(240.0)
             .h(120.0)
@@ -12608,7 +12616,7 @@ mod portal_hoist_tests {
             .overflow_y("hidden")
             .child(Element::new().text("Dialog title"));
         card.template_id = Some("dlg__modal_zoom".into());
-        card.style.scale = [0.90, 0.90];
+        card.style.scale = [paint_scale, paint_scale];
         let mut root = Element::new().w(400.0).h(400.0).child(card);
 
         let mut tree = LayoutTree::new();
@@ -12636,13 +12644,13 @@ mod portal_hoist_tests {
         assert!(
             cap.instances
                 .iter()
-                .all(|i| i.shadow_blur < 15.0 || i.rect_size[0] < 1.0),
+                .all(|i| i.shadow_blur < expected_shadow_blur - 0.1 || i.rect_size[0] < 1.0),
             "shadow chrome must not enter the inner capture"
         );
         let chrome = result
             .instances
             .iter()
-            .find(|i| i.shadow_blur > 15.0 && i.rect_size[0] > 1.0)
+            .find(|i| (i.shadow_blur - expected_shadow_blur).abs() < 0.1 && i.rect_size[0] > 1.0)
             .expect("dialog chrome live in main pass");
         assert!(
             chrome.radii.iter().all(|r| *r > 7.0),

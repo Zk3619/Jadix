@@ -1,3 +1,5 @@
+#![cfg(feature = "document-editing")]
+
 use jadix::core::reactivity::create_root;
 use jadix::core::scroll_viewport::scroll_offset_y_signal_key;
 use jadix::core::tree::LayoutTree;
@@ -260,12 +262,16 @@ fn builders_and_rsx_expose_document_and_native_text_editors() {
     assert!(has_selectable(&viewer));
     let plain = ui! { <TextEditor id="rsx-native-editor" rows={4} /> };
     assert_eq!(plain.attrs["data-slot"], "text-editor");
-    let molecule = Molecule::from_xyz("1\natom\nC 0 0 0\n").unwrap();
-    let graphic = ui! { <MoleculeView molecule={molecule} viewport_h={200.0} /> };
-    assert_eq!(graphic.attrs["data-slot"], "molecule-view");
+    #[cfg(feature = "document-science")]
+    {
+        let molecule = Molecule::from_xyz("1\natom\nC 0 0 0\n").unwrap();
+        let graphic = ui! { <MoleculeView molecule={molecule} viewport_h={200.0} /> };
+        assert_eq!(graphic.attrs["data-slot"], "molecule-view");
+    }
 }
 
 #[test]
+#[cfg(feature = "document-science")]
 fn molecular_json_and_xyz_are_typed_graphs() {
     let molecule = Molecule::from_xyz("3\nwater\nO 0 0 0\nH 1 0 0\nH 0 1 0\n").unwrap();
     assert_eq!(

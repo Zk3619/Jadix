@@ -554,6 +554,7 @@ mod chrome_tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn auto_hide_must_retarget_cubic_before_tick_or_collect_stays_opaque() {
         use crate::core::reactivity::create_root;
         use crate::style::{any_ui_animation_active, tick_animations, use_ui_transition_cubic};

@@ -7322,7 +7322,7 @@ mod tests {
         reset_registered_anchors();
     }
 
-    #[cfg(feature = "svg")]
+    #[cfg(feature = "gallery-tests")]
     #[test]
     fn gallery_nested_folder_preview_keeps_files_inside_auto_height_cards() {
         use crate::core::tree::{LayoutStatus, ReactiveSyncCollect};

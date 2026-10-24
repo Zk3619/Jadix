@@ -333,8 +333,17 @@ fn latest_enter_and_exit_rebuild_one_ordered_composite() {
         );
         // Translated composites replay in painter order to restore their old
         // rounded fringe and caption together. Only the settled pill is Node.
-        let translated = prev.iter().any(|(k, old)| {
-            *k == key && ((old[0] - bounds[0]).abs() > 0.01 || (old[1] - bounds[1]).abs() > 0.01)
+        let current = last_present_visual_slots(
+            &frame.node_paints,
+            &frame.instances,
+            &[],
+            &frame.text_nodes,
+            &[],
+        );
+        let translated = prev.iter().any(|(key, old)| {
+            current.iter().any(|(now_key, now)| {
+                key == now_key && ((old[0] - now[0]).abs() > 0.01 || (old[1] - now[1]).abs() > 0.01)
+            })
         });
         let expect = if alpha < 0.99 || translated {
             PaintDirtyKind::Region
@@ -363,9 +372,8 @@ fn latest_enter_and_exit_rebuild_one_ordered_composite() {
             .expect("settled plate");
             assert!(
                 under.iter().all(|t| {
-                    t.clip_bounds.is_none_or(|c| {
-                        crate::app::damage::intersect_rects(c, plate).is_none()
-                    })
+                    t.clip_bounds
+                        .is_none_or(|c| crate::app::damage::intersect_rects(c, plate).is_none())
                 }),
                 "opaque plate must not recapture wrapping inside the chip, plate={plate:?} clips={:?}",
                 under.iter().map(|t| t.clip_bounds).collect::<Vec<_>>()
@@ -398,13 +406,7 @@ fn latest_enter_and_exit_rebuild_one_ordered_composite() {
                 "hide must erase previous ink completely: cover={d:?}, previous={old:?}"
             );
         }
-        prev = last_present_visual_slots(
-            &frame.node_paints,
-            &frame.instances,
-            &[],
-            &frame.text_nodes,
-            &[],
-        );
+        prev = current;
     }
 }
 
@@ -719,6 +721,7 @@ fn node_glyph_capture_preserves_both_sides_of_portal() {
 }
 
 #[test]
+#[cfg(feature = "animation-base")]
 fn paused_and_cancelled_players_stop_pumping_and_resume_rearms() {
     use crate::style::*;
     let anim = Animation::from_effect(KeyframeEffect::named("spin").duration(1000.0));

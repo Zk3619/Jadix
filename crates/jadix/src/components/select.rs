@@ -1561,6 +1561,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn content_keeps_panel_tid_while_exiting() {
         use crate::app::portal_overlay::{clear_overlay_stack, OverlayKind, OverlayMode};
         use crate::core::reactivity::Signal;

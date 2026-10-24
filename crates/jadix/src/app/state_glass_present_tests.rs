@@ -1,3 +1,5 @@
+#![cfg(all(feature = "gallery-tests", feature = "backend-dx12"))]
+
 use super::*;
 use crate::renderer::offscreen::RgbaImage;
 use std::{cell::RefCell, rc::Rc};

@@ -5,12 +5,14 @@ edition.workspace = true
 publish = false
 
 [features]
-dx11 = ["jadix/backend-dx11", "dep:wgpu-hal", "wgpu-hal/dx11"]
-dx11-angle = ["jadix/backend-dx11-angle"]
+backend-dx11-native = ["jadix/backend-dx11-native", "dep:wgpu-hal", "wgpu-hal/dx11"]
+backend-dx11-angle = ["jadix/backend-dx11-angle"]
+dx11 = ["backend-dx11-native"]
+dx11-angle = ["backend-dx11-angle"]
 
 [dependencies]
 wgpu-hal = { version = "30", default-features = false, optional = true }
-jadix = { workspace = true, features = ["a11y", "performance"] }
+jadix = { workspace = true, features = ["backend-dx12", "backend-gles", "backend-metal", "theme-shadcn", "a11y", "performance"] }
 winit.workspace = true
 serde_json.workspace = true
 wgpu.workspace = true

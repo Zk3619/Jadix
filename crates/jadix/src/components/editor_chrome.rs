@@ -5,8 +5,9 @@ use crate::{
     },
     utils::text_field,
 };
+use std::cell::RefCell;
+#[cfg(feature = "syntax-highlighting")]
 use std::{
-    cell::RefCell,
     rc::Rc,
     sync::{
         atomic::{AtomicU64, Ordering},

@@ -19,11 +19,12 @@ find-msvc-tools = { workspace = true }
 
 [dependencies]
 # Keep lucide embedded so Icon PUA glyphs never tofu when cwd ≠ workspace.
-jadix = { workspace = true, features = [
+jadix = { workspace = true, features = ["backend-dx12", "backend-gles", "backend-metal", "theme-shadcn",
     "bundled-lucide",
     "lucide-animated",
     "svg",
     "text-undo",
+    "themes", "animation-path", "code", "scale-preview", "windows-dcomp", "document-editing", "document-diff", "document-science", "file-dialog",
 ] }
 jadix_window_state = { workspace = true, features = ["jadix"] }
 log = { workspace = true }

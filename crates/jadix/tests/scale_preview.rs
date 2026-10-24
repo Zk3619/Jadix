@@ -1,3 +1,5 @@
+#![cfg(feature = "scale-preview")]
+
 use jadix::components::scale_preview;
 use jadix::core::reactivity::create_root;
 use jadix::core::tree::{Element, LayoutTree};

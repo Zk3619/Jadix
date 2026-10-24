@@ -90,68 +90,68 @@ pub(crate) fn apply_created_window(
 }
 
 pub(crate) fn try_init_custom_glass(window: &dyn Window, options: &WindowOptions) -> bool {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "windows-dwm"))]
     {
         os::windows::glass::try_init_custom(window, options)
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(all(target_os = "windows", feature = "windows-dwm")))]
     {
         let _ = (window, options);
         false
     }
 }
 
-#[cfg(all(windows, feature = "backend-dx12"))]
+#[cfg(all(windows, feature = "windows-dcomp"))]
 pub(crate) fn custom_glass_surface_handle(window: &dyn Window) -> Option<*mut std::ffi::c_void> {
     os::windows::glass::composition_surface_handle(window)
 }
 
 pub(crate) fn glass_detach(window: &dyn Window) {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "windows-dwm"))]
     {
         os::windows::glass::detach_window(window);
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(all(target_os = "windows", feature = "windows-dwm")))]
     {
         let _ = window;
     }
 }
 
 pub(crate) fn glass_on_focus(window: &dyn Window, focused: bool) {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "windows-dwm"))]
     {
         os::windows::glass::on_focus(window, focused);
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(all(target_os = "windows", feature = "windows-dwm")))]
     {
         let _ = (window, focused);
     }
 }
 
 pub(crate) fn glass_on_shown(window: &dyn Window) {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "windows-dwm"))]
     {
         os::windows::glass::on_shown(window);
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(all(target_os = "windows", feature = "windows-dwm")))]
     {
         let _ = window;
     }
 }
 
 pub(crate) fn glass_on_moved(window: &dyn Window) {
-    #[cfg(target_os = "windows")]
+    #[cfg(all(target_os = "windows", feature = "windows-dwm"))]
     {
         os::windows::glass::on_moved(window);
     }
-    #[cfg(not(target_os = "windows"))]
+    #[cfg(not(all(target_os = "windows", feature = "windows-dwm")))]
     {
         let _ = window;
     }
 }
 
 pub(crate) fn glass_sync_jadix_theme() {
-    #[cfg(all(target_os = "windows", feature = "backend-dx12"))]
+    #[cfg(all(target_os = "windows", feature = "windows-dcomp"))]
     {
         os::windows::glass::sync_jadix_theme();
         crate::app::runtime::request_redraw_all();
@@ -159,12 +159,12 @@ pub(crate) fn glass_sync_jadix_theme() {
 }
 
 pub(crate) fn glass_on_os_theme(os_dark: bool) {
-    #[cfg(all(target_os = "windows", feature = "backend-dx12"))]
+    #[cfg(all(target_os = "windows", feature = "windows-dcomp"))]
     {
         os::windows::glass::set_os_dark_all(os_dark);
         crate::app::runtime::request_redraw_all();
     }
-    #[cfg(not(all(target_os = "windows", feature = "backend-dx12")))]
+    #[cfg(not(all(target_os = "windows", feature = "windows-dcomp")))]
     {
         let _ = os_dark;
     }

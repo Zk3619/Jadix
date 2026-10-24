@@ -2724,6 +2724,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn overlay_reaction_chip_hover_scale_tweens_from_rest() {
         // +N hoist builds chips under the pointer (or reveals a wrapped row onto it).
         // First live `:hover` captures rest as the transition baseline *before*
@@ -3315,6 +3316,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn collapsed_reaction_chip_hover_scale_mid_tween_is_not_square_cropped() {
         // Screenshot is the 150ms tween: yellow 😮 AABB-cropped on all four sides,
         // gray capsule intact. Full `build_and_layout` FACE/mid-tween stayed green

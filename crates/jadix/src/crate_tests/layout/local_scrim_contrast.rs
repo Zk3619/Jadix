@@ -467,6 +467,15 @@ fn gallery_real_scroll_area_capture_includes_yellow_glyphon() {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn gallery_yellow_glyphon_prepare_is_not_culled() {
     use crate::renderer::offscreen::OffscreenGpu;
     use crate::renderer::prepare_text::prepare_text_frame;
@@ -974,6 +983,15 @@ fn gallery_yellow_glyphon_prepare_is_not_culled() {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn gallery_capture_interleaved_prefix_bands_keep_yellow() {
     use crate::renderer::offscreen::OffscreenGpu;
     use crate::renderer::prepare_text::prepare_text_frame;
@@ -1187,6 +1205,15 @@ fn pixel_is_yellow_smear(p: [u8; 4]) -> bool {
 /// `Rgba8UnormSrgb` — if glyphon mask glyphs cannot write that offscreen format,
 /// frost samples host blue only. One variable: format.
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn gallery_glyphon_draws_to_bgra_offscreen_rt() {
     use crate::renderer::offscreen::OffscreenGpu;
     use crate::renderer::prepare_text::prepare_text_frame;
@@ -1357,6 +1384,15 @@ fn count_yellow_box(
 /// AppState: prepare once, `render` into the capture encoder, submit, then `render`
 /// the same glyphon buffers into the surface pass. Isolated tests only rendered once.
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn gallery_glyphon_second_render_does_not_empty_first_capture() {
     use crate::renderer::offscreen::OffscreenGpu;
     use crate::renderer::prepare_text::prepare_text_frame;
@@ -1522,6 +1558,15 @@ fn gallery_glyphon_second_render_does_not_empty_first_capture() {
 
 /// Physical pixels in Gallery are `logical * ui_scale`. Tests used scale=1.
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn gallery_glyphon_capture_keeps_yellow_at_ui_scale_1_5() {
     use crate::renderer::offscreen::OffscreenGpu;
     use crate::renderer::prepare_text::prepare_text_frame;

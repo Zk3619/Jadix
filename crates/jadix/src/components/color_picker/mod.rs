@@ -1780,6 +1780,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn nested_format_select_first_open_seeds_enter_and_encodes() {
         use std::cell::RefCell;
         use std::rc::Rc;
@@ -2015,6 +2016,7 @@ mod tests {
     /// Accordion-up already shrank the format-Select chrome; HEX/RGB labels must not
     /// keep painting below that clip (leftover ink over the swatch grid).
     #[test]
+    #[cfg(feature = "animation-base")]
     fn nested_format_select_exit_clips_labels_to_accordion() {
         check_nested_format_select_exit(false, false);
     }
@@ -2397,20 +2399,24 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn nested_format_select_upward_exit_keeps_bottom_anchored() {
         check_nested_format_select_exit(true, false);
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn nested_format_select_alpha_change_exit_tracks_trigger() {
         check_nested_format_select_exit(true, true);
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn nested_format_select_downward_alpha_change_exit_tracks_trigger() {
         check_nested_format_select_exit(false, true);
     }
 
+    #[cfg(feature = "animation-base")]
     fn check_nested_format_select_exit(upward: bool, change_format: bool) {
         use std::cell::RefCell;
         use std::rc::Rc;

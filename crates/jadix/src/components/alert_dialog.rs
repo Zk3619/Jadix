@@ -1341,6 +1341,7 @@ mod tests {
         el.children.iter().find_map(|c| find_tid(c, tid))
     }
 
+    #[cfg(feature = "animation-base")]
     fn overlay_opacity(el: &Element, tid: &str) -> Option<f32> {
         if el.template_id.as_deref() == Some(tid) {
             return Some(el.style.opacity);
@@ -1348,6 +1349,7 @@ mod tests {
         el.children.iter().find_map(|c| overlay_opacity(c, tid))
     }
 
+    #[cfg(feature = "animation-base")]
     fn overlay_has_fade_out(el: &Element, tid: &str) -> bool {
         if el.template_id.as_deref() == Some(tid) {
             return el.style.animations.iter().any(|a| a.name == "fade-out-0");
@@ -1355,6 +1357,7 @@ mod tests {
         el.children.iter().any(|c| overlay_has_fade_out(c, tid))
     }
 
+    #[cfg(feature = "animation-base")]
     fn find_text_color(el: &Element, needle: &str) -> Option<[u8; 4]> {
         if el.text.as_deref() == Some(needle) {
             return el.text_style.color;
@@ -1363,6 +1366,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn alert_dialog_action_click_keeps_exit_fade_after_rebuild() {
         use std::cell::RefCell;
         use std::rc::Rc;
@@ -1470,6 +1474,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn alert_dialog_action_click_keeps_description_variant_color() {
         use std::cell::RefCell;
         use std::rc::Rc;
@@ -1595,6 +1600,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn alert_dialog_open_in_wrap_row_keeps_neighbor_gap_and_enter_fade() {
         // Gallery 1c-ad unpacks Trigger+Content into a wrap HStack. A 0×0 static
         // island host between buttons doubles `gap`; opening makes it absolute so
@@ -1800,6 +1806,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn alert_dialog_open_must_become_visible_across_layout_frames() {
         use std::cell::RefCell;
         use std::rc::Rc;
@@ -2211,6 +2218,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn alert_dialog_info_ok_click_must_keep_exit_mid_across_layout_frames() {
         use std::cell::RefCell;
         use std::rc::Rc;

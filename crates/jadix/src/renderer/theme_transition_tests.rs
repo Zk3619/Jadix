@@ -141,6 +141,15 @@ fn check_crossfade(gpu: &OffscreenGpu) {
 }
 
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn crossfade_samples_pixels_and_reverses_without_snapping() {
     let Some(gpu) = OffscreenGpu::new() else {
         return;
@@ -153,6 +162,15 @@ fn crossfade_samples_pixels_and_reverses_without_snapping() {
 
 #[cfg(windows)]
 #[test]
+#[cfg_attr(
+    not(any(
+        all(windows, feature = "backend-dx12"),
+        all(target_vendor = "apple", feature = "backend-metal"),
+        feature = "backend-gles",
+        feature = "backend-vulkan",
+    )),
+    ignore = "requires a wgpu backend for this target"
+)]
 fn compositor_receives_display_premultiplied_pixels_through_theme_fades() {
     let gpu = OffscreenGpu::with_backends(wgpu::Backends::DX12).expect("DX12 adapter");
     let previous_theme = get_theme();

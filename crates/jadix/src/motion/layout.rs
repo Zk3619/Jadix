@@ -124,7 +124,7 @@ impl LayoutMotion {
             return;
         }
         let mut state = self.0.borrow_mut();
-        let reduced = crate::style::prefers_reduced_motion();
+        let reduced = !cfg!(feature = "animation-ex") || crate::style::prefers_reduced_motion();
         for (index, (&value, channel)) in bounds.iter().zip(&state.channels).enumerate() {
             let animate = state.mode.animates(index);
             let changed = state
@@ -172,6 +172,7 @@ impl LayoutMotion {
         for (index, channel) in state.channels.iter().enumerate() {
             if valid
                 && state.mode.animates(index)
+                && cfg!(feature = "animation-ex")
                 && !crate::style::prefers_reduced_motion()
                 && (initial[index] - bounds[index]).abs() > 1e-4
             {
@@ -363,7 +364,9 @@ impl LayoutRegistry {
                 (context.scale[axis] * positive_scale(scale[axis])).clamp(0.01, 8.0)
             });
             let top_left: [f32; 2] = std::array::from_fn(|axis| {
-                base[axis] + translate[axis] + bounds[axis + 2] * element.style.translate_pct[axis] * context.scale[axis]
+                base[axis]
+                    + translate[axis]
+                    + bounds[axis + 2] * element.style.translate_pct[axis] * context.scale[axis]
             });
             let visual: [f32; 2] = std::array::from_fn(|axis| {
                 top_left[axis] + origin[axis] * (1.0 - total_scale[axis])
@@ -389,13 +392,17 @@ impl LayoutRegistry {
                 );
             }
             let child_context = ProjectionContext {
-                top_left: std::array::from_fn(|axis| top_left[axis] - element.scroll_offset[axis] * total_scale[axis]),
+                top_left: std::array::from_fn(|axis| {
+                    top_left[axis] - element.scroll_offset[axis] * total_scale[axis]
+                }),
                 origin,
                 scale: total_scale,
                 author_scale: std::array::from_fn(|axis| {
                     context.author_scale[axis] * positive_scale(element.style.scale[axis])
                 }),
-                visual: std::array::from_fn(|axis| visual[axis] - element.scroll_offset[axis] * total_scale[axis]),
+                visual: std::array::from_fn(|axis| {
+                    visual[axis] - element.scroll_offset[axis] * total_scale[axis]
+                }),
                 axis_aligned,
             };
             let parent_node = element.layout_node;

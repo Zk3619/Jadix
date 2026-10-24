@@ -659,6 +659,7 @@ mod tests {
     use crate::style::animation::{tick_element_animations, AnimationSnapshot};
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn play_pause_current_time_and_finished_signal() {
         let anim = Animation::from_effect(KeyframeEffect::named("spin").duration(1000.0));
         let mut style = crate::style::Style::default();
@@ -744,6 +745,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn keyframe_objects_offset_and_default_duration_zero() {
         let anim = Animation::animate(
             vec![
@@ -769,6 +771,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "animation-base")]
     fn negative_rate_rewinds_current_time() {
         let anim = Animation::from_effect(KeyframeEffect::named("spin").duration(1000.0));
         let mut style = crate::style::Style::default();

@@ -7,7 +7,7 @@ use std::{
 };
 use winit::{event::WindowEvent, window::Window};
 
-#[cfg(all(windows, feature = "dx11-angle"))]
+#[cfg(all(windows, feature = "backend-dx11-angle"))]
 #[path = "../../../scripts/gpui-compare/angle_identity.rs"]
 mod angle_identity;
 #[path = "../../../scripts/gpui-compare/gpu_identity.rs"]
@@ -34,15 +34,15 @@ impl jadix::app::WindowLifecycleHook for Telemetry {
         surface: &wgpu::SurfaceConfiguration,
     ) {
         let info = adapter.get_info();
-        #[cfg(all(windows, feature = "dx11-angle"))]
+        #[cfg(all(windows, feature = "backend-dx11-angle"))]
         let dxgi = if info.backend == wgpu::Backend::Gl {
             angle_identity::selected_device(adapter)
         } else {
             gpu_identity::dxgi_identity(&info.name)
         };
-        #[cfg(not(all(windows, feature = "dx11-angle")))]
+        #[cfg(not(all(windows, feature = "backend-dx11-angle")))]
         let dxgi = gpu_identity::dxgi_identity(&info.name);
-        #[cfg(all(windows, feature = "dx11"))]
+        #[cfg(all(windows, feature = "backend-dx11-native"))]
         let dxgi = if info.backend == wgpu::Backend::Dx11 {
             let hal =
                 unsafe { adapter.as_hal::<wgpu_hal::dx11::Api>() }.expect("native DX11 adapter");
@@ -54,7 +54,7 @@ impl jadix::app::WindowLifecycleHook for Telemetry {
         let adapter = info;
         *self.renderer.lock().unwrap() = Some(serde_json::json!({
             "backend": format!("{:?}", adapter.backend),
-            "implementation": if cfg!(feature = "dx11-angle") && adapter.backend == wgpu::Backend::Gl { "angle-d3d11" } else if adapter.backend == wgpu::Backend::Dx11 {"native-wgpu-hal-d3d11"} else { "native" },
+            "implementation": if cfg!(feature = "backend-dx11-angle") && adapter.backend == wgpu::Backend::Gl { "angle-d3d11" } else if adapter.backend == wgpu::Backend::Dx11 {"native-wgpu-hal-d3d11"} else { "native" },
             "device_name": adapter.name, "vendor_id": adapter.vendor, "device_id": adapter.device,
             "device_type": format!("{:?}", adapter.device_type),
             "driver": adapter.driver, "driver_info": adapter.driver_info,

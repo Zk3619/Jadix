@@ -6,5 +6,5 @@ license.workspace = true
 publish = false
 
 [dependencies]
-jadix = { workspace = true }
+jadix = { workspace = true, features = ["backend-dx12", "backend-gles", "backend-metal", "theme-shadcn"] }
 winit = { workspace = true }

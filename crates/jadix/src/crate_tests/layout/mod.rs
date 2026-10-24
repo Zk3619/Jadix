@@ -31,7 +31,7 @@ mod scrollbar_thumb_overlay;
 mod showcase_collapse;
 mod sidebar_content_footer_clip;
 mod sidebar_content_scrollbar;
-#[cfg(feature = "svg")]
+#[cfg(feature = "gallery-tests")]
 mod sidebar_forms_hover;
 mod sidebar_header_footer_text;
 mod sidebar_scroll_resize;

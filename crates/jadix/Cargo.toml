@@ -24,9 +24,32 @@ include = [
 ]
 
 [features]
-# Lean by default: no resvg. Theme/stylesheet files are always TOML (`toml` crate).
-default = ["backend-dx12", "native-materials"]
-native-materials = ["dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit"]
+# Capability inventory and core/optional boundaries: docs/FEATURES.md.
+default = ["backend-dx12", "backend-gles", "backend-metal", "window-materials", "theme-shadcn", "animation-base"]
+theme-shadcn = []
+theme-fluent = []
+theme-material3 = []
+theme-liquid-glass = []
+themes = ["theme-shadcn", "theme-fluent", "theme-material3", "theme-liquid-glass"]
+animation-base = []
+animation-ex = ["animation-base"]
+animation = ["animation-base", "animation-ex"]
+animation-path = ["animation-ex"]
+code = []
+code-lsp = []
+markdown = ["dep:pulldown-cmark"]
+document = ["markdown"]
+document-editing = ["document"]
+document-diff = ["dep:similar"]
+document-science = ["document"]
+file-dialog = ["dep:rfd"]
+gallery-tests = ["svg", "themes", "animation-path", "code", "scale-preview", "windows-dcomp", "document-editing", "document-diff", "document-science", "lucide-animated", "file-dialog"]
+window-materials = ["windows-dwm", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit"]
+windows-dwm = ["windows-sys/Win32_Graphics_Dwm", "windows-sys/Win32_UI_Controls"]
+windows-composition = ["backend-dx12", "dep:windows", "dep:windows-core", "dep:windows-numerics", "dep:windows-collections"]
+windows-dcomp = ["window-materials", "windows-composition"]
+native-materials = ["window-materials"]
+scale-preview = []
 # Framework performance sampling capability (enabled by Gallery for its diagnostics UI).
 # Applications that do not need performance telemetry leave this feature disabled.
 performance = []
@@ -39,11 +62,11 @@ i18n = ["dep:icu", "dep:icu_provider_blob", "dep:writeable"]
 # Enable: cargo test -p jadix --lib --features a11y
 # `accesskit_winit` still tracks winit 0.30. The OS hook is in-tree
 # (`a11y::winit_adapter`) with a Windows subclass and OHOS native ArkUI provider.
-a11y = ["dep:accesskit", "accesskit_windows", "dep:jadix_accesskit_ohos"]
+a11y = ["dep:accesskit", "dep:accesskit_windows", "dep:jadix_accesskit_ohos"]
 # Dev-time TCP hot reload (`jadix_hot_reload_cli`). Requires debug build.
 hot-reload = []
 # pqoqubbw animated Lucide recipes — runtime JSON from assets/lucide_animated.json.
-lucide-animated = []
+lucide-animated = ["animation-base"]
 # Optional runtime logger: console (stderr) + optional file via JADIX_LOG_FILE (env_logger).
 runtime-logging = ["dep:env_logger"]
 # Optional structured spans on hot paths (layout / reconcile). Off by default.
@@ -52,20 +75,23 @@ tracing = ["dep:tracing"]
 system-tray = ["dep:tray-icon"]
 # OS menu bars on Windows/macOS. Linux winit windows are not GTK windows.
 native-menu = ["dep:muda"]
-webview = ["backend-dx12", "dep:webview2-com", "dep:wry", "dep:gtk", "dep:jni", "dep:objc2", "dep:objc2-foundation", "dep:html5ever", "dep:base64"]
+webview = ["windows-composition", "dep:webview2-com", "dep:wry", "dep:gtk", "dep:jni", "dep:objc2", "dep:objc2-foundation", "dep:html5ever", "dep:base64"]
 # Windows defaults to D3D12 for predictable presentation and 4K frame throughput.
 # GL remains the fallback; lean consumers can disable default features.
 # This adds native backend code and driver memory (ADR-3, 2026-10-16 update).
-backend-dx12 = ["wgpu/dx12", "dep:windows", "dep:windows-core", "dep:windows-numerics", "dep:windows-collections"]
+backend-dx12 = ["wgpu/dx12"]
 # Optional Vulkan backend (kept off by default to avoid multi-backend bloat on Windows).
 backend-vulkan = ["wgpu/vulkan"]
+backend-gles = ["wgpu/gles"]
+backend-metal = ["wgpu/metal"]
 # Translated D3D11: WGSL -> GLSL -> ANGLE -> hardware D3D11.
 # Native graphics HAL and ANGLE are independently selectable.
 # Experimental: native-window color and sustained presentation are not accepted yet.
 
 # Experimental native SM5 graphics subset; see vendor/wgpu-hal/JADIX_DX11_PATCH.md.
-backend-dx11 = ["dep:wgpu-hal", "wgpu-hal/dx11"]
-backend-dx11-angle = ["dep:wgpu-hal", "wgpu-hal/gles-angle"]
+backend-dx11-native = ["dep:wgpu-hal", "wgpu-hal/dx11"]
+backend-dx11-angle = ["backend-gles", "dep:wgpu-hal", "wgpu-hal/gles-angle"]
+backend-dx11 = ["backend-dx11-native"]
 # Embed lucide.ttf (~0.8MB). Prefer shipping assets/ beside the exe instead.
 bundled-lucide = []
 # Embed large fonts into the binary (single-file distro; dramatically increases size).
@@ -81,7 +107,7 @@ fonts-emoji = []
 # Public `<svg>` / SMIL / resvg raster (Image · CSS cursor · AnimatedIcon frames) + MorphIcon.
 # Not in default. Path kernel (Chart, ProgressCircle) stays without this feature.
 svg = ["dep:resvg"]
-document-math = ["svg", "dep:latex-rust"]
+document-math = ["document", "svg", "dep:latex-rust"]
 syntax-highlighting = ["dep:syntect"]
 # Twemoji SVG via the same resvg (PNG fallback remains without it).
 emoji-svg = ["svg"]
@@ -126,7 +152,7 @@ compute = []
 image-stream = []
 # B1 runtime Inspector: Elements pick/highlight + Reactivity graph + style live edit.
 # Opt-in; not in default release surface (see docs/ops/devtools.md).
-devtools = []
+devtools = ["scale-preview"]
 # Allow `<Image src="https://…">` / Avatar / Icon to call an app-installed
 # [`RemoteAssetFetcher`] (no HTTP crate). See docs/ops/remote_asset.md.
 remote-asset = []
@@ -173,8 +199,8 @@ swash = { workspace = true }
 ttf-parser = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-linebreak = { workspace = true }
-similar = { workspace = true }
-pulldown-cmark = { workspace = true, features = ["html"] }
+similar = { workspace = true, optional = true }
+pulldown-cmark = { workspace = true, optional = true, features = ["html"] }
 syntect = { version = "5.3", optional = true, default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
 html5ever = { version = "0.39", optional = true }
 base64 = { version = "0.22", optional = true }
@@ -215,14 +241,12 @@ webview2-com = { version = "0.39.1", optional = true }
 accesskit_windows = { version = "0.34.0", optional = true }
 windows-sys = { workspace = true, features = [
     "Win32_Foundation",
-    "Win32_Graphics_Dwm",
     "Win32_Graphics_Gdi",
     "Win32_Security_Cryptography",
     "Win32_System_Diagnostics_ToolHelp",
     "Win32_System_LibraryLoader",
     "Win32_System_ProcessStatus",
     "Win32_System_Threading",
-    "Win32_UI_Controls",
     "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_Shell",
@@ -260,6 +284,14 @@ ropey = { workspace = true }
 name = "layout_baseline"
 harness = false
 
+[[example]]
+name = "document_editor"
+required-features = ["document-editing"]
+
+[[example]]
+name = "text_documents"
+required-features = ["document-diff"]
+
 [target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
 tray-icon = { workspace = true, optional = true }
 
@@ -276,4 +308,4 @@ objc2-foundation = { workspace = true, optional = true, features = ["NSGeometry"
 
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
-rfd = { workspace = true }
+rfd = { workspace = true, optional = true }

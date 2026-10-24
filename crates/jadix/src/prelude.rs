@@ -103,19 +103,18 @@ pub use crate::app::pointer_events::{MouseEvent, PointerEvent};
 pub use crate::app::props::{children, resolve_children, Children, ChildrenAccessor, MergeProps};
 pub use crate::app::reactive::immediate_region;
 pub use crate::app::reactive::{for_keyed_reactive, index_reactive};
-pub use crate::app::with_ui_build_stack;
 pub use crate::app::tasks::{
     CancellationToken, EventSendError, EventSink, TaskError, TaskErrorKind, TaskHandle, TaskScope,
 };
+pub use crate::app::with_ui_build_stack;
 pub use crate::app::{
-    app, create_async_resource, create_resource, create_resource_on, error_boundary, launch,
-    page_scroll_locked, parse_scroll_freeze,
-    set_page_scroll_locked, set_scroll_freeze, suspense, throw_error, throw_resource_error,
-    AppBuilder, AppConfig, AppIcon, InstanceLaunch, InstancePolicy, Resource, ResourceState,
-    ScrollFreeze, WindowBackdrop, WindowOptions,
-    current_window, open_secondary_window_with, set_second_instance_handler,
-    set_window_fullscreen, toggle_window_fullscreen, window_is_fullscreen, windows, WindowHandle,
-    WindowClosed, WindowSession,
+    app, create_async_resource, create_resource, create_resource_on, current_window,
+    error_boundary, launch, open_secondary_window_with, page_scroll_locked, parse_scroll_freeze,
+    set_page_scroll_locked, set_scroll_freeze, set_second_instance_handler, set_window_fullscreen,
+    suspense, throw_error, throw_resource_error, toggle_window_fullscreen, window_is_fullscreen,
+    windows, AppBuilder, AppConfig, AppIcon, InstanceLaunch, InstancePolicy, Resource,
+    ResourceState, ScrollFreeze, WindowBackdrop, WindowClosed, WindowHandle, WindowOptions,
+    WindowSession,
 };
 pub use crate::core::reactivity::{
     component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
@@ -139,6 +138,14 @@ pub use crate::{
 // 布局 / 叶子原语（Builder 面常用）
 // ---------------------------------------------------------------------------
 
+pub use crate::components::media_player::*;
+pub use crate::media::playback::*;
+#[cfg(feature = "net")]
+pub use crate::net::*;
+pub use crate::primitives::media::{
+    audio, video, Audio, AudioBuilder, AudioProps, MediaAspectRatio, MediaFit, MediaRotation,
+    Video, VideoBuilder, VideoProps,
+};
 #[cfg(feature = "svg")]
 pub use crate::primitives::{
     animate, animate_motion, animate_transform, circle, clip_path, defs, desc, ellipse, fe_blend,
@@ -153,17 +160,16 @@ pub use crate::primitives::{
     Portal, PortalProps, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial,
     ShaderBuilder, TextBuilder,
 };
-pub use crate::primitives::media::{audio, video, Audio, AudioBuilder, AudioProps, MediaAspectRatio, MediaFit, MediaRotation, Video, VideoBuilder, VideoProps};
-pub use crate::media::playback::*;
-#[cfg(feature = "net")]
-pub use crate::net::*;
-pub use crate::components::media_player::*;
 
 pub use crate::layout::dimension::{css_root_font_size_px, em, px, rem};
+#[cfg(feature = "animation-path")]
 pub use crate::motion::{
-    bind_path_follow, bind_path_morph, bind_path_reveal, use_layout_motion, use_motion,
-    LayoutAnimation, LayoutMotion, Motion, MotionState, MotionTarget, PathMorph, PathMorphError,
-    PathSample, PreparedPath,
+    bind_path_follow, bind_path_morph, bind_path_reveal, PathMorph, PathMorphError, PathSample,
+    PreparedPath,
+};
+#[cfg(feature = "animation-ex")]
+pub use crate::motion::{
+    use_layout_motion, use_motion, LayoutAnimation, LayoutMotion, Motion, MotionState, MotionTarget,
 };
 pub use crate::utils::font::{
     default_ui_mono_family_list, default_ui_sans_family_list, default_ui_serif_family_list,
@@ -175,11 +181,15 @@ pub use crate::utils::{
     morph_handle, morph_icon, morph_seek, morph_set, morph_to, morph_to_with, svg_to_icon,
     IconInput, MorphHandle, MorphIcon, MorphIconBuilder, MorphPlan,
 };
+#[cfg(feature = "lucide-animated")]
 pub use crate::utils::{
-    animated_icon, animated_icon_names, animated_icon_recipe, clear_icon_provider,
-    clear_registered_icons, icon_named, icon_src, register_icon, set_icon_provider,
-    start_animated_icon, stop_animated_icon, unregister_icon, with_icon_animations, AnimatedIcon,
-    AnimatedIconBuilder, IconProvider, IconSource,
+    animated_icon, animated_icon_names, animated_icon_recipe, start_animated_icon,
+    stop_animated_icon, AnimatedIcon, AnimatedIconBuilder,
+};
+pub use crate::utils::{
+    clear_icon_provider, clear_registered_icons, icon_named, icon_src, register_icon,
+    set_icon_provider, sync_icon_hover, unregister_icon, with_icon_animations, IconProvider,
+    IconSource,
 };
 
 // ---------------------------------------------------------------------------
@@ -192,38 +202,52 @@ pub use crate::style::{
     focus_ring_width, get_theme, install_theme_overrides, is_dark_theme,
     load_and_install_theme_overrides, load_stylesheet, load_theme_overrides, parse_stylesheet,
     parse_theme_overrides_str, register_stylesheet, reload_stylesheets, set_focus_ring_style,
-    set_focus_ring_width, set_theme_mode, set_theme_preference, set_theme_transition_config, theme_mode,
-    theme_preference,
+    set_focus_ring_width, set_theme_mode, set_theme_preference, set_theme_preset,
+    set_theme_transition_config, theme_mode, theme_overrides, theme_preference, theme_preset,
     theme_transition_config, toggle_theme_mode, watch_stylesheets, ClassPart, DesignTokensPatch,
-    FocusRingStyle, IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent, IntoOverflow,
-    IntoPaintColor, IntoTextColor, LineStyle, MatchedStyleRule, Selector, StyleRule, Stylesheet,
-    StylesheetError, TextAlign, TextOverflow, Theme, ThemeMode, ThemePreference, ThemeOverrideError, ThemeOverrides,
-    ThemeTransitionConfig, ThemePreset, ThemeStyles, GlassMaterial, set_theme_preset, theme_preset, theme_overrides, TRANSPARENT,
+    FocusRingStyle, GlassMaterial, IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent,
+    IntoOverflow, IntoPaintColor, IntoTextColor, LineStyle, MatchedStyleRule, Selector, StyleRule,
+    Stylesheet, StylesheetError, TextAlign, TextOverflow, Theme, ThemeMode, ThemeOverrideError,
+    ThemeOverrides, ThemePreference, ThemePreset, ThemeStyles, ThemeTransitionConfig, TRANSPARENT,
 };
 
 // ---------------------------------------------------------------------------
 // 产品组件：标签 + Builder/`fn`（低层 popup 除外）
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "document-diff")]
+pub use crate::components::diff_view::{diff_view, DiffView, DiffViewBuilder, DiffViewProps};
+pub use crate::components::dock::{DockLayout, DockOrientation, DockPlacement, DockState, DockTab};
+#[cfg(feature = "document-editing")]
+pub use crate::components::document_editor::{
+    document_editor, DocumentEditor, DocumentEditorBuilder, DocumentEditorProps,
+};
+#[cfg(feature = "document")]
+pub use crate::components::document_view::{
+    document_view, DocumentBlockRenderer, DocumentView, DocumentViewBuilder, DocumentViewProps,
+};
+#[cfg(feature = "webview")]
+pub use crate::components::html_document::{html_document_editor, html_document_view};
+pub use crate::components::math_view::{
+    chemistry_view, math_view, ChemistryView, ChemistryViewProps, MathView, MathViewBuilder,
+    MathViewProps,
+};
+#[cfg(feature = "document-science")]
+pub use crate::components::molecule_view::{
+    molecule_view, MoleculeCamera, MoleculeView, MoleculeViewBuilder, MoleculeViewProps,
+};
+#[cfg(feature = "scale-preview")]
 pub use crate::components::scale_preview::{
     scale_preview, ScalePreview, ScalePreviewBuilder, ScalePreviewProps,
 };
-pub use crate::components::dock::{DockLayout, DockOrientation, DockPlacement, DockState, DockTab};
+pub use crate::components::text_editor::{
+    text_editor, TextEditor, TextEditorBuilder, TextEditorProps,
+};
 pub use crate::components::text_view::{text_view, TextView, TextViewBuilder, TextViewProps};
-pub use crate::components::text_editor::{text_editor, TextEditor, TextEditorBuilder, TextEditorProps};
-pub use crate::components::document_view::{document_view, DocumentView, DocumentViewBuilder, DocumentViewProps, DocumentBlockRenderer};
-pub use crate::components::document_editor::{document_editor, DocumentEditor, DocumentEditorBuilder, DocumentEditorProps};
-pub use crate::components::math_view::{math_view, chemistry_view, MathView, ChemistryView, MathViewBuilder, MathViewProps, ChemistryViewProps};
-pub use crate::components::molecule_view::{molecule_view, MoleculeView, MoleculeViewProps, MoleculeViewBuilder, MoleculeCamera};
-pub use crate::text::{DocumentEditorState, DocumentEditorSnapshot, DocumentSelection, DocumentEditMode, DocumentMark, Molecule, MoleculeAtom, MoleculeBond, MoleculeData};
-pub use crate::text::{RichTextBlock, RichTextSpan};
-pub use crate::text::{Document, DocumentFormat, DocumentBlock, DocumentBlockKind, DocumentInline, DocumentInlineKind, DocumentInlineStyle, DocumentHeightIndex, DocumentScrollAnchor};
-pub use crate::components::diff_view::{diff_view, DiffView, DiffViewBuilder, DiffViewProps};
-pub use crate::text::{TextDocument, DiffDocument, DiffMode, DiffLineKind, DiffRow};
 #[cfg(feature = "webview")]
-pub use crate::components::webview::{webview, webview_html, webview_status, webview_supported, WebView, WebViewProps, WebViewStatus};
-#[cfg(feature = "webview")]
-pub use crate::components::html_document::{html_document_editor, html_document_view};
+pub use crate::components::webview::{
+    webview, webview_html, webview_status, webview_supported, WebView, WebViewProps, WebViewStatus,
+};
 pub use crate::components::{
     // Accordion（复合标签 + Builder）
     accordion,
@@ -1488,3 +1512,21 @@ pub use crate::components::{
     WindowDragRegionProps,
     TABSTRIP_FOCUS_PREFIX,
 };
+pub use crate::text::TextDocument;
+#[cfg(feature = "document-diff")]
+pub use crate::text::{DiffDocument, DiffLineKind, DiffMode, DiffRow};
+#[cfg(feature = "document")]
+pub use crate::text::{DocumentHeightIndex, DocumentScrollAnchor};
+#[cfg(feature = "markdown")]
+pub use crate::text::{
+    Document, DocumentBlock, DocumentBlockKind, DocumentFormat,
+    DocumentInline, DocumentInlineKind, DocumentInlineStyle,
+};
+#[cfg(feature = "document-editing")]
+pub use crate::text::{
+    DocumentEditMode, DocumentEditorSnapshot, DocumentEditorState, DocumentMark, DocumentSelection,
+};
+#[cfg(feature = "document-science")]
+pub use crate::text::{Molecule, MoleculeAtom, MoleculeBond, MoleculeData};
+#[cfg(feature = "markdown")]
+pub use crate::text::{RichTextBlock, RichTextSpan};
