@@ -1764,7 +1764,7 @@ pub(crate) fn avatar_showcase_group() -> Element {
         <VStack w="100%" min_w="0" gap="0.25rem">
             <Label font_weight="700" text_size="0.75rem">"AvatarGroup + Count"</Label>
             <Label w="100%" text_size="0.7rem" color="muted-foreground" leading="normal">
-                "悬停 / 点击 +N：原地向下盖住展开（expand_placement / expand_class / max_visible 可配）；Count 内可嵌隐藏头像参与展开列表；宽度不足时自动折叠"
+                "点击 +N：通过 Popover 展示全部头像，再次点击、点击外部或按 Esc 关闭（expand_placement / expand_class / max_visible 可配）；宽度不足时自动折叠"
             </Label>
             <AvatarGroup>
                 <Avatar>

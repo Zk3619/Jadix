@@ -1,5 +1,9 @@
 # Jadix - Rust Native UI Framework
 
+> **文档地位（2026-10-23）**：入口：[现状](development-docs/STATUS.md) · [执行台账](development-docs/AUTHORITY.md) · [实现方案](development-docs/plans/README.md) · [使用手册](docs/README.md)。当前先拆分框架／组件并完成实际基线发版，再做原生／混合／脚本增强；保持 Alpha。
+
+> **Splash 规划**：[跨平台开屏与启动交接](development-docs/plans/splash-startup.md) 提供 System 系统能力／Component 开屏组件的显式选择，覆盖 Windows／macOS／Linux X11 与 Wayland，以及 Android／iOS／OHOS 的宿主资源和接力；组件不替代移动必需系统屏。SP0 随 R0，SP1 起 R5 后实施，尚未实现，不新增当前发布门。
+
 > **GitHub Description (建议 / Suggested)**
 >
 > - 中文：基于 `winit + wgpu + taffy + glyphon` 的 Rust 原生 UI 框架，提供类 RSX 与纯 Rust Builder 双书写面、细粒度响应式与开发期热重载。
@@ -61,7 +65,7 @@ Jadix is a pure Rust-native UI workspace aimed at building a modern, composable,
 - `wgpu` - GPU rendering backend
 - `taffy` - layout engine (Flexbox/Grid)
 - `glyphon` / `cosmic-text` - text shaping and rendering
-- `accesskit` - accessibility tree (`a11y` feature; OS adapter pending winit 0.31)
+- `accesskit` - accessibility tree (`a11y` feature; Windows/OHOS bridges; other platform coverage remains limited)
 - `syn` / `quote` / `proc-macro2` - macro infrastructure
 
 Versions are pinned once in the root `[workspace.dependencies]` table. Member crates use `{ workspace = true }`. Adding or bumping a crate follows `development-docs/ops/crate_deps.md`; licenses and duplicate versions are gated by [`deny.toml`](deny.toml) (`cargo deny check licenses bans sources`).
@@ -413,7 +417,7 @@ fn FineGrainedDemo() -> jadix::core::tree::Element {
 
 主题支持 shadcn、Microsoft Fluent、Google MD3 和 Liquid Glass 四种风格，覆盖颜色、排版、尺寸、圆角、阴影、组件 slot 及玻璃光学材质。配置与优先级见[主题系统](crates/jadix/THEMES.md)，Gallery 的主题工作台可实时切换和调参。
 
-新增 `#[component]`、改 RSX 属性或宏 `own_prop` 时，遵循 [docs/COMPONENT_LIBRARY.md](docs/COMPONENT_LIBRARY.md) §1（属性分层与改名）。CSS 短名（`w` / `h` / `class`）留给根节点 chrome；领域测量用 `plot_h` / `col_w` / `rail_w` 这类专名。
+新增 `#[component]`、改 RSX 属性或宏 `own_prop` 时，遵循 [组件作者约定](development-docs/COMPONENT_LIBRARY_2.md) §1（属性分层与改名）。CSS 短名（`w` / `h` / `class`）留给根节点 chrome；领域测量用 `plot_h` / `col_w` / `rail_w` 这类专名。
 
 ---
 

@@ -1,0 +1,8 @@
+{
+  "autosave": { "enabled": false, "delay_ms": 1500 },
+  "language_servers": {
+    "rust": { "command": "rust-analyzer", "args": [] },
+    "typescript": { "command": "typescript-language-server", "args": ["--stdio"] },
+    "python": { "command": "pylsp", "args": [] }
+  }
+}

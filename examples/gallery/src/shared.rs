@@ -150,15 +150,11 @@ fn gallery_performance_panel() -> Element {
     let visible = use_signal("gal-perf-visible", || true);
     let text = use_signal("gal-perf-text", || "Measuring…".to_string());
     let panel = ui! {
-        <VStack absolute={true} right="12px" bottom="12px" z_index={1000000} gap="4px" items="end">
+        <VStack absolute={true} right="12px" bottom="12px" max_w="calc(100% - 24px)" z_index={1000000} gap="4px" items="end">
             <Button id="gal-perf-toggle" size="sm" variant="secondary"
                 on_click={move || visible.set(!visible.peek())}>"性能 / FPS"</Button>
             <Show when={visible.get()} scope="gallery:performance">
-                <Box w="320px" max_w="calc(100dvw - 24px)" h="164px" p="8px" bg="#111827ee" rounded="6px" pointer_events="none">
-                    <Label w="100%" h="148px" text_size="12px" color="#ffffff" leading="1.5">
-                        { text.get() }
-                    </Label>
-                </Box>
+                <GalleryPerformanceResources text={text} />
             </Show>
         </VStack>
     };
@@ -171,6 +167,76 @@ fn gallery_performance_panel() -> Element {
             panel,
             1_000_000,
         ))
+}
+
+#[cfg(feature = "performance")]
+#[component]
+fn GalleryPerformanceResources(text: Signal<String>) -> Element {
+    ui! {
+        <Box w="320px" max_w="100%" min_w="0" p="8px" shrink="0" bg="#111827ee" rounded="6px" pointer_events="none">
+            <Label w="100%" min_w="0" text_size="12px" color="#ffffff" leading="1.5">
+                { text.get() }
+            </Label>
+        </Box>
+    }
+}
+
+#[cfg(all(test, feature = "performance"))]
+#[test]
+fn performance_panel_fits_every_resource_line() {
+    jadix::core::reactivity::create_root(|| {
+        let text = "窗口呈现请求 67.0 FPS · 67 次/1.00s\n页面呈现 65.0 FPS · 65 次\n渲染调用 1.5 ms · 布局 0.4 · 文本 0.2\n进程 PID 25436 · 资源采样 0.50s\nCPU 进程 0.4% / 32 逻辑核\nCPU UI 线程 12.5% / 单核 · 进程 0.12 核\nGPU 进程 引擎峰值 14.2%\nGPU 进程 专用 0 · 共享 125 MiB\n内存 进程 工作集 236 · 私有 210 MiB";
+        let mut root = Element::new().flex_col().w(640.0).h(600.0)
+            .child(GalleryPerformanceResources(GalleryPerformanceResourcesProps {
+                text: Some(Signal::new(text.to_string())),
+                ..Default::default()
+            }));
+        let mut layout = jadix::core::tree::LayoutTree::new();
+        let scene = layout.build_and_layout(&mut root, 640.0, 600.0, [-1.0; 2]);
+        let label = scene.text_nodes.iter().find(|node| node.text.starts_with("窗口呈现请求"))
+            .expect("performance resource label");
+        assert!(label.height >= text.lines().count() as f32 * 18.0,
+            "performance label clips its last line: height={}", label.height);
+        let panel = root.children[0].layout_bounds;
+        assert!(label.y + label.height <= panel[1] + panel[3] - 8.0 + 0.5,
+            "performance resource text overflows its panel: bottom={}, panel={panel:?}",
+            label.y + label.height);
+    });
+}
+
+#[cfg(all(test, feature = "performance"))]
+#[test]
+fn performance_resources_subscribe_without_rebuilding_the_panel() {
+    use jadix::core::reactivity::{create_effect, create_root, reactivity_debug_snapshot};
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    create_root(|| {
+        let text = use_signal("performance-resource-binding-regression", || "Measuring…".to_string());
+        let panel = Rc::new(RefCell::new(None));
+        let builds = Rc::new(Cell::new(0));
+        create_effect({
+            let panel = panel.clone();
+            let builds = builds.clone();
+            move || {
+                builds.set(builds.get() + 1);
+                *panel.borrow_mut() = Some(GalleryPerformanceResources(GalleryPerformanceResourcesProps {
+                    text: Some(text),
+                    ..Default::default()
+                }));
+            }
+        });
+        for sample in ["CPU 1.0%", "CPU 2.0%\nGPU 3.0%"] {
+            text.set(sample.to_string());
+            let graph = reactivity_debug_snapshot();
+            let signal = graph.named_signal_entries.iter()
+                .find(|entry| entry.key == "performance-resource-binding-regression").unwrap();
+            assert!(graph.signal_effect_edges.iter().any(|edge|
+                edge.signal_id == signal.signal_id && !edge.effect_ids.is_empty()),
+                "the performance label must subscribe to live samples, not a String snapshot");
+            assert_eq!(builds.get(), 1, "sampling must not rebuild the panel or page animations");
+        }
+    });
 }
 
 /// Packaged resources live beside the executable; cargo run uses the source tree.

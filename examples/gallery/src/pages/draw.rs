@@ -568,7 +568,10 @@ pub(crate) fn chaikin_smooth(pts: &[(f32, f32)]) -> Vec<(f32, f32)> {
 
 #[component]
 pub(crate) fn DrawingCanvasShowcase() -> Element {
-    let strokes = Rc::new(RefCell::new(Vec::<Vec<(f32, f32)>>::new()));
+    let strokes = use_signal("gal-canvas-strokes", || {
+        Rc::new(RefCell::new(Vec::<Vec<(f32, f32)>>::new()))
+    })
+    .peek();
     let drawing = Rc::new(Cell::new(false));
 
     let builder_el: Element = canvas()
@@ -626,6 +629,11 @@ pub(crate) fn DrawingCanvasShowcase() -> Element {
         })
         .into();
 
+    let paint_id = builder_el
+        .get_attr(jadix::primitives::canvas::ATTR_CANVAS_PAINT)
+        .unwrap()
+        .to_string();
+
     ui! {
         <MyCard title="Canvas · 自定义绘制（WP-3.12）">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
@@ -656,6 +664,11 @@ pub(crate) fn DrawingCanvasShowcase() -> Element {
                 }} />
                 <Label font_weight="600" text_size="0.875rem">{ "Builder：指针拖线（mousedown / mousemove）" }</Label>
                 { builder_el }
+                <Button id="gal-canvas-clear" variant="outline" size="sm" on_click={move || {
+                    strokes.borrow_mut().clear();
+                    drawing.set(false);
+                    jadix::primitives::canvas::mark_canvas_dirty_hex(&paint_id);
+                }}>"清除画布"</Button>
             </VStack>
         </MyCard>
     }
@@ -762,7 +775,6 @@ pub(crate) fn ImageStreamShowcase() -> Element {
     let clock: Element = canvas()
         .w(4.0)
         .h(4.0)
-        .opacity(0.0)
         .paint(move |ctx: &mut dyn Canvas2D, _size: CanvasSize| {
             queue_synthetic_stream_frame();
             ctx.request_frame();

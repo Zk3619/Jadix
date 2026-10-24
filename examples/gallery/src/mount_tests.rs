@@ -5,6 +5,55 @@ use crate::shared::*;
 use jadix::core::reactivity::{create_effect, create_root};
 
 #[test]
+fn drawing_canvas_preserves_strokes_on_remount_and_clears_independently() {
+    fn canvas(root: &Element) -> Option<&Element> {
+        if root.on_mousedown.is_some()
+            && root.attrs.contains_key(jadix::primitives::canvas::ATTR_CANVAS_PAINT)
+        {
+            Some(root)
+        } else {
+            root.children.iter().find_map(canvas)
+        }
+    }
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            let first = crate::pages::draw::DrawingCanvasShowcase(Default::default());
+            let leaf = canvas(&first).unwrap();
+            let down = MouseEvent::new(10.0, 15.0, winit::event::MouseButton::Left, 1);
+            (leaf.on_mousedown.as_ref().unwrap().borrow_mut())(&down);
+            let moved = MouseEvent::new(80.0, 60.0, winit::event::MouseButton::Left, 1);
+            (leaf.on_mousemove.as_ref().unwrap().borrow_mut())(&moved);
+            let strokes = use_signal("gal-canvas-strokes", || {
+                Rc::new(RefCell::new(Vec::<Vec<(f32, f32)>>::new()))
+            }).peek();
+            assert_eq!(&*strokes.borrow(), &[vec![(10.0, 15.0), (80.0, 60.0)]]);
+            drop(first);
+            let second = crate::pages::draw::DrawingCanvasShowcase(Default::default());
+            assert_eq!(strokes.borrow().len(), 1, "leaving the page must not discard strokes");
+            let clear = gallery_find_by_tid(&second, "gal-canvas-clear").unwrap();
+            (clear.on_click.as_ref().unwrap().borrow_mut())();
+            assert!(strokes.borrow().is_empty());
+        });
+    });
+}
+
+#[test]
+fn synthetic_stream_clock_is_collectable_and_stays_live() {
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            let mut root = crate::pages::draw::ImageStreamShowcase(Default::default());
+            let mut tree = jadix::layout::LayoutTree::new();
+            tree.build_and_layout(&mut root, 900.0, 900.0, [-1.0; 2]);
+            for _ in 0..3 {
+                let frame = tree.build_and_layout_fast(&mut root, 900.0, 900.0, [-1.0; 2], true, false);
+                assert!(frame.textured_draws.iter().any(|draw| draw.texture_key.starts_with("jadix_canvas:")),
+                    "stream clock must remain visible to collect");
+            }
+        });
+    });
+}
+
+#[test]
 fn window_session_showcase_mounts_and_reports_missing_session() {
     run_on_gallery_build_stack(|| {
         create_root(|| {
@@ -86,6 +135,15 @@ fn responsive_gallery_showcase_reflows_at_viewport_breakpoints() {
                             el.layout_bounds
                         );
                         for child in &el.children {
+                            assert!(
+                                child.layout_bounds[1] + child.layout_bounds[3]
+                                    <= el.layout_bounds[1] + el.layout_bounds[3] + 0.5,
+                                "width={width}, parent={:?} {:?}, child={:?} {:?}",
+                                el.attrs.get("data-slot"),
+                                el.layout_bounds,
+                                child.text,
+                                child.layout_bounds,
+                            );
                             check_bounds(child, width);
                         }
                     }
@@ -209,6 +267,69 @@ fn responsive_gallery_breakpoint_keeps_previous_presented_cards() {
                 }
             });
         });
+    });
+}
+
+#[test]
+fn responsive_gallery_card_contains_wrapped_actions_in_scroll_viewport() {
+    fn check_children(element: &Element, width: f32) {
+        for child in &element.children {
+            assert!(
+                child.layout_bounds[1] + child.layout_bounds[3]
+                    <= element.layout_bounds[1] + element.layout_bounds[3] + 0.5,
+                "width={width}, parent={:?} {:?}, child={:?} {:?}",
+                element.attrs.get("data-slot"),
+                element.layout_bounds,
+                child.text,
+                child.layout_bounds,
+            );
+            check_children(child, width);
+        }
+    }
+    fn card(element: &Element) -> Option<&Element> {
+        if element
+            .attrs
+            .get("data-slot")
+            .is_some_and(|slot| slot == "card")
+        {
+            Some(element)
+        } else {
+            element.children.iter().find_map(card)
+        }
+    }
+    run_on_gallery_build_stack(|| {
+        jadix::style::set_prefers_reduced_motion(Some(true));
+        create_root(|| {
+            create_effect(|| {
+                let mut root = ui! {
+                    <VStack w="100%" h="100%" min_w="0">
+                        <ScrollArea id="responsive-height-test" flex_grow="1" min_h="0" overflow_y="auto">
+                            <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6">
+                                <ResponsiveShowcase />
+                                <MyCard title="Next card"><Label>"Sibling content"</Label></MyCard>
+                            </VStack>
+                        </ScrollArea>
+                    </VStack>
+                };
+                let mut tree = jadix::core::tree::LayoutTree::new();
+                for width in [1280.0, 768.0, 640.0, 340.0, 290.0, 640.0, 340.0] {
+                    let mut impact = jadix::core::tree::LayoutStatus::Clean;
+                    jadix::style::sync_class_variants_subtree(
+                        &mut root,
+                        [-1.0; 2],
+                        "",
+                        false,
+                        width,
+                        460.0,
+                        &mut tree,
+                        &mut impact,
+                    );
+                    tree.build_and_layout(&mut root, width, 460.0, [-1.0; 2]);
+                    check_children(card(&root).expect("responsive card"), width);
+                }
+            });
+        });
+        jadix::style::set_prefers_reduced_motion(None);
     });
 }
 
@@ -2304,6 +2425,35 @@ fn theme_section_glass_covers_controls_and_supports_opaque_fallback() {
         });
         jadix::style::install_theme_overrides(overrides).unwrap();
         jadix::style::set_theme_mode(previous_mode);
+    });
+}
+
+#[test]
+fn theme_section_switches_light_dark_and_system_preferences() {
+    use jadix::style::{ThemeMode, ThemePreference};
+    run_on_gallery_build_stack(|| {
+        let previous_theme = jadix::style::get_theme();
+        let previous_preference = jadix::style::theme_preference();
+        create_root(|| {
+            for (name, preference, mode) in [
+                ("light", ThemePreference::Light, Some(ThemeMode::Light)),
+                ("dark", ThemePreference::Dark, Some(ThemeMode::Dark)),
+                ("system", ThemePreference::System, None),
+            ] {
+                let tree = ThemeStyleShowcase(Default::default());
+                let button = gallery_find_by_tid(&tree, &format!("gal-theme-mode-{name}")).unwrap();
+                (button.on_click.as_ref().unwrap().borrow_mut())();
+                assert_eq!(jadix::style::theme_preference(), preference);
+                if let Some(mode) = mode {
+                    assert_eq!(jadix::style::theme_mode(), mode);
+                }
+                let updated = ThemeStyleShowcase(Default::default());
+                let selected = gallery_find_by_tid(&updated, &format!("gal-theme-mode-{name}")).unwrap();
+                assert_eq!(selected.attrs.get("data-variant").map(String::as_str), Some("secondary"));
+            }
+        });
+        jadix::style::set_theme_preference(previous_preference);
+        jadix::style::set_theme(previous_theme);
     });
 }
 

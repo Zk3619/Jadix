@@ -8,7 +8,8 @@ use jadix::prelude::{
     clear_stylesheets, clear_theme_overrides, get_theme, install_theme_overrides,
     load_and_install_theme_overrides, parse_stylesheet, parse_theme_overrides_str,
     register_stylesheet, reload_stylesheets, set_theme_preset, theme_mode, theme_overrides,
-    theme_preset, theme_transition_config, toggle_theme_mode, ThemeMode, ThemePreset, ThemeStyles,
+    theme_preset, theme_transition_config, toggle_theme_mode, set_theme_preference,
+    theme_preference, ThemeMode, ThemePreference, ThemePreset, ThemeStyles,
 };
 
 const THEME_TOML: &str = include_str!("../../theme.toml");
@@ -81,6 +82,24 @@ pub(crate) fn ThemeStyleShowcase() -> Element {
                 .into()
         })
         .collect();
+    let appearance: Vec<Element> = [
+        (ThemePreference::Light, "light", "浅色"),
+        (ThemePreference::Dark, "dark", "深色"),
+        (ThemePreference::System, "system", "跟随系统"),
+    ]
+    .into_iter()
+    .map(|(preference, name, title)| {
+        button(format!("gal-theme-mode-{name}"))
+            .variant(if theme_preference() == preference { "secondary" } else { "outline" })
+            .size("sm")
+            .text(title)
+            .on_click(move || {
+                set_theme_preference(preference);
+                bump(tick);
+            })
+            .into()
+    })
+    .collect();
     let density = move || {
         edit_styles(tick, |styles| {
             let height = get_theme().styles.control_height.unwrap_or(36.0);
@@ -183,8 +202,8 @@ pub(crate) fn ThemeStyleShowcase() -> Element {
                         <Button id="gal-theme-surface-opacity" variant="outline" size="sm" on_click={opacity}>"表面透明度"</Button>
                         <Button id="gal-theme-opacity" variant="outline" size="sm" on_click={opaque}>"不透明降级"</Button>
                         <Button id="gal-theme-styles-reset" variant="ghost" size="sm" on_click={reset}>"恢复预设造型"</Button>
-                        <Button id="gal-theme-preview-mode" variant="outline" size="sm" on_click={move || { toggle_theme_mode(); bump(tick); }}>"切换明暗"</Button>
                     </HStack>
+                    <HStack id="gal-theme-appearance" w="100%" gap="0.5rem" wrap="wrap">{ appearance }</HStack>
                 </VStack>
             </MyCard>
             <VStack w="100%" min_w="0">
