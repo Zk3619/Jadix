@@ -30,7 +30,7 @@
 use crate::components::base::SlotChrome;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{
-    parse_color, parse_text_color, ButtonHoverPaint, Element, IntoCssDim, IntoF32, IntoNodeBg,
+    parse_color, parse_text_color, Element, IntoCssDim, IntoF32, IntoNodeBg,
     IntoNodeSize, LayoutStatus,
 };
 use crate::layout::layout_tree::LayoutTree;
@@ -45,6 +45,17 @@ use crate::utils::take_packed;
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use jadix_macros::component;
 use std::sync::atomic::{AtomicUsize, Ordering};
+
+#[derive(Debug, Clone)]
+pub struct ButtonHoverPaint {
+    pub variant: String,
+    pub disabled: bool,
+    /// `"spring"`（欠阻尼弹簧）或 `"cubic"`（`cubic-bezier` 时长型过渡）。
+    pub hover_easing: String,
+    /// 显式字色（如 Calendar 非本月 `muted-foreground`）；`None` 跟变体 chrome。
+    pub text_color: Option<[u8; 4]>,
+}
+
 
 const ATTR_SLOT: &str = "data-slot";
 
@@ -782,12 +793,13 @@ impl From<ButtonBuilder> for Element {
             None => {}
         }
         el.template_id = Some(builder.id.clone());
-        el.button_hover_paint = Some(ButtonHoverPaint {
+        el.authoring_state.set(crate::components::button::ButtonHoverPaint {
             variant: builder.variant.as_paint_key().to_string(),
             disabled: builder.disabled,
             hover_easing: builder.hover_easing.clone(),
             text_color: builder.explicit_text_color,
         });
+        attach_hover_presentation(&mut el);
 
         for mut child in builder.content {
             // MorphIcon seeds a Lucide glyph so layout takes the texture path. Do not
@@ -1290,7 +1302,7 @@ pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) ->
     let variant = ButtonVariant::from(variant.as_ref()).as_paint_key();
     {
         let inner = &mut *el.inner;
-        let Some(desc) = inner.button_hover_paint.as_mut() else {
+        let Some(desc) = inner.authoring_state.get_mut::<crate::components::button::ButtonHoverPaint>() else {
             return LayoutStatus::Clean;
         };
         if desc.variant == variant {
@@ -1298,7 +1310,7 @@ pub fn apply_bound_button_variant(el: &mut Element, variant: impl AsRef<str>) ->
         }
         desc.variant = variant.to_string();
     }
-    let desc = el.button_hover_paint.as_ref().expect("set above");
+    let desc = el.authoring_state.get::<crate::components::button::ButtonHoverPaint>().expect("set above");
     let explicit_fg = desc.text_color;
     let _ = extend_class_list(el, button_variant_color_classes(variant));
     if let Some(fg) = explicit_fg {
@@ -1320,7 +1332,81 @@ pub fn apply_bound_button_disabled(el: &mut Element, disabled: bool) -> LayoutSt
     crate::primitives::interactive::apply_disabled(el, disabled)
 }
 
-/// Synchronize `{focus_id}_hover` with the global focus ring to the node with [`Element::button_hover_paint`] (without going through the root `create_effect`).
+pub(super) fn configure_hover_presentation(element: &mut Element) {
+    element.authored_style = Some(authored_button_style);
+    element.paint_caption_scope = true;
+    element.owns_focus_paint = true;
+    element.disabled_sync = Some(|element, disabled| {
+        let Some(state) = element.authoring_state.get_mut::<ButtonHoverPaint>() else { return false; };
+        let changed = state.disabled != disabled;
+        state.disabled = disabled;
+        changed
+    });
+}
+
+pub(super) fn attach_hover_presentation(element: &mut Element) {
+    configure_hover_presentation(element);
+    crate::authoring::presentation::attach_visible(
+        element,
+        crate::authoring::presentation::Phase::Hover,
+        |element, layout, _| sync_button_hover_paint(element, layout),
+    );
+}
+
+fn authored_button_style(element: &Element) -> Option<crate::style::Style> {
+    let state = element.authoring_state.get::<ButtonHoverPaint>()?;
+    let mut style = element.style.as_ref().clone();
+    let (background, _, border) = crate::style::button_chrome::button_chrome_for_variant(&state.variant, 0.0);
+    style.bg_color = background;
+    if let Some(border) = border { style.border_color = border; style.border_width = 1.0; }
+    else { style.border_width = 0.0; }
+    Some(style)
+}
+
+fn sync_button_hover_paint(element: &mut Element, layout_tree: &mut LayoutTree) -> LayoutStatus {
+    let mut impact = LayoutStatus::Clean;
+        if let Some(desc) = element.authoring_state.get::<crate::components::button::ButtonHoverPaint>().cloned() {
+            if let Some(fid) = element.focus_id.clone() {
+                let key = format!("{}_hover", fid);
+                let hover_sig = use_signal(&key, || false);
+                let is_hovered = hover_sig.try_peek().unwrap_or(false) && !desc.disabled;
+                let focused = use_signal("__jadix_button_focus_id", String::new);
+                let focus_visible = use_signal("__jadix_focus_visible", || false);
+                let is_focused = !desc.disabled
+                    && focus_visible.try_peek().unwrap_or(false)
+                    && focused.try_peek().as_deref() == Some(fid.as_str());
+                paint_button_root_from_hover(
+                    element,
+                    layout_tree,
+                    &desc,
+                    &fid,
+                    is_hovered,
+                    is_focused,
+                    &mut impact,
+                );
+                // Table rows only swap fill. Focus-ring / `border-ring` sync treats
+                // `border-b` as Button chrome and dest-resets every row — stacked
+                // tables then stamp the upper header's 「Status」 as 「Sta」.
+                if desc.variant != "table-row"
+                    && element.attrs.get("data-slot").map(String::as_str) != Some("table-row")
+                {
+                    sync_button_focus_ring_shadow(
+                        element,
+                        layout_tree,
+                        desc.disabled,
+                        is_focused,
+                        &desc.variant,
+                        &fid,
+                        &mut impact,
+                    );
+                }
+            }
+        }
+    impact
+}
+
+/// Synchronize `{focus_id}_hover` with the global focus ring to the node with [`crate::components::button::ButtonHoverPaint`] (without going through the root `create_effect`).
+#[cfg(test)]
 pub(crate) fn sync_button_hover_paint_subtree(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
@@ -1346,43 +1432,7 @@ pub(crate) fn sync_button_hover_paint_subtree(
         if crate::core::tree::element_is_offscreen(node, frame.scroll_acc, viewport_w, viewport_h) {
             continue;
         }
-        if let Some(desc) = node.button_hover_paint.clone() {
-            if let Some(fid) = node.focus_id.clone() {
-                let key = format!("{}_hover", fid);
-                let hover_sig = use_signal(&key, || false);
-                let is_hovered = hover_sig.try_peek().unwrap_or(false) && !desc.disabled;
-                let focused = use_signal("__jadix_button_focus_id", String::new);
-                let focus_visible = use_signal("__jadix_focus_visible", || false);
-                let is_focused = !desc.disabled
-                    && focus_visible.try_peek().unwrap_or(false)
-                    && focused.try_peek().as_deref() == Some(fid.as_str());
-                paint_button_root_from_hover(
-                    node,
-                    layout_tree,
-                    &desc,
-                    &fid,
-                    is_hovered,
-                    is_focused,
-                    impact,
-                );
-                // Table rows only swap fill. Focus-ring / `border-ring` sync treats
-                // `border-b` as Button chrome and dest-resets every row — stacked
-                // tables then stamp the upper header's 「Status」 as 「Sta」.
-                if desc.variant != "table-row"
-                    && node.attrs.get("data-slot").map(String::as_str) != Some("table-row")
-                {
-                    sync_button_focus_ring_shadow(
-                        node,
-                        layout_tree,
-                        desc.disabled,
-                        is_focused,
-                        &desc.variant,
-                        &fid,
-                        impact,
-                    );
-                }
-            }
-        }
+        *impact = impact.merge(sync_button_hover_paint(node, layout_tree));
         let child_acc = crate::app::tree_hit::next_hit_scroll_acc(node, frame.scroll_acc);
         let n = node.children.len();
         for i in (0..n).rev() {
@@ -1524,7 +1574,7 @@ mod chrome_tests {
             .find_map(|c| c.text.as_ref().map(|_| c.text_style.color_resolved()));
         assert_eq!(fg, Some(muted));
         assert_eq!(
-            el.button_hover_paint.as_ref().and_then(|p| p.text_color),
+            el.authoring_state.get::<crate::components::button::ButtonHoverPaint>().and_then(|p| p.text_color),
             Some(muted)
         );
     }

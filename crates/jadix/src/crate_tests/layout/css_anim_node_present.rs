@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! CSS `animate-spin` must register a node-present dirty every tick.
 //!
 //! Gallery: typing in Kbd Search switches the frame to PartialLoad (Input is in

@@ -3,7 +3,7 @@ use super::*;
 use crate::app::{damage::*, draw_cull::*};
 use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 
-#[cfg(all(target_os = "windows", feature = "bundled-lucide"))]
+#[cfg(all(target_os = "windows", feature = "bundled-lucide", feature = "components"))]
 #[path = "state_toggle_motion_present_tests.rs"]
 mod toggle_motion_present_tests;
 
@@ -57,6 +57,10 @@ mod tree_view_present_tests;
 #[path = "state_drag_present_tests.rs"]
 mod drag_present_tests;
 
+#[cfg(all(target_os = "windows", feature = "bundled-lucide", feature = "gallery-tests"))]
+#[path = "state_drag_overlay_present_tests.rs"]
+mod drag_overlay_present_tests;
+
 #[cfg(target_os = "windows")]
 #[path = "state_carousel_present_tests.rs"]
 mod carousel_present_tests;
@@ -74,6 +78,7 @@ mod kanban_present_tests;
 #[cfg(target_os = "windows")]
 #[test]
 #[ignore = "requires a native Windows GPU surface; run explicitly with --ignored --nocapture"]
+#[cfg(feature = "components")]
 fn color_picker_native_frames_keep_page_and_hover_stable() {
     native_popup_frames(false);
 }
@@ -81,11 +86,13 @@ fn color_picker_native_frames_keep_page_and_hover_stable() {
 #[cfg(target_os = "windows")]
 #[test]
 #[ignore = "requires a native Windows GPU surface; run explicitly with --ignored --nocapture"]
+#[cfg(feature = "components")]
 fn calendar_select_native_frames_have_no_shadow_residue() {
     native_popup_frames(true);
 }
 
 #[cfg(target_os = "windows")]
+#[cfg(feature = "components")]
 fn native_popup_frames(calendar: bool) {
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
@@ -121,6 +128,7 @@ fn native_popup_frames(calendar: bool) {
 }
 
 #[cfg(target_os = "windows")]
+#[cfg(feature = "components")]
 fn run_color_picker_native_frames(window: Arc<dyn Window>, calendar: bool) {
     use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
     use crate::app::runtime::{clear_app_runtime, set_app_runtime, AppRuntime};
@@ -649,8 +657,8 @@ fn run_color_picker_native_frames(window: Arc<dyn Window>, calendar: bool) {
 
 #[test]
 #[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+#[cfg(feature = "components")]
 fn avatar_interrupted_expand_restores_caption_each_frame() {
-    use crate as jadix;
     use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
     use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
     use crate::core::reactivity::{create_effect, create_root, isolate_reads};
@@ -2655,6 +2663,7 @@ fn draw_message_capture_for_test(
 
 #[test]
 #[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
+#[cfg(feature = "components")]
 fn button_group_hover_first_then_second_matches_full_composite() {
     let gpu = OffscreenGpu::new().expect("GPU adapter");
     for toggle in [false, true] {
@@ -2666,6 +2675,7 @@ fn button_group_hover_first_then_second_matches_full_composite() {
     }
 }
 
+#[cfg(feature = "components")]
 fn check_group_hover_matches_full_composite(
     gpu: &OffscreenGpu,
     toggle: bool,
@@ -3096,6 +3106,7 @@ fn check_partial_pixels(gpu: &OffscreenGpu, background: bool, portal: bool) {
                         key,
                         bounds,
                         &current.node_paints,
+                        &current.instances,
                         prev.iter().find(|(k, _)| *k == key).map(|(_, r)| *r)
                     ),
                     "Node must have a backdrop unless this is its first visible paint: frame={frame}"

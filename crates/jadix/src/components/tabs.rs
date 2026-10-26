@@ -79,13 +79,12 @@ use std::sync::OnceLock;
 use taffy::style::{AlignItems, Display, FlexDirection, JustifyContent};
 
 /// AccessKit / 焦点约定前缀（无头条带）。
-pub const TABSTRIP_FOCUS_PREFIX: &str = "tabstrip:";
+pub use crate::utils::roving::TABSTRIP_FOCUS_PREFIX;
 
 const ATTR_SLOT: &str = "data-slot";
 const ATTR_VARIANT: &str = "data-variant";
 const ATTR_ORIENTATION: &str = "data-orientation";
 const ATTR_TABS_VALUE: &str = "jadix_tabs_value";
-const ATTR_LINE_INDICATOR: &str = "jadix_tabs_line_indicator";
 const SLOT_TABS: &str = "tabs";
 const SLOT_LIST: &str = "tabs-list";
 const SLOT_TRIGGER: &str = "tabs-trigger";
@@ -329,22 +328,17 @@ fn apply_trigger_chrome(el: &mut Element, selected: bool, disabled: bool) -> (bo
         }
     }
 
-    let want_ind = if selected && line {
-        if vertical {
-            "v"
+    let want_ind = (selected && line).then(|| crate::authoring::presentation::EdgePaint {
+        edge: if vertical {
+            crate::authoring::presentation::PaintEdge::Right
         } else {
-            "h"
-        }
-    } else {
-        ""
-    };
-    if el.attrs.get(ATTR_LINE_INDICATOR).map(|s| s.as_str()) != Some(want_ind) {
-        if want_ind.is_empty() {
-            el.attrs.remove(ATTR_LINE_INDICATOR);
-        } else {
-            el.attrs
-                .insert(ATTR_LINE_INDICATOR.to_string(), want_ind.to_string());
-        }
+            crate::authoring::presentation::PaintEdge::Bottom
+        },
+        width: 2.0,
+        color: crate::style::parse_color("foreground"),
+    });
+    if el.paint_edge != want_ind {
+        el.paint_edge = want_ind;
         paint = true;
     }
 
@@ -457,6 +451,15 @@ fn build_trigger(ctx: &TabsCtx, value: &str, label: String, disabled: bool) -> E
     }
     el.template_id = Some(focus_id);
     el.radio_selected_sync = Some(ctx.value);
+    crate::authoring::presentation::attach(
+        &mut el,
+        crate::authoring::presentation::Phase::State,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_tabs_trigger_node(element, layout, &mut impact);
+            impact
+        },
+    );
     el
 }
 
@@ -1040,58 +1043,66 @@ impl_simple_slot_builder!(TabsListSlotBuilder, tabs_list_slot, TabsList, TabsLis
 
 // ── Per-frame trigger sync ───────────────────────────────────────────────────
 
+#[cfg(test)]
 pub(crate) fn sync_tabs_trigger_subtree(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    crate::core::tree::walk_elements_mut(el, |el| {
-        if is_tabs_trigger(el) {
-            // Heal frames where radio sync mistakenly nested a Radio Indicator under the chip
-            // (shared `radio_selected_sync` without `jadix_radio_value`). That turns the text leaf
-            // into a flex parent sized to the 16px dot → labels pile at the TabsList origin.
-            let before = el.children.len();
-            el.children.retain(|c| {
-                c.attrs.get("data-slot").map(|s| s.as_str()) != Some("radio-indicator")
-            });
-            if el.children.len() != before {
-                *impact = impact.merge(LayoutStatus::StructureChanged);
+    crate::core::tree::walk_elements_mut(el, |element| {
+        sync_tabs_trigger_node(element, layout_tree, impact)
+    });
+}
+
+fn sync_tabs_trigger_node(
+    el: &mut Element,
+    layout_tree: &mut LayoutTree,
+    impact: &mut LayoutStatus,
+) {
+    if is_tabs_trigger(el) {
+        // Heal frames where radio sync mistakenly nested a Radio Indicator under the chip
+        // (shared `radio_selected_sync` without `jadix_radio_value`). That turns the text leaf
+        // into a flex parent sized to the 16px dot → labels pile at the TabsList origin.
+        let before = el.children.len();
+        el.children
+            .retain(|c| c.attrs.get("data-slot").map(|s| s.as_str()) != Some("radio-indicator"));
+        if el.children.len() != before {
+            *impact = impact.merge(LayoutStatus::StructureChanged);
+        }
+        if let Some(sel) = el.radio_selected_sync {
+            if !sel.is_alive() {
+                el.radio_selected_sync = None;
+                return;
             }
-            if let Some(sel) = el.radio_selected_sync {
-                if !sel.is_alive() {
-                    el.radio_selected_sync = None;
-                    return;
-                }
-                let item_value = el
-                    .attrs
-                    .get(ATTR_TABS_VALUE)
-                    .map(|s| s.as_str())
-                    .unwrap_or("");
-                let on = sel.peek() == item_value;
-                let disabled = el
-                    .attrs
-                    .get("disabled")
-                    .map(|s| s.as_str() == "true")
-                    .unwrap_or(false);
-                let (paint, lay) = apply_trigger_chrome(el, on, disabled);
-                if paint || lay {
-                    if lay {
-                        if el.layout_node.is_some() {
-                            layout_tree.mark_element_layout_dirty(el);
-                            layout_tree.update_taffy_node_style(el);
-                        }
-                        *impact = impact.merge(LayoutStatus::LayoutChanged);
-                    } else {
-                        if el.layout_node.is_some() {
-                            layout_tree.update_taffy_node_style(el);
-                        }
-                        *impact = impact.merge(LayoutStatus::StyleChanged);
+            let item_value = el
+                .attrs
+                .get(ATTR_TABS_VALUE)
+                .map(|s| s.as_str())
+                .unwrap_or("");
+            let on = sel.peek() == item_value;
+            let disabled = el
+                .attrs
+                .get("disabled")
+                .map(|s| s.as_str() == "true")
+                .unwrap_or(false);
+            let (paint, lay) = apply_trigger_chrome(el, on, disabled);
+            if paint || lay {
+                if lay {
+                    if el.layout_node.is_some() {
+                        layout_tree.mark_element_layout_dirty(el);
+                        layout_tree.update_taffy_node_style(el);
                     }
-                    crate::app::damage::push_frame_paint_damage(el.layout_bounds);
+                    *impact = impact.merge(LayoutStatus::LayoutChanged);
+                } else {
+                    if el.layout_node.is_some() {
+                        layout_tree.update_taffy_node_style(el);
+                    }
+                    *impact = impact.merge(LayoutStatus::StyleChanged);
                 }
+                crate::app::damage::push_frame_paint_damage(el.layout_bounds);
             }
         }
-    });
+    }
 }
 
 #[cfg(test)]

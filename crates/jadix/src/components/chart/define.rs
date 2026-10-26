@@ -556,7 +556,6 @@ pub(crate) struct ChartHover {
 }
 
 thread_local! {
-    static CHART_HOVER_FROZEN: Cell<bool> = const { Cell::new(false) };
     static PENDING_CHART_HOVER: RefCell<HashMap<SignalId, (Signal<ChartHover>, ChartHover)>> =
         RefCell::new(HashMap::new());
     /// Leave during scroll: hide the live overlay in place (`StyleChanged`) instead of
@@ -569,8 +568,10 @@ thread_local! {
 /// Smooth-scroll / scrollbar-fade frames: defer tooltip overlay remounts.
 /// Rebuilding `{chart}__tip__view` is StructureChanged → FullClear, which drops a scroll
 /// frame and ghosts the overlay scrollbar thumb.
-pub(crate) fn set_chart_hover_frozen(frozen: bool) {
-    let was = CHART_HOVER_FROZEN.with(|c| c.replace(frozen));
+#[cfg(test)]
+fn set_chart_hover_frozen(frozen: bool) {
+    let was = crate::authoring::input::geometry_changing();
+    crate::authoring::input::set_geometry_changing(frozen);
     if was && !frozen {
         flush_pending_chart_hovers();
     }
@@ -591,7 +592,7 @@ fn set_overlay_scroll_hidden(id: SignalId, hidden: bool) {
 }
 
 fn assign_chart_hover(sig: Signal<ChartHover>, next: ChartHover) {
-    if CHART_HOVER_FROZEN.with(|c| c.get()) {
+    if crate::authoring::input::geometry_changing() {
         PENDING_CHART_HOVER.with(|m| {
             m.borrow_mut().insert(sig.id(), (sig, next));
         });
@@ -616,6 +617,7 @@ fn assign_chart_hover(sig: Signal<ChartHover>, next: ChartHover) {
     }
 }
 
+#[cfg(test)]
 fn flush_pending_chart_hovers() {
     let pending = PENDING_CHART_HOVER.with(|m| std::mem::take(&mut *m.borrow_mut()));
     for (_, (sig, next)) in pending {
@@ -1146,7 +1148,7 @@ fn pin_overlay_layer(
     // Local chart overlays move every pointer frame. Mark the whole retained
     // overlay subtree so damage can replay the chart page band underneath the
     // old and new positions instead of doing a white node dest-reset.
-    layer.set_attr("jadix_chart_overlay", "1");
+    layer.paint_region_replay = true;
     let Some(pin) = pin else {
         return layer;
     };
@@ -1163,7 +1165,7 @@ fn pin_overlay_layer(
             .top(0.0)
             .pointer_events("none")
             .into();
-        v.set_attr("jadix_chart_overlay", "1");
+        v.paint_region_replay = true;
         v = v.bg(theme.grid);
         let mut hline: Element = r#box()
             .h(1.0)
@@ -1173,7 +1175,7 @@ fn pin_overlay_layer(
             .top(format!("{y_pct:.2}%"))
             .pointer_events("none")
             .into();
-        hline.set_attr("jadix_chart_overlay", "1");
+        hline.paint_region_replay = true;
         hline = hline.bg(theme.grid);
         layer = layer.child(v).child(hline);
         if polar {
@@ -1186,7 +1188,7 @@ fn pin_overlay_layer(
                 .top(format!("calc({y_pct:.2}% - 3px)"))
                 .pointer_events("none")
                 .into();
-            dot.set_attr("jadix_chart_overlay", "1");
+            dot.paint_region_replay = true;
             dot = dot.bg(pin.color);
             layer = layer.child(dot);
         }
@@ -1196,7 +1198,7 @@ fn pin_overlay_layer(
         let gap = TOOLTIP_GAP_PX;
         let body = chart_tooltip_content(&pin.item, pin.color, tooltip_indicator);
         let mut tip = chart_tooltip_bubble(body, tooltip_chrome);
-        tip.set_attr("jadix_chart_overlay", "1");
+        tip.paint_region_replay = true;
         tip = tip.absolute().pointer_events("none");
         if place.flip_x {
             let from_right = (100.0 - x_pct).clamp(0.0, 100.0);
@@ -1415,6 +1417,33 @@ fn attach_chart_pointer(
     track_hover: bool,
     round_bar_base: bool,
 ) -> Element {
+    if let Some(signal) = hover_signal {
+        crate::authoring::deadline::attach(
+            &mut plot,
+            crate::authoring::deadline::Visibility::Always,
+            move |_| {
+                let redraw = if !crate::authoring::input::geometry_changing() {
+                    let pending = PENDING_CHART_HOVER.with(|pending| pending.borrow_mut().remove(&signal.id()));
+                    if let Some((signal, next)) = pending {
+                        set_overlay_scroll_hidden(signal.id(), false);
+                        if signal.is_alive() && signal.peek() != next {
+                            signal.set(next);
+                            crate::primitives::interactive::mark_hover_paint_dirty();
+                        }
+                        true
+                    } else { false }
+                } else { false };
+                crate::authoring::deadline::Poll { redraw, next_wake: None }
+            },
+        );
+        if crate::core::reactivity::current_owner().is_some() {
+            crate::core::reactivity::on_cleanup(move || {
+                PENDING_CHART_HOVER.with(|pending| pending.borrow_mut().remove(&signal.id()));
+                OVERLAY_SCROLL_HIDDEN.with(|hidden| hidden.borrow_mut().remove(&signal.id()));
+                LAST_HOVER_GEOM.with(|geometry| geometry.borrow_mut().remove(&signal.id()));
+            });
+        }
+    }
     let bounds = Rc::new(Cell::new([0.0_f32; 4]));
     let interactive = on_select.is_some() || selected_signal.is_some();
     let hit_enabled = interactive || track_hover;

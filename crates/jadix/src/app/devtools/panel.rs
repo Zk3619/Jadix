@@ -11,7 +11,7 @@ use crate::core::tree::{Element, LayoutStatus};
 use crate::primitives::{hstack, r#box, vstack};
 use crate::style::{collect_matching_rules, parse_color, parse_text_color, soft_semantic_fill};
 use crate::utils::text_field::{focus_id_for_text_edit, input_value_signal_key};
-use crate::utils::{build_icon_text_node, lucide_glyph};
+use crate::utils::build_lucide_icon_text_node_or as inspector_icon;
 
 use super::locale::text;
 use super::overlay::{box_model_diagram, highlight_slot};
@@ -366,9 +366,7 @@ fn dock_panel(
 }
 
 fn panel_header(pick: bool, tab: DevToolsTab) -> Element {
-    let pick_icon = build_icon_text_node(
-        lucide_glyph("square-dashed-mouse-pointer").unwrap_or_else(|| "⌖".into()),
-    )
+    let pick_icon = inspector_icon("square-dashed-mouse-pointer", "⌖")
     .text_size(16.0);
     let header: Element = hstack()
         .w("100%")
@@ -399,9 +397,7 @@ fn panel_header(pick: bool, tab: DevToolsTab) -> Element {
                         "ghost"
                     })
                     .child(
-                        build_icon_text_node(
-                            lucide_glyph("monitor-smartphone").unwrap_or_else(|| "▣".into()),
-                        )
+                        inspector_icon("monitor-smartphone", "▣")
                         .text_size(16.0),
                     )
                     .on_click(super::device::toggle)
@@ -463,14 +459,11 @@ fn panel_header(pick: bool, tab: DevToolsTab) -> Element {
                     .size("icon-sm")
                     .variant("ghost")
                     .child(
-                        build_icon_text_node(
-                            lucide_glyph(if super::presentation::is_detached() {
+                        inspector_icon(if super::presentation::is_detached() {
                                 "panel-right-close"
                             } else {
                                 "external-link"
-                            })
-                            .unwrap_or_else(|| ">".into()),
-                        )
+                            }, ">")
                         .text_size(15.0),
                     )
                     .on_click(super::presentation::toggle_detached)
@@ -480,7 +473,7 @@ fn panel_header(pick: bool, tab: DevToolsTab) -> Element {
                     .size("icon-sm")
                     .variant("ghost")
                     .child(
-                        build_icon_text_node(lucide_glyph("x").unwrap_or_else(|| "×".into()))
+                        inspector_icon("x", "×")
                             .text_size(15.0),
                     )
                     .on_click(|| {
@@ -1067,9 +1060,7 @@ fn breadcrumbs(
                             .items("center")
                             .justify("center")
                             .pointer_events("none")
-                            .child(build_icon_text_node(
-                                lucide_glyph("chevron-right").unwrap_or_else(|| ">".into()),
-                            ))
+                            .child(inspector_icon("chevron-right", ">"))
                             .text_size(13.0)
                             .text_color(parse_text_color("muted-foreground")),
                     )
@@ -1190,14 +1181,11 @@ fn tree_row(
     let caption = tree_row_caption(node);
     let fold_path = path.clone();
     let disclosure: Element = if node.child_count > 0 {
-        let arrow = build_icon_text_node(
-            lucide_glyph(if DevToolsState::is_collapsed(&path) {
+        let arrow = inspector_icon(if DevToolsState::is_collapsed(&path) {
                 "chevron-right"
             } else {
                 "chevron-down"
-            })
-            .unwrap_or_else(|| ">".into()),
-        )
+            }, ">")
         .text_size(11.0);
         let fold = Element::from(
             hstack()
@@ -1613,9 +1601,7 @@ fn element_style_editor(path: &[usize], instance_id: u64, css: &str) -> Element 
                             .size("icon-sm")
                             .variant("ghost")
                             .child(
-                                build_icon_text_node(
-                                    lucide_glyph("check").unwrap_or_else(|| "+".into()),
-                                )
+                                inspector_icon("check", "+")
                                 .text_size(12.0),
                             )
                             .on_click(move || {
@@ -3020,7 +3006,6 @@ mod tests {
     #[test]
     fn cssom_seed_prefers_committed_apply_text() {
         use crate::core::reactivity::create_root;
-        use crate::core::tree::ButtonHoverPaint;
         use crate::style::parse_color;
         use crate::utils::text_field::input_value_signal_key;
 
@@ -3031,11 +3016,11 @@ mod tests {
 
             // Live style has the apply; authored button dump would show ghost transparent.
             let mut el = Element::new();
-            el.button_hover_paint = Some(ButtonHoverPaint {
-                variant: "ghost".into(),
-                disabled: false,
-                hover_easing: "spring".into(),
-                text_color: None,
+            el.authored_style = Some(|element| {
+                let mut style = element.style.as_ref().clone();
+                style.bg_color = [0.0; 4];
+                style.border_width = 0.0;
+                Some(style)
             });
             el.style.bg_color = parse_color("#00ff00");
             el.style.opacity = 0.5;

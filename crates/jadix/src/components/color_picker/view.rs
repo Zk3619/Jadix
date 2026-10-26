@@ -13,20 +13,16 @@ pub(super) fn hue_texture_key() -> &'static str {
 }
 
 struct TexCpuEntry {
-    width: u32,
-    height: u32,
-    rgba: Vec<u8>,
+    _texture: crate::media::texture::RgbaTexture,
     /// Content fingerprint; when it changes, pixels are rebuilt and re-uploaded
     /// under the same key (avoids per-RGB key thrash on the alpha track).
     tag: u64,
 }
 
 thread_local! {
-    /// CPU backup for ColorPicker ramps — TexturePool eviction can rehydrate via
-    /// [`flush_color_picker_textures`] (same pattern as gradients / path rasters).
+    /// Retained ramp pixels survive GPU eviction through the shared image resource.
     pub(super) static TEX_CPU: RefCell<std::collections::HashMap<String, TexCpuEntry>> =
         RefCell::new(std::collections::HashMap::new());
-    static TEX_NEEDED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
 }
 
 /// Test/diagnostic: how many SV keys currently sit in the CPU cache.
@@ -47,15 +43,15 @@ pub(super) fn sv_texture_mid_column_luma(id: &str, hue: f32) -> (i32, i32) {
     TEX_CPU.with(|c| {
         let map = c.borrow();
         let entry = map.get(&key).expect("sv cpu");
-        let w = entry.width as usize;
-        let h = entry.height as usize;
+        let w = entry._texture.width() as usize;
+        let h = entry._texture.height() as usize;
         let mid = w / 2;
         let top = mid * 4;
         let bot = ((h - 1) * w + mid) * 4;
         let top_luma =
-            entry.rgba[top] as i32 + entry.rgba[top + 1] as i32 + entry.rgba[top + 2] as i32;
+            entry._texture.rgba()[top] as i32 + entry._texture.rgba()[top + 1] as i32 + entry._texture.rgba()[top + 2] as i32;
         let bot_luma =
-            entry.rgba[bot] as i32 + entry.rgba[bot + 1] as i32 + entry.rgba[bot + 2] as i32;
+            entry._texture.rgba()[bot] as i32 + entry._texture.rgba()[bot + 1] as i32 + entry._texture.rgba()[bot + 2] as i32;
         (top_luma, bot_luma)
     })
 }
@@ -69,16 +65,12 @@ pub(super) fn tex_cached(key: String, build: impl FnOnce() -> (u32, u32, Vec<u8>
             map.insert(
                 key.clone(),
                 TexCpuEntry {
-                    width: w,
-                    height: h,
-                    rgba,
+                    _texture: crate::media::texture::RgbaTexture::new(key.clone(), w, h, rgba)
+                        .expect("valid generated color ramp"),
                     tag: 0,
                 },
             );
         }
-    });
-    TEX_NEEDED.with(|n| {
-        n.borrow_mut().insert(key.clone());
     });
     key
 }
@@ -89,57 +81,22 @@ pub(super) fn tex_cached_tagged(
     tag: u64,
     build: impl FnOnce() -> (u32, u32, Vec<u8>),
 ) -> String {
-    let mut queued = false;
     TEX_CPU.with(|c| {
         let mut map = c.borrow_mut();
         let rebuild = map.get(&key).map(|e| e.tag != tag).unwrap_or(true);
         if rebuild {
             let (w, h, rgba) = build();
-            crate::queue_image_rgba8(key.clone(), w, h, rgba.clone());
             map.insert(
                 key.clone(),
                 TexCpuEntry {
-                    width: w,
-                    height: h,
-                    rgba,
+                    _texture: crate::media::texture::RgbaTexture::new(key.clone(), w, h, rgba)
+                        .expect("valid generated color ramp"),
                     tag,
                 },
             );
-            queued = true;
         }
-    });
-    let _ = queued;
-    TEX_NEEDED.with(|n| {
-        n.borrow_mut().insert(key.clone());
     });
     key
-}
-
-/// Re-queue ColorPicker ramps missing from the GPU pool after eviction.
-pub(crate) fn flush_color_picker_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool {
-    let needed: Vec<String> = TEX_NEEDED
-        .with(|n| std::mem::take(&mut *n.borrow_mut()))
-        .into_iter()
-        .collect();
-    let mut any = false;
-    TEX_CPU.with(|c| {
-        let map = c.borrow();
-        for key in needed {
-            if has_gpu(&key) {
-                continue;
-            }
-            if let Some(entry) = map.get(&key) {
-                crate::app::pending_images::queue_image_rgba8(
-                    &key,
-                    entry.width,
-                    entry.height,
-                    entry.rgba.clone(),
-                );
-                any = true;
-            }
-        }
-    });
-    any
 }
 
 pub(super) fn apply_rounded_rect_alpha(rgba: &mut [u8], w: u32, h: u32, radius: f32) {

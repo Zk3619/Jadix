@@ -4,7 +4,7 @@ use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{parse_text_color, Element};
 use crate::primitives::r#box::{r#box, vstack};
-use crate::utils::lucide::lucide_glyph;
+use crate::utils::icon_provider::glyph_for_name as lucide_glyph;
 use crate::utils::text_field::*;
 use crate::utils::text_node::build_lucide_icon_text_node;
 use winit::event::MouseButton;

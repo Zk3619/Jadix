@@ -261,8 +261,8 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn sidebar_selection_survives_theme_refresh_and_parent_rebuild() {
-        use crate as jadix;
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::components::SidebarMenuButtonProps;
         use crate::core::reactivity::{create_effect, create_root, Signal};

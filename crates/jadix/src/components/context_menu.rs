@@ -517,7 +517,7 @@ pub fn ContextMenuTrigger(id: String, children: Option<Element>) -> Element {
     };
 
     // Custom (non-Button) triggers need an explicit focus-visible ring.
-    if trigger.button_hover_paint.is_none() && trigger.input_paint_sync.is_none() {
+    if trigger.authoring_state.get::<crate::components::button::ButtonHoverPaint>().is_none() && trigger.input_paint_sync.is_none() {
         trigger.set_focusable(true);
     }
     let fid_focus = trigger
@@ -734,6 +734,15 @@ pub fn ContextMenuItem(
     hit.set_attr(ATTR_SLOT, SLOT_ITEM);
     hit.set_attr("jadix_ctx_id", &ctx.id);
     hit.set_attr("jadix_ctx_ix", ix.to_string());
+    crate::authoring::presentation::attach(
+        &mut hit,
+        crate::authoring::presentation::Phase::State,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_context_menu_item_paint_node(element, layout, &mut impact);
+            impact
+        },
+    );
     hit.set_attr("data-inset", if inset { "true" } else { "false" });
     if destructive {
         hit.set_attr("data-variant", "destructive");
@@ -838,6 +847,15 @@ pub fn ContextMenuCheckboxItem(
     hit.set_attr(ATTR_SLOT, SLOT_CHECKBOX_ITEM);
     hit.set_attr("jadix_ctx_id", &ctx.id);
     hit.set_attr("jadix_ctx_ix", ix.to_string());
+    crate::authoring::presentation::attach(
+        &mut hit,
+        crate::authoring::presentation::Phase::State,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_context_menu_item_paint_node(element, layout, &mut impact);
+            impact
+        },
+    );
     hit.set_attr("data-inset", if inset { "true" } else { "false" });
     if disabled {
         hit.set_attr("data-disabled", "true");
@@ -1002,6 +1020,15 @@ pub fn ContextMenuRadioItem(
     hit.set_attr(ATTR_SLOT, SLOT_RADIO_ITEM);
     hit.set_attr("jadix_ctx_id", &ctx.id);
     hit.set_attr("jadix_ctx_ix", ix.to_string());
+    crate::authoring::presentation::attach(
+        &mut hit,
+        crate::authoring::presentation::Phase::State,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_context_menu_item_paint_node(element, layout, &mut impact);
+            impact
+        },
+    );
     hit.set_attr("data-inset", if inset { "true" } else { "false" });
     hit.set_attr("data-value", &value);
     if disabled {
@@ -1162,6 +1189,15 @@ pub fn ContextMenuSubTrigger(disabled: bool, inset: bool, children: Option<Eleme
     hit.set_attr(ATTR_SLOT, SLOT_SUB_TRIGGER);
     hit.set_attr("jadix_ctx_id", &parent.id);
     hit.set_attr("jadix_ctx_ix", ix.to_string());
+    crate::authoring::presentation::attach(
+        &mut hit,
+        crate::authoring::presentation::Phase::State,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_context_menu_item_paint_node(element, layout, &mut impact);
+            impact
+        },
+    );
     hit.set_attr("data-inset", if inset { "true" } else { "false" });
     if disabled {
         hit.set_attr("data-disabled", "true");
@@ -1260,7 +1296,7 @@ pub fn context_menu_sub_content(
 }
 
 /// 每帧按 `{id}__ctx_active` 写回高亮（`peek`，不订阅根 effect）。
-pub(crate) fn sync_context_menu_item_paint_subtree(
+fn sync_context_menu_item_paint_node(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
@@ -1282,7 +1318,7 @@ pub(crate) fn sync_context_menu_item_paint_subtree(
         active_key_suffix: "__ctx_active",
         active_none: ACTIVE_NONE,
     };
-    item_chrome::sync_item_paint_subtree(el, layout_tree, impact, &cfg);
+    item_chrome::sync_item_paint_node(el, layout_tree, impact, &cfg);
 }
 
 /// solid-ui / shadcn `ContextMenuLabel`：`px-2 py-1.5 text-sm font-semibold`。
@@ -1623,7 +1659,6 @@ mod tests {
 
     #[test]
     fn rsx_menu_hugs_content_in_tall_viewport_after_open_and_idle() {
-        use crate as jadix;
         use crate::app::portal_overlay::clear_overlay_stack;
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};

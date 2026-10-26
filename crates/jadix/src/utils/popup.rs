@@ -1678,6 +1678,7 @@ mod tests {
         assert_eq!(floating_trigger_bounds(&triggers, "scaled-anchor"), Some(expected));
     }
 
+    #[cfg(feature = "components")]
     fn menu_panel(id: &str, cursor: [f32; 2]) -> Element {
         let rows: Element = crate::primitives::vstack()
             .w("100%")
@@ -1712,6 +1713,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn cursor_menu_first_frame_and_reopen_keep_full_height_above() {
         crate::core::reactivity::create_root(|| {
             let mut tree = crate::layout::layout_tree::LayoutTree::new();
@@ -1815,6 +1817,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn nested_submenu_first_frame_keeps_parent_height_and_live_trigger() {
         crate::core::reactivity::create_root(|| {
             let mut root = Element::new()

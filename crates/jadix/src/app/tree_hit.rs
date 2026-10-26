@@ -48,24 +48,16 @@ pub(crate) fn sync_pointer_component_chrome_after_layout(
 ) -> crate::core::tree::LayoutStatus {
     apply_pointer_hover_reconcile(root, mouse[0], mouse[1], true);
     let mut impact = crate::core::tree::LayoutStatus::Clean;
-    crate::components::button::sync_button_hover_paint_subtree(
+
+    impact = impact.merge(crate::authoring::presentation::sync_tree(
         root,
         layout_tree,
-        &mut impact,
-        width,
-        height,
-        [0.0, 0.0],
-    );
-    crate::components::sidebar::sync_sidebar_menu_button_paint_subtree(
-        root,
-        layout_tree,
-        &mut impact,
-    );
-    crate::components::tree_view::sync_tree_view_hover_paint_subtree(
-        root,
-        layout_tree,
-        &mut impact,
-    );
+        crate::authoring::presentation::Context {
+            phase: crate::authoring::presentation::Phase::Hover,
+            viewport: [width, height],
+        width_budget: None,
+},
+    ));
     impact
 }
 
@@ -264,8 +256,8 @@ fn inherit_text_edit_focus_id<'a>(el: &'a Element, inherited: Option<&'a str>) -
         return None;
     }
     if let Some(id) = el.focus_id.as_deref() {
-        if id.starts_with(crate::components::INPUT_FOCUS_PREFIX)
-            || id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX)
+        if id.starts_with(crate::utils::text_field::INPUT_FOCUS_PREFIX)
+            || id.starts_with(crate::utils::text_field::TEXTAREA_FOCUS_PREFIX)
         {
             return Some(id);
         }
@@ -1043,8 +1035,13 @@ fn find_input_text_leaf_for_rest_acc(
                     return None;
                 }
                 if let Some(id) = child_fid {
-                    if id == format!("{}{}", crate::components::INPUT_FOCUS_PREFIX, rest)
-                        || id == format!("{}{}", crate::components::TEXTAREA_FOCUS_PREFIX, rest)
+                    if id == format!("{}{}", crate::utils::text_field::INPUT_FOCUS_PREFIX, rest)
+                        || id
+                            == format!(
+                                "{}{}",
+                                crate::utils::text_field::TEXTAREA_FOCUS_PREFIX,
+                                rest
+                            )
                     {
                         let b = el.layout_bounds;
                         let [vx, vy] = visual_xy(el, scroll_acc);
@@ -1125,8 +1122,10 @@ fn find_input_text_at_hit(
                 if el.text_style.font_family.as_deref() != Some("lucide") {
                     if let Some(id) = child_text_edit_fid {
                         let rest = id
-                            .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
-                            .or_else(|| id.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX));
+                            .strip_prefix(crate::utils::text_field::INPUT_FOCUS_PREFIX)
+                            .or_else(|| {
+                                id.strip_prefix(crate::utils::text_field::TEXTAREA_FOCUS_PREFIX)
+                            });
                         if let Some(rest) = rest {
                             if inside {
                                 return LayerHit::Hit(Some((
@@ -1149,8 +1148,8 @@ fn find_input_text_at_hit(
                 .or(text_edit_fid.filter(|id| is_text_edit_focus_id(id)));
             if let Some(id) = field_id {
                 let rest = id
-                    .strip_prefix(crate::components::INPUT_FOCUS_PREFIX)
-                    .or_else(|| id.strip_prefix(crate::components::TEXTAREA_FOCUS_PREFIX));
+                    .strip_prefix(crate::utils::text_field::INPUT_FOCUS_PREFIX)
+                    .or_else(|| id.strip_prefix(crate::utils::text_field::TEXTAREA_FOCUS_PREFIX));
                 if let Some(rest) = rest {
                     if inside && !pointer_on_text_edit_adornment(el, x, y, scroll_acc, lin, sc) {
                         if let Some((bounds, text, style, scroll)) =
@@ -1178,8 +1177,8 @@ fn find_input_text_at_hit(
 }
 
 fn is_text_edit_focus_id(id: &str) -> bool {
-    id.starts_with(crate::components::INPUT_FOCUS_PREFIX)
-        || id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX)
+    id.starts_with(crate::utils::text_field::INPUT_FOCUS_PREFIX)
+        || id.starts_with(crate::utils::text_field::TEXTAREA_FOCUS_PREFIX)
 }
 
 /// True when `(x,y)` is on a clear/reveal control inside a text-edit chrome.
@@ -1236,8 +1235,13 @@ fn matches_input_text_leaf(el: &Element, child_fid: Option<&str>, rest: &str) ->
     let Some(id) = child_fid else {
         return false;
     };
-    id == format!("{}{}", crate::components::INPUT_FOCUS_PREFIX, rest)
-        || id == format!("{}{}", crate::components::TEXTAREA_FOCUS_PREFIX, rest)
+    id == format!("{}{}", crate::utils::text_field::INPUT_FOCUS_PREFIX, rest)
+        || id
+            == format!(
+                "{}{}",
+                crate::utils::text_field::TEXTAREA_FOCUS_PREFIX,
+                rest
+            )
 }
 
 /// World pointer → glyphon layout-box xy on the input/textarea leaf for `rest`.
@@ -1292,7 +1296,7 @@ pub(super) fn world_to_selectable_text_layout_pointer(
                 return child_hit;
             }
             if is_selectable_static_text(el)
-                && crate::components::label::selectable_text_key(el).as_deref() == Some(key)
+                && crate::utils::text_selection::selectable_text_key(el).as_deref() == Some(key)
             {
                 Some(crate::core::tree::pointer_as_layout_box_xy(
                     el, world, scroll_acc, lin, sc,
@@ -1306,7 +1310,7 @@ pub(super) fn world_to_selectable_text_layout_pointer(
 }
 
 fn is_selectable_static_text(el: &Element) -> bool {
-    crate::components::label::selectable_text_key(el).is_some()
+    crate::utils::text_selection::selectable_text_key(el).is_some()
 }
 
 /// 拖选进行中按稳定键查找可选静态文本叶（布局、展示串与样式）。
@@ -1336,7 +1340,7 @@ fn find_selectable_text_leaf_for_key_acc(
                 return child_hit;
             }
             if is_selectable_static_text(el)
-                && crate::components::label::selectable_text_key(el).as_deref() == Some(key)
+                && crate::utils::text_selection::selectable_text_key(el).as_deref() == Some(key)
             {
                 if let Some(text) = &el.text {
                     let b = el.layout_bounds;
@@ -1387,7 +1391,7 @@ fn find_selectable_text_at_hit(
             let inside =
                 crate::core::tree::pointer_in_paint_border_box(el, [x, y], scroll_acc, lin, sc);
             if is_selectable_static_text(el) && inside {
-                if let Some(key) = crate::components::label::selectable_text_key(el) {
+                if let Some(key) = crate::utils::text_selection::selectable_text_key(el) {
                     if let Some(text) = &el.text {
                         return LayerHit::Hit(Some((
                             key,
@@ -1445,7 +1449,7 @@ pub(crate) fn reconcile_pointer_hovers_and_cursor(
 ) -> Option<CursorValue> {
     let hit = pick_hover_and_cursor(el, x, y, scroll_offset).into_option();
     let cursor = hit.as_ref().and_then(|hit| hit.cursor.clone());
-    let dragging = crate::utils::drag::is_active();
+    let dragging = crate::utils::drag::runtime::is_active();
     let target = if dragging {
         None
     } else {
@@ -2445,8 +2449,8 @@ mod hover_occlusion_tests {
 
     #[test]
     fn claiming_overlay_blocks_input_text_hit_underneath() {
-        use crate::components::TEXTAREA_FOCUS_PREFIX;
         use crate::layout::layout_tree::PORTAL_LAYER_ID;
+        use crate::utils::text_field::TEXTAREA_FOCUS_PREFIX;
 
         // Page textarea under a color-picker-like portal panel (claims via on_click).
         let mut leaf = Element::new().w(200.0).h(80.0);
@@ -2517,6 +2521,20 @@ mod hover_occlusion_tests {
         assert!(
             hovered.get(),
             "Button on_hover must fire when pointer is over a non-hover child"
+        );
+    }
+
+    #[test]
+    fn rounded_interactive_hit_excludes_transparent_corners() {
+        let mut button = Element::new().w(100.0).h(40.0).rounded(8.0);
+        button.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+        assert!(
+            element_self_pointer_hit(&button, 50.0, 20.0, [0.0, 0.0]),
+            "the rounded control face must remain hittable"
+        );
+        assert!(
+            !element_self_pointer_hit(&button, 1.0, 1.0, [0.0, 0.0]),
+            "transparent rounded corners must not arm a square hover state"
         );
     }
 
@@ -3235,9 +3253,9 @@ mod ime_scroll_bounds_tests {
 #[cfg(test)]
 mod textarea_text_hit_tests {
     use super::*;
-    use crate::components::TEXTAREA_FOCUS_PREFIX;
     use crate::core::scroll_viewport::focus_id_for_scroll_viewport;
     use crate::utils::text_field::text_edit_line_box_px;
+    use crate::utils::text_field::TEXTAREA_FOCUS_PREFIX;
     use taffy::style::Overflow;
 
     fn textarea_like_tree() -> (Element, f32) {
@@ -3302,8 +3320,8 @@ mod textarea_text_hit_tests {
     }
 
     fn input_like_tree_with_padding_and_adornment() -> Element {
-        use crate::components::INPUT_FOCUS_PREFIX;
         use crate::core::tree::CursorKind;
+        use crate::utils::text_field::INPUT_FOCUS_PREFIX;
 
         let mut text = Element::new();
         text.layout_bounds = [12.0, 4.0, 152.0, 28.0];
@@ -3380,7 +3398,7 @@ mod textarea_text_hit_tests {
 
     #[test]
     fn find_input_text_at_hits_painted_not_layout_after_rotate_90() {
-        use crate::components::INPUT_FOCUS_PREFIX;
+        use crate::utils::text_field::INPUT_FOCUS_PREFIX;
         let mut el = Element::new();
         el.layout_bounds = [0.0, 0.0, 100.0, 20.0];
         el.text = Some("hello".into());

@@ -23,6 +23,8 @@ mod desktop;
 mod font_script;
 mod host;
 mod os;
+#[cfg(feature = "webview")]
+pub mod webview;
 
 pub use common::UI_STACK_RESERVE;
 pub(crate) use font_script::SystemFontScript;
@@ -150,12 +152,12 @@ pub(crate) fn glass_on_moved(window: &dyn Window) {
     }
 }
 
-pub(crate) fn glass_sync_jadix_theme() {
+pub(crate) fn glass_sync_jadix_theme(window: &dyn Window) {
     #[cfg(all(target_os = "windows", feature = "windows-dcomp"))]
     {
-        os::windows::glass::sync_jadix_theme();
-        crate::app::runtime::request_redraw_all();
+        os::windows::glass::sync_jadix_theme(window);
     }
+    let _ = window;
 }
 
 pub(crate) fn glass_on_os_theme(os_dark: bool) {

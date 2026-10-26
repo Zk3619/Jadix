@@ -101,6 +101,8 @@ pub(crate) fn forget_secondary(id: WindowId) -> Option<u64> {
         .flatten();
     if let Some(t) = token {
         super::invalidation::forget(WindowScope::Secondary(t));
+        crate::authoring::input::forget(WindowScope::Secondary(t));
+        crate::authoring::window::forget(WindowScope::Secondary(t));
         super::damage::clear_window_paint_nodes(WindowScope::Secondary(t));
         let _ = TOKEN_TO_WINDOW.try_with(|rev| {
             rev.borrow_mut().remove(&t);

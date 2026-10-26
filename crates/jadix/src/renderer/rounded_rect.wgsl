@@ -108,15 +108,14 @@ fn rect_vertex(
     let shadow_blur = instance.shadow_params.x;
     let shadow_spread = instance.shadow_params.y;
     let shadow_inset = instance.shadow_params.z;
-    // No size gate: a 2px I-beam is entirely inside the +2 vertex AA fringe, so
-    // dest-reset of the fill leaves a translucent hole (white line through S).
     let simple_fill = instance.radii.x <= 0.0 && instance.radii.y <= 0.0
         && instance.radii.z <= 0.0 && instance.radii.w <= 0.0
         && instance.border_width <= 0.0
         && instance.shadow_color.a <= 0.001
         && instance.glass.x >= 0.0
         && instance.clip_size_and_extra.w <= 0.5
-        && instance.clip_size_and_extra.z < 0.5;
+        && instance.clip_size_and_extra.z < 0.5
+        && instance.rect_size.x > 32.0 && instance.rect_size.y > 32.0;
     let plain_fill = instance.border_width <= 0.0
         && instance.shadow_color.a <= 0.001
         && instance.clip_size_and_extra.w <= 0.5;

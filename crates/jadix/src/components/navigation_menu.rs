@@ -463,7 +463,7 @@ pub fn navigation_menu_content(
                 }
                 focus_roving_key(&ev, &ids, i, FocusRovingAxis::Vertical)
             });
-            if el.button_hover_paint.is_none() {
+            if el.authoring_state.get::<crate::components::button::ButtonHoverPaint>().is_none() {
                 el.set_focusable(true);
             }
             list = list.child(el);
@@ -964,7 +964,6 @@ mod tests {
 
     #[test]
     fn components_click_mounts_dropdown_in_rsx_and_builder() {
-        use crate as jadix;
         use crate::app::portal_overlay::{
             clear_overlay_stack, try_close_top, try_dismiss_outside_press,
         };

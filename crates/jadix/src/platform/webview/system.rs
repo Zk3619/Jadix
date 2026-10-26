@@ -51,8 +51,8 @@ pub(crate) struct NativeWebViews {
 }
 fn blocked() -> bool {
     crate::app::portal_overlay::top_stacked_panel_z().is_some()
-        || crate::utils::drag::is_dragging()
-        || crate::components::resizable::is_resizable_dragging()
+        || crate::utils::drag::runtime::state().dragging
+        || crate::utils::drag::routing::blocks_native_input()
 }
 impl NativeWebViews {
     pub(crate) fn new(_: &dyn Window) -> Self {

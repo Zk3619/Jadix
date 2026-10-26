@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Off-screen descendants of an overflow clip must not be collected as instances,
 //! while Taffy content height (scroll range) stays the full column.
 

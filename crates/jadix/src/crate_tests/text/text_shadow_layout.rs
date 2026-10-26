@@ -1,8 +1,8 @@
+#![cfg(feature = "components")]
 //! Gallery-style `text_shadow` must reach `TextLayoutInfo` after layout collect.
 //!
 //! Catches regressions where RSX/`Label` base attrs or Bake routing drop shadows
 //! before prepare (symptom: gallery「Text-shadow」shows plain text).
-
 use crate::components::base::BaseComponentBuilder;
 use crate::components::label::{label, Label, LabelProps};
 use crate::core::tree::Element;

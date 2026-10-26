@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Pagination must retain hover on the first presented frame after a reactive page change.
 use super::*;
 use crate::renderer::offscreen::RgbaImage;
@@ -34,7 +35,6 @@ fn pagination_native_first_page_change_frame_keeps_hover() {
     builder.with_any_thread(true);
     builder.build().unwrap().run_app(Harness).unwrap();
 }
-
 fn run_frames(window: Arc<dyn Window>) {
     use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
     use crate::app::runtime::{clear_app_runtime, set_app_runtime, AppRuntime};

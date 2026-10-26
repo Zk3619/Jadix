@@ -581,7 +581,7 @@ fn run_optical_frames(window: Arc<dyn Window>) {
             assert_eq!(open.peek(), opened);
             crate::core::reactivity::use_signal("__jadix_button_focus_id", String::new).set(
                 if opened && (8..16).contains(&tick) {
-                    crate::components::input::focus_id_for_input("optical-native-input")
+                    crate::utils::text_field::input_focus_id("optical-native-input")
                 } else {
                     String::new()
                 },

@@ -1,3 +1,5 @@
+mod dnd;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use proc_macro::TokenStream;
@@ -53,7 +55,7 @@ fn quote_unitless_f32(e: &Expr) -> proc_macro2::TokenStream {
 fn quote_slot_chrome(class: &proc_macro2::TokenStream) -> proc_macro2::TokenStream {
     quote! {{
         let __jadix_sc_class: Option<String> = #class;
-        jadix::components::base::SlotChrome::from_opts(__jadix_sc_class, None)
+        jadix::authoring::SlotChrome::from_opts(__jadix_sc_class, None)
     }}
 }
 
@@ -236,6 +238,11 @@ fn is_boolish_attr(name: &str) -> bool {
             | "scrollAnchor"
             | "clickable"
             | "inertia"
+            | "opacity_groups"
+            | "opacityGroups"
+            | "arrows"
+            | "scrollbar_arrows"
+            | "scrollbarArrows"
     )
 }
 
@@ -485,15 +492,109 @@ pub fn ui(input: TokenStream) -> TokenStream {
     }
 }
 
+struct RuntimeRsx {
+    runtime: syn::Path,
+    dnd: Option<syn::Path>,
+    components: Option<syn::Path>,
+    icons: Option<syn::Path>,
+    source: proc_macro2::TokenStream,
+}
+
+impl Parse for RuntimeRsx {
+    fn parse(input: ParseStream) -> syn::Result<Self> {
+        let runtime = input.parse()?;
+        input.parse::<Token![;]>()?;
+        let mut dnd = None;
+        let mut components = None;
+        let mut icons = None;
+        while input.peek(Ident) && input.peek2(Token![=]) {
+            let setting: Ident = input.parse()?;
+            let destination = match setting.to_string().as_str() {
+                "dnd" => &mut dnd,
+                "components" => &mut components,
+                "icons" => &mut icons,
+                _ => return Err(syn::Error::new(setting.span(), "expected `dnd`, `components`, or `icons` product path")),
+            };
+            if destination.is_some() {
+                return Err(syn::Error::new(setting.span(), "duplicate product path"));
+            }
+            input.parse::<Token![=]>()?;
+            let path = input.parse()?;
+            input.parse::<Token![;]>()?;
+            *destination = Some(path);
+        }
+        Ok(Self {
+            runtime,
+            dnd,
+            components,
+            icons,
+            source: input.parse()?,
+        })
+    }
+}
+
+#[doc(hidden)]
+#[proc_macro]
+pub fn ui_with_runtime(input: TokenStream) -> TokenStream {
+    let parsed = syn::parse_macro_input!(input as RuntimeRsx);
+    let runtime = parsed.runtime;
+    let raw_source = parsed.source.to_string();
+    match syn::parse2::<RsxNode>(parsed.source) {
+        Ok(root) => {
+            let mut node_counter = 0;
+            let expanded = expand_node(&root, &mut node_counter, false);
+            let template_hash = syn::LitStr::new(
+                &stable_template_hash(&raw_source),
+                proc_macro2::Span::call_site(),
+            );
+            let expanded = wrap_ui_expansion_with_products(expanded, template_hash, parsed.dnd, parsed.components, parsed.icons);
+            quote! {{ use #runtime as jadix; #expanded }}.into()
+        }
+        Err(error) => error.to_compile_error().into(),
+    }
+}
+
 fn wrap_ui_expansion(
     expanded: proc_macro2::TokenStream,
     template_hash_lit: syn::LitStr,
 ) -> proc_macro2::TokenStream {
+    wrap_ui_expansion_with_products(expanded, template_hash_lit, None, None, None)
+}
+
+fn wrap_ui_expansion_with_products(
+    expanded: proc_macro2::TokenStream,
+    template_hash_lit: syn::LitStr,
+    dnd: Option<syn::Path>,
+    components: Option<syn::Path>,
+    icons: Option<syn::Path>,
+) -> proc_macro2::TokenStream {
+    fn uses_product(tokens: proc_macro2::TokenStream, product: &str) -> bool {
+        tokens.into_iter().any(|token| match token {
+            proc_macro2::TokenTree::Ident(name) => name == product,
+            proc_macro2::TokenTree::Group(group) => uses_product(group.stream(), product),
+            _ => false,
+        })
+    }
+    let icons_import = if uses_product(expanded.clone(), "__jadix_icons") {
+        let path = icons.unwrap_or_else(|| syn::parse_quote!(jadix::utils));
+        quote! { use #path as __jadix_icons; }
+    } else { quote! {} };
+    let components_import = if uses_product(expanded.clone(), "__jadix_components") {
+        let path = components.unwrap_or_else(|| syn::parse_quote!(jadix::components));
+        quote! { use #path as __jadix_components; }
+    } else { quote! {} };
+    let dnd_import = if uses_product(expanded.clone(), "__jadix_dnd") {
+        let path = dnd.unwrap_or_else(|| syn::parse_quote!(jadix::utils::drag));
+        quote! { use #path as __jadix_dnd; }
+    } else { quote! {} };
     // `build_ui_root` keeps the RSX expansion off the caller's MSVC-debug prologue.
     // Keep an explicit component `id` (Sidebar / ScrollArea / …): overwriting it with
     // `file:line` made splitting `ui!` across files change identity and broke lookups.
     quote! {
         jadix::core::tree::build_ui_root(|| {
+            #icons_import
+            #components_import
+            #dnd_import
             let mut __jadix_root: jadix::core::tree::Element = (#expanded).into();
             __jadix_root = __jadix_root.template_hash(#template_hash_lit);
             let __jadix_source = format!("{}:{}:{}", file!(), line!(), column!());
@@ -935,7 +1036,7 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
     }
 
     // Add base prop for styling/layout
-    fields.push(quote! { pub base: Option<Box<dyn FnOnce(#crate_path::components::base::BaseComponentBuilder) -> #crate_path::components::base::BaseComponentBuilder>> });
+    fields.push(quote! { pub base: Option<Box<dyn FnOnce(#crate_path::authoring::BaseComponentBuilder) -> #crate_path::authoring::BaseComponentBuilder>> });
     field_names.push(syn::Ident::new("base", proc_macro2::Span::call_site()));
     field_unwrapping.push(quote! { let mut base = base; });
     let base_ident = syn::Ident::new("base", proc_macro2::Span::call_site());
@@ -946,10 +1047,10 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
     let merge_base_stmt = if has_base_builder_arg {
         quote! {
             let base_builder = match (base_builder, base) {
-                (Some(inner), Some(outer)) => Some(Box::new(move |b: #crate_path::components::base::BaseComponentBuilder| {
+                (Some(inner), Some(outer)) => Some(Box::new(move |b: #crate_path::authoring::BaseComponentBuilder| {
                     let b = inner(b);
                     outer(b)
-                }) as Box<dyn FnOnce(#crate_path::components::base::BaseComponentBuilder) -> #crate_path::components::base::BaseComponentBuilder>),
+                }) as Box<dyn FnOnce(#crate_path::authoring::BaseComponentBuilder) -> #crate_path::authoring::BaseComponentBuilder>),
                 (Some(inner), None) => Some(inner),
                 (None, Some(outer)) => Some(outer),
                 (None, None) => None,
@@ -963,7 +1064,7 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
     } else {
         quote! {
             if let Some(base_fn) = base {
-                let builder = #crate_path::components::base::BaseComponentBuilder::new(__el);
+                let builder = #crate_path::authoring::BaseComponentBuilder::new(__el);
                 __el = base_fn(builder).el;
             }
         }
@@ -991,7 +1092,7 @@ pub fn component(_attr: TokenStream, item: TokenStream) -> TokenStream {
                         let mut __el = { #body };
                         __el = #crate_path::style::apply_stylesheet_rules_tree(__el);
                         if let Some(base_fn) = base.take() {
-                            let builder = #crate_path::components::base::BaseComponentBuilder::new(__el);
+                            let builder = #crate_path::authoring::BaseComponentBuilder::new(__el);
                             __el = base_fn(builder).el;
                         }
                         __el
@@ -1346,6 +1447,9 @@ fn expand_node(
                 "div" | "Div" => "Box".to_string(),
                 other => other.to_string(),
             };
+            if dnd::supports(&name_str) {
+                return dnd::expand(&name_str, el, node_counter, in_reactive_boundary);
+            }
             let select_is_compound =
                 name_str == "Select" && !el.attributes.iter().any(|(k, _)| k == "options");
             let combobox_is_compound =
@@ -1384,14 +1488,6 @@ fn expand_node(
                 || name_str == "AnchoredOverlayContent"
                 || name_str == "ViewportModal"
                 || name_str == "ViewportModalContent"
-                || name_str == "DragProvider"
-                || name_str == "Draggable"
-                || name_str == "Droppable"
-                || name_str == "DragOverlay"
-                || name_str == "DragHandle"
-                || name_str == "DragIgnore"
-                || name_str == "SortableList"
-                || name_str == "SortableItem"
                 || name_str == "HoverCard"
                 || name_str == "HoverCardContent"
                 || name_str == "Progress"
@@ -1525,8 +1621,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_prg_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_prg_class, None).apply(
-                            jadix::components::progress_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_prg_class, None).apply(
+                            __jadix_components::progress_scope(
                                 #id_ts,
                                 #value_ts,
                                 #default_ts,
@@ -1610,7 +1706,7 @@ fn expand_node(
                         quote! { true }
                     };
                     return quote! {
-                        jadix::components::stepper_scope(
+                        __jadix_components::stepper_scope(
                             #id_ts,
                             #current_ts,
                             #default_ts,
@@ -1702,7 +1798,7 @@ fn expand_node(
                         quote! { 2.0f32 }
                     };
                     return quote! {
-                        jadix::components::timeline_scope(
+                        __jadix_components::timeline_scope(
                             #id_ts,
                             #active_ts,
                             #default_ts,
@@ -1741,14 +1837,14 @@ fn expand_node(
                         }
                     };
                     let variant_ts = if let Some(v) = variant_expr {
-                        quote! { jadix::components::BubbleVariant::from(#v) }
+                        quote! { __jadix_components::BubbleVariant::from(#v) }
                     } else {
-                        quote! { jadix::components::BubbleVariant::Default }
+                        quote! { __jadix_components::BubbleVariant::Default }
                     };
                     let align_ts = if let Some(a) = align_expr {
-                        quote! { jadix::components::BubbleAlign::from(#a) }
+                        quote! { __jadix_components::BubbleAlign::from(#a) }
                     } else {
-                        quote! { jadix::components::BubbleAlign::Start }
+                        quote! { __jadix_components::BubbleAlign::Start }
                     };
                     let class_ts = if let Some(c) = class_expr {
                         quote! { Some((#c).to_string()) }
@@ -1757,8 +1853,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_bub_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_bub_class, None).apply(
-                            jadix::components::bubble_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_bub_class, None).apply(
+                            __jadix_components::bubble_scope(
                                 #variant_ts,
                                 #align_ts,
                                 || #child_el,
@@ -1801,14 +1897,14 @@ fn expand_node(
                         quote! { format!("{}:{}:Avatar#{}", file!(), line!(), #idx) }
                     };
                     let size_ts = if let Some(s) = size_expr {
-                        quote! { jadix::components::AvatarSize::from(#s) }
+                        quote! { __jadix_components::AvatarSize::from(#s) }
                     } else {
-                        quote! { jadix::components::AvatarSize::Default }
+                        quote! { __jadix_components::AvatarSize::Default }
                     };
                     let shape_ts = if let Some(s) = shape_expr {
-                        quote! { jadix::components::AvatarShape::from(#s) }
+                        quote! { __jadix_components::AvatarShape::from(#s) }
                     } else {
-                        quote! { jadix::components::AvatarShape::Circle }
+                        quote! { __jadix_components::AvatarShape::Circle }
                     };
                     let class_ts = if let Some(c) = class_expr {
                         quote! { Some((#c).to_string()) }
@@ -1816,7 +1912,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::avatar_scope(
+                        __jadix_components::avatar_scope(
                             #id_ts,
                             #size_ts,
                             #shape_ts,
@@ -1898,8 +1994,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_acc_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_acc_class, None).apply(
-                            jadix::components::accordion_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_acc_class, None).apply(
+                            __jadix_components::accordion_scope(
                                 #id_ts,
                                 #value_ts,
                                 #default_ts.unwrap_or_default(),
@@ -1963,9 +2059,9 @@ fn expand_node(
                         quote! { String::new() }
                     };
                     let shortcuts_ts = if let Some(s) = shortcuts_expr {
-                        quote! { jadix::components::QuestionnaireShortcuts::parse(&(#s).to_string()) }
+                        quote! { __jadix_components::QuestionnaireShortcuts::parse(&(#s).to_string()) }
                     } else {
-                        quote! { jadix::components::QuestionnaireShortcuts::None }
+                        quote! { __jadix_components::QuestionnaireShortcuts::None }
                     };
                     let items_ts = if let Some(i) = items_expr {
                         quote! { #i }
@@ -1978,19 +2074,19 @@ fn expand_node(
                         quote! { None }
                     };
                     let on_submit_ts = if let Some(s) = on_submit_expr {
-                        quote! { Some(jadix::components::questionnaire_submit_fn(#s)) }
+                        quote! { Some(__jadix_components::questionnaire_submit_fn(#s)) }
                     } else {
                         quote! { None }
                     };
                     let on_item_change_ts = if let Some(s) = on_item_change_expr {
-                        quote! { Some(jadix::components::questionnaire_item_change_fn(#s)) }
+                        quote! { Some(__jadix_components::questionnaire_item_change_fn(#s)) }
                     } else {
                         quote! { None }
                     };
                     return quote! {{
                         let __jadix_q_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_q_class, None).apply(
-                            jadix::components::questionnaire_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_q_class, None).apply(
+                            __jadix_components::questionnaire_scope(
                                 #id_ts,
                                 #item_ts,
                                 #default_ts,
@@ -2042,9 +2138,9 @@ fn expand_node(
                         quote! { format!("{}:{}:TreeView#{}", file!(), line!(), #idx) }
                     };
                     let variant_ts = if let Some(v) = variant_expr {
-                        quote! { jadix::components::TreeViewVariant::from((#v).to_string()) }
+                        quote! { __jadix_components::TreeViewVariant::from((#v).to_string()) }
                     } else {
-                        quote! { jadix::components::TreeViewVariant::default() }
+                        quote! { __jadix_components::TreeViewVariant::default() }
                     };
                     let expanded_ts = if let Some(exp) = expanded_expr {
                         quote! { Some(#exp) }
@@ -2074,9 +2170,9 @@ fn expand_node(
                     };
                     let chrome_expr = get_attr("chrome");
                     let chrome_ts = if let Some(c) = chrome_expr {
-                        quote! { jadix::components::TreeViewChrome::from((#c).to_string()) }
+                        quote! { __jadix_components::TreeViewChrome::from((#c).to_string()) }
                     } else {
-                        quote! { jadix::components::TreeViewChrome::Default }
+                        quote! { __jadix_components::TreeViewChrome::Default }
                     };
                     let selected_expr =
                         get_attr("selected_signal").or_else(|| get_attr("selectedSignal"));
@@ -2099,8 +2195,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_tv_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_tv_class, None).apply(
-                            jadix::components::tree_view_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_tv_class, None).apply(
+                            __jadix_components::tree_view_scope(
                                 #id_ts,
                                 #variant_ts,
                                 #expanded_ts,
@@ -2201,8 +2297,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_col_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_col_class, None).apply(
-                            jadix::components::collapsible_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_col_class, None).apply(
+                            __jadix_components::collapsible_scope(
                                 #id_ts,
                                 #open_ts,
                                 #default_ts,
@@ -2287,8 +2383,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_ms_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_ms_class, None).apply(
-                            jadix::components::message_scroller_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_ms_class, None).apply(
+                            __jadix_components::message_scroller_scope(
                                 #id_ts,
                                 #auto_ts,
                                 #pos_ts,
@@ -2369,10 +2465,10 @@ fn expand_node(
                     };
                     let pattern_ts = if let Some(p) = pattern_expr {
                         quote! {
-                            jadix::components::InputOtpPattern::parse(&(#p).to_string())
+                            __jadix_components::InputOtpPattern::parse(&(#p).to_string())
                         }
                     } else {
-                        quote! { jadix::components::InputOtpPattern::Digits }
+                        quote! { __jadix_components::InputOtpPattern::Digits }
                     };
                     let class_ts = if let Some(c) = class_expr {
                         quote! { Some((#c).to_string()) }
@@ -2381,8 +2477,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_otp_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_otp_class, None).apply(
-                            jadix::components::input_otp_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_otp_class, None).apply(
+                            __jadix_components::input_otp_scope(
                                 #id_ts,
                                 #max_ts,
                                 #value_ts,
@@ -2454,8 +2550,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_rz_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_rz_class, None).apply(
-                            jadix::components::resizable_panel_group_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_rz_class, None).apply(
+                            __jadix_components::resizable_panel_group_scope(
                                 #id_ts,
                                 #ori_ts,
                                 #height_ts,
@@ -2505,7 +2601,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::popover_scope(#id_ts, #open_ts, || #child_el)
+                        __jadix_components::popover_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -2547,230 +2643,6 @@ fn expand_node(
                     };
                     return quote! {
                         jadix::utils::anchored_overlay::anchored_overlay_scope(#id_ts, #open_ts, || #child_el)
-                    };
-                }
-
-                if name_str == "DragProvider" {
-                    let id_expr = get_attr("id");
-                    let collision = get_attr("collision")
-                        .map(|e| quote! { (#e).to_string() })
-                        .unwrap_or_else(|| quote! { "most-intersecting".to_string() });
-                    let axis = get_attr("axis")
-                        .or_else(|| get_attr("direction"))
-                        .map(|e| quote! { (#e).to_string() })
-                        .unwrap_or_else(|| quote! { "xy".to_string() });
-                    let start_axis = get_attr("start_axis")
-                        .or_else(|| get_attr("startAxis"))
-                        .map(|e| quote! { jadix::utils::drag::Axis::parse(&(#e)) })
-                        .unwrap_or_else(|| quote! { jadix::utils::drag::Axis::Xy });
-                    let restrict_end_only = get_attr("restrict_end_only")
-                        .or_else(|| get_attr("restrictEndOnly"))
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { false });
-                    let restrict_anchor = get_attr("restrict_anchor")
-                        .or_else(|| get_attr("restrictAnchor"))
-                        .map(|e| quote! { jadix::utils::drag::RestrictAnchor::parse(&(#e)) })
-                        .unwrap_or_else(|| quote! { jadix::utils::drag::RestrictAnchor::FULL });
-                    let restrict_overflow = get_attr("restrict_overflow")
-                        .or_else(|| get_attr("restrictOverflow"))
-                        .map(|e| quote! { jadix::utils::drag::RestrictOverflow::parse(&(#e)) })
-                        .unwrap_or_else(
-                            || quote! { jadix::utils::drag::RestrictOverflow::Visible },
-                        );
-                    let threshold = get_attr("threshold")
-                        .map(|e| quote_unitless_f32(e))
-                        .unwrap_or_else(|| quote! { 4.0f32 });
-                    let restrict = get_attr("restrict")
-                        .map(|e| quote! { (#e).to_string() })
-                        .unwrap_or_else(|| quote! { String::new() });
-                    let delay_ms = get_attr("delay_ms")
-                        .or_else(|| get_attr("delayMs"))
-                        .map(|e| quote_unitless_f32(e))
-                        .unwrap_or_else(|| quote! { 0.0f32 });
-                    let activation = get_attr("activation")
-                        .map(|e| quote! { jadix::utils::drag::Activation::parse(&(#e)) })
-                        .unwrap_or_else(|| quote! { jadix::utils::drag::Activation::And });
-                    let empty_insert = get_attr("empty_insert")
-                        .or_else(|| get_attr("emptyInsert"))
-                        .map(|e| quote_unitless_f32(e))
-                        .unwrap_or_else(|| quote! { 8.0f32 });
-                    let autoscroll = get_attr("autoscroll")
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { true });
-                    let scroll_sensitivity =
-                        get_attr("scroll_sensitivity").or_else(|| get_attr("scrollSensitivity"));
-                    let scroll_speed = get_attr("scroll_speed").or_else(|| get_attr("scrollSpeed"));
-                    let scroll_lock = get_attr("scroll_lock")
-                        .or_else(|| get_attr("scrollLock"))
-                        .map(|e| quote! { (#e).to_string() })
-                        .unwrap_or_else(|| {
-                            if get_attr("scroll_lock_all").is_some() {
-                                quote! { "all".to_string() }
-                            } else if get_attr("scroll_lock_x").is_some() {
-                                quote! { "x".to_string() }
-                            } else if get_attr("scroll_lock_y").is_some() {
-                                quote! { "y".to_string() }
-                            } else if get_attr("scroll_lock_none").is_some() {
-                                quote! { "none".to_string() }
-                            } else if get_attr("scroll_lock_auto").is_some() {
-                                quote! { "auto".to_string() }
-                            } else {
-                                quote! { "auto".to_string() }
-                            }
-                        });
-                    let animation = get_attr("animation")
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { true });
-                    let sort_mode = get_attr("sort_mode")
-                        .or_else(|| get_attr("sortMode"))
-                        .map(|e| quote! { (#e).to_string() })
-                        .unwrap_or_else(|| quote! { "insert".to_string() });
-                    let multi_drag = get_attr("multi_drag")
-                        .or_else(|| get_attr("multiDrag"))
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { false });
-                    let reorder_preview = get_attr("reorder_preview")
-                        .or_else(|| get_attr("reorderPreview"))
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { false });
-                    let debug_hits = get_attr("debug_hits")
-                        .or_else(|| get_attr("debugHits"))
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { false });
-                    let inertia = get_attr("inertia")
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { false });
-                    let on_end = get_attr("on_drag_end").or_else(|| get_attr("onDragEnd"));
-                    let on_start = get_attr("on_drag_start").or_else(|| get_attr("onDragStart"));
-                    let on_over = get_attr("on_drag_over").or_else(|| get_attr("onDragOver"));
-                    let on_move = get_attr("on_drag_move").or_else(|| get_attr("onDragMove"));
-                    let can_drop = get_attr("can_drop").or_else(|| get_attr("canDrop"));
-                    let sensor_id = get_attr("sensor_id")
-                        .or_else(|| get_attr("sensorId"))
-                        .map(|e| quote! { (#e).to_string() })
-                        .unwrap_or_else(|| quote! { "sensor".to_string() });
-                    let sensor_fn = get_attr("sensor");
-                    let sensor_ts = if let Some(f) = sensor_fn {
-                        quote! { __b = __b.sensor(#sensor_id, #f); }
-                    } else {
-                        quote! {}
-                    };
-                    let idx = *node_counter;
-                    *node_counter += 1;
-                    let mut expanded_children = Vec::new();
-                    for child in &el.children {
-                        expanded_children.push(expand_node(
-                            child,
-                            node_counter,
-                            in_reactive_boundary,
-                        ));
-                    }
-                    let child_el = if expanded_children.is_empty() {
-                        quote! { jadix::core::tree::Element::new() }
-                    } else {
-                        quote! {
-                            {
-                                let mut __list: Vec<jadix::core::tree::Element> = Vec::new();
-                                #( __list.extend(jadix::core::tree::build_ui_child(|| (#expanded_children))); )*
-                                let mut __frag = jadix::core::tree::Element::new();
-                                __frag.set_attr("jadix_fragment", "1");
-                                __frag.children(__list)
-                            }
-                        }
-                    };
-                    let id_ts = if let Some(id) = id_expr {
-                        quote! { (#id).to_string() }
-                    } else {
-                        quote! { format!("{}:{}:DragProvider#{}", file!(), line!(), #idx) }
-                    };
-                    let on_end_ts = if let Some(h) = on_end {
-                        quote! { __b = __b.on_drag_end(#h); }
-                    } else {
-                        quote! {}
-                    };
-                    let on_start_ts = if let Some(h) = on_start {
-                        quote! { __b = __b.on_drag_start(#h); }
-                    } else {
-                        quote! {}
-                    };
-                    let on_over_ts = if let Some(h) = on_over {
-                        quote! { __b = __b.on_drag_over(#h); }
-                    } else {
-                        quote! {}
-                    };
-                    let on_move_ts = if let Some(h) = on_move {
-                        quote! { __b = __b.on_drag_move(#h); }
-                    } else {
-                        quote! {}
-                    };
-                    let can_drop_ts = if let Some(h) = can_drop {
-                        quote! { __b = __b.can_drop(#h); }
-                    } else {
-                        quote! {}
-                    };
-                    let snap = get_attr("snap");
-                    let snap_targets = get_attr("snap_targets").or_else(|| get_attr("snapTargets"));
-                    let snap_fn = get_attr("snap_fn").or_else(|| get_attr("snapFn"));
-                    let snap_ts = if let Some(s) = snap {
-                        quote! { __b = __b.snap(#s); }
-                    } else {
-                        quote! {}
-                    };
-                    let snap_targets_ts = if let Some(t) = snap_targets {
-                        quote! { __b = __b.snap_targets(#t); }
-                    } else {
-                        quote! {}
-                    };
-                    let snap_fn_ts = if let Some(f) = snap_fn {
-                        quote! { __b = __b.snap_fn(#f); }
-                    } else {
-                        quote! {}
-                    };
-                    let scroll_sensitivity_ts = if let Some(v) = scroll_sensitivity {
-                        quote! { __b = __b.scroll_sensitivity(#v); }
-                    } else {
-                        quote! {}
-                    };
-                    let scroll_speed_ts = if let Some(v) = scroll_speed {
-                        quote! { __b = __b.scroll_speed(#v); }
-                    } else {
-                        quote! {}
-                    };
-                    return quote! {
-                        {
-                            let mut __b = jadix::utils::drag::drag_scope(#id_ts);
-                            __b = __b.collision(jadix::utils::drag::CollisionAlg::parse(&(#collision)));
-                            __b = __b.axis(jadix::utils::drag::Axis::parse(&(#axis)));
-                            __b = __b.start_axis(#start_axis);
-                            __b = __b.threshold(#threshold);
-                            __b = __b.restrict(jadix::utils::drag::Restrict::parse(&(#restrict)));
-                            __b = __b.restrict_end_only(#restrict_end_only);
-                            __b = __b.restrict_anchor(#restrict_anchor);
-                            __b = __b.restrict_overflow(#restrict_overflow);
-                            __b = __b.delay_ms(#delay_ms);
-                            __b = __b.activation(#activation);
-                            __b = __b.empty_insert(#empty_insert);
-                            __b = __b.autoscroll(#autoscroll);
-                            #scroll_sensitivity_ts
-                            #scroll_speed_ts
-                            __b = __b.scroll_lock(jadix::utils::drag::ScrollLock::parse(&(#scroll_lock)));
-                            __b = __b.animation(#animation);
-                            __b = __b.sort_mode(jadix::utils::drag::SortMode::parse(&(#sort_mode)));
-                            __b = __b.multi_drag(#multi_drag);
-                            __b = __b.reorder_preview(#reorder_preview);
-                            __b = __b.debug_hits(#debug_hits);
-                            __b = __b.inertia(#inertia);
-                            #snap_ts
-                            #snap_targets_ts
-                            #snap_fn_ts
-                            #on_start_ts
-                            #on_over_ts
-                            #on_move_ts
-                            #on_end_ts
-                            #can_drop_ts
-                            #sensor_ts
-                            __b.child(|| #child_el)
-                        }
                     };
                 }
 
@@ -2888,7 +2760,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::hover_card_scope(#id_ts, #open_ts, || #child_el)
+                        __jadix_components::hover_card_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -2931,7 +2803,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::dialog_scope(#id_ts, #open_ts, || #child_el)
+                        __jadix_components::dialog_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -2972,7 +2844,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::alert_dialog_scope(#id_ts, #open_ts, || #child_el)
+                        __jadix_components::alert_dialog_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -3015,7 +2887,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::sheet_scope(#id_ts, #open_ts, || #child_el)
+                        __jadix_components::sheet_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -3056,7 +2928,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::drawer_scope(#id_ts, #open_ts, || #child_el)
+                        __jadix_components::drawer_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -3108,7 +2980,7 @@ fn expand_node(
                         quote! { "Type a command or search...".to_string() }
                     };
                     return quote! {
-                        jadix::components::command_dialog_scope(
+                        __jadix_components::command_dialog_scope(
                             #id_ts,
                             #open_ts,
                             #placeholder_ts,
@@ -3161,7 +3033,7 @@ fn expand_node(
                         quote! { "Type a command or search...".to_string() }
                     };
                     return quote! {
-                        jadix::components::command_overlay_scope(
+                        __jadix_components::command_overlay_scope(
                             #id_ts,
                             #open_ts,
                             #placeholder_ts,
@@ -3213,11 +3085,11 @@ fn expand_node(
                         quote! { "Type a command or search...".to_string() }
                     };
                     return quote! {
-                        jadix::components::command_scope(
+                        __jadix_components::command_scope(
                             #id_ts,
                             #open_ts,
                             #placeholder_ts,
-                            jadix::components::CommandSurface::Inline,
+                            __jadix_components::CommandSurface::Inline,
                             || #child_el,
                         )
                     };
@@ -3261,7 +3133,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::tooltip_scope(#id_ts, #open_ts, || #child_el)
+                        __jadix_components::tooltip_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -3324,7 +3196,7 @@ fn expand_node(
                     return quote! {
                         {
                             let __jadix_sidebar_variant: Option<String> = #variant_ts;
-                            let mut __jadix_el = jadix::components::sidebar_provider_scope(
+                            let mut __jadix_el = __jadix_components::sidebar_provider_scope(
                                 #id_ts,
                                 #open_ts,
                                 #default_open_ts,
@@ -3381,7 +3253,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::context_menu_scope(#id_ts, #open_ts, || #child_el)
+                        __jadix_components::context_menu_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -3423,7 +3295,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::dropdown_menu_scope(#id_ts, #open_ts, || #child_el)
+                        __jadix_components::dropdown_menu_scope(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -3458,7 +3330,7 @@ fn expand_node(
                         quote! { format!("{}:{}:Menubar#{}", file!(), line!(), #idx) }
                     };
                     return quote! {
-                        jadix::components::menubar_scope(#id_ts, || #child_el)
+                        __jadix_components::menubar_scope(#id_ts, || #child_el)
                     };
                 }
 
@@ -3505,7 +3377,7 @@ fn expand_node(
                         quote! { true }
                     };
                     return quote! {
-                        jadix::components::navigation_menu_scope(#id_ts, #viewport_ts, || #child_el)
+                        __jadix_components::navigation_menu_scope(#id_ts, #viewport_ts, || #child_el)
                     };
                 }
 
@@ -3545,8 +3417,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_nmi_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_nmi_class, None).apply(
-                            jadix::components::navigation_menu_item(#value_ts, || #child_el)
+                        jadix::authoring::SlotChrome::from_opts(__jadix_nmi_class, None).apply(
+                            __jadix_components::navigation_menu_item(#value_ts, || #child_el)
                         )
                     }};
                 }
@@ -3586,7 +3458,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::menubar_menu(#id_ts, #open_ts, || #child_el)
+                        __jadix_components::menubar_menu(#id_ts, #open_ts, || #child_el)
                     };
                 }
 
@@ -3661,8 +3533,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_sel_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_sel_class, None).apply(
-                            jadix::components::select_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_sel_class, None).apply(
+                            __jadix_components::select_scope(
                                 #id_ts,
                                 #open_ts,
                                 #value_ts,
@@ -3731,7 +3603,7 @@ fn expand_node(
                         quote! { false }
                     };
                     return quote! {
-                        jadix::components::radio_group_scope(
+                        __jadix_components::radio_group_scope(
                             #id_ts,
                             #value_ts,
                             #default_ts,
@@ -3840,7 +3712,7 @@ fn expand_node(
                         quote! { "horizontal".to_string() }
                     };
                     let spacing_ts = if let Some(s) = spacing_expr {
-                        quote! { jadix::components::parse_toggle_group_spacing(#s) }
+                        quote! { __jadix_components::parse_toggle_group_spacing(#s) }
                     } else {
                         quote! { 2u8 }
                     };
@@ -3851,7 +3723,7 @@ fn expand_node(
                             quote! { jadix::core::tree::parse_bool_like(#j) }
                         }
                     } else if let Some(l) = layout_expr {
-                        quote! { jadix::components::ToggleGroupLayout::from((#l).to_string()).is_joined() }
+                        quote! { __jadix_components::ToggleGroupLayout::from((#l).to_string()).is_joined() }
                     } else {
                         quote! { false }
                     };
@@ -3871,8 +3743,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_tg_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_tg_class, None).apply(
-                            jadix::components::toggle_group_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_tg_class, None).apply(
+                            __jadix_components::toggle_group_scope(
                                 #id_ts,
                                 #value_ts,
                                 #values_ts,
@@ -3953,7 +3825,7 @@ fn expand_node(
                         quote! { false }
                     };
                     return quote! {
-                        jadix::components::tabs_scope(
+                        __jadix_components::tabs_scope(
                             #id_ts,
                             #value_ts,
                             #default_ts,
@@ -4162,7 +4034,7 @@ fn expand_node(
                         quote! { 1u32 }
                     };
                     return quote! {
-                        jadix::components::carousel_scope(
+                        __jadix_components::carousel_scope(
                             #id_ts,
                             #index_ts,
                             #orientation_ts,
@@ -4211,7 +4083,7 @@ fn expand_node(
                         }
                     };
                     return quote! {
-                        jadix::components::tabs_content((#value_expr).to_string(), move || #child_el)
+                        __jadix_components::tabs_content((#value_expr).to_string(), move || #child_el)
                     };
                 }
 
@@ -4245,8 +4117,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_accc_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_accc_class, None).apply(
-                            jadix::components::accordion_content(move || #child_el)
+                        jadix::authoring::SlotChrome::from_opts(__jadix_accc_class, None).apply(
+                            __jadix_components::accordion_content(move || #child_el)
                         )
                     }};
                 }
@@ -4281,8 +4153,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_colc_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_colc_class, None).apply(
-                            jadix::components::collapsible_content(move || #child_el)
+                        jadix::authoring::SlotChrome::from_opts(__jadix_colc_class, None).apply(
+                            __jadix_components::collapsible_content(move || #child_el)
                         )
                     }};
                 }
@@ -4337,8 +4209,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_tvi_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_tvi_class, None).apply(
-                            jadix::components::tree_view_item_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_tvi_class, None).apply(
+                            __jadix_components::tree_view_item_scope(
                                 #id_ts,
                                 #label_ts,
                                 #disabled_ts,
@@ -4392,8 +4264,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_acci_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_acci_class, None).apply(
-                            jadix::components::accordion_item_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_acci_class, None).apply(
+                            __jadix_components::accordion_item_scope(
                                 #value_ts,
                                 #disabled_ts,
                                 || #child_el,
@@ -4479,14 +4351,14 @@ fn expand_node(
                         quote! { None }
                     };
                     let on_status_ts = if let Some(s) = on_status_expr {
-                        quote! { Some(jadix::components::questionnaire_status_change_fn(#s)) }
+                        quote! { Some(__jadix_components::questionnaire_status_change_fn(#s)) }
                     } else {
                         quote! { None }
                     };
                     return quote! {{
                         let __jadix_qi_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_qi_class, None).apply(
-                            jadix::components::questionnaire_item_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_qi_class, None).apply(
+                            __jadix_components::questionnaire_item_scope(
                                 #name_ts,
                                 #required_ts,
                                 #multiple_ts,
@@ -4559,8 +4431,8 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::dialog_content(
-                            jadix::components::DialogContentOpts {
+                        __jadix_components::dialog_content(
+                            __jadix_components::DialogContentOpts {
                                 show_close: #show_close,
                                 overlay_color: #overlay_color,
                                 overlay_opacity: #overlay_opacity,
@@ -4600,15 +4472,15 @@ fn expand_node(
                         })
                         .unwrap_or_else(|| quote! { None });
                     let size = get_attr("size")
-                        .map(|e| quote! { jadix::components::AlertDialogSize::from(#e) })
+                        .map(|e| quote! { __jadix_components::AlertDialogSize::from(#e) })
                         .unwrap_or_else(|| {
-                            quote! { jadix::components::AlertDialogSize::Default }
+                            quote! { __jadix_components::AlertDialogSize::Default }
                         });
                     let variant_static = get_attr("variant")
                         .filter(|e| !expr_reads_get(e))
-                        .map(|e| quote! { jadix::components::AlertDialogVariant::from(#e) })
+                        .map(|e| quote! { __jadix_components::AlertDialogVariant::from(#e) })
                         .unwrap_or_else(|| {
-                            quote! { jadix::components::AlertDialogVariant::Default }
+                            quote! { __jadix_components::AlertDialogVariant::Default }
                         });
                     let filled_static = get_attr("filled")
                         .filter(|e| !expr_reads_get(e))
@@ -4657,8 +4529,8 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::alert_dialog_content(
-                            jadix::components::AlertDialogContentOpts {
+                        __jadix_components::alert_dialog_content(
+                            __jadix_components::AlertDialogContentOpts {
                                 overlay_color: #overlay_color,
                                 overlay_opacity: #overlay_opacity,
                                 close_on_overlay_click: #close_on_overlay,
@@ -4683,9 +4555,9 @@ fn expand_node(
                         .map(|e| quote! { #e })
                         .unwrap_or_else(|| quote! { true });
                     let side = get_attr("side")
-                        .map(|e| quote! { jadix::components::SheetSide::from(#e) })
+                        .map(|e| quote! { __jadix_components::SheetSide::from(#e) })
                         .unwrap_or_else(|| {
-                            quote! { jadix::components::SheetSide::Right }
+                            quote! { __jadix_components::SheetSide::Right }
                         });
                     let overlay_color = get_attr("overlay_color")
                         .or_else(|| get_attr("overlayColor"))
@@ -4750,8 +4622,8 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::sheet_content(
-                            jadix::components::SheetContentOpts {
+                        __jadix_components::sheet_content(
+                            __jadix_components::SheetContentOpts {
                                 side: #side,
                                 show_close: #show_close,
                                 overlay_color: #overlay_color,
@@ -4797,9 +4669,9 @@ fn expand_node(
                         .or_else(|| get_attr("swipe_direction"))
                         .or_else(|| get_attr("swipeDirection"))
                         .or_else(|| get_attr("side"))
-                        .map(|e| quote! { jadix::components::DrawerDirection::from(#e) })
+                        .map(|e| quote! { __jadix_components::DrawerDirection::from(#e) })
                         .unwrap_or_else(|| {
-                            quote! { jadix::components::DrawerDirection::Down }
+                            quote! { __jadix_components::DrawerDirection::Down }
                         });
                     let overlay_color = get_attr("overlay_color")
                         .or_else(|| get_attr("overlayColor"))
@@ -4836,10 +4708,10 @@ fn expand_node(
                     let snap_points = get_attr("snap_points")
                         .or_else(|| get_attr("snapPoints"))
                         .map(|e| {
-                            quote! { jadix::components::drawer::coerce_snap_points(#e) }
+                            quote! { __jadix_components::drawer::coerce_snap_points(#e) }
                         })
                         .unwrap_or_else(
-                            || quote! { vec![jadix::components::DrawerSnapPoint::Fraction(1.0)] },
+                            || quote! { vec![__jadix_components::DrawerSnapPoint::Fraction(1.0)] },
                         );
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
@@ -4868,8 +4740,8 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::drawer_content(
-                            jadix::components::DrawerContentOpts {
+                        __jadix_components::drawer_content(
+                            __jadix_components::DrawerContentOpts {
                                 direction: #direction,
                                 show_close: #show_close,
                                 show_swipe_handle: #show_swipe_handle,
@@ -4922,8 +4794,8 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::tooltip_content(
-                            jadix::components::TooltipContentOpts {
+                        __jadix_components::tooltip_content(
+                            __jadix_components::TooltipContentOpts {
                                 side: #side,
                                 panel: #panel,
                             },
@@ -4990,8 +4862,8 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::popover_content(
-                            jadix::components::PopoverContentOpts {
+                        __jadix_components::popover_content(
+                            __jadix_components::PopoverContentOpts {
                                 side: #side,
                                 align: #align,
                                 side_offset: #side_offset,
@@ -5154,434 +5026,6 @@ fn expand_node(
                     };
                 }
 
-                if name_str == "Draggable" || name_str == "SortableItem" {
-                    let id_expr = get_attr("id");
-                    let item_type = get_attr("item_type")
-                        .or_else(|| get_attr("itemType"))
-                        .map(|e| quote! { (#e).to_string() })
-                        .unwrap_or_else(|| quote! { String::new() });
-                    let group = get_attr("group")
-                        .map(|e| quote! { (#e).to_string() })
-                        .unwrap_or_else(|| quote! { String::new() });
-                    let list = get_attr("list")
-                        .map(|e| quote! { Some((#e).to_string()) })
-                        .unwrap_or_else(|| quote! { None });
-                    let index = get_attr("index")
-                        .map(|e| quote! { Some((#e) as usize) })
-                        .unwrap_or_else(|| quote! { None });
-                    let accept = get_attr("accept")
-                        .map(|e| quote! { (#e).to_string() })
-                        .unwrap_or_else(|| quote! { String::new() });
-                    let disabled = get_attr("disabled")
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { false });
-                    let handle_only = get_attr("handle")
-                        .or_else(|| get_attr("handle_only"))
-                        .or_else(|| get_attr("handleOnly"))
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { false });
-                    let opacity = get_attr("opacity")
-                        .map(|e| {
-                            quote! { Some(jadix::core::tree::IntoOpacity::into_opacity(#e)) }
-                        })
-                        .unwrap_or_else(|| quote! { None });
-                    let source_opacity = get_attr("source_opacity")
-                        .or_else(|| get_attr("sourceOpacity"))
-                        .map(|e| {
-                            quote! { Some(jadix::core::tree::IntoOpacity::into_opacity(#e)) }
-                        })
-                        .unwrap_or_else(|| quote! { None });
-                    let stack = get_attr("stack")
-                        .map(|e| quote! { jadix::utils::drag::DragStack::from(#e) })
-                        .unwrap_or_else(|| quote! { jadix::utils::drag::DragStack::Auto });
-                    let restrict = get_attr("restrict")
-                        .map(|e| {
-                            quote! { Some(jadix::utils::drag::Restrict::parse(&(#e).to_string())) }
-                        })
-                        .unwrap_or_else(|| quote! { None });
-                    let skip_shift = get_attr("skip_shift")
-                        .or_else(|| get_attr("skipShift"))
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { false });
-                    let skip_follow = get_attr("skip_follow")
-                        .or_else(|| get_attr("skipFollow"))
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { false });
-                    let pull_clone = get_attr("pull_clone")
-                        .or_else(|| get_attr("pullClone"))
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { false });
-                    let data = get_attr("data")
-                        .map(|e| quote! { Some(#e) })
-                        .unwrap_or_else(|| quote! { None });
-                    let idx = *node_counter;
-                    *node_counter += 1;
-                    let mut expanded_children = Vec::new();
-                    for child in &el.children {
-                        expanded_children.push(expand_node(child, node_counter, true));
-                    }
-                    let child_el = if expanded_children.is_empty() {
-                        quote! { jadix::core::tree::Element::new() }
-                    } else {
-                        quote! {
-                            {
-                                let mut __list: Vec<jadix::core::tree::Element> = Vec::new();
-                                #( __list.extend(jadix::core::tree::build_ui_child(|| (#expanded_children))); )*
-                                if __list.len() == 1 {
-                                    __list.remove(0)
-                                } else {
-                                    let mut __v = jadix::primitives::vstack();
-                                    __v = __v.children(__list);
-                                    jadix::core::tree::Element::from(__v)
-                                }
-                            }
-                        }
-                    };
-                    let id_ts = if let Some(id) = id_expr {
-                        quote! { (#id).to_string() }
-                    } else {
-                        quote! { format!("{}:{}:{}#{}", file!(), line!(), #name_str, #idx) }
-                    };
-                    let also = if name_str == "SortableItem" {
-                        quote! { true }
-                    } else {
-                        quote! { false }
-                    };
-                    return quote! {
-                        jadix::utils::drag::draggable_from_rsx(
-                            jadix::utils::drag::DraggableRsxOpts {
-                                id: #id_ts,
-                                item_type: #item_type,
-                                group: #group,
-                                list: #list,
-                                index: #index,
-                                disabled: #disabled,
-                                handle_only: #handle_only,
-                                also_droppable: #also,
-                                accept: #accept,
-                                opacity: #opacity,
-                                source_opacity: #source_opacity,
-                                stack: #stack,
-                                restrict: #restrict,
-                                skip_shift: #skip_shift,
-                                skip_follow: #skip_follow,
-                                pull_clone: #pull_clone,
-                                data: #data,
-                            },
-                            move || #child_el,
-                        )
-                    };
-                }
-
-                if name_str == "Droppable" || name_str == "SortableList" {
-                    let id_expr = get_attr("id");
-                    let accept = get_attr("accept")
-                        .map(|e| quote! { (#e).to_string() })
-                        .unwrap_or_else(|| quote! { String::new() });
-                    let group = get_attr("group")
-                        .map(|e| quote! { (#e).to_string() })
-                        .unwrap_or_else(|| quote! { String::new() });
-                    let disabled = get_attr("disabled")
-                        .map(|e| quote! { #e })
-                        .unwrap_or_else(|| quote! { false });
-                    let overlap_attr = get_attr("overlap");
-                    let overlap_ts = if let Some(e) = overlap_attr {
-                        quote! {
-                            __db = __db.overlap(
-                                jadix::utils::drag::DropOverlap::parse(&(#e).to_string()),
-                            );
-                        }
-                    } else {
-                        quote! {}
-                    };
-                    let drop_checker = get_attr("drop_checker").or_else(|| get_attr("dropChecker"));
-                    let on_drop_activate =
-                        get_attr("on_drop_activate").or_else(|| get_attr("onDropActivate"));
-                    let on_drop_deactivate =
-                        get_attr("on_drop_deactivate").or_else(|| get_attr("onDropDeactivate"));
-                    let on_drag_enter =
-                        get_attr("on_drag_enter").or_else(|| get_attr("onDragEnter"));
-                    let on_drag_leave =
-                        get_attr("on_drag_leave").or_else(|| get_attr("onDragLeave"));
-                    let on_drop_move = get_attr("on_drop_move").or_else(|| get_attr("onDropMove"));
-                    let on_drop = get_attr("on_drop").or_else(|| get_attr("onDrop"));
-                    let drop_checker_ts = if let Some(f) = drop_checker {
-                        quote! { __db = __db.drop_checker(std::rc::Rc::new(#f)); }
-                    } else {
-                        quote! {}
-                    };
-                    let on_drop_activate_ts = if let Some(h) = on_drop_activate {
-                        quote! { __db = __db.on_drop_activate(#h); }
-                    } else {
-                        quote! {}
-                    };
-                    let on_drop_deactivate_ts = if let Some(h) = on_drop_deactivate {
-                        quote! { __db = __db.on_drop_deactivate(#h); }
-                    } else {
-                        quote! {}
-                    };
-                    let on_drag_enter_ts = if let Some(h) = on_drag_enter {
-                        quote! { __db = __db.on_drag_enter(#h); }
-                    } else {
-                        quote! {}
-                    };
-                    let on_drag_leave_ts = if let Some(h) = on_drag_leave {
-                        quote! { __db = __db.on_drag_leave(#h); }
-                    } else {
-                        quote! {}
-                    };
-                    let on_drop_move_ts = if let Some(h) = on_drop_move {
-                        quote! { __db = __db.on_drop_move(#h); }
-                    } else {
-                        quote! {}
-                    };
-                    let on_drop_ts = if let Some(h) = on_drop {
-                        quote! { __db = __db.on_drop(#h); }
-                    } else {
-                        quote! {}
-                    };
-                    let list_attr = get_attr("list");
-                    let list_ts = if let Some(e) = list_attr {
-                        quote! { __db = __db.list((#e).to_string()); }
-                    } else if name_str == "SortableList" {
-                        if let Some(id) = get_attr("id") {
-                            quote! { __db = __db.list((#id).to_string()); }
-                        } else {
-                            quote! {}
-                        }
-                    } else {
-                        quote! {}
-                    };
-                    let opacity_attr = get_attr("opacity");
-                    let opacity_ts = if let Some(e) = opacity_attr {
-                        quote! {
-                            __db = __db.opacity(
-                                jadix::core::tree::IntoOpacity::into_opacity(#e),
-                            );
-                        }
-                    } else {
-                        quote! {}
-                    };
-                    let direction_attr = get_attr("direction");
-                    let direction_ts = if let Some(e) = direction_attr {
-                        quote! {
-                            __db = __db.direction(jadix::utils::drag::Axis::parse(&(#e)));
-                        }
-                    } else {
-                        quote! {}
-                    };
-                    let idx = *node_counter;
-                    *node_counter += 1;
-                    let mut expanded_children = Vec::new();
-                    for child in &el.children {
-                        expanded_children.push(expand_node(child, node_counter, true));
-                    }
-                    let child_el = if expanded_children.is_empty() {
-                        quote! { jadix::core::tree::Element::new() }
-                    } else {
-                        quote! {
-                            {
-                                let mut __list: Vec<jadix::core::tree::Element> = Vec::new();
-                                #( __list.extend(jadix::core::tree::build_ui_child(|| (#expanded_children))); )*
-                                if __list.len() == 1 {
-                                    __list.remove(0)
-                                } else {
-                                    let mut __v = jadix::primitives::vstack();
-                                    __v = __v.children(__list);
-                                    jadix::core::tree::Element::from(__v)
-                                }
-                            }
-                        }
-                    };
-                    let id_ts = if let Some(id) = id_expr {
-                        quote! { (#id).to_string() }
-                    } else {
-                        quote! { format!("{}:{}:{}#{}", file!(), line!(), #name_str, #idx) }
-                    };
-                    return quote! {
-                        {
-                            let mut __db = jadix::utils::drag::droppable(#id_ts)
-                                .accept(#accept)
-                                .group(#group)
-                                .disabled(#disabled);
-                            #list_ts
-                            #opacity_ts
-                            #direction_ts
-                            #overlap_ts
-                            #drop_checker_ts
-                            #on_drop_activate_ts
-                            #on_drop_deactivate_ts
-                            #on_drag_enter_ts
-                            #on_drag_leave_ts
-                            #on_drop_move_ts
-                            #on_drop_ts
-                            __db.child(move || #child_el)
-                        }
-                    };
-                }
-
-                if name_str == "DragOverlay" {
-                    let mut expanded_children = Vec::new();
-                    for child in &el.children {
-                        expanded_children.push(expand_node(child, node_counter, true));
-                    }
-                    let child_ts = if expanded_children.is_empty() {
-                        quote! {}
-                    } else {
-                        quote! {
-                            .child(move || {
-                                let mut __list: Vec<jadix::core::tree::Element> = Vec::new();
-                                #( __list.extend(jadix::core::tree::build_ui_child(|| (#expanded_children))); )*
-                                if __list.len() == 1 {
-                                    __list.remove(0)
-                                } else {
-                                    let mut __v = jadix::primitives::vstack();
-                                    __v = __v.children(__list);
-                                    jadix::core::tree::Element::from(__v)
-                                }
-                            })
-                        }
-                    };
-                    let mut style_stmts = Vec::new();
-                    if let Some(class) = get_attr("class")
-                        .or_else(|| get_attr("className"))
-                        .or_else(|| get_attr("tw"))
-                        .or_else(|| get_attr("uno"))
-                    {
-                        style_stmts.push(quote_apply_class_list(class));
-                    }
-                    if let Some(op) = get_attr("opacity") {
-                        style_stmts.push(quote! {
-                            __jadix_el = __jadix_el.opacity(#op);
-                        });
-                    }
-                    if let Some(rot) = get_attr("rotate") {
-                        style_stmts.push(quote! {
-                            __jadix_el = __jadix_el.rotate(#rot);
-                        });
-                    }
-                    if let Some(bg) = get_attr("bg") {
-                        style_stmts.push(quote! {
-                            __jadix_el = __jadix_el.bg(jadix::core::tree::parse_color(#bg));
-                        });
-                    }
-                    if let Some(rounded) = get_attr("rounded")
-                        .or_else(|| get_attr("radius"))
-                        .or_else(|| get_attr("border_radius"))
-                        .or_else(|| get_attr("borderRadius"))
-                    {
-                        style_stmts.push(quote! {
-                            __jadix_el = __jadix_el.rounded(jadix::core::tree::IntoF32::into_f32(#rounded));
-                        });
-                    }
-                    if let Some(shadow) = get_attr("box_shadow").or_else(|| get_attr("boxShadow")) {
-                        style_stmts.push(quote! {
-                            __jadix_el = __jadix_el.box_shadow(#shadow);
-                        });
-                    }
-                    if let Some(p) = get_attr("p") {
-                        style_stmts.push(quote! {
-                            __jadix_el = __jadix_el.p(#p);
-                        });
-                    }
-                    if let Some(w) = get_attr("w").or_else(|| get_attr("width")) {
-                        style_stmts.push(quote! {
-                            __jadix_el = __jadix_el.w(#w);
-                        });
-                    }
-                    if let Some(h) = get_attr("h").or_else(|| get_attr("height")) {
-                        style_stmts.push(quote! {
-                            __jadix_el = __jadix_el.h(#h);
-                        });
-                    }
-                    let style_ts = if style_stmts.is_empty() {
-                        quote! {}
-                    } else {
-                        quote! {
-                            .style(move |__jadix_el| {
-                                let mut __jadix_el = __jadix_el;
-                                #(#style_stmts)*
-                                __jadix_el
-                            })
-                        }
-                    };
-                    let source_opacity_ts = if let Some(v) =
-                        get_attr("source_opacity").or_else(|| get_attr("sourceOpacity"))
-                    {
-                        quote! { .source_opacity(#v) }
-                    } else {
-                        quote! {}
-                    };
-                    let align_ts = if let Some(v) = get_attr("align") {
-                        quote! { .align(jadix::utils::drag::OverlayAlign::parse(&(#v))) }
-                    } else {
-                        quote! {}
-                    };
-                    return quote! {
-                        jadix::core::tree::Element::from(
-                            jadix::utils::drag::drag_overlay()
-                                #child_ts
-                                #style_ts
-                                #source_opacity_ts
-                                #align_ts
-                        )
-                    };
-                }
-
-                if name_str == "DragHandle" {
-                    let mut expanded_children = Vec::new();
-                    for child in &el.children {
-                        expanded_children.push(expand_node(child, node_counter, true));
-                    }
-                    let child_el = if expanded_children.is_empty() {
-                        quote! { jadix::core::tree::Element::new() }
-                    } else {
-                        quote! {
-                            {
-                                let mut __list: Vec<jadix::core::tree::Element> = Vec::new();
-                                #( __list.extend(jadix::core::tree::build_ui_child(|| (#expanded_children))); )*
-                                if __list.len() == 1 {
-                                    __list.remove(0)
-                                } else {
-                                    let mut __v = jadix::primitives::vstack();
-                                    __v = __v.children(__list);
-                                    jadix::core::tree::Element::from(__v)
-                                }
-                            }
-                        }
-                    };
-                    return quote! {
-                        jadix::utils::drag::drag_handle_from_rsx(|| #child_el)
-                    };
-                }
-
-                if name_str == "DragIgnore" {
-                    let mut expanded_children = Vec::new();
-                    for child in &el.children {
-                        expanded_children.push(expand_node(child, node_counter, true));
-                    }
-                    let child_el = if expanded_children.is_empty() {
-                        quote! { jadix::core::tree::Element::new() }
-                    } else {
-                        quote! {
-                            {
-                                let mut __list: Vec<jadix::core::tree::Element> = Vec::new();
-                                #( __list.extend(jadix::core::tree::build_ui_child(|| (#expanded_children))); )*
-                                if __list.len() == 1 {
-                                    __list.remove(0)
-                                } else {
-                                    let mut __v = jadix::primitives::vstack();
-                                    __v = __v.children(__list);
-                                    jadix::core::tree::Element::from(__v)
-                                }
-                            }
-                        }
-                    };
-                    return quote! {
-                        jadix::utils::drag::drag_ignore_from_rsx(|| #child_el)
-                    };
-                }
-
                 if name_str == "ViewportModalContent" {
                     let motion = get_attr("motion")
                         .map(|e| {
@@ -5671,8 +5115,8 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::hover_card_content(
-                            jadix::components::HoverCardContentOpts {
+                        __jadix_components::hover_card_content(
+                            __jadix_components::HoverCardContentOpts {
                                 side: #side,
                                 align: #align,
                                 side_offset: #side_offset,
@@ -5718,7 +5162,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::context_menu_sub(#id_ts, || #child_el)
+                        __jadix_components::context_menu_sub(#id_ts, || #child_el)
                     };
                 }
 
@@ -5768,7 +5212,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::context_menu_radio_group(
+                        __jadix_components::context_menu_radio_group(
                             #id_ts,
                             #value_ts,
                             #default_ts,
@@ -5810,7 +5254,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::dropdown_menu_sub(#id_ts, || #child_el)
+                        __jadix_components::dropdown_menu_sub(#id_ts, || #child_el)
                     };
                 }
 
@@ -5860,7 +5304,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::dropdown_menu_radio_group(
+                        __jadix_components::dropdown_menu_radio_group(
                             #id_ts,
                             #value_ts,
                             #default_ts,
@@ -5902,7 +5346,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::menubar_sub(#id_ts, || #child_el)
+                        __jadix_components::menubar_sub(#id_ts, || #child_el)
                     };
                 }
 
@@ -5952,7 +5396,7 @@ fn expand_node(
                         quote! { None }
                     };
                     return quote! {
-                        jadix::components::menubar_radio_group(
+                        __jadix_components::menubar_radio_group(
                             #id_ts,
                             #value_ts,
                             #default_ts,
@@ -5993,8 +5437,8 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::context_menu_content(
-                            jadix::components::ContextMenuContentOpts {
+                        __jadix_components::context_menu_content(
+                            __jadix_components::ContextMenuContentOpts {
                                 placement: #placement,
                                 panel: #panel,
                             },
@@ -6033,8 +5477,8 @@ fn expand_node(
                         }
                     };
                     return quote! {
-                        jadix::components::dropdown_menu_content(
-                            jadix::components::DropdownMenuContentOpts::new(#placement, #class),
+                        __jadix_components::dropdown_menu_content(
+                            __jadix_components::DropdownMenuContentOpts::new(#placement, #class),
                             move || #child_el,
                         )
                     };
@@ -6071,8 +5515,8 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::menubar_content(
-                            jadix::components::MenubarContentOpts {
+                        __jadix_components::menubar_content(
+                            __jadix_components::MenubarContentOpts {
                                 placement: #placement,
                                 panel: #panel,
                             },
@@ -6108,8 +5552,8 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::navigation_menu_content(
-                            jadix::components::NavigationMenuContentOpts {
+                        __jadix_components::navigation_menu_content(
+                            __jadix_components::NavigationMenuContentOpts {
                                 panel: #panel,
                             },
                             move || #child_el,
@@ -6144,7 +5588,7 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::context_menu_sub_content(
+                        __jadix_components::context_menu_sub_content(
                             #panel,
                             move || #child_el,
                         )
@@ -6178,7 +5622,7 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::dropdown_menu_sub_content(
+                        __jadix_components::dropdown_menu_sub_content(
                             #panel,
                             move || #child_el,
                         )
@@ -6212,7 +5656,7 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::menubar_sub_content(
+                        __jadix_components::menubar_sub_content(
                             #panel,
                             move || #child_el,
                         )
@@ -6276,8 +5720,8 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::select_content(
-                            jadix::components::SelectContentOpts {
+                        __jadix_components::select_content(
+                            __jadix_components::SelectContentOpts {
                                 panel: #panel,
                                 match_trigger: #match_trigger,
                                 menu_width: #menu_width,
@@ -6369,8 +5813,8 @@ fn expand_node(
                     };
                     return quote! {{
                         let __jadix_cb_class: Option<String> = #class_ts;
-                        jadix::components::base::SlotChrome::from_opts(__jadix_cb_class, None).apply(
-                            jadix::components::combobox_scope(
+                        jadix::authoring::SlotChrome::from_opts(__jadix_cb_class, None).apply(
+                            __jadix_components::combobox_scope(
                                 #id_ts,
                                 #open_ts,
                                 #value_ts,
@@ -6442,8 +5886,8 @@ fn expand_node(
                     };
                     let panel = quote_slot_chrome(&class);
                     return quote! {
-                        jadix::components::combobox_content(
-                            jadix::components::ComboboxContentOpts {
+                        __jadix_components::combobox_content(
+                            __jadix_components::ComboboxContentOpts {
                                 panel: #panel,
                                 match_trigger: #match_trigger,
                                 menu_width: #menu_width,
@@ -6813,7 +6257,7 @@ fn expand_node(
                     .as_ref()
                     .and_then(|v| v.as_ref().ok())
                     .cloned()
-                    .or_else(|| Some(syn::Ident::new("item", proc_macro2::Span::call_site())));
+                    .or_else(|| Some(syn::Ident::new("item", el.name.span())));
                 let render_ts = if let Some(item_ident) = item_ident_for_render {
                     let mut expanded_children = Vec::new();
                     for child in &el.children {
@@ -6868,7 +6312,7 @@ fn expand_node(
                     .as_ref()
                     .and_then(|v| v.as_ref().ok())
                     .cloned()
-                    .or_else(|| Some(syn::Ident::new("item", proc_macro2::Span::call_site())));
+                    .or_else(|| Some(syn::Ident::new("item", el.name.span())));
                 // I-7 via ui!: `each={…get()}` + `key` → item-level owners (`for_keyed_reactive`).
                 // Empty source + `fallback` still keeps item owners for non-empty updates.
                 if each_is_reactive && let Some(key_ts) = maybe_key_ts.as_ref() {
@@ -7097,7 +6541,7 @@ fn expand_node(
                                 format!("{}:{}:bind_sidebar_menu_button_active#{}", file!(), line!(), #idx),
                                 move || #value,
                                 |el, active| {
-                                    jadix::components::apply_bound_sidebar_menu_button_active(el, active)
+                                    __jadix_components::apply_bound_sidebar_menu_button_active(el, active)
                                 },
                             );
                         });
@@ -7144,7 +6588,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_bubble_variant#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_bubble_variant(el, v),
+                                    |el, v| __jadix_components::apply_bound_bubble_variant(el, v),
                                 );
                             });
                             continue;
@@ -7159,7 +6603,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_bubble_align#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_bubble_align(el, v),
+                                    |el, v| __jadix_components::apply_bound_bubble_align(el, v),
                                 );
                             });
                             continue;
@@ -7174,7 +6618,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_message_align#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_message_align(el, v),
+                                    |el, v| __jadix_components::apply_bound_message_align(el, v),
                                 );
                             });
                             continue;
@@ -7189,7 +6633,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_alert_variant#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_alert_variant(el, v),
+                                    |el, v| __jadix_components::apply_bound_alert_variant(el, v),
                                 );
                             });
                             continue;
@@ -7204,7 +6648,7 @@ fn expand_node(
                                         format!("{}:{}:bind_alert_chrome#{}", file!(), line!(), #idx),
                                         move || #value,
                                         |el, enabled| {
-                                            jadix::components::apply_bound_alert_chrome(el, enabled)
+                                            __jadix_components::apply_bound_alert_chrome(el, enabled)
                                         },
                                     );
                                 });
@@ -7224,7 +6668,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_marker_variant#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_marker_variant(el, v),
+                                    |el, v| __jadix_components::apply_bound_marker_variant(el, v),
                                 );
                             });
                             continue;
@@ -7239,7 +6683,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_item_variant#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_item_variant(el, v),
+                                    |el, v| __jadix_components::apply_bound_item_variant(el, v),
                                 );
                             });
                             continue;
@@ -7254,7 +6698,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_item_size#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_item_size(el, v),
+                                    |el, v| __jadix_components::apply_bound_item_size(el, v),
                                 );
                             });
                             continue;
@@ -7269,7 +6713,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_item_media_variant#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_item_media_variant(el, v),
+                                    |el, v| __jadix_components::apply_bound_item_media_variant(el, v),
                                 );
                             });
                             continue;
@@ -7284,7 +6728,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_attachment_state#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_attachment_state(el, v),
+                                    |el, v| __jadix_components::apply_bound_attachment_state(el, v),
                                 );
                             });
                             continue;
@@ -7299,7 +6743,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_attachment_size#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_attachment_size(el, v),
+                                    |el, v| __jadix_components::apply_bound_attachment_size(el, v),
                                 );
                             });
                             continue;
@@ -7314,7 +6758,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_attachment_orientation#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_attachment_orientation(el, v),
+                                    |el, v| __jadix_components::apply_bound_attachment_orientation(el, v),
                                 );
                             });
                             continue;
@@ -7329,7 +6773,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_attachment_media_variant#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_attachment_media_variant(el, v),
+                                    |el, v| __jadix_components::apply_bound_attachment_media_variant(el, v),
                                 );
                             });
                             continue;
@@ -7344,7 +6788,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_table_row_selected#{}", file!(), line!(), #idx),
                                     move || #value,
-                                    |el, v| jadix::components::apply_bound_table_row_selected(el, v),
+                                    |el, v| __jadix_components::apply_bound_table_row_selected(el, v),
                                 );
                             });
                             continue;
@@ -7367,7 +6811,7 @@ fn expand_node(
                                         __jadix_el,
                                         format!("{}:{}:bind_table_align#{}", file!(), line!(), #idx),
                                         move || (#value).to_string(),
-                                        |el, v| jadix::components::apply_bound_table_align(el, v),
+                                        |el, v| __jadix_components::apply_bound_table_align(el, v),
                                     );
                                 });
                             }
@@ -7383,7 +6827,7 @@ fn expand_node(
                                         format!("{}:{}:bind_badge_chrome#{}", file!(), line!(), #idx),
                                         move || #value,
                                         |el, enabled| {
-                                            jadix::components::apply_bound_badge_chrome(el, enabled)
+                                            __jadix_components::apply_bound_badge_chrome(el, enabled)
                                         },
                                     );
                                 });
@@ -7403,7 +6847,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_avatar_size#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_avatar_size(el, v),
+                                    |el, v| __jadix_components::apply_bound_avatar_size(el, v),
                                 );
                             });
                             continue;
@@ -7418,7 +6862,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_avatar_shape#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_avatar_shape(el, v),
+                                    |el, v| __jadix_components::apply_bound_avatar_shape(el, v),
                                 );
                             });
                             continue;
@@ -7436,9 +6880,9 @@ fn expand_node(
                                 "badge"
                             };
                             let apply_fn = if name_str == "AvatarBadge" {
-                                quote! { jadix::components::apply_bound_avatar_badge_variant }
+                                quote! { __jadix_components::apply_bound_avatar_badge_variant }
                             } else {
-                                quote! { jadix::components::apply_bound_badge_variant }
+                                quote! { __jadix_components::apply_bound_badge_variant }
                             };
                             chrome_binds.push(quote! {
                                 __jadix_el = jadix::app::reactive::bind_attr(
@@ -7460,7 +6904,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_btn_variant#{}", file!(), line!(), #idx),
                                     move || (#value).to_string(),
-                                    |el, v| jadix::components::apply_bound_button_variant(el, v),
+                                    |el, v| __jadix_components::apply_bound_button_variant(el, v),
                                 );
                             });
                             continue;
@@ -7475,7 +6919,7 @@ fn expand_node(
                                     __jadix_el,
                                     format!("{}:{}:bind_input_invalid#{}", file!(), line!(), #idx),
                                     move || #value,
-                                    |el, v| jadix::components::apply_bound_input_invalid(el, v),
+                                    |el, v| __jadix_components::apply_bound_input_invalid(el, v),
                                 );
                             });
                             continue;
@@ -7533,6 +6977,8 @@ fn expand_node(
                                 | "backdrop"
                                 | "synthetic_bold"
                                 | "syntheticBold"
+                                | "opacity_groups"
+                                | "opacityGroups"
                                 | "devtools"
                         );
 
@@ -7579,6 +7025,8 @@ fn expand_node(
                                 | "rounded"
                                 | "bg"
                                 | "opacity"
+                                | "opacity_group"
+                                | "opacityGroup"
                                 | "color"
                                 | "text_color"
                                 | "font_weight"
@@ -7779,6 +7227,27 @@ fn expand_node(
                         );
 
                     if is_base {
+                        if matches!(attr_name, "opacity_group" | "opacityGroup") {
+                            if expr_reads_get(value) {
+                                let idx = *node_counter;
+                                *node_counter += 1;
+                                chrome_binds.push(quote! {
+                                    __jadix_el = jadix::app::reactive::bind_prop(
+                                        __jadix_el,
+                                        format!("{}:{}:bind_opacity_group#{}", file!(), line!(), #idx),
+                                        move || jadix::core::tree::parse_bool_like(#value),
+                                        |element, enabled| element.set_opacity_group(enabled),
+                                    );
+                                });
+                            } else {
+                                chrome_binds.push(quote! {
+                                    __jadix_el = __jadix_el.opacity_group(
+                                        jadix::core::tree::parse_bool_like(#value)
+                                    );
+                                });
+                            }
+                            continue;
+                        }
                         // a11y attrs apply on the finished Element (not BaseComponentBuilder).
                         if matches!(attr_name, "aria_label" | "aria-label") {
                             chrome_binds.push(quote! {
@@ -8178,6 +7647,7 @@ fn expand_node(
                                 "fontSize" => "font_size",
                                 "fontWeight" => "font_weight",
                                 "syntheticBold" => "synthetic_bold",
+                                "opacityGroups" => "opacity_groups",
                                 other => other,
                             };
                             let ident = syn::Ident::new(prop, attr.span());
@@ -8418,7 +7888,7 @@ fn expand_node(
                 let base_expr = if base_calls.is_empty() {
                     quote! { None }
                 } else {
-                    quote! { Some(Box::new(|mut b: jadix::components::base::BaseComponentBuilder| { #(#base_calls)* b })) }
+                    quote! { Some(Box::new(|mut b: jadix::authoring::BaseComponentBuilder| { #(#base_calls)* b })) }
                 };
 
                 let mut children_expr = quote! { None };
@@ -8496,8 +7966,8 @@ fn expand_node(
                     quote! {
                         {
                             let __jadix_sc_class: Option<String> = Some((#c).to_string());
-                            jadix::components::base::push_pending_item_chrome(
-                                jadix::components::base::SlotChrome::from_opts(__jadix_sc_class, None)
+                            __jadix_components::base::push_pending_item_chrome(
+                                jadix::authoring::SlotChrome::from_opts(__jadix_sc_class, None)
                             );
                         }
                     }
@@ -8544,7 +8014,7 @@ fn expand_node(
                     "GStack" | "Grid" => quote! { jadix::primitives::gstack() },
                     // Layout container. `Rect` is SVG — use `<Box>`.
                     // HTML/Solid `<div>` / `<Div>` are remapped to `Box` above.
-                    "Box" => quote! { jadix::primitives::r#box() },
+                    "Box" => quote! { jadix::primitives::div() },
                     "Interactive" => {
                         quote! { jadix::primitives::interactive(jadix::core::tree::Element::new()) }
                     }
@@ -8760,7 +8230,7 @@ fn expand_node(
                 };
                 element = quote! {
                     {
-                        let mut __b = jadix::utils::animated_icon(#name_ts)
+                        let mut __b = __jadix_icons::animated_icon(#name_ts)
                             .size_px(#size_ts);
                         if #controlled_ts {
                             __b = __b.controlled(true);
@@ -9192,6 +8662,27 @@ fn expand_node(
                         }
                         jadix::core::tree::bind_element_ref(&(#value), &__jadix_el);
                     });
+                    continue;
+                }
+                if matches!(attr_str.as_str(), "opacity_group" | "opacityGroup") {
+                    if expr_reads_get(value) {
+                        let idx = *node_counter;
+                        *node_counter += 1;
+                        dynamic_binds.push(quote! {
+                            __jadix_el = jadix::app::reactive::bind_prop(
+                                __jadix_el,
+                                format!("{}:{}:bind_opacity_group#{}", file!(), line!(), #idx),
+                                move || jadix::core::tree::parse_bool_like(#value),
+                                |element, enabled| element.set_opacity_group(enabled),
+                            );
+                        });
+                    } else {
+                        dynamic_binds.push(quote! {
+                            __jadix_el = __jadix_el.opacity_group(
+                                jadix::core::tree::parse_bool_like(#value)
+                            );
+                        });
+                    }
                     continue;
                 }
                 if attr_str == "id"
@@ -10019,6 +9510,12 @@ fn expand_node(
                     "scrollbar_visibility" | "scrollbarVisibility" => {
                         element = quote! { #element.scrollbar_visibility(#value) }
                     }
+                    "scrollbar_arrows" | "scrollbarArrows" => {
+                        element = quote! { #element.scrollbar_arrows(jadix::core::tree::parse_bool_like(#value)) }
+                    }
+                    "scrollbar_arrow_class" | "scrollbarArrowClass" => {
+                        element = quote! { #element.scrollbar_arrow_class(#value) }
+                    }
                     "scrollbar_inset" | "scrollbarInset" => {
                         element = quote! { #element.scrollbar_inset(#value) }
                     }
@@ -10707,8 +10204,8 @@ mod rsx_lowering_tests {
         let from_div = expand(r#"<div w="2rem" id="shell">"hi"</div>"#);
         let from_box = expand(r#"<Box w="2rem" id="shell">"hi"</Box>"#);
         assert!(
-            from_div.contains("r#box"),
-            "div must lower to primitives::r#box(); got {from_div}"
+            from_div.contains("primitives :: div"),
+            "div must lower to primitives::div(); got {from_div}"
         );
         assert!(
             from_div.contains(". id") || from_div.contains(".id"),
@@ -10721,7 +10218,7 @@ mod rsx_lowering_tests {
     fn div_pascal_alias_lowers_to_box_primitive() {
         let from_div = expand(r#"<Div h="1rem"></Div>"#);
         let from_box = expand(r#"<Box h="1rem"></Box>"#);
-        assert!(from_div.contains("r#box"), "{from_div}");
+        assert!(from_div.contains("primitives :: div"), "{from_div}");
         assert_eq!(from_div, from_box);
     }
 
@@ -10779,6 +10276,26 @@ mod rsx_lowering_tests {
         assert!(pct.contains("opacity"), "{pct}");
         let frac = expand(r#"<Box opacity={0.4}></Box>"#);
         assert!(frac.contains("opacity"), "{frac}");
+    }
+
+    #[test]
+    fn opacity_group_uses_framework_element_for_primitives_and_components() {
+        for source in [
+            r#"<div opacity_group={true} />"#,
+            r#"<Button opacityGroup="true" />"#,
+        ] {
+            let expanded = expand(source);
+            assert!(expanded.contains(". opacity_group"), "{expanded}");
+            assert!(!expanded.contains("__jadix_unknown_attr"), "{expanded}");
+        }
+        for source in [
+            r#"<Div opacity_group={enabled.get()} />"#,
+            r#"<Button opacityGroup={enabled.get()} />"#,
+        ] {
+            let expanded = expand(source);
+            assert!(expanded.contains("bind_opacity_group"), "{expanded}");
+            assert!(expanded.contains("set_opacity_group"), "{expanded}");
+        }
     }
 
     #[test]

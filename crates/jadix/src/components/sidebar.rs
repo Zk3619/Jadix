@@ -497,22 +497,23 @@ pub fn try_toggle_sidebar_from_key(
     event: &winit::event::KeyEvent,
     modifiers: &winit::keyboard::ModifiersState,
 ) -> bool {
-    use winit::event::ElementState;
-    use winit::keyboard::Key;
-    if event.state != ElementState::Pressed || event.repeat {
-        return false;
-    }
-    let Key::Character(c) = &event.logical_key else {
-        return false;
-    };
-    if !c.eq_ignore_ascii_case(SIDEBAR_KEYBOARD_SHORTCUT) {
-        return false;
-    }
-    if !(modifiers.control_key() || modifiers.meta_key()) {
-        return false;
-    }
-    toggle_sidebar();
-    true
+    if sidebar_shortcut_matches(crate::authoring::keys::Context {
+        key: &event.logical_key,
+        modifiers: *modifiers,
+        state: event.state,
+        repeat: event.repeat,
+    }) {
+        toggle_sidebar();
+        true
+    } else { false }
+}
+
+fn sidebar_shortcut_matches(context: crate::authoring::keys::Context<'_>) -> bool {
+    context.state == winit::event::ElementState::Pressed
+        && !context.repeat
+        && (context.modifiers.control_key() || context.modifiers.meta_key())
+        && matches!(context.key, winit::keyboard::Key::Character(key)
+            if key.eq_ignore_ascii_case(SIDEBAR_KEYBOARD_SHORTCUT))
 }
 
 /// 切换侧栏开合（无 Provider 时为 no-op）。
@@ -560,12 +561,25 @@ pub fn sidebar_provider_scope(
     };
     // Frame synchronization must use the actual controlled signal, not an inferred key.
     use_signal(format!("{id}__context").as_str(), || ctx.clone()).try_set_silent(ctx.clone());
-    provide_context(sidebar_context(), ctx);
+    provide_context(sidebar_context(), ctx.clone());
     let kids = take_packed(body());
     let mut root = sidebar_provider_shell(kids);
     if variant.is_alive() && variant.peek() == "inset" {
         root = root.bg(parse_color("sidebar"));
     }
+    crate::authoring::keys::attach(&mut root, move |context| {
+        if sidebar_shortcut_matches(context) {
+            ctx.toggle();
+            true
+        } else { false }
+    });
+    let provider_id = id.clone();
+    crate::authoring::presentation::attach_tree(&mut root,
+        crate::authoring::presentation::Phase::State,
+        move |root, _, _| {
+            if sync_sidebar_mobile_subtree(root, Some(&provider_id)) { LayoutStatus::StructureChanged }
+            else { LayoutStatus::Clean }
+        });
     root.set_attr(ATTR_SLOT, SLOT_PROVIDER);
     root.set_attr(ATTR_PROVIDER_ID, id.clone());
     if !id.trim().is_empty() {
@@ -713,18 +727,7 @@ fn rail_width_tween_running(el: &Element) -> bool {
 }
 
 thread_local! {
-    static RAIL_WIDTH_TWEEN_ACTIVE: Cell<bool> = const { Cell::new(false) };
     static RAIL_ANIM_NEEDS_SETTLE: Cell<bool> = const { Cell::new(false) };
-}
-
-/// True while any sidebar rail width tween is in flight (layout/text fast path).
-pub(crate) fn sidebar_rail_width_anim_active() -> bool {
-    RAIL_WIDTH_TWEEN_ACTIVE.get()
-}
-
-/// Consume the “rail tween just finished” flag so the next frame can settle text wrap.
-pub(crate) fn take_sidebar_rail_text_settle() -> bool {
-    RAIL_ANIM_NEEDS_SETTLE.replace(false)
 }
 
 fn preview_width_px(css: &str) -> f32 {
@@ -1154,12 +1157,12 @@ fn sidebar_mobile_header_with_close(mut inner: Element, close: Element) -> Eleme
 
 /// Move the original content, including hooks and reactive bindings, across the portal boundary.
 /// Keep the portal slot until the exit finishes so hoisting cannot prune that content early.
-fn sync_sidebar_mobile_subtree(root: &mut Element) -> bool {
+fn sync_sidebar_mobile_subtree(root: &mut Element, only: Option<&str>) -> bool {
     let mobile = sidebar_viewport_width() < SIDEBAR_MOBILE_BREAKPOINT;
     let mut rails = Vec::new();
     crate::core::tree::walk_elements(root, |el| {
         if el.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_PROVIDER) {
-            if let Some(provider) = el.attrs.get(ATTR_PROVIDER_ID) {
+            if let Some(provider) = el.attrs.get(ATTR_PROVIDER_ID).filter(|provider| only.is_none_or(|only| only == provider.as_str())) {
                 let ctx = sidebar_state(provider);
                 if ctx.is_mobile.peek() != mobile {
                     ctx.is_mobile.set(mobile);
@@ -1169,7 +1172,7 @@ fn sync_sidebar_mobile_subtree(root: &mut Element) -> bool {
         if let (Some(id), Some(provider)) =
             (el.attrs.get(ATTR_MOBILE_ID), el.attrs.get(ATTR_PROVIDER_ID))
         {
-            rails.push((id.clone(), sidebar_state(provider)));
+            if only.is_none_or(|only| only == provider) { rails.push((id.clone(), sidebar_state(provider))); }
         }
     });
     let mut changed = false;
@@ -1283,51 +1286,30 @@ fn sync_sidebar_mobile_subtree(root: &mut Element) -> bool {
     changed
 }
 
-/// 每帧同步响应式呈现与 Provider 的桌面 rail 宽度。
-pub(crate) fn sync_sidebar_rail_subtree(
-    el: &mut Element,
-    layout_tree: &mut LayoutTree,
-    impact: &mut LayoutStatus,
-) {
-    if sync_sidebar_mobile_subtree(el) {
-        *impact = impact.merge(LayoutStatus::StructureChanged);
+fn sync_sidebar_rail(el: &mut Element, layout_tree: &mut LayoutTree) -> LayoutStatus {
+    let (Some(provider), Some(width)) = (
+        el.attrs.get(ATTR_PROVIDER_ID).cloned(), el.attrs.get(ATTR_WIDTH_STORE).cloned(),
+    ) else { return LayoutStatus::Clean; };
+    let open = sidebar_state(&provider).open;
+    if !open.is_alive() { return LayoutStatus::Clean; }
+    let status = apply_sidebar_rail_layout(el, open.peek(), &width);
+    if rail_width_tween_running(el) {
+        layout_tree.request_geometry_motion();
+        el.style.overflow.x = taffy::style::Overflow::Hidden;
+        el.style.overflow.y = taffy::style::Overflow::Hidden;
+        crate::app::runtime::request_redraw();
     }
-    RAIL_WIDTH_TWEEN_ACTIVE.set(false);
-    crate::core::tree::walk_elements_mut(el, |el| {
-        if el.attrs.get(ATTR_SLOT).map(String::as_str) != Some(SLOT_ROOT) {
-            return;
-        }
-        let (Some(_provider_id), Some(width)) = (
-            el.attrs.get(ATTR_PROVIDER_ID).cloned(),
-            el.attrs.get(ATTR_WIDTH_STORE).cloned(),
-        ) else {
-            return;
-        };
-        let open_sig = sidebar_state(&_provider_id).open;
-        if !open_sig.is_alive() {
-            return;
-        }
-        let open = open_sig.peek();
-        let status = apply_sidebar_rail_layout(el, open, width.as_str());
-        let running = rail_width_tween_running(el);
-        if running {
-            RAIL_WIDTH_TWEEN_ACTIVE.set(true);
-            use taffy::style::Overflow;
-            el.style.overflow.x = Overflow::Hidden;
-            el.style.overflow.y = Overflow::Hidden;
-            crate::app::runtime::request_redraw();
-        } else if RAIL_ANIM_NEEDS_SETTLE.get() {
-            crate::app::runtime::request_redraw();
-        }
-        if status == LayoutStatus::LayoutChanged && el.layout_node.is_some() {
-            layout_tree.mark_element_layout_dirty(el);
-            crate::core::tree::walk_elements(&*el, |node| {
-                layout_tree.update_taffy_node_style(node);
-            });
-        }
-        *impact = impact.merge(status);
-    });
+    if RAIL_ANIM_NEEDS_SETTLE.replace(false) {
+        layout_tree.request_text_settle();
+        crate::app::runtime::request_redraw();
+    }
+    if status == LayoutStatus::LayoutChanged && el.layout_node.is_some() {
+        layout_tree.mark_element_layout_dirty(el);
+        crate::core::tree::walk_elements(el, |node| { layout_tree.update_taffy_node_style(node); });
+    }
+    status
 }
+
 
 fn sidebar_menu_button_variant(el: &Element) -> SidebarMenuButtonVariant {
     el.attrs
@@ -1522,26 +1504,35 @@ fn apply_sidebar_menu_button_chrome(
 }
 
 /// 每帧按 `{focus_id}_hover` 与 `data-active` 写回菜单按钮 chrome（`peek`，不订阅根 effect）。
+#[cfg(test)]
 pub(crate) fn sync_sidebar_menu_button_paint_subtree(
+    root: &mut Element,
+    layout_tree: &mut crate::core::tree::LayoutTree,
+    impact: &mut LayoutStatus,
+) {
+    crate::core::tree::walk_elements_mut(root, |el| {
+        sync_sidebar_menu_button_paint_node(el, layout_tree, impact)
+    });
+}
+
+fn sync_sidebar_menu_button_paint_node(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    crate::core::tree::walk_elements_mut(el, |el| {
-        if el.attrs.get(ATTR_SLOT).map(String::as_str) != Some(SLOT_MENU_BUTTON) {
-            return;
-        }
-        let variant = sidebar_menu_button_variant(el);
-        let is_active = sidebar_menu_button_active(el);
-        let is_hovered = sidebar_menu_button_hovered(el);
-        *impact = impact.merge(apply_sidebar_menu_button_chrome(
-            el,
-            Some(layout_tree),
-            variant,
-            is_active,
-            is_hovered,
-        ));
-    });
+    if el.attrs.get(ATTR_SLOT).map(String::as_str) != Some(SLOT_MENU_BUTTON) {
+        return;
+    }
+    let variant = sidebar_menu_button_variant(el);
+    let is_active = sidebar_menu_button_active(el);
+    let is_hovered = sidebar_menu_button_hovered(el);
+    *impact = impact.merge(apply_sidebar_menu_button_chrome(
+        el,
+        Some(layout_tree),
+        variant,
+        is_active,
+        is_hovered,
+    ));
 }
 
 fn wire_sidebar_menu_button_hover(el: Element, focus_id: &str) -> Element {
@@ -1580,6 +1571,15 @@ fn paint_menu_button(
         .overflow_y("hidden")
         .cursor("pointer");
     el.set_attr(ATTR_SLOT, SLOT_MENU_BUTTON);
+    crate::authoring::presentation::attach(
+        &mut el,
+        crate::authoring::presentation::Phase::Hover,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_sidebar_menu_button_paint_node(element, layout, &mut impact);
+            impact
+        },
+    );
     el.set_attr(ATTR_SIDEBAR, "menu-button");
     el.set_attr("data-active", if is_active { "true" } else { "false" });
     el.set_attr("data-size", size.as_str());
@@ -1775,6 +1775,9 @@ pub fn Sidebar(
             );
         }
     }
+    crate::authoring::presentation::attach(&mut rail,
+        crate::authoring::presentation::Phase::State,
+        |element, layout, _| sync_sidebar_rail(element, layout));
     rail
 }
 
@@ -1903,6 +1906,7 @@ pub fn SidebarGroupLabel(children: Option<Element>) -> Element {
         .h("2rem")
         .px("0.5rem")
         .items_center()
+        .justify_center()
         .flex_shrink(0.0)
         .rounded("0.375rem")
         .text_size(GROUP_LABEL_SIZE_PX)
@@ -2536,10 +2540,29 @@ impl crate::core::tree::IntoElementList for SidebarBuilder {
 mod tests {
     use super::*;
 
+    #[test]
+    fn group_label_centers_navigation_on_both_axes() {
+        let (_owner, mut root) = crate::core::reactivity::create_root(|| {
+            SidebarGroupLabel(SidebarGroupLabelProps {
+                children: Some(Element::from("导航")),
+                base: None,
+            }).w(240.0)
+        });
+        let mut layout = LayoutTree::new();
+        let _ = layout.build_and_layout(&mut root, 240.0, 32.0, [-1.0, -1.0]);
+        let bounds = root.layout_bounds;
+        let label = root.children.first().expect("navigation label");
+        let text = label.layout_bounds;
+        assert!((bounds[0] + bounds[2] * 0.5 - text[0] - text[2] * 0.5).abs() < 0.5);
+        assert!((bounds[1] + bounds[3] * 0.5 - text[1] - text[3] * 0.5).abs() < 0.5);
+    }
+
     fn responsive_frame(root: &mut Element, layout: &mut LayoutTree, width: f32) -> LayoutStatus {
         crate::utils::modal_motion::set_modal_viewport_size(width, 600.0);
         let mut impact = LayoutStatus::Clean;
-        sync_sidebar_rail_subtree(root, layout, &mut impact);
+        impact = impact.merge(crate::authoring::presentation::sync_tree(
+            root, layout, crate::authoring::presentation::Context::new(
+                crate::authoring::presentation::Phase::State, [width, 600.0])));
         crate::layout::layout_tree::hoist_portal_subtrees(root);
         crate::style::sync_class_variants_subtree(
             root,

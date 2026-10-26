@@ -118,6 +118,16 @@ pub const SCROLLBAR_TRACK_FOCUS_PREFIX: &str = "scrollbar-track:";
 pub(crate) const ATTR_SCROLLBAR_TRACK_FADES: &str = "jadix_scrollbar_track_fades";
 /// Height reveal clips content temporarily; it must not expose scrollbar chrome or hit slabs.
 pub(crate) const ATTR_SCROLLBAR_REVEAL_HIDDEN: &str = "jadix_scrollbar_reveal_hidden";
+pub(crate) const ATTR_SCROLLBAR_FLEX_TRACK: &str = "jadix_scrollbar_flex_track";
+pub(crate) const ATTR_SCROLLBAR_GROUP: &str = "jadix_scrollbar_group";
+
+/// Register a flex group containing a track and caller-owned end controls.
+/// The runtime updates nested track geometry and collapses the entire group
+/// when the target axis disables its scrollbar.
+pub fn configure_scrollbar_group(group: &mut Element, track: &mut Element, target: &str, axis: &str) {
+    group.set_attr(ATTR_SCROLLBAR_GROUP, format!("{target}:{axis}"));
+    track.set_attr(ATTR_SCROLLBAR_FLEX_TRACK, "1");
+}
 
 pub(crate) const CHROME_ALPHA_EPS: f32 = 0.01;
 

@@ -307,6 +307,7 @@ struct OpaqueBoxPipeline {
 
 pub struct JadixPipeline {
     pub render_pipeline: wgpu::RenderPipeline,
+    pub(crate) clear_render_pipeline: wgpu::RenderPipeline,
     solid_render_pipeline: Option<wgpu::RenderPipeline>,
     opaque_box: Option<OpaqueBoxPipeline>,
     pub vertex_buffer: wgpu::Buffer,
@@ -419,6 +420,16 @@ impl JadixPipeline {
         );
         let render_pipeline =
             Self::make_render_pipeline(device, config, &shader, &bind_group_layout, &backdrop_bgl);
+        let clear_render_pipeline = Self::make_render_pipeline_entry(
+            device,
+            config,
+            &shader,
+            &bind_group_layout,
+            &backdrop_bgl,
+            "vs_main",
+            "fs_main",
+            None,
+        );
         let solid_render_pipeline = wgsl_source.contains("fn fs_solid(").then(|| {
             Self::make_render_pipeline_entry(
                 device,
@@ -428,6 +439,7 @@ impl JadixPipeline {
                 &backdrop_bgl,
                 "vs_main",
                 "fs_solid",
+                Some(crate::renderer::color_target_blend(config.alpha_mode)),
             )
         });
 
@@ -474,6 +486,7 @@ impl JadixPipeline {
 
         Self {
             render_pipeline,
+            clear_render_pipeline,
             solid_render_pipeline,
             opaque_box,
             vertex_buffer,
@@ -645,6 +658,7 @@ impl JadixPipeline {
             backdrop_bgl,
             "vs_main",
             "fs_main",
+            Some(crate::renderer::color_target_blend(config.alpha_mode)),
         )
     }
 
@@ -656,6 +670,7 @@ impl JadixPipeline {
         backdrop_bgl: &wgpu::BindGroupLayout,
         vertex_entry: &str,
         fragment_entry: &str,
+        blend: Option<wgpu::BlendState>,
     ) -> wgpu::RenderPipeline {
         let mut vertex_layout = VertexInput::desc();
         vertex_layout.attributes = &vertex_layout.attributes[..1];
@@ -680,7 +695,7 @@ impl JadixPipeline {
                 entry_point: Some(fragment_entry),
                 targets: &[Some(wgpu::ColorTargetState {
                     format: config.format,
-                    blend: Some(crate::renderer::color_target_blend(config.alpha_mode)),
+                    blend,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
                 compilation_options: Default::default(),
@@ -751,6 +766,7 @@ impl JadixPipeline {
                 } else {
                     "fs_main"
                 },
+                Some(crate::renderer::color_target_blend(config.alpha_mode)),
             ),
             interior: Self::make_render_pipeline_entry(
                 device,
@@ -760,6 +776,7 @@ impl JadixPipeline {
                 backdrop,
                 "vs_interior",
                 "fs_interior",
+                Some(crate::renderer::color_target_blend(config.alpha_mode)),
             ),
             vertices: device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
                 label: Some("Opaque box perimeter vertices"),
@@ -844,8 +861,19 @@ impl JadixPipeline {
                     &self.backdrop_bgl,
                     "vs_main",
                     "fs_solid",
+                    Some(crate::renderer::color_target_blend(config.alpha_mode)),
                 )
             });
+            let clear_render_pipeline = Self::make_render_pipeline_entry(
+                device,
+                config,
+                &shader,
+                &self.bind_group_layout,
+                &self.backdrop_bgl,
+                "vs_main",
+                "fs_main",
+                None,
+            );
             let opaque_box = Self::make_opaque_box_pipeline(
                 device,
                 config,
@@ -858,21 +886,28 @@ impl JadixPipeline {
                 bind_group,
                 bind_group_clip_poly,
                 render_pipeline,
+                clear_render_pipeline,
                 solid_render_pipeline,
                 opaque_box,
             )
         }));
-        let (bind_group, bind_group_clip_poly, render_pipeline, solid_render_pipeline, opaque_box) =
-            match built {
-                Ok(tuple) => tuple,
-                Err(_) => {
-                    let _ = crate::renderer::wgpu_compat::wait_error_scope(device, scope);
-                    log::warn!(
-                        "hot-reload WGSL: pipeline create panicked; keeping previous pipeline"
-                    );
-                    return false;
-                }
-            };
+        let (
+            bind_group,
+            bind_group_clip_poly,
+            render_pipeline,
+            clear_render_pipeline,
+            solid_render_pipeline,
+            opaque_box,
+        ) = match built {
+            Ok(tuple) => tuple,
+            Err(_) => {
+                let _ = crate::renderer::wgpu_compat::wait_error_scope(device, scope);
+                log::warn!(
+                    "hot-reload WGSL: pipeline create panicked; keeping previous pipeline"
+                );
+                return false;
+            }
+        };
         if crate::renderer::wgpu_compat::wait_error_scope(device, scope).is_some() {
             log::warn!("hot-reload WGSL: pipeline validation failed; keeping previous pipeline");
             return false;
@@ -880,6 +915,7 @@ impl JadixPipeline {
         self.bind_group = bind_group;
         self.bind_group_clip_poly = bind_group_clip_poly;
         self.render_pipeline = render_pipeline;
+        self.clear_render_pipeline = clear_render_pipeline;
         self.solid_render_pipeline = solid_render_pipeline;
         self.opaque_box = opaque_box;
         true

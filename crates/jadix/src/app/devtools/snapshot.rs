@@ -504,22 +504,7 @@ pub fn inspector_authored_style(el: &Element) -> Style {
             return base.clone();
         }
     }
-    if let Some(desc) = el.button_hover_paint.as_ref() {
-        let mut style = el.style.as_ref().clone();
-        let (bg, _, border) =
-            crate::style::button_chrome::button_chrome_for_variant(&desc.variant, 0.0);
-        style.bg_color = bg;
-        match border {
-            Some(b) => {
-                style.border_color = b;
-                style.border_width = 1.0;
-            }
-            None => {
-                style.border_width = 0.0;
-            }
-        }
-        return style;
-    }
+    if let Some(style) = el.authored_style.and_then(|describe| describe(el)) { return style; }
     if el
         .template_id
         .as_deref()
@@ -629,7 +614,7 @@ fn tag_hint_from(el: &Element) -> Option<String> {
 }
 
 fn text_preview_from(el: &Element) -> Option<String> {
-    if let Some(name) = el.attrs.get(crate::utils::lucide::ATTR_ICON_NAME) {
+    if let Some(name) = el.attrs.get(crate::utils::ATTR_ICON_NAME) {
         return Some(format!("[icon: {name}]"));
     }
     if let Some(t) = &el.text {
@@ -1293,7 +1278,7 @@ mod tests {
     #[test]
     fn icon_previews_use_semantic_names_not_private_use_codepoints() {
         let mut icon = Element::new().text("\u{e001}");
-        icon.set_attr(crate::utils::lucide::ATTR_ICON_NAME, "panels-top-left");
+        icon.set_attr(crate::utils::ATTR_ICON_NAME, "panels-top-left");
         assert_eq!(
             text_preview_from(&icon).as_deref(),
             Some("[icon: panels-top-left]")
@@ -1570,15 +1555,14 @@ mod tests {
 
     #[test]
     fn cssom_uses_button_rest_chrome_not_hover_paint() {
-        use crate::core::tree::ButtonHoverPaint;
         use crate::style::parse_color;
 
         let mut el = Element::new().focus_id("gal-nav-data");
-        el.button_hover_paint = Some(ButtonHoverPaint {
-            variant: "ghost".into(),
-            disabled: false,
-            hover_easing: "spring".into(),
-            text_color: None,
+        el.authored_style = Some(|element| {
+            let mut style = element.style.as_ref().clone();
+            style.bg_color = [0.0; 4];
+            style.border_width = 0.0;
+            Some(style)
         });
         // Live paint after hover: accent fill (what the bug was dumping into CSSOM).
         el.style.bg_color = parse_color("accent");

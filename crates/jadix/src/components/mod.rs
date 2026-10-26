@@ -92,6 +92,7 @@ pub mod date_picker;
 pub mod dialog;
 #[cfg(feature = "document-diff")]
 pub mod diff_view;
+#[cfg(feature = "dnd")]
 pub mod dock;
 #[cfg(feature = "document-editing")]
 pub mod document_editor;
@@ -228,7 +229,7 @@ pub use badge::{
     apply_bound_badge_chrome, apply_bound_badge_variant, badge, Badge, BadgeBuilder, BadgeProps,
     BadgeVariant,
 };
-pub use base::{BaseComponentBuilder, SlotChrome, SlotMap, SlotStyleFn};
+pub use crate::authoring::{BaseComponentBuilder, SlotChrome, SlotMap, SlotStyleFn};
 pub use breadcrumb::{
     breadcrumb, breadcrumb_ellipsis, breadcrumb_item, breadcrumb_link, breadcrumb_list,
     breadcrumb_page, breadcrumb_separator, Breadcrumb, BreadcrumbBuilder, BreadcrumbEllipsis,
@@ -352,6 +353,7 @@ pub use dialog::{
 };
 #[cfg(feature = "document-diff")]
 pub use diff_view::{diff_view, DiffView, DiffViewBuilder, DiffViewProps};
+#[cfg(feature = "dnd")]
 pub use dock::{DockLayout, DockOrientation, DockPlacement, DockState, DockTab};
 #[cfg(feature = "document-editing")]
 pub use document_editor::{

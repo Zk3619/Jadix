@@ -11,6 +11,7 @@ use crate::core::tree::LayoutStatus;
 #[derive(Default)]
 struct Requests {
     present: bool,
+    repaint: bool,
     rebuild: bool,
     caches: bool,
     nodes: HashMap<String, bool>, // true = subtree layout, false = paint
@@ -52,6 +53,19 @@ fn request(f: impl FnOnce(&mut Requests)) {
 /// Call again from an immediate region to keep its animation running.
 pub fn request_frame() {
     request(|r| r.present = true);
+}
+
+pub(crate) fn repaint_all() {
+    let scopes = ROOTS.with(|roots| roots.borrow().keys().copied().collect::<Vec<_>>());
+    REQUESTS.with(|queue| {
+        let mut queue = queue.borrow_mut();
+        for scope in scopes.into_iter().chain(std::iter::once(window_scope::active())) {
+            let request = queue.entry(scope).or_default();
+            request.present = true;
+            request.repaint = true;
+        }
+    });
+    super::runtime::request_redraw_all();
 }
 
 /// L3: rerun/diff the active window's declarations and reactive islands/bindings.
@@ -158,7 +172,7 @@ pub(super) fn begin_frame() {
         // than letting L3 bake stale font metrics into explicit dimensions.
         crate::text::invalidate_prepare_cache();
         crate::utils::text_texture::invalidate_text_texture_cache();
-        super::runtime::apply_frame_invalidation(false, true, &HashMap::new());
+        super::runtime::apply_frame_invalidation(false, true, false, &HashMap::new());
     }
     if requests.rebuild {
         let root = ROOTS.with(|roots| roots.borrow().get(&window_scope::active()).copied());
@@ -168,7 +182,7 @@ pub(super) fn begin_frame() {
         super::reactive::rebuild_registered_in_scope();
     }
     super::reactive::tick_immediate_regions();
-    super::runtime::apply_frame_invalidation(requests.present, false, &requests.nodes);
+    super::runtime::apply_frame_invalidation(requests.present, false, requests.repaint, &requests.nodes);
     STATS.with(|stats| {
         let mut s = stats.get();
         s.frames += 1;

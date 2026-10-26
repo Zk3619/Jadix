@@ -490,6 +490,30 @@ impl super::App {
         self.handle_keyboard_input_ex(event, false)
     }
 
+    fn text_edit_key_handler(&self, focused: &str) -> Option<crate::authoring::text::KeyHandler> {
+        if let Some(window) = super::window_scope::window_id_for_active_token() {
+            self.secondaries.borrow().get(&window).and_then(|state| {
+                crate::authoring::text::key_handler(&state.root_element, focused)
+            })
+        } else {
+            self.state.borrow().as_ref().and_then(|state| {
+                crate::authoring::text::key_handler(&state.root_element, focused)
+            })
+        }
+    }
+
+    fn window_shortcut_handlers(&self) -> Vec<crate::authoring::keys::Handler> {
+        if let Some(window) = super::window_scope::window_id_for_active_token() {
+            self.secondaries.borrow().get(&window).map_or_else(Vec::new, |state| {
+                crate::authoring::keys::handlers(&state.root_element)
+            })
+        } else {
+            self.state.borrow().as_ref().map_or_else(Vec::new, |state| {
+                crate::authoring::keys::handlers(&state.root_element)
+            })
+        }
+    }
+
     fn handle_keyboard_input_ex(&mut self, event: KeyEvent, allow_primary_tree: bool) -> bool {
         if event.state == ElementState::Pressed {
             #[cfg(all(debug_assertions, feature = "devtools"))]
@@ -497,7 +521,14 @@ impl super::App {
                 crate::app::runtime::request_redraw();
                 return true;
             }
-            if crate::components::sidebar::try_toggle_sidebar_from_key(&event, &self.modifiers) {
+            let shortcuts = self.window_shortcut_handlers();
+            let context = crate::authoring::keys::Context {
+                key: &event.logical_key,
+                modifiers: self.modifiers,
+                state: event.state,
+                repeat: event.repeat,
+            };
+            if shortcuts.into_iter().any(|handler| handler.dispatch(context)) {
                 return true;
             }
         }
@@ -567,35 +598,24 @@ impl super::App {
                 // Imm still had GCS_COMPSTR — commit preedit so the underline leaves.
                 ime_support::drain_pending_ime_shift_compose_finish(&fid);
 
-                if allow_primary_tree
-                    && event.state == ElementState::Pressed
-                    && crate::utils::drag::is_active()
-                {
-                    match &event.logical_key {
+                if allow_primary_tree && event.state == ElementState::Pressed {
+                    let drag_key = match &event.logical_key {
                         Key::Named(NamedKey::Escape) => {
-                            let _ = crate::utils::drag::cancel();
-                            if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                                st.window.request_redraw();
-                            }
-                            return true;
+                            Some(crate::utils::drag::runtime::DragKey::Cancel)
                         }
                         Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::ArrowRight) => {
-                            if crate::utils::drag::nudge_insert(1) {
-                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                                    st.window.request_redraw();
-                                }
-                                return true;
-                            }
+                            Some(crate::utils::drag::runtime::DragKey::Next)
                         }
                         Key::Named(NamedKey::ArrowUp) | Key::Named(NamedKey::ArrowLeft) => {
-                            if crate::utils::drag::nudge_insert(-1) {
-                                if let Some(st) = (*self.state.borrow_mut()).as_mut() {
-                                    st.window.request_redraw();
-                                }
-                                return true;
-                            }
+                            Some(crate::utils::drag::runtime::DragKey::Previous)
                         }
-                        _ => {}
+                        _ => None,
+                    };
+                    if drag_key.is_some_and(crate::utils::drag::runtime::key) {
+                        if let Some(st) = (*self.state.borrow_mut()).as_mut() {
+                            st.window.request_redraw();
+                        }
+                        return true;
                     }
                 }
 
@@ -658,8 +678,9 @@ impl super::App {
                         && edit_shortcut_letter(&event) == Some('c')
                     {
                         if let Some(st) = (*self.state.borrow()).as_ref() {
-                            if crate::components::label::try_copy_label_selection(&st.root_element)
-                            {
+                            if crate::utils::text_selection::try_copy_label_selection(
+                                &st.root_element,
+                            ) {
                                 if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                                     st.window.request_redraw();
                                 }
@@ -703,7 +724,8 @@ impl super::App {
                         crate::core::reactivity::use_signal(&pref_x_key, || None::<f32>);
                     let pre = preedit_sig.get();
                     let composing = ime_active.get() && !pre.is_empty();
-                    if !composing && crate::components::text_editor::dispatch_editor_key(rest, &event, self.modifiers) {
+                    if !composing && self.text_edit_key_handler(&fid)
+                        .is_some_and(|handler| handler(&event, self.modifiers)) {
                         return true;
                     }
                     let password_field = input_type_for(rest).is_password();

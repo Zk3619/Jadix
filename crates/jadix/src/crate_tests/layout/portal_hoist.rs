@@ -14,6 +14,7 @@ fn portal_layer(root: &Element) -> Option<&Element> {
 }
 
 #[test]
+#[cfg(feature = "components")]
 fn persistent_hud_survives_floating_portal_and_reactive_refresh() {
     use crate::core::reactivity::{create_effect, create_root, use_signal};
     use std::{cell::RefCell, rc::Rc};

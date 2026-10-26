@@ -1,9 +1,9 @@
+#![cfg(feature = "components")]
 //! Last visible SidebarContent row must not paint past the footer separator.
 //!
 //! Gallery inset rail: Header / Separator / Content / Separator / Footer.
 //! Overflow lives on Content (inner is `overflow: visible` so Header/Footer
 //! glyphs survive). A last-item leak onto the footer rule is a clip/layout bug.
-
 use crate::components::sidebar::{
     sidebar_group, sidebar_group_content, sidebar_group_label, sidebar_menu, sidebar_menu_button,
     sidebar_provider_scope, Sidebar, SidebarContent, SidebarContentProps, SidebarFooter,

@@ -17,13 +17,10 @@ use std::rc::Rc;
 
 use crate::app::portal_overlay::{pinned_overlay_z, portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
+use crate::authoring::mount::pin_overlay_origin as pin_overlay_follow_insets;
 use crate::core::reactivity::{isolate_reads, with_child_owner, Signal};
 use crate::core::tree::{lpa_length_px, Element, IntoCssDim, IntoOpacity, LayoutStatus, UnitSlot};
-use crate::layout::layout_tree::{
-    ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT,
-};
 use crate::layout::{dim_kind, dim_length_px, DimKind};
-use crate::utils::anchored_overlay::pin_overlay_follow_insets;
 use crate::utils::popup::{flow_hidden_portal_host, mount_anchored_overlay, ATTR_FLOATING};
 
 use super::builder::{
@@ -62,6 +59,7 @@ fn place_drag_ghost(
     origin: [f32; 2],
     clip: Option<[f32; 4]>,
 ) -> Element {
+    super::session_runtime::install();
     panel.style.overflow.x = taffy::style::Overflow::Visible;
     panel.style.overflow.y = taffy::style::Overflow::Visible;
     if let Some(bbox) = clip.filter(|b| b[2] > 0.5 && b[3] > 0.5) {
@@ -141,7 +139,7 @@ fn write_clip_shell(el: &mut Element, bbox: [f32; 4], origin: [f32; 2]) -> (bool
 /// Dest-reset old + new ghost boxes. Origin follow is paint-only (`StyleChanged`);
 /// without Overlay dirty, PartialLoad keeps the previous chip.
 fn note_ghost_follow_damage(el: &Element, origin: [f32; 2]) {
-    crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
+    crate::authoring::mount::invalidate_paint(el);
     let w = el.layout_bounds[2];
     let h = el.layout_bounds[3];
     remember_ghost_follow_chrome(el, origin, [w, h]);
@@ -156,7 +154,7 @@ fn note_ghost_follow_damage(el: &Element, origin: [f32; 2]) {
 /// Dest-reset the restrict clip box (old + live) and the chip. Page scroll
 /// moves the shell; chip-only dirty leaves ink at the pre-scroll parent.
 fn note_clip_shell_damage(el: &Element, old: [f32; 4], bbox: [f32; 4], origin: [f32; 2]) {
-    crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
+    crate::authoring::mount::invalidate_paint(el);
     let stamp = crate::layout::layout_tree::overlay_portal_stamp_key(el);
     if old[2] > 0.5 && old[3] > 0.5 {
         crate::app::damage::push_frame_overlay_damage(stamp, old);
@@ -188,7 +186,7 @@ struct GhostFollow {
     base: Cell<Option<[f32; 2]>>,
 }
 
-thread_local! {
+crate::authoring::window::window_local! {
     static GHOST_FOLLOW: GhostFollow = const {
         GhostFollow {
             stamp_key: Cell::new(0),
@@ -269,7 +267,7 @@ pub(crate) fn adjust_overlay_collect_origin(
     el: &mut Element,
     measured: [f32; 2],
 ) -> Option<[f32; 2]> {
-    let scale = crate::core::tree::paint_scale_with_ancestor(el, el.paint_ancestor_scale);
+    let scale = crate::authoring::mount::painted_scale(el);
     let measured = [measured[0] * scale[0], measured[1] * scale[1]];
     if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
         return peek_restrict_clip()
@@ -385,35 +383,10 @@ fn write_placed_ghost(
     origin: [f32; 2],
     clip: Option<[f32; 4]>,
 ) {
-    let sync = host.reactive_sync.take();
-    let z = host.style.z_index;
-    let portal_key = host.attrs.get(ATTR_PORTAL_KEY).cloned();
-    let portal = host.attrs.get("jadix_portal").cloned();
-    let portal_mount = host.attrs.get(ATTR_PORTAL_MOUNT).cloned();
-    let hoisted = host.attrs.get(ATTR_HOISTED_PORTAL).cloned();
-    let hoisted_mount = host.attrs.get(ATTR_HOISTED_MOUNT).cloned();
-    *host = place_drag_ghost(body, ghost_id, origin, clip);
-    host.reactive_sync = sync;
-    if z != 0 {
-        host.style.z_index = z;
-    }
-    if let Some(k) = portal_key {
-        host.set_attr(ATTR_PORTAL_KEY, k);
-    }
-    if let Some(v) = portal {
-        host.set_attr("jadix_portal", v);
-    }
-    if let Some(m) = portal_mount {
-        host.set_attr(ATTR_PORTAL_MOUNT, m);
-    }
-    // Keep portal ownership across body/clip replacement, so removing its
-    // declaration slot also removes the hoisted node on close.
-    if let Some(v) = hoisted {
-        host.set_attr(ATTR_HOISTED_PORTAL, v);
-    }
-    if let Some(m) = hoisted_mount {
-        host.set_attr(ATTR_HOISTED_MOUNT, m);
-    }
+    crate::authoring::mount::replace_portal_content(
+        host,
+        place_drag_ghost(body, ghost_id, origin, clip),
+    );
 }
 
 /// Paint-time ghost body + origin. The island itself must not remount on
@@ -777,6 +750,7 @@ impl From<DragOverlayBuilder> for Element {
 }
 
 pub fn drag_overlay() -> DragOverlayBuilder {
+    super::session_runtime::install();
     DragOverlayBuilder {
         body: None,
         body_for: None,
@@ -1314,6 +1288,7 @@ mod tests {
     /// Leaf `.text().p()` staying green does not cover this path — the live
     /// symptom is a bordered radius dot with no chip text.
     #[test]
+    #[cfg(feature = "components")]
     fn gallery_hstack_icon_label_ghost_is_not_a_dot() {
         use crate::app::reactive::reset_registered_anchors;
         use crate::app::runtime::clear_test_reconcile_root;
@@ -1409,6 +1384,7 @@ mod tests {
     /// paints a bordered radius dot — the clone has no `layout_node` and fast path
     /// keeps the empty host's 0×0 Taffy box.
     #[test]
+    #[cfg(feature = "components")]
     fn gallery_card_chip_ghost_is_not_a_dot_on_appstate_fast_path() {
         use crate::app::reactive::reset_registered_anchors;
         use crate::app::runtime::clear_test_reconcile_root;
@@ -4712,7 +4688,7 @@ mod tests {
         let (_o, live) = mount_scope_tree(move || {
             drag_scope("ov-cross-src").threshold(0.0).child(move || {
                 let _ = Element::from(drag_overlay());
-                let mk = |id: &'static str, list: &'static str, idx: usize| {
+                let mk = move |id: &'static str, list: &'static str, idx: usize| {
                     draggable(id)
                         .also_droppable(true)
                         .item_type("task")
@@ -4849,6 +4825,15 @@ mod tests {
     /// the abspos padding box) — a sliver wider than the in-flow sibling.
     #[test]
     fn cross_list_hole_preview_keeps_stretched_row_width() {
+        check_cross_list_hole_preview_stretched_width(true);
+    }
+
+    #[test]
+    fn cross_list_hole_preview_keeps_stretched_auto_row_width() {
+        check_cross_list_hole_preview_stretched_width(false);
+    }
+
+    fn check_cross_list_hole_preview_stretched_width(percent_width: bool) {
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::clear_test_reconcile_root;
         use crate::core::tree::LayoutStatus;
@@ -4861,14 +4846,17 @@ mod tests {
         let (_o, live) = mount_scope_tree(move || {
             drag_scope("ov-cross-w").threshold(0.0).child(move || {
                 let overlay: Element = drag_overlay().into();
-                let mk = |id: &'static str, list: &'static str, idx: usize| {
+                let mk = move |id: &'static str, list: &'static str, idx: usize| {
                     draggable(id)
                         .also_droppable(true)
                         .item_type("task")
                         .group("board")
                         .list(list)
                         .index(idx)
-                        .child(move || Element::new().text("Draft RFC").w("100%").h(32.0))
+                        .child(move || {
+                            let body = Element::new().text("Draft RFC").h(32.0);
+                            if percent_width { body.w("100%") } else { body }
+                        })
                 };
                 let left = droppable("todo")
                     .list("todo")
@@ -8556,6 +8544,7 @@ mod tests {
     /// the dimmed body stays in-list, and commit follows the hovered slot —
     /// not always `len` (tail insert).
     #[test]
+    #[cfg(feature = "components")]
     fn gallery_sortable_without_hide_source_keeps_dimmed_body() {
         use crate::app::reactive::{
             drain_deferred_view_remounts, for_keyed, reset_registered_anchors,
@@ -8794,6 +8783,7 @@ mod tests {
     /// ScrollArea offset). Insert-index must use the visual slots, not fall
     /// through to `len` because the pointer Y is large.
     #[test]
+    #[cfg(feature = "components")]
     fn gallery_sortable_below_page_offset_does_not_append() {
         use crate::app::reactive::{
             drain_deferred_view_remounts, for_keyed, reset_registered_anchors,
@@ -8933,6 +8923,7 @@ mod tests {
     /// outer `scroll-overlays`). Dimmed chrome must match opacity-0 except
     /// opacity 0.4, and moving to Earth must not append.
     #[test]
+    #[cfg(feature = "components")]
     fn gallery_stacked_dimmed_matches_hide_source() {
         use crate::app::reactive::{
             drain_deferred_view_remounts, for_keyed, reset_registered_anchors,

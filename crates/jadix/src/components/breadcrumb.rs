@@ -908,9 +908,9 @@ mod tests {
             "empty id must use stable breadcrumb focus_id, not auto btn-N"
         );
         assert_eq!(el.attrs.get(ATTR_SLOT).map(String::as_str), Some(SLOT_LINK));
-        assert!(el.button_hover_paint.is_some());
+        assert!(el.authoring_state.get::<crate::components::button::ButtonHoverPaint>().is_some());
         assert_eq!(
-            el.button_hover_paint.as_ref().map(|p| p.variant.as_str()),
+            el.authoring_state.get::<crate::components::button::ButtonHoverPaint>().map(|p| p.variant.as_str()),
             Some("link")
         );
         use crate::core::tree::PointerEvents;

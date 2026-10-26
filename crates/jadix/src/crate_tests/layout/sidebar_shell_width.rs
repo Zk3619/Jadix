@@ -1,5 +1,5 @@
+#![cfg(feature = "components")]
 //! App-shell flex: fixed sidebar must not shrink when main content has large min-width.
-
 use crate::components::scroll_area::scroll_area;
 use crate::components::sidebar::sidebar;
 use crate::core::reactivity::{create_effect, create_root};

@@ -1438,6 +1438,7 @@ mod tests {
     /// play Dialog fade-out instead of being pruned on the same frame.
     #[test]
     #[cfg(feature = "animation-base")]
+    #[cfg(feature = "components")]
     fn tab_unmount_plays_configured_modal_exit() {
         use std::cell::RefCell;
         use std::rc::Rc;
@@ -1570,6 +1571,7 @@ mod tests {
     /// Gallery RSX `<ViewportModal>` unpacks Trigger + Content into the parent HStack
     /// (`jadix_fragment` + `IntoElementList`). Opening must not eat the page VStack gap.
     #[test]
+    #[cfg(feature = "components")]
     fn rsx_open_toggle_keeps_page_vstack_gap() {
         use std::cell::RefCell;
         use std::rc::Rc;

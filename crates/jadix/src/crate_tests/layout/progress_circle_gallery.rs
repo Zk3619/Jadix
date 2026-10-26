@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Gallery-shaped ProgressCircle: root effect defers anchors → reconcile → layout paint.
 
 use crate::app::reactive::reset_registered_anchors;

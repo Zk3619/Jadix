@@ -13,6 +13,7 @@ pub mod image;
 pub mod playback;
 pub(crate) mod remote;
 pub mod stream;
+pub mod texture;
 #[cfg(feature = "svg")]
 pub mod svg_raster;
 pub mod yuv;

@@ -37,6 +37,7 @@
 //! - 默认仅接受 ASCII 数字；`pattern="alnum"` 可字母数字。
 //! - `<InputOTP*>` 走通用 PascalCase → `*Props`；RSX `maxLength` 由宏映到 `max_length`。
 
+#[cfg(test)]
 use std::cell::Cell;
 use std::sync::OnceLock;
 
@@ -75,26 +76,6 @@ pub const INPUT_OTP_FOCUS_PREFIX: &str = "input-otp:";
 const SLOT_SIZE: &str = "2.25rem";
 /// Tailwind `rounded-md`（`first:rounded-l-md` / `last:rounded-r-md`）。
 const SLOT_EDGE_RADIUS: f32 = 6.0;
-
-thread_local! {
-    /// Set during slot paint when an empty active OTP cell needs caret blink wake
-    /// (same ~520ms `WaitUntil` path as Input `InputCaretDraw`).
-    static OTP_CARET_BLINK_NEEDED: Cell<bool> = const { Cell::new(false) };
-}
-
-/// Whether this frame's OTP paint requested caret blink scheduling.
-pub(crate) fn take_otp_caret_blink_needed() -> bool {
-    OTP_CARET_BLINK_NEEDED.replace(false)
-}
-
-fn mark_otp_caret_blink_needed() {
-    OTP_CARET_BLINK_NEEDED.set(true);
-}
-
-/// `focus_id` 是否为 InputOTP（`input-otp:{id}`）。
-pub(crate) fn is_input_otp_focus(focus_id: &str) -> bool {
-    focus_id.starts_with(INPUT_OTP_FOCUS_PREFIX)
-}
 
 /// Group 内边位置（供圆角 / 重叠描边复用）。
 const ATTR_OTP_EDGE: &str = "jadix_otp_edge";
@@ -381,9 +362,7 @@ fn sync_otp_slot_paint(
     // Blink only changes opacity and dirties the stroke.
     let want_caret = is_active && ch.is_none();
     let caret_opacity = if caret_blink_on() { 1.0 } else { 0.0 };
-    if want_caret {
-        mark_otp_caret_blink_needed();
-    }
+    el.set_attr("jadix_otp_caret_wake", if want_caret { "true" } else { "false" });
     let mut kids: Vec<Element> = Vec::new();
     if let Some(c) = ch {
         kids.push(build_slot_glyph(c));
@@ -715,6 +694,7 @@ pub fn input_otp_scope(
     });
 
     root.set_attr(ATTR_SLOT, SLOT_ROOT);
+    root.set_attr(crate::authoring::focus::ATTR_BLUR_ON_OUTSIDE_PRESS, "true");
     root.template_id = Some(id.clone());
     if disabled {
         root = root.opacity(0.5).cursor_not_allowed();
@@ -914,10 +894,14 @@ pub fn InputOTPSlot(index: Option<i32>, children: Option<Element>) -> Element {
     }
 
     let sync_fid = fid;
-    cell = cell.reactive_sync(move |el, _| {
-        sync_otp_slot_paint(
+    cell = cell.reactive_sync(move |el, layout| {
+        let status = sync_otp_slot_paint(
             el, index, max_length, value_sig, active_sig, &sync_fid, disabled, invalid,
-        )
+        );
+        if el.attrs.get("jadix_otp_caret_wake").map(String::as_str) == Some("true") {
+            layout.request_caret_blink();
+        }
+        status
     });
 
     cell

@@ -130,17 +130,27 @@ struct ResizableDrag {
     start_y: f32,
 }
 
-thread_local! {
+crate::authoring::window::window_local! {
     static RESIZABLE_DRAG: RefCell<Option<ResizableDrag>> = const { RefCell::new(None) };
 }
 
 fn begin_resizable_drag(id: impl Into<String>, drag: ResizableDrag, x: f32, y: f32) {
-    crate::utils::pointer_drag::begin(crate::utils::pointer_drag::DragKind::Resizable, id, x, y);
+    crate::utils::drag::pointer::begin(crate::utils::drag::pointer::DragKind::Resizable, id, x, y);
     RESIZABLE_DRAG.with(|d| *d.borrow_mut() = Some(drag));
+    crate::utils::drag::routing::register(
+        module_path!(),
+        crate::utils::drag::routing::DragHandlers::new(
+            tick_resizable_drag,
+            clear_resizable_drag_if_any,
+        )
+        .scroll_policy(crate::utils::drag::routing::ScrollPolicy::BlockPan)
+        .block_native_input(),
+    );
 }
 
 fn end_resizable_drag() {
-    crate::utils::pointer_drag::clear();
+    crate::utils::drag::routing::unregister(module_path!());
+    crate::utils::drag::pointer::clear();
     RESIZABLE_DRAG.with(|d| *d.borrow_mut() = None);
     crate::app::release_pointer_capture();
 }
@@ -1568,9 +1578,14 @@ mod tests {
             120.0,
             80.0,
         );
-        assert!(tick_resizable_drag(160.0, 80.0));
+        assert!(crate::utils::drag::routing::blocks_content_pan());
+        assert!(!crate::utils::drag::routing::freezes_scroll());
+        assert!(
+            crate::utils::drag::routing::prepare_move(Some(&root), 160.0, 80.0).dispatch()
+        );
         let after = sizes.peek();
-        clear_resizable_drag_if_any();
+        crate::utils::drag::routing::finish_all();
+        assert!(!is_resizable_dragging());
         assert!(
             (after[0] - 40.0).abs() < 0.5 && (after[1] - 60.0).abs() < 0.5,
             "expected ~[40,60] after +40px drag, got {after:?}"

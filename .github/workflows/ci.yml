@@ -66,8 +66,15 @@ jobs:
           ./scripts/check-features.ps1
           cargo test -p jadix --no-default-features --lib -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test -p jadix --no-default-features --test feature_contracts --test animation_features --test text_document_views -- --test-threads=1
+          cargo test -p jadix --no-default-features --test feature_contracts --test animation_features --test geometry_contracts -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p jadix --no-default-features --features drag --test drag_routing_contracts --test drag_runtime_contracts -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p jadix --no-default-features --features components,dnd --lib --test feature_contracts --test animation_features --test text_document_views --test authoring_contracts --test authoring_runtime_contracts --test drag_routing_contracts --test drag_runtime_contracts --test geometry_contracts --test macro_lowering --test fragment_macro -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/check-authoring.ps1
+          ./scripts/check-dnd-source.ps1
+          ./scripts/check-lucide-source.ps1
           foreach ($capability in @('theme-fluent', 'theme-material3', 'theme-liquid-glass', 'code', 'markdown', 'syntax-highlighting', 'code-lsp', 'scale-preview', 'windows-dwm', 'windows-dcomp', 'lucide-animated', 'svg', 'svg,bundled-lucide,lucide-animated')) {
             cargo test -p jadix --no-default-features --features $capability --test feature_contracts
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -84,7 +91,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p jadix --no-default-features --features code-lsp --lib text::lsp::tests
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test -p jadix --no-default-features --features scale-preview --test scale_preview
+          cargo test -p jadix --no-default-features --features components,scale-preview --test scale_preview
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p jadix --features themes,animation-path,document-editing,document-diff,document-science --test feature_contracts --test document_editing --test document_extensions --test document_quality --test text_document_views
       - name: Wayland configure capability projection

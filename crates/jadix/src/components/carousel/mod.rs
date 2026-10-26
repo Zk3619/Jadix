@@ -19,7 +19,7 @@
 //!
 //! ## Module split (product layer, not framework primitives)
 //! - [`track`] / [`snap`] / [`loop_anim`] / [`autoplay`] / [`geometry`] / [`drag`] / [`content`] / [`builder`]: This component’s private layering
-//! - For drag sessions see [`utils::pointer_drag`](crate::utils::pointer_drag)
+//! - For drag sessions see [`utils::drag::pointer`](crate::utils::drag::pointer)
 //!
 //! ## Usage
 //! ```ignore
@@ -78,10 +78,10 @@ pub use builder::{carousel, carousel_multi, carousel_single, carousel_stack, Car
 #[allow(unused_imports)] // used by external crates / window layer
 pub(crate) use drag::is_carousel_dragging;
 use drag::*;
-pub(crate) use drag::{
-    begin_carousel_paint_frame, carousel_next_wake_at, clear_carousel_drag_if_any,
-    tick_carousel_autoplay, tick_carousel_drag,
-};
+#[cfg(test)]
+pub(crate) use drag::{begin_carousel_paint_frame, tick_carousel_autoplay};
+#[cfg(test)]
+pub(crate) use drag::{clear_carousel_drag_if_any, tick_carousel_drag};
 use geometry::*;
 
 use autoplay::{decide_autoplay, gate_autoplay_visibility, AutoplayAction};
@@ -975,6 +975,7 @@ pub fn carousel_scope(
         paused,
     };
     provide_context(carousel_context(), ctx.clone());
+    #[cfg(test)]
     register_autoplay(&ctx);
 
     let kids = take_packed(body());
@@ -1024,10 +1025,19 @@ pub fn carousel_scope(
     root.set_attr("aria-roledescription", "carousel");
     root.template_id = Some(id.clone());
 
-    let unreg_id = id.clone();
-    root = root.on_unmount(move || {
-        unregister_autoplay(&unreg_id);
-    });
+    if autoplay_ms > 0 {
+        bump_autoplay(&ctx);
+        let autoplay_ctx = ctx.clone();
+        crate::authoring::deadline::attach(
+            &mut root, crate::authoring::deadline::Visibility::Visible,
+            move |context| poll_autoplay(&autoplay_ctx, context),
+        );
+    }
+    #[cfg(test)]
+    {
+        let unreg_id = id.clone();
+        root = root.on_unmount(move || unregister_autoplay(&unreg_id));
+    }
 
     let focus_id = format!("{id}__carousel_root");
     let ctx_key = ctx.clone();
@@ -1888,7 +1898,12 @@ mod tests {
                 autoplay_ms: 0,
             });
             // Dragging past the last item into the "next" direction should wrap back to the real band in ticks (not clone/blank).
-            let _ = tick_carousel_drag(200.0 - (step + 50.0), 0.0);
+            assert!(crate::utils::drag::routing::prepare_move(
+                None,
+                200.0 - (step + 50.0),
+                0.0
+            )
+            .dispatch());
             let mid = offset_target(id).peek();
             let start = -(cc as f32) * step;
             let end = start - (n as f32) * step;
@@ -1896,7 +1911,8 @@ mod tests {
                 mid <= start + 0.01 && mid > end,
                 "snap+seamless drag must stay in real band; mid={mid} start={start} end={end}"
             );
-            end_carousel_drag();
+            crate::utils::drag::routing::finish_all();
+            assert!(!is_carousel_dragging_id(id));
             assert!(
                 loop_anim(id).is_none(),
                 "drag wrap should not leave a pending clone loop anim"
@@ -2194,11 +2210,13 @@ mod tests {
             stamp_carousel_painted(id);
             tick_carousel_autoplay();
             assert_eq!(index.peek(), 0, "first on-screen tick restarts clock");
+            assert!(carousel_next_wake_at().is_some());
 
             set_next_autoplay_at(id, Some(Instant::now() - Duration::from_millis(1)));
             begin_carousel_paint_frame();
             tick_carousel_autoplay();
             assert_eq!(index.peek(), 0, "offscreen must not Advance");
+            assert!(carousel_next_wake_at().is_none());
 
             set_next_autoplay_at(id, Some(Instant::now() - Duration::from_millis(1)));
             begin_carousel_paint_frame();

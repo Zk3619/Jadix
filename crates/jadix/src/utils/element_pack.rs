@@ -8,7 +8,7 @@
 //! ## Contract ([`take_packed`])
 //! - **Expand**: `jadix_fragment=1`, or an anonymous multi-child shell (`children.len() > 1`,
 //!   no text).
-//! - **Preserve**: any `data-slot`, `on_click`, `focus_id`, or `button_hover_paint`
+//! - **Preserve**: any `data-slot`, `on_click`, `focus_id`, or authored paint policy
 //!   (Kbd / menu Item / Button chrome, …); and any anonymous shell that carries
 //!   box-model layout (padding / margin / gap / border) so Taffy still sees insets.
 //! - **Recursive**: nested pack shells are flattened; preserved nodes are leaves of the
@@ -52,7 +52,12 @@ fn is_preserved_shell(el: &Element) -> bool {
     has_slot(el)
         || el.on_click.is_some()
         || el.focus_id.is_some()
-        || el.button_hover_paint.is_some()
+        || !el.authoring_state.is_empty()
+        || el.paint_edge.is_some()
+        || el.paint_opaque_fill
+        || el.paint_region_replay
+        || el.paint_children_unculled
+        || el.attrs.contains_key(crate::core::tree::ATTR_OPACITY_GROUP)
 }
 
 /// Anonymous multi-child packs must not be peeled when they carry box-model layout
@@ -189,6 +194,20 @@ mod tests {
         let kids = take_packed(pack);
         assert_eq!(kids.len(), 2);
         assert_eq!(kids[0].text.as_deref(), Some("Search"));
+    }
+
+    #[test]
+    fn opacity_group_shell_survives_packing_and_empty_child_normalization() {
+        for enabled in [false, true] {
+            let empty = Element::new().opacity_group(enabled);
+            assert!(children_none_if_vacuous(Some(empty)).is_some());
+            let shell = Element::new().opacity_group(enabled)
+                .child(Element::new().text("a"))
+                .child(Element::new().text("b"));
+            let packed = take_packed(shell);
+            assert_eq!(packed.len(), 1);
+            assert_eq!(packed[0].children.len(), 2);
+        }
     }
 
     #[test]

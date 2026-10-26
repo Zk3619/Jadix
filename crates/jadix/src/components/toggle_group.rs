@@ -688,6 +688,7 @@ pub fn toggle_group_scope(
             paint_join_frame(&mut el, frame);
         }
         el.set_attr(ATTR_SLOT, SLOT_ROOT);
+        crate::components::button_group::attach_join_seams(&mut el);
         el.set_attr("data-variant", variant.as_str());
         el.set_attr("data-size", size.as_str());
         el.set_attr("data-spacing", spacing.to_string());
@@ -1315,6 +1316,48 @@ mod tests {
         );
         assert!(segs.iter().all(|s| s.style.border_width < 0.01));
         assert!((el.style.border_width - 1.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn joined_seams_keep_border_color_through_selection_and_hover() {
+        use crate::core::reactivity::create_root;
+        use crate::core::tree::LayoutTree;
+
+        for orientation in ["horizontal", "vertical"] {
+            create_root(|| {
+                let group: Element = toggle_group("tg-seam-states")
+                    .orientation(orientation)
+                    .variant("outline")
+                    .spacing(0)
+                    .default_value("middle")
+                    .options([("top", "Top"), ("middle", "Middle"), ("bottom", "Bottom")])
+                    .into();
+                let mut root = Element::new().w(400.0).h(240.0).child(group);
+                let mut layout = LayoutTree::new();
+                layout.build_and_layout(&mut root, 400.0, 240.0, [-1.0; 2]);
+                for selected in ["middle", "top", "bottom", ""] {
+                    sync_toggle_group_pressed(
+                        &mut root.children[0], true, false, false, false, selected, &[],
+                    );
+                    for hovered in [None, Some(0), Some(2), Some(4), None] {
+                        let mouse = hovered.map_or([-1.0; 2], |index| {
+                            let bounds = root.children[0].children[index].layout_bounds;
+                            [bounds[0] + bounds[2] * 0.5, bounds[1] + bounds[3] * 0.5]
+                        });
+                        let mut impact = crate::core::tree::LayoutStatus::Clean;
+                        crate::style::sync_class_variants_subtree(
+                            &mut root, mouse, "", false, 400.0, 240.0,
+                            &mut layout, &mut impact,
+                        );
+                        for index in [1, 3] {
+                            let seam = &root.children[0].children[index];
+                            assert_eq!(seam.style.bg_color, seam.style.border_color,
+                                "{orientation}: selected={selected:?} hovered={hovered:?} seam={index} must keep its border color");
+                        }
+                    }
+                }
+            });
+        }
     }
 
     #[test]

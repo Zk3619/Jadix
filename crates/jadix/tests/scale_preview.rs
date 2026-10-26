@@ -1,4 +1,4 @@
-#![cfg(feature = "scale-preview")]
+#![cfg(all(feature = "scale-preview", feature = "components"))]
 
 use jadix::components::scale_preview;
 use jadix::core::reactivity::create_root;

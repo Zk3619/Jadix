@@ -78,6 +78,7 @@ use crate::utils::anchored_overlay::{
     anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
     FloatingMotionKind, FloatingStrategy, Placement,
 };
+#[cfg(test)]
 use crate::utils::overflow_fit::tighten_horizontal_constraint;
 use crate::utils::popup::{
     PopupPlacement, ATTR_FLOATING_EXPAND_FROM_H, ATTR_FLOATING_EXPAND_FROM_W,
@@ -898,6 +899,21 @@ fn open_reaction_expand(id: &str) {
     }
 }
 
+fn dismiss_idle_reaction_hover(id: &str) -> bool {
+    let expanded = BUBBLE_REACTIONS.with(|entries| {
+        let entries = entries.borrow();
+        let entry = entries.get(id)?;
+        if !entry.expanded.peek() || !entry.hover_armed.get()
+            || entry.bar_hover.get() || entry.panel_hover.get() {
+            return None;
+        }
+        entry.hover_armed.set(false);
+        Some(entry.expanded)
+    });
+    expanded.is_some_and(|expanded| expanded.peek() && expanded.try_set(false))
+}
+
+#[cfg(test)]
 fn dismiss_idle_reaction_hovers() -> bool {
     let mut to_close: Vec<Signal<bool>> = Vec::new();
     BUBBLE_REACTIONS.with(|m| {
@@ -919,12 +935,6 @@ fn dismiss_idle_reaction_hovers() -> bool {
         }
     }
     closed
-}
-
-/// Run after a hover enter/leave batch so leave→close is not delayed until the next
-/// layout pass (mouse-stop after leaving the portal otherwise never schedules that pass).
-pub(crate) fn flush_reaction_hover_dismiss() -> bool {
-    dismiss_idle_reaction_hovers()
 }
 
 fn register_bubble_reactions_redraw(reactions_id: &str, expanded: Signal<bool>) {
@@ -1064,6 +1074,7 @@ fn sync_bubble_reactions_row(
 }
 
 /// 每帧把 `data-state` 与 `expanded` 对齐；指针已离开条带和浮层时收起；宽度不足时自动折叠 `+N`。
+#[cfg(test)]
 pub(crate) fn sync_bubble_reactions_subtree(
     el: &mut Element,
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
@@ -1077,6 +1088,7 @@ pub(crate) fn sync_bubble_reactions_subtree(
     walk_bubble_reactions_sync(el, root_budget, layout_tree, impact);
 }
 
+#[cfg(test)]
 fn walk_bubble_reactions_sync(
     el: &mut Element,
     constraint_w: Option<f32>,
@@ -1263,6 +1275,20 @@ fn build_bubble_reactions_element(
         if expanded.peek() { "open" } else { "closed" },
     );
 
+    for phase in [crate::authoring::presentation::Phase::State,
+        crate::authoring::presentation::Phase::AfterGeometry] {
+        crate::authoring::presentation::attach(&mut row, phase, |element, layout, context| {
+            let mut status = LayoutStatus::Clean;
+            sync_bubble_reactions_row(element, context.width_budget, layout, &mut status);
+            status
+        });
+    }
+    let hover_id = reactions_id.clone();
+    crate::authoring::deadline::attach(&mut row,
+        crate::authoring::deadline::Visibility::Always,
+        move |_| crate::authoring::deadline::Poll {
+            redraw: dismiss_idle_reaction_hover(&hover_id), next_wake: None,
+        });
     let id_cleanup = reactions_id.clone();
     row = row.on_unmount(move || unregister_bubble_reactions(&id_cleanup));
 
@@ -2511,7 +2537,11 @@ mod tests {
         let mut tree = LayoutTree::new();
         let _ = tree.build_and_layout(&mut host, 44.0, 120.0, [-1.0, -1.0]);
         let mut impact = LayoutStatus::Clean;
-        sync_bubble_reactions_subtree(&mut host, &mut tree, &mut impact, 44.0);
+        impact = impact.merge(crate::authoring::presentation::sync_tree(
+            &mut host, &mut tree, crate::authoring::presentation::Context::new(
+                crate::authoring::presentation::Phase::AfterGeometry, [44.0, 120.0]),
+        ));
+        assert_ne!(impact, LayoutStatus::Clean);
         let rendered = BUBBLE_REACTIONS.with(|m| {
             m.borrow()
                 .get(&reactions_id)
@@ -3919,6 +3949,11 @@ mod tests {
             .find(|c| is_bubble_reactions(c))
             .and_then(|rx| rx.attrs.get(ATTR_REACTIONS_ID).cloned())
             .expect("reactions id");
+        let mut layout = LayoutTree::new();
+        layout.build_and_layout(&mut el, 400.0, 300.0, [-1.0; 2]);
+        let flush = |layout: &mut LayoutTree| layout.deadlines.prepare(true)
+            .into_iter().map(|task| task.dispatch(std::time::Instant::now()).redraw)
+            .fold(false, |changed, redraw| changed | redraw);
         BUBBLE_REACTIONS.with(|m| {
             let e = m.borrow();
             let e = e.get(&id).expect("registry");
@@ -3928,18 +3963,18 @@ mod tests {
             e.panel_hover.set(false);
         });
         assert!(
-            !flush_reaction_hover_dismiss(),
+            !flush(&mut layout),
             "still over the bar — must not close mid hover-transfer"
         );
         note_reactions_hover(&id, HoverPart::Bar, false);
         note_reactions_hover(&id, HoverPart::Panel, true);
         assert!(
-            !flush_reaction_hover_dismiss(),
+            !flush(&mut layout),
             "pointer moved onto the portal panel — stay open"
         );
         note_reactions_hover(&id, HoverPart::Panel, false);
         assert!(
-            flush_reaction_hover_dismiss(),
+            flush(&mut layout),
             "left bar and panel — close in the same hover batch"
         );
         BUBBLE_REACTIONS.with(|m| {

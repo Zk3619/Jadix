@@ -470,7 +470,10 @@ pub(crate) fn clear_text_edit_compose_state(focus_id: &str) {
     crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(None);
     crate::core::reactivity::use_signal(&ak, || None::<usize>).set(None);
     crate::core::reactivity::use_signal(&mk, Vec::<(usize, usize, u8)>::new).set(Vec::new());
-    crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false).set(false);
+    crate::core::reactivity::use_signal(crate::utils::text_edit::field::IME_ACTIVE_SIGNAL, || {
+        false
+    })
+    .set(false);
     on_ime_composition_ended();
 }
 
@@ -986,8 +989,11 @@ mod tests {
             crate::core::reactivity::use_signal(&ak, || None::<usize>).set(Some("4@qqq".len()));
             crate::core::reactivity::use_signal(&mk, Vec::<(usize, usize, u8)>::new)
                 .set(vec![(0, 1, 1)]);
-            crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || false)
-                .set(true);
+            crate::core::reactivity::use_signal(
+                crate::utils::text_edit::field::IME_ACTIVE_SIGNAL,
+                || false,
+            )
+            .set(true);
             on_ime_alphanumeric_toggle(&fid);
             assert_eq!(
                 crate::core::reactivity::use_signal(&vk, String::new).peek(),
@@ -1007,9 +1013,10 @@ mod tests {
                 "preedit underline marks must clear"
             );
             assert!(
-                !crate::core::reactivity::use_signal(crate::components::IME_ACTIVE_SIGNAL, || {
-                    false
-                })
+                !crate::core::reactivity::use_signal(
+                    crate::utils::text_edit::field::IME_ACTIVE_SIGNAL,
+                    || { false }
+                )
                 .peek(),
                 "IME active flag must clear after the toggle commit"
             );

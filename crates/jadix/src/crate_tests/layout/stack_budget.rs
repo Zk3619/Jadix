@@ -1,9 +1,9 @@
+#![cfg(feature = "components")]
 //! Windows PE default stack is ~1 MiB. Layout used to fit; collect/build frames
 //! grew until calculator/gallery needed an 8 MiB grow. This file is the red/green
 //! loop: measure type sizes + stack watermarks, then assert a calculator-shaped
 //! tree stays under the default budget. Deep chains must layout fully on a heap
 //! work queue — they are a memory/time cost, not a stack overflow.
-
 use crate::components::button::button;
 use crate::core::tree::{Element, ElementInner};
 use crate::layout::layout_tree::{stack_probe, LayoutTree, TextLayoutInfo};

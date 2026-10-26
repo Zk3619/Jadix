@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 #[test]
 fn nested_scroll_pins_fit_after_coverage_deduplication() {
     let mut pins: Vec<_> = (0..30)

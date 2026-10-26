@@ -397,6 +397,16 @@ fn scroll_repair_cost_keeps_sparse_edges_but_bounds_fragmented_replays() {
     assert!(scroll_repair_prefers_full(None, 3840, 2160));
 }
 
+pub(crate) fn physical_repair_text_cull(coverage: CullRects, scale: f32) -> CullRects {
+    let scale = scale.max(1e-6);
+    CullRects::from_rects(coverage.strips().map(|rect| [
+        (rect[0] - 1.0) / scale,
+        (rect[1] - 1.0) / scale,
+        (rect[2] + 2.0) / scale,
+        (rect[3] + 2.0) / scale,
+    ])).unwrap_or_else(CullRects::empty)
+}
+
 /// Text preparation coverage for visible Region/OverlayRestore clears.
 /// Clip each hole before unioning: offscreen holes on opposite sides of the
 /// viewport must not cause every intervening label to be prepared again.
@@ -823,6 +833,9 @@ pub(crate) fn clip_text_nodes_to_strips(
 fn clip_text_node_to_scroll_rect(n: &TextLayoutInfo, clip: [f32; 4]) -> Option<TextLayoutInfo> {
     if !text_hits_damage(n, clip) {
         return None;
+    }
+    if crate::app::damage::rect_contains_rect(clip, padded_xywh(text_paint_bounds(n), 1.0)) {
+        return Some(n.clone());
     }
     let emoji = crate::renderer::emoji_detect::text_contains_emoji(&n.text);
     let scaled = (n.paint_scale - 1.0).abs() > 1e-4;
@@ -1993,7 +2006,8 @@ pub(crate) fn instance_has_dest_ink(i: &InstanceInput) -> bool {
 /// (capsule corners, outline ring). Dest-reset must clear with the layer
 /// underneath and replay this chrome instead.
 fn instance_aabb_clear_unsafe(i: &InstanceInput) -> bool {
-    i.radii.iter().any(|r| *r > 0.5)
+    !instance_fill_opaque(i)
+        || i.radii.iter().any(|r| *r > 0.5)
         || (i.border_width > 0.5 && i.border_color[3] > 0.05)
         || !transform_is_identity(&i.transform)
 }
@@ -3725,7 +3739,7 @@ pub(crate) fn prepare_node_present_dirties_ex(
                 instances,
                 last_present,
                 ui_scale,
-            ) && (layered_src_over_skips_dest_reset(dirty.key, dirty.bounds, node_paints, prev)
+            ) && (layered_src_over_skips_dest_reset(dirty.key, dirty.bounds, node_paints, instances, prev)
                 || node_present_dest_reset_full(
                     dirty.key,
                     dirty.bounds,
@@ -3736,7 +3750,7 @@ pub(crate) fn prepare_node_present_dirties_ex(
                     ui_scale,
                     prev,
                 )
-                .is_some())
+                .is_some_and(|reset| reset.clear[3] >= 0.999))
             {
                 // Underlay can be reconstructed (src-over or dest-reset). Stay
                 // Node so the clear is the ink wipe, not a window-colored AABB.
@@ -3783,7 +3797,7 @@ pub(crate) fn prepare_node_present_dirties_ex(
             continue;
         }
         let src_over =
-            layered_src_over_skips_dest_reset(dirty.key, dirty.bounds, node_paints, prev);
+            layered_src_over_skips_dest_reset(dirty.key, dirty.bounds, node_paints, instances, prev);
         if src_over && overlay.is_none() {
             continue;
         }
@@ -3814,6 +3828,11 @@ pub(crate) fn prepare_node_present_dirties_ex(
         let logical = reset_rect
             .map(|r| [r[0] / s, r[1] / s, r[2] / s, r[3] / s])
             .unwrap_or(dirty.bounds);
+        if reset.as_ref().is_some_and(|reset| reset.clear[3] < 0.999) {
+            dirty.kind = PaintDirtyKind::Region;
+            dirty.bounds = logical;
+            continue;
+        }
         if overlay.is_some_and(|occ| portal_occupancy_requires_region(logical, occ, portal_stamps))
         {
             // Scrim (occupancy far outside the panel's shadow pad). A Node
@@ -3827,10 +3846,8 @@ pub(crate) fn prepare_node_present_dirties_ex(
         if src_over || reset.is_some() {
             continue;
         }
-        if let Some(rect) = reset_rect {
-            dirty.bounds = [rect[0] / s, rect[1] / s, rect[2] / s, rect[3] / s];
-            dirty.kind = PaintDirtyKind::Region;
-        }
+        dirty.bounds = logical;
+        dirty.kind = PaintDirtyKind::Region;
     }
     dirties.extend(leftover_poses);
     // A concurrent in-flow caption must not be flushed after a Region that
@@ -5077,6 +5094,7 @@ pub(crate) fn layered_src_over_skips_dest_reset(
     dirty_key: u64,
     dirty_bounds: [f32; 4],
     node_paints: &[NodePaint],
+    instances: &[InstanceInput],
     prev_bounds: Option<[f32; 4]>,
 ) -> bool {
     let Some(slot) = layered_overlay_slot_bounds(dirty_key, dirty_bounds, node_paints) else {
@@ -5091,6 +5109,13 @@ pub(crate) fn layered_src_over_skips_dest_reset(
         return false;
     }
     let has_keyed = paints_has_keyed_slot(dirty_key, dirty_bounds, node_paints);
+    if node_paints.iter().any(|paint| {
+        slot_matches_dirty(dirty_key, dirty_bounds, paint, has_keyed)
+            && instances[paint.instance.0.min(instances.len())..paint.instance.1.min(instances.len())]
+                .iter().any(|instance| instance.backdrop_blur > 0.0)
+    }) {
+        return false;
+    }
     if !node_paints.iter().any(|paint| {
         slot_matches_dirty(dirty_key, dirty_bounds, paint, has_keyed)
             && (paint.instance.0 < paint.instance.1 || paint.textured.0 < paint.textured.1)
@@ -5180,7 +5205,7 @@ pub(crate) fn node_present_dest_reset_full(
     ui_scale: f32,
     prev_bounds: Option<[f32; 4]>,
 ) -> Option<NodePresentDestReset> {
-    if layered_src_over_skips_dest_reset(dirty_key, dirty_bounds, node_paints, prev_bounds) {
+    if layered_src_over_skips_dest_reset(dirty_key, dirty_bounds, node_paints, instances, prev_bounds) {
         return None;
     }
     let rect = node_present_reset_rect(
@@ -5246,7 +5271,11 @@ pub(crate) fn node_present_dest_reset_full(
                 replay: (0, 0),
             });
         }
-        return None;
+        return Some(NodePresentDestReset {
+            rect,
+            clear: [0.0; 4],
+            replay: (0, 0),
+        });
     };
     let behind = &instances[idx];
     if !instance_aabb_clear_unsafe(behind) {
@@ -5255,7 +5284,8 @@ pub(crate) fn node_present_dest_reset_full(
         // Replaying own chrome here composites translucent edges twice.
         return Some(NodePresentDestReset {
             rect,
-            clear: behind.color,
+            clear: uniform_opaque_fill_color_for_rect(instances, rect, skip_dirty)
+                .unwrap_or([0.0; 4]),
             replay: (0, 0),
         });
     }
@@ -5272,19 +5302,48 @@ pub(crate) fn node_present_dest_reset_full(
         .map(|o| slot_own_chrome_replay(o, instances, ui_scale))
         .filter(|r| r.0 <= idx && idx < r.1)
         .unwrap_or((idx, idx + 1));
-    // Rounded underlay with nothing further behind (gallery Item on a rounded
-    // card, no page fill at the sample): falling through to None skipped the
-    // wipe and PartialLoad kept the previous 1px outline. CLEAR the hole with
-    // the underlay's own color; replay still redraws the SDF in the scissor.
-    let clear = opaque_fill_color_at_skipping(instances, cx, cy, |i| {
+    let clear = uniform_opaque_fill_color_for_rect(instances, rect, |i| {
         skip_dirty(i) || (i >= replay.0 && i < replay.1)
     })
-    .unwrap_or(behind.color);
+    .unwrap_or([0.0; 4]);
     Some(NodePresentDestReset {
         rect,
         clear,
         replay,
     })
+}
+
+fn uniform_opaque_fill_color_for_rect(
+    instances: &[InstanceInput],
+    rect: [f32; 4],
+    skip: impl Fn(usize) -> bool,
+) -> Option<[f32; 4]> {
+    let rect = intersect_rects(rect, [0.0, 0.0, f32::MAX, f32::MAX])?;
+    let mut color = None;
+    for (index, inst) in instances.iter().enumerate().rev() {
+        if skip(index) || !instance_has_dest_ink(inst)
+            || intersect_rects(instance_paint_bounds(inst), rect).is_none()
+        {
+            continue;
+        }
+        if instance_aabb_clear_unsafe(inst)
+            || color.is_some_and(|color| color != inst.color)
+        {
+            return None;
+        }
+        color = Some(inst.color);
+        let bounds = [inst.rect_pos[0], inst.rect_pos[1], inst.rect_size[0], inst.rect_size[1]];
+        if crate::app::damage::rect_contains_rect(bounds, rect)
+            && (inst.clip_size[0] < 0.0 || inst.clip_size[1] < 0.0
+                || crate::app::damage::rect_contains_rect(
+                    [inst.clip_pos[0], inst.clip_pos[1], inst.clip_size[0], inst.clip_size[1]],
+                    rect,
+                ))
+        {
+            return color;
+        }
+    }
+    None
 }
 
 fn node_present_behind_color_for_rect(
@@ -5296,28 +5355,7 @@ fn node_present_behind_color_for_rect(
 ) -> Option<[f32; 4]> {
     let dirty_inst = dirty_slot_instance_ranges(dirty_key, dirty_bounds, node_paints);
     let skip = |i: usize| dirty_inst.iter().any(|&(a, b)| i >= a && i < b);
-    let samples = [
-        [rect[0] + rect[2] * 0.5, rect[1] + rect[3] * 0.5],
-        [rect[0] + 1.0, rect[1] + 1.0],
-        [rect[0] + rect[2] - 1.0, rect[1] + 1.0],
-        [rect[0] + 1.0, rect[1] + rect[3] - 1.0],
-        [rect[0] + rect[2] - 1.0, rect[1] + rect[3] - 1.0],
-    ];
-    if let Some(c) = samples.iter().find_map(|p| {
-        node_present_behind_color(dirty_key, dirty_bounds, node_paints, instances, p[0], p[1])
-    }) {
-        return Some(c);
-    }
-    instances.iter().enumerate().rev().find_map(|(i, inst)| {
-        if skip(i) || !instance_fill_opaque(inst) {
-            return None;
-        }
-        let b = instance_paint_bounds(inst);
-        if b[2] <= 0.0 || b[3] <= 0.0 {
-            return None;
-        }
-        intersect_rects(b, rect).map(|_| inst.color)
-    })
+    uniform_opaque_fill_color_for_rect(instances, rect, skip)
 }
 
 /// Page fill inside this slot's overflow clip, even if it does not contain the
@@ -5344,11 +5382,9 @@ fn node_present_behind_color_in_overflow(
         if b[2] <= 0.0 || b[3] <= 0.0 {
             return None;
         }
-        if let Some(c) = clip {
-            intersect_rects(b, c).map(|_| inst.color)
-        } else {
-            Some(inst.color)
-        }
+        clip.filter(|c| !instance_aabb_clear_unsafe(inst)
+            && crate::app::damage::rect_contains_rect(b, *c))
+            .map(|_| inst.color)
     })
 }
 
@@ -6483,11 +6519,12 @@ mod tests {
     #[test]
     fn keyed_thumb_region_does_not_absorb_wide_neighbor() {
         let mut thumb = slot(7, [10.0, 10.0, 16.0, 16.0], (0, 0));
-        thumb.instance = (1, 2);
+        thumb.instance = (2, 3);
         let mut wide = slot(9, [0.0, 8.0, 480.0, 28.0], (0, 0));
-        wide.instance = (0, 1);
+        wide.instance = (1, 2);
         let paints = [wide, thumb];
         let instances = [
+            blank_instance(0.0, 0.0, 500.0, 50.0),
             blank_instance(0.0, 8.0, 480.0, 28.0),
             blank_instance(10.0, 10.0, 16.0, 16.0),
         ];
@@ -6861,6 +6898,30 @@ mod tests {
             visible_instance_runs(&inst, 0, 3, CullRects::one(damage)),
             vec![(0, 1), (2, 1)]
         );
+    }
+
+    #[test]
+    fn complete_region_repair_preserves_unclipped_glyph_overhang() {
+        let text = sample_text("secondary", 20.0);
+        assert!(text.clip_bounds.is_none());
+        let runs = clip_text_nodes_to_cull(&[text], CullRects::one([-10.0, -10.0, 300.0, 200.0]));
+        assert_eq!(runs.len(), 1);
+        assert!(runs[0].clip_bounds.is_none());
+    }
+
+    #[test]
+    fn fractional_repair_text_covers_every_cleared_pixel() {
+        let physical = [415.0, 467.0, 450.0, 493.0];
+        for scale in [1.25, 1.5, 1.75, 2.0] {
+            let cull = physical_repair_text_cull(CullRects::one(physical), scale);
+            let mut text = sample_text("repair edge", 0.0);
+            text.width = 2000.0;
+            text.height = 2000.0;
+            let runs = clip_text_nodes_to_cull(&[text], cull);
+            let clip = runs[0].clip_bounds.unwrap().map(|value| value * scale);
+            let snapped = crate::renderer::prepare_text::integerize_clip_rect(clip).unwrap();
+            assert!(crate::app::damage::rect_contains_rect(snapped, physical), "scale={scale} clip={snapped:?}");
+        }
     }
 
     fn sample_text(text: &str, x: f32) -> TextLayoutInfo {
@@ -7354,6 +7415,22 @@ mod tests {
             None,
         );
         assert_eq!(dirties[0].kind, PaintDirtyKind::Node);
+    }
+
+    #[test]
+    fn first_hover_backdrop_replays_retained_caption_in_scene_order() {
+        let bounds = [8.0, 161.0, 240.0, 32.0];
+        let mut fill = blank_instance(bounds[0], bounds[1], bounds[2], bounds[3]);
+        fill.color = [0.35, 0.35, 0.39, 0.25];
+        fill.backdrop_blur = 20.0;
+        fill.radii = [4.0; 4];
+        let mut hover = slot(2, bounds, (0, 1));
+        hover.instance = (0, 1);
+        hover.layered = true;
+        hover.overflow_clip = Some([0.0, 49.0, 256.0, 602.0]);
+        let mut dirties = vec![PaintDirty { key: 2, bounds, kind: PaintDirtyKind::Node }];
+        prepare_node_present_dirties(&mut dirties, &[hover], &[], &[fill], &[], &[], 1.0, None);
+        assert_eq!(dirties[0].kind, PaintDirtyKind::Region);
     }
 
     #[test]
@@ -8863,6 +8940,7 @@ mod tests {
                     },
                 ],
                 Some(shadow),
+                [0.0, 0.0, 1000.0, 640.0],
             )
             .expect("portal changes require a composite region");
             assert!(
@@ -8875,11 +8953,12 @@ mod tests {
             bounds: [240.0, 194.0, 32.0, 32.0],
             kind: PaintDirtyKind::Node,
         };
-        assert!(crate::app::damage::portal_composite_damage(&[day], Some(shadow)).is_some());
-        assert!(crate::app::damage::portal_composite_damage(&[day], None).is_none());
+        assert!(crate::app::damage::portal_composite_damage(&[day], Some(shadow), [0.0, 0.0, 1000.0, 640.0]).is_some());
+        assert!(crate::app::damage::portal_composite_damage(&[day], None, [0.0, 0.0, 1000.0, 640.0]).is_none());
         assert!(crate::app::damage::portal_composite_damage(
             &[day],
             Some([400.0, 58.0, 100.0, 224.0]),
+            [0.0, 0.0, 1000.0, 640.0],
         )
         .is_none());
     }
@@ -9544,6 +9623,73 @@ mod tests {
             &[p],
             &[inst]
         ));
+    }
+
+    #[test]
+    fn patterned_underlay_requires_region_replay_for_hover_reset() {
+        let mut page = blank_instance(0.0, 0.0, 200.0, 100.0);
+        page.color = [0.05, 0.05, 0.05, 1.0];
+        let mut button = blank_instance(20.0, 20.0, 100.0, 32.0);
+        button.color = [1.0, 1.0, 1.0, 0.08];
+        button.radii = [4.0; 4];
+        let paint = NodePaint {
+            key: 7,
+            bounds: [20.0, 20.0, 100.0, 32.0],
+            instance: (2, 3),
+            overlay: false,
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: None,
+            layered: false,
+            rest: None,
+        };
+        for stripe_x in [30.0, 65.0] {
+            let mut stripe = blank_instance(stripe_x, 0.0, 12.0, 100.0);
+            stripe.color = [0.0, 0.4, 0.8, 1.0];
+            let reset = node_present_dest_reset_full(
+                7, paint.bounds, &[paint.clone()], &[page, stripe, button], &[], &[], 1.0, None,
+            ).unwrap();
+            assert_eq!(reset.clear[3], 0.0, "patterned underlay needs ordered region replay");
+        }
+        let mut clipped = page;
+        clipped.color = [0.0, 0.4, 0.8, 1.0];
+        clipped.clip_pos = [0.0, 0.0];
+        clipped.clip_size = [80.0, 100.0];
+        let reset = node_present_dest_reset_full(
+            7, paint.bounds, &[paint], &[page, clipped, button], &[], &[], 1.0, None,
+        ).unwrap();
+        assert_eq!(reset.clear[3], 0.0, "clipped fill must cover the complete reset");
+    }
+
+    #[test]
+    fn translucent_underlay_must_not_become_an_opaque_hover_reset() {
+        let mut page = blank_instance(0.0, 0.0, 200.0, 100.0);
+        page.color = [0.05, 0.05, 0.05, 1.0];
+        let mut material = page;
+        material.color = [0.8, 0.8, 0.8, 0.18];
+        let mut button = blank_instance(20.0, 20.0, 100.0, 32.0);
+        button.color = [1.0, 1.0, 1.0, 0.08];
+        button.radii = [4.0; 4];
+        let paint = NodePaint {
+            key: 7,
+            bounds: [20.0, 20.0, 100.0, 32.0],
+            instance: (2, 3),
+            overlay: false,
+            textured: (0, 0),
+            text: (0, 0),
+            chrome: (0, 0),
+            paint_ops: (0, 0),
+            overflow_clip: None,
+            layered: false,
+            rest: None,
+        };
+        let reset = node_present_dest_reset_full(
+            7, paint.bounds, &[paint], &[page, material, button], &[], &[], 1.0, None,
+        ).unwrap();
+        assert_eq!(reset.clear, page.color);
+        assert_eq!(reset.replay, (1, 2));
     }
 
     #[test]
@@ -12906,6 +13052,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn scaled_preview_hover_capture_preserves_caption_clip() {
         crate::core::reactivity::create_root(|| {
             let button: crate::core::tree::Element = crate::components::button("preview-hover")

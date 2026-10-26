@@ -163,7 +163,7 @@ pub fn sync_focus_ring_subtree(
     impact: &mut LayoutStatus,
 ) {
     // Button owns its focus ring; Input/Textarea paint their own always-on ring.
-    if el.button_hover_paint.is_none() && el.input_paint_sync.is_none() && el.focus_ring {
+    if !el.owns_focus_paint && el.input_paint_sync.is_none() && el.focus_ring {
         if let Some(fid) = el.focus_id.clone() {
             let show = control_focus_ring_active(&fid, el.focusable, false);
             if show {

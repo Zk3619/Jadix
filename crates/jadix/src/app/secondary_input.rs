@@ -121,7 +121,7 @@ impl super::App {
 
         let input_drag_active = self.input_drag_rest.is_some() && self.left_button_down;
 
-        let (x, y, path, captured_move_path, cursor_pick, hover_cbs, window) = {
+        let (x, y, path, captured_move_path, cursor_pick, hover_cbs, window, drag_move, product_move) = {
             let mut secs = self.secondaries.borrow_mut();
             let Some(sec) = secs.get_mut(&id) else {
                 return;
@@ -132,6 +132,21 @@ impl super::App {
             let mut hover_cbs = Vec::new();
             super::tree_hit::update_hovers(&sec.root_element, x, y, [0.0, 0.0], &mut hover_cbs);
             let window = sec.window.clone();
+            let overlay_dragging = crate::utils::drag::runtime::is_dragging()
+                || crate::utils::anchored_overlay::is_floating_panel_dragging();
+            if !overlay_dragging && crate::utils::drag::routing::sample_paint(&mut sec.root_element, x, y) {
+                sec.layout_tree.invalidate_collect_skip();
+            }
+            let size = window.surface_size();
+            let scale = (window.scale_factor() as f32).max(1.0);
+            let drag_move = crate::utils::drag::runtime::prepare_move(
+                Some(&sec.root_element), [x, y],
+                [size.width as f32 / scale, size.height as f32 / scale],
+                crate::utils::drag::runtime::MoveMode::Follow,
+            );
+            let product_move = crate::utils::drag::routing::prepare_move(
+                (!overlay_dragging).then_some(&sec.root_element), x, y,
+            );
             (
                 x,
                 y,
@@ -140,6 +155,8 @@ impl super::App {
                 cursor_pick,
                 hover_cbs,
                 window,
+                drag_move,
+                product_move,
             )
         };
 
@@ -163,17 +180,19 @@ impl super::App {
         self.last_client_pos = Some([x, y]);
 
         let mut need_redraw = input_drag_active;
+        need_redraw |= drag_move.dispatch();
+        need_redraw |= product_move.dispatch();
         if let Some((key, lo, hi, caret, is_input)) = drag_sel_update {
             if is_input {
                 if self.input_drag_rest.as_deref() == Some(key.as_str()) {
-                    let sk = crate::components::input::input_selection_signal_key(&key);
+                    let sk = crate::utils::text_field::input_selection_signal_key(&key);
                     use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
-                    let ck = crate::components::input::input_caret_signal_key(&key);
+                    let ck = crate::utils::text_field::input_caret_signal_key(&key);
                     use_signal(&ck, || None::<usize>).set(Some(caret));
                     need_redraw = true;
                 }
             } else if self.label_drag_key.as_deref() == Some(key.as_str()) {
-                let sk = crate::components::label::label_selection_signal_key(&key);
+                let sk = crate::utils::text_selection::label_selection_signal_key(&key);
                 use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
                 need_redraw = true;
             }
@@ -294,8 +313,8 @@ impl super::App {
                         .map(
                             |(rest, bounds, display_el, style, leaf_scroll, focus_id)| {
                                 let ui_scale = scale.max(1.0);
-                                let is_textarea =
-                                    focus_id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX);
+                                let is_textarea = focus_id
+                                    .starts_with(crate::utils::text_field::TEXTAREA_FOCUS_PREFIX);
                                 let layout_ptr =
                                     super::tree_hit::world_to_input_text_layout_pointer(
                                         &sec.root_element,
@@ -344,14 +363,14 @@ impl super::App {
                                         ui_scale,
                                     )
                                 };
-                                let vk = crate::components::input::input_value_signal_key(&rest);
-                                let pk = crate::components::input::input_preedit_signal_key(&rest);
+                                let vk = crate::utils::text_field::input_value_signal_key(&rest);
+                                let pk = crate::utils::text_field::input_preedit_signal_key(&rest);
                                 let committed = use_signal(&vk, String::new).get();
                                 let pre = use_signal(&pk, String::new).get();
                                 let caret_ix = if committed.is_empty() && pre.is_empty() {
                                     0
                                 } else {
-                                    crate::components::input::caret_index_from_display_hit(
+                                    crate::utils::text_edit::field::caret_index_from_display_hit(
                                         &rest, ix,
                                     )
                                 };
@@ -421,24 +440,28 @@ impl super::App {
                         super::pointer_events::PointerKind::Down,
                     );
 
-                    if crate::utils::drag::is_dragging() {
-                        let (hits, viewport) = {
+                    if crate::utils::drag::runtime::is_dragging() {
+                        let update = {
                             let secs = self.secondaries.borrow();
                             if let Some(sec) = secs.get(&id) {
                                 let size = sec.window.surface_size();
-                                let scale = sec.window.scale_factor() as f32;
-                                (
-                                    crate::utils::drag::collect_hits(&sec.root_element),
-                                    [
-                                        size.width as f32 / scale.max(1.0),
-                                        size.height as f32 / scale.max(1.0),
-                                    ],
+                                let scale = (sec.window.scale_factor() as f32).max(1.0);
+                                crate::utils::drag::runtime::prepare_move(
+                                    Some(&sec.root_element),
+                                    [x, y],
+                                    [size.width as f32 / scale, size.height as f32 / scale],
+                                    crate::utils::drag::runtime::MoveMode::Reconcile,
                                 )
                             } else {
-                                (Vec::new(), [0.0_f32, 0.0])
+                                crate::utils::drag::runtime::prepare_move(
+                                    None,
+                                    [x, y],
+                                    [0.0, 0.0],
+                                    crate::utils::drag::runtime::MoveMode::Reconcile,
+                                )
                             }
                         };
-                        let _ = crate::utils::drag::tick(x, y, &hits, viewport);
+                        let _ = update.dispatch();
                     }
 
                     use_signal("__jadix_focus_visible", || false).set(false);
@@ -448,15 +471,15 @@ impl super::App {
                         let was_focused =
                             use_signal("__jadix_button_focus_id", String::new).peek() == focus_id;
                         use_signal("__jadix_button_focus_id", String::new).set(focus_id);
-                        let ck = crate::components::input::input_caret_signal_key(&rest);
-                        let sk = crate::components::input::input_selection_signal_key(&rest);
-                        let pk = crate::components::input::input_preedit_signal_key(&rest);
-                        let ty_key = crate::components::input::input_type_signal_key(&rest);
+                        let ck = crate::utils::text_field::input_caret_signal_key(&rest);
+                        let sk = crate::utils::text_field::input_selection_signal_key(&rest);
+                        let pk = crate::utils::text_field::input_preedit_signal_key(&rest);
+                        let ty_key = crate::utils::text_field::input_type_signal_key(&rest);
                         let pre_empty = use_signal(&pk, String::new).peek().is_empty();
                         let existing = use_signal(&sk, || None::<(usize, usize)>).get();
-                        let password = crate::components::input::InputType::parse(
+                        let password = crate::utils::text_edit::field::InputType::parse(
                             &use_signal(&ty_key, || {
-                                crate::components::input::InputType::Text
+                                crate::utils::text_edit::field::InputType::Text
                                     .as_str()
                                     .to_string()
                             })
@@ -472,7 +495,7 @@ impl super::App {
                         self.input_drag_multi = false;
                         self.input_drag_multi_base.clear();
                         if alt_multi {
-                            let vk = crate::components::input::input_value_signal_key(&rest);
+                            let vk = crate::utils::text_field::input_value_signal_key(&rest);
                             let committed = use_signal(&vk, String::new).peek();
                             let shift_box = self.modifiers.shift_key();
                             if let Some((anchor, base)) =
@@ -505,7 +528,7 @@ impl super::App {
                                     .is_some_and(|(lo, hi)| caret_ix >= lo && caret_ix <= hi);
                             if can_move {
                                 let (lo, hi) = sel_range.expect("can_move implies non-empty range");
-                                let vk = crate::components::input::input_value_signal_key(&rest);
+                                let vk = crate::utils::text_field::input_value_signal_key(&rest);
                                 let committed = use_signal(&vk, String::new).peek();
                                 let chunk = committed.get(lo..hi).unwrap_or("").to_string();
                                 let (size, weight, color, lh) = {
@@ -569,7 +592,7 @@ impl super::App {
                         self.label_drag_key = None;
                         self.left_button_down = true;
                     } else if let Some((key, caret_ix)) = label_drag {
-                        let sk = crate::components::label::label_selection_signal_key(&key);
+                        let sk = crate::utils::text_selection::label_selection_signal_key(&key);
                         use_signal(&sk, || None::<(usize, usize)>).set(Some((caret_ix, caret_ix)));
                         self.label_drag_key = Some(key);
                         self.label_drag_anchor = caret_ix;
@@ -606,12 +629,14 @@ impl super::App {
                                 use_signal("__jadix_button_focus_id", String::new)
                                     .set(String::new());
                             }
-                        } else if crate::components::input_otp::is_input_otp_focus(&focused) {
+                        } else if self.secondaries.borrow().get(&id).is_some_and(|state| {
+                            crate::authoring::focus::blur_on_outside_press(&state.root_element, &focused)
+                        }) {
                             let keep = {
                                 let secs = self.secondaries.borrow();
                                 secs.get(&id)
                                     .map(|sec| {
-                                        Self::pointer_keeps_otp_focus(
+                                        Self::pointer_keeps_custom_focus(
                                             &sec.root_element,
                                             &focused,
                                             &path,
@@ -697,7 +722,13 @@ impl super::App {
                         &mut pev,
                         super::pointer_events::PointerKind::Up,
                     );
-                    if !pev.is_consumed() {
+                    let drag_end = self.secondaries.borrow().get(&id).map(|sec| {
+                        crate::utils::drag::runtime::prepare_end(&sec.root_element)
+                    });
+                    let ended_drag = drag_end.is_some_and(|work| work.dispatch());
+                    crate::utils::drag::routing::finish_all();
+                    crate::utils::drag::pointer::clear();
+                    if !pev.is_consumed() && !ended_drag {
                         if let Some(fid) = label_for {
                             use_signal("__jadix_button_focus_id", String::new).set(fid);
                         }
@@ -722,7 +753,7 @@ impl super::App {
                         super::window_events::apply_input_drag_release(&rest);
                     }
                     if let Some(key) = self.label_drag_key.take() {
-                        let sk = crate::components::label::label_selection_signal_key(&key);
+                        let sk = crate::utils::text_selection::label_selection_signal_key(&key);
                         let sel = use_signal(&sk, || None::<(usize, usize)>).get();
                         if let Some((a, b)) = sel {
                             if a == b {
@@ -760,7 +791,7 @@ impl super::App {
     }
 
     fn begin_secondary_scrollbar_drag(&mut self, id: WindowId, x: f32, y: f32) -> bool {
-        let drag = {
+        let (drag, is_thumb) = {
             let windows = self.secondaries.borrow();
             let Some(window) = windows.get(&id) else { return false };
             let Some(focus) = super::tree_hit::find_focus_id_at(&window.root_element, x, y, [0.0; 2])
@@ -773,7 +804,7 @@ impl super::App {
             let Some((track, thumb)) = super::scroll_support::scrollbar_drag_bounds(&window.root_element, &rest, axis)
                 else { return false };
             let pointer = if index == 0 { x } else { y };
-            super::scroll_support::ScrollbarDragState {
+            (super::scroll_support::ScrollbarDragState {
                 rest, axis,
                 track_start: track[index],
                 track_len: track[index + 2],
@@ -782,7 +813,7 @@ impl super::App {
                 grab_offset: if is_thumb {
                     (pointer - thumb[index]).clamp(0.0, thumb[index + 2])
                 } else { thumb[index + 2] * 0.5 },
-            }
+            }, is_thumb)
         };
         let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(&drag.rest);
         let pointer = if drag.axis == super::scroll_support::ScrollAxis::X { x } else { y };
@@ -793,9 +824,12 @@ impl super::App {
         let horizontal = drag.axis == super::scroll_support::ScrollAxis::X;
         offset[if horizontal { 0 } else { 1 }] = target;
         use_signal(if horizontal { &keys.hover_axis_x } else { &keys.hover_axis_y }, || false).set_silent(true);
-        super::scroll_support::set_scroll_offset_with_behavior(&drag.rest, offset[0], offset[1], true);
+        let behavior = use_signal(&keys.behavior,
+            || crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()).peek();
+        super::scroll_support::set_scroll_offset_with_behavior(&drag.rest, offset[0], offset[1],
+            is_thumb || crate::core::scroll_viewport::scroll_behavior_is_jump(&behavior));
         self.click_press_path = None;
-        self.scrollbar_drag = Some(drag);
+        if is_thumb { self.scrollbar_drag = Some(drag); }
         if let Some(window) = self.secondaries.borrow().get(&id) {
             window.window.request_redraw();
         }
@@ -830,21 +864,12 @@ impl super::App {
             };
             let (dx, dy) =
                 super::scroll_support::wheel_delta_for_scroll_range(dx, dy, *max_x, *max_y);
-            if *max_y > 0.5 && dy.abs() > f32::EPSILON {
-                let key = crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest);
-                let cur = use_signal(&key, || 0.0f32).peek();
-                let next = (cur - dy).clamp(0.0, *max_y);
-                let horizontal = use_signal(&crate::core::scroll_viewport::scroll_offset_x_signal_key(&rest), || 0.0_f32).peek();
-                super::scroll_support::set_scroll_offset_with_behavior(&rest, horizontal, next, true);
-                scrolled = true;
-                break;
-            }
-            if *max_x > 0.5 && dx.abs() > f32::EPSILON {
-                let key = crate::core::scroll_viewport::scroll_offset_x_signal_key(&rest);
-                let cur = use_signal(&key, || 0.0f32).peek();
-                let next = (cur - dx).clamp(0.0, *max_x);
-                let vertical = use_signal(&crate::core::scroll_viewport::scroll_offset_y_signal_key(&rest), || 0.0_f32).peek();
-                super::scroll_support::set_scroll_offset_with_behavior(&rest, next, vertical, true);
+            let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(&rest);
+            let current_x = use_signal(&keys.target_x, || 0.0_f32).peek();
+            let current_y = use_signal(&keys.target_y, || 0.0_f32).peek();
+            if ((current_x - dx).clamp(0.0, *max_x) - current_x).abs() > 0.01
+                || ((current_y - dy).clamp(0.0, *max_y) - current_y).abs() > 0.01 {
+                super::scroll_support::apply_scroll_navigation_delta(&rest, dx, dy, *max_x, *max_y);
                 scrolled = true;
                 break;
             }

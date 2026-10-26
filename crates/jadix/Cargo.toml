@@ -25,7 +25,11 @@ include = [
 
 [features]
 # Capability inventory and core/optional boundaries: docs/FEATURES.md.
-default = ["backend-dx12", "backend-gles", "backend-metal", "window-materials", "theme-shadcn", "animation-base"]
+default = ["components", "dnd", "backend-dx12", "backend-gles", "backend-metal", "window-materials", "theme-shadcn", "animation-base"]
+components = ["drag", "lucide"]
+drag = []
+dnd = ["drag"]
+lucide = []
 theme-shadcn = []
 theme-fluent = []
 theme-material3 = []
@@ -43,7 +47,7 @@ document-editing = ["document"]
 document-diff = ["dep:similar"]
 document-science = ["document"]
 file-dialog = ["dep:rfd"]
-gallery-tests = ["svg", "themes", "animation-path", "code", "scale-preview", "windows-dcomp", "document-editing", "document-diff", "document-science", "lucide-animated", "file-dialog"]
+gallery-tests = ["components", "dnd", "svg", "themes", "animation-path", "code", "scale-preview", "windows-dcomp", "document-editing", "document-diff", "document-science", "lucide-animated", "file-dialog"]
 window-materials = ["windows-dwm", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit"]
 windows-dwm = ["windows-sys/Win32_Graphics_Dwm", "windows-sys/Win32_UI_Controls"]
 windows-composition = ["backend-dx12", "dep:windows", "dep:windows-core", "dep:windows-numerics", "dep:windows-collections"]
@@ -66,7 +70,7 @@ a11y = ["dep:accesskit", "dep:accesskit_windows", "dep:jadix_accesskit_ohos"]
 # Dev-time TCP hot reload (`jadix_hot_reload_cli`). Requires debug build.
 hot-reload = []
 # pqoqubbw animated Lucide recipes — runtime JSON from assets/lucide_animated.json.
-lucide-animated = ["animation-base"]
+lucide-animated = ["animation-base", "lucide"]
 # Optional runtime logger: console (stderr) + optional file via JADIX_LOG_FILE (env_logger).
 runtime-logging = ["dep:env_logger"]
 # Optional structured spans on hot paths (layout / reconcile). Off by default.
@@ -93,7 +97,7 @@ backend-dx11-native = ["dep:wgpu-hal", "wgpu-hal/dx11"]
 backend-dx11-angle = ["backend-gles", "dep:wgpu-hal", "wgpu-hal/gles-angle"]
 backend-dx11 = ["backend-dx11-native"]
 # Embed lucide.ttf (~0.8MB). Prefer shipping assets/ beside the exe instead.
-bundled-lucide = []
+bundled-lucide = ["lucide"]
 # Embed large fonts into the binary (single-file distro; dramatically increases size).
 bundled-cjk = []
 bundled-cjk-serif = []
@@ -286,11 +290,11 @@ harness = false
 
 [[example]]
 name = "document_editor"
-required-features = ["document-editing"]
+required-features = ["components", "document-editing"]
 
 [[example]]
 name = "text_documents"
-required-features = ["document-diff"]
+required-features = ["components", "document-diff"]
 
 [target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
 tray-icon = { workspace = true, optional = true }
@@ -309,3 +313,102 @@ objc2-foundation = { workspace = true, optional = true, features = ["NSGeometry"
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
 rfd = { workspace = true, optional = true }
+
+[[test]]
+name = "app_shell"
+required-features = ["components"]
+
+
+[[test]]
+name = "authoring_contracts"
+required-features = ["components"]
+
+
+[[test]]
+name = "authoring_runtime_contracts"
+required-features = ["components"]
+
+
+[[test]]
+name = "fragment_macro"
+required-features = ["components"]
+
+
+[[test]]
+name = "geometry_contracts"
+required-features = ["components"]
+
+
+[[test]]
+name = "img_alias"
+required-features = ["components"]
+
+
+[[test]]
+name = "input_adornment_rsx"
+required-features = ["components"]
+
+
+[[test]]
+name = "macro_lowering"
+required-features = ["components"]
+
+
+[[test]]
+name = "media_customization"
+required-features = ["components"]
+
+
+[[test]]
+name = "media_player"
+required-features = ["components"]
+
+
+[[test]]
+name = "media_presentation_layout"
+required-features = ["components"]
+
+
+[[test]]
+name = "prelude_dual_surface"
+required-features = ["components"]
+
+
+[[test]]
+name = "rsx_class"
+required-features = ["components"]
+
+
+[[test]]
+name = "scroll_components"
+required-features = ["components"]
+
+
+[[test]]
+name = "text_document_views"
+required-features = ["components"]
+
+
+[[test]]
+name = "textarea_rsx_wrap"
+required-features = ["components"]
+
+[[test]]
+name = "drag_rsx"
+required-features = ["dnd"]
+
+[[test]]
+name = "drag_routing_contracts"
+required-features = ["drag"]
+
+[[test]]
+name = "drag_runtime_contracts"
+required-features = ["drag"]
+
+[[example]]
+name = "application_icons"
+required-features = ["components"]
+
+[[example]]
+name = "desktop_shell"
+required-features = ["components"]

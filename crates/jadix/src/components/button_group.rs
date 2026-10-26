@@ -70,7 +70,7 @@ const EDGE_ONLY: &str = "only";
 ///
 /// OTP slots still use this. Joined groups do not: an inset stroke plus a 1px
 /// shift draws a second line beside the neighbor.
-pub(crate) const ATTR_PAINT_NUDGE: &str = "jadix_button_group_nudge";
+pub(crate) use crate::core::geometry::ATTR_PAINT_NUDGE;
 /// Fill-corner radius (px) after the group takes the perimeter stroke.
 const ATTR_GROUP_RADIUS: &str = "jadix_button_group_radius";
 /// Paint the seam after the fills without opening a stacking band.
@@ -144,7 +144,7 @@ fn is_join_segment(el: &Element) -> bool {
     if is_separator_slot(el) {
         return false;
     }
-    if el.button_hover_paint.is_some() {
+    if el.authoring_state.get::<crate::components::button::ButtonHoverPaint>().is_some() {
         return true;
     }
     match slot_of(el) {
@@ -184,43 +184,10 @@ fn overlap_shared_edge(el: &mut Element) {
 /// Drawing of conjoined segments: extends 1px toward the shared edge (origin moved left/up, size widened), with the far side still in the layout position.
 ///
 /// Panning the entire frame will also take away the right/bottom edge of the middle item, and the subsequent Separator or third item will merge with this edge to form 2px.
-pub(crate) fn button_group_paint_nudge(el: &Element) -> [f32; 2] {
-    match el.attrs.get(ATTR_PAINT_NUDGE).map(String::as_str) {
-        Some("x") => [-1.0, 0.0],
-        Some("y") => [0.0, -1.0],
-        _ => [0.0, 0.0],
-    }
-}
-
-/// Expand a visual paint box to include the shared edge that the group chrome
-/// draws outside the Taffy layout box. The same box must be used for damage and
-/// retained-node matching; otherwise the dest reset erases the seam while the
-/// node scissor clips the replacement paint back to the unnudged box.
-pub(crate) fn expand_paint_nudge(el: &Element, bounds: [f32; 4]) -> [f32; 4] {
-    let [dx, dy] = button_group_paint_nudge(el);
-    if dx == 0.0 && dy == 0.0 {
-        return bounds;
-    }
-    [
-        bounds[0] + dx,
-        bounds[1] + dy,
-        (bounds[2] - dx).max(0.0),
-        (bounds[3] - dy).max(0.0),
-    ]
-}
-
-/// Visual box for chrome that opts into [`ATTR_PAINT_NUDGE`] (OTP slots).
-///
-/// Joined groups leave this box alone. Their perimeter is the group's border,
-/// not a second stroke grown out of the item.
-pub(crate) fn group_paint_bounds(el: &Element, bounds: [f32; 4]) -> [f32; 4] {
-    expand_paint_nudge(el, bounds)
-}
-
-/// Use the same ownership box for hover damage as for retained node paint.
-pub(crate) fn group_damage_bounds(el: &Element, bounds: [f32; 4]) -> [f32; 4] {
-    group_paint_bounds(el, bounds)
-}
+#[cfg(test)]
+use crate::core::geometry::{
+    paint_bounds as group_paint_bounds, paint_nudge as button_group_paint_nudge,
+};
 
 fn positive_radius(el: &Element) -> f32 {
     let m = el
@@ -284,8 +251,8 @@ fn mark_join_segment(
 
 /// 1px seam. Solid fill, no layout border — a 1px border-box plus a 1px stroke
 /// collapses the content box and Taffy can grow the line to 2px.
-/// Painted after the items (`z` + paint-only) so both sides of a pressed chip
-/// cover the same strip; tree order would let the chip tint only the leading seam.
+/// Painted after the items (`z` + paint-only) to preserve both connecting borders
+/// when either neighboring segment changes its fill.
 fn paint_seam(el: &mut Element, color: [f32; 4]) {
     let zero_min = taffy::style::Dimension::length(0.0);
     el.style.set_css_dim(UnitSlot::MarginT, CssDim::Px(0.0));
@@ -330,19 +297,17 @@ pub(crate) fn paint_join_frame(el: &mut Element, frame: &JoinFrame) {
     el.style.radii = [frame.radius; 4];
 }
 
-pub(crate) fn sync_join_seams(
-    group: &mut Element,
-    hit_nodes: &std::collections::HashSet<*const Element>,
-) -> bool {
+pub(crate) fn attach_join_seams(element: &mut Element) {
+    crate::authoring::presentation::attach_after_style(element, sync_join_seams);
+}
+
+fn sync_join_seams(group: &mut Element, is_hovered: &dyn Fn(&Element) -> bool) -> bool {
     if !matches!(slot_of(group), Some(SLOT_ROOT | "toggle-group"))
         || !group.children.iter().any(is_separator_slot)
     {
         return false;
     }
-    let hovered = group
-        .children
-        .iter()
-        .position(|item| hit_nodes.contains(&(item as *const Element)));
+    let hovered = group.children.iter().position(is_hovered);
     let previous_hovered = group
         .attrs
         .get("jadix_button_group_hover_index")
@@ -355,49 +320,13 @@ pub(crate) fn sync_join_seams(
             group.attrs.remove("jadix_button_group_hover_index");
         }
     }
-    let mut changed = false;
-    for index in 1..group.children.len().saturating_sub(1) {
-        if !is_separator_slot(&group.children[index]) {
-            continue;
-        }
-        let adjacent = [&group.children[index - 1], &group.children[index + 1]];
-        let enabled = |item: &&Element| {
-            item.attrs.get("aria-disabled").map(String::as_str) != Some("true")
-                && item
-                    .attrs
-                    .get("disabled")
-                    .map(String::as_str)
-                    .is_none_or(|value| value == "false")
-        };
-        let fill = adjacent
-            .iter()
-            .copied()
-            .filter(enabled)
-            .find(|item| hit_nodes.contains(&(*item as *const Element)))
-            .or_else(|| {
-                adjacent.iter().copied().filter(enabled).find(|item| {
-                    matches!(
-                        item.attrs.get("data-state").map(String::as_str),
-                        Some("on" | "active")
-                    ) || item.attrs.get("data-active").map(String::as_str) == Some("true")
-                })
-            })
-            .map(|item| item.style.bg_color);
-        let seam = &mut group.children[index];
-        let color = fill.unwrap_or(seam.style.border_color);
-        if seam.style.bg_color != color {
-            seam.style.bg_color = color;
-            seam.collect_paint_hash = 0;
-            changed = true;
-        }
-    }
     let transitioning = group.children.iter().any(|item| {
         item.transition_snapshot.has_active_tweens() || item.transition_snapshot.settled_this_tick()
     });
-    if changed || transitioning || hover_changed {
+    if transitioning || hover_changed {
         crate::app::damage::push_frame_paint_element(group, group.paint_scroll_acc);
     }
-    changed || transitioning || hover_changed
+    transitioning || hover_changed
 }
 
 /// Fuse corners and, when any segment had a stroke, return the frame to paint
@@ -508,6 +437,7 @@ fn build_button_group(
         paint_join_frame(&mut el, &frame);
     }
     el.set_attr(ATTR_SLOT, SLOT_ROOT);
+    attach_join_seams(&mut el);
     el.set_attr("data-orientation", orientation.as_str());
     el = el.accesskit_role("group");
     if !id.trim().is_empty() {
@@ -876,7 +806,7 @@ mod tests {
     }
 
     #[test]
-    fn hovered_joined_segment_covers_adjacent_seam() {
+    fn hovered_joined_segment_preserves_adjacent_seam() {
         crate::core::reactivity::create_root(|| {
             let mut root = Element::new().w(240.0).h(160.0).child(Element::from(
                 button_group()
@@ -901,8 +831,8 @@ mod tests {
             );
             let group = &root.children[0];
             assert_eq!(
-                group.children[1].style.bg_color, group.children[0].style.bg_color,
-                "an occupied seam must continue the hovered fill, not leave a neutral hairline"
+                group.children[1].style.bg_color, group.children[1].style.border_color,
+                "hover must preserve the connecting border"
             );
         });
     }
@@ -916,15 +846,20 @@ mod tests {
                 .into();
             group.children[2].set_attr("data-state", "on");
             group.children[2].style.bg_color = [0.25, 0.25, 0.25, 1.0];
-            let idle = std::collections::HashSet::new();
-            assert!(sync_join_seams(&mut group, &idle));
-            assert!(!sync_join_seams(&mut group, &idle));
+            let idle = std::collections::HashSet::<*const Element>::new();
+            assert!(!sync_join_seams(&mut group, &|element| idle
+                .contains(&(element as *const Element))));
+            assert!(!sync_join_seams(&mut group, &|element| idle
+                .contains(&(element as *const Element))));
             let color = group.children[1].style.bg_color;
             let hovered = std::collections::HashSet::from([&group.children[2] as *const Element]);
-            assert!(sync_join_seams(&mut group, &hovered));
+            assert!(sync_join_seams(&mut group, &|element| hovered
+                .contains(&(element as *const Element))));
             assert_eq!(group.children[1].style.bg_color, color);
-            assert!(!sync_join_seams(&mut group, &hovered));
-            assert!(sync_join_seams(&mut group, &idle));
+            assert!(!sync_join_seams(&mut group, &|element| hovered
+                .contains(&(element as *const Element))));
+            assert!(sync_join_seams(&mut group, &|element| idle
+                .contains(&(element as *const Element))));
         });
     }
 

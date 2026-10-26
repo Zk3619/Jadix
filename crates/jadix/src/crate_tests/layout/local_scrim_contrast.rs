@@ -1,8 +1,8 @@
+#![cfg(feature = "components")]
 //! Diagnose: gallery local scrim frost has no high-contrast host glyphs.
 //!
 //! Loop = layout the *real* `label()` + Portal tree (not a `.text()` stub) and check
 //! the exact windows `AppState` uses to prepare / capture prefix glyphon.
-
 use crate::components::label::label;
 use crate::core::tree::Element;
 use crate::layout::layout_tree::{

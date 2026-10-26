@@ -82,6 +82,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn native_icon_decodes_and_reaches_both_entry_surfaces() {
         let rgba = image::RgbaImage::from_pixel(2, 2, image::Rgba([17, 33, 55, 255]));
         let mut bytes = std::io::Cursor::new(Vec::new());

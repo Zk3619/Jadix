@@ -170,7 +170,6 @@ impl IntoElementList for TitleBarBuilder {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate as jadix;
     use crate::prelude::{Label, LabelProps};
 
     #[test]

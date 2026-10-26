@@ -87,7 +87,7 @@ use crate::core::reactivity::{
 };
 use crate::core::scroll_viewport::{
     activate_scroll_viewport, scroll_content_h_signal_key, scroll_offset_y_signal_key,
-    scroll_target_y_signal_key, scroll_viewport_h_signal_key, SCROLL_BEHAVIOR_JUMP,
+    scroll_target_y_signal_key, scroll_viewport_h_signal_key, DEFAULT_SCROLL_BEHAVIOR,
 };
 use crate::core::tree::{parse_text_color, Element, LayoutStatus, ATTR_POINTER_EVENTS};
 use crate::impl_slot_chrome_methods;
@@ -279,11 +279,11 @@ pub struct MessageScrollerScrollable {
 
 impl MessageScrollerScrollable {
     pub fn scroll_to_end(&self) {
-        self.ctx.scroll_to_end(true);
+        self.ctx.scroll_to_end(false);
     }
 
     pub fn scroll_to_start(&self) {
-        self.ctx.scroll_to_start(true);
+        self.ctx.scroll_to_start(false);
     }
 }
 
@@ -351,6 +351,9 @@ pub fn message_scroller_stick_to_end(id: impl AsRef<str>) {
 
 fn set_scroll_y(viewport_id: &str, y: f32, jump: bool) {
     let y = y.max(0.0);
+    let behavior = use_signal(&crate::core::scroll_viewport::scroll_behavior_signal_key(viewport_id),
+        || DEFAULT_SCROLL_BEHAVIOR.to_string()).peek();
+    let jump = jump || crate::core::scroll_viewport::scroll_behavior_is_jump(&behavior);
     let ty = use_signal(&scroll_target_y_signal_key(viewport_id), || 0.0_f32);
     if jump {
         use_signal(&scroll_offset_y_signal_key(viewport_id), || 0.0_f32).set_silent(y);
@@ -566,13 +569,15 @@ fn apply_viewport_scroll(
         // `following` can be false while the reader is still on the last measured end
         // (max jitter / prior cull).
         if want_stick || (grew && (ctx.following.peek() || was_at_end)) {
-            set_scroll_y(&ctx.viewport_id, max, true);
+            set_scroll_y(&ctx.viewport_id, max, false);
             ctx.following.set_silent(true);
             if want_stick {
                 stick_end.set_silent(false);
             }
             changed = true;
-        } else if ctx.following.peek() && !at_end {
+        } else if ctx.following.peek() && !at_end
+            && use_signal(&scroll_target_y_signal_key(&ctx.viewport_id), || 0.0_f32).peek()
+                < (max - threshold).max(0.0) {
             ctx.following.set_silent(false);
             changed = true;
         } else if at_end && !ctx.following.peek() {
@@ -624,46 +629,24 @@ fn apply_scroll_offset_to_element(el: &mut Element, viewport_id: &str) {
 /// Iterative: this runs from inside `finish_collect` immediately before
 /// `collect_instances_mut`, whose frames are already large. A recursive walk of
 /// Gallery / calculator trees overflowed the Windows default stack.
+#[cfg(test)]
 pub(crate) fn sync_message_scroller_follow_after_layout(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
 ) {
-    // Raw pointers: NLL will not let `&mut Element` children share a stack
-    // with their parent. The walk is exclusive — a node is popped before its
-    // children are pushed, so no two entries alias.
-    //
-    // Viewport follow publishes `content_h` / snaps offset *then*
-    // the jump button re-reads those signals. Pre-layout `reactive_sync` walks
-    // the dock before the viewport (LIFO children), so a same-frame live-edge
-    // snap left Latest at opacity 1. `request_redraw` is a no-op during render.
-    let mut stack: Vec<*mut Element> = vec![el];
-    let mut buttons = Vec::new();
-    while let Some(ptr) = stack.pop() {
-        // SAFETY: exclusive tree walk — parent is popped before children are pushed.
-        let node = unsafe { &mut *ptr };
-        if node.collect_paint_hash != 0 && !node.subtree_reactive_sync {
-            continue;
-        }
-        if node.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_VIEWPORT) {
-            if let Some(sync) = node.reactive_sync.clone() {
-                let _ = sync.run(node, layout_tree);
-            }
-        }
-        if node.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_BUTTON) {
-            buttons.push(ptr);
-        }
-        for child in &mut node.children {
-            stack.push(child);
-        }
-    }
-    for ptr in buttons {
-        // SAFETY: viewport sync only changes scroll/style; the tree stays allocated.
-        let node = unsafe { &mut *ptr };
-        if let Some(sync) = node.reactive_sync.clone() {
-            if sync.run(node, layout_tree) == LayoutStatus::StyleChanged {
-                crate::app::damage::push_frame_paint_element(node, node.paint_scroll_acc);
-            }
-        }
+    for phase in [
+        crate::authoring::presentation::Phase::AfterLayout,
+        crate::authoring::presentation::Phase::AfterLayoutDependents,
+    ] {
+        let _ = crate::authoring::presentation::sync_tree(
+            el,
+            layout_tree,
+            crate::authoring::presentation::Context {
+                phase,
+                viewport: [0.0; 2],
+            width_budget: None,
+},
+        );
     }
 }
 
@@ -1012,6 +995,7 @@ pub fn MessageScroller(
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn MessageScrollerViewport(
+    #[prop(optional, into)] scroll_behavior: Option<String>,
     base_builder: Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>,
     children: Option<Element>,
 ) -> Element {
@@ -1031,7 +1015,7 @@ pub fn MessageScrollerViewport(
         &ctx.viewport_id,
         "hidden",
         "auto",
-        SCROLL_BEHAVIOR_JUMP,
+        scroll_behavior.as_deref().unwrap_or(DEFAULT_SCROLL_BEHAVIOR),
         "scrollbar",
     );
     inner.set_attr(ATTR_SLOT, SLOT_VIEWPORT);
@@ -1040,6 +1024,16 @@ pub fn MessageScrollerViewport(
     let sync_ctx = ctx.clone();
     inner = inner
         .reactive_sync(move |el, layout_tree| apply_viewport_scroll(el, layout_tree, &sync_ctx));
+    crate::authoring::presentation::attach(
+        &mut inner,
+        crate::authoring::presentation::Phase::AfterLayout,
+        |element, layout, _context| {
+            if let Some(sync) = element.reactive_sync.clone() {
+                let _ = sync.run(element, layout);
+            }
+            LayoutStatus::Clean
+        },
+    );
 
     let bar: Element = scrollbar(&format!("__jadix_ms_sb_{}", ctx.viewport_id))
         .target(ctx.viewport_id.clone())
@@ -1167,9 +1161,9 @@ pub fn MessageScrollerButton(
         .size(size)
         .on_click(move || {
             if jump_dir.is_end() {
-                jump_ctx.scroll_to_end(true);
+                jump_ctx.scroll_to_end(false);
             } else {
-                jump_ctx.scroll_to_start(true);
+                jump_ctx.scroll_to_start(false);
             }
         })
         .children(if kids.is_empty() {
@@ -1180,6 +1174,7 @@ pub fn MessageScrollerButton(
         .into();
     el = el.flex_shrink(0.0).relative();
     el.set_attr(ATTR_SLOT, SLOT_BUTTON);
+    el.paint_opaque_fill = true;
     el.set_attr(ATTR_DIRECTION, direction.as_str());
     el.set_attr(ATTR_ACTIVE, "false");
     el = el.opacity(0.0).pointer_events_none();
@@ -1200,6 +1195,19 @@ pub fn MessageScrollerButton(
     crate::style::patch_class_set_base_motion(&mut el);
     let sync_ctx = ctx.clone();
     el = el.reactive_sync(move |node, _layout_tree| apply_button_active(node, &sync_ctx, jump_dir));
+    crate::authoring::presentation::attach(
+        &mut el,
+        crate::authoring::presentation::Phase::AfterLayoutDependents,
+        |element, layout, _context| {
+            if let Some(sync) = element.reactive_sync.clone() {
+                if sync.run(element, layout) == LayoutStatus::StyleChanged {
+                    crate::authoring::mount::invalidate_paint(element);
+                    return LayoutStatus::StyleChanged;
+                }
+            }
+            LayoutStatus::Clean
+        },
+    );
 
     // Full-width dock: `left:50%` + `translateX(-50%)` on the button itself used
     // to share `translate_pct` with the hide Y-slide and clip through overflow:hidden
@@ -1375,12 +1383,14 @@ impl From<MessageScrollerBuilder> for Element {
 }
 
 pub struct MessageScrollerViewportBuilder {
+    scroll_behavior: Option<String>,
     chrome: SlotChrome,
     children: Vec<Element>,
 }
 
 pub fn message_scroller_viewport() -> MessageScrollerViewportBuilder {
     MessageScrollerViewportBuilder {
+        scroll_behavior: None,
         chrome: SlotChrome::default(),
         children: Vec::new(),
     }
@@ -1388,6 +1398,11 @@ pub fn message_scroller_viewport() -> MessageScrollerViewportBuilder {
 
 impl MessageScrollerViewportBuilder {
     impl_slot_chrome_methods!();
+
+    pub fn scroll_behavior(mut self, behavior: impl Into<String>) -> Self {
+        self.scroll_behavior = Some(behavior.into());
+        self
+    }
 
     pub fn child(mut self, child: impl Into<Element>) -> Self {
         self.children.extend(take_packed(child.into()));
@@ -1404,6 +1419,7 @@ impl crate::core::tree::IntoElementList for MessageScrollerViewportBuilder {
 impl From<MessageScrollerViewportBuilder> for Element {
     fn from(builder: MessageScrollerViewportBuilder) -> Self {
         let el = MessageScrollerViewport(MessageScrollerViewportProps {
+            scroll_behavior: builder.scroll_behavior,
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
@@ -1573,6 +1589,22 @@ impl From<MessageScrollerButtonBuilder> for Element {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn message_navigation_defaults_to_smooth_and_retains_explicit_jump() {
+        crate::core::reactivity::create_root(|| {
+            let viewport = "message-navigation-policy";
+            let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(viewport);
+            set_scroll_y(viewport, 180.0, false);
+            assert_eq!(use_signal(&keys.offset_y, || 0.0_f32).peek(), 0.0);
+            assert_eq!(use_signal(&keys.target_y, || 0.0_f32).peek(), 180.0);
+            set_scroll_y(viewport, 240.0, true);
+            assert_eq!(use_signal(&keys.offset_y, || 0.0_f32).peek(), 240.0);
+            use_signal(&keys.behavior, || String::new()).set_silent("jump".into());
+            set_scroll_y(viewport, 300.0, false);
+            assert_eq!(use_signal(&keys.offset_y, || 0.0_f32).peek(), 300.0);
+        });
+    }
 
     #[test]
     fn latest_button_has_a_filled_default_and_accepts_explicit_variants() {

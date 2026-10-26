@@ -25,11 +25,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Instant;
 
+use crate::core::geometry::Axis;
 use crate::core::reactivity::Signal;
 use crate::core::scroll_viewport::{scroll_offset_x_signal_key, scroll_offset_y_signal_key};
 use crate::core::tree::{Element, IntoCssDim, LayoutStatus};
 use crate::style::{IntoCursor, UnitSlot};
-use crate::utils::drag::geometry::Axis;
 pub use crate::utils::edge_scroll::{AutoScroll, ScrollLock};
 
 use crate::utils::edge_scroll::{apply, collect_scroll_hits, frame_dt, pump_at, ScrollHit};

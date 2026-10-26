@@ -568,14 +568,3 @@ pub fn set_os_dark_all(os_dark: bool) {
     });
 }
 
-pub fn sync_jadix_theme() {
-    HOSTS.with(|h| {
-        let mut map = h.borrow_mut();
-        for host in map.values_mut() {
-            set_host_dark(host, None, false);
-            if host.options.follow_theme {
-                refresh_brush(host, false);
-            }
-        }
-    });
-}

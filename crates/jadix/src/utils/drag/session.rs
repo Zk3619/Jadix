@@ -81,7 +81,7 @@ pub struct DragEvent {
 ///
 /// `rect` is the pointer-space **layout slot** (scroll applied, CSS translate
 /// omitted) so sortable preview shift does not move collision targets.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DragHit {
     pub id: String,
     pub scope_id: String,
@@ -233,8 +233,10 @@ pub(super) struct ScopeRuntime {
     pub sensors: Vec<super::sensor::DragSensor>,
 }
 
-thread_local! {
+crate::authoring::window::window_local! {
     static SESSION: RefCell<Option<DragSession>> = const { RefCell::new(None) };
+    static SESSION_LIFETIME: RefCell<Rc<()>> = RefCell::new(Rc::new(()));
+    static SCOPE_LIFETIMES: RefCell<HashMap<String, Rc<()>>> = RefCell::new(HashMap::new());
     static SCOPES: RefCell<HashMap<String, ScopeRuntime>> = RefCell::new(HashMap::new());
     /// Runtime [`add_modifier`] stages, keyed by scope id. Survives
     /// [`register_scope`] rebuilds (builder `modifiers` are replaced).
@@ -284,6 +286,7 @@ thread_local! {
     /// target. Hidden clip shells live on the portal layer and must scissor to
     /// this intersection or they paint over chrome that already clipped the parent.
     static ANCESTOR_OVERFLOW_CLIP: RefCell<HashMap<String, [f32; 4]>> = RefCell::new(HashMap::new());
+    static DEBUG_SLOT_CLIPS: RefCell<HashMap<String, [f32; 4]>> = RefCell::new(HashMap::new());
 }
 
 pub(super) fn set_scope_inertia(scope_id: &str, opts: InertiaOpts) {
@@ -457,6 +460,10 @@ fn last_ancestor_overflow_clip(id: &str) -> Option<[f32; 4]> {
     ANCESTOR_OVERFLOW_CLIP.with(|m| m.borrow().get(id).copied())
 }
 
+pub(super) fn debug_slot_clip(scope: &str, id: &str) -> Option<[f32; 4]> {
+    DEBUG_SLOT_CLIPS.with(|clips| clips.borrow().get(&item_bounds_key(scope, id)).copied())
+}
+
 fn intersect_xywh(a: [f32; 4], b: [f32; 4]) -> [f32; 4] {
     let x0 = a[0].max(b[0]);
     let y0 = a[1].max(b[1]);
@@ -585,6 +592,7 @@ pub(super) fn register_scope_product(
     multi_drag: bool,
     selected: Signal<Vec<String>>,
 ) {
+    super::session_runtime::install();
     SCOPE_PRODUCT.with(|m| {
         let mut m = m.borrow_mut();
         let selection_anchor = m.get(&id).and_then(|p| p.selection_anchor.clone());
@@ -775,7 +783,92 @@ fn freeze_drag_items(sess: &mut DragSession, hits: &[DragHit]) {
     sess.items = refs;
 }
 
+pub(super) fn guard_update(update: super::runtime::Update) -> super::runtime::Update {
+    let lifetime = SESSION_LIFETIME.with(|slot| slot.borrow().clone());
+    Box::new(move || {
+        let valid = SESSION_LIFETIME.with(|slot| Rc::ptr_eq(&slot.borrow(), &lifetime));
+        valid && update()
+    })
+}
+
 pub(super) fn register_scope(id: String, rt: ScopeRuntime) {
+    let lifetime = Rc::new(());
+    SCOPE_LIFETIMES.with(|slots| slots.borrow_mut().insert(id.clone(), lifetime.clone()));
+    let cleanup_id = id.clone();
+    let window = crate::authoring::window::Scope::capture();
+    crate::core::reactivity::on_cleanup(move || {
+        let _window = window.enter();
+        let current = SCOPE_LIFETIMES.with(|slots| {
+            slots
+                .borrow()
+                .get(&cleanup_id)
+                .is_some_and(|current| Rc::ptr_eq(current, &lifetime))
+        });
+        if !current {
+            return;
+        }
+        let owns_session = SESSION.with(|slot| {
+            slot.borrow()
+                .as_ref()
+                .is_some_and(|session| session.scope_id == cleanup_id)
+        });
+        if owns_session {
+            cancel();
+        }
+        let still_current = SCOPE_LIFETIMES.with(|slots| {
+            slots
+                .borrow()
+                .get(&cleanup_id)
+                .is_some_and(|current| Rc::ptr_eq(current, &lifetime))
+        });
+        if !still_current {
+            return;
+        }
+        SCOPE_LIFETIMES.with(|slots| slots.borrow_mut().remove(&cleanup_id));
+        let removed = SCOPES.with(|slots| slots.borrow_mut().remove(&cleanup_id));
+        SCOPE_PRODUCT.with(|slots| slots.borrow_mut().remove(&cleanup_id));
+        SCOPE_INERTIA.with(|slots| slots.borrow_mut().remove(&cleanup_id));
+        let modifiers = EXTRA_MODIFIERS.with(|slots| slots.borrow_mut().remove(&cleanup_id));
+        clear_overlay_ghost_extent(&cleanup_id);
+        let prefix = format!("{cleanup_id}\0");
+        ITEM_BOUNDS.with(|slots| {
+            slots
+                .borrow_mut()
+                .retain(|key, _| !key.starts_with(&prefix))
+        });
+        ITEM_RESTRICT.with(|slots| {
+            slots
+                .borrow_mut()
+                .retain(|key, _| !key.starts_with(&prefix))
+        });
+        NAMED_BOUNDS.with(|slots| {
+            slots
+                .borrow_mut()
+                .retain(|key, _| !key.starts_with(&prefix))
+        });
+        PARENT_BOUNDS.with(|slots| {
+            slots
+                .borrow_mut()
+                .retain(|key, _| !key.starts_with(&prefix))
+        });
+        ITEM_PACK_GAPS.with(|slots| {
+            slots
+                .borrow_mut()
+                .retain(|key, _| !key.starts_with(&prefix))
+        });
+        ANCESTOR_OVERFLOW_CLIP.with(|slots| {
+            slots
+                .borrow_mut()
+                .retain(|key, _| !key.starts_with(&prefix))
+        });
+        LAST_HITS.with(|hits| hits.borrow_mut().retain(|hit| hit.scope_id != cleanup_id));
+        SOURCE_LIST_LAYOUT.with(|hits| hits.borrow_mut().retain(|hit| hit.scope_id != cleanup_id));
+        let previews = super::builder::take_scope_previews(&cleanup_id);
+        let data = super::registry::take_scope(&cleanup_id);
+        let zones = super::dropzone::take_scope(&cleanup_id);
+        let sensors = super::sensor::take_scope(&cleanup_id);
+        drop((removed, modifiers, previews, data, zones, sensors));
+    });
     SCOPES.with(|m| {
         let mut map = m.borrow_mut();
         let mut rt = rt;
@@ -1054,6 +1147,8 @@ fn list_passes_can_drop(
 
 /// Start a pointer session. Does not fire `on_drag_start` until the threshold is crossed.
 pub fn begin(opts: BeginDrag) {
+    super::session_runtime::install();
+    SESSION_LIFETIME.with(|lifetime| *lifetime.borrow_mut() = Rc::new(()));
     if is_coasting() {
         let same = SESSION.with(|s| {
             s.borrow()
@@ -1076,8 +1171,8 @@ pub fn begin(opts: BeginDrag) {
                     sess.last_pointer = opts.pointer;
                 }
             });
-            crate::utils::pointer_drag::begin(
-                crate::utils::pointer_drag::DragKind::Scope,
+            crate::utils::drag::pointer::begin(
+                crate::utils::drag::pointer::DragKind::Scope,
                 opts.draggable_id.clone(),
                 opts.pointer[0],
                 opts.pointer[1],
@@ -1090,8 +1185,8 @@ pub fn begin(opts: BeginDrag) {
     }
     VELOCITY.with(|v| v.borrow_mut().reset());
     COAST.with(|c| *c.borrow_mut() = None);
-    crate::utils::pointer_drag::begin(
-        crate::utils::pointer_drag::DragKind::Scope,
+    crate::utils::drag::pointer::begin(
+        crate::utils::drag::pointer::DragKind::Scope,
         opts.draggable_id.clone(),
         opts.pointer[0],
         opts.pointer[1],
@@ -1628,7 +1723,7 @@ pub fn tick_follow(x: f32, y: f32, viewport: [f32; 2]) -> bool {
     if !is_active() && !is_coasting() {
         return false;
     }
-    crate::utils::pointer_drag::tick(x, y);
+    crate::utils::drag::pointer::tick(x, y);
     let Some(sess) = SESSION.with(|s| s.borrow().clone()) else {
         return false;
     };
@@ -1714,11 +1809,11 @@ pub(crate) fn resync_overlay_follow_after_layout(root: &mut Element) {
             }
             let translate = source_translation(&sess, origin, &hits);
             if source.style.translate != translate {
-                crate::app::damage::push_frame_paint_element(source, source.paint_scroll_acc);
+                crate::authoring::mount::invalidate_paint(source);
                 source.style.translate = translate;
                 crate::utils::motion::clear_motion(source);
-                crate::app::damage::push_frame_paint_element(source, source.paint_scroll_acc);
-                crate::layout::collect_cache::invalidate_collect_paint_hash_path(root, &path);
+                crate::authoring::mount::invalidate_paint(source);
+                crate::authoring::mount::invalidate_collect_paint(root, &path);
             }
         }
     }
@@ -1781,7 +1876,7 @@ fn tick_session(
     viewport: [f32; 2],
     sensor_activated: bool,
 ) -> bool {
-    crate::utils::pointer_drag::tick(x, y);
+    crate::utils::drag::pointer::tick(x, y);
     let coasting = SESSION.with(|s| {
         s.borrow()
             .as_ref()
@@ -2422,7 +2517,32 @@ fn fire(scope_id: &str, kind: HandlerKind, ev: &DragEvent) {
     }
 }
 
-fn reset_scope_ui(rt: &ScopeRuntime) {
+fn reset_scope_ui(scope: &str) {
+    let signals = SCOPES.with(|slots| {
+        slots.borrow().get(scope).map(|runtime| {
+            (
+                runtime.overlay_open,
+                runtime.active_draggable,
+                runtime.active_droppable,
+                runtime.from_list,
+                runtime.from_index,
+                runtime.hover_list,
+                runtime.hover_index,
+            )
+        })
+    });
+    let Some((
+        overlay_open,
+        active_draggable,
+        active_droppable,
+        from_list,
+        from_index,
+        hover_list,
+        hover_index,
+    )) = signals
+    else {
+        return;
+    };
     // One transition: overlay / active / hover are one session, not six effects.
     DRAG_PACK_PITCH.set(0.0);
     DRAG_PACK_GAP.set(0.0);
@@ -2430,13 +2550,13 @@ fn reset_scope_ui(rt: &ScopeRuntime) {
     clear_restrict_clip_state();
     super::overlay::clear_ghost_follow();
     batch(|| {
-        rt.overlay_open.set(false);
-        rt.active_draggable.set(None);
-        rt.active_droppable.set(None);
-        rt.from_list.set(None);
-        rt.from_index.set(None);
-        rt.hover_list.set(None);
-        rt.hover_index.set(None);
+        overlay_open.set(false);
+        active_draggable.set(None);
+        active_droppable.set(None);
+        from_list.set(None);
+        from_index.set(None);
+        hover_list.set(None);
+        hover_index.set(None);
     });
 }
 
@@ -2460,7 +2580,7 @@ pub fn end(hits: &[DragHit]) -> bool {
                         d.phase = DragPhase::Coasting;
                     }
                 });
-                crate::utils::pointer_drag::clear();
+                crate::utils::drag::pointer::clear();
                 crate::app::release_pointer_capture();
                 LAST_COAST_AT.with(|t| *t.borrow_mut() = None);
                 return true;
@@ -2501,7 +2621,7 @@ fn commit_end(hits: &[DragHit]) -> bool {
     let Some(mut sess) = SESSION.with(|s| s.borrow_mut().take()) else {
         return false;
     };
-    crate::utils::pointer_drag::clear();
+    crate::utils::drag::pointer::clear();
     crate::app::release_pointer_capture();
     VELOCITY.with(|v| v.borrow_mut().reset());
     COAST.with(|c| *c.borrow_mut() = None);
@@ -2546,11 +2666,7 @@ fn commit_end(hits: &[DragHit]) -> bool {
     };
     // Clear live preview before `on_drag_end` mutates the Vec, so the rebuild
     // does not apply a stale gap / source dim.
-    SCOPES.with(|m| {
-        if let Some(rt) = m.borrow().get(&sess.scope_id) {
-            reset_scope_ui(rt);
-        }
-    });
+    reset_scope_ui(&sess.scope_id);
     if let Some(ev) = ev {
         if let Some(id) = ev.droppable_id.as_deref() {
             super::dropzone::on_drop(&sess.scope_id, id, &ev);
@@ -2563,6 +2679,23 @@ fn commit_end(hits: &[DragHit]) -> bool {
 
 /// Advance a [`DragPhase::Coasting`] fling / smoothEnd. Call from vsync / wait.
 pub fn pump_inertia(root: &Element, viewport: [f32; 2]) -> bool {
+    prepare_inertia(root, viewport)()
+}
+
+pub(super) fn prepare_inertia(root: &Element, viewport: [f32; 2]) -> super::runtime::Update {
+    if !is_coasting() {
+        LAST_COAST_AT.with(|slot| slot.borrow_mut().take());
+        return Box::new(|| false);
+    }
+    let lifetime = SESSION_LIFETIME.with(|slot| slot.borrow().clone());
+    let hits = collect_hits(root);
+    Box::new(move || {
+        let current = SESSION_LIFETIME.with(|slot| Rc::ptr_eq(&slot.borrow(), &lifetime));
+        current && is_coasting() && pump_inertia_with_hits(&hits, viewport)
+    })
+}
+
+fn pump_inertia_with_hits(hits: &[DragHit], viewport: [f32; 2]) -> bool {
     if !is_coasting() {
         LAST_COAST_AT.with(|t| *t.borrow_mut() = None);
         return false;
@@ -2582,7 +2715,7 @@ pub fn pump_inertia(root: &Element, viewport: [f32; 2]) -> bool {
         dt.min(0.05)
     };
     let Some(mut inertia) = COAST.with(|c| c.borrow_mut().take()) else {
-        return commit_end(&collect_hits(root));
+        return commit_end(hits);
     };
     match inertia.step(dt) {
         Some(dxy) => {
@@ -2597,13 +2730,16 @@ pub fn pump_inertia(root: &Element, viewport: [f32; 2]) -> bool {
                     [0.0, 0.0]
                 }
             });
-            let hits = collect_hits(root);
-            COAST_TICK.set(true);
-            let dirty = tick(next[0], next[1], &hits, viewport);
-            COAST_TICK.set(false);
-            dirty
+            struct CoastTick(bool);
+            impl Drop for CoastTick {
+                fn drop(&mut self) {
+                    COAST_TICK.set(self.0);
+                }
+            }
+            let _coast_tick = CoastTick(COAST_TICK.replace(true));
+            tick(next[0], next[1], hits, viewport)
         }
-        None => commit_end(&collect_hits(root)),
+        None => commit_end(hits),
     }
 }
 
@@ -2615,20 +2751,17 @@ pub fn clear_if_any() {
 
 /// Abort without firing `on_drag_end` (Escape). SortableJS has no first-class cancel.
 pub fn cancel() -> bool {
+    SESSION_LIFETIME.with(|slot| *slot.borrow_mut() = Rc::new(()));
     let Some(sess) = SESSION.with(|s| s.borrow_mut().take()) else {
         return false;
     };
     clear_restrict_clip_state();
-    crate::utils::pointer_drag::clear();
+    crate::utils::drag::pointer::clear();
     crate::app::release_pointer_capture();
     VELOCITY.with(|v| v.borrow_mut().reset());
     COAST.with(|c| *c.borrow_mut() = None);
     LAST_COAST_AT.with(|t| *t.borrow_mut() = None);
-    SCOPES.with(|m| {
-        if let Some(rt) = m.borrow().get(&sess.scope_id) {
-            reset_scope_ui(rt);
-        }
-    });
+    reset_scope_ui(&sess.scope_id);
     if sess.phase == DragPhase::Active || sess.phase == DragPhase::Coasting {
         let ev = event_from(&sess, None, None, None);
         super::dropzone::on_drag_deactivated(&sess.scope_id, &ev);
@@ -2706,13 +2839,18 @@ fn locked_axis_drift(sess: &DragSession, hits: &[DragHit], overlay_pos: [f32; 2]
 /// autoscroll, and vsync pumps scroll with no mousemove. `axis="y"` would
 /// otherwise freeze overlay X while Gallery `scroll-overlays` pans.
 pub fn pump_autoscroll(root: &Element, viewport: [f32; 2]) -> bool {
+    prepare_autoscroll(root, viewport)()
+}
+
+pub(super) fn prepare_autoscroll(root: &Element, viewport: [f32; 2]) -> super::runtime::Update {
     if !is_active() {
         LAST_SCROLL_AT.with(|t| *t.borrow_mut() = None);
-        return false;
+        return Box::new(|| false);
     }
     let Some(pointer) = last_pointer() else {
-        return false;
+        return Box::new(|| false);
     };
+    let lifetime = SESSION_LIFETIME.with(|slot| slot.borrow().clone());
     let (cfg, axis, overlay_pos) = SESSION.with(|s| {
         let sess = s.borrow();
         let Some(d) = sess.as_ref() else {
@@ -2743,7 +2881,7 @@ pub fn pump_autoscroll(root: &Element, viewport: [f32; 2]) -> bool {
     // XY has no locked-axis drift. Skip a second full-tree `collect_hits` on
     // every mousemove when autoscroll did not actually pan (Gallery drag 不跟手).
     if !moved && !matches!(axis, Axis::X | Axis::Y) {
-        return false;
+        return Box::new(|| false);
     }
     let hits = collect_hits(root);
     let drift = SESSION.with(|s| {
@@ -2752,11 +2890,14 @@ pub fn pump_autoscroll(root: &Element, viewport: [f32; 2]) -> bool {
             .map(|sess| locked_axis_drift(sess, &hits, overlay_pos))
             .unwrap_or(false)
     });
-    if moved || drift {
-        tick(pointer[0], pointer[1], &hits, viewport);
-        return true;
-    }
-    false
+    Box::new(move || {
+        let current = SESSION_LIFETIME.with(|slot| Rc::ptr_eq(&slot.borrow(), &lifetime));
+        if current && is_active() && (moved || drift) {
+            tick(pointer[0], pointer[1], &hits, viewport);
+            return true;
+        }
+        false
+    })
 }
 
 /// Walk the laid-out tree and collect drag targets (skip the drag ghost).
@@ -2769,6 +2910,7 @@ pub fn collect_hits(root: &Element) -> Vec<DragHit> {
     PARENT_BOUNDS.with(|m| m.borrow_mut().clear());
     ITEM_PACK_GAPS.with(|m| m.borrow_mut().clear());
     ANCESTOR_OVERFLOW_CLIP.with(|m| m.borrow_mut().clear());
+    DEBUG_SLOT_CLIPS.with(|clips| clips.borrow_mut().clear());
     let mut out = Vec::new();
     collect_hits_inner(root, [0.0, 0.0], None, None, &mut out);
     cap_stretched_indexed_rects(&mut out);
@@ -2896,7 +3038,7 @@ fn collect_hits_inner(
     } else {
         (scroll_acc, overflow_clip)
     };
-    let slot = crate::app::tree_hit::collision_hit_box(el, scroll_acc);
+    let slot = crate::authoring::mount::collision_bounds(el, scroll_acc);
     let item_shell = el.attrs.contains_key(ATTR_DRAG_ITEM_SHELL);
     let child_anc = RestrictAncestor {
         slot,
@@ -2946,6 +3088,11 @@ fn collect_hits_inner(
         let scope_id = el.attrs.get(ATTR_DRAG_SCOPE).cloned().unwrap_or_default();
         remember_draggable_bounds(&scope_id, &id, slot);
         remember_ancestor_overflow_clip(&id, overflow_clip);
+        if let Some(clip) = overflow_clip {
+            DEBUG_SLOT_CLIPS.with(|clips| {
+                clips.borrow_mut().insert(item_bounds_key(&scope_id, &id), clip);
+            });
+        }
         if el.attrs.contains_key(ATTR_DRAG_INDEX) {
             if let Some(parent) = ancestor {
                 ITEM_PACK_GAPS.with(|m| {
@@ -2985,7 +3132,7 @@ fn collect_hits_inner(
             pull_clone,
         });
     }
-    let mut next_acc = crate::app::tree_hit::next_hit_scroll_acc(el, scroll_acc);
+    let mut next_acc = crate::authoring::mount::child_scroll_offset(el, scroll_acc);
     // Child layout_bounds include ancestor translates. The kit shell's layout
     // compensation belongs to paint, not the sortable collision slots.
     if el.attrs.contains_key(super::ATTR_DRAG_ITEM_SHELL) {

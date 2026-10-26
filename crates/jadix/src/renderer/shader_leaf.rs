@@ -285,20 +285,33 @@ impl ShaderGpu {
         time_s: f32,
         pointer: [f32; 2],
     ) -> bool {
+        !self.flush_updated_textures(device, queue, textured, images, time_s, pointer).is_empty()
+    }
+
+    pub(crate) fn flush_updated_textures(
+        &mut self,
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        textured: &TexturedQuadPipeline,
+        images: &mut HashMap<String, GpuImageTexture>,
+        time_s: f32,
+        pointer: [f32; 2],
+    ) -> Vec<String> {
         let mut last: HashMap<String, crate::primitives::shader::ShaderJob> = HashMap::new();
         for job in take_shader_jobs() {
             last.insert(job.key.clone(), job);
         }
-        let mut any = false;
+        let mut updated = Vec::new();
         for job in last.into_values() {
+            let key = job.key.clone();
             if self.render_job(device, queue, textured, images, job, time_s, pointer) {
-                any = true;
+                updated.push(key);
             }
         }
-        if any {
+        if !updated.is_empty() {
             crate::app::pending_images::bump_dynamic_texture_epoch();
         }
-        any
+        updated
     }
 
     pub(crate) fn prepare_source(&mut self, device: &wgpu::Device, source: &str) -> u64 {

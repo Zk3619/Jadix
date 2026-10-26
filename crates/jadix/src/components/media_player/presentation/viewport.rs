@@ -51,7 +51,7 @@ fn find_node<'a>(root: &'a mut Element, attr: &str, value: &str) -> Option<&'a m
         .find_map(|child| find_node(child, attr, value))
 }
 
-pub(crate) fn sync_media_presentation_subtree(root: &mut Element) -> bool {
+fn sync_media_presentation(root: &mut Element, only: Option<&str>) -> bool {
     let scope = window_scope::active();
     if !PLAYERS.with(|players| players.borrow().keys().any(|(window, _)| *window == scope)) {
         return false;
@@ -62,7 +62,7 @@ pub(crate) fn sync_media_presentation_subtree(root: &mut Element) -> bool {
             && element.attrs.get("data-media-kind").map(String::as_str) == Some("video")
         {
             if let Some(id) = &element.template_id {
-                ids.push(id.clone());
+                if only.is_none_or(|only| only == id) { ids.push(id.clone()); }
             }
         }
     });
@@ -177,4 +177,20 @@ pub(crate) fn sync_media_presentation_subtree(root: &mut Element) -> bool {
         }
     }
     changed
+}
+
+pub(crate) fn attach_presentation(root: &mut Element, id: String) {
+    crate::authoring::presentation::attach_tree(root,
+        crate::authoring::presentation::Phase::State,
+        move |root, _, _| {
+            if sync_media_presentation(root, Some(&id)) { LayoutStatus::StructureChanged }
+            else { LayoutStatus::Clean }
+        });
+}
+
+#[cfg(test)]
+pub(crate) fn sync_media_presentation_subtree(root: &mut Element) -> bool {
+    crate::authoring::presentation::sync_tree(root, &mut crate::layout::LayoutTree::new(),
+        crate::authoring::presentation::Context::new(
+            crate::authoring::presentation::Phase::State, [900.0, 600.0])) == LayoutStatus::StructureChanged
 }

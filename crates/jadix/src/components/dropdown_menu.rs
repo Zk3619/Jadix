@@ -548,7 +548,7 @@ pub fn DropdownMenuTrigger(id: String, children: Option<Element>) -> Element {
         }
     };
 
-    if trigger.button_hover_paint.is_none() && trigger.input_paint_sync.is_none() {
+    if trigger.authoring_state.get::<crate::components::button::ButtonHoverPaint>().is_none() && trigger.input_paint_sync.is_none() {
         trigger.set_focusable(true);
     }
     let fid_focus = trigger
@@ -768,6 +768,15 @@ pub fn DropdownMenuItem(
     hit.set_attr(ATTR_SLOT, SLOT_ITEM);
     hit.set_attr("jadix_dd_id", &ctx.id);
     hit.set_attr("jadix_dd_ix", ix.to_string());
+    crate::authoring::presentation::attach(
+        &mut hit,
+        crate::authoring::presentation::Phase::State,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_dropdown_menu_item_paint_node(element, layout, &mut impact);
+            impact
+        },
+    );
     hit.set_attr("data-inset", if inset { "true" } else { "false" });
     if destructive {
         hit.set_attr("data-variant", "destructive");
@@ -872,6 +881,15 @@ pub fn DropdownMenuCheckboxItem(
     hit.set_attr(ATTR_SLOT, SLOT_CHECKBOX_ITEM);
     hit.set_attr("jadix_dd_id", &ctx.id);
     hit.set_attr("jadix_dd_ix", ix.to_string());
+    crate::authoring::presentation::attach(
+        &mut hit,
+        crate::authoring::presentation::Phase::State,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_dropdown_menu_item_paint_node(element, layout, &mut impact);
+            impact
+        },
+    );
     hit.set_attr("data-inset", if inset { "true" } else { "false" });
     if disabled {
         hit.set_attr("data-disabled", "true");
@@ -1035,6 +1053,15 @@ pub fn DropdownMenuRadioItem(
     hit.set_attr(ATTR_SLOT, SLOT_RADIO_ITEM);
     hit.set_attr("jadix_dd_id", &ctx.id);
     hit.set_attr("jadix_dd_ix", ix.to_string());
+    crate::authoring::presentation::attach(
+        &mut hit,
+        crate::authoring::presentation::Phase::State,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_dropdown_menu_item_paint_node(element, layout, &mut impact);
+            impact
+        },
+    );
     hit.set_attr("data-inset", if inset { "true" } else { "false" });
     hit.set_attr("data-value", &value);
     if disabled {
@@ -1194,6 +1221,15 @@ pub fn DropdownMenuSubTrigger(disabled: bool, inset: bool, children: Option<Elem
     hit.set_attr(ATTR_SLOT, SLOT_SUB_TRIGGER);
     hit.set_attr("jadix_dd_id", &parent.id);
     hit.set_attr("jadix_dd_ix", ix.to_string());
+    crate::authoring::presentation::attach(
+        &mut hit,
+        crate::authoring::presentation::Phase::State,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_dropdown_menu_item_paint_node(element, layout, &mut impact);
+            impact
+        },
+    );
     hit.set_attr("data-inset", if inset { "true" } else { "false" });
     if disabled {
         hit.set_attr("data-disabled", "true");
@@ -1297,7 +1333,7 @@ pub(crate) fn dropdown_menu_sub_content_ex(
 }
 
 /// 每帧按 `{id}__dd_active` 写回高亮（`peek`，不订阅根 effect）。
-pub(crate) fn sync_dropdown_menu_item_paint_subtree(
+fn sync_dropdown_menu_item_paint_node(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
@@ -1324,7 +1360,7 @@ pub(crate) fn sync_dropdown_menu_item_paint_subtree(
         active_key_suffix: "__dd_active",
         active_none: ACTIVE_NONE,
     };
-    item_chrome::sync_item_paint_subtree(el, layout_tree, impact, &cfg);
+    item_chrome::sync_item_paint_node(el, layout_tree, impact, &cfg);
 }
 
 /// solid-ui / shadcn `DropdownMenuLabel`：`px-2 py-1.5 text-sm font-semibold`。
@@ -1610,7 +1646,6 @@ mod tests {
     #[test]
     #[cfg(feature = "animation-base")]
     fn rsx_dropdown_keeps_content_height_placement_and_shadow_through_expansion() {
-        use crate as jadix;
         use crate::app::portal_overlay::clear_overlay_stack;
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};

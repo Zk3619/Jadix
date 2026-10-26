@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Short-screen sidebar scroll must clamp when the window grows until content fits.
 //!
 //! `is_stale_zero_max_sample` used to treat any `max→0` as a nested clip-cull and

@@ -8,7 +8,7 @@ use std::sync::Arc;
 
 use winit::window::{Window, WindowId};
 
-use crate::core::tree::Element;
+use crate::core::tree::{Element, LayoutStatus};
 
 use super::secondary_window::SecondaryWindowState;
 use super::window_scope::{self, TreeHome};
@@ -279,7 +279,7 @@ pub fn request_redraw() {
     });
 }
 
-pub(super) fn apply_frame_invalidation(present: bool, caches: bool, nodes: &HashMap<String, bool>) {
+pub(super) fn apply_frame_invalidation(present: bool, caches: bool, repaint: bool, nodes: &HashMap<String, bool>) {
     APP_RUNTIME.with(|slot| {
         let rt = slot.borrow().clone();
         let Some(rt) = rt else { return };
@@ -291,6 +291,11 @@ pub(super) fn apply_frame_invalidation(present: bool, caches: bool, nodes: &Hash
                 let mut state = state.borrow_mut();
                 let Some(state) = state.as_mut() else { return };
                 state.force_present |= present;
+                if repaint {
+                    super::invalidation::patch_node(&mut state.root_element, false);
+                    state.layout_status = state.layout_status.merge(LayoutStatus::StyleChanged);
+                    state.mark_full_redraw();
+                }
                 if caches {
                     state.bust_text_caches();
                 }
@@ -313,6 +318,11 @@ pub(super) fn apply_frame_invalidation(present: bool, caches: bool, nodes: &Hash
                 };
                 let mut secs = secs.borrow_mut();
                 let Some(sec) = secs.get_mut(&id) else { return };
+                if repaint {
+                    super::invalidation::patch_node(&mut sec.root_element, false);
+                    sec.layout_status = sec.layout_status.merge(LayoutStatus::StyleChanged);
+                    sec.layout_tree.invalidate_collect_skip();
+                }
                 if caches {
                     sec.bust_text_caches();
                 }

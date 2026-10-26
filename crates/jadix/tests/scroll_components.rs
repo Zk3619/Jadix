@@ -113,3 +113,62 @@ fn scroll_component_tags_remain_available_from_prelude() {
         );
     });
 }
+
+#[test]
+fn arrow_switches_work_in_both_scroll_component_tags() {
+    use jadix::prelude::*;
+    let (_owner, ()) = create_root(|| {
+        let bar = ui! {
+            <Scrollbar target="arrows" orientation="horizontal" visibility="always" arrows={true}
+                arrow_class="hover:bg-primary" />
+        };
+        assert_eq!(bar.children.len(), 3);
+        let area = ui! {
+            <ScrollArea id="arrows" w={240.0} h={160.0} scrollbar_arrows={true}
+                scrollbar_arrow_class="hover:bg-primary">
+                <Div w={600.0} h={700.0} />
+            </ScrollArea>
+        };
+        assert!(jadix::core::tree::find_in_tree(&area, |el|
+            el.get_attr("data-slot").map(String::as_str) == Some("scrollbar-arrow-end")).is_some());
+    });
+}
+
+#[test]
+fn product_viewports_default_to_smooth_and_allow_explicit_jump() {
+    use jadix::prelude::*;
+    let (_owner, ()) = create_root(|| {
+        for behavior in ["smooth", "jump"] {
+            let list: Element = if behavior == "jump" {
+                virtual_list("default-list").scroll_behavior("jump").into()
+            } else { virtual_list("default-list").into() };
+            let masonry: Element = if behavior == "jump" {
+                virtual_masonry("default-masonry").scroll_behavior("jump").into()
+            } else { virtual_masonry("default-masonry").into() };
+            let messages = if behavior == "jump" {
+                ui! { <MessageScrollerProvider id="default-messages">
+                    <MessageScrollerViewport scroll_behavior="jump" />
+                </MessageScrollerProvider> }
+            } else {
+                ui! { <MessageScrollerProvider id="default-messages">
+                    <MessageScrollerViewport />
+                </MessageScrollerProvider> }
+            };
+            for root in [&list, &masonry, &messages] {
+                let viewport = jadix::core::tree::find_in_tree(root, |node|
+                    node.focus_id.as_deref().is_some_and(|id| id.starts_with("scroll:"))).unwrap();
+                let id = viewport.focus_id.as_deref().unwrap().strip_prefix("scroll:").unwrap();
+                let keys = jadix::core::scroll_viewport::ScrollViewportSignalKeys::new(id);
+                assert_eq!(use_signal(keys.behavior.as_str(), String::new).peek(), behavior);
+                use_signal(keys.viewport_h.as_str(), || 100.0_f32).set_silent(100.0);
+                use_signal(keys.content_h.as_str(), || 500.0_f32).set_silent(500.0);
+                use_signal(keys.offset_y.as_str(), || 0.0_f32).set_silent(0.0);
+                use_signal(keys.target_y.as_str(), || 0.0_f32).set_silent(0.0);
+                jadix::authoring::input::scroll_by(id, 0.0, 40.0);
+                assert_eq!(use_signal(keys.target_y.as_str(), || 0.0_f32).peek(), 40.0);
+                assert_eq!(use_signal(keys.offset_y.as_str(), || 0.0_f32).peek(),
+                    if behavior == "smooth" { 0.0 } else { 40.0 });
+            }
+        }
+    });
+}

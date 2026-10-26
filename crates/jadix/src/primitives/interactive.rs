@@ -201,7 +201,7 @@ pub fn apply_disabled(el: &mut Element, disabled: bool) -> crate::core::tree::La
         changed = true;
     }
 
-    let interactive = el.button_hover_paint.is_some() || el.input_paint_sync.is_some();
+    let interactive = el.disabled_sync.is_some() || el.input_paint_sync.is_some();
     if interactive {
         if el.focusable == disabled {
             el.set_focusable(!disabled);
@@ -212,12 +212,7 @@ pub fn apply_disabled(el: &mut Element, disabled: bool) -> crate::core::tree::La
         changed = true;
     }
 
-    if let Some(desc) = el.button_hover_paint.as_mut() {
-        if desc.disabled != disabled {
-            desc.disabled = disabled;
-            changed = true;
-        }
-    }
+    if let Some(sync) = el.disabled_sync { changed |= sync(el, disabled); }
 
     if let Some(sync) = el.input_paint_sync.as_mut() {
         if sync.disabled != disabled {
@@ -267,19 +262,19 @@ mod tests {
     #[test]
     fn apply_disabled_restores_focus_on_paint_sync_nodes() {
         let mut el: Element = hstack().into();
-        el.button_hover_paint = Some(crate::core::tree::ButtonHoverPaint {
-            variant: "default".into(),
-            disabled: false,
-            hover_easing: "cubic".into(),
-            text_color: None,
+        el.disabled_sync = Some(|element, disabled| {
+            let changed = element.attrs.get("test_disabled").is_some() != disabled;
+            if disabled { element.set_attr("test_disabled", "true"); }
+            else { element.attrs.remove("test_disabled"); }
+            changed
         });
         el.set_focusable(true);
         assert_eq!(apply_disabled(&mut el, true), LayoutStatus::StyleChanged);
         assert!(!el.focusable);
-        assert!(el.button_hover_paint.as_ref().unwrap().disabled);
+        assert!(el.attrs.contains_key("test_disabled"));
         assert_eq!(apply_disabled(&mut el, false), LayoutStatus::StyleChanged);
         assert!(el.focusable);
-        assert!(!el.button_hover_paint.as_ref().unwrap().disabled);
+        assert!(!el.attrs.contains_key("test_disabled"));
     }
 
     #[test]

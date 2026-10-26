@@ -27,6 +27,9 @@ var src_tex: texture_2d<f32>;
 @group(1) @binding(1)
 var src_sampler: sampler;
 
+@group(1) @binding(2)
+var sharp_tex: texture_2d<f32>;
+
 struct VertexOutput {
     @builtin(position) clip_position: vec4<f32>,
     @location(0) uv: vec2<f32>,
@@ -88,8 +91,8 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
         return gaussian1d(in.uv, uniforms.texel_size, uniforms.direction, uniforms.sigma);
     }
     // Upsample / fullscreen blit: hardware bilinear from low-res source.
-    // Page dimming belongs on the modal underlay rect (bg alpha × overlay opacity),
-    // not on the blurred capture — fading the blit made glyphs vanish instead of blur.
+    // Crossfade the sharp capture and the completed blur at the underlay opacity.
     let c = textureSample(src_tex, src_sampler, in.uv);
-    return c;
+    let sharp = textureSample(sharp_tex, src_sampler, in.uv);
+    return mix(sharp, c, clamp(uniforms.blit_alpha, 0.0, 1.0));
 }

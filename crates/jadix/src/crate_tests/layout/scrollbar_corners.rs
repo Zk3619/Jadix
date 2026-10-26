@@ -1,5 +1,5 @@
+#![cfg(feature = "components")]
 //! Dual-axis scrollbar corners: unified L-join (horizontal yields to vertical).
-
 use crate::components::scroll_area::scroll_area;
 use crate::components::scrollbar::{
     SCROLLBAR_DEFAULT_CROSS_PX, SCROLLBAR_TRACK_FOCUS_PREFIX,

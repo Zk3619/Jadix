@@ -30,23 +30,19 @@ fn zone_list_hover_peek(ctx: Option<&DragCtx>, list: &str) -> bool {
 /// Subscribe `active_droppable` (not `overlay_pos`); peek `hits()` for the tick cache.
 fn hits_hud() -> Element {
     let ctx = use_drag();
-    let over = ctx.as_ref().and_then(|c| c.active_droppable.get());
-    let dragging = ctx
-        .as_ref()
-        .and_then(|c| c.active_draggable.get())
-        .is_some();
-    let hits = ctx.as_ref().map(|c| c.hits()).unwrap_or_default();
-    let n_drag = hits.iter().filter(|h| h.is_draggable).count();
-    let n_drop = hits.iter().filter(|h| h.is_droppable).count();
-    let mode = if dragging {
-        "拖中·layout walk"
-    } else {
-        "空闲·registered"
-    };
-    let text = format!(
-        "use_drag().hits() · {mode} · drag={n_drag} drop={n_drop} over={}",
-        over.as_deref().unwrap_or("—")
-    );
+    let id = format!("{}__hits_hud", ctx.as_ref().map_or("drag", |ctx| ctx.id.as_str()));
+    let text = jadix::app::reactive::bind_text(id, move || {
+        let over = ctx.as_ref().and_then(|c| c.active_droppable.get());
+        let dragging = ctx.as_ref().and_then(|c| c.active_draggable.get()).is_some();
+        let hits = ctx.as_ref().map(|c| c.hits()).unwrap_or_default();
+        let n_drag = hits.iter().filter(|h| h.is_draggable).count();
+        let n_drop = hits.iter().filter(|h| h.is_droppable).count();
+        let mode = if dragging { "拖中·layout walk" } else { "空闲·registered" };
+        format!(
+            "use_drag().hits() · {mode} · drag={n_drag} drop={n_drop} over={}",
+            over.as_deref().unwrap_or("—")
+        )
+    });
     ui! {
         <Label text_size="0.75rem" color="muted-foreground">{ text }</Label>
     }
@@ -1075,6 +1071,36 @@ fn gesture_dot(glyph: &'static str, pos: Signal<[f32; 2]>) -> Element {
     }
 }
 
+fn gesture_preview(
+    mut preview: Element,
+    drag: DragCtx,
+    positions: [Signal<[f32; 2]>; 2],
+    delta: Signal<[f32; 2]>,
+    visible: Signal<bool>,
+) -> Element {
+    let opacity = preview.style.opacity;
+    preview.style.opacity = 0.0;
+    preview.style.translate_pct = [-0.5; 2];
+    preview.absolute().left(0.0).top(0.0).pointer_events_none()
+        .reactive_sync(move |element, _| {
+            let before = element.style.clone();
+            let active = drag.active_draggable.peek().filter(|_| visible.peek());
+            element.style.opacity = if active.is_some() { opacity } else { 0.0 };
+            if let Some(active) = active {
+                let mut pair = [positions[0].peek(), positions[1].peek()];
+                let index = usize::from(!active.contains("g-a"));
+                let movement = delta.peek();
+                pair[index][0] += movement[0];
+                pair[index][1] += movement[1];
+                let live = GestureState::from_pair([[48.0, 72.0], [200.0, 72.0]], pair);
+                element.style.translate = live.centroid;
+                element.style.scale = [live.scale.clamp(0.333, 3.0); 2];
+                element.style.rotate_deg = live.angle.to_degrees();
+            }
+            if element.style == before { LayoutStatus::Clean } else { LayoutStatus::StyleChanged }
+        })
+}
+
 /// Overlapping free-move tiles: light opaque fill + one huge unique glyph.
 /// Overlap zone must show only the front letter; both letters = glyph bleed.
 fn free_move_tile(
@@ -1235,6 +1261,77 @@ mod drop_position_tests {
     use super::*;
     use jadix::core::reactivity::create_root;
     use jadix::utils::drag::{BeginDrag, begin, end, tick};
+
+    #[test]
+    fn gesture_preview_is_optional_and_keeps_authored_style() {
+        create_root(|| {
+            let visible = Signal::new(false);
+            let positions = [Signal::new([48.0, 72.0]), Signal::new([200.0, 72.0])];
+            let delta = Signal::new([0.0; 2]);
+            let mut context = None;
+            let mut root: Element = drag_scope("gesture-preview-test").child(|| {
+                let drag = use_drag().unwrap();
+                context = Some(drag.clone());
+                gesture_preview(Element::new().w(100.0).h(40.0).bg("#ff0000")
+                    .rounded(3.0).opacity(0.6), drag, positions, delta, visible)
+            }).into();
+            let drag = context.unwrap();
+            let preview = &mut root;
+            let authored = preview.style.clone();
+            preview.layout_bounds = [0.0, 0.0, 100.0, 40.0];
+            let mut layout = jadix::layout::LayoutTree::new();
+            let sync = preview.reactive_sync.clone().unwrap();
+            drag.active_draggable.set(Some("g-a".into()));
+            sync.run(preview, &mut layout);
+            assert_eq!(preview.style.opacity, 0.0);
+            visible.set(true);
+            sync.run(preview, &mut layout);
+            assert_eq!(preview.style.opacity, 0.6);
+            assert_eq!(preview.style.bg_color, authored.bg_color);
+            assert_eq!(preview.style.radii, authored.radii);
+            assert_eq!(preview.style.translate, [124.0, 72.0]);
+            assert_eq!(preview.style.translate_pct, [-0.5; 2]);
+            drag.active_draggable.set(None);
+            sync.run(preview, &mut layout);
+            assert_eq!(preview.style.opacity, 0.0);
+        });
+    }
+
+    #[test]
+    fn idle_hits_board_accepts_both_draggables_and_reports_drop() {
+        jadix::init();
+        let (_owner, mut root) = create_root(|| jadix::authoring::mount::with_inline_mount(||
+            DragShowcase(Default::default())));
+        let mut layout = jadix::layout::LayoutTree::new();
+        layout.build_and_layout(&mut root, 1200.0, 100000.0, [-1.0; 2]);
+        let scope = "gal-drag-idle-hits";
+        let hits = jadix::utils::drag::collect_hits(&root);
+        let registered = jadix::utils::drag::registered_hits_in_scope(scope);
+        assert_eq!(registered.iter().filter(|hit| hit.is_draggable).count(), 2);
+        assert_eq!(registered.iter().filter(|hit| hit.is_droppable).count(), 1);
+        let zone = hits.iter().find(|hit| hit.scope_id == scope && hit.id == "idle-zone")
+            .expect("idle drop zone").rect;
+        assert!(zone.is_usable(), "drop zone has no layout: {zone:?}");
+        let target = zone.center();
+        let note = use_signal("gal_drag_idle_hits_note", String::new);
+        for id in ["idle-a", "idle-b"] {
+            let source = hits.iter().find(|hit| hit.scope_id == scope && hit.id == id)
+                .expect("idle draggable");
+            let pointer = source.rect.center();
+            let path = jadix::app::pointer_events::hit_path(&root, pointer[0], pointer[1]);
+            let mut event = jadix::app::pointer_events::PointerEvent::new(
+                pointer[0], pointer[1], winit::event::MouseButton::Left, 1,
+            );
+            jadix::app::pointer_events::dispatch_pointer(
+                &path, &mut event, jadix::app::pointer_events::PointerKind::Down,
+            );
+            assert_eq!(jadix::utils::drag::active_draggable_id().as_deref(), Some(id));
+            tick(target[0], target[1], &hits, [1200.0, 100000.0]);
+            assert_eq!(jadix::utils::drag::active_droppable_id().as_deref(), Some("idle-zone"));
+            end(&hits);
+            assert!(note.peek().contains(&format!("{id} → idle-zone")), "{}", note.peek());
+        }
+    }
 
     #[test]
     fn pull_clone_keeps_distinct_draggable_rows_after_drop() {
@@ -2215,6 +2312,8 @@ pub(crate) fn DragShowcase() -> Element {
     });
     let gesture_a = use_signal("gal_drag_gesture_a", || [48.0_f32, 72.0]);
     let gesture_b = use_signal("gal_drag_gesture_b", || [200.0_f32, 72.0]);
+    let gesture_delta = use_signal("gal_drag_gesture_delta", || [0.0_f32; 2]);
+    let gesture_preview_visible = use_signal("gal_drag_gesture_preview_visible", || false);
     set_gesture_opts(GestureOpts::default().autoscroll(true));
     let veto_open = use_signal("gal_drag_veto_open", || {
         vec!["Move me".to_string(), "Locked".to_string()]
@@ -2402,12 +2501,10 @@ pub(crate) fn DragShowcase() -> Element {
                     }
                 })
                 .child(move || {
-                    let idle_hits_note = idle_hits_note.get();
                     ui! {
                         <VStack gap="0.375rem" w="100%">
-                            { hits_hud() }
                             <Label text_size="0.75rem" color="muted-foreground">
-                                { idle_hits_note }
+                                { idle_hits_note.get() }
                             </Label>
                             <HStack gap="0.5rem" w="100%" wrap="wrap">
                                 <Draggable id="idle-a" item_type="peek">
@@ -2428,6 +2525,7 @@ pub(crate) fn DragShowcase() -> Element {
                                     ) }
                                 </Droppable>
                             </HStack>
+                            { hits_hud() }
                         </VStack>
                     }
                 }),
@@ -2808,13 +2906,11 @@ pub(crate) fn DragShowcase() -> Element {
         ),
         None => "触屏双指会写 last_gesture()（桌面用两个圆点模拟）；set_gesture_opts(autoscroll) 开边缘滚".to_string(),
     };
-    let preview_w = (72.0 * gesture.scale).clamp(24.0, 220.0);
-    let preview_h = (48.0 * gesture.scale).clamp(16.0, 160.0);
-    let preview_x = gesture.centroid[0] - preview_w * 0.5;
-    let preview_y = gesture.centroid[1] - preview_h * 0.5;
     let gesture_board = Element::from(
         drag_scope("gal-drag-gesture")
             .restrict(Restrict::Parent)
+            .on_drag_start(move |_| gesture_delta.set_silent([0.0; 2]))
+            .on_drag_move(move |ev| gesture_delta.set_silent(ev.delta))
             .on_drag_end(move |ev: &DragEvent| {
                 let pos = if ev.draggable_id.contains("g-a") {
                     gesture_a
@@ -2825,19 +2921,12 @@ pub(crate) fn DragShowcase() -> Element {
                 pos.set([p[0] + ev.delta[0], p[1] + ev.delta[1]]);
             })
             .child(move || {
-                let preview = Element::from(ui! {
-                    <Box
-                        absolute={true}
-                        left={preview_x}
-                        top={preview_y}
-                        w={preview_w}
-                        h={preview_h}
-                        rounded="0.5rem"
-                        bg="accent"
-                        pointer_events="none"
-                    />
-                })
-                .opacity(0.35);
+                let drag = use_drag().unwrap();
+                let preview = gesture_preview(
+                    Element::new().w(72.0).h(48.0).rounded("0.5rem")
+                        .bg("accent").opacity(0.35),
+                    drag, [gesture_a, gesture_b], gesture_delta, gesture_preview_visible,
+                );
                 ui! {
                     <Box
                         relative={true}
@@ -3618,6 +3707,9 @@ pub(crate) fn DragShowcase() -> Element {
                 <Label font_weight="600" text_size="0.875rem">"gesture · 双指（桌面两点）"</Label>
                 <Label text_size="0.75rem" color="muted-foreground">{ gesture_hud }</Label>
                 <Label text_size="0.75rem" color="muted-foreground">{ touch_hud }</Label>
+                <Switch id="gal-drag-gesture-preview" checked={gesture_preview_visible}>
+                    "显示手势预览（示例装饰）"
+                </Switch>
                 { gesture_board }
 
                 <Separator />

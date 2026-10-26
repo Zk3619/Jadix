@@ -120,17 +120,26 @@ struct SliderDrag {
     vertical: bool,
 }
 
-thread_local! {
+crate::authoring::window::window_local! {
     static SLIDER_DRAG: RefCell<Option<SliderDrag>> = const { RefCell::new(None) };
 }
 
 fn begin_slider_drag(id: impl Into<String>, drag: SliderDrag) {
-    crate::utils::pointer_drag::begin(crate::utils::pointer_drag::DragKind::Slider, id, 0.0, 0.0);
+    crate::utils::drag::pointer::begin(crate::utils::drag::pointer::DragKind::Slider, id, 0.0, 0.0);
     SLIDER_DRAG.with(|d| *d.borrow_mut() = Some(drag));
+    crate::utils::drag::routing::register(
+        module_path!(),
+        crate::utils::drag::routing::DragHandlers::new(
+            tick_slider_drag,
+            clear_slider_drag_if_any,
+        )
+        .scroll_policy(crate::utils::drag::routing::ScrollPolicy::Freeze),
+    );
 }
 
 fn end_slider_drag() {
-    crate::utils::pointer_drag::clear();
+    crate::utils::drag::routing::unregister(module_path!());
+    crate::utils::drag::pointer::clear();
     SLIDER_DRAG.with(|d| *d.borrow_mut() = None);
     crate::app::release_pointer_capture();
 }
@@ -161,8 +170,7 @@ pub(crate) fn tick_slider_drag(x: f32, y: f32) -> bool {
 }
 
 pub(crate) fn clear_slider_drag_if_any() {
-    let had = SLIDER_DRAG.with(|d| d.borrow().is_some());
-    if had {
+    if is_slider_dragging() {
         end_slider_drag();
     }
 }
@@ -887,8 +895,8 @@ impl From<SliderBuilder> for Element {
                         }
                     }
                 }
-                let dragging = crate::utils::pointer_drag::peek().is_some_and(|session| {
-                    session.kind == crate::utils::pointer_drag::DragKind::Slider
+                let dragging = crate::utils::drag::pointer::peek().is_some_and(|session| {
+                    session.kind == crate::utils::drag::pointer::DragKind::Slider
                         && session.id == sync_id
                 });
                 let elevated = !disabled && thumb_shadow_elevated(sync_hover.get(), dragging);
@@ -1479,7 +1487,13 @@ mod tests {
             "click should raise value, got {}",
             value.peek()
         );
-        assert!(tick_slider_drag(110.0, 10.0), "drag should be active");
+        assert!(crate::utils::drag::routing::freezes_scroll());
+        assert!(
+            crate::utils::drag::routing::prepare_move(Some(&root), 110.0, 10.0).dispatch(),
+            "drag should be active"
+        );
+        crate::utils::drag::routing::finish_all();
+        assert!(!is_slider_dragging());
     }
 
     #[test]

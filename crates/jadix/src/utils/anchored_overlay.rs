@@ -933,8 +933,8 @@ pub fn begin_floating_panel_drag(id: impl Into<String>, pos: Signal<[f32; 2]>, x
             *d.borrow_mut() = Some(id.clone());
         });
     }
-    crate::utils::pointer_drag::begin(
-        crate::utils::pointer_drag::DragKind::FloatingPanel,
+    crate::utils::drag::pointer::begin(
+        crate::utils::drag::pointer::DragKind::FloatingPanel,
         id.clone(),
         x,
         y,
@@ -1003,7 +1003,7 @@ pub fn clear_floating_panel_drag() {
             *p.borrow_mut() = Some((drag.id.clone(), visual));
         });
         ENDED_FLOATING_DRAG.set(true);
-        crate::utils::pointer_drag::clear();
+        crate::utils::drag::pointer::clear();
         crate::app::release_pointer_capture();
         crate::app::runtime::request_redraw();
     }
@@ -2394,6 +2394,7 @@ mod tests {
     /// play Fade exit (`fade-out-0`) instead of being pruned on the same frame.
     #[test]
     #[cfg(feature = "animation-base")]
+    #[cfg(feature = "components")]
     fn tab_unmount_plays_configured_floating_exit() {
         use std::cell::RefCell;
         use std::rc::Rc;

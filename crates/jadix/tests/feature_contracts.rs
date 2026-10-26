@@ -2,6 +2,7 @@ use jadix::prelude::*;
 
 #[test]
 fn static_icons_and_css_hover_do_not_require_lucide_recipes() {
+    let _: Option<&'static str> = jadix::utils::lucide_svg_inner("check");
     let mut icon = with_icon_animations(
         icon_named("check"),
         "spin",
@@ -97,7 +98,7 @@ fn svg_morph_runs_without_lucide_recipe_playback() {
     assert!(icon.style.animations.is_empty());
 }
 
-#[cfg(feature = "code")]
+#[cfg(all(feature = "code", feature = "components"))]
 #[test]
 fn code_editor_is_independent_of_highlighting_and_language_servers() {
     let (_owner, ()) = jadix::core::reactivity::create_root(|| {
@@ -215,7 +216,7 @@ fn disabled_themes_are_rejected_without_mutating_current_theme() {
     }
 }
 
-#[cfg(feature = "document")]
+#[cfg(all(feature = "document", feature = "components"))]
 #[test]
 fn document_view_is_available_without_editing_or_science() {
     let (_owner, ()) = jadix::core::reactivity::create_root(|| {

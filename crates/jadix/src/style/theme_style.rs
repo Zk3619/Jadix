@@ -224,6 +224,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn page_and_navigation_surfaces_follow_preset_materials() {
         reset();
         for (preset, radius) in [
@@ -313,6 +314,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn cards_use_glass_surface_only_for_liquid_glass() {
         reset();
         for preset in ThemePreset::ALL {
@@ -348,6 +350,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn fluent_scrollbars_are_thumb_only_over_the_material() {
         reset();
         set_theme_preset(ThemePreset::Fluent);
@@ -408,6 +411,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn fluent_cards_blend_over_a_clear_borderless_sidebar() {
         reset();
         for mode in [ThemeMode::Light, ThemeMode::Dark] {
@@ -443,6 +447,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn outline_buttons_stay_clear_across_presets_and_interactions() {
         reset();
         for preset in ThemePreset::ALL {
@@ -609,6 +614,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn component_sheet_and_reactive_caller_classes_override_theme() {
         reset();
         install_theme_overrides(
@@ -657,6 +663,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn glass_covers_content_cards_and_can_be_disabled_by_caller() {
         reset();
         set_theme_preset(ThemePreset::LiquidGlass);
@@ -693,6 +700,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn liquid_glass_input_focus_ring_follows_rounded_chrome() {
         reset();
         set_theme_preset(ThemePreset::LiquidGlass);
@@ -764,6 +772,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn preset_shapes_elevation_and_typography_follow_component_roles() {
         reset();
         for preset in [ThemePreset::Fluent, ThemePreset::Material3] {
@@ -815,6 +824,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn preset_button_states_keep_disabled_roles_and_caller_precedence() {
         reset();
         for preset in [ThemePreset::Fluent, ThemePreset::Material3] {
@@ -896,6 +906,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn opaque_glass_fallback_removes_optics_and_preserves_overrides() {
         reset();
         install_theme_overrides(parse_theme_overrides_str("preset = 'liquid-glass'\n[styles]\nsurface-opacity = 1\npanel-radius = 18\nshadow = 'none'").unwrap()).unwrap();
@@ -914,6 +925,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn explicit_common_styles_win_even_when_equal_to_another_preset_default() {
         reset();
         install_theme_overrides(parse_theme_overrides_str("preset = 'material3'\n[styles]\nfont-size = 14\nline-height = 20\nfont-weight = 400\ncontrol-radius = 20\npanel-radius = 28").unwrap()).unwrap();
@@ -975,6 +987,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn floating_surfaces_receive_glass_and_late_slots_are_restyled() {
         reset();
         set_theme_preset(ThemePreset::LiquidGlass);
@@ -1023,6 +1036,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn density_and_typography_reach_controls_without_overriding_caller() {
         reset();
         install_theme_overrides(

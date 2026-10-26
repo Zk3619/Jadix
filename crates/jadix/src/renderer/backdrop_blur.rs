@@ -59,6 +59,7 @@ pub struct BackdropBlurPipeline {
     work_a: Option<Rt>,
     work_b: Option<Rt>,
     full: Option<Rt>,
+    modal_blit_bind_group: Option<wgpu::BindGroup>,
     width: u32,
     height: u32,
     work_w: u32,
@@ -106,6 +107,16 @@ impl BackdropBlurPipeline {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
                     ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        multisampled: false,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    },
                     count: None,
                 },
             ],
@@ -219,6 +230,7 @@ impl BackdropBlurPipeline {
             work_a: None,
             work_b: None,
             full: None,
+            modal_blit_bind_group: None,
             width: 0,
             height: 0,
             work_w: 0,
@@ -261,6 +273,7 @@ impl BackdropBlurPipeline {
             work_a: None,
             work_b: None,
             full: None,
+            modal_blit_bind_group: None,
             width: 0,
             height: 0,
             work_w: 0,
@@ -308,6 +321,10 @@ impl BackdropBlurPipeline {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&view),
                 },
             ],
         });
@@ -384,6 +401,24 @@ impl BackdropBlurPipeline {
         ));
         self.work_a = None;
         self.work_b = None;
+        self.modal_blit_bind_group = Some(device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Modal Blur Composite"),
+            layout: &self.tex_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&self.full.as_ref().unwrap().view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.scene.as_ref().unwrap().view),
+                },
+            ],
+        }));
     }
 
     fn ensure_work(&mut self, device: &wgpu::Device, factor: u32) {
@@ -761,6 +796,10 @@ impl BackdropBlurPipeline {
                     binding: 1,
                     resource: wgpu::BindingResource::Sampler(sampler),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(view),
+                },
             ],
         })
     }
@@ -962,7 +1001,7 @@ impl BackdropBlurPipeline {
             self.num_indices,
             queue,
             encoder,
-            &full.bind_group,
+            self.modal_blit_bind_group.as_ref().unwrap_or(&full.bind_group),
             dst,
             [1.0 / full.width as f32, 1.0 / full.height as f32],
             [0.0, 0.0],

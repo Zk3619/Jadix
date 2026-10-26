@@ -428,6 +428,15 @@ fn with_row_hover_chrome(ctx: &TreeViewCtx, node_id: &str, visual: Element) -> E
         })
         .into();
     row.set_attr(ATTR_ROW_CHROME, "1");
+    crate::authoring::presentation::attach(
+        &mut row,
+        crate::authoring::presentation::Phase::Hover,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_tree_view_hover_paint_node(element, layout, &mut impact);
+            impact
+        },
+    );
     row.reactive_sync(move |el, _| {
         let selected = sel.and_then(|s| s.try_peek()).is_some_and(|id| id == nid);
         let hovered = use_signal(hover_key_sync.as_str(), || false)
@@ -438,24 +447,22 @@ fn with_row_hover_chrome(ctx: &TreeViewCtx, node_id: &str, visual: Element) -> E
 }
 
 /// Reconcile row paint after pointer callbacks, including freshly mounted rows.
-pub(crate) fn sync_tree_view_hover_paint_subtree(
-    root: &mut Element,
+fn sync_tree_view_hover_paint_node(
+    el: &mut Element,
     layout_tree: &mut crate::core::tree::LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    crate::core::tree::walk_elements_mut(root, |el| {
-        if !el.attrs.contains_key(ATTR_ROW_CHROME) {
-            return;
+    if !el.attrs.contains_key(ATTR_ROW_CHROME) {
+        return;
+    }
+    if let Some(sync) = el.reactive_sync.clone() {
+        let status = sync.run(el, layout_tree);
+        if status != LayoutStatus::Clean {
+            crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
+            layout_tree.note_collect_skip_hash_bust_if_idle(el.collect_skip_live);
+            *impact = impact.merge(status);
         }
-        if let Some(sync) = el.reactive_sync.clone() {
-            let status = sync.run(el, layout_tree);
-            if status != LayoutStatus::Clean {
-                crate::app::damage::push_frame_paint_element(el, el.paint_scroll_acc);
-                layout_tree.note_collect_skip_hash_bust_if_idle(el.collect_skip_live);
-                *impact = impact.merge(status);
-            }
-        }
-    });
+    }
 }
 
 // ── Shared chrome ─────────────────────────────────────────────────────────────
@@ -799,7 +806,6 @@ fn wrap_tree_scroll_viewport(tree_id: &str, height: f32, body: Element) -> Eleme
     scroll_area(&format!("{tree_id}__scroll"))
         .overflow_y("auto")
         .overflow_x("hidden")
-        .scroll_behavior("jump")
         .w("100%")
         .h(height)
         .flex_shrink(0.0)

@@ -108,6 +108,7 @@ fn local_edit_matches_full_parse_and_reuses_later_blocks() {
 }
 
 #[test]
+#[cfg(feature = "components")]
 fn live_editor_reveals_only_active_line_and_commits_native_input() {
     let (_owner, ()) = create_root(|| {
         let state = DocumentEditorState::new("# title\n\n**bold**\n\nparagraph");
@@ -154,6 +155,7 @@ fn live_editor_reveals_only_active_line_and_commits_native_input() {
 }
 
 #[test]
+#[cfg(feature = "components")]
 fn revealing_a_different_block_resets_the_native_source_scroll() {
     let (_owner, ()) = create_root(|| {
         let state = DocumentEditorState::new("paragraph\n\n| A | B |\n| --- | --- |\n| 1 | 2 |\n");
@@ -173,6 +175,7 @@ fn revealing_a_different_block_resets_the_native_source_scroll() {
 }
 
 #[test]
+#[cfg(feature = "components")]
 fn document_view_virtualizes_large_code_and_handles_stale_scroll() {
     let (_owner, ()) = create_root(|| {
         let document = use_signal("large-semantic-doc", || {
@@ -250,6 +253,7 @@ fn rich_text_formatting_preserves_source_and_is_undoable() {
 }
 
 #[test]
+#[cfg(feature = "components")]
 fn builders_and_rsx_expose_document_and_native_text_editors() {
     let state = DocumentEditorState::new("# title");
     let editor = ui! { <DocumentEditor id="rsx-rich-editor" state={state} viewport_h={300.0} /> };
@@ -354,6 +358,7 @@ fn huge_unicode_source_uses_safe_sampled_height() {
 }
 
 #[test]
+#[cfg(feature = "components")]
 fn inline_code_reserves_its_full_width_next_to_math() {
     let (_owner, ()) = create_root(|| {
         let mut root: Element = document_view("inline-code-math")

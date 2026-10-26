@@ -295,6 +295,8 @@ impl ApplicationHandler for Harness {
         );
         self.app.handle_user_event(event_loop, JadixUserEvent::Exit);
         assert_eq!(windows().len(), 2);
+        assert!(primary.upgrade().unwrap().is_visible().unwrap_or(false));
+        assert!(secondary.upgrade().unwrap().is_visible().unwrap_or(false));
         assert_eq!(self.guard.closing.load(Ordering::SeqCst), 0);
         self.guard.block_secondary.store(false, Ordering::SeqCst);
         self.app.handle_user_event(
@@ -355,7 +357,12 @@ fn desktop_native_smoke() {
             .title("Contract primary")
             .resizable(false)
             .size(320.0, 240.0),
-        || Element::new().text("primary"),
+        || {
+            let window = current_window().unwrap().upgrade().unwrap();
+            Element::new().text("primary").on_unmount(move || {
+                assert!(!window.is_visible().unwrap_or(false), "hide before native/GPU teardown");
+            })
+        },
         event_loop.create_proxy(),
         rx,
     );

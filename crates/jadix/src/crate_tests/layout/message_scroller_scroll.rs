@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! MessageScroller: `defaultScrollPosition=end` must paint the live edge, not an empty
 //! tail from `min-h-full` / inflated `content_h`.
 
@@ -3659,6 +3660,15 @@ fn ui_like_vacuous_filter_keeps_nested_rows_placeholder() {
 /// end after Taffy measures the appended turn (pre-layout `reactive_sync` cannot).
 #[test]
 fn message_scroller_nested_rows_island_auto_scrolls_on_append() {
+    run_nested_rows_append("jump");
+}
+
+#[test]
+fn message_scroller_nested_rows_append_smoothly_keeps_following_until_settled() {
+    run_nested_rows_append("smooth");
+}
+
+fn run_nested_rows_append(behavior: &'static str) {
     use crate::app::reactive::switch_reactive;
     use crate::core::reactivity::isolate_reads;
     use crate::utils::children_none_if_vacuous;
@@ -3719,6 +3729,7 @@ fn message_scroller_nested_rows_island_auto_scrolls_on_append() {
                                 .child(
                                     message_scroller().h("100%").child(
                                         message_scroller_viewport()
+                                            .scroll_behavior(behavior)
                                             .child(message_scroller_content().child(rows)),
                                     ),
                                 )
@@ -3777,14 +3788,25 @@ fn message_scroller_nested_rows_island_auto_scrolls_on_append() {
         // jump updates the offset signal but this frame still paints the old edge —
         // Gallery send then never redraws because `request_redraw` fails while AppState
         // is borrowed.
-        let result = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
-        let sy = use_signal(&scroll_offset_y_signal_key(viewport), || 0.0_f32).peek();
+        let mut result = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+        let offset = use_signal(&scroll_offset_y_signal_key(viewport), || 0.0_f32);
         let max_y = result
             .scroll_metrics
             .iter()
             .find(|(id, ..)| id == viewport)
             .map(|(_, _, max_scroll, _)| max_scroll[1])
             .unwrap_or(0.0);
+        if behavior == "smooth" {
+            let target = use_signal(&crate::core::scroll_viewport::scroll_target_y_signal_key(viewport), || 0.0_f32).peek();
+            assert_eq!(offset.peek(), sy_before);
+            assert!((target - max_y).abs() < 0.5 && target > sy_before + 4.0);
+            offset.set_silent((sy_before + target) * 0.5);
+            sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+            assert!(use_signal("ms-append-test:following", || false).peek());
+            offset.set_silent(target);
+            result = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0, -1.0]);
+        }
+        let sy = offset.peek();
         assert!(
             sy > sy_before + 4.0,
             "auto-scroll on append must move toward the new end (before={sy_before} after={sy} max={max_y})"
@@ -3879,6 +3901,7 @@ fn message_scroller_send_follows_when_following_flag_was_released() {
                                         .h("100%")
                                         .child(
                                             message_scroller_viewport()
+                                                .scroll_behavior("jump")
                                                 .child(message_scroller_content().child(rows)),
                                         )
                                         .child(message_scroller_button().direction("end")),
@@ -4032,6 +4055,7 @@ fn message_scroller_stick_to_end_jumps_from_mid_list() {
                                 .child(
                                     message_scroller().h("100%").child(
                                         message_scroller_viewport()
+                                            .scroll_behavior("jump")
                                             .child(message_scroller_content().child(rows)),
                                     ),
                                 )

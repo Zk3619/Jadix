@@ -396,11 +396,11 @@ fn hoisted_portal_paint_box(el: &Element) -> Option<[f32; 4]> {
     Some(b)
 }
 
-fn subtree_has_drag_overlay(el: &Element) -> bool {
-    if el.attrs.contains_key(crate::utils::drag::ATTR_DRAG_OVERLAY) {
+fn subtree_has_live_drag_content(el: &Element) -> bool {
+    if crate::utils::drag::runtime::keeps_collect_live(el) {
         return true;
     }
-    el.children.iter().any(subtree_has_drag_overlay)
+    el.children.iter().any(subtree_has_live_drag_content)
 }
 
 /// Lift `jadix_portal=1` subtrees onto their mount host (Solid `<Portal mount={…}>`).
@@ -430,9 +430,7 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
     // Drag ghost follow is Point paint chrome: pin Taffy at grab origin before
     // layout so collect can patch `abs` the same frame. Live left/top churn
     // disabled collect-skip and lagged the Gallery ghost.
-    if crate::utils::drag::is_active() {
-        crate::utils::drag::overlay::sync_overlay_ghost_insets(root);
-    }
+    crate::utils::drag::runtime::sync_tree(root);
     crate::utils::anchored_overlay::sync_point_overlay_drag_insets(root);
     let dirty = ensure_portal_layer(root);
 
@@ -475,7 +473,7 @@ pub fn hoist_portal_subtrees(root: &mut Element) -> usize {
             // Drag overlay ghosts are paint clones: grafting last frame's chip onto a
             // closed empty host leaves a frozen ghost on the portal layer.
             if let Some(mut prev_node) = prev.remove(&key) {
-                if !subtree_has_drag_overlay(&node) && !subtree_has_drag_overlay(&prev_node) {
+                if !subtree_has_live_drag_content(&node) && !subtree_has_live_drag_content(&prev_node) {
                     crate::utils::keyed_overlay::adopt_keyed_overlay(&mut node, &mut prev_node);
                 }
             }
@@ -786,7 +784,7 @@ fn hoist_nested_portals_from_hoisted(
         let key = portal_key_of(&node);
         wanted.insert(key.clone());
         if let Some(mut prev) = take_hoisted_by_key(root, &key) {
-            if !subtree_has_drag_overlay(&node) && !subtree_has_drag_overlay(&prev) {
+            if !subtree_has_live_drag_content(&node) && !subtree_has_live_drag_content(&prev) {
                 crate::utils::keyed_overlay::adopt_keyed_overlay(&mut node, &mut prev);
             }
         }
@@ -2418,7 +2416,7 @@ fn record_node_paint(
     } else {
         scroll_acc
     };
-    let b = crate::components::button_group::group_paint_bounds(
+    let b = crate::core::geometry::paint_bounds(
         el,
         crate::core::tree::visual_paint_aabb(el, paint_scroll),
     );
@@ -2754,8 +2752,14 @@ pub struct LayoutTree {
     pub(crate) full_rebuilds: u32,
     /// Frame-local collect output; `std::mem::take` hands buffers to [`RenderResult`].
     collect_scratch: CollectScratch,
+    painted_caret_blink_requested: bool,
+    geometry_motion_requested: bool,
+    text_settle_requested: bool,
+    pub(crate) deadlines: crate::authoring::deadline::WindowDeadlines,
+    pub(crate) tree_retirements: crate::authoring::presentation::Retirements,
     /// Cross-frame fingerprint DL for paint-only sibling skip.
     collect_skip: crate::layout::collect_cache::CollectSkipState,
+    opacity_groups_enabled: bool,
     layout_motion_registry: crate::motion::LayoutRegistry,
     #[cfg(test)]
     reused_culled_tails: std::cell::Cell<usize>,
@@ -2778,6 +2782,35 @@ pub struct LayoutTreeStats {
 }
 
 impl LayoutTree {
+    pub(crate) fn begin_presentation_frame(&mut self) {
+        self.take_caret_blink_request();
+        self.deadlines.begin_frame();
+    }
+
+    /// Request the shared caret clock for a custom painted caret in this window's frame.
+    /// Call from the node's presentation or reactive synchronizer.
+    pub fn request_caret_blink(&mut self) {
+        self.painted_caret_blink_requested = true;
+    }
+
+    /// Keep exact text measurement during a node's geometry animation.
+    pub fn request_geometry_motion(&mut self) { self.geometry_motion_requested = true; }
+
+    /// Run a final text wrap measurement after a node's geometry animation settles.
+    pub fn request_text_settle(&mut self) { self.text_settle_requested = true; }
+
+    pub(crate) fn take_geometry_motion(&mut self) -> bool {
+        std::mem::take(&mut self.geometry_motion_requested)
+    }
+
+    pub(crate) fn take_text_settle(&mut self) -> bool {
+        std::mem::take(&mut self.text_settle_requested)
+    }
+
+    pub(crate) fn take_caret_blink_request(&mut self) -> bool {
+        std::mem::take(&mut self.painted_caret_blink_requested)
+    }
+
     pub(crate) fn scroll_paint_axis_offset(
         &self,
         element: &Element,
@@ -3266,6 +3299,8 @@ struct CollectPainted {
     filter_capture: bool,
     filter_cap_inst0: usize,
     filter_cap_tex0: usize,
+    opacity_layer: Option<f32>,
+    opacity_cap_text0: usize,
     /// Dialog `__modal_zoom` CSS scale: capture at rest, blit scaled. `None` when idle.
     scale_layer: Option<[f32; 2]>,
     scale_cap_inst0: usize,
@@ -3312,7 +3347,7 @@ struct CollectWalk {
     parent_scales: bool,
     parent_rotates: bool,
     parent_translates: bool,
-    is_carousel_track: bool,
+    children_unculled: bool,
     skip_scroll_band_cull: bool,
     reuse_culled_extent: Option<[f32; 2]>,
     any_stacking: bool,
@@ -3513,7 +3548,13 @@ impl LayoutTree {
             #[cfg(test)]
             full_rebuilds: 0,
             collect_scratch: CollectScratch::default(),
+            painted_caret_blink_requested: false,
+            geometry_motion_requested: false,
+            text_settle_requested: false,
+            deadlines: crate::authoring::deadline::WindowDeadlines::default(),
+            tree_retirements: crate::authoring::presentation::Retirements::default(),
             collect_skip: crate::layout::collect_cache::CollectSkipState::default(),
+            opacity_groups_enabled: crate::core::tree::opacity_groups_enabled(),
             layout_motion_registry: crate::motion::LayoutRegistry::default(),
             #[cfg(test)]
             reused_culled_tails: std::cell::Cell::new(0),
@@ -4104,7 +4145,7 @@ impl LayoutTree {
         if portal_dirty > 0 || attached {
             self.sync_taffy_children_from_elements(root);
         }
-        portal_dirty
+        portal_dirty + usize::from(attached)
     }
 
     fn portal_layer_available_space(
@@ -4533,14 +4574,25 @@ impl LayoutTree {
         // paints the new live edge. AppState used to run this after collect; the offset
         // signal moved but paint stayed on the old offset, and `request_redraw` is a
         // no-op while `AppState` is mutably borrowed for render.
-        crate::components::message_scroller::sync_message_scroller_follow_after_layout(root, self);
+        let presentation_viewport = self.viewport;
+        for phase in [
+            crate::authoring::presentation::Phase::AfterLayout,
+            crate::authoring::presentation::Phase::AfterLayoutDependents,
+        ] {
+            let _ = crate::authoring::presentation::sync_tree(
+                root,
+                self,
+                crate::authoring::presentation::Context {
+                    phase,
+                    viewport: presentation_viewport,
+                width_budget: None,
+},
+            );
+        }
         // Wheel / autoscroll chase offset after the vsync drag `tick`. Hidden
         // clip shells must follow the live parent before this collect, or the
         // ghost paints in the pre-scroll restrict box (突破父容器).
-        if crate::utils::drag::is_active() {
-            crate::utils::drag::session::resync_overlay_follow_after_layout(root);
-            crate::utils::drag::overlay::sync_overlay_ghost_insets(root);
-        }
+        crate::utils::drag::runtime::after_layout(root);
 
         let t_collect_begin = Instant::now();
         self.layout_motion_registry.measure(root, &self.taffy);
@@ -4549,6 +4601,12 @@ impl LayoutTree {
         {
             crate::app::devtools::begin_highlight_collect();
             crate::app::devtools::set_highlight_collect_root(root);
+        }
+        let opacity_groups_enabled = crate::core::tree::opacity_groups_enabled();
+        if self.opacity_groups_enabled != opacity_groups_enabled {
+            self.opacity_groups_enabled = opacity_groups_enabled;
+            self.collect_skip.invalidate();
+            crate::core::tree::walk_elements_mut(root, |element| element.collect_paint_hash = 0);
         }
         let mut skip = std::mem::take(&mut self.collect_skip);
         skip.begin_frame();
@@ -4611,21 +4669,23 @@ impl LayoutTree {
             overlay_split.paint_op_start = paint_rec.ops.len();
         }
 
-        if crate::utils::drag::debug_drag_hits_enabled() {
-            let frames = crate::utils::drag::debug_frames_for_tree(root);
+        {
+            let frames = crate::utils::drag::runtime::debug_rects_with_clips(root);
             if !frames.is_empty() {
                 paint_rec.split_here();
                 let i0 = scratch.instances.len();
-                for frame in &frames {
-                    let stroke = frame.stroke();
-                    let style = if stroke.dashed { 3.0 } else { 1.0 };
+                for (frame, clip) in &frames {
+                    let style = if frame.dashed { 3.0 } else { 1.0 };
+                    let (clip_pos, clip_size) = clip
+                        .map(|clip| ([clip[0], clip[1]], [clip[2], clip[3]]))
+                        .unwrap_or(([0.0, 0.0], InstanceInput::NO_CLIP_SIZE));
                     scratch.instances.push(InstanceInput {
                         rect_pos: [frame.rect[0], frame.rect[1]],
                         rect_size: [frame.rect[2], frame.rect[3]],
-                        color: stroke.fill,
-                        border_color: stroke.border,
+                        color: frame.fill,
+                        border_color: frame.border,
                         radii: [0.0; 4],
-                        border_width: stroke.width,
+                        border_width: frame.width,
                         shadow_color: [0.0, 0.0, 0.0, 0.0],
                         shadow_offset: [0.0, 0.0],
                         shadow_blur: 0.0,
@@ -4633,8 +4693,8 @@ impl LayoutTree {
                         shadow_inset: 0.0,
                         backdrop_fade: 0.0,
                         transform: crate::style::MAT2D_IDENTITY,
-                        clip_pos: [0.0, 0.0],
-                        clip_size: InstanceInput::NO_CLIP_SIZE,
+                        clip_pos,
+                        clip_size,
                         border_extra: InstanceInput::pack_border_extra(style, 0.0, 0.0),
                         backdrop_blur: 0.0,
                         glass: [0.0; 4],
@@ -5740,21 +5800,12 @@ impl LayoutTree {
         };
 
         let overlay_scale = crate::core::tree::paint_scale_with_ancestor(element, ancestor_scale);
-        let (lay_w, lay_h) = if crate::utils::drag::is_active()
-            && element.attrs.contains_key(crate::utils::drag::ATTR_DRAG_OVERLAY_CLIP)
-        {
-            (lay_w / overlay_scale[0], lay_h / overlay_scale[1])
-        } else {
-            (lay_w, lay_h)
-        };
-        let overlay_origin = if crate::utils::drag::is_active() {
-            if let Some(origin) =
-                crate::utils::drag::overlay::adjust_overlay_collect_origin(element, [lay_w, lay_h])
-            {
-                Some(origin)
-            } else {
-                None
-            }
+        let drag_geometry = crate::utils::drag::runtime::collect_geometry(
+            element, [lay_w, lay_h], overlay_scale,
+        );
+        let [lay_w, lay_h] = drag_geometry.size;
+        let overlay_origin = if crate::utils::drag::runtime::is_active() {
+            drag_geometry.origin
         } else if crate::utils::anchored_overlay::is_floating_panel_dragging() {
             crate::utils::anchored_overlay::adjust_point_overlay_collect_origin(element)
         } else {
@@ -5777,6 +5828,13 @@ impl LayoutTree {
 
         let zoom_layer_scale = modal_zoom_compositor_scale(element);
         let fade = (ancestor_opacity * element.style.opacity).clamp(0.0, 1.0);
+        let opacity_layer = (fade > 0.0 && fade < 1.0
+            && crate::core::tree::opacity_groups_enabled()
+            && element.attrs.get(crate::core::tree::ATTR_OPACITY_GROUP).map(String::as_str)
+                == Some("1")
+            && zoom_layer_scale.is_none()
+            && element.style.filter.as_ref().is_none_or(|filters| filters.is_empty()))
+            .then_some(fade);
         // Own chrome (rounded border / shadow) paints with the fade. Capture children
         // stay opaque; fade lives on the inner blit so the RT is content-stable.
         // Auto scrollbar cubic is paint-only on this node — do not fold it into
@@ -5784,6 +5842,7 @@ impl LayoutTree {
         let bar_alpha = crate::core::scrollbar::auto_scrollbar_live_paint_alpha(element);
         let opacity = match bar_alpha {
             Some(v) => (fade * v).clamp(0.0, 1.0),
+            None if opacity_layer.is_some() => 1.0,
             None => fade,
         };
         // Stamped Inspector highlight rects are already in paint/visual space — never
@@ -5862,16 +5921,17 @@ impl LayoutTree {
         let paint_sy = (ancestor_scale[1] * scale_y).clamp(0.01, 8.0);
         let paint_scale = paint_sx.min(paint_sy);
         let paint_radii = element.style.radii.map(|radius| {
-            if radius < 0.0 { radius } else { radius * paint_scale }
+            if radius < 0.0 {
+                radius
+            } else {
+                radius * paint_scale
+            }
         });
         // OTP slots widen this box by 1px toward the previous cell. Joined
         // ButtonGroup leaves it on the layout box and drops the shared stroke
         // in the shader instead of sliding the rect.
         let [chrome_x, chrome_y, chrome_w, chrome_h] =
-            crate::components::button_group::group_paint_bounds(
-                element,
-                [render_x, render_y, lay_w, lay_h],
-            );
+            crate::core::geometry::paint_bounds(element, [render_x, render_y, lay_w, lay_h]);
         // Bake CSS independent `scale` into the instance rect about `transform-origin`
         // so placement matches `visual_paint_aabb` (hover / leave). Center origin is
         // the old `(size-scaled)*0.5` inset. Passing `style.scale` again in the SDF
@@ -6056,25 +6116,18 @@ impl LayoutTree {
         // Hidden DragOverlay: portal + escape drops page overflow. Re-AND the
         // restrict target's ancestor clip so rotation cannot paint in the header
         // or the padding beside the dashed parent after the page scrolls.
-        let (clip, dest_clip, overflow_clip_poly) = if element
-            .attrs
-            .get(crate::utils::drag::ATTR_DRAG_OVERLAY_CLIP)
-            .is_some()
+        let (clip, dest_clip, overflow_clip_poly) = if let Some(ancestor) =
+            crate::utils::drag::runtime::ancestor_clip(element)
+                .filter(|bounds| bounds[2] > 0.5 && bounds[3] > 0.5)
         {
-            if let Some(anc) = crate::utils::drag::session::peek_restrict_ancestor_clip()
-                .filter(|b| b[2] > 0.5 && b[3] > 0.5)
-            {
-                (
-                    Some(intersect_rect(clip, anc)),
-                    Some(intersect_rect(dest_clip, anc)),
-                    crate::style::GpuClipPoly::and_layers(
-                        overflow_clip_poly,
-                        crate::style::GpuClipPoly::from_axis_rect(anc),
-                    ),
-                )
-            } else {
-                (clip, dest_clip, overflow_clip_poly)
-            }
+            (
+                Some(intersect_rect(clip, ancestor)),
+                Some(intersect_rect(dest_clip, ancestor)),
+                crate::style::GpuClipPoly::and_layers(
+                    overflow_clip_poly,
+                    crate::style::GpuClipPoly::from_axis_rect(ancestor),
+                ),
+            )
         } else {
             (clip, dest_clip, overflow_clip_poly)
         };
@@ -6240,12 +6293,17 @@ impl LayoutTree {
         // Filter SourceGraphic includes this node's own paint. Zoom capture must
         // **not**: own rounded chrome stays live SDF (the blit dest was the extra
         // rectangular stroke). Record zoom indices after own paint.
-        let filter_cap_inst0 = if filter_capture { instances.len() } else { 0 };
-        let filter_cap_tex0 = if filter_capture {
+        let filter_cap_inst0 = if filter_capture || opacity_layer.is_some() {
+            instances.len()
+        } else {
+            0
+        };
+        let filter_cap_tex0 = if filter_capture || opacity_layer.is_some() {
             textured_draws.len()
         } else {
             0
         };
+        let opacity_cap_text0 = text_nodes.len();
         // Filter SourceGraphic is the unclipped subtree (plus this node's own overflow).
         // Ancestor overflow clips the *output* after the filter runs.
         let paint_parent_clip = if filter_capture { None } else { parent_clip };
@@ -6278,7 +6336,7 @@ impl LayoutTree {
         // The jump chip is a page-stack occluder on a wrapping line. Entrance
         // opacity fades the label and icon. Folding it into this plate lets
         // the line show through the chip.
-        let plate_opacity = jump_chip_plate_opacity(element, paint_bg, opacity);
+        let plate_opacity = fill_paint_opacity(element, paint_bg, opacity);
         // ShadCN `border-transparent` keeps a 1px width for layout. Width-only
         // `has_border` still pushed an SDF stroke (gallery Item outline→default
         // left a 1px ring and darkened title AA against that instance).
@@ -6314,8 +6372,15 @@ impl LayoutTree {
         let has_shadow = (!flow_item || flow_focus) && element.style.shadow_color[3] > 0.0;
         // Page-stack `backdrop-filter` is sampled on this element's SDF instance
         // (modal underlays keep the fullscreen blit and must not double-sample).
+        let viewport_underlay = element.attrs
+            .get(ATTR_PORTAL_KEY)
+            .is_some_and(|key| key.starts_with("underlay:"))
+            && !element.attrs.contains_key(ATTR_HOISTED_MOUNT);
         let instance_backdrop_blur = if !flow_item
-            && (overlay_split.page_stack_depth > 0 || element.style.glass.is_some())
+            && !viewport_underlay
+            && (overlay_split.page_stack_depth > 0
+                || overlay_split.marked
+                || element.style.glass.is_some())
         {
             element.style.backdrop_blur.max(0.0)
         } else {
@@ -6699,24 +6764,18 @@ impl LayoutTree {
             }
         }
 
-        // Tabs line variant: paint-only underline / side bar (no absolute child node).
-        if let Some(ind) = element
-            .attrs
-            .get("jadix_tabs_line_indicator")
-            .map(|s| s.as_str())
-        {
-            let line_w = 2.0_f32;
-            let color = crate::style::parse_color("foreground");
-            let (pos, size) = match ind {
-                "h" if render_rect[2] > 0.0 && render_rect[3] > 0.0 => (
+        if let Some(edge) = element.paint_edge.filter(|_| render_rect[2] > 0.0 && render_rect[3] > 0.0) {
+            let line_w = edge.width.max(0.0);
+            let color = edge.color;
+            let (pos, size) = match edge.edge {
+                crate::authoring::presentation::PaintEdge::Bottom => (
                     [render_rect[0], render_rect[1] + render_rect[3] - line_w],
                     [render_rect[2], line_w],
                 ),
-                "v" if render_rect[2] > 0.0 && render_rect[3] > 0.0 => (
+                crate::authoring::presentation::PaintEdge::Right => (
                     [render_rect[0] + render_rect[2] - line_w, render_rect[1]],
                     [line_w, render_rect[3]],
                 ),
-                _ => ([0.0, 0.0], [0.0, 0.0]),
             };
             if size[0] > 0.0 && size[1] > 0.0 {
                 let bar_rect = [pos[0], pos[1], size[0], size[1]];
@@ -6935,10 +6994,7 @@ impl LayoutTree {
             } else {
                 text_x0 - text_style.scroll_x.max(0.0) * text_scale
             };
-            #[cfg(feature = "lucide-animated")]
-            let is_animated_icon = element.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON);
-            #[cfg(not(feature = "lucide-animated"))]
-            let is_animated_icon = false;
+            let is_animated_icon = element.icon_playback.is_some();
             #[cfg(feature = "svg")]
             let is_morph_icon = element.attrs.contains_key(crate::utils::ATTR_MORPH_ICON);
             #[cfg(not(feature = "svg"))]
@@ -6974,14 +7030,13 @@ impl LayoutTree {
                 // Recomputing origin wrap on `side` and copying tx/ty made the icon orbit a corner.
                 let icon_xf = transform;
                 if is_animated_icon {
-                    #[cfg(feature = "lucide-animated")]
-                    if let Some((tex_key, _)) =
-                        crate::utils::lucide_animated::ensure_animated_icon_texture(
+                    if let Some((tex_key, _)) = element.icon_playback.and_then(|playback|
+                        (playback.texture)(
                             element,
                             side,
                             icon_raster_color,
                             2.0,
-                        )
+                        ))
                     {
                         textured_draws.push(
                             crate::renderer::TexturedDraw {
@@ -7067,7 +7122,7 @@ impl LayoutTree {
                             .filter(|n| !n.is_empty()),
                         element.text.as_deref(),
                     ) {
-                        if crate::utils::lucide_svg_inner(icon_name).is_some() {
+                        if crate::utils::icon_provider::resolve_icon_svg(icon_name).is_some() {
                             let side = (text_style.size_resolved() * text_scale).max(1.0);
                             if let Some((tex_key, _)) =
                                 crate::utils::icon_texture::ensure_lucide_icon_texture(
@@ -7586,7 +7641,9 @@ impl LayoutTree {
             abs_y,
             lay_w,
             lay_h,
-            opacity: if zoom_layer_scale.is_some() {
+            opacity: if opacity_layer.is_some() {
+                1.0
+            } else if zoom_layer_scale.is_some() {
                 ancestor_opacity.clamp(0.0, 1.0)
             } else {
                 fade
@@ -7607,6 +7664,8 @@ impl LayoutTree {
             filter_capture,
             filter_cap_inst0,
             filter_cap_tex0,
+            opacity_layer,
+            opacity_cap_text0,
             scale_layer: zoom_layer_scale,
             scale_cap_inst0,
             scale_cap_tex0,
@@ -7705,7 +7764,14 @@ impl LayoutTree {
         } else {
             0
         };
-        let (cap_inst0, cap_tex0, cap_text0, cap_children) = if painted.filter_capture {
+        let (cap_inst0, cap_tex0, cap_text0, cap_children) = if painted.opacity_layer.is_some() {
+            (
+                painted.filter_cap_inst0,
+                painted.filter_cap_tex0,
+                painted.opacity_cap_text0,
+                true,
+            )
+        } else if painted.filter_capture {
             (painted.filter_cap_inst0, painted.filter_cap_tex0, 0, true)
         } else if painted.scale_layer.is_some() {
             (
@@ -7798,8 +7864,7 @@ impl LayoutTree {
             parent_scales,
             parent_rotates,
             parent_translates,
-            is_carousel_track: element.attrs.get("data-carousel-track").map(|s| s.as_str())
-                == Some("1"),
+            children_unculled: element.paint_children_unculled,
             skip_scroll_band_cull: element_authored_block_is_intrinsic(element),
             reuse_culled_extent: None,
             any_stacking,
@@ -7842,7 +7907,11 @@ impl LayoutTree {
             text_start: text_nodes.len(),
             chrome_start: input_chrome_instances.len(),
             paint_op_start: paint_ops_len,
-            backdrop_blur: if band_root.style.glass.is_some() {
+            backdrop_blur: if band_root.style.glass.is_some()
+                || (is_body_portal_layer
+                    && !band_root.attrs.get(ATTR_PORTAL_KEY)
+                        .is_some_and(|key| key.starts_with("underlay:")))
+            {
                 0.0
             } else {
                 band_root.style.backdrop_blur.max(0.0)
@@ -7987,7 +8056,7 @@ impl LayoutTree {
             if _scroll_only
                 && !walk.skip_scroll_band_cull
                 && !walk.parent_translates
-                && !walk.is_carousel_track
+                && !walk.children_unculled
             {
                 if let Some(clip_rect) = walk.clip {
                     if !element.children[i].style.position_fixed
@@ -8020,6 +8089,8 @@ impl LayoutTree {
                                         crate::layout::collect_cache::stamped_subtree_holds_live_text_edit(
                                             &element.children[i],
                                             focused.as_str(),
+                                        ) || crate::layout::collect_cache::stamped_subtree_holds_live_paint(
+                                            &element.children[i],
                                         )
                                     }
                                     ScrollSiblingBandAction::StopAfter => {
@@ -8027,7 +8098,7 @@ impl LayoutTree {
                                             crate::layout::collect_cache::stamped_subtree_holds_live_text_edit(
                                                 c,
                                                 focused.as_str(),
-                                            )
+                                            ) || crate::layout::collect_cache::stamped_subtree_holds_live_paint(c)
                                         })
                                     }
                                     ScrollSiblingBandAction::Visit => false,
@@ -8182,6 +8253,7 @@ impl LayoutTree {
             visible_rect,
             transform,
             filter_capture,
+            opacity_layer,
             scale_layer,
             layout_border,
             layout_size,
@@ -8209,7 +8281,11 @@ impl LayoutTree {
             } else {
                 0.0
             };
-            let (capture_bounds, draw_rect) = if filter_capture {
+            let (capture_bounds, draw_rect) = if opacity_layer.is_some() {
+                let pad = paint_outset_pad(&element.style, render_rect[2], render_rect[3]);
+                let bounds = inflate_rect(render_rect, pad, pad);
+                (bounds, bounds)
+            } else if filter_capture {
                 let inflated = inflate_rect(render_rect, filter_outset, filter_outset);
                 let b = [
                     inflated[0],
@@ -8251,6 +8327,28 @@ impl LayoutTree {
                     clip_polys,
                     &paint_rec.ops,
                 ));
+            } else if let Some(fade) = opacity_layer {
+                let child_insts = instances.drain(cap_inst0..).collect();
+                let child_tex = textured_draws.drain(cap_tex0..).collect();
+                let child_text = text_nodes.drain(cap_text0..).collect();
+                clip_polys.truncate(cap_inst0);
+                paint_rec.truncate_from(cap_inst0, cap_tex0);
+                truncate_node_paint_ranges(crate::layout::collect_cache::DlCursor::capture(
+                    instances,
+                    textured_draws,
+                    text_nodes,
+                    input_chrome_instances,
+                    clip_polys,
+                    &paint_rec.ops,
+                ));
+                let key = crate::renderer::queue_zoom_layer_wrap(
+                    capture_bounds, child_insts, child_tex, child_text,
+                );
+                if let Some(draw) = TexturedDraw::clipped(draw_rect, parent_clip, key, fade) {
+                    let index = textured_draws.len();
+                    textured_draws.push(draw);
+                    paint_rec.push_textured(index, 1);
+                }
             } else if let Some([sx, sy]) = scale_layer {
                 // Hairline SDF (Select trigger border, inner cards) stays live, scaled
                 // about the card center. A 1px stroke in the blit dest goes thick/dark
@@ -8601,13 +8699,9 @@ fn scrollbar_track_overlay_abs(
     (track_rect, thumb_rect)
 }
 
-/// Opaque jump-chip plate. Label and icon still use element opacity.
-fn jump_chip_plate_opacity(element: &Element, paint_bg: [f32; 4], opacity: f32) -> f32 {
-    let jump = element
-        .attrs
-        .get("data-slot")
-        .is_some_and(|slot| slot == "message-scroller-button");
-    if jump && paint_bg[3] >= 0.99 && opacity >= 0.01 {
+/// Opaque authored fill. Label and icon still use element opacity.
+fn fill_paint_opacity(element: &Element, paint_bg: [f32; 4], opacity: f32) -> f32 {
+    if element.paint_opaque_fill && paint_bg[3] >= 0.99 && opacity >= 0.01 {
         1.0
     } else {
         opacity
@@ -10822,6 +10916,27 @@ mod portal_hoist_tests {
     }
 
     #[test]
+    fn hoisted_portal_new_children_are_laid_out_during_scroll_only_collect() {
+        let panel = Element::new().template_id("retained-perf-panel").absolute()
+            .right(12.0).bottom(12.0).flex_col().gap(4.0)
+            .child(Element::new().w(80.0).h(24.0));
+        let mut root = Element::new().w(300.0).h(200.0).child(
+            crate::utils::viewport_portal_stage("retained-perf", panel, 1000));
+        let mut tree = LayoutTree::new();
+        tree.build_and_layout(&mut root, 300.0, 200.0, [-1.0; 2]);
+        let panel = crate::core::tree::find_in_tree_mut(&mut root,
+            |element| element.template_id.as_deref() == Some("retained-perf-panel")).unwrap();
+        panel.children.push(Element::new().w(140.0).h(40.0));
+        tree.build_and_layout_fast(&mut root, 300.0, 200.0, [-1.0; 2], true, true);
+        let panel = crate::core::tree::find_in_tree(&root,
+            |element| element.template_id.as_deref() == Some("retained-perf-panel")).unwrap();
+        let bounds = panel.viewport_layout_bounds();
+        assert_eq!(bounds, [148.0, 120.0, 140.0, 68.0]);
+        assert_eq!(panel.children[1].layout_bounds[2..], [140.0, 40.0]);
+        assert_eq!(tree.last_compute_root, LayoutTree::portal_layer_layout_node(&root));
+    }
+
+    #[test]
     fn portal_content_survives_second_hoist_pass() {
         // Solid keep-alive: after lift, source keeps a slot; next hoist must retain the panel.
         let mut panel = Element::new().bg([1.0, 1.0, 1.0, 1.0]).w(160.0).h(80.0);
@@ -11232,6 +11347,28 @@ mod portal_hoist_tests {
                     start + count <= overlay_i0,
                     "page Rects must not swallow overlay panel fills (would paint page glyphs on the popover); op={start}+{count} overlay_i0={overlay_i0}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn portal_panel_frost_stays_local_while_modal_underlay_blurs_the_viewport() {
+        for underlay in [false, true] {
+            let panel = if underlay {
+                crate::primitives::overlay::overlay(1000).backdrop_blur(20.0).into()
+            } else {
+                let mut panel = Element::new().absolute().left(40.0).top(40.0)
+                    .w(120.0).h(60.0).bg([0.2, 0.2, 0.2, 0.2]).backdrop_blur(20.0);
+                panel.set_attr(ATTR_PORTAL_KEY, "panel:local-frost");
+                panel_block_clicks(panel, 1000)
+            };
+            let mut root = Element::new().w(400.0).h(300.0).child(panel);
+            hoist_portal_subtrees(&mut root);
+            let mut tree = LayoutTree::new();
+            for _ in 0..2 {
+                let result = tree.build_and_layout(&mut root, 400.0, 300.0, [-1.0; 2]);
+                assert_eq!(result.overlay_split.bands.iter().any(|band| band.backdrop_blur > 0.5), underlay);
+                assert_eq!(result.instances.iter().any(|instance| instance.backdrop_blur > 0.5), !underlay);
             }
         }
     }
@@ -12739,9 +12876,10 @@ mod portal_hoist_tests {
     /// Gallery Dialog shell at enter: live rounded chrome in the main pass;
     /// 「行 1–6」 stay at rest inside the inner capture (no per-leaf crawl).
     #[test]
+    #[cfg(feature = "components")]
     fn modal_zoom_dialog_enter_captures_rows_at_rest() {
         use crate::app::portal_overlay::clear_overlay_stack;
-        use crate::components::base::SlotChrome;
+        use crate::authoring::SlotChrome;
         use crate::components::dialog::dialog_shell_frame;
         use crate::components::scroll_area::scroll_area;
         use crate::core::reactivity::{create_root, Signal};
@@ -13913,5 +14051,23 @@ mod cached_hit_geometry_tests {
             );
         }
         assert_eq!(cached, reference);
+    }
+}
+
+#[cfg(test)]
+mod painted_caret_clock_tests {
+    use super::LayoutTree;
+
+    #[test]
+    fn requests_are_frame_local_and_window_local() {
+        let mut primary = LayoutTree::new();
+        let mut secondary = LayoutTree::new();
+        primary.request_caret_blink();
+        assert!(!secondary.take_caret_blink_request());
+        assert!(primary.take_caret_blink_request());
+        assert!(!primary.take_caret_blink_request());
+        secondary.request_caret_blink();
+        assert!(!primary.take_caret_blink_request());
+        assert!(secondary.take_caret_blink_request());
     }
 }

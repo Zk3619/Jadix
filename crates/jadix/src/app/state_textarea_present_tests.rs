@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 use super::*;
 
 #[test]
@@ -240,19 +241,19 @@ fn check_focus_ring(
     }
     focus.set(textarea_focus_id("native-ta-off"));
     use_signal(
-        &crate::components::input::input_caret_signal_key("native-ta-off"),
+        &crate::utils::text_field::input_caret_signal_key("native-ta-off"),
         || None::<usize>,
     )
     .set(Some(0));
     frame(&mut s);
     let off_len = use_signal("native-ta-off", String::new).peek().len();
     use_signal(
-        &crate::components::input::input_caret_signal_key("native-ta-off"),
+        &crate::utils::text_field::input_caret_signal_key("native-ta-off"),
         || None::<usize>,
     )
     .set(Some(off_len));
     use_signal(
-        &crate::components::input::input_selection_signal_key("native-ta-off"),
+        &crate::utils::text_field::input_selection_signal_key("native-ta-off"),
         || None::<(usize, usize)>,
     )
     .set(Some((0, off_len)));
@@ -271,7 +272,7 @@ fn check_focus_ring(
     let scale = s.ui_scale();
     for (name, caret) in [("pan-end", off_len), ("pan-start", 0)] {
         use_signal(
-            &crate::components::input::input_caret_signal_key("native-ta-off"),
+            &crate::utils::text_field::input_caret_signal_key("native-ta-off"),
             || None::<usize>,
         )
         .set(Some(caret));
@@ -290,7 +291,7 @@ fn check_focus_ring(
     focus.set(textarea_focus_id("native-ta-word"));
     assert_eq!(
         use_signal(
-            &crate::components::input::input_selection_signal_key("native-ta-off"),
+            &crate::utils::text_field::input_selection_signal_key("native-ta-off"),
             || None::<(usize, usize)>
         )
         .peek(),
@@ -332,7 +333,7 @@ fn check_focus_ring(
         "focus transfer changed retained text pixels"
     );
     let selection = use_signal(
-        &crate::components::input::input_selection_signal_key("native-ta-word"),
+        &crate::utils::text_field::input_selection_signal_key("native-ta-word"),
         || None::<(usize, usize)>,
     );
     for (i, range) in [Some((0, 24)), Some((12, 72)), None]
@@ -357,19 +358,19 @@ fn check_focus_ring(
     ] {
         if !multiline {
             use_signal(
-                &crate::components::input::input_value_signal_key(id),
+                &crate::utils::text_field::input_value_signal_key(id),
                 String::new,
             )
             .set("selected overflow text ".repeat(16));
         }
         let fid = crate::utils::text_field::focus_id_for_text_edit(id, multiline);
         let selection = use_signal(
-            &crate::components::input::input_selection_signal_key(id),
+            &crate::utils::text_field::input_selection_signal_key(id),
             || None::<(usize, usize)>,
         );
         focus.set(fid.clone());
         use_signal(
-            &crate::components::input::input_caret_signal_key(id),
+            &crate::utils::text_field::input_caret_signal_key(id),
             || None::<usize>,
         )
         .set(Some(0));
@@ -397,19 +398,19 @@ fn check_focus_ring(
     focus.set(textarea_focus_id("native-ta-char"));
     let char_len = use_signal("native-ta-char", String::new).peek().len();
     use_signal(
-        &crate::components::input::input_selection_signal_key("native-ta-char"),
+        &crate::utils::text_field::input_selection_signal_key("native-ta-char"),
         || None::<(usize, usize)>,
     )
     .set(Some((0, char_len)));
     frame(&mut s);
     focus.set(textarea_focus_id("native-ta-off"));
     use_signal(
-        &crate::components::input::input_caret_signal_key("native-ta-off"),
+        &crate::utils::text_field::input_caret_signal_key("native-ta-off"),
         || None::<usize>,
     )
     .set(Some(off_len));
     use_signal(
-        &crate::components::input::input_selection_signal_key("native-ta-off"),
+        &crate::utils::text_field::input_selection_signal_key("native-ta-off"),
         || None::<(usize, usize)>,
     )
     .set(Some((0, off_len)));
@@ -479,7 +480,7 @@ fn check_focus_ring(
         let fid = crate::utils::text_field::focus_id_for_text_edit(id, multiline);
         focus.set(fid.clone());
         let selection = use_signal(
-            &crate::components::input::input_selection_signal_key(id),
+            &crate::utils::text_field::input_selection_signal_key(id),
             || None::<(usize, usize)>,
         );
         selection.set(Some((0, 24)));
@@ -543,12 +544,12 @@ fn check_focus_ring(
 
     focus.set(textarea_focus_id("native-ta-off"));
     use_signal(
-        &crate::components::input::input_caret_signal_key("native-ta-off"),
+        &crate::utils::text_field::input_caret_signal_key("native-ta-off"),
         || None::<usize>,
     )
     .set(Some(off_len));
     use_signal(
-        &crate::components::input::input_selection_signal_key("native-ta-off"),
+        &crate::utils::text_field::input_selection_signal_key("native-ta-off"),
         || None::<(usize, usize)>,
     )
     .set(Some((0, off_len)));
@@ -579,7 +580,7 @@ fn check_focus_ring(
     for cycle in 0..16 {
         if cycle == 8 {
             use_signal(
-                &crate::components::input::input_caret_signal_key("native-ta-off"),
+                &crate::utils::text_field::input_caret_signal_key("native-ta-off"),
                 || None::<usize>,
             )
             .set(Some(0));
@@ -724,7 +725,7 @@ fn check_focus_ring(
     }
     // Exercise the real drag/release path before hover, without a full redraw.
     use_signal(
-        &crate::components::input::input_selection_signal_key("native-ta-off"),
+        &crate::utils::text_field::input_selection_signal_key("native-ta-off"),
         || None::<(usize, usize)>,
     )
     .set(None);
@@ -758,7 +759,7 @@ fn check_focus_ring(
     assert!(!app.left_button_down);
     assert!(app.input_drag_rest.is_none());
     assert!(use_signal(
-        &crate::components::input::input_selection_signal_key("native-ta-off"),
+        &crate::utils::text_field::input_selection_signal_key("native-ta-off"),
         || None::<(usize, usize)>,
     )
     .peek()

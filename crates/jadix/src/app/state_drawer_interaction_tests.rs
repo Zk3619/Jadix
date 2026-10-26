@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Replay actual modal enter/exit frames and compare cached captures with fresh ones.
 use super::*;
 use crate::core::reactivity::{create_effect, create_root, use_signal};
@@ -111,7 +112,6 @@ fn compare_full(state: &Rc<RefCell<Option<AppState>>>) {
         "Drawer retained rendering differs from full repaint"
     );
 }
-
 fn run_drawer(window: Arc<dyn Window>, direction: crate::components::drawer::DrawerDirection) {
     use crate::app::pointer_events::{dispatch_pointer, hit_path, PointerEvent, PointerKind};
     use crate::components::button::{Button, ButtonProps};

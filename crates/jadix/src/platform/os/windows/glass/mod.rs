@@ -94,8 +94,10 @@ pub fn on_moved(window: &dyn Window) {
 }
 
 #[cfg(feature = "windows-dcomp")]
-pub fn sync_jadix_theme() {
-    dcomp::sync_jadix_theme();
+pub fn sync_jadix_theme(window: &dyn Window) {
+    if let Some(hwnd) = super::window::hwnd(window) {
+        dcomp::refresh(hwnd as isize);
+    }
 }
 
 #[cfg(feature = "windows-dcomp")]

@@ -762,11 +762,19 @@ pub fn progress_circle_svg(
     let d = outer_r * 2.0;
 
     let mut layers = Vec::new();
-    if let Some(track_d) = progress_circle_arc_d(outer_r, outer_r, nr, 1.0) {
-        layers.push((
-            decode_path_d(&track_d),
-            PathStyle::stroke(parse_color("border"), sw),
-        ));
+    if let Some(mut track_d) = progress_circle_arc_d(outer_r, outer_r, outer_r, 1.0) {
+        let inner_r = (outer_r - sw).max(0.0);
+        if inner_r > 0.0 {
+            let inner_top = outer_r - inner_r;
+            let inner_bottom = outer_r + inner_r;
+            track_d.push_str(&format!(
+                " L {outer_r} {inner_top} A {inner_r} {inner_r} 0 1 0 {outer_r} {inner_bottom} A {inner_r} {inner_r} 0 1 0 {outer_r} {inner_top}"
+            ));
+        }
+        track_d.push_str(" Z");
+        let mut track_style = PathStyle::fill(parse_color("border"));
+        track_style.fill_rule = crate::primitives::path::FillRule::EvenOdd;
+        layers.push((decode_path_d(&track_d), track_style));
     }
     if let Some(arc_d) = progress_circle_arc_d(outer_r, outer_r, nr, t) {
         layers.push((
@@ -1261,6 +1269,25 @@ mod tests {
         assert_eq!(ProgressCircleSize::Md.stroke_width(), 6.0);
         assert_eq!(ProgressCircleSize::Xl.radius(), 80.0);
         assert_eq!(ProgressCircleSize::parse("LG"), ProgressCircleSize::Lg);
+    }
+
+    #[test]
+    fn circle_track_is_a_single_alpha_ring_without_a_filled_center() {
+        let leaf = progress_circle_svg(0.0, ProgressCircleSize::Md, None, None, false);
+        let commands = decode_path_d(&leaf.attrs[ATTR_PATH_D]);
+        let pixels = crate::primitives::path::rasterize_layers_rgba(
+            &[(commands, PathStyle::fill([1.0, 1.0, 1.0, 0.25]))],
+            &[], 0.0, 64, 64, 4,
+        );
+        assert_eq!(pixels[(32 * 64 + 32) * 4 + 3], 0, "track must leave the center transparent");
+        let mut alphas = Vec::new();
+        for sample in 0..360 {
+            let angle = sample as f32 * std::f32::consts::TAU / 360.0;
+            let x = (32.0 + 29.0 * angle.cos()).floor() as usize;
+            let y = (32.0 + 29.0 * angle.sin()).floor() as usize;
+            alphas.push(pixels[(y * 64 + x) * 4 + 3]);
+        }
+        assert!(alphas.iter().all(|alpha| (62..=65).contains(alpha)), "nonuniform track alpha: {alphas:?}");
     }
 
     #[test]

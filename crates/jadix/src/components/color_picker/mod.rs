@@ -31,7 +31,6 @@
 
 use std::cell::Cell;
 use std::cell::RefCell;
-use std::collections::HashSet;
 use std::rc::Rc;
 
 use crate::app::pointer_events::EventPhase;
@@ -76,15 +75,10 @@ mod drag;
 mod model;
 pub mod view;
 
-pub(crate) use drag::{
-    clear_color_drag_if_any, drain_color_drag_apply, is_color_dragging, queue_color_drag_apply,
-    snapshot_color_drag_bounds, tick_color_drag_with_bounds,
-};
 pub use model::{
     format_color, hsl_to_rgb, hsv_to_rgb, parse_color_str, rgb_to_hsl, rgb_to_hsv, ColorFormat,
     ColorPickerVariant, Rgba,
 };
-pub(crate) use view::flush_color_picker_textures;
 use view::{build_color_picker_view, follow_fmt_str, follow_hue_into_rgba, ColorPickerRenderProps};
 
 /// HTML `input type="color"` + Reader 式 HSV 面板。
@@ -226,9 +220,8 @@ impl From<ColorPickerBuilder> for Element {
 #[cfg(test)]
 mod tests {
     use super::drag::{
-        apply_color_pointer, begin_color_drag, drain_color_drag_apply, end_color_drag,
-        queue_color_drag_apply, tick_color_drag, tick_color_drag_with_bounds, ColorDrag,
-        ColorDragKind,
+        apply_color_pointer, begin_color_drag, end_color_drag, tick_color_drag,
+        tick_color_drag_with_bounds, ColorDrag, ColorDragKind,
     };
     use super::model::SWATCHES_GITHUB;
     use super::view::{
@@ -732,9 +725,14 @@ mod tests {
                 fmt_sig: Signal::new(ColorFormat::Hex),
                 sv_id: Some("sv-newer-sample".into()),
             });
-            queue_color_drag_apply(20.0, 20.0, None);
-            tick_color_drag_with_bounds(80.0, 70.0, None);
-            drain_color_drag_apply();
+            crate::utils::drag::routing::queue_frame(&Element::new(), 20.0, 20.0);
+            assert!(crate::utils::drag::routing::prepare_move(
+                Some(&Element::new()),
+                80.0,
+                70.0
+            )
+            .dispatch());
+            crate::utils::drag::routing::drain_frame();
             let result = [sat.peek(), val.peek()];
             end_color_drag();
             assert!(
@@ -903,10 +901,9 @@ mod tests {
         drain_deferred_view_remounts();
         assert_eq!(tree.borrow().text.as_deref(), Some("0.000"));
 
-        let live_bounds = Some([0.0, 0.0, 100.0, 100.0]);
         {
             let held = tree.borrow_mut();
-            queue_color_drag_apply(80.0, 20.0, live_bounds);
+            crate::utils::drag::routing::queue_frame(&held, 80.0, 20.0);
             assert_eq!(sat.peek(), 0.0, "queue under borrow must not Signal::set");
             assert_eq!(
                 held.text.as_deref(),
@@ -914,7 +911,7 @@ mod tests {
                 "bind_prop must not patch while AppState is borrowed"
             );
         }
-        drain_color_drag_apply();
+        crate::utils::drag::routing::drain_frame();
         assert!(
             (sat.peek() - 0.8).abs() < 0.02,
             "apply after drop must write sat; got {}",

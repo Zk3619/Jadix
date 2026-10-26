@@ -1,8 +1,25 @@
 use std::ops::{Deref, DerefMut};
+use std::sync::atomic::{AtomicBool, Ordering};
 use taffy::prelude::*;
 use winit::event::KeyEvent;
 
 use crate::core::reactivity::Signal;
+
+pub(crate) const ATTR_OPACITY_GROUP: &str = "jadix_opacity_group";
+static OPACITY_GROUPS_ENABLED: AtomicBool = AtomicBool::new(true);
+
+/// Enable or disable all requested opacity-group compositions for this process.
+/// Call on the UI thread; changed values request repaint in registered windows.
+pub fn set_opacity_groups_enabled(enabled: bool) {
+    if OPACITY_GROUPS_ENABLED.swap(enabled, Ordering::Relaxed) != enabled {
+        crate::app::invalidation::repaint_all();
+    }
+}
+
+/// Returns whether requested opacity-group compositions are currently honored.
+pub fn opacity_groups_enabled() -> bool {
+    OPACITY_GROUPS_ENABLED.load(Ordering::Relaxed)
+}
 
 pub use crate::layout::dimension::{
     css_root_font_size_px, dim_kind, dim_length_px, dimension_to_lp, dimension_to_lpa, em, lp_kind,
@@ -495,17 +512,6 @@ pub(crate) fn css_spin_locks_pointer_to_layout_box(el: &Element) -> bool {
         || el.style.animations.iter().any(|a| a.name == "spin")
 }
 
-/// [`Element::button_hover_paint`]：用于无整树重建的按钮 hover / focus 环同步（见 `components/button.rs`）。
-#[derive(Debug, Clone)]
-pub struct ButtonHoverPaint {
-    pub variant: String,
-    pub disabled: bool,
-    /// `"spring"`（欠阻尼弹簧）或 `"cubic"`（`cubic-bezier` 时长型过渡）。
-    pub hover_easing: String,
-    /// 显式字色（如 Calendar 非本月 `muted-foreground`）；`None` 跟变体 chrome。
-    pub text_color: Option<[u8; 4]>,
-}
-
 /// [`Element::input_paint_sync`]：每帧按信号 `peek` 刷新 Input/Textarea 边框、阴影、文本与光标（避免根 `create_effect` 订阅焦点与按键）。
 #[derive(Debug, Clone)]
 pub struct TextEditPaintSync {
@@ -827,7 +833,7 @@ pub(crate) fn walk_within_template_mut(
     false
 }
 
-pub(crate) fn find_in_tree<'a>(
+pub fn find_in_tree<'a>(
     root: &'a Element,
     mut pred: impl FnMut(&Element) -> bool,
 ) -> Option<&'a Element> {
@@ -912,7 +918,7 @@ pub(crate) fn walk_elements_post_order_mut(
 }
 
 /// Child-index path from `root` to the first pre-order match, or `[]` if `root` matches.
-pub(crate) fn find_path_in_tree(
+pub fn find_path_in_tree(
     root: &Element,
     mut pred: impl FnMut(&Element) -> bool,
 ) -> Option<Vec<usize>> {
@@ -985,6 +991,7 @@ pub struct ElementInner {
     pub(crate) subtree_paint_sync: bool,
     /// Presence summaries refreshed with the paint fingerprint. Hash zero means unknown.
     pub(crate) subtree_reactive_sync: bool,
+    pub(crate) subtree_presentation_sync: bool,
     pub(crate) subtree_layout_motion: bool,
     pub(crate) subtree_floating_panel: bool,
     /// Pending collapse measurement/damage, or a callback that can produce it.
@@ -1068,6 +1075,10 @@ pub struct ElementInner {
     pub on_key_down: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(KeyEvent) -> bool>>>,
     /// 节点从树中丢弃且 `Rc` 计数归零时触发（用于 Navigator Host dispose 等）。
     pub on_unmount: Option<std::rc::Rc<UnmountHook>>,
+    pub tree_presentation_sync: Vec<crate::authoring::presentation::TreeSync>,
+    pub window_key_handlers: Vec<crate::authoring::keys::Handler>,
+    /// Product-owned editing command handler; runs before default text editing.
+    pub text_edit_key_handler: Option<crate::authoring::text::KeyHandler>,
     pub focus_id: Option<String>,
     pub focusable: bool,
     pub cursor: Option<CursorValue>,
@@ -1081,13 +1092,24 @@ pub struct ElementInner {
     pub scroll_viewport_subtree_count: u32,
     pub template_hash: Option<String>,
     pub template_id: Option<String>,
-    /// 若存在，则每帧由 `sync_button_hover_paint_subtree` 根据 `{focus_id}_hover` 与全局焦点信号刷新样式（避免 `hover.get()` / `focused.get()` 订阅根 effect）。
-    pub button_hover_paint: Option<ButtonHoverPaint>,
+    pub authoring_state: crate::authoring::state::State,
+    pub authored_style: Option<fn(&Element) -> Option<crate::style::Style>>,
+    pub disabled_sync: Option<fn(&mut Element, bool) -> bool>,
+    pub paint_fill_inset: Option<[f32; 4]>,
+    pub paint_edge: Option<crate::authoring::presentation::EdgePaint>,
+    pub paint_caption_scope: bool,
+    /// Keep an opaque fill and border independent of a visible node opacity.
+    pub paint_opaque_fill: bool,
+    /// Replay the surrounding page region when this local composite changes.
+    pub paint_region_replay: bool,
+    /// Visit moving overflowing children during scroll-only collection.
+    pub paint_children_unculled: bool,
+    pub owns_focus_paint: bool,
     /// 若存在，则每帧由 [`crate::utils::text_edit::sync_text_edit_paint_subtree`] 刷新（`peek` 全部输入相关信号）。
     pub input_paint_sync: Option<TextEditPaintSync>,
-    /// Switch track: [`crate::components::switch::sync_switch_checked_subtree`] reads `checked` and animates track bg + thumb translate.
+    /// Switch state read by its node-owned [`crate::authoring::presentation`] callback.
     pub switch_checked_sync: Option<Signal<bool>>,
-    /// Checkbox root: [`crate::components::checkbox::sync_checkbox_checked_subtree`] updates fill + checkmark color.
+    /// Checkbox state read by its node-owned [`crate::authoring::presentation`] callback.
     pub checkbox_sync: Option<Signal<bool>>,
     /// Radio item control: group [`Signal<String>`] + attrs `jadix_radio_value`；见 `sync_radio_checked_subtree`。
     pub radio_selected_sync: Option<Signal<String>>,
@@ -1097,6 +1119,11 @@ pub struct ElementInner {
     pub focus_ring: bool,
     /// Generic component-owned signal synchronization; see [`ReactiveSync`].
     pub reactive_sync: Option<ReactiveSync>,
+    /// Product-owned work in the host presentation phases.
+    pub presentation_sync: Option<crate::authoring::presentation::PresentationSync>,
+    pub icon_playback: Option<crate::authoring::icon::Playback>,
+    /// Paint-only work after child styles have been resolved.
+    pub after_style_sync: Option<crate::authoring::presentation::AfterStyleSync>,
     /// GPU 贴图资源键（见 [`crate::queue_image_rgba8`]）；布局收集时生成纹理四边形实例。
     pub image_texture: Option<String>,
     /// Parsed utility class list + base style snapshot for variant re-resolve (`hover:` / `dark:` …).
@@ -1141,6 +1168,7 @@ fn blank_inner() -> ElementInner {
         css_hover_armed: false,
         subtree_paint_sync: false,
         subtree_reactive_sync: false,
+        subtree_presentation_sync: false,
         subtree_layout_motion: false,
         subtree_floating_panel: false,
         subtree_collapse_work: false,
@@ -1175,6 +1203,9 @@ fn blank_inner() -> ElementInner {
         on_mouseout: None,
         on_key_down: None,
         on_unmount: None,
+        tree_presentation_sync: Vec::new(),
+        window_key_handlers: Vec::new(),
+        text_edit_key_handler: None,
         focus_id: None,
         focusable: false,
         cursor: None,
@@ -1183,13 +1214,25 @@ fn blank_inner() -> ElementInner {
         scroll_viewport_subtree_count: 0,
         template_hash: None,
         template_id: None,
-        button_hover_paint: None,
+        authoring_state: Default::default(),
+        authored_style: None,
+        disabled_sync: None,
+        paint_fill_inset: None,
+        paint_edge: None,
+        paint_caption_scope: false,
+        paint_opaque_fill: false,
+        paint_region_replay: false,
+        paint_children_unculled: false,
+        owns_focus_paint: false,
         input_paint_sync: None,
         switch_checked_sync: None,
         checkbox_sync: None,
         radio_selected_sync: None,
         focus_ring: false,
         reactive_sync: None,
+        presentation_sync: None,
+        icon_playback: None,
+        after_style_sync: None,
         image_texture: None,
         class_set: None,
         layout_node: None,
@@ -1882,6 +1925,23 @@ impl Element {
     pub fn set_attr(&mut self, key: impl Into<String>, value: impl Into<String>) -> &mut Self {
         self.attrs.insert(key.into(), value.into());
         self
+    }
+
+    /// Composite this node and its painted descendants before applying opacity.
+    pub fn opacity_group(mut self, enabled: bool) -> Self {
+        self.set_opacity_group(enabled);
+        self
+    }
+
+    /// Update the composition request in place, including retained paint invalidation.
+    pub fn set_opacity_group(&mut self, enabled: bool) -> LayoutStatus {
+        let value = if enabled { "1" } else { "0" };
+        if self.attrs.get(ATTR_OPACITY_GROUP).map(String::as_str) == Some(value) {
+            return LayoutStatus::Clean;
+        }
+        self.set_attr(ATTR_OPACITY_GROUP, value);
+        self.collect_paint_hash = 0;
+        LayoutStatus::StyleChanged
     }
 
     pub fn get_attr(&self, key: &str) -> Option<&String> {
@@ -4464,7 +4524,17 @@ pub(crate) fn pointer_in_paint_border_box(
         el.style.overflow.x == taffy::style::Overflow::Visible,
         el.style.overflow.y == taffy::style::Overflow::Visible,
     );
-    local[0] >= -0.5 && local[1] >= -0.5 && local[0] <= b[2] + 0.5 && local[1] <= b[3] + 0.5
+    if !(local[0] >= -0.5
+        && local[1] >= -0.5
+        && local[0] <= b[2] + 0.5
+        && local[1] <= b[3] + 0.5)
+    {
+        return false;
+    }
+    // Pointer hit must follow the painted border box. An AABB-only hit enters
+    // rounded Fluent buttons/sidebar items through their transparent corners,
+    // which exposes the hover fill as a square at the control edge.
+    crate::style::rounded_rect_contains([0.0, 0.0, b[2], b[3]], el.style.radii, local)
 }
 
 /// World pointer as glyphon/layout-box `(vx+lx, vy+ly)` after inverting the VS affine.
@@ -4533,7 +4603,7 @@ pub(crate) fn overflow_clip_axes_from(
 /// some viewport rebuilds). Without this, scrolled content can absorb hits that belong to
 /// sibling chrome (gallery sidebar) while the main pane scrolls.
 #[inline]
-pub(crate) fn element_clips_overflow(el: &Element) -> bool {
+pub fn element_clips_overflow(el: &Element) -> bool {
     let (clip_x, clip_y) = overflow_clip_axes(el);
     clip_x || clip_y
 }

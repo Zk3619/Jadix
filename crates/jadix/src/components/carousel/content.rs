@@ -47,9 +47,8 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
     // Stack cards move independently inside this fixed viewport. Mark the
     // viewport as a region so retained pixels from the previous card are
     // cleared before the transformed card/text is replayed.
-    stage
-        .attrs
-        .insert("data-carousel-track".to_string(), "1".to_string());
+    stage.paint_region_replay = true;
+    stage.paint_children_unculled = true;
     stage
         .attrs
         .insert("data-stacking-context".to_string(), "1".to_string());
@@ -204,6 +203,7 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
     // 避免 step 变了但 offset 仍按旧步长 → progress 漂移（首屏放大后卡位错乱/空白）。
     let vp_ctx = ctx.clone();
     stage = stage.reactive_sync(move |el, _lt: &mut LayoutTree| {
+        #[cfg(test)]
         stamp_carousel_painted(&vp_ctx.id);
         let len = el.layout_bounds[2];
         let off = offset_target(&vp_ctx.id).peek();
@@ -395,9 +395,8 @@ pub fn CarouselContent(children: Option<Element>) -> Element {
             .into(),
     };
     // 供 layout collect 识别：禁止 scroll_only sibling band（translate=0 时也要访齐后卡）。
-    track
-        .attrs
-        .insert("data-carousel-track".to_string(), "1".to_string());
+    track.paint_region_replay = true;
+    track.paint_children_unculled = true;
     // CSS `transition: transform` (including translate); target driven by offset_target signal.
     ensure_track_css_transition(&mut track);
 
@@ -460,6 +459,7 @@ pub fn CarouselContent(children: Option<Element>) -> Element {
 
     let vp_ctx = ctx.clone();
     viewport = viewport.reactive_sync(move |el, _lt: &mut LayoutTree| {
+        #[cfg(test)]
         stamp_carousel_painted(&vp_ctx.id);
         let len = match vp_ctx.orientation {
             CarouselOrientation::Horizontal => el.layout_bounds[2],

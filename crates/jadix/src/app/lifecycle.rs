@@ -118,6 +118,9 @@ impl super::App {
             return;
         }
         self.persist_window_state();
+        if let Some(state) = self.state.borrow().as_ref() {
+            state.window.set_visible(false);
+        }
         super::tray::dispose_trays_for_shutdown();
         super::native_menu::dispose_all();
 
@@ -166,6 +169,7 @@ impl super::App {
         crate::core::reactivity::clear_effects();
         let window = state.as_ref().map(|state| state.window.clone());
         drop(state);
+        crate::authoring::window::forget(super::window_scope::WindowScope::Primary);
         self.detached_gpu.take();
         self.instance_guard.take();
         if let Some(window) = window {
@@ -234,6 +238,11 @@ impl super::App {
     }
 
     fn finish_close(&mut self, event_loop: &dyn ActiveEventLoop, closing: Vec<WindowId>) {
+        for id in &closing {
+            if let Some(window) = self.lifecycle_window(*id) {
+                window.set_visible(false);
+            }
+        }
         if closing.len() == self.window_registry.len() {
             self.shutdown_renderer();
             event_loop.exit();
@@ -389,7 +398,7 @@ impl super::App {
             .collect();
         for &(id, pos) in &pts {
             if Some(id) != self.primary_touch_id.map(|f| f.into_raw() as u64) {
-                crate::utils::pointer_drag::tick_pointer(id, pos[0], pos[1]);
+                crate::utils::drag::pointer::tick_pointer(id, pos[0], pos[1]);
             }
         }
         crate::utils::pointer_action::sync_touches(pts);
@@ -404,7 +413,7 @@ impl super::App {
     pub(super) fn try_fire_long_press(&mut self) {
         // Drag activation can precede the long-press movement threshold. A slow
         // live drag must not synthesize a context click at the press position.
-        if crate::utils::drag::is_active() {
+        if crate::utils::drag::runtime::is_active() {
             self.long_press = None;
             return;
         }
@@ -911,6 +920,7 @@ impl ApplicationHandler for super::App {
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        let _window = super::window_scope::enter_primary();
         let _work = super::frame_budget::begin_work(super::frame_budget::WorkKind::Shared);
         if crate::style::take_system_theme_refresh() {
             super::window_chrome::update_system_theme(event_loop.system_theme());
@@ -951,11 +961,11 @@ impl ApplicationHandler for super::App {
                     .pending = true;
             }
         }
-        for &id in self.secondaries.borrow().keys() {
+        for (&id, secondary) in self.secondaries.borrow().iter() {
             let scope = super::window_scope::WindowScope::Secondary(
                 super::window_scope::token_for_secondary(id),
             );
-            if super::invalidation::pending(scope) {
+            if super::invalidation::pending(scope) || secondary.scroll_animation_active() {
                 self.frame_pacers.entry(id).or_default().pending = true;
             }
         }
@@ -1034,95 +1044,89 @@ impl ApplicationHandler for super::App {
             }
         }
 
-        // Toast 自动退场 / 退场动画结束：到期唤醒并推进队列。
-        if crate::components::toast::tick_toast_lifecycle() {
-            if let Some(state) = (*self.state.borrow()).as_ref() {
-                state.window.request_redraw();
-            }
+        let can_present = |window: &dyn Window| {
+            !self.is_suspended && window.is_visible() != Some(false)
+                && window.is_minimized() != Some(true)
+                && window.surface_size().width > 0 && window.surface_size().height > 0
+        };
+        let mut deadline_work = Vec::new();
+        if let Some(state) = self.state.borrow_mut().as_mut() {
+            let pending = state.layout_tree.deadlines.prepare(can_present(state.window.as_ref()));
+            deadline_work.push((state.window.clone(), pending));
         }
-        if let Some(wake) = crate::components::toast::toast_next_wake_at() {
-            if wake <= now {
-                if let Some(state) = (*self.state.borrow()).as_ref() {
-                    state.window.request_redraw();
+        for state in self.secondaries.borrow_mut().values_mut() {
+            let pending = state.layout_tree.deadlines.prepare(can_present(state.window.as_ref()));
+            deadline_work.push((state.window.clone(), pending));
+        }
+        for (window, pending) in deadline_work {
+            for task in pending {
+                let poll = task.dispatch(now);
+                if poll.redraw || poll.next_wake.is_some_and(|wake| wake <= now) {
+                    window.request_redraw();
                 }
-            } else {
-                next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
+                if let Some(wake) = poll.next_wake.filter(|wake| *wake > now) {
+                    next_wake = Some(next_wake.map_or(wake, |at| at.min(wake)));
+                }
             }
         }
 
-        // Carousel automatically rotates.
-        if crate::components::carousel::tick_carousel_autoplay() {
-            if let Some(state) = (*self.state.borrow()).as_ref() {
-                state.window.request_redraw();
+        let mut drag_work = Vec::new();
+        let mut sample_drag = |root: &Element, window: &Arc<dyn Window>| {
+            if !can_present(window.as_ref()) {
+                return;
             }
-        }
-        if let Some(wake) = crate::components::carousel::carousel_next_wake_at() {
-            if wake <= now {
-                if let Some(state) = (*self.state.borrow()).as_ref() {
-                    state.window.request_redraw();
+            let state = crate::utils::drag::runtime::state();
+            let size = window.surface_size();
+            let scale = (window.scale_factor() as f32).max(1.0);
+            let viewport = [size.width as f32 / scale, size.height as f32 / scale];
+            if let Some(wake) = state.activation_deadline {
+                if wake <= now {
+                    if let Some(pointer) = state.pointer {
+                        drag_work.push((window.clone(), crate::utils::drag::runtime::prepare_move(
+                            Some(root), pointer, viewport, crate::utils::drag::runtime::MoveMode::Reconcile,
+                        )));
+                    }
+                } else {
+                    next_wake = Some(next_wake.map_or(wake, |at| at.min(wake)));
                 }
-            } else {
-                next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
+            }
+            if state.active {
+                drag_work.push((window.clone(), crate::utils::drag::runtime::prepare_autoscroll(root, viewport)));
+            }
+            if state.coasting {
+                drag_work.push((window.clone(), crate::utils::drag::runtime::prepare_inertia(root, viewport)));
+            }
+            if state.active || state.coasting {
+                let wake = now + std::time::Duration::from_millis(16);
+                next_wake = Some(next_wake.map_or(wake, |at| at.min(wake)));
+            }
+        };
+        {
+            let _scope = super::window_scope::enter_primary();
+            if let Some(state) = self.state.borrow().as_ref() {
+                sample_drag(&state.root_element, &state.window);
             }
         }
-
-        // A moved pointer can stop before the drag hold delay expires.
-        if let Some(wake) = crate::utils::drag::session::activation_next_wake_at() {
-            if wake <= now {
-                let sample = self.state.borrow().as_ref().map(|state| {
-                    let size = state.window.surface_size();
-                    let scale = (state.window.scale_factor() as f32).max(1.0);
-                    (
-                        crate::utils::drag::collect_hits(&state.root_element),
-                        [size.width as f32 / scale, size.height as f32 / scale],
-                        state.window.clone(),
-                    )
+        for (id, state) in self.secondaries.borrow().iter() {
+            let _scope = super::window_scope::enter_secondary_id(*id);
+            sample_drag(&state.root_element, &state.window);
+        }
+        for (window, work) in drag_work {
+            if work.dispatch() {
+                window.request_redraw();
+            }
+        }
+        {
+            let _scope = super::window_scope::enter_primary();
+            if crate::utils::pointer_action::edge_scroll_active() {
+                let scrolled = self.state.borrow().as_ref().is_some_and(|state| {
+                    crate::utils::pointer_action::pump_edge_scroll(&state.root_element)
                 });
-                if let (Some((hits, viewport, window)), Some(pointer)) =
-                    (sample, crate::utils::drag::last_pointer())
-                {
-                    // Activation writes signals that can rebuild AppState.
-                    if crate::utils::drag::tick(pointer[0], pointer[1], &hits, viewport) {
-                        self.force_redraw_count = self.force_redraw_count.max(2);
-                        window.request_redraw();
+                if scrolled {
+                    if let Some(state) = self.state.borrow().as_ref() {
+                        state.window.request_redraw();
                     }
                 }
-            } else {
-                next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
-            }
-        }
-
-        // Drag / resize / gesture: keep edge auto-scroll alive while held still.
-        if crate::utils::drag::is_active() || crate::utils::pointer_action::edge_scroll_active() {
-            if let Some(state) = (*self.state.borrow()).as_ref() {
-                let size = state.window.surface_size();
-                let scale = state.window.scale_factor() as f32;
-                let vp = [
-                    size.width as f32 / scale.max(1.0),
-                    size.height as f32 / scale.max(1.0),
-                ];
-                let scrolled = if crate::utils::drag::is_active() {
-                    crate::utils::drag::pump_autoscroll(&state.root_element, vp)
-                } else {
-                    crate::utils::pointer_action::pump_edge_scroll(&state.root_element)
-                };
-                if scrolled {
-                    state.window.request_redraw();
-                }
-            }
-        }
-        if crate::utils::drag::is_coasting() {
-            if let Some(state) = (*self.state.borrow()).as_ref() {
-                let size = state.window.surface_size();
-                let scale = state.window.scale_factor() as f32;
-                let vp = [
-                    size.width as f32 / scale.max(1.0),
-                    size.height as f32 / scale.max(1.0),
-                ];
-                let _ = crate::utils::drag::pump_inertia(&state.root_element, vp);
-                state.window.request_redraw();
-                let wake = now + std::time::Duration::from_millis(16);
-                next_wake = Some(next_wake.map_or(wake, |t| t.min(wake)));
             }
         }
 
@@ -1163,9 +1167,15 @@ impl ApplicationHandler for super::App {
         // Hold-repeat typing uses the same Poll: otherwise caret WaitUntil lets the OS
         // queue many KeyDowns and they all land in one paint (batched glyphs).
         let text_edit_pump = super::input_controller::take_text_edit_force_immediate();
-        crate::components::color_picker::drain_color_drag_apply();
-        let drawer_snap_needs_frame = crate::components::drawer::tick_drawer_snaps();
-        crate::components::drawer::drain_drawer_layout_bumps();
+        {
+            let _scope = super::window_scope::enter_primary();
+            crate::utils::drag::routing::drain_frame();
+        }
+        let secondary_ids: Vec<_> = self.secondaries.borrow().keys().copied().collect();
+        for id in secondary_ids {
+            let _scope = super::window_scope::enter_secondary_id(id);
+            crate::utils::drag::routing::drain_frame();
+        }
         // Theme presentation is a window-level animation, independent of element CSS clocks.
         let can_animate = |window: &dyn winit::window::Window| {
             !self.is_suspended
@@ -1174,20 +1184,19 @@ impl ApplicationHandler for super::App {
                 && window.surface_size().width > 0
                 && window.surface_size().height > 0
         };
-        let theme_needs_frame =
+        let window_animation_needs_frame =
             self.state.borrow().as_ref().is_some_and(|s| {
-                can_animate(s.window.as_ref()) && s.theme_transition.needs_frame()
+                can_animate(s.window.as_ref()) && (s.theme_transition.needs_frame() || s.shader_frame_active)
             }) || self
                 .secondaries
                 .borrow()
                 .values()
                 .any(|s| can_animate(s.window.as_ref()) && s.theme_transition.needs_frame());
-        let page_css_needs = crate::style::any_page_css_needs_frame() || theme_needs_frame;
+        let page_css_needs = crate::style::any_page_css_needs_frame() || window_animation_needs_frame;
         let modal_css_needs = crate::utils::modal_motion::any_modal_css_needs_frame();
         // Nested Select Expand (ColorPicker format menu) is not Dialog CSS. A one-shot
         // armed at floating Enter is consumed by the parent Fade; query live motion.
         let overlay_css_needs = modal_css_needs
-            || drawer_snap_needs_frame
             || crate::utils::floating_motion::any_floating_motion_needs_frame();
         let resize_followup = (*self.state.borrow())
             .as_ref()
@@ -1317,14 +1326,22 @@ impl ApplicationHandler for super::App {
             let mut state = self.state.borrow_mut();
             if let Some(state) = state.as_mut().filter(|state| state.window.id() == id) {
                 let _scope = super::window_scope::enter_primary();
-                if state.webviews.handle_event(&event) { return; }
+                if state.webviews.handle_event(&event) {
+                    return;
+                }
             }
         }
         match event {
             WindowEvent::CloseRequested => {
+                if self.pointer_window == Some(id) {
+                    self.cancel_pointer_session();
+                }
                 self.request_close(event_loop, Some(id));
             }
             WindowEvent::Destroyed => {
+                if self.pointer_window == Some(id) {
+                    self.cancel_pointer_session();
+                }
                 self.finish_close(event_loop, self.close_targets(Some(id)));
             }
             WindowEvent::PointerMoved {
@@ -1434,6 +1451,9 @@ impl ApplicationHandler for super::App {
                 }
             }
             WindowEvent::Focused(focused) => {
+                if !focused && self.pointer_window == Some(id) {
+                    self.cancel_pointer_session();
+                }
                 if !focused {
                     self.window_modifiers.remove(&id);
                     self.modifiers = ModifiersState::default();
@@ -1631,6 +1651,7 @@ pub(super) fn create_app(
     event_loop_proxy: winit::event_loop::EventLoopProxy,
     user_rx: std::sync::mpsc::Receiver<super::JadixUserEvent>,
 ) -> super::App {
+    crate::authoring::window::activate(super::window_scope::WindowScope::Primary);
     super::App {
         detached_gpu: None,
         primary_owner: None,

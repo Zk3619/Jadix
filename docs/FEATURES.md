@@ -14,6 +14,10 @@
 已有独立 crate 也不等于它是可选依赖。
 具体审计、解耦、实施与验收步骤见 [拆分流程](../development-docs/plans/SPLITTING.md)。
 
+高层拖放的宿主输入、唤醒、布局和 collect 接入现通过 `utils::drag::runtime` 登记，内置 DnD 在产品侧实现适配。`drag::pointer`／`drag::routing`／`drag::runtime` 是实际接口；`drag` 控制基础拖动，`dnd` 控制尚未迁出的内置高层产品；二者已可分别关闭，独立 `jadix_dnd` 仍在 R2 迁包，用法和限制见[组件作者接口](component-authoring.md#高层拖放的宿主接入)。
+
+通用组件作者契约现位于 `jadix::authoring`；`components::base` 保留兼容重导出与产品条目协作状态。`jadix::authoring` 在关闭 `components` 时仍可使用，兼容产品路径须启用 `components`；必选过程宏保持可用；用法与显式运行时路径见 [自定义组件作者接口](component-authoring.md)。
+
 动画图标 API（含 `AnimatedIcon`、`animated_icon` 与配方查询）需显式启用 `lucide-animated`，该开关启用 `animation-base`；需要 SVG 动画绘制时同时启用 `svg`，不隐式启用增强层。关闭配方时，普通 `Icon` 的 `hover_animation="animated"` 保留静态图标；CSS 悬停播放使用基础层，通用 IconProvider 不依赖 Lucide 配方。
 
 `animation` 聚合 `animation-base` 与 `animation-ex`；增强层单向依赖基础层。默认显式保留 `animation-base`，延续普通 CSS/组件反馈；完全静态配置使用 `--no-default-features`，并核对其他依赖是否传递开启基础层。feature 是叠加选择，未选择聚合入口不代表基础层未启用。
@@ -34,7 +38,7 @@
 | 系统窗口材质 | `window-materials`、`windows-dwm`、`windows-composition`、`windows-dcomp` | 系统材质聚合默认启用；自定义 DComp 默认关闭 | 窗口数据契约、事件循环、DPI、普通透明路径 |
 | 平台集成 | `a11y`、`native-menu`、`system-tray`、`file-dialog`、`webview` | 默认关闭 | 系统字体与剪贴板桥接、平台窗口基础 |
 | 资源与服务 | 字体包、SVG/额外图片格式、`remote-asset`、`net`、`net-json`、`i18n` | 默认关闭；部分旧图片开关仅为兼容空开关 | 基础图片格式、资源/文件工具、媒体与任务契约 |
-| 开发与诊断 | `devtools`、`hot-reload`、`performance`、`runtime-logging`、`tracing`、`gallery-tests` | 默认关闭；示例可自行启用 | 组件运行时及正常呈现流程 |
+| 开发与诊断 | `devtools`、`hot-reload`、`performance`、`runtime-logging`、`tracing`、`gallery-tests` | 默认关闭；示例可自行启用 | 响应式运行时及正常呈现流程 |
 
 “默认启用但可关闭”不是“始终属于不可裁剪核心”。例如默认窗口材质与 Shadcn 预设
 已经 feature 化，而基础文本编辑和内部 GPU 效果尚未 feature 化。
@@ -44,14 +48,13 @@
 | 能力 | 默认状态 | 保留范围／原因 | 不包含的可选能力 |
 | --- | --- | --- | --- |
 | 响应式与组件运行时 | 始终保留 | Signal、effect、owner、任务桥接、RSX/组件宏和 retained 元素树 | LSP 进程、网络客户端、热重载 |
-| 布局与基础交互 | 始终保留 | Taffy、布局树、滚动、焦点、键盘、指针、基础虚拟列表 | 缩放预览组件及其局部 portal 作用域遍历 |
-| 高层拖拽与排序（当前未裁剪） | 当前始终保留；是待拆分项 | `utils/drag`、`drag_reorder` 的 draggable/dropzone/sortable、overlay、自动滚动与输入/布局接入；没有独立拖拽 feature | 不能因列在本表就视为永久核心；基础捕获、文本选择、滑块/窗口拖动需另行保留 |
-| 字体与基础文本 | 始终保留 | 字形测量与绘制、IME、选择、换行、普通输入、多光标、`TextDocument`、`TextView`、`TextEditor` | `CodeEditor`、Markdown、文档编辑器、语法高亮、LSP |
-| 样式与基础组件 | 始终保留 | CSS/utility、语义令牌、组件 slot 适配、基础控件、Shadcn 基础 light/dark 令牌与自定义主题契约 | 可选主题提供者的配色与配置 |
+| 布局与基础交互 | 始终保留 | 共享几何 `core::geometry::{Axis, Rect}`、Taffy、布局树、滚动、焦点、键盘、指针、基础虚拟列表 | 缩放预览组件及其局部 portal 作用域遍历 |
+| 字体与基础文本 | 始终保留 | 字形测量与绘制、IME、选择、换行、普通输入协议、多光标和文本模型；产品 TextView／TextEditor 由 `components` 控制 | `CodeEditor`、Markdown、文档编辑器、语法高亮、LSP |
+| 样式与基础组件 | 始终保留 | CSS/utility、语义令牌、authoring slot 适配、基础节点、Shadcn 基础 light/dark 令牌与自定义主题契约 | 可选主题提供者的配色与配置 |
 | 动画兼容数据与静态完成 | 始终保留 | 样式声明、参数类型、静态目标、通用时钟/事件基础设施 | 基础层控制 UI 动画推进；增强层控制布局投影与 morph 播放；不等于全部动画类型/解析代码已从编译输入排除 |
 | GPU/UI 渲染核心 | 始终保留 | wgpu/glyphon 桥接、绘制与命中、普通变换、裁剪、GPU 内部阴影/模糊/玻璃着色 | 桌面 DWM/DComp/macOS 原生窗口材质；内部 GPU 玻璃不等于系统窗口玻璃 |
 | 窗口与平台基础 | 始终保留 | 多窗口、窗口选项数据、事件循环、DPI、普通透明/alpha 路径、系统字体与剪贴板桥接 | 原生窗口材质实现、菜单、托盘、原生文件对话框 |
-| 基础图片 | 始终保留 | PNG/JPEG/GIF/WebP/ICO 解码、图片组件与光标图片机制 | SVG/resvg、额外图片格式、网络下载实现 |
+| 基础图片 | 始终保留 | PNG/JPEG/GIF/WebP/ICO 解码、图片原语与光标图片机制 | SVG/resvg、额外图片格式、网络下载实现 |
 | 媒体与文件工具契约 | 始终保留 | 后端无关媒体播放接口、文本文件/资源工具、自动保存配置 | 内置音视频解码器或播放器后端（当前没有强制引入）、原生文件选择器 |
 
 关闭所有 feature **不是无依赖或无 GPU 的 crate**：上述核心仍存在。后续拆 crate 时，
@@ -61,7 +64,11 @@
 
 | Feature | 默认开启 | 内容／依赖关系 | 关闭后的行为 |
 | --- | --- | --- | --- |
-| `default` | 是 | `backend-dx12`、`backend-gles`、`backend-metal`、`window-materials`、`theme-shadcn`、`animation-base` | `default-features = false` 后由应用自行选后端与扩展能力 |
+| `lucide` | 是（由组件间接开启） | R1 兼容静态图标目录适配及名称表，默认 provider 在根门面组合 | 关闭后框架只保留通用 IconProvider／播放接口；R2 由统一 `jadix_lucide` 提供适配与资源 |
+| `components` | 是 | 现有内置组件产品集合；依赖 `drag`、`lucide`，关闭后不编译 `components` 模块与对应 prelude 导出 | 外部组件使用 `authoring`；产品测试按 `required-features` 标注归属 |
+| `drag` | 是（由组件间接开启） | 基础指针会话及 routing/runtime 宿主桥；不包含高层 DnD 实现 | 关闭后指针会话／注册不启动；选择与原生窗口拖动仍由核心输入处理 |
+| `dnd` | 是 | R1 过渡期内置高层 DnD，依赖 `drag`；关闭后排除排序、碰撞、overlay 和会话产品模块 | R2 由真实 `jadix_dnd` crate 替代；不是第二套基础拖动引擎 |
+| `default` | 是 | `components`、`dnd`、`backend-dx12`、`backend-gles`、`backend-metal`、`window-materials`、`theme-shadcn`、`animation-base` | `default-features = false` 后由应用自行选后端与扩展能力 |
 | `theme-shadcn` | 是 | 将 Shadcn 加入可选预设列表 | 基础令牌仍在核心；不再加入预设列表 |
 | `theme-fluent` | 否 | Fluent 调色板、字体、尺寸与滚动条配置 | 不编译提供者，不允许选择该预设 |
 | `theme-material3` | 否 | Material 3 调色板、字体、尺寸与焦点环配置 | 同上 |
@@ -104,7 +111,7 @@ LSP 从 IDE 示例提取为可选传输模块；调用方提供消息回调，�
 | `animation-path` | 否 | 启用增强层；路径跟随/揭示/morph 预处理几何，不自动开启 SVG | 不编译高层路径动画模块 |
 | `lucide-animated` | 否 | 启用基础层；动画图标模块/API、配方 JSON、播放状态及专属事件/布局/缓存接入；不隐式启用 `svg` 或增强层 | 排除动画模块与配方；静态/自定义图标和通用时钟独立；配方光栅绘制需另启用 `svg` |
 | `scale-preview` | 否 | ScalePreview 组件、逻辑视口配置、嵌套预览局部 portal 路由；release 也可使用 | 不导出组件/配置函数，不执行预览 portal 遍历；普通 scale/transform/响应式布局仍保留 |
-| `devtools` | 否 | 启用 `scale-preview`；运行时 Inspector/设备预览，当前 UI 入口还受 debug 构建限制 | 不加入 Inspector；独立 ScalePreview 不需要它 |
+| `devtools` | 否 | 启用 `scale-preview`；运行时 Inspector/设备预览，图标通过通用 provider 解析，无目录时使用 Unicode；UI 入口受 debug 构建限制 | 不加入 Inspector；独立 ScalePreview 不需要它 |
 | `performance` | 否 | 性能采样及 Gallery 诊断所需采样 | 不加入可选遥测采样 |
 | `hot-reload` | 否 | 开发期 TCP 热重载，还受 debug 构建限制 | 不加入该开发桥接 |
 | `runtime-logging` | 否 | env_logger 控制台/可选文件 logger | 不安装该 logger，log 调用点仍可由应用接管 |
@@ -213,3 +220,9 @@ Cargo 同次构建会合并同一个包的 feature，因此精简依赖检查要
 
 源码仓的 `scripts/check-features.ps1 -InventoryOnly` 校验本清单覆盖所有已声明开关；
 开发期编译、测试与迁移验收命令统一维护在拆分/测试治理流程中。
+
+## 框架与产品的验证配置
+
+`cargo check -p jadix --no-default-features --all-targets` 检查排除内置组件、静态 Lucide 和高层 DnD 的框架。`--features drag` 增加外部拖动产品的宿主桥；`--features components,dnd` 对应保留产品、关闭动画等可选功能的配置。示例显式声明产品依赖，不能用整个 workspace 的 feature 合并证明框架单用。
+
+GPU 集成测试需要选择当前平台支持的后端；完全不启用后端的配置验证 CPU／协议能力，不代表执行过 GPU 绘制。Gallery 仍位于 `examples/gallery`，可用 `cargo build -p gallery` 验证产品组合。

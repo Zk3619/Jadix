@@ -358,6 +358,8 @@ pub fn media_aspect_ratio_button(content: bool) -> Element {
 
 mod viewport;
 pub(super) use viewport::register_presentation;
+pub(crate) use viewport::attach_presentation;
+#[cfg(test)]
 pub(crate) use viewport::sync_media_presentation_subtree;
 
 #[cfg(test)]

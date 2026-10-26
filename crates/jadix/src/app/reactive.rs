@@ -378,7 +378,11 @@ fn subtree_is_clone_safe(root: &Element) -> bool {
             || el.on_mouseout.is_some()
             || el.on_key_down.is_some()
             || el.on_unmount.is_some()
-            || el.button_hover_paint.is_some()
+            || !el.authoring_state.is_empty()
+            || el.paint_edge.is_some()
+            || el.paint_opaque_fill
+            || el.paint_region_replay
+            || el.paint_children_unculled
             || el.input_paint_sync.is_some()
             || el.switch_checked_sync.is_some()
             || el.checkbox_sync.is_some()

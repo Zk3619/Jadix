@@ -35,8 +35,8 @@ try {
         if ($unexpected) { throw "Minimal dependency leak: $unexpected" }
     }
     foreach ($selection in @(
-        '', 'theme-shadcn', 'theme-fluent', 'theme-material3', 'theme-liquid-glass',
-        'animation-base', 'animation-ex', 'animation', 'animation-path', 'lucide-animated', 'bundled-lucide', 'svg',
+        '', 'drag', 'components', 'dnd', 'theme-shadcn', 'theme-fluent', 'theme-material3', 'theme-liquid-glass',
+        'lucide', 'animation-base', 'animation-ex', 'animation', 'animation-path', 'lucide-animated', 'bundled-lucide', 'svg',
         'document', 'document-editing', 'document-diff',
         'code', 'code-lsp', 'markdown', 'scale-preview', 'devtools',
         'windows-dwm', 'window-materials', 'windows-composition', 'windows-dcomp', 'native-materials',

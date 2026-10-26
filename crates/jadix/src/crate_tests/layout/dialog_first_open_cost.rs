@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! First vs second Dialog-open cost: CPU layout vs first GPU draw of blur / capture text.
 //!
 //! The Gallery symptom is a ~500ms empty wait on the process's first Dialog, then instant

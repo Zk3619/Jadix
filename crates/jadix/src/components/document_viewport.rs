@@ -305,7 +305,6 @@ pub(crate) fn document_viewport(
     scroll_area(id)
         .overflow_y("auto")
         .overflow_x("auto")
-        .scroll_behavior("jump")
         .w("100%")
         .h(viewport_h.max(1.0))
         .child(body)

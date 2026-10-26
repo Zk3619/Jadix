@@ -66,6 +66,8 @@ pub struct ScrollAreaBuilder {
     scroll_behavior: String,
     hover_mode: String,
     scrollbar_visibility: String,
+    scrollbar_arrows: bool,
+    scrollbar_arrow_class: String,
     scrollbar_inset_x: String,
     scrollbar_inset_y: String,
     scrollbar_y_side: String,
@@ -96,6 +98,8 @@ pub fn scroll_area(id: &str) -> ScrollAreaBuilder {
         scroll_behavior: crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string(),
         hover_mode: "scrollbar".to_string(),
         scrollbar_visibility: "auto".to_string(),
+        scrollbar_arrows: false,
+        scrollbar_arrow_class: String::new(),
         scrollbar_inset_x: "inside".to_string(),
         scrollbar_inset_y: "inside".to_string(),
         scrollbar_y_side: "right".to_string(),
@@ -121,9 +125,8 @@ pub fn scrollarea(id: &str) -> ScrollAreaBuilder {
 ///（`Box` / `VStack` 的 `.id(...)` 会写入 `template_id`）。
 /// `align`：`none`（忽略）| `start` | `center` | `end`。
 ///
-/// 默认 **进入前写偏移**（`when = "before"`）：布局就绪后立刻 snap，打开时看不到滚动。
-/// 需要进入后再滚、并遵守该区域 `scroll_behavior`（`smooth` / `jump`）时，用
-/// [`scroll_into_view_when`] 传入 `"after"`。
+/// 默认进入后遵守该区域 `scroll_behavior`（`smooth` / `jump`）。
+/// 打开前的初始定位可用 [`scroll_into_view_when`] 显式传入 `"before"`。
 ///
 /// 任意滚动视口 id 都可用（[`ScrollArea`] / [`crate::components::ScrollViewport`]）。
 pub fn scroll_into_view(
@@ -131,7 +134,7 @@ pub fn scroll_into_view(
     target: impl AsRef<str>,
     align: impl AsRef<str>,
 ) {
-    scroll_into_view_when(scroll_id, target, align, "before");
+    scroll_into_view_when(scroll_id, target, align, "after");
 }
 
 /// [`scroll_into_view`]，`when`：`before`（进入前 snap）| `after`（进入后按 smooth/jump 滚）。
@@ -159,7 +162,7 @@ pub fn scroll_item_into_view(
     item_count: usize,
     align: impl AsRef<str>,
 ) {
-    scroll_item_into_view_when(scroll_id, index, item_count, align, "before");
+    scroll_item_into_view_when(scroll_id, index, item_count, align, "after");
 }
 
 /// [`scroll_item_into_view`]，`when`：`before` | `after`。
@@ -193,6 +196,8 @@ pub fn ScrollArea(
     overflow_y: Option<String>,
     scroll_behavior: Option<String>,
     scrollbar_visibility: Option<String>,
+    scrollbar_arrows: Option<bool>,
+    scrollbar_arrow_class: Option<String>,
     scrollbar_inset: Option<String>,
     scrollbar_inset_x: Option<String>,
     scrollbar_inset_y: Option<String>,
@@ -227,6 +232,12 @@ pub fn ScrollArea(
     if let Some(v) = scrollbar_visibility {
         builder = builder.scrollbar_visibility(v);
     }
+    if let Some(enabled) = scrollbar_arrows {
+        builder = builder.scrollbar_arrows(enabled);
+    }
+    if let Some(class) = scrollbar_arrow_class {
+        builder = builder.scrollbar_arrow_class(class);
+    }
     if let Some(i) = scrollbar_inset {
         builder = builder.scrollbar_inset(i);
     }
@@ -259,7 +270,7 @@ pub fn ScrollArea(
     }
     if let Some(target) = scroll_into_view {
         let align = scroll_align.unwrap_or_else(|| "center".into());
-        let when = scroll_into_view_when.unwrap_or_else(|| "before".into());
+        let when = scroll_into_view_when.unwrap_or_else(|| "after".into());
         builder = builder.scroll_into_view_when(target, align, when);
     }
     if let Some(c) = children {
@@ -291,6 +302,16 @@ fn apply_scrollbar_appearance(mut b: ScrollbarBuilder, a: &ScrollAreaBuilder) ->
 }
 
 impl ScrollAreaBuilder {
+    /// Optional triangle buttons at both ends of each scrollbar.
+    pub fn scrollbar_arrows(mut self, enabled: bool) -> Self {
+        self.scrollbar_arrows = enabled;
+        self
+    }
+
+    pub fn scrollbar_arrow_class(mut self, class: impl Into<String>) -> Self {
+        self.scrollbar_arrow_class = class.into();
+        self
+    }
     pub fn id(mut self, id: impl Into<String>) -> Self {
         self.id = id.into();
         self
@@ -470,9 +491,9 @@ impl ScrollAreaBuilder {
     }
 
     /// 打开/构建后把子孙 `target`（`focus_id` / `template_id`）滚进视口。
-    /// `align`：`none` | `start` | `center` | `end`。默认进入前 snap。
+    /// `align`：`none` | `start` | `center` | `end`。默认遵守 smooth/jump 策略。
     pub fn scroll_into_view(self, target: impl AsRef<str>, align: impl AsRef<str>) -> Self {
-        self.scroll_into_view_when(target, align, "before")
+        self.scroll_into_view_when(target, align, "after")
     }
 
     /// [`Self::scroll_into_view`]，`when`：`before` | `after`。
@@ -490,14 +511,14 @@ impl ScrollAreaBuilder {
         self
     }
 
-    /// 等高列表：按 index 滚进视口。默认进入前 snap。
+    /// 等高列表：按 index 滚进视口。默认遵守 smooth/jump 策略。
     pub fn scroll_item_into_view(
         self,
         index: usize,
         item_count: usize,
         align: impl AsRef<str>,
     ) -> Self {
-        self.scroll_item_into_view_when(index, item_count, align, "before")
+        self.scroll_item_into_view_when(index, item_count, align, "after")
     }
 
     /// [`Self::scroll_item_into_view`]，`when`：`before` | `after`。
@@ -584,6 +605,8 @@ impl From<ScrollAreaBuilder> for Element {
         let z_overlay = 1000_i32;
         let mut v_scroll = apply_scrollbar_appearance(
             scrollbar(&format!("__jadix_v_scrollbar_{}", builder.id))
+                .arrows(builder.scrollbar_arrows)
+                .arrow_class(builder.scrollbar_arrow_class.clone())
                 .target(builder.id.clone())
                 .orientation(ScrollbarOrientation::Vertical)
                 .visibility(vis_y)
@@ -592,6 +615,8 @@ impl From<ScrollAreaBuilder> for Element {
         );
         let mut h_scroll = apply_scrollbar_appearance(
             scrollbar(&format!("__jadix_h_scrollbar_{}", builder.id))
+                .arrows(builder.scrollbar_arrows)
+                .arrow_class(builder.scrollbar_arrow_class.clone())
                 .target(builder.id.clone())
                 .orientation(ScrollbarOrientation::Horizontal)
                 .visibility(vis_x)

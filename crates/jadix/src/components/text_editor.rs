@@ -1,9 +1,6 @@
 //! Native document text editing without form-field chrome.
 
-use std::cell::RefCell;
-use std::collections::HashMap;
 use std::rc::Rc;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::components::base::SlotChrome;
 use crate::components::input::InputType;
@@ -16,21 +13,7 @@ use jadix_macros::component;
 use winit::event::KeyEvent;
 use winit::keyboard::ModifiersState;
 
-type EditorKeyHandler = Rc<dyn Fn(&KeyEvent, ModifiersState) -> bool>;
-thread_local! {
-    static KEY_HANDLERS: RefCell<HashMap<String, (u64, EditorKeyHandler)>> = RefCell::new(HashMap::new());
-}
-static NEXT_HANDLER: AtomicU64 = AtomicU64::new(1);
-
-pub(crate) fn dispatch_editor_key(id: &str, event: &KeyEvent, modifiers: ModifiersState) -> bool {
-    let handler = KEY_HANDLERS.with(|handlers| {
-        handlers
-            .borrow()
-            .get(id)
-            .map(|(_, handler)| handler.clone())
-    });
-    handler.is_some_and(|handler| handler(event, modifiers))
-}
+type EditorKeyHandler = crate::authoring::text::KeyHandler;
 
 pub fn text_editor(id: impl Into<String>) -> TextEditorBuilder {
     TextEditorBuilder {
@@ -200,30 +183,7 @@ impl From<TextEditorBuilder> for Element {
                 }
             });
         }
-        if let Some(handler) = builder.key_handler {
-            let generation = NEXT_HANDLER.fetch_add(1, Ordering::Relaxed);
-            let id = builder.id.clone();
-            KEY_HANDLERS.with(|handlers| {
-                handlers
-                    .borrow_mut()
-                    .insert(id.clone(), (generation, handler))
-            });
-            let previous = element.on_unmount.take();
-            element = element.on_unmount(move || {
-                KEY_HANDLERS.with(|handlers| {
-                    let mut handlers = handlers.borrow_mut();
-                    if handlers
-                        .get(&id)
-                        .is_some_and(|(current, _)| *current == generation)
-                    {
-                        handlers.remove(&id);
-                    }
-                });
-                if let Some(previous) = previous {
-                    previous.fire();
-                }
-            });
-        }
+        element.text_edit_key_handler = builder.key_handler;
         let element = crate::components::editor_chrome::decorate_editor(
             element,
             &builder.id,

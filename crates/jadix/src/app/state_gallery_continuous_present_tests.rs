@@ -4,6 +4,191 @@ use crate::app::runtime::{AppRuntime, clear_app_runtime, set_app_runtime};
 use crate::core::reactivity::{create_effect, create_root, use_signal};
 use std::{cell::RefCell, rc::Rc};
 
+#[cfg(feature = "performance")]
+#[test]
+#[ignore = "requires the complete native Gallery and Windows GPU presentation"]
+fn real_gallery_fluent_hover_leave_scroll_hud_continuous_frames() {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    use winit::window::WindowId;
+
+    struct Harness;
+    impl ApplicationHandler for Harness {
+        fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+            let optical_edge = std::env::var_os("JADIX_OPTICAL_EDGE").is_some();
+            let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join(if optical_edge { "../../.theme-evidence/optical-edge-continuous" }
+                    else { "../../.theme-evidence/fluent-gallery-continuous" })
+                .join(std::process::id().to_string());
+            std::fs::create_dir_all(&directory).unwrap();
+            let mut mismatched = 0;
+            let mut misplaced = 0;
+            let frames = std::env::var("JADIX_CONTINUOUS_FRAMES").ok()
+                .and_then(|value| value.parse::<usize>().ok()).unwrap_or(240);
+            for full in [false, true] {
+                crate::init();
+                clear_app_runtime();
+                reset_registered_anchors();
+                crate::style::load_and_install_theme_overrides(
+                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                        .join("../../examples/gallery/theme.toml"),
+                ).unwrap();
+                crate::style::set_theme_preset(crate::style::ThemePreset::Fluent);
+                crate::style::set_theme_mode(crate::style::ThemeMode::Dark);
+                crate::style::set_theme_preference(crate::style::ThemePreference::Dark);
+                let mut transition = crate::style::theme_transition_config();
+                transition.enabled = false;
+                crate::style::set_theme_transition_config(transition);
+                crate::style::set_css_transition_virtual_timeline(true);
+                crate::style::set_css_transition_timeline_ms(0.0);
+                use_signal("gal_nav_section", String::new).set("theme".into());
+                use_signal("gal-perf-visible", || true).set_silent(true);
+                use_signal("gal_theme_preview_popover", || false).set_silent(false);
+                for key in [
+                    crate::core::scroll_viewport::scroll_offset_y_signal_key("scroll-theme"),
+                    crate::core::scroll_viewport::scroll_target_y_signal_key("scroll-theme"),
+                ] { use_signal(&key, || 0.0_f32).set_silent(0.0); }
+                crate::shared::install_performance_overlay();
+                let (tx, rx) = std::sync::mpsc::channel();
+                crate::app::ui_bridge::install_proxy(event_loop.create_proxy(), tx);
+                let mut app = crate::app::lifecycle::create_app(
+                    crate::app::WindowOptions::new().follow_theme(true).size(1000.0, 700.0),
+                    crate::gallery_app::build_gallery_app,
+                    event_loop.create_proxy(), rx,
+                );
+                crate::app::with_ui_build_stack(|| app.can_create_surfaces(event_loop));
+                let window = app.state.borrow().as_ref().unwrap().window.clone();
+                let mut optical_surroundings = Vec::new();
+                for frame in 0..frames {
+                    crate::style::set_css_transition_timeline_ms(frame as f64 * 1000.0 / 60.0);
+                    crate::style::utility::set_frame_dt(1.0 / 60.0);
+                    if frame % 15 == 0 {
+                        use_signal("gal-perf-text", String::new).set(format!(
+                            "Present {} FPS\nCPU {}%\nGPU {}%\nRAM {} MiB{}",
+                            frame % 3, frame % 7, frame % 5, 320 + frame % 17,
+                            if frame % 30 == 0 { "\nSampling 0.50s\nUI 3.1%\nResources ready" } else { "" },
+                        ));
+                    }
+                    drain_deferred_view_remounts();
+                    let phase = frame % 90;
+                    if !optical_edge && (frame == 180 || frame == 225) {
+                        use_signal("gal_theme_preview_popover", || false).set(frame == 180);
+                        drain_deferred_view_remounts();
+                    }
+                    if optical_edge || frame >= 90 {
+                        let offset = if optical_edge { 480.0 } else if frame >= 180 { 480.0 }
+                            else if frame % 90 < 45 { 180.0 } else { 360.0 };
+                        for key in [
+                            crate::core::scroll_viewport::scroll_offset_y_signal_key("scroll-theme"),
+                            crate::core::scroll_viewport::scroll_target_y_signal_key("scroll-theme"),
+                        ] { use_signal(&key, || 0.0_f32).set_silent(offset); }
+                    }
+                    let target = if optical_edge { "gal-theme-preview-popover" } else {
+                        ["gal-nav-forms", "gal-nav-data", "gal-nav-theme",
+                        "gal-theme-refraction", "gal-perf-toggle"][(frame / 12) % 5] };
+                    let pointer = {
+                        let state = app.state.borrow();
+                        let state = state.as_ref().unwrap();
+                        let bounds = crate::core::tree::find_by_template_id(&state.root_element, target)
+                            .unwrap_or_else(|| panic!("missing full Gallery control {target}"))
+                            .viewport_layout_bounds();
+                        if optical_edge {
+                            let [left, top, width, height] = bounds;
+                            let step = frame % 60;
+                            let edge = if frame % 2 == 0 { -0.25 } else { 0.25 };
+                            match (frame / 60) % 4 {
+                                0 => [left + edge, top + height * 0.5],
+                                1 => [left + width * 0.5, top + edge],
+                                2 => [left + width - edge, top + height * 0.5],
+                                _ if step < 30 => [left + width * 0.5, top + height - edge],
+                                _ => [left + width + 10.0, top + height + 10.0],
+                            }
+                        }
+                        else if phase >= 75 { [-1.0; 2] }
+                        else if phase >= 65 { [999.5, 350.0] }
+                        else if frame % 12 < 3 { [bounds[0] + 0.25, bounds[1] + 0.25] }
+                        else { [bounds[0] + bounds[2] * 0.5, bounds[1] + bounds[3] * 0.5] }
+                    };
+                    app.with_primary_input(window.id(), |app| {
+                        if pointer[0] < 0.0 {
+                            app.handle_cursor_moved(window.id(), winit::dpi::PhysicalPosition::new(
+                                999.5 * window.scale_factor(), 350.0 * window.scale_factor(),
+                            ), event_loop);
+                            app.handle_cursor_left(window.id(), event_loop);
+                        }
+                        else {
+                            let scale = window.scale_factor();
+                            app.handle_cursor_moved(window.id(), winit::dpi::PhysicalPosition::new(
+                                pointer[0] as f64 * scale, pointer[1] as f64 * scale,
+                            ), event_loop);
+                        }
+                        app.flush_pending_cursor_moved(window.id(), event_loop);
+                        assert_eq!(app.cursor_inside_window, pointer[0] >= 0.0);
+                    });
+                    drain_deferred_view_remounts();
+                    let mut state = app.state.borrow_mut();
+                    let state = state.as_mut().unwrap();
+                    if !optical_edge && (frame == 150 || frame == 165) {
+                        let scale = window.scale_factor();
+                        state.resize(winit::dpi::PhysicalSize::new(
+                            ((if frame == 150 { 940.0 } else { 1000.0 }) * scale) as u32,
+                            (700.0 * scale) as u32,
+                        ));
+                    }
+                    if full { state.mark_full_redraw(); }
+                    crate::app::with_ui_build_stack(|| state.render(pointer,
+                        ScrollbarUpdateMode::ViewportsOnly, None, false, false, false)).unwrap();
+                    let panel = crate::core::tree::find_by_template_id(&state.root_element, "gal-perf-panel")
+                        .expect("complete Gallery must include its real performance portal");
+                    let bounds = panel.viewport_layout_bounds();
+                    let (width, height) = state.logical_size();
+                    if (width - bounds[0] - bounds[2] - 12.0).abs() > 1.0
+                        || (height - bounds[1] - bounds[3] - 12.0).abs() > 1.0 {
+                        misplaced += 1;
+                        if misplaced < 5 { eprintln!("HUD misplaced frame={frame} full={full} bounds={bounds:?} viewport={width}x{height}"); }
+                    }
+                    let image = super::toggle_motion_present_tests::read_frame(state);
+                    let image = ::image::RgbaImage::from_raw(image.width, image.height, image.pixels).unwrap();
+                    if !optical_edge && full && matches!(frame, 220 | 239) {
+                        let samples: Vec<_> = [[400.0, 600.0], [600.0, 600.0]].map(|point| {
+                            *image.get_pixel((point[0] * window.scale_factor()) as u32,
+                                (point[1] * window.scale_factor()) as u32)
+                        }).into_iter().collect();
+                        if frame == 220 { optical_surroundings = samples; }
+                        else { assert_eq!(samples, optical_surroundings,
+                            "opening optical popover must not recolor distant page pixels"); }
+                    }
+                    let path = directory.join(format!("{}-{frame:04}.png", if full { "full" } else { "partial" }));
+                    image.save(&path).unwrap();
+                    if full {
+                        let partial = ::image::open(directory.join(format!("partial-{frame:04}.png")))
+                            .unwrap().into_rgba8();
+                        let changed = partial.pixels().zip(image.pixels()).filter(|(left, right)|
+                            left.0.iter().zip(right.0.iter()).any(|(left, right)| left.abs_diff(*right) > 3)).count();
+                        if changed > 0 {
+                            mismatched += 1;
+                            if mismatched <= 8 { eprintln!("Fluent Gallery mismatch frame={frame} pixels={changed}"); }
+                        }
+                    }
+                }
+                drop(app);
+            }
+            crate::style::set_css_transition_virtual_timeline(false);
+            clear_app_runtime();
+            eprintln!("Full Gallery continuous capture: frames={frames} mismatched={mismatched} misplaced={misplaced} evidence={}", directory.display());
+            assert_eq!(misplaced, 0, "real Gallery HUD must remain viewport anchored");
+            assert_eq!(mismatched, 0, "every real Gallery partial frame must match a full repaint");
+            event_loop.exit();
+        }
+        fn window_event(&mut self, _: &dyn ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    }
+    let mut builder = EventLoop::builder();
+    builder.with_any_thread(true);
+    builder.build().unwrap().run_app(Harness).unwrap();
+}
+
 #[test]
 #[ignore = "requires a native Windows GPU surface"]
 fn real_gallery_motion_continuous_frames() {

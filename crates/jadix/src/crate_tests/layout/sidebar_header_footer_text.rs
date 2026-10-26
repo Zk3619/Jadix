@@ -1,8 +1,8 @@
+#![cfg(feature = "components")]
 //! Header / Footer RSX string leaves must keep `sidebar-foreground` across a full
 //! cascade (overlay enter / portal hoist). Idle frames skip cascade (`scroll_only`);
 //! the first animation layout does not — without an inherit-lock, `TextStyle::default`
 //! white flashes on light chrome then chrome-sync paints black again.
-
 use crate::components::sidebar::{sidebar, SidebarMenuButton, SidebarMenuButtonProps};
 use crate::core::reactivity::{create_effect, create_root};
 use crate::core::tree::{parse_text_color, Element, LayoutStatus, LayoutTree};

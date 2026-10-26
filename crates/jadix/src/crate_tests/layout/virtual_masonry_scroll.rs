@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! VirtualMasonry: 千级项只挂可见格；静默滚动换窗。
 
 use crate::app::test_support::sync_reactive_elements_subtree;

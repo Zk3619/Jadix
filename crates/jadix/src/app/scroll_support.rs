@@ -2116,6 +2116,26 @@ mod scroll_item_align_tests {
         });
     }
 
+    #[cfg(feature = "components")]
+    #[test]
+    fn public_scroll_alignment_uses_smooth_unless_jump_is_explicit() {
+        use crate::core::scroll_viewport::ScrollViewportSignalKeys;
+        let _ = create_root(|| {
+            for (id, behavior) in [("public-align-default", "smooth"), ("public-align-jump", "jump")] {
+                let keys = ScrollViewportSignalKeys::new(id);
+                if behavior == "jump" {
+                    crate::core::reactivity::use_signal(keys.behavior.as_str(), || "jump".to_string());
+                }
+                crate::components::scroll_item_into_view(id, 8, 12, "center");
+                assert!(apply_pending_scroll_item_into_view(id, 200.0, 384.0));
+                let target = crate::core::reactivity::use_signal(keys.target_y.as_str(), || 0.0_f32).peek();
+                let offset = crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32).peek();
+                assert!(target > 0.0);
+                assert_eq!(offset, if behavior == "smooth" { 0.0 } else { target });
+            }
+        });
+    }
+
     #[test]
     fn after_jump_snaps_offset() {
         use crate::core::scroll_viewport::{scroll_behavior_signal_key, SCROLL_BEHAVIOR_JUMP};

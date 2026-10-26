@@ -97,7 +97,8 @@ pub fn find_input_text_leaf_for_rest(
                 let fid = frame.el.focus_id.as_deref().or(frame.fid);
                 if let Some(text) = &frame.el.text {
                     if let Some(id) = fid {
-                        if id == format!("{}{}", crate::components::INPUT_FOCUS_PREFIX, rest) {
+                        if id == format!("{}{}", crate::utils::text_field::INPUT_FOCUS_PREFIX, rest)
+                        {
                             result = Some((
                                 frame.el.layout_bounds,
                                 text.clone(),
@@ -160,7 +161,9 @@ pub fn find_input_text_at(
                 let fid = frame.el.focus_id.as_deref().or(frame.fid);
                 if let Some(text) = &frame.el.text {
                     if let Some(id) = fid {
-                        if let Some(rest) = id.strip_prefix(crate::components::INPUT_FOCUS_PREFIX) {
+                        if let Some(rest) =
+                            id.strip_prefix(crate::utils::text_field::INPUT_FOCUS_PREFIX)
+                        {
                             let b = frame.el.layout_bounds;
                             if x >= b[0] && x <= b[0] + b[2] && y >= b[1] && y <= b[1] + b[3] {
                                 result = Some((

@@ -6,7 +6,7 @@ use crate::{
         pending_images::{queue_image_from_src, texture_key_for_src},
         reactive::bind_prop,
     },
-    components::base::{stamp_slot, SlotChrome},
+    authoring::{stamp_slot, SlotChrome},
     core::tree::{Element, IntoElementList, LayoutStatus},
     media::{MediaController, MediaSnapshot},
 };

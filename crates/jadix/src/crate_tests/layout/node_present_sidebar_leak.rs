@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Input paint-only PartialLoad must not stamp sidebar captions into the retain buffer.
 //!
 //! Gallery repro: focus / type in the Kbd Search field → leftover glyphs on the left rail.

@@ -81,6 +81,8 @@
 
 #![allow(unused_imports)]
 
+pub use crate::authoring::{SlotChrome, SlotMap};
+
 // ---------------------------------------------------------------------------
 // 宏与书写面糖（`main` = 可选程序入口糖，见模块文档「兼容 / 进阶」）
 // ---------------------------------------------------------------------------
@@ -120,6 +122,7 @@ pub use crate::core::reactivity::{
     component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
 };
 pub use crate::core::tree::{collect_ui, Element, LayoutStatus, PointerEvents};
+pub use crate::core::tree::{opacity_groups_enabled, set_opacity_groups_enabled};
 #[cfg(feature = "i18n")]
 pub use crate::i18n::{
     add_bundle, add_json, add_toml, clear_bundles, fallback, format_compact, format_currency,
@@ -138,6 +141,7 @@ pub use crate::{
 // 布局 / 叶子原语（Builder 面常用）
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "components")]
 pub use crate::components::media_player::*;
 pub use crate::media::playback::*;
 #[cfg(feature = "net")]
@@ -155,7 +159,7 @@ pub use crate::primitives::{
     PathBuilder, SvgBuilder,
 };
 pub use crate::primitives::{
-    boxed, canvas, effect_wrap, gstack, hstack, icon, interactive, r#box, scene3d, shader, text,
+    boxed, canvas, div, effect_wrap, gstack, hstack, icon, interactive, r#box, scene3d, shader, text,
     vstack, BoxBuilder, Canvas2D, CanvasBuilder, CanvasSize, EffectWrapBuilder, InteractiveBuilder,
     Portal, PortalProps, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial,
     ShaderBuilder, TextBuilder,
@@ -216,38 +220,51 @@ pub use crate::style::{
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "document-diff")]
+#[cfg(feature = "components")]
 pub use crate::components::diff_view::{diff_view, DiffView, DiffViewBuilder, DiffViewProps};
+#[cfg(feature = "components")]
+#[cfg(feature = "dnd")]
 pub use crate::components::dock::{DockLayout, DockOrientation, DockPlacement, DockState, DockTab};
 #[cfg(feature = "document-editing")]
+#[cfg(feature = "components")]
 pub use crate::components::document_editor::{
     document_editor, DocumentEditor, DocumentEditorBuilder, DocumentEditorProps,
 };
 #[cfg(feature = "document")]
+#[cfg(feature = "components")]
 pub use crate::components::document_view::{
     document_view, DocumentBlockRenderer, DocumentView, DocumentViewBuilder, DocumentViewProps,
 };
 #[cfg(feature = "webview")]
+#[cfg(feature = "components")]
 pub use crate::components::html_document::{html_document_editor, html_document_view};
+#[cfg(feature = "components")]
 pub use crate::components::math_view::{
     chemistry_view, math_view, ChemistryView, ChemistryViewProps, MathView, MathViewBuilder,
     MathViewProps,
 };
 #[cfg(feature = "document-science")]
+#[cfg(feature = "components")]
 pub use crate::components::molecule_view::{
     molecule_view, MoleculeCamera, MoleculeView, MoleculeViewBuilder, MoleculeViewProps,
 };
 #[cfg(feature = "scale-preview")]
+#[cfg(feature = "components")]
 pub use crate::components::scale_preview::{
     scale_preview, ScalePreview, ScalePreviewBuilder, ScalePreviewProps,
 };
+#[cfg(feature = "components")]
 pub use crate::components::text_editor::{
     text_editor, TextEditor, TextEditorBuilder, TextEditorProps,
 };
+#[cfg(feature = "components")]
 pub use crate::components::text_view::{text_view, TextView, TextViewBuilder, TextViewProps};
 #[cfg(feature = "webview")]
+#[cfg(feature = "components")]
 pub use crate::components::webview::{
     webview, webview_html, webview_status, webview_supported, WebView, WebViewProps, WebViewStatus,
 };
+#[cfg(feature = "components")]
 pub use crate::components::{
     // Accordion（复合标签 + Builder）
     accordion,
@@ -1374,8 +1391,6 @@ pub use crate::components::{
     Slider,
     SliderBuilder,
     SliderProps,
-    SlotChrome,
-    SlotMap,
     Stepper,
     StepperBuilder,
     StepperCtx,

@@ -60,6 +60,7 @@ pub struct DragCtx {
     pub hover_list: Signal<Option<String>>,
     pub hover_index: Signal<Option<usize>>,
     pub drag_extent: Signal<[f32; 2]>,
+    pub registry_epoch: Signal<u64>,
     pub axis: Axis,
     /// Sibling / source-hole FLIP. `false` snaps translate (SortableJS `animation: 0`).
     pub animation: bool,
@@ -76,6 +77,7 @@ impl DragCtx {
     /// [`Self::active_droppable`] / [`Self::overlay_open`] so the island reruns
     /// when the winner changes. While dragging uses tick cache; idle uses registered slots.
     pub fn hits(&self) -> Vec<super::session::DragHit> {
+        let _ = self.registry_epoch.get();
         if super::session::is_dragging() {
             super::session::last_hits_in_scope(&self.id)
         } else {
@@ -145,13 +147,13 @@ fn wrap_fragment(mut el: Element) -> Element {
 /// Author body of each draggable, used by `<DragOverlay>` when it has no children
 /// (solid-dnd default: the ghost follows the live source, it is not a second tree).
 #[derive(Clone)]
-struct SourcePreview {
+pub(super) struct SourcePreview {
     body: Rc<dyn Fn() -> Element>,
     item: DragItemCtx,
     source_opacity: Option<f32>,
 }
 
-thread_local! {
+crate::authoring::window::window_local! {
     static SOURCE_PREVIEWS: RefCell<HashMap<(String, String), SourcePreview>> =
         RefCell::new(HashMap::new());
     /// Last materialized author tree (before drag chrome). Overlay paint copies
@@ -167,21 +169,42 @@ thread_local! {
     static CLONING_OVERLAY_GHOST: Cell<bool> = const { Cell::new(false) };
 }
 
+pub(super) fn take_scope_previews(scope: &str) -> (Vec<SourcePreview>, Vec<Element>) {
+    let previews = SOURCE_PREVIEWS.with(|slots| {
+        let mut slots = slots.borrow_mut();
+        let keys: Vec<_> = slots
+            .keys()
+            .filter(|(owner, _)| owner == scope)
+            .cloned()
+            .collect();
+        keys.into_iter()
+            .filter_map(|key| slots.remove(&key))
+            .collect::<Vec<_>>()
+    });
+    let snapshots = SOURCE_SNAPSHOTS.with(|slots| {
+        let mut slots = slots.borrow_mut();
+        let keys: Vec<_> = slots
+            .keys()
+            .filter(|(owner, _)| owner == scope)
+            .cloned()
+            .collect();
+        keys.into_iter()
+            .filter_map(|key| slots.remove(&key))
+            .collect::<Vec<_>>()
+    });
+    (previews, snapshots)
+}
+
 struct OverlayGhostCloneGuard {
     prev: bool,
-    _inline: crate::app::reactive::InlineIslandGuard,
 }
 
 impl OverlayGhostCloneGuard {
     fn enter() -> Self {
-        let inline = crate::app::reactive::InlineIslandGuard::enter();
         CLONING_OVERLAY_GHOST.with(|c| {
             let prev = c.get();
             c.set(true);
-            Self {
-                prev,
-                _inline: inline,
-            }
+            Self { prev }
         })
     }
 }
@@ -277,7 +300,7 @@ fn snapshot_has_unresolved_island(el: &Element) -> bool {
     let mut stack: Vec<*const Element> = vec![el as *const Element];
     while let Some(ptr) = stack.pop() {
         let el = unsafe { &*ptr };
-        if el.template_hash.as_deref() == Some(crate::app::reactive::REACTIVE_PLACEHOLDER_HASH) {
+        if crate::authoring::mount::is_reactive_placeholder(el) {
             return true;
         }
         for child in &el.children {
@@ -356,9 +379,11 @@ pub(super) fn clone_source_preview(scope: &str, draggable_id: &str) -> Option<El
     }
     let preview = SOURCE_PREVIEWS.with(|m| m.borrow().get(&key).cloned())?;
     Some(with_child_owner(|| {
-        let _ghost = OverlayGhostCloneGuard::enter();
-        provide_context(item_context(), preview.item);
-        wrap_fragment((preview.body)())
+        crate::authoring::mount::with_inline_mount(|| {
+            let _ghost = OverlayGhostCloneGuard::enter();
+            provide_context(item_context(), preview.item);
+            wrap_fragment((preview.body)())
+        })
     }))
 }
 
@@ -1140,7 +1165,7 @@ fn pin_percent_size_to_slot(el: &mut Element, slot: [f32; 2]) -> bool {
     let pin_w = slot[0] > 0.0
         && (spec_w_pct
             || matches!(dim_kind(el.style.size.width), DimKind::Percent(_))
-            || (hole && matches!(dim_kind(el.style.size.width), DimKind::Length(_))));
+            || (hole && matches!(dim_kind(el.style.size.width), DimKind::Length(_) | DimKind::Auto)));
     if pin_w {
         let want = taffy::style::Dimension::length(slot[0]);
         if spec_w_pct || !dims_eq(el.style.size.width, want) {
@@ -1785,6 +1810,8 @@ impl DragScopeBuilder {
         let hover_index = use_signal(format!("{id}__drag_hover_index").as_str(), || None::<usize>);
         let drag_extent = use_signal(format!("{id}__drag_extent").as_str(), || [0.0_f32, 0.0]);
         let selected = use_signal(format!("{id}__drag_selected").as_str(), Vec::<String>::new);
+        let registry_epoch = use_signal(format!("{id}__drag_registry_epoch").as_str(), || 0_u64);
+        super::registry::bind_epoch(&id, registry_epoch);
         register_scope_product(id.clone(), self.sort_mode, self.multi_drag, selected);
         super::session::set_reorder_preview(&id, self.reorder_preview);
         super::session::register_scope(
@@ -1838,6 +1865,7 @@ impl DragScopeBuilder {
             hover_list,
             hover_index,
             drag_extent,
+            registry_epoch,
             axis: self.axis,
             animation: self.animation,
             sort_mode: self.sort_mode,

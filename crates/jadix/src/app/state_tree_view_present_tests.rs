@@ -1,6 +1,6 @@
+#![cfg(feature = "components")]
 //! Exercise nested TreeView presence, animations and retained native presentation together.
 use super::*;
-use crate as jadix;
 use crate::core::reactivity::{create_effect, create_root, use_signal};
 use crate::renderer::offscreen::RgbaImage;
 use std::{cell::RefCell, collections::HashSet, rc::Rc};
@@ -205,7 +205,6 @@ fn frame(state: &Rc<RefCell<Option<AppState>>>, mouse: [f32; 2], action: &str, t
         "{action} tick {tick}: retained frame must equal full composite"
     );
 }
-
 fn run_frames(window: Arc<dyn Window>) {
     use crate::app::runtime::{clear_app_runtime, set_app_runtime, AppRuntime};
     use crate::components::*;

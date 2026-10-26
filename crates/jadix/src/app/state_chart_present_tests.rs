@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Check chart first-display alignment and moving overlays in the native compositor.
 use super::*;
 
@@ -32,7 +33,6 @@ fn chart_tooltip_native_movement_matches_full_repaint() {
     builder.with_any_thread(true);
     builder.build().unwrap().run_app(Harness).unwrap();
 }
-
 fn run_chart_frames(window: Arc<dyn Window>) {
     use crate::app::pointer_events::{dispatch_pointer, hit_path, PointerEvent, PointerKind};
     use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};

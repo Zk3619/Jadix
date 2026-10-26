@@ -6,7 +6,46 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
-pub const ATTR_ICON_NAME: &str = "jadix_icon_name";
+pub use super::icon_provider::ATTR_ICON_NAME;
+
+pub(crate) struct DefaultProvider;
+
+impl super::icon_provider::IconProvider for DefaultProvider {
+    fn resolve(&self, name: &str) -> Option<super::icon_provider::IconSource> {
+        Some(super::icon_provider::IconSource::Glyph { family: "lucide".into(), glyph: lucide_builtin_glyph(name)? })
+    }
+
+    fn svg_source(&self, name: &str, source: &super::icon_provider::IconSource) -> Option<String> {
+        match source {
+            super::icon_provider::IconSource::Glyph { family, glyph }
+                if family == "lucide" && lucide_builtin_glyph(name).as_ref() == Some(glyph) =>
+                    lucide_svg_inner(name).map(str::to_string),
+            _ => None,
+        }
+    }
+
+    fn configure_animation(&self, element: &mut crate::core::tree::Element, name: &str, source: &super::icon_provider::IconSource) -> bool {
+        #[cfg(feature = "lucide-animated")]
+        {
+            use super::lucide_animated as animation;
+            let supported = matches!(source, super::icon_provider::IconSource::Glyph { family, glyph }
+                if family == "lucide" && lucide_builtin_glyph(name).as_ref() == Some(glyph))
+                && animation::animated_icon_recipe(name).is_some();
+            if supported {
+                if element.get_attr(animation::ATTR_ANIMATED_ICON).map(String::as_str) != Some(name) {
+                    crate::authoring::icon::reset(element);
+                    element.set_attr(animation::ATTR_ANIMATED_ICON, name);
+                }
+                animation::attach_playback(element);
+                return true;
+            }
+            crate::authoring::icon::reset(element);
+            element.attrs.remove(animation::ATTR_ANIMATED_ICON);
+        }
+        let _ = (element, name, source);
+        false
+    }
+}
 
 fn lucide_map() -> &'static HashMap<String, String> {
     static MAP: OnceLock<HashMap<String, String>> = OnceLock::new();

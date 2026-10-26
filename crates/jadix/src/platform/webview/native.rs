@@ -7,7 +7,7 @@ use webview2_com::{
     AcceleratorKeyPressedEventHandler, CapturePreviewCompletedHandler,
     CreateCoreWebView2CompositionControllerCompletedHandler,
     CreateCoreWebView2EnvironmentCompletedHandler, Microsoft::Web::WebView2::Win32::*,
-    NavigationCompletedEventHandler, NewWindowRequestedEventHandler,
+    NavigationCompletedEventHandler, NavigationStartingEventHandler, NewWindowRequestedEventHandler,
     WebMessageReceivedEventHandler,
 };
 use windows::core::{Interface, PCWSTR, PWSTR};
@@ -48,6 +48,7 @@ struct Entry {
     attached: Cell<bool>,
     covered: Cell<bool>,
     capture_pending: Cell<bool>,
+    ready: Cell<bool>,
     snapshot: crate::core::reactivity::Signal<bool>,
 }
 
@@ -206,6 +207,7 @@ impl NativeWebViews {
                     attached: Cell::new(false),
                     covered: Cell::new(false),
                     capture_pending: Cell::new(false),
+                    ready: Cell::new(false),
                     snapshot: super::webview_snapshot(&spec.id),
                 });
                 self.entries.insert(spec.id.clone(), entry.clone());
@@ -218,8 +220,8 @@ impl NativeWebViews {
                 if let Some(browser) = entry.browser.borrow().as_ref() {
                     let covered = spec.visible
                         && (crate::app::portal_overlay::top_stacked_panel_z().is_some()
-                            || crate::utils::drag::is_active()
-                            || crate::components::resizable::is_resizable_dragging());
+                            || crate::utils::drag::runtime::is_active()
+                            || crate::utils::drag::routing::blocks_native_input());
                     if !covered {
                         entry.snapshot.try_set(false);
                     }
@@ -271,6 +273,12 @@ impl NativeWebViews {
                         let visual = device.CreateVisual()?;
                         composition.SetRootVisualTarget(&visual)?;
                         controller.SetIsVisible(false)?;
+                        let controller2: ICoreWebView2Controller2 = controller.cast()?;
+                        let background = crate::style::get_theme().colors.background;
+                        let channel = |value: f32| (value.clamp(0.0, 1.0) * 255.0).round() as u8;
+                        controller2.SetDefaultBackgroundColor(COREWEBVIEW2_COLOR {
+                            A: 255, R: channel(background[0]), G: channel(background[1]), B: channel(background[2]),
+                        })?;
                         let settings = webview.Settings()?;
                         settings.SetIsWebMessageEnabled(entry.spec.borrow().messages)?;
                         let mut token = 0;
@@ -305,10 +313,24 @@ impl NativeWebViews {
                             Ok(())
                         })), &mut token)?;
                         let status = webview_status(&entry.spec.borrow().id);
+                        let loading_window = window.clone();
+                        let loading_entry = Rc::downgrade(&entry);
+                        webview.add_NavigationStarting(&NavigationStartingEventHandler::create(Box::new(move |_, _| {
+                            if let Some(entry) = loading_entry.upgrade() {
+                                entry.ready.set(false);
+                                let _scope = crate::app::window_scope::enter(scope);
+                                webview_status(&entry.spec.borrow().id).try_set(WebViewStatus::Loading);
+                                loading_window.request_redraw();
+                            }
+                            Ok(())
+                        })), &mut token)?;
                         let ready_window = window.clone();
+                        let ready_entry = Rc::downgrade(&entry);
                         webview.add_NavigationCompleted(&NavigationCompletedEventHandler::create(Box::new(move |_, args| {
                             let mut success = windows::core::BOOL(0);
                             if let Some(args) = args { args.IsSuccess(&mut success)?; }
+                            if let Some(entry) = ready_entry.upgrade() { entry.ready.set(success.as_bool()); }
+                            let _scope = crate::app::window_scope::enter(scope);
                             status.try_set(if success.as_bool() { WebViewStatus::Ready } else { WebViewStatus::Failed("Website navigation failed".into()) });
                             ready_window.request_redraw();
                             Ok(())
@@ -372,6 +394,7 @@ impl NativeWebViews {
         unsafe {
             let source = (spec.url.clone(), spec.html.clone());
             if *entry.source.borrow() != source {
+                entry.ready.set(false);
                 if let Some(html) = &spec.html {
                     browser
                         .webview
@@ -408,7 +431,7 @@ impl NativeWebViews {
             })?;
             browser
                 .controller
-                .SetIsVisible(spec.visible && !entry.snapshot.peek())?;
+                .SetIsVisible(spec.visible && entry.ready.get() && !entry.snapshot.peek())?;
         }
         Ok(())
     }
@@ -431,7 +454,7 @@ impl NativeWebViews {
         pass.set_pipeline(pipeline);
         for entry in self.entries.values() {
             let spec = entry.spec.borrow();
-            if !spec.visible || entry.snapshot.peek() || entry.browser.borrow().is_none() {
+            if !spec.visible || !entry.ready.get() || entry.snapshot.peek() || entry.browser.borrow().is_none() {
                 continue;
             }
             let [x, y, clip_width, clip_height] = spec.clip.map(|value| value * self.scale);
@@ -568,7 +591,8 @@ impl NativeWebViews {
             WindowEvent::MouseWheel { delta, .. } => {
                 let (horizontal, vertical) = match delta {
                     MouseScrollDelta::LineDelta(horizontal, vertical) => {
-                        (*horizontal * 120.0, *vertical * 120.0)
+                        let (characters, lines) = system_wheel_units();
+                        (wheel_detent_data(*horizontal, characters), wheel_detent_data(*vertical, lines))
                     }
                     MouseScrollDelta::PixelDelta(position) => {
                         (position.x as f32, position.y as f32)
@@ -579,7 +603,7 @@ impl NativeWebViews {
                     data = vertical as i32 as u32;
                     COREWEBVIEW2_MOUSE_EVENT_KIND_WHEEL
                 } else {
-                    data = horizontal as i32 as u32;
+                    data = (-horizontal) as i32 as u32;
                     COREWEBVIEW2_MOUSE_EVENT_KIND_HORIZONTAL_WHEEL
                 }
             }
@@ -602,14 +626,140 @@ impl NativeWebViews {
     }
 }
 
+fn wheel_detent_data(lines: f32, units: u32) -> f32 {
+    if units == 0 { return 0.0; }
+    let units = if units == u32::MAX { 3 } else { units };
+    lines * 120.0 / units as f32
+}
+
+fn system_wheel_units() -> (u32, u32) {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{SystemParametersInfoW, SPI_GETWHEELSCROLLCHARS, SPI_GETWHEELSCROLLLINES};
+    let mut characters = 3_u32;
+    let mut lines = 3_u32;
+    unsafe {
+        SystemParametersInfoW(SPI_GETWHEELSCROLLCHARS, 0, &mut characters as *mut u32 as _, 0);
+        SystemParametersInfoW(SPI_GETWHEELSCROLLLINES, 0, &mut lines as *mut u32 as _, 0);
+    }
+    (characters, lines)
+}
+
+#[cfg(test)]
+mod wheel_tests {
+    use super::*;
+
+    #[test]
+    fn native_wheel_restores_detents_before_browser_applies_system_speed() {
+        assert_eq!(wheel_detent_data(3.0, 3), 120.0);
+        assert_eq!(wheel_detent_data(-5.0, 5), -120.0);
+        assert_eq!(wheel_detent_data(1.5, 3), 60.0);
+        assert_eq!(wheel_detent_data(0.0, 0), 0.0);
+        assert_eq!(wheel_detent_data(3.0, u32::MAX), 120.0);
+    }
+
+    #[test]
+    #[ignore = "requires native WebView2 and a Windows GPU"]
+    fn loading_native_document_keeps_opaque_pixels_until_navigation_completes() {
+        use winit::application::ApplicationHandler;
+        use winit::event_loop::{ActiveEventLoop, EventLoop};
+        use winit::platform::windows::EventLoopBuilderExtWindows;
+        use winit::window::WindowId;
+
+        fn aperture_alpha(host: &NativeWebViews, gpu: &crate::renderer::offscreen::OffscreenGpu) -> u8 {
+            let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("WebView loading alpha"),
+                size: wgpu::Extent3d { width: 32, height: 32, depth_or_array_layers: 1 },
+                mip_level_count: 1, sample_count: 1, dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+                view_formats: &[],
+            });
+            let view = texture.create_view(&Default::default());
+            let mut encoder = gpu.device.create_command_encoder(&Default::default());
+            {
+                let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: None,
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &view, depth_slice: None, resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::GREEN), store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
+                    multiview_mask: None,
+                });
+                host.clear_apertures(&mut pass, 32, 32);
+            }
+            let image = crate::renderer::offscreen::readback_texture(
+                &gpu.device, &gpu.queue, &texture, 32, 32, encoder).unwrap();
+            image.pixel(16, 16).unwrap()[3]
+        }
+
+        struct Harness;
+        impl ApplicationHandler for Harness {
+            fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+                let window: Arc<dyn Window> = Arc::from(event_loop.create_window(
+                    crate::app::WindowOptions::new().size(64.0, 64.0).to_window_attributes()).unwrap());
+                let gpu = crate::renderer::offscreen::OffscreenGpu::with_backends(wgpu::Backends::DX12).unwrap();
+                let mut host = NativeWebViews::new(window.as_ref()).unwrap();
+                host.configure(&gpu.device, wgpu::TextureFormat::Rgba8UnormSrgb);
+                let (_owner, ()) = crate::core::reactivity::create_root(|| {
+                    let mut root = super::super::surface("loading-alpha".into(), String::new(), Some(
+                        "<html><script>const t=Date.now();while(Date.now()-t<1800){}</script><body>Ready</body></html>".into()));
+                    root.layout_bounds = [0.0, 0.0, 32.0, 32.0];
+                    host.sync(&window, &root, 1.0, [0.0, 0.0, 32.0, 32.0]);
+                    assert_eq!(aperture_alpha(&host, &gpu), 255);
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+                    let mut saw_loading_browser = false;
+                    while !host.entries["loading-alpha"].ready.get() {
+                        assert!(std::time::Instant::now() < deadline, "WebView navigation timed out");
+                        let entry = host.entries["loading-alpha"].clone();
+                        if entry.browser.borrow().is_some() && !entry.ready.get() {
+                            host.sync(&window, &root, 1.0, [0.0, 0.0, 32.0, 32.0]);
+                            let mut visible = windows::core::BOOL(0);
+                            unsafe { entry.browser.borrow().as_ref().unwrap().controller.IsVisible(&mut visible).unwrap(); }
+                            assert!(!visible.as_bool());
+                            assert_eq!(aperture_alpha(&host, &gpu), 255);
+                            saw_loading_browser = true;
+                        }
+                        unsafe {
+                            use windows_sys::Win32::UI::WindowsAndMessaging::{DispatchMessageW, PeekMessageW, TranslateMessage, MSG, PM_REMOVE};
+                            let mut message = MSG::default();
+                            while PeekMessageW(&mut message, std::ptr::null_mut(), 0, 0, PM_REMOVE) != 0 {
+                                TranslateMessage(&message);
+                                DispatchMessageW(&message);
+                            }
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(5));
+                    }
+                    assert!(saw_loading_browser);
+                    host.sync(&window, &root, 1.0, [0.0, 0.0, 32.0, 32.0]);
+                    assert_eq!(aperture_alpha(&host, &gpu), 0);
+                    host.entries["loading-alpha"].snapshot.set(true);
+                    assert_eq!(aperture_alpha(&host, &gpu), 255);
+                    root.set_attr("jadix_webview_html", "<html><body>Second</body></html>");
+                    host.sync(&window, &root, 1.0, [0.0, 0.0, 32.0, 32.0]);
+                    assert!(!host.entries["loading-alpha"].ready.get());
+                    assert_eq!(aperture_alpha(&host, &gpu), 255);
+                });
+                drop(host);
+                event_loop.exit();
+            }
+            fn window_event(&mut self, _: &dyn ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+        }
+        let mut builder = EventLoop::builder();
+        builder.with_any_thread(true);
+        builder.build().unwrap().run_app(Harness).unwrap();
+    }
+}
+
 fn wide(value: &str) -> Vec<u16> {
     value.encode_utf16().chain(Some(0)).collect()
 }
 
 fn blocked() -> bool {
     crate::app::portal_overlay::top_stacked_panel_z().is_some()
-        || crate::utils::drag::is_dragging()
-        || crate::components::resizable::is_resizable_dragging()
+        || crate::utils::drag::runtime::is_dragging()
+        || crate::utils::drag::routing::blocks_native_input()
 }
 
 fn read_snapshot(stream: &IStream) -> windows::core::Result<Vec<u8>> {

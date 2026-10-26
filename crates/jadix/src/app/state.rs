@@ -190,7 +190,7 @@ pub(super) enum TextRendererBackend {
 
 pub(super) struct AppState {
     #[cfg(feature = "webview")]
-    pub(super) webviews: crate::components::webview::native::NativeWebViews,
+    pub(super) webviews: crate::platform::webview::native::NativeWebViews,
     // Field drop order is the reverse of declaration. wgpu Surface must drop while Device
     // and the winit Window/HWND are still alive (Windows GL/WGL otherwise panics in
     // make_current → workspace `panic = "abort"` → STATUS_STACK_BUFFER_OVERRUN 0xC0000409).
@@ -209,8 +209,10 @@ pub(super) struct AppState {
     #[cfg(feature = "scene3d")]
     scene3d: Option<crate::renderer::scene3d::Scene3dGpu>,
     shader: Option<crate::renderer::shader_leaf::ShaderGpu>,
+    pub(super) shader_frame_active: bool,
     path2d: Option<crate::renderer::path_pipeline::PathGpu>,
     backdrop_blur: BackdropBlurPipeline,
+    local_backdrop_layers: Vec<Option<(u64, BackdropBlurPipeline)>>,
     effect_pass: crate::renderer::EffectPassGpu,
     css_filter_pass: crate::renderer::CssFilterPassGpu,
     compute: crate::renderer::ComputePipelines,
@@ -366,6 +368,7 @@ pub(super) struct AppState {
     pub(super) composition_swapchain: bool,
     /// Creation chrome; re-applied after surface configure (Windows DWM punch-through).
     chrome: super::window_chrome::WindowOptions,
+    pending_window_chrome: bool,
     /// `backdrop_blur.full` still holds last local frost. Skip recapture when
     /// PartialLoad damage misses the host (gallery hover on another card).
     local_backdrop_valid: bool,
@@ -901,6 +904,7 @@ fn draw_scissor_clear_ex<'a>(
         usage: wgpu::BufferUsages::VERTEX,
     });
     pipeline.bind_sdf(pass, false, pipeline.dummy_backdrop());
+    pass.set_pipeline(&pipeline.clear_render_pipeline);
     pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
     pass.set_vertex_buffer(1, buf.slice(..));
     pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
@@ -916,9 +920,7 @@ fn scissor_clear_instance(rect: [f32; 4], clear: wgpu::Color, inflate: f32) -> I
     InstanceInput {
         rect_pos: [rect[0], rect[1]],
         rect_size: [rect[2], rect[3]],
-        // Src-over with a=0 (compositor-alpha TRANSPARENT) is a no-op and leaves
-        // overlay keyframes in retain. Always replace the hole, then restore page.
-        color: [clear.r as f32, clear.g as f32, clear.b as f32, 1.0],
+        color: [clear.r as f32, clear.g as f32, clear.b as f32, clear.a as f32],
         border_color: [0.0; 4],
         radii: [0.0; 4],
         border_width: 0.0,
@@ -947,6 +949,7 @@ fn draw_scroll_clear_instances<'a>(
         return;
     }
     pipeline.bind_sdf(pass, false, pipeline.dummy_backdrop());
+    pass.set_pipeline(&pipeline.clear_render_pipeline);
     pass.set_vertex_buffer(0, pipeline.vertex_buffer.slice(..));
     pass.set_vertex_buffer(1, buffer.slice(..));
     pass.set_index_buffer(pipeline.index_buffer.slice(..), wgpu::IndexFormat::Uint16);
@@ -2044,10 +2047,10 @@ impl AppState {
         };
         let compositor_alpha = chrome.compositor_alpha() || cfg!(all(windows, feature = "webview"));
         #[cfg(all(windows, feature = "webview"))]
-        let mut webviews = crate::components::webview::native::NativeWebViews::new(window.as_ref())
+        let mut webviews = crate::platform::webview::native::NativeWebViews::new(window.as_ref())
             .expect("initialize WebView DirectComposition host");
         #[cfg(all(not(windows), feature = "webview"))]
-        let webviews = crate::components::webview::native::NativeWebViews::new(window.as_ref());
+        let webviews = crate::platform::webview::native::NativeWebViews::new(window.as_ref());
         let mut root_element = Element::new().w("100%").h("100%");
         root_element.set_attr(Self::BOOTSTRAP_ROOT_ATTR, "1");
         let size = window.surface_size();
@@ -2267,6 +2270,7 @@ impl AppState {
             #[cfg(feature = "scene3d")]
             scene3d: None,
             shader: None,
+            shader_frame_active: false,
             path2d,
             backdrop_blur,
             modal_backdrop: None,
@@ -2294,6 +2298,7 @@ impl AppState {
             overlay_band_text_renderers: Vec::new(),
             page_stack_band_text_renderers: Vec::new(),
             local_backdrop_text_renderers: Vec::new(),
+            local_backdrop_layers: Vec::new(),
             page_stack_band_text_keys: Vec::new(),
             root_element,
             template_paths: HashMap::new(),
@@ -2372,6 +2377,7 @@ impl AppState {
             compositor_alpha,
             composition_swapchain,
             chrome,
+            pending_window_chrome: false,
             local_backdrop_valid: false,
             #[cfg(test)]
             local_backdrop_capture_count: 0,
@@ -3001,7 +3007,7 @@ impl AppState {
     /// switching into Fluent/LiquidGlass does not recreate the swapchain, but
     /// opaque themes still need an opaque attachment clear during that period.
     fn transparent_surface(&self) -> bool {
-        self.compositor_alpha && self.chrome.themed().blur
+        self.compositor_alpha && (self.chrome.transparent || self.chrome.themed().blur)
     }
 
     fn plan_gpu_present(&self, ui_scale: f32) -> GpuPresentPlan {
@@ -3010,7 +3016,7 @@ impl AppState {
         let portal_region = if self.scroll_layer_clear {
             None
         } else {
-            super::damage::portal_composite_damage(&self.damage_nodes, self.overlay_occupied)
+            super::damage::portal_composite_damage(&self.damage_nodes, self.overlay_occupied, viewport_logical)
         };
         let has_node_damage = !self.scroll_layer_clear && !self.damage_nodes.is_empty();
         let node_present = has_node_damage && portal_region.is_none();
@@ -3175,6 +3181,7 @@ impl AppState {
         // Physical scissors actually repaired for captured page glyphs. Track
         // Region repairs as well as Node repairs, and deduplicate after rounding.
         let mut node_glyph_holes: Vec<[f32; 4]> = Vec::new();
+        let mut band_glyph_holes: Vec<[f32; 4]> = Vec::new();
         let overlay_replay_coverage = super::damage::overlay_replay_coverage(
             &self.last_overlay_stamps,
             self.overlay_occupied,
@@ -3420,6 +3427,7 @@ impl AppState {
                         // is the hole. Floating sliders stay Overlay; solid Slider
                         // dest-resets as Node.
                         if dirty.kind == PaintDirtyKind::Region
+                            && !self.transparent_surface()
                             && super::draw_cull::region_replays_own_chrome_only(
                                 dirty.key,
                                 dirty.bounds,
@@ -3505,6 +3513,7 @@ impl AppState {
                                 }
                                 // Rebuild each layer's glyphs before the next
                                 // plate, matching full repaint at rounded edges.
+                                band_glyph_holes.push(cull_rect);
                                 continue;
                             }
                             if overlay_paint_start > 0 {
@@ -4043,6 +4052,12 @@ impl AppState {
             holes = super::draw_cull::capture_glyph_scissors_after_replay_physical(
                 &holes,
                 &caption_physical,
+                self.config.width,
+                self.config.height,
+            );
+            holes = super::draw_cull::capture_glyph_scissors_after_replay_physical(
+                &holes,
+                &band_glyph_holes,
                 self.config.width,
                 self.config.height,
             );
@@ -4895,7 +4910,7 @@ impl AppState {
             {
                 return false;
             }
-            let in_button = in_button || new_el.button_hover_paint.is_some();
+            let in_button = in_button || new_el.paint_caption_scope;
             if new_el.text != old_el.text {
                 if !in_button {
                     return false;
@@ -4914,7 +4929,7 @@ impl AppState {
 
     fn has_button_caption_change(new_root: &Element, old_root: &Element) -> bool {
         fn walk(new_el: &Element, old_el: &Element, in_button: bool) -> bool {
-            let in_button = in_button || new_el.button_hover_paint.is_some();
+            let in_button = in_button || new_el.paint_caption_scope;
             if in_button && new_el.text != old_el.text {
                 return true;
             }
@@ -4936,7 +4951,7 @@ impl AppState {
             old_el: &Element,
             in_button: bool,
         ) -> (bool, Option<(u64, [f32; 4])>) {
-            let is_button = in_button || new_el.button_hover_paint.is_some();
+            let is_button = in_button || new_el.paint_caption_scope;
             let mut changed = is_button && new_el.text != old_el.text;
             let mut descendant_damage = None;
             for (new_child, old_child) in
@@ -4952,7 +4967,7 @@ impl AppState {
                 changed |= child_changed;
                 descendant_damage = child_damage.or(descendant_damage);
             }
-            if changed && new_el.button_hover_paint.is_some() {
+            if changed && new_el.paint_caption_scope {
                 return (
                     true,
                     Some((
@@ -4975,7 +4990,7 @@ impl AppState {
     /// insertion/removal is handled by portal membership damage instead.
     fn portal_only_structure_change(new_root: &Element, old_root: &Element) -> bool {
         fn walk(new_el: &Element, old_el: &Element, in_button: bool) -> bool {
-            let in_button = in_button || new_el.button_hover_paint.is_some();
+            let in_button = in_button || new_el.paint_caption_scope;
             if new_el.template_id != old_el.template_id
                 || new_el.style != old_el.style
                 || new_el.text_style != old_el.text_style
@@ -5250,7 +5265,7 @@ impl AppState {
     fn path_has_button_ancestor(root: &Element, path: &[usize]) -> bool {
         let mut node = root;
         for &index in path {
-            if node.button_hover_paint.is_some() {
+            if node.paint_caption_scope {
                 return true;
             }
             let Some(next) = node.children.get(index) else {
@@ -5258,14 +5273,14 @@ impl AppState {
             };
             node = next;
         }
-        node.button_hover_paint.is_some()
+        node.paint_caption_scope
     }
 
     fn button_ancestor_damage(root: &Element, path: &[usize]) -> Option<(u64, [f32; 4])> {
         let mut node = root;
         let mut found = None;
         for &index in path {
-            if node.button_hover_paint.is_some() {
+            if node.paint_caption_scope {
                 found = Some((
                     crate::app::damage::paint_element_key(node),
                     crate::core::tree::visual_paint_aabb(node, node.paint_scroll_acc),
@@ -5273,7 +5288,7 @@ impl AppState {
             }
             node = node.children.get(index)?;
         }
-        if node.button_hover_paint.is_some() {
+        if node.paint_caption_scope {
             found = Some((
                 crate::app::damage::paint_element_key(node),
                 crate::core::tree::visual_paint_aabb(node, node.paint_scroll_acc),
@@ -5637,11 +5652,10 @@ impl AppState {
         // / redraw causes visible flicker; use `recover_surface` after a Lost acquire instead.
         if dims_changed {
             self.surface.configure(&self.device, &self.config);
-            super::window_chrome::apply_created_window(
-                self.window.as_ref(),
-                &self.chrome,
-                self.composition_swapchain,
-            );
+            if !self.pending_window_chrome {
+                super::window_chrome::apply_created_window(
+                    self.window.as_ref(), &self.chrome, self.composition_swapchain);
+            }
             self.pipeline
                 .update_resolution(&self.queue, self.config.width, self.config.height);
             self.textured_pipeline.update_resolution(
@@ -5652,6 +5666,7 @@ impl AppState {
             self.layout_status = crate::core::tree::LayoutStatus::LayoutChanged;
             self.page_geom_dirty = true;
             self.local_backdrop_valid = false;
+            self.local_backdrop_layers.clear();
             self.mark_full_redraw();
         }
     }
@@ -5660,29 +5675,30 @@ impl AppState {
     /// `Outdated` without a size change.
     pub(super) fn recover_surface(&mut self) {
         self.surface.configure(&self.device, &self.config);
-        super::window_chrome::apply_created_window(
-            self.window.as_ref(),
-            &self.chrome,
-            self.composition_swapchain,
-        );
+        if !self.pending_window_chrome {
+            super::window_chrome::apply_created_window(
+                self.window.as_ref(), &self.chrome, self.composition_swapchain);
+        }
         self.mark_full_redraw();
     }
 
     pub(super) fn sync_window_theme(&mut self) {
         self.window.set_theme(super::window_chrome::native_theme_preference());
         self.scrollbar_base_style.clear();
-        super::window_chrome::apply_created_window(
-            self.window.as_ref(),
-            &self.chrome,
-            self.composition_swapchain,
-        );
+        self.pending_window_chrome = true;
+        if self.chrome.themed().blur {
+            super::window_chrome::apply_created_window(
+                self.window.as_ref(), &self.chrome, self.composition_swapchain);
+            crate::platform::glass_sync_jadix_theme(self.window.as_ref());
+            self.pending_window_chrome = false;
+        }
         self.local_backdrop_valid = false;
+        self.local_backdrop_layers.clear();
         // Theme presets can change font metrics and glyph raster mode while the
         // text nodes keep the same strings. Drop glyphon CPU/GPU caches before
         // the first themed frame so the retained page cannot reuse old shaping.
         self.bust_text_caches();
         self.mark_full_redraw();
-        crate::platform::glass_sync_jadix_theme();
         self.window.request_redraw();
     }
 
@@ -5695,7 +5711,7 @@ impl AppState {
         // 无拇指拖拽时：overlay 淡入淡出会走 Full 预更新，但 flex 树尺寸不变，可跳过 compute_layout，
         // collect draws the track/thumb with the scroll signal (same path as ViewportsOnly).
         scrollbar_skip_flex_layout: bool,
-        // Smooth-scroll / overlay-fade: skip chrome walks that cannot change (checked, focus ring,
+        // Smooth-scroll / content drag: skip chrome walks that cannot change (checked, focus ring,
         // caret paint). Class `hover:scale/rotate/skew` **enter** is frozen here — content
         // sliding onto a still cursor must not light up every `transition-transform` tile
         // (gallery layout WP jank + sidebar hover flash). `hover:bg/text` **does** enter
@@ -5704,6 +5720,7 @@ impl AppState {
         // via `tick_active_css_transitions`.
         scroll_paint_only: bool,
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
+        self.layout_tree.begin_presentation_frame();
         super::frame_stats::begin_scene_uploads();
         super::frame_stats::begin_scene_batches();
         self.gpu_presented_this_frame = false;
@@ -5735,10 +5752,10 @@ impl AppState {
         // measure and paint with fitted wrapping, including live resize and rail tweens.
         // Settle is deferred one frame after `inner_size` matches the last Resized event so the
         // final drag frame stays fluid; that next frame must run with fast=false + LayoutChanged.
-        if crate::components::sidebar::take_sidebar_rail_text_settle() {
+        if self.layout_tree.take_text_settle() {
             self.needs_text_settle = true;
         }
-        let rail_anim = crate::components::sidebar::sidebar_rail_width_anim_active();
+        let rail_anim = self.layout_tree.take_geometry_motion();
         // Snapshot before `inner_size` may drop `last_resized_event` this frame.
         let viewport_resizing = self.last_resized_event.is_some();
         let settling = self.needs_text_settle && self.last_resized_event.is_none() && !rail_anim;
@@ -5817,7 +5834,6 @@ impl AppState {
         crate::utils::modal_motion::set_modal_viewport_size(viewport_w, viewport_h);
         #[cfg(all(debug_assertions, feature = "devtools"))]
         crate::app::devtools::sync_content_viewport(&mut self.root_element);
-        crate::components::carousel::begin_carousel_paint_frame();
         crate::core::tree::sync_reactive_elements_subtree_ex(
             &mut self.root_element,
             &mut self.layout_tree,
@@ -5889,84 +5905,31 @@ impl AppState {
                 // reconciled, including during `scroll_paint_only` (main-pane smooth scroll under
                 // a still pointer on the rail). Gating sidebar here left enter/leave signals live
                 // but never wrote `sidebar-accent`, so nav items looked dead until scroll settled.
-                crate::components::button::sync_button_hover_paint_subtree(
+
+                sync_impact = sync_impact.merge(crate::authoring::presentation::sync_tree(
                     &mut self.root_element,
                     &mut self.layout_tree,
-                    &mut sync_impact,
-                    viewport_w,
-                    viewport_h,
-                    [0.0, 0.0],
-                );
-                crate::components::sidebar::sync_sidebar_menu_button_paint_subtree(
-                    &mut self.root_element,
-                    &mut self.layout_tree,
-                    &mut sync_impact,
-                );
-                crate::components::tree_view::sync_tree_view_hover_paint_subtree(
-                    &mut self.root_element,
-                    &mut self.layout_tree,
-                    &mut sync_impact,
-                );
+                    crate::authoring::presentation::Context {
+                        phase: crate::authoring::presentation::Phase::Hover,
+                        viewport: [viewport_w, viewport_h],
+                    width_budget: None,
+},
+                ));
             }
         }
         if !scroll_paint_only {
-            crate::components::command::sync_command_item_paint_subtree(
+            sync_impact = sync_impact.merge(crate::authoring::presentation::sync_tree(
                 &mut self.root_element,
                 &mut self.layout_tree,
-                &mut sync_impact,
-            );
-            crate::components::context_menu::sync_context_menu_item_paint_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut sync_impact,
-            );
-            crate::components::dropdown_menu::sync_dropdown_menu_item_paint_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut sync_impact,
-            );
-            crate::components::switch::sync_switch_checked_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut sync_impact,
-            );
-            crate::components::checkbox::sync_checkbox_checked_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut sync_impact,
-            );
-            crate::components::radio_group::sync_radio_checked_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut sync_impact,
-            );
-            crate::components::tabs::sync_tabs_trigger_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut sync_impact,
-            );
-            crate::components::sidebar::sync_sidebar_rail_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut sync_impact,
-            );
-            if crate::components::media_player::sync_media_presentation_subtree(
-                &mut self.root_element,
-            ) {
-                sync_impact = sync_impact.merge(LayoutStatus::StructureChanged);
-            }
-            crate::components::bubble::sync_bubble_reactions_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut sync_impact,
-                viewport_w,
-            );
-            crate::components::avatar::sync_avatar_group_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut sync_impact,
-                viewport_w,
-            );
+                crate::authoring::presentation::Context {
+                    phase: crate::authoring::presentation::Phase::State,
+                    viewport: [viewport_w, viewport_h],
+                width_budget: None,
+},
+            ));
+
+
+
             // After reactive/toggle pressed shadows so keyboard ring can override without fighting.
             crate::style::sync_focus_ring_subtree(
                 &mut self.root_element,
@@ -6017,7 +5980,7 @@ impl AppState {
                 viewport_h,
                 [0.0, 0.0],
             );
-            crate::components::label::sync_label_selection_paint_subtree(
+            crate::utils::text_selection::sync_label_selection_paint_subtree(
                 &mut self.root_element,
                 &mut sync_impact,
             );
@@ -6055,9 +6018,7 @@ impl AppState {
             hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element)
         } else {
             // Drag-follow changes paint position without changing membership.
-            if crate::utils::drag::is_active() {
-                crate::utils::drag::overlay::sync_overlay_ghost_insets(&mut self.root_element);
-            }
+            crate::utils::drag::runtime::sync_tree(&mut self.root_element);
             crate::utils::anchored_overlay::sync_point_overlay_drag_insets(&mut self.root_element);
             0
         };
@@ -6099,15 +6060,18 @@ impl AppState {
         ) {
             self.mark_full_redraw();
         }
-        let layout_for_build_base =
-            Self::merge_layout_status(pre_chrome_layout_status, sync_impact);
+        let authoring_layout = crate::authoring::presentation::sync_tree(
+            &mut self.root_element, &mut self.layout_tree,
+            crate::authoring::presentation::Context::new(
+                crate::authoring::presentation::Phase::BeforeLayout, [viewport_w, viewport_h]),
+        );
+        let layout_for_build_base = Self::merge_layout_status(
+            Self::merge_layout_status(pre_chrome_layout_status, sync_impact), authoring_layout);
         // `layout_for_build` will only be merged once for `devtools`; no mut is required for non-devtools builds.
         #[cfg(all(debug_assertions, feature = "devtools"))]
         let mut layout_for_build = layout_for_build_base;
         #[cfg(not(all(debug_assertions, feature = "devtools")))]
         let layout_for_build = layout_for_build_base;
-
-        crate::components::drawer::sync_drawer_background_scale(&mut self.root_element);
 
         // Seed overlay/zoom closed pose *before* layout so `__modal_zoom` capture
         // sees opacity 0 / scale 0.90. CSS time starts *after* layout — first-open
@@ -6518,19 +6482,12 @@ impl AppState {
             }
         }
         if !scroll_paint_only {
-            let mut overflow_impact = crate::core::tree::LayoutStatus::Clean;
-            crate::components::bubble::sync_bubble_reactions_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut overflow_impact,
-                logical_w,
+            let overflow_impact = crate::authoring::presentation::sync_tree(
+                &mut self.root_element, &mut self.layout_tree,
+                crate::authoring::presentation::Context::new(
+                    crate::authoring::presentation::Phase::AfterGeometry, [logical_w, logical_h]),
             );
-            crate::components::avatar::sync_avatar_group_subtree(
-                &mut self.root_element,
-                &mut self.layout_tree,
-                &mut overflow_impact,
-                logical_w,
-            );
+
             if matches!(
                 overflow_impact,
                 crate::core::tree::LayoutStatus::StructureChanged
@@ -6590,18 +6547,11 @@ impl AppState {
         if modal_css_ticking || floating_needs_frame || floating_css_ticking {
             self.window.request_redraw();
         }
-        if crate::components::color_picker::is_color_dragging() {
-            let live = crate::components::color_picker::snapshot_color_drag_bounds(
-                &self.root_element,
-                mouse_pos[0],
-                mouse_pos[1],
-            );
-            crate::components::color_picker::queue_color_drag_apply(
-                mouse_pos[0],
-                mouse_pos[1],
-                live,
-            );
-        }
+        crate::utils::drag::routing::queue_frame(
+            &self.root_element,
+            mouse_pos[0],
+            mouse_pos[1],
+        );
         drop(acc_layout_prof);
         let layout_done = Instant::now();
         #[cfg(feature = "webview")]
@@ -6806,15 +6756,16 @@ impl AppState {
         }
         let _ =
             super::pending_images::flush_src_textures(|key| self.image_textures.get(key).is_some());
-        let _ = crate::components::color_picker::flush_color_picker_textures(|key| {
-            self.image_textures.get(key).is_some()
-        });
+        crate::media::texture::flush_retained_textures(
+            render_result.textured_draws.iter().map(|draw| draw.texture_key.as_str()),
+            |key| self.image_textures.get(key).is_some(),
+        );
         let _ = crate::utils::text_texture::flush_text_xform_textures(|key| {
             self.image_textures.get(key).is_some()
         });
 
         let pending_images = super::pending_images::take_pending();
-        let updated_texture_keys: std::collections::HashSet<_> =
+        let mut updated_texture_keys: std::collections::HashSet<_> =
             pending_images.iter().map(|(key, ..)| key.clone()).collect();
         #[cfg(test)]
         let pending_count = pending_images.len();
@@ -6908,6 +6859,7 @@ impl AppState {
             }
         }
         let paths_done = Instant::now();
+        self.shader_frame_active = false;
         {
             // Compile mounted offscreen shader leaves while establishing the
             // page, so first exposure during a wheel gesture does not compile.
@@ -6939,14 +6891,17 @@ impl AppState {
                     for source in shader_sources {
                         gpu.prepare_source(&self.device, &source);
                     }
-                    if gpu.flush(
+                    let updated = gpu.flush_updated_textures(
                         &self.device,
                         &self.queue,
                         &self.textured_pipeline,
                         &mut self.image_textures,
                         crate::style::global_time_s(),
                         mouse_pos,
-                    ) {
+                    );
+                    if !updated.is_empty() {
+                        updated_texture_keys.extend(updated);
+                        self.shader_frame_active = true;
                         self.window.request_redraw();
                     }
                 }
@@ -7184,7 +7139,7 @@ impl AppState {
             );
         }
         let mut region_present =
-            super::damage::portal_composite_damage(&self.damage_nodes, self.overlay_occupied)
+            super::damage::portal_composite_damage(&self.damage_nodes, self.overlay_occupied, [0.0, 0.0, logical_w, logical_h])
                 .is_some()
                 || self.damage_nodes.iter().any(|d| {
                     matches!(
@@ -7193,11 +7148,6 @@ impl AppState {
                             | super::damage::PaintDirtyKind::OverlayRestore
                     )
                 });
-        // A source-over clear quad cannot replace transparent destination alpha.
-        // Preserve compositor transparency with a real attachment Clear.
-        if region_present && self.transparent_surface() {
-            self.force_full_redraw = true;
-        }
         let max_backdrop_blur_logical = overlay_split
             .bands
             .iter()
@@ -7214,7 +7164,9 @@ impl AppState {
         // A region repair would replay sharp page pixels into the retained
         // blurred scene (notably the strip exposed by a shrinking Drawer).
         // Recompose the cached modal backdrop before drawing its overlays.
-        if max_backdrop_blur_logical > 0.5 && modal_underlay_opacity > 0.001 {
+        if (max_backdrop_blur_logical > 0.5 && modal_underlay_opacity > 0.001)
+            || self.modal_blur_radius.is_some()
+        {
             self.force_full_redraw = true;
         }
         let page_stack_band_ranges = overlay_split.page_stack_band_ranges();
@@ -7430,12 +7382,7 @@ impl AppState {
         {
             // Prepare exactly the pixels reset below, including viewport-clear
             // fallback and pins outside the scrolled viewport.
-            cull_phys.and_then(|c| {
-                super::draw_cull::CullRects::from_rects(c.strips().map(|r| {
-                    let s = ui_scale.max(1e-6);
-                    [r[0] / s, r[1] / s, r[2] / s, r[3] / s]
-                }))
-            })
+            cull_phys.map(|coverage| super::draw_cull::physical_repair_text_cull(coverage, ui_scale))
         } else if region_present && gpu_present.use_node_present {
             Some(super::draw_cull::region_repair_text_cull(
                 &self.damage_nodes,
@@ -7951,7 +7898,7 @@ impl AppState {
             // Complete regions replay glyphs in page-band order. Only local
             // chrome repairs need the deferred capture after their fill.
             super::damage::PaintDirtyKind::Region => {
-                super::draw_cull::region_replays_own_chrome_only(
+                !self.transparent_surface() && super::draw_cull::region_replays_own_chrome_only(
                     d.key,
                     d.bounds,
                     &render_result.node_paints,
@@ -8465,14 +8412,9 @@ impl AppState {
                         self.config.height,
                     ) {
                         scroll_clear_scissors.push(scissor);
-                        let repair_clear = if self.transparent_surface() {
-                            crate::renderer::surface_clear_color(false)
-                        } else {
-                            clear
-                        };
                         scroll_clear_instances.push(scissor_clear_instance(
                             rect,
-                            repair_clear,
+                            clear,
                             8.0,
                         ));
                     }
@@ -8503,6 +8445,7 @@ impl AppState {
         }
         let capture_page_count = capture_bands.len();
         capture_bands.extend_from_slice(&overlay_band_ranges);
+        self.local_backdrop_layers.resize_with(capture_bands.len(), || None);
         let mut capture_backdrop_idx = vec![None; capture_bands.len()];
         // Capture submits its own encoder (like subtree `render_capture`) so prefix
         // glyphon is flushed to the scene RT before this frame encoder reuses the
@@ -8513,7 +8456,7 @@ impl AppState {
                 let optical = scaled_instances[band.instance.0..band.instance.1]
                     .iter()
                     .any(|instance| instance.glass[0] >= 1.0 && instance.glass[1] > 0.0);
-                if (band_i >= capture_page_count || reuse_modal_source) && !optical {
+                if (band.backdrop_blur > 0.5 || reuse_modal_source) && !optical {
                     continue;
                 }
                 // `render_result.instances` was `take`n into `scaled_instances` (physical).
@@ -8553,18 +8496,33 @@ impl AppState {
                             .map(|dirty| dirty.bounds),
                     )
                     .collect();
+                let dedicated = optical || band_i > 0;
+                if dedicated && self.local_backdrop_layers[band_i].as_ref()
+                    .is_none_or(|(key, _)| *key != band.stamp_key)
+                {
+                    self.local_backdrop_layers[band_i] =
+                        Some((band.stamp_key, self.backdrop_blur.new_target(&self.device)));
+                }
+                let has_valid_blur = if dedicated {
+                    self.local_backdrop_layers[band_i].as_ref()
+                        .is_some_and(|(_, backdrop)| backdrop.blurred_view().is_some())
+                } else {
+                    self.local_backdrop_valid && self.backdrop_blur.blurred_view().is_some()
+                };
                 let recapture = optical
                     || local_backdrop_must_recapture(
-                        self.local_backdrop_valid && self.backdrop_blur.blurred_view().is_some(),
+                        has_valid_blur,
                         use_partial_damage,
                         scroll_source_moved,
                         capture_region,
                         &source_damage,
                         ui_scale,
                     );
-                let mut optical_target =
-                    optical.then(|| self.backdrop_blur.new_target(&self.device));
-                let backdrop = optical_target.as_mut().unwrap_or(&mut self.backdrop_blur);
+                let backdrop = if dedicated {
+                    &mut self.local_backdrop_layers[band_i].as_mut().unwrap().1
+                } else {
+                    &mut self.backdrop_blur
+                };
                 if recapture {
                     #[cfg(test)]
                     {
@@ -8607,9 +8565,7 @@ impl AppState {
                         &scaled_instances,
                         capture_region,
                     );
-                    if !optical {
-                        self.local_backdrop_valid = backdrop.blurred_view().is_some();
-                    }
+                    self.local_backdrop_valid |= backdrop.blurred_view().is_some();
                 }
                 if let Some(view) = backdrop.blurred_view() {
                     let idx = live_backdrops.len();
@@ -8863,7 +8819,7 @@ impl AppState {
                     }
                     // I-beam is a swapchain overlay after retain blit.
                 }
-                let radius = max_backdrop_blur_logical * modal_underlay_opacity * ui_scale;
+                let radius = max_backdrop_blur_logical * ui_scale;
                 if !reuse_modal_source || self.modal_blur_radius != Some(radius.to_bits()) {
                     #[cfg(test)]
                     {
@@ -8891,7 +8847,7 @@ impl AppState {
                 // Destination is retain (draw_to_retain forced above); never Load the swapchain.
                 let blur_dst = self.present_retain.color_view();
                 if let Some(dst) = blur_dst {
-                    modal.blit_to(&self.queue, &mut encoder, dst, 1.0, clear_color);
+                    modal.blit_to(&self.queue, &mut encoder, dst, modal_underlay_opacity, clear_color);
                 }
             }
         }
@@ -9439,6 +9395,15 @@ impl AppState {
         let submit_done = Instant::now();
         let present_begin = Instant::now();
         self.queue.present(output);
+        if self.pending_window_chrome && !self.theme_transition.needs_frame() {
+            super::window_chrome::apply_created_window(
+                self.window.as_ref(),
+                &self.chrome,
+                self.composition_swapchain,
+            );
+            self.pending_window_chrome = false;
+            crate::platform::glass_sync_jadix_theme(self.window.as_ref());
+        }
         super::frame_stats::note_presented_frame(self.window.id());
         #[cfg(feature = "performance")]
         super::frame_stats::note_frame_timings(
@@ -9658,6 +9623,41 @@ fn update_scrollbar_element_self(
     base_style: &mut std::collections::HashMap<String, ScrollbarBaseStyle>,
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
 ) {
+    if let Some(group) = el.attrs.get(crate::core::scrollbar::ATTR_SCROLLBAR_GROUP).cloned() {
+        let (rest, axis) = group.rsplit_once(':').unwrap_or((&group, "y"));
+        let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(rest);
+        let horizontal = axis == "x";
+        let (viewport, content, overflow) = if horizontal {
+            (&keys.viewport_w, &keys.content_w, &keys.overflow_x)
+        } else {
+            (&keys.viewport_h, &keys.content_h, &keys.overflow_y)
+        };
+        let extent = use_signal(viewport.as_str(), || 0.0_f32).peek();
+        let content = use_signal(content.as_str(), || 0.0_f32).peek();
+        let overflow = use_signal(overflow.as_str(), || "auto".to_string()).peek();
+        let visibility = use_signal(&scrollbar_visibility_signal_key(rest, axis), || "auto".to_string()).peek();
+        let disabled = matches!(overflow.as_str(), "hidden" | "clip" | "visible")
+            || visibility == "never"
+            || (visibility != "always" && extent > 0.5 && content <= extent + 0.5);
+        el.style.display = if disabled { taffy::style::Display::None } else { taffy::style::Display::Flex };
+        if horizontal {
+            if let Some(edge) = el.attrs.get(ATTR_H_LANE_INSET).and_then(|value| value.parse::<f32>().ok()) {
+                let height = use_signal(keys.viewport_h.as_str(), || 0.0_f32).peek();
+                let content = use_signal(keys.content_h.as_str(), || 0.0_f32).peek();
+                let overflow = use_signal(keys.overflow_y.as_str(), || "auto".to_string()).peek();
+                let visibility = use_signal(&scrollbar_visibility_signal_key(rest, "y"), || "auto".to_string()).peek();
+                let lane = vertical_scrollbar_occupies_lane(
+                    !matches!(overflow.as_str(), "hidden" | "clip" | "visible"), &visibility, height, content);
+                let cross = el.attrs.get(ATTR_H_LANE_V_CROSS)
+                    .and_then(|value| value.parse::<f32>().ok()).unwrap_or(SCROLLBAR_DEFAULT_CROSS_PX);
+                let next = taffy::style::LengthPercentageAuto::length(horizontal_lane_side_inset(edge, cross, lane));
+                let side = use_signal(&scroll_scrollbar_y_side_signal_key(rest), || "right".to_string()).peek();
+                if side == "left" { el.style.inset.left = next; } else { el.style.inset.right = next; }
+            }
+        }
+        layout_tree.update_taffy_node_style(el);
+        return;
+    }
     let inset_len_px = |v: &taffy::style::LengthPercentageAuto| {
         crate::layout::lpa_length_px(*v)
             .filter(|px| px.is_finite())
@@ -9805,7 +9805,8 @@ fn update_scrollbar_element_self(
     // Only the side facing the vertical bar. Replacing both insets with the
     // shared edge pad moved textarea bars (left 4 → 2) on the first frame, and
     // a collect-time stretch then painted outside the box the fade clears.
-    if axis == "x" && !this_inset_outside {
+    let flex_track = el.attrs.contains_key(crate::core::scrollbar::ATTR_SCROLLBAR_FLEX_TRACK);
+    if axis == "x" && !this_inset_outside && !flex_track {
         let y_side = use_signal(&scroll_scrollbar_y_side_signal_key(&rest), || {
             "right".to_string()
         })
@@ -9874,7 +9875,7 @@ fn update_scrollbar_element_self(
         };
         // Last frame still included the vertical lane. Size the thumb to the
         // released length now; Taffy catches the track box up on this layout.
-        if axis == "x" && !y_lane && main_available > laid + 0.5 {
+        if axis == "x" && !y_lane && !flex_track && main_available > laid + 0.5 {
             main_available
         } else if laid > 1.0 {
             laid
@@ -9885,7 +9886,7 @@ fn update_scrollbar_element_self(
 
     match axis {
         "x" => {
-            el.style.size.width = if this_inset_outside {
+            el.style.size.width = if this_inset_outside && !flex_track {
                 Dimension::percent(1.0)
             } else {
                 Dimension::auto()
@@ -9894,7 +9895,7 @@ fn update_scrollbar_element_self(
         }
         _ => {
             el.style.size.width = Dimension::length(cross);
-            el.style.size.height = if this_inset_outside {
+            el.style.size.height = if this_inset_outside && !flex_track {
                 Dimension::percent(1.0)
             } else {
                 Dimension::auto()
@@ -10131,6 +10132,7 @@ pub(super) fn update_scrollbar_elements(
                 for i in (0..n).rev() {
                     let child = &el.children[i];
                     let descend = child.scroll_viewport_subtree_count > 0
+                        || child.attrs.contains_key(crate::core::scrollbar::ATTR_SCROLLBAR_GROUP)
                         || child.focus_id.as_deref().is_some_and(|f| {
                             f.starts_with(SCROLLBAR_THUMB_FOCUS_PREFIX)
                                 || f.starts_with(SCROLLBAR_TRACK_FOCUS_PREFIX)
@@ -11164,6 +11166,7 @@ mod template_path_tests {
 }
 
 #[cfg(test)]
+#[cfg(feature = "components")]
 mod button_caption_damage_tests {
     use super::AppState;
     use crate::components::button::button;
@@ -11457,6 +11460,7 @@ mod present_fingerprint_tests {
 
     #[test]
     #[ignore = "requires GPU adapter; run with --ignored --nocapture"]
+    #[cfg(feature = "components")]
     fn breadcrumb_node_capture_draws_hover_underline_and_clears_on_leave() {
         use crate::app::damage::{clear_frame_paint_nodes, take_frame_paint_nodes};
         use crate::app::draw_cull::node_present_clipped_capture_text;

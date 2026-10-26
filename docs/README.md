@@ -10,6 +10,7 @@
 | [DevTools 与热重载](devtools.md) | Gallery 使用与限制；内部机制见 [开发工具手册](../development-docs/ops/devtools.md) |
 | [ScalePreview](../crates/jadix/SCALE_PREVIEW.md) | 框架级逻辑视口缩放；支持非 DevTools 场景与独立浮层宿主 |
 | [应用图标与托盘](application-icons.md) | 产品集成；配置示例 [app-icons.example.toml](app-icons.example.toml) |
+| [自定义组件作者接口](component-authoring.md) | 框架共享样式／槽位、组件宏的显式运行时路径与兼容边界 |
 | [Feature 配置清单](FEATURES.md) | 已实现能力、默认值与核心保留范围；开发期候选/拆分/测试与文档治理见 development-docs |
 
 源码、包或 feature 变化时同步使用示例；拆分迁移按 R2／R4 的实际发布入口更新，不能预写尚不存在的 import 为当前可用。

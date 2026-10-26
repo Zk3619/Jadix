@@ -44,7 +44,6 @@ pub fn style_item_text(el: &mut Element, color: [u8; 4], attr_slot: &str, shortc
         true
     });
 }
-
 pub fn has_shortcut_slot(el: &Element, attr_slot: &str, shortcut_slot: &str) -> bool {
     crate::core::tree::any_in_tree(el, |n| {
         n.attrs.get(attr_slot).map(|s| s.as_str()) == Some(shortcut_slot)
@@ -65,30 +64,28 @@ pub struct ItemPaintConfig {
     pub active_none: usize,
 }
 
-pub fn sync_item_paint_subtree(
+pub fn sync_item_paint_node(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
     cfg: &ItemPaintConfig,
 ) {
-    crate::core::tree::walk_elements_mut(el, |el| {
-        let slot = el.attrs.get(cfg.attr_slot).map(String::as_str);
-        if slot.is_some_and(|s| cfg.interactive_slots.iter().any(|want| *want == s)) {
-            let disabled = el.attrs.get(cfg.attr_disabled).map(String::as_str) == Some("1");
-            let destructive = el.attrs.get(cfg.attr_destructive).map(String::as_str) == Some("1");
-            let ix = el
-                .attrs
-                .get(cfg.attr_ix)
-                .and_then(|s| s.parse::<usize>().ok());
-            let id = el.attrs.get(cfg.attr_menu_id).cloned();
-            if let (Some(id), Some(ix)) = (id, ix) {
-                let key = format!("{id}{}", cfg.active_key_suffix);
-                let active = use_signal(key.as_str(), || cfg.active_none).peek();
-                let on = !disabled && active == ix;
-                apply_item_highlight(el, layout_tree, impact, on, destructive, cfg);
-            }
+    let slot = el.attrs.get(cfg.attr_slot).map(String::as_str);
+    if slot.is_some_and(|s| cfg.interactive_slots.iter().any(|want| *want == s)) {
+        let disabled = el.attrs.get(cfg.attr_disabled).map(String::as_str) == Some("1");
+        let destructive = el.attrs.get(cfg.attr_destructive).map(String::as_str) == Some("1");
+        let ix = el
+            .attrs
+            .get(cfg.attr_ix)
+            .and_then(|s| s.parse::<usize>().ok());
+        let id = el.attrs.get(cfg.attr_menu_id).cloned();
+        if let (Some(id), Some(ix)) = (id, ix) {
+            let key = format!("{id}{}", cfg.active_key_suffix);
+            let active = use_signal(key.as_str(), || cfg.active_none).peek();
+            let on = !disabled && active == ix;
+            apply_item_highlight(el, layout_tree, impact, on, destructive, cfg);
         }
-    });
+    }
 }
 
 pub fn apply_item_highlight(

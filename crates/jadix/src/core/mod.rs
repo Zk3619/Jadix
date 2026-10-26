@@ -5,6 +5,7 @@
 //! theme-dependent defaults belong in `components`; atomic layout/rendering
 //! building blocks belong in `primitives`.
 
+pub mod geometry;
 pub mod reactivity;
 pub(crate) mod registry_stats;
 pub mod resource;

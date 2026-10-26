@@ -145,9 +145,11 @@ struct Playback {
     bridging: bool,
 }
 
-fn play_store() -> &'static Mutex<HashMap<u64, Playback>> {
-    static S: OnceLock<Mutex<HashMap<u64, Playback>>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(HashMap::new()))
+fn play_store() -> std::rc::Rc<Mutex<HashMap<u64, Playback>>> {
+    crate::authoring::window::window_local! {
+        static STORE: std::rc::Rc<Mutex<HashMap<u64, Playback>>> = std::rc::Rc::new(Mutex::new(HashMap::new()));
+    }
+    STORE.with(std::rc::Rc::clone)
 }
 
 fn now_secs() -> f32 {
@@ -897,7 +899,8 @@ pub fn tick_animated_icon(el: &mut Element, _dt: f32) -> bool {
         .map(|s| s.as_str())
         .unwrap_or("normal");
     let key = instance_key(el);
-    let mut store = play_store().lock().ok();
+    let playback_store = play_store();
+    let mut store = playback_store.lock().ok();
     let Some(ref mut map) = store else {
         return false;
     };
@@ -955,15 +958,13 @@ pub fn stop_animated_icon(el: &mut Element) {
     set_animated_icon_state(el, "normal");
 }
 
-#[cfg(feature = "svg")]
-pub(crate) fn reset_animated_icon_playback(el: &Element) {
+pub fn reset_animated_icon_playback(el: &Element) {
     if let Ok(mut map) = play_store().lock() {
         map.remove(&instance_key(el));
     }
 }
 
-#[cfg(feature = "svg")]
-pub(crate) fn release_animated_icon(key: u64, template_id: &str) {
+fn release_animated_icon(key: u64, template_id: &str) {
     if let Ok(mut map) = play_store().lock() {
         map.remove(&key);
     }
@@ -1056,10 +1057,10 @@ pub(crate) fn ensure_animated_icon_recipe_texture(
 }
 
 /// Whether any animated icon in the tree needs the frame pump.
-pub fn subtree_needs_animated_icon_frame(el: &Element) -> bool {
+fn node_needs_animated_icon_frame(el: &Element) -> bool {
     // Collect already summarizes animated descendants. An invalidated hash must
     // fall through so newly mounted/bound icons are discovered before collection.
-    if el.collect_paint_hash != 0 && !el.collect_skip_live {
+    if crate::authoring::presentation::is_cached_static(el) {
         return false;
     }
     #[cfg(feature = "svg")]
@@ -1094,14 +1095,48 @@ pub fn subtree_needs_animated_icon_frame(el: &Element) -> bool {
             }
         }
     }
-    el.children.iter().any(subtree_needs_animated_icon_frame)
+    false
+}
+
+pub fn subtree_needs_animated_icon_frame(el: &Element) -> bool {
+    node_needs_animated_icon_frame(el) || el.children.iter().any(subtree_needs_animated_icon_frame)
+}
+
+pub fn attach_playback(el: &mut Element) {
+    if !el.attrs.contains_key("jadix_animated_icon_cleanup") {
+        let previous = el.on_unmount.take();
+        let key = instance_key(el);
+        let template = el.template_id.clone().unwrap_or_default();
+        let window = crate::authoring::window::Scope::capture();
+        el.on_unmount = Some(crate::core::tree::UnmountHook::new(move || {
+            let _window = window.enter();
+            release_animated_icon(key, &template);
+            if let Some(previous) = previous { previous.fire(); }
+        }));
+        el.set_attr("jadix_animated_icon_cleanup", "1");
+    }
+    crate::authoring::presentation::invalidate_paint(el);
+    el.icon_playback = Some(crate::authoring::icon::Playback {
+        tick: tick_animated_icon,
+        needs_frame: node_needs_animated_icon_frame,
+        texture: ensure_animated_icon_texture,
+        hover_texture: ensure_animated_icon_recipe_texture,
+        set_state: set_animated_icon_state,
+        reset: reset_animated_icon_playback,
+        detach: |element| {
+            reset_animated_icon_playback(element);
+            element.attrs.remove(ATTR_ANIMATED_ICON);
+            element.attrs.remove(ATTR_ANIMATED_ICON_CONTROLLED);
+        },
+        controlled: el.get_attr(ATTR_ANIMATED_ICON_CONTROLLED).is_some(),
+    });
 }
 
 /// Tick all animated icons under `el`.
 pub fn tick_animated_icons_subtree(el: &mut Element, dt: f32) -> bool {
     // Collect already summarizes animated descendants. An invalidated hash must
     // fall through so newly mounted/bound icons are discovered before collection.
-    if el.collect_paint_hash != 0 && !el.collect_skip_live {
+    if crate::authoring::presentation::is_cached_static(el) {
         return false;
     }
     let mut any = tick_animated_icon(el, dt);
@@ -1202,6 +1237,7 @@ impl From<AnimatedIconBuilder> for Element {
         // Default: SVG `bounding-box` — hit own layout container (MDN SVG-only).
         el = el.pointer_events(pointer_events.as_deref().unwrap_or("bounding-box"));
 
+        attach_playback(&mut el);
         if controlled {
             return el;
         }

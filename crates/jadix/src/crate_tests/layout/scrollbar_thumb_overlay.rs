@@ -1,8 +1,8 @@
+#![cfg(feature = "components")]
 //! Regression: overlay-collect thumb origin must match Full Taffy, centered in the track.
 //!
 //! Track chrome is a 1px layout border and no padding. A previous overlay formula used
 //! border+padding (2px) and sat the thumb ~1px down-right of the track.
-
 use crate::components::scroll_area::scroll_area;
 use crate::components::scrollbar::{SCROLLBAR_THUMB_FOCUS_PREFIX, SCROLLBAR_TRACK_FOCUS_PREFIX};
 use crate::core::reactivity::{create_effect, create_root, use_signal};

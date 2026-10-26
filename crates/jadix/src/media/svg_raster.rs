@@ -131,7 +131,7 @@ pub fn ensure_svg_document_texture(svg: &str, width: u32, height: u32) -> Option
 
 /// The key must identify the document, dimensions and paint parameters.
 /// Animation callers keep their frame-key namespace while sharing raster/upload reuse.
-pub(crate) fn ensure_svg_document_texture_with_key(
+pub fn ensure_svg_document_texture_with_key(
     tex_id: String,
     svg: &str,
     width: u32,
@@ -293,9 +293,7 @@ mod tests {
 
     #[test]
     fn lucide_minus_partial_coverage_keeps_foreground_rgb() {
-        let Some(inner) = crate::utils::lucide::lucide_svg_inner("x") else {
-            return;
-        };
+        let inner = r#"<path d="M18 6 6 18" /> <path d="m6 6 12 12" />"#;
         let fg = [25u8, 25, 25, 255];
         let (_, _, rgba) = rasterize_lucide_icon_rgba(inner, fg, 96).expect("raster");
         let mut aa = 0usize;

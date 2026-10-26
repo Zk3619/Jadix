@@ -223,4 +223,5 @@ pub use variant_override::{
 pub use waapi::{get_animations, Animation, ComputedTiming, Keyframe, KeyframeEffect};
 pub use writing_mode::{PhysicalSide, WritingMode};
 
+#[cfg(feature = "components")]
 pub(crate) mod button_chrome;

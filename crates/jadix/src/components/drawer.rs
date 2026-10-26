@@ -64,7 +64,7 @@ use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
-use crate::core::tree::Element;
+use crate::core::tree::{Element, LayoutStatus};
 use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::{r#box, vstack};
@@ -700,6 +700,7 @@ fn drawer_shell_panel(
     scale_background: bool,
     chrome_close: Option<Element>,
     panel_chrome: crate::components::base::SlotChrome,
+    background_lifetime: &std::rc::Rc<()>,
 ) -> Element {
     let (vw, vh) = drawer_viewport_size();
     let axis = drawer_panel_axis(direction, vw, vh, width, height);
@@ -811,6 +812,7 @@ fn drawer_shell_panel(
         modal_id,
         scale_background && !motion_busy && !dragging,
         rest_frac,
+        background_lifetime,
     );
     panel
 }
@@ -982,6 +984,7 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
     let had_mounted_key = format!("{id}__drawer_had_mounted");
     let had_mounted = use_signal(had_mounted_key.as_str(), || false);
 
+    let background_lifetime = std::rc::Rc::new(());
     viewport_modal_island(view_id, move || {
         let owner = format!("drawer:{id}");
         let (vw, vh) = drawer_viewport_size();
@@ -1003,7 +1006,7 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
         layer_opts.dragging = dragging;
         layer_opts.overlay = modal;
         layer_opts.stage_overflow_hidden = true;
-        viewport_modal_layer(&id, open, &live_overlay, layer_opts, |phase| {
+        let mut layer = viewport_modal_layer(&id, open, &live_overlay, layer_opts, |phase| {
             let Some(phase) = phase else {
                 had_mounted.set(false);
                 clear_drawer_scale_background(&id);
@@ -1077,9 +1080,44 @@ pub fn drawer_content(opts: DrawerContentOpts, body: impl Fn() -> Element + 'sta
                 scale_background,
                 chrome_close,
                 panel_chrome.clone(),
+                &background_lifetime,
             ))
-        })
+        });
+        let snap_id = id.clone();
+        crate::authoring::deadline::attach(
+            &mut layer,
+            crate::authoring::deadline::Visibility::Always,
+            move |context| {
+                let changed = poll_drawer_snap(&snap_id, context.now);
+                drain_drawer_layout_bump(&snap_id);
+                let active = DRAWER_Y_SETTLING.with(|snaps| snaps.borrow().contains_key(&snap_id));
+                crate::authoring::deadline::Poll {
+                    redraw: changed,
+                    next_wake: active.then_some(context.now + std::time::Duration::from_millis(16)),
+                }
+            },
+        );
+        attach_drawer_background(&mut layer, &id, &background_lifetime);
+        layer
     })
+}
+
+fn attach_drawer_background(layer: &mut Element, id: &str, background_lifetime: &std::rc::Rc<()>) {
+    let cleanup_id = id.to_string();
+    let cleanup_lifetime = background_lifetime.clone();
+        crate::authoring::presentation::attach_tree_with_cleanup(layer,
+            crate::authoring::presentation::Phase::BeforeLayout,
+            |root, _, _| {
+                sync_drawer_background_scale(root);
+                LayoutStatus::Clean
+            }, move |root, _, _| {
+                let owns_background = DRAWER_SCALE_BG.with(|state| state.borrow().as_ref().is_some_and(|state| {
+                    state.lifetime.ptr_eq(&std::rc::Rc::downgrade(&cleanup_lifetime))
+                }));
+                if owns_background { clear_drawer_scale_background(&cleanup_id); }
+                sync_drawer_background_scale(root);
+                LayoutStatus::StyleChanged
+            });
 }
 
 fn collect_drawer_focus_ids(el: &Element, out: &mut Vec<String>) {
@@ -1261,7 +1299,7 @@ const DRAWER_CLOSE_VELOCITY: f32 = 900.0;
 const SCALE_BG_MAX_SHRINK: f32 = 0.04;
 const DRAWER_DRAG_COMMIT_PX: f32 = 2.0;
 
-thread_local! {
+crate::authoring::window::window_local! {
     static DRAWER_DRAG: RefCell<Option<DrawerDrag>> = const { RefCell::new(None) };
     static DRAWER_LIVE_FRAC: RefCell<HashMap<String, f32>> = RefCell::new(HashMap::new());
     static DRAWER_SCALE_BG: RefCell<Option<DrawerScaleBg>> = const { RefCell::new(None) };
@@ -1277,6 +1315,7 @@ thread_local! {
 
 #[derive(Clone)]
 struct DrawerScaleBg {
+    lifetime: std::rc::Weak<()>,
     id: String,
     open_frac: f32,
 }
@@ -1356,25 +1395,43 @@ struct DrawerSettle {
 }
 
 /// Run outside the live tree borrow, alongside the existing modal frame pump.
+#[cfg(test)]
 pub(crate) fn tick_drawer_snaps() -> bool {
     tick_drawer_snaps_at(Instant::now())
 }
 
-fn tick_drawer_snaps_at(now: Instant) -> bool {
-    let snaps = DRAWER_Y_SETTLING.with(|s| s.borrow().clone());
-    for (id, snap) in snaps {
-        let t = (now.saturating_duration_since(snap.started).as_secs_f32() / 0.25).min(1.0);
-        let eased = 1.0 - (1.0 - t).powi(3);
-        set_drawer_live_frac(&id, snap.from + (snap.target - snap.from) * eased);
-        if t >= 1.0 {
-            clear_drawer_y_settling(&id);
-            clear_drawer_live_frac(&id);
-        }
-        queue_drawer_layout_bump(&id);
-        let (vw, vh) = drawer_viewport_size();
-        crate::app::damage::push_frame_paint_damage([0.0, 0.0, vw, vh]);
+fn poll_drawer_snap(id: &str, now: Instant) -> bool {
+    let Some(snap) = DRAWER_Y_SETTLING.with(|snaps| snaps.borrow().get(id).cloned()) else {
+        return false;
+    };
+    let time = (now.saturating_duration_since(snap.started).as_secs_f32() / 0.25).min(1.0);
+    let eased = 1.0 - (1.0 - time).powi(3);
+    set_drawer_live_frac(id, snap.from + (snap.target - snap.from) * eased);
+    if time >= 1.0 {
+        clear_drawer_y_settling(id);
+        clear_drawer_live_frac(id);
     }
-    DRAWER_Y_SETTLING.with(|s| !s.borrow().is_empty())
+    queue_drawer_layout_bump(id);
+    let (width, height) = drawer_viewport_size();
+    crate::app::damage::push_frame_paint_damage([0.0, 0.0, width, height]);
+    true
+}
+
+#[cfg(test)]
+fn tick_drawer_snaps_at(now: Instant) -> bool {
+    let ids = DRAWER_Y_SETTLING.with(|snaps| snaps.borrow().keys().cloned().collect::<Vec<_>>());
+    for id in ids { poll_drawer_snap(&id, now); }
+    DRAWER_Y_SETTLING.with(|snaps| !snaps.borrow().is_empty())
+}
+
+fn drain_drawer_layout_bump(id: &str) {
+    let pending = PENDING_DRAWER_LAYOUT_BUMP.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        let queued = pending.iter().any(|entry| entry == id);
+        pending.retain(|entry| entry != id);
+        queued
+    });
+    if pending { bump_drawer_shell_layout(id); }
 }
 
 fn drawer_snap_index_signal(id: &str) -> Signal<Option<usize>> {
@@ -1525,6 +1582,11 @@ fn begin_drawer_drag(
             captured: exclusive,
         });
     });
+    crate::utils::drag::routing::register(
+        "drawer",
+        crate::utils::drag::routing::DragHandlers::new(dispatch_drawer_drag, clear_drawer_drag_if_any)
+            .paint_sampling(tick_drawer_drag, drain_drawer_layout_bumps),
+    );
 }
 
 fn nearest_snap_index(snap_fracs: &[f32], frac: f32) -> usize {
@@ -1598,13 +1660,14 @@ pub fn drawer_snap_to_prev(drawer_id: &str) {
     drawer_set_active_snap_point(drawer_id, idx.saturating_sub(1));
 }
 
-fn register_drawer_scale_background(id: &str, enabled: bool, open_frac: f32) {
+fn register_drawer_scale_background(id: &str, enabled: bool, open_frac: f32, lifetime: &std::rc::Rc<()>) {
     if !enabled {
         clear_drawer_scale_background(id);
         return;
     }
     DRAWER_SCALE_BG.with(|slot| {
         *slot.borrow_mut() = Some(DrawerScaleBg {
+            lifetime: std::rc::Rc::downgrade(lifetime),
             id: id.to_string(),
             open_frac,
         });
@@ -1631,7 +1694,12 @@ fn reset_non_portal_child_scale(root: &mut Element) {
         if child.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
             continue;
         }
-        child.style.scale = [1.0, 1.0];
+        if let Some(saved) = child.attrs.remove("jadix_drawer_background_scale") {
+            let values: Vec<f32> = saved.split(',').filter_map(|value| value.parse().ok()).collect();
+            if values.len() == 4 && child.style.scale == [values[2], values[3]] {
+                child.style.scale = [values[0], values[1]];
+            }
+        }
     }
 }
 
@@ -1645,14 +1713,23 @@ pub(crate) fn sync_drawer_background_scale(root: &mut Element) {
         }
         return;
     };
+    reset_non_portal_child_scale(root);
     let scale = drawer_background_scale(state.open_frac);
     for child in &mut root.children {
         if child.template_id.as_deref() == Some(PORTAL_LAYER_ID) {
             continue;
         }
-        child.style.scale = [scale, scale];
+        let base = child.style.scale;
+        let applied = [base[0] * scale, base[1] * scale];
+        child.set_attr("jadix_drawer_background_scale", format!("{},{},{},{}", base[0], base[1], applied[0], applied[1]));
+        child.style.scale = applied;
     }
     DRAWER_SCALE_BG_APPLIED.set(true);
+}
+
+fn dispatch_drawer_drag(_x: f32, _y: f32) -> bool {
+    drain_drawer_layout_bumps();
+    DRAWER_DRAG.with(|drag| drag.borrow().is_some())
 }
 
 pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
@@ -1720,6 +1797,7 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
 }
 
 pub(crate) fn clear_drawer_drag_if_any() {
+    crate::utils::drag::routing::unregister("drawer");
     let drag = DRAWER_DRAG.with(|d| d.borrow().clone());
     let Some(drag) = drag else {
         return;
@@ -1872,6 +1950,37 @@ fn bind_drawer_drag_region(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn background_removal_and_owner_disposal_restore_authored_scale_once() {
+        use crate::authoring::presentation::{self, Context, Phase};
+        for dispose_owner in [false, true] {
+            DRAWER_SCALE_BG.with(|state| *state.borrow_mut() = None);
+            DRAWER_SCALE_BG_APPLIED.set(false);
+            let (owner, layer) = crate::core::reactivity::create_root(|| {
+                let lifetime = std::rc::Rc::new(());
+                register_drawer_scale_background("retiring-drawer", true, 1.0, &lifetime);
+                let mut layer = Element::new();
+                attach_drawer_background(&mut layer, "retiring-drawer", &lifetime);
+                layer
+            });
+            let mut page = Element::new();
+            page.style.scale = [0.8, 0.9];
+            let mut root = Element::new().child(page).child(layer);
+            let mut layout = crate::layout::LayoutTree::new();
+            let context = Context::new(Phase::BeforeLayout, [800.0, 600.0]);
+            presentation::sync_tree(&mut root, &mut layout, context);
+            assert_eq!(root.children[0].style.scale, [0.8 * 0.96, 0.9 * 0.96]);
+            presentation::sync_tree(&mut root, &mut layout, context);
+            assert_eq!(root.children[0].style.scale, [0.8 * 0.96, 0.9 * 0.96]);
+            if dispose_owner { owner.dispose(); } else { root.children.pop(); }
+            presentation::sync_tree(&mut root, &mut layout, context);
+            assert_eq!(root.children[0].style.scale, [0.8, 0.9]);
+            presentation::sync_tree(&mut root, &mut layout, context);
+            assert_eq!(root.children[0].style.scale, [0.8, 0.9]);
+            assert!(DRAWER_SCALE_BG.with(|state| state.borrow().is_none()));
+        }
+    }
 
     #[test]
     fn responsive_drawer_caps_sides_and_short_viewport_metrics() {

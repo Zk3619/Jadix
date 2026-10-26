@@ -99,7 +99,6 @@ use crate::utils::anchored_overlay::{
     FloatingMotionKind, FloatingStrategy, Placement,
 };
 use crate::utils::lucide::lucide_glyph;
-use crate::utils::overflow_fit::tighten_horizontal_constraint;
 use crate::utils::popup::{
     mark_floating_with_gap, PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W,
     ATTR_FLOATING_STRATEGY, ATTR_FLOATING_W,
@@ -679,6 +678,12 @@ fn apply_group_ring(mut el: Element) -> Element {
         let ring = parse_color("background");
         // Ring after overflow so the 2px stroke is not clipped (same order as face roots).
         el = el.border(ring, 2.0);
+        if el.style.bg_color[3] == 0.0 {
+            el.style.bg_color = el.children.iter()
+                .find(|child| child.attrs.get(ATTR_SLOT).map(String::as_str) == Some(SLOT_FALLBACK))
+                .map(|child| child.style.bg_color)
+                .unwrap_or_else(|| parse_color("muted"));
+        }
     }
     el
 }
@@ -912,6 +917,7 @@ fn open_avatar_group_expand(id: &str) {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn dismiss_avatar_group_expands_on_scroll() -> bool {
     let to_close: Vec<Signal<bool>> = AVATAR_GROUPS.with(|m| {
         let mut out = Vec::new();
@@ -1047,6 +1053,7 @@ fn build_avatar_group_expand_panel(
         .max_w("100%");
     panel.set_attr(ATTR_FLOATING_W, format!("{content_w}px"));
     panel.set_attr("data-avatar-group-popover", "1");
+    panel = panel.opacity_group(true);
     panel.set_attr("data-slot", "popover-content");
     mark_floating_with_gap(&mut panel, floating_id, trigger_fid, placement, 6.0);
     panel.set_attr(ATTR_FLOATING_STRATEGY, "fixed");
@@ -1248,37 +1255,6 @@ fn sync_avatar_group_shell(
     structure_changed
 }
 
-/// 每帧按父级宽度与 `max_visible` 折叠头像行。
-pub(crate) fn sync_avatar_group_subtree(
-    el: &mut Element,
-    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
-    impact: &mut LayoutStatus,
-    viewport_w: f32,
-) {
-    let root_budget = (viewport_w > 0.0).then_some(viewport_w);
-    walk_avatar_group_sync(el, root_budget, layout_tree, impact);
-}
-
-fn walk_avatar_group_sync(
-    el: &mut Element,
-    constraint_w: Option<f32>,
-    layout_tree: &mut crate::layout::layout_tree::LayoutTree,
-    impact: &mut LayoutStatus,
-) {
-    let mut stack: Vec<(*mut Element, Option<f32>)> = vec![(el as *mut Element, constraint_w)];
-    while let Some((ptr, constraint_w)) = stack.pop() {
-        let el = unsafe { &mut *ptr };
-        let child_constraint = tighten_horizontal_constraint(el, constraint_w);
-        if el.attrs.get(ATTR_SLOT).map(|s| s.as_str()) == Some(SLOT_GROUP) {
-            let _ = sync_avatar_group_shell(el, child_constraint, layout_tree, impact);
-        }
-        let n = el.children.len();
-        for i in (0..n).rev() {
-            stack.push((std::ptr::addr_of_mut!(el.children[i]), child_constraint));
-        }
-    }
-}
-
 fn build_avatar_group_row_manual(
     group_id: &str,
     avatars: Vec<Element>,
@@ -1443,6 +1419,23 @@ fn build_avatar_group(
         "data-state",
         if expanded.peek() { "open" } else { "closed" },
     );
+    for phase in [crate::authoring::presentation::Phase::State,
+        crate::authoring::presentation::Phase::AfterGeometry] {
+        crate::authoring::presentation::attach(&mut row_el, phase, |element, layout, context| {
+            let mut status = LayoutStatus::Clean;
+            sync_avatar_group_shell(element, context.width_budget, layout, &mut status);
+            status
+        });
+    }
+    let scroll_revision = Cell::new(crate::authoring::input::scroll_revision());
+    crate::authoring::deadline::attach(&mut row_el,
+        crate::authoring::deadline::Visibility::Always,
+        move |_| {
+            let revision = crate::authoring::input::scroll_revision();
+            let moved = scroll_revision.replace(revision) != revision;
+            let redraw = moved && expanded.try_peek() == Some(true) && expanded.try_set(false);
+            crate::authoring::deadline::Poll { redraw, next_wake: None }
+        });
     let id_cleanup = group_id.clone();
     row_el.on_unmount(move || unregister_avatar_group(&id_cleanup))
 }
@@ -1965,6 +1958,52 @@ mod tests {
     use super::*;
 
     #[test]
+    fn expanded_avatar_faces_inherit_panel_fade() {
+        crate::core::reactivity::create_root(|| {
+            let face = AvatarFaceSpec {
+                size: AvatarSize::Default,
+                shape: AvatarShape::Circle,
+                src: None,
+                fallback: Some("A".into()),
+                class: None,
+            };
+            let mut root = default_expand_container(expand_group_faces(&[face]), None)
+                .w(120.0).h(64.0);
+            let mut tree = crate::core::tree::LayoutTree::new();
+            tree.set_collect_skip_allowed(true);
+            tree.build_and_layout(&mut root, 120.0, 64.0, [-1.0; 2]);
+            for alpha in [0.25, 0.75, 0.5, 0.1] {
+                root.style.opacity = alpha;
+                let result = tree.build_and_layout_fast(
+                    &mut root, 120.0, 64.0, [-1.0; 2], true, false,
+                );
+                assert!(result.instances.len() >= 3);
+                for instance in &result.instances {
+                    assert!(instance.color[3] <= alpha + 0.001,
+                        "face did not inherit panel fade {alpha}: {:?}", instance.color);
+                    assert!(instance.border_color[3] <= alpha + 0.001);
+                }
+                assert!(result.text_nodes.iter().all(|text|
+                    text.style.color_resolved()[3] as f32 <= alpha * 255.0 + 1.0));
+            }
+        });
+    }
+
+    #[test]
+    fn grouped_faces_fill_under_the_ring() {
+        for slot in [SLOT_AVATAR, SLOT_GROUP_COUNT] {
+            let mut fallback = Element::new().bg("#d83030");
+            fallback.set_attr(ATTR_SLOT, SLOT_FALLBACK);
+            let mut face = Element::new().w(40.0).h(40.0).rounded(20.0).child(fallback);
+            face.set_attr(ATTR_SLOT, slot);
+            let face = apply_group_ring(face);
+            assert_eq!(face.style.bg_color, parse_color("#d83030"));
+            assert_eq!(face.style.border_width, 2.0);
+            assert_eq!(face.style.radii, [20.0; 4]);
+        }
+    }
+
+    #[test]
     fn avatar_group_count_only_toggles_on_click_and_uses_popover_dismissal() {
         use crate::app::portal_overlay::{
             clear_overlay_stack, try_close_top, try_dismiss_outside_press,
@@ -2146,8 +2185,8 @@ mod tests {
             "inner face must carry muted fill so the ring reads as an inner stroke"
         );
         assert!(
-            el.style.bg_color[3] < 0.01,
-            "count shell must not fill (fill belongs on the inner face, like AvatarFallback)"
+            el.style.bg_color == muted,
+            "count shell must back the inner face so antialiasing cannot expose underlying content"
         );
     }
 
@@ -2496,7 +2535,11 @@ mod tests {
         let mut tree = crate::layout::layout_tree::LayoutTree::new();
         let _ = tree.build_and_layout(&mut host, 72.0, 120.0, [-1.0, -1.0]);
         let mut impact = LayoutStatus::Clean;
-        sync_avatar_group_subtree(&mut host, &mut tree, &mut impact, 72.0);
+        impact = impact.merge(crate::authoring::presentation::sync_tree(
+            &mut host, &mut tree, crate::authoring::presentation::Context::new(
+                crate::authoring::presentation::Phase::AfterGeometry, [72.0, 120.0]),
+        ));
+        assert_ne!(impact, LayoutStatus::Clean);
         let rendered = AVATAR_GROUPS.with(|m| {
             m.borrow()
                 .get(&group_id)

@@ -777,6 +777,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn hoisted_exit_keeps_close_button_hover_before_relayout() {
         crate::core::reactivity::create_root(|| {
             crate::style::set_css_transition_virtual_timeline(true);

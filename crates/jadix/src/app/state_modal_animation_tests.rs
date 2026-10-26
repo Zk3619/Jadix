@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Replay actual modal enter/exit frames and compare cached captures with fresh ones.
 use super::*;
 use crate::core::reactivity::{create_effect, create_root, use_signal};
@@ -63,6 +64,12 @@ fn read(s: &AppState) -> crate::renderer::offscreen::RgbaImage {
 
 fn compare(s: &mut AppState, ms: f64) {
     let cached = read(s);
+    let mut before_pose = Vec::new();
+    crate::core::tree::walk_elements(&s.root_element, |el| {
+        if el.template_id.as_deref().is_some_and(|id| id.ends_with("__modal_panel")) {
+            before_pose.push((el.template_id.clone(), el.style.opacity, el.style.translate_pct, el.layout_bounds));
+        }
+    });
     s.modal_source_fp = None;
     s.mark_full_redraw();
     // Modal keyframes advance by frame_dt, independent of the CSS test clock.
@@ -84,12 +91,24 @@ fn compare(s: &mut AppState, ms: f64) {
         .zip(fresh.pixels.chunks_exact(4))
         .filter(|(a, b)| a.iter().zip(*b).any(|(a, b)| a.abs_diff(*b) > 3))
         .count();
+    if changed > 0 {
+        let folder = std::env::temp_dir();
+        for (name, image) in [("jadix-modal-cached.png", &cached), ("jadix-modal-fresh.png", &fresh)] {
+            image::save_buffer(folder.join(name), &image.pixels, image.width, image.height, image::ColorType::Rgba8).unwrap();
+        }
+        eprintln!("modal mismatch partial={}, source={:?}, blur={:?}", s.last_frame_partial, s.modal_source_fp, s.modal_blur_radius);
+        eprintln!("before pose={before_pose:?}");
+        crate::core::tree::walk_elements(&s.root_element, |el| {
+            if el.template_id.as_deref().is_some_and(|id| id.ends_with("__modal_panel")) {
+                eprintln!("after pose={:?} {:?} {:?}", el.template_id, el.style.opacity, el.style.translate_pct);
+            }
+        });
+    }
     assert_eq!(
         changed, 0,
         "cached modal differs from fresh capture at {ms} ms"
     );
 }
-
 fn run(window: Arc<dyn Window>) {
     crate::init();
     crate::app::reactive::reset_registered_anchors();
@@ -164,10 +183,8 @@ fn run(window: Arc<dyn Window>) {
         kind.set(k);
         render(state.borrow_mut().as_mut().unwrap(), base);
         open.set(true);
-        for t in [0.0, 16.0, 48.0] {
-            render(state.borrow_mut().as_mut().unwrap(), base + t);
-        }
-        let initial = state.borrow().as_ref().unwrap().modal_capture_count;
+        render(state.borrow_mut().as_mut().unwrap(), base);
+        render(state.borrow_mut().as_mut().unwrap(), base + 16.0);
         let work = state
             .borrow()
             .as_ref()
@@ -177,33 +194,34 @@ fn run(window: Arc<dyn Window>) {
             .unwrap()
             .work_size();
         let start = Instant::now();
-        for t in [80.0, 112.0, 144.0, 176.0] {
+        for frame in 2..=40 {
             let mut guard = state.borrow_mut();
             let s = guard.as_mut().unwrap();
-            render(s, base + t);
+            let before_blurs = s.modal_blur_count;
+            let before_captures = s.modal_capture_count;
+            let time = base + frame as f64 * 16.0;
+            render(s, time);
             assert_eq!(
                 s.modal_backdrop.as_ref().unwrap().work_size(),
                 work,
                 "fade must not reallocate blur work targets"
             );
             assert!(work.0 <= s.config.width / 2 && work.1 <= s.config.height / 2);
+            assert_eq!(s.modal_blur_count, before_blurs, "enter blur changed at frame {frame}, kind {k}");
+            assert_eq!(s.modal_capture_count, before_captures, "enter recaptured background at frame {frame}, kind {k}");
+            compare(s, time);
         }
         let mut guard = state.borrow_mut();
         let s = guard.as_mut().unwrap();
-        let captures = s.modal_capture_count - initial;
         eprintln!(
-            "modal kind={k} enter four frames={:?}, background captures={captures}",
+            "modal kind={k} continuous enter frames={:?}",
             start.elapsed()
         );
-        assert_eq!(
-            captures, 0,
-            "opacity/translation-only animation must reuse the static page"
-        );
-        compare(s, base + 176.0);
+        compare(s, base + 640.0);
         drop(guard);
         caption.set(format!("Background changed {k}"));
         let before = state.borrow().as_ref().unwrap().modal_capture_count;
-        render(state.borrow_mut().as_mut().unwrap(), base + 190.0);
+        render(state.borrow_mut().as_mut().unwrap(), base + 656.0);
         assert!(
             state.borrow().as_ref().unwrap().modal_capture_count > before,
             "page edit must refresh capture"
@@ -211,25 +229,28 @@ fn run(window: Arc<dyn Window>) {
         for frame in 1..=36 {
             render(
                 state.borrow_mut().as_mut().unwrap(),
-                base + 190.0 + frame as f64 * 16.0,
+                base + 656.0 + frame as f64 * 16.0,
             );
         }
         let blurred = state.borrow().as_ref().unwrap().modal_blur_count;
-        render(state.borrow_mut().as_mut().unwrap(), base + 782.0);
+        render(state.borrow_mut().as_mut().unwrap(), base + 1248.0);
         assert_eq!(
             state.borrow().as_ref().unwrap().modal_blur_count,
             blurred,
             "settled modal must reuse the completed blur"
         );
         open.set(false);
-        render(state.borrow_mut().as_mut().unwrap(), base + 800.0);
-        for t in [816.0, 848.0, 880.0] {
-            render(state.borrow_mut().as_mut().unwrap(), base + t);
+        render(state.borrow_mut().as_mut().unwrap(), base + 1264.0);
+        for frame in 1..=40 {
+            let mut guard = state.borrow_mut();
+            let s = guard.as_mut().unwrap();
+            let time = base + 1264.0 + frame as f64 * 16.0;
+            render(s, time);
+            compare(s, time);
         }
-        compare(state.borrow_mut().as_mut().unwrap(), base + 880.0);
         // Finish presence wall-clock gate for Sheet/Drawer, then establish a closed page.
         std::thread::sleep(std::time::Duration::from_millis(500));
-        render(state.borrow_mut().as_mut().unwrap(), base + 1400.0);
+        render(state.borrow_mut().as_mut().unwrap(), base + 1920.0);
         crate::utils::modal_motion::drain_pending_modal_unmounts();
         base += 2000.0;
     }

@@ -4,7 +4,7 @@
 //! - [`split_props!`](crate::split_props): `mem::take` lists the fields, and the remaining fields can be spread through `..rest`.
 //! - [`children`]: 把 `Option<Element>` / fragment 展平；闭包版在 render effect 里求值以便订 signal。
 
-use crate::components::base::BaseComponentBuilder;
+use crate::authoring::BaseComponentBuilder;
 use crate::core::reactivity::{create_render_effect, create_signal, Signal};
 use crate::core::tree::Element;
 use std::cell::RefCell;

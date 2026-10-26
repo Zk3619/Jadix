@@ -215,8 +215,11 @@ fn reset_command_session(id: &str) {
         None::<(usize, usize)>
     })
     .set(None);
-    use_signal(format!("{id}__cmd_active").as_str(), || 0usize).set(0);
+    use_signal(format!("{id}__cmd_active").as_str(), || NO_ACTIVE_COMMAND)
+        .set(NO_ACTIVE_COMMAND);
 }
+
+const NO_ACTIVE_COMMAND: usize = usize::MAX;
 
 /// Filter box only consumes list nav / run / dismiss. Backspace, Delete, arrows, Home/End, and chars go to text editing.
 fn command_filter_consumes_key(key: &Key) -> bool {
@@ -296,7 +299,7 @@ fn command_paint(
     body: Rc<dyn Fn() -> Element>,
 ) -> Element {
     let filter_id = format!("{id}__filter");
-    let active = use_signal(format!("{id}__cmd_active").as_str(), || 0usize);
+    let active = use_signal(format!("{id}__cmd_active").as_str(), || NO_ACTIVE_COMMAND);
     let visible = use_signal(
         format!("{id}__cmd_visible").as_str(),
         Vec::<CommandVisibleItem>::new,
@@ -363,6 +366,15 @@ fn stamp_command_palette_attrs(
         return;
     }
     el.set_attr("jadix_command_palette", "1");
+    crate::authoring::presentation::attach(
+        el,
+        crate::authoring::presentation::Phase::State,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_command_item_paint_node(element, layout, &mut impact);
+            impact
+        },
+    );
     el.set_attr("jadix_command_id", id);
     el.set_attr(
         "jadix_command_surface",
@@ -954,9 +966,18 @@ pub fn CommandInput(placeholder: Option<String>, children: Option<Element>) -> E
                 }
             }
             Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::ArrowUp) => {
-                if let Some(next) =
+                let next = if active.peek() == NO_ACTIVE_COMMAND {
+                    if n == 0 {
+                        None
+                    } else if matches!(ev.logical_key, Key::Named(NamedKey::ArrowDown)) {
+                        Some(0)
+                    } else {
+                        Some(n - 1)
+                    }
+                } else {
                     crate::utils::list_nav::list_nav_move_arrows(&ev.logical_key, n, active.peek())
-                {
+                };
+                if let Some(next) = next {
                     set_command_active(active, next);
                 }
                 return true;
@@ -1047,8 +1068,8 @@ pub fn CommandList(children: Option<Element>) -> Element {
     );
     let n = ctx.visible.peek().len();
     if n == 0 {
-        set_command_active(ctx.active, 0);
-    } else if ctx.active.peek() >= n {
+        set_command_active(ctx.active, NO_ACTIVE_COMMAND);
+    } else if ctx.active.peek() != NO_ACTIVE_COMMAND && ctx.active.peek() >= n {
         set_command_active(ctx.active, n - 1);
     }
     let scroll_id = format!("{}:list", ctx.id);
@@ -1272,8 +1293,12 @@ pub fn CommandItem(
         .on_hover(move |h| {
             // Do not `Signal::set`: that rebuilds the whole Command tree mid-hover dispatch,
             // freezing highlight, dropping later hover targets, and breaking click (Toast).
-            if h && !disabled {
-                set_command_active(active, ix);
+            if !disabled {
+                if h {
+                    set_command_active(active, ix);
+                } else if active.peek() == ix {
+                    set_command_active(active, NO_ACTIVE_COMMAND);
+                }
             }
         })
         .on_click(move || {
@@ -1299,6 +1324,15 @@ pub fn CommandItem(
     hit.set_attr("data-slot", "command-item");
     hit.set_attr("jadix_command_id", ctx.id.clone());
     hit.set_attr("jadix_command_ix", ix.to_string());
+    crate::authoring::presentation::attach(
+        &mut hit,
+        crate::authoring::presentation::Phase::State,
+        |element, layout, _context| {
+            let mut impact = LayoutStatus::Clean;
+            sync_command_item_paint_node(element, layout, &mut impact);
+            impact
+        },
+    );
     hit = hit
         .text_size(13.0)
         .text_leading(TAILWIND_TEXT_SM_LEADING_SCALE);
@@ -1343,27 +1377,25 @@ fn style_command_item_text(el: &mut Element, color: [u8; 4]) {
 }
 
 /// Each frame writes highlight from `{id}__cmd_active` (`peek`, no root-effect subscription).
-pub(crate) fn sync_command_item_paint_subtree(
+pub(crate) fn sync_command_item_paint_node(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    crate::core::tree::walk_elements_mut(el, |el| {
-        sync_command_palette_focus(el);
-        if el.attrs.get("data-slot").map(String::as_str) == Some("command-item") {
-            let disabled = el.attrs.get("jadix_command_disabled").map(String::as_str) == Some("1");
-            let ix = el
-                .attrs
-                .get("jadix_command_ix")
-                .and_then(|s| s.parse::<usize>().ok());
-            let id = el.attrs.get("jadix_command_id").cloned();
-            if let (Some(id), Some(ix)) = (id, ix) {
-                let active = use_signal(format!("{id}__cmd_active").as_str(), || 0usize).peek();
-                let on = !disabled && active == ix;
-                apply_command_item_highlight(el, layout_tree, impact, on);
-            }
+    sync_command_palette_focus(el);
+    if el.attrs.get("data-slot").map(String::as_str) == Some("command-item") {
+        let disabled = el.attrs.get("jadix_command_disabled").map(String::as_str) == Some("1");
+        let ix = el
+            .attrs
+            .get("jadix_command_ix")
+            .and_then(|s| s.parse::<usize>().ok());
+        let id = el.attrs.get("jadix_command_id").cloned();
+        if let (Some(id), Some(ix)) = (id, ix) {
+            let active = use_signal(format!("{id}__cmd_active").as_str(), || NO_ACTIVE_COMMAND).peek();
+            let on = !disabled && active == ix;
+            apply_command_item_highlight(el, layout_tree, impact, on);
         }
-    });
+    }
 }
 
 fn apply_command_item_highlight(
@@ -2192,7 +2224,7 @@ mod tests {
             );
             assert_eq!(
                 use_signal(format!("{id}__cmd_active").as_str(), || 0usize).get(),
-                0
+                NO_ACTIVE_COMMAND
             );
         });
     }
@@ -2233,7 +2265,7 @@ mod tests {
 
             viewport_modal_force_unmount(id);
             reset_command_session(id);
-            assert_eq!(active.get(), 0);
+            assert_eq!(active.get(), NO_ACTIVE_COMMAND);
             assert_eq!(
                 use_signal(input_value_signal_key(&filter_id).as_str(), String::new).get(),
                 ""
@@ -2291,6 +2323,25 @@ mod tests {
                 }),
             ])
         })
+    }
+
+    #[test]
+    fn command_has_no_active_item_until_hover_and_clears_on_leave() {
+        let (_owner, root) = create_root(|| {
+            command_paint("cmd-no-active".into(), Signal::new(true), "q".into(),
+                CommandSurface::Dialog, three_item_command_body())
+        });
+        let active = use_signal("cmd-no-active__cmd_active", || NO_ACTIVE_COMMAND);
+        assert_eq!(active.peek(), NO_ACTIVE_COMMAND);
+        let items = collect_cmd_items(&root);
+        assert!(items.iter().all(|item| item.style.bg_color[3] == 0.0));
+        for frame in 0..120 {
+            let index = frame % items.len();
+            (items[index].on_hover.as_ref().unwrap().borrow_mut())(true);
+            assert_eq!(active.peek(), index);
+            (items[index].on_hover.as_ref().unwrap().borrow_mut())(false);
+            assert_eq!(active.peek(), NO_ACTIVE_COMMAND, "pointer leave at sample {frame}");
+        }
     }
 
     fn collect_cmd_items(root: &Element) -> Vec<&Element> {
@@ -3261,4 +3312,15 @@ mod tests {
             "active row must take accent via paint sync"
         );
     }
+}
+
+#[cfg(test)]
+pub(crate) fn sync_command_item_paint_subtree(
+    el: &mut Element,
+    layout_tree: &mut LayoutTree,
+    impact: &mut LayoutStatus,
+) {
+    crate::core::tree::walk_elements_mut(el, |element| {
+        sync_command_item_paint_node(element, layout_tree, impact)
+    });
 }

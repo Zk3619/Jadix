@@ -37,6 +37,7 @@ pub struct VirtualMasonryBuilder {
     height: f32,
     overscan_viewports: f32,
     scrollbar_visibility: String,
+    scroll_behavior: String,
     item_height: Rc<dyn Fn(usize, f32) -> f32>,
     render_item: Rc<dyn Fn(usize, f32, f32) -> Element>,
     chrome: SlotChrome,
@@ -51,6 +52,7 @@ pub fn virtual_masonry(id: impl Into<String>) -> VirtualMasonryBuilder {
         height: 240.0,
         overscan_viewports: 1.0,
         scrollbar_visibility: "auto".to_string(),
+        scroll_behavior: crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string(),
         item_height: Rc::new(|_, col_w| col_w.max(1.0)),
         render_item: Rc::new(|i, w, h| {
             Element::from(r#box().w(w).h(h).min_h(h).text(format!("item {i}")))
@@ -61,6 +63,10 @@ pub fn virtual_masonry(id: impl Into<String>) -> VirtualMasonryBuilder {
 
 impl VirtualMasonryBuilder {
     crate::impl_slot_chrome_methods!();
+    pub fn scroll_behavior(mut self, behavior: impl Into<String>) -> Self {
+        self.scroll_behavior = behavior.into();
+        self
+    }
     pub fn item_count(mut self, n: usize) -> Self {
         self.item_count = n;
         self
@@ -268,6 +274,7 @@ impl From<VirtualMasonryBuilder> for Element {
             height,
             overscan_viewports,
             scrollbar_visibility,
+            scroll_behavior,
             item_height,
             render_item,
             chrome,
@@ -324,7 +331,7 @@ impl From<VirtualMasonryBuilder> for Element {
             scroll_area(&id)
                 .overflow_y("auto")
                 .overflow_x("hidden")
-                .scroll_behavior("jump")
+                .scroll_behavior(scroll_behavior)
                 .scrollbar_visibility(scrollbar_visibility)
                 .w("100%")
                 .h(height)

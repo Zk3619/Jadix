@@ -122,6 +122,7 @@ pub fn media_player_presentation_scope(
         if kind == MediaKind::Video {
             root.set_attr("data-media-presentation-host", &id);
             presentation::register_presentation(&id, presentation.clone());
+            presentation::attach_presentation(&mut root, id.clone());
         }
         let presentation_state = presentation.state();
         root = bind_prop(

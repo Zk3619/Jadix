@@ -1,3 +1,5 @@
+#![cfg(any(feature = "backend-dx12", feature = "backend-gles", feature = "backend-metal", feature = "backend-vulkan"))]
+
 use jadix::renderer::{
     InstanceInput, JadixPipeline,
     offscreen::{OffscreenGpu, RgbaImage},

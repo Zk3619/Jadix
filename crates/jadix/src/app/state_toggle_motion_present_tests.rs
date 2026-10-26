@@ -16,34 +16,53 @@ fn translated_scaled_native_frames_match_full_repaint() {
 
 #[test]
 fn checkbox_checked_sync_keeps_layout_and_invalidates_its_paint_spine() {
-    let (_owner, ()) = create_root(|| {
-        let checked = use_signal("checkbox-paint-only", || false);
-        let mut root = Element::new()
-            .w(240.0)
-            .h(80.0)
-            .child(Element::from(
-                crate::components::checkbox::checkbox("checkbox-paint-only")
-                    .checked_signal(checked),
-            ))
-            .child(Element::new().text("Unchanged sibling"));
-        let mut tree = crate::layout::layout_tree::LayoutTree::new();
-        tree.build_and_layout(&mut root, 240.0, 80.0, [-1.0; 2]);
-        let bounds = root.children[0].layout_bounds;
-        let sibling_hash = root.children[1].collect_paint_hash;
-        assert_ne!(sibling_hash, 0);
-        checked.set(true);
-        let mut impact = LayoutStatus::Clean;
-        crate::components::checkbox::sync_checkbox_checked_subtree(
-            &mut root,
-            &mut tree,
-            &mut impact,
-        );
-        assert_eq!(impact, LayoutStatus::StyleChanged);
-        assert_eq!(root.children[0].layout_bounds, bounds);
-        assert_eq!(root.collect_paint_hash, 0);
-        assert_eq!(root.children[0].children[0].collect_paint_hash, 0);
-        assert_eq!(root.children[1].collect_paint_hash, sibling_hash);
-    });
+    for use_protocol in [false, true] {
+        let (_owner, ()) = create_root(|| {
+            let checked = use_signal("checkbox-paint-only", || false);
+            checked.set(false);
+            let mut root = Element::new()
+                .w(240.0)
+                .h(80.0)
+                .child(Element::from(
+                    crate::components::checkbox::checkbox("checkbox-paint-only")
+                        .checked_signal(checked),
+                ))
+                .child(Element::new().text("Unchanged sibling"));
+            let mut tree = crate::layout::layout_tree::LayoutTree::new();
+            tree.build_and_layout(&mut root, 240.0, 80.0, [-1.0; 2]);
+            let bounds = root.children[0].layout_bounds;
+            let sibling_hash = root.children[1].collect_paint_hash;
+            assert_ne!(sibling_hash, 0);
+            checked.set(true);
+            let mut impact = LayoutStatus::Clean;
+            if use_protocol {
+                impact = crate::authoring::presentation::sync_tree(
+                    &mut root,
+                    &mut tree,
+                    crate::authoring::presentation::Context {
+                        phase: crate::authoring::presentation::Phase::State,
+                        viewport: [240.0, 80.0],
+                    width_budget: None,
+},
+                );
+            } else {
+                crate::components::checkbox::sync_checkbox_checked_subtree(
+                    &mut root,
+                    &mut tree,
+                    &mut impact,
+                );
+            }
+            assert_eq!(
+                impact,
+                LayoutStatus::StyleChanged,
+                "use_protocol={use_protocol}"
+            );
+            assert_eq!(root.children[0].layout_bounds, bounds);
+            assert_eq!(root.collect_paint_hash, 0);
+            assert_eq!(root.children[0].children[0].collect_paint_hash, 0);
+            assert_eq!(root.children[1].collect_paint_hash, sibling_hash);
+        });
+    }
 }
 
 fn native_frames(motion: bool) {

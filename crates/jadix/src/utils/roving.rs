@@ -14,6 +14,9 @@ use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
 use crate::utils::input_hit::collect_focusable_ids;
 
+/// Legacy focus namespace recognized as a tab list by the accessibility bridge.
+pub const TABSTRIP_FOCUS_PREFIX: &str = "tabstrip:";
+
 /// Move selection within `0..len`, wrapping at ends. Returns `None` if `len == 0`.
 pub fn roving_move(len: usize, current: usize, delta: i32) -> Option<usize> {
     if len == 0 {

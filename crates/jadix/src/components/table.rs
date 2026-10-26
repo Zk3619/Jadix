@@ -84,7 +84,7 @@ use crate::components::base::{packed_children, SlotChrome, SlotStyleFn};
 use crate::components::button::button;
 use crate::components::virtual_list::virtual_list;
 use crate::core::reactivity::{use_signal, Signal};
-use crate::core::tree::{ButtonHoverPaint, Element, Handler, LayoutStatus};
+use crate::core::tree::{Element, Handler, LayoutStatus};
 use crate::impl_simple_slot_builder;
 use crate::primitives::interactive::mark_hover_paint_dirty;
 use crate::primitives::r#box::{gstack, hstack, r#box, vstack};
@@ -123,7 +123,7 @@ fn apply_table_row_state(mut row: Element, selected: bool) -> Element {
     if selected {
         row = row.bg(tokens::muted());
         row.set_attr("data-state", "selected");
-        row.button_hover_paint = None;
+        row.authoring_state.remove::<crate::components::button::ButtonHoverPaint>();
     } else {
         row = row.bg([0.0, 0.0, 0.0, 0.0]);
         row.attrs.remove("data-state");
@@ -141,12 +141,13 @@ fn wire_table_row_hover(mut row: Element, row_id: &str, selected: bool) -> Eleme
         // Paint from `{id}_hover` (exclusive `on_hover` bubble). Class `hover:bg-*`
         // is the cell hit leaf, so `:hover` never lands on the row — first enter
         // stayed rest, and switching dest-reset both rows (leave flashed then died).
-        row.button_hover_paint = Some(ButtonHoverPaint {
+        row.authoring_state.set(crate::components::button::ButtonHoverPaint {
             variant: "table-row".into(),
             disabled: false,
             hover_easing: "cubic".into(),
             text_color: None,
         });
+        super::button::attach_hover_presentation(&mut row);
         row = row.on_hover(move |h| {
             hovered.set_silent(h);
             mark_hover_paint_dirty();
@@ -575,6 +576,7 @@ pub fn TableRow(
     row = wire_table_row_hover(row, &row_id, selected);
     row = row.on_click(move || on_click.call(()));
     row.set_attr("data-slot", "table-row");
+    row.paint_fill_inset = Some([0.0, 1.0, 0.0, 1.0]);
     row
 }
 
@@ -620,6 +622,7 @@ pub fn TableHead(
     cell = apply_table_cell_width(cell, col_w.as_deref());
     cell = apply_cell_align(cell, align);
     cell.set_attr("data-slot", "table-head");
+    cell.paint_fill_inset = Some([0.0, 1.0, 0.0, 1.0]);
     cell
 }
 
@@ -1239,6 +1242,7 @@ impl From<TableBuilder> for Element {
                 .into();
             header_row = finish_table_row_grid(header_row, col_tracks.clone());
             header_row.set_attr("data-slot", "table-row");
+    header_row.paint_fill_inset = Some([0.0, 1.0, 0.0, 1.0]);
 
             for col in &columns {
                 let can_sort = sortable && col.sortable;
@@ -1264,6 +1268,7 @@ impl From<TableBuilder> for Element {
                     .into();
                 head = head.whitespace_nowrap();
                 head.set_attr("data-slot", "table-head");
+    head.paint_fill_inset = Some([0.0, 1.0, 0.0, 1.0]);
                 head = head.justify_self_kw("stretch");
                 head = apply_cell_align(head, col.align);
                 if can_sort {
@@ -1295,6 +1300,7 @@ impl From<TableBuilder> for Element {
                         .into();
                     head = head.min_w(0.0).justify_self_kw("stretch");
                     head.set_attr("data-slot", "table-head");
+    head.paint_fill_inset = Some([0.0, 1.0, 0.0, 1.0]);
                 }
                 header_row = header_row.child(head);
             }
@@ -1347,6 +1353,7 @@ impl From<TableBuilder> for Element {
                     let row_focus = format!("{table_id}:tr:{row}");
                     row_el = wire_table_row_hover(row_el, &row_focus, is_sel);
                     row_el.set_attr("data-slot", "table-row");
+    row_el.paint_fill_inset = Some([0.0, 1.0, 0.0, 1.0]);
 
                     let s = sel;
                     row_el.on_click(move || s.set(Some(row)))
@@ -1471,8 +1478,8 @@ pub fn apply_bound_table_row_selected(el: &mut Element, selected: bool) -> Layou
             el.set_attr("data-state", "selected");
             changed = true;
         }
-        if el.button_hover_paint.is_some() {
-            el.button_hover_paint = None;
+        if el.authoring_state.get::<crate::components::button::ButtonHoverPaint>().is_some() {
+            el.authoring_state.remove::<crate::components::button::ButtonHoverPaint>();
             changed = true;
         }
     } else {

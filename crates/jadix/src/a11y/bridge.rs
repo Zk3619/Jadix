@@ -7,11 +7,11 @@ use accesskit::{
 };
 use std::hash::{Hash, Hasher};
 
-use crate::components::label::ATTR_LABEL_FOR;
-use crate::components::tabs::TABSTRIP_FOCUS_PREFIX;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
 use crate::utils::text_field::{input_value_signal_key, INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX};
+use crate::utils::roving::TABSTRIP_FOCUS_PREFIX;
+use crate::utils::text_selection::ATTR_LABEL_FOR;
 use std::collections::HashMap;
 
 const ROOT_ID: NodeId = NodeId(1);
@@ -1481,7 +1481,7 @@ mod tests {
 
     #[test]
     fn input_prefix_is_text_input_with_value_and_placeholder_name() {
-        use crate::components::input::input_value_signal_key;
+        use crate::utils::text_field::input_value_signal_key;
         use crate::core::reactivity::use_signal;
 
         let id = "a11y_smoke_input";

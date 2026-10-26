@@ -856,6 +856,7 @@ pub fn create_font_system() -> FontSystem {
         }
 
         load_eager_bundled_fonts(&mut db, state);
+        crate::utils::font::load_registered_fonts(&mut db);
 
         let face_count = db.len();
         log::info!(

@@ -2,7 +2,7 @@
 //!
 //! RSX：`VStack` / `HStack` / `GStack`（别名 `Grid`）/ `Box`（别名 `div` / `Div`）由宏映射到
 //! 本 Builder；SVG 形状用小写/Pascal `<rect>` / `<Rect>`（见 `primitives::svg`）。
-//! [`vstack`] / [`hstack`] / [`gstack`] / [`r#box`]（[`boxed`] 别名；`box` 为 Rust 关键字）。
+//! [`vstack`] / [`hstack`] / [`gstack`] / [`div`]（兼容 [`r#box`] / [`boxed`]）。
 
 use crate::layout::GridTrack;
 
@@ -283,6 +283,11 @@ impl BoxBuilder {
     #[track_caller]
     pub fn opacity(mut self, o: impl IntoNodeOpacity) -> Self {
         self.el = o.apply_node_opacity(self.el);
+        self
+    }
+
+    pub fn opacity_group(mut self, enabled: bool) -> Self {
+        self.el = self.el.opacity_group(enabled);
         self
     }
 
@@ -995,6 +1000,12 @@ impl crate::core::tree::IntoElementList for BoxBuilder {
 
 pub fn r#box() -> BoxBuilder {
     BoxBuilder::new()
+}
+
+/// Rust-friendly alias for [`r#box`]. RSX uses `<div>` / `<Div>`.
+#[inline]
+pub fn div() -> BoxBuilder {
+    r#box()
 }
 
 /// Callable alias of [`r#box`] (Rust reserves `box`; RSX uses `<Box>` / `<div>`).

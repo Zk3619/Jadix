@@ -129,7 +129,7 @@ pub fn build_lucide_icon_text_node_or(
             crate::utils::icon_provider::build_icon_from_src(src)
         }
         None => {
-            if crate::utils::lucide::lucide_svg_inner(name).is_some() {
+            if crate::utils::icon_provider::resolve_icon_svg(name).is_some() {
                 return build_named_icon_text_node(name, fallback);
             }
             Element::new()
@@ -158,6 +158,7 @@ mod icon_defaults_tests {
         assert!(el.pointer_events_mode().targets_self());
     }
 
+    #[cfg(feature = "lucide")]
     #[test]
     fn lucide_named_icon_sets_attr_from_name_only() {
         let el = build_lucide_icon_text_node("chevron-down");

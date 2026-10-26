@@ -259,7 +259,7 @@ pub fn PopoverTrigger(id: String, children: Option<Element>) -> Element {
         }
     };
 
-    if trigger.button_hover_paint.is_none() && trigger.input_paint_sync.is_none() {
+    if trigger.authoring_state.get::<crate::components::button::ButtonHoverPaint>().is_none() && trigger.input_paint_sync.is_none() {
         trigger.set_focusable(true);
     }
     let fid_focus = trigger

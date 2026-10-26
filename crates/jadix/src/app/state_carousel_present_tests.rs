@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Moving carousel frames must retain the same pixels as a full compositor draw.
 use super::*;
 
@@ -39,7 +40,6 @@ fn carousel_native_motion_keeps_text_and_matches_full_repaint() {
     builder.with_any_thread(true);
     builder.build().unwrap().run_app(Harness).unwrap();
 }
-
 fn run_carousel_frames(
     window: Arc<dyn Window>,
     variant: crate::components::carousel::CarouselVariant,

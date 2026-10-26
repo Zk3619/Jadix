@@ -269,7 +269,7 @@ impl HitPathEntry {
             focus_id: el.focus_id.clone(),
             label_for: el
                 .attrs
-                .get(crate::components::label::ATTR_LABEL_FOR)
+                .get(crate::utils::text_selection::ATTR_LABEL_FOR)
                 .or_else(|| el.attrs.get(ATTR_ACTIVATE_FOR))
                 .map(|s| s.trim().to_string())
                 .filter(|s| !s.is_empty()),
@@ -483,7 +483,7 @@ pub(crate) fn captured_path(root: &Element) -> Option<Vec<HitPathEntry>> {
 /// CSS `:hover` must use this set: geometric AABB alone paints covered siblings
 /// (ColorPicker popover over a DatePicker trigger).
 pub(crate) fn pointer_hit_node_set(el: &Element, x: f32, y: f32) -> HashSet<*const Element> {
-    if crate::utils::drag::is_active() {
+    if crate::utils::drag::runtime::is_active() {
         return HashSet::new();
     }
     hit_path_nodes(el, x, y)

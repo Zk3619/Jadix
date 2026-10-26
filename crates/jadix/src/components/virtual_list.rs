@@ -52,6 +52,7 @@ pub struct VirtualListBuilder {
     overscan: usize,
     height: f32,
     scrollbar_visibility: String,
+    scroll_behavior: String,
     render_item: Rc<dyn Fn(usize) -> Element>,
     chrome: SlotChrome,
 }
@@ -67,6 +68,7 @@ pub fn virtual_list(id: impl Into<String>) -> VirtualListBuilder {
         overscan: 2,
         height: 240.0,
         scrollbar_visibility: "auto".to_string(),
+        scroll_behavior: crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string(),
         render_item: Rc::new(|i| Element::new().text(format!("item {i}"))),
         chrome: SlotChrome::default(),
     }
@@ -74,6 +76,10 @@ pub fn virtual_list(id: impl Into<String>) -> VirtualListBuilder {
 
 impl VirtualListBuilder {
     crate::impl_slot_chrome_methods!();
+    pub fn scroll_behavior(mut self, behavior: impl Into<String>) -> Self {
+        self.scroll_behavior = behavior.into();
+        self
+    }
     pub fn item_count(mut self, n: usize) -> Self {
         self.item_count = n;
         self
@@ -319,6 +325,7 @@ impl From<VirtualListBuilder> for Element {
             overscan,
             height,
             scrollbar_visibility,
+            scroll_behavior,
             render_item,
             chrome,
         } = builder;
@@ -388,7 +395,7 @@ impl From<VirtualListBuilder> for Element {
             scroll_area(&scroll_id)
                 .overflow_y("auto")
                 .overflow_x(if horizontal_scroll { "auto" } else { "hidden" })
-                .scroll_behavior("jump")
+                .scroll_behavior(scroll_behavior)
                 .scrollbar_visibility(scrollbar_visibility)
                 .w("100%")
                 .h(height)

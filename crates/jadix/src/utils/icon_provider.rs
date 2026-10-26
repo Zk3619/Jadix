@@ -24,21 +24,28 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 
 use crate::app::pending_images::{queue_image_from_src, texture_key_for_src};
 use crate::core::tree::{Element, IntoCssDim, LayoutStatus};
 use crate::style::UnitSlot;
-use crate::utils::lucide::{lucide_builtin_glyph, ATTR_ICON_NAME};
+pub const ATTR_ICON_NAME: &str = "jadix_icon_name";
+#[cfg(all(test, feature = "lucide"))]
+use crate::utils::lucide::lucide_builtin_glyph;
 use crate::utils::text_node::build_named_icon_text_node;
 
-pub(crate) const ATTR_ICON_ANIMATION_STATE: &str = "jadix_animated_icon_state";
+pub const ATTR_ICON_ANIMATION_STATE: &str = "jadix_animated_icon_state";
 
 /// Default square size when `<Icon src>` / a registered raster has no explicit `size`.
 pub const DEFAULT_ICON_SIZE_PX: f32 = 16.0;
 
 /// Fallback PUA glyph (Lucide "album") when a name does not resolve.
-const FALLBACK_GLYPH: &str = "\u{ea0e}";
+fn fallback_glyph() -> (String, String) {
+    match crate::DEFAULT_ICON_PROVIDER.as_ref().and_then(|provider| provider.resolve("album")) {
+        Some(IconSource::Glyph { family, glyph }) => (family, glyph),
+        _ => ("sans-serif".into(), "?".into()),
+    }
+}
 
 pub const ATTR_ICON_SRC: &str = "jadix_icon_src";
 pub(crate) const ATTR_ICON_HOVER_ANIMATION: &str = "jadix_icon_hover_animation";
@@ -84,18 +91,8 @@ impl From<String> for IconSource {
 /// App-wide icon catalog. The default adapter is built-in Lucide.
 pub trait IconProvider: Send + Sync {
     fn resolve(&self, name: &str) -> Option<IconSource>;
-}
-
-struct LucideIconProvider;
-
-impl IconProvider for LucideIconProvider {
-    fn resolve(&self, name: &str) -> Option<IconSource> {
-        let glyph = lucide_builtin_glyph(name)?;
-        Some(IconSource::Glyph {
-            family: "lucide".into(),
-            glyph,
-        })
-    }
+    fn svg_source(&self, _name: &str, _source: &IconSource) -> Option<String> { None }
+    fn configure_animation(&self, _element: &mut Element, _name: &str, _source: &IconSource) -> bool { false }
 }
 
 thread_local! {
@@ -124,15 +121,13 @@ pub fn clear_registered_icons() {
 
 /// Replace the custom catalog layer (Lucide remains the fallback; overlay still wins).
 pub fn set_icon_provider(provider: Arc<dyn IconProvider>) {
-    PROVIDER.with(|s| {
-        *s.borrow_mut() = Some(provider);
-    });
+    let previous = PROVIDER.with(|slot| slot.borrow_mut().replace(provider));
+    drop(previous);
 }
 
 pub fn clear_icon_provider() {
-    PROVIDER.with(|s| {
-        *s.borrow_mut() = None;
-    });
+    let previous = PROVIDER.with(|slot| slot.borrow_mut().take());
+    drop(previous);
 }
 
 /// Resolve `name` through overlay → custom provider → Lucide.
@@ -140,10 +135,19 @@ pub fn resolve_icon(name: &str) -> Option<IconSource> {
     if let Some(src) = OVERLAY.with(|m| m.borrow().get(name).cloned()) {
         return Some(src);
     }
-    if let Some(src) = PROVIDER.with(|s| s.borrow().as_ref().and_then(|p| p.resolve(name))) {
-        return Some(src);
-    }
-    LucideIconProvider.resolve(name)
+    with_catalog(|provider| provider.resolve(name))
+}
+
+fn with_catalog<Value>(mut callback: impl FnMut(&dyn IconProvider) -> Option<Value>) -> Option<Value> {
+    let custom = PROVIDER.with(|provider| provider.borrow().clone());
+    if let Some(value) = custom.as_ref().and_then(|provider| callback(provider.as_ref())) { return Some(value); }
+    crate::DEFAULT_ICON_PROVIDER.as_ref().and_then(|provider| callback(provider.as_ref()))
+}
+
+/// Resolve catalog-provided SVG markup for a named glyph, including custom catalogs.
+pub fn resolve_icon_svg(name: &str) -> Option<String> {
+    let source = resolve_icon(name)?;
+    with_catalog(|provider| provider.svg_source(name, &source))
 }
 
 /// Glyph string for a name, if the resolved source is a font glyph.
@@ -160,7 +164,7 @@ pub fn build_icon_named(name: impl AsRef<str>) -> Element {
     match resolve_icon(name) {
         Some(IconSource::Glyph { family, glyph }) => glyph_element(name, family, glyph),
         Some(IconSource::Src(src)) => build_icon_from_src_named(Some(name), src),
-        None => glyph_element(name, "lucide".to_string(), FALLBACK_GLYPH),
+        None => { let (family, glyph) = fallback_glyph(); glyph_element(name, family, glyph) },
     }
 }
 
@@ -180,10 +184,7 @@ pub fn icon_src(src: impl Into<String>) -> Element {
 /// Apply `size` on `<Icon>`: text size always; box size for raster / SVG `src` icons.
 pub fn with_icon_size(el: Element, px: f32) -> Element {
     let px = px.max(1.0);
-    #[cfg(feature = "lucide-animated")]
-    let is_animated = el.get_attr(crate::utils::ATTR_ANIMATED_ICON).is_some();
-    #[cfg(not(feature = "lucide-animated"))]
-    let is_animated = false;
+    let is_animated = el.icon_playback.is_some();
     let is_src = el.image_texture.is_some()
         || el.get_attr(ATTR_ICON_SRC).is_some()
         || el.get_attr(ATTR_ICON_CHANGE_ANIMATION).is_some()
@@ -208,16 +209,12 @@ pub fn with_icon_animations(
     spring: impl AsRef<str>,
 ) -> Element {
     let hover = hover.as_ref().trim();
-    #[cfg(any(feature = "svg", feature = "lucide-animated"))]
     let name = el.get_attr(ATTR_ICON_NAME).cloned();
-    #[cfg(any(feature = "svg", feature = "lucide-animated"))]
     let source = el
         .get_attr(ATTR_ICON_SRC)
         .cloned()
         .map(IconSource::Src)
         .or_else(|| name.as_deref().and_then(resolve_icon));
-    #[cfg(feature = "lucide-animated")]
-    let recipe = recipe_name(name.as_deref(), source.as_ref()).map(str::to_string);
     #[cfg(feature = "svg")]
     if change.as_ref() == "morph" {
         let src = morph_source(name.as_deref(), source.as_ref());
@@ -245,25 +242,23 @@ pub fn with_icon_animations(
     if hover.is_empty() || hover == "none" || hover == "false" {
         return el;
     }
-    #[cfg(not(feature = "lucide-animated"))]
-    if hover == "animated" {
-        return el;
-    }
     if el.template_id.is_none() {
         el.template_id = Some(format!("icon-motion:{}", id.as_ref()));
     }
     el.set_attr(ATTR_ICON_HOVER_ANIMATION, hover);
     el.set_attr(ATTR_ICON_ANIMATION_STATE, "normal");
-    #[cfg(feature = "lucide-animated")]
     if hover == "animated" {
-        if let Some(name) = recipe {
-            el.set_attr(crate::utils::ATTR_ANIMATED_ICON, name);
+        sync_icon_recipe(&mut el, name.as_deref(), source.as_ref());
+        if el.icon_playback.is_none() {
+            el.attrs.remove(ATTR_ICON_HOVER_ANIMATION);
+            el.attrs.remove(ATTR_ICON_ANIMATION_STATE);
+            return el;
         }
     }
     with_icon_hover(el.pointer_events("bounding-box"))
 }
 
-pub(crate) fn with_icon_hover(el: Element) -> Element {
+pub fn with_icon_hover(el: Element) -> Element {
     let tid = el.template_id.clone().expect("icon identity");
     crate::primitives::interactive::interactive(el)
         .cursor("pointer")
@@ -277,13 +272,14 @@ pub(crate) fn with_icon_hover(el: Element) -> Element {
         .into()
 }
 
-pub(super) fn hover_intent_map() -> &'static Mutex<HashMap<String, bool>> {
-    static INTENTS: OnceLock<Mutex<HashMap<String, bool>>> = OnceLock::new();
-    INTENTS.get_or_init(|| Mutex::new(HashMap::new()))
+pub(super) fn hover_intent_map() -> std::rc::Rc<Mutex<HashMap<String, bool>>> {
+    crate::authoring::window::window_local! {
+        static INTENTS: std::rc::Rc<Mutex<HashMap<String, bool>>> = std::rc::Rc::new(Mutex::new(HashMap::new()));
+    }
+    INTENTS.with(Clone::clone)
 }
 
-#[cfg(feature = "lucide-animated")]
-pub(crate) fn release_icon_hover(template_id: &str) {
+pub fn release_icon_hover(template_id: &str) {
     if let Ok(mut map) = hover_intent_map().lock() {
         map.remove(template_id);
     }
@@ -304,16 +300,8 @@ fn sync_hover_rec(el: &mut Element, intents: &HashMap<String, bool>) {
     if el.collect_paint_hash != 0 && !el.collect_skip_live {
         return;
     }
-    #[cfg(feature = "lucide-animated")]
-    let is_animated = el.get_attr(crate::utils::ATTR_ANIMATED_ICON).is_some();
-    #[cfg(not(feature = "lucide-animated"))]
-    let is_animated = false;
-    #[cfg(feature = "lucide-animated")]
-    let controlled = el
-        .get_attr(crate::utils::lucide_animated::ATTR_ANIMATED_ICON_CONTROLLED)
-        .is_some();
-    #[cfg(not(feature = "lucide-animated"))]
-    let controlled = false;
+    let is_animated = el.icon_playback.is_some();
+    let controlled = el.icon_playback.is_some_and(|playback| playback.controlled);
     if (is_animated || el.get_attr(ATTR_ICON_HOVER_ANIMATION).is_some()) && !controlled {
         if let Some(tid) = el.template_id.clone() {
             if let Some(&on) = intents.get(&tid) {
@@ -325,9 +313,8 @@ fn sync_hover_rec(el: &mut Element, intents: &HashMap<String, bool>) {
                     .unwrap_or("normal");
                 if current != want {
                     el.set_attr(ATTR_ICON_ANIMATION_STATE, want);
-                    #[cfg(feature = "lucide-animated")]
-                    if is_animated {
-                        crate::utils::lucide_animated::set_animated_icon_state(el, want);
+                    if let Some(playback) = el.icon_playback {
+                        (playback.set_state)(el, want);
                     }
                 }
             }
@@ -376,12 +363,9 @@ pub(crate) fn sync_icon_hover_animation(el: &mut Element, on: bool) {
 #[cfg(feature = "svg")]
 fn morph_source(name: Option<&str>, source: Option<&IconSource>) -> Option<String> {
     match source? {
-        IconSource::Glyph { family, glyph } if family == "lucide" => {
+        IconSource::Glyph { .. } => {
             let name = name?;
-            if crate::utils::lucide::lucide_builtin_glyph(name).as_ref() != Some(glyph) {
-                return None;
-            }
-            crate::utils::lucide::lucide_svg_inner(name).map(|_| name.to_string())
+            with_catalog(|provider| provider.svg_source(name, source?)).map(|_| name.to_string())
         }
         IconSource::Src(src) => {
             let bytes = if src.trim_start().starts_with('<') {
@@ -394,7 +378,6 @@ fn morph_source(name: Option<&str>, source: Option<&IconSource>) -> Option<Strin
             let input = crate::utils::svg_to_icon(std::str::from_utf8(&bytes).ok()?).ok()?;
             crate::utils::canonical_d(&input).ok()
         }
-        _ => None,
     }
 }
 
@@ -423,11 +406,15 @@ fn apply_resolved(
     #[cfg(feature = "svg")]
     if el.get_attr(ATTR_ICON_CHANGE_ANIMATION).is_some() {
         if let Some(src) = morph_source(name, source.as_ref()) {
+            let family = match source.as_ref() {
+                Some(IconSource::Glyph { family, .. }) => family.as_str(),
+                _ => "sans-serif",
+            };
             let layout_changed = el.image_texture.is_some()
-                || el.text_style.font_family.as_deref() != Some("lucide");
+                || el.text_style.font_family.as_deref() != Some(family);
             let status = crate::utils::apply_bound_morph_icon(el, src);
             el.image_texture = None;
-            el.text_style.font_family = Some("lucide".into());
+            el.text_style.font_family = Some(family.into());
             el.attrs.remove(ATTR_ICON_SRC);
             if let Some(name) = name {
                 el.set_attr(ATTR_ICON_NAME, name);
@@ -435,7 +422,6 @@ fn apply_resolved(
             if let Some(IconSource::Src(src)) = &source {
                 el.set_attr(ATTR_ICON_SRC, src);
             }
-            #[cfg(feature = "lucide-animated")]
             sync_icon_recipe(el, name, source.as_ref());
             return status.merge(if layout_changed {
                 LayoutStatus::LayoutChanged
@@ -445,7 +431,6 @@ fn apply_resolved(
         }
         el.attrs.remove(crate::utils::ATTR_MORPH_ICON);
     }
-    #[cfg(feature = "lucide-animated")]
     sync_icon_recipe(el, name, source.as_ref());
     match source {
         Some(IconSource::Glyph { family, glyph }) => {
@@ -477,53 +462,31 @@ fn apply_resolved(
             LayoutStatus::LayoutChanged
         }
         None => {
-            let fallback = FALLBACK_GLYPH;
-            if el.text.as_deref() == Some(fallback)
-                && el.text_style.font_family.as_deref() == Some("lucide")
+            let (family, fallback) = fallback_glyph();
+            if el.text.as_deref() == Some(fallback.as_str())
+                && el.text_style.font_family.as_deref() == Some(family.as_str())
                 && el.image_texture.is_none()
             {
                 return LayoutStatus::Clean;
             }
-            paint_glyph(el, name, "lucide", fallback);
+            paint_glyph(el, name, family, fallback);
             LayoutStatus::LayoutChanged
         }
     }
 }
 
-#[cfg(feature = "lucide-animated")]
-fn sync_icon_recipe(el: &mut Element, name: Option<&str>, source: Option<&IconSource>) {
-    if el.get_attr(ATTR_ICON_HOVER_ANIMATION).map(String::as_str) != Some("animated") {
-        return;
-    }
-    let name = recipe_name(name, source);
-    if el
-        .get_attr(crate::utils::ATTR_ANIMATED_ICON)
-        .map(String::as_str)
-        == name
-    {
-        return;
-    }
-    if let Some(name) = name {
-        el.set_attr(crate::utils::ATTR_ANIMATED_ICON, name);
-    } else {
-        el.attrs.remove(crate::utils::ATTR_ANIMATED_ICON);
-    }
-    #[cfg(feature = "svg")]
-    crate::utils::lucide_animated::reset_animated_icon_playback(el);
+pub fn refresh_icon_animation(element: &mut Element, name: &str) {
+    let source = resolve_icon(name);
+    sync_icon_recipe(element, Some(name), source.as_ref());
 }
 
-#[cfg(feature = "lucide-animated")]
-fn recipe_name<'a>(name: Option<&'a str>, source: Option<&IconSource>) -> Option<&'a str> {
-    let name = name?;
-    match source? {
-        IconSource::Glyph { family, glyph }
-            if family == "lucide"
-                && crate::utils::lucide::lucide_builtin_glyph(name).as_ref() == Some(glyph)
-                && crate::utils::animated_icon_recipe(name).is_some() =>
-        {
-            Some(name)
-        }
-        _ => None,
+fn sync_icon_recipe(element: &mut Element, name: Option<&str>, source: Option<&IconSource>) {
+    if element.get_attr(ATTR_ICON_HOVER_ANIMATION).map(String::as_str) != Some("animated") { return; }
+    let installed = name.zip(source).and_then(|(name, source)| {
+        with_catalog(|provider| provider.configure_animation(element, name, source).then_some(()))
+    }).is_some();
+    if !installed {
+        if let Some(playback) = element.icon_playback.take() { (playback.detach)(element); }
     }
 }
 
@@ -620,7 +583,7 @@ fn with_icon_test<R>(f: impl FnOnce() -> R) -> R {
     out
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "lucide"))]
 mod tests {
     use super::*;
 
@@ -946,5 +909,28 @@ mod tests {
             let src = with_icon_size(build_icon_from_src(RED_PNG), 20.0);
             assert!((src.text_style.size_resolved() - 20.0).abs() < f32::EPSILON);
         });
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    #[test]
+    fn same_named_hover_intents_are_isolated_and_released_with_the_window() {
+        use crate::app::window_scope::{self, WindowScope};
+        let primary = WindowScope::Primary;
+        let secondary = WindowScope::Secondary(805);
+        crate::authoring::window::activate(primary);
+        crate::authoring::window::activate(secondary);
+        let _primary = window_scope::enter(primary);
+        super::hover_intent_map().lock().unwrap().insert("same-icon".into(), true);
+        {
+            let _secondary = window_scope::enter(secondary);
+            assert!(!super::hover_intent_map().lock().unwrap().contains_key("same-icon"));
+            super::hover_intent_map().lock().unwrap().insert("same-icon".into(), false);
+            crate::authoring::window::forget(secondary);
+            assert!(super::hover_intent_map().lock().unwrap().is_empty());
+        }
+        assert_eq!(super::hover_intent_map().lock().unwrap().get("same-icon"), Some(&true));
+        super::release_icon_hover("same-icon");
     }
 }

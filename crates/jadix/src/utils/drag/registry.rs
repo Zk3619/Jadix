@@ -9,6 +9,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use crate::core::reactivity::Signal;
 use super::session::DragHit;
 
 fn slot_key(scope: &str, id: &str) -> String {
@@ -24,10 +25,17 @@ pub struct ItemFlags {
     pub pull_clone: bool,
 }
 
-thread_local! {
+crate::authoring::window::window_local! {
     static ITEM_DATA: RefCell<HashMap<String, Rc<dyn Any>>> = RefCell::new(HashMap::new());
     static ITEM_FLAGS: RefCell<HashMap<String, ItemFlags>> = RefCell::new(HashMap::new());
     static REGISTERED: RefCell<HashMap<String, DragHit>> = RefCell::new(HashMap::new());
+    static REGISTRY_EPOCHS: RefCell<HashMap<String, Signal<u64>>> = RefCell::new(HashMap::new());
+}
+
+pub fn bind_epoch(scope: &str, epoch: Signal<u64>) {
+    REGISTRY_EPOCHS.with(|m| {
+        m.borrow_mut().insert(scope.to_string(), epoch);
+    });
 }
 
 pub fn set_item_data(scope: &str, id: &str, data: Rc<dyn Any>) {
@@ -67,18 +75,32 @@ pub fn register_slot_meta(hit: DragHit) {
 }
 
 /// Register or refresh slot metadata (rect updated on each [`super::collect_hits`]).
-pub fn register_slot(hit: DragHit) {
+pub fn register_slot(hit: DragHit) -> bool {
     let key = slot_key(&hit.scope_id, &hit.id);
     REGISTERED.with(|m| {
-        m.borrow_mut().insert(key, hit);
-    });
+        let mut slots = m.borrow_mut();
+        let changed = slots.get(&key) != Some(&hit);
+        slots.insert(key, hit);
+        changed
+    })
 }
 
 /// Merge a layout walk into the scope registry (idle + debugger HUD).
 pub fn sync_registered_from_collect(hits: &[DragHit]) {
+    let mut changed_scopes = std::collections::HashSet::new();
     for h in hits {
-        register_slot(h.clone());
+        if register_slot(h.clone()) {
+            changed_scopes.insert(h.scope_id.clone());
+        }
     }
+    REGISTRY_EPOCHS.with(|epochs| {
+        let epochs = epochs.borrow();
+        for scope in changed_scopes {
+            if let Some(epoch) = epochs.get(&scope).cloned() {
+                epoch.set(epoch.peek().wrapping_add(1));
+            }
+        }
+    });
 }
 
 /// Idle hit table for one provider (solid-dnd context store analog).
@@ -139,4 +161,33 @@ mod tests {
         assert_eq!(registered_hits_in_scope("s1").len(), 1);
         assert_eq!(registered_hits_in_scope("s1")[0].id, "a");
     }
+}
+
+pub(super) fn take_scope(scope: &str) -> Vec<Rc<dyn Any>> {
+    let prefix = format!("{scope}\0");
+    let removed = ITEM_DATA.with(|slots| {
+        let mut slots = slots.borrow_mut();
+        let keys: Vec<_> = slots
+            .keys()
+            .filter(|key| key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        keys.into_iter()
+            .filter_map(|key| slots.remove(&key))
+            .collect()
+    });
+    ITEM_FLAGS.with(|slots| {
+        slots
+            .borrow_mut()
+            .retain(|key, _| !key.starts_with(&prefix))
+    });
+    REGISTERED.with(|slots| {
+        slots
+            .borrow_mut()
+            .retain(|key, _| !key.starts_with(&prefix))
+    });
+    REGISTRY_EPOCHS.with(|epochs| {
+        epochs.borrow_mut().remove(scope);
+    });
+    removed
 }

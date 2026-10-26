@@ -38,7 +38,7 @@ impl DragSensor {
     }
 }
 
-thread_local! {
+crate::authoring::window::window_local! {
     static EXTRA_SENSORS: RefCell<HashMap<String, Vec<DragSensor>>> = RefCell::new(HashMap::new());
 }
 
@@ -158,4 +158,8 @@ mod tests {
     fn add_sensor_requires_scope() {
         assert!(!add_sensor("missing", DragSensor::new("kbd", |_| false)));
     }
+}
+
+pub(super) fn take_scope(scope: &str) -> Vec<DragSensor> {
+    EXTRA_SENSORS.with(|slots| slots.borrow_mut().remove(scope).unwrap_or_default())
 }

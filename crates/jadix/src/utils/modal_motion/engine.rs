@@ -450,12 +450,9 @@ pub(crate) fn tick_modal_presence() -> bool {
             let maybe_unmount = {
                 let mut c = cell.borrow_mut();
                 if c.gate.phase() == PresencePhase::Exiting {
-                    let dialog_css_exit = c
-                        .shell
-                        .as_ref()
-                        .is_some_and(|s| s.motion == ModalSurfaceMotion::DialogFade);
-                    if dialog_css_exit {
-                        // Wall-clock ExitGate must not unmount a Dialog whose CSS is still
+                    let shell_css_exit = c.shell.is_some();
+                    if shell_css_exit {
+                        // Wall-clock ExitGate must not unmount a modal whose CSS is still
                         // painting: Bake/layout hitch makes elapsed_ms lag Instant, and the
                         // gate would tear the panel down mid-zoom (stutter + content disappears suddenly).
                         needs_frame = true;
@@ -655,15 +652,18 @@ fn enter_visual_settled(
 ) -> bool {
     // Same class of cutoff as Dialog zoom: 2–4% remaining snapped the last
     // ease-out tail onto the dock in one frame (Sheet/Drawer 入场末段瞬跳).
-    let overlay_ok = (overlay.style.opacity - 1.0).abs() < 0.005;
+    let overlay_ok = (overlay.style.opacity - 1.0).abs() < 0.001;
     let nested = 1.0_f32;
     let panel_ok = if motion == ModalSurfaceMotion::DialogFade {
         (panel.style.scale[0] - nested).abs() < 0.002
     } else {
         let target_pct = extra_to_translate_pct(motion, target_translate, slide_axis_px);
-        let pct_ok = (panel.style.translate_pct[0] - target_pct[0]).abs() < 0.002
-            && (panel.style.translate_pct[1] - target_pct[1]).abs() < 0.002;
-        let px_ok = panel.style.translate[0].abs() < 1.0 && panel.style.translate[1].abs() < 1.0;
+        let pct_ok = (panel.style.translate_pct[0] - target_pct[0]).abs() < 0.0005
+            && (panel.style.translate_pct[1] - target_pct[1]).abs() < 0.0005;
+        // The last fractional pixel is visible on a one-pixel sheet edge. Do
+        // not clear the keyframe while the border can still move between
+        // physical samples.
+        let px_ok = panel.style.translate[0].abs() < 0.25 && panel.style.translate[1].abs() < 0.25;
         pct_ok && px_ok
     };
     overlay_ok && panel_ok
@@ -731,11 +731,11 @@ fn write_modal_shell_tick_targets(
 }
 
 fn exit_visual_settled(overlay: &Element, panel: &Element, motion: ModalSurfaceMotion) -> bool {
-    let overlay_done = overlay.style.opacity < 0.05;
+    let overlay_done = overlay.style.opacity <= 0.001;
     let closed = motion.closed_translate_pct();
-    let pct_done = (panel.style.translate_pct[0] - closed[0]).abs() < 0.04
-        && (panel.style.translate_pct[1] - closed[1]).abs() < 0.04;
-    overlay_done && pct_done
+    let pct_done = (panel.style.translate_pct[0] - closed[0]).abs() <= 0.001
+        && (panel.style.translate_pct[1] - closed[1]).abs() <= 0.001;
+    overlay_done && pct_done && !modal_shell_enter_css_active(overlay, panel)
 }
 
 fn modal_shell_enter_css_active(overlay: &Element, panel: &Element) -> bool {
@@ -1762,6 +1762,17 @@ pub(crate) fn tick_hoisted_modal_css(root: &mut Element) -> bool {
                     },
                 );
             }
+            if shell.phase == PresencePhase::Exiting
+                && shell.motion != ModalSurfaceMotion::DialogFade
+                && exit_visual_settled(overlay, motion_el, shell.motion)
+            {
+                // The exit keyframe can finish after layout collected the previous pose.
+                // Write the terminal opacity before the animation-frame collect so the
+                // final present clears the panel shadow in the same frame.
+                motion_el.style.opacity = 0.0;
+                crate::app::damage::push_frame_paint_element(motion_el, motion_el.paint_scroll_acc);
+                any = true;
+            }
             if crate::style::css_animation_needs_frame(&overlay.style, &overlay.animation_snapshot)
                 || crate::style::css_animation_needs_frame(
                     &motion_el.style,
@@ -1946,6 +1957,20 @@ pub(crate) fn apply_modal_shell_motion(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn slide_exit_keeps_the_last_visible_pixels_until_completion() {
+        for motion in [ModalSurfaceMotion::SlideFromRight, ModalSurfaceMotion::SlideFromBottom] {
+            let mut overlay = Element::new().opacity(0.03);
+            let mut panel = Element::new();
+            let closed = motion.closed_translate_pct();
+            panel.style.translate_pct = [closed[0] * 0.97, closed[1] * 0.97];
+            assert!(!exit_visual_settled(&overlay, &panel, motion));
+            overlay.style.opacity = 0.0;
+            panel.style.translate_pct = closed;
+            assert!(exit_visual_settled(&overlay, &panel, motion));
+        }
+    }
     use crate::core::reactivity::{create_effect, create_root};
     #[cfg(feature = "animation-base")]
     use crate::style::{set_css_transition_timeline_ms, set_css_transition_virtual_timeline};

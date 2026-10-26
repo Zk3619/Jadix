@@ -640,7 +640,7 @@ fn node_has_collect_side_channel(el: &Element) -> bool {
         || el.template_id.as_deref() == Some("__jadix_devtools_highlight")
         || el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
         || el.attrs.get("jadix_portal").map(String::as_str) == Some("1")
-        || el.attrs.contains_key(crate::utils::drag::ATTR_DRAG_OVERLAY)
+        || crate::utils::drag::runtime::keeps_collect_live(el)
         || crate::utils::anchored_overlay::point_overlay_drag_collect_live(el)
         || node_records_page_stack_bands(el)
 }
@@ -726,6 +726,13 @@ fn node_clips_descendants(el: &Element) -> bool {
 }
 
 fn node_collect_is_live(el: &Element) -> bool {
+    if crate::core::tree::opacity_groups_enabled()
+        && el.attrs.get(crate::core::tree::ATTR_OPACITY_GROUP).map(String::as_str) == Some("1")
+        && el.style.opacity > 0.0
+        && el.style.opacity < 1.0
+    {
+        return true;
+    }
     if crate::primitives::canvas::canvas_paint_is_dirty(&el.attrs) {
         return true;
     }
@@ -773,8 +780,7 @@ pub(crate) fn node_paint_needs_frame(el: &Element) -> bool {
     {
         return true;
     }
-    #[cfg(feature = "lucide-animated")]
-    if el.attrs.contains_key(crate::utils::ATTR_ANIMATED_ICON) {
+    if el.icon_playback.is_some() {
         return true;
     }
     if el.attrs.contains_key(crate::utils::icon_provider::ATTR_ICON_HOVER_ANIMATION) {
@@ -949,13 +955,13 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
         let mut hover_armed =
             el.class_set.as_ref().and_then(|cs| cs.last_pointer_hover) == Some(true);
         let mut hover_cursor = el.on_hover.is_some() || el.cursor.is_some();
-        let mut paint_sync = el.button_hover_paint.is_some()
+        let mut paint_sync = !el.authoring_state.is_empty()
             || el.input_paint_sync.is_some()
             || el.text_style.selectable
-            || el.text_style.input_caret.is_some()
-            || el.attrs.get("data-slot").map(String::as_str) == Some("sidebar-menu-button")
-            || el.attrs.contains_key("jadix_tree_row_chrome");
+            || el.text_style.input_caret.is_some();
         let mut reactive_sync = el.reactive_sync.is_some();
+        let mut presentation_sync = el.presentation_sync.is_some() || !el.tree_presentation_sync.is_empty();
+        paint_sync |= presentation_sync || el.after_style_sync.is_some();
         let mut layout_motion = el.layout_motion.is_some() || el.liquid_flow.is_some();
         let mut collapse_work = reactive_sync
             || el.attrs.contains_key("jadix_collapse_measuring")
@@ -973,6 +979,7 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
             hover_armed |= child.css_hover_armed;
             paint_sync |= child.subtree_paint_sync;
             reactive_sync |= child.subtree_reactive_sync;
+            presentation_sync |= child.subtree_presentation_sync;
             layout_motion |= child.subtree_layout_motion;
             collapse_work |= child.subtree_collapse_work;
             floating_panel |= child.subtree_floating_panel;
@@ -989,6 +996,7 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
         el.css_hover_armed = hover_armed;
         el.subtree_paint_sync = paint_sync;
         el.subtree_reactive_sync = reactive_sync;
+        el.subtree_presentation_sync = presentation_sync;
         el.subtree_layout_motion = layout_motion;
         el.subtree_collapse_work = collapse_work;
         el.subtree_floating_panel = floating_panel;
@@ -1008,6 +1016,14 @@ pub(crate) fn stamped_subtree_holds_live_text_edit(el: &Element, focused: &str) 
         return false;
     }
     crate::core::tree::subtree_holds_live_text_edit(el, focused)
+}
+
+/// Scroll-only sibling culling must keep a subtree whose paint clock is still
+/// active. The normal collect hash carries this bit upward, but the band walk
+/// cannot infer it from geometry alone. Skipping a live canvas or shader here
+/// stops its next-frame request and leaves the last texture on screen.
+pub(crate) fn stamped_subtree_holds_live_paint(el: &Element) -> bool {
+    el.collect_skip_live || el.children.iter().any(stamped_subtree_holds_live_paint)
 }
 
 pub(crate) fn invalidate_animation_shell_hashes(root: &mut Element) {
@@ -1053,6 +1069,16 @@ fn node_seeds_scroll_skip(el: &Element) -> bool {
 }
 
 fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
+    el.attrs.get(crate::core::tree::ATTR_OPACITY_GROUP).hash(h);
+    el.paint_edge.is_some().hash(h);
+    if let Some(edge) = el.paint_edge {
+        edge.edge.hash(h);
+        edge.width.to_bits().hash(h);
+        hash_f32s(h, &edge.color);
+    }
+    el.paint_opaque_fill.hash(h);
+    el.paint_region_replay.hash(h);
+    el.paint_children_unculled.hash(h);
     el.attrs.contains_key(crate::style::liquid_flow::ITEM).hash(h);
     if let Some(sample) = el.liquid_flow.as_ref().and_then(crate::style::liquid_flow::LiquidFlow::sample) {
         hash_f32s(h, &sample);
@@ -1983,7 +2009,6 @@ fn nudge_clip_poly(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils::drag::ATTR_DRAG_OVERLAY;
 
     #[test]
     fn scroll_replay_keeps_inherited_masks_and_moves_local_masks() {
@@ -2276,9 +2301,12 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "dnd")]
     fn drag_overlay_is_not_skippable() {
+        let _product = crate::utils::drag::drag_overlay();
         let mut el = el_with_child();
-        el.set_attr(ATTR_DRAG_OVERLAY, "1");
+        el.set_attr(crate::utils::drag::ATTR_DRAG_OVERLAY, "1");
+        assert!(crate::utils::drag::runtime::keeps_collect_live(&el));
         assert!(!subtree_is_skippable(&el));
     }
 
@@ -2291,6 +2319,18 @@ mod tests {
             c.collect_paint_hash = 1;
         }
         assert!(subtree_is_skippable(&el));
+    }
+
+    #[test]
+    fn scroll_band_cull_keeps_a_live_paint_subtree() {
+        let mut shader = Element::new();
+        shader.set_attr(crate::primitives::shader::ATTR_SHADER, "1");
+        let mut root = Element::new().child(shader);
+
+        stamp_subtree_paint_hashes(&mut root, false);
+
+        assert!(root.children[0].collect_skip_live);
+        assert!(stamped_subtree_holds_live_paint(&root.children[0]));
     }
 
     #[test]

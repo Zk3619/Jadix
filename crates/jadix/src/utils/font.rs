@@ -19,6 +19,29 @@ thread_local! {
         RefCell::new(HashMap::new());
 }
 
+static REGISTERED_FONT_DATA: Mutex<Vec<std::sync::Arc<Vec<u8>>>> = Mutex::new(Vec::new());
+
+/// Register font bytes before creating UI windows. Each subsequently created
+/// font system loads the same assets; existing systems retain their own database.
+/// Returns the declared family names and rejects data without a readable face.
+pub fn register_font_data(bytes: Vec<u8>) -> Result<Vec<String>, String> {
+    let bytes = std::sync::Arc::new(bytes);
+    let mut database = Database::new();
+    database.load_font_source(glyphon::fontdb::Source::Binary(bytes.clone()));
+    let mut families: Vec<_> = database.faces().flat_map(|face| face.families.iter().map(|(family, _)| family.clone())).collect();
+    families.sort();
+    families.dedup();
+    if families.is_empty() { return Err("font data contains no readable face".into()); }
+    let mut registered = REGISTERED_FONT_DATA.lock().map_err(|_| "font registration unavailable")?;
+    if !registered.iter().any(|current| current.as_ref() == bytes.as_ref()) { registered.push(bytes); }
+    Ok(families)
+}
+
+pub(crate) fn load_registered_fonts(database: &mut Database) {
+    let fonts = REGISTERED_FONT_DATA.lock().map(|fonts| fonts.clone()).unwrap_or_default();
+    for bytes in fonts { database.load_font_source(glyphon::fontdb::Source::Binary(bytes)); }
+}
+
 static FONT_MATCH_GEN: AtomicU64 = AtomicU64::new(1);
 
 fn bump_font_match_caches() {

@@ -29,6 +29,7 @@ pub mod keyboard;
 pub mod keyed_overlay;
 pub mod layout_group;
 pub mod list_nav;
+#[cfg(feature = "lucide")]
 pub mod lucide;
 #[cfg(feature = "lucide-animated")]
 pub mod lucide_animated;
@@ -41,6 +42,7 @@ pub mod motion;
 pub mod overflow_fit;
 pub mod panel_presence;
 pub mod pointer_action;
+#[deprecated(note = "use crate::utils::drag::pointer and crate::utils::drag::routing")]
 pub mod pointer_drag;
 pub mod popup;
 pub mod presence;
@@ -52,6 +54,7 @@ pub mod text_field;
 pub mod text_multi_cursor;
 pub mod text_node;
 pub mod text_sel_move;
+pub mod text_selection;
 pub mod text_texture;
 pub mod text_vector_spike;
 pub mod toggle_state;
@@ -106,7 +109,11 @@ pub use keyed_overlay::{
 pub use layout_group::{
     linear_slot_offset, slot_list_pose, slot_visual_offset, LayoutGroup, SlotListConfig, SlotPose,
 };
-pub use lucide::{lucide_glyph, lucide_svg_inner, ATTR_ICON_NAME};
+pub use icon_provider::{glyph_for_name as lucide_glyph, resolve_icon_svg, ATTR_ICON_NAME};
+#[cfg(feature = "lucide")]
+pub use lucide::lucide_svg_inner;
+#[cfg(not(feature = "lucide"))]
+pub fn lucide_svg_inner(_name: &str) -> Option<&'static str> { None }
 #[cfg(feature = "lucide-animated")]
 pub use lucide_animated::{
     animated_icon, animated_icon_names, animated_icon_recipe, ensure_animated_icon_texture,

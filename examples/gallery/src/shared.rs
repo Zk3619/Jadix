@@ -150,7 +150,7 @@ fn gallery_performance_panel() -> Element {
     let visible = use_signal("gal-perf-visible", || true);
     let text = use_signal("gal-perf-text", || "Measuring…".to_string());
     let panel = ui! {
-        <VStack absolute={true} right="12px" bottom="12px" max_w="calc(100% - 24px)" z_index={1000000} gap="4px" items="end">
+        <VStack id="gal-perf-panel" absolute={true} right="12px" bottom="12px" max_w="calc(100% - 24px)" z_index={1000000} gap="4px" items="end">
             <Button id="gal-perf-toggle" size="sm" variant="secondary"
                 on_click={move || visible.set(!visible.peek())}>"性能 / FPS"</Button>
             <Show when={visible.get()} scope="gallery:performance">
@@ -179,6 +179,46 @@ fn GalleryPerformanceResources(text: Signal<String>) -> Element {
             </Label>
         </Box>
     }
+}
+
+#[cfg(all(test, feature = "performance"))]
+#[test]
+fn performance_panel_stays_viewport_anchored_across_scroll_and_resize() {
+    fn find<'a>(element: &'a Element, id: &str) -> Option<&'a Element> {
+        if element.template_id.as_deref() == Some(id) {
+            Some(element)
+        } else {
+            element.children.iter().find_map(|child| find(child, id))
+        }
+    }
+    jadix::core::reactivity::create_root(|| {
+        let mut root = jadix::authoring::mount::with_inline_mount(|| {
+            Element::new().w("100%").h("100%").child(
+                scroll_area("performance-position-scroll").w("100%").h("100%")
+                    .child(Element::new().w("100%").h(1800.0)),
+            ).child(gallery_performance_panel())
+        });
+        let mut layout = jadix::layout::LayoutTree::new();
+        layout.set_collect_skip_allowed(true);
+        layout.build_and_layout(&mut root, 640.0, 600.0, [-1.0; 2]);
+        for frame in 0..120 {
+            let [width, height] = [[640.0, 600.0], [800.0, 500.0], [360.0, 640.0]][(frame / 20) % 3];
+            use_signal(&jadix::core::scroll_viewport::scroll_offset_y_signal_key(
+                "performance-position-scroll"), || 0.0_f32).set_silent((frame * 37 % 900) as f32);
+            layout.build_and_layout_fast(&mut root, width, height, [-1.0; 2], frame % 3 != 0, true);
+            let panel = find(&root, "gal-perf-panel")
+                .expect("performance panel");
+            let bounds = panel.viewport_layout_bounds();
+            assert!((width - bounds[0] - bounds[2] - 12.0).abs() < 1.0,
+                "performance right anchor moved at frame {frame}: {bounds:?}");
+            assert!((height - bounds[1] - bounds[3] - 12.0).abs() < 1.0,
+                "performance bottom anchor moved at frame {frame}: {bounds:?}");
+            let button = find(&root, "gal-perf-toggle").unwrap();
+            let button = button.viewport_layout_bounds();
+            assert!((button[0] + button[2] - bounds[0] - bounds[2]).abs() < 1.0,
+                "performance button detached at frame {frame}: {button:?} / {bounds:?}");
+        }
+    });
 }
 
 #[cfg(all(test, feature = "performance"))]

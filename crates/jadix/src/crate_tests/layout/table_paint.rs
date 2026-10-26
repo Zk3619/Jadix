@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Table hover / collect-skip must keep cell glyphs and row chrome.
 //!
 //! Gallery invoices + data_table used to flash empty then restyle: hover chrome
@@ -1096,7 +1097,7 @@ fn composite_table_footer_seams_must_survive_adjacent_row_hover() {
             total.layout_bounds,
             row_bottom_border(total),
             total.on_hover.clone(),
-            total.button_hover_paint.is_some(),
+            total.authoring_state.get::<crate::components::button::ButtonHoverPaint>().is_some(),
         )
     };
     assert!(

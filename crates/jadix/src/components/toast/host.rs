@@ -91,7 +91,14 @@ pub(super) const TOAST_HOST_VIEW: &str = "__jadix_toast_host_view";
 /// 反应根必须是**非 portal** 外壳。若把 `jadix_portal` 当 `__jadix_toast_host_view` 根，
 /// hoist 后身份落到 portal 层；Command Modal 关闭再调和会找不到壳，后续通知全部不上屏。
 fn toast_host_idle() -> Element {
-    Element::new().w(0.0).h(0.0).pointer_events_none()
+    let mut root = Element::new().w(0.0).h(0.0).pointer_events_none();
+    crate::authoring::deadline::attach(
+        &mut root, crate::authoring::deadline::Visibility::Always,
+        |_| crate::authoring::deadline::Poll {
+            redraw: tick_toast_lifecycle(), next_wake: toast_next_wake_at(),
+        },
+    );
+    root
 }
 
 /// 铺满视口的舞台（提升到窗口根 portal 层）；卡片在其内按 `position` 锚点摆放。

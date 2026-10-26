@@ -23,3 +23,14 @@ fn div_and_div_pascal_tags_match_box() {
     assert_eq!(from_pascal.children[0].text.as_deref(), Some("hi"));
     assert_eq!(from_box.children[0].text.as_deref(), Some("hi"));
 }
+
+#[test]
+fn div_builder_and_module_match_existing_box_builders() {
+    let builder: Element = div().id("shell").w("2rem").h("1rem").text("hi").into();
+    let module: Element = jadix::primitives::div::div().w("2rem").h("1rem").into();
+    let compatibility: Element = r#box().w("2rem").h("1rem").into();
+    assert_eq!(builder.template_id.as_deref(), Some("shell"));
+    assert_eq!(builder.text.as_deref(), Some("hi"));
+    assert_eq!(builder.style.size, compatibility.style.size);
+    assert_eq!(module.style.size, compatibility.style.size);
+}

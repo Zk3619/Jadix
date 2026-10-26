@@ -1624,6 +1624,19 @@ pub(crate) fn ScrollShowcase() -> jadix::core::tree::Element {
                 </HStack>
 
                 <Label font_weight="700" text_size="0.875rem">"B) Visibility: auto / always / never"</Label>
+                <Box w="18rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
+                    <ScrollArea id="sa-optional-arrows" w="100%" h="100%" p="0.5rem"
+                        scrollbar_arrows={true} scrollbar_visibility="always"
+                        scrollbar_arrow_class="hover:bg-primary hover:text-primary-foreground"
+                        overflow_y="auto" overflow_x="auto">
+                        <VStack gap="0.25rem" min_w="24rem">
+                            <Label font_weight="700">"可选箭头：点击三角形滚动，悬停样式可定制"</Label>
+                            <For each={1..=10}>
+                                <Label>{ format!("arrow scroll {:02}", item) }</Label>
+                            </For>
+                        </VStack>
+                    </ScrollArea>
+                </Box>
                 <HStack gap="0.5rem" items="start" wrap="wrap">
                     <Box w="13.5rem" h="6.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                         <ScrollArea id="sa-vis-auto" w="100%" h="100%" p="0.5rem"

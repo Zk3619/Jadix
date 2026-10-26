@@ -37,7 +37,7 @@ pub fn icon_input_from_src(src: &str) -> Option<IconInput> {
     if looks_like_path_d(t) {
         return Some(IconInput::D(t.to_string()));
     }
-    crate::utils::lucide::lucide_svg_inner(t).and_then(|inner| markup_to_icon(inner, true).ok())
+    crate::utils::icon_provider::resolve_icon_svg(t).and_then(|inner| markup_to_icon(&inner, true).ok())
 }
 
 fn looks_like_path_d(s: &str) -> bool {
@@ -179,7 +179,7 @@ mod tests {
     #[test]
     fn markup_lucide_inner() {
         let inner = r#"<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>"#;
-        let input = markup_to_icon(inner, true).unwrap();
+        let input = markup_to_icon(&inner, true).unwrap();
         let cubics = icon_to_cubics(&input).unwrap();
         assert_eq!(cubics.len(), 3);
     }

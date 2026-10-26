@@ -68,7 +68,7 @@ pub struct DropzoneConfig {
     pub hooks: DropzoneHooks,
 }
 
-thread_local! {
+crate::authoring::window::window_local! {
     static CONFIG: RefCell<HashMap<String, DropzoneConfig>> = RefCell::new(HashMap::new());
     static ACTIVATED: RefCell<HashMap<String, Vec<String>>> = RefCell::new(HashMap::new());
     static ENTERED: RefCell<HashMap<String, Option<String>>> = RefCell::new(HashMap::new());
@@ -180,4 +180,22 @@ mod tests {
         assert!(DropOverlap::Ratio(0.49).passes([80.0, 50.0], half_out, zone));
         assert!(!DropOverlap::Ratio(0.51).passes([80.0, 50.0], half_out, zone));
     }
+}
+
+pub(super) fn take_scope(scope: &str) -> Vec<DropzoneConfig> {
+    let prefix = format!("{scope}\0");
+    let removed = CONFIG.with(|slots| {
+        let mut slots = slots.borrow_mut();
+        let keys: Vec<_> = slots
+            .keys()
+            .filter(|key| key.starts_with(&prefix))
+            .cloned()
+            .collect();
+        keys.into_iter()
+            .filter_map(|key| slots.remove(&key))
+            .collect()
+    });
+    ACTIVATED.with(|slots| slots.borrow_mut().remove(scope));
+    ENTERED.with(|slots| slots.borrow_mut().remove(scope));
+    removed
 }

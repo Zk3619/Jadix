@@ -82,7 +82,7 @@ use crate::components::dropdown_menu::{
 use crate::core::reactivity::{
     create_context, provide_context, use_context, use_signal, Context, Signal,
 };
-use crate::core::tree::{ButtonHoverPaint, Element, Handler, LayoutStatus};
+use crate::core::tree::{Element, Handler, LayoutStatus};
 use crate::impl_simple_slot_builder;
 use crate::impl_slot_chrome_methods;
 use crate::primitives::r#box::hstack;
@@ -253,14 +253,14 @@ fn chain_hover(mut el: Element, handler: impl FnMut(bool) + 'static) -> Element 
 /// Ghost rest chrome captured after the trigger button is built (closed).
 #[derive(Clone)]
 struct MenubarTriggerRestChrome {
-    hover: Option<ButtonHoverPaint>,
+    hover: Option<crate::components::button::ButtonHoverPaint>,
     bg: [f32; 4],
     parent_fg: Option<[u8; 4]>,
     child_fg: Option<[u8; 4]>,
 }
 
 /// Open accent is paint-only: patch bg / label / `data-state` in place.
-/// Clear [`Element::button_hover_paint`] while open so frame sync cannot overwrite accent.
+/// Clear [`crate::components::button::ButtonHoverPaint`] while open so frame sync cannot overwrite accent.
 fn apply_menubar_trigger_open_chrome(
     el: &mut Element,
     is_open: bool,
@@ -275,7 +275,10 @@ fn apply_menubar_trigger_open_chrome(
     if is_open {
         let accent_bg = parse_color("accent");
         let accent_fg = parse_text_color("accent-foreground");
-        el.button_hover_paint = None;
+        el.authoring_state.remove::<crate::components::button::ButtonHoverPaint>();
+        el.owns_focus_paint = false;
+        el.paint_caption_scope = false;
+        el.disabled_sync = None;
         if el.style.bg_color != accent_bg {
             el.style.bg_color = accent_bg;
             impact = impact.merge(LayoutStatus::StyleChanged);
@@ -291,7 +294,10 @@ fn apply_menubar_trigger_open_chrome(
             }
         }
     } else {
-        el.button_hover_paint = rest.hover.clone();
+        if let Some(hover) = rest.hover.clone() {
+            el.authoring_state.set(hover);
+            super::button::configure_hover_presentation(el);
+        }
         if el.style.bg_color != rest.bg {
             el.style.bg_color = rest.bg;
             impact = impact.merge(LayoutStatus::StyleChanged);
@@ -592,7 +598,7 @@ pub fn MenubarTrigger(id: String, children: Option<Element>) -> Element {
         }
     });
 
-    if trigger.button_hover_paint.is_none() && trigger.input_paint_sync.is_none() {
+    if trigger.authoring_state.get::<crate::components::button::ButtonHoverPaint>().is_none() && trigger.input_paint_sync.is_none() {
         trigger.set_focusable(true);
     }
     if trigger.focus_id.is_none() {
@@ -608,7 +614,7 @@ pub fn MenubarTrigger(id: String, children: Option<Element>) -> Element {
     trigger = trigger.accesskit_role("menuitem");
 
     let rest = MenubarTriggerRestChrome {
-        hover: trigger.button_hover_paint.clone(),
+        hover: trigger.authoring_state.get::<crate::components::button::ButtonHoverPaint>().cloned(),
         bg: trigger.style.bg_color,
         parent_fg: trigger.text_style.color,
         child_fg: trigger
@@ -632,7 +638,7 @@ pub fn MenubarTrigger(id: String, children: Option<Element>) -> Element {
 
 /// solid-ui/shadcn `MenubarItem` (underlying [`DropdownMenuItem`]).
 ///
-/// 保留 `dropdown-menu-item` data-slot，供 [`sync_dropdown_menu_item_paint_subtree`] 写回悬停高亮。
+/// 保留 `dropdown-menu-item` data-slot，供 [`crate::authoring::presentation`] 写回悬停高亮。
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn MenubarItem(
@@ -1041,7 +1047,6 @@ mod tests {
 
     #[test]
     fn hover_switch_keeps_successor_open_after_previous_menu_exits() {
-        use crate as jadix;
         use crate::app::portal_overlay::clear_overlay_stack;
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
@@ -1239,7 +1244,7 @@ mod tests {
                 after.template_id.clone(),
                 after.attrs.get("data-state").cloned(),
                 after.style.bg_color,
-                after.button_hover_paint.is_none(),
+                after.authoring_state.get::<crate::components::button::ButtonHoverPaint>().is_none(),
             )
         };
         assert_eq!(after_tid.as_deref(), Some(tid.as_str()));

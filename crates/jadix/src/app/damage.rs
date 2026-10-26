@@ -76,6 +76,7 @@ pub struct PaintDirty {
 pub(crate) fn portal_composite_damage(
     nodes: &[PaintDirty],
     occupied: Option<[f32; 4]>,
+    viewport: [f32; 4],
 ) -> Option<[f32; 4]> {
     if !nodes.iter().any(|node| {
         matches!(
@@ -88,8 +89,11 @@ pub(crate) fn portal_composite_damage(
     nodes
         .iter()
         .filter_map(|node| {
-            (node.bounds[2] > 0.0 && node.bounds[3] > 0.0)
-                .then(|| super::draw_cull::padded_xywh(node.bounds, OVERLAY_RESTORE_PAD_LOGICAL))
+            let bounds = intersect_rects(
+                super::draw_cull::padded_xywh(node.bounds, OVERLAY_RESTORE_PAD_LOGICAL),
+                viewport,
+            )?;
+            (bounds[2] > 0.0 && bounds[3] > 0.0).then_some(bounds)
         })
         .reduce(union_rects)
 }
@@ -172,7 +176,7 @@ pub(crate) fn push_frame_paint_element_change_from_before(
     if previous_opacity < 0.01 && skip_transparent_shown_dest_reset(el) {
         return;
     }
-    let current = crate::components::button_group::group_damage_bounds(
+    let current = crate::core::geometry::paint_bounds(
         el,
         clamp_overlay_clip_box(el, crate::core::tree::visual_paint_aabb(el, scroll_acc)),
     );
@@ -182,8 +186,8 @@ pub(crate) fn push_frame_paint_element_change_from_before(
     if b[2] <= 0.0 || b[3] <= 0.0 {
         return;
     }
-    if is_table_row_fill_dest_reset(el) {
-        push_table_row_fill_dest_reset(el, b);
+    if let Some(inset) = el.paint_fill_inset {
+        push_fill_dest_reset(el, b, inset);
         return;
     }
     let spinning = el.attrs.get("jadix_animate").map(|s| s.as_str()) == Some("spin")
@@ -226,29 +230,11 @@ pub(crate) fn push_frame_paint_element_change_from_before(
     push_paint_dirty(key, bounds, kind);
 }
 
-fn is_table_row_fill_dest_reset(el: &Element) -> bool {
-    matches!(
-        el.attrs.get("data-slot").map(String::as_str),
-        Some("table-row") | Some("table-head")
-    ) || el
-        .button_hover_paint
-        .as_ref()
-        .is_some_and(|p| p.variant == "table-row")
-}
-
-/// Hover only changes the fill. Node dest-reset unions last-present and pads
-/// 8px, which punches the 1px footer `border-t` / neighbor `border-b`.
-fn push_table_row_fill_dest_reset(el: &Element, b: [f32; 4]) {
-    const SEAM: f32 = 1.0;
-    let h = (b[3] - SEAM * 2.0).max(0.0);
-    if b[2] <= 0.0 || h <= 0.0 {
-        return;
-    }
-    push_paint_dirty(
-        paint_element_key(el),
-        [b[0], b[1] + SEAM, b[2], h],
-        PaintDirtyKind::Region,
-    );
+fn push_fill_dest_reset(el: &Element, bounds: [f32; 4], inset: [f32; 4]) {
+    let width = (bounds[2] - inset[0] - inset[2]).max(0.0);
+    let height = (bounds[3] - inset[1] - inset[3]).max(0.0);
+    if width <= 0.0 || height <= 0.0 { return; }
+    push_paint_dirty(paint_element_key(el), [bounds[0] + inset[0], bounds[1] + inset[1], width, height], PaintDirtyKind::Region);
 }
 
 /// Outset beyond the visual layout box that this node actually paints (CSS
@@ -303,17 +289,7 @@ fn clamp_overlay_clip_box(el: &Element, mut b: [f32; 4]) -> [f32; 4] {
 /// Descendants (reaction chips, menu items) inherit overlay membership from
 /// last collect (`paint_overlay_stamp`) — they are not themselves `__floating_panel`.
 pub fn paint_kind_for_element(el: &Element) -> PaintDirtyKind {
-    // A carousel track moves overflowing child cards through a fixed viewport.
-    // Its border box cannot own the entering cards' retained pixels or glyphs.
-    if el.attrs.get("data-carousel-track").map(String::as_str) == Some("1") {
-        return PaintDirtyKind::Region;
-    }
-    // Chart tooltips and crosshair strokes are local absolute children, not
-    // hoisted portals. Their old pixels sit over the rasterized chart, so a
-    // Node dest-reset would clear the page color and leave a white band until
-    // the next full repaint. Treat their retained movement as a tiny Region:
-    // the present pass clears and replays the page band in the same scissor.
-    if el.attrs.get("jadix_chart_overlay").map(String::as_str) == Some("1")
+    if el.paint_region_replay
         || el.attrs.get("jadix_devtools_composite").map(String::as_str) == Some("1")
     {
         return PaintDirtyKind::Region;
@@ -3626,6 +3602,16 @@ mod tests {
     use std::collections::HashSet;
 
     #[test]
+    fn portal_composite_ignores_offscreen_nodes_before_union() {
+        let portal = PaintDirty { key: 1, bounds: [320.0, 340.0, 214.0, 24.0], kind: PaintDirtyKind::Overlay };
+        let viewport = [0.0, 0.0, 1000.0, 640.0];
+        let expected = portal_composite_damage(&[portal], Some(portal.bounds), viewport).unwrap();
+        let offscreen = PaintDirty { key: 2, bounds: [305.0, 3384.0, 214.0, 24.0], kind: PaintDirtyKind::Node };
+        assert_eq!(portal_composite_damage(&[portal, offscreen], Some(portal.bounds), viewport), Some(expected));
+        assert!(expected[2] < 300.0 && expected[3] < 100.0);
+    }
+
+    #[test]
     fn scaled_preview_damage_includes_scaled_outline_outset() {
         let mut element = Element::new().outline([0.0, 0.0, 0.0, 1.0], 3.0).outline_offset(2.0);
         for scale in [0.35, 0.57, 1.0, 1.5] {
@@ -3692,9 +3678,36 @@ mod tests {
     }
 
     #[test]
+    fn rounded_translucent_hover_chrome_keeps_node_damage() {
+        let mut el = Element::new()
+            .rounded(4.0)
+            .bg([0.20, 0.20, 0.20, 0.18])
+            .on_hover(|_| {});
+        el.style.bg_color[3] = 0.0;
+        let _ = crate::style::apply_class_list(&mut el, "hover:bg-#202020");
+        el.style.bg_color[3] = 0.18;
+        assert_eq!(
+            paint_kind_for_element(&el),
+            PaintDirtyKind::Node,
+            "rounded hover chrome must keep its own paint slot"
+        );
+
+        // Exercise both directions repeatedly: the leave state is transparent,
+        // while the enter state is an opaque hover fill over the same rounded box.
+        for alpha in [1.0, 0.0].into_iter().cycle().take(120) {
+            el.style.bg_color[3] = if alpha == 1.0 { 1.0 } else { 0.0 };
+            assert_eq!(
+                paint_kind_for_element(&el),
+                PaintDirtyKind::Node,
+                "hover transition sample with alpha={alpha} changed paint ownership"
+            );
+        }
+    }
+
+    #[test]
     fn local_chart_overlay_replays_its_page_band() {
         let mut overlay = Element::new();
-        overlay.set_attr("jadix_chart_overlay", "1");
+        overlay.paint_region_replay = true;
         assert_eq!(
             paint_kind_for_element(&overlay),
             PaintDirtyKind::Region,
@@ -3961,6 +3974,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn button_group_joined_damage_box_matches_layout() {
         let _ = take_frame_paint_nodes();
         let mut el = Element::new();

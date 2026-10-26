@@ -24,7 +24,7 @@ pub(super) struct ColorDrag {
     pub(super) sv_id: Option<String>,
 }
 
-thread_local! {
+crate::authoring::window::window_local! {
     static COLOR_DRAG: RefCell<Option<ColorDrag>> = const { RefCell::new(None) };
     static PENDING_COLOR_DRAG: Cell<Option<(f32, f32, Option<[f32; 4]>)>> =
         const { Cell::new(None) };
@@ -33,18 +33,28 @@ thread_local! {
 pub(super) fn begin_color_drag(drag: ColorDrag) {
     PENDING_COLOR_DRAG.with(|p| p.set(None));
     let sid = drag.sv_id.clone().unwrap_or_else(|| "color_picker".into());
-    crate::utils::pointer_drag::begin(
-        crate::utils::pointer_drag::DragKind::ColorPicker,
+    crate::utils::drag::pointer::begin(
+        crate::utils::drag::pointer::DragKind::ColorPicker,
         sid,
         0.0,
         0.0,
     );
     COLOR_DRAG.with(|d| *d.borrow_mut() = Some(drag));
+    crate::utils::drag::routing::register(
+        module_path!(),
+        crate::utils::drag::routing::DragHandlers::new(
+            tick_color_drag,
+            clear_color_drag_if_any,
+        )
+        .scroll_policy(crate::utils::drag::routing::ScrollPolicy::Freeze)
+        .frame_sampling(sample_color_drag, drain_color_drag_apply),
+    );
 }
 
 pub(super) fn end_color_drag() {
+    crate::utils::drag::routing::unregister(module_path!());
     PENDING_COLOR_DRAG.with(|p| p.set(None));
-    crate::utils::pointer_drag::clear();
+    crate::utils::drag::pointer::clear();
     COLOR_DRAG.with(|d| *d.borrow_mut() = None);
     crate::app::release_pointer_capture();
 }
@@ -53,7 +63,6 @@ pub(crate) fn is_color_dragging() -> bool {
     COLOR_DRAG.with(|d| d.borrow().is_some())
 }
 
-#[cfg(test)]
 pub(crate) fn tick_color_drag(x: f32, y: f32) -> bool {
     tick_color_drag_with_bounds(x, y, None)
 }
@@ -64,8 +73,8 @@ pub(crate) fn snapshot_color_drag_bounds(
     x: f32,
     y: f32,
 ) -> Option<[f32; 4]> {
-    let live = crate::utils::pointer_drag::peek()
-        .filter(|s| s.kind == crate::utils::pointer_drag::DragKind::ColorPicker)
+    let live = crate::utils::drag::pointer::peek()
+        .filter(|s| s.kind == crate::utils::drag::pointer::DragKind::ColorPicker)
         .and_then(|s| {
             let fid = format!("{}:sv", s.id);
             let path = crate::app::pointer_events::hit_path(root, x, y);
@@ -91,6 +100,11 @@ pub(crate) fn snapshot_color_drag_bounds(
         }
     }
     live
+}
+
+fn sample_color_drag(root: &crate::core::tree::Element, x: f32, y: f32) {
+    let live = snapshot_color_drag_bounds(root, x, y);
+    queue_color_drag_apply(x, y, live);
 }
 
 pub(crate) fn queue_color_drag_apply(x: f32, y: f32, live_bounds: Option<[f32; 4]>) {

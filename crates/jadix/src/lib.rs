@@ -17,6 +17,8 @@ pub use renderer as render;
 #[cfg(feature = "a11y")]
 pub mod a11y;
 pub mod app;
+pub mod authoring;
+#[cfg(feature = "components")]
 pub mod components;
 #[cfg(feature = "i18n")]
 /// Locale overlays, ICU-lite format, TOML catalogs. Off by default; see [`tr_default`].
@@ -91,7 +93,18 @@ pub mod reactivity {
 }
 
 pub use core::tree::{CursorKind, CursorValue, PathHitPolicy, PointerEvents};
-pub use jadix_macros::*;
+pub use core::tree::{opacity_groups_enabled, set_opacity_groups_enabled};
+#[doc(hidden)]
+pub use jadix_macros::ui_with_runtime as __ui_with_runtime;
+pub use jadix_macros::{component, main};
+
+/// Build an RSX tree using this runtime, including when the dependency is renamed.
+#[macro_export]
+macro_rules! ui {
+    ($($tokens:tt)*) => {
+        $crate::__ui_with_runtime!($crate; $($tokens)*)
+    };
+}
 
 /// `true` when `src/i18n` (catalogs / locale overlay) is compiled in.
 pub const fn i18n_enabled() -> bool {
@@ -642,3 +655,11 @@ mod tr_default_shim_tests {
         );
     }
 }
+
+pub(crate) static DEFAULT_ICON_PROVIDER: std::sync::LazyLock<Option<std::sync::Arc<dyn utils::icon_provider::IconProvider>>> =
+    std::sync::LazyLock::new(|| {
+        #[cfg(feature = "lucide")]
+        { Some(std::sync::Arc::new(utils::lucide::DefaultProvider)) }
+        #[cfg(not(feature = "lucide"))]
+        { None }
+    });

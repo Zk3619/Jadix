@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Reproduce gallery ButtonShowcase: Show LayoutChanged must not collapse absolute Y.
 
 use crate::app::reactive::reset_registered_anchors;

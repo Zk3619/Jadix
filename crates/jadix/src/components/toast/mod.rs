@@ -19,7 +19,7 @@
 //! - 入退场/堆叠位移吃 [`utils::motion::MotionStyle`](crate::utils::motion::MotionStyle)
 //! - portal + 同 key 调和吃 [`utils::keyed_overlay`](crate::utils::keyed_overlay)
 //! - 堆叠/列表 rank→位移吃 [`utils::layout_group`](crate::utils::layout_group)
-//! - 拖拽会话登记见 [`utils::pointer_drag`](crate::utils::pointer_drag)
+//! - 拖拽会话登记见 [`utils::drag::pointer`](crate::utils::drag::pointer)
 //!
 //! ## Usage
 //!
@@ -334,7 +334,7 @@ struct ToastDrag {
     dirs: ToastSwipeDirs,
 }
 
-thread_local! {
+crate::authoring::window::window_local! {
     static TOAST_DRAG: RefCell<Option<ToastDrag>> = const { RefCell::new(None) };
     static TOAST_STACK_TIMER_PAUSED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// 可见入场标记：仅「新挂上可见队列」播入场滑入；堆叠晋升为 front 不重播。
@@ -590,13 +590,21 @@ fn toast_timer_deadline(id: u64) -> Option<Instant> {
 fn begin_toast_drag(drag: ToastDrag) {
     toast_drag_xy(drag.id).set([0.0, 0.0]);
     let id = drag.id;
-    crate::utils::pointer_drag::begin(
-        crate::utils::pointer_drag::DragKind::Toast,
+    crate::utils::drag::pointer::begin(
+        crate::utils::drag::pointer::DragKind::Toast,
         format!("toast:{id}"),
         drag.start_x,
         drag.start_y,
     );
     TOAST_DRAG.with(|d| *d.borrow_mut() = Some(drag));
+    crate::utils::drag::routing::register(
+        module_path!(),
+        crate::utils::drag::routing::DragHandlers::new(
+            tick_toast_drag,
+            clear_toast_drag_if_any,
+        )
+        .scroll_policy(crate::utils::drag::routing::ScrollPolicy::Allow),
+    );
     if is_stack_layout() {
         set_stack_expanded(true);
         set_stack_timers_paused(true);
@@ -623,7 +631,8 @@ pub(crate) fn tick_toast_drag(x: f32, y: f32) -> bool {
 
 /// 指针抬起：任一侧向超过阈值则退场，否则回弹。
 pub(crate) fn clear_toast_drag_if_any() {
-    crate::utils::pointer_drag::clear();
+    crate::utils::drag::routing::unregister(module_path!());
+    crate::utils::drag::pointer::clear();
     let finished = TOAST_DRAG.with(|d| d.borrow_mut().take());
     let Some(drag) = finished else {
         return;
@@ -1486,6 +1495,28 @@ mod tests {
     use super::*;
     use crate::layout::layout_tree::ATTR_PORTAL_KEY;
     use crate::style::{parse_color, parse_text_color, SemanticTone};
+
+    #[test]
+    fn registered_swipe_moves_and_settles_through_host_routing() {
+        crate::core::reactivity::create_root(|| {
+            crate::utils::drag::routing::finish_all();
+            let id = 997_143;
+            begin_toast_drag(ToastDrag {
+                id,
+                start_x: 100.0,
+                start_y: 100.0,
+                dirs: ToastSwipeDirs::for_edge(true, false, false, true),
+            });
+            assert!(
+                crate::utils::drag::routing::prepare_move(None, 130.0, 80.0).dispatch()
+            );
+            assert_eq!(toast_drag_xy(id).peek(), [30.0, -20.0]);
+            crate::utils::drag::routing::finish_all();
+            assert_eq!(toast_drag_xy(id).peek(), [0.0, 0.0]);
+            assert!(!is_toast_dragging());
+            assert!(!crate::utils::drag::pointer::is_active());
+        });
+    }
 
     fn toast_tone_palette(tone: ToastTone) -> ([f32; 4], [u8; 4], [f32; 4], Option<&'static str>) {
         let chrome = tone_chrome(tone);

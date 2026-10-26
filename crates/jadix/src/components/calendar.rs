@@ -996,9 +996,7 @@ mod tests {
         let outside = find_fid(&grid, "t-cal-out:d0-0").expect("July 26 cell");
         assert_eq!(text_fg(outside), Some(muted));
         assert_eq!(
-            outside
-                .button_hover_paint
-                .as_ref()
+            outside.authoring_state.get::<crate::components::button::ButtonHoverPaint>()
                 .and_then(|p| p.text_color),
             Some(muted),
             "hover paint must keep muted, not ghost foreground"

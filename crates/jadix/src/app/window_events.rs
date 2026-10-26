@@ -35,7 +35,7 @@ pub(super) fn tick_input_drag_select_at(
         || matches!(vscroll, super::tree_hit::TextDragVScrollTick::Scrolled);
 
     if crate::utils::text_sel_move::blocks_select_drag() {
-        let vk = crate::components::input::input_value_signal_key(rest);
+        let vk = crate::utils::text_field::input_value_signal_key(rest);
         let committed_len = crate::core::reactivity::use_signal(&vk, String::new)
             .peek()
             .len();
@@ -48,7 +48,7 @@ pub(super) fn tick_input_drag_select_at(
         return scrolled;
     };
     if multi {
-        let vk = crate::components::input::input_value_signal_key(rest);
+        let vk = crate::utils::text_field::input_value_signal_key(rest);
         let text = crate::core::reactivity::use_signal(&vk, String::new).peek();
         let gesture =
             crate::utils::text_multi_cursor::gesture_carets(&text, anchor, caret_ix, column_select);
@@ -71,9 +71,9 @@ pub(super) fn tick_input_drag_select_at(
     }
     let lo = anchor.min(caret_ix);
     let hi = anchor.max(caret_ix);
-    let sk = crate::components::input::input_selection_signal_key(rest);
+    let sk = crate::utils::text_field::input_selection_signal_key(rest);
     crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set_silent(Some((lo, hi)));
-    let ck = crate::components::input::input_caret_signal_key(rest);
+    let ck = crate::utils::text_field::input_caret_signal_key(rest);
     crate::core::reactivity::use_signal(&ck, || None::<usize>).set_silent(Some(caret_ix));
 
     scrolled
@@ -92,8 +92,8 @@ fn hit_input_caret_at(
     else {
         return None;
     };
-    let vk = crate::components::input::input_value_signal_key(rest);
-    let pk = crate::components::input::input_preedit_signal_key(rest);
+    let vk = crate::utils::text_field::input_value_signal_key(rest);
+    let pk = crate::utils::text_field::input_preedit_signal_key(rest);
     let committed = crate::core::reactivity::use_signal(&vk, String::new).peek();
     let pre = crate::core::reactivity::use_signal(&pk, String::new).peek();
     let ui_scale = scale.max(1.0);
@@ -127,7 +127,7 @@ fn hit_input_caret_at(
     Some(if committed.is_empty() && pre.is_empty() {
         0
     } else {
-        crate::components::input::caret_index_from_display_hit(rest, ix)
+        crate::utils::text_edit::field::caret_index_from_display_hit(rest, ix)
     })
 }
 
@@ -136,7 +136,7 @@ pub(super) fn apply_input_drag_release(rest: &str) {
     crate::utils::text_field::set_text_drag_select_active(false);
     match crate::utils::text_sel_move::on_release() {
         ReleaseAction::None => {
-            let sk = crate::components::input::input_selection_signal_key(rest);
+            let sk = crate::utils::text_field::input_selection_signal_key(rest);
             let sel = crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).get();
             if let Some((a, b)) = sel {
                 if a == b {
@@ -145,14 +145,14 @@ pub(super) fn apply_input_drag_release(rest: &str) {
             }
         }
         ReleaseAction::Click { caret, .. } => {
-            let ck = crate::components::input::input_caret_signal_key(rest);
-            let sk = crate::components::input::input_selection_signal_key(rest);
+            let ck = crate::utils::text_field::input_caret_signal_key(rest);
+            let sk = crate::utils::text_field::input_selection_signal_key(rest);
             crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(caret));
             crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(None);
             crate::renderer::restart_caret_blink();
         }
         ReleaseAction::Move { sel, drop, .. } => {
-            let vk = crate::components::input::input_value_signal_key(rest);
+            let vk = crate::utils::text_field::input_value_signal_key(rest);
             let val_sig = crate::core::reactivity::use_signal(&vk, String::new);
             let s = val_sig.get();
             if let Some((next, caret)) = crate::utils::text_sel_move::apply_move(&s, sel, drop) {
@@ -162,8 +162,8 @@ pub(super) fn apply_input_drag_release(rest: &str) {
                     crate::utils::text_edit_history::EditKind::Replace,
                 );
                 crate::utils::text_field::commit_value_sig(rest, val_sig, next);
-                let ck = crate::components::input::input_caret_signal_key(rest);
-                let sk = crate::components::input::input_selection_signal_key(rest);
+                let ck = crate::utils::text_field::input_caret_signal_key(rest);
+                let sk = crate::utils::text_field::input_selection_signal_key(rest);
                 crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(caret));
                 crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(None);
                 #[cfg(feature = "text-undo")]
@@ -180,12 +180,42 @@ fn retarget_scrollbar_fade(fade: &crate::style::CubicTween, target: f32) {
     fade.set_at_frame_start(target);
 }
 
+#[inline]
+fn content_scroll_paint_only(
+    smooth_scroll_animating: bool,
+    scrollbar_drag_active: bool,
+    offsets_moved: bool,
+) -> bool {
+    // Scrollbar alpha is an overlay-local paint update. It must not enter this
+    // flag: this flag suppresses page chrome and presentation work while the
+    // content itself is moving.
+    smooth_scroll_animating || scrollbar_drag_active || offsets_moved
+}
+
 impl super::App {
+    pub(super) fn cancel_pointer_session(&mut self) {
+        crate::utils::drag::runtime::cancel();
+        crate::utils::drag::routing::finish_all();
+        crate::utils::drag::pointer::clear_all();
+        crate::app::release_pointer_capture();
+        self.left_button_down = false;
+        self.mouse_buttons = 0;
+        self.click_press_path = None;
+        self.scrollbar_drag = None;
+        self.content_scroll_drag = None;
+        self.textarea_resize_drag = None;
+        self.drag_reorder = None;
+        self.long_press = None;
+    }
+
     pub(super) fn bind_pointer_window(&mut self, id: WindowId) {
         if self.pointer_window == Some(id) {
             return;
         }
         let prev = self.pointer_window;
+        if prev.is_some() {
+            self.cancel_pointer_session();
+        }
         self.pointer_window = Some(id);
         self.last_mouse_path = None;
         self.last_mouse_target = None;
@@ -253,9 +283,7 @@ impl super::App {
         crate::app::reactive::drain_deferred_view_remounts();
         crate::utils::modal_motion::drain_pending_modal_unmounts();
         crate::utils::floating_motion::drain_pending_floating_unmounts();
-        if crate::components::bubble::flush_reaction_hover_dismiss() {
-            window.request_redraw();
-        }
+
     }
 
     /// Primary-only input wrapper (sets primary window scope). Secondary events must use
@@ -345,15 +373,15 @@ impl super::App {
         super::tree_hit::pointer_hits_focus_paint(root, focused, x, y, [0.0, 0.0])
     }
 
-    /// Keep InputOTP focus when the press hits the OTP root (or lands in its layout box).
-    pub(super) fn pointer_keeps_otp_focus(
+    /// Keep an opted-in custom control focused while the press hits its tree or paint box.
+    pub(super) fn pointer_keeps_custom_focus(
         root: &crate::core::tree::Element,
         focused: &str,
         path: &[super::pointer_events::HitPathEntry],
         x: f32,
         y: f32,
     ) -> bool {
-        if !crate::components::input_otp::is_input_otp_focus(focused) {
+        if !crate::authoring::focus::blur_on_outside_press(root, focused) {
             return false;
         }
         if path.iter().any(|e| e.focus_id.as_deref() == Some(focused)) {
@@ -595,14 +623,14 @@ impl super::App {
             if os_focused {
                 let allow_ime = super::ime_support::text_edit_rest(&fid_clone)
                     .map(|rest| {
-                        let key = crate::components::input::input_type_signal_key(rest);
+                        let key = crate::utils::text_field::input_type_signal_key(rest);
                         let raw = crate::core::reactivity::use_signal(&key, || {
-                            crate::components::input::InputType::Text
+                            crate::utils::text_edit::field::InputType::Text
                                 .as_str()
                                 .to_string()
                         })
                         .peek();
-                        crate::components::input::InputType::parse(&raw).allows_ime()
+                        crate::utils::text_edit::field::InputType::parse(&raw).allows_ime()
                     })
                     .unwrap_or(true);
                 super::ime_support::sync_ime_focus_owner(window, Some(&fid_clone));
@@ -629,10 +657,10 @@ impl super::App {
                     let composing = {
                         let rest = super::ime_support::text_edit_rest(&fid_clone);
                         rest.map(|r| {
-                            let pk = crate::components::input::input_preedit_signal_key(r);
+                            let pk = crate::utils::text_field::input_preedit_signal_key(r);
                             let pre = crate::core::reactivity::use_signal(&pk, String::new).peek();
                             let active = crate::core::reactivity::use_signal(
-                                crate::components::IME_ACTIVE_SIGNAL,
+                                crate::utils::text_edit::field::IME_ACTIVE_SIGNAL,
                                 || false,
                             )
                             .peek();
@@ -791,10 +819,10 @@ impl super::App {
         });
 
         let rest = super::ime_support::text_edit_rest(focus_id).unwrap_or("");
-        let vk = crate::components::input::input_value_signal_key(rest);
-        let pk = crate::components::input::input_preedit_signal_key(rest);
-        let ak = crate::components::input::input_ime_anchor_signal_key(rest);
-        let ck = crate::components::input::input_caret_signal_key(rest);
+        let vk = crate::utils::text_field::input_value_signal_key(rest);
+        let pk = crate::utils::text_field::input_preedit_signal_key(rest);
+        let ak = crate::utils::text_field::input_ime_anchor_signal_key(rest);
+        let ck = crate::utils::text_field::input_caret_signal_key(rest);
         let committed = crate::core::reactivity::use_signal(&vk, String::new).peek();
         let pre = crate::core::reactivity::use_signal(&pk, String::new).peek();
         let anchor = crate::core::reactivity::use_signal(&ak, || None::<usize>).peek();
@@ -1231,7 +1259,7 @@ impl super::App {
             hit,
             self.textarea_resize_drag.is_some(),
             (self.drag_reorder.is_some() && self.left_button_down)
-                || crate::utils::drag::is_dragging()
+                || crate::utils::drag::runtime::is_dragging()
                 || crate::utils::anchored_overlay::is_floating_panel_dragging(),
         );
     }
@@ -1401,7 +1429,7 @@ impl super::App {
 
         // Hover-driven overlay scrollbar visibility: pick the topmost scroll area (or scrollbar target)
         // under the cursor and keep its hover signal set while we remain inside.
-        let overlay_dragging = crate::utils::drag::is_dragging()
+        let overlay_dragging = crate::utils::drag::runtime::is_dragging()
             || crate::utils::anchored_overlay::is_floating_panel_dragging();
         let mouse_path = if overlay_dragging {
             Vec::new()
@@ -1597,22 +1625,22 @@ impl super::App {
                 cursor_pick.clone(),
                 self.textarea_resize_drag.is_some(),
                 (self.drag_reorder.is_some() && self.left_button_down)
-                    || crate::utils::drag::is_dragging()
+                    || crate::utils::drag::runtime::is_dragging()
                     || crate::utils::anchored_overlay::is_floating_panel_dragging(),
             );
         }
 
-        let drawer_dragging = if overlay_dragging {
+        let paint_dragging = if overlay_dragging {
             false
         } else {
-            crate::components::drawer::tick_drawer_drag(&mut state.root_element, x, y)
+            crate::utils::drag::routing::sample_paint(&mut state.root_element, x, y)
         };
-        if drawer_dragging {
+        if paint_dragging {
             state.mark_full_redraw();
         }
         // Active drag: follow from LAST_HITS (no tree walk). Pending still collects
         // so threshold-cross can freeze items. Collision / 跨区 hover runs on vsync.
-        let drag_viewport = if crate::utils::drag::is_dragging() {
+        let drag_viewport = if crate::utils::drag::runtime::is_dragging() {
             let size = state.window.surface_size();
             let scale = state.window.scale_factor() as f32;
             [
@@ -1622,30 +1650,24 @@ impl super::App {
         } else {
             [0.0_f32, 0.0]
         };
-        let drag_hits = if crate::utils::drag::is_dragging() && !crate::utils::drag::is_active() {
-            crate::utils::drag::collect_hits(&state.root_element)
-        } else {
-            Vec::new()
-        };
+        let drag_move = crate::utils::drag::runtime::prepare_move(
+            Some(&state.root_element),
+            [x, y],
+            drag_viewport,
+            crate::utils::drag::runtime::MoveMode::Follow,
+        );
 
-        let color_live = if overlay_dragging {
-            None
-        } else if crate::components::color_picker::is_color_dragging() {
-            Some(crate::components::color_picker::snapshot_color_drag_bounds(
-                &state.root_element,
-                x,
-                y,
-            ))
-        } else {
-            None
-        };
+        let product_drag_move = crate::utils::drag::routing::prepare_move(
+            (!overlay_dragging).then_some(&state.root_element),
+            x,
+            y,
+        );
 
         drop(state_borrow);
         // C1: hover bind must not `Signal::set` while AppState is borrowed.
         if let Some((list_id, idx)) = pending_drag_hover {
             crate::utils::drag_reorder::set_drag_hover(&list_id, Some(idx));
         }
-        crate::components::drawer::drain_drawer_layout_bumps();
         if let Some(scroll_rest) = text_drag_scrollbar_bump {
             let now = std::time::Instant::now();
             self.bump_scrollbar_visible_until_axis(
@@ -1683,45 +1705,47 @@ impl super::App {
         );
         self.last_client_pos = Some([x, y]);
 
-        let color_dragging = color_live
-            .map(|live| crate::components::color_picker::tick_color_drag_with_bounds(x, y, live))
-            .unwrap_or(false);
-        let slider_dragging = crate::components::slider::tick_slider_drag(x, y);
-        let toast_dragging = crate::components::toast::tick_toast_drag(x, y);
-        let carousel_dragging = crate::components::carousel::tick_carousel_drag(x, y);
-        let resizable_dragging = crate::components::resizable::tick_resizable_drag(x, y);
+        let product_dragging = product_drag_move.dispatch();
         let floating_panel_dragging =
             crate::utils::anchored_overlay::tick_floating_panel_drag(x, y);
-        let drag_dragging = if crate::utils::drag::is_active() {
-            crate::utils::drag::tick_follow(x, y, drag_viewport)
-        } else {
-            crate::utils::drag::tick(x, y, &drag_hits, drag_viewport)
-        };
+        let drag_dragging = drag_move.dispatch();
         let pointer_action_dragging = crate::utils::pointer_action::on_move(x, y);
-        let drag_scrolled = (*self.state.borrow()).as_ref().is_some_and(|st| {
-            if crate::utils::drag::is_active() {
-                crate::utils::drag::pump_autoscroll(&st.root_element, drag_viewport)
-            } else if crate::utils::pointer_action::edge_scroll_active() {
-                crate::utils::pointer_action::pump_edge_scroll(&st.root_element)
-            } else {
-                false
-            }
-        });
-        let drag_coasting = crate::utils::drag::is_coasting()
-            && (*self.state.borrow()).as_ref().is_some_and(|st| {
-                crate::utils::drag::pump_inertia(&st.root_element, drag_viewport)
-            });
-        if slider_dragging
-            || toast_dragging
-            || color_dragging
-            || carousel_dragging
-            || resizable_dragging
+        let (drag_scroll, pointer_scrolled) = {
+            let state = self.state.borrow();
+            state.as_ref().map_or((None, false), |state| {
+                if crate::utils::drag::runtime::is_active() {
+                    (
+                        Some(crate::utils::drag::runtime::prepare_autoscroll(
+                            &state.root_element,
+                            drag_viewport,
+                        )),
+                        false,
+                    )
+                } else {
+                    (
+                        None,
+                        crate::utils::pointer_action::edge_scroll_active()
+                            && crate::utils::pointer_action::pump_edge_scroll(&state.root_element),
+                    )
+                }
+            })
+        };
+        let drag_scrolled = pointer_scrolled || drag_scroll.is_some_and(|update| update.dispatch());
+        let drag_inertia = if crate::utils::drag::runtime::is_coasting() {
+            self.state.borrow().as_ref().map(|state| {
+                crate::utils::drag::runtime::prepare_inertia(&state.root_element, drag_viewport)
+            })
+        } else {
+            None
+        };
+        let drag_coasting = drag_inertia.is_some_and(|update| update.dispatch());
+        if product_dragging
             || floating_panel_dragging
             || drag_dragging
             || pointer_action_dragging
             || drag_scrolled
             || drag_coasting
-            || drawer_dragging
+            || paint_dragging
             || crate::utils::modal_motion::tick_modal_presence()
             || crate::utils::floating_motion::tick_floating_presence()
             || crate::utils::tick_collapse_panel_presence()
@@ -1829,13 +1853,11 @@ impl super::App {
             && self.input_drag_rest.is_none()
             && self.label_drag_key.is_none()
             && self.drag_reorder.is_none()
-            && !crate::components::slider::is_slider_dragging()
-            && !crate::components::color_picker::is_color_dragging()
-            && !crate::components::resizable::is_resizable_dragging()
+            && !crate::utils::drag::routing::blocks_content_pan()
             && !crate::utils::pointer_action::resize_is_active()
             && !crate::utils::pointer_action::gesture_is_active()
             && !crate::utils::anchored_overlay::is_floating_panel_dragging()
-            && !crate::utils::drag::is_dragging()
+            && !crate::utils::drag::runtime::is_dragging()
         {
             self.tick_content_scroll_drag(x, y);
         }
@@ -1848,7 +1870,7 @@ impl super::App {
             }
         }
         if let Some((key, lo, hi)) = label_drag_sel_update {
-            let sk = crate::components::label::label_selection_signal_key(&key);
+            let sk = crate::utils::text_selection::label_selection_signal_key(&key);
             crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(Some((lo, hi)));
             if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                 st.window.request_redraw();
@@ -1860,9 +1882,7 @@ impl super::App {
         crate::app::reactive::drain_deferred_view_remounts();
         crate::utils::modal_motion::drain_pending_modal_unmounts();
         crate::utils::floating_motion::drain_pending_floating_unmounts();
-        if crate::components::bubble::flush_reaction_hover_dismiss() {
-            window.request_redraw();
-        }
+
 
         // Utility-class `:hover` (e.g. gallery `hover:scale-x-150`) has no `on_hover`.
         // Wake a frame when pointer geometry would change those samples — otherwise enter
@@ -1871,7 +1891,7 @@ impl super::App {
         // walking the whole gallery here is what freezes Marker spin during a pointer storm.
         // Crossing `sm:`/`dark:`-only boxes also cannot change `:hover` samples — skip that
         // walk so spin keeps vsync instead of hitching on every layout-box boundary.
-        if !crate::utils::drag::is_dragging()
+        if !crate::utils::drag::runtime::is_dragging()
             && !crate::utils::anchored_overlay::is_floating_panel_dragging()
             && class_hover_path_changed
             && class_hover_may_change
@@ -1920,6 +1940,7 @@ impl super::App {
         drop(state_borrow);
 
         self.cursor_inside_window = false;
+        self.cursor_move_pending = false;
 
         #[cfg(all(debug_assertions, feature = "devtools"))]
         if crate::app::devtools::DevToolsState::is_pick() {
@@ -1998,7 +2019,8 @@ impl super::App {
                 super::tree_hit::find_input_text_at(&state.root_element, None, x, y, [0.0, 0.0])
             {
                 let ui_scale = scale.max(1.0);
-                let is_textarea = focus_id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX);
+                let is_textarea =
+                    focus_id.starts_with(crate::utils::text_field::TEXTAREA_FOCUS_PREFIX);
                 let layout_ptr = super::tree_hit::world_to_input_text_layout_pointer(
                     &state.root_element,
                     &rest,
@@ -2047,14 +2069,14 @@ impl super::App {
                         ui_scale,
                     )
                 };
-                let vk = crate::components::input::input_value_signal_key(&rest);
-                let pk = crate::components::input::input_preedit_signal_key(&rest);
+                let vk = crate::utils::text_field::input_value_signal_key(&rest);
+                let pk = crate::utils::text_field::input_preedit_signal_key(&rest);
                 let committed = crate::core::reactivity::use_signal(&vk, String::new).get();
                 let pre = crate::core::reactivity::use_signal(&pk, String::new).get();
                 let caret_ix = if committed.is_empty() && pre.is_empty() {
                     0
                 } else {
-                    crate::components::input::caret_index_from_display_hit(&rest, ix)
+                    crate::utils::text_edit::field::caret_index_from_display_hit(&rest, ix)
                 };
                 // Double-click in the blank beside the line ink — select that hard line.
                 let line_sel = if self.click_count >= 2
@@ -2349,7 +2371,7 @@ impl super::App {
             } else {
                 super::pointer_events::hit_path(&state.root_element, x, y)
             };
-            crate::utils::drag::refresh_hit_cache(&state.root_element);
+            crate::utils::drag::runtime::refresh_geometry(&state.root_element);
             drop(state_borrow);
             let focus_visible =
                 crate::core::reactivity::use_signal("__jadix_focus_visible", || false);
@@ -2382,21 +2404,25 @@ impl super::App {
             // Overlay / on_drag_start wait for `tick`. Press-only stays Pending
             // (do not dim/raise the source). A same-point tick is still required
             // so delay clocks and sensors see the hold.
-            if crate::utils::drag::is_dragging() {
-                let (hits, viewport) = if let Some(st) = (*self.state.borrow()).as_ref() {
+            if crate::utils::drag::runtime::is_dragging() {
+                let drag_move = if let Some(st) = (*self.state.borrow()).as_ref() {
                     let size = st.window.surface_size();
-                    let scale = st.window.scale_factor() as f32;
-                    (
-                        crate::utils::drag::collect_hits(&st.root_element),
-                        [
-                            size.width as f32 / scale.max(1.0),
-                            size.height as f32 / scale.max(1.0),
-                        ],
+                    let scale = (st.window.scale_factor() as f32).max(1.0);
+                    crate::utils::drag::runtime::prepare_move(
+                        Some(&st.root_element),
+                        [x, y],
+                        [size.width as f32 / scale, size.height as f32 / scale],
+                        crate::utils::drag::runtime::MoveMode::Reconcile,
                     )
                 } else {
-                    (Vec::new(), [0.0_f32, 0.0])
+                    crate::utils::drag::runtime::prepare_move(
+                        None,
+                        [x, y],
+                        [0.0, 0.0],
+                        crate::utils::drag::runtime::MoveMode::Reconcile,
+                    )
                 };
-                if crate::utils::drag::tick(x, y, &hits, viewport) {
+                if drag_move.dispatch() {
                     need_paint_sync_redraw = true;
                 }
             }
@@ -2407,9 +2433,7 @@ impl super::App {
             // ColorPicker / Slider freeze a window-space chart box. Leftover smooth
             // scroll or fling would move the page (and a Fixed overlay with it) so
             // the frozen y maps every move to the SV bottom.
-            if crate::components::color_picker::is_color_dragging()
-                || crate::components::slider::is_slider_dragging()
-            {
+            if crate::utils::drag::routing::freezes_scroll() {
                 self.content_scroll_drag = None;
                 self.smooth_active_until.clear();
                 self.smooth_scroll_motion.clear();
@@ -2428,23 +2452,23 @@ impl super::App {
                         .peek()
                         == focus_id;
                 let is_textarea_drag =
-                    focus_id.starts_with(crate::components::TEXTAREA_FOCUS_PREFIX);
+                    focus_id.starts_with(crate::utils::text_field::TEXTAREA_FOCUS_PREFIX);
                 // Hit-tested caret placement: ensure DOM focus even if `on_click` was consumed
                 // (e.g. by an ancestor pointer handler), so caret/selection paint can run.
                 crate::core::reactivity::use_signal("__jadix_button_focus_id", String::new)
                     .set(focus_id);
-                let ck = crate::components::input::input_caret_signal_key(&rest);
-                let sk = crate::components::input::input_selection_signal_key(&rest);
-                let pk = crate::components::input::input_preedit_signal_key(&rest);
-                let ty_key = crate::components::input::input_type_signal_key(&rest);
+                let ck = crate::utils::text_field::input_caret_signal_key(&rest);
+                let sk = crate::utils::text_field::input_selection_signal_key(&rest);
+                let pk = crate::utils::text_field::input_preedit_signal_key(&rest);
+                let ty_key = crate::utils::text_field::input_type_signal_key(&rest);
                 let pre_empty = crate::core::reactivity::use_signal(&pk, String::new)
                     .peek()
                     .is_empty();
                 let existing =
                     crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).get();
-                let password = crate::components::input::InputType::parse(
+                let password = crate::utils::text_edit::field::InputType::parse(
                     &crate::core::reactivity::use_signal(&ty_key, || {
-                        crate::components::input::InputType::Text
+                        crate::utils::text_edit::field::InputType::Text
                             .as_str()
                             .to_string()
                     })
@@ -2460,7 +2484,7 @@ impl super::App {
                 self.input_drag_multi = false;
                 self.input_drag_multi_base.clear();
                 if alt_multi {
-                    let vk = crate::components::input::input_value_signal_key(&rest);
+                    let vk = crate::utils::text_field::input_value_signal_key(&rest);
                     let committed = crate::core::reactivity::use_signal(&vk, String::new).peek();
                     let shift_box = self.modifiers.shift_key();
                     if let Some((anchor, base)) = crate::utils::text_field::begin_alt_pointer(
@@ -2488,7 +2512,7 @@ impl super::App {
                         && sel_range.is_some_and(|(lo, hi)| caret_ix >= lo && caret_ix <= hi);
                     if can_move {
                         let (lo, hi) = sel_range.expect("can_move implies non-empty range");
-                        let vk = crate::components::input::input_value_signal_key(&rest);
+                        let vk = crate::utils::text_field::input_value_signal_key(&rest);
                         let committed =
                             crate::core::reactivity::use_signal(&vk, String::new).peek();
                         let chunk = committed.get(lo..hi).unwrap_or("").to_string();
@@ -2585,7 +2609,7 @@ impl super::App {
                 // super::input_controller::arm_text_edit_force_immediate();
                 // self.force_redraw_count = self.force_redraw_count.max(2);
             } else if let Some((key, caret_ix)) = label_drag {
-                let sk = crate::components::label::label_selection_signal_key(&key);
+                let sk = crate::utils::text_selection::label_selection_signal_key(&key);
                 crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
                     .set(Some((caret_ix, caret_ix)));
                 self.label_drag_key = Some(key);
@@ -2624,9 +2648,11 @@ impl super::App {
                             .set(String::new());
                         need_paint_sync_redraw = true;
                     }
-                } else if crate::components::input_otp::is_input_otp_focus(&focused) {
+                } else if self.state.borrow().as_ref().is_some_and(|state| {
+                    crate::authoring::focus::blur_on_outside_press(&state.root_element, &focused)
+                }) {
                     let keep = if let Some(st) = (*self.state.borrow()).as_ref() {
-                        Self::pointer_keeps_otp_focus(&st.root_element, &focused, &path, x, y)
+                        Self::pointer_keeps_custom_focus(&st.root_element, &focused, &path, x, y)
                     } else {
                         true
                     };
@@ -2687,24 +2713,15 @@ impl super::App {
                 }
             }
         } else {
-            let drag_hits = if crate::utils::drag::is_dragging() {
-                crate::utils::drag::collect_hits(&state.root_element)
-            } else {
-                Vec::new()
-            };
+            let drag_end = crate::utils::drag::runtime::prepare_end(&state.root_element);
             drop(state_borrow);
             self.left_button_down = false;
             self.scrollbar_drag = None;
             self.textarea_resize_drag = None;
-            crate::components::slider::clear_slider_drag_if_any();
-            crate::components::toast::clear_toast_drag_if_any();
-            crate::components::color_picker::clear_color_drag_if_any();
-            crate::components::carousel::clear_carousel_drag_if_any();
-            crate::components::resizable::clear_resizable_drag_if_any();
-            crate::components::drawer::clear_drawer_drag_if_any();
+            crate::utils::drag::routing::finish_all();
             crate::utils::anchored_overlay::clear_floating_panel_drag();
             let pointer_action_ended = crate::utils::pointer_action::on_up();
-            if crate::utils::drag::end(&drag_hits) || pointer_action_ended {
+            if drag_end.dispatch() || pointer_action_ended {
                 if let Some(st) = (*self.state.borrow_mut()).as_mut() {
                     st.window.request_redraw();
                 }
@@ -2733,7 +2750,7 @@ impl super::App {
                 }
             }
             if let Some(key) = self.label_drag_key.take() {
-                let sk = crate::components::label::label_selection_signal_key(&key);
+                let sk = crate::utils::text_selection::label_selection_signal_key(&key);
                 let sel = crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).get();
                 if let Some((a, b)) = sel {
                     if a == b {
@@ -2814,7 +2831,7 @@ impl super::App {
                         now,
                     )
                 });
-            crate::components::chart::set_chart_hover_frozen(true);
+            crate::authoring::input::set_geometry_changing(true);
             let next_x = if wheel {
                 super::scroll_support::wheel_scroll_target(sx.peek(), tx.peek(), dx, max_x)
             } else {
@@ -2870,9 +2887,7 @@ impl super::App {
         let x = self.cursor_pos.x as f32 / scale_factor.max(1.0);
         let y = self.cursor_pos.y as f32 / scale_factor.max(1.0);
 
-        if crate::components::color_picker::is_color_dragging()
-            || crate::components::slider::is_slider_dragging()
-        {
+        if crate::utils::drag::routing::freezes_scroll() {
             drop(state_borrow);
             return;
         }
@@ -3254,7 +3269,7 @@ impl super::App {
                     );
                     self.note_user_scroll_after_press();
                     if smooth {
-                        crate::components::chart::set_chart_hover_frozen(true);
+                        crate::authoring::input::set_geometry_changing(true);
                         self.bump_smooth_active_until(&rest, now);
                     }
                 }
@@ -3279,28 +3294,25 @@ impl super::App {
         crate::utils::floating_motion::drain_pending_floating_unmounts();
         // Collision / sortable 跨区 at vsync so CursorMoved only follows the pointer.
         // Do not hold AppState across `tick` (hover_list.set remounts islands).
-        if crate::utils::drag::is_active() {
+        if crate::utils::drag::runtime::is_active() {
             let sampled = {
                 let guard = self.state.borrow();
                 match guard.as_ref() {
                     Some(st) if st.window.id() == id => {
-                        let hits = crate::utils::drag::collect_hits(&st.root_element);
                         let size = st.window.surface_size();
-                        let scale = st.window.scale_factor() as f32;
-                        Some((
-                            hits,
-                            [
-                                size.width as f32 / scale.max(1.0),
-                                size.height as f32 / scale.max(1.0),
-                            ],
+                        let scale = (st.window.scale_factor() as f32).max(1.0);
+                        Some(crate::utils::drag::runtime::prepare_move(
+                            Some(&st.root_element),
                             self.last_client_pos.unwrap_or([0.0, 0.0]),
+                            [size.width as f32 / scale, size.height as f32 / scale],
+                            crate::utils::drag::runtime::MoveMode::Reconcile,
                         ))
                     }
                     _ => None,
                 }
             };
-            if let Some((hits, viewport, pos)) = sampled {
-                let _ = crate::utils::drag::tick(pos[0], pos[1], &hits, viewport);
+            if let Some(update) = sampled {
+                let _ = update.dispatch();
             }
         }
         let mut state_borrow = self.state.borrow_mut();
@@ -3456,13 +3468,7 @@ impl super::App {
         let window = state.window.clone();
         crate::utils::icon_provider::sync_icon_hover(&mut state.root_element);
         let anim_icons = {
-            #[cfg(feature = "lucide-animated")]
-            let animated = crate::utils::lucide_animated::tick_animated_icons_subtree(
-                &mut state.root_element,
-                anim_dt,
-            );
-            #[cfg(not(feature = "lucide-animated"))]
-            let animated = false;
+            let animated = crate::authoring::icon::tick_tree(&mut state.root_element, anim_dt);
             #[cfg(feature = "svg")]
             {
                 let morphing = crate::utils::morph_icon::tick_morph_icons_subtree(
@@ -3547,9 +3553,7 @@ impl super::App {
         // Color / slider drag freeze a window-space box — coasting the page glues the SV knob.
         // Overlay page-lock (default) must snap *page* rests only; menu ScrollAreas keep chasing.
         const INERTIA_FRICTION_PER_SEC: f32 = 4.5;
-        let freeze = if crate::components::color_picker::is_color_dragging()
-            || crate::components::slider::is_slider_dragging()
-        {
+        let freeze = if crate::utils::drag::routing::freezes_scroll() {
             super::portal_overlay::ScrollFreeze::All
         } else {
             super::portal_overlay::active_scroll_freeze()
@@ -3845,7 +3849,7 @@ impl super::App {
             self.bump_smooth_active_until(rest, now);
         }
         if overlay_scroll_moved {
-            let _ = crate::components::avatar::dismiss_avatar_group_expands_on_scroll();
+            crate::authoring::input::note_scroll();
         }
 
         let mut re_borrow = match self.state.try_borrow_mut() {
@@ -3906,9 +3910,12 @@ impl super::App {
         // Jump wheel deltas have already been drained above. Use actual movement
         // this frame, so discrete notches take the same path as smooth scrolling.
         // The next stationary frame still restores focus/caret and full CSS sync.
-        let scroll_paint_only =
-            smooth_scroll_animating || scrollbar_drag_active || !rests_offset_moved.is_empty();
-        crate::components::chart::set_chart_hover_frozen(scroll_paint_only);
+        let scroll_paint_only = content_scroll_paint_only(
+            smooth_scroll_animating,
+            scrollbar_drag_active,
+            !rests_offset_moved.is_empty(),
+        );
+        crate::authoring::input::set_geometry_changing(scroll_paint_only);
         // Live scroll Polls via `paint_clock_active`. The first idle frame used to
         // plant caret WaitUntil; Windows then coalesced `request_redraw` and froze
         // focus chrome / caret blink / overlay scrollbar until the next wheel.
@@ -4061,7 +4068,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         hover_cursor_pick.clone(),
                         self.textarea_resize_drag.is_some(),
                         (self.drag_reorder.is_some() && self.left_button_down)
-                            || crate::utils::drag::is_dragging()
+                            || crate::utils::drag::runtime::is_dragging()
                             || crate::utils::anchored_overlay::is_floating_panel_dragging(),
                     );
                 }
@@ -4116,11 +4123,12 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // Blink wake must follow painted carets, not only IME geometry. If
                 // `find_bounds_by_focus_id` misses for a frame, clearing `caret_wake_at`
                 // freezes the caret in its current on/off phase forever.
+                let painted_caret = state.layout_tree.take_caret_blink_request();
                 let has_input_caret = state
                     .text_nodes
                     .iter()
                     .any(|n| n.style.input_caret.is_some())
-                    || crate::components::input_otp::take_otp_caret_blink_needed();
+                    || painted_caret;
                 let ime_field_in_overflow_clip = ime_data.as_ref().is_some_and(|(_, _, fid, _)| {
                     super::ime_support::painted_ime_field_in_overflow_clip(
                         &state.text_nodes,
@@ -4131,12 +4139,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 });
                 let svg_smil_active = crate::primitives::subtree_has_svg_smil(&state.root_element);
                 let anim_icon_active = {
-                    #[cfg(feature = "lucide-animated")]
-                    let animated = crate::utils::lucide_animated::subtree_needs_animated_icon_frame(
-                        &state.root_element,
-                    );
-                    #[cfg(not(feature = "lucide-animated"))]
-                    let animated = false;
+                    let animated = crate::authoring::icon::needs_frame(&state.root_element);
                     #[cfg(feature = "svg")]
                     {
                         animated
@@ -4574,6 +4577,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     }
                 }
                 self.paint_clock_active = smooth_scroll_animating
+                    || self.state.borrow().as_ref().is_some_and(|state| state.shader_frame_active)
                     || scrollbar_fade_animating
                     || svg_smil_active
                     || anim_icon_active
@@ -4608,9 +4612,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 crate::app::reactive::drain_deferred_view_remounts();
                 crate::utils::modal_motion::drain_pending_modal_unmounts();
                 crate::utils::floating_motion::drain_pending_floating_unmounts();
-                if crate::components::bubble::flush_reaction_hover_dismiss() {
-                    window.request_redraw();
-                }
+
                 if crate::primitives::interactive::take_hover_paint_dirty() {
                     window.request_redraw();
                 }
@@ -4622,7 +4624,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         hover_cursor_pick,
                         self.textarea_resize_drag.is_some(),
                         (self.drag_reorder.is_some() && self.left_button_down)
-                            || crate::utils::drag::is_dragging()
+                            || crate::utils::drag::runtime::is_dragging()
                             || crate::utils::anchored_overlay::is_floating_panel_dragging(),
                     );
                 }
@@ -4634,14 +4636,14 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     if self.os_window_focused {
                         let allow_ime = super::ime_support::text_edit_rest(&fid_clone)
                             .map(|rest| {
-                                let key = crate::components::input::input_type_signal_key(rest);
+                                let key = crate::utils::text_field::input_type_signal_key(rest);
                                 let raw = crate::core::reactivity::use_signal(&key, || {
-                                    crate::components::input::InputType::Text
+                                    crate::utils::text_edit::field::InputType::Text
                                         .as_str()
                                         .to_string()
                                 })
                                 .peek();
-                                crate::components::input::InputType::parse(&raw).allows_ime()
+                                crate::utils::text_edit::field::InputType::parse(&raw).allows_ime()
                             })
                             .unwrap_or(true);
                         // Keep focus-owner sync even for password (field-switch cancel);
@@ -4687,11 +4689,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                             let composing = {
                                 let rest = super::ime_support::text_edit_rest(&fid_clone);
                                 rest.map(|r| {
-                                    let pk = crate::components::input::input_preedit_signal_key(r);
+                                    let pk = crate::utils::text_field::input_preedit_signal_key(r);
                                     let pre = crate::core::reactivity::use_signal(&pk, String::new)
                                         .peek();
                                     let active = crate::core::reactivity::use_signal(
-                                        crate::components::IME_ACTIVE_SIGNAL,
+                                        crate::utils::text_edit::field::IME_ACTIVE_SIGNAL,
                                         || false,
                                     )
                                     .peek();
@@ -5113,7 +5115,7 @@ fn root_has_input_caret(el: &crate::core::tree::Element) -> bool {
 #[cfg(test)]
 #[cfg(feature = "animation-base")]
 mod scrollbar_fade_clock_tests {
-    use super::retarget_scrollbar_fade;
+    use super::{content_scroll_paint_only, retarget_scrollbar_fade};
     use crate::style::{tick_animations, CubicTween};
 
     #[test]
@@ -5170,6 +5172,15 @@ mod scrollbar_fade_clock_tests {
         tick_animations(0.016);
         assert!(fade.peek() > mid);
     }
+
+    #[test]
+    #[cfg(feature = "animation-base")]
+    fn scrollbar_fade_does_not_enter_content_paint_only() {
+        assert!(!content_scroll_paint_only(false, false, false));
+        assert!(content_scroll_paint_only(true, false, false));
+        assert!(content_scroll_paint_only(false, true, false));
+        assert!(content_scroll_paint_only(false, false, true));
+    }
 }
 
 #[cfg(all(test, target_os = "windows"))]
@@ -5185,9 +5196,11 @@ mod wheel_recovery_tests {
 
     #[test]
     #[ignore = "native wheel delivery and redraw regression; run in a separate process"]
+    #[cfg(feature = "components")]
     fn queued_wheel_events_do_not_replay_screens_after_stall() {
         struct Harness;
         impl ApplicationHandler for Harness {
+            #[cfg(feature = "components")]
             fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
                 crate::init();
                 let window: std::sync::Arc<dyn winit::window::Window> = std::sync::Arc::from(

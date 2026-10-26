@@ -379,6 +379,15 @@ impl From<SwitchBuilder> for Element {
             .into();
         ensure_switch_track_css_transition(&mut track);
         track.switch_checked_sync = Some(sig);
+        crate::authoring::presentation::attach(
+            &mut track,
+            crate::authoring::presentation::Phase::State,
+            |element, layout, _context| {
+                let mut impact = LayoutStatus::Clean;
+                sync_switch_checked_node(element, layout, &mut impact);
+                impact
+            },
+        );
 
         let mut track: Element = interactive(track)
             .focus_id(id.clone())
@@ -433,72 +442,81 @@ impl crate::core::tree::IntoElementList for SwitchBuilder {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn sync_switch_checked_subtree(
     el: &mut Element,
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    crate::core::tree::walk_elements_mut(el, |el| {
-        if let Some(sig) = el.switch_checked_sync {
-            if !sig.is_alive() {
-                // Same teardown window as checkbox: owner gone, node still in this frame.
-                el.switch_checked_sync = None;
-                return;
-            }
-            let on = sig.peek();
-            let want_tx = if on { THUMB_TRAVEL } else { 0.0 };
-            let want_bg = if on { track_on_bg() } else { track_off_bg() };
-
-            ensure_switch_track_css_transition(el);
-
-            let bg_changed = (el.style.bg_color[0] - want_bg[0]).abs() > 0.001
-                || (el.style.bg_color[1] - want_bg[1]).abs() > 0.001
-                || (el.style.bg_color[2] - want_bg[2]).abs() > 0.001
-                || (el.style.bg_color[3] - want_bg[3]).abs() > 0.001;
-            if bg_changed {
-                el.style.bg_color = want_bg;
-            }
-
-            let thumb_changed = if let Some(thumb) = find_thumb_mut(el) {
-                ensure_switch_thumb_css_transition(thumb);
-                let want_thumb_bg = thumb_bg();
-                let tx_hit = (thumb.style.translate[0] - want_tx).abs() > 0.01;
-                let bg_hit = (thumb.style.bg_color[0] - want_thumb_bg[0]).abs() > 0.001
-                    || (thumb.style.bg_color[1] - want_thumb_bg[1]).abs() > 0.001
-                    || (thumb.style.bg_color[2] - want_thumb_bg[2]).abs() > 0.001
-                    || (thumb.style.bg_color[3] - want_thumb_bg[3]).abs() > 0.001;
-                if tx_hit {
-                    thumb.style.translate[0] = want_tx;
-                }
-                if bg_hit {
-                    thumb.style.bg_color = want_thumb_bg;
-                }
-                tx_hit || bg_hit
-            } else {
-                el.children.insert(0, build_thumb(want_tx));
-                true
-            };
-
-            if bg_changed || thumb_changed {
-                if el.layout_node.is_some() {
-                    layout_tree.update_taffy_node_style(el);
-                }
-                if let Some(thumb) = find_thumb_mut(el) {
-                    if thumb.layout_node.is_some() {
-                        layout_tree.update_taffy_node_style(thumb);
-                    }
-                }
-                // translate 不改布局几何，但仍需局部重绘；StyleChanged 避免 FullClear。
-                push_switch_paint_damage(el);
-                *impact = impact.merge(LayoutStatus::StyleChanged);
-            } else if el.transition_snapshot.has_active_tweens()
-                || find_thumb_mut(el).is_some_and(|t| t.transition_snapshot.has_active_tweens())
-            {
-                push_switch_paint_damage(el);
-                *impact = impact.merge(LayoutStatus::StyleChanged);
-            }
-        }
+    crate::core::tree::walk_elements_mut(el, |element| {
+        sync_switch_checked_node(element, layout_tree, impact)
     });
+}
+
+fn sync_switch_checked_node(
+    el: &mut Element,
+    layout_tree: &mut LayoutTree,
+    impact: &mut LayoutStatus,
+) {
+    if let Some(sig) = el.switch_checked_sync {
+        if !sig.is_alive() {
+            // Same teardown window as checkbox: owner gone, node still in this frame.
+            el.switch_checked_sync = None;
+            return;
+        }
+        let on = sig.peek();
+        let want_tx = if on { THUMB_TRAVEL } else { 0.0 };
+        let want_bg = if on { track_on_bg() } else { track_off_bg() };
+
+        ensure_switch_track_css_transition(el);
+
+        let bg_changed = (el.style.bg_color[0] - want_bg[0]).abs() > 0.001
+            || (el.style.bg_color[1] - want_bg[1]).abs() > 0.001
+            || (el.style.bg_color[2] - want_bg[2]).abs() > 0.001
+            || (el.style.bg_color[3] - want_bg[3]).abs() > 0.001;
+        if bg_changed {
+            el.style.bg_color = want_bg;
+        }
+
+        let thumb_changed = if let Some(thumb) = find_thumb_mut(el) {
+            ensure_switch_thumb_css_transition(thumb);
+            let want_thumb_bg = thumb_bg();
+            let tx_hit = (thumb.style.translate[0] - want_tx).abs() > 0.01;
+            let bg_hit = (thumb.style.bg_color[0] - want_thumb_bg[0]).abs() > 0.001
+                || (thumb.style.bg_color[1] - want_thumb_bg[1]).abs() > 0.001
+                || (thumb.style.bg_color[2] - want_thumb_bg[2]).abs() > 0.001
+                || (thumb.style.bg_color[3] - want_thumb_bg[3]).abs() > 0.001;
+            if tx_hit {
+                thumb.style.translate[0] = want_tx;
+            }
+            if bg_hit {
+                thumb.style.bg_color = want_thumb_bg;
+            }
+            tx_hit || bg_hit
+        } else {
+            el.children.insert(0, build_thumb(want_tx));
+            true
+        };
+
+        if bg_changed || thumb_changed {
+            if el.layout_node.is_some() {
+                layout_tree.update_taffy_node_style(el);
+            }
+            if let Some(thumb) = find_thumb_mut(el) {
+                if thumb.layout_node.is_some() {
+                    layout_tree.update_taffy_node_style(thumb);
+                }
+            }
+            // translate 不改布局几何，但仍需局部重绘；StyleChanged 避免 FullClear。
+            push_switch_paint_damage(el);
+            *impact = impact.merge(LayoutStatus::StyleChanged);
+        } else if el.transition_snapshot.has_active_tweens()
+            || find_thumb_mut(el).is_some_and(|t| t.transition_snapshot.has_active_tweens())
+        {
+            push_switch_paint_damage(el);
+            *impact = impact.merge(LayoutStatus::StyleChanged);
+        }
+    }
 }
 
 #[cfg(test)]

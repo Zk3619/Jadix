@@ -1,9 +1,9 @@
+#![cfg(feature = "components")]
 //! Overlay scrollbar must sit on `SidebarContent`, not the Header/Footer column.
 //!
 //! `Sidebar` `take_packed`s its children. An anonymous two-child host (viewport +
 //! bar) used to be peeled so the track became a Header sibling: Taffy then
 //! placed `top:0` against the rail while overlay height stayed at content `vh`.
-
 use crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
 use crate::components::sidebar::{sidebar, sidebar_menu_button};
 use crate::core::reactivity::{create_effect, create_root};

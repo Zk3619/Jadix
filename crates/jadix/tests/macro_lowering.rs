@@ -830,3 +830,26 @@ fn ui_suspense_tag_builds_element() {
     assert_eq!(template_id, "sus-tag");
     reset_registered_anchors();
 }
+
+#[test]
+fn implicit_for_item_keeps_caller_hygiene_through_runtime_facade() {
+    use jadix::prelude::*;
+    create_root(|| {
+        let tree = ui! {
+            <Box>
+                <For each={1..=3} key={*item}>
+                    <Label>{format!("row {item}")}</Label>
+                </For>
+                <For each={4..=5}>
+                    <Label>{format!("unkeyed {item}")}</Label>
+                </For>
+                <For each={6..=7} item={entry} key={*entry}>
+                    <Label>{format!("explicit {entry}")}</Label>
+                </For>
+            </Box>
+        };
+        for text in ["row 1", "row 3", "unkeyed 4", "explicit 7"] {
+            assert!(find_text(&tree, text), "{text}");
+        }
+    });
+}

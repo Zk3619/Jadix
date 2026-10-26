@@ -1,10 +1,10 @@
+#![cfg(feature = "components")]
 //! WP-2.6 component golden scenes (stable-face only).
 //!
 //! Scenes: Button · Input · Dialog · Tabs · ScrollArea.
 //! Chrome instances only (no glyphon) for cross-OS CI; see `render_element_scene`.
 //!
 //! Record: `JADIX_UPDATE_GOLDEN=1 cargo test -p jadix --lib golden_component`
-
 use crate::components::button::button;
 use crate::components::dialog::{
     dialog, dialog_content, DialogBody, DialogBodyProps, DialogContentOpts,

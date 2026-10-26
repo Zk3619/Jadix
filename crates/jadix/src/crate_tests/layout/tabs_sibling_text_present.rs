@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Gallery Forms: switching Tabs must not punch 8b ToggleGroup glyphs for one frame.
 //!
 //! `<TabsContent>` reconcile used to dest-reset the page `ScrollArea` clip (the whole

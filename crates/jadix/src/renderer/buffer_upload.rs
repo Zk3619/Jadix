@@ -27,7 +27,7 @@ impl RetainedBuffer {
         use wgpu::util::DeviceExt;
         let buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some(label),
-            contents: bytes,
+            contents: if bytes.is_empty() { &[0; 4] } else { bytes },
             usage: usage | wgpu::BufferUsages::COPY_DST,
         });
         Self {

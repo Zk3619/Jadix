@@ -2367,9 +2367,14 @@ fn sync_class_variants_subtree_inner(
         let el = unsafe { &mut *ptr };
         let n = el.inner.children.len();
         if frame.next_child >= n {
-            let seams_changed = crate::components::button_group::sync_join_seams(el, hit_nodes);
+            let after_style = el.after_style_sync.clone();
+            let chrome_changed = after_style.is_some_and(|sync| {
+                sync.run(el, &|element| {
+                    hit_nodes.contains(&(element as *const Element))
+                })
+            });
             let flow_changed = super::liquid_flow::sync(el, hit_nodes);
-            if seams_changed || flow_changed {
+            if chrome_changed || flow_changed {
                 *impact = impact.merge(LayoutStatus::StyleChanged);
                 queue_paint_hash_spine(&mut paint_hash_spines, layout_tree, el, false);
             }
@@ -3732,6 +3737,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn scroll_hover_keeps_button_caption_size_and_padding() {
         crate::core::reactivity::create_root(|| {
             let mut root = Element::new().flex_col().w(400.0).h(200.0).text_size(22.0)
@@ -3847,6 +3853,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn dimension_writes_survive_variant_restore_without_relayout() {
         use crate::core::tree::LayoutTree;
         use taffy::style::Dimension;

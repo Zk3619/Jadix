@@ -41,6 +41,8 @@ impl OffscreenGpu {
     }
 
     pub fn with_backends(backends: wgpu::Backends) -> Option<Self> {
+        let backends = backends & wgpu::Instance::enabled_backend_features();
+        if backends.is_empty() { return None; }
         let instance = super::wgpu_compat::instance(backends);
         let adapter = crate::utils::block_on::block_on(instance.request_adapter(
             &wgpu::RequestAdapterOptions {

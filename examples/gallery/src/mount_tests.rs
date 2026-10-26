@@ -38,7 +38,7 @@ fn drawing_canvas_preserves_strokes_on_remount_and_clears_independently() {
 }
 
 #[test]
-fn synthetic_stream_clock_is_collectable_and_stays_live() {
+fn synthetic_stream_image_is_collectable_without_a_canvas_clock() {
     run_on_gallery_build_stack(|| {
         create_root(|| {
             let mut root = crate::pages::draw::ImageStreamShowcase(Default::default());
@@ -46,8 +46,10 @@ fn synthetic_stream_clock_is_collectable_and_stays_live() {
             tree.build_and_layout(&mut root, 900.0, 900.0, [-1.0; 2]);
             for _ in 0..3 {
                 let frame = tree.build_and_layout_fast(&mut root, 900.0, 900.0, [-1.0; 2], true, false);
-                assert!(frame.textured_draws.iter().any(|draw| draw.texture_key.starts_with("jadix_canvas:")),
-                    "stream clock must remain visible to collect");
+                assert!(frame.textured_draws.iter().any(|draw| draw.texture_key == "jadix-gallery-stream"),
+                    "stream image must remain visible to collect");
+                assert!(!frame.textured_draws.iter().any(|draw| draw.texture_key.starts_with("jadix_canvas:")),
+                    "stream visibility must follow its image instead of a separate clock");
             }
         });
     });
@@ -1883,13 +1885,14 @@ fn headless_mount_gallery_app_does_not_overflow() {
     jadix::app::reactive::reset_registered_anchors();
     let (_handle, _) = create_root(|| {
         create_effect(|| {
-            let tree = build_gallery_app();
+            let tree = jadix::authoring::mount::with_inline_mount(build_gallery_app);
             assert!(
                 !tree.children.is_empty(),
                 "gallery root should have children"
             );
         });
     });
+    jadix::app::reactive::reset_registered_anchors();
 }
 
 #[test]
@@ -1931,7 +1934,7 @@ fn forms_section_does_not_crush_sidebar_width() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {
             use_signal("gal_nav_section", || "basics".to_string()).set("forms".to_string());
-            let mut app = build_gallery_app();
+            let mut app = jadix::authoring::mount::with_inline_mount(build_gallery_app);
             let mut layout = jadix::core::tree::LayoutTree::new();
             let _ = layout.build_and_layout(&mut app, 720.0, 700.0, [-1.0, -1.0]);
             let side = gallery_find_by_tid(&app, "gal-sidebar").expect("gal-sidebar");
@@ -2016,7 +2019,7 @@ fn gallery_main_pane_uses_remaining_width() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {
             use_signal("gal_nav_section", || "basics".to_string());
-            let mut app = build_gallery_app();
+            let mut app = jadix::authoring::mount::with_inline_mount(build_gallery_app);
             let mut layout = jadix::core::tree::LayoutTree::new();
             let _ = layout.build_and_layout(&mut app, 1000.0, 700.0, [-1.0, -1.0]);
             let side = gallery_find_by_tid(&app, "gal-sidebar").expect("sidebar");
@@ -2049,7 +2052,7 @@ fn gallery_sidebar_collapses_to_icon_rail() {
         create_effect(|| {
             use_signal("gal_nav_section", || "basics".to_string());
             use_signal("gal-shell__open", || false);
-            let mut app = build_gallery_app();
+            let mut app = jadix::authoring::mount::with_inline_mount(build_gallery_app);
             let mut layout = jadix::core::tree::LayoutTree::new();
             let _ = layout.build_and_layout(&mut app, 1000.0, 700.0, [-1.0, -1.0]);
             let side = gallery_find_by_tid(&app, "gal-sidebar").expect("sidebar");

@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Gallery inset shell: flex children must not spill past SidebarInset border-box.
 
 use crate::app::damage::{

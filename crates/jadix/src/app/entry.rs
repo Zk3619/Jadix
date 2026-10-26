@@ -102,6 +102,8 @@ pub struct AppConfig {
     pub font_size: Option<f32>,
     pub font_weight: Option<u16>,
     pub synthetic_bold: Option<bool>,
+    /// Process-wide policy for honoring node-level opacity-group requests.
+    pub opacity_groups: Option<bool>,
     /// BCP 47 locale (`zh-CN`). With feature `i18n`, becomes the active locale
     /// for this window (`signal_key_scope`); primary window also sets the process default.
     pub locale: Option<String>,
@@ -210,6 +212,9 @@ impl AppConfig {
     /// Apply font / rem root (always) and live window title / size when a window exists.
     pub fn apply_document(&self) {
         self.apply_window_patch();
+        if let Some(enabled) = self.opacity_groups {
+            crate::core::tree::set_opacity_groups_enabled(enabled);
+        }
         let mut d = text_defaults();
         let mut font_changed = false;
         if let Some(ref family) = self.font_family {
@@ -598,6 +603,12 @@ impl AppBuilder {
         self
     }
 
+    /// Enable or disable node-level opacity-group composition for this process.
+    pub fn opacity_groups(mut self, enabled: bool) -> Self {
+        self.config.opacity_groups = Some(enabled);
+        self
+    }
+
     /// BCP 47 locale (`zh-CN` / `ar`).
     pub fn locale(mut self, locale: impl Into<String>) -> Self {
         self.config.locale = Some(locale.into());
@@ -656,6 +667,9 @@ impl AppBuilder {
     ///
     /// 新代码请用 [`Self::mount`]；RSX 请用 [`launch`].
     pub fn run<F: FnMut() -> Element + 'static>(self, ui: F) {
+        if let Some(enabled) = self.config.opacity_groups {
+            crate::core::tree::set_opacity_groups_enabled(enabled);
+        }
         super::run_with(self.config.into_window_options(), ui);
     }
 

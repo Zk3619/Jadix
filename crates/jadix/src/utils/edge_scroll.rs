@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::time::Instant;
 
+use crate::core::geometry::{Axis, Rect};
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{
     scroll_content_h_signal_key, scroll_content_w_signal_key, scroll_offset_x_signal_key,
@@ -14,7 +15,6 @@ use crate::core::scroll_viewport::{
     scroll_viewport_h_signal_key, scroll_viewport_w_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX,
 };
 use crate::core::tree::Element;
-use crate::utils::drag::geometry::{Axis, Rect};
 
 /// Which axes of **edge auto-scroll** are frozen while dragging.
 /// Independent of motion [`Axis`]: `scroll_lock="all"` works with `axis="xy"`.

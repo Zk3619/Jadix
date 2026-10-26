@@ -1,3 +1,4 @@
+#![cfg(feature = "components")]
 //! Paint-only collect can replay a fingerprint display list for clean sibling subtrees
 //! (GPUI `Entity::cached` analog — skip collect, not omit pixels).
 
@@ -2207,7 +2208,9 @@ fn paint_only_skip_must_not_drop_stacked_portal_bands() {
 
 const DRAG_CHIP: [f32; 4] = [1.0, 0.45, 0.0, 1.0];
 
+#[cfg(feature = "dnd")]
 fn page_with_drag_overlay() -> Element {
+    let _product = crate::utils::drag::drag_overlay();
     let page = Element::new()
         .w(160.0)
         .h(80.0)
@@ -2238,6 +2241,7 @@ fn drag_chip_instance(
 
 /// Drag overlay is a collect side channel (not stored in the fingerprint DL).
 /// Skipping an ancestor freezes the ghost at last-frame `overlay_pos` / translate.
+#[cfg(feature = "dnd")]
 #[test]
 fn paint_only_skip_must_not_freeze_drag_overlay() {
     reset_collect_skip_counters();

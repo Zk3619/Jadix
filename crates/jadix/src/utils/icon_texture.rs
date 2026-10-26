@@ -13,7 +13,7 @@ use swash::zeno::Format;
 use swash::FontRef;
 
 use crate::app::pending_images::queue_image_rgba8;
-use crate::utils::lucide::lucide_svg_inner;
+use crate::utils::icon_provider::resolve_icon_svg as lucide_svg_inner;
 
 #[cfg(not(feature = "svg"))]
 use crate::primitives::path::{
@@ -258,14 +258,14 @@ fn rasterize_svg_rgba(
 
     #[cfg(feature = "svg")]
     {
-        return crate::media::svg_raster::rasterize_lucide_icon_rgba(inner, color, side);
+        return crate::media::svg_raster::rasterize_lucide_icon_rgba(&inner, color, side);
     }
 
     #[cfg(not(feature = "svg"))]
     {
         let scale = side as f32 / LUCIDE_VB;
         let stroke_w = (2.0 * scale).max(1.0);
-        let layers_vb = lucide_inner_to_layers(inner, color_f32(color), 2.0);
+        let layers_vb = lucide_inner_to_layers(&inner, color_f32(color), 2.0);
         if layers_vb.is_empty() {
             return None;
         }

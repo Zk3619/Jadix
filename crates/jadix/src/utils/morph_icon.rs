@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, OnceLock};
+use std::sync::Mutex;
 
 use crate::core::tree::{Element, IntoElementList, LayoutStatus};
 use crate::style::{GeneratorSample, Spring, SpringPhysics};
@@ -186,9 +186,11 @@ fn invalidate_pair(play: &mut MorphPlay) {
     play.pair_to = None;
 }
 
-fn play_store() -> &'static Mutex<HashMap<u64, MorphPlay>> {
-    static S: OnceLock<Mutex<HashMap<u64, MorphPlay>>> = OnceLock::new();
-    S.get_or_init(|| Mutex::new(HashMap::new()))
+fn play_store() -> std::rc::Rc<Mutex<HashMap<u64, MorphPlay>>> {
+    crate::authoring::window::window_local! {
+        static STORE: std::rc::Rc<Mutex<HashMap<u64, MorphPlay>>> = std::rc::Rc::new(Mutex::new(HashMap::new()));
+    }
+    STORE.with(std::rc::Rc::clone)
 }
 
 fn morph_template_id(id: &str) -> String {
@@ -246,17 +248,16 @@ pub(crate) fn hash_morph_icon_paint(el: &Element, h: &mut impl Hasher) {
     }
 }
 
-fn lucide_seed(el: &mut Element, name: &str) {
-    let glyph = crate::utils::lucide::lucide_glyph(name).unwrap_or_else(|| "\u{ea0e}".into());
+fn icon_seed(el: &mut Element, name: &str) {
+    let (family, glyph) = match crate::utils::icon_provider::resolve_icon(name) {
+        Some(crate::utils::icon_provider::IconSource::Glyph { family, glyph }) => (family, glyph),
+        _ => ("sans-serif".into(), "\u{2001}".into()),
+    };
+    el.text_style.font_family = Some(family);
     el.text = Some(glyph);
     el.set_attr(crate::utils::ATTR_ICON_NAME, name);
-    #[cfg(feature = "lucide-animated")]
-    if el
-        .get_attr(crate::utils::ATTR_ANIMATED_ICON)
-        .is_some_and(|s| s != name)
-    {
-        el.set_attr(crate::utils::ATTR_ANIMATED_ICON, name);
-        crate::utils::lucide_animated::reset_animated_icon_playback(el);
+    if el.icon_playback.is_some() {
+        crate::utils::icon_provider::refresh_icon_animation(el, name);
     }
 }
 
@@ -332,7 +333,8 @@ fn play_exists(key: u64) -> bool {
 }
 
 fn release_play(key: u64) -> bool {
-    let Ok(mut map) = play_store().lock() else {
+    let playback_store = play_store();
+    let Ok(mut map) = playback_store.lock() else {
         return false;
     };
     let remove = match map.get_mut(&key) {
@@ -472,7 +474,7 @@ fn is_controlled(el: &Element) -> bool {
 
 fn seed_icon(el: &mut Element, icon: &str) {
     el.set_attr(ATTR_MORPH_ICON, icon);
-    lucide_seed(el, icon);
+    icon_seed(el, icon);
 }
 
 /// Jump to `icon` with no spring (morphicons `set`). Invalidates a frozen pair
@@ -718,7 +720,7 @@ pub fn apply_bound_morph_icon(el: &mut Element, icon: impl AsRef<str>) -> Layout
     // Controlled wins: pair owns the path; `icon` is ignored until the pair drops.
     if is_controlled(el) {
         el.set_attr(ATTR_MORPH_ICON, icon);
-        lucide_seed(el, icon);
+        icon_seed(el, icon);
         return LayoutStatus::Clean;
     }
     let Some(key) = ensure_play(el) else {
@@ -1083,7 +1085,8 @@ pub fn tick_morph_icon(el: &mut Element, dt: f32) -> bool {
         return false;
     }
     let key = instance_key(el);
-    let mut store = match play_store().lock() {
+    let playback_store = play_store();
+    let mut store = match playback_store.lock() {
         Ok(g) => g,
         Err(_) => return false,
     };
@@ -1107,18 +1110,12 @@ pub fn tick_morph_icon(el: &mut Element, dt: f32) -> bool {
         drop(store);
         // Keep one more frame alive for the hover timeline to take over, even
         // when this was the last active morph in the tree.
-        #[cfg(feature = "lucide-animated")]
-        if el
-            .get_attr(crate::utils::ATTR_ANIMATED_ICON_STATE)
-            .is_some_and(|s| s == "animate")
-            && el
-                .get_attr(crate::utils::ATTR_ANIMATED_ICON)
-                .and_then(|name| crate::utils::animated_icon_recipe(name))
-                .is_some_and(|recipe| recipe.animated)
-            && !should_skip_spring(el)
-        {
-            crate::utils::start_animated_icon(el);
-            return true;
+        if el.get_attr(crate::utils::icon_provider::ATTR_ICON_ANIMATION_STATE).is_some_and(|state| state == "animate")
+            && !should_skip_spring(el) {
+            if let Some(playback) = el.icon_playback {
+                (playback.set_state)(el, "animate");
+                return true;
+            }
         }
         if el
             .get_attr(crate::utils::icon_provider::ATTR_ICON_ANIMATION_STATE)
@@ -1206,7 +1203,7 @@ fn current_d(el: &Element) -> String {
 
 /// A controlled pair owns its geometry even at an endpoint. Hover playback
 /// starts afresh after an imperative or bound icon change has settled.
-pub(crate) fn blocks_hover_animation(el: &Element) -> bool {
+pub fn blocks_hover_animation(el: &Element) -> bool {
     if el.get_attr(ATTR_MORPH_ICON).is_none() {
         return false;
     }
@@ -1220,7 +1217,7 @@ pub(crate) fn blocks_hover_animation(el: &Element) -> bool {
         .unwrap_or(false)
 }
 
-pub(crate) fn stroke_for_paint(el: &Element, size: f32) -> f32 {
+pub fn stroke_for_paint(el: &Element, size: f32) -> f32 {
     let sw = el
         .get_attr(ATTR_MORPH_STROKE)
         .and_then(|s| s.parse().ok())
@@ -1257,11 +1254,8 @@ pub fn ensure_morph_icon_texture(
     color: [u8; 4],
     dpr: f32,
 ) -> Option<(String, f32)> {
-    #[cfg(feature = "lucide-animated")]
-    if el.get_attr(crate::utils::ATTR_ANIMATED_ICON).is_some() && !blocks_hover_animation(el) {
-        if let Some(texture) = crate::utils::lucide_animated::ensure_animated_icon_recipe_texture(
-            el, size_px, color, dpr,
-        ) {
+    if !blocks_hover_animation(el) {
+        if let Some(texture) = el.icon_playback.and_then(|playback| (playback.hover_texture)(el, size_px, color, dpr)) {
             return Some(texture);
         }
     }
@@ -1450,11 +1444,6 @@ impl From<MorphIconBuilder> for Element {
         el.set_attr(ATTR_MORPH_SPRING, &b.spring);
         el.set_attr(ATTR_MORPH_INTERP, &b.interp);
         el.set_attr(ATTR_MORPH_REDUCED, &b.reduced_motion);
-        #[cfg(feature = "lucide-animated")]
-        if b.hover_animation {
-            el.set_attr(crate::utils::ATTR_ANIMATED_ICON, &display);
-            el.set_attr(crate::utils::ATTR_ANIMATED_ICON_STATE, "normal");
-        }
         if b.absolute_stroke_width {
             el.set_attr(ATTR_MORPH_ABS_STROKE, "1");
         }
@@ -1474,9 +1463,8 @@ impl From<MorphIconBuilder> for Element {
         if !empty {
             el.set_attr(ATTR_MORPH_ICON, &display);
             el.set_attr(ATTR_MORPH_TO, &display);
-            lucide_seed(&mut el, &display);
+            icon_seed(&mut el, &display);
         }
-        el.text_style.font_family = Some("lucide".into());
         let tid = if let Some(id) = &b.id {
             morph_template_id(id)
         } else {
@@ -1519,22 +1507,19 @@ impl From<MorphIconBuilder> for Element {
                 }
             }
         }
-        #[cfg(feature = "lucide-animated")]
-        let tid = el.template_id.clone().unwrap_or_default();
+        let window = crate::authoring::window::Scope::capture();
         el = el.on_unmount(move || {
-            if release_play(key) {
-                #[cfg(feature = "lucide-animated")]
-                crate::utils::lucide_animated::release_animated_icon(key, &tid);
-            }
+            let _window = window.enter();
+            release_play(key);
         });
         if pair {
             apply_controlled_pair(&mut el);
         } else if inserted && b.progress.is_some() {
             morph_seek_src(&mut el, &display, t0);
         }
-        #[cfg(feature = "lucide-animated")]
         if b.hover_animation {
-            return crate::utils::icon_provider::with_icon_hover(el);
+            let identity = el.template_id.clone().unwrap_or_default();
+            return crate::utils::icon_provider::with_icon_animations(el, "animated", "none", identity, "");
         }
         el
     }
@@ -1772,6 +1757,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(feature = "components")]
     fn button_keeps_morph_icon_child() {
         let morph: Element = morph_icon("pause").id("pp").into();
         let el: Element = crate::components::button("gal-pp").child(morph).into();

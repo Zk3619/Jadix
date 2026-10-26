@@ -16,7 +16,11 @@
 //! 拖拽、浮层几何、虚拟列表、内嵌文本等能力在 [`crate::utils`] / [`crate::app`]；
 //! 布尔开关状态在 [`crate::utils::toggle_state`]（WP-3.7）；Tabs / Toggle 外观在 [`crate::components`]。
 
-pub mod r#box;
+#[path = "box.rs"]
+pub mod div;
+pub mod r#box {
+    pub use super::div::*;
+}
 pub mod canvas;
 pub mod effect_wrap;
 pub mod interactive;
@@ -48,7 +52,7 @@ pub use path::{
     ATTR_PATH_STROKE, ATTR_PATH_STROKE_WIDTH, ATTR_PATH_VIEWBOX,
 };
 pub use portal::{Portal, PortalProps};
-pub use r#box::{boxed, gstack, hstack, r#box, vstack, BoxBuilder};
+pub use div::{boxed, div, gstack, hstack, r#box, vstack, BoxBuilder};
 pub use scene3d::{
     scene3d, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial, ATTR_SCENE3D,
 };

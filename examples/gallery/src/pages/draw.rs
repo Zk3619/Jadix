@@ -769,19 +769,26 @@ fn queue_synthetic_stream_frame() {
 
 #[component]
 pub(crate) fn ImageStreamShowcase() -> Element {
-    // Seed the GPU key before the first collect. A 1×1 clock never rasterizes
-    // (`canvas` skips w/h < 2), so the Image leaf used to draw with a missing bind group.
     queue_synthetic_stream_frame();
-    let clock: Element = canvas()
-        .w(4.0)
-        .h(4.0)
-        .paint(move |ctx: &mut dyn Canvas2D, _size: CanvasSize| {
-            queue_synthetic_stream_frame();
-            ctx.request_frame();
-            LayoutStatus::Clean
-        })
-        .into();
-    let clock = clock.pointer_events_none();
+    let mut stream = ui! {
+        <Image texture={IMAGE_STREAM_KEY} w="20rem" h="11.25rem" rounded="0.5rem" />
+    };
+    let next_frame = std::cell::Cell::new(std::time::Instant::now());
+    jadix::authoring::deadline::attach(
+        &mut stream,
+        jadix::authoring::deadline::Visibility::Visible,
+        move |context| {
+            let redraw = context.resumed || context.now >= next_frame.get();
+            if redraw {
+                queue_synthetic_stream_frame();
+                next_frame.set(context.now + std::time::Duration::from_millis(16));
+            }
+            jadix::authoring::deadline::Poll {
+                redraw,
+                next_wake: Some(next_frame.get()),
+            }
+        },
+    );
 
     ui! {
         <MyCard title="ImageStream · 合成 RGBA 流（WP-M.2）">
@@ -789,8 +796,7 @@ pub(crate) fn ImageStreamShowcase() -> Element {
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
                     "引擎只收帧：CPU 色条 → queue_media_frame → <Image texture>。无 FFmpeg / 无播放器。应看到亮/暗竖纹 + 一条横向移动的蓝条。`--features image-stream` 时色条以 I420 投递（引擎转 RGBA），不要在热路径上再做 RGBA→YUV→RGBA 往返。"
                 </Label>
-                { clock }
-                <Image texture={IMAGE_STREAM_KEY} w="20rem" h="11.25rem" rounded="0.5rem" />
+                { stream }
             </VStack>
         </MyCard>
     }

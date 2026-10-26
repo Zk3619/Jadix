@@ -7,7 +7,9 @@ use crate::style::{parse_color, parse_text_color};
 use crate::utils::text_edit::field::InputType;
 use crate::utils::text_edit::{build_text_edit_element, TextEditBuildParams};
 use crate::utils::text_field::{SelectionOnBlur, TextareaWrapMode};
-use crate::utils::{build_icon_text_node, lucide_glyph};
+use crate::utils::build_lucide_icon_text_node_or as inspector_icon;
+#[cfg(test)]
+use crate::utils::build_icon_text_node;
 use winit::event::ElementState;
 use winit::keyboard::{Key, NamedKey};
 
@@ -673,7 +675,7 @@ impl From<Select> for Element {
             .overflow("hidden")
             .text_overflow_ellipsis();
         let arrow =
-            build_icon_text_node(lucide_glyph("chevron-down").unwrap_or_else(|| "⌄".into()))
+            inspector_icon("chevron-down", "⌄")
                 .text_size(12.0)
                 .flex_shrink(0.0)
                 .pointer_events("none");
@@ -920,7 +922,7 @@ mod tests {
     #[test]
     fn tool_button_tooltip_does_not_shift_icon_center() {
         crate::core::reactivity::create_root(|| {
-            let icon = build_icon_text_node(lucide_glyph("x").unwrap()).text_size(16.0);
+            let icon = inspector_icon("x", "×").template_id("inspector-test-icon").text_size(16.0);
             let tool: Element = button("centered-tooltip-icon")
                 .size("icon-sm")
                 .tooltip("Close DevTools")
@@ -931,7 +933,7 @@ mod tests {
             tree.build_and_layout(&mut root, 200.0, 100.0, [-1.0; 2]);
             let button = &root.children[0];
             let icon = crate::core::tree::find_in_tree(button, |node| {
-                node.text_style.font_family.as_deref() == Some("lucide")
+                node.template_id.as_deref() == Some("inspector-test-icon")
             })
             .unwrap();
             for axis in 0..2 {

@@ -1,9 +1,9 @@
+#![cfg(feature = "components")]
 //! Regression: ScrollArea content must not flex-shrink into the viewport.
 //!
 //! Shrinking content to fit makes `content_h == viewport_h`, so overflow clip
 //! appears when the window gets shorter but wheel/scrollbar never enable
 //! (gallery root-scroll after viewport height reduce).
-
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::{create_effect, create_root};
 use crate::core::tree::{Element, LayoutTree};
