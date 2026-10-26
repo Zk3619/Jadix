@@ -1,0 +1,236 @@
+[workspace]
+members = ["crates/*", "examples/*"]
+exclude = [
+    "vendor/glyphon",
+    "vendor/taffy",
+    "vendor/naga",
+    "vendor/wgpu-core",
+    "vendor/wgpu-types",
+    "vendor/wgpu-hal",
+    "vendor/gpui-pre-windows-0.3.9",
+    "vendor/gpui-fast-windows-0.1.9",
+    "vendor/winit-wayland",
+    "vendor/winit-win32",
+]
+resolver = "2"
+
+[patch.crates-io]
+naga = { path = "vendor/naga" }
+wgpu-core = { path = "vendor/wgpu-core" }
+wgpu-types = { path = "vendor/wgpu-types" }
+# Optional Windows EGL/ANGLE D3D11 path; default WGL/DX12 behavior is preserved.
+wgpu-hal = { path = "vendor/wgpu-hal" }
+# Batch on-demand glyph uploads; retain atlas pixels across growth instead of
+# rasterizing the same glyphs again. See vendor/glyphon/JADIX_PATCH.md.
+glyphon = { path = "vendor/glyphon" }
+# Retain intrinsic measurements across out-of-flow updates; see JADIX_PATCH.md.
+taffy = { path = "vendor/taffy" }
+# Some transitive crates also consume DPI types; keep those identical to Winit.
+dpi = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+
+# OHOS uses Winit's fork URL; bind it to the exact same core/DPI as our facade.
+[patch."https://github.com/richerfu/winit.git"]
+winit-core = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+dpi = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "Apache-2.0"
+repository = "https://github.com/Zk3619/Jadix"
+
+# Single source of truth for versions. Member crates use `{ workspace = true }`
+# plus crate-local features / optional. Policy: development-docs/ops/crate_deps.md
+[workspace.dependencies]
+# --- path crates (version required so they are not `*` wildcards for cargo-deny / publish) ---
+jadix = { path = "crates/jadix", version = "0.1.0", default-features = false, features = ["backend-dx12"] }
+jadix_macros = { path = "crates/jadix_macros", version = "0.1.0" }
+jadix_style_tokens = { path = "crates/jadix_style_tokens", version = "0.1.0" }
+jadix_window_state = { path = "crates/jadix_window_state", version = "0.1.0" }
+jadix_clipboard = { path = "crates/jadix_clipboard", version = "0.1.0", default-features = false }
+jadix_media = { path = "crates/jadix_media", version = "0.1.0" }
+jadix_net = { path = "crates/jadix_net", version = "0.1.0", default-features = false }
+jadix_tasks = { path = "crates/jadix_tasks", version = "0.1.0" }
+
+# --- window / GPU ---
+# Local facade fork; backends/core are pinned together (see jadix_winit/README.md).
+winit = { package = "jadix_winit", path = "crates/jadix_winit", version = "0.31.0-beta.3-jadix.1" }
+winit-ohos = { git = "https://github.com/ohos-rs/winit-ohos.git", rev = "af4063b4e75b62b152a315d2606d799ca65bda84", version = "=0.31.0-beta.3", default-features = false }
+wry = "=0.57.0"
+gtk = "0.18"
+jni = "0.21.1"
+web-sys = "0.3"
+wasm-bindgen = "0.2"
+# HarmonyOS Ability (gpui-template / ohos-rs). Only used on `target_env = "ohos"`.
+openharmony-ability = "=1.0.0-beta.3"
+openharmony-ability-derive = "=1.0.0-beta.3"
+napi-ohos = "1.2"
+napi-derive-ohos = "1.2"
+napi-build-ohos = "1.2"
+accesskit = "0.24.1"
+# wgpu 30 gates native backends behind features (unlike 22, which force-linked
+# Vulkan+GLES on Windows). Keep GL/Metal available; jadix enables DX12 for the
+# Windows frame path. Vulkan stays opt-in.
+# glyphon 0.12 pins wgpu 30 + cosmic-text 0.19; swash/ttf-parser follow that stack.
+wgpu = { version = "30", default-features = false, features = [
+    "std",
+    "parking_lot",
+    "wgsl",
+    "gles",
+    "metal",
+] }
+
+# --- layout / text ---
+taffy = "=0.15.0"
+bytemuck = { version = "1.25", features = ["derive"] }
+# Upstream glyphon 0.12 (Coverage only). CSS transform text uses Bake/Msdf offscreen path.
+glyphon = { version = "0.12", default-features = false }
+# Stack pin (not a direct dep). glyphon re-exports `glyphon::cosmic_text`.
+cosmic-text = "0.19"
+swash = "0.2.6"
+ttf-parser = "0.25"
+unicode-segmentation = "1.11.0"
+unicode-linebreak = "0.1.5"
+
+# --- logging / serde ---
+env_logger = "0.11"
+log = "0.4"
+tracing = "0.1"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# --- macros ---
+syn = { version = "2.0", features = ["full", "extra-traits", "visit"] }
+quote = "1.0"
+proc-macro2 = "1.0"
+
+# --- desktop helpers ---
+# Clipboard lives in `jadix_clipboard` (fork of clipboard-rs; Windows → `windows` 0.62).
+clipboard-win = { version = "5.4", features = ["monitor"] }
+x11rb = { version = "0.13", features = ["xfixes"] }
+# objc2 0.6 matches rfd / wgpu-hal / winit 0.31.
+objc2 = "0.6"
+objc2-foundation = "0.3"
+objc2-app-kit = "0.3"
+objc2-ui-kit = "0.3"
+rfd = "0.17.2"
+# default-features off: skip Linux libxdo / libappindicator. gtk still required on Linux if this feature is on.
+# 0.25 + muda 0.20 accept windows-sys 0.61 (range >=0.60, <=0.61).
+tray-icon = { version = "0.25", default-features = false }
+muda = { version = "0.20", default-features = false }
+# 8.2 pins windows-sys ^0.60.1 (cannot pick 0.61). 9.0.0-rc.5 is the first line that pins 0.61.
+notify = "9.0.0-rc.5"
+# Scoped grow around `app_builder` / `ui!` (Windows PE ~1 MiB). Not a PE `/STACK` bump.
+stacker = "0.1"
+
+# --- media ---
+image = { version = "0.25.10", default-features = false, features = [
+    "png",
+    "jpeg",
+    "webp",
+    "gif",
+    "ico",
+] }
+resvg = "0.48.1"
+# Used by ignored `text_buffer_mid_insert` (P3 String vs ropey). Not a product dependency.
+ropey = "1.6"
+
+# --- i18n (feature `i18n`) ---
+icu = { version = "2.3.1", default-features = false }
+icu_provider_blob = { version = "2.3", default-features = false }
+writeable = "0.6"
+
+# --- platform ---
+libc = "0.2"
+windows-sys = "0.61"
+windows = "0.62"
+windows-core = "0.62"
+windows-numerics = "0.3"
+windows-collections = "0.3"
+find-msvc-tools = "0.1.9"
+
+[profile.release]
+codegen-units = 1
+# Optimize per-frame CPU work; retain fat LTO to eliminate unused code.
+opt-level = 3
+lto = "fat"
+debug = false
+split-debuginfo = "off"
+strip = "symbols"
+panic = "abort"
+
+# Font parsing, shaping and rasterization are on the first-popup critical path.
+# Keep application/framework code debuggable while avoiding multi-frame font
+# initialization stalls in the default `cargo run` Gallery build.
+[profile.dev.package.cosmic-text]
+opt-level = 2
+
+[profile.dev.package.swash]
+opt-level = 2
+
+[profile.dev.package.skrifa]
+opt-level = 2
+
+[profile.dev.package.read-fonts]
+opt-level = 2
+
+[profile.dev.package.harfrust]
+opt-level = 2
+
+# The engine's per-frame tree walks and paint planning must fit a frame budget
+# in the default Gallery build. Keep debug info and assertions enabled.
+[profile.dev.package.jadix]
+opt-level = 2
+
+# Flex/grid recomputation runs throughout sortable size animations.
+[profile.dev.package.taffy]
+opt-level = 2
+
+# Glyph packing and atlas preparation also run on every rendered text frame.
+[profile.dev.package.glyphon]
+opt-level = 2
+
+# GPU validation, command encoding and uploads are also on the frame path.
+# Keep their debug information and assertions while optimizing CPU execution.
+[profile.dev.package.wgpu-core]
+opt-level = 2
+
+[profile.dev.package.wgpu]
+opt-level = 2
+
+[profile.dev.package.wgpu-hal]
+opt-level = 2
+
+[profile.dev.package.wgpu-types]
+opt-level = 2
+
+# WGSL validation and GLSL translation happen lazily when shader/path leaves
+# first enter the viewport. Optimize the parser without changing demand loading.
+[profile.dev.package.naga]
+opt-level = 2
+
+[profile.dev.package.wgpu-naga-bridge]
+opt-level = 2
+
+# Atlas allocation/eviction is on the first-visible glyph path as well.
+[profile.dev.package.etagere]
+opt-level = 2
+
+# Unicode segmentation/bidi and font queries run beneath cosmic-text's first
+# visible shaping work. Keep their checks while optimizing the same algorithms.
+[profile.dev.package.unicode-bidi]
+opt-level = 2
+
+[profile.dev.package.unicode-segmentation]
+opt-level = 2
+
+[profile.dev.package.fontdb]
+opt-level = 2
+
+[profile.dev.package.ttf-parser]
+opt-level = 2
+
+# D3D12 suballocation also runs while first-visible filter targets are created.
+[profile.dev.package.gpu-allocator]
+opt-level = 2

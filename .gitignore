@@ -23,6 +23,7 @@ crates/jadix/tmp_stack_crumb.txt
 
 # Allow root Rust manifest/lock files
 !Cargo.toml
+!Cargo.toml.bak
 !Cargo.lock
 
 # Local upstream glyphon patch: batched, on-demand glyph atlas uploads.
@@ -96,6 +97,7 @@ development-docs/
 !docs/devtools.md
 !docs/FEATURES.md
 !docs/README.md
+!docs/component-authoring.md
 scripts/__pycache__/
 
 !assets/
