@@ -122,7 +122,7 @@ pub fn src_load_state_for_src(src: &str) -> SrcLoadState {
 }
 
 /// 注册 Signal，在 [`publish_src_load_state`] 时同步更新（供 Avatar bind 使用）。
-pub(crate) fn track_src_load_signal(key: &str, sig: Signal<SrcLoadState>) {
+pub fn track_src_load_signal(key: &str, sig: Signal<SrcLoadState>) {
     SRC_LOAD_LISTENERS.with(|cell| {
         let mut map = cell.borrow_mut();
         let list = map.entry(key.to_string()).or_default();
@@ -192,7 +192,7 @@ fn begin_remote_src_load(key: &str, src: &str, mask: Option<AvatarImageMask>) ->
 
 #[cfg(feature = "remote-asset")]
 fn fetch_decode_remote(src: &str, mask: Option<AvatarImageMask>) -> Result<DecodedImage, String> {
-    let bytes = crate::media::fetch_remote_bytes(src)?;
+    let bytes = crate::media::fetch_remote_bytes_shared(src)?;
     let mut img = decode_bytes(&bytes, DecodeOptions::image())
         .ok_or_else(|| "unsupported or corrupt image".to_string())?;
     if let Some(mask) = mask {
@@ -716,6 +716,63 @@ mod tests {
                 assert_eq!(src_load_state_for_key(&key), SrcLoadState::Ready);
             },
         );
+    }
+
+    #[cfg(feature = "remote-asset-cache")]
+    #[test]
+    fn image_and_avatar_share_the_cached_remote_download() {
+        use crate::app::ui_bridge::{drain_ui_tasks, UI_QUEUE_TEST_LOCK};
+        use crate::media::remote::with_remote_fetcher;
+        use crate::media::{encode_png, CachedRemoteAssetFetcher};
+        use std::{
+            num::NonZeroU32,
+            sync::{atomic::AtomicUsize, Arc},
+            time::Duration,
+        };
+
+        let png = encode_png(&DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![0, 255, 0, 255],
+            intrinsic_hotspot: None,
+            animation: None,
+        })
+        .unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let observed = calls.clone();
+        let cache = CachedRemoteAssetFetcher::new(
+            move |_url: &str| {
+                observed.fetch_add(1, Ordering::AcqRel);
+                Ok(png.clone())
+            },
+            NonZeroU32::new(4096).unwrap(),
+            Duration::from_secs(60),
+        );
+        with_remote_fetcher(cache, || {
+            let _ui = UI_QUEUE_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            let url = "https://jadix.test/cached-image-avatar.png";
+            let image_key = texture_key_for_src(url);
+            let avatar_key = texture_key_for_avatar_src(url, AvatarImageMask::Circle);
+            assert_eq!(ensure_src_loaded(&image_key, url), SrcLoadState::Pending);
+            assert_eq!(
+                ensure_avatar_src_loaded(&avatar_key, url, AvatarImageMask::Circle),
+                SrcLoadState::Pending
+            );
+            for _ in 0..200 {
+                drain_ui_tasks();
+                if src_load_state_for_key(&image_key).is_ready()
+                    && src_load_state_for_key(&avatar_key).is_ready()
+                {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(src_load_state_for_key(&image_key).is_ready());
+            assert!(src_load_state_for_key(&avatar_key).is_ready());
+            assert_eq!(calls.load(Ordering::Acquire), 1);
+        });
     }
 
     #[test]

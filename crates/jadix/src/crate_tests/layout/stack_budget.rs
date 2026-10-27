@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Windows PE default stack is ~1 MiB. Layout used to fit; collect/build frames
 //! grew until calculator/gallery needed an 8 MiB grow. This file is the red/green
 //! loop: measure type sizes + stack watermarks, then assert a calculator-shaped

@@ -5,9 +5,6 @@
 //! child末尾（见 `button.rs`），因此 DFS 是「先图标subtree，后按钮copy」。普通 `Element`/`Label` 仍是
 //! 父 `el.text` 先于subtree（见 `replace_text_at_index_inner`）。
 
-use std::collections::HashMap;
-use std::sync::OnceLock;
-
 #[derive(Debug)]
 enum Node {
     Text(String),
@@ -22,18 +19,8 @@ struct ElementNode {
     children: Vec<Node>,
 }
 
-fn lucide_map() -> &'static HashMap<String, String> {
-    static MAP: OnceLock<HashMap<String, String>> = OnceLock::new();
-    MAP.get_or_init(|| {
-        let json = include_str!("../../jadix/assets/lucide.json");
-        serde_json::from_str(json).expect("lucide.json")
-    })
-}
-
 fn icon_glyph_char(name: &str) -> Option<String> {
-    let hex = lucide_map().get(name)?;
-    let cp = u32::from_str_radix(hex, 16).ok()?;
-    char::from_u32(cp).map(|c| c.to_string())
+    jadix_lucide::glyph(name)
 }
 
 struct Parser<'a> {
@@ -165,7 +152,8 @@ impl<'a> Parser<'a> {
             }
             _ => {
                 while self.peek().is_some_and(|value| {
-                    !value.is_ascii_whitespace() && value != b'>'
+                    !value.is_ascii_whitespace()
+                        && value != b'>'
                         && !(value == b'/' && self.src.get(self.i + 1) == Some(&b'>'))
                 }) {
                     self.i += 1;

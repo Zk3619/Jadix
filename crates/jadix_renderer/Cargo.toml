@@ -1,0 +1,23 @@
+[package]
+name = "jadix_renderer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "GPU compute kernels, backdrop blur pipelines and emoji classification"
+readme = "README.md"
+
+[features]
+default = []
+compute = []
+backend-dx12 = ["wgpu/dx12", "compute"]
+backend-dx11-angle = ["wgpu/gles"]
+backend-dx11-native = ["dep:wgpu-hal", "wgpu-hal/dx11"]
+test-hooks = []
+
+[dependencies]
+unicode-segmentation.workspace = true
+wgpu.workspace = true
+bytemuck.workspace = true
+log.workspace = true
+wgpu-hal = { version = "30", default-features = false, optional = true }

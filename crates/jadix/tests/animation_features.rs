@@ -221,16 +221,16 @@ fn base_spring_and_css_work_without_the_enhanced_layer() {
     set_prefers_reduced_motion(None);
 }
 
-#[cfg(all(feature = "svg", not(feature = "animation-ex")))]
+#[cfg(feature = "animation-path")]
 #[test]
-fn svg_morph_without_enhanced_animation_applies_the_target_immediately() {
+fn animation_path_morph_is_renderable() {
     use jadix::utils::morph_icon::{
         ensure_morph_icon_texture, morph_icon, morph_progress, morph_to, tick_morph_icons_subtree,
     };
     let mut icon = morph_icon("M4 12L20 12").into();
     morph_to(&mut icon, "M12 4L12 20");
-    assert_eq!(morph_progress(&icon), 1.0);
-    assert!(!tick_morph_icons_subtree(&mut icon, 0.016));
+    assert!(morph_progress(&icon) < 1.0);
+    assert!(tick_morph_icons_subtree(&mut icon, 0.016));
     assert!(ensure_morph_icon_texture(&icon, 24.0, [0, 0, 0, 255], 1.0).is_some());
 }
 
@@ -248,7 +248,7 @@ fn enhanced_motion_implies_base_and_exposes_the_existing_api() {
 
 #[cfg(feature = "animation-path")]
 #[test]
-fn path_morph_is_available_without_requiring_svg() {
+fn animation_path_exposes_the_shared_path_kernel() {
     use jadix::motion::PathMorph;
     use jadix::primitives::path::PathCommand;
     let morph = PathMorph::new(

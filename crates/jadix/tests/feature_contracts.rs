@@ -2,7 +2,7 @@ use jadix::prelude::*;
 
 #[test]
 fn static_icons_and_css_hover_do_not_require_lucide_recipes() {
-    let _: Option<&'static str> = jadix::utils::lucide_svg_inner("check");
+    let _: Option<String> = jadix::utils::lucide_svg_inner("check");
     let mut icon = with_icon_animations(
         icon_named("check"),
         "spin",
@@ -35,7 +35,7 @@ fn static_icons_and_css_hover_do_not_require_lucide_recipes() {
     unregister_icon("feature-custom-glyph");
 }
 
-#[cfg(not(feature = "lucide-animated"))]
+#[cfg(not(feature = "gallery-tests"))]
 #[test]
 fn disabled_lucide_recipes_leave_icons_static() {
     let icon = with_icon_animations(
@@ -49,26 +49,6 @@ fn disabled_lucide_recipes_leave_icons_static() {
     assert!(icon.on_hover.is_none());
     assert!(!icon.attrs.contains_key("jadix_animated_icon"));
     assert!(!icon.attrs.contains_key("jadix_animated_icon_state"));
-}
-
-#[cfg(feature = "lucide-animated")]
-#[test]
-fn enabled_lucide_recipes_support_builder_macro_and_hover() {
-    assert!(animated_icon_names().count() >= 400);
-    assert!(animated_icon_recipe("bell").is_some());
-    let mut icon: Element = animated_icon("bell").into();
-    (icon.on_hover.as_ref().unwrap().borrow_mut())(true);
-    sync_icon_hover(&mut icon);
-    assert_eq!(
-        icon.attrs[jadix::utils::ATTR_ANIMATED_ICON_STATE],
-        "animate"
-    );
-    (icon.on_hover.as_ref().unwrap().borrow_mut())(false);
-    sync_icon_hover(&mut icon);
-    assert_eq!(icon.attrs[jadix::utils::ATTR_ANIMATED_ICON_STATE], "normal");
-    let controlled = jadix::ui! { <AnimatedIcon name="bell" controlled={true} /> };
-    assert_eq!(controlled.attrs[jadix::utils::ATTR_ANIMATED_ICON], "bell");
-    assert!(controlled.on_hover.is_none());
 }
 
 #[cfg(all(feature = "svg", feature = "animation-ex"))]
@@ -96,17 +76,6 @@ fn svg_morph_runs_without_lucide_recipe_playback() {
     (icon.on_hover.as_ref().unwrap().borrow_mut())(false);
     sync_icon_hover(&mut icon);
     assert!(icon.style.animations.is_empty());
-}
-
-#[cfg(all(feature = "code", feature = "components"))]
-#[test]
-fn code_editor_is_independent_of_highlighting_and_language_servers() {
-    let (_owner, ()) = jadix::core::reactivity::create_root(|| {
-        let editor: Element = jadix::components::code_editor("feature-code")
-            .initial("let value = 1;")
-            .into();
-        assert!(editor.input_paint_sync.is_some());
-    });
 }
 
 #[cfg(feature = "markdown")]
@@ -214,20 +183,6 @@ fn disabled_themes_are_rejected_without_mutating_current_theme() {
             assert_eq!(get_theme(), before);
         }
     }
-}
-
-#[cfg(all(feature = "document", feature = "components"))]
-#[test]
-fn document_view_is_available_without_editing_or_science() {
-    let (_owner, ()) = jadix::core::reactivity::create_root(|| {
-        let document = Document::markdown("# Title\n\ncontent\n");
-        assert!(matches!(
-            document.blocks()[0].kind,
-            DocumentBlockKind::Heading(1)
-        ));
-        let view: Element = document_view("feature-document").document(document).into();
-        assert_eq!(view.attrs["data-slot"], "document-view");
-    });
 }
 
 #[cfg(feature = "animation-ex")]

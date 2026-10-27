@@ -8,6 +8,57 @@ use std::{
     task::{Context, Poll, Wake, Waker},
 };
 
+#[cfg(feature = "runtime-tokio")]
+#[test]
+fn tokio_completion_returns_to_its_owner_and_disposal_cancels_pending_work() {
+    let _queue = UI_QUEUE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    while drain_ui_tasks() != 0 {}
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .unwrap();
+    let executor = TokioExecutor::new(runtime.handle().clone(), 2).unwrap();
+    let (done_send, done_receive) = tokio::sync::oneshot::channel();
+    let (owner, (scope, value)) = create_root(|| {
+        let scope = TaskScope::new();
+        let value = Signal::new(0);
+        let expected_owner = current_owner();
+        scope
+            .spawn(
+                &executor,
+                move |_| async move {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    done_send.send(()).unwrap();
+                    Ok(42)
+                },
+                move |result| {
+                    assert_eq!(current_owner(), expected_owner);
+                    value.set(result.unwrap());
+                },
+            )
+            .unwrap();
+        (scope, value)
+    });
+    runtime.block_on(done_receive).unwrap();
+    assert_eq!(value.peek(), 0);
+    drain_ui_tasks();
+    assert_eq!(value.peek(), 42);
+    let pending = scope
+        .spawn(
+            &executor,
+            |_| std::future::pending::<Result<(), TaskError>>(),
+            |_| panic!("disposed task must not update the UI"),
+        )
+        .unwrap();
+    owner.dispose();
+    assert!(pending.cancellation().is_cancelled());
+    runtime.block_on(async { tokio::task::yield_now().await });
+    drain_ui_tasks();
+    assert!(scope.is_closed());
+}
+
 #[derive(Default)]
 struct QueueExecutor {
     work: Mutex<VecDeque<BlockingTask>>,

@@ -580,6 +580,13 @@ impl Default for TextStyle {
 }
 
 impl TextStyle {
+    pub fn line_height_specified(&self) -> bool {
+        self.line_height_specified
+    }
+    pub fn set_line_height_specified(&mut self, specified: bool) {
+        self.line_height_specified = specified;
+    }
+
     pub(crate) fn without_inherited(&self, inherited: Option<&Self>) -> Self {
         let mut specified = self.clone();
         if let Some(inherited) = inherited {
@@ -590,8 +597,19 @@ impl TextStyle {
                     }
                 )+};
             }
-            restore!(color, size, weight, font_family, align, underline, overline,
-                line_through, decoration_style, decoration_thickness, underline_offset);
+            restore!(
+                color,
+                size,
+                weight,
+                font_family,
+                align,
+                underline,
+                overline,
+                line_through,
+                decoration_style,
+                decoration_thickness,
+                underline_offset
+            );
         }
         specified
     }
@@ -605,8 +623,19 @@ impl TextStyle {
                 }
             )+};
         }
-        remember!(color, size, weight, font_family, align, underline, overline,
-            line_through, decoration_style, decoration_thickness, underline_offset);
+        remember!(
+            color,
+            size,
+            weight,
+            font_family,
+            align,
+            underline,
+            overline,
+            line_through,
+            decoration_style,
+            decoration_thickness,
+            underline_offset
+        );
         inherited
     }
 

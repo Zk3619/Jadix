@@ -8,7 +8,7 @@ use crate::layout::layout_tree::ATTR_HOISTED_PORTAL;
 
 /// 打开下拉后把某一项滚进视口（布局写出 content/viewport 后再应用，避免菜单 effect 订阅滚动信号）。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ScrollItemAlign {
+pub enum ScrollItemAlign {
     Start,
     Center,
     End,
@@ -16,7 +16,7 @@ pub(crate) enum ScrollItemAlign {
 
 /// When to apply a pending align.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum ScrollAlignWhen {
+pub enum ScrollAlignWhen {
     /// Snap offset as soon as metrics exist (overlay measure / Expand pin).
     Before,
     /// Wait for a real clipped viewport, then honor the area's smooth/jump.
@@ -24,7 +24,7 @@ pub(crate) enum ScrollAlignWhen {
 }
 
 impl ScrollAlignWhen {
-    pub(crate) fn parse(s: &str) -> Self {
+    pub fn parse(s: &str) -> Self {
         match s.trim().to_ascii_lowercase().as_str() {
             "after" | "enter" | "animate" => Self::After,
             _ => Self::Before,
@@ -33,7 +33,7 @@ impl ScrollAlignWhen {
 }
 
 impl ScrollItemAlign {
-    pub(crate) fn parse(s: &str) -> Option<Self> {
+    pub fn parse(s: &str) -> Option<Self> {
         match s.trim().to_ascii_lowercase().as_str() {
             "" | "none" | "false" | "0" => None,
             "start" | "top" | "left" => Some(Self::Start),
@@ -165,7 +165,7 @@ fn upsert_pending_scroll_align(
     });
 }
 
-pub(crate) fn request_scroll_item_into_view(
+pub fn request_scroll_item_into_view(
     rest: impl Into<String>,
     index: usize,
     item_count: usize,
@@ -174,7 +174,7 @@ pub(crate) fn request_scroll_item_into_view(
     request_scroll_item_into_view_when(rest, index, item_count, align, ScrollAlignWhen::Before);
 }
 
-pub(crate) fn request_scroll_item_into_view_when(
+pub fn request_scroll_item_into_view_when(
     rest: impl Into<String>,
     index: usize,
     item_count: usize,
@@ -201,7 +201,7 @@ pub(crate) fn request_scroll_descendant_into_view(
     request_scroll_descendant_into_view_when(rest, target, align, ScrollAlignWhen::Before);
 }
 
-pub(crate) fn request_scroll_descendant_into_view_when(
+pub fn request_scroll_descendant_into_view_when(
     rest: impl Into<String>,
     target: impl Into<String>,
     align: ScrollItemAlign,
@@ -225,7 +225,7 @@ pub(crate) fn cancel_scroll_item_into_view(rest: &str) {
 
 /// On close: drop a pending align so exit does not keep rewriting the viewport.
 /// Do **not** snap offset to 0 — keep-alive Expand still paints the menu.
-pub(crate) fn reset_scroll_item_into_view(rest: &str) {
+pub fn reset_scroll_item_into_view(rest: &str) {
     cancel_scroll_item_into_view(rest);
 }
 
@@ -273,8 +273,8 @@ pub(crate) fn apply_pending_scroll_align(
         }
         return false;
     }
-    let effective_vh =
-        effective_scroll_viewport_h_when(rest, viewport_h, content_h, pending.when).or_else(|| {
+    let effective_vh = effective_scroll_viewport_h_when(rest, viewport_h, content_h, pending.when)
+        .or_else(|| {
             (matches!(pending.target, PendingAlignTarget::Descendant { .. })
                 && content_w > viewport_w + 0.5)
                 .then_some(viewport_h)
@@ -867,7 +867,10 @@ fn collect_scroll_hit_walk(
                 }
                 let mut next_acc = escaped;
                 if !is_body_portal {
-                    let scale = crate::core::tree::paint_scale_with_ancestor(frame.el, frame.el.paint_ancestor_scale);
+                    let scale = crate::core::tree::paint_scale_with_ancestor(
+                        frame.el,
+                        frame.el.paint_ancestor_scale,
+                    );
                     if frame.el.style.overflow.x != taffy::style::Overflow::Visible {
                         next_acc[0] += frame.el.scroll_offset[0] * scale[0];
                     }
@@ -2116,20 +2119,27 @@ mod scroll_item_align_tests {
         });
     }
 
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     #[test]
     fn public_scroll_alignment_uses_smooth_unless_jump_is_explicit() {
         use crate::core::scroll_viewport::ScrollViewportSignalKeys;
         let _ = create_root(|| {
-            for (id, behavior) in [("public-align-default", "smooth"), ("public-align-jump", "jump")] {
+            for (id, behavior) in [
+                ("public-align-default", "smooth"),
+                ("public-align-jump", "jump"),
+            ] {
                 let keys = ScrollViewportSignalKeys::new(id);
                 if behavior == "jump" {
-                    crate::core::reactivity::use_signal(keys.behavior.as_str(), || "jump".to_string());
+                    crate::core::reactivity::use_signal(keys.behavior.as_str(), || {
+                        "jump".to_string()
+                    });
                 }
                 crate::components::scroll_item_into_view(id, 8, 12, "center");
                 assert!(apply_pending_scroll_item_into_view(id, 200.0, 384.0));
-                let target = crate::core::reactivity::use_signal(keys.target_y.as_str(), || 0.0_f32).peek();
-                let offset = crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32).peek();
+                let target =
+                    crate::core::reactivity::use_signal(keys.target_y.as_str(), || 0.0_f32).peek();
+                let offset =
+                    crate::core::reactivity::use_signal(keys.offset_y.as_str(), || 0.0_f32).peek();
                 assert!(target > 0.0);
                 assert_eq!(offset, if behavior == "smooth" { 0.0 } else { target });
             }

@@ -370,7 +370,7 @@ fn resolve_input(el: &Element, src: &str) -> Option<IconInput> {
     fit_icon(&input, vb, 24.0).ok().map(IconInput::D)
 }
 
-#[cfg(all(test, feature = "bundled-lucide"))]
+#[cfg(all(test, feature = "gallery-tests"))]
 fn rest_d_for(src: &str) -> String {
     icon_input_from_src(src)
         .and_then(|i| canonical_d(&i).ok())
@@ -1110,8 +1110,11 @@ pub fn tick_morph_icon(el: &mut Element, dt: f32) -> bool {
         drop(store);
         // Keep one more frame alive for the hover timeline to take over, even
         // when this was the last active morph in the tree.
-        if el.get_attr(crate::utils::icon_provider::ATTR_ICON_ANIMATION_STATE).is_some_and(|state| state == "animate")
-            && !should_skip_spring(el) {
+        if el
+            .get_attr(crate::utils::icon_provider::ATTR_ICON_ANIMATION_STATE)
+            .is_some_and(|state| state == "animate")
+            && !should_skip_spring(el)
+        {
             if let Some(playback) = el.icon_playback {
                 (playback.set_state)(el, "animate");
                 return true;
@@ -1255,7 +1258,10 @@ pub fn ensure_morph_icon_texture(
     dpr: f32,
 ) -> Option<(String, f32)> {
     if !blocks_hover_animation(el) {
-        if let Some(texture) = el.icon_playback.and_then(|playback| (playback.hover_texture)(el, size_px, color, dpr)) {
+        if let Some(texture) = el
+            .icon_playback
+            .and_then(|playback| (playback.hover_texture)(el, size_px, color, dpr))
+        {
             return Some(texture);
         }
     }
@@ -1519,7 +1525,9 @@ impl From<MorphIconBuilder> for Element {
         }
         if b.hover_animation {
             let identity = el.template_id.clone().unwrap_or_default();
-            return crate::utils::icon_provider::with_icon_animations(el, "animated", "none", identity, "");
+            return crate::utils::icon_provider::with_icon_animations(
+                el, "animated", "none", identity, "",
+            );
         }
         el
     }
@@ -1647,7 +1655,7 @@ mod tests {
             .starts_with("morph-icon:"));
     }
 
-    #[cfg(feature = "bundled-lucide")]
+    #[cfg(feature = "gallery-tests")]
     #[test]
     fn morph_to_changes_target() {
         let mut el: Element = morph_icon("menu")
@@ -1662,7 +1670,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "bundled-lucide")]
+    #[cfg(feature = "gallery-tests")]
     #[test]
     fn resvg_morph_frame_nonempty() {
         let el: Element = morph_icon("menu").size_px(32.0).into();
@@ -1671,7 +1679,7 @@ mod tests {
         assert!(tex.starts_with("jadix_morph_icon:"));
     }
 
-    #[cfg(feature = "bundled-lucide")]
+    #[cfg(feature = "gallery-tests")]
     #[test]
     fn unchanged_morph_frame_reuses_resident_texture() {
         let el: Element = morph_icon("menu").id("cache-regression").into();
@@ -1696,7 +1704,7 @@ mod tests {
         assert!(crate::app::pending_images::take_pending_key(&next).is_some());
     }
 
-    #[cfg(feature = "bundled-lucide")]
+    #[cfg(feature = "gallery-tests")]
     #[test]
     #[cfg(feature = "animation-ex")]
     fn stable_id_does_not_reset_play() {
@@ -1757,7 +1765,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn button_keeps_morph_icon_child() {
         let morph: Element = morph_icon("pause").id("pp").into();
         let el: Element = crate::components::button("gal-pp").child(morph).into();
@@ -1832,7 +1840,7 @@ mod tests {
         assert!((cfg.k - 200.0).abs() < 1e-3 && (cfg.c - 22.0).abs() < 1e-3);
     }
 
-    #[cfg(feature = "bundled-lucide")]
+    #[cfg(feature = "gallery-tests")]
     #[test]
     fn controlled_pair_rebases_and_exit_invalidates() {
         let mut el: Element = morph_icon("menu")
@@ -1907,7 +1915,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "bundled-lucide")]
+    #[cfg(feature = "gallery-tests")]
     #[test]
     fn from_and_to_without_progress_is_controlled() {
         let mut el: Element = morph_icon("menu")
@@ -1922,7 +1930,7 @@ mod tests {
         assert_eq!(current_d(&el), from_d);
     }
 
-    #[cfg(feature = "bundled-lucide")]
+    #[cfg(feature = "gallery-tests")]
     #[test]
     fn morph_handle_seek_and_into_morph_src() {
         let mut el: Element = morph_icon("menu").id("morph-handle-seek").into();
@@ -1949,7 +1957,7 @@ mod tests {
         assert!(d.starts_with('M'), "{d}");
     }
 
-    #[cfg(feature = "bundled-lucide")]
+    #[cfg(feature = "gallery-tests")]
     #[test]
     fn polar_and_linear_mid_frames_differ() {
         let polar: Element = morph_icon("menu")
@@ -1974,7 +1982,7 @@ mod tests {
         play_exists(key)
     }
 
-    #[cfg(feature = "bundled-lucide")]
+    #[cfg(feature = "gallery-tests")]
     #[test]
     fn morph_to_with_overrides_instance_spring() {
         let mut el: Element = morph_icon("menu").id("spring-once").spring("snappy").into();
@@ -2010,7 +2018,7 @@ mod tests {
         );
     }
 
-    #[cfg(feature = "bundled-lucide")]
+    #[cfg(feature = "gallery-tests")]
     #[test]
     fn rebuild_keeps_play_until_last_drop() {
         let mut live: Element = morph_icon("menu").id("keep-refs").into();
@@ -2027,7 +2035,7 @@ mod tests {
         assert!(!play_present("keep-refs"));
     }
 
-    #[cfg(feature = "bundled-lucide")]
+    #[cfg(feature = "gallery-tests")]
     #[test]
     fn lazy_mount_first_icon_does_not_fly() {
         let mut el: Element = morph_icon("").id("lazy-driver").into();

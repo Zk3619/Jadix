@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Overlay `auto` fade is paint-only: live cubic × collect, hit slab unchanged.
 //!
 //! Full prepass used to bake cubic into `style.bg` and skip-flex Taffy, which crushed

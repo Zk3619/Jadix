@@ -45,7 +45,7 @@ Google Noto fonts in `crates/jadix/assets/`:
   Copyright: The Noto Project Authors (Google LLC and contributors)
   https://fonts.google.com/noto/specimen/Noto+Sans
 
-Lucide icon font in `crates/jadix/assets/lucide.ttf`:
+Lucide icon font in `crates/jadix_lucide/assets/lucide.ttf`:
 
   License: ISC License
   Copyright: Lucide Contributors
@@ -54,14 +54,14 @@ Lucide icon font in `crates/jadix/assets/lucide.ttf`:
 Bundled icon data
 -----------------
 
-Lucide name → codepoint maps in `crates/jadix/assets/lucide.json` and
+Lucide name → codepoint maps in `crates/jadix_lucide/assets/lucide.json` and
 `lucide_paths.json`:
 
   License: ISC License
   Copyright: Lucide Contributors
   https://github.com/lucide-icons/lucide
 
-Animated icon recipes in `crates/jadix/assets/lucide_animated.json`
+Animated icon recipes in `crates/jadix_lucide/assets/lucide_animated.json`
 (optional `lucide-animated` feature; extracted offline from pqoqubbw/icons):
 
   License: MIT License

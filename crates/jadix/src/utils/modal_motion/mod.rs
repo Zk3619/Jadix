@@ -14,10 +14,9 @@ pub use crate::utils::modal_surface::{
 };
 
 pub(crate) use engine::{
-    any_modal_css_needs_frame, apply_modal_shell_motion, arm_modal_slide_settle, bind_modal_open,
+    any_modal_css_needs_frame, apply_modal_shell_motion, bind_modal_open,
     drain_pending_modal_unmounts, finish_modal_exit_immediate, flush_modal_shell_motion_subtree,
-    hoisted_should_retain, modal_shell_defer_css_tick, mounted_signal, note_modal_shell_drag,
-    patch_modal_overlay_opacity, patch_modal_panel_transform, sync_modal_presence,
+    hoisted_should_retain, modal_shell_defer_css_tick, mounted_signal, sync_modal_presence,
     take_modal_force_immediate_wake, tick_hoisted_modal_css, tick_modal_presence,
     use_modal_presence, ModalPresenceHandle,
 };
@@ -25,4 +24,9 @@ pub(crate) use engine::{
 #[cfg(test)]
 pub(crate) use engine::{
     clear_pending_modal_enter, finish_modal_exit_for_test, set_modal_css_needs_frame_for_test,
+};
+
+pub use engine::{
+    arm_modal_slide_settle, note_modal_shell_drag, patch_modal_overlay_opacity,
+    patch_modal_panel_transform,
 };

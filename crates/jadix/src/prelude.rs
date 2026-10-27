@@ -87,12 +87,15 @@ pub use crate::authoring::{SlotChrome, SlotMap};
 // 宏与书写面糖（`main` = 可选程序入口糖，见模块文档「兼容 / 进阶」）
 // ---------------------------------------------------------------------------
 
+#[cfg(feature = "macros")]
 #[doc(hidden)]
 pub use crate::main;
 pub use crate::{
-    bind_attr, bind_style, bind_text, classes, component, for_keyed, merge_props, reactive,
-    reactive_anchor_id, split_props, t, ui,
+    bind_attr, bind_style, bind_text, classes, for_keyed, merge_props, reactive,
+    reactive_anchor_id, split_props, t,
 };
+#[cfg(feature = "macros")]
+pub use crate::{component, ui};
 
 // ---------------------------------------------------------------------------
 // 核心类型（双书写面共用）
@@ -105,6 +108,8 @@ pub use crate::app::pointer_events::{MouseEvent, PointerEvent};
 pub use crate::app::props::{children, resolve_children, Children, ChildrenAccessor, MergeProps};
 pub use crate::app::reactive::immediate_region;
 pub use crate::app::reactive::{for_keyed_reactive, index_reactive};
+#[cfg(feature = "runtime-tokio")]
+pub use crate::app::tasks::TokioExecutor;
 pub use crate::app::tasks::{
     CancellationToken, EventSendError, EventSink, TaskError, TaskErrorKind, TaskHandle, TaskScope,
 };
@@ -119,8 +124,10 @@ pub use crate::app::{
     WindowSession,
 };
 pub use crate::core::reactivity::{
-    component_root, create_signal, isolate_reads, untrack, use_signal, with_child_owner, Signal,
+    batch, component_root, create_context, create_memo, create_signal, isolate_reads,
+    provide_context, untrack, use_context, use_scoped_signal, use_signal, with_child_owner, Signal,
 };
+pub use crate::core::store::{create_store, store_field, ReadStore, Store, StoreField};
 pub use crate::core::tree::{collect_ui, Element, LayoutStatus, PointerEvents};
 pub use crate::core::tree::{opacity_groups_enabled, set_opacity_groups_enabled};
 #[cfg(feature = "i18n")]
@@ -141,14 +148,13 @@ pub use crate::{
 // 布局 / 叶子原语（Builder 面常用）
 // ---------------------------------------------------------------------------
 
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::media_player::*;
 pub use crate::media::playback::*;
 #[cfg(feature = "net")]
 pub use crate::net::*;
 pub use crate::primitives::media::{
-    audio, video, Audio, AudioBuilder, AudioProps, MediaAspectRatio, MediaFit, MediaRotation,
-    Video, VideoBuilder, VideoProps,
+    audio, video, AudioBuilder, MediaAspectRatio, MediaFit, MediaRotation, VideoBuilder,
 };
 #[cfg(feature = "svg")]
 pub use crate::primitives::{
@@ -159,11 +165,14 @@ pub use crate::primitives::{
     PathBuilder, SvgBuilder,
 };
 pub use crate::primitives::{
-    boxed, canvas, div, effect_wrap, gstack, hstack, icon, interactive, r#box, scene3d, shader, text,
-    vstack, BoxBuilder, Canvas2D, CanvasBuilder, CanvasSize, EffectWrapBuilder, InteractiveBuilder,
-    Portal, PortalProps, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial,
-    ShaderBuilder, TextBuilder,
+    boxed, canvas, div, effect_wrap, gstack, hstack, icon, interactive, portal, r#box, scene3d,
+    shader, text, vstack, BoxBuilder, Canvas2D, CanvasBuilder, CanvasSize, EffectWrapBuilder,
+    InteractiveBuilder, PortalBuilder, Scene3dBuilder, Scene3dCamera, Scene3dLight,
+    Scene3dMaterial, ShaderBuilder, TextBuilder,
 };
+
+#[cfg(feature = "macros")]
+pub use crate::primitives::{Audio, AudioProps, Portal, PortalProps, Video, VideoProps};
 
 pub use crate::layout::dimension::{css_root_font_size_px, em, px, rem};
 #[cfg(feature = "animation-path")]
@@ -179,13 +188,13 @@ pub use crate::utils::font::{
     default_ui_mono_family_list, default_ui_sans_family_list, default_ui_serif_family_list,
     root_font_size_px, set_root_font_size, set_text_defaults, text_defaults, TextDefaults,
 };
-#[cfg(feature = "svg")]
+#[cfg(all(feature = "svg", feature = "animation-path"))]
 pub use crate::utils::{
     alloc_outputs, canonical_d, cubics_to_path_d, fit_icon, interp_linear, morph_destroy,
     morph_handle, morph_icon, morph_seek, morph_set, morph_to, morph_to_with, svg_to_icon,
     IconInput, MorphHandle, MorphIcon, MorphIconBuilder, MorphPlan,
 };
-#[cfg(feature = "lucide-animated")]
+#[cfg(all(test, feature = "gallery-tests"))]
 pub use crate::utils::{
     animated_icon, animated_icon_names, animated_icon_recipe, start_animated_icon,
     stop_animated_icon, AnimatedIcon, AnimatedIconBuilder,
@@ -220,51 +229,51 @@ pub use crate::style::{
 // ---------------------------------------------------------------------------
 
 #[cfg(feature = "document-diff")]
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::diff_view::{diff_view, DiffView, DiffViewBuilder, DiffViewProps};
-#[cfg(feature = "components")]
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::dock::{DockLayout, DockOrientation, DockPlacement, DockState, DockTab};
 #[cfg(feature = "document-editing")]
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::document_editor::{
     document_editor, DocumentEditor, DocumentEditorBuilder, DocumentEditorProps,
 };
 #[cfg(feature = "document")]
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::document_view::{
     document_view, DocumentBlockRenderer, DocumentView, DocumentViewBuilder, DocumentViewProps,
 };
 #[cfg(feature = "webview")]
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::html_document::{html_document_editor, html_document_view};
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::math_view::{
     chemistry_view, math_view, ChemistryView, ChemistryViewProps, MathView, MathViewBuilder,
     MathViewProps,
 };
 #[cfg(feature = "document-science")]
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::molecule_view::{
     molecule_view, MoleculeCamera, MoleculeView, MoleculeViewBuilder, MoleculeViewProps,
 };
 #[cfg(feature = "scale-preview")]
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::scale_preview::{
     scale_preview, ScalePreview, ScalePreviewBuilder, ScalePreviewProps,
 };
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::text_editor::{
     text_editor, TextEditor, TextEditorBuilder, TextEditorProps,
 };
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::text_view::{text_view, TextView, TextViewBuilder, TextViewProps};
 #[cfg(feature = "webview")]
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::webview::{
     webview, webview_html, webview_status, webview_supported, WebView, WebViewProps, WebViewStatus,
 };
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::components::{
     // Accordion（复合标签 + Builder）
     accordion,
@@ -1530,17 +1539,17 @@ pub use crate::components::{
 pub use crate::text::TextDocument;
 #[cfg(feature = "document-diff")]
 pub use crate::text::{DiffDocument, DiffLineKind, DiffMode, DiffRow};
-#[cfg(feature = "document")]
-pub use crate::text::{DocumentHeightIndex, DocumentScrollAnchor};
 #[cfg(feature = "markdown")]
 pub use crate::text::{
-    Document, DocumentBlock, DocumentBlockKind, DocumentFormat,
-    DocumentInline, DocumentInlineKind, DocumentInlineStyle,
+    Document, DocumentBlock, DocumentBlockKind, DocumentFormat, DocumentInline, DocumentInlineKind,
+    DocumentInlineStyle,
 };
 #[cfg(feature = "document-editing")]
 pub use crate::text::{
     DocumentEditMode, DocumentEditorSnapshot, DocumentEditorState, DocumentMark, DocumentSelection,
 };
+#[cfg(feature = "document")]
+pub use crate::text::{DocumentHeightIndex, DocumentScrollAnchor};
 #[cfg(feature = "document-science")]
 pub use crate::text::{Molecule, MoleculeAtom, MoleculeBond, MoleculeData};
 #[cfg(feature = "markdown")]

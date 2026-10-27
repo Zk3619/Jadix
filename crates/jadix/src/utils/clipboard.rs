@@ -33,10 +33,12 @@ pub fn sanitize_pasted_line(s: &str) -> String {
     s.chars().filter(|c| *c != '\r' && *c != '\n').collect()
 }
 
+/// Writes system text when `native-clipboard` is enabled; otherwise does nothing.
 pub fn set_text(text: &str) {
     crate::platform::clipboard_set_text(text);
 }
 
+/// Returns `None` when `native-clipboard` is disabled or the platform has no text.
 pub fn get_text() -> Option<String> {
     crate::platform::clipboard_get_text()
 }

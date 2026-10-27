@@ -66,16 +66,31 @@ jobs:
           ./scripts/check-features.ps1
           cargo test -p jadix --no-default-features --lib -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test -p jadix --no-default-features --test feature_contracts --test animation_features --test geometry_contracts -- --test-threads=1
+          cargo test -p jadix --no-default-features --test animation_features --test optional_macros -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test -p jadix --no-default-features --features drag --test drag_routing_contracts --test drag_runtime_contracts -- --test-threads=1
+          cargo test -p jadix --no-default-features --features drag --test drag_routing_contracts -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test -p jadix --no-default-features --features components,dnd --lib --test feature_contracts --test animation_features --test text_document_views --test authoring_contracts --test authoring_runtime_contracts --test drag_routing_contracts --test drag_runtime_contracts --test geometry_contracts --test macro_lowering --test fragment_macro -- --test-threads=1
+          cargo test -p jadix_components --no-default-features --features macros,dnd --tests -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p jadix --features gallery-tests --lib -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p jadix --no-default-features --features macros --lib --test optional_macros -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/check-optional-macros.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ./scripts/check-authoring.ps1
           ./scripts/check-dnd-source.ps1
-          ./scripts/check-lucide-source.ps1
-          foreach ($capability in @('theme-fluent', 'theme-material3', 'theme-liquid-glass', 'code', 'markdown', 'syntax-highlighting', 'code-lsp', 'scale-preview', 'windows-dwm', 'windows-dcomp', 'lucide-animated', 'svg', 'svg,bundled-lucide,lucide-animated')) {
+          cargo test -p jadix_dnd --features macros --tests -- --test-threads=1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p jadix_lucide --no-default-features
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test -p jadix_lucide --features animated,svg,macros --all-targets
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/check-product-distributions.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          ./scripts/check-extracted-kernels.ps1
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($capability in @('theme-fluent', 'theme-material3', 'theme-liquid-glass', 'code', 'markdown', 'syntax-highlighting', 'code-lsp', 'scale-preview', 'windows-dwm', 'windows-dcomp', 'svg')) {
             cargo test -p jadix --no-default-features --features $capability --test feature_contracts
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
@@ -83,17 +98,17 @@ jobs:
             cargo test -p jadix --no-default-features --features $capability --test animation_features -- --test-threads=1
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           }
-          cargo test -p jadix --no-default-features --features svg,bundled-lucide --lib utils::morph_icon -- --test-threads=1
+          cargo test -p jadix --no-default-features --features product-tests,svg --lib utils::morph_icon -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test -p jadix --no-default-features --features svg,bundled-lucide,lucide-animated --lib utils::icon_provider::tests -- --test-threads=1
+          cargo test -p jadix --no-default-features --features gallery-tests --lib utils::icon_provider::tests -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p jadix --lib anim_freeze -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test -p jadix --no-default-features --features code-lsp --lib text::lsp::tests
+          cargo test -p jadix_lsp --lib
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test -p jadix --no-default-features --features components,scale-preview --test scale_preview
+          cargo test -p jadix_components --no-default-features --features macros,scale-preview --test scale_preview
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          cargo test -p jadix --features themes,animation-path,document-editing,document-diff,document-science --test feature_contracts --test document_editing --test document_extensions --test document_quality --test text_document_views
+          cargo test -p jadix_components --features macros,themes,animation-path,document-editing,document-diff,document-science --tests
       - name: Wayland configure capability projection
         if: runner.os == 'Linux'
         run: cargo test -p winit-wayland --lib projects_real_configure
@@ -103,7 +118,7 @@ jobs:
         if: runner.os == 'Windows'
         run: 'cargo test -p jadix --lib --features native-menu,system-tray native_menu:: -- --test-threads=1'
       - name: Native menu bridge + example (all hosts)
-        run: cargo check -p jadix --features native-menu --example desktop_shell
+        run: cargo check -p jadix_components --features macros,jadix/native-menu --example desktop_shell
       - name: AccessKit bridge and OHOS node identities
         run: |
           cargo test -p jadix --lib --features a11y a11y:: -- --test-threads=1
@@ -163,10 +178,10 @@ jobs:
       - name: Component golden (WP-2.6)
         if: runner.os != 'Windows'
         # Serialize GPU device creation — software adapters dislike parallel request_device.
-        run: cargo test -p jadix --lib golden_component -- --nocapture --test-threads=1
+        run: cargo test -p jadix --features product-tests --lib golden_component -- --nocapture --test-threads=1
       - name: Component golden (WP-2.6, Windows WARP)
         if: runner.os == 'Windows'
-        run: cargo test -p jadix --features backend-dx12 --lib golden_component -- --nocapture --test-threads=1
+        run: cargo test -p jadix --features backend-dx12,product-tests --lib golden_component -- --nocapture --test-threads=1
       - name: Library unit tests (smoke)
         # Golden / smoke companion: fast lib tests without full workspace matrix cost.
         run: cargo test -p jadix --lib -- --skip golden_component

@@ -37,7 +37,7 @@ fn decode_path(source: &str) -> Option<String> {
 }
 
 #[cfg(feature = "webview")]
-pub(crate) fn html_images(
+pub fn html_images(
     source: &str,
     root: Option<&Path>,
 ) -> std::collections::BTreeMap<String, String> {

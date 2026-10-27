@@ -115,7 +115,7 @@ pub fn scrollbar_visibility_signal_key(target_id: &str, axis: &str) -> String {
 pub const SCROLLBAR_THUMB_FOCUS_PREFIX: &str = "scrollbar-thumb:";
 pub const SCROLLBAR_TRACK_FOCUS_PREFIX: &str = "scrollbar-track:";
 /// When `"0"`, `auto` fade skips track chrome (overlay thumb-only).
-pub(crate) const ATTR_SCROLLBAR_TRACK_FADES: &str = "jadix_scrollbar_track_fades";
+pub const ATTR_SCROLLBAR_TRACK_FADES: &str = "jadix_scrollbar_track_fades";
 /// Height reveal clips content temporarily; it must not expose scrollbar chrome or hit slabs.
 pub(crate) const ATTR_SCROLLBAR_REVEAL_HIDDEN: &str = "jadix_scrollbar_reveal_hidden";
 pub(crate) const ATTR_SCROLLBAR_FLEX_TRACK: &str = "jadix_scrollbar_flex_track";
@@ -124,12 +124,17 @@ pub(crate) const ATTR_SCROLLBAR_GROUP: &str = "jadix_scrollbar_group";
 /// Register a flex group containing a track and caller-owned end controls.
 /// The runtime updates nested track geometry and collapses the entire group
 /// when the target axis disables its scrollbar.
-pub fn configure_scrollbar_group(group: &mut Element, track: &mut Element, target: &str, axis: &str) {
+pub fn configure_scrollbar_group(
+    group: &mut Element,
+    track: &mut Element,
+    target: &str,
+    axis: &str,
+) {
     group.set_attr(ATTR_SCROLLBAR_GROUP, format!("{target}:{axis}"));
     track.set_attr(ATTR_SCROLLBAR_FLEX_TRACK, "1");
 }
 
-pub(crate) const CHROME_ALPHA_EPS: f32 = 0.01;
+pub const CHROME_ALPHA_EPS: f32 = 0.01;
 
 /// Restore base alpha after build-time `auto` zeroing; skip intentionally transparent track chrome.
 #[inline]
@@ -353,14 +358,14 @@ pub(crate) fn scrollbar_track_content_inset(track: &Element) -> f32 {
 pub const SCROLLBAR_DEFAULT_CROSS_PX: f32 = 10.0;
 
 /// Gap between an overlay track and the scroll-area edge (and the other bar).
-pub(crate) const SCROLLBAR_EDGE_PAD: f32 = 2.0;
+pub const SCROLLBAR_EDGE_PAD: f32 = 2.0;
 
 /// Edge-only lane-side inset (no vertical thickness). Runtime adds `v_cross`
 /// when [`vertical_scrollbar_occupies_lane`] is true.
-pub(crate) const ATTR_H_LANE_INSET: &str = "jadix_h_scrollbar_lane_inset";
+pub const ATTR_H_LANE_INSET: &str = "jadix_h_scrollbar_lane_inset";
 
 /// Vertical track cross size used when expanding the H bar's lane-side inset.
-pub(crate) const ATTR_H_LANE_V_CROSS: &str = "jadix_h_scrollbar_v_cross";
+pub const ATTR_H_LANE_V_CROSS: &str = "jadix_h_scrollbar_v_cross";
 
 /// Whether the vertical bar is actually on screen (L-join owns the corner).
 ///
@@ -431,7 +436,7 @@ pub(crate) fn overlay_main_length_when_unlaid(
 /// Returns main-axis padding for an **inside** (absolute) track:
 /// - vertical → `(top, bottom)` — full height, only container edge pad
 /// - horizontal → `(left, right)` — edge pad plus `v_cross` on the side the vertical bar occupies
-pub(crate) fn scrollbar_overlay_main_insets(
+pub fn scrollbar_overlay_main_insets(
     axis: &str,
     this_outside: bool,
     vertical_shown: bool,

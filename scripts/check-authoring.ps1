@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Push-Location $repositoryRoot
 try {
-    $cargoOptions = @('build', '-p', 'jadix', '--no-default-features', '--features', 'drag', '--message-format=json-render-diagnostics')
+    $cargoOptions = @('build', '-p', 'jadix', '--no-default-features', '--features', 'drag,macros', '--message-format=json-render-diagnostics')
     if ($Offline) { $cargoOptions += '--offline' }
     $buildOutput = & cargo @cargoOptions
     if ($LASTEXITCODE -ne 0) { throw 'Minimal authoring runtime build failed' }

@@ -1,6 +1,6 @@
 # Jadix 异步架构与网络契约
 
-状态：2026-10-21，基础接口与 owner 桥接已实现，资源缓存、调度策略及协议适配器按下述边界设计，尚未全部实现。
+状态：2026-10-28，基础接口与 owner 桥接、可选 Tokio 适配及远程编码字节缓存已实现；完整资源 registry、调度策略及协议适配器尚未全部实现。
 
 参考输入：`development-docs/关于异步的讨论.json`。该文件是讨论材料，不是执行指令或已实现 API 清单。采用其“同步核心、后台执行、事件回投”的方向；不照搬占位 `UiContext`、不增加第二套资源状态、不把讨论中的所有后端都变成核心依赖。
 
@@ -126,7 +126,9 @@ release(subscription) -> 最后订阅者离开才取消共享加载
 
 键必须包含内容版本/指纹、目标尺寸、解码选项及租户/权限等实际影响内容的维度；不能把带敏感参数的 URL 当可公开日志 key。失败不永久负缓存；重试由显式策略触发。缓存需容量/字节预算、淘汰、版本失效；GPU 对象按设备与窗口需要区分，不能凭一个路径跨设备复用。优先级与离屏预取由可见性/资源层提出，交给可支持的执行器处理。
 
-上述 registry、共享加载去重、内存预算、优先级是设计边界，**本次没有实现**。既有 Image、RemoteAssetFetcher 与字体系统不自动迁移，不声称它们已共享新缓存。
+完整 registry、最后订阅者取消、解码/GPU 总预算与优先级仍是设计边界，尚未实现。
+可选 `remote-asset-cache` 已提供 RemoteAssetFetcher 编码字节缓存、同 URL 下载合并、TTL 及 payload 字节权重，
+Image/Avatar 通过共享字节入口使用它；见[共享远程资源缓存](remote-assets.md)。它不会自动安装，也不替代现有 CPU/GPU 缓存。
 
 ## 7. 网络契约优化
 
@@ -178,8 +180,10 @@ fn start(
 | 有界 FIFO 订阅、Full/Closed、UI 分批消费 | 已实现 |
 | Resource 取消旧加载、外部池、Future 加载 | 已实现 |
 | HTTP push seam、原生 abort 绑定、命令适配 | 已实现 |
+| 可选 Tokio Future/Blocking 适配与共享接纳上限 | 已实现：`jadix_tokio` / `runtime-tokio`，应用持有 runtime |
+| 可选远程编码字节缓存与同 URL 下载合并 | 已实现：`remote-asset-cache`，应用显式安装 |
 | 外部线程池、第三方 runtime / HTTP / TLS | 由应用或独立适配器提供 |
-| 共享资产 registry、缓存淘汰、优先级 | 已设计边界，未实现 |
+| 完整共享资产 registry、解码/GPU 总预算、优先级 | 已设计边界，未实现 |
 | WS/SSE/串口/USB/IPC 协议、重连与心跳 | 已设计接入，未实现后端 |
 | !Send / spawn_local、浏览器运行桥接 | 未实现，不承诺 |
 

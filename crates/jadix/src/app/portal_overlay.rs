@@ -828,7 +828,7 @@ pub fn overlay_stack_depth_for_test() -> usize {
 }
 
 /// Modal `(index, len)` in stacked stack; only counts [`OverlayKind::Modal`].
-pub(crate) fn modal_stack_metrics(id: &str) -> (usize, usize) {
+pub fn modal_stack_metrics(id: &str) -> (usize, usize) {
     with_stack_mut(|stack| {
         let indices: Vec<usize> = stack
             .iter()

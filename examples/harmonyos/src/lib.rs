@@ -9,7 +9,7 @@
 
 #[cfg(target_env = "ohos")]
 mod ohos_main {
-    use jadix::prelude::*;
+    use jadix_components::prelude::*;
     use openharmony_ability::OpenHarmonyApp;
 
     #[openharmony_ability_derive::ability]

@@ -640,6 +640,11 @@ fn node_has_collect_side_channel(el: &Element) -> bool {
         || el.template_id.as_deref() == Some("__jadix_devtools_highlight")
         || el.attrs.get(ATTR_HOISTED_PORTAL).map(String::as_str) == Some("1")
         || el.attrs.get("jadix_portal").map(String::as_str) == Some("1")
+        || el
+            .style
+            .filter
+            .as_ref()
+            .is_some_and(|filters| !filters.is_empty())
         || crate::utils::drag::runtime::keeps_collect_live(el)
         || crate::utils::anchored_overlay::point_overlay_drag_collect_live(el)
         || node_records_page_stack_bands(el)
@@ -727,7 +732,11 @@ fn node_clips_descendants(el: &Element) -> bool {
 
 fn node_collect_is_live(el: &Element) -> bool {
     if crate::core::tree::opacity_groups_enabled()
-        && el.attrs.get(crate::core::tree::ATTR_OPACITY_GROUP).map(String::as_str) == Some("1")
+        && el
+            .attrs
+            .get(crate::core::tree::ATTR_OPACITY_GROUP)
+            .map(String::as_str)
+            == Some("1")
         && el.style.opacity > 0.0
         && el.style.opacity < 1.0
     {
@@ -746,7 +755,11 @@ fn node_collect_is_live(el: &Element) -> bool {
 
 /// Local continuously sampled paint, excluding descendants and timer-driven carets.
 pub(crate) fn node_paint_needs_frame(el: &Element) -> bool {
-    if el.liquid_flow.as_ref().is_some_and(crate::style::liquid_flow::LiquidFlow::is_active) {
+    if el
+        .liquid_flow
+        .as_ref()
+        .is_some_and(crate::style::liquid_flow::LiquidFlow::is_active)
+    {
         return true;
     }
     if el
@@ -783,10 +796,13 @@ pub(crate) fn node_paint_needs_frame(el: &Element) -> bool {
     if el.icon_playback.is_some() {
         return true;
     }
-    if el.attrs.contains_key(crate::utils::icon_provider::ATTR_ICON_HOVER_ANIMATION) {
+    if el
+        .attrs
+        .contains_key(crate::utils::icon_provider::ATTR_ICON_HOVER_ANIMATION)
+    {
         return true;
     }
-    #[cfg(feature = "svg")]
+    #[cfg(all(feature = "svg", feature = "animation-path"))]
     if el.attrs.contains_key(crate::utils::ATTR_MORPH_ICON) {
         return true;
     }
@@ -829,7 +845,7 @@ pub(crate) fn invalidate_collect_paint_hash_path(root: &mut Element, path: &[usi
 /// Zero hashes from `root` down to each Taffy node so `reuse_idle` rehashes that
 /// spine only. A global `hash_bust` rehashed the whole gallery on every hover
 /// edge (trigger switch hitch). Returns false if any id is not in the tree.
-pub(crate) fn invalidate_collect_paint_hash_spines(
+pub fn invalidate_collect_paint_hash_spines(
     root: &mut Element,
     nodes: &[taffy::prelude::NodeId],
 ) -> bool {
@@ -945,7 +961,9 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
             || node_is_scrollbar_chrome(el)
             || el.attrs.get(ATTR_ESCAPE_OVERFLOW_CLIP).map(String::as_str) == Some("1");
         let mut has_scroll = node_seeds_scroll_skip(el);
-        let mut has_canvas = el.attrs.contains_key(crate::primitives::canvas::ATTR_CANVAS_PAINT);
+        let mut has_canvas = el
+            .attrs
+            .contains_key(crate::primitives::canvas::ATTR_CANVAS_PAINT);
         let mut css_active = node_paint_needs_frame(el)
             || !el.style.transition.is_empty()
             || el
@@ -960,7 +978,8 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
             || el.text_style.selectable
             || el.text_style.input_caret.is_some();
         let mut reactive_sync = el.reactive_sync.is_some();
-        let mut presentation_sync = el.presentation_sync.is_some() || !el.tree_presentation_sync.is_empty();
+        let mut presentation_sync =
+            el.presentation_sync.is_some() || !el.tree_presentation_sync.is_empty();
         paint_sync |= presentation_sync || el.after_style_sync.is_some();
         let mut layout_motion = el.layout_motion.is_some() || el.liquid_flow.is_some();
         let mut collapse_work = reactive_sync
@@ -1079,8 +1098,14 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
     el.paint_opaque_fill.hash(h);
     el.paint_region_replay.hash(h);
     el.paint_children_unculled.hash(h);
-    el.attrs.contains_key(crate::style::liquid_flow::ITEM).hash(h);
-    if let Some(sample) = el.liquid_flow.as_ref().and_then(crate::style::liquid_flow::LiquidFlow::sample) {
+    el.attrs
+        .contains_key(crate::style::liquid_flow::ITEM)
+        .hash(h);
+    if let Some(sample) = el
+        .liquid_flow
+        .as_ref()
+        .and_then(crate::style::liquid_flow::LiquidFlow::sample)
+    {
         hash_f32s(h, &sample);
     }
     if el.layout_motion.is_some() {
@@ -1164,7 +1189,9 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
     hash_f32s(h, &el.style.bg_position);
     el.style.backdrop_blur.to_bits().hash(h);
     el.style.glass.is_some().hash(h);
-    if let Some(glass) = el.style.glass { hash_f32s(h, &glass.gpu_params()); }
+    if let Some(glass) = el.style.glass {
+        hash_f32s(h, &glass.gpu_params());
+    }
     match el.style.transform.as_ref() {
         Some(list) => {
             true.hash(h);
@@ -1239,7 +1266,7 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
     }
     el.text_style.color.hash(h);
     el.text_style.size.map(|s| s.to_bits()).hash(h);
-    #[cfg(feature = "svg")]
+    #[cfg(all(feature = "svg", feature = "animation-path"))]
     crate::utils::morph_icon::hash_morph_icon_paint(el, h);
     el.text_style.weight.hash(h);
     el.text_style.font_family.hash(h);
@@ -2218,12 +2245,10 @@ mod tests {
                 .unwrap();
             if frame == 0 {
                 assert_eq!(cache.prev.len(), 33);
-                assert!(
-                    cache
-                        .prev
-                        .values()
-                        .all(|cached| Rc::ptr_eq(cached.payload.as_ref().unwrap(), payload))
-                );
+                assert!(cache
+                    .prev
+                    .values()
+                    .all(|cached| Rc::ptr_eq(cached.payload.as_ref().unwrap(), payload)));
             }
             assert_eq!(
                 cache.snapshot_items,
@@ -2301,7 +2326,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "dnd")]
+    #[cfg(feature = "product-tests")]
     fn drag_overlay_is_not_skippable() {
         let _product = crate::utils::drag::drag_overlay();
         let mut el = el_with_child();
@@ -2724,6 +2749,19 @@ mod tests {
             self_paint_hash(&el),
             "filter blur amount (not just discriminant) must bust paint-hash skip"
         );
+    }
+
+    #[test]
+    fn filter_capture_keeps_ancestors_live_for_collect_side_effects() {
+        let mut filtered = Element::new();
+        filtered.style.filter = crate::style::parse_filter("blur(4px)");
+        let mut root = Element::new().child(filtered).child(Element::new());
+        stamp_subtree_paint_hashes(&mut root, false);
+        assert!(root.collect_skip_side_channel);
+        assert!(root.children[0].collect_skip_side_channel);
+        assert!(!subtree_is_skippable(&root));
+        assert!(!subtree_is_skippable(&root.children[0]));
+        assert!(subtree_is_skippable(&root.children[1]));
     }
 
     #[test]

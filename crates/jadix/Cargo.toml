@@ -25,30 +25,31 @@ include = [
 
 [features]
 # Capability inventory and core/optional boundaries: docs/FEATURES.md.
-default = ["components", "dnd", "backend-dx12", "backend-gles", "backend-metal", "window-materials", "theme-shadcn", "animation-base"]
-components = ["drag", "lucide"]
+default = ["macros", "backend-dx12", "backend-gles", "backend-metal", "window-materials", "theme-shadcn", "animation-base", "native-clipboard", "images", "file-persistence"]
+macros = ["dep:jadix_macros"]
+file-persistence = []
+native-clipboard = ["dep:jadix_clipboard"]
+product-tests = ["drag", "macros"]
 drag = []
-dnd = ["drag"]
-lucide = []
-theme-shadcn = []
-theme-fluent = []
-theme-material3 = []
-theme-liquid-glass = []
+theme-shadcn = ["jadix_theme/theme-shadcn"]
+theme-fluent = ["jadix_theme/theme-fluent"]
+theme-material3 = ["jadix_theme/theme-material3"]
+theme-liquid-glass = ["jadix_theme/theme-liquid-glass"]
 themes = ["theme-shadcn", "theme-fluent", "theme-material3", "theme-liquid-glass"]
-animation-base = []
-animation-ex = ["animation-base"]
+animation-base = ["jadix_animation/animation-base"]
+animation-ex = ["animation-base", "jadix_animation/animation-ex"]
 animation = ["animation-base", "animation-ex"]
-animation-path = ["animation-ex"]
+animation-path = ["animation-ex", "svg", "jadix_animation/animation-path"]
 code = []
-code-lsp = []
-markdown = ["dep:pulldown-cmark"]
+code-lsp = ["dep:jadix_lsp"]
+markdown = ["jadix_document/markdown"]
 document = ["markdown"]
-document-editing = ["document"]
-document-diff = ["dep:similar"]
-document-science = ["document"]
+document-editing = ["document", "jadix_document/document-editing"]
+document-diff = ["jadix_document/diff"]
+document-science = ["document", "jadix_document/science"]
 file-dialog = ["dep:rfd"]
-gallery-tests = ["components", "dnd", "svg", "themes", "animation-path", "code", "scale-preview", "windows-dcomp", "document-editing", "document-diff", "document-science", "lucide-animated", "file-dialog"]
-window-materials = ["windows-dwm", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit"]
+gallery-tests = ["product-tests", "text-undo", "svg", "themes", "animation-path", "code", "scale-preview", "windows-dcomp", "document-editing", "document-diff", "document-science", "file-dialog"]
+window-materials = ["jadix_window_materials/windows-dcomp", "windows-dwm", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit"]
 windows-dwm = ["windows-sys/Win32_Graphics_Dwm", "windows-sys/Win32_UI_Controls"]
 windows-composition = ["backend-dx12", "dep:windows", "dep:windows-core", "dep:windows-numerics", "dep:windows-collections"]
 windows-dcomp = ["window-materials", "windows-composition"]
@@ -69,8 +70,6 @@ i18n = ["dep:icu", "dep:icu_provider_blob", "dep:writeable"]
 a11y = ["dep:accesskit", "dep:accesskit_windows", "dep:jadix_accesskit_ohos"]
 # Dev-time TCP hot reload (`jadix_hot_reload_cli`). Requires debug build.
 hot-reload = []
-# pqoqubbw animated Lucide recipes — runtime JSON from assets/lucide_animated.json.
-lucide-animated = ["animation-base", "lucide"]
 # Optional runtime logger: console (stderr) + optional file via JADIX_LOG_FILE (env_logger).
 runtime-logging = ["dep:env_logger"]
 # Optional structured spans on hot paths (layout / reconcile). Off by default.
@@ -83,7 +82,7 @@ webview = ["windows-composition", "dep:webview2-com", "dep:wry", "dep:gtk", "dep
 # Windows defaults to D3D12 for predictable presentation and 4K frame throughput.
 # GL remains the fallback; lean consumers can disable default features.
 # This adds native backend code and driver memory (ADR-3, 2026-10-16 update).
-backend-dx12 = ["wgpu/dx12"]
+backend-dx12 = ["jadix_renderer/backend-dx12", "wgpu/dx12"]
 # Optional Vulkan backend (kept off by default to avoid multi-backend bloat on Windows).
 backend-vulkan = ["wgpu/vulkan"]
 backend-gles = ["wgpu/gles"]
@@ -93,17 +92,15 @@ backend-metal = ["wgpu/metal"]
 # Experimental: native-window color and sustained presentation are not accepted yet.
 
 # Experimental native SM5 graphics subset; see vendor/wgpu-hal/JADIX_DX11_PATCH.md.
-backend-dx11-native = ["dep:wgpu-hal", "wgpu-hal/dx11"]
-backend-dx11-angle = ["backend-gles", "dep:wgpu-hal", "wgpu-hal/gles-angle"]
+backend-dx11-native = ["jadix_renderer/backend-dx11-native", "dep:wgpu-hal", "wgpu-hal/dx11"]
+backend-dx11-angle = ["jadix_renderer/backend-dx11-angle", "backend-gles", "dep:wgpu-hal", "wgpu-hal/gles-angle"]
 backend-dx11 = ["backend-dx11-native"]
-# Embed lucide.ttf (~0.8MB). Prefer shipping assets/ beside the exe instead.
-bundled-lucide = ["lucide"]
 # Embed large fonts into the binary (single-file distro; dramatically increases size).
 bundled-cjk = []
 bundled-cjk-serif = []
 bundled-emoji = []
 bundled-symbols = []
-bundled-fonts = ["bundled-lucide", "bundled-cjk", "bundled-cjk-serif", "bundled-emoji", "bundled-symbols"]
+bundled-fonts = ["bundled-cjk", "bundled-cjk-serif", "bundled-emoji", "bundled-symbols"]
 # Load optional fonts from disk at runtime (JADIX_FONT_DIR / assets/), without embedding.
 fonts-cjk = []
 fonts-cjk-serif = []
@@ -111,11 +108,11 @@ fonts-emoji = []
 # Public `<svg>` / SMIL / resvg raster (Image · CSS cursor · AnimatedIcon frames) + MorphIcon.
 # Not in default. Path kernel (Chart, ProgressCircle) stays without this feature.
 svg = ["dep:resvg"]
-document-math = ["document", "svg", "dep:latex-rust"]
-syntax-highlighting = ["dep:syntect"]
+document-math = ["document", "svg", "jadix_document/document-math"]
+syntax-highlighting = ["jadix_document/syntax"]
 # Twemoji SVG via the same resvg (PNG fallback remains without it).
 emoji-svg = ["svg"]
-# Extra raster codecs (off by default; see `image` dep for the core set).
+# Extra raster codecs (off by default; PNG remains in the core set).
 image-bmp = ["image/bmp"]
 image-tiff = ["image/tiff"]
 image-avif = ["image/avif"]
@@ -126,6 +123,7 @@ image-qoi = ["image/qoi"]
 image-tga = ["image/tga"]
 image-ff = ["image/ff"]
 image-full = [
+    "images",
     "image-bmp",
     "image-tiff",
     "image-avif",
@@ -136,11 +134,14 @@ image-full = [
     "image-tga",
     "image-ff",
 ]
-# Deprecated aliases (raster decode is always on via the `image` crate).
-jpeg = ["image/jpeg"]
-gif = ["image/gif"]
-webp = ["image/webp"]
-images = []
+image-jpeg = ["image/jpeg"]
+image-gif = ["image/gif"]
+image-webp = ["image/webp"]
+image-ico = ["image/ico"]
+jpeg = ["image-jpeg"]
+gif = ["image-gif"]
+webp = ["image-webp"]
+images = ["image-jpeg", "image-gif", "image-webp", "image-ico"]
 cursor-images = []
 # WP-3.13 experimental <scene3d> rotating cube. Off by default (volume / ADR-3).
 scene3d = []
@@ -160,6 +161,8 @@ devtools = ["scale-preview"]
 # Allow `<Image src="https://…">` / Avatar / Icon to call an app-installed
 # [`RemoteAssetFetcher`] (no HTTP crate). See docs/ops/remote_asset.md.
 remote-asset = []
+remote-asset-cache = ["remote-asset", "dep:moka"]
+runtime-tokio = ["dep:jadix_tokio"]
 net = ["dep:jadix_net"]
 net-json = ["net", "jadix_net/json"]
 # Input/Textarea undo+redo history. Off by default (lean crate). Gallery enables it.
@@ -171,8 +174,19 @@ text-undo = []
 # text-undo-rope = ["text-undo", "dep:ropey"]
 
 [dependencies]
+jadix_document.workspace = true
+jadix_core.workspace = true
+jadix_layout.workspace = true
+jadix_animation.workspace = true
+jadix_theme.workspace = true
+jadix_renderer.workspace = true
+jadix_window_materials.workspace = true
+jadix_hot_reload.workspace = true
+jadix_lsp = { workspace = true, optional = true }
 jadix_media.workspace = true
 jadix_tasks.workspace = true
+jadix_tokio = { workspace = true, optional = true }
+moka = { workspace = true, optional = true, features = ["sync"] }
 jadix_net = { workspace = true, optional = true }
 winit = { workspace = true }
 wgpu = { workspace = true }
@@ -194,18 +208,15 @@ icu = { workspace = true, optional = true, features = [
 ] }
 icu_provider_blob = { workspace = true, optional = true, features = ["alloc"] }
 writeable = { workspace = true, optional = true }
-jadix_macros = { workspace = true }
+jadix_macros = { workspace = true, optional = true }
 jadix_style_tokens = { workspace = true }
 stacker = { workspace = true }
-jadix_clipboard = { workspace = true }
+jadix_clipboard = { workspace = true, optional = true }
 accesskit = { workspace = true, optional = true }
 swash = { workspace = true }
 ttf-parser = { workspace = true }
 unicode-segmentation = { workspace = true }
 unicode-linebreak = { workspace = true }
-similar = { workspace = true, optional = true }
-pulldown-cmark = { workspace = true, optional = true, features = ["html"] }
-syntect = { version = "5.3", optional = true, default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
 html5ever = { version = "0.39", optional = true }
 base64 = { version = "0.22", optional = true }
 latex-rust = { workspace = true, optional = true }
@@ -281,20 +292,15 @@ windows-numerics = { workspace = true, optional = true }
 windows-collections = { workspace = true, optional = true }
 
 [dev-dependencies]
+tokio = { workspace = true, features = ["rt", "time", "sync"] }
 # Used by ignored `text_buffer_mid_insert` (P3 String vs ropey). Not a product dependency.
 ropey = { workspace = true }
+jadix_animation = { workspace = true, features = ["test-hooks"] }
+jadix_renderer = { workspace = true, features = ["test-hooks"] }
 
 [[bench]]
 name = "layout_baseline"
 harness = false
-
-[[example]]
-name = "document_editor"
-required-features = ["components", "document-editing"]
-
-[[example]]
-name = "text_documents"
-required-features = ["components", "document-diff"]
 
 [target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
 tray-icon = { workspace = true, optional = true }
@@ -315,100 +321,22 @@ objc2-foundation = { workspace = true, optional = true, features = ["NSGeometry"
 rfd = { workspace = true, optional = true }
 
 [[test]]
-name = "app_shell"
-required-features = ["components"]
-
-
-[[test]]
-name = "authoring_contracts"
-required-features = ["components"]
-
-
-[[test]]
-name = "authoring_runtime_contracts"
-required-features = ["components"]
-
-
-[[test]]
-name = "fragment_macro"
-required-features = ["components"]
-
-
-[[test]]
-name = "geometry_contracts"
-required-features = ["components"]
-
-
-[[test]]
-name = "img_alias"
-required-features = ["components"]
-
-
-[[test]]
-name = "input_adornment_rsx"
-required-features = ["components"]
-
-
-[[test]]
-name = "macro_lowering"
-required-features = ["components"]
-
-
-[[test]]
-name = "media_customization"
-required-features = ["components"]
-
-
-[[test]]
-name = "media_player"
-required-features = ["components"]
-
-
-[[test]]
-name = "media_presentation_layout"
-required-features = ["components"]
-
-
-[[test]]
-name = "prelude_dual_surface"
-required-features = ["components"]
-
-
-[[test]]
-name = "rsx_class"
-required-features = ["components"]
-
-
-[[test]]
-name = "scroll_components"
-required-features = ["components"]
-
-
-[[test]]
-name = "text_document_views"
-required-features = ["components"]
-
-
-[[test]]
-name = "textarea_rsx_wrap"
-required-features = ["components"]
-
-[[test]]
-name = "drag_rsx"
-required-features = ["dnd"]
-
-[[test]]
 name = "drag_routing_contracts"
 required-features = ["drag"]
 
+
 [[test]]
-name = "drag_runtime_contracts"
-required-features = ["drag"]
+name = "anchored_overlay_rsx"
+required-features = ["macros"]
 
-[[example]]
-name = "application_icons"
-required-features = ["components"]
+[[test]]
+name = "backdrop_blur_rsx"
+required-features = ["macros"]
 
-[[example]]
-name = "desktop_shell"
-required-features = ["components"]
+[[test]]
+name = "format_bind_text"
+required-features = ["macros"]
+
+[[test]]
+name = "viewport_modal_rsx"
+required-features = ["macros"]

@@ -55,14 +55,14 @@ pub(crate) fn sync_pointer_component_chrome_after_layout(
         crate::authoring::presentation::Context {
             phase: crate::authoring::presentation::Phase::Hover,
             viewport: [width, height],
-        width_budget: None,
-},
+            width_budget: None,
+        },
     ));
     impact
 }
 
 /// Opt-in containers receive hover while an interactive descendant is targeted.
-pub(crate) const ATTR_HOVER_REGION: &str = "jadix_hover_region";
+pub const ATTR_HOVER_REGION: &str = "jadix_hover_region";
 
 /// Stable identity for exclusive hover tracking across tree rebuilds that replace handler `Rc`s.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -867,7 +867,7 @@ pub(super) fn find_paint_ime_caret(
 
 /// World-space paint AABB + `scroll_acc` for `focus_id` (IME fallback / keep-focus).
 /// The AABB already subtracts ancestor scroll — do not subtract `scroll_acc` again.
-pub(crate) fn find_paint_aabb_by_focus_id(
+pub fn find_paint_aabb_by_focus_id(
     el: &Element,
     focus_id: &str,
     scroll_acc: [f32; 2],
@@ -1594,7 +1594,7 @@ pub(crate) fn apply_pointer_hover_reconcile(
 ///
 /// Does **not** fire leave. The next [`update_hovers`] re-resolves by [`HoverKey`]: same
 /// `focus_id` only re-asserts enter (no spring 0→1 thrash); pointer moved away emits leave.
-pub(crate) fn invalidate_hover_handlers() {
+pub fn invalidate_hover_handlers() {
     HOVER_NEEDS_RESYNC.set(true);
 }
 

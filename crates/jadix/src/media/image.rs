@@ -121,6 +121,7 @@ pub fn encode_png(img: &DecodedImage) -> Option<Vec<u8>> {
     encode(img, ImageFormat::Png)
 }
 
+#[cfg(feature = "image-jpeg")]
 pub fn encode_jpeg(img: &DecodedImage, quality: u8) -> Option<Vec<u8>> {
     let rgba = to_rgba_image(img)?;
     let mut buf = Vec::new();
@@ -136,8 +137,19 @@ pub fn encode_jpeg(img: &DecodedImage, quality: u8) -> Option<Vec<u8>> {
     Some(buf)
 }
 
+#[cfg(not(feature = "image-jpeg"))]
+pub fn encode_jpeg(_img: &DecodedImage, _quality: u8) -> Option<Vec<u8>> {
+    None
+}
+
+#[cfg(feature = "image-webp")]
 pub fn encode_webp(img: &DecodedImage) -> Option<Vec<u8>> {
     encode(img, ImageFormat::WebP)
+}
+
+#[cfg(not(feature = "image-webp"))]
+pub fn encode_webp(_img: &DecodedImage) -> Option<Vec<u8>> {
+    None
 }
 
 fn encode(img: &DecodedImage, format: ImageFormat) -> Option<Vec<u8>> {
@@ -167,6 +179,40 @@ mod tests {
             animation: None,
         })
         .unwrap()
+    }
+
+    #[cfg(not(feature = "image-jpeg"))]
+    #[test]
+    fn disabled_jpeg_encoder_returns_none() {
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![255; 4],
+            intrinsic_hotspot: None,
+            animation: None,
+        };
+        assert!(encode_jpeg(&image, 80).is_none());
+    }
+
+    #[cfg(not(feature = "image-webp"))]
+    #[test]
+    fn disabled_webp_encoder_returns_none() {
+        let image = DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: vec![255; 4],
+            intrinsic_hotspot: None,
+            animation: None,
+        };
+        assert!(encode_webp(&image).is_none());
+    }
+
+    #[cfg(not(feature = "image-gif"))]
+    #[test]
+    fn disabled_gif_decoder_returns_none_without_loading_frames() {
+        let image = b"GIF89a\x01\x00\x01\x00\x80\x00\x00\x00\x00\x00\xff\xff\xff\x21\xf9\x04\x01\x00\x00\x00\x00\x2c\x00\x00\x00\x00\x01\x00\x01\x00\x00\x02\x02\x44\x01\x00\x3b";
+        assert!(super::super::gif::is_gif(image));
+        assert!(super::super::gif::decode_gif_animation(image).is_none());
     }
 
     #[test]

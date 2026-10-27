@@ -1,5 +1,6 @@
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
+use jadix_hot_reload::{TemplateFragment, StyleAttr, TextReplacement};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
@@ -495,36 +496,6 @@ struct OutgoingStylesheetReload {
     paths: Vec<String>,
 }
 
-#[derive(Serialize, Clone)]
-struct TemplateFragment {
-    id: String,
-    hash: String,
-    len: usize,
-    #[serde(default)]
-    index: usize,
-    #[serde(default)]
-    text_literals: Vec<String>,
-    #[serde(default)]
-    text_replacements: Vec<TextReplacement>,
-    #[serde(default)]
-    style_attrs: Vec<StyleAttr>,
-}
-
-#[derive(Serialize, Clone, PartialEq, Eq)]
-struct StyleAttr {
-    #[serde(default)]
-    element_index: usize,
-    name: String,
-    value: String,
-}
-
-#[derive(Serialize, Clone)]
-struct TextReplacement {
-    index: usize,
-    from: String,
-    to: String,
-}
-
 fn stable_hash(text: &str) -> String {
     let normalized = normalize_template_source(text);
     let mut hash: u64 = 0xcbf29ce484222325;
@@ -720,11 +691,15 @@ mod tests {
             .join("../../examples/gallery/src/pages/basics.rs");
         let key = normalize_path_for_id(&file);
         let previous = collect_templates_for_file(&file, &key);
-        let source = fs::read_to_string(&file).unwrap();
+        let source = fs::read_to_string(&file).unwrap().replace("\r\n", "\n");
         let changed = source.replacen(
             "\"Secondary\"\n                    </Button>",
             "\"HMR VERIFIED\"\n                    </Button>",
             1,
+        );
+        assert_ne!(
+            changed, source,
+            "Gallery Button fixture must contain the target label"
         );
         let templates = extract_ui_templates(&changed);
         let block = templates

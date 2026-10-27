@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Gallery Edge Cases: bidi / RTL+emoji labels must soft-wrap inside a narrow card.
 use crate::components::label::label;
 use crate::core::reactivity::{create_effect, create_root};

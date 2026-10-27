@@ -30,7 +30,7 @@ fn scaled_scroll_snapshot_and_collect_share_the_physical_grid() {
 
 #[test]
 #[ignore = "requires a native Windows GPU surface; run explicitly with --ignored --nocapture"]
-#[cfg(feature = "components")]
+#[cfg(feature = "product-tests")]
 fn scaled_nested_scrollbars_match_full_repaint_on_every_frame() {
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
@@ -252,7 +252,7 @@ fn run_devtools_fade_frames(window: Arc<dyn Window>) {
     });
 }
 
-#[cfg(feature = "components")]
+#[cfg(feature = "product-tests")]
 fn run_frames(window: Arc<dyn Window>) {
     use crate::core::reactivity::{create_root, use_signal};
     use crate::core::scroll_viewport::{

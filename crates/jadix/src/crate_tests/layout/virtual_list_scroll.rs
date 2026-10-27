@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! VirtualList: silent scroll remounts window; overlapping rows reuse layout nodes.
 
 use crate::app::test_support::sync_reactive_elements_subtree;

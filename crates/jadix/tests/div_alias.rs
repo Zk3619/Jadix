@@ -2,6 +2,7 @@
 
 use jadix::prelude::*;
 
+#[cfg(feature = "macros")]
 #[test]
 fn div_and_div_pascal_tags_match_box() {
     let from_div = ui! {

@@ -2,7 +2,7 @@ use crate::core::tree::{Element, IntoF32, IntoNodeFg, IntoNodeText};
 use crate::style::TextAlignDeclaration;
 
 pub struct TextBuilder {
-    pub(crate) el: Element,
+    pub el: Element,
 }
 
 impl TextBuilder {

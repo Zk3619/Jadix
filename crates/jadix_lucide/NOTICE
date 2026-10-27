@@ -1,0 +1,19 @@
+Bundled icon data
+-----------------
+
+Lucide name → codepoint map in `assets/lucide.json` and SVG paths in
+`assets/lucide_paths.json`:
+
+  License: ISC License
+  Copyright: Lucide Contributors
+  https://github.com/lucide-icons/lucide
+
+Animated icon recipes in `assets/lucide_animated.json` (extracted offline from
+pqoqubbw/icons; embedded when the `animated` feature is enabled):
+
+  License: MIT License
+  Copyright: pqoqubbw and contributors
+  https://github.com/pqoqubbw/icons
+
+Font asset: assets/lucide.ttf, Lucide Contributors, ISC License.
+https://github.com/lucide-icons/lucide

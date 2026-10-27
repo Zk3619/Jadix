@@ -1,12 +1,9 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Off-screen descendants of an overflow clip must not be collected as instances,
 //! while Taffy content height (scroll range) stays the full column.
 
 use crate::app::ime_support::{painted_ime_field_in_overflow_clip, painted_text_edit_node};
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
-use crate::utils::text_edit::{
-    sync_text_edit_paint_subtree, sync_text_edit_paint_subtree_in_viewport,
-};
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::scroll_offset_y_signal_key;
@@ -15,6 +12,9 @@ use crate::primitives::r#box::hstack;
 use crate::renderer::font_loader;
 use crate::style::{sync_class_variants_subtree, tick_active_css_transitions_subtree};
 use crate::text::install_shared_font_system;
+use crate::utils::text_edit::{
+    sync_text_edit_paint_subtree, sync_text_edit_paint_subtree_in_viewport,
+};
 use crate::utils::text_field::input_text_template_id;
 use taffy::style::FlexWrap;
 

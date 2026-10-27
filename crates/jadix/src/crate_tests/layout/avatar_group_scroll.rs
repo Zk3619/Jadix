@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! AvatarGroup label-to-row gap must stay stable when only scroll offset changes.
 
 use crate::app::reactive::reset_registered_anchors;

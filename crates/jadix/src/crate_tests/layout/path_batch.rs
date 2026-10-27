@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! WP-3.2：path 产品绘制走 TexturedDraw（GPU PathPipeline 或 CPU golden）；SDF 矩形不是产品核。
 use crate::components::{
     area_chart, bar_chart, define_chart, line_chart, line_y, pie_chart, ChartDatum,

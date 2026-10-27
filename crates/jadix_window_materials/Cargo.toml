@@ -1,0 +1,13 @@
+[package]
+name = "jadix_window_materials"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Platform-neutral window backdrop choices and material tuning"
+readme = "README.md"
+
+[features]
+windows-dcomp = []
+default = []
+[dependencies]

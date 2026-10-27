@@ -6,6 +6,8 @@
 use winit::window::Window;
 
 use std::ptr::null_mut;
+use std::cell::RefCell;
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicIsize, Ordering};
 use std::sync::Mutex;
 
@@ -23,7 +25,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, DestroyCaret, GetAncestor, GetClassNameW, GetClientRect, GetForegroundWindow,
     GetWindowRect, IsWindow, SendMessageW, SetWindowPos, WindowFromPoint, GA_ROOT, HWND_TOP,
     SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, WM_IME_COMPOSITION, WM_IME_CONTROL, WM_IME_REQUEST,
-    WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_KILLFOCUS, WM_NCDESTROY,
 };
 
 const SUBCLASS_ID: usize = 0x4A44_5849; // 'JDXI'
@@ -583,10 +585,34 @@ unsafe fn imm_has_compstr(hwnd: HWND) -> bool {
     size > 0
 }
 
-/// After lone Shift reaches the IME: finish app compose when Imm had a string
-/// (zombie alphanumeric leave, or ENDCOMPOSITION that winit did not surface).
-fn shift_compose_finish_needed(had_compstr: bool) -> bool {
-    had_compstr
+#[derive(Default)]
+struct ShiftGesture {
+    held: bool,
+    chord: bool,
+}
+
+impl ShiftGesture {
+    fn update(&mut self, msg: u32, key: WPARAM) -> bool {
+        let pressed = matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN);
+        let released = matches!(msg, WM_KEYUP | WM_SYSKEYUP);
+        if shift_reaches_ime(msg, key) {
+            if pressed && !self.held {
+                self.held = true;
+                self.chord = false;
+            } else if released {
+                let lone = self.held && !self.chord;
+                self.held = false;
+                return lone;
+            }
+        } else if pressed && self.held {
+            self.chord = true;
+        }
+        false
+    }
+}
+
+thread_local! {
+    static SHIFT_GESTURES: RefCell<HashMap<isize, ShiftGesture>> = RefCell::default();
 }
 
 /// Drain the flag set by the IME subclass after a lone Shift language toggle.
@@ -602,14 +628,27 @@ unsafe extern "system" fn ime_subclass_proc(
     _uid: usize,
     _data: usize,
 ) -> LRESULT {
-    if shift_reaches_ime(msg, wparam) {
+    let (lone_shift, shift_chord_key) = SHIFT_GESTURES.with(|gestures| {
+        let mut gestures = gestures.borrow_mut();
+        if matches!(msg, WM_KILLFOCUS | WM_NCDESTROY) {
+            gestures.remove(&(hwnd as isize));
+            return (false, false);
+        }
+        if !matches!(msg, WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP) {
+            return (false, false);
+        }
+        let gesture = gestures.entry(hwnd as isize).or_default();
+        let shift_chord_key = gesture.held;
+        (gesture.update(msg, wparam), shift_chord_key)
+    });
+    if shift_reaches_ime(msg, wparam) || shift_chord_key {
         let had_compstr = unsafe { imm_has_compstr(hwnd) };
         unsafe {
             DefWindowProcW(hwnd, msg, wparam, lparam);
         }
         // IME may hide the candidate and flip 中/英 while leaving GCS_COMPSTR
         // (underline sticks). Or it may end Imm without a winit Commit/Disabled.
-        if shift_compose_finish_needed(had_compstr) {
+        if lone_shift && had_compstr {
             PENDING_SHIFT_COMPOSE_FINISH.store(true, Ordering::Release);
             crate::app::runtime::request_redraw_all();
         }
@@ -815,8 +854,14 @@ mod tests {
     }
 
     #[test]
-    fn lone_shift_with_compstr_requests_compose_finish() {
-        assert!(shift_compose_finish_needed(true));
-        assert!(!shift_compose_finish_needed(false));
+    fn only_lone_shift_release_finishes_composition() {
+        let mut gesture = ShiftGesture::default();
+        assert!(!gesture.update(WM_KEYDOWN, VK_SHIFT as WPARAM));
+        assert!(!gesture.update(WM_KEYDOWN, 0x54));
+        assert!(!gesture.update(WM_KEYUP, 0x54));
+        assert!(!gesture.update(WM_KEYUP, VK_SHIFT as WPARAM));
+        assert!(!gesture.update(WM_KEYDOWN, VK_SHIFT as WPARAM));
+        assert!(gesture.update(WM_KEYUP, VK_SHIFT as WPARAM));
+        assert!(!gesture.update(WM_KEYUP, VK_SHIFT as WPARAM));
     }
 }

@@ -2,6 +2,7 @@
 
 #![cfg(feature = "svg")]
 
+#[cfg(feature = "macros")]
 use jadix::core::tree::LayoutTree;
 use jadix::prelude::*;
 use jadix::primitives::path::{ATTR_PATH_D, ATTR_PATH_SCENE};
@@ -39,6 +40,7 @@ fn svg_builder_builds_a_leaf() {
     );
 }
 
+#[cfg(feature = "macros")]
 #[test]
 fn svg_ui_tag_builds_a_leaf() {
     let el: Element = ui! {
@@ -64,6 +66,7 @@ fn svg_ui_tag_builds_a_leaf() {
     );
 }
 
+#[cfg(feature = "macros")]
 #[test]
 fn svg_ui_text_and_filter_leaf() {
     let el: Element = ui! {
@@ -82,6 +85,7 @@ fn svg_ui_text_and_filter_leaf() {
     );
 }
 
+#[cfg(feature = "macros")]
 #[test]
 fn svg_ui_leaf_layout_bounds() {
     let svg_el: Element = ui! {

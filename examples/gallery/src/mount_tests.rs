@@ -8,7 +8,9 @@ use jadix::core::reactivity::{create_effect, create_root};
 fn drawing_canvas_preserves_strokes_on_remount_and_clears_independently() {
     fn canvas(root: &Element) -> Option<&Element> {
         if root.on_mousedown.is_some()
-            && root.attrs.contains_key(jadix::primitives::canvas::ATTR_CANVAS_PAINT)
+            && root
+                .attrs
+                .contains_key(jadix::primitives::canvas::ATTR_CANVAS_PAINT)
         {
             Some(root)
         } else {
@@ -25,11 +27,16 @@ fn drawing_canvas_preserves_strokes_on_remount_and_clears_independently() {
             (leaf.on_mousemove.as_ref().unwrap().borrow_mut())(&moved);
             let strokes = use_signal("gal-canvas-strokes", || {
                 Rc::new(RefCell::new(Vec::<Vec<(f32, f32)>>::new()))
-            }).peek();
+            })
+            .peek();
             assert_eq!(&*strokes.borrow(), &[vec![(10.0, 15.0), (80.0, 60.0)]]);
             drop(first);
             let second = crate::pages::draw::DrawingCanvasShowcase(Default::default());
-            assert_eq!(strokes.borrow().len(), 1, "leaving the page must not discard strokes");
+            assert_eq!(
+                strokes.borrow().len(),
+                1,
+                "leaving the page must not discard strokes"
+            );
             let clear = gallery_find_by_tid(&second, "gal-canvas-clear").unwrap();
             (clear.on_click.as_ref().unwrap().borrow_mut())();
             assert!(strokes.borrow().is_empty());
@@ -45,11 +52,22 @@ fn synthetic_stream_image_is_collectable_without_a_canvas_clock() {
             let mut tree = jadix::layout::LayoutTree::new();
             tree.build_and_layout(&mut root, 900.0, 900.0, [-1.0; 2]);
             for _ in 0..3 {
-                let frame = tree.build_and_layout_fast(&mut root, 900.0, 900.0, [-1.0; 2], true, false);
-                assert!(frame.textured_draws.iter().any(|draw| draw.texture_key == "jadix-gallery-stream"),
-                    "stream image must remain visible to collect");
-                assert!(!frame.textured_draws.iter().any(|draw| draw.texture_key.starts_with("jadix_canvas:")),
-                    "stream visibility must follow its image instead of a separate clock");
+                let frame =
+                    tree.build_and_layout_fast(&mut root, 900.0, 900.0, [-1.0; 2], true, false);
+                assert!(
+                    frame
+                        .textured_draws
+                        .iter()
+                        .any(|draw| draw.texture_key == "jadix-gallery-stream"),
+                    "stream image must remain visible to collect"
+                );
+                assert!(
+                    !frame
+                        .textured_draws
+                        .iter()
+                        .any(|draw| draw.texture_key.starts_with("jadix_canvas:")),
+                    "stream visibility must follow its image instead of a separate clock"
+                );
             }
         });
     });
@@ -64,7 +82,10 @@ fn window_session_showcase_mounts_and_reports_missing_session() {
             );
             let send = gallery_find_by_tid(&root, "gal-session-send").unwrap();
             (send.on_click.as_ref().unwrap().borrow_mut())();
-            assert_eq!(use_signal("gal-session-status", String::new).peek(), "请先打开会话次窗");
+            assert_eq!(
+                use_signal("gal-session-status", String::new).peek(),
+                "请先打开会话次窗"
+            );
         });
     });
 }
@@ -73,9 +94,17 @@ fn window_session_showcase_mounts_and_reports_missing_session() {
 fn gallery_button_showcase_retains_ui_source() {
     run_on_gallery_build_stack(|| {
         create_root(|| {
-            let root = crate::pages::basics::ButtonShowcase(crate::pages::basics::ButtonShowcaseProps::default());
-            let source = root.get_attr("jadix_ui_template_id").unwrap().replace('\\', "/");
-            assert!(source.starts_with("examples/gallery/src/pages/basics.rs:"), "{source}");
+            let root = crate::pages::basics::ButtonShowcase(
+                crate::pages::basics::ButtonShowcaseProps::default(),
+            );
+            let source = root
+                .get_attr("jadix_ui_template_id")
+                .unwrap()
+                .replace('\\', "/");
+            assert!(
+                source.starts_with("examples/gallery/src/pages/basics.rs:"),
+                "{source}"
+            );
         });
     });
 }
@@ -1315,6 +1344,7 @@ fn forms_date_time_pickers_tabs_mount_only_active() {
 
 #[test]
 fn forms_password_input_adornments_visible_when_focused() {
+    jadix_lucide::install().expect("install Lucide icon catalog and font");
     jadix::app::reactive::reset_registered_anchors();
     let mut fs = jadix::renderer::font_loader::create_font_system();
     jadix::renderer::font_loader::apply_default_families(fs.db_mut());
@@ -1322,10 +1352,15 @@ fn forms_password_input_adornments_visible_when_focused() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {
             let id = "gal-s2-input-pw";
-            use_signal(&jadix::components::input_value_signal_key(id), String::new)
-                .set("secret1".into());
-            use_signal("__jadix_button_focus_id", String::new)
-                .set(format!("{}{id}", jadix::components::INPUT_FOCUS_PREFIX));
+            use_signal(
+                &jadix_components::components::input_value_signal_key(id),
+                String::new,
+            )
+            .set("secret1".into());
+            use_signal("__jadix_button_focus_id", String::new).set(format!(
+                "{}{id}",
+                jadix_components::components::INPUT_FOCUS_PREFIX
+            ));
 
             let mut tree = jadix::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
             let pw = gallery_find_by_tid(&tree, id).expect("password input root");
@@ -1385,7 +1420,7 @@ fn gallery_collect_input_bounds(
     out: &mut Vec<(String, [f32; 4])>,
 ) {
     if let Some(fid) = el.focus_id.as_deref() {
-        if let Some(rest) = fid.strip_prefix(jadix::components::INPUT_FOCUS_PREFIX) {
+        if let Some(rest) = fid.strip_prefix(jadix_components::components::INPUT_FOCUS_PREFIX) {
             out.push((rest.to_string(), el.layout_bounds));
         }
     }
@@ -1416,12 +1451,12 @@ fn forms_input_showcase_keeps_caret_when_first_field_partially_clipped() {
                 let showcase = "gal-s2-input-a";
                 let adornment = "gal-ia-search";
                 use_signal(
-                    &jadix::components::input_value_signal_key(showcase),
+                    &jadix_components::components::input_value_signal_key(showcase),
                     String::new,
                 )
                 .set("hello".into());
                 use_signal(
-                    &jadix::components::input_value_signal_key(adornment),
+                    &jadix_components::components::input_value_signal_key(adornment),
                     String::new,
                 )
                 .set("query".into());
@@ -1433,7 +1468,7 @@ fn forms_input_showcase_keeps_caret_when_first_field_partially_clipped() {
                 ) -> (bool, bool, bool, f32, Vec<(String, [f32; 4])>, usize) {
                     use_signal("__jadix_button_focus_id", String::new).set(format!(
                         "{}{focus_rest}",
-                        jadix::components::INPUT_FOCUS_PREFIX
+                        jadix_components::components::INPUT_FOCUS_PREFIX
                     ));
                     let mut tree =
                         jadix::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
@@ -2359,22 +2394,52 @@ fn themed_buttons_and_motion_labels_keep_their_first_layout_geometry() {
         let mut fonts = jadix::renderer::font_loader::create_font_system();
         jadix::renderer::font_loader::apply_default_families(fonts.db_mut());
         jadix::text::install_shared_font_system(&mut fonts);
-        for preset in [jadix::style::ThemePreset::Fluent, jadix::style::ThemePreset::LiquidGlass] {
+        for preset in [
+            jadix::style::ThemePreset::Fluent,
+            jadix::style::ThemePreset::LiquidGlass,
+        ] {
             jadix::style::set_theme_preset(preset);
             for motion in [false, true] {
-                let (owner, mut tree) = create_root(|| if motion {
-                    crate::pages::motion::build_layout_motion_showcase()
-                } else { ThemeStyleShowcase(Default::default()) });
+                let (owner, mut tree) = create_root(|| {
+                    if motion {
+                        crate::pages::motion::build_layout_motion_showcase()
+                    } else {
+                        ThemeStyleShowcase(Default::default())
+                    }
+                });
                 let mut layout = jadix::layout::LayoutTree::new();
                 let first = layout.build_and_layout(&mut tree, 1280.0, 1600.0, [-1.0; 2]);
                 let next = layout.build_and_layout(&mut tree, 1280.0, 1600.0, [-1.0; 2]);
-                let needles: &[&str] = if motion { &["Card 1", "Card 2", "Card 3"] } else { &["Fluent", "Liquid Glass"] };
+                let needles: &[&str] = if motion {
+                    &["Card 1", "Card 2", "Card 3"]
+                } else {
+                    &["Fluent", "Liquid Glass"]
+                };
                 for needle in needles {
-                    let initial = first.text_nodes.iter().find(|text| text.text.contains(needle)).unwrap_or_else(|| panic!("{preset:?} first frame misses {needle}"));
-                    let settled = next.text_nodes.iter().find(|text| text.text == initial.text).unwrap();
-                    assert!(initial.width > 0.0 && initial.height > 0.0 && initial.style.color_resolved()[3] > 0, "{needle} must have visible ink");
-                    assert!((initial.x - settled.x).abs() < 0.1 && (initial.y - settled.y).abs() < 0.1,
-                        "{preset:?}/{needle} first frame ({},{}) differs from ({},{})", initial.x, initial.y, settled.x, settled.y);
+                    let initial = first
+                        .text_nodes
+                        .iter()
+                        .find(|text| text.text.contains(needle))
+                        .unwrap_or_else(|| panic!("{preset:?} first frame misses {needle}"));
+                    let settled = next
+                        .text_nodes
+                        .iter()
+                        .find(|text| text.text == initial.text)
+                        .unwrap();
+                    assert!(
+                        initial.width > 0.0
+                            && initial.height > 0.0
+                            && initial.style.color_resolved()[3] > 0,
+                        "{needle} must have visible ink"
+                    );
+                    assert!(
+                        (initial.x - settled.x).abs() < 0.1 && (initial.y - settled.y).abs() < 0.1,
+                        "{preset:?}/{needle} first frame ({},{}) differs from ({},{})",
+                        initial.x,
+                        initial.y,
+                        settled.x,
+                        settled.y
+                    );
                 }
                 owner.dispose();
                 jadix::app::reactive::reset_registered_anchors();
@@ -2410,7 +2475,10 @@ fn theme_section_glass_covers_controls_and_supports_opaque_fallback() {
                     glass_count += usize::from(element.style.glass.is_some());
                     stack.extend(element.children.iter());
                 }
-                assert!(glass_count > 10, "cards and ordinary controls share the optical material");
+                assert!(
+                    glass_count > 10,
+                    "cards and ordinary controls share the optical material"
+                );
                 assert!(gallery_find_by_tid(&tree, "gal-theme-optical-stage").is_some());
                 assert!(gallery_find_by_tid(&tree, "gal-theme-optical-grid").is_some());
                 let toggle = gallery_find_by_tid(&tree, "gal-theme-opacity").unwrap();
@@ -2451,8 +2519,12 @@ fn theme_section_switches_light_dark_and_system_preferences() {
                     assert_eq!(jadix::style::theme_mode(), mode);
                 }
                 let updated = ThemeStyleShowcase(Default::default());
-                let selected = gallery_find_by_tid(&updated, &format!("gal-theme-mode-{name}")).unwrap();
-                assert_eq!(selected.attrs.get("data-variant").map(String::as_str), Some("secondary"));
+                let selected =
+                    gallery_find_by_tid(&updated, &format!("gal-theme-mode-{name}")).unwrap();
+                assert_eq!(
+                    selected.attrs.get("data-variant").map(String::as_str),
+                    Some("secondary")
+                );
             }
         });
         jadix::style::set_theme_preference(previous_preference);

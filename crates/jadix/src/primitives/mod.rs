@@ -37,9 +37,14 @@ pub mod svg_smil;
 pub mod text;
 
 pub use canvas::{canvas, Canvas2D, CanvasBuilder, CanvasSize, ATTR_CANVAS_PAINT};
+pub use div::{boxed, div, gstack, hstack, r#box, vstack, BoxBuilder};
 pub use effect_wrap::{effect_wrap, EffectWrapBuilder};
 pub use interactive::{apply_disabled, interactive, InteractiveBuilder};
-pub use media::{audio, video, Audio, AudioBuilder, AudioProps, MediaAspectRatio, MediaFit, MediaRotation, Video, VideoBuilder, VideoProps};
+pub use media::{
+    audio, video, AudioBuilder, MediaAspectRatio, MediaFit, MediaRotation, VideoBuilder,
+};
+#[cfg(feature = "macros")]
+pub use media::{Audio, AudioProps, Video, VideoProps};
 pub use overlay::{overlay, OverlayBuilder};
 pub use path::{
     attach_path, attach_polyline, decode_path_d, draw_polyline_batch, draw_polyline_batch_stub,
@@ -51,8 +56,9 @@ pub use path::{
     ATTR_PATH_FILL, ATTR_PATH_FIT_LEAF, ATTR_PATH_KIND, ATTR_PATH_MARKERS, ATTR_PATH_POINTS,
     ATTR_PATH_STROKE, ATTR_PATH_STROKE_WIDTH, ATTR_PATH_VIEWBOX,
 };
+pub use portal::{portal, PortalBuilder};
+#[cfg(feature = "macros")]
 pub use portal::{Portal, PortalProps};
-pub use div::{boxed, div, gstack, hstack, r#box, vstack, BoxBuilder};
 pub use scene3d::{
     scene3d, Scene3dBuilder, Scene3dCamera, Scene3dLight, Scene3dMaterial, ATTR_SCENE3D,
 };

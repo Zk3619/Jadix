@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Native theme regression: actual primary/secondary trees and retained pixels.
 use super::*;
 use crate::core::reactivity::{create_effect, create_root};
@@ -321,14 +321,21 @@ fn material_exit_keeps_backdrop_until_the_opaque_crossfade_is_presented() {
     use winit::window::WindowId;
 
     fn backdrop(window: &dyn Window) -> i32 {
-        let RawWindowHandle::Win32(raw) = window.window_handle().unwrap().as_raw() else { panic!("Win32"); };
+        let RawWindowHandle::Win32(raw) = window.window_handle().unwrap().as_raw() else {
+            panic!("Win32");
+        };
         let mut value = 0_i32;
-        assert_eq!(unsafe {
-            windows_sys::Win32::Graphics::Dwm::DwmGetWindowAttribute(
-                raw.hwnd.get() as _,
-                windows_sys::Win32::Graphics::Dwm::DWMWA_SYSTEMBACKDROP_TYPE as u32,
-                &mut value as *mut i32 as _, std::mem::size_of_val(&value) as u32)
-        }, 0);
+        assert_eq!(
+            unsafe {
+                windows_sys::Win32::Graphics::Dwm::DwmGetWindowAttribute(
+                    raw.hwnd.get() as _,
+                    windows_sys::Win32::Graphics::Dwm::DWMWA_SYSTEMBACKDROP_TYPE as u32,
+                    &mut value as *mut i32 as _,
+                    std::mem::size_of_val(&value) as u32,
+                )
+            },
+            0
+        );
         value
     }
 
@@ -341,43 +348,113 @@ fn material_exit_keeps_backdrop_until_the_opaque_crossfade_is_presented() {
             crate::style::set_css_transition_virtual_timeline(true);
             crate::style::set_css_transition_timeline_ms(0.0);
             crate::style::set_theme_transition_config(crate::style::ThemeTransitionConfig {
-                enabled: true, duration_ms: 180.0, easing: "linear".into(),
+                enabled: true,
+                duration_ms: 180.0,
+                easing: "linear".into(),
             });
             crate::style::set_theme_preset(crate::style::ThemePreset::Fluent);
-            let options = crate::app::WindowOptions::new().follow_theme(true).size(320.0, 200.0);
-            let window: Arc<dyn Window> = Arc::from(event_loop.create_window(options.to_window_attributes()).unwrap());
-            let mut state = crate::utils::block_on::block_on(AppState::new_bootstrap(window, options));
+            let options = crate::app::WindowOptions::new()
+                .follow_theme(true)
+                .size(320.0, 200.0);
+            let window: Arc<dyn Window> = Arc::from(
+                event_loop
+                    .create_window(options.to_window_attributes())
+                    .unwrap(),
+            );
+            let mut state =
+                crate::utils::block_on::block_on(AppState::new_bootstrap(window, options));
             state.rebuild_ui(Element::new().w("100%").h("100%"));
             let mut clock = 0.0;
-            for material in [crate::style::ThemePreset::Fluent, crate::style::ThemePreset::LiquidGlass] {
-                for opaque in [crate::style::ThemePreset::Shadcn, crate::style::ThemePreset::Material3] {
+            for material in [
+                crate::style::ThemePreset::Fluent,
+                crate::style::ThemePreset::LiquidGlass,
+            ] {
+                for opaque in [
+                    crate::style::ThemePreset::Shadcn,
+                    crate::style::ThemePreset::Material3,
+                ] {
                     crate::style::set_theme_preset(material);
                     state.sync_window_theme();
-                    state.render([-1.0; 2], ScrollbarUpdateMode::Full, None, false, false, false).unwrap();
+                    state
+                        .render(
+                            [-1.0; 2],
+                            ScrollbarUpdateMode::Full,
+                            None,
+                            false,
+                            false,
+                            false,
+                        )
+                        .unwrap();
                     clock += 200.0;
                     crate::style::set_css_transition_timeline_ms(clock);
-                    state.render([-1.0; 2], ScrollbarUpdateMode::Full, None, false, false, false).unwrap();
+                    state
+                        .render(
+                            [-1.0; 2],
+                            ScrollbarUpdateMode::Full,
+                            None,
+                            false,
+                            false,
+                            false,
+                        )
+                        .unwrap();
                     let material_backdrop = backdrop(state.window.as_ref());
                     crate::style::set_theme_preset(opaque);
                     state.sync_window_theme();
                     assert!(state.pending_window_chrome);
                     assert_eq!(backdrop(state.window.as_ref()), material_backdrop);
-                    state.render([-1.0; 2], ScrollbarUpdateMode::Full, None, false, false, false).unwrap();
+                    state
+                        .render(
+                            [-1.0; 2],
+                            ScrollbarUpdateMode::Full,
+                            None,
+                            false,
+                            false,
+                            false,
+                        )
+                        .unwrap();
                     assert!(state.pending_window_chrome);
                     clock += 90.0;
                     crate::style::set_css_transition_timeline_ms(clock);
-                    state.render([-1.0; 2], ScrollbarUpdateMode::Full, None, false, false, false).unwrap();
+                    state
+                        .render(
+                            [-1.0; 2],
+                            ScrollbarUpdateMode::Full,
+                            None,
+                            false,
+                            false,
+                            false,
+                        )
+                        .unwrap();
                     assert!(state.pending_window_chrome);
                     assert_eq!(backdrop(state.window.as_ref()), material_backdrop);
                     clock += 110.0;
                     crate::style::set_css_transition_timeline_ms(clock);
-                    state.render([-1.0; 2], ScrollbarUpdateMode::Full, None, false, false, false).unwrap();
+                    state
+                        .render(
+                            [-1.0; 2],
+                            ScrollbarUpdateMode::Full,
+                            None,
+                            false,
+                            false,
+                            false,
+                        )
+                        .unwrap();
                     assert!(!state.pending_window_chrome);
                     assert_eq!(backdrop(state.window.as_ref()), 1);
-                    let image = readback_texture(&state.device, &state.queue,
-                        state.present_retain.color_texture_for_test().unwrap(), state.config.width, state.config.height,
-                        state.device.create_command_encoder(&Default::default())).unwrap();
-                    assert_eq!(image.pixel(160, 100).unwrap()[3], 255, "{material:?} -> {opaque:?}");
+                    let image = readback_texture(
+                        &state.device,
+                        &state.queue,
+                        state.present_retain.color_texture_for_test().unwrap(),
+                        state.config.width,
+                        state.config.height,
+                        state.device.create_command_encoder(&Default::default()),
+                    )
+                    .unwrap();
+                    assert_eq!(
+                        image.pixel(160, 100).unwrap()[3],
+                        255,
+                        "{material:?} -> {opaque:?}"
+                    );
                 }
             }
             state.window.set_visible(false);

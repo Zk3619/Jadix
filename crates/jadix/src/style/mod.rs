@@ -23,11 +23,11 @@ pub mod filter;
 mod focus_ring;
 mod generator;
 mod glass;
-pub(crate) mod liquid_flow;
 pub(crate) mod gradient;
 mod into_value;
 pub mod keyframes;
 mod keyframes_parse;
+pub(crate) mod liquid_flow;
 pub(crate) mod offset_path;
 mod scroll_timeline;
 mod semantic_tone;
@@ -58,7 +58,7 @@ pub(crate) use animatable::{
     write_value as write_animatable_value,
 };
 pub(crate) use animation::css_timeline_now_ms;
-pub(crate) use animation::note_page_css_needs_frame;
+pub use animation::note_page_css_needs_frame;
 pub use animation::{
     advance_css_transition_timeline_ms, animation_run_active, any_page_css_needs_frame,
     any_ui_animation_active, assign_transition_specified,
@@ -113,10 +113,13 @@ pub use focus_ring::{
     FOCUS_RING_BLUR, FOCUS_RING_HARD_SPREAD, FOCUS_RING_SOFT_BLUR,
 };
 pub use generator::{
-    animate, any_value_generator_active, find_spring, follow, stagger_ms, tick_value_generators,
-    use_animated, AnimatedNumber, GeneratorSample, Inertia, InertiaOptions, RepeatMode, Spring,
-    SpringOptions, SpringPhysics, StaggerFrom, TweenOptions, ValueDriver,
+    animate, any_value_generator_active, find_spring, follow, tick_value_generators, use_animated,
+    AnimatedNumber, GeneratorSample, Inertia, InertiaOptions, RepeatMode, Spring, SpringOptions,
+    SpringPhysics, TweenOptions, ValueDriver,
 };
+#[cfg(feature = "animation-ex")]
+pub use generator::{stagger_ms, StaggerFrom};
+pub use glass::GlassMaterial;
 pub use gradient::{
     ensure_gradient_texture, flush_gradient_textures, gradient_raster_dpi, gradient_texture_radii,
     gradient_texture_size, parse_gradient, rasterize_gradient, sample_gradient,
@@ -168,23 +171,22 @@ pub use text_style::{
     parse_text_shadow, InputCaretDraw, TextAlign, TextAlignDeclaration, TextDecorationStyle,
     TextDirection, TextOverflow, TextSpan, TextSpanKind, TextStyle, WhiteSpace,
 };
-pub(crate) use theme::{take_system_theme_refresh, theme_generation, update_system_theme};
-pub use glass::GlassMaterial;
-pub use theme_style::{set_theme_preset, theme_preset, ThemePreset, ThemeStyles};
 pub use theme::{
     focus_ring_style, focus_ring_width, get_theme, is_dark_theme, set_focus_ring_style,
     set_focus_ring_width, set_theme, set_theme_mode, set_theme_preference, theme_mode,
-    theme_preference, toggle_theme_mode, with_theme,
-    DesignTokens, FocusRingStyle, Theme, ThemeMode, ThemePreference, ThemeTransitionConfig,
-    DEFAULT_FOCUS_RING_WIDTH,
+    theme_preference, toggle_theme_mode, with_theme, DesignTokens, FocusRingStyle, Theme,
+    ThemeMode, ThemePreference, ThemeTransitionConfig, DEFAULT_FOCUS_RING_WIDTH,
 };
+pub(crate) use theme::{take_system_theme_refresh, theme_generation, update_system_theme};
 pub use theme_override::{
     apply_theme_patch, clear_theme_overrides, compose_theme, install_theme_overrides,
     load_and_install_theme_overrides, load_theme_overrides, parse_theme_overrides_str,
-    set_theme_transition_config, theme_transition_config, theme_overrides, DesignTokensPatch, ThemeOverrideError,
-    ThemeOverrides,
+    set_theme_transition_config, theme_overrides, theme_transition_config, DesignTokensPatch,
+    ThemeOverrideError, ThemeOverrides,
 };
 pub(crate) use theme_override::{restore_theme_overrides, snapshot_theme_overrides};
+pub use theme_style::{set_theme_preset, theme_preset, ThemePreset, ThemeStyles};
+#[cfg(all(test, target_os = "windows"))]
 #[cfg(all(test, target_os = "windows"))]
 pub(crate) use timeline::set_global_time_for_test;
 pub use timeline::{
@@ -222,6 +224,3 @@ pub use variant_override::{
 };
 pub use waapi::{get_animations, Animation, ComputedTiming, Keyframe, KeyframeEffect};
 pub use writing_mode::{PhysicalSide, WritingMode};
-
-#[cfg(feature = "components")]
-pub(crate) mod button_chrome;

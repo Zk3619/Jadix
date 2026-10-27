@@ -23,6 +23,9 @@ pub use jadix_tasks::{
 
 use super::{ui_bridge::run_on_ui_thread, window_scope};
 
+#[cfg(feature = "runtime-tokio")]
+pub use jadix_tokio::TokioExecutor;
+
 #[derive(Default)]
 struct ScopeState {
     closed: AtomicBool,

@@ -16,7 +16,7 @@ use crate::style::{
 };
 
 pub struct BoxBuilder {
-    pub(crate) el: Element,
+    pub el: Element,
     /// When set and overflow is `scroll`/`auto` on an axis, registers as a scroll viewport.
     scroll_id: Option<String>,
     scroll_behavior: String,

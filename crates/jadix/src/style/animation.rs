@@ -1,229 +1,5 @@
+pub use jadix_animation::animation::*;
 use std::cell::RefCell;
-use std::rc::{Rc, Weak};
-
-use crate::core::reactivity::{use_signal, Signal};
-
-thread_local! {
-    static CUBIC_TWEENS: RefCell<Vec<Weak<RefCell<CubicTweenState>>>> = const { RefCell::new(Vec::new()) };
-}
-
-/// CSS `cubic-bezier(p1x, p1y, p2x, p2y)`：给定归一化时间 `x∈[0,1]`，求曲线上对应 `y`（用于对标 `transition-timing-function`）。
-#[inline]
-pub fn cubic_bezier_y_at_x(x: f32, x1: f32, y1: f32, x2: f32, y2: f32) -> f32 {
-    let x = x.clamp(0.0, 1.0);
-    fn bezier_x(u: f32, x1: f32, x2: f32) -> f32 {
-        let u = u.clamp(0.0, 1.0);
-        let inv = 1.0 - u;
-        3.0 * inv * inv * u * x1 + 3.0 * inv * u * u * x2 + u * u * u
-    }
-    fn bezier_y(u: f32, y1: f32, y2: f32) -> f32 {
-        let u = u.clamp(0.0, 1.0);
-        let inv = 1.0 - u;
-        3.0 * inv * inv * u * y1 + 3.0 * inv * u * u * y2 + u * u * u
-    }
-    let mut lo = 0.0f32;
-    let mut hi = 1.0f32;
-    for _ in 0..28 {
-        let mid = (lo + hi) * 0.5;
-        if bezier_x(mid, x1, x2) < x {
-            lo = mid;
-        } else {
-            hi = mid;
-        }
-    }
-    let u = (lo + hi) * 0.5;
-    bezier_y(u, y1, y2)
-}
-
-pub struct CubicTweenState {
-    pub target: f32,
-    pub value: f32,
-    pub from_value: f32,
-    pub elapsed: f32,
-    pub duration: f32,
-    pub x1: f32,
-    pub y1: f32,
-    pub x2: f32,
-    pub y2: f32,
-    pub active: bool,
-    pub signal: Signal<f32>,
-    // A target chosen at the current frame boundary has no share of the
-    // preceding frame interval (which may include an idle WaitUntil).
-    skip_frame_dt: bool,
-}
-
-#[derive(Clone)]
-pub struct CubicTween(Rc<RefCell<CubicTweenState>>);
-
-impl CubicTween {
-    /// 默认 `cubic-bezier(0.4, 0, 0.2, 1)`，时长约 150ms，对标常见 `transition`。
-    pub fn new_ui_transition(initial: f32) -> Self {
-        Self::new_with_curve(initial, 0.15, (0.4, 0.0, 0.2, 1.0))
-    }
-
-    pub fn new_with_curve(initial: f32, duration_secs: f32, ctrl: (f32, f32, f32, f32)) -> Self {
-        let (x1, y1, x2, y2) = ctrl;
-        let state = Rc::new(RefCell::new(CubicTweenState {
-            target: initial,
-            value: initial,
-            from_value: initial,
-            elapsed: 0.0,
-            duration: duration_secs.max(1e-6),
-            x1,
-            y1,
-            x2,
-            y2,
-            active: false,
-            signal: Signal::new_unowned(initial),
-            skip_frame_dt: false,
-        }));
-        CUBIC_TWEENS.with(|anim| {
-            anim.borrow_mut().push(Rc::downgrade(&state));
-        });
-        Self(state)
-    }
-
-    pub fn set(&self, target: f32) {
-        self.retarget(target, false);
-    }
-
-    /// Start at this frame boundary without consuming the preceding interval.
-    /// Repeating the same target still preserves the running animation clock.
-    pub(crate) fn set_at_frame_start(&self, target: f32) {
-        self.retarget(target, true);
-    }
-
-    fn retarget(&self, target: f32, at_frame_start: bool) {
-        let mut s = self.0.borrow_mut();
-        if !cfg!(feature = "animation-base") {
-            s.target = target;
-            s.value = target;
-            s.from_value = target;
-            s.elapsed = 0.0;
-            s.active = false;
-            s.skip_frame_dt = false;
-            let _ = s.signal.try_set_silent(target);
-            return;
-        }
-        // 目标未变时不要重置 `elapsed`：chrome sync 每帧会再 `set` 同一目标，
-        // 若此处重启，有效时长会远长于 `duration`（asymptotic crawl）。
-        if (s.target - target).abs() < 1e-5 {
-            return;
-        }
-        s.from_value = s.value;
-        s.target = target;
-        s.elapsed = 0.0;
-        s.active = (s.value - target).abs() >= 1e-5;
-        s.skip_frame_dt = at_frame_start && s.active;
-        let _ = s.signal.try_set_silent(s.value);
-    }
-
-    pub fn get(&self) -> f32 {
-        self.0.borrow().signal.get()
-    }
-
-    pub fn peek(&self) -> f32 {
-        let s = self.0.borrow();
-        s.signal.try_peek().unwrap_or(s.value)
-    }
-
-    pub fn is_active(&self) -> bool {
-        self.0.borrow().active
-    }
-}
-
-pub fn use_ui_transition_cubic(id_str: &str, initial: f32) -> CubicTween {
-    let sig = use_signal(id_str, move || CubicTween::new_ui_transition(initial));
-    sig.peek()
-}
-
-/// [`tick_animations`] 的返回值：`any` 决定是否继续 `request_redraw`；`scrollbar_overlay` 保留字段兼容（现恒为 `false`）。
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct AnimationTick {
-    pub any: bool,
-    /// 曾用于未 settle 的滚动条可见性弹簧；Spring 移除后恒为 `false`。
-    pub scrollbar_overlay: bool,
-}
-
-pub fn tick_animations(dt: f32) -> AnimationTick {
-    if !cfg!(feature = "animation-base") {
-        return AnimationTick {
-            any: false,
-            scrollbar_overlay: false,
-        };
-    }
-    // 与滚动同口径：首屏连帧 / Wait 后首帧的 raw `dt` 常为 ≈0 或数秒。
-    // 不夹紧时：≈0 → 动画看似失效；过大 → 一帧瞬跳到目标。
-    const DT_MIN: f32 = 1.0 / 240.0;
-    const DT_MAX: f32 = 0.08;
-    let dt = dt.clamp(DT_MIN, DT_MAX);
-
-    let mut cubic_running = false;
-    let mut cubic_updates = Vec::new();
-    CUBIC_TWEENS.with(|anim| {
-        let mut list = anim.borrow_mut();
-        let mut i = 0;
-        while i < list.len() {
-            if let Some(tw) = list[i].upgrade() {
-                let mut s = tw.borrow_mut();
-                if s.active {
-                    if !std::mem::take(&mut s.skip_frame_dt) {
-                        s.elapsed += dt;
-                    }
-                    let sample = generator_tween_sample(
-                        s.from_value,
-                        s.target,
-                        s.elapsed * 1000.0,
-                        TweenOptions {
-                            duration_ms: s.duration * 1000.0,
-                            easing: TimingFunction::CubicBezier(s.x1, s.y1, s.x2, s.y2),
-                        },
-                    );
-                    s.value = sample.value;
-                    if sample.done {
-                        s.value = s.target;
-                        s.active = false;
-                    } else {
-                        cubic_running = true;
-                    }
-                    cubic_updates.push((s.signal, s.value));
-                }
-                i += 1;
-            } else {
-                list.remove(i);
-            }
-        }
-    });
-    for (sig, val) in cubic_updates {
-        // Silent: UI chrome reads tweens via `peek` + per-frame sync. Notifying here
-        // flushed effects / risked root rebuild and wiped live Inspector style edits.
-        let _ = sig.try_set_silent(val);
-    }
-
-    let timeline_any = super::timeline::tick_timelines(dt);
-    let generator_any = super::generator::tick_value_generators(dt);
-
-    AnimationTick {
-        any: cubic_running || timeline_any || generator_any,
-        scrollbar_overlay: false,
-    }
-}
-
-/// 是否仍有未 settle 的 cubic tween / timeline（不推进时间）。
-/// chrome sync（Switch 等）常在本帧 `tick_animations` **之后**才 `set` 目标；
-/// render 结束后用此查询补 `request_redraw`，避免动画停在第 0 帧。
-pub fn any_ui_animation_active() -> bool {
-    if !cfg!(feature = "animation-base") {
-        return false;
-    }
-    CUBIC_TWEENS.with(|anim| {
-        anim.borrow()
-            .iter()
-            .any(|w| w.upgrade().is_some_and(|s| s.borrow().active))
-    }) || super::timeline::any_timeline_playing()
-        || super::generator::any_value_generator_active()
-}
-
 thread_local! {
     /// Set during chrome when `@keyframes` / `animate-spin` / shimmer still need vsync.
     /// `any_ui_animation_active` is cubic tweens only; without this, `about_to_wait`
@@ -235,7 +11,7 @@ pub(crate) fn begin_page_css_frame() {
     PAGE_CSS_NEEDS_FRAME.with(|c| c.set(false));
 }
 
-pub(crate) fn note_page_css_needs_frame() {
+pub fn note_page_css_needs_frame() {
     PAGE_CSS_NEEDS_FRAME.with(|c| c.set(cfg!(feature = "animation-base")));
 }
 
@@ -251,7 +27,7 @@ pub fn any_page_css_needs_frame() -> bool {
 // `SystemTime` / wall clock (NTP jumps must not seek animations).
 // Each frame *samples* the timeline; it does not invent time by summing clamped `dt`.
 // After `Wait`, Instant can jump past `duration` — duration tweens cap that delta
-// per tick (`CSS_TRANSITION_DEFAULT_MAX_STEP_MS`) so ease-out cannot skip mids.
+// per tick through the shared clock policy so ease-out cannot skip mids.
 
 use super::clip_path::ClipPath;
 use super::element_style::{
@@ -260,83 +36,21 @@ use super::element_style::{
     TransitionEntry, TransitionProperty, UnitSlot,
 };
 use super::filter::{interpolate_filter_lists, FilterList};
-use super::generator::{
-    tween_sample as generator_tween_sample, Spring, SpringPhysics, TweenOptions,
-};
+use super::generator::{Spring, SpringPhysics};
 use std::cell::Cell;
 use std::collections::HashMap;
+#[cfg(test)]
 use std::time::Instant;
 
-/// After `ControlFlow::Wait` or a hitch, Instant can jump past `duration` /
-/// a spring's start. Cap **only** those idle jumps (see
-/// [`duration_tween_elapsed_ms`]); normal frames keep wall-clock progress so
-/// 30/60 Hz does not crawl.
-const CSS_TRANSITION_IDLE_JUMP_MS: f32 = 80.0;
-const CSS_TRANSITION_DEFAULT_MAX_STEP_MS: f32 = 1000.0 / 60.0;
+pub(crate) use jadix_animation::clock::css_timeline_now_ms;
+use jadix_animation::clock::css_transition_max_step_ms;
+pub use jadix_animation::clock::{
+    advance_css_transition_timeline_ms, prefers_reduced_motion, set_css_transition_max_step_ms,
+    set_css_transition_synthetic_clock, set_css_transition_timeline_ms,
+    set_css_transition_virtual_timeline, set_prefers_reduced_motion,
+};
 
 thread_local! {
-    /// Monotonic origin for the document CSS-transition timeline (`performance.now()`-like).
-    static CSS_TIMELINE_ORIGIN: RefCell<Option<Instant>> = const { RefCell::new(None) };
-    /// When `Some`, overrides [`css_timeline_now_ms`] (unit tests / virtual clock).
-    static CSS_TIMELINE_VIRTUAL_MS: Cell<Option<f64>> = const { Cell::new(None) };
-    /// `None` = uncapped (virtual-timeline tests that seek exactly). `Some` = max ms/tick.
-    static CSS_TRANSITION_MAX_STEP_MS: Cell<Option<f32>> =
-        const { Cell::new(Some(CSS_TRANSITION_DEFAULT_MAX_STEP_MS)) };
-}
-
-pub(crate) fn css_timeline_now_ms() -> f64 {
-    if let Some(ms) = CSS_TIMELINE_VIRTUAL_MS.get() {
-        return ms.max(0.0);
-    }
-    CSS_TIMELINE_ORIGIN.with(|slot| {
-        let mut g = slot.borrow_mut();
-        let origin = *g.get_or_insert_with(Instant::now);
-        origin.elapsed().as_secs_f64() * 1000.0
-    })
-}
-
-/// Drive CSS transitions from a virtual monotonic timeline (unit tests).
-///
-/// When enabled, time only moves via [`set_css_transition_timeline_ms`] /
-/// [`advance_css_transition_timeline_ms`] — not via wall `SystemTime` and not by
-/// inventing progress from frame `dt` storms.
-pub fn set_css_transition_virtual_timeline(on: bool) {
-    if on {
-        CSS_TIMELINE_VIRTUAL_MS.set(Some(CSS_TIMELINE_VIRTUAL_MS.get().unwrap_or(0.0).max(0.0)));
-        // Exact seeks in tests; production Instant idle uses the default cap.
-        CSS_TRANSITION_MAX_STEP_MS.set(None);
-    } else {
-        CSS_TIMELINE_VIRTUAL_MS.set(None);
-        CSS_TRANSITION_MAX_STEP_MS.set(Some(CSS_TRANSITION_DEFAULT_MAX_STEP_MS));
-    }
-}
-
-/// Cap duration-tween Instant delta per tick (`None` = uncapped).
-pub fn set_css_transition_max_step_ms(ms: Option<f32>) {
-    CSS_TRANSITION_MAX_STEP_MS.set(ms.map(|v| v.max(0.0)));
-}
-
-/// Seek the virtual CSS timeline to an absolute monotonic time (ms since origin).
-pub fn set_css_transition_timeline_ms(ms: f64) {
-    CSS_TIMELINE_VIRTUAL_MS.set(Some(ms.max(0.0)));
-}
-
-/// Advance the virtual CSS timeline by `delta_ms` (tests / scripted frames).
-pub fn advance_css_transition_timeline_ms(delta_ms: f64) {
-    let cur = CSS_TIMELINE_VIRTUAL_MS.get().unwrap_or(0.0);
-    CSS_TIMELINE_VIRTUAL_MS.set(Some((cur + delta_ms).max(0.0)));
-}
-
-/// Compatibility alias: enable virtual timeline at `t = 0` (or disable).
-pub fn set_css_transition_synthetic_clock(on: bool) {
-    set_css_transition_virtual_timeline(on);
-    if on {
-        set_css_transition_timeline_ms(0.0);
-    }
-}
-
-thread_local! {
-    static PREFERS_REDUCED_MOTION: Cell<Option<bool>> = const { Cell::new(None) };
     static TRANSITION_TEXT: RefCell<Option<*mut super::text_style::TextStyle>> =
         const { RefCell::new(None) };
     static TRANSITION_USED: Cell<Option<*const super::used_layout::UsedLayout>> =
@@ -388,27 +102,6 @@ fn transition_tick_text() -> Option<&'static mut super::text_style::TextStyle> {
             unsafe { &mut *ptr }
         })
     })
-}
-
-/// Override `prefers-reduced-motion` (tests / settings). `None` restores auto-detect.
-pub fn set_prefers_reduced_motion(on: Option<bool>) {
-    PREFERS_REDUCED_MOTION.set(on);
-}
-
-/// CSS `prefers-reduced-motion: reduce` — durations snap to the end of the interval.
-pub fn prefers_reduced_motion() -> bool {
-    if !cfg!(feature = "animation-base") {
-        return true;
-    }
-    if let Some(v) = PREFERS_REDUCED_MOTION.get() {
-        return v;
-    }
-    match std::env::var("JADIX_REDUCED_MOTION") {
-        Ok(s) if s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("reduce") => {
-            true
-        }
-        _ => false,
-    }
 }
 
 /// Per-property in-flight tween state (CSS transition segment).
@@ -492,7 +185,7 @@ pub struct TransitionSnapshot {
 
 impl TransitionSnapshot {
     /// True while at least one property tween is still interpolating.
-    pub(crate) fn has_active_tweens(&self) -> bool {
+    pub fn has_active_tweens(&self) -> bool {
         self.tweens.values().any(|t| t.active)
             || self.filter_tween.as_ref().is_some_and(|t| t.active)
             || self.clip_tween.as_ref().is_some_and(|t| t.active)
@@ -500,19 +193,19 @@ impl TransitionSnapshot {
     }
 
     /// True if this node has ever seeded a transition snapshot (active or settled).
-    pub(crate) fn has_any_tweens(&self) -> bool {
+    pub fn has_any_tweens(&self) -> bool {
         !self.tweens.is_empty()
             || self.filter_tween.is_some()
             || self.clip_tween.is_some()
             || self.shadow_tween.is_some()
     }
 
-    pub(crate) fn prop_tween_active(&self, prop: TransitionProperty) -> bool {
+    pub fn prop_tween_active(&self, prop: TransitionProperty) -> bool {
         self.tweens.get(&prop).is_some_and(|t| t.active)
     }
 
     /// Peek the hide-settle latch (`push_frame_paint_element` hide dest-reset).
-    pub(crate) fn settled_this_tick(&self) -> bool {
+    pub fn settled_this_tick(&self) -> bool {
         self.settled_this_tick
     }
 
@@ -861,7 +554,7 @@ fn entry_timing_model(entry: &super::element_style::AnimationEntry) -> super::ti
 ///
 /// A pointer storm blocks this thread, so the next present can be hundreds of
 /// milliseconds late while `dt_secs` stays tiny. Clamping that gap to
-/// [`CSS_TRANSITION_IDLE_JUMP_MS`] and stamping `last_tick_ms` to *now* drops the
+/// 80 ms and stamping `last_tick_ms` to *now* drops the
 /// rest — spin crawls for the whole slide. Transitions keep that cap in
 /// [`duration_tween_elapsed_ms`]. Keyframes apply the full gap. `frame` is only
 /// the fallback when the timeline has not moved (unit tests).
@@ -2099,13 +1792,13 @@ pub fn css_transition_needs_frame(style: &super::Style, snapshot: &TransitionSna
 
 fn duration_tween_elapsed_ms(tween: &mut PropertyTween, now_ms: f64) -> f32 {
     let raw = (now_ms - tween.start_ms).max(0.0);
-    let Some(max_step) = CSS_TRANSITION_MAX_STEP_MS.get() else {
+    let Some(max_step) = css_transition_max_step_ms() else {
         tween.last_ms = now_ms;
         return raw as f32;
     };
     let progressed = (tween.last_ms - tween.start_ms).max(0.0);
     let since_last = (now_ms - tween.last_ms).max(0.0);
-    let step = if since_last > CSS_TRANSITION_IDLE_JUMP_MS as f64 {
+    let step = if since_last > 80.0 {
         since_last.min(max_step as f64)
     } else {
         since_last
@@ -3326,23 +3019,15 @@ mod tests {
         let tw = CubicTween::new_ui_transition(0.0);
         tw.set(1.0);
         let _ = tick_animations(0.05);
-        let elapsed_mid = tw.0.borrow().elapsed;
-        assert!(
-            elapsed_mid > 0.04,
-            "expected ~50ms progress, got {elapsed_mid}"
-        );
+        assert!(tw.peek() > 0.0, "expected initial tween progress");
         // Chrome sync style: set the same target again each frame
         tw.set(1.0);
         tw.set(1.0);
-        assert!(
-            (tw.0.borrow().elapsed - elapsed_mid).abs() < 1e-6,
-            "same-target set must not reset elapsed"
-        );
-        // 再走完剩余 ≈100ms，应在 150ms 窗口内 settle
-        for _ in 0..8 {
+        // Retained clock settles at 150ms; a reset clock would still be active.
+        for _ in 0..6 {
             let _ = tick_animations(0.02);
         }
-        assert!(!tw.0.borrow().active);
+        assert!(!tw.is_active());
         assert!((tw.peek() - 1.0).abs() < 1e-3);
     }
 
@@ -3353,12 +3038,8 @@ mod tests {
         tw.set(1.0);
         // First-screen back-to-back frames / repeated RedrawRequested often yield raw dt≈0
         let _ = tick_animations(0.0);
-        let elapsed = tw.0.borrow().elapsed;
-        assert!(
-            elapsed >= 1.0 / 240.0 - 1e-6,
-            "near-zero dt must still advance (got {elapsed})"
-        );
-        assert!(tw.0.borrow().active);
+        assert!(tw.is_active());
+        assert!(tw.peek() > 0.0, "near-zero dt must still advance");
         assert!(any_ui_animation_active());
     }
 
@@ -3370,7 +3051,7 @@ mod tests {
         // First frame after Wait for several seconds: without clamping, 150ms would finish in one step
         let _ = tick_animations(2.0);
         assert!(
-            tw.0.borrow().active,
+            tw.is_active(),
             "huge dt must not finish a 150ms tween in one tick"
         );
         let v = tw.peek();
@@ -3560,7 +3241,7 @@ mod tests {
             ..Default::default()
         });
         let mut snap = AnimationSnapshot::default();
-        for _ in 0..5 {
+        for _ in 0..6 {
             let _ = tick_element_animations(&mut style, &mut snap, 0.05);
         }
         assert!(

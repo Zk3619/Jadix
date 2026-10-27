@@ -1,6 +1,6 @@
 use jadix::app::reactive::{bind_text, reactive_view};
-use jadix::components::code_editor::code_editor;
-use jadix::prelude::*;
+use jadix_components::components::code_editor::code_editor;
+use jadix_components::prelude::*;
 use std::{path::PathBuf, rc::Rc};
 mod ide_lsp;
 mod lsp;

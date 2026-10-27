@@ -1,8 +1,10 @@
 //! 每帧 chrome sync（边框 / 焦点环 / 文本 / caret / 多行高度与滚入视口）。
 
+use super::field::{
+    effective_invalid, map_byte_index_to_masked, map_byte_range_to_masked, resolve_placeholder,
+    set_adornment_visible, InputType,
+};
 use super::strings::{compose_text_edit_strings, finish_selection_draw, TextEditStringsInput};
-use super::field::{effective_invalid, map_byte_index_to_masked, map_byte_range_to_masked, resolve_placeholder, set_adornment_visible, InputType};
-use crate::utils::text_field::{input_caret_signal_key, input_clear_template_id, input_ime_anchor_signal_key, input_overwrite_signal_key, input_password_reveal_signal_key, input_preedit_marks_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id, input_selection_signal_key, input_text_template_id, input_value_signal_key};
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{parse_color, parse_text_color, Element, InputPaintSync, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
@@ -16,6 +18,12 @@ use crate::utils::text_field::{
     ensure_caret_visible_scroll_x, ensure_caret_visible_scroll_y_at_line, extra_carets_signal,
     focus_id_for_text_edit, input_scroll_x_signal_key, pull_controlled_into_store,
     textarea_wrap_width_signal_key,
+};
+use crate::utils::text_field::{
+    input_caret_signal_key, input_clear_template_id, input_ime_anchor_signal_key,
+    input_overwrite_signal_key, input_password_reveal_signal_key, input_preedit_marks_signal_key,
+    input_preedit_sel_signal_key, input_preedit_signal_key, input_reveal_template_id,
+    input_selection_signal_key, input_text_template_id, input_value_signal_key,
 };
 
 #[cfg(test)]
@@ -518,16 +526,27 @@ fn sync_one_text_edit_paint(
                 || old.map(|c| c.selection_bg) != new.map(|c| c.selection_bg)
                 || old.and_then(|c| c.selection_foreground)
                     != new.and_then(|c| c.selection_foreground);
-            if selection_ink_changed
-                && (old.is_some_and(|c| {
-                    c.selection.is_some()
-                        || !c.extra_selections.is_empty()
-                        || c.overwrite_highlight.is_some()
-                }) || new.is_some_and(|c| {
-                    c.selection.is_some()
-                        || !c.extra_selections.is_empty()
-                        || c.overwrite_highlight.is_some()
-                }))
+            let preedit_ink_changed = old.and_then(|c| c.preedit_underline)
+                != new.and_then(|c| c.preedit_underline)
+                || old
+                    .map(|c| c.extra_preedit_underlines.as_slice())
+                    .unwrap_or(&[])
+                    != new
+                        .map(|c| c.extra_preedit_underlines.as_slice())
+                        .unwrap_or(&[])
+                || old.map(|c| c.preedit_ul.as_slice()).unwrap_or(&[])
+                    != new.map(|c| c.preedit_ul.as_slice()).unwrap_or(&[]);
+            if preedit_ink_changed
+                || (selection_ink_changed
+                    && (old.is_some_and(|c| {
+                        c.selection.is_some()
+                            || !c.extra_selections.is_empty()
+                            || c.overwrite_highlight.is_some()
+                    }) || new.is_some_and(|c| {
+                        c.selection.is_some()
+                            || !c.extra_selections.is_empty()
+                            || c.overwrite_highlight.is_some()
+                    })))
             {
                 // Selection is retained glyph/background ink, unlike the swapchain-only
                 // I-beam. Blurring a plain InputAdornment must repair the entire run.

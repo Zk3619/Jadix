@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 #[test]
 fn nested_scroll_pins_fit_after_coverage_deduplication() {
     let mut pins: Vec<_> = (0..30)
@@ -936,18 +936,10 @@ fn plain_input_blur_repairs_selection_not_only_ibeam() {
         let mut tree = LayoutTree::new();
         tree.build_and_layout(&mut root, 300.0, 40.0, [-1.0, -1.0]);
         let mut status = LayoutStatus::Clean;
-        crate::utils::text_edit::sync_text_edit_paint_subtree(
-            &mut root,
-            &mut tree,
-            &mut status,
-        );
+        crate::utils::text_edit::sync_text_edit_paint_subtree(&mut root, &mut tree, &mut status);
         let _ = take_frame_paint_nodes();
         focus.set(String::new());
-        crate::utils::text_edit::sync_text_edit_paint_subtree(
-            &mut root,
-            &mut tree,
-            &mut status,
-        );
+        crate::utils::text_edit::sync_text_edit_paint_subtree(&mut root, &mut tree, &mut status);
         assert!(
             take_frame_paint_nodes()
                 .iter()
@@ -986,10 +978,10 @@ fn cached_scroll_viewport_keeps_metrics_for_next_scroll_repair() {
 }
 #[test]
 fn paint_synced_input_refreshes_warmed_idle_cache() {
-    use crate::utils::text_edit::sync_text_edit_paint_subtree;
     use crate::core::reactivity::use_signal;
     use crate::core::tree::{Element, LayoutStatus};
     use crate::layout::layout_tree::LayoutTree;
+    use crate::utils::text_edit::sync_text_edit_paint_subtree;
     for multiline in [false, true] {
         let id = if multiline {
             "cache-textarea"

@@ -1,0 +1,19 @@
+[package]
+name = "jadix_animation"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Animation timing, spring, inertia, scalar players and timelines"
+readme = "README.md"
+
+[features]
+default = ["animation-base"]
+animation-base = []
+animation-ex = ["animation-base"]
+animation-path = ["animation-ex"]
+animation = ["animation-base", "animation-ex"]
+test-hooks = []
+
+[dependencies]
+jadix_core.workspace = true

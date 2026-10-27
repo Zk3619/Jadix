@@ -91,7 +91,11 @@ fn run_frames(window: Arc<dyn Window>) {
                 .border_width(1.0)
                 .border_color("border")
                 .border_style("dashed")
-                .child(crate::gallery_drag::snap_grid_lines(grids, visible))
+                .child(crate::gallery_drag::snap_grid_lines(
+                    grids,
+                    visible,
+                    std::rc::Rc::new(std::cell::Cell::new([0.0; 2])),
+                ))
                 .child(
                     Element::new()
                         .absolute()

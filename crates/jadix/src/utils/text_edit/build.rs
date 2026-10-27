@@ -24,7 +24,7 @@ use crate::utils::text_field::{
     input_text_template_id, input_type_signal_key, input_value_signal_key,
 };
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
-pub(crate) struct TextEditBuildParams {
+pub struct TextEditBuildParams {
     pub field_id: String,
     pub placeholder: String,
     pub disabled: bool,
@@ -66,7 +66,7 @@ pub(crate) struct TextEditBuildParams {
     /// [`crate::utils::document_registry::DocumentRegistry`] until `unregister`).
     pub drop_undo_on_unmount: bool,
 }
-pub(crate) fn build_text_edit_element(params: TextEditBuildParams) -> Element {
+pub fn build_text_edit_element(params: TextEditBuildParams) -> Element {
     let TextEditBuildParams {
         field_id,
         placeholder: explicit_placeholder,

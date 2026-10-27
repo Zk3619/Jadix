@@ -640,9 +640,7 @@ pub fn anchored_overlay_content(
     } else {
         reactive_anchor(view_id.clone(), render);
     }
-    flow_hidden_portal_host(
-        reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none(),
-    )
+    flow_hidden_portal_host(reactive_placeholder_sized(view_id, 0.0, 0.0).pointer_events_box_none())
 }
 
 /// RSX `<AnchoredOverlayContent>` entry (same implementation as [`anchored_overlay_content`]).
@@ -2394,7 +2392,7 @@ mod tests {
     /// play Fade exit (`fade-out-0`) instead of being pruned on the same frame.
     #[test]
     #[cfg(feature = "animation-base")]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn tab_unmount_plays_configured_floating_exit() {
         use std::cell::RefCell;
         use std::rc::Rc;

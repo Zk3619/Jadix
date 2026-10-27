@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Replay actual modal enter/exit frames and compare cached captures with fresh ones.
 use super::*;
 use crate::core::reactivity::{create_effect, create_root, use_signal};

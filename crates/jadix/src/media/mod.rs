@@ -12,10 +12,12 @@ pub mod gif;
 pub mod image;
 pub mod playback;
 pub(crate) mod remote;
+#[cfg(feature = "remote-asset-cache")]
+mod remote_cache;
 pub mod stream;
-pub mod texture;
 #[cfg(feature = "svg")]
 pub mod svg_raster;
+pub mod texture;
 pub mod yuv;
 
 pub use animation::{DecodedAnimation, DecodedFrame};
@@ -27,10 +29,13 @@ pub use image::{
     flip_vertical, grayscale, huerotate, invert, resize, rotate180, rotate270, rotate90,
     to_rgba_image, unsharpen, FilterType,
 };
-pub use remote::{
-    clear_remote_asset_fetcher, fetch_remote_bytes, is_remote_src, remote_asset_enabled,
-    remote_asset_fetcher_installed, set_remote_asset_fetcher, RemoteAssetFetcher,
-};
-pub use stream::{queue_media_frame, MediaFrame, MediaPlanes, PixelLayout, TextureColorSpace};
 pub use playback::*;
+pub use remote::{
+    clear_remote_asset_fetcher, fetch_remote_bytes, fetch_remote_bytes_shared, is_remote_src,
+    remote_asset_enabled, remote_asset_fetcher_installed, set_remote_asset_fetcher,
+    RemoteAssetFetcher,
+};
+#[cfg(feature = "remote-asset-cache")]
+pub use remote_cache::CachedRemoteAssetFetcher;
+pub use stream::{queue_media_frame, MediaFrame, MediaPlanes, PixelLayout, TextureColorSpace};
 pub use yuv::{bt709_yuv8_to_rgb, i420_frame, rgba8_to_i420};

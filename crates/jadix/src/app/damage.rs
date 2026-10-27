@@ -202,8 +202,8 @@ pub(crate) fn push_frame_paint_element_change_from_before(
     let mut kind = paint_kind_for_element(el);
     let composite_scrollbar = kind == PaintDirtyKind::Region
         && crate::core::scrollbar::auto_scrollbar_live_paint_alpha(el).is_some();
-    let pad = element_paint_outset_pad(el, rot_pad)
-        .max(if composite_scrollbar { 2.0 } else { 0.0 });
+    let pad =
+        element_paint_outset_pad(el, rot_pad).max(if composite_scrollbar { 2.0 } else { 0.0 });
     let key = if el.attrs.get("jadix_devtools_composite").map(String::as_str) == Some("1")
         || composite_scrollbar
     {
@@ -233,8 +233,14 @@ pub(crate) fn push_frame_paint_element_change_from_before(
 fn push_fill_dest_reset(el: &Element, bounds: [f32; 4], inset: [f32; 4]) {
     let width = (bounds[2] - inset[0] - inset[2]).max(0.0);
     let height = (bounds[3] - inset[1] - inset[3]).max(0.0);
-    if width <= 0.0 || height <= 0.0 { return; }
-    push_paint_dirty(paint_element_key(el), [bounds[0] + inset[0], bounds[1] + inset[1], width, height], PaintDirtyKind::Region);
+    if width <= 0.0 || height <= 0.0 {
+        return;
+    }
+    push_paint_dirty(
+        paint_element_key(el),
+        [bounds[0] + inset[0], bounds[1] + inset[1], width, height],
+        PaintDirtyKind::Region,
+    );
 }
 
 /// Outset beyond the visual layout box that this node actually paints (CSS
@@ -371,6 +377,7 @@ pub fn push_frame_region_paint(key: u64, bounds: [f32; 4]) {
     push_paint_dirty(key, bounds, PaintDirtyKind::Region);
 }
 
+#[cfg(feature = "devtools")]
 pub(crate) fn push_frame_region_damage(bounds: [f32; 4]) {
     push_frame_region_paint(bounds_key(bounds), bounds);
 }
@@ -3074,9 +3081,19 @@ pub fn scroll_ancestor_chrome_blit_pins(
             let [x, y, w, h] = crate::core::tree::visual_paint_aabb(el, el.paint_scroll_acc);
             for edge in [
                 [x, y, rounded_pad.max(border_pad(bl)).min(w), h],
-                [x + (w - rounded_pad.max(border_pad(br))).max(0.0), y, rounded_pad.max(border_pad(br)).min(w), h],
+                [
+                    x + (w - rounded_pad.max(border_pad(br))).max(0.0),
+                    y,
+                    rounded_pad.max(border_pad(br)).min(w),
+                    h,
+                ],
                 [x, y, w, rounded_pad.max(border_pad(bt)).min(h)],
-                [x, y + (h - rounded_pad.max(border_pad(bb))).max(0.0), w, rounded_pad.max(border_pad(bb)).min(h)],
+                [
+                    x,
+                    y + (h - rounded_pad.max(border_pad(bb))).max(0.0),
+                    w,
+                    rounded_pad.max(border_pad(bb)).min(h),
+                ],
             ] {
                 if let Some(hit) = intersect_rects(edge, viewport) {
                     push_scroll_blit_pin(pins, hit);
@@ -3603,17 +3620,30 @@ mod tests {
 
     #[test]
     fn portal_composite_ignores_offscreen_nodes_before_union() {
-        let portal = PaintDirty { key: 1, bounds: [320.0, 340.0, 214.0, 24.0], kind: PaintDirtyKind::Overlay };
+        let portal = PaintDirty {
+            key: 1,
+            bounds: [320.0, 340.0, 214.0, 24.0],
+            kind: PaintDirtyKind::Overlay,
+        };
         let viewport = [0.0, 0.0, 1000.0, 640.0];
         let expected = portal_composite_damage(&[portal], Some(portal.bounds), viewport).unwrap();
-        let offscreen = PaintDirty { key: 2, bounds: [305.0, 3384.0, 214.0, 24.0], kind: PaintDirtyKind::Node };
-        assert_eq!(portal_composite_damage(&[portal, offscreen], Some(portal.bounds), viewport), Some(expected));
+        let offscreen = PaintDirty {
+            key: 2,
+            bounds: [305.0, 3384.0, 214.0, 24.0],
+            kind: PaintDirtyKind::Node,
+        };
+        assert_eq!(
+            portal_composite_damage(&[portal, offscreen], Some(portal.bounds), viewport),
+            Some(expected)
+        );
         assert!(expected[2] < 300.0 && expected[3] < 100.0);
     }
 
     #[test]
     fn scaled_preview_damage_includes_scaled_outline_outset() {
-        let mut element = Element::new().outline([0.0, 0.0, 0.0, 1.0], 3.0).outline_offset(2.0);
+        let mut element = Element::new()
+            .outline([0.0, 0.0, 0.0, 1.0], 3.0)
+            .outline_offset(2.0);
         for scale in [0.35, 0.57, 1.0, 1.5] {
             element.paint_ancestor_scale = [scale; 2];
             assert!((element_paint_outset_pad(&element, 0.0) - 5.0 * scale).abs() < 0.001);
@@ -3974,7 +4004,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn button_group_joined_damage_box_matches_layout() {
         let _ = take_frame_paint_nodes();
         let mut el = Element::new();
@@ -7077,11 +7107,17 @@ mod tests {
 
     #[test]
     fn nested_scrollbar_pins_follow_the_ancestor_scroll_transform() {
-        let mut rail = Element::new().absolute().focus_id("scrollbar-track:inner:y");
+        let mut rail = Element::new()
+            .absolute()
+            .focus_id("scrollbar-track:inner:y");
         rail.layout_bounds = [180.0, 120.0, 10.0, 140.0];
         rail.paint_scroll_acc = [0.0, 80.0];
         let root = Element::new().child(rail);
-        let pins = overlay_scrollbar_scroll_blit_pins(&root, &["inner".into()], &[[0.0, 0.0, 200.0, 100.0]]);
+        let pins = overlay_scrollbar_scroll_blit_pins(
+            &root,
+            &["inner".into()],
+            &[[0.0, 0.0, 200.0, 100.0]],
+        );
         assert_eq!(pins, vec![[180.0, 40.0, 10.0, 140.0]]);
     }
 
@@ -7091,12 +7127,16 @@ mod tests {
         let mut child = Element::new().focus_id("scroll:bordered");
         child.layout_bounds = viewport;
         child.contains_scroll_viewport = true;
-        let mut root = Element::new().border([0.5, 0.5, 0.5, 1.0], 1.0).child(child);
+        let mut root = Element::new()
+            .border([0.5, 0.5, 0.5, 1.0], 1.0)
+            .child(child);
         root.layout_bounds = viewport;
         root.contains_scroll_viewport = true;
         let pins = scroll_ancestor_chrome_blit_pins(&root, "bordered", viewport);
         assert!(pins.contains(&[10.0, 10.0, 200.0, 2.0]));
-        assert!(pins.iter().all(|pin| intersect_rects(*pin, [50.0, 50.0, 100.0, 40.0]).is_none()));
+        assert!(pins
+            .iter()
+            .all(|pin| intersect_rects(*pin, [50.0, 50.0, 100.0, 40.0]).is_none()));
     }
 
     #[test]

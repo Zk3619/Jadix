@@ -2,7 +2,7 @@
 
 `jadix::authoring` 提供自定义组件和 Builder 共用的框架接口：`BaseComponentBuilder`、`SlotChrome`、`SlotMap`，以及槽位、文字覆盖和 children 打包辅助函数。它们不属于某套产品组件的默认外观。
 
-`jadix::components::base` 仍重导出同一组类型与函数；既有 `jadix::components::{BaseComponentBuilder, SlotChrome, SlotMap, SlotStyleFn}` 和 prelude 的 `SlotChrome`／`SlotMap` 保持兼容。新自定义组件优先引用 `jadix::authoring`，便于后续将产品代码迁到独立库。
+产品兼容转发现位于 `jadix_components::components::base`；原 `jadix::components::*` 生产路径已移除。框架 prelude 的 `SlotChrome`／`SlotMap` 保留；自定义组件应直接引用 `jadix::authoring`，不因基础作者协议而依赖整个产品库。
 
 ## 普通函数与 Builder
 
@@ -28,6 +28,21 @@ let element = caption(
 
 `BaseComponentBuilder::finish()` 保持既有语义；其中 `.text()` 写入供产品 Builder 消费的 label 元数据，不能当作修改普通 Element 正文的接口。普通函数直接使用 `Element::text`。
 
+## 无宏框架消费（R2 首批）
+
+```toml
+[dependencies]
+jadix = { version = "0.1.0", default-features = false }
+```
+
+```rust,ignore
+use jadix::prelude::*;
+let video_node: Element = video().id("movie").rotation("90").into();
+let floating: Element = portal("movie-overlay").mount("overlay-host").child(video_node).into();
+```
+
+这是消费形式说明，不表示当前候选已经发布。应用要打开窗口还须选择对应 GPU 后端。`audio()`、`video()` 和 `portal(id)` 及其 Builder 不依赖 UI 过程宏；`Audio`／`Video`／`Portal` 与对应 `*Props` 仅供宏作者层，随 `macros` 门控。媒体 Builder 保持组件 Owner、隔离读取、样式处理的原顺序，宏适配调用相同运行时实现。现有默认配置保留宏兼容；应用可显式选择 `features = ["macros"]` 恢复 RSX 与属性宏。
+
 ## 组件宏与显式运行时路径
 
 `#[component]` 注入的 `base` 回调使用 `jadix::authoring::BaseComponentBuilder`，普通、泛型、`reactive` 与显式 `base_builder` 分支共享这项契约。领域参数与 children 的写法沿用现有组件宏。
@@ -47,9 +62,9 @@ pub fn Caption(value: String, children: Option<Element>) -> Element {
 
 调用方可以从另一 crate 引入生成的 `Caption`／`CaptionProps`。`impl_slot_map_methods!`、`impl_overlay_content_slot!`、`impl_simple_slot_builder!` 等既有声明式 Builder 宏从框架作者接口生成样式代码，宏名和调用方式不变。
 
-`jadix::ui!` 携带运行时路径；外部产品门面还可通过隐藏的 `__ui_runtime!` 显式选择 `components`、`dnd`、`icons` 模块路径。特殊标签的编译规则仍位于 `jadix_macros`，迁包时须迁移对应规则和测试；过程宏在当前版本依旧是必选依赖。关闭 `components` 可以独立构建框架。
+`jadix::ui!` 携带运行时路径；外部产品门面还可通过隐藏的 `__ui_runtime!` 显式选择 `components`、`dnd`、`icons` 模块路径。特殊标签由可选 `jadix_macros` 的显式产品路径规则展开；过程宏现由 `jadix/macros` 控制。关闭默认 features 后可以只使用普通函数／Builder；三个独立产品默认关闭 `macros`，Props／Builder 不依赖 UI 宏或解析包。
 
-2026-10-26 已确认后续 R2 迁包要求：组件、图标及高层 DnD 提供不依赖 UI 宏／解析包的普通函数／Builder 模式，并通过默认关闭的可选 `macros` feature 保留宏作者写法；Gallery／宏示例迁移时显式开启。框架的传递依赖、生成的公共类型和源码复制闭包一并处理；该计划尚未在当前版本实现，不能把 `--no-default-features` 当作已排除 `jadix_macros`。实施与验收约束见 [宏专项](../development-docs/plans/SPLITTING.md#6-宏专项独立包不等于可选作者层)。
+2026-10-26 已确认后续 R2 迁包要求：组件、图标及高层 DnD 提供不依赖 UI 宏／解析包的普通函数／Builder 模式，并通过默认关闭的可选 `macros` feature 保留宏作者写法；Gallery／宏示例迁移时显式开启。框架的传递依赖、生成的公共类型和源码复制闭包一并处理；R2 首批已解除纯框架的强制宏依赖；产品迁包与各产品的无宏模式仍待完成。`scripts/check-optional-macros.ps1 -Offline` 使用独立 workspace、重命名 `ui_runtime` 分别验证 Builder／宏消费，并检查 normal/build 依赖树中的 `jadix_macros` 是否随开关出现；其他正常依赖的 derive／syn／quote 不在排除范围。该本地 path 消费沿用根 patch 和锁文件，不代表无 patch 的 registry 消费，后者仍归发布闭包。实施与验收约束见 [宏专项](../development-docs/plans/SPLITTING.md#6-宏专项独立包不等于可选作者层)。
 
 ## 自定义控件的指针拖动
 
@@ -75,13 +90,13 @@ pub fn Caption(value: String, children: Option<Element>) -> Element {
 
 自动滚动采样允许以 `set_silent` 更新滚动偏移，然后收集滚动后的命中几何；产品拖拽回调与响应式写入放进返回的更新闭包。惯性采样只保留命中快照，步进、移动和结束回调均在提交阶段执行。内置 DnD 的待提交滚动更新还绑定具体会话，取消、结束、重新开始或惯性恢复后，旧更新不能推进新会话。
 
-R1 的运行时协议尚未冻结：实现者现在须提供 `prepare_autoscroll`／`prepare_inertia`，同仓外部实现与源码消费样例已同步迁移。原 `pump_autoscroll`／`pump_inertia` 同步入口保留，适合调用方已保证无宿主树借用的场景；宿主使用采样加延后 `dispatch`。这只保证本协议中的拖拽产品回调已移出借用，布局回调仍遵循前述约束。`drag` 与内置 `dnd` 已分别门控；真实 `jadix_dnd` 包及发布依赖闭包归 R2–R5。
+R1 的运行时协议尚未冻结：实现者现在须提供 `prepare_autoscroll`／`prepare_inertia`，同仓外部实现与源码消费样例已同步迁移。原 `pump_autoscroll`／`pump_inertia` 同步入口保留，适合调用方已保证无宿主树借用的场景；宿主使用采样加延后 `dispatch`。这只保证本协议中的拖拽产品回调已移出借用，布局回调仍遵循前述约束。框架 `drag` 与独立 `jadix_dnd` 已分离；发布来源闭包仍归 R3–R5。
 
 [外部 BoardDrag 示例](../crates/jadix/tests/fixtures/authoring/board_drag.rs)只依赖公开框架接口。同一份源码既作为独立 provider crate 的模块编译，也直接作为消费者模块嵌入；`scripts/check-authoring.ps1 -Offline` 验证重命名运行时下的两种消费方式。该验证使用工作区构建产物，尚未验证已发布 crate 安装，也不代表现有完整组件库或 Lucide 资源已经可以直接复制使用。
 
 ## 分发边界
 
-本接口可以供项目内自定义组件或外部组件 crate 使用。独立 `jadix_components`／`jadix_lucide` 的 Cargo 安装和按需源码、资源复制仍按后续真实迁移验收，现有产品源码不能据此视为复制即用。开发验证见 [R1 作者接口记录](../development-docs/ops/r1-authoring-20261025.md)，当前能力开关见 [FEATURES](FEATURES.md)。
+本接口可以供项目内自定义组件或外部组件 crate 使用。独立 `jadix_components`／`jadix_lucide`／`jadix_dnd` 已迁包；`scripts/check-product-distributions.ps1` 分别验证 crate path 与原样源码/资源复制、Builder 与可选宏；复制必须保留依赖、feature 和许可证，不是孤立粘贴一个文件。开发验证见 [R1 作者接口记录](../development-docs/ops/r1-authoring-20261025.md)，当前能力开关见 [FEATURES](FEATURES.md)。
 
 
 ## 挂载、命中与保留绘制
@@ -113,11 +128,11 @@ R1 的运行时协议尚未冻结：实现者现在须提供 `prepare_autoscroll
 
 ## 宏与源码复制的验证范围
 
-通过 `jadix::ui!` 调用 RSX 时，展开会携带实际运行时路径，Cargo 将依赖改名为 `ui_runtime` 后也可使用普通组件、基础节点和现有产品特殊标签。`#[component(crate_path = "runtime")]` 的显式路径契约继续适用。直接使用底层 `jadix_macros::ui!` 仍保留原来的 `jadix` 路径约定；应用和组件作者优先使用运行时重导出的宏。
+通过 `jadix::ui!` 调用框架 RSX 时，展开会携带实际运行时路径；产品标签改用 `jadix_components::ui!` / `jadix_dnd::ui!` / `jadix_lucide::ui!` 或显式产品路径，不能依赖已删除的框架内置产品。依赖改名的 Builder 与宏消费均由仓外夹具验证。`#[component(crate_path = "runtime")]` 的显式路径契约继续适用。直接使用底层 `jadix_macros::ui!` 仍保留原来的 `jadix` 路径约定；应用和组件作者优先使用运行时重导出的宏。
 
 `scripts/check-authoring.ps1` 验证跨 crate 自定义组件及同一 BoardDrag 源码的两种消费方式。`scripts/check-dnd-source.ps1` 把完整高层 DnD 实现复制到全新目录，保留共享的 pointer／routing／runtime 协议身份后编译独立外部 crate，验证会话独立、布局、Owner 清理和旧任务失效。它们使用当前工作区构建产物，不证明发布 registry、无根 patch 消费或所有组件源码都能直接复制。
 
-`scripts/check-lucide-source.ps1` 复制静态／动画实现、四项资源及许可，在仅启用 `svg,animation` 的框架上验证独立 provider、Builder／宏、hover、morph、字体与纹理布局。纯 Rust 文件复制不足以代替该闭包。库安装和源码／资源复制两条路径仍分别在 R2–R5 验证。
+`scripts/check-lucide-source.ps1` 委托统一产品分发验证，覆盖单一 `jadix_lucide` 的目录、字体、配方、hover、morph 和纹理。纯 Rust 文件复制不足以代替资源/依赖闭包；这些本地验证不冒充 registry 发布。
 
 ## 窗口、定时与输入
 
@@ -133,7 +148,7 @@ R1 的运行时协议尚未冻结：实现者现在须提供 `prepare_autoscroll
 
 `media::texture::RgbaTexture` 持有 CPU 纹理，GPU 上传由各窗口实际使用的纹理 key 驱动。`utils::font::register_font_data` 校验并登记字体数据，须在创建窗口／FontSystem 前调用；既有 FontSystem 不会自动重载。SVG 文档栅格化通过公开 `media::svg_raster` 接口。
 
-`IconProvider` 可以解析字形、提供 SVG 和配置节点的 `authoring::icon::Playback`。框架持有通用播放回调、共享动画和 morph；图标库持有目录、配方、播放状态与资源。未开启 `lucide` 时不编译内置目录；复制的外部图标库仍能驱动通用 Icon。静态、配方播放和 morph 分别遵循 feature 依赖，不能把动画配方开关当作全部动画开关。
+`IconProvider` 可以解析字形、提供 SVG 和配置节点的 `authoring::icon::Playback`。框架持有通用播放回调、共享动画和 morph；图标库持有目录、配方、播放状态与资源。框架不再包含 Lucide 目录；调用 `jadix_lucide::install()` 安装产品后驱动通用 Icon，复制源码使用同一契约。静态、配方播放和 morph 分别遵循 feature 依赖，不能把动画配方开关当作全部动画开关。
 
 WebView 的窗口原生宿主位于 `platform::webview`，UI 产品只负责页面组件的组合。平台服务与组件产品分开，Windows 编译证据不代表其他目标已经交叉编译或运行。
 

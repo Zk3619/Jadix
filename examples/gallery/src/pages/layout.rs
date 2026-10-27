@@ -7,24 +7,51 @@ use crate::shared::*;
 pub(crate) fn ResponsiveShowcase() -> Element {
     let panels = [
         ("内容优先", "使用流式宽度和自动换行，避免固定宽度挤压内容。"),
-        ("清晰的断点边界", "max-md 在 768px 以下生效，md 从 768px 开始生效。"),
-        ("操作始终可达", "操作按钮在窄窗口纵向排列，宽窗口恢复横向排列。"),
-    ].into_iter().enumerate().map(|(index, (title, description))| {
+        (
+            "清晰的断点边界",
+            "max-md 在 768px 以下生效，md 从 768px 开始生效。",
+        ),
+        (
+            "操作始终可达",
+            "操作按钮在窄窗口纵向排列，宽窗口恢复横向排列。",
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    .map(|(index, (title, description))| {
         use jadix::motion::{use_layout_motion, LayoutAnimation};
-        let title = ui! { <Label font_weight="600">{ title }</Label> }
-            .layout_motion(&use_layout_motion(&format!("gal-responsive-title-{index}"), LayoutAnimation::Position));
-        let description = ui! { <Label w="100%">{ description }</Label> }
-            .layout_motion(&use_layout_motion(&format!("gal-responsive-body-{index}"), LayoutAnimation::Position));
-        Element::new().template_id(format!("gal-responsive-panel-{index}"))
-            .flex_col().min_w(0.0).class("rounded-md bg-muted p-3 sm:p-4").gap("0.5rem")
+        let title =
+            ui! { <Label font_weight="600">{ title }</Label> }.layout_motion(&use_layout_motion(
+                &format!("gal-responsive-title-{index}"),
+                LayoutAnimation::Position,
+            ));
+        let description =
+            ui! { <Label w="100%">{ description }</Label> }.layout_motion(&use_layout_motion(
+                &format!("gal-responsive-body-{index}"),
+                LayoutAnimation::Position,
+            ));
+        Element::new()
+            .template_id(format!("gal-responsive-panel-{index}"))
+            .flex_col()
+            .min_w(0.0)
+            .class("rounded-md bg-muted p-3 sm:p-4")
+            .gap("0.5rem")
             .children([title, description])
-            .layout_motion(&use_layout_motion(&format!("gal-responsive-panel-{index}"), LayoutAnimation::Both))
-    }).collect::<Vec<_>>();
+            .layout_motion(&use_layout_motion(
+                &format!("gal-responsive-panel-{index}"),
+                LayoutAnimation::Both,
+            ))
+    })
+    .collect::<Vec<_>>();
     let grid = ui! {
         <GStack w="100%" min_w="0" class="grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3 sm:gap-4">
             { panels }
         </GStack>
-    }.layout_motion(&jadix::motion::use_layout_motion("gal-responsive-grid", jadix::motion::LayoutAnimation::Position));
+    }
+    .layout_motion(&jadix::motion::use_layout_motion(
+        "gal-responsive-grid",
+        jadix::motion::LayoutAnimation::Position,
+    ));
     ui! {
         <MyCard title="响应式布局">
             <VStack w="100%" min_w="0" gap="0.75rem">
@@ -201,6 +228,41 @@ pub(crate) fn filter_demo_logo(filter: Option<&str>, class: Option<&str>) -> Ele
     wrap.child(ui! {
         <Image src={format!("{}/assets/firefox-logo.svg", gallery_resource_root().display())} w="4.5rem" h="4.5rem" />
     })
+}
+
+#[cfg(test)]
+#[test]
+fn filter_image_capture_remains_stable_across_fractional_scroll() {
+    jadix::init();
+    jadix::core::reactivity::create_root(|| {
+        let mut root = Element::new().w(400.0).h(300.0).overflow("scroll")
+            .child(filter_demo_logo(Some("grayscale(1)"), None).absolute().left(20.1).top(4800.3));
+        let mut layout = jadix::layout::LayoutTree::new();
+        layout.set_collect_skip_allowed(true);
+        let mut key = None;
+        for (frame, offset) in [0.0, 0.1, 0.5, 12.3, 20.7, 70.1, 100.7, 0.0].into_iter().enumerate() {
+            root.scroll_offset[1] = 4720.0 + offset;
+            let _ = jadix::renderer::take_capture_jobs();
+            let _ = jadix::renderer::take_filter_jobs();
+            let scene = if frame == 0 {
+                layout.build_and_layout(&mut root, 400.0, 300.0, [-1.0; 2])
+            } else {
+                layout.build_and_layout_fast(&mut root, 400.0, 300.0, [-1.0; 2], true, false)
+            };
+            let output = scene.textured_draws.iter().find(|draw|
+                draw.texture_key.starts_with("jadix_filter:")).unwrap_or_else(|| panic!("filtered image output missing at frame {frame}, offset {offset}, bounds {:?}, scroll {:?}", root.children[0].layout_bounds, root.scroll_offset));
+            if let Some(key) = &key {
+                assert_eq!(&output.texture_key, key, "filter cache changed at scroll {offset}");
+            } else {
+                key = Some(output.texture_key.clone());
+            }
+            for capture in jadix::renderer::take_capture_jobs() {
+                assert_eq!(capture.textured_draws.len(), 1, "SVG SourceGraphic lost at {offset}");
+                assert!(capture.textured_draws[0].texture_key.starts_with("jadix-src:"));
+            }
+        }
+        let _ = jadix::renderer::take_filter_jobs();
+    });
 }
 
 #[component]
@@ -899,8 +961,8 @@ pub(crate) fn OutlineShowcase() -> jadix::core::tree::Element {
 /// ANIM 对齐：steps()、text color transition、layout 属性、reduced-motion。
 fn ensure_gallery_motion_extras() {
     use jadix::style::{
-        AnimatableValue, KeyframeStop, PropertyId, parse_clip_path, register_clip_path,
-        register_keyframes,
+        parse_clip_path, register_clip_path, register_keyframes, AnimatableValue, KeyframeStop,
+        PropertyId,
     };
     register_keyframes(
         "gal-linear-slide",
@@ -1627,7 +1689,7 @@ pub(crate) fn ScrollShowcase() -> jadix::core::tree::Element {
                 <Box w="18rem" h="7.5rem" bg="background" rounded="0.5rem" p="0.25rem">
                     <ScrollArea id="sa-optional-arrows" w="100%" h="100%" p="0.5rem"
                         scrollbar_arrows={true} scrollbar_visibility="always"
-                        scrollbar_arrow_class="hover:bg-primary hover:text-primary-foreground"
+                scrollbar_arrow_class="opacity-60 hover:opacity-100"
                         overflow_y="auto" overflow_x="auto">
                         <VStack gap="0.25rem" min_w="24rem">
                             <Label font_weight="700">"可选箭头：点击三角形滚动，悬停样式可定制"</Label>
@@ -2209,7 +2271,7 @@ pub(crate) fn DamageShowcase() -> jadix::core::tree::Element {
 #[component]
 pub(crate) fn FgMatrixShowcase() -> jadix::core::tree::Element {
     use jadix::app::reactive::{bind_miss_count, unkeyed_for_rebuild_count};
-    use jadix::core::reactivity::{EffectPhase, take_flushed_effects, ui_root_effect_dep_count};
+    use jadix::core::reactivity::{take_flushed_effects, ui_root_effect_dep_count, EffectPhase};
 
     let n = use_signal("gal_fg_n", || 0_u32);
     let last_render = use_signal("gal_fg_render", || 0_usize);
@@ -3334,7 +3396,7 @@ pub(crate) fn GridAndDragShowcase() -> Element {
     });
 
     ui! {
-        <MyCard title="Grid + drag-reorder (ShadCN Card: jadix::components::Card)">
+        <MyCard title="Grid + drag-reorder (ShadCN Card: jadix_components::components::Card)">
             <VStack w="100%" gap="0.5rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
                     "GStack（cols / rows / col_span）沙盘；列表为 for_keyed! + drag_reorder_handle；排序块用 reactive! 订阅 commit/hover。"

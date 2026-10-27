@@ -10,14 +10,14 @@ fn rotating_rectangle_native_frames_match_full_repaint_after_scroll() {
 }
 
 #[test]
-#[cfg(feature = "bundled-lucide")]
+#[cfg(feature = "gallery-tests")]
 #[ignore = "requires a native Windows GPU surface; run explicitly with --ignored --nocapture"]
 fn shimmer_spin_rows_native_frames_match_full_repaint_after_scroll() {
     native_animation_frames(true, false);
 }
 
 #[test]
-#[cfg(feature = "bundled-lucide")]
+#[cfg(feature = "gallery-tests")]
 #[ignore = "requires a native Windows GPU surface; run explicitly with --ignored --nocapture"]
 fn shimmer_retained_ink_matches_single_pass_during_unrelated_damage() {
     native_animation_frames(true, true);

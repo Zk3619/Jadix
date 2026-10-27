@@ -111,7 +111,6 @@ pub struct AppConfig {
     pub i18n: Option<String>,
     /// IANA timezone (`Asia/Shanghai`). Separate from the message catalog.
     pub timezone: Option<String>,
-    #[cfg(all(debug_assertions, feature = "devtools"))]
     pub devtools: Option<bool>,
 }
 
@@ -693,7 +692,7 @@ impl AppBuilder {
 }
 
 /// Full-window document shell used by [`AppBuilder`] (as [`Element`]) and `<App>`.
-pub(crate) fn materialize_app_shell(config: AppConfig, children: Vec<Element>) -> Element {
+pub fn materialize_app_shell(config: AppConfig, children: Vec<Element>) -> Element {
     config.apply_document();
     let mut el: Element = crate::primitives::r#box::r#box()
         .w("100%")
@@ -757,15 +756,31 @@ mod tests {
         let defaults = app().into_window_options();
         assert!(defaults.fullscreen_shortcuts);
         assert!(defaults.close_with_primary);
-        assert_eq!(defaults.instance_policy, super::super::InstancePolicy::Multiple);
-        let options = app().single_instance("org.jadix.editor:profile-a")
-            .fullscreen_shortcuts(false).close_with_primary(false).into_window_options();
+        assert_eq!(
+            defaults.instance_policy,
+            super::super::InstancePolicy::Multiple
+        );
+        let options = app()
+            .single_instance("org.jadix.editor:profile-a")
+            .fullscreen_shortcuts(false)
+            .close_with_primary(false)
+            .into_window_options();
         assert!(!options.fullscreen_shortcuts);
         assert!(!options.close_with_primary);
-        assert_eq!(options.instance_policy, super::super::InstancePolicy::Single { id: "org.jadix.editor:profile-a".into() });
-        let multiple = app().single_instance("org.jadix.editor")
-            .instance_policy(super::super::InstancePolicy::Multiple).into_window_options();
-        assert_eq!(multiple.instance_policy, super::super::InstancePolicy::Multiple);
+        assert_eq!(
+            options.instance_policy,
+            super::super::InstancePolicy::Single {
+                id: "org.jadix.editor:profile-a".into()
+            }
+        );
+        let multiple = app()
+            .single_instance("org.jadix.editor")
+            .instance_policy(super::super::InstancePolicy::Multiple)
+            .into_window_options();
+        assert_eq!(
+            multiple.instance_policy,
+            super::super::InstancePolicy::Multiple
+        );
     }
 
     #[test]

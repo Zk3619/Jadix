@@ -119,6 +119,47 @@ fn find_caret_leaf(el: &Element) -> Option<&Element> {
 }
 
 #[test]
+fn ime_commit_with_unchanged_text_repairs_entire_preedit_run() {
+    use crate::components::input::{
+        input_caret_signal_key, input_ime_anchor_signal_key, input_preedit_sel_signal_key,
+        input_preedit_signal_key,
+    };
+    for multiline in [false, true] {
+        let id = if multiline { "ime-commit-ta" } else { "ime-commit-input" };
+        use_signal("__jadix_button_focus_id", String::new)
+            .set(focus_id_for_text_edit(id, multiline));
+        let value = use_signal(&input_value_signal_key(id), String::new);
+        value.set(String::new());
+        use_signal(&input_caret_signal_key(id), || None::<usize>).set(Some(0));
+        use_signal(&input_ime_anchor_signal_key(id), || None::<usize>).set(Some(0));
+        let preedit = use_signal(&input_preedit_signal_key(id), String::new);
+        let cursor = use_signal(&input_preedit_sel_signal_key(id), || None::<(usize, usize)>);
+        preedit.set("Thus".into());
+        cursor.set(Some((4, 4)));
+        let field: Element = if multiline { textarea(id).into() } else { input(id).into() };
+        let mut root = Element::new().w(400.0).h(160.0).child(field);
+        let mut tree = LayoutTree::new();
+        tree.build_and_layout(&mut root, 400.0, 160.0, [-1.0, -1.0]);
+        sync_paint_like_app(&mut root, &mut tree, &mut LayoutStatus::Clean);
+        let leaf = find_caret_leaf(&root).unwrap();
+        assert_eq!(leaf.text.as_deref(), Some("Thus"));
+        assert!(leaf.text_style.input_caret.as_ref().unwrap().preedit_underline.is_some());
+        let key = crate::app::damage::paint_element_key(leaf);
+        crate::app::damage::take_frame_paint_nodes();
+        value.set("Thus".into());
+        preedit.set(String::new());
+        cursor.set(None);
+        sync_paint_like_app(&mut root, &mut tree, &mut LayoutStatus::Clean);
+        let leaf = find_caret_leaf(&root).unwrap();
+        assert_eq!(leaf.text.as_deref(), Some("Thus"));
+        assert!(leaf.text_style.input_caret.as_ref().unwrap().preedit_underline.is_none());
+        assert!(crate::app::damage::take_frame_paint_nodes().iter().any(|dirty|
+            dirty.key == key && dirty.kind == crate::app::damage::PaintDirtyKind::Region),
+            "committing identical display text must erase retained underline ink");
+    }
+}
+
+#[test]
 fn ime_reversed_range_keeps_input_and_textarea_caret_after_inline_candidates() {
     use crate::components::input::{
         input_caret_signal_key, input_ime_anchor_signal_key, input_preedit_sel_signal_key,

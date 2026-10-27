@@ -27,6 +27,7 @@ pub(crate) fn text_flow_scene(
     shifted: Signal<bool>,
     obstacles: bool,
     chinese: bool,
+    clearance: f32,
 ) -> Element {
     let moved = shifted.get();
     let columns = if width >= 660.0 { 2 } else { 1 };
@@ -52,13 +53,13 @@ pub(crate) fn text_flow_scene(
         vec![
             TextExclusion::Circle {
                 center,
-                radius: radius + 12.0,
+                radius: radius + clearance,
             },
             TextExclusion::Rect(TextFlowRect {
-                x: quote.x - 12.0,
-                y: quote.y - 12.0,
-                width: quote.width + 24.0,
-                height: quote.height + 24.0,
+                x: quote.x - clearance,
+                y: quote.y - clearance,
+                width: quote.width + clearance * 2.0,
+                height: quote.height + clearance * 2.0,
             }),
         ]
     } else {
@@ -162,11 +163,16 @@ pub(crate) fn text_flow_scene(
                 .h(quote.height)
                 .rounded("0px")
                 .bg("#244a3c")
-                .text("MAKE\nSPACE")
-                .text_size(15.0)
-                .text_line_height(24.0)
-                .text_align("center")
-                .text_color("#ffffff")
+                .flex_col()
+                .flex_items("center")
+                .justify_center()
+                .child(Element::new()
+                    .template_id("gal-flow-quote-label")
+                    .text("MAKE\nSPACE")
+                    .text_size(15.0)
+                    .text_line_height(24.0)
+                    .text_align("center")
+                    .text_color("#ffffff"))
                 .on_click(move || shifted.set(!shifted.peek())),
         );
     }
@@ -180,6 +186,7 @@ pub(crate) fn TextFlowShowcase() -> Element {
     let shifted = use_signal("gal-flow-shifted", || false);
     let obstacles = use_signal("gal-flow-obstacles", || true);
     let chinese = use_signal("gal-flow-chinese", || false);
+    let clearance = use_signal("gal-flow-clearance", || 0.0_f32);
     let last = Rc::new(Cell::new(None));
     let scene = Element::new()
         .w("100%")
@@ -190,6 +197,7 @@ pub(crate) fn TextFlowShowcase() -> Element {
             shifted,
             obstacles.peek(),
             chinese.peek(),
+            clearance.peek(),
         ))
         .reactive_sync(move |host, _| {
             let available = host.layout_bounds[2];
@@ -204,13 +212,14 @@ pub(crate) fn TextFlowShowcase() -> Element {
                 shifted.peek(),
                 obstacles.peek(),
                 chinese.peek(),
+                clearance.peek(),
             );
             if last.get() == Some(settings) {
                 return LayoutStatus::Clean;
             }
             last.set(Some(settings));
             host.children = vec![jadix::core::reactivity::isolate_reads(|| {
-                text_flow_scene(settings.0, settings.1, shifted, settings.3, settings.4)
+                text_flow_scene(settings.0, settings.1, shifted, settings.3, settings.4, settings.5)
             })];
             LayoutStatus::StructureChanged
         });
@@ -228,6 +237,10 @@ pub(crate) fn TextFlowShowcase() -> Element {
                     <VStack w="12rem" min_w="0" gap="0.5rem">
                         <Label text_size="0.75rem">{format!("栏高  {:.0} px", height.get())}</Label>
                         { slider("gal-flow-height-slider").min(288.0).max(576.0).step(24.0).value_signal(height) }
+                    </VStack>
+                    <VStack w="12rem" min_w="0" gap="0.5rem">
+                        <Label text_size="0.75rem">{format!("避让间距  {:.0} px", clearance.get())}</Label>
+                        { slider("gal-flow-clearance-slider").min(0.0).max(24.0).step(1.0).value_signal(clearance) }
                     </VStack>
                 </HStack>
                 <HStack gap="0.5rem" wrap="wrap">
@@ -265,7 +278,7 @@ mod tests {
                                 for chinese in [false, true] {
                                     for obstacles in [false, true] {
                                         let mut scene = text_flow_scene(
-                                            width, height, shifted, obstacles, chinese,
+                                            width, height, shifted, obstacles, chinese, 0.0,
                                         );
                                         let mut source_text = String::new();
                                         for node in &scene.children {
@@ -286,6 +299,24 @@ mod tests {
                                             4000.0,
                                             [-1.0, -1.0],
                                         );
+                                        if obstacles {
+                                            let quote_box =
+                                                jadix::core::tree::find_in_tree(&scene, |node| {
+                                                    node.template_id.as_deref()
+                                                        == Some("gal-flow-quote")
+                                                })
+                                                .unwrap()
+                                                .layout_bounds;
+                                            let label =
+                                                jadix::core::tree::find_in_tree(&scene, |node| {
+                                                    node.template_id.as_deref()
+                                                        == Some("gal-flow-quote-label")
+                                                })
+                                                .unwrap()
+                                                .layout_bounds;
+                                            assert!((label[0] + label[2] * 0.5 - quote_box[0] - quote_box[2] * 0.5).abs() < 0.5);
+                                            assert!((label[1] + label[3] * 0.5 - quote_box[1] - quote_box[3] * 0.5).abs() < 0.5);
+                                        }
                                         let body: Vec<_> = output
                                             .text_nodes
                                             .iter()
@@ -341,7 +372,7 @@ mod tests {
                                                     .min(node.y + node.height);
                                                 let circle_overlap = (closest_x - center[0]).powi(2)
                                                     + (closest_y - center[1]).powi(2)
-                                                    < radius.powi(2);
+                                                    < (radius - 0.01).powi(2);
                                                 assert!(
                                                     !circle_overlap,
                                                     "{width}x{height}: {:?} crosses circle at {} + {}",
@@ -366,7 +397,7 @@ mod tests {
                                 }
                             }
                         }
-                        let original = text_flow_scene(800.0, 432.0, shifted, true, false);
+                        let original = text_flow_scene(800.0, 432.0, shifted, true, false, 0.0);
                         let orb = original
                             .children
                             .iter()
@@ -374,7 +405,7 @@ mod tests {
                             .unwrap();
                         (orb.on_click.as_ref().unwrap().borrow_mut())();
                         assert!(shifted.peek());
-                        let moved = text_flow_scene(800.0, 432.0, shifted, true, false);
+                        let moved = text_flow_scene(800.0, 432.0, shifted, true, false, 0.0);
                         let positions = |scene: &Element| {
                             scene
                                 .children

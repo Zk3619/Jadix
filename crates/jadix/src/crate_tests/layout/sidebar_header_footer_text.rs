@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Header / Footer RSX string leaves must keep `sidebar-foreground` across a full
 //! cascade (overlay enter / portal hoist). Idle frames skip cascade (`scroll_only`);
 //! the first animation layout does not — without an inherit-lock, `TextStyle::default`

@@ -312,7 +312,10 @@ mod tests {
         image.layout_bounds = [10.0, 10.0, 80.0, 60.0];
         attach(&mut image, Visibility::Visible, move |_| {
             seen.set(seen.get() + 1);
-            Poll { redraw: true, next_wake: None }
+            Poll {
+                redraw: true,
+                next_wake: None,
+            }
         });
         let mut layout = LayoutTree::new();
         for top in [10.0, -20.0, -59.0, 199.0] {
@@ -320,7 +323,14 @@ mod tests {
             track(&mut layout, &mut image);
             let pending = layout.deadlines.prepare(true);
             assert_eq!(pending.len(), 1, "partly visible image stopped at {top}");
-            assert!(pending.into_iter().next().unwrap().dispatch(Instant::now()).redraw);
+            assert!(
+                pending
+                    .into_iter()
+                    .next()
+                    .unwrap()
+                    .dispatch(Instant::now())
+                    .redraw
+            );
         }
         assert_eq!(calls.get(), 4);
         image.layout_bounds[1] = 900.0;
@@ -357,7 +367,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn actual_toast_host_and_carousel_install_window_deadlines() {
         create_root(|| {
             crate::components::toast::toast("node deadline")

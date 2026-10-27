@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Collapsed AvatarGroup A/B/C dest-reset vs the pairwise overlap crescents.
 //!
 //! Gallery: 32px faces, `GROUP_OVERLAP` -8px. A later face's AABB dest-reset

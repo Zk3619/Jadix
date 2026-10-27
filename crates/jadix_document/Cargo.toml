@@ -1,0 +1,25 @@
+[package]
+name = "jadix_document"
+version.workspace = true
+edition.workspace = true
+description = "GUI-independent text snapshots, document height indexing and optional diffs"
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+
+[features]
+default = []
+markdown = ["dep:pulldown-cmark", "dep:serde", "dep:serde_json"]
+document-editing = ["markdown"]
+document-math = ["markdown", "dep:latex-rust"]
+science = ["dep:serde"]
+diff = ["dep:similar"]
+syntax = ["dep:syntect"]
+
+[dependencies]
+pulldown-cmark = { workspace = true, optional = true, features = ["html"] }
+serde = { workspace = true, optional = true }
+serde_json = { workspace = true, optional = true }
+latex-rust = { workspace = true, optional = true }
+syntect = { version = "5.3", optional = true, default-features = false, features = ["default-syntaxes", "default-themes", "regex-fancy"] }
+similar = { workspace = true, optional = true }

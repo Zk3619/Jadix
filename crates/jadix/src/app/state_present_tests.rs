@@ -3,11 +3,19 @@ use super::*;
 use crate::app::{damage::*, draw_cull::*};
 use crate::renderer::offscreen::{images_match, readback_texture, OffscreenGpu};
 
-#[cfg(all(target_os = "windows", feature = "bundled-lucide", feature = "components"))]
+#[cfg(all(
+    target_os = "windows",
+    feature = "gallery-tests",
+    feature = "product-tests"
+))]
 #[path = "state_toggle_motion_present_tests.rs"]
 mod toggle_motion_present_tests;
 
-#[cfg(all(target_os = "windows", feature = "bundled-lucide", feature = "gallery-tests"))]
+#[cfg(all(
+    target_os = "windows",
+    feature = "gallery-tests",
+    feature = "gallery-tests"
+))]
 #[path = "state_gallery_continuous_present_tests.rs"]
 mod gallery_continuous_present_tests;
 
@@ -57,7 +65,11 @@ mod tree_view_present_tests;
 #[path = "state_drag_present_tests.rs"]
 mod drag_present_tests;
 
-#[cfg(all(target_os = "windows", feature = "bundled-lucide", feature = "gallery-tests"))]
+#[cfg(all(
+    target_os = "windows",
+    feature = "gallery-tests",
+    feature = "gallery-tests"
+))]
 #[path = "state_drag_overlay_present_tests.rs"]
 mod drag_overlay_present_tests;
 
@@ -78,7 +90,7 @@ mod kanban_present_tests;
 #[cfg(target_os = "windows")]
 #[test]
 #[ignore = "requires a native Windows GPU surface; run explicitly with --ignored --nocapture"]
-#[cfg(feature = "components")]
+#[cfg(feature = "product-tests")]
 fn color_picker_native_frames_keep_page_and_hover_stable() {
     native_popup_frames(false);
 }
@@ -86,13 +98,13 @@ fn color_picker_native_frames_keep_page_and_hover_stable() {
 #[cfg(target_os = "windows")]
 #[test]
 #[ignore = "requires a native Windows GPU surface; run explicitly with --ignored --nocapture"]
-#[cfg(feature = "components")]
+#[cfg(feature = "product-tests")]
 fn calendar_select_native_frames_have_no_shadow_residue() {
     native_popup_frames(true);
 }
 
 #[cfg(target_os = "windows")]
-#[cfg(feature = "components")]
+#[cfg(feature = "product-tests")]
 fn native_popup_frames(calendar: bool) {
     use winit::application::ApplicationHandler;
     use winit::event::WindowEvent;
@@ -128,7 +140,7 @@ fn native_popup_frames(calendar: bool) {
 }
 
 #[cfg(target_os = "windows")]
-#[cfg(feature = "components")]
+#[cfg(feature = "product-tests")]
 fn run_color_picker_native_frames(window: Arc<dyn Window>, calendar: bool) {
     use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
     use crate::app::runtime::{clear_app_runtime, set_app_runtime, AppRuntime};
@@ -657,7 +669,7 @@ fn run_color_picker_native_frames(window: Arc<dyn Window>, calendar: bool) {
 
 #[test]
 #[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
-#[cfg(feature = "components")]
+#[cfg(feature = "product-tests")]
 fn avatar_interrupted_expand_restores_caption_each_frame() {
     use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
     use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
@@ -2663,7 +2675,7 @@ fn draw_message_capture_for_test(
 
 #[test]
 #[ignore = "requires a GPU adapter; run explicitly with --ignored --nocapture"]
-#[cfg(feature = "components")]
+#[cfg(feature = "product-tests")]
 fn button_group_hover_first_then_second_matches_full_composite() {
     let gpu = OffscreenGpu::new().expect("GPU adapter");
     for toggle in [false, true] {
@@ -2675,7 +2687,7 @@ fn button_group_hover_first_then_second_matches_full_composite() {
     }
 }
 
-#[cfg(feature = "components")]
+#[cfg(feature = "product-tests")]
 fn check_group_hover_matches_full_composite(
     gpu: &OffscreenGpu,
     toggle: bool,
@@ -3381,7 +3393,11 @@ fn scroll_snapshot_pruning_matches_full_walk_after_nested_insert_and_remove() {
         let snapshot = AppState::scroll_offsets_map(root, 1.5);
         let mut expected = HashMap::new();
         crate::core::tree::walk_elements(root, |el| {
-            if let Some(id) = el.focus_id.as_deref().and_then(|id| id.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX)) {
+            if let Some(id) = el
+                .focus_id
+                .as_deref()
+                .and_then(|id| id.strip_prefix(SCROLL_VIEWPORT_FOCUS_PREFIX))
+            {
                 expected.insert(id.to_string(), el.scroll_offset.map(f32::to_bits));
             }
         });
@@ -3390,7 +3406,9 @@ fn scroll_snapshot_pruning_matches_full_walk_after_nested_insert_and_remove() {
     let mut viewport = Element::new();
     viewport.focus_id = Some(format!("{SCROLL_VIEWPORT_FOCUS_PREFIX}outer"));
     viewport.scroll_offset = [0.0, 25.0];
-    for _ in 0..256 { viewport.children.push(Element::new().child(Element::new())); }
+    for _ in 0..256 {
+        viewport.children.push(Element::new().child(Element::new()));
+    }
     let mut root = Element::new().child(viewport).child(Element::new());
     check(&mut root);
     let mut nested = Element::new();

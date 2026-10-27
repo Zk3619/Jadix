@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 use crate::app::test_support::sync_reactive_elements_subtree;
 use crate::components::{radio_group, slider, toggle_group};
 use crate::core::reactivity::use_signal;

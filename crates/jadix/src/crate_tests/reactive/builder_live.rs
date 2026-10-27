@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Wave 1 / N.2: Builder `text` / `class` / `w` / `h` / `bg` / `color` / `opacity` accept Signal / FnMut.
 //! Filter: `cargo test -p jadix --lib builder_live_`
 

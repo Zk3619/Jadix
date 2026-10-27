@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Pagination must retain hover on the first presented frame after a reactive page change.
 use super::*;
 use crate::renderer::offscreen::RgbaImage;

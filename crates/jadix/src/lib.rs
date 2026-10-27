@@ -2,12 +2,22 @@
 // intentionally dense; refactoring them into newtypes is tracked separately.
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
+#[cfg(all(test, feature = "product-tests"))]
+#[allow(unexpected_cfgs)]
+#[path = "../../jadix_lucide/src/catalog.rs"]
+pub mod catalog;
+#[cfg(all(test, feature = "gallery-tests"))]
+#[path = "../../jadix_lucide/src/recipes.rs"]
+pub mod recipes;
+#[cfg(all(test, feature = "gallery-tests"))]
+pub use utils::lucide_animated::animated_icon;
+
 pub mod core;
 pub mod layout;
 pub mod media;
+pub mod motion;
 #[cfg(feature = "net")]
 pub mod net;
-pub mod motion;
 pub mod renderer;
 pub mod style;
 
@@ -18,7 +28,9 @@ pub use renderer as render;
 pub mod a11y;
 pub mod app;
 pub mod authoring;
-#[cfg(feature = "components")]
+#[cfg(all(test, feature = "product-tests"))]
+#[allow(unexpected_cfgs)]
+#[path = "../../jadix_components/src/components/mod.rs"]
 pub mod components;
 #[cfg(feature = "i18n")]
 /// Locale overlays, ICU-lite format, TOML catalogs. Off by default; see [`tr_default`].
@@ -51,6 +63,12 @@ mod crate_tests;
 // ui! expansions in crate-local tests use the public crate name.
 #[cfg(test)]
 extern crate self as jadix;
+#[cfg(all(test, feature = "gallery-tests"))]
+extern crate self as jadix_components;
+#[cfg(all(test, feature = "gallery-tests"))]
+extern crate self as jadix_dnd;
+#[cfg(all(test, feature = "gallery-tests"))]
+extern crate self as jadix_lucide;
 // Native drag regressions mount the Gallery source, including every provider.
 #[cfg(all(test, feature = "gallery-tests"))]
 #[path = "../../../examples/gallery/src/imports.rs"]
@@ -65,8 +83,10 @@ mod pages;
 mod shared;
 #[cfg(all(test, feature = "gallery-tests"))]
 pub(crate) fn gallery_icon() -> crate::app::AppIcon {
-    crate::app::AppIcon::from_bytes(include_bytes!("../../../examples/gallery/assets/app-icon.png"))
-        .expect("bundled Gallery icon")
+    crate::app::AppIcon::from_bytes(include_bytes!(
+        "../../../examples/gallery/assets/app-icon.png"
+    ))
+    .expect("bundled Gallery icon")
 }
 #[cfg(all(test, feature = "gallery-tests"))]
 pub(crate) mod gallery_drag {
@@ -92,13 +112,16 @@ pub mod reactivity {
     pub use crate::core::resource::{Resource, ResourceState};
 }
 
-pub use core::tree::{CursorKind, CursorValue, PathHitPolicy, PointerEvents};
 pub use core::tree::{opacity_groups_enabled, set_opacity_groups_enabled};
+pub use core::tree::{CursorKind, CursorValue, PathHitPolicy, PointerEvents};
+#[cfg(feature = "macros")]
 #[doc(hidden)]
 pub use jadix_macros::ui_with_runtime as __ui_with_runtime;
+#[cfg(feature = "macros")]
 pub use jadix_macros::{component, main};
 
 /// Build an RSX tree using this runtime, including when the dependency is renamed.
+#[cfg(feature = "macros")]
 #[macro_export]
 macro_rules! ui {
     ($($tokens:tt)*) => {
@@ -164,7 +187,11 @@ pub fn tr_default_zh(key: &str, en_us: &str, zh_cn: &str) -> String {
     #[cfg(not(feature = "i18n"))]
     {
         let _ = key;
-        String::from(if chrome_locale().starts_with("zh") { zh_cn } else { en_us })
+        String::from(if chrome_locale().starts_with("zh") {
+            zh_cn
+        } else {
+            en_us
+        })
     }
 }
 
@@ -190,7 +217,14 @@ pub fn tr_with_default_zh(key: &str, en_us: &str, zh_cn: &str, args: &[(&str, &s
     #[cfg(not(feature = "i18n"))]
     {
         let _ = key;
-        i18n_interpolate(if chrome_locale().starts_with("zh") { zh_cn } else { en_us }, args)
+        i18n_interpolate(
+            if chrome_locale().starts_with("zh") {
+                zh_cn
+            } else {
+                en_us
+            },
+            args,
+        )
     }
 }
 
@@ -203,9 +237,13 @@ thread_local! {
 /// Lightweight component language, available without the full i18n feature.
 pub fn chrome_locale() -> String {
     #[cfg(feature = "i18n")]
-    { crate::i18n::locale().to_string() }
+    {
+        crate::i18n::locale().to_string()
+    }
     #[cfg(not(feature = "i18n"))]
-    { CHROME_LOCALE.with(|locale| locale.borrow().clone()) }
+    {
+        CHROME_LOCALE.with(|locale| locale.borrow().clone())
+    }
 }
 
 /// Sets component language; with i18n enabled this also selects the catalog locale.
@@ -554,17 +592,19 @@ pub fn decode_image_src(src: impl AsRef<str>) -> Option<crate::media::DecodedIma
 }
 
 pub use crate::media::{
-    clear_remote_asset_fetcher, fetch_remote_bytes, is_remote_src, remote_asset_enabled,
-    remote_asset_fetcher_installed, set_remote_asset_fetcher, MediaFrame, MediaPlanes, PixelLayout,
-    RemoteAssetFetcher, TextureColorSpace,
+    clear_remote_asset_fetcher, fetch_remote_bytes, fetch_remote_bytes_shared, is_remote_src,
+    remote_asset_enabled, remote_asset_fetcher_installed, set_remote_asset_fetcher, MediaFrame,
+    MediaPlanes, PixelLayout, RemoteAssetFetcher, TextureColorSpace,
 };
+#[cfg(feature = "remote-asset-cache")]
+pub use media::CachedRemoteAssetFetcher;
 
 /// 注册自定义图标名（覆盖 Lucide / [`set_icon_provider`]）。路径、`data:` URL 或内联 SVG。
 pub fn register_icon(name: impl Into<String>, source: impl Into<crate::utils::IconSource>) {
     crate::utils::register_icon(name, source)
 }
 
-/// 替换自定义 [`IconProvider`](crate::utils::IconProvider)（Lucide 仍为回退；[`register_icon`] 优先）。
+/// 替换自定义 [`IconProvider`](crate::utils::IconProvider)（[`register_icon`] 优先，Lucide 由产品显式安装）。
 pub fn set_icon_provider(provider: std::sync::Arc<dyn crate::utils::IconProvider>) {
     crate::utils::set_icon_provider(provider)
 }
@@ -656,10 +696,15 @@ mod tr_default_shim_tests {
     }
 }
 
-pub(crate) static DEFAULT_ICON_PROVIDER: std::sync::LazyLock<Option<std::sync::Arc<dyn utils::icon_provider::IconProvider>>> =
-    std::sync::LazyLock::new(|| {
-        #[cfg(feature = "lucide")]
-        { Some(std::sync::Arc::new(utils::lucide::DefaultProvider)) }
-        #[cfg(not(feature = "lucide"))]
-        { None }
-    });
+pub(crate) static DEFAULT_ICON_PROVIDER: std::sync::LazyLock<
+    Option<std::sync::Arc<dyn utils::icon_provider::IconProvider>>,
+> = std::sync::LazyLock::new(|| {
+    #[cfg(all(test, feature = "product-tests"))]
+    {
+        Some(std::sync::Arc::new(utils::lucide::DefaultProvider))
+    }
+    #[cfg(not(all(test, feature = "product-tests")))]
+    {
+        None
+    }
+});

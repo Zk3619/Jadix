@@ -2,17 +2,27 @@
 //!
 //! 经 [`image::codecs::gif::GifDecoder`] 解码；`gif` crate 仅作 `image` 传递依赖。
 
+#[cfg(feature = "image-gif")]
 use std::io::Cursor;
+#[cfg(feature = "image-gif")]
 use std::time::Duration;
 
+#[cfg(feature = "image-gif")]
 use image::codecs::gif::GifDecoder;
+#[cfg(feature = "image-gif")]
 use image::{AnimationDecoder, ImageDecoder};
 
+#[cfg(feature = "image-gif")]
 use super::animation::{DecodedAnimation, DecodedFrame};
 use super::DecodedImage;
 
 pub fn is_gif(bytes: &[u8]) -> bool {
     bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a")
+}
+
+#[cfg(not(feature = "image-gif"))]
+pub fn decode_gif_animation(_bytes: &[u8]) -> Option<super::animation::DecodedAnimation> {
+    None
 }
 
 /// 解码 GIF 为合成后的全画布帧序列。
@@ -29,6 +39,7 @@ pub fn decode_gif(bytes: &[u8]) -> Option<DecodedImage> {
     })
 }
 
+#[cfg(feature = "image-gif")]
 pub fn decode_gif_animation(bytes: &[u8]) -> Option<DecodedAnimation> {
     let decoder = GifDecoder::new(Cursor::new(bytes)).ok()?;
     let (width, height) = decoder.dimensions();
@@ -56,13 +67,14 @@ pub fn decode_gif_animation(bytes: &[u8]) -> Option<DecodedAnimation> {
     })
 }
 
+#[cfg(feature = "image-gif")]
 fn frame_delay_cs(delay: image::Delay) -> u16 {
     let ms = Duration::from(delay).as_millis();
     let cs = ms / 10;
     cs.min(u16::MAX as u128) as u16
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "image-gif"))]
 mod tests {
     use super::*;
     use image::codecs::gif::{GifEncoder, Repeat};

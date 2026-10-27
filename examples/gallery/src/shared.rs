@@ -202,10 +202,19 @@ fn performance_panel_stays_viewport_anchored_across_scroll_and_resize() {
         layout.set_collect_skip_allowed(true);
         layout.build_and_layout(&mut root, 640.0, 600.0, [-1.0; 2]);
         for frame in 0..120 {
+            if frame % 10 == 0 {
+                root.children.push(jadix::utils::keyed_overlay::viewport_portal_stage(
+                    &format!("hover-scroll-{frame}"),
+                    Element::new().w(240.0).h(100.0).absolute().left(200.0).top(200.0)
+                        .bg("red").text("HoverCard"),
+                    1000,
+                ));
+            }
             let [width, height] = [[640.0, 600.0], [800.0, 500.0], [360.0, 640.0]][(frame / 20) % 3];
             use_signal(&jadix::core::scroll_viewport::scroll_offset_y_signal_key(
                 "performance-position-scroll"), || 0.0_f32).set_silent((frame * 37 % 900) as f32);
-            layout.build_and_layout_fast(&mut root, width, height, [-1.0; 2], frame % 3 != 0, true);
+            jadix::layout::layout_tree::hoist_portal_subtrees(&mut root);
+            let scene = layout.build_and_layout_fast(&mut root, width, height, [-1.0; 2], frame % 3 != 0, true);
             let panel = find(&root, "gal-perf-panel")
                 .expect("performance panel");
             let bounds = panel.viewport_layout_bounds();
@@ -217,6 +226,16 @@ fn performance_panel_stays_viewport_anchored_across_scroll_and_resize() {
             let button = button.viewport_layout_bounds();
             assert!((button[0] + button[2] - bounds[0] - bounds[2]).abs() < 1.0,
                 "performance button detached at frame {frame}: {button:?} / {bounds:?}");
+            let label = scene.text_nodes.iter().find(|node| node.text == "性能 / FPS")
+                .expect("performance toggle paint");
+            assert!(label.x >= button[0] && label.x < button[0] + button[2]
+                && label.y >= button[1] && label.y < button[1] + button[3],
+                "performance toggle paint detached at {frame}: {}, {} / {button:?}", label.x, label.y);
+            let resources = scene.text_nodes.iter().find(|node| node.text == "Measuring…")
+                .expect("performance resources paint");
+            assert!(resources.x >= bounds[0] && resources.x < bounds[0] + bounds[2]
+                && resources.y >= bounds[1] && resources.y < bounds[1] + bounds[3],
+                "performance resources paint detached at {frame}: {}, {} / {bounds:?}", resources.x, resources.y);
         }
     });
 }

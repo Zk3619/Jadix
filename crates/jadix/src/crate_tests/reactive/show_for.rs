@@ -547,12 +547,12 @@ fn reactive_component_props_refresh_reruns_effect() {
 
 #[test]
 fn show_for_spot_check_button_toast_have_no_reactive_view() {
-    let button = include_str!("../../components/button.rs");
+    let button = include_str!("../../../../jadix_components/src/components/button.rs");
     assert!(
         !button.contains("reactive_view("),
         "button must bind leaves, not wrap chrome in reactive_view"
     );
-    let toast = include_str!("../../components/toast/mod.rs");
+    let toast = include_str!("../../../../jadix_components/src/components/toast/mod.rs");
     assert!(
         !toast.contains("reactive_view("),
         "toast must not use reactive_view for text/variant"
@@ -561,7 +561,7 @@ fn show_for_spot_check_button_toast_have_no_reactive_view() {
 
 #[test]
 fn show_for_spot_check_dialog_island_is_viewport_modal() {
-    let dialog = include_str!("../../components/dialog.rs");
+    let dialog = include_str!("../../../../jadix_components/src/components/dialog.rs");
     assert!(
         dialog.contains("viewport_modal_island("),
         "Dialog open/close is a structure island"
@@ -574,7 +574,7 @@ fn show_for_spot_check_dialog_island_is_viewport_modal() {
 
 #[test]
 fn show_for_spot_check_tabs_strip_not_an_island() {
-    let tabs = include_str!("../../components/tabs.rs");
+    let tabs = include_str!("../../../../jadix_components/src/components/tabs.rs");
     assert!(
         !tabs.contains("reactive_view("),
         "tabs strip must not rebuild interactive chrome on selection"
@@ -587,7 +587,7 @@ fn show_for_spot_check_tabs_strip_not_an_island() {
 
 #[test]
 fn show_for_spot_check_progress_track_not_an_island() {
-    let progress = include_str!("../../components/progress.rs");
+    let progress = include_str!("../../../../jadix_components/src/components/progress.rs");
     assert!(
         !progress.contains("reactive_view("),
         "ProgressTrack fill is paint-only — bind_prop, not reactive_view"
@@ -600,7 +600,7 @@ fn show_for_spot_check_progress_track_not_an_island() {
 
 #[test]
 fn show_for_spot_check_menubar_trigger_not_an_island() {
-    let menubar = include_str!("../../components/menubar.rs");
+    let menubar = include_str!("../../../../jadix_components/src/components/menubar.rs");
     assert!(
         !menubar.contains("reactive_view("),
         "MenubarTrigger open accent is paint-only — bind_prop, not reactive_view"

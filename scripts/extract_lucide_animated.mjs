@@ -10,7 +10,7 @@ const iconsDir = path.resolve(
   process.argv[2] ?? ".tmp/lucide-animated/icons"
 );
 const outPath = path.resolve(
-  process.argv[3] ?? "crates/jadix/assets/lucide_animated.json"
+  process.argv[3] ?? "crates/jadix_lucide/assets/lucide_animated.json"
 );
 
 function extractBalancedObject(src, startIdx) {

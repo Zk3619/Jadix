@@ -10,6 +10,7 @@ use crate::{
     core::tree::{Element, IntoElementList, LayoutStatus},
     media::{MediaController, MediaSnapshot},
 };
+#[cfg(feature = "macros")]
 use jadix_macros::component;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -301,6 +302,7 @@ fn media_element(
 }
 
 /// Nonvisual audio endpoint. Rendering never opens, plays, or stops a source.
+#[cfg(feature = "macros")]
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Audio(id: String, controller: MediaController) -> Element {
@@ -308,9 +310,32 @@ pub fn Audio(id: String, controller: MediaController) -> Element {
 }
 
 /// Video texture endpoint with optional poster. Size, fit, clipping and chrome are caller-owned.
+#[cfg(feature = "macros")]
 #[component(crate_path = "crate")]
 #[allow(non_snake_case)]
 pub fn Video(
+    id: String,
+    controller: MediaController,
+    poster: String,
+    fit: MediaFit,
+    content_ratio: MediaAspectRatio,
+    rotation: MediaRotation,
+    mirror_horizontal: bool,
+    mirror_vertical: bool,
+) -> Element {
+    video_element(
+        id,
+        controller,
+        poster,
+        fit,
+        content_ratio,
+        rotation,
+        mirror_horizontal,
+        mirror_vertical,
+    )
+}
+
+fn video_element(
     id: String,
     controller: MediaController,
     poster: String,
@@ -356,11 +381,19 @@ impl AudioBuilder {
 
 impl From<AudioBuilder> for Element {
     fn from(builder: AudioBuilder) -> Self {
-        builder.chrome.apply(Audio(AudioProps {
-            id: builder.id,
-            controller: Some(builder.controller),
-            ..Default::default()
-        }))
+        let element = crate::core::reactivity::component_root(|| {
+            let element = crate::core::reactivity::component_isolated_body(|| {
+                media_element(
+                    builder.id,
+                    builder.controller,
+                    false,
+                    String::new(),
+                    MediaFit::Fill,
+                )
+            });
+            crate::style::apply_stylesheet_rules_tree(element)
+        });
+        builder.chrome.apply(element)
     }
 }
 
@@ -434,17 +467,22 @@ impl VideoBuilder {
 
 impl From<VideoBuilder> for Element {
     fn from(builder: VideoBuilder) -> Self {
-        builder.chrome.apply(Video(VideoProps {
-            id: builder.id,
-            controller: Some(builder.controller),
-            poster: Some(builder.poster),
-            fit: Some(builder.fit),
-            content_ratio: Some(builder.content_ratio),
-            rotation: Some(builder.rotation),
-            mirror_horizontal: Some(builder.mirror_horizontal),
-            mirror_vertical: Some(builder.mirror_vertical),
-            ..Default::default()
-        }))
+        let element = crate::core::reactivity::component_root(|| {
+            let element = crate::core::reactivity::component_isolated_body(|| {
+                video_element(
+                    builder.id,
+                    builder.controller,
+                    builder.poster,
+                    builder.fit,
+                    builder.content_ratio,
+                    builder.rotation,
+                    builder.mirror_horizontal,
+                    builder.mirror_vertical,
+                )
+            });
+            crate::style::apply_stylesheet_rules_tree(element)
+        });
+        builder.chrome.apply(element)
     }
 }
 

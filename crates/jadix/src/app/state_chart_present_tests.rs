@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Check chart first-display alignment and moving overlays in the native compositor.
 use super::*;
 

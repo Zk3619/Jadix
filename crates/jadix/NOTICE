@@ -45,7 +45,7 @@ Google Noto fonts in `assets/`:
   Copyright: The Noto Project Authors (Google LLC and contributors)
   https://fonts.google.com/noto/specimen/Noto+Sans
 
-Lucide icon font in `assets/lucide.ttf`:
+Lucide icon font in the optional `jadix_lucide` dependency (`assets/lucide.ttf`):
 
   License: ISC License
   Copyright: Lucide Contributors
@@ -54,14 +54,14 @@ Lucide icon font in `assets/lucide.ttf`:
 Bundled icon data
 -----------------
 
-Lucide name → codepoint map in `assets/lucide.json` and SVG paths in
+Lucide name → codepoint map and SVG paths shipped by `jadix_lucide`, in
 `assets/lucide_paths.json`:
 
   License: ISC License
   Copyright: Lucide Contributors
   https://github.com/lucide-icons/lucide
 
-Animated icon recipes in `assets/lucide_animated.json` (extracted offline from
+Animated icon recipes in `jadix_lucide/assets/lucide_animated.json` (extracted offline from
 pqoqubbw/icons; embedded when the `lucide-animated` feature is enabled):
 
   License: MIT License

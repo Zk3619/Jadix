@@ -1,0 +1,162 @@
+[package]
+name = "jadix_components"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Jadix native UI components with optional RSX authoring"
+readme = "README.md"
+
+[lib]
+test = false
+
+[features]
+default = []
+markdown = ["jadix/markdown"]
+svg = ["jadix/svg"]
+macros = ["jadix/macros"]
+dnd = ["dep:jadix_dnd"]
+code = ["jadix/code"]
+code-lsp = ["jadix/code-lsp"]
+document = ["jadix/document", "dep:image", "dep:glyphon"]
+document-editing = ["jadix/document-editing", "document"]
+document-diff = ["jadix/document-diff"]
+document-science = ["jadix/document-science", "document"]
+document-math = ["jadix/document-math", "document", "svg"]
+syntax-highlighting = ["jadix/syntax-highlighting"]
+scale-preview = ["jadix/scale-preview"]
+webview = ["jadix/webview"]
+i18n = ["jadix/i18n"]
+a11y = ["jadix/a11y"]
+file-dialog = ["jadix/file-dialog"]
+file-persistence = ["jadix/file-persistence"]
+animation-base = ["jadix/animation-base"]
+animation-ex = ["jadix/animation-ex", "animation-base"]
+animation-path = ["jadix/animation-path", "animation-ex"]
+animation = ["jadix/animation", "animation-base", "animation-ex"]
+image-stream = ["jadix/image-stream"]
+image-gif = ["jadix/image-gif"]
+image-webp = ["jadix/image-webp"]
+remote-asset = ["jadix/remote-asset"]
+text-undo = ["jadix/text-undo"]
+themes = ["jadix/themes", "theme-shadcn", "theme-fluent", "theme-material3", "theme-liquid-glass"]
+theme-shadcn = ["jadix/theme-shadcn"]
+theme-fluent = ["jadix/theme-fluent"]
+theme-material3 = ["jadix/theme-material3"]
+theme-liquid-glass = ["jadix/theme-liquid-glass"]
+
+[dependencies]
+jadix = { workspace = true, features = ["drag"] }
+jadix_dnd = { workspace = true, optional = true }
+taffy.workspace = true
+winit.workspace = true
+log.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+unicode-segmentation.workspace = true
+image = { workspace = true, optional = true }
+glyphon = { workspace = true, optional = true }
+
+
+[[test]]
+name = "app_shell"
+required-features = ["macros"]
+
+[[test]]
+name = "authoring_contracts"
+required-features = ["macros"]
+
+[[test]]
+name = "authoring_runtime_contracts"
+required-features = ["macros"]
+
+[[test]]
+name = "fragment_macro"
+required-features = ["macros"]
+
+[[test]]
+name = "geometry_contracts"
+required-features = ["macros"]
+
+[[test]]
+name = "img_alias"
+required-features = ["macros"]
+
+[[test]]
+name = "input_adornment_rsx"
+required-features = ["macros"]
+
+[[test]]
+name = "macro_lowering"
+required-features = ["macros"]
+
+[[test]]
+name = "media_customization"
+required-features = ["macros"]
+
+[[test]]
+name = "media_player"
+required-features = ["macros"]
+
+[[test]]
+name = "media_presentation_layout"
+required-features = ["macros"]
+
+[[test]]
+name = "prelude_dual_surface"
+required-features = ["macros"]
+
+[[test]]
+name = "rsx_class"
+required-features = ["macros"]
+
+[[test]]
+name = "scroll_components"
+required-features = ["macros"]
+
+[[test]]
+name = "text_document_views"
+required-features = ["macros"]
+
+[[test]]
+name = "textarea_rsx_wrap"
+required-features = ["macros"]
+
+[[test]]
+name = "document_editing"
+required-features = ["macros"]
+
+[[test]]
+name = "document_extensions"
+required-features = ["macros"]
+
+[[test]]
+name = "scale_preview"
+required-features = ["macros"]
+
+[[test]]
+name = "feature_contracts"
+required-features = ["macros"]
+
+[[example]]
+name = "document_editor"
+required-features = ["macros", "document-editing"]
+
+[[example]]
+name = "text_documents"
+required-features = ["macros", "document-diff"]
+
+[[example]]
+name = "application_icons"
+required-features = ["macros"]
+
+[[example]]
+name = "desktop_shell"
+required-features = ["macros"]
+
+[dev-dependencies]
+jadix_lucide = { workspace = true, features = ["ui", "svg"] }
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("product-tests"))'] }

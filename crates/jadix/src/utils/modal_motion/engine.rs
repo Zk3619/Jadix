@@ -1451,7 +1451,7 @@ fn flush_shell_state(
 }
 
 /// 拖拽等跟手路径：直接写面板 transform，避免 reactive 重建。
-pub(crate) fn patch_modal_panel_transform(root: &mut Element, modal_id: &str, translate: [f32; 2]) {
+pub fn patch_modal_panel_transform(root: &mut Element, modal_id: &str, translate: [f32; 2]) {
     let panel_tid = format!("{modal_id}__modal_panel");
     let Some(panel) = find_template_id_mut(root, &panel_tid) else {
         return;
@@ -1488,7 +1488,7 @@ pub(crate) fn patch_modal_panel_transform(root: &mut Element, modal_id: &str, tr
 }
 
 /// 拖拽跟手：遮罩透明度随 open_frac（对齐 shadcn `--drawer-swipe-progress`）。
-pub(crate) fn patch_modal_overlay_opacity(root: &mut Element, modal_id: &str, opacity: f32) {
+pub fn patch_modal_overlay_opacity(root: &mut Element, modal_id: &str, opacity: f32) {
     let overlay_tid = format!("{modal_id}__modal_overlay");
     let Some(overlay) = find_template_id_mut(root, &overlay_tid) else {
         return;
@@ -1510,12 +1510,7 @@ fn translated_bounds(bounds: [f32; 4], translate: [f32; 2]) -> [f32; 4] {
 }
 
 /// Keep flush's dragging branch in sync with the live swipe (no reactive rebuild).
-pub(crate) fn note_modal_shell_drag(
-    modal_id: &str,
-    extra: [f32; 2],
-    dragging: bool,
-    open_frac: f32,
-) {
+pub fn note_modal_shell_drag(modal_id: &str, extra: [f32; 2], dragging: bool, open_frac: f32) {
     PRESENCE_REGISTRY.with(|reg| {
         for cell in reg.borrow().iter() {
             let mut c = cell.borrow_mut();
@@ -1536,7 +1531,7 @@ pub(crate) fn note_modal_shell_drag(
 }
 
 /// Drawer 松手后吸附：下一帧从 `from` 位移 CSS transition 到 snap 目标。
-pub(crate) fn arm_modal_slide_settle(modal_id: &str, from: [f32; 2]) {
+pub fn arm_modal_slide_settle(modal_id: &str, from: [f32; 2]) {
     PRESENCE_REGISTRY.with(|reg| {
         for cell in reg.borrow().iter() {
             let mut c = cell.borrow_mut();
@@ -1960,7 +1955,10 @@ mod tests {
 
     #[test]
     fn slide_exit_keeps_the_last_visible_pixels_until_completion() {
-        for motion in [ModalSurfaceMotion::SlideFromRight, ModalSurfaceMotion::SlideFromBottom] {
+        for motion in [
+            ModalSurfaceMotion::SlideFromRight,
+            ModalSurfaceMotion::SlideFromBottom,
+        ] {
             let mut overlay = Element::new().opacity(0.03);
             let mut panel = Element::new();
             let closed = motion.closed_translate_pct();
@@ -2044,7 +2042,11 @@ mod tests {
             let animated = cfg!(feature = "animation-base");
             assert_eq!(
                 sync_modal_presence(&handle, false),
-                if animated { PresencePhase::Exiting } else { PresencePhase::Absent }
+                if animated {
+                    PresencePhase::Exiting
+                } else {
+                    PresencePhase::Absent
+                }
             );
             assert_eq!(mounted.get(), animated);
             assert_eq!(runs.get(), if animated { 2 } else { 3 });

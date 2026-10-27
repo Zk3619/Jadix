@@ -1,5 +1,5 @@
 use super::{lsp, CodeFile, Workspace};
-use jadix::prelude::*;
+use jadix_components::prelude::*;
 use serde_json::{json, Value};
 use std::{collections::HashMap, rc::Rc};
 

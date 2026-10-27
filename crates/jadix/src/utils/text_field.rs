@@ -940,7 +940,7 @@ pub(crate) fn attach_text_edit_field_lifecycle(
 }
 
 /// Drop value / caret / undo named slots for a field (L3 close-tab).
-pub(crate) fn wipe_text_edit_named_slots(field_id: &str) {
+pub fn wipe_text_edit_named_slots(field_id: &str) {
     crate::utils::text_edit_history::reset(field_id);
     unbind_controlled_value(field_id);
     let keys = [

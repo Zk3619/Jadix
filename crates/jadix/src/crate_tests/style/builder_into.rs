@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Builder chain dual-accept: strings stay the product default; typed values share the same method.
 
 use crate::prelude::*;

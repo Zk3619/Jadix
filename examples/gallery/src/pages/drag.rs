@@ -4,16 +4,16 @@ use crate::imports::*;
 use crate::shared::*;
 use std::rc::Rc;
 
-use jadix::utils::drag::{
-    Axis, CollisionAlg, DragCtx, DragEvent, DragItemCtx, OverlayAlign, Restrict, RestrictAnchor,
-    SnapGrid, SnapPointFn, SnapTargets, apply_event, apply_reorder_vec, apply_transfer,
-    begin_draggable, detect, drag_overlay, drag_scope, last_drag_extent, last_hit_rect,
-    last_overlay_pos, last_pointer, run_scope_sensors, set_debug_drag_hits, sortable_item,
-    sortable_list, use_drag,
-};
 use jadix::utils::pointer_action::{
-    BoxRect, Edges, GestureOpts, GestureState, Invert, ResizeOpts, begin_resize, bind_resize_rect,
-    last_gesture, resize_on_edges, set_gesture_opts,
+    begin_resize, bind_resize_rect, last_gesture, resize_on_edges, set_gesture_opts, BoxRect,
+    Edges, GestureOpts, GestureState, Invert, ResizeOpts,
+};
+use jadix_dnd::utils::drag::{
+    apply_event, apply_reorder_vec, apply_transfer, begin_draggable, detect, drag_overlay,
+    drag_scope, last_drag_extent, last_hit_rect, last_overlay_pos, last_pointer, run_scope_sensors,
+    set_debug_drag_hits, sortable_item, sortable_list, use_drag, Axis, CollisionAlg, DragCtx,
+    DragEvent, DragItemCtx, OverlayAlign, Restrict, RestrictAnchor, SnapGrid, SnapPointFn,
+    SnapTargets,
 };
 
 /// `reactive_sync` runs in the frame prepass with no provider owner.
@@ -30,14 +30,24 @@ fn zone_list_hover_peek(ctx: Option<&DragCtx>, list: &str) -> bool {
 /// Subscribe `active_droppable` (not `overlay_pos`); peek `hits()` for the tick cache.
 fn hits_hud() -> Element {
     let ctx = use_drag();
-    let id = format!("{}__hits_hud", ctx.as_ref().map_or("drag", |ctx| ctx.id.as_str()));
+    let id = format!(
+        "{}__hits_hud",
+        ctx.as_ref().map_or("drag", |ctx| ctx.id.as_str())
+    );
     let text = jadix::app::reactive::bind_text(id, move || {
         let over = ctx.as_ref().and_then(|c| c.active_droppable.get());
-        let dragging = ctx.as_ref().and_then(|c| c.active_draggable.get()).is_some();
+        let dragging = ctx
+            .as_ref()
+            .and_then(|c| c.active_draggable.get())
+            .is_some();
         let hits = ctx.as_ref().map(|c| c.hits()).unwrap_or_default();
         let n_drag = hits.iter().filter(|h| h.is_draggable).count();
         let n_drop = hits.iter().filter(|h| h.is_droppable).count();
-        let mode = if dragging { "拖中·layout walk" } else { "空闲·registered" };
+        let mode = if dragging {
+            "拖中·layout walk"
+        } else {
+            "空闲·registered"
+        };
         format!(
             "use_drag().hits() · {mode} · drag={n_drag} drop={n_drop} over={}",
             over.as_deref().unwrap_or("—")
@@ -55,7 +65,8 @@ fn data_payload_ghost(item: &DragItemCtx) -> Element {
         .unwrap_or_else(|| "—".to_string());
     ui! {
         <HStack
-            p="0.35rem 0.6rem"
+            py="0.35rem"
+            px="0.6rem"
             gap="0.375rem"
             items="center"
             rounded="9999px"
@@ -310,7 +321,8 @@ fn vacated_slot(hint: &str) -> Element {
         <Box
             min_h="2.5rem"
             min_w="7rem"
-            p="0.5rem 0.65rem"
+            py="0.5rem"
+            px="0.65rem"
             rounded="0.5rem"
             bg="transparent"
             border_style="dashed"
@@ -413,7 +425,8 @@ fn kanban_column(list: &'static str, title: &str, body: Element) -> Element {
 fn card_chip(label: &str) -> Element {
     ui! {
         <HStack
-            p="0.5rem 0.65rem"
+            py="0.5rem"
+            px="0.65rem"
             gap="0.5rem"
             items="center"
             rounded="0.5rem"
@@ -433,7 +446,8 @@ fn card_chip(label: &str) -> Element {
 fn compact_chip(label: &str) -> Element {
     ui! {
         <HStack
-            p="0.375rem 0.65rem"
+            py="0.375rem"
+            px="0.65rem"
             gap="0.375rem"
             items="center"
             rounded="0.5rem"
@@ -487,7 +501,8 @@ fn multi_select_chip(label: &str, item_id: &str) -> Element {
         .is_some_and(|c| c.selected.get().contains(&item_id));
     let mut el = ui! {
         <HStack
-            p="0.375rem 0.65rem"
+            py="0.375rem"
+            px="0.65rem"
             gap="0.375rem"
             items="center"
             rounded="0.5rem"
@@ -698,7 +713,8 @@ fn typed_overlay_ghost(item: &DragItemCtx) -> Element {
     };
     ui! {
         <HStack
-            p="0.35rem 0.6rem"
+            py="0.35rem"
+            px="0.6rem"
             gap="0.375rem"
             items="center"
             rounded="9999px"
@@ -760,7 +776,8 @@ fn handle_grip() -> Element {
 fn handle_row() -> Element {
     ui! {
         <HStack
-            p="0.5rem 0.65rem"
+            py="0.5rem"
+            px="0.65rem"
             gap="0.5rem"
             items="center"
             rounded="0.5rem"
@@ -778,7 +795,8 @@ fn handle_row() -> Element {
 fn ignore_row() -> Element {
     ui! {
         <HStack
-            p="0.5rem 0.65rem"
+            py="0.5rem"
+            px="0.65rem"
             gap="0.5rem"
             items="center"
             rounded="0.5rem"
@@ -799,7 +817,7 @@ fn ignore_row() -> Element {
 
 fn token_chip() -> Element {
     ui! {
-        <Box p="0.5rem 0.75rem" rounded="0.5rem" bg="primary" cursor="grab">
+        <Box py="0.5rem" px="0.75rem" rounded="0.5rem" bg="primary" cursor="grab">
             <Label color="primary-foreground" text_size="0.875rem">"Token · Builder"</Label>
         </Box>
     }
@@ -829,13 +847,22 @@ fn persist_delta_pos(pos: Signal<[f32; 2]>) -> impl FnMut(&DragEvent) {
     }
 }
 
-/// Paint-only background: keep the viewport-space lattice used by SnapGrid,
-/// including after the page scrolls, without rebuilding the draggable children.
-pub(crate) fn snap_grid_lines(grids: &[(SnapGrid, f32)], visible: Signal<bool>) -> Element {
+fn local_snap_targets(targets: SnapTargets, origin: Rc<Cell<[f32; 2]>>) -> SnapTargets {
+    let end_only = targets.end_only;
+    SnapTargets::default().end_only(end_only).with_fn(Rc::new(move |x, y| {
+        let [left, top] = origin.get();
+        let point = targets.apply(x - left, y - top);
+        Some([point[0] + left, point[1] + top])
+    }))
+}
+
+pub(crate) fn snap_grid_lines(
+    grids: &[(SnapGrid, f32)],
+    visible: Signal<bool>,
+    origin: Rc<Cell<[f32; 2]>>,
+) -> Element {
     let mut layers = Vec::new();
     for &(grid, alpha) in grids {
-        let origin = Rc::new(Cell::new([0.0, 0.0]));
-        let painted_origin = origin.clone();
         let layer: Element = canvas()
             .w("100%")
             .h("100%")
@@ -847,7 +874,7 @@ pub(crate) fn snap_grid_lines(grids: &[(SnapGrid, f32)], visible: Signal<bool>) 
                     if !step.is_finite() || step < 1.0 {
                         continue;
                     }
-                    let mut p = (grid.offset[axis] - painted_origin.get()[axis]).rem_euclid(step);
+                    let mut p = grid.offset[axis].rem_euclid(step);
                     while p < [size.w, size.h][axis] {
                         if axis == 0 {
                             ctx.fill_rect(p, 0.0, 1.0, size.h);
@@ -869,12 +896,9 @@ pub(crate) fn snap_grid_lines(grids: &[(SnapGrid, f32)], visible: Signal<bool>) 
                 .opacity(alpha)
                 .pointer_events_none()
                 .reactive_sync(move |el, _| {
-                    let bounds = el.viewport_layout_bounds();
-                    let next = [bounds[0], bounds[1]];
                     let color = parse_color("foreground");
-                    let moved = origin.replace(next) != next;
                     let recolored = painted_color.replace(color) != color;
-                    if !moved && !recolored {
+                    if !recolored {
                         return LayoutStatus::Clean;
                     }
                     if let Some(id) = el.get_attr(jadix::primitives::canvas::ATTR_CANVAS_PAINT) {
@@ -894,6 +918,8 @@ pub(crate) fn snap_grid_lines(grids: &[(SnapGrid, f32)], visible: Signal<bool>) 
         .pointer_events_none()
         .children(layers)
         .reactive_sync(move |el, _| {
+            let bounds = el.viewport_layout_bounds();
+            origin.set([bounds[0], bounds[1]]);
             let opacity = if visible.peek() { 1.0 } else { 0.0 };
             if el.style.opacity == opacity {
                 return LayoutStatus::Clean;
@@ -1081,7 +1107,11 @@ fn gesture_preview(
     let opacity = preview.style.opacity;
     preview.style.opacity = 0.0;
     preview.style.translate_pct = [-0.5; 2];
-    preview.absolute().left(0.0).top(0.0).pointer_events_none()
+    preview
+        .absolute()
+        .left(0.0)
+        .top(0.0)
+        .pointer_events_none()
         .reactive_sync(move |element, _| {
             let before = element.style.clone();
             let active = drag.active_draggable.peek().filter(|_| visible.peek());
@@ -1097,7 +1127,11 @@ fn gesture_preview(
                 element.style.scale = [live.scale.clamp(0.333, 3.0); 2];
                 element.style.rotate_deg = live.angle.to_degrees();
             }
-            if element.style == before { LayoutStatus::Clean } else { LayoutStatus::StyleChanged }
+            if element.style == before {
+                LayoutStatus::Clean
+            } else {
+                LayoutStatus::StyleChanged
+            }
         })
 }
 
@@ -1213,7 +1247,8 @@ fn list_chip(label: &str) -> Element {
     ui! {
         <HStack
             w="100%"
-            p="0.5rem 0.65rem"
+            py="0.5rem"
+            px="0.65rem"
             gap="0.5rem"
             items="center"
             rounded="0.5rem"
@@ -1260,7 +1295,101 @@ fn corner_overlay_angle(scope: &str, arena: &str) -> f32 {
 mod drop_position_tests {
     use super::*;
     use jadix::core::reactivity::create_root;
-    use jadix::utils::drag::{BeginDrag, begin, end, tick};
+    use jadix_dnd::utils::drag::{begin, end, tick, BeginDrag};
+
+    #[test]
+    fn grid_snap_follows_its_arena_across_scroll() {
+        let origin = Rc::new(Cell::new([40.0, 73.0]));
+        let targets = local_snap_targets(
+            SnapTargets::new([SnapGrid::new(32.0, 32.0).offset([16.0; 2])]),
+            origin.clone(),
+        );
+        assert_eq!(targets.apply(59.0, 91.0), [56.0, 89.0]);
+        origin.set([40.0, -28.5]);
+        assert_eq!(targets.apply(59.0, -10.5), [56.0, -12.5]);
+    }
+
+    #[test]
+    fn all_drag_chip_variants_keep_content_padding() {
+        jadix::init();
+        create_root(|| {
+            let mut root = jadix::authoring::mount::with_inline_mount(|| {
+                Element::from(drag_scope("all-chip-padding-test").child(|| {
+                    let mut rows = vec![
+                        card_chip("Card Jupiter"),
+                        compact_chip("Mon Jupiter"),
+                        full_width_chip("Clone Jupiter"),
+                        swap_chip("Swap Jupiter", "swap-list", 0, "swap-row".into()),
+                        multi_select_chip("Multi Jupiter", "multi-row"),
+                        jadix_dnd::utils::drag::draggable("padding-handle").child(handle_row),
+                        jadix_dnd::utils::drag::draggable("padding-ignore").child(ignore_row),
+                        token_chip(),
+                        list_chip("List Jupiter"),
+                    ];
+                    for row in &mut rows {
+                        row.set_attr("data-padding-test-row", "1");
+                    }
+                    Element::new().w(600.0).flex_col().children(rows)
+                })).w(600.0).h(1200.0)
+            });
+            let mut layout = jadix::layout::LayoutTree::new();
+            let scene = layout.build_and_layout(&mut root, 600.0, 1200.0, [-1.0; 2]);
+            let rows: Vec<_> = root.children.iter()
+                .filter(|row| row.get_attr("data-padding-test-row").is_some())
+                .collect();
+            assert_eq!(rows.len(), 9);
+            for row in rows {
+                let bounds = row.viewport_layout_bounds();
+                let labels: Vec<_> = scene.text_nodes.iter().filter(|text| {
+                    text.style.font_family.as_deref() != Some("lucide")
+                        && text.y >= bounds[1]
+                        && text.y < bounds[1] + bounds[3]
+                }).collect();
+                assert!(!labels.is_empty(), "drag row must contain a label: {bounds:?}");
+                for text in labels {
+                    assert!(text.x >= bounds[0] + 8.0
+                        && text.y >= bounds[1] + 5.0
+                        && text.y + text.height <= bounds[1] + bounds[3] - 5.0,
+                        "drag row lost padding: {:?}, row={bounds:?}, text={:?}",
+                        text.text, [text.x, text.y, text.width, text.height]);
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn sortable_chips_preserve_padding_and_descenders() {
+        jadix::init();
+        create_root(|| {
+            let items = Signal::new(vec!["Mercury".to_string(), "Jupiter".to_string()]);
+            let mut root = jadix::authoring::mount::with_inline_mount(|| {
+                Element::from(drag_scope("chip-height-test").child(|| {
+                    keyed_sortable_chips("chip-height-rows", items, "planet", "planets", "planets", "", 0.5)
+                })).w(600.0).h(300.0)
+            });
+            let mut layout = jadix::layout::LayoutTree::new();
+            let scene = layout.build_and_layout(&mut root, 600.0, 300.0, [-1.0; 2]);
+            fn check(element: &Element, scene: &jadix::core::tree::RenderResult, rows: &mut usize) {
+                if element.get_attr("jadix_drag_draggable").is_some() {
+                    *rows += 1;
+                    let bounds = element.viewport_layout_bounds();
+                    let text = scene.text_nodes.iter().find(|node| {
+                        matches!(node.text.as_str(), "Mercury" | "Jupiter")
+                            && node.y >= bounds[1]
+                            && node.y < bounds[1] + bounds[3]
+                    }).expect("sortable row text");
+                    assert!(text.y >= bounds[1] + 4.0
+                        && text.y + text.height <= bounds[1] + bounds[3] - 4.0,
+                        "sortable row must leave room above and below its text: row={bounds:?}, text_y={}, text_height={}", text.y, text.height);
+                }
+                for child in &element.children { check(child, scene, rows); }
+            }
+            let mut rows = 0;
+            check(&root, &scene, &mut rows);
+            assert_eq!(rows, 2);
+            assert!(scene.text_nodes.iter().any(|node| node.text == "Mercury"));
+        });
+    }
 
     #[test]
     fn gesture_preview_is_optional_and_keeps_authored_style() {
@@ -1269,12 +1398,24 @@ mod drop_position_tests {
             let positions = [Signal::new([48.0, 72.0]), Signal::new([200.0, 72.0])];
             let delta = Signal::new([0.0; 2]);
             let mut context = None;
-            let mut root: Element = drag_scope("gesture-preview-test").child(|| {
-                let drag = use_drag().unwrap();
-                context = Some(drag.clone());
-                gesture_preview(Element::new().w(100.0).h(40.0).bg("#ff0000")
-                    .rounded(3.0).opacity(0.6), drag, positions, delta, visible)
-            }).into();
+            let mut root: Element = drag_scope("gesture-preview-test")
+                .child(|| {
+                    let drag = use_drag().unwrap();
+                    context = Some(drag.clone());
+                    gesture_preview(
+                        Element::new()
+                            .w(100.0)
+                            .h(40.0)
+                            .bg("#ff0000")
+                            .rounded(3.0)
+                            .opacity(0.6),
+                        drag,
+                        positions,
+                        delta,
+                        visible,
+                    )
+                })
+                .into();
             let drag = context.unwrap();
             let preview = &mut root;
             let authored = preview.style.clone();
@@ -1300,36 +1441,57 @@ mod drop_position_tests {
     #[test]
     fn idle_hits_board_accepts_both_draggables_and_reports_drop() {
         jadix::init();
-        let (_owner, mut root) = create_root(|| jadix::authoring::mount::with_inline_mount(||
-            DragShowcase(Default::default())));
+        let (_owner, mut root) = create_root(|| {
+            jadix::authoring::mount::with_inline_mount(|| DragShowcase(Default::default()))
+        });
         let mut layout = jadix::layout::LayoutTree::new();
         layout.build_and_layout(&mut root, 1200.0, 100000.0, [-1.0; 2]);
         let scope = "gal-drag-idle-hits";
-        let hits = jadix::utils::drag::collect_hits(&root);
-        let registered = jadix::utils::drag::registered_hits_in_scope(scope);
+        let hits = jadix_dnd::utils::drag::collect_hits(&root);
+        let registered = jadix_dnd::utils::drag::registered_hits_in_scope(scope);
         assert_eq!(registered.iter().filter(|hit| hit.is_draggable).count(), 2);
         assert_eq!(registered.iter().filter(|hit| hit.is_droppable).count(), 1);
-        let zone = hits.iter().find(|hit| hit.scope_id == scope && hit.id == "idle-zone")
-            .expect("idle drop zone").rect;
+        let zone = hits
+            .iter()
+            .find(|hit| hit.scope_id == scope && hit.id == "idle-zone")
+            .expect("idle drop zone")
+            .rect;
         assert!(zone.is_usable(), "drop zone has no layout: {zone:?}");
         let target = zone.center();
         let note = use_signal("gal_drag_idle_hits_note", String::new);
         for id in ["idle-a", "idle-b"] {
-            let source = hits.iter().find(|hit| hit.scope_id == scope && hit.id == id)
+            let source = hits
+                .iter()
+                .find(|hit| hit.scope_id == scope && hit.id == id)
                 .expect("idle draggable");
             let pointer = source.rect.center();
             let path = jadix::app::pointer_events::hit_path(&root, pointer[0], pointer[1]);
             let mut event = jadix::app::pointer_events::PointerEvent::new(
-                pointer[0], pointer[1], winit::event::MouseButton::Left, 1,
+                pointer[0],
+                pointer[1],
+                winit::event::MouseButton::Left,
+                1,
             );
             jadix::app::pointer_events::dispatch_pointer(
-                &path, &mut event, jadix::app::pointer_events::PointerKind::Down,
+                &path,
+                &mut event,
+                jadix::app::pointer_events::PointerKind::Down,
             );
-            assert_eq!(jadix::utils::drag::active_draggable_id().as_deref(), Some(id));
+            assert_eq!(
+                jadix_dnd::utils::drag::active_draggable_id().as_deref(),
+                Some(id)
+            );
             tick(target[0], target[1], &hits, [1200.0, 100000.0]);
-            assert_eq!(jadix::utils::drag::active_droppable_id().as_deref(), Some("idle-zone"));
+            assert_eq!(
+                jadix_dnd::utils::drag::active_droppable_id().as_deref(),
+                Some("idle-zone")
+            );
             end(&hits);
-            assert!(note.peek().contains(&format!("{id} → idle-zone")), "{}", note.peek());
+            assert!(
+                note.peek().contains(&format!("{id} → idle-zone")),
+                "{}",
+                note.peek()
+            );
         }
     }
 
@@ -1360,10 +1522,10 @@ mod drop_position_tests {
                 to_index: Some(3),
                 pointer: [0.0, 0.0],
                 delta: [0.0, 0.0],
-                phase: jadix::utils::drag::DragPhase::Active,
+                phase: jadix_dnd::utils::drag::DragPhase::Active,
                 pull_clone: true,
                 data: None,
-                sort_mode: jadix::utils::drag::SortMode::Insert,
+                sort_mode: jadix_dnd::utils::drag::SortMode::Insert,
                 items: Vec::new(),
             };
             let mut values = items.peek();
@@ -1460,10 +1622,10 @@ mod drop_position_tests {
                 to_index: Some(1),
                 pointer: [0.0, 0.0],
                 delta: [0.0, 0.0],
-                phase: jadix::utils::drag::DragPhase::Active,
+                phase: jadix_dnd::utils::drag::DragPhase::Active,
                 pull_clone: false,
                 data: None,
-                sort_mode: jadix::utils::drag::SortMode::Insert,
+                sort_mode: jadix_dnd::utils::drag::SortMode::Insert,
                 items: Vec::new(),
             };
 
@@ -1511,7 +1673,7 @@ mod drop_position_tests {
 
     #[test]
     fn handled_resize_stays_in_content_and_never_scrolls_sibling() {
-        use jadix::app::pointer_events::{MouseEvent, PointerKind, dispatch_pointer, hit_path};
+        use jadix::app::pointer_events::{dispatch_pointer, hit_path, MouseEvent, PointerKind};
         use jadix::core::scroll_viewport::{
             scroll_content_h_signal_key, scroll_offset_y_signal_key, scroll_viewport_h_signal_key,
         };
@@ -2681,11 +2843,13 @@ pub(crate) fn DragShowcase() -> Element {
         .offset([16.0, 16.0])
         .range(18.0)
         .end_only(true);
+    let snap_origin = Rc::new(Cell::new([0.0; 2]));
+    let snap_targets = local_snap_targets(SnapTargets::new([snap_grid]), snap_origin.clone());
     let snap_board = Element::from(
         drag_scope("gal-drag-snap")
             .axis(Axis::Xy)
             .restrict(Restrict::Parent)
-            .snap(snap_grid)
+            .snap_targets(snap_targets)
             .on_drag_end(persist_delta_pos(snap_pos))
             .child(move || {
                 ui! {
@@ -2700,7 +2864,7 @@ pub(crate) fn DragShowcase() -> Element {
                         border_width="1px"
                         border_color="border"
                     >
-                        { snap_grid_lines(&[(snap_grid, 0.16)], snap_lines_visible) }
+                        { snap_grid_lines(&[(snap_grid, 0.16)], snap_lines_visible, snap_origin.clone()) }
                         <Draggable id="snap-tile" stack="auto">
                             { free_move_tile("S", "snap 32px · restrict=parent", snap_pos, 0, "primary") }
                         </Draggable>
@@ -2710,7 +2874,10 @@ pub(crate) fn DragShowcase() -> Element {
     );
 
     let snap_fine_grid = SnapGrid::new(8.0, 8.0);
-    let snap_multi = SnapTargets::new([snap_fine_grid, snap_grid]).range(14.0);
+    let snap_multi_origin = Rc::new(Cell::new([0.0; 2]));
+    let snap_multi = local_snap_targets(
+        SnapTargets::new([snap_fine_grid, snap_grid]).range(14.0), snap_multi_origin.clone(),
+    );
     let snap_multi_board = Element::from(
         drag_scope("gal-drag-snap-multi")
             .axis(Axis::Xy)
@@ -2733,6 +2900,7 @@ pub(crate) fn DragShowcase() -> Element {
                         { snap_grid_lines(
                             &[(snap_fine_grid, 0.06), (snap_grid, 0.16)],
                             snap_lines_visible,
+                            snap_multi_origin.clone(),
                         ) }
                         <Draggable id="snap-multi-tile" stack="auto">
                             { free_move_tile("M", "8px + 32px 双格 · 近者胜", snap_multi_pos, 0, "accent") }
@@ -2804,12 +2972,16 @@ pub(crate) fn DragShowcase() -> Element {
         </DragProvider>
     };
 
+    let snap_end_origin = Rc::new(Cell::new([0.0; 2]));
+    let snap_end_targets = local_snap_targets(
+        SnapTargets::new([snap_end_grid]).end_only(true), snap_end_origin.clone(),
+    );
     let snap_end_board = Element::from(
         drag_scope("gal-drag-snap-end")
             .axis(Axis::Xy)
             .restrict(Restrict::Parent)
             .restrict_anchor(RestrictAnchor::CENTER)
-            .snap(snap_end_grid)
+            .snap_targets(snap_end_targets)
             .on_drag_end(persist_delta_pos(snap_end_pos))
             .child(move || {
                 ui! {
@@ -2824,7 +2996,7 @@ pub(crate) fn DragShowcase() -> Element {
                         border_width="1px"
                         border_color="border"
                     >
-                        { snap_grid_lines(&[(snap_end_grid, 0.16)], snap_end_lines_visible) }
+                        { snap_grid_lines(&[(snap_end_grid, 0.16)], snap_end_lines_visible, snap_end_origin.clone()) }
                         <Draggable id="snap-end-tile" stack="auto">
                             { free_move_tile("E", "endOnly + range 18 · 中心钳位", snap_end_pos, 0, "secondary") }
                         </Draggable>
@@ -2923,9 +3095,16 @@ pub(crate) fn DragShowcase() -> Element {
             .child(move || {
                 let drag = use_drag().unwrap();
                 let preview = gesture_preview(
-                    Element::new().w(72.0).h(48.0).rounded("0.5rem")
-                        .bg("accent").opacity(0.35),
-                    drag, [gesture_a, gesture_b], gesture_delta, gesture_preview_visible,
+                    Element::new()
+                        .w(72.0)
+                        .h(48.0)
+                        .rounded("0.5rem")
+                        .bg("accent")
+                        .opacity(0.35),
+                    drag,
+                    [gesture_a, gesture_b],
+                    gesture_delta,
+                    gesture_preview_visible,
                 );
                 ui! {
                     <Box
@@ -3120,7 +3299,8 @@ pub(crate) fn DragShowcase() -> Element {
                     </HStack>
                     <DragOverlay>
                         <HStack
-                            p="0.5rem 0.75rem"
+                            py="0.5rem"
+                            px="0.75rem"
                             gap="0.5rem"
                             items="center"
                             rounded="0.5rem"

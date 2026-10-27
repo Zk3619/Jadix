@@ -283,7 +283,6 @@ impl super::App {
         crate::app::reactive::drain_deferred_view_remounts();
         crate::utils::modal_motion::drain_pending_modal_unmounts();
         crate::utils::floating_motion::drain_pending_floating_unmounts();
-
     }
 
     /// Primary-only input wrapper (sets primary window scope). Secondary events must use
@@ -681,7 +680,9 @@ impl super::App {
                     let paint_scale = if source == "painted" {
                         super::ime_support::painted_text_edit_node(text_nodes, &fid_clone)
                             .map_or(1.0, |node| node.paint_scale)
-                    } else { 1.0 };
+                    } else {
+                        1.0
+                    };
                     let line_h = line_h * paint_scale;
                     let caret_w = (caret_w * paint_scale).max(1.0 / ui_scale.max(0.001));
                     let ay = super::ime_support::clamp_ime_anchor_y(ay, line_h, win_h);
@@ -950,8 +951,10 @@ impl super::App {
         if source == "painted" {
             if let Some(n) = super::ime_support::painted_text_edit_node(text_nodes, fid) {
                 return super::ime_support::paint_space_ime_origin(
-                    [n.x + compose_x_in_field * n.paint_scale,
-                        n.y + (n.height - line_h).max(0.0) * 0.5 * n.paint_scale],
+                    [
+                        n.x + compose_x_in_field * n.paint_scale,
+                        n.y + (n.height - line_h).max(0.0) * 0.5 * n.paint_scale,
+                    ],
                     &n.paint_transform,
                     n.paint_origin,
                 );
@@ -1002,10 +1005,19 @@ impl super::App {
     /// submitted; static pages then slept (`any_ui_animation_active` gated on
     /// `force_redraw_count`) and the bar stayed at cubic 1.
     fn apply_overlay_scrollbar_fade_targets(&mut self, now: std::time::Instant) {
-        let rests: Vec<(String, f32, f32)> = self.state.borrow().as_ref()
-            .map(|state| state.last_render_scroll_metrics.iter()
-                .map(|(rest, _, [maximum_x, maximum_y], _)| (rest.clone(), *maximum_x, *maximum_y))
-                .collect())
+        let rests: Vec<(String, f32, f32)> = self
+            .state
+            .borrow()
+            .as_ref()
+            .map(|state| {
+                state
+                    .last_render_scroll_metrics
+                    .iter()
+                    .map(|(rest, _, [maximum_x, maximum_y], _)| {
+                        (rest.clone(), *maximum_x, *maximum_y)
+                    })
+                    .collect()
+            })
             .unwrap_or_default();
         for (rest, raw_max_x, raw_max_y) in rests {
             self.retarget_overlay_scrollbar_cubics(&rest, now, raw_max_x, raw_max_y);
@@ -1883,7 +1895,6 @@ impl super::App {
         crate::utils::modal_motion::drain_pending_modal_unmounts();
         crate::utils::floating_motion::drain_pending_floating_unmounts();
 
-
         // Utility-class `:hover` (e.g. gallery `hover:scale-x-150`) has no `on_hover`.
         // Wake a frame when pointer geometry would change those samples — otherwise enter
         // waits for scrollbar auto-hide redraws and leave sticks until another chrome hover.
@@ -2131,7 +2142,11 @@ impl super::App {
                     let metrics = self.scroll_metrics_cache.get(&rest).copied();
                     if let Some((_area_bounds, [max_x, max_y], _)) = metrics {
                         if let Some((track_bounds, thumb_bounds)) =
-                            super::scroll_support::scrollbar_drag_bounds(&state.root_element, &rest, axis)
+                            super::scroll_support::scrollbar_drag_bounds(
+                                &state.root_element,
+                                &rest,
+                                axis,
+                            )
                         {
                             // Page scrollbar is outside the floating panel. Dismiss *before*
                             // applying scroll so the overlay does not follow the trigger then
@@ -3469,7 +3484,7 @@ impl super::App {
         crate::utils::icon_provider::sync_icon_hover(&mut state.root_element);
         let anim_icons = {
             let animated = crate::authoring::icon::tick_tree(&mut state.root_element, anim_dt);
-            #[cfg(feature = "svg")]
+            #[cfg(all(feature = "svg", feature = "animation-path"))]
             {
                 let morphing = crate::utils::morph_icon::tick_morph_icons_subtree(
                     &mut state.root_element,
@@ -3477,7 +3492,7 @@ impl super::App {
                 );
                 animated || morphing
             }
-            #[cfg(not(feature = "svg"))]
+            #[cfg(not(all(feature = "svg", feature = "animation-path")))]
             {
                 animated
             }
@@ -3640,11 +3655,21 @@ impl super::App {
         const SMOOTH_SCROLL_EDGE_SNAP_PX: f32 = 0.45;
 
         let mut pre_render_data = Vec::new();
-        let secondary_rests: std::collections::HashSet<_> = self.secondaries.borrow().values()
-            .flat_map(|secondary| secondary.last_render_scroll_metrics.iter().map(|(rest, _, _, _)| rest.clone()))
+        let secondary_rests: std::collections::HashSet<_> = self
+            .secondaries
+            .borrow()
+            .values()
+            .flat_map(|secondary| {
+                secondary
+                    .last_render_scroll_metrics
+                    .iter()
+                    .map(|(rest, _, _, _)| rest.clone())
+            })
             .collect();
-        self.scroll_metrics_cache.retain(|rest, _| !secondary_rests.contains(rest));
-        self.smooth_scroll_motion.retain(|rest, _| !secondary_rests.contains(rest));
+        self.scroll_metrics_cache
+            .retain(|rest, _| !secondary_rests.contains(rest));
+        self.smooth_scroll_motion
+            .retain(|rest, _| !secondary_rests.contains(rest));
         for (rest, (_, [mx, my], _)) in &self.scroll_metrics_cache {
             let keys = crate::core::scroll_viewport::signal_keys_for_rest_cached(
                 rest,
@@ -4140,14 +4165,14 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 let svg_smil_active = crate::primitives::subtree_has_svg_smil(&state.root_element);
                 let anim_icon_active = {
                     let animated = crate::authoring::icon::needs_frame(&state.root_element);
-                    #[cfg(feature = "svg")]
+                    #[cfg(all(feature = "svg", feature = "animation-path"))]
                     {
                         animated
                             || crate::utils::morph_icon::subtree_needs_morph_icon_frame(
                                 &state.root_element,
                             )
                     }
-                    #[cfg(not(feature = "svg"))]
+                    #[cfg(not(all(feature = "svg", feature = "animation-path")))]
                     {
                         animated
                     }
@@ -4403,14 +4428,10 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     // - hover over scrollbar: only that axis
                     // - wheel: axis-specific visible_until
                     // - text drag-select edge auto-scroll: keep bars visible while scrolling
-                    let keep_visible_x = is_hover_x
-                        || is_dragging_x
-                        || now < visible_until_x
-                        || text_drag_on_rest;
-                    let keep_visible_y = is_hover_y
-                        || is_dragging_y
-                        || now < visible_until_y
-                        || text_drag_on_rest;
+                    let keep_visible_x =
+                        is_hover_x || is_dragging_x || now < visible_until_x || text_drag_on_rest;
+                    let keep_visible_y =
+                        is_hover_y || is_dragging_y || now < visible_until_y || text_drag_on_rest;
 
                     // Keep the old activity signal (used elsewhere) as "any axis visible".
                     let keep_visible = is_hover
@@ -4577,7 +4598,11 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     }
                 }
                 self.paint_clock_active = smooth_scroll_animating
-                    || self.state.borrow().as_ref().is_some_and(|state| state.shader_frame_active)
+                    || self
+                        .state
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|state| state.shader_frame_active)
                     || scrollbar_fade_animating
                     || svg_smil_active
                     || anim_icon_active
@@ -4718,10 +4743,20 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                                 }
                             };
                             let paint_scale = if source == "painted" {
-                                self.state.borrow().as_ref().and_then(|state|
-                                    super::ime_support::painted_text_edit_node(&state.text_nodes, &fid_clone)
-                                        .map(|node| node.paint_scale)).unwrap_or(1.0)
-                            } else { 1.0 };
+                                self.state
+                                    .borrow()
+                                    .as_ref()
+                                    .and_then(|state| {
+                                        super::ime_support::painted_text_edit_node(
+                                            &state.text_nodes,
+                                            &fid_clone,
+                                        )
+                                        .map(|node| node.paint_scale)
+                                    })
+                                    .unwrap_or(1.0)
+                            } else {
+                                1.0
+                            };
                             let line_h = line_h * paint_scale;
                             let caret_w = (caret_w * paint_scale).max(1.0 / ui_scale.max(0.001));
                             let ay = super::ime_support::clamp_ime_anchor_y(ay, line_h, win_h);
@@ -5196,11 +5231,11 @@ mod wheel_recovery_tests {
 
     #[test]
     #[ignore = "native wheel delivery and redraw regression; run in a separate process"]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn queued_wheel_events_do_not_replay_screens_after_stall() {
         struct Harness;
         impl ApplicationHandler for Harness {
-            #[cfg(feature = "components")]
+            #[cfg(feature = "product-tests")]
             fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
                 crate::init();
                 let window: std::sync::Arc<dyn winit::window::Window> = std::sync::Arc::from(

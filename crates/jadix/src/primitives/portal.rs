@@ -47,11 +47,17 @@
 
 use crate::core::tree::Element;
 use crate::layout::layout_tree::{ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT};
+#[cfg(feature = "macros")]
 use jadix_macros::component;
 
 /// Portal：标记 `jadix_portal`，布局时提升到根叠层或 `mount` 宿主（对齐 Solid `<Portal>`）。
+#[cfg(feature = "macros")]
 #[component(crate_path = "crate")]
 pub fn Portal(id: String, mount: Option<String>, children: Option<Element>) -> Element {
+    portal_element(id, mount, children)
+}
+
+fn portal_element(id: String, mount: Option<String>, children: Option<Element>) -> Element {
     let mut inner = children.unwrap_or_else(Element::new);
     inner.template_id = Some(id.clone());
     inner.set_attr("jadix_portal", "1");
@@ -67,4 +73,57 @@ pub fn Portal(id: String, mount: Option<String>, children: Option<Element>) -> E
         .inset(0.0)
         .w("100%")
         .h("100%")
+}
+
+#[derive(Default)]
+pub struct PortalBuilder {
+    id: String,
+    mount: Option<String>,
+    children: Vec<Element>,
+}
+
+pub fn portal(id: impl Into<String>) -> PortalBuilder {
+    PortalBuilder {
+        id: id.into(),
+        ..Default::default()
+    }
+}
+
+impl PortalBuilder {
+    pub fn mount(mut self, mount: impl Into<String>) -> Self {
+        self.mount = Some(mount.into());
+        self
+    }
+
+    pub fn child(mut self, child: impl Into<Element>) -> Self {
+        self.children.push(child.into());
+        self
+    }
+
+    pub fn children(mut self, children: impl crate::core::tree::IntoElementList) -> Self {
+        self.children.extend(children.into_element_list());
+        self
+    }
+}
+
+impl From<PortalBuilder> for Element {
+    fn from(builder: PortalBuilder) -> Self {
+        let children = if builder.children.len() == 1 {
+            builder.children.into_iter().next()
+        } else {
+            crate::authoring::packed_children(builder.children)
+        };
+        crate::core::reactivity::component_root(|| {
+            let element = crate::core::reactivity::component_isolated_body(|| {
+                portal_element(builder.id, builder.mount, children)
+            });
+            crate::style::apply_stylesheet_rules_tree(element)
+        })
+    }
+}
+
+impl crate::core::tree::IntoElementList for PortalBuilder {
+    fn into_element_list(self) -> Vec<Element> {
+        vec![self.into()]
+    }
 }

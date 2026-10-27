@@ -3,7 +3,7 @@
 //! Resolution order for [`resolve_icon`]:
 //! 1. [`register_icon`] overlay
 //! 2. [`set_icon_provider`] (if any)
-//! 3. built-in Lucide catalog
+//! Lucide is installed explicitly by `jadix_lucide::install()`.
 //!
 //! `<Icon name="check">` still works. Custom assets:
 //!
@@ -20,7 +20,7 @@
 //! ```
 //!
 //! File `src` is the same pipeline as [`crate::components::Image`]: local path / `data:` URL
-//! (no `http(s)`). PNG/JPEG/WebP/GIF/ICO always; SVG needs the `svg` feature.
+//! (remote assets require `remote-asset`). PNG is built in; other formats and SVG are optional.
 
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -30,7 +30,7 @@ use crate::app::pending_images::{queue_image_from_src, texture_key_for_src};
 use crate::core::tree::{Element, IntoCssDim, LayoutStatus};
 use crate::style::UnitSlot;
 pub const ATTR_ICON_NAME: &str = "jadix_icon_name";
-#[cfg(all(test, feature = "lucide"))]
+#[cfg(all(test, feature = "product-tests"))]
 use crate::utils::lucide::lucide_builtin_glyph;
 use crate::utils::text_node::build_named_icon_text_node;
 
@@ -41,7 +41,7 @@ pub const DEFAULT_ICON_SIZE_PX: f32 = 16.0;
 
 /// Fallback PUA glyph (Lucide "album") when a name does not resolve.
 fn fallback_glyph() -> (String, String) {
-    match crate::DEFAULT_ICON_PROVIDER.as_ref().and_then(|provider| provider.resolve("album")) {
+    match with_catalog(|provider| provider.resolve("album")) {
         Some(IconSource::Glyph { family, glyph }) => (family, glyph),
         _ => ("sans-serif".into(), "?".into()),
     }
@@ -88,11 +88,23 @@ impl From<String> for IconSource {
     }
 }
 
-/// App-wide icon catalog. The default adapter is built-in Lucide.
+/// App-wide icon catalog supplied by the application or an icon product.
 pub trait IconProvider: Send + Sync {
+    fn font_data(&self) -> Option<&'static [u8]> {
+        None
+    }
     fn resolve(&self, name: &str) -> Option<IconSource>;
-    fn svg_source(&self, _name: &str, _source: &IconSource) -> Option<String> { None }
-    fn configure_animation(&self, _element: &mut Element, _name: &str, _source: &IconSource) -> bool { false }
+    fn svg_source(&self, _name: &str, _source: &IconSource) -> Option<String> {
+        None
+    }
+    fn configure_animation(
+        &self,
+        _element: &mut Element,
+        _name: &str,
+        _source: &IconSource,
+    ) -> bool {
+        false
+    }
 }
 
 thread_local! {
@@ -119,7 +131,7 @@ pub fn clear_registered_icons() {
     OVERLAY.with(|m| m.borrow_mut().clear());
 }
 
-/// Replace the custom catalog layer (Lucide remains the fallback; overlay still wins).
+/// Replace the catalog layer; explicitly registered icons still win.
 pub fn set_icon_provider(provider: Arc<dyn IconProvider>) {
     let previous = PROVIDER.with(|slot| slot.borrow_mut().replace(provider));
     drop(previous);
@@ -130,7 +142,7 @@ pub fn clear_icon_provider() {
     drop(previous);
 }
 
-/// Resolve `name` through overlay → custom provider → Lucide.
+/// Resolve `name` through registered icons and the installed catalog.
 pub fn resolve_icon(name: &str) -> Option<IconSource> {
     if let Some(src) = OVERLAY.with(|m| m.borrow().get(name).cloned()) {
         return Some(src);
@@ -138,10 +150,19 @@ pub fn resolve_icon(name: &str) -> Option<IconSource> {
     with_catalog(|provider| provider.resolve(name))
 }
 
-fn with_catalog<Value>(mut callback: impl FnMut(&dyn IconProvider) -> Option<Value>) -> Option<Value> {
+pub(crate) fn with_catalog<Value>(
+    mut callback: impl FnMut(&dyn IconProvider) -> Option<Value>,
+) -> Option<Value> {
     let custom = PROVIDER.with(|provider| provider.borrow().clone());
-    if let Some(value) = custom.as_ref().and_then(|provider| callback(provider.as_ref())) { return Some(value); }
-    crate::DEFAULT_ICON_PROVIDER.as_ref().and_then(|provider| callback(provider.as_ref()))
+    if let Some(value) = custom
+        .as_ref()
+        .and_then(|provider| callback(provider.as_ref()))
+    {
+        return Some(value);
+    }
+    crate::DEFAULT_ICON_PROVIDER
+        .as_ref()
+        .and_then(|provider| callback(provider.as_ref()))
 }
 
 /// Resolve catalog-provided SVG markup for a named glyph, including custom catalogs.
@@ -164,7 +185,10 @@ pub fn build_icon_named(name: impl AsRef<str>) -> Element {
     match resolve_icon(name) {
         Some(IconSource::Glyph { family, glyph }) => glyph_element(name, family, glyph),
         Some(IconSource::Src(src)) => build_icon_from_src_named(Some(name), src),
-        None => { let (family, glyph) = fallback_glyph(); glyph_element(name, family, glyph) },
+        None => {
+            let (family, glyph) = fallback_glyph();
+            glyph_element(name, family, glyph)
+        }
     }
 }
 
@@ -215,7 +239,7 @@ pub fn with_icon_animations(
         .cloned()
         .map(IconSource::Src)
         .or_else(|| name.as_deref().and_then(resolve_icon));
-    #[cfg(feature = "svg")]
+    #[cfg(all(feature = "svg", feature = "animation-path"))]
     if change.as_ref() == "morph" {
         let src = morph_source(name.as_deref(), source.as_ref());
         el = crate::utils::morph_icon(src.as_deref().unwrap_or(""))
@@ -237,7 +261,7 @@ pub fn with_icon_animations(
             el.set_attr(ATTR_ICON_SRC, src);
         }
     }
-    #[cfg(not(feature = "svg"))]
+    #[cfg(not(all(feature = "svg", feature = "animation-path")))]
     let _ = (change, spring);
     if hover.is_empty() || hover == "none" || hover == "false" {
         return el;
@@ -332,7 +356,7 @@ pub(crate) fn sync_icon_hover_animation(el: &mut Element, on: bool) {
     if spec == "animated" {
         return;
     }
-    #[cfg(feature = "svg")]
+    #[cfg(all(feature = "svg", feature = "animation-path"))]
     let on = on && !crate::utils::morph_icon::blocks_hover_animation(el);
     let on = on && !crate::style::prefers_reduced_motion();
     let active = if on { "1" } else { "0" };
@@ -360,7 +384,7 @@ pub(crate) fn sync_icon_hover_animation(el: &mut Element, on: bool) {
     }
 }
 
-#[cfg(feature = "svg")]
+#[cfg(all(feature = "svg", feature = "animation-path"))]
 fn morph_source(name: Option<&str>, source: Option<&IconSource>) -> Option<String> {
     match source? {
         IconSource::Glyph { .. } => {
@@ -403,15 +427,15 @@ fn apply_resolved(
     name: Option<&str>,
     source: Option<IconSource>,
 ) -> LayoutStatus {
-    #[cfg(feature = "svg")]
+    #[cfg(all(feature = "svg", feature = "animation-path"))]
     if el.get_attr(ATTR_ICON_CHANGE_ANIMATION).is_some() {
         if let Some(src) = morph_source(name, source.as_ref()) {
             let family = match source.as_ref() {
                 Some(IconSource::Glyph { family, .. }) => family.as_str(),
                 _ => "sans-serif",
             };
-            let layout_changed = el.image_texture.is_some()
-                || el.text_style.font_family.as_deref() != Some(family);
+            let layout_changed =
+                el.image_texture.is_some() || el.text_style.font_family.as_deref() != Some(family);
             let status = crate::utils::apply_bound_morph_icon(el, src);
             el.image_texture = None;
             el.text_style.font_family = Some(family.into());
@@ -481,12 +505,27 @@ pub fn refresh_icon_animation(element: &mut Element, name: &str) {
 }
 
 fn sync_icon_recipe(element: &mut Element, name: Option<&str>, source: Option<&IconSource>) {
-    if element.get_attr(ATTR_ICON_HOVER_ANIMATION).map(String::as_str) != Some("animated") { return; }
-    let installed = name.zip(source).and_then(|(name, source)| {
-        with_catalog(|provider| provider.configure_animation(element, name, source).then_some(()))
-    }).is_some();
+    if element
+        .get_attr(ATTR_ICON_HOVER_ANIMATION)
+        .map(String::as_str)
+        != Some("animated")
+    {
+        return;
+    }
+    let installed = name
+        .zip(source)
+        .and_then(|(name, source)| {
+            with_catalog(|provider| {
+                provider
+                    .configure_animation(element, name, source)
+                    .then_some(())
+            })
+        })
+        .is_some();
     if !installed {
-        if let Some(playback) = element.icon_playback.take() { (playback.detach)(element); }
+        if let Some(playback) = element.icon_playback.take() {
+            (playback.detach)(element);
+        }
     }
 }
 
@@ -583,7 +622,7 @@ fn with_icon_test<R>(f: impl FnOnce() -> R) -> R {
     out
 }
 
-#[cfg(all(test, feature = "lucide"))]
+#[cfg(all(test, feature = "product-tests"))]
 mod tests {
     use super::*;
 
@@ -653,12 +692,9 @@ mod tests {
         assert!(plain.on_hover.is_none());
     }
 
-    #[cfg(all(
-        feature = "svg",
-        feature = "bundled-lucide",
-        feature = "lucide-animated"
-    ))]
+    #[cfg(all(feature = "svg", feature = "gallery-tests", feature = "gallery-tests"))]
     #[test]
+    #[cfg(feature = "macros")]
     fn icon_motion_macro_binds_name_and_arbitrates_hover_and_change() {
         let mut el = crate::ui! {
             <Icon name="sun" size="28px" hover_animation="animated" change_animation="morph" spring="smooth" />
@@ -715,7 +751,7 @@ mod tests {
         assert_eq!(spin.style.animations[0].name, "spin");
     }
 
-    #[cfg(all(feature = "svg", feature = "bundled-lucide"))]
+    #[cfg(all(feature = "svg", feature = "gallery-tests"))]
     #[test]
     fn icon_motion_morphs_svg_sources_and_falls_back_for_raster_and_custom_glyphs() {
         let a = r#"<svg viewBox="0 0 24 24" fill="none"><path d="M4 12h16"/></svg>"#;
@@ -770,7 +806,7 @@ mod tests {
             }),
         );
         assert_eq!(custom.text.as_deref(), Some("X"));
-        #[cfg(feature = "lucide-animated")]
+        #[cfg(feature = "gallery-tests")]
         assert!(custom.get_attr(crate::utils::ATTR_ANIMATED_ICON).is_none());
         assert!(custom.get_attr(crate::utils::ATTR_MORPH_ICON).is_none());
     }
@@ -922,15 +958,27 @@ mod window_tests {
         crate::authoring::window::activate(primary);
         crate::authoring::window::activate(secondary);
         let _primary = window_scope::enter(primary);
-        super::hover_intent_map().lock().unwrap().insert("same-icon".into(), true);
+        super::hover_intent_map()
+            .lock()
+            .unwrap()
+            .insert("same-icon".into(), true);
         {
             let _secondary = window_scope::enter(secondary);
-            assert!(!super::hover_intent_map().lock().unwrap().contains_key("same-icon"));
-            super::hover_intent_map().lock().unwrap().insert("same-icon".into(), false);
+            assert!(!super::hover_intent_map()
+                .lock()
+                .unwrap()
+                .contains_key("same-icon"));
+            super::hover_intent_map()
+                .lock()
+                .unwrap()
+                .insert("same-icon".into(), false);
             crate::authoring::window::forget(secondary);
             assert!(super::hover_intent_map().lock().unwrap().is_empty());
         }
-        assert_eq!(super::hover_intent_map().lock().unwrap().get("same-icon"), Some(&true));
+        assert_eq!(
+            super::hover_intent_map().lock().unwrap().get("same-icon"),
+            Some(&true)
+        );
         super::release_icon_hover("same-icon");
     }
 }

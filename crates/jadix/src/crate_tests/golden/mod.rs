@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! WP-2.6 component golden scenes (stable-face only).
 //!
 //! Scenes: Button · Input · Dialog · Tabs · ScrollArea.

@@ -381,18 +381,7 @@ pub fn parse_time_ms(s: &str) -> Option<f32> {
     }
 }
 
-/// Parse CSS time with **required** unit (`ms` / `s`). Bare numbers are not times.
-pub fn parse_css_time_ms_strict(s: &str) -> Option<f32> {
-    let s = s.trim();
-    if let Some(ms) = s.strip_suffix("ms").or_else(|| s.strip_suffix("MS")) {
-        ms.trim().parse::<f32>().ok()
-    } else if let Some(secs) = s.strip_suffix('s').or_else(|| s.strip_suffix('S')) {
-        // `forwards`.strip_suffix('s') → `forward` → parse fails (good).
-        secs.trim().parse::<f32>().ok().map(|v| v * 1000.0)
-    } else {
-        None
-    }
-}
+pub use jadix_animation::parse_css_time_ms_strict;
 
 fn ensure_animation_slots(list: &mut Vec<crate::style::AnimationEntry>, n: usize) {
     while list.len() < n {
@@ -699,7 +688,7 @@ impl Drop for Element {
 }
 
 /// Pre-order heap DFS. Tree depth does not consume OS stack frames.
-pub(crate) fn walk_elements<'a>(root: &'a Element, mut visit: impl FnMut(&'a Element)) {
+pub fn walk_elements<'a>(root: &'a Element, mut visit: impl FnMut(&'a Element)) {
     let mut stack: Vec<&'a Element> = vec![root];
     while let Some(el) = stack.pop() {
         visit(el);
@@ -709,7 +698,7 @@ pub(crate) fn walk_elements<'a>(root: &'a Element, mut visit: impl FnMut(&'a Ele
 
 /// Mutable pre-order heap DFS. `visit` must not restructure `children` in a way
 /// that invalidates pointers still on the worklist (same constraint as recursion).
-pub(crate) fn walk_elements_mut(root: &mut Element, mut visit: impl FnMut(&mut Element)) {
+pub fn walk_elements_mut(root: &mut Element, mut visit: impl FnMut(&mut Element)) {
     let mut stack: Vec<*mut Element> = vec![root as *mut Element];
     while let Some(ptr) = stack.pop() {
         // SAFETY: pointers stay inside `root`'s exclusive subtree for this pass.
@@ -724,7 +713,7 @@ pub(crate) fn walk_elements_mut(root: &mut Element, mut visit: impl FnMut(&mut E
 
 /// Pre-order heap DFS. `visit` returning `false` skips `el.children` (shortcut
 /// slots, chevron subtrees, …).
-pub(crate) fn walk_elements_pruned(root: &Element, mut visit: impl FnMut(&Element) -> bool) {
+pub fn walk_elements_pruned(root: &Element, mut visit: impl FnMut(&Element) -> bool) {
     let mut stack: Vec<&Element> = vec![root];
     while let Some(el) = stack.pop() {
         if !visit(el) {
@@ -735,10 +724,7 @@ pub(crate) fn walk_elements_pruned(root: &Element, mut visit: impl FnMut(&Elemen
 }
 
 /// Mutable counterpart of [`walk_elements_pruned`].
-pub(crate) fn walk_elements_mut_pruned(
-    root: &mut Element,
-    mut visit: impl FnMut(&mut Element) -> bool,
-) {
+pub fn walk_elements_mut_pruned(root: &mut Element, mut visit: impl FnMut(&mut Element) -> bool) {
     let mut stack: Vec<*mut Element> = vec![root as *mut Element];
     while let Some(ptr) = stack.pop() {
         // SAFETY: exclusive subtree walk; skip means children stay off the worklist.
@@ -753,17 +739,17 @@ pub(crate) fn walk_elements_mut_pruned(
     }
 }
 
-pub(crate) fn any_in_tree(root: &Element, pred: impl FnMut(&Element) -> bool) -> bool {
+pub fn any_in_tree(root: &Element, pred: impl FnMut(&Element) -> bool) -> bool {
     find_in_tree(root, pred).is_some()
 }
 
-pub(crate) fn find_by_attr<'a>(root: &'a Element, key: &str, value: &str) -> Option<&'a Element> {
+pub fn find_by_attr<'a>(root: &'a Element, key: &str, value: &str) -> Option<&'a Element> {
     find_in_tree(root, |el| {
         el.attrs.get(key).map(String::as_str) == Some(value)
     })
 }
 
-pub(crate) fn find_by_attr_mut<'a>(
+pub fn find_by_attr_mut<'a>(
     root: &'a mut Element,
     key: &str,
     value: &str,
@@ -774,7 +760,7 @@ pub(crate) fn find_by_attr_mut<'a>(
 }
 
 /// First node whose `text` is `Some` and non-empty after trim.
-pub(crate) fn first_trimmed_text(root: &Element) -> Option<String> {
+pub fn first_trimmed_text(root: &Element) -> Option<String> {
     find_in_tree(root, |n| {
         n.text
             .as_deref()
@@ -785,7 +771,7 @@ pub(crate) fn first_trimmed_text(root: &Element) -> Option<String> {
 }
 
 /// First node with `text: Some(_)` (empty string counts). `""` if none.
-pub(crate) fn first_text_leaf(root: &Element) -> String {
+pub fn first_text_leaf(root: &Element) -> String {
     find_in_tree(root, |n| n.text.is_some())
         .and_then(|n| n.text.clone())
         .unwrap_or_default()
@@ -872,7 +858,7 @@ pub(crate) fn find_by_template_id_mut<'a>(
     find_in_tree_mut(root, |el| template_id_eq_normalized(el, &want))
 }
 
-pub(crate) fn find_in_tree_mut<'a>(
+pub fn find_in_tree_mut<'a>(
     root: &'a mut Element,
     mut pred: impl FnMut(&Element) -> bool,
 ) -> Option<&'a mut Element> {
@@ -1318,7 +1304,8 @@ impl DerefMut for Element {
 
 impl Element {
     pub(crate) fn specified_text_style(&self) -> TextStyle {
-        self.text_style.without_inherited(self.inherited_text_style.as_deref())
+        self.text_style
+            .without_inherited(self.inherited_text_style.as_deref())
     }
 
     /// Split-borrow style + animation snapshot (Deref cannot).
@@ -1338,7 +1325,7 @@ impl Element {
 
     /// Split-borrow style + transition snapshot (Deref cannot).
     #[inline]
-    pub(crate) fn tick_css_transitions(&mut self, dt: f32) -> bool {
+    pub fn tick_css_transitions(&mut self, dt: f32) -> bool {
         let lock = crate::style::AnimationLock::default();
         crate::style::tick_element_transitions_with_text(
             &mut self.inner.style,
@@ -1364,7 +1351,7 @@ impl Element {
 
     /// Split-borrow style + transition snapshot (Deref cannot).
     #[inline]
-    pub(crate) fn snap_css_transition_baseline(&mut self) {
+    pub fn snap_css_transition_baseline(&mut self) {
         crate::style::snap_element_transitions_to_current(
             &self.inner.style,
             &mut self.inner.transition_snapshot,
@@ -1859,7 +1846,28 @@ macro_rules! impl_into_node_opacity_int {
 impl_into_node_opacity_int!(i8, i16, i32, i64, isize, u8, u16, u32, u64, usize);
 
 impl Element {
-    pub(crate) fn into_margin_auto(val: impl IntoDimension) -> LengthPercentageAuto {
+    pub fn layout_node_id(&self) -> Option<taffy::prelude::NodeId> {
+        self.layout_node
+    }
+    pub fn set_layout_node_id(&mut self, node: Option<taffy::prelude::NodeId>) {
+        self.layout_node = node;
+    }
+    pub fn paint_scroll_offset(&self) -> [f32; 2] {
+        self.paint_scroll_acc
+    }
+    pub fn set_paint_scroll_offset(&mut self, offset: [f32; 2]) {
+        self.paint_scroll_acc = offset;
+    }
+    pub fn collect_cache_live(&self) -> bool {
+        self.collect_skip_live
+    }
+    pub fn overlay_stamp(&self) -> Option<u64> {
+        self.paint_overlay_stamp
+    }
+    pub fn has_overlay_stamp(&self) -> bool {
+        self.paint_overlay_stamp.is_some()
+    }
+    pub fn into_margin_auto(val: impl IntoDimension) -> LengthPercentageAuto {
         crate::layout::dimension_to_lpa(val.into_dimension())
     }
 
@@ -4273,8 +4281,10 @@ fn paint_vis(
     );
     let offset = crate::style::offset_path::sample(&el.style, [b[2], b[3]]);
     let translate = crate::motion::presentation_translate_in_paint_space(el, ancestor_scale);
-    let tx = translate[0] + (b[2] * el.style.translate_pct[0] + offset.translate[0]) * ancestor_scale[0];
-    let ty = translate[1] + (b[3] * el.style.translate_pct[1] + offset.translate[1]) * ancestor_scale[1];
+    let tx =
+        translate[0] + (b[2] * el.style.translate_pct[0] + offset.translate[0]) * ancestor_scale[0];
+    let ty =
+        translate[1] + (b[3] * el.style.translate_pct[1] + offset.translate[1]) * ancestor_scale[1];
     let vx = b[0] - scroll_acc[0] + el.sticky_visual_offset[0] + tx;
     let vy = b[1] - scroll_acc[1] + el.sticky_visual_offset[1] + ty;
     let [paint_sx, paint_sy] = paint_scale_with_ancestor(el, ancestor_scale);
@@ -4364,7 +4374,7 @@ fn paint_vis(
 /// [`visual_paint_aabb_with_ancestor`] with a live cascade so a parent rotate
 /// this frame is visible before collect.
 #[inline]
-pub(crate) fn visual_paint_aabb(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
+pub fn visual_paint_aabb(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
     visual_paint_aabb_with_ancestor(
         el,
         scroll_acc,
@@ -4393,7 +4403,10 @@ pub(crate) fn rest_paint_aabb(el: &Element, scroll_acc: [f32; 2]) -> [f32; 4] {
     let transform = crate::style::mat2d_world_center_pivot_with_shift(
         &el.paint_ancestor_linear,
         &crate::style::MAT2D_IDENTITY,
-        [origin[0] - (visual[0] - rest[0]), origin[1] - (visual[1] - rest[1])],
+        [
+            origin[0] - (visual[0] - rest[0]),
+            origin[1] - (visual[1] - rest[1]),
+        ],
         [visual[2], visual[3]],
         [0.0; 2],
     );
@@ -4524,11 +4537,7 @@ pub(crate) fn pointer_in_paint_border_box(
         el.style.overflow.x == taffy::style::Overflow::Visible,
         el.style.overflow.y == taffy::style::Overflow::Visible,
     );
-    if !(local[0] >= -0.5
-        && local[1] >= -0.5
-        && local[0] <= b[2] + 0.5
-        && local[1] <= b[3] + 0.5)
-    {
+    if !(local[0] >= -0.5 && local[1] >= -0.5 && local[0] <= b[2] + 0.5 && local[1] <= b[3] + 0.5) {
         return false;
     }
     // Pointer hit must follow the painted border box. An AABB-only hit enters

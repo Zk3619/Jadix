@@ -1,5 +1,5 @@
 use crate::shared::{MyCard, MyCardProps};
-use jadix::prelude::*;
+use jadix_components::prelude::*;
 use std::time::Duration;
 
 fn demo_snapshot(video: bool) -> MediaSnapshot {

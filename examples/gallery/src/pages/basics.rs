@@ -816,7 +816,7 @@ pub(crate) fn MessageScrollerShowcase() -> jadix::core::tree::Element {
                                                         v.push(next);
                                                         thread_send.set(v);
                                                         extra_send.set((n as u32) + 1);
-                                                        jadix::components::message_scroller_stick_to_end(
+                                                        jadix_components::components::message_scroller_stick_to_end(
                                                             "gal-ms-showcase",
                                                         );
                                                     }
@@ -2288,7 +2288,7 @@ fn gen_stagger_bar(on: Signal<bool>, index: usize, tone: &str) -> Element {
 #[component]
 pub(crate) fn GeneratorShowcase() -> jadix::core::tree::Element {
     use jadix::style::{
-        AnimatedNumber, InertiaOptions, RepeatMode, TimingFunction, ValueDriver, use_animated,
+        use_animated, AnimatedNumber, InertiaOptions, RepeatMode, TimingFunction, ValueDriver,
     };
 
     let travel = gen_track_travel_px();

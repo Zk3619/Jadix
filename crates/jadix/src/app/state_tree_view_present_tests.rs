@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Exercise nested TreeView presence, animations and retained native presentation together.
 use super::*;
 use crate::core::reactivity::{create_effect, create_root, use_signal};

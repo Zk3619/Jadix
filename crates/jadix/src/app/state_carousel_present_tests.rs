@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Moving carousel frames must retain the same pixels as a full compositor draw.
 use super::*;
 

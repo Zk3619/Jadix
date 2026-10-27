@@ -19,6 +19,45 @@ fn filter_draw(result: &RenderResult) -> Option<&crate::renderer::TexturedDraw> 
 }
 
 #[test]
+fn css_filter_offscreen_capture_preserves_preceding_text() {
+    for offset in [-240.0, -80.0, 0.0, 120.0, 240.0] {
+        drain_filter_queues();
+        let mut root = Element::new()
+            .w(300.0)
+            .h(100.0)
+            .flex_row()
+            .child(Element::new().w(100.0).h(100.0).text("sidebar caption"))
+            .child(
+                Element::new()
+                    .w(200.0)
+                    .h(100.0)
+                    .overflow("hidden")
+                    .position("relative")
+                    .child(
+                        Element::new()
+                            .absolute()
+                            .left(20.0)
+                            .top(offset)
+                            .w(80.0)
+                            .h(80.0)
+                            .filter("blur(4px)")
+                            .bg([1.0, 0.0, 0.0, 1.0]),
+                    ),
+            );
+        let mut tree = LayoutTree::new();
+        let result = tree.build_and_layout(&mut root, 300.0, 100.0, [-1.0; 2]);
+        assert!(
+            result.text_nodes.iter().any(|text| text.text == "sidebar caption"),
+            "filter capture at offset {offset} removed preceding text"
+        );
+        for paint in &result.node_paints {
+            assert!(paint.text.0 <= paint.text.1 && paint.text.1 <= result.text_nodes.len());
+        }
+        drain_filter_queues();
+    }
+}
+
+#[test]
 fn css_filter_scroll_collect_keeps_node_paint_ranges_valid() {
     drain_filter_queues();
     let mut root = Element::new()

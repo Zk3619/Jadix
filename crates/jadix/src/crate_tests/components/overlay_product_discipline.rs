@@ -16,7 +16,7 @@ const FORBIDDEN: &[&str] = &[
 ];
 
 fn components_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("src/components")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../jadix_components/src/components")
 }
 
 fn walk_rs(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -99,9 +99,12 @@ fn strip_cfg_test_items(src: &str) -> String {
     let bytes = src.as_bytes();
     let mut out = String::with_capacity(src.len());
     let mut i = 0;
-    let marker = b"#[cfg(test)]";
+    let markers: &[&[u8]] = &[
+        b"#[cfg(test)]",
+        b"#[cfg(all(test, feature = \"product-tests\"))]",
+    ];
     while i < bytes.len() {
-        if bytes[i..].starts_with(marker) {
+        if let Some(marker) = markers.iter().find(|marker| bytes[i..].starts_with(marker)) {
             i += marker.len();
             i = skip_ws(bytes, i);
             while bytes[i..].starts_with(b"#[") {
@@ -154,4 +157,17 @@ fn product_components_do_not_copy_portal_recipes() {
         "product files must use viewport_modal / anchored_overlay / keyed_overlay, not portal recipes:\n{}",
         hits.join("\n")
     );
+}
+
+#[test]
+fn production_scan_preserves_real_calls_but_ignores_both_test_gates() {
+    for gate in [
+        "#[cfg(test)]",
+        "#[cfg(all(test, feature = \"product-tests\"))]",
+    ] {
+        let source = format!("fn production() {{ portal_sync(); }}\n{gate}\nmod tests {{ fn fixture() {{ flush_modal_shell_motion_subtree(); }} }}");
+        let production = production_source(&source);
+        assert!(production.contains("portal_sync("));
+        assert!(!production.contains("flush_modal_shell_motion_subtree("));
+    }
 }

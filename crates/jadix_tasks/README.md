@@ -57,19 +57,13 @@ let task = scope.spawn_blocking(
 该便利方法每次创建一个线程，仅适合偶发工作；大量任务用 `spawn_blocking_on(&pool, work, on_ui)`。Future 用 `scope.spawn(&spawner, factory, on_ui)`；factory 在运行时内调用，不能将需要运行时上下文的初始化提前放在 UI 线程执行。
 
 ```rust,ignore
-struct AppSpawner(tokio::runtime::Handle);
-impl jadix_tasks::FutureSpawner for AppSpawner {
-    fn spawn(&self, task: jadix_tasks::BoxTask)
-        -> Result<jadix_tasks::TaskHandle, jadix_tasks::TaskError>
-    {
-        let join = self.0.spawn(task);
-        let abort = join.abort_handle();
-        Ok(jadix_tasks::TaskHandle::with_abort(
-            jadix_tasks::CancellationToken::new(), move || abort.abort(),
-        ))
-    }
-}
+let executor = jadix_tokio::TokioExecutor::new(runtime.handle().clone(), 64)?;
+scope.spawn(&executor, factory, on_ui)?;
 ```
+
+官方 [`jadix_tokio`](../jadix_tokio/README.md) 同时实现 FutureSpawner 与 BlockingExecutor，
+异步/阻塞任务共享容量上限，满载立即拒绝。GUI 可选 `runtime-tokio` feature，
+从 `jadix::app::tasks` 或 prelude 导入 TokioExecutor。无需自行重复编写适配器。
 
 应用必须维持 runtime 的寿命、IO/timer driver 和匹配后端的运行环境。句柄不拥有 runtime；runtime 停止后接纳的 Future 可能被直接 drop，GUI 会把未完成任务标记为 `Abandoned`，不会伪称成功。这里不提供隐藏的 `block_on`。
 

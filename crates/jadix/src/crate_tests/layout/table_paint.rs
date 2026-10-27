@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Table hover / collect-skip must keep cell glyphs and row chrome.
 //!
 //! Gallery invoices + data_table used to flash empty then restyle: hover chrome
@@ -802,6 +802,9 @@ fn composite_table_hover_paint_must_not_zero_row_border_width() {
     tree.build_and_layout(&mut row, 400.0, 40.0, [0.0, 0.0]);
     let before = row_bottom_border(&row);
     assert!(before > 0.5, "row must have border-b, got {before}");
+    let authored = row.authored_style.expect("table hover authored style")(&row).unwrap();
+    assert_eq!(authored.resolved_border_widths(), row.style.resolved_border_widths());
+    assert_eq!(authored.bg_color, [0.0; 4]);
 
     let mut impact = LayoutStatus::Clean;
     sync_button_hover_paint_subtree(&mut row, &mut tree, &mut impact, 400.0, 40.0, [0.0, 0.0]);
@@ -972,7 +975,8 @@ fn sync_table_hover(root: &mut Element, tree: &mut LayoutTree, mouse: [f32; 2], 
 #[test]
 fn composite_table_row_hover_fill_follows_exclusive_row() {
     crate::app::tree_hit::clear_hover_tracking();
-    let hover_bg = crate::style::parse_color("muted/50");
+    let mut hover_bg = crate::style::parse_color("muted");
+    hover_bg[3] *= 0.5;
     let rest_bg = [0.0, 0.0, 0.0, 0.0];
     let (_handle, mut root) = create_root(|| invoice_table());
     let mut tree = LayoutTree::new();
@@ -1097,7 +1101,10 @@ fn composite_table_footer_seams_must_survive_adjacent_row_hover() {
             total.layout_bounds,
             row_bottom_border(total),
             total.on_hover.clone(),
-            total.authoring_state.get::<crate::components::button::ButtonHoverPaint>().is_some(),
+            total
+                .authoring_state
+                .get::<crate::components::button::ButtonHoverPaint>()
+                .is_some(),
         )
     };
     assert!(

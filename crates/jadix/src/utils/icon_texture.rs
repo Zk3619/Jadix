@@ -21,9 +21,6 @@ use crate::primitives::path::{
     PathStyle, Point2, StrokeLinecap, StrokeLinejoin,
 };
 
-#[cfg(feature = "bundled-lucide")]
-static LUCIDE_TTF: &[u8] = include_bytes!("../../assets/lucide.ttf");
-
 struct GlyphCpuEntry {
     width: u32,
     height: u32,
@@ -39,14 +36,8 @@ const MAX_GLYPH_CACHE: usize = 256;
 const LUCIDE_VB: f32 = 24.0;
 
 fn font_ref() -> Option<FontRef<'static>> {
-    #[cfg(feature = "bundled-lucide")]
-    {
-        FontRef::from_index(LUCIDE_TTF, 0)
-    }
-    #[cfg(not(feature = "bundled-lucide"))]
-    {
-        None
-    }
+    crate::utils::icon_provider::with_catalog(|provider| provider.font_data())
+        .and_then(|data| FontRef::from_index(data, 0))
 }
 
 #[cfg(not(feature = "svg"))]
@@ -444,7 +435,7 @@ pub(crate) fn flush_icon_textures(mut has_gpu: impl FnMut(&str) -> bool) -> bool
     uploaded
 }
 
-#[cfg(all(test, feature = "bundled-lucide"))]
+#[cfg(all(test, feature = "gallery-tests"))]
 mod upload_tests {
     use super::*;
 
@@ -468,7 +459,7 @@ mod upload_tests {
     }
 }
 
-#[cfg(all(test, feature = "bundled-lucide"))]
+#[cfg(all(test, feature = "gallery-tests"))]
 mod tests {
     use super::*;
 

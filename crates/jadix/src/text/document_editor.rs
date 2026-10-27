@@ -191,7 +191,7 @@ impl DocumentEditorState {
         self.select(selection, false)
     }
 
-    pub(crate) fn select(
+    pub fn select(
         &self,
         selection: DocumentSelection,
         silent: bool,
@@ -227,7 +227,7 @@ impl DocumentEditorState {
         self.apply(range, insert, after, false)
     }
 
-    pub(crate) fn apply(
+    pub fn apply(
         &self,
         range: Range<usize>,
         insert: &str,

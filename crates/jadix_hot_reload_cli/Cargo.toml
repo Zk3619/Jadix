@@ -2,19 +2,20 @@
 name = "jadix_hot_reload_cli"
 version.workspace = true
 edition.workspace = true
-description = "Dev-time hot-reload watcher for jadix (`template_patch` / reload)"
 license.workspace = true
 repository.workspace = true
+description = "Development watcher and template patch sender for Jadix"
+readme = "README.md"
 
-include = [
-  "/Cargo.toml",
-  "/LICENSE",
-  "/src/**/*",
-]
+[[bin]]
+name = "jadix-hot-reload"
+path = "src/main.rs"
 
 [dependencies]
-notify = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-toml = { workspace = true }
+jadix_hot_reload.workspace = true
+jadix_lucide.workspace = true
+notify.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+toml.workspace = true
 proc-macro2 = { workspace = true, features = ["span-locations"] }

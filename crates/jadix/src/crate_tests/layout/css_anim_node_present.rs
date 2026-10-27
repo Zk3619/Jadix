@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! CSS `animate-spin` must register a node-present dirty every tick.
 //!
 //! Gallery: typing in Kbd Search switches the frame to PartialLoad (Input is in
@@ -12,8 +12,12 @@ use crate::app::damage::{
     expand_paint_dirties_for_translated_slots, intersect_rects, paint_dirty_has_keyed_slot,
     paint_dirty_matches_present_slot, paint_element_key, take_frame_paint_nodes, PaintDirtyKind,
 };
-#[cfg(feature = "bundled-lucide")]
+#[cfg(feature = "animation-base")]
+use crate::app::damage::{paint_dirty_nested_in_larger_node, paint_dirty_skips_node_dest_reset};
+#[cfg(feature = "gallery-tests")]
 use crate::app::draw_cull::skip_covered_nested_node_present;
+#[cfg(feature = "animation-base")]
+use crate::app::draw_cull::slot_visual_exceeds_rest;
 use crate::app::draw_cull::{
     escalate_dirties_for_node_present, last_present_prev_for_dirty, last_present_visual_slots,
     node_paint_visual_bounds, node_present_clipped_capture_text,
@@ -30,20 +34,16 @@ use crate::core::scroll_viewport::{scroll_offset_y_signal_key, SCROLL_VIEWPORT_F
 use crate::core::tree::{visual_paint_aabb, Element, LayoutStatus, LayoutTree};
 #[cfg(feature = "animation-base")]
 use crate::primitives::r#box::hstack;
-#[cfg(feature = "animation-base")]
-use crate::app::damage::{paint_dirty_nested_in_larger_node, paint_dirty_skips_node_dest_reset};
-#[cfg(feature = "animation-base")]
-use crate::app::draw_cull::slot_visual_exceeds_rest;
 use crate::style::{
     apply_class_list, set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
     sync_class_variants_subtree, tick_active_css_transitions_subtree,
 };
 
-#[cfg(feature = "bundled-lucide")]
+#[cfg(feature = "gallery-tests")]
 use crate::app::draw_cull::{textured_hits_damage, textured_paint_bounds};
-#[cfg(feature = "bundled-lucide")]
+#[cfg(feature = "gallery-tests")]
 use crate::renderer::scale_textured_draws;
-#[cfg(all(feature = "animation-base", feature = "bundled-lucide"))]
+#[cfg(all(feature = "animation-base", feature = "gallery-tests"))]
 use crate::style::class_variant_hover_needs_frame;
 
 fn fmt_rect(r: [f32; 4]) -> String {
@@ -1005,7 +1005,7 @@ fn marker_hover_must_not_nested_skip_spin_dest_reset() {
     );
 }
 
-#[cfg(all(feature = "animation-base", feature = "bundled-lucide"))]
+#[cfg(all(feature = "animation-base", feature = "gallery-tests"))]
 fn find_spin_el(el: &Element) -> Option<&Element> {
     if el.attrs.get("jadix_animate").map(String::as_str) == Some("spin")
         || el.style.animations.iter().any(|a| a.name == "spin")
@@ -1015,7 +1015,7 @@ fn find_spin_el(el: &Element) -> Option<&Element> {
     el.children.iter().find_map(find_spin_el)
 }
 
-#[cfg(all(feature = "animation-base", feature = "bundled-lucide"))]
+#[cfg(all(feature = "animation-base", feature = "gallery-tests"))]
 fn spin_elapsed_ms(el: &Element) -> f32 {
     el.animation_snapshot
         .runs
@@ -1024,7 +1024,7 @@ fn spin_elapsed_ms(el: &Element) -> f32 {
         .unwrap_or(0.0)
 }
 
-#[cfg(all(feature = "animation-base", feature = "bundled-lucide"))]
+#[cfg(all(feature = "animation-base", feature = "gallery-tests"))]
 fn dump_paints(paints: &[crate::layout::layout_tree::NodePaint], root: &Element) -> String {
     paints
         .iter()
@@ -1229,7 +1229,7 @@ fn page_pointer_storm_must_keep_distant_marker_spinning() {
 /// CursorMoved extra paints used a simplified hstack tree in the previous test;
 /// the cluster / MarkerIcon wrap / content last-present is what nested-skips.
 /// Lucide path/font raster needs `bundled-lucide` (same as gallery).
-#[cfg(feature = "bundled-lucide")]
+#[cfg(feature = "gallery-tests")]
 #[test]
 #[cfg(feature = "animation-base")]
 fn gallery_marker_pointer_storm_must_keep_spinning() {
@@ -1450,7 +1450,7 @@ fn gallery_marker_pointer_storm_must_keep_spinning() {
 /// Gallery Marker: idle spin+shimmer must not src-over "Thinking..." twice.
 /// Spin circumcircle scissor / wipe that nips the caption, or nested-skipping the
 /// content dest-reset, leaves PartialLoad stacking glyph alpha (叠影变粗).
-#[cfg(feature = "bundled-lucide")]
+#[cfg(feature = "gallery-tests")]
 #[test]
 #[cfg(feature = "animation-base")]
 fn gallery_marker_spin_must_not_thicken_thinking_caption() {
@@ -1668,7 +1668,7 @@ fn gallery_marker_spin_must_not_thicken_thinking_caption() {
 /// Idle ticks used to dest-reset Marker/Message wraps that only inherited the
 /// lucide collect range. That CLEAR of the caption every frame is the shimmer
 /// flicker — even after the hole was wide enough to recapture the full string.
-#[cfg(feature = "bundled-lucide")]
+#[cfg(feature = "gallery-tests")]
 #[test]
 #[cfg(feature = "animation-base")]
 fn message_status_shimmer_capture_must_keep_full_oliver_is_typing() {
@@ -5044,42 +5044,94 @@ fn status_shimmer_marker() -> Element {
 fn scaled_status_animation_repair_covers_the_caption_ink() {
     crate::core::reactivity::create_root(|| {
         let mut root = Element::new().w(800.0).h(700.0).child(
-            Element::new().absolute().left(80.0).top(90.0).w(390.0).h(844.0)
-                .scale(0.57).transform_origin("left top").child(
-                    Element::new().flex_col().w(320.0).h(80.0)
+            Element::new()
+                .absolute()
+                .left(80.0)
+                .top(90.0)
+                .w(390.0)
+                .h(844.0)
+                .scale(0.57)
+                .transform_origin("left top")
+                .child(
+                    Element::new()
+                        .flex_col()
+                        .w(320.0)
+                        .h(80.0)
                         .child(Element::new().text("Status (Marker inside Message)"))
-                        .child(message().child(status_shimmer_marker()))));
+                        .child(message().child(status_shimmer_marker())),
+                ),
+        );
         let mut tree = LayoutTree::new();
         tree.build_and_layout(&mut root, 800.0, 700.0, [-1.0; 2]);
         take_frame_paint_nodes();
         for _ in 0..6 {
             crate::style::utility::set_frame_dt(1.0 / 60.0);
             let mut impact = LayoutStatus::Clean;
-            tick_active_css_transitions_subtree(&mut root, [0.0; 2], "", false,
-                800.0, 700.0, [0.0; 2], &mut tree, &mut impact);
+            tick_active_css_transitions_subtree(
+                &mut root,
+                [0.0; 2],
+                "",
+                false,
+                800.0,
+                700.0,
+                [0.0; 2],
+                &mut tree,
+                &mut impact,
+            );
             let dirty = take_frame_paint_nodes();
-            let result = tree.build_and_layout_fast(&mut root, 800.0, 700.0, [-1.0; 2], false, false);
+            let result =
+                tree.build_and_layout_fast(&mut root, 800.0, 700.0, [-1.0; 2], false, false);
             let caption = caption_named(&result.text_nodes, "Oliver is typing").expect("caption");
             let ink = crate::app::draw_cull::text_paint_bounds(caption);
-            let repairs: Vec<_> = dirty.iter().copied().filter(|candidate| {
-                !crate::app::draw_cull::skip_covered_nested_node_present(candidate, &dirty, false,
-                    &result.node_paints, &result.instances, 1.0)
-            }).collect();
-            let wipes: Vec<_> = repairs.iter()
+            let repairs: Vec<_> = dirty
+                .iter()
+                .copied()
+                .filter(|candidate| {
+                    !crate::app::draw_cull::skip_covered_nested_node_present(
+                        candidate,
+                        &dirty,
+                        false,
+                        &result.node_paints,
+                        &result.instances,
+                        1.0,
+                    )
+                })
+                .collect();
+            let wipes: Vec<_> = repairs
+                .iter()
                 .filter(|dirty| dirty.kind == PaintDirtyKind::Node)
                 .filter_map(|dirty| {
-                let wipe = node_present_dest_reset_full(dirty.key, dirty.bounds,
-                    &result.node_paints, &result.instances, &[], &result.input_chrome_instances,
-                    1.0, None)?.rect;
-                Some((dirty.key, node_present_glyph_clip_logical(dirty, Some(wipe), 1.0)))
-            }).collect();
-            let captured = node_present_clipped_capture_text_wipes(&repairs,
-                &result.text_nodes, &result.node_paints, &wipes);
-            let captured = caption_named(&captured, "Oliver is typing")
-                .unwrap_or_else(|| panic!("missing scaled caption: repairs={repairs:?} ink={ink:?}"));
+                    let wipe = node_present_dest_reset_full(
+                        dirty.key,
+                        dirty.bounds,
+                        &result.node_paints,
+                        &result.instances,
+                        &[],
+                        &result.input_chrome_instances,
+                        1.0,
+                        None,
+                    )?
+                    .rect;
+                    Some((
+                        dirty.key,
+                        node_present_glyph_clip_logical(dirty, Some(wipe), 1.0),
+                    ))
+                })
+                .collect();
+            let captured = node_present_clipped_capture_text_wipes(
+                &repairs,
+                &result.text_nodes,
+                &result.node_paints,
+                &wipes,
+            );
+            let captured = caption_named(&captured, "Oliver is typing").unwrap_or_else(|| {
+                panic!("missing scaled caption: repairs={repairs:?} ink={ink:?}")
+            });
             let clip = captured.clip_bounds.expect("capture clip");
-            assert!(crate::app::damage::rect_contains_rect(clip, ink),
-                "scaled shimmer recapture clips ink: ink={ink:?} clip={clip:?} repairs={repairs:?}");
+            assert!(
+                crate::app::damage::rect_contains_rect(clip, ink),
+                "scaled shimmer recapture clips ink: ink={ink:?} clip={clip:?} repairs={repairs:?}"
+            );
         }
     });
 }

@@ -244,7 +244,7 @@ pub(crate) fn measure(root: &mut Element, layout: &taffy::TaffyTree<()>) {
 mod tests {
     use super::*;
 
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     #[test]
     fn shared_material_preserves_the_keyboard_focus_ring() {
         let previous = super::super::get_theme();

@@ -5,261 +5,268 @@
 //! reuses [`crate::text::parse_markdown_inline`].
 
 use crate::core::tree::Element;
-use crate::text::parse_markdown_inline;
 
-/// Parse a markdown document into a vertical stack of block elements.
+/// Parse a document through the framework-independent model and render its blocks.
 pub fn parse_markdown_blocks(src: &str) -> Element {
+    use jadix_document::{Document, DocumentBlockKind};
+
+    let document = Document::markdown(src.to_owned());
+    let blocks = document.blocks();
     let mut children = Vec::new();
-    let lines: Vec<&str> = src.lines().collect();
-    let mut i = 0usize;
+    let mut index = 0;
 
-    while i < lines.len() {
-        let line = lines[i];
-        let trimmed = line.trim_end();
-
-        if trimmed.trim().is_empty() {
-            i += 1;
-            continue;
-        }
-
-        if let Some(lang) = fence_open(trimmed) {
-            i += 1;
-            let mut body = String::new();
-            while i < lines.len() && !is_fence_close(lines[i]) {
-                if !body.is_empty() {
-                    body.push('\n');
+    while index < blocks.len() {
+        let block = &blocks[index];
+        match &block.kind {
+            DocumentBlockKind::Blank | DocumentBlockKind::Syntax => index += 1,
+            DocumentBlockKind::Heading(level) => {
+                children.push(heading_element(*level, block));
+                index += 1;
+            }
+            DocumentBlockKind::Paragraph => {
+                children.push(paragraph_element(block));
+                index += 1;
+            }
+            DocumentBlockKind::Quote { depth } => {
+                children.push(blockquote_element(block, *depth));
+                index += 1;
+            }
+            DocumentBlockKind::ListItem {
+                marker, depth: _, ..
+            } if marker.is_empty() => {
+                children.push(paragraph_element(block));
+                index += 1;
+            }
+            DocumentBlockKind::ListItem { marker, depth, .. } => {
+                let ordered = marker.chars().next().is_some_and(|ch| ch.is_ascii_digit());
+                let start = index;
+                index += 1;
+                while index < blocks.len() {
+                    match &blocks[index].kind {
+                        DocumentBlockKind::ListItem {
+                            marker: next_marker,
+                            depth: next_depth,
+                            ..
+                        } if !next_marker.is_empty()
+                            && *next_depth == *depth
+                            && next_marker
+                                .chars()
+                                .next()
+                                .is_some_and(|ch| ch.is_ascii_digit())
+                                == ordered =>
+                        {
+                            index += 1;
+                        }
+                        _ => break,
+                    }
                 }
-                body.push_str(lines[i]);
-                i += 1;
+                children.push(list_element(&blocks[start..index], ordered));
             }
-            if i < lines.len() {
-                i += 1;
-            }
-            children.push(code_block_element(&body, lang.as_deref()));
-            continue;
-        }
-
-        if let Some((level, text)) = parse_heading(trimmed) {
-            children.push(heading_element(level, text));
-            i += 1;
-            continue;
-        }
-
-        if trimmed.trim_start().starts_with('>') {
-            let mut quote_body = String::new();
-            while i < lines.len() {
-                let t = lines[i].trim_end();
-                let ts = t.trim_start();
-                if !ts.starts_with('>') {
-                    break;
+            DocumentBlockKind::Code { language } => {
+                if block.edit_range.as_ref().map_or(true, |range| {
+                    index == 0
+                        || blocks[index - 1].edit_range.as_ref() != Some(range)
+                        || !matches!(blocks[index - 1].kind, DocumentBlockKind::Code { .. })
+                }) {
+                    let body = block
+                        .payload
+                        .as_deref()
+                        .map(str::to_owned)
+                        .unwrap_or_else(|| block.text());
+                    children.push(code_block_element(&body, language));
                 }
-                let rest = ts[1..].strip_prefix(' ').unwrap_or(&ts[1..]);
-                if !quote_body.is_empty() {
-                    quote_body.push('\n');
-                }
-                quote_body.push_str(rest);
-                i += 1;
+                index += 1;
             }
-            children.push(blockquote_element(&quote_body));
-            continue;
-        }
-
-        if is_ul_item(trimmed) {
-            let mut items = Vec::new();
-            while i < lines.len() && is_ul_item(lines[i].trim_end()) {
-                items.push(list_item_text(lines[i].trim_end()));
-                i += 1;
+            DocumentBlockKind::TableRow { header } => {
+                children.push(table_row_element(block, *header));
+                index += 1;
             }
-            children.push(ul_element(&items));
-            continue;
-        }
-
-        if is_ol_item(trimmed) {
-            let mut items = Vec::new();
-            while i < lines.len() && is_ol_item(lines[i].trim_end()) {
-                items.push(list_item_text(lines[i].trim_end()));
-                i += 1;
+            DocumentBlockKind::Rule => {
+                let mut element = Element::new().h(1.0).bg([0.5, 0.5, 0.5, 0.5]);
+                element.set_attr("jadix_md_rule", "1");
+                children.push(element);
+                index += 1;
             }
-            children.push(ol_element(&items));
-            continue;
-        }
-
-        let mut para = String::new();
-        while i < lines.len() {
-            let t = lines[i].trim_end();
-            if t.trim().is_empty()
-                || fence_open(t).is_some()
-                || parse_heading(t).is_some()
-                || t.trim_start().starts_with('>')
-                || is_ul_item(t)
-                || is_ol_item(t)
-            {
-                break;
+            DocumentBlockKind::Math
+            | DocumentBlockKind::Chemistry
+            | DocumentBlockKind::Molecule { .. }
+            | DocumentBlockKind::Html => {
+                let text = block
+                    .payload
+                    .as_deref()
+                    .map(str::to_owned)
+                    .unwrap_or_else(|| block.text());
+                children.push(paragraph_element_with_text(&text));
+                index += 1;
             }
-            if !para.is_empty() {
-                para.push(' ');
-            }
-            para.push_str(t.trim());
-            i += 1;
-        }
-        if !para.is_empty() {
-            children.push(paragraph_element(&para));
         }
     }
 
     Element::new().flex_col().gap(8.0).children(children)
 }
 
-fn fence_open(line: &str) -> Option<Option<String>> {
-    let t = line.trim_start();
-    if !t.starts_with("```") {
-        return None;
-    }
-    let rest = t[3..].trim();
-    if rest.is_empty() {
-        Some(None)
-    } else {
-        Some(Some(rest.to_string()))
-    }
-}
+fn inline_spans(inlines: &[jadix_document::DocumentInline]) -> Vec<crate::style::TextSpan> {
+    inlines
+        .iter()
+        .map(|inline| {
+            use crate::style::TextSpan;
 
-fn is_fence_close(line: &str) -> bool {
-    let t = line.trim();
-    t == "```" || (t.starts_with("```") && t.chars().all(|c| c == '`'))
-}
-
-fn parse_heading(line: &str) -> Option<(u8, &str)> {
-    let t = line.trim_start();
-    let mut level = 0u8;
-    for c in t.chars() {
-        if c == '#' {
-            level = level.saturating_add(1);
-            if level > 3 {
-                return None;
+            let mut span = TextSpan::new(inline.text.clone());
+            if inline.style.bold {
+                span = span.weight(700);
             }
-        } else {
-            break;
-        }
-    }
-    if !(1..=3).contains(&level) {
-        return None;
-    }
-    let after = &t[level as usize..];
-    if !after.is_empty() && !after.starts_with(' ') {
-        return None;
-    }
-    Some((level, after.trim()))
+            if inline.style.italic {
+                span = span.italic();
+            }
+            if inline.style.code {
+                span = span.monospace().background([15, 23, 42, 28]).padding_x(3.0);
+            }
+            if let Some(color) = inline.style.color {
+                span = span.color(color);
+            }
+            if let Some(background) = inline.style.background {
+                span = span.background(background);
+            }
+            if let Some(size) = inline.style.font_size {
+                span = span.size(size as f32);
+            }
+            if let Some(link) = &inline.style.link {
+                span = span
+                    .color([37, 99, 235, 255])
+                    .underline()
+                    .href(link.clone());
+            }
+            span
+        })
+        .collect()
 }
 
-fn is_ul_item(line: &str) -> bool {
-    let t = line.trim_start();
-    t.starts_with("- ") || t.starts_with("* ") || t.starts_with("+ ")
-}
-
-fn is_ol_item(line: &str) -> bool {
-    let t = line.trim_start();
-    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
-    if digits == 0 {
-        return false;
+pub(crate) fn inline_spans_for_source(src: &str) -> Vec<crate::style::TextSpan> {
+    let mut spans = Vec::new();
+    let mut rest = src;
+    while let Some(newline) = rest.find('\n') {
+        let (line, tail) = rest.split_at(newline);
+        let document = jadix_document::Document::markdown(line.to_owned());
+        spans.extend(
+            document
+                .blocks()
+                .iter()
+                .flat_map(|block| inline_spans(&block.inlines)),
+        );
+        spans.push(crate::style::TextSpan::new("\n"));
+        rest = &tail[1..];
     }
-    let rest = &t[digits..];
-    rest.starts_with(". ") || rest.starts_with(") ")
-}
-
-fn list_item_text(line: &str) -> String {
-    let t = line.trim_start();
-    if is_ul_item(line) {
-        return t[2..].trim().to_string();
-    }
-    let digits = t.chars().take_while(|c| c.is_ascii_digit()).count();
-    let rest = &t[digits..];
-    let body = if rest.starts_with(". ") || rest.starts_with(") ") {
-        &rest[2..]
+    let document = jadix_document::Document::markdown(rest.to_owned());
+    spans.extend(
+        document
+            .blocks()
+            .iter()
+            .flat_map(|block| inline_spans(&block.inlines)),
+    );
+    if spans.is_empty() {
+        vec![crate::style::TextSpan::new("")]
     } else {
-        rest
-    };
-    body.trim().to_string()
+        spans
+    }
 }
 
-fn inline_rich(text: &str) -> Element {
-    Element::new().text_spans(parse_markdown_inline(text))
+fn inline_rich(block: &jadix_document::DocumentBlock) -> Element {
+    Element::new().text_spans(inline_spans(&block.inlines))
 }
 
-fn heading_element(level: u8, text: &str) -> Element {
+fn heading_element(level: u8, block: &jadix_document::DocumentBlock) -> Element {
     let size = match level {
         1 => 28.0,
         2 => 22.0,
         _ => 18.0,
     };
     let weight = if level <= 2 { 700.0 } else { 600.0 };
-    let mut el = inline_rich(text).text_size(size).font_weight(weight);
-    el.set_attr("jadix_md_heading", level.to_string());
-    el
+    let mut element = inline_rich(block).text_size(size).font_weight(weight);
+    element.set_attr("jadix_md_heading", level.to_string());
+    element
 }
 
-fn paragraph_element(text: &str) -> Element {
-    let mut el = inline_rich(text).text_size(14.0);
-    el.set_attr("jadix_md_paragraph", "1");
-    el
+fn paragraph_element(block: &jadix_document::DocumentBlock) -> Element {
+    let mut element = inline_rich(block).text_size(14.0);
+    element.set_attr("jadix_md_paragraph", "1");
+    element
 }
 
-fn code_block_element(body: &str, lang: Option<&str>) -> Element {
-    let mut el = Element::new()
-        .text(body.to_string())
+fn paragraph_element_with_text(text: &str) -> Element {
+    let mut element = Element::new().text(text.to_owned()).text_size(14.0);
+    element.set_attr("jadix_md_paragraph", "1");
+    element
+}
+
+fn code_block_element(body: &str, language: &str) -> Element {
+    let mut element = Element::new()
+        .text(body.to_owned())
         .text_size(13.0)
         .p(8.0)
         .rounded(6.0)
         .bg([15.0 / 255.0, 23.0 / 255.0, 42.0 / 255.0, 1.0]);
-    el.text_style.font_family = Some("monospace".into());
-    el.set_attr("jadix_md_code", "1");
-    if let Some(l) = lang {
-        el.set_attr("jadix_md_code_lang", l);
+    element.text_style.font_family = Some("monospace".into());
+    element.set_attr("jadix_md_code", "1");
+    if !language.is_empty() {
+        element.set_attr("jadix_md_code_lang", language);
     }
-    el
+    element
 }
 
-fn blockquote_element(body: &str) -> Element {
-    let mut el = Element::new()
+fn blockquote_element(block: &jadix_document::DocumentBlock, depth: usize) -> Element {
+    let mut element = Element::new()
         .flex_col()
         .p(8.0)
-        .ml(4.0)
+        .ml(4.0 * depth as f32)
         .bg([148.0 / 255.0, 163.0 / 255.0, 184.0 / 255.0, 0.15])
-        .child(inline_rich(body).text_size(14.0));
-    el.set_attr("jadix_md_blockquote", "1");
-    el
+        .child(inline_rich(block).text_size(14.0));
+    element.set_attr("jadix_md_blockquote", "1");
+    element
 }
 
-fn ul_element(items: &[String]) -> Element {
-    let children: Vec<Element> = items
-        .iter()
-        .map(|t| {
-            Element::new()
-                .flex_row()
-                .gap(6.0)
-                .child(Element::new().text("•").text_size(14.0))
-                .child(inline_rich(t).text_size(14.0))
-        })
-        .collect();
-    let mut el = Element::new().flex_col().gap(4.0).children(children);
-    el.set_attr("jadix_md_ul", "1");
-    el
-}
-
-fn ol_element(items: &[String]) -> Element {
-    let children: Vec<Element> = items
+fn list_element(blocks: &[jadix_document::DocumentBlock], ordered: bool) -> Element {
+    let children: Vec<Element> = blocks
         .iter()
         .enumerate()
-        .map(|(idx, t)| {
+        .map(|(index, block)| {
+            let marker = match &block.kind {
+                jadix_document::DocumentBlockKind::ListItem { marker, .. } if ordered => {
+                    if marker.is_empty() {
+                        format!("{}.", index + 1)
+                    } else {
+                        marker.clone()
+                    }
+                }
+                _ => "•".to_owned(),
+            };
             Element::new()
                 .flex_row()
                 .gap(6.0)
-                .child(Element::new().text(format!("{}.", idx + 1)).text_size(14.0))
-                .child(inline_rich(t).text_size(14.0))
+                .child(Element::new().text(marker).text_size(14.0))
+                .child(inline_rich(block).text_size(14.0))
         })
         .collect();
-    let mut el = Element::new().flex_col().gap(4.0).children(children);
-    el.set_attr("jadix_md_ol", "1");
-    el
+    let mut element = Element::new().flex_col().gap(4.0).children(children);
+    element.set_attr(
+        if ordered {
+            "jadix_md_ol"
+        } else {
+            "jadix_md_ul"
+        },
+        "1",
+    );
+    element
+}
+
+fn table_row_element(block: &jadix_document::DocumentBlock, header: bool) -> Element {
+    let cells: Vec<Element> = block
+        .cells
+        .iter()
+        .map(|cell| Element::new().text_spans(inline_spans(cell)))
+        .collect();
+    let mut element = Element::new().flex_row().gap(8.0).children(cells);
+    element.set_attr("jadix_md_table_row", if header { "header" } else { "1" });
+    element
 }
 
 #[cfg(test)]

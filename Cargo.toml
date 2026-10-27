@@ -42,15 +42,30 @@ repository = "https://github.com/Zk3619/Jadix"
 # Single source of truth for versions. Member crates use `{ workspace = true }`
 # plus crate-local features / optional. Policy: development-docs/ops/crate_deps.md
 [workspace.dependencies]
+jadix_window_materials = { path = "crates/jadix_window_materials", version = "0.1.0", default-features = false }
+jadix_renderer = { path = "crates/jadix_renderer", version = "0.1.0", default-features = false }
+jadix_theme = { path = "crates/jadix_theme", version = "0.1.0", default-features = false }
+jadix_animation = { path = "crates/jadix_animation", version = "0.1.0", default-features = false }
+jadix_layout = { path = "crates/jadix_layout", version = "0.1.0", default-features = false }
+jadix_core = { path = "crates/jadix_core", version = "0.1.0", default-features = false }
 # --- path crates (version required so they are not `*` wildcards for cargo-deny / publish) ---
 jadix = { path = "crates/jadix", version = "0.1.0", default-features = false }
+jadix_components = { path = "crates/jadix_components", version = "0.1.0", default-features = false }
+jadix_dnd = { path = "crates/jadix_dnd", version = "0.1.0", default-features = false }
 jadix_macros = { path = "crates/jadix_macros", version = "0.1.0" }
 jadix_style_tokens = { path = "crates/jadix_style_tokens", version = "0.1.0" }
 jadix_window_state = { path = "crates/jadix_window_state", version = "0.1.0" }
 jadix_clipboard = { path = "crates/jadix_clipboard", version = "0.1.0", default-features = false }
 jadix_media = { path = "crates/jadix_media", version = "0.1.0" }
+jadix_lucide = { path = "crates/jadix_lucide", version = "0.1.0", default-features = false }
+jadix_lsp = { path = "crates/jadix_lsp", version = "0.1.0" }
+jadix_document = { path = "crates/jadix_document", version = "0.1.0", default-features = false }
+jadix_hot_reload = { path = "crates/jadix_hot_reload", version = "0.1.0", default-features = false }
 jadix_net = { path = "crates/jadix_net", version = "0.1.0", default-features = false }
 jadix_tasks = { path = "crates/jadix_tasks", version = "0.1.0" }
+jadix_tokio = { path = "crates/jadix_tokio", version = "0.1.0" }
+tokio = { version = "1.53.3", default-features = false }
+moka = { version = "0.12.16", default-features = false }
 
 # --- window / GPU ---
 # Local facade fork; backends/core are pinned together (see jadix_winit/README.md).
@@ -126,13 +141,7 @@ notify = "9.0.0-rc.5"
 stacker = "0.1"
 
 # --- media ---
-image = { version = "0.25.10", default-features = false, features = [
-    "png",
-    "jpeg",
-    "webp",
-    "gif",
-    "ico",
-] }
+image = { version = "0.25.10", default-features = false, features = ["png"] }
 resvg = "0.48.1"
 # Used by ignored `text_buffer_mid_insert` (P3 String vs ropey). Not a product dependency.
 ropey = "1.6"

@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Replay actual modal enter/exit frames and compare cached captures with fresh ones.
 use super::*;
 use crate::core::reactivity::{create_effect, create_root, use_signal};
@@ -66,8 +66,17 @@ fn compare(s: &mut AppState, ms: f64) {
     let cached = read(s);
     let mut before_pose = Vec::new();
     crate::core::tree::walk_elements(&s.root_element, |el| {
-        if el.template_id.as_deref().is_some_and(|id| id.ends_with("__modal_panel")) {
-            before_pose.push((el.template_id.clone(), el.style.opacity, el.style.translate_pct, el.layout_bounds));
+        if el
+            .template_id
+            .as_deref()
+            .is_some_and(|id| id.ends_with("__modal_panel"))
+        {
+            before_pose.push((
+                el.template_id.clone(),
+                el.style.opacity,
+                el.style.translate_pct,
+                el.layout_bounds,
+            ));
         }
     });
     s.modal_source_fp = None;
@@ -93,14 +102,34 @@ fn compare(s: &mut AppState, ms: f64) {
         .count();
     if changed > 0 {
         let folder = std::env::temp_dir();
-        for (name, image) in [("jadix-modal-cached.png", &cached), ("jadix-modal-fresh.png", &fresh)] {
-            image::save_buffer(folder.join(name), &image.pixels, image.width, image.height, image::ColorType::Rgba8).unwrap();
+        for (name, image) in [
+            ("jadix-modal-cached.png", &cached),
+            ("jadix-modal-fresh.png", &fresh),
+        ] {
+            image::save_buffer(
+                folder.join(name),
+                &image.pixels,
+                image.width,
+                image.height,
+                image::ColorType::Rgba8,
+            )
+            .unwrap();
         }
-        eprintln!("modal mismatch partial={}, source={:?}, blur={:?}", s.last_frame_partial, s.modal_source_fp, s.modal_blur_radius);
+        eprintln!(
+            "modal mismatch partial={}, source={:?}, blur={:?}",
+            s.last_frame_partial, s.modal_source_fp, s.modal_blur_radius
+        );
         eprintln!("before pose={before_pose:?}");
         crate::core::tree::walk_elements(&s.root_element, |el| {
-            if el.template_id.as_deref().is_some_and(|id| id.ends_with("__modal_panel")) {
-                eprintln!("after pose={:?} {:?} {:?}", el.template_id, el.style.opacity, el.style.translate_pct);
+            if el
+                .template_id
+                .as_deref()
+                .is_some_and(|id| id.ends_with("__modal_panel"))
+            {
+                eprintln!(
+                    "after pose={:?} {:?} {:?}",
+                    el.template_id, el.style.opacity, el.style.translate_pct
+                );
             }
         });
     }
@@ -207,8 +236,14 @@ fn run(window: Arc<dyn Window>) {
                 "fade must not reallocate blur work targets"
             );
             assert!(work.0 <= s.config.width / 2 && work.1 <= s.config.height / 2);
-            assert_eq!(s.modal_blur_count, before_blurs, "enter blur changed at frame {frame}, kind {k}");
-            assert_eq!(s.modal_capture_count, before_captures, "enter recaptured background at frame {frame}, kind {k}");
+            assert_eq!(
+                s.modal_blur_count, before_blurs,
+                "enter blur changed at frame {frame}, kind {k}"
+            );
+            assert_eq!(
+                s.modal_capture_count, before_captures,
+                "enter recaptured background at frame {frame}, kind {k}"
+            );
             compare(s, time);
         }
         let mut guard = state.borrow_mut();

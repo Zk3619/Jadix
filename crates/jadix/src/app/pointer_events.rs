@@ -18,7 +18,7 @@ use crate::core::tree::{pointer_events_targets_children, Element};
 use super::tree_hit;
 
 /// Composite option boxes forward activation without becoming accessible labels.
-pub(crate) const ATTR_ACTIVATE_FOR: &str = "data-jadix-activate-for";
+pub const ATTR_ACTIVATE_FOR: &str = "data-jadix-activate-for";
 
 thread_local! {
     static LAST_POINTER_CLIENT: Cell<[f32; 2]> = const { Cell::new([-1.0, -1.0]) };
@@ -40,7 +40,7 @@ pub(crate) fn clear_hover_target_sample() {
 }
 
 /// Last exclusive-hover visual box + client pointer (updated on scroll with a still cursor).
-pub(crate) fn last_hover_sample() -> Option<([f32; 2], [f32; 4])> {
+pub fn last_hover_sample() -> Option<([f32; 2], [f32; 4])> {
     if !LAST_HOVER_SAMPLE_VALID.get() {
         return None;
     }

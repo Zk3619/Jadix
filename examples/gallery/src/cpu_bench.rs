@@ -6,13 +6,13 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use jadix::app::{WindowLifecycleHook, set_window_lifecycle_hook};
+use jadix::app::{set_window_lifecycle_hook, WindowLifecycleHook};
 use winit::{event::WindowEvent, window::Window};
 
 /// A fixed, non-virtualized ordinary list. Keep its workload stable across
 /// Gallery showcase edits so results from different commits stay comparable.
 pub(super) fn ordinary_scene() -> jadix::core::tree::Element {
-    use jadix::prelude::*;
+    use jadix_components::prelude::*;
     let rows: Vec<_> = (0..200).map(|i| {
         let title = format!("List item {i:03}");
         ui! {

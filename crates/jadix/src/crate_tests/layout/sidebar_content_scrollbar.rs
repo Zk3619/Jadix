@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Overlay scrollbar must sit on `SidebarContent`, not the Header/Footer column.
 //!
 //! `Sidebar` `take_packed`s its children. An anonymous two-child host (viewport +

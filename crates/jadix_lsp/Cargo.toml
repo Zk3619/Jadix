@@ -1,0 +1,12 @@
+[package]
+name = "jadix_lsp"
+version.workspace = true
+edition.workspace = true
+description = "GUI-independent LSP transport and UTF-16 text edits for Jadix applications"
+license.workspace = true
+repository.workspace = true
+readme = "README.md"
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }

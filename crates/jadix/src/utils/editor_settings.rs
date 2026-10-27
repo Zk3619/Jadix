@@ -3,6 +3,7 @@ pub use crate::text::lsp::LanguageServerSettings;
 use serde::{Deserialize, Serialize};
 #[cfg(feature = "code-lsp")]
 use std::collections::BTreeMap;
+#[cfg(feature = "file-persistence")]
 use std::path::PathBuf;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -28,6 +29,7 @@ pub struct EditorSettings {
     pub language_servers: BTreeMap<String, LanguageServerSettings>,
 }
 impl EditorSettings {
+    #[cfg(feature = "file-persistence")]
     pub fn load() -> Result<Self, String> {
         let path = std::env::var_os("JADIX_EDITOR_CONFIG")
             .map(PathBuf::from)

@@ -16,7 +16,6 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 #[cfg(any(
-    feature = "bundled-lucide",
     feature = "bundled-cjk",
     feature = "bundled-cjk-serif",
     feature = "bundled-emoji",
@@ -26,7 +25,6 @@ use std::sync::Arc;
 
 use glyphon::fontdb::Database;
 #[cfg(any(
-    feature = "bundled-lucide",
     feature = "bundled-cjk",
     feature = "bundled-cjk-serif",
     feature = "bundled-emoji",
@@ -40,8 +38,6 @@ use crate::renderer::emoji_detect;
 /// Filenames we may load from a font search directory.
 const RUNTIME_CJK_SANS: &str = "NotoSansCJK.ttc";
 const RUNTIME_CJK_SERIF: &str = "NotoSerifCJK.ttc";
-#[cfg(not(feature = "bundled-lucide"))]
-const RUNTIME_LUCIDE: &str = "lucide.ttf";
 const RUNTIME_INTER: &[&str] = &[
     "Inter-Variable.ttf",
     "InterVariable.ttf",
@@ -229,7 +225,6 @@ fn with_lazy_state<R>(f: impl FnOnce(&mut LazyFontState) -> R) -> R {
 }
 
 #[cfg(any(
-    feature = "bundled-lucide",
     feature = "bundled-cjk",
     feature = "bundled-cjk-serif",
     feature = "bundled-emoji",
@@ -768,18 +763,6 @@ fn load_eager_project_ui_fonts(db: &mut Database, state: &mut LazyFontState) {
 fn load_eager_bundled_fonts(db: &mut Database, state: &mut LazyFontState) {
     load_eager_project_ui_fonts(db, state);
 
-    #[cfg(feature = "bundled-lucide")]
-    {
-        load_static_bytes(db, include_bytes!("../../assets/lucide.ttf"));
-    }
-    #[cfg(not(feature = "bundled-lucide"))]
-    {
-        if !try_load_font_file(db, RUNTIME_LUCIDE, state) {
-            log::warn!(
-                "lucide.ttf not found beside assets/; icons may be missing (enable feature bundled-lucide)"
-            );
-        }
-    }
     crate::utils::font::clear_resolve_family_cache();
 
     // Escape hatches that force eager Noto loads (single-file / CI demos).

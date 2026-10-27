@@ -185,13 +185,21 @@ impl SlotMap {
     ) -> Element {
         let mut root = Element::new().relative();
         if let Some(surface) = surface {
-            root = root.child(self.paint(SLOT_SURFACE, surface)
-                .absolute().inset(0.0).pointer_events_none());
+            root = root.child(
+                self.paint(SLOT_SURFACE, surface)
+                    .absolute()
+                    .inset(0.0)
+                    .pointer_events_none(),
+            );
         }
         root = root.child(self.paint(SLOT_CONTENT, content));
         if let Some(overlay) = overlay {
-            root = root.child(self.paint(SLOT_OVERLAY, overlay)
-                .absolute().inset(0.0).pointer_events_box_none());
+            root = root.child(
+                self.paint(SLOT_OVERLAY, overlay)
+                    .absolute()
+                    .inset(0.0)
+                    .pointer_events_box_none(),
+            );
         }
         root
     }
@@ -606,7 +614,7 @@ macro_rules! impl_simple_slot_builder {
 
 pub struct BaseComponentBuilder {
     pub el: Element,
-    pub(crate) label: Option<String>,
+    pub label: Option<String>,
     pub(crate) has_custom_w: bool,
     pub(crate) has_custom_h: bool,
     pub(crate) has_custom_rounded: bool,
@@ -1322,18 +1330,18 @@ impl From<BaseComponentBuilder> for Element {
     }
 }
 
-/// Framework mounting, hit geometry and retained-paint operations for product authors.
-pub mod mount;
 pub mod focus;
+pub mod icon;
 pub mod input;
 pub mod keys;
-pub mod window;
+/// Framework mounting, hit geometry and retained-paint operations for product authors.
+pub mod mount;
 pub mod state;
-pub mod icon;
+pub mod window;
 
+pub mod deadline;
 /// Node-owned work for the host hover and state presentation phases.
 pub mod presentation;
-pub mod deadline;
 
 #[cfg(test)]
 mod layer_tests {
@@ -1353,16 +1361,35 @@ mod layer_tests {
         assert_eq!(root.children.len(), 3);
         let mut layout = crate::layout::LayoutTree::new();
         layout.build_and_layout(&mut root, 320.0, 200.0, [-1.0; 2]);
-        let layer = |name| crate::core::tree::find_in_tree(&root, |node|
-            node.get_attr("data-slot").map(String::as_str) == Some(name)).unwrap();
+        let layer = |name| {
+            crate::core::tree::find_in_tree(&root, |node| {
+                node.get_attr("data-slot").map(String::as_str) == Some(name)
+            })
+            .unwrap()
+        };
         let surface = layer(SLOT_SURFACE);
         let content = layer(SLOT_CONTENT);
         let overlay = layer(SLOT_OVERLAY);
-        assert_eq!(surface.get_attr("data-slot").map(String::as_str), Some(SLOT_SURFACE));
-        assert_eq!(content.get_attr("data-slot").map(String::as_str), Some(SLOT_CONTENT));
-        assert_eq!(overlay.get_attr("data-slot").map(String::as_str), Some(SLOT_OVERLAY));
-        assert_eq!(surface.pointer_events_mode(), crate::core::tree::PointerEvents::None);
-        assert_eq!(overlay.pointer_events_mode(), crate::core::tree::PointerEvents::BoxNone);
+        assert_eq!(
+            surface.get_attr("data-slot").map(String::as_str),
+            Some(SLOT_SURFACE)
+        );
+        assert_eq!(
+            content.get_attr("data-slot").map(String::as_str),
+            Some(SLOT_CONTENT)
+        );
+        assert_eq!(
+            overlay.get_attr("data-slot").map(String::as_str),
+            Some(SLOT_OVERLAY)
+        );
+        assert_eq!(
+            surface.pointer_events_mode(),
+            crate::core::tree::PointerEvents::None
+        );
+        assert_eq!(
+            overlay.pointer_events_mode(),
+            crate::core::tree::PointerEvents::BoxNone
+        );
         assert_eq!(content.style.opacity, 1.0);
         assert!(content.layout_bounds[2] >= 160.0);
         assert!(overlay.children[0].on_click.is_some());
@@ -1372,18 +1399,18 @@ mod layer_tests {
 }
 
 /// Shared text editing policies, independent of a component builder.
+pub mod widgets;
+
 pub mod text {
     /// Runs before the shared editor handles a key and only outside IME composition.
     /// The focused node owns this handler, including its captured product state.
-    pub type KeyHandler = std::rc::Rc<
-        dyn Fn(&winit::event::KeyEvent, winit::keyboard::ModifiersState) -> bool,
-    >;
+    pub type KeyHandler =
+        std::rc::Rc<dyn Fn(&winit::event::KeyEvent, winit::keyboard::ModifiersState) -> bool>;
 
     /// Resolve a node-owned handler without retaining a borrow of the host tree.
     pub fn key_handler(root: &crate::core::tree::Element, focused: &str) -> Option<KeyHandler> {
-        crate::core::tree::find_in_tree(root, |node| {
-            node.focus_id.as_deref() == Some(focused)
-        }).and_then(|node| node.text_edit_key_handler.clone())
+        crate::core::tree::find_in_tree(root, |node| node.focus_id.as_deref() == Some(focused))
+            .and_then(|node| node.text_edit_key_handler.clone())
     }
 
     pub use crate::utils::text_edit::field::{
@@ -1391,5 +1418,75 @@ pub mod text {
         filter_number_insert, filter_password_insert, filter_tel_insert, filter_url_insert,
         format_number_step_result, map_masked_byte_index_to_real, step_number_value,
         strip_control_insert, InputType, IME_ACTIVE_SIGNAL, INPUT_LINE_SHAPE_SUFFIX,
+    };
+}
+
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __component_contract {
+    (
+        $props_name:ident [$($base_builder:ident)?];
+        $(#[$attribute:meta])* $visibility:vis fn $name:ident (
+            $($mode:ident [$($mutable:tt)*] $field:ident: $ty:ty),* $(,)?
+        ) -> $result:ty $body:block
+    ) => {
+        $(#[$attribute])*
+        #[derive(Default)]
+        $visibility struct $props_name {
+            $(pub $field: $crate::__component_contract!(@type $mode $ty),)*
+            pub base: Option<Box<dyn FnOnce($crate::authoring::BaseComponentBuilder) -> $crate::authoring::BaseComponentBuilder>>,
+        }
+
+        impl $crate::app::props::MergeProps for $props_name {
+            fn merge_with(self, overlay: Self) -> Self {
+                Self {
+                    $($field: $crate::__component_contract!(@merge $mode self overlay $field),)*
+                    base: $crate::app::props::merge_base_prop(self.base, overlay.base),
+                }
+            }
+        }
+
+        $(#[$attribute])*
+        #[allow(non_snake_case, unused_variables, unused_mut)]
+        #[inline(never)]
+        $visibility fn $name(props: $props_name) -> $result {
+            #[allow(unused_imports)]
+            $visibility use $props_name;
+            $crate::core::reactivity::component_root(|| {
+                $(let $($mutable)* $field = $crate::__component_contract!(@value $mode props.$field);)*
+                let base = props.base;
+                $crate::__component_contract!(@prepare [$($base_builder)?] base);
+                let mut element = $crate::core::reactivity::component_isolated_body(|| $body);
+                element = $crate::style::apply_stylesheet_rules_tree(element);
+                $crate::__component_contract!(@finish [$($base_builder)?] element base)
+            })
+        }
+    };
+    (@type default $ty:ty) => { Option<$ty> };
+    (@type required $ty:ty) => { Option<$ty> };
+    (@type $mode:ident $ty:ty) => { $ty };
+    (@value default $value:expr) => { $value.unwrap_or_default() };
+    (@value required $props:ident.$field:ident) => {
+        $props.$field.expect(concat!("missing required Signal prop `", stringify!($field), "`"))
+    };
+    (@value $mode:ident $value:expr) => { $value };
+    (@merge identity $receiver:ident $overlay:ident $field:ident) => {
+        if $overlay.$field.is_empty() { $receiver.$field } else { $overlay.$field }
+    };
+    (@merge base_builder $receiver:ident $overlay:ident $field:ident) => {
+        $crate::app::props::merge_base_prop($receiver.$field, $overlay.$field)
+    };
+    (@merge $mode:ident $receiver:ident $overlay:ident $field:ident) => { $overlay.$field.or($receiver.$field) };
+    (@prepare [$builder:ident] $base:ident) => {
+        let $builder = $crate::app::props::merge_base_prop($builder, $base);
+    };
+    (@prepare [] $base:ident) => {};
+    (@finish [$builder:ident] $element:ident $base:ident) => { $element };
+    (@finish [] $element:ident $base:ident) => {
+        if let Some(base_fn) = $base {
+            base_fn($crate::authoring::BaseComponentBuilder::new($element)).el
+        } else {
+            $element
+        }
     };
 }

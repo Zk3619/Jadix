@@ -58,6 +58,7 @@ fn main() {
         default_filter:
             "info,wgpu_core=warn,wgpu_hal=warn,wgpu_core::device::resource=off,fontdb=error",
     });
+    jadix_lucide::install().expect("install Lucide icon catalog and font");
     install_gallery_theme();
     let (rgba, w, h) = checker_rgba_texture();
     jadix::queue_image_rgba8("demo-checker", w, h, rgba);
@@ -92,7 +93,9 @@ fn main() {
         }
     }
 
-    let options = jadix::app::WindowOptions::new().icon(gallery_icon()).follow_theme(true);
+    let options = jadix::app::WindowOptions::new()
+        .icon(gallery_icon())
+        .follow_theme(true);
     let options = if let Some(mode) = instance_demo {
         jadix::app::set_second_instance_handler(pages::record_second_instance);
         let options = options

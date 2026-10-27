@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Last visible SidebarContent row must not paint past the footer separator.
 //!
 //! Gallery inset rail: Header / Separator / Content / Separator / Footer.

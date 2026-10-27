@@ -1,0 +1,24 @@
+[package]
+name = "jadix_theme"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Theme palettes, design tokens, color parsing and validated overrides"
+readme = "README.md"
+
+[features]
+default = ["theme-shadcn"]
+theme-shadcn = []
+theme-fluent = []
+theme-material3 = []
+theme-liquid-glass = []
+themes = ["theme-shadcn", "theme-fluent", "theme-material3", "theme-liquid-glass"]
+
+[dependencies]
+jadix_animation.workspace = true
+jadix_layout.workspace = true
+jadix_style_tokens.workspace = true
+serde.workspace = true
+toml.workspace = true
+log.workspace = true

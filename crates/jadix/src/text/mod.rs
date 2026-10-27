@@ -74,7 +74,7 @@ pub use molecule::{Molecule, MoleculeAtom, MoleculeBond, MoleculeData};
 pub use rich_text::{RichTextBlock, RichTextSpan};
 #[cfg(feature = "markdown")]
 pub use semantic_document::{
-    Document, DocumentBlock, DocumentBlockKind, DocumentFormat, DocumentInline, DocumentInlineKind,
+    Document, DocumentAlignment, DocumentBlock, DocumentBlockKind, DocumentFormat, DocumentInline, DocumentInlineKind,
     DocumentInlineStyle,
 };
 pub use uax14_wrap::{needs_logical_prewrap, soft_wrap_logical};

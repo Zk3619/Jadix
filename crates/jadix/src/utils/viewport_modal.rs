@@ -259,7 +259,7 @@ impl ViewportModalContentOpts {
 /// `gap` to the next trigger), open `absolute` 0×0 drops it. The clicked trigger's
 /// neighbor spacing jumps, dest-reset punches its glyphs through the scrim, and
 /// overlay StructureChanged skips enter/exit.
-pub(crate) fn viewport_modal_island(
+pub fn viewport_modal_island(
     view_id: impl Into<String>,
     render: impl FnMut() -> Element + 'static,
 ) -> Element {
@@ -438,7 +438,7 @@ pub fn viewport_modal_phase(id: &str, open: Signal<bool>) -> Option<PresencePhas
 }
 
 /// A responsive surface returning to normal flow must release its modal stack immediately.
-pub(crate) fn dismiss_viewport_modal(id: &str, open: Signal<bool>) {
+pub fn dismiss_viewport_modal(id: &str, open: Signal<bool>) {
     if open.try_peek() == Some(true) {
         open.set(false);
     }
@@ -449,7 +449,7 @@ pub(crate) fn dismiss_viewport_modal(id: &str, open: Signal<bool>) {
 
 /// Mount existing stateful content. The caller pumps presence each frame instead of
 /// installing a new reactive effect every time the content changes presentation.
-pub(crate) fn retained_viewport_modal_layer(
+pub fn retained_viewport_modal_layer(
     id: &str,
     open: Signal<bool>,
     overlay: &ModalOverlayOpts,
@@ -1438,7 +1438,7 @@ mod tests {
     /// play Dialog fade-out instead of being pruned on the same frame.
     #[test]
     #[cfg(feature = "animation-base")]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn tab_unmount_plays_configured_modal_exit() {
         use std::cell::RefCell;
         use std::rc::Rc;
@@ -1571,7 +1571,7 @@ mod tests {
     /// Gallery RSX `<ViewportModal>` unpacks Trigger + Content into the parent HStack
     /// (`jadix_fragment` + `IntoElementList`). Opening must not eat the page VStack gap.
     #[test]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn rsx_open_toggle_keeps_page_vstack_gap() {
         use std::cell::RefCell;
         use std::rc::Rc;

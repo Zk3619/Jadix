@@ -6,6 +6,8 @@ Implemented: hardware DXGI adapter identity, D3D11 immediate-context serializati
 
 This is a graphics subset. Compute, shader-writable storage, depth/stencil, MSAA, compressed/3D/cube textures, indirect draws, timestamps, ray tracing, binding arrays, external textures, pipeline caches and transparent composition are not implemented. Optional Jadix GPU path pipelines use the existing CPU fallback. Unsupported operations fail rather than returning fake GPU work. Do not treat this as a complete WebGPU implementation or change the default backend until broader compatibility is covered.
 
+The `dx11` feature explicitly enables `windows/std`: its public transparent Windows error requires the standard `Error` implementation even when no other Windows backend is enabled. This is checked by the isolated `backend-dx11-native` feature matrix.
+
 Regression commands from the repository root:
 
 - cargo test --locked -p d3d11_probe --features native-wgpu sm5_register_tests

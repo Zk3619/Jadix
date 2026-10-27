@@ -1,17 +1,18 @@
 pub mod activate_registry;
 pub mod anchored_overlay;
+#[cfg(feature = "file-persistence")]
+pub mod autosave;
 pub mod block_on;
 pub mod clipboard;
 pub mod collapse_panel;
 pub mod controlled;
-pub mod document_registry;
-pub mod document_file;
 pub mod document_assets;
-pub mod editor_settings;
-pub mod autosave;
+pub mod document_file;
+pub mod document_registry;
 pub mod drag;
 pub mod drag_reorder;
 pub mod edge_scroll;
+pub mod editor_settings;
 pub mod element_pack;
 pub mod file_dialog;
 pub mod floating_kind;
@@ -19,7 +20,7 @@ pub mod floating_motion;
 pub mod focus_trap;
 pub mod font;
 pub mod hover_intent;
-#[cfg(feature = "svg")]
+#[cfg(all(feature = "svg", feature = "animation-path"))]
 pub mod icon_morph;
 pub mod icon_provider;
 pub mod icon_texture;
@@ -29,14 +30,18 @@ pub mod keyboard;
 pub mod keyed_overlay;
 pub mod layout_group;
 pub mod list_nav;
-#[cfg(feature = "lucide")]
+#[cfg(all(test, feature = "product-tests"))]
+#[allow(unexpected_cfgs)]
+#[path = "../../../jadix_lucide/src/utils/lucide.rs"]
 pub mod lucide;
-#[cfg(feature = "lucide-animated")]
+#[cfg(all(test, feature = "gallery-tests"))]
+#[allow(unexpected_cfgs)]
+#[path = "../../../jadix_lucide/src/utils/lucide_animated.rs"]
 pub mod lucide_animated;
 pub mod modal_motion;
 pub mod modal_shell;
 pub mod modal_surface;
-#[cfg(feature = "svg")]
+#[cfg(all(feature = "svg", feature = "animation-path"))]
 pub mod morph_icon;
 pub mod motion;
 pub mod overflow_fit;
@@ -88,11 +93,12 @@ pub use focus_trap::{
     activate_focus_trap, deactivate_focus_trap, focus_trap_ring_ids, sync_focus_trap,
     FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,
 };
-#[cfg(feature = "svg")]
+#[cfg(all(feature = "svg", feature = "animation-path"))]
 pub use icon_morph::{
     alloc_outputs, canonical_d, cubics_to_path_d, fit_icon, interp_linear, svg_to_icon, IconInput,
     IconNode, MorphError, MorphPlan,
 };
+pub use icon_provider::resolve_icon_svg as lucide_svg_inner;
 pub use icon_provider::{
     apply_bound_icon_name, apply_bound_icon_src, build_icon_from_src, build_icon_named,
     clear_icon_provider, clear_registered_icons, glyph_for_name, icon_named, icon_src,
@@ -100,6 +106,7 @@ pub use icon_provider::{
     with_icon_animations, with_icon_size, IconProvider, IconSource, ATTR_ICON_SRC,
     DEFAULT_ICON_SIZE_PX,
 };
+pub use icon_provider::{glyph_for_name as lucide_glyph, resolve_icon_svg, ATTR_ICON_NAME};
 pub use instance_id::resolve_instance_id;
 pub use keyed_overlay::{
     adopt_keyed_overlay, is_keyed_motion_item, item_template_id, mount_reactive_anchor,
@@ -109,19 +116,14 @@ pub use keyed_overlay::{
 pub use layout_group::{
     linear_slot_offset, slot_list_pose, slot_visual_offset, LayoutGroup, SlotListConfig, SlotPose,
 };
-pub use icon_provider::{glyph_for_name as lucide_glyph, resolve_icon_svg, ATTR_ICON_NAME};
-#[cfg(feature = "lucide")]
-pub use lucide::lucide_svg_inner;
-#[cfg(not(feature = "lucide"))]
-pub fn lucide_svg_inner(_name: &str) -> Option<&'static str> { None }
-#[cfg(feature = "lucide-animated")]
+#[cfg(all(test, feature = "gallery-tests"))]
 pub use lucide_animated::{
     animated_icon, animated_icon_names, animated_icon_recipe, ensure_animated_icon_texture,
     start_animated_icon, stop_animated_icon, subtree_needs_animated_icon_frame,
     sync_animated_icon_hover, tick_animated_icons_subtree, AnimatedIcon, AnimatedIconBuilder,
     ATTR_ANIMATED_ICON, ATTR_ANIMATED_ICON_STATE,
 };
-#[cfg(feature = "svg")]
+#[cfg(all(feature = "svg", feature = "animation-path"))]
 pub use morph_icon::{
     apply_bound_morph_abs_stroke, apply_bound_morph_from, apply_bound_morph_icon,
     apply_bound_morph_interp, apply_bound_morph_label, apply_bound_morph_progress,

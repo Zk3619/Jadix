@@ -35,7 +35,7 @@ fn browser_content() -> Element {
     {
         let url = std::env::var("JADIX_GALLERY_WEBVIEW_URL")
             .unwrap_or_else(|_| "https://www.bilibili.com/".into());
-        jadix::components::webview("gal-dock-browser", url)
+        jadix_components::components::webview("gal-dock-browser", url)
     }
     #[cfg(not(feature = "webview"))]
     {

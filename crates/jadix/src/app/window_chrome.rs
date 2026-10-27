@@ -13,45 +13,7 @@ use super::glass_params::{
     DEFAULT_AERO_REFLECTION, DEFAULT_BLUR_AMOUNT, DEFAULT_LUMINOSITY_OPACITY,
 };
 
-/// Windows backdrop material (system DWM on Win11, custom DComp recipes when requested).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub enum WindowBackdrop {
-    /// OS default (usually title-bar only).
-    Auto,
-    /// No system backdrop.
-    None,
-    /// Windows 11 Mica (`DWMSBT_MAINWINDOW`).
-    Mica,
-    /// Windows 11 Acrylic / frosted (`DWMSBT_TRANSIENTWINDOW`).
-    #[default]
-    Acrylic,
-    /// Windows 11 Mica Alt (`DWMSBT_TABBEDWINDOW`).
-    MicaAlt,
-    /// Custom Gaussian blur of the desktop (DirectComposition recipe).
-    Blur,
-    /// Windows 7 Aero glass recipe (DirectComposition).
-    Aero,
-}
-
-impl From<&str> for WindowBackdrop {
-    fn from(s: &str) -> Self {
-        match s.trim().to_ascii_lowercase().as_str() {
-            "mica" => Self::Mica,
-            "mica-alt" | "mica_alt" | "micaalt" => Self::MicaAlt,
-            "none" => Self::None,
-            "auto" => Self::Auto,
-            "blur" => Self::Blur,
-            "aero" => Self::Aero,
-            _ => Self::Acrylic,
-        }
-    }
-}
-
-impl From<String> for WindowBackdrop {
-    fn from(s: String) -> Self {
-        Self::from(s.as_str())
-    }
-}
+pub use jadix_window_materials::WindowBackdrop;
 
 /// Persistence identity for the primary window when [`Self::window_label`] is unset.
 pub const PRIMARY_WINDOW_LABEL: &str = "main";

@@ -100,7 +100,7 @@ pub struct ClassSet {
 }
 
 impl ClassSet {
-    pub(crate) fn set_base_dimension(
+    pub fn set_base_dimension(
         &mut self,
         slot: crate::style::UnitSlot,
         dim: crate::layout::dimension::CssDim,
@@ -320,7 +320,7 @@ pub fn apply_class_list(el: &mut Element, classes: &str) -> LayoutStatus {
 }
 
 /// Component defaults survive caller `class` replacement, before sheet and caller utilities.
-pub(crate) fn with_default_class_list(mut el: Element, classes: &str) -> Element {
+pub fn with_default_class_list(mut el: Element, classes: &str) -> Element {
     el.set_attr("jadix_default_class", classes);
     apply_class_list(&mut el, "");
     el
@@ -534,7 +534,7 @@ pub fn patch_class_set_base_paint(
     }
 }
 
-pub(crate) fn patch_class_set_base_layout(element: &mut Element) {
+pub fn patch_class_set_base_layout(element: &mut Element) {
     let display = element.style.display;
     let grow = element.style.flex_grow;
     let basis = element.style.flex_basis;
@@ -1440,12 +1440,7 @@ pub fn tick_active_css_transitions_subtree(
                 {
                     mark_hover_paint_dirty();
                 }
-                if spun
-                    || css_anim
-                    || css_trans
-                    || hover_edge
-                    || el.style != before
-                {
+                if spun || css_anim || css_trans || hover_edge || el.style != before {
                     // Paint-only motion must be a node-present dirty. StyleChanged with an
                     // empty damage list FullClears; a sibling Input PartialLoad would skip
                     // this icon and the retain angle jumps on the next Clear.
@@ -1459,10 +1454,7 @@ pub fn tick_active_css_transitions_subtree(
                         before.opacity,
                     );
                 }
-                if css_trans
-                    || el.style != before
-                    || hover_edge
-                {
+                if css_trans || el.style != before || hover_edge {
                     // Hover color leave is paint-only on an idle chip. Passing
                     // `collect_skip_live` skips the bust when a spinner ancestor
                     // marked the leaf live last stamp, and `reuse_idle` then
@@ -2021,7 +2013,12 @@ fn sync_class_variants_subtree_inner(
         if !frame.started {
             // SAFETY: exclusive subtree walk of the `el` passed to this function.
             let el = unsafe { &mut *ptr };
-            if let Some(width) = el.attrs.get("data-jadix-viewport-width").and_then(|value| value.parse::<f32>().ok()).filter(|width| width.is_finite() && *width > 0.0) {
+            if let Some(width) = el
+                .attrs
+                .get("data-jadix-viewport-width")
+                .and_then(|value| value.parse::<f32>().ok())
+                .filter(|width| width.is_finite() && *width > 0.0)
+            {
                 frame.responsive_width = width;
             }
             // Clone names so later `frame.*` writes do not fight borrows into the Frame.
@@ -2176,9 +2173,13 @@ fn sync_class_variants_subtree_inner(
                             .class_set
                             .as_ref()
                             .map(|classes| {
-                                classes.variants.iter()
+                                classes
+                                    .variants
+                                    .iter()
                                     .filter(|(selectors, _)| {
-                                        selectors.iter().all(|selector| rest.matches_selector(selector))
+                                        selectors
+                                            .iter()
+                                            .all(|selector| rest.matches_selector(selector))
                                     })
                                     .map(|(_, utility)| utility.clone())
                                     .collect()
@@ -3737,22 +3738,41 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn scroll_hover_keeps_button_caption_size_and_padding() {
         crate::core::reactivity::create_root(|| {
-            let mut root = Element::new().flex_col().w(400.0).h(200.0).text_size(22.0)
-                .child(Element::from(crate::components::button("scroll-caption")
-                    .variant("outline").size("sm").text("separator")));
+            let mut root = Element::new()
+                .flex_col()
+                .w(400.0)
+                .h(200.0)
+                .text_size(22.0)
+                .child(Element::from(
+                    crate::components::button("scroll-caption")
+                        .variant("outline")
+                        .size("sm")
+                        .text("separator"),
+                ));
             let mut layout = crate::layout::LayoutTree::new();
             layout.build_and_layout(&mut root, 400.0, 200.0, [-1.0; 2]);
             let size = root.children[0].children[0].text_style.size;
             let padding = root.children[0].style.padding;
             for mouse in [[20.0, 10.0], [-1.0; 2], [20.0, 10.0], [-1.0; 2]] {
                 let mut impact = LayoutStatus::Clean;
-                tick_active_css_transitions_subtree(&mut root, mouse, "", false,
-                    400.0, 200.0, [0.0; 2], &mut layout, &mut impact);
-                assert_eq!(root.children[0].children[0].text_style.size, size,
-                    "scroll hover must preserve the authored caption size");
+                tick_active_css_transitions_subtree(
+                    &mut root,
+                    mouse,
+                    "",
+                    false,
+                    400.0,
+                    200.0,
+                    [0.0; 2],
+                    &mut layout,
+                    &mut impact,
+                );
+                assert_eq!(
+                    root.children[0].children[0].text_style.size, size,
+                    "scroll hover must preserve the authored caption size"
+                );
                 assert_eq!(root.children[0].style.padding, padding);
                 layout.build_and_layout_fast(&mut root, 400.0, 200.0, mouse, true, false);
             }
@@ -3853,7 +3873,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn dimension_writes_survive_variant_restore_without_relayout() {
         use crate::core::tree::LayoutTree;
         use taffy::style::Dimension;
@@ -4149,7 +4169,14 @@ mod tests {
         crate::style::set_prefers_reduced_motion(Some(false));
         let _ = resolve_class_variants(&mut el, &VariantContext::default());
         assert!(
-            (el.style.opacity - if cfg!(feature = "animation-base") { 1.0 } else { 0.0 }).abs() < 0.01,
+            (el.style.opacity
+                - if cfg!(feature = "animation-base") {
+                    1.0
+                } else {
+                    0.0
+                })
+            .abs()
+                < 0.01,
             "base opacity restored when motion-reduce is off; got {}",
             el.style.opacity
         );
@@ -4540,15 +4567,18 @@ mod p1_utility_tests {
         let mut root = Element::new().w(200.0).h(48.0).child(box_el);
         let mut tree = crate::layout::layout_tree::LayoutTree::new();
         let result = tree.build_and_layout(&mut root, 200.0, 48.0, [-1.0, -1.0]);
-        let sheen =
-            |i: &crate::renderer::InstanceInput| i.color[3] >= 0.01 && i.glass[0] < 0.0;
+        let sheen = |i: &crate::renderer::InstanceInput| i.color[3] >= 0.01 && i.glass[0] < 0.0;
         let in_chrome: Vec<_> = result
             .input_chrome_instances
             .iter()
             .filter(|i| sheen(i))
             .collect();
         let in_instances: Vec<_> = result.instances.iter().filter(|i| sheen(i)).collect();
-        assert_eq!(in_chrome.len(), 1, "one continuous sheen above glyphs, not overlapping strips");
+        assert_eq!(
+            in_chrome.len(),
+            1,
+            "one continuous sheen above glyphs, not overlapping strips"
+        );
         assert_eq!(in_chrome[0].rect_size, [200.0, 48.0]);
         assert!(
             in_instances.is_empty(),
@@ -5469,19 +5499,58 @@ mod p1_utility_tests {
         let mut tree = crate::layout::LayoutTree::new();
         for _ in 0..3 {
             let mut element = with_class_list(
-                Element::new().w(400.0).h(200.0).transition("padding 200ms linear"),
+                Element::new()
+                    .w(400.0)
+                    .h(200.0)
+                    .transition("padding 200ms linear"),
                 "p-3 sm:p-4 lg:p-6",
             );
             let mut impact = LayoutStatus::Clean;
-            sync_class_variants_subtree(&mut element, [-1.0; 2], "", false, 1100.0, 600.0, &mut tree, &mut impact);
-            assert_eq!(crate::layout::lp_kind(element.style.padding.top), crate::layout::DimKind::Length(24.0),
-                "mounting a page must not animate from the unselected base breakpoint");
+            sync_class_variants_subtree(
+                &mut element,
+                [-1.0; 2],
+                "",
+                false,
+                1100.0,
+                600.0,
+                &mut tree,
+                &mut impact,
+            );
+            assert_eq!(
+                crate::layout::lp_kind(element.style.padding.top),
+                crate::layout::DimKind::Length(24.0),
+                "mounting a page must not animate from the unselected base breakpoint"
+            );
             assert!(!element.transition_snapshot.has_active_tweens());
-            sync_class_variants_subtree(&mut element, [-1.0; 2], "", false, 900.0, 600.0, &mut tree, &mut impact);
-            assert_eq!(crate::layout::lp_kind(element.style.padding.top), crate::layout::DimKind::Length(24.0));
+            sync_class_variants_subtree(
+                &mut element,
+                [-1.0; 2],
+                "",
+                false,
+                900.0,
+                600.0,
+                &mut tree,
+                &mut impact,
+            );
+            assert_eq!(
+                crate::layout::lp_kind(element.style.padding.top),
+                crate::layout::DimKind::Length(24.0)
+            );
             crate::style::advance_css_transition_timeline_ms(100.0);
-            sync_class_variants_subtree(&mut element, [-1.0; 2], "", false, 900.0, 600.0, &mut tree, &mut impact);
-            assert_eq!(crate::layout::lp_kind(element.style.padding.top), crate::layout::DimKind::Length(20.0));
+            sync_class_variants_subtree(
+                &mut element,
+                [-1.0; 2],
+                "",
+                false,
+                900.0,
+                600.0,
+                &mut tree,
+                &mut impact,
+            );
+            assert_eq!(
+                crate::layout::lp_kind(element.style.padding.top),
+                crate::layout::DimKind::Length(20.0)
+            );
         }
         crate::style::set_css_transition_virtual_timeline(false);
     }

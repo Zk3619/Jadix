@@ -2,11 +2,11 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use jadix::component;
-use jadix::components::*;
 use jadix::core::reactivity::{use_signal, Signal};
 use jadix::core::tree::Element;
 use jadix::style::parse_color;
 use jadix::ui;
+use jadix_components::components::*;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Op {

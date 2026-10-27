@@ -1,5 +1,5 @@
 use jadix::app::reactive::{bind_text, reactive_view};
-use jadix::prelude::*;
+use jadix_components::prelude::*;
 use std::{path::PathBuf, rc::Rc};
 
 #[derive(Clone, PartialEq)]
@@ -395,14 +395,14 @@ fn build() -> Element {
                 )
                 .font_family("monospace"),
                 DocumentEditMode::Preview => {
-                    jadix::components::html_document::html_document_view_with_assets(
+                    jadix_components::components::html_document::html_document_view_with_assets(
                         format!("md-html-view-{}", file.generation),
                         content_workspace.html.peek(),
                         file.path.as_ref().and_then(|path| path.parent()),
                     )
                 }
                 DocumentEditMode::LivePreview => {
-                    jadix::components::html_document::html_document_editor_with_assets(
+                    jadix_components::components::html_document::html_document_editor_with_assets(
                         format!("md-html-{}", file.generation),
                         content_workspace.html,
                         file.path.as_ref().and_then(|path| path.parent()),

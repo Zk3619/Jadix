@@ -1,274 +1,110 @@
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
 use super::JadixUserEvent;
-#[cfg(all(any(debug_assertions, test), feature = "hot-reload"))]
-use serde::Deserialize;
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
+use jadix_hot_reload::HotReloadCommand;
+#[cfg(any(all(debug_assertions, feature = "hot-reload"), test))]
+use jadix_hot_reload::TemplatePatchMsg;
+pub use jadix_hot_reload::{StyleAttr, TemplateFragment, TextReplacement};
+#[cfg(any(all(debug_assertions, feature = "hot-reload"), test))]
 use std::collections::HashMap;
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
-use std::io::{BufRead, BufReader, Read};
-#[cfg(all(debug_assertions, feature = "hot-reload"))]
-use std::net::TcpListener;
-#[cfg(all(debug_assertions, feature = "hot-reload"))]
-use std::sync::atomic::{AtomicUsize, Ordering};
-#[cfg(all(debug_assertions, feature = "hot-reload"))]
-use std::sync::mpsc::{self, Receiver};
-#[cfg(all(debug_assertions, feature = "hot-reload"))]
-use std::sync::Arc;
-
-#[cfg(all(debug_assertions, feature = "hot-reload"))]
 const DEFAULT_ADDR: &str = "127.0.0.1:39091";
-
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
 pub(super) struct HotReloadState {
-    rx: Receiver<HotReloadCommand>,
-    pending_count: Arc<AtomicUsize>,
+    receiver: jadix_hot_reload::HotReloadReceiver,
 }
-
 #[cfg(all(debug_assertions, feature = "hot-reload"))]
 impl HotReloadState {
-    /// `wake`: after TCP thread receives a patch, wake the main event loop (under `ControlFlow::Wait` it may otherwise block until user input).
     pub(super) fn new() -> Self {
-        let (tx, rx) = mpsc::channel();
-        let pending_count = Arc::new(AtomicUsize::new(0));
-        let pending_count_ref = Arc::clone(&pending_count);
         let addr =
             std::env::var("JADIX_HOT_RELOAD_ADDR").unwrap_or_else(|_| DEFAULT_ADDR.to_string());
-        std::thread::spawn(move || {
-            let listener = match TcpListener::bind(&addr) {
-                Ok(v) => v,
-                Err(err) => {
-                    super::hmr_log::error(&format!("bind failed on {addr}: {err}"));
-                    return;
-                }
-            };
-            super::hmr_log::ready(&addr);
-            for conn in listener.incoming() {
-                let stream = match conn {
-                    Ok(v) => v,
-                    Err(err) => {
-                        super::hmr_log::error(&format!("accept failed: {err}"));
-                        continue;
-                    }
-                };
-                let _ = stream.set_read_timeout(Some(std::time::Duration::from_secs(2)));
-                let mut reader = BufReader::new(stream);
-                let mut line = String::new();
-                loop {
-                    line.clear();
-                    let n = match reader
-                        .by_ref()
-                        .take(4 * 1024 * 1024 + 1)
-                        .read_line(&mut line)
-                    {
-                        Ok(v) => v,
-                        Err(_) => break,
-                    };
-                    if n == 0 || n > 4 * 1024 * 1024 {
-                        break;
-                    }
-                    if let Some(cmd) = parse_command(line.trim()) {
-                        pending_count_ref.fetch_add(1, Ordering::Relaxed);
-                        if tx.send(cmd).is_err() {
-                            pending_count_ref.fetch_sub(1, Ordering::Relaxed);
-                            return;
-                        }
-                        let _ = super::ui_bridge::send_user_event(JadixUserEvent::HotReloadWake);
-                    }
-                }
-            }
-        });
-        Self { rx, pending_count }
+        Self {
+            receiver: jadix_hot_reload::HotReloadReceiver::spawn(
+                addr,
+                || {
+                    let _ = super::ui_bridge::send_user_event(JadixUserEvent::HotReloadWake);
+                },
+                super::hmr_log::ready,
+                super::hmr_log::error,
+            ),
+        }
     }
-
     pub(super) fn drain_pending(&self) -> HotReloadBatch {
         let mut batch = HotReloadBatch::default();
-        let mut by_template_id: HashMap<String, TemplateFragment> = HashMap::new();
-        let mut asset_paths: Vec<String> = Vec::new();
-        while let Ok(cmd) = self.rx.try_recv() {
+        let mut by_id = HashMap::new();
+        let mut assets = Vec::new();
+        while let Ok(command) = self.receiver.try_recv() {
             batch.count += 1;
-            self.pending_count.fetch_sub(1, Ordering::Relaxed);
-            match cmd {
+            match command {
                 HotReloadCommand::Reload => batch.force_reload = true,
                 HotReloadCommand::TemplatePatch(patch) => {
-                    ingest_template_patch(&mut batch, patch, &mut by_template_id);
+                    ingest_template_patch(&mut batch, patch, &mut by_id)
                 }
                 HotReloadCommand::AssetReload(paths) => {
-                    for p in paths {
-                        if !asset_paths.iter().any(|x| x == &p) {
-                            asset_paths.push(p);
+                    for path in paths {
+                        if !assets.contains(&path) {
+                            assets.push(path);
                         }
                     }
                 }
                 HotReloadCommand::StylesheetReload(paths) => {
-                    for p in paths {
-                        if !batch.stylesheet_paths.iter().any(|x| x == &p) {
-                            batch.stylesheet_paths.push(p);
+                    for path in paths {
+                        if !batch.stylesheet_paths.contains(&path) {
+                            batch.stylesheet_paths.push(path);
                         }
                     }
                 }
             }
         }
-        batch.merged_templates = by_template_id.into_values().collect();
+        batch.merged_templates = by_id.into_values().collect();
         batch
             .merged_templates
             .sort_by(|left, right| left.id.cmp(&right.id));
-        batch.asset_paths = asset_paths;
+        batch.asset_paths = assets;
         batch
     }
-
     pub(super) fn has_pending(&self) -> bool {
-        self.pending_count.load(Ordering::Relaxed) > 0
+        self.receiver.has_pending()
     }
 }
-
 #[cfg(all(debug_assertions, not(feature = "hot-reload")))]
 pub(super) struct HotReloadState;
-
 #[cfg(all(debug_assertions, not(feature = "hot-reload")))]
 impl HotReloadState {
     pub(super) fn new() -> Self {
         Self
     }
-
     pub(super) fn drain_pending(&self) -> HotReloadBatch {
         HotReloadBatch::default()
     }
-
     pub(super) fn has_pending(&self) -> bool {
         false
     }
 }
-
 #[cfg(any(debug_assertions, test))]
 #[derive(Debug, Clone, Default)]
 pub(super) struct HotReloadBatch {
     pub(super) count: usize,
-    /// If this batch contains a `TemplatePatch`, record one source path (logging only).
     pub(super) last_patch_file: String,
     pub(super) force_reload: bool,
     pub(super) merged_templates: Vec<TemplateFragment>,
     pub(super) asset_paths: Vec<String>,
     pub(super) stylesheet_paths: Vec<String>,
 }
-
-#[cfg(all(debug_assertions, feature = "hot-reload"))]
-#[derive(Debug, Clone)]
-pub(super) enum HotReloadCommand {
-    Reload,
-    TemplatePatch(TemplatePatchMsg),
-    AssetReload(Vec<String>),
-    StylesheetReload(Vec<String>),
-}
-
-#[cfg(any(all(debug_assertions, feature = "hot-reload"), test))]
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "hot-reload", derive(Deserialize))]
-pub(super) struct TemplatePatchMsg {
-    pub(super) file: String,
-    #[cfg_attr(feature = "hot-reload", serde(default))]
-    pub(super) templates: Vec<TemplateFragment>,
-}
-
-#[cfg(any(debug_assertions, test))]
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "hot-reload", derive(Deserialize))]
-pub(super) struct TemplateFragment {
-    pub(super) id: String,
-    pub(super) hash: String,
-    pub(super) len: usize,
-    #[cfg_attr(feature = "hot-reload", serde(default))]
-    pub(super) index: usize,
-    #[cfg_attr(feature = "hot-reload", serde(default))]
-    pub(super) text_literals: Vec<String>,
-    #[cfg_attr(feature = "hot-reload", serde(default))]
-    pub(super) text_replacements: Vec<TextReplacement>,
-    #[cfg_attr(feature = "hot-reload", serde(default))]
-    pub(super) style_attrs: Vec<StyleAttr>,
-}
-
-#[cfg(any(debug_assertions, test))]
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "hot-reload", derive(Deserialize))]
-pub(super) struct StyleAttr {
-    #[cfg_attr(feature = "hot-reload", serde(default))]
-    pub(super) element_index: usize,
-    pub(super) name: String,
-    pub(super) value: String,
-}
-
-#[cfg(any(debug_assertions, test))]
-#[derive(Debug, Clone)]
-#[cfg_attr(feature = "hot-reload", derive(Deserialize))]
-pub(super) struct TextReplacement {
-    #[cfg_attr(feature = "hot-reload", serde(default))]
-    pub(super) index: usize,
-    pub(super) from: String,
-    pub(super) to: String,
-}
-
-#[cfg(all(debug_assertions, feature = "hot-reload"))]
-#[derive(Debug, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum IncomingMessage {
-    Reload,
-    TemplatePatch {
-        file: String,
-        #[serde(default)]
-        templates: Vec<TemplateFragment>,
-    },
-    AssetReload {
-        #[serde(default)]
-        paths: Vec<String>,
-    },
-    StylesheetReload {
-        #[serde(default)]
-        paths: Vec<String>,
-    },
-}
-
-/// WP-R.6: `templates: []` means the file parsed but has no `ui!` blocks — must full-tree `rebuild_ui`,
-/// do not inject vague/empty patches into reactive slots.
 #[cfg(any(all(debug_assertions, feature = "hot-reload"), test))]
 fn ingest_template_patch(
     batch: &mut HotReloadBatch,
     patch: TemplatePatchMsg,
-    by_template_id: &mut std::collections::HashMap<String, TemplateFragment>,
+    by_id: &mut HashMap<String, TemplateFragment>,
 ) {
     if batch.last_patch_file.is_empty() {
         batch.last_patch_file = patch.file.clone();
     }
     if patch.templates.is_empty() {
-        // CLI sends `templates: []` when nothing in the file changed (poll after
-        // a successful patch, or a no-op save). That is not a structural rebuild
-        // request — `app_builder()` only emits `reactive_view` placeholders and
-        // blanks Gallery's section body until the user re-enters the page.
         return;
     }
-    for tpl in patch.templates {
-        let _declared_fragment_len = tpl.len;
-        by_template_id.insert(tpl.id.clone(), tpl);
-    }
-}
-
-#[cfg(all(debug_assertions, feature = "hot-reload"))]
-fn parse_command(raw: &str) -> Option<HotReloadCommand> {
-    if raw.eq_ignore_ascii_case("reload") {
-        return Some(HotReloadCommand::Reload);
-    }
-    let msg: IncomingMessage = serde_json::from_str(raw).ok()?;
-    match msg {
-        IncomingMessage::Reload => Some(HotReloadCommand::Reload),
-        IncomingMessage::TemplatePatch { file, templates } => {
-            Some(HotReloadCommand::TemplatePatch(TemplatePatchMsg {
-                file,
-                templates,
-            }))
-        }
-        IncomingMessage::AssetReload { paths } => Some(HotReloadCommand::AssetReload(paths)),
-        IncomingMessage::StylesheetReload { paths } => {
-            Some(HotReloadCommand::StylesheetReload(paths))
-        }
+    for template in patch.templates {
+        by_id.insert(template.id.clone(), template);
     }
 }
 

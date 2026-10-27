@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! MessageScroller: `defaultScrollPosition=end` must paint the live edge, not an empty
 //! tail from `min-h-full` / inflated `content_h`.
 
@@ -365,18 +365,27 @@ fn scaled_message_scroller_end_keeps_messages_in_view() {
         for frame in 0..6 {
             let mut impact = LayoutStatus::Clean;
             sync_reactive_elements_subtree(
-                &mut root, &mut tree, &mut impact, 800.0, 700.0, [0.0, 0.0],
+                &mut root,
+                &mut tree,
+                &mut impact,
+                800.0,
+                700.0,
+                [0.0, 0.0],
             );
             let result = tree.build_and_layout(&mut root, 800.0, 700.0, [-1.0, -1.0]);
             publish_scroll_metrics(&result.scroll_metrics);
             if frame >= 2 {
                 let viewport = find_slot_ms(&root, "message-scroller-viewport").expect("viewport");
-                let viewport = crate::core::tree::visual_paint_aabb(viewport, viewport.paint_scroll_acc);
-                assert!(result.text_nodes.iter().any(|text| {
-                    text.text.contains("MessageScrollerContent sets role")
-                        && text.y < viewport[1] + viewport[3]
-                        && text.y + text.height * text.paint_scale > viewport[1]
-                }), "frame {frame}: scaled live edge must contain message text");
+                let viewport =
+                    crate::core::tree::visual_paint_aabb(viewport, viewport.paint_scroll_acc);
+                assert!(
+                    result.text_nodes.iter().any(|text| {
+                        text.text.contains("MessageScrollerContent sets role")
+                            && text.y < viewport[1] + viewport[3]
+                            && text.y + text.height * text.paint_scale > viewport[1]
+                    }),
+                    "frame {frame}: scaled live edge must contain message text"
+                );
             }
         }
     });
@@ -1354,6 +1363,26 @@ fn message_scroller_latest_enter_t0_must_not_punch_thread_and_hide_must_fade() {
                 hide_mid > 0.08 && hide_mid < 0.92,
                 "hide must fade through a mid opacity, got {hide_mid}"
             );
+
+            for time in [280.0, 312.0, 344.0, 376.0] {
+                crate::style::set_css_transition_timeline_ms(time);
+                production_jump_chrome_pass(&mut root, &mut tree, &mut impact);
+                sync_message_scroller_follow_after_layout(&mut root, &mut tree);
+                let scene = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0; 2]);
+                let button = find_slot(&root, "message-scroller-button").unwrap();
+                let key = u64::from(button.layout_node.unwrap());
+                let paint = scene.node_paints.iter().find(|paint| paint.key == key).unwrap();
+                let fill = scene.instances[paint.instance.0..paint.instance.1].iter()
+                    .find(|instance| instance.color[3] > 0.0 && instance.rect_size[0] > 20.0);
+                if button.style.opacity >= 0.01 {
+                    let fill = fill.expect("fading button fill");
+                    assert!((fill.color[3] - button.style.bg_color[3] * button.style.opacity).abs() < 0.01,
+                        "Latest fill must fade with its label at {time}ms: fill={}, opacity={}",
+                        fill.color[3], button.style.opacity);
+                } else {
+                    assert!(fill.is_none(), "hidden button must leave no opaque plate");
+                }
+            }
 
             crate::style::set_css_transition_timeline_ms(400.0);
             crate::app::damage::clear_frame_paint_nodes();
@@ -3797,7 +3826,11 @@ fn run_nested_rows_append(behavior: &'static str) {
             .map(|(_, _, max_scroll, _)| max_scroll[1])
             .unwrap_or(0.0);
         if behavior == "smooth" {
-            let target = use_signal(&crate::core::scroll_viewport::scroll_target_y_signal_key(viewport), || 0.0_f32).peek();
+            let target = use_signal(
+                &crate::core::scroll_viewport::scroll_target_y_signal_key(viewport),
+                || 0.0_f32,
+            )
+            .peek();
             assert_eq!(offset.peek(), sy_before);
             assert!((target - max_y).abs() < 0.5 && target > sy_before + 4.0);
             offset.set_silent((sy_before + target) * 0.5);

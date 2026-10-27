@@ -777,7 +777,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn hoisted_exit_keeps_close_button_hover_before_relayout() {
         crate::core::reactivity::create_root(|| {
             crate::style::set_css_transition_virtual_timeline(true);
@@ -789,9 +789,11 @@ mod tests {
                     .p(8.0)
                     .flex_col()
                     .child(
-                        Element::from(crate::components::button::button("hoisted-close").text("Close"))
-                            .w(160.0)
-                            .h(32.0),
+                        Element::from(
+                            crate::components::button::button("hoisted-close").text("Close"),
+                        )
+                        .w(160.0)
+                        .h(32.0),
                     )
             };
             let mut tree = crate::layout::LayoutTree::new();

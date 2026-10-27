@@ -70,6 +70,8 @@ vendor/winit-win32/target/
 docs/*
 !docs/.gitkeep
 !docs/async-architecture.md
+!docs/state-management.md
+!docs/remote-assets.md
 development-docs/
 
 !scripts/

@@ -1,7 +1,9 @@
 //! WP-3.12：`<canvas>` / `canvas()` 双书写面可编译。
 
+#[cfg(feature = "macros")]
 use jadix::prelude::*;
 
+#[cfg(feature = "macros")]
 #[test]
 fn canvas_tag_and_builder_compile() {
     let _b: Element = canvas()
@@ -27,6 +29,7 @@ fn canvas_tag_and_builder_compile() {
     let _: Element = el;
 }
 
+#[cfg(feature = "macros")]
 #[test]
 fn scene3d_tag_and_builder_compile() {
     let _b: Element = scene3d().w(80.0).h(60.0).into();
@@ -36,6 +39,7 @@ fn scene3d_tag_and_builder_compile() {
     let _: Element = el;
 }
 
+#[cfg(feature = "macros")]
 #[test]
 fn shader_tag_and_builder_compile() {
     const WGSL: &str = r#"

@@ -1,11 +1,10 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Paint-only collect can replay a fingerprint display list for clean sibling subtrees
 //! (GPUI `Entity::cached` analog — skip collect, not omit pixels).
 
 use crate::app::frame_stats::{last_skipped_siblings, reset_collect_skip_counters};
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
 use crate::components::input_adornment::input_adornment;
-use crate::utils::text_edit::sync_text_edit_paint_subtree;
 use crate::components::scroll_area::scroll_area;
 use crate::core::reactivity::use_signal;
 use crate::core::scroll_viewport::{scroll_offset_y_signal_key, SCROLL_VIEWPORT_FOCUS_PREFIX};
@@ -16,6 +15,7 @@ use crate::primitives::r#box::{hstack, vstack};
 use crate::renderer::font_loader;
 use crate::style::sync_class_variants_subtree;
 use crate::text::install_shared_font_system;
+use crate::utils::text_edit::sync_text_edit_paint_subtree;
 
 #[test]
 fn dirty_canvas_repaints_without_scroll_or_style_changes() {
@@ -33,7 +33,10 @@ fn dirty_canvas_repaints_without_scroll_or_style_changes() {
         })
         .into();
     let paint_id = canvas.attrs[crate::primitives::canvas::ATTR_CANVAS_PAINT].clone();
-    let sibling = Element::new().w(32.0).h(32.0).bg("blue")
+    let sibling = Element::new()
+        .w(32.0)
+        .h(32.0)
+        .bg("blue")
         .child(Element::new().w(12.0).h(12.0).bg("green"));
     let mut root = Element::new().w(128.0).h(64.0).child(canvas).child(sibling);
     let mut tree = LayoutTree::new();
@@ -46,12 +49,23 @@ fn dirty_canvas_repaints_without_scroll_or_style_changes() {
     reset_collect_skip_counters();
     crate::primitives::canvas::mark_canvas_dirty_hex(&paint_id);
     tree.build_and_layout_fast(&mut root, 128.0, 64.0, [-1.0; 2], true, false);
-    assert_eq!(paints.get(), before + 1, "pointer damage must reach canvas paint immediately");
-    assert!(last_skipped_siblings() >= 1, "clean siblings must retain their display lists");
+    assert_eq!(
+        paints.get(),
+        before + 1,
+        "pointer damage must reach canvas paint immediately"
+    );
+    assert!(
+        last_skipped_siblings() >= 1,
+        "clean siblings must retain their display lists"
+    );
     for _ in 0..3 {
         tree.build_and_layout_fast(&mut root, 128.0, 64.0, [-1.0; 2], true, false);
     }
-    assert_eq!(paints.get(), before + 1, "a clean canvas must stop repainting");
+    assert_eq!(
+        paints.get(),
+        before + 1,
+        "a clean canvas must stop repainting"
+    );
 }
 
 #[test]
@@ -231,7 +245,6 @@ fn retained_collect_history_matches_uncached_output() {
         }
     }
 }
-
 #[test]
 fn retained_collect_structural_history_preserves_hits_and_reclaims_nodes() {
     fn fixture() -> Element {
@@ -340,7 +353,6 @@ fn retained_collect_structural_history_preserves_hits_and_reclaims_nodes() {
         }
     }
 }
-
 #[test]
 fn paint_only_skips_clean_sibling_subtree() {
     reset_collect_skip_counters();
@@ -2208,7 +2220,7 @@ fn paint_only_skip_must_not_drop_stacked_portal_bands() {
 
 const DRAG_CHIP: [f32; 4] = [1.0, 0.45, 0.0, 1.0];
 
-#[cfg(feature = "dnd")]
+#[cfg(feature = "product-tests")]
 fn page_with_drag_overlay() -> Element {
     let _product = crate::utils::drag::drag_overlay();
     let page = Element::new()
@@ -2241,7 +2253,7 @@ fn drag_chip_instance(
 
 /// Drag overlay is a collect side channel (not stored in the fingerprint DL).
 /// Skipping an ancestor freezes the ghost at last-frame `overlay_pos` / translate.
-#[cfg(feature = "dnd")]
+#[cfg(feature = "product-tests")]
 #[test]
 fn paint_only_skip_must_not_freeze_drag_overlay() {
     reset_collect_skip_counters();
@@ -3432,4 +3444,3 @@ fn scroll_replay_rotated_text_matches_fresh_collect() {
         }
     }
 }
-

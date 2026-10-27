@@ -290,12 +290,14 @@ Ubuntu 智能拼音的候选文字按系统提供的 preedit 实时显示；`Pre
 
 ## 最小示例 | Minimal Example
 
+R2 已将产品控件迁入 `jadix_components`，高层 DnD 迁入 `jadix_dnd`，图标统一为 `jadix_lucide`。产品默认支持 Builder/Props，使用 RSX 时显式开启产品 `macros` feature；基础原语仍由 `jadix` 提供。图标应用启动时调用 `jadix_lucide::install()`。这些是当前源码消费入口，不代表已发布 registry 版本。
+
 ```rust
 #![allow(non_snake_case)]
 
 use jadix::component;
 use jadix::core::reactivity::use_signal;
-use jadix::ui;
+use jadix_components::prelude::*;
 
 #[component]
 fn Counter() -> jadix::core::tree::Element {
@@ -321,10 +323,10 @@ fn main() {
 同一棵树也可用 **Builder（无类 HTML 标签）** 拼装，并与 `ui!` 互嵌，例如：
 
 ```rust
-use jadix::components::button;
+use jadix_components::button;
 use jadix::core::tree::Element;
 use jadix::primitives::r#box::vstack;
-use jadix::ui;
+use jadix_components::prelude::*;
 
 fn toolbar() -> Element {
     Element::from(
@@ -346,7 +348,7 @@ fn toolbar() -> Element {
 Builder 文本入口直接接收 Signal 或闭包；`text(count)`、`TextBuilder::new(count)` 与 `label("id").text(count)` 都走叶子绑定。`get()` 会订阅当前 effect/Memo，但把其结果传给普通 Builder 不会另建叶子绑定；`ui!` 可以将 tracked 表达式自动降为叶子。Memo / StoreField 用闭包：`text(move || memo.get().to_string())`。
 
 ```rust
-use jadix::prelude::*;
+use jadix_components::prelude::*;
 
 let count = create_signal(0);
 let row: Element = vstack()
@@ -368,7 +370,7 @@ let row: Element = vstack()
 
 ```rust
 use jadix::core::reactivity::use_signal;
-use jadix::ui;
+use jadix_components::prelude::*;
 
 fn FineGrainedDemo() -> jadix::core::tree::Element {
     let selected = use_signal("selected", || "default".to_string());

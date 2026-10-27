@@ -22,6 +22,12 @@ pub const fn remote_asset_enabled() -> bool {
 /// Blocking is OK: the Image path runs this on a worker via [`crate::app::spawn_blocking`].
 pub trait RemoteAssetFetcher: Send + Sync {
     fn fetch(&self, url: &str) -> Result<Vec<u8>, String>;
+
+    /// Share immutable encoded bytes across consumers. Existing adapters inherit
+    /// the allocating fallback; cache adapters can return their retained bytes.
+    fn fetch_shared(&self, url: &str) -> Result<Arc<[u8]>, String> {
+        self.fetch(url).map(Arc::from)
+    }
 }
 
 impl<F> RemoteAssetFetcher for F
@@ -54,17 +60,26 @@ pub fn remote_asset_fetcher_installed() -> bool {
 /// Does not perform I/O itself. Errors if the URL is not `http(s)` or no fetcher is installed.
 pub fn fetch_remote_bytes(url: &str) -> Result<Vec<u8>, String> {
     let url = url.trim();
+    installed_fetcher(url)?.fetch(url)
+}
+
+/// Fetch shared encoded bytes on a worker, using the same installed adapter.
+pub fn fetch_remote_bytes_shared(url: &str) -> Result<Arc<[u8]>, String> {
+    let url = url.trim();
+    installed_fetcher(url)?.fetch_shared(url)
+}
+
+fn installed_fetcher(url: &str) -> Result<Arc<dyn RemoteAssetFetcher>, String> {
     if !is_remote_src(url) {
         return Err("not an http(s) URL".into());
     }
-    let fetcher = FETCHER
+    FETCHER
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
         .ok_or_else(|| {
             "no RemoteAssetFetcher installed (call jadix::set_remote_asset_fetcher)".to_string()
-        })?;
-    fetcher.fetch(url)
+        })
 }
 
 #[cfg(test)]

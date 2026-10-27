@@ -3,8 +3,8 @@
 use crate::core::tree::Element;
 use crate::layout::layout_tree::LayoutTree;
 use crate::layout::layout_tree::{
-    ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL, ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, ATTR_PORTAL_SLOT,
-    PORTAL_LAYER_ID, escapes_ancestor_overflow, hoist_portal_subtrees,
+    escapes_ancestor_overflow, hoist_portal_subtrees, ATTR_HOISTED_MOUNT, ATTR_HOISTED_PORTAL,
+    ATTR_PORTAL_KEY, ATTR_PORTAL_MOUNT, ATTR_PORTAL_SLOT, PORTAL_LAYER_ID,
 };
 
 fn portal_layer(root: &Element) -> Option<&Element> {
@@ -14,7 +14,35 @@ fn portal_layer(root: &Element) -> Option<&Element> {
 }
 
 #[test]
-#[cfg(feature = "components")]
+fn prepared_portal_removal_keeps_remaining_hud_layout_during_scroll() {
+    let mut hover = Element::new().w(222.0).h(46.0).template_id("closing-hover");
+    hover.set_attr("jadix_portal", "1");
+    hover.set_attr(ATTR_PORTAL_KEY, "closing-hover");
+    let hud = crate::utils::viewport_portal_stage(
+        "persistent-hud",
+        Element::new().absolute().right(12.0).bottom(12.0)
+            .w(320.0).h(150.0).template_id("persistent-hud-panel"),
+        1_000_000,
+    );
+    let mut root = Element::new().w(1000.0).h(700.0)
+        .child(Element::new().w(0.0).h(0.0).child(hover))
+        .child(Element::new().w(0.0).h(0.0).child(hud));
+    let mut tree = LayoutTree::new();
+    tree.build_and_layout(&mut root, 1000.0, 700.0, [-1.0; 2]);
+    let rebuilds = tree.full_rebuilds;
+    let before = find_by_tid(&root, "persistent-hud-panel").unwrap().layout_bounds;
+    root.children[0].children.clear();
+    let changed = hoist_portal_subtrees(&mut root);
+    assert!(changed > 0);
+    tree.note_portals_prepared(true);
+    tree.build_and_layout_fast_ex(&mut root, 1000.0, 700.0, [-1.0; 2], true, true, None);
+    assert_eq!(find_by_tid(&root, "persistent-hud-panel").unwrap().layout_bounds, before);
+    assert_eq!(tree.full_rebuilds, rebuilds);
+    assert_eq!(count_in_layer(&root), 1);
+}
+
+#[test]
+#[cfg(feature = "product-tests")]
 fn persistent_hud_survives_floating_portal_and_reactive_refresh() {
     use crate::core::reactivity::{create_effect, create_root, use_signal};
     use std::{cell::RefCell, rc::Rc};
@@ -449,11 +477,9 @@ fn hoist_unknown_mount_falls_back_to_root_layer() {
 
     assert_eq!(hoist_portal_subtrees(&mut root), 1);
     assert_eq!(count_in_layer(&root), 1);
-    assert!(
-        find_by_tid(&root, "orphan-portal")
-            .map(|n| { n.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1") })
-            .unwrap_or(false)
-    );
+    assert!(find_by_tid(&root, "orphan-portal")
+        .map(|n| { n.attrs.get(ATTR_HOISTED_PORTAL).map(|s| s.as_str()) == Some("1") })
+        .unwrap_or(false));
 }
 
 #[test]
@@ -1022,14 +1048,14 @@ fn second_portal_joins_existing_layer_without_slotmap_panic() {
     let mut root = Element::new().w(800.0).h(600.0).child(page).child(island);
 
     let mut tree = LayoutTree::new();
-    tree.note_portals_prepared();
+    tree.note_portals_prepared(false);
     let _ = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
     assert_eq!(count_in_layer(&root), 1);
     let rebuilds_after_cold = tree.full_rebuilds;
 
     // A stable AppState frame skips its duplicate hoist, but that hint must
     // expire before a subsequent standalone layout introduces a new portal.
-    tree.note_portals_prepared();
+    tree.note_portals_prepared(false);
     tree.build_and_layout_fast_ex(&mut root, 800.0, 600.0, [0.0, 0.0], true, true, None);
 
     let mut plus_n = Element::new()

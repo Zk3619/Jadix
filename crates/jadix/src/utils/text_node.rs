@@ -158,7 +158,7 @@ mod icon_defaults_tests {
         assert!(el.pointer_events_mode().targets_self());
     }
 
-    #[cfg(feature = "lucide")]
+    #[cfg(feature = "product-tests")]
     #[test]
     fn lucide_named_icon_sets_attr_from_name_only() {
         let el = build_lucide_icon_text_node("chevron-down");

@@ -1,0 +1,17 @@
+[package]
+name = "jadix_hot_reload"
+version.workspace = true
+edition.workspace = true
+description = "Framework-neutral hot-reload protocol and receiver"
+license.workspace = true
+repository.workspace = true
+
+include = [
+  "/Cargo.toml",
+  "/LICENSE",
+  "/src/**/*",
+]
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true

@@ -52,6 +52,7 @@ ignored = ["cfg_aliases"]
 [features]
 gles-angle = ["gles"]
 dx11 = [
+    "windows/std",
     "dep:parking_lot",
     "naga/hlsl-out",
     "windows/Win32_Foundation",

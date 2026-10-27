@@ -1,0 +1,27 @@
+[package]
+name = "jadix_dnd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Independent Jadix UI product with optional macro authoring"
+readme = "README.md"
+
+[lib]
+test = false
+
+[features]
+default = []
+macros = ["jadix/macros"]
+
+[dependencies]
+jadix = { workspace = true, features = ["drag"] }
+taffy.workspace = true
+winit.workspace = true
+
+[[test]]
+name = "drag_rsx"
+required-features = ["macros"]
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("product-tests"))'] }

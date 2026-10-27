@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Diagnose: gallery local scrim frost has no high-contrast host glyphs.
 //!
 //! Loop = layout the *real* `label()` + Portal tree (not a `.text()` stub) and check

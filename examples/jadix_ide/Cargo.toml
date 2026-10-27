@@ -6,7 +6,8 @@ license.workspace = true
 publish = false
 
 [dependencies]
-jadix = { workspace = true, features = ["components", "backend-dx12", "backend-gles", "backend-metal", "theme-shadcn", "code", "code-lsp", "svg", "text-undo", "bundled-lucide", "syntax-highlighting", "document-diff", "file-dialog"] }
+jadix_components = { workspace = true, features = ["macros", "dnd", "document-editing", "document-diff", "document-science", "code", "code-lsp", "file-persistence"] }
+jadix = { workspace = true, features = ["file-persistence", "images", "native-clipboard", "backend-dx12", "backend-gles", "backend-metal", "theme-shadcn", "code", "code-lsp", "svg", "text-undo", "syntax-highlighting", "document-diff", "file-dialog"] }
 rfd.workspace = true
 serde_json.workspace = true
 

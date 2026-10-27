@@ -160,10 +160,10 @@ pub(crate) const ATTR_FLOATING_EXITING: &str = "jadix_floating_exiting";
 /// Expand enter/exit baseline height (logical px). When set, accordion clips from this height
 /// instead of 0 so covered triggers (e.g. bubble reaction bar) continue downward/upward.
 /// Exit lands on this height (the in-flow pill), then the portal hides — not accordion-up to 0.
-pub(crate) const ATTR_FLOATING_EXPAND_FROM_H: &str = "jadix_floating_expand_from_h";
+pub const ATTR_FLOATING_EXPAND_FROM_H: &str = "jadix_floating_expand_from_h";
 /// Expand enter/exit baseline width (logical px). When set, `max-width` interpolates with the
 /// accordion so row-wise content (e.g. AvatarGroup +N) is clipped instead of popping in/out.
-pub(crate) const ATTR_FLOATING_EXPAND_FROM_W: &str = "jadix_floating_expand_from_w";
+pub const ATTR_FLOATING_EXPAND_FROM_W: &str = "jadix_floating_expand_from_w";
 /// When `"1"` with [`ATTR_FLOATING_EXPAND_FROM_W`], lerp `max-width` and `nowrap` (horizontal
 /// clip). When unset, pin width to `from_w` so wrapped rows unveil via `max-height` (Bubble +N).
 pub(crate) const ATTR_FLOATING_EXPAND_CLIP_X: &str = "jadix_floating_expand_clip_x";
@@ -1077,16 +1077,38 @@ fn apply_floating_menus(
     point_space: Option<[f32; 4]>,
     changed: &mut bool,
 ) {
-    if el.attrs.contains_key(crate::core::scaled_viewport::ATTR_PORTALS) {
+    if el
+        .attrs
+        .contains_key(crate::core::scaled_viewport::ATTR_PORTALS)
+    {
         let bounds = crate::core::tree::visual_paint_aabb(el, [0.0; 2]);
         let size = [el.layout_bounds[2].max(1.0), el.layout_bounds[3].max(1.0)];
-        let scale = [(bounds[2] / size[0]).max(0.01), (bounds[3] / size[1]).max(0.01)];
-        let local: Vec<_> = triggers.iter().map(|(id, rect)| (id.clone(), [
-            (rect[0] - bounds[0]) / scale[0], (rect[1] - bounds[1]) / scale[1],
-            rect[2] / scale[0], rect[3] / scale[1],
-        ])).collect();
+        let scale = [
+            (bounds[2] / size[0]).max(0.01),
+            (bounds[3] / size[1]).max(0.01),
+        ];
+        let local: Vec<_> = triggers
+            .iter()
+            .map(|(id, rect)| {
+                (
+                    id.clone(),
+                    [
+                        (rect[0] - bounds[0]) / scale[0],
+                        (rect[1] - bounds[1]) / scale[1],
+                        rect[2] / scale[0],
+                        rect[3] / scale[1],
+                    ],
+                )
+            })
+            .collect();
         for child in &mut el.children {
-            apply_floating_menus(child, &local, size, Some([bounds[0], bounds[1], scale[0], scale[1]]), changed);
+            apply_floating_menus(
+                child,
+                &local,
+                size,
+                Some([bounds[0], bounds[1], scale[0], scale[1]]),
+                changed,
+            );
         }
         return;
     }
@@ -1198,7 +1220,9 @@ fn apply_floating_menus(
     let point = floating_point_of(el).map(|point| {
         if let Some([x, y, sx, sy]) = point_space {
             [(point[0] - x) / sx, (point[1] - y) / sy]
-        } else { point }
+        } else {
+            point
+        }
     });
     let trigger_fid = floating_trigger_of(el);
     let tb = if let Some(pt) = point {
@@ -1443,7 +1467,13 @@ pub fn sync_floating_placement(root: &mut Element, viewport_w: f32, viewport_h: 
     let mut triggers = Vec::new();
     collect_focus_bounds(root, [0.0, 0.0], &mut triggers);
     let mut changed = false;
-    apply_floating_menus(root, &triggers, [viewport_w, viewport_h], None, &mut changed);
+    apply_floating_menus(
+        root,
+        &triggers,
+        [viewport_w, viewport_h],
+        None,
+        &mut changed,
+    );
     changed
 }
 
@@ -1660,7 +1690,6 @@ pub(crate) fn seed_floating_place_max_h_for_test(id: &str, max_h: f32) {
 mod tests {
     use super::*;
 
-
     #[test]
     fn scaled_anchor_follows_nested_scroll_in_paint_space() {
         let mut target = Element::new().focus_id("scaled-anchor");
@@ -1673,12 +1702,15 @@ mod tests {
         outer.scroll_offset = [0.0, 100.0];
         let mut triggers = Vec::new();
         collect_focus_bounds(&outer, [0.0; 2], &mut triggers);
-        let expected = crate::core::tree::visual_paint_aabb(
-            &outer.children[0].children[0], [0.0, 70.0]);
-        assert_eq!(floating_trigger_bounds(&triggers, "scaled-anchor"), Some(expected));
+        let expected =
+            crate::core::tree::visual_paint_aabb(&outer.children[0].children[0], [0.0, 70.0]);
+        assert_eq!(
+            floating_trigger_bounds(&triggers, "scaled-anchor"),
+            Some(expected)
+        );
     }
 
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn menu_panel(id: &str, cursor: [f32; 2]) -> Element {
         let rows: Element = crate::primitives::vstack()
             .w("100%")
@@ -1713,7 +1745,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn cursor_menu_first_frame_and_reopen_keep_full_height_above() {
         crate::core::reactivity::create_root(|| {
             let mut tree = crate::layout::layout_tree::LayoutTree::new();
@@ -1817,7 +1849,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn nested_submenu_first_frame_keeps_parent_height_and_live_trigger() {
         crate::core::reactivity::create_root(|| {
             let mut root = Element::new()
@@ -3378,11 +3410,19 @@ mod tests {
             let mut trigger = Element::new().focus_id("device-popup-trigger");
             trigger.layout_bounds = [110.0, 120.0, 50.0, 20.0];
             let mut panel = Element::new().absolute();
-            mark_floating(&mut panel, "device-popup-menu", "device-popup-trigger", PopupPlacement::BottomStart);
+            mark_floating(
+                &mut panel,
+                "device-popup-menu",
+                "device-popup-trigger",
+                PopupPlacement::BottomStart,
+            );
             panel.set_attr(ATTR_FLOATING_MATCH_TRIGGER, "0");
             panel.set_attr(ATTR_FLOATING_W, "100px");
             panel.layout_bounds = [0.0, 0.0, 100.0, 60.0];
-            let mut scope = Element::new().scale(0.5).transform_origin("left top").child(panel);
+            let mut scope = Element::new()
+                .scale(0.5)
+                .transform_origin("left top")
+                .child(panel);
             scope.set_attr(crate::core::scaled_viewport::ATTR_PORTALS, "1");
             scope.layout_bounds = [100.0, 100.0, 400.0, 800.0];
             let mut root = Element::new().children([trigger, scope]);
@@ -3391,7 +3431,10 @@ mod tests {
             let left = inset_length(popup.style.inset.left).unwrap();
             let top = inset_length(popup.style.inset.top).unwrap();
             assert!((left - 20.0).abs() < 0.5, "local x={left}");
-            assert!((top - 80.0 - FLOATING_TRIGGER_GAP).abs() < 0.5, "local y={top}");
+            assert!(
+                (top - 80.0 - FLOATING_TRIGGER_GAP).abs() < 0.5,
+                "local y={top}"
+            );
         });
     }
 

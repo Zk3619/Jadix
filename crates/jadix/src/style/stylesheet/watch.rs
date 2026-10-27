@@ -261,7 +261,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(feature = "components")]
+    #[cfg(feature = "product-tests")]
     fn sidebar_selection_survives_theme_refresh_and_parent_rebuild() {
         use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
         use crate::components::SidebarMenuButtonProps;

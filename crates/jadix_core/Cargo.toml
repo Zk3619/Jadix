@@ -1,0 +1,16 @@
+[package]
+name = "jadix_core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Reactive ownership, signals and stores without a UI or renderer"
+readme = "README.md"
+
+[features]
+default = []
+
+[dependencies]
+log.workspace = true
+stacker.workspace = true
+

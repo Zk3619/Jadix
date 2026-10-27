@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Input paint-only PartialLoad must not stamp sidebar captions into the retain buffer.
 //!
 //! Gallery repro: focus / type in the Kbd Search field → leftover glyphs on the left rail.
@@ -22,9 +22,6 @@ use crate::app::draw_cull::{
 use crate::components::form::form_field;
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
 use crate::components::input_adornment::input_adornment;
-use crate::utils::text_edit::{
-    push_focused_text_edit_caret_damage, sync_text_edit_paint_subtree_in_viewport,
-};
 use crate::components::sidebar::{
     sidebar, sidebar_provider_scope, SidebarInset, SidebarInsetProps, SidebarMenuButton,
     SidebarMenuButtonProps,
@@ -42,6 +39,9 @@ use crate::style::{
     tick_active_css_transitions_subtree,
 };
 use crate::text::install_shared_font_system;
+use crate::utils::text_edit::{
+    push_focused_text_edit_caret_damage, sync_text_edit_paint_subtree_in_viewport,
+};
 
 const NAV_LAYOUT: &str = "布局";
 const NAV_GALLERY: &str = "Gallery";

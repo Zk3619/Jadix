@@ -28,18 +28,35 @@ pub fn register_font_data(bytes: Vec<u8>) -> Result<Vec<String>, String> {
     let bytes = std::sync::Arc::new(bytes);
     let mut database = Database::new();
     database.load_font_source(glyphon::fontdb::Source::Binary(bytes.clone()));
-    let mut families: Vec<_> = database.faces().flat_map(|face| face.families.iter().map(|(family, _)| family.clone())).collect();
+    let mut families: Vec<_> = database
+        .faces()
+        .flat_map(|face| face.families.iter().map(|(family, _)| family.clone()))
+        .collect();
     families.sort();
     families.dedup();
-    if families.is_empty() { return Err("font data contains no readable face".into()); }
-    let mut registered = REGISTERED_FONT_DATA.lock().map_err(|_| "font registration unavailable")?;
-    if !registered.iter().any(|current| current.as_ref() == bytes.as_ref()) { registered.push(bytes); }
+    if families.is_empty() {
+        return Err("font data contains no readable face".into());
+    }
+    let mut registered = REGISTERED_FONT_DATA
+        .lock()
+        .map_err(|_| "font registration unavailable")?;
+    if !registered
+        .iter()
+        .any(|current| current.as_ref() == bytes.as_ref())
+    {
+        registered.push(bytes);
+    }
     Ok(families)
 }
 
 pub(crate) fn load_registered_fonts(database: &mut Database) {
-    let fonts = REGISTERED_FONT_DATA.lock().map(|fonts| fonts.clone()).unwrap_or_default();
-    for bytes in fonts { database.load_font_source(glyphon::fontdb::Source::Binary(bytes)); }
+    let fonts = REGISTERED_FONT_DATA
+        .lock()
+        .map(|fonts| fonts.clone())
+        .unwrap_or_default();
+    for bytes in fonts {
+        database.load_font_source(glyphon::fontdb::Source::Binary(bytes));
+    }
 }
 
 static FONT_MATCH_GEN: AtomicU64 = AtomicU64::new(1);
@@ -925,6 +942,7 @@ mod resolve_family_cache_tests {
 
     use crate::renderer::font_loader::create_font_system;
 
+    #[cfg(feature = "product-tests")]
     #[test]
     fn lucide_resolves_after_font_load_despite_early_miss_cache() {
         clear_resolve_family_cache();
@@ -934,6 +952,7 @@ mod resolve_family_cache_tests {
             Family::SansSerif
         ));
 
+        register_font_data(crate::catalog::FONT_DATA.to_vec()).unwrap();
         let fs = create_font_system();
         assert!(matches!(
             resolve_family(fs.db(), "lucide"),

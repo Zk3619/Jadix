@@ -1,0 +1,15 @@
+[package]
+name = "jadix_tokio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Bounded Tokio execution adapter for Jadix task contracts"
+readme = "README.md"
+
+[dependencies]
+jadix_tasks.workspace = true
+tokio = { workspace = true, features = ["rt", "sync"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["rt-multi-thread", "time"] }

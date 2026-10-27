@@ -15,7 +15,7 @@ thread_local! {
 }
 
 #[inline]
-pub(crate) fn mark_hover_paint_dirty() {
+pub fn mark_hover_paint_dirty() {
     HOVER_PAINT_DIRTY.set(true);
 }
 
@@ -212,7 +212,9 @@ pub fn apply_disabled(el: &mut Element, disabled: bool) -> crate::core::tree::La
         changed = true;
     }
 
-    if let Some(sync) = el.disabled_sync { changed |= sync(el, disabled); }
+    if let Some(sync) = el.disabled_sync {
+        changed |= sync(el, disabled);
+    }
 
     if let Some(sync) = el.input_paint_sync.as_mut() {
         if sync.disabled != disabled {
@@ -264,8 +266,11 @@ mod tests {
         let mut el: Element = hstack().into();
         el.disabled_sync = Some(|element, disabled| {
             let changed = element.attrs.get("test_disabled").is_some() != disabled;
-            if disabled { element.set_attr("test_disabled", "true"); }
-            else { element.attrs.remove("test_disabled"); }
+            if disabled {
+                element.set_attr("test_disabled", "true");
+            } else {
+                element.attrs.remove("test_disabled");
+            }
             changed
         });
         el.set_focusable(true);

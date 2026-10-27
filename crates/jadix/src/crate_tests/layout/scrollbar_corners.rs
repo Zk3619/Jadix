@@ -1,9 +1,7 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Dual-axis scrollbar corners: unified L-join (horizontal yields to vertical).
 use crate::components::scroll_area::scroll_area;
-use crate::components::scrollbar::{
-    SCROLLBAR_DEFAULT_CROSS_PX, SCROLLBAR_TRACK_FOCUS_PREFIX,
-};
+use crate::components::scrollbar::{SCROLLBAR_DEFAULT_CROSS_PX, SCROLLBAR_TRACK_FOCUS_PREFIX};
 use crate::core::reactivity::{create_effect, create_root};
 use crate::core::scrollbar::horizontal_lane_side_inset;
 use crate::core::tree::{Element, LayoutTree};

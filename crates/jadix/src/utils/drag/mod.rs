@@ -11,80 +11,93 @@
 //! first-class. Not in `prelude` — `use jadix::utils::drag::{…}`. Dual-write:
 //! Builder is the source of truth; RSX expands to the same functions (ADR-9).
 
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/autoscroll.rs"]
 pub mod autoscroll;
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/collision.rs"]
 pub mod collision;
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/debug.rs"]
 pub mod debug;
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/dropzone.rs"]
 pub mod dropzone;
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/geometry.rs"]
 pub mod geometry;
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/modifier.rs"]
 pub mod modifier;
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/overlay.rs"]
 pub mod overlay;
 pub mod pointer;
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/registry.rs"]
 pub mod registry;
 pub mod routing;
 pub mod runtime;
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/sensor.rs"]
 pub mod sensor;
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/session.rs"]
 pub mod session;
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/sortable.rs"]
 pub mod sortable;
 
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/builder.rs"]
 mod builder;
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/session_runtime.rs"]
 mod session_runtime;
 
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::utils::pointer_action::InertiaOpts;
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use autoscroll::{edge_delta, AutoScroll, ScrollHit, ScrollLock};
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use builder::{
     drag_handle, drag_handle_from_rsx, drag_ignore, drag_ignore_from_rsx, drag_scope,
     drag_scope_from_rsx, draggable, draggable_from_rsx, droppable, droppable_from_rsx, use_drag,
     use_drag_item, DragCtx, DragItemCtx, DragScopeBuilder, DragScopeRsxOpts, DraggableBuilder,
     DraggableRsxOpts, DroppableBuilder, DroppableRsxOpts,
 };
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use collision::{detect, detect_with, Candidate, CollisionAlg, CollisionFn, CollisionInput};
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use debug::{
     debug_drag_hits_enabled, debug_frames_for_tree, debug_hit_frames, last_debug_frames,
     set_debug_drag_hits, DragDebugEmphasis, DragDebugFrame, DragDebugRole, DragDebugStroke,
 };
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use dropzone::{
     set_dropzone_config, DropCheckerFn, DropOverlap, DropzoneConfig, DropzoneHandler, DropzoneHooks,
 };
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use geometry::{
     clamp_origin_to_box, clamp_origin_to_box_anchor, distance, Activation, Axis, DragStack,
     OverlayAlign, Rect, Restrict, RestrictAnchor, RestrictOverflow, Snap, SnapGrid, SnapPointFn,
     SnapTarget, SnapTargets, SortMode,
 };
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use modifier::{
     apply_modifiers, builtin_modifiers, DragDelta, DragModifier, DragModifierCtx,
     MODIFIER_ORDER_AUTHOR, MODIFIER_ORDER_AXIS, MODIFIER_ORDER_PIN_AXIS, MODIFIER_ORDER_RESTRICT,
     MODIFIER_ORDER_SNAP,
 };
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use overlay::{drag_overlay, drag_overlay_from_rsx, DragOverlayBuilder};
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use registry::{item_data, item_flags, registered_hits_in_scope, set_item_data, ItemFlags};
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use sensor::{
     add_sensor, begin_draggable, remove_sensor, run_scope_sensors, DragSensor, DragSensorCtx,
 };
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use session::{
     active_drag_ids, active_draggable_id, active_droppable_id, active_scope_id, active_sort_mode,
     active_source_translate, add_modifier, begin, cancel, clear_if_any, collect_hits, end,
@@ -95,7 +108,7 @@ pub use session::{
     resolve_insert_index, start_geometry, tick, tick_follow, BeginDrag, DragEvent, DragHandler,
     DragHit, DragItemRef, DragPhase, DragPredicate, OVERLAY_SOURCE_OPACITY,
 };
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use sortable::{
     apply_clone_event, apply_event, apply_multi_event, apply_swap_event, apply_transfer,
     sortable_item, sortable_list, sortable_preview, sortable_shift, sortable_source_to_hole,
@@ -103,7 +116,7 @@ pub use sortable::{
 };
 
 /// Re-export list-reorder helpers so callers can import one module.
-#[cfg(feature = "dnd")]
+#[cfg(all(test, feature = "product-tests"))]
 pub use crate::utils::drag_reorder::{
     apply_reorder_vec, drag_commit_signal_key, drag_hover_signal_key,
     drag_insert_index_after_remove,
@@ -146,5 +159,6 @@ pub const ATTR_DRAG_SELECTED: &str = "jadix_drag_selected";
 /// Not a hit target; stripped of session attrs so collision never sees it.
 pub const ATTR_DRAG_HOLE_PREVIEW: &str = "jadix_drag_hole_preview";
 
-#[cfg(all(test, feature = "dnd"))]
+#[cfg(all(test, feature = "product-tests"))]
+#[path = "../../../../jadix_dnd/src/utils/drag/window_tests.rs"]
 mod window_tests;

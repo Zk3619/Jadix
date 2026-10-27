@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 //! Regression: ScrollArea content must not flex-shrink into the viewport.
 //!
 //! Shrinking content to fit makes `content_h == viewport_h`, so overflow clip

@@ -4,7 +4,7 @@ $ErrorActionPreference = 'Stop'
 $repositoryRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 Push-Location $repositoryRoot
 try {
-    $cargoOptions = @('build', '-p', 'jadix', '--no-default-features', '--features', 'drag', '--message-format=json-render-diagnostics')
+    $cargoOptions = @('build', '-p', 'jadix', '--no-default-features', '--features', 'drag,macros', '--message-format=json-render-diagnostics')
     if ($Offline) { $cargoOptions += '--offline' }
     $buildOutput = & cargo @cargoOptions
     if ($LASTEXITCODE -ne 0) { throw 'Minimal runtime build failed' }
@@ -25,14 +25,14 @@ try {
     $sourceDirectory = Join-Path $outputDirectory 'utils/drag'
     New-Item -ItemType Directory -Force -Path $sourceDirectory | Out-Null
     $sourceManifest = @()
-    foreach ($source in Get-ChildItem 'crates/jadix/src/utils/drag' -Filter '*.rs') {
+    foreach ($source in Get-ChildItem 'crates/jadix_dnd/src/utils/drag' -Filter '*.rs') {
         if ($source.BaseName -in @('pointer', 'routing', 'runtime')) { continue }
         $destination = Join-Path $sourceDirectory $source.Name
         Copy-Item -LiteralPath $source.FullName -Destination $destination
         if ($source.Name -eq 'mod.rs') {
             $text = Get-Content -LiteralPath $destination -Raw
             foreach ($module in @('pointer', 'routing', 'runtime')) {
-                $text = $text.Replace("pub mod $module;", "pub use ui_runtime::utils::drag::$module;")
+                $text = $text.Replace("pub use jadix::utils::drag::$module;", "pub use ui_runtime::utils::drag::$module;")
             }
             [System.IO.File]::WriteAllText($destination, $text)
         }

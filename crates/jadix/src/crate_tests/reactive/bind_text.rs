@@ -1,4 +1,4 @@
-#![cfg(feature = "components")]
+#![cfg(feature = "product-tests")]
 use crate::app::reactive::{bind_class, bind_prop, bind_text, bind_with, reset_registered_anchors};
 use crate::app::test_support::reconcile_elements;
 use crate::core::reactivity::{create_effect, dispose_effect, use_signal};
@@ -306,13 +306,17 @@ fn apply_bound_button_variant_updates_chrome_in_place() {
         .text("Go")
         .into();
     assert_eq!(
-        el.authoring_state.get::<crate::components::button::ButtonHoverPaint>().map(|d| d.variant.as_str()),
+        el.authoring_state
+            .get::<crate::components::button::ButtonHoverPaint>()
+            .map(|d| d.variant.as_str()),
         Some("default")
     );
     let status = apply_bound_button_variant(&mut el, "outline");
     assert_eq!(status, LayoutStatus::StyleChanged);
     assert_eq!(
-        el.authoring_state.get::<crate::components::button::ButtonHoverPaint>().map(|d| d.variant.as_str()),
+        el.authoring_state
+            .get::<crate::components::button::ButtonHoverPaint>()
+            .map(|d| d.variant.as_str()),
         Some("outline")
     );
     let again = apply_bound_button_variant(&mut el, "outline");
@@ -329,7 +333,9 @@ fn apply_bound_unknown_button_variant_falls_back_to_default() {
     let status = apply_bound_button_variant(&mut el, "not-a-variant");
     assert_eq!(status, LayoutStatus::StyleChanged);
     assert_eq!(
-        el.authoring_state.get::<crate::components::button::ButtonHoverPaint>().map(|d| d.variant.as_str()),
+        el.authoring_state
+            .get::<crate::components::button::ButtonHoverPaint>()
+            .map(|d| d.variant.as_str()),
         Some("default")
     );
 }

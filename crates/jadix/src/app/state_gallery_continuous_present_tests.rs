@@ -4,6 +4,517 @@ use crate::app::runtime::{AppRuntime, clear_app_runtime, set_app_runtime};
 use crate::core::reactivity::{create_effect, create_root, use_signal};
 use std::{cell::RefCell, rc::Rc};
 
+#[test]
+#[ignore = "requires native Windows GPU presentation"]
+fn message_scroller_latest_exit_fades_through_complete_native_frames() {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    use winit::window::{WindowAttributes, WindowId};
+
+    fn jump_button(element: &Element) -> Option<&Element> {
+        if element.get_attr("data-slot").map(String::as_str) == Some("message-scroller-button") {
+            return Some(element);
+        }
+        element.children.iter().find_map(jump_button)
+    }
+
+    struct Harness;
+    impl ApplicationHandler for Harness {
+        fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+            crate::init();
+            clear_app_runtime();
+            reset_registered_anchors();
+            crate::style::set_theme_mode(crate::style::ThemeMode::Dark);
+            crate::style::set_css_transition_virtual_timeline(true);
+            crate::style::set_css_transition_timeline_ms(0.0);
+            let window: Arc<dyn Window> = Arc::from(event_loop.create_window(
+                WindowAttributes::default().with_title("Latest exit regression")
+                    .with_surface_size(winit::dpi::LogicalSize::new(720.0, 900.0))
+                    .with_visible(false),
+            ).unwrap());
+            let mut state = crate::utils::block_on::block_on(AppState::new_bootstrap(
+                window, crate::app::WindowOptions::new(),
+            ));
+            let (owner, root) = create_root(|| crate::authoring::mount::with_inline_mount(|| {
+                Element::new().w("100%").h("100%").p(16.0)
+                    .bg(crate::style::parse_color("background"))
+                    .child(crate::pages::basics::MessageScrollerShowcase(Default::default()))
+            }));
+            state.rebuild_ui(root);
+            for _ in 0..4 {
+                super::toggle_motion_present_tests::render(&mut state);
+            }
+            let viewport = "gal-ms-showcase:viewport";
+            let offset = use_signal(&crate::core::scroll_viewport::scroll_offset_y_signal_key(viewport), || 0.0_f32);
+            let max = use_signal(&crate::core::scroll_viewport::scroll_content_h_signal_key(viewport), || 0.0_f32).peek()
+                - use_signal(&crate::core::scroll_viewport::scroll_viewport_h_signal_key(viewport), || 0.0_f32).peek();
+            assert!(max > 100.0, "Gallery conversation must overflow");
+            use_signal("gal-ms-showcase:auto_scroll", || true).set(false);
+            offset.set_silent(0.0);
+            state.update_scroll_offset_in_place(viewport, [0.0, 0.0]);
+            super::toggle_motion_present_tests::render(&mut state);
+            crate::style::set_css_transition_timeline_ms(220.0);
+            super::toggle_motion_present_tests::render(&mut state);
+            let button = jump_button(&state.root_element).unwrap();
+            assert!(button.style.opacity > 0.99, "Latest must finish entering");
+            let bounds = button.viewport_layout_bounds();
+            offset.set_silent(max);
+            state.update_scroll_offset_in_place(viewport, [0.0, max]);
+            let mut previous_opacity = 1.0;
+            for elapsed in (0..=208).step_by(16) {
+                crate::style::set_css_transition_timeline_ms(300.0 + elapsed as f64);
+                super::toggle_motion_present_tests::render(&mut state);
+                let opacity = jump_button(&state.root_element).unwrap().style.opacity;
+                assert!(opacity <= previous_opacity + 0.001, "exit must not restart at {elapsed}ms");
+                if elapsed > 0 && elapsed < 160 {
+                    assert!(opacity > 0.0 && opacity < previous_opacity, "exit stopped fading at {elapsed}ms: {opacity}");
+                }
+                previous_opacity = opacity;
+                let partial = super::toggle_motion_present_tests::read_frame(&state);
+                state.mark_full_redraw();
+                super::toggle_motion_present_tests::render(&mut state);
+                let full = super::toggle_motion_present_tests::read_frame(&state);
+                let scale = state.window.scale_factor() as f32;
+                let differences = partial.pixels.chunks_exact(4).zip(full.pixels.chunks_exact(4))
+                    .enumerate().filter(|(index, (actual, expected))| {
+                        let horizontal = (*index % full.width as usize) as f32 / scale;
+                        let vertical = (*index / full.width as usize) as f32 / scale;
+                        horizontal >= bounds[0] - 12.0 && horizontal <= bounds[0] + bounds[2] + 12.0
+                            && vertical >= bounds[1] - 12.0 && vertical <= bounds[1] + bounds[3] + 20.0
+                            && actual.iter().zip(*expected).any(|(actual, expected)| actual.abs_diff(*expected) > 3)
+                    }).count();
+                assert_eq!(differences, 0, "Latest exit frame differs from full repaint at {elapsed}ms");
+            }
+            assert!(previous_opacity < 0.001, "exit must finish hidden");
+            drop(owner);
+            clear_app_runtime();
+            crate::style::set_css_transition_virtual_timeline(false);
+            event_loop.exit();
+        }
+        fn window_event(&mut self, _: &dyn ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    }
+    let mut builder = EventLoop::builder();
+    builder.with_any_thread(true);
+    builder.build().unwrap().run_app(Harness).unwrap();
+}
+
+#[test]
+#[ignore = "requires native Windows GPU presentation"]
+fn multiline_ime_commit_clears_preedit_pixels_immediately() {
+    use winit::application::ApplicationHandler;
+    use winit::event::{Ime, WindowEvent};
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    use winit::window::WindowId;
+
+    struct Harness;
+    impl ApplicationHandler for Harness {
+        fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+            crate::init();
+            clear_app_runtime();
+            reset_registered_anchors();
+            crate::style::set_theme_mode(crate::style::ThemeMode::Dark);
+            crate::style::set_css_transition_virtual_timeline(true);
+            crate::style::set_css_transition_timeline_ms(0.0);
+            let (sender, receiver) = std::sync::mpsc::channel();
+            crate::app::ui_bridge::install_proxy(event_loop.create_proxy(), sender);
+            let mut app = crate::app::lifecycle::create_app(
+                crate::app::WindowOptions::new().size(600.0, 700.0),
+                || Element::new().w("100%").h("100%").p(24.0)
+                    .bg(crate::style::parse_color("background"))
+                    .child(crate::pages::forms::InputAdornmentShowcase(Default::default())),
+                event_loop.create_proxy(), receiver,
+            );
+            crate::app::with_ui_build_stack(|| app.can_create_surfaces(event_loop));
+            let state = app.state.clone();
+            let window = state.borrow().as_ref().unwrap().window.clone();
+            window.set_visible(false);
+            for _ in 0..3 {
+                drain_deferred_view_remounts();
+                super::toggle_motion_present_tests::render(state.borrow_mut().as_mut().unwrap());
+            }
+            use_signal("__jadix_button_focus_id", String::new).set("textarea:gal-ia-ta".into());
+            for text in ["T", "Th", "Thus"] {
+                app.handle_ime_event(Ime::Preedit(text.into(), Some((text.len(), text.len()))), window.id());
+                drain_deferred_view_remounts();
+                app.handle_redraw_requested(window.id(), event_loop);
+            }
+            let composing = super::toggle_motion_present_tests::read_frame(state.borrow_mut().as_mut().unwrap());
+            app.handle_ime_event(Ime::Commit("Thus".into()), window.id());
+            app.handle_redraw_requested(window.id(), event_loop);
+            let mut live = state.borrow_mut();
+            let live = live.as_mut().unwrap();
+            let partial = super::toggle_motion_present_tests::read_frame(live);
+            live.mark_full_redraw();
+            super::toggle_motion_present_tests::render(live);
+            let full = super::toggle_motion_present_tests::read_frame(live);
+            let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../.theme-evidence/ui-regressions");
+            std::fs::create_dir_all(&directory).unwrap();
+            for (name, image) in [("composing", &composing), ("committed", &partial), ("full", &full)] {
+                ::image::RgbaImage::from_raw(image.width, image.height, image.pixels.clone()).unwrap()
+                    .save(directory.join(format!("ime-{name}.png"))).unwrap();
+            }
+            let differences = partial.pixels.chunks_exact(4).zip(full.pixels.chunks_exact(4))
+                .filter(|(actual, expected)| actual.iter().zip(*expected)
+                    .any(|(actual, expected)| actual.abs_diff(*expected) > 3)).count();
+            assert_eq!(differences, 0, "IME commit left stale pixels");
+            assert_eq!(use_signal(&crate::utils::text_field::input_value_signal_key("gal-ia-ta"), String::new).peek(), "Thus");
+            crate::style::set_css_transition_virtual_timeline(false);
+            event_loop.exit();
+        }
+        fn window_event(&mut self, _: &dyn ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    }
+    let mut builder = EventLoop::builder();
+    builder.with_any_thread(true);
+    builder.build().unwrap().run_app(Harness).unwrap();
+}
+
+#[cfg(feature = "performance")]
+#[test]
+#[ignore = "requires the complete native Gallery and Windows GPU presentation"]
+fn real_gallery_hover_card_scroll_keeps_performance_panel_anchored() {
+    check_real_gallery_scroll(false);
+}
+
+#[cfg(feature = "performance")]
+#[test]
+#[ignore = "requires the complete native Gallery and Windows GPU presentation"]
+fn real_gallery_filter_scroll_keeps_sidebar_text_visible() {
+    check_real_gallery_scroll(true);
+}
+
+#[cfg(feature = "performance")]
+fn check_real_gallery_scroll(filters: bool) {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    use winit::window::WindowId;
+
+    struct Harness(bool);
+    impl ApplicationHandler for Harness {
+        fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+            let filters = self.0;
+            let scroll_id = if filters { "scroll-layout" } else { "scroll-overlays" };
+            crate::init();
+            crate::style::load_and_install_theme_overrides(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .join("../../examples/gallery/theme.toml"),
+            ).unwrap();
+            clear_app_runtime();
+            reset_registered_anchors();
+            crate::style::set_theme_mode(crate::style::ThemeMode::Dark);
+            crate::style::set_css_transition_virtual_timeline(true);
+            crate::style::set_css_transition_timeline_ms(0.0);
+            use_signal("gal_nav_section", String::new).set_silent(if filters { "layout" } else { "overlays" }.into());
+            use_signal("gal-perf-visible", || true).set_silent(true);
+            crate::shared::install_performance_overlay();
+            let (tx, rx) = std::sync::mpsc::channel();
+            crate::app::ui_bridge::install_proxy(event_loop.create_proxy(), tx);
+            let mut app = crate::app::lifecycle::create_app(
+                crate::app::WindowOptions::new().size(1000.0, 700.0),
+                crate::gallery_app::build_gallery_app,
+                event_loop.create_proxy(), rx,
+            );
+            crate::app::with_ui_build_stack(|| app.can_create_surfaces(event_loop));
+            let state = app.state.clone();
+            let window = state.borrow().as_ref().unwrap().window.clone();
+            window.set_visible(false);
+            for _ in 0..4 {
+                drain_deferred_view_remounts();
+                super::toggle_motion_present_tests::render(state.borrow_mut().as_mut().unwrap());
+            }
+            let scroll = {
+                let live = state.borrow();
+                fn first_filter(element: &Element) -> Option<&Element> {
+                    if element.style.filter.is_some() { return Some(element); }
+                    element.children.iter().find_map(first_filter)
+                }
+                let root = &live.as_ref().unwrap().root_element;
+                let target = if filters { first_filter(root).expect("Gallery filter") }
+                    else { crate::core::tree::find_by_template_id(root, "gallery:hover_card_builder_btn").unwrap() };
+                (target.layout_bounds[1] - 300.0).max(0.0)
+            };
+            let sidebar = super::toggle_motion_present_tests::read_frame(state.borrow_mut().as_mut().unwrap());
+            let mut mismatched_frames = 0;
+            for frame in 0_i32..90 {
+                let offset = if filters {
+                    scroll + (45 - (frame % 90 - 45).abs()) as f32 * 20.0
+                } else {
+                    scroll + (frame % 12) as f32 * 0.3
+                };
+                for key in [
+                    crate::core::scroll_viewport::scroll_offset_y_signal_key(scroll_id),
+                    crate::core::scroll_viewport::scroll_target_y_signal_key(scroll_id),
+                ] {
+                    use_signal(&key, || 0.0_f32).set_silent(offset);
+                }
+                if !filters && frame % 6 == 0 {
+                    use_signal("gal_hover_card_builder_open", || false).set(frame % 12 == 0);
+                }
+                if frame % 9 == 0 {
+                    use_signal("gal-perf-text", String::new).set(format!(
+                        "Window 109 FPS\nCPU 2.1%\nGPU 36.6%\nRAM {} MiB", 518 + frame,
+                    ));
+                }
+                drain_deferred_view_remounts();
+                {
+                    let mut live = state.borrow_mut();
+                    live.as_mut().unwrap().update_scroll_offset_in_place(
+                        scroll_id, [0.0, offset],
+                    );
+                }
+                let pointer = {
+                    let live = state.borrow();
+                    let bounds = if filters { [650.0, 350.0, 1.0, 1.0] } else { crate::core::tree::find_by_template_id(
+                        &live.as_ref().unwrap().root_element, "gallery:hover_card_builder_btn",
+                    ).unwrap().viewport_layout_bounds() };
+                    if frame % 12 < 6 { [bounds[0] + bounds[2] * 0.5, bounds[1] + bounds[3] * 0.5] }
+                    else { [450.0, 350.0] }
+                };
+                app.with_primary_input(window.id(), |app| {
+                    let scale = window.scale_factor();
+                    app.handle_cursor_moved(window.id(), winit::dpi::PhysicalPosition::new(
+                        pointer[0] as f64 * scale, pointer[1] as f64 * scale,
+                    ), event_loop);
+                    app.flush_pending_cursor_moved(window.id(), event_loop);
+                    app.handle_mouse_wheel(window.id(), winit::event::MouseScrollDelta::PixelDelta(
+                        winit::dpi::PhysicalPosition::new(0.0, -0.45),
+                    ));
+                });
+                app.last_frame_time = std::time::Instant::now() - std::time::Duration::from_millis(16);
+                for motion in app.smooth_scroll_motion.values_mut() {
+                    motion.1 = app.last_frame_time;
+                }
+                app.handle_redraw_requested(window.id(), event_loop);
+                let mut live = state.borrow_mut();
+                let live = live.as_mut().unwrap();
+                if !filters {
+                    live.update_scroll_offset_in_place(scroll_id, [0.0, scroll + (frame % 12) as f32 * 0.3]);
+                    live.scroll_layer_clear = true;
+                    super::toggle_motion_present_tests::render(live);
+                }
+                let panel = crate::core::tree::find_by_template_id(&live.root_element, "gal-perf-panel")
+                    .expect("performance panel").viewport_layout_bounds();
+                let viewport = [live.config.width as f32 / live.window.scale_factor() as f32,
+                    live.config.height as f32 / live.window.scale_factor() as f32];
+                if (viewport[0] - panel[0] - panel[2] - 12.0).abs() >= 1.0
+                    || (viewport[1] - panel[1] - panel[3] - 12.0).abs() >= 1.0 {
+                    for id in ["gal-perf-panel", "gal-perf-toggle", "__jadix_portal_layer"] {
+                        if let Some(element) = crate::core::tree::find_by_template_id(&live.root_element, id) {
+                            eprintln!("HUD FAILURE {id}: node={:?} bounds={:?} style={:?}",
+                                element.layout_node, element.layout_bounds, element.style);
+                        }
+                    }
+                }
+                assert!((viewport[0] - panel[0] - panel[2] - 12.0).abs() < 1.0
+                    && (viewport[1] - panel[1] - panel[3] - 12.0).abs() < 1.0,
+                    "performance panel detached at frame {frame}: {panel:?}, viewport={viewport:?}");
+                let toggle = crate::core::tree::find_by_template_id(&live.root_element, "gal-perf-toggle")
+                    .expect("performance toggle").viewport_layout_bounds();
+                assert!(toggle[2] > 40.0 && toggle[3] > 20.0
+                    && (toggle[0] + toggle[2] - panel[0] - panel[2]).abs() < 1.0,
+                    "performance toggle lost layout at frame {frame}: {toggle:?}");
+                let partial = super::toggle_motion_present_tests::read_frame(live);
+                if filters {
+                    let sidebar_width = (220.0 * window.scale_factor()) as usize;
+                    let differences = partial.pixels.chunks_exact(4).zip(sidebar.pixels.chunks_exact(4))
+                        .enumerate().filter(|(index, (actual, expected))| index % (sidebar.width as usize) < sidebar_width
+                            && actual.iter().zip(*expected).any(|(actual, expected)| actual.abs_diff(*expected) > 3)).count();
+                    if differences > 0 {
+                        eprintln!("FAILED text nodes: {}", live.text_nodes.len());
+                        for text in live.text_nodes.iter().filter(|text| text.x < 240.0) {
+                            eprintln!("SIDEBAR {} {:?} clip={:?}", text.text, [text.x, text.y, text.width, text.height], text.clip_bounds);
+                        }
+                        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("../../.theme-evidence/ui-regressions");
+                        std::fs::create_dir_all(&directory).unwrap();
+                        for (name, image) in [("partial", &partial), ("baseline", &sidebar)] {
+                            ::image::RgbaImage::from_raw(image.width, image.height, image.pixels.clone()).unwrap()
+                                .save(directory.join(format!("filter-{name}-{frame}.png"))).unwrap();
+                        }
+                        live.mark_full_redraw();
+                        super::toggle_motion_present_tests::render(live);
+                        let full = super::toggle_motion_present_tests::read_frame(live);
+                        ::image::RgbaImage::from_raw(full.width, full.height, full.pixels).unwrap()
+                            .save(directory.join(format!("filter-full-{frame}.png"))).unwrap();
+                    }
+                    assert_eq!(differences, 0, "filter scroll erased Gallery sidebar at frame {frame}");
+                    continue;
+                }
+                live.mark_full_redraw();
+                super::toggle_motion_present_tests::render(live);
+                let full = super::toggle_motion_present_tests::read_frame(live);
+                let scale = live.window.scale_factor() as f32;
+                let left = ((panel[0] + 2.0) * scale) as usize;
+                let top = ((panel[1] + 2.0) * scale) as usize;
+                let right = ((panel[0] + panel[2] - 2.0) * scale) as usize;
+                let bottom = ((panel[1] + panel[3] - 2.0) * scale) as usize;
+                let differences = (top..bottom).flat_map(|vertical| (left..right).map(move |horizontal| (horizontal, vertical)))
+                    .filter(|(horizontal, vertical)| {
+                        let logical = [*horizontal as f32 / scale, *vertical as f32 / scale];
+                        if logical[1] < toggle[1] + toggle[3] + 4.0
+                            && !(logical[0] > toggle[0] + 2.0 && logical[0] < toggle[0] + toggle[2] - 2.0
+                                && logical[1] > toggle[1] + 2.0 && logical[1] < toggle[1] + toggle[3] - 2.0) {
+                            return false;
+                        }
+                        let pixel = (vertical * full.width as usize + horizontal) * 4;
+                        partial.pixels[pixel..pixel + 4].iter().zip(&full.pixels[pixel..pixel + 4])
+                            .any(|(actual, expected)| actual.abs_diff(*expected) > 3)
+                    }).count();
+                if differences > 0 {
+                    mismatched_frames += 1;
+                    eprintln!("performance panel frame {frame}: {differences} differing pixels, bounds={panel:?}");
+                    if mismatched_frames <= 4 {
+                        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("../../.theme-evidence/ui-regressions");
+                        std::fs::create_dir_all(&directory).unwrap();
+                        for (name, image) in [("partial", partial), ("full", full)] {
+                            ::image::RgbaImage::from_raw(image.width, image.height, image.pixels).unwrap()
+                                .save(directory.join(format!("hover-{name}-{frame}.png"))).unwrap();
+                        }
+                    }
+                }
+            }
+            assert_eq!(mismatched_frames, 0, "performance panel paint diverged from full repaint");
+            drop(app);
+            clear_app_runtime();
+            crate::style::set_css_transition_virtual_timeline(false);
+            event_loop.exit();
+        }
+        fn window_event(&mut self, _: &dyn ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    }
+    let mut builder = EventLoop::builder();
+    builder.with_any_thread(true);
+    builder.build().unwrap().run_app(Harness(filters)).unwrap();
+}
+
+#[test]
+#[ignore = "requires native Windows GPU presentation"]
+fn real_gallery_svg_filters_retain_pixels_during_scroll() {
+    use winit::application::ApplicationHandler;
+    use winit::event::WindowEvent;
+    use winit::event_loop::{ActiveEventLoop, EventLoop};
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    use winit::window::{WindowAttributes, WindowId};
+
+    struct Harness;
+    impl ApplicationHandler for Harness {
+        fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+            crate::init();
+            clear_app_runtime();
+            reset_registered_anchors();
+            crate::style::set_css_transition_virtual_timeline(true);
+            crate::style::set_css_transition_timeline_ms(0.0);
+            let gallery_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../examples/gallery");
+            crate::style::load_and_install_theme_overrides(gallery_root.join("theme.toml")).unwrap();
+            let source = format!("{}/assets/firefox-logo.svg", crate::shared::gallery_resource_root().display());
+            let key = crate::app::pending_images::texture_key_for_src(&source);
+            assert!(crate::app::pending_images::queue_image_from_src(
+                key, gallery_root.join("assets/firefox-logo.svg").to_str().unwrap(),
+            ));
+            let window: Arc<dyn Window> = Arc::from(event_loop.create_window(
+                WindowAttributes::default().with_title("Gallery SVG filter scroll regression")
+                    .with_surface_size(winit::dpi::LogicalSize::new(1000.0, 700.0))
+                    .with_visible(false),
+            ).unwrap());
+            let mut state = crate::utils::block_on::block_on(AppState::new_bootstrap(
+                window, crate::app::WindowOptions::new(),
+            ));
+            let (owner, root) = create_root(|| crate::authoring::mount::with_inline_mount(|| {
+                Element::new().w("100%").h("100%").flex_row()
+                    .child(Element::new().w(200.0).h("100%").flex_shrink(0.0)
+                        .text("Jadix Gallery\nNavigation\nForms\nLayout\nText\nAnimation"))
+                    .child(crate::components::scroll_area("filter-scroll-regression")
+                        .flex_grow(1.0).min_w(0.0).h("100%")
+                        .child(Element::new().h(4800.0).flex_shrink(0.0))
+                        .child(crate::pages::layout::FilterShowcase(Default::default())))
+            }));
+            state.rebuild_ui(root);
+            for _ in 0..4 {
+                super::toggle_motion_present_tests::render(&mut state);
+            }
+            let mut pixels_by_key = std::collections::HashMap::new();
+            for frame in 0..60 {
+                let offset = 4720.0 + (frame % 30) as f32 * 0.3;
+                use_signal(&crate::core::scroll_viewport::scroll_offset_y_signal_key("filter-scroll-regression"), || 0.0_f32)
+                    .set_silent(offset);
+                state.update_scroll_offset_in_place("filter-scroll-regression", [0.0, offset]);
+                state.scroll_layer_clear = true;
+                super::toggle_motion_present_tests::render(&mut state);
+                let partial = super::toggle_motion_present_tests::read_frame(&mut state);
+                state.mark_full_redraw();
+                super::toggle_motion_present_tests::render(&mut state);
+                let full = super::toggle_motion_present_tests::read_frame(&mut state);
+                let sidebar_width = (195.0 * state.window.scale_factor()) as usize;
+                let sidebar_differences = partial.pixels.chunks_exact(4)
+                    .zip(full.pixels.chunks_exact(4)).enumerate()
+                    .filter(|(index, (actual, expected))| index % (full.width as usize) < sidebar_width
+                        && actual.iter().zip(*expected).any(|(actual, expected)| actual.abs_diff(*expected) > 3))
+                    .count();
+                assert_eq!(sidebar_differences, 0, "filter scroll erased sidebar text at frame {frame}");
+                fn filter_bounds(element: &Element, bounds: &mut Vec<[f32; 4]>) {
+                    if element.style.filter.is_some() {
+                        bounds.push(element.viewport_layout_bounds());
+                    }
+                    for child in &element.children { filter_bounds(child, bounds); }
+                }
+                let mut bounds = Vec::new();
+                filter_bounds(&state.root_element, &mut bounds);
+                let scale = state.window.scale_factor() as f32;
+                for bounds in bounds {
+                    let left = ((bounds[0] + 4.0).max(0.0) * scale) as usize;
+                    let top = ((bounds[1] + 4.0).max(0.0) * scale) as usize;
+                    let right = (((bounds[0] + bounds[2] - 4.0) * scale) as usize).min(full.width as usize);
+                    let bottom = (((bounds[1] + bounds[3] - 4.0) * scale) as usize).min(full.height as usize);
+                    let differences = (top..bottom).flat_map(|vertical| (left..right).map(move |horizontal| (horizontal, vertical)))
+                        .filter(|(horizontal, vertical)| {
+                            let pixel = (vertical * full.width as usize + horizontal) * 4;
+                            partial.pixels[pixel..pixel + 4].iter().zip(&full.pixels[pixel..pixel + 4])
+                                .any(|(actual, expected)| actual.abs_diff(*expected) > 3)
+                        }).count();
+                    if differences > 0 {
+                        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                            .join("../../.theme-evidence/ui-regressions");
+                        std::fs::create_dir_all(&directory).unwrap();
+                        for (name, image) in [("partial", &partial), ("full", &full)] {
+                            ::image::RgbaImage::from_raw(image.width, image.height, image.pixels.clone()).unwrap()
+                                .save(directory.join(format!("svg-{name}-{frame}.png"))).unwrap();
+                        }
+                    }
+                    assert_eq!(differences, 0, "SVG filter presentation flickered at frame {frame}: {bounds:?}");
+                }
+                let outputs: Vec<_> = state.image_textures.keys()
+                    .filter(|key| key.starts_with("jadix_filter:")).cloned().collect();
+                assert!(outputs.len() >= 15, "SVG filter outputs missing at frame {frame}: {}", outputs.len());
+                for key in outputs {
+                    let texture = &state.image_textures.get(&key).unwrap()._texture;
+                    let image = crate::renderer::offscreen::readback_texture(
+                        &state.device, &state.queue, texture, texture.width(), texture.height(),
+                        state.device.create_command_encoder(&Default::default()),
+                    ).unwrap();
+                    assert!(image.pixels.chunks_exact(4).any(|pixel| pixel[3] > 2),
+                        "SVG filter became blank at frame {frame}: {key}");
+                    if let Some(previous) = pixels_by_key.insert(key.clone(), image.pixels.clone()) {
+                        assert_eq!(previous, image.pixels, "SVG filter pixels flickered at frame {frame}: {key}");
+                    }
+                }
+            }
+            drop(owner);
+            crate::style::set_css_transition_virtual_timeline(false);
+            event_loop.exit();
+        }
+        fn window_event(&mut self, _: &dyn ActiveEventLoop, _: WindowId, _: WindowEvent) {}
+    }
+    let mut builder = EventLoop::builder();
+    builder.with_any_thread(true);
+    builder.build().unwrap().run_app(Harness).unwrap();
+}
+
 #[cfg(feature = "performance")]
 #[test]
 #[ignore = "requires the complete native Gallery and Windows GPU presentation"]
