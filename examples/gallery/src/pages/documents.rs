@@ -7,12 +7,20 @@ const MARKDOWN: &str = "# 原生文档工作台\n\n直接点击段落开始编�
 
 const RUST_SOURCE: &str = "use jadix_components::prelude::*;\n\nfn counter() -> Element {\n    let count = use_signal(\"counter\", || 0);\n    let action: Element = button(\"increment\")\n        .text(\"增加\")\n        .on_click(move || count.update(|value| *value += 1))\n        .into();\n    ui! {\n        <VStack gap=\"1rem\">\n            <Label>{format!(\"计数：{}\", count.get())}</Label>\n            {action}\n        </VStack>\n    }\n}\n";
 
+pub(crate) fn gallery_document_state() -> DocumentEditorState {
+    use_signal("gallery-document-session", || {
+        Rc::new(jadix::core::reactivity::create_root(|| {
+            DocumentEditorState::new(MARKDOWN)
+        }))
+    })
+    .peek()
+    .1
+    .clone()
+}
+
 #[component]
 pub(crate) fn DocumentEditingShowcase() -> Element {
-    let editor = use_signal("gallery-document-state", || {
-        DocumentEditorState::new(MARKDOWN)
-    })
-    .peek();
+    let editor = gallery_document_state();
     let modes: Vec<Element> = [
         ("live", "实时预览", DocumentEditMode::LivePreview),
         ("source", "Markdown 源码", DocumentEditMode::Source),

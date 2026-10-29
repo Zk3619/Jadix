@@ -578,12 +578,11 @@ fn gallery_catalog_has_unique_pages_and_populated_groups() {
 
 #[test]
 fn document_controls_switch_modes_and_restore_content() {
-    use jadix::text::{DocumentEditMode, DocumentEditorState};
+    use jadix::text::DocumentEditMode;
     run_on_gallery_build_stack(|| {
         create_root(|| {
             let tree = DocumentEditingShowcase(Default::default());
-            let editor =
-                use_signal("gallery-document-state", || DocumentEditorState::new("")).peek();
+            let editor = gallery_document_state();
             let original = editor.document().source().text().to_string();
             for (id, mode) in [
                 ("source", DocumentEditMode::Source),
@@ -600,6 +599,27 @@ fn document_controls_switch_modes_and_restore_content() {
             assert_eq!(editor.document().source().text(), original);
         });
         jadix::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
+fn document_session_survives_page_owner_rebuilds() {
+    use jadix::text::DocumentEditMode;
+    run_on_gallery_build_stack(|| {
+        for iteration in 0..3 {
+            let (owner, tree) = create_root(|| DocumentEditingShowcase(Default::default()));
+            let editor = gallery_document_state();
+            if iteration == 0 {
+                editor.set_document("# Persistent content");
+            }
+            assert_eq!(editor.document().source().text(), "# Persistent content");
+            let button = gallery_find_by_tid(&tree, "gallery-document-source").unwrap();
+            (button.on_click.as_ref().unwrap().borrow_mut())();
+            assert_eq!(editor.snapshot().mode, DocumentEditMode::Source);
+            owner.dispose();
+            jadix::app::reactive::reset_registered_anchors();
+            assert!(editor.signal().is_alive());
+        }
     });
 }
 
