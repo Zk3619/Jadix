@@ -15,5 +15,5 @@ cp "${CARGO_TARGET_DIR:-$workspace/target}/$rust_target/release/gallery" "$bundl
 cp examples/gallery/theme.toml examples/gallery/styles.toml "$bundle/"
 cp examples/gallery/LINUX.md "$bundle/README.md"
 cp -R examples/gallery/assets "$bundle/"
-tar -czf "$output/jadix-gallery-$target-release.tar.gz" -C "$bundle" .
+tar -czf "$output/jadix-gallery-$target-release.tar.gz" -C "$bundle" gallery theme.toml styles.toml assets README.md
 sha256sum "$bundle/gallery" "$output/jadix-gallery-$target-release.tar.gz"
