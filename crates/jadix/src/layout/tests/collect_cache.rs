@@ -326,6 +326,18 @@ fn scroll_band_cull_keeps_a_live_paint_subtree() {
 }
 
 #[test]
+#[cfg(feature = "scene3d")]
+fn scene3d_keeps_its_ancestor_collect_live() {
+    let leaf: Element = crate::primitives::scene3d::scene3d().into();
+    let mut root = Element::new().child(Element::new().child(leaf));
+    stamp_subtree_paint_hashes(&mut root, false);
+    assert!(root.collect_skip_live);
+    assert!(root.children[0].collect_skip_live);
+    assert!(root.children[0].children[0].collect_skip_live);
+    assert!(!subtree_is_skippable(&root));
+}
+
+#[test]
 fn stacking_band_node_is_not_skippable() {
     let mut abs = el_with_child();
     abs.style.position = taffy::style::Position::Absolute;

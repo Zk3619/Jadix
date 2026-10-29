@@ -293,7 +293,21 @@ pub fn scene3d_tex_from_element_attrs(
     }
     let t0 = *SCENE3D_EPOCH.get_or_init(std::time::Instant::now);
     let t = t0.elapsed().as_secs_f32();
-    let key = format!("jadix_scene3d:{w}x{h}");
+    use std::hash::{Hash, Hasher};
+    let mut identity = std::collections::hash_map::DefaultHasher::new();
+    for attr in [
+        ATTR_SCENE3D_FOV_DEG,
+        ATTR_SCENE3D_YAW_SPEED,
+        ATTR_SCENE3D_PITCH,
+        ATTR_SCENE3D_BG,
+        ATTR_SCENE3D_CAMERA_Z,
+        ATTR_SCENE3D_LIGHT,
+        ATTR_SCENE3D_MATERIAL,
+        ATTR_SCENE3D_LABEL,
+    ] {
+        attrs.get(attr).hash(&mut identity);
+    }
+    let key = format!("jadix_scene3d:{:016x}:{w}x{h}", identity.finish());
     let yaw_speed = attrs
         .get(ATTR_SCENE3D_YAW_SPEED)
         .and_then(|s| s.parse::<f32>().ok())

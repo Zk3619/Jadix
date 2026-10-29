@@ -4348,7 +4348,12 @@ fn clip_rect_against_layered_siblings(
         .filter(|p| slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed))
         .collect();
     for (i, p) in node_paints.iter().enumerate() {
-        if !p.layered || p.overlay || p.bounds[2] <= 0.0 || p.bounds[3] <= 0.0 {
+        if !p.layered
+            || p.overlay
+            || p.bounds[2] <= 0.0
+            || p.bounds[3] <= 0.0
+            || !slot_emits_paint(p)
+        {
             continue;
         }
         if slot_matches_dirty(dirty_key, dirty_bounds, p, has_keyed) {

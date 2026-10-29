@@ -1501,6 +1501,31 @@ fn slot(key: u64, bounds: [f32; 4], text: (usize, usize)) -> NodePaint {
     }
 }
 
+#[test]
+fn layered_scrollbar_only_crops_menu_repaint_while_it_emits_paint() {
+    let menu_bounds = [8.0, 40.0, 232.0, 32.0];
+    let mut menu = slot(1, menu_bounds, (0, 0));
+    menu.instance = (0, 1);
+    menu.layered = true;
+    let mut track = slot(2, [236.0, 0.0, 8.0, 480.0], (0, 0));
+    track.layered = true;
+    for visible in [false, true] {
+        track.instance = if visible { (1, 2) } else { (1, 1) };
+        let paints = [menu.clone(), track.clone()];
+        let clipped =
+            clip_node_present_rect(menu_bounds, menu.key, menu_bounds, &paints, 1.0, true, &[]);
+        assert_eq!(
+            clipped,
+            if visible {
+                [8.0, 40.0, 228.0, 32.0]
+            } else {
+                menu_bounds
+            },
+            "scrollbar visible={visible}"
+        );
+    }
+}
+
 /// Click toggles the caption via `bind_text`, which also dirties the button.
 /// Reset restores the page; the matching node draw restores the rounded
 /// button exactly once before its caption. A caption-only dirty instead

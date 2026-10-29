@@ -29,6 +29,83 @@ fn canvas_dirty_pixels_present_without_scrolling() {
     native_texture_frames(true);
 }
 
+#[cfg(feature = "scene3d")]
+#[test]
+#[ignore = "requires a native Windows GPU surface"]
+fn scene3d_keeps_presenting_motion_without_input() {
+    native_window(|window| {
+        crate::core::reactivity::create_root(|| {
+            let mut state = crate::utils::block_on::block_on(AppState::new_bootstrap(
+                window,
+                crate::app::WindowOptions::new(),
+            ));
+            let leaf: Element = crate::primitives::scene3d::scene3d()
+                .w(100.0)
+                .h(80.0)
+                .yaw_speed(1.0)
+                .pitch_deg(20.0)
+                .into();
+            state.rebuild_ui(Element::new().w("100%").h("100%").bg("#000000").child(leaf));
+            let mut previous = None;
+            for frame in 0..6 {
+                std::thread::sleep(std::time::Duration::from_millis(40));
+                state
+                    .render(
+                        [-1.0; 2],
+                        ScrollbarUpdateMode::ViewportsOnly,
+                        None,
+                        false,
+                        false,
+                        false,
+                    )
+                    .unwrap();
+                assert!(
+                    state.scene3d_frame_active,
+                    "3D frame clock stopped at frame {frame}"
+                );
+                assert!(crate::app::lifecycle::about_to_wait_force_immediate(
+                    false,
+                    false,
+                    false,
+                    false,
+                    state.scene3d_frame_active,
+                    false,
+                    false,
+                    false,
+                ));
+                let image = readback_texture(
+                    &state.device,
+                    &state.queue,
+                    state.present_retain.color_texture_for_test().unwrap(),
+                    state.config.width,
+                    state.config.height,
+                    state.device.create_command_encoder(&Default::default()),
+                )
+                .unwrap();
+                if let Some(previous) = previous {
+                    assert!(image.pixels != previous, "3D motion froze at frame {frame}");
+                }
+                previous = Some(image.pixels);
+            }
+            state.rebuild_ui(Element::new().w("100%").h("100%"));
+            state
+                .render(
+                    [-1.0; 2],
+                    ScrollbarUpdateMode::Full,
+                    None,
+                    false,
+                    false,
+                    false,
+                )
+                .unwrap();
+            assert!(
+                !state.scene3d_frame_active,
+                "unmounted 3D must release its frame clock"
+            );
+        });
+    });
+}
+
 #[test]
 #[ignore = "requires a native Windows GPU surface"]
 fn same_key_media_frames_present_without_geometry_changes() {

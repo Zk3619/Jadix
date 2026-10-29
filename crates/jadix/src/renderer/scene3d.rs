@@ -53,6 +53,7 @@ impl CubeVert {
 
 pub struct Scene3dGpu {
     pipeline: wgpu::RenderPipeline,
+    target_format: wgpu::TextureFormat,
     uniform_buf: wgpu::Buffer,
     uniform_bg: wgpu::BindGroup,
     vertex_buf: wgpu::Buffer,
@@ -63,15 +64,15 @@ pub struct Scene3dGpu {
 }
 
 impl Scene3dGpu {
-    pub fn try_new(device: &wgpu::Device) -> Option<Self> {
+    pub fn try_new(device: &wgpu::Device, format: wgpu::TextureFormat) -> Option<Self> {
         crate::renderer::wgpu_compat::try_gpu_init(
             device,
             "scene3d GPU pipeline failed; 3D leaves disabled",
-            || Self::build(device),
+            || Self::build(device, format),
         )
     }
 
-    fn build(device: &wgpu::Device) -> Self {
+    fn build(device: &wgpu::Device, format: wgpu::TextureFormat) -> Self {
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("jadix-scene3d-shader"),
             source: wgpu::ShaderSource::Wgsl(include_str!("scene3d.wgsl").into()),
@@ -110,7 +111,7 @@ impl Scene3dGpu {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    format,
                     blend: Some(wgpu::BlendState::REPLACE),
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -162,6 +163,7 @@ impl Scene3dGpu {
 
         Self {
             pipeline,
+            target_format: format,
             uniform_buf,
             uniform_bg,
             vertex_buf,
@@ -171,26 +173,27 @@ impl Scene3dGpu {
         }
     }
 
-    /// Returns `true` if any cube was drawn (caller should `window.request_redraw` to keep spinning).
-    pub fn flush(
+    /// Returns the updated texture keys for local damage and the animation frame clock.
+    pub fn flush_updated_textures(
         &mut self,
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         textured: &TexturedQuadPipeline,
         images: &mut HashMap<String, GpuImageTexture>,
-    ) -> bool {
+    ) -> Vec<String> {
         let mut last: HashMap<String, crate::primitives::scene3d::Scene3dJob> = HashMap::new();
         for job in take_scene3d_jobs() {
             last.insert(job.key.clone(), job);
         }
-        let any = !last.is_empty();
+        let mut updated = Vec::with_capacity(last.len());
         for job in last.into_values() {
+            updated.push(job.key.clone());
             self.render_job(device, queue, textured, images, job);
         }
-        if any {
+        if !updated.is_empty() {
             crate::app::pending_images::bump_dynamic_texture_epoch();
         }
-        any
+        updated
     }
 
     fn render_job(
@@ -218,7 +221,7 @@ impl Scene3dGpu {
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                format: self.target_format,
                 usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                     | wgpu::TextureUsages::TEXTURE_BINDING,
                 view_formats: &[],
@@ -498,3 +501,7 @@ fn rotate_x(a: f32) -> [f32; 16] {
     m[10] = c;
     m
 }
+
+#[cfg(test)]
+#[path = "tests/scene3d.rs"]
+mod tests;

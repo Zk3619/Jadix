@@ -815,6 +815,15 @@ pub(crate) fn node_paint_needs_frame(el: &Element) -> bool {
     {
         return true;
     }
+    #[cfg(feature = "scene3d")]
+    if el
+        .attrs
+        .get(crate::primitives::scene3d::ATTR_SCENE3D)
+        .map(String::as_str)
+        == Some("1")
+    {
+        return true;
+    }
     el.transition_snapshot.has_active_tweens()
 }
 

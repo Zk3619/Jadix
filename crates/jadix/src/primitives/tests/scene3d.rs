@@ -56,6 +56,37 @@ fn scene3d_camera_light_attrs() {
     assert!(leaf.get_attr(ATTR_SCENE3D_MATERIAL).is_some());
 }
 
+#[cfg(feature = "scene3d")]
+#[test]
+fn scene3d_equal_sizes_with_distinct_cameras_keep_separate_targets() {
+    let first: Element = scene3d()
+        .w(80.0)
+        .h(60.0)
+        .pitch_deg(12.0)
+        .label("first")
+        .into();
+    let second: Element = scene3d()
+        .w(80.0)
+        .h(60.0)
+        .pitch_deg(52.0)
+        .label("second")
+        .into();
+    let first_key = scene3d_tex_from_element_attrs(&first.attrs, 80.0, 60.0)
+        .unwrap()
+        .0;
+    let second_key = scene3d_tex_from_element_attrs(&second.attrs, 80.0, 60.0)
+        .unwrap()
+        .0;
+    assert_ne!(first_key, second_key);
+    assert_eq!(
+        first_key,
+        scene3d_tex_from_element_attrs(&first.attrs, 80.0, 60.0)
+            .unwrap()
+            .0
+    );
+    take_scene3d_jobs();
+}
+
 /// Layout collect used to call `runtime::request_redraw` while `AppState` was already
 /// `borrow_mut` → panic at `runtime.rs` + GLES WGL Drop on Windows.
 #[cfg(feature = "scene3d")]

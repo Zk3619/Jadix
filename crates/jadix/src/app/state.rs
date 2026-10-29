@@ -177,6 +177,7 @@ pub(super) struct AppState {
     scene3d: Option<crate::renderer::scene3d::Scene3dGpu>,
     shader: Option<crate::renderer::shader_leaf::ShaderGpu>,
     pub(super) shader_frame_active: bool,
+    pub(super) scene3d_frame_active: bool,
     path2d: Option<crate::renderer::path_pipeline::PathGpu>,
     backdrop_blur: BackdropBlurPipeline,
     local_backdrop_layers: Vec<Option<(u64, BackdropBlurPipeline)>>,
@@ -2112,6 +2113,7 @@ impl AppState {
             scene3d: None,
             shader: None,
             shader_frame_active: false,
+            scene3d_frame_active: false,
             path2d,
             backdrop_blur,
             modal_backdrop: None,
@@ -6826,13 +6828,17 @@ impl AppState {
             self.image_textures.insert_with_size(id, gpu, w, h);
         }
         let images_uploaded = Instant::now();
+        self.scene3d_frame_active = false;
         #[cfg(feature = "scene3d")]
         {
             if !crate::renderer::scene3d::scene3d_gpu_enabled() {
                 let _ = crate::primitives::scene3d::take_scene3d_jobs();
             } else if crate::primitives::scene3d::has_scene3d_jobs() || self.scene3d.is_some() {
                 if self.scene3d.is_none() {
-                    match crate::renderer::scene3d::Scene3dGpu::try_new(&self.device) {
+                    match crate::renderer::scene3d::Scene3dGpu::try_new(
+                        &self.device,
+                        self.config.format,
+                    ) {
                         Some(gpu) => self.scene3d = Some(gpu),
                         None => {
                             crate::renderer::scene3d::disable_scene3d_gpu_runtime();
@@ -6841,12 +6847,15 @@ impl AppState {
                     }
                 }
                 if let Some(gpu) = self.scene3d.as_mut() {
-                    if gpu.flush(
+                    let updated = gpu.flush_updated_textures(
                         &self.device,
                         &self.queue,
                         &self.textured_pipeline,
                         &mut self.image_textures,
-                    ) {
+                    );
+                    if !updated.is_empty() {
+                        updated_texture_keys.extend(updated);
+                        self.scene3d_frame_active = true;
                         // Collect already ran under `&mut self`; do not go through `runtime::request_redraw`.
                         self.window.request_redraw();
                     }

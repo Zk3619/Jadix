@@ -4666,11 +4666,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     }
                 }
                 self.paint_clock_active = smooth_scroll_animating
-                    || self
-                        .state
-                        .borrow()
-                        .as_ref()
-                        .is_some_and(|state| state.shader_frame_active)
+                    || self.state.borrow().as_ref().is_some_and(|state| {
+                        state.shader_frame_active || state.scene3d_frame_active
+                    })
                     || scrollbar_fade_animating
                     || svg_smil_active
                     || anim_icon_active
