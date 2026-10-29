@@ -19,6 +19,7 @@ pub fn parse_and_register_keyframes(css: &str) -> Result<Vec<String>, String> {
     Ok(names)
 }
 
+#[cfg(any(all(debug_assertions, feature = "hot-reload"), test))]
 pub(crate) fn parse_keyframe_definitions(
     css: &str,
 ) -> Result<Vec<(String, Vec<KeyframeStop>)>, String> {
@@ -31,10 +32,7 @@ fn collect_keyframe_definitions(
 ) -> Result<Vec<(String, Vec<KeyframeStop>)>, String> {
     let mut definitions = Vec::new();
     let mut rest = css;
-    loop {
-        let Some(at) = rest.find("@keyframes") else {
-            break;
-        };
+    while let Some(at) = rest.find("@keyframes") {
         if strict && !rest[..at].trim().is_empty() {
             return Err("only @keyframes declarations are supported".into());
         }
@@ -351,15 +349,11 @@ fn parse_transform_value(s: &str) -> Option<AnimatableValue> {
                     ty += *v;
                 }
             }
-            TransformFunction::TranslateX(x) => {
-                if let crate::layout::dimension::CssDim::Px(v) = x {
-                    tx += *v;
-                }
+            TransformFunction::TranslateX(crate::layout::dimension::CssDim::Px(value)) => {
+                tx += *value
             }
-            TransformFunction::TranslateY(y) => {
-                if let crate::layout::dimension::CssDim::Px(v) = y {
-                    ty += *v;
-                }
+            TransformFunction::TranslateY(crate::layout::dimension::CssDim::Px(value)) => {
+                ty += *value
             }
             TransformFunction::Scale(x, y) => {
                 sx *= *x;

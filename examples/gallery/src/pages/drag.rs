@@ -1316,25 +1316,26 @@ mod drop_position_tests {
         jadix::init();
         create_root(|| {
             let mut root = jadix::authoring::mount::with_inline_mount(|| {
-                Element::from(drag_scope("all-chip-padding-test").child(|| {
-                    let mut rows = vec![
-                        card_chip("Card Jupiter"),
-                        compact_chip("Mon Jupiter"),
-                        full_width_chip("Clone Jupiter"),
-                        swap_chip("Swap Jupiter", "swap-list", 0, "swap-row".into()),
-                        multi_select_chip("Multi Jupiter", "multi-row"),
-                        jadix_dnd::utils::drag::draggable("padding-handle").child(handle_row),
-                        jadix_dnd::utils::drag::draggable("padding-ignore").child(ignore_row),
-                        token_chip(),
-                        list_chip("List Jupiter"),
-                    ];
-                    for row in &mut rows {
-                        row.set_attr("data-padding-test-row", "1");
-                    }
-                    Element::new().w(600.0).flex_col().children(rows)
-                }))
-                .w(600.0)
-                .h(1200.0)
+                drag_scope("all-chip-padding-test")
+                    .child(|| {
+                        let mut rows = vec![
+                            card_chip("Card Jupiter"),
+                            compact_chip("Mon Jupiter"),
+                            full_width_chip("Clone Jupiter"),
+                            swap_chip("Swap Jupiter", "swap-list", 0, "swap-row".into()),
+                            multi_select_chip("Multi Jupiter", "multi-row"),
+                            jadix_dnd::utils::drag::draggable("padding-handle").child(handle_row),
+                            jadix_dnd::utils::drag::draggable("padding-ignore").child(ignore_row),
+                            token_chip(),
+                            list_chip("List Jupiter"),
+                        ];
+                        for row in &mut rows {
+                            row.set_attr("data-padding-test-row", "1");
+                        }
+                        Element::new().w(600.0).flex_col().children(rows)
+                    })
+                    .w(600.0)
+                    .h(1200.0)
             });
             let mut layout = jadix::layout::LayoutTree::new();
             let scene = layout.build_and_layout(&mut root, 600.0, 1200.0, [-1.0; 2]);
@@ -1379,19 +1380,20 @@ mod drop_position_tests {
         create_root(|| {
             let items = Signal::new(vec!["Mercury".to_string(), "Jupiter".to_string()]);
             let mut root = jadix::authoring::mount::with_inline_mount(|| {
-                Element::from(drag_scope("chip-height-test").child(|| {
-                    keyed_sortable_chips(
-                        "chip-height-rows",
-                        items,
-                        "planet",
-                        "planets",
-                        "planets",
-                        "",
-                        0.5,
-                    )
-                }))
-                .w(600.0)
-                .h(300.0)
+                drag_scope("chip-height-test")
+                    .child(|| {
+                        keyed_sortable_chips(
+                            "chip-height-rows",
+                            items,
+                            "planet",
+                            "planets",
+                            "planets",
+                            "",
+                            0.5,
+                        )
+                    })
+                    .w(600.0)
+                    .h(300.0)
             });
             let mut layout = jadix::layout::LayoutTree::new();
             let scene = layout.build_and_layout(&mut root, 600.0, 300.0, [-1.0; 2]);
@@ -1430,24 +1432,22 @@ mod drop_position_tests {
             let positions = [Signal::new([48.0, 72.0]), Signal::new([200.0, 72.0])];
             let delta = Signal::new([0.0; 2]);
             let mut context = None;
-            let mut root: Element = drag_scope("gesture-preview-test")
-                .child(|| {
-                    let drag = use_drag().unwrap();
-                    context = Some(drag.clone());
-                    gesture_preview(
-                        Element::new()
-                            .w(100.0)
-                            .h(40.0)
-                            .bg("#ff0000")
-                            .rounded(3.0)
-                            .opacity(0.6),
-                        drag,
-                        positions,
-                        delta,
-                        visible,
-                    )
-                })
-                .into();
+            let mut root: Element = drag_scope("gesture-preview-test").child(|| {
+                let drag = use_drag().unwrap();
+                context = Some(drag.clone());
+                gesture_preview(
+                    Element::new()
+                        .w(100.0)
+                        .h(40.0)
+                        .bg("#ff0000")
+                        .rounded(3.0)
+                        .opacity(0.6),
+                    drag,
+                    positions,
+                    delta,
+                    visible,
+                )
+            });
             let drag = context.unwrap();
             let preview = &mut root;
             let authored = preview.style.clone();
@@ -2568,7 +2568,6 @@ pub(crate) fn DragShowcase() -> Element {
     let sensor_target = use_signal("gal_drag_sensor_target", || None::<String>);
 
     let clone_on_end = {
-        let clone_tags = clone_tags.clone();
         move |ev: &DragEvent| {
             let mut v = clone_tags.peek();
             apply_pull_clone_event(&mut v, ev);
@@ -2584,8 +2583,6 @@ pub(crate) fn DragShowcase() -> Element {
     });
 
     let swap_on_end = {
-        let swap_left = swap_left.clone();
-        let swap_right = swap_right.clone();
         move |ev: &DragEvent| {
             apply_two_list_event(swap_left, swap_right, "swap-left", ev);
         }
@@ -2604,7 +2601,6 @@ pub(crate) fn DragShowcase() -> Element {
         });
 
     let multi_on_end = {
-        let multi_tags = multi_tags.clone();
         move |ev: &DragEvent| {
             let mut v = multi_tags.peek();
             apply_event(&mut v, None, ev);
@@ -2614,116 +2610,106 @@ pub(crate) fn DragShowcase() -> Element {
     let multi_board = rsx_multi_board(multi_tags, multi_on_end);
 
     let data_board = {
-        let data_note = data_note.clone();
-        Element::from(
-            drag_scope("gal-drag-data")
-                .on_drag_start({
-                    let data_note = data_note.clone();
-                    move |ev| {
-                        if let Some(n) = ev
-                            .data
-                            .as_ref()
-                            .and_then(|d| d.downcast_ref::<i32>().copied())
-                        {
-                            data_note.set(format!("drag_start · data={n}"));
-                        }
+        drag_scope("gal-drag-data")
+            .on_drag_start({
+                move |ev| {
+                    if let Some(n) = ev
+                        .data
+                        .as_ref()
+                        .and_then(|d| d.downcast_ref::<i32>().copied())
+                    {
+                        data_note.set(format!("drag_start · data={n}"));
                     }
-                })
-                .on_drag_end({
-                    let data_note = data_note.clone();
-                    move |ev| {
-                        if let Some(n) = ev
-                            .data
-                            .as_ref()
-                            .and_then(|d| d.downcast_ref::<i32>().copied())
-                        {
-                            data_note.set(format!("drag_end · data={n} · id={}", ev.draggable_id));
-                        }
+                }
+            })
+            .on_drag_end({
+                move |ev| {
+                    if let Some(n) = ev
+                        .data
+                        .as_ref()
+                        .and_then(|d| d.downcast_ref::<i32>().copied())
+                    {
+                        data_note.set(format!("drag_end · data={n} · id={}", ev.draggable_id));
                     }
-                })
-                .child({
-                    let data_note = data_note.clone();
-                    move || {
-                        let note = data_note.get();
-                        ui! {
-                            <VStack gap="0.375rem" w="100%">
-                                <Label text_size="0.75rem" color="muted-foreground">{ note }</Label>
-                                <HStack gap="0.5rem" w="100%" wrap="wrap">
-                                    <Draggable
-                                        id="data-a"
-                                        item_type="payload"
-                                        data={Rc::new(42i32)}
-                                    >
-                                        { compact_chip("payload 42 · RSX data=") }
-                                    </Draggable>
-                                    <Draggable
-                                        id="data-b"
-                                        item_type="payload"
-                                        data={Rc::new(99i32)}
-                                    >
-                                        { compact_chip("payload 99") }
-                                    </Draggable>
-                                </HStack>
-                                { Element::from(
-                                    drag_overlay()
-                                        .align(OverlayAlign::Center)
-                                        .child_for(|item| data_payload_ghost(item)),
-                                ) }
-                            </VStack>
-                        }
+                }
+            })
+            .child({
+                move || {
+                    let note = data_note.get();
+                    ui! {
+                        <VStack gap="0.375rem" w="100%">
+                            <Label text_size="0.75rem" color="muted-foreground">{ note }</Label>
+                            <HStack gap="0.5rem" w="100%" wrap="wrap">
+                                <Draggable
+                                    id="data-a"
+                                    item_type="payload"
+                                    data={Rc::new(42i32)}
+                                >
+                                    { compact_chip("payload 42 · RSX data=") }
+                                </Draggable>
+                                <Draggable
+                                    id="data-b"
+                                    item_type="payload"
+                                    data={Rc::new(99i32)}
+                                >
+                                    { compact_chip("payload 99") }
+                                </Draggable>
+                            </HStack>
+                            { Element::from(
+                                drag_overlay()
+                                    .align(OverlayAlign::Center)
+                                    .child_for(data_payload_ghost),
+                            ) }
+                        </VStack>
                     }
-                }),
-        )
+                }
+            })
     };
 
     let idle_hits_board = {
-        let idle_hits_note = idle_hits_note.clone();
-        Element::from(
-            drag_scope("gal-drag-idle-hits")
-                .collision(CollisionAlg::PointerWithin)
-                .on_drag_end({
-                    let idle_hits_note = idle_hits_note.clone();
-                    move |ev: &DragEvent| {
-                        let target = ev.droppable_id.as_deref().unwrap_or("—");
-                        idle_hits_note.set(format!(
-                            "最近 drop · {} → {} · drag={} drop={}",
-                            ev.draggable_id,
-                            target,
-                            ev.items.len().max(1),
-                            usize::from(ev.droppable_id.is_some())
-                        ));
-                    }
-                })
-                .child(move || {
-                    ui! {
-                        <VStack gap="0.375rem" w="100%">
-                            <Label text_size="0.75rem" color="muted-foreground">
-                                { idle_hits_note.get() }
-                            </Label>
-                            <HStack gap="0.5rem" w="100%" wrap="wrap">
-                                <Draggable id="idle-a" item_type="peek">
-                                    { compact_chip("idle draggable A") }
-                                </Draggable>
-                                <Draggable id="idle-b" item_type="peek">
-                                    { compact_chip("idle draggable B") }
-                                </Draggable>
-                                <Droppable id="idle-zone" accept="peek">
-                                    { collision_hit_zone(
-                                        "idle-zone",
-                                        "idle droppable",
-                                        ui! {
-                                            <Label text_size="0.75rem" color="muted-foreground">
-                                                "未拖时 hits() 走 registered 表"
-                                            </Label>
-                                        },
-                                    ) }
-                                </Droppable>
-                            </HStack>
-                            { hits_hud() }
-                        </VStack>
-                    }
-                }),
-        )
+        drag_scope("gal-drag-idle-hits")
+            .collision(CollisionAlg::PointerWithin)
+            .on_drag_end({
+                move |ev: &DragEvent| {
+                    let target = ev.droppable_id.as_deref().unwrap_or("—");
+                    idle_hits_note.set(format!(
+                        "最近 drop · {} → {} · drag={} drop={}",
+                        ev.draggable_id,
+                        target,
+                        ev.items.len().max(1),
+                        usize::from(ev.droppable_id.is_some())
+                    ));
+                }
+            })
+            .child(move || {
+                ui! {
+                    <VStack gap="0.375rem" w="100%">
+                        <Label text_size="0.75rem" color="muted-foreground">
+                            { idle_hits_note.get() }
+                        </Label>
+                        <HStack gap="0.5rem" w="100%" wrap="wrap">
+                            <Draggable id="idle-a" item_type="peek">
+                                { compact_chip("idle draggable A") }
+                            </Draggable>
+                            <Draggable id="idle-b" item_type="peek">
+                                { compact_chip("idle draggable B") }
+                            </Draggable>
+                            <Droppable id="idle-zone" accept="peek">
+                                { collision_hit_zone(
+                                    "idle-zone",
+                                    "idle droppable",
+                                    ui! {
+                                        <Label text_size="0.75rem" color="muted-foreground">
+                                            "未拖时 hits() 走 registered 表"
+                                        </Label>
+                                    },
+                                ) }
+                            </Droppable>
+                        </HStack>
+                        { hits_hud() }
+                    </VStack>
+                }
+            })
     };
 
     let skip_on_end = move |ev: &DragEvent| {
@@ -2733,11 +2719,9 @@ pub(crate) fn DragShowcase() -> Element {
         rsx_skip_flags_board(shift_normal, shift_pinned, shift_follow, skip_on_end);
 
     let sensor_board = {
-        let sensor_target = sensor_target.clone();
-        Element::from(
-            drag_scope("gal-drag-sensor")
+        drag_scope("gal-drag-sensor")
                 .sensor("gallery-hotkey", {
-                    let sensor_target = sensor_target.clone();
+
                     move |ctx| {
                         let Some(id) = sensor_target.peek() else {
                             return false;
@@ -2747,7 +2731,7 @@ pub(crate) fn DragShowcase() -> Element {
                     }
                 })
                 .child({
-                    let sensor_target = sensor_target.clone();
+
                     move || {
                         ui! {
                             <VStack gap="0.375rem" w="100%">
@@ -2773,102 +2757,97 @@ pub(crate) fn DragShowcase() -> Element {
                             </VStack>
                         }
                     }
-                }),
-        )
+                })
     };
 
     let builder_drop = {
         let parked = use_signal("gal_drag_parked", || false);
-        Element::from(
-            drag_scope("gal-drag-builder")
-                .collision(CollisionAlg::PointerWithin)
-                .axis(Axis::Xy)
-                .restrict(Restrict::Viewport)
-                .on_drag_end(park_on_drop(parked, "dock"))
-                .child(move || {
-                    ui! {
-                        <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
-                            <Show when={!parked.get()}>
-                                <Draggable id="token" item_type="token">
-                                    { token_chip() }
-                                </Draggable>
-                            </Show>
-                            <Show when={parked.get()}>
-                                { vacated_slot("已放入右侧") }
-                            </Show>
-                            <Droppable id="dock" accept="token">
-                                { drop_park_zone("dock", parked, || {
-                                    ui! {
-                                        <Draggable id="token:dock" item_type="token">
-                                            { token_chip() }
-                                        </Draggable>
-                                    }
-                                }) }
-                            </Droppable>
-                            <DragOverlay />
-                        </HStack>
-                    }
-                }),
-        )
-    };
-
-    let collision_prefer = Element::from(
-        drag_scope("gal-drag-cfn")
-            .collision(CollisionAlg::MostIntersecting)
-            .collision_fn(|input| {
-                if input.droppables.iter().any(|c| c.id == "hit-prefer") {
-                    Some("hit-prefer".into())
-                } else {
-                    detect(
-                        CollisionAlg::MostIntersecting,
-                        input.pointer,
-                        input.dragged,
-                        input.droppables,
-                        input.active_id,
-                    )
-                }
-            })
-            .child(|| {
+        drag_scope("gal-drag-builder")
+            .collision(CollisionAlg::PointerWithin)
+            .axis(Axis::Xy)
+            .restrict(Restrict::Viewport)
+            .on_drag_end(park_on_drop(parked, "dock"))
+            .child(move || {
                 ui! {
                     <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
-                        <Draggable id="cfn-probe" item_type="probe">
-                            { card_chip("探测块") }
-                        </Draggable>
-                        <Box relative={true} grow="1" min_w="18rem" min_h="8.5rem">
-                            <Box absolute={true} left="0" top="0" w="72%" h="8rem">
-                                <Droppable id="hit-outer" accept="probe">
-                                    { collision_hit_zone(
-                                        "hit-outer",
-                                        "更大 overlap · outer",
-                                        ui! {
-                                            <Box h="4.5rem">
-                                                <Label text_size="0.75rem" color="muted-foreground">
-                                                    "MostIntersecting 会选这块"
-                                                </Label>
-                                            </Box>
-                                        },
-                                    ) }
-                                </Droppable>
-                            </Box>
-                            <Box absolute={true} left="38%" top="1.5rem" w="58%" h="6rem">
-                                <Droppable id="hit-prefer" accept="probe">
-                                    { collision_hit_zone(
-                                        "hit-prefer",
-                                        "collision_fn · prefer",
-                                        ui! {
-                                            <Label text_size="0.75rem" color="muted-foreground">
-                                                "重叠区函数强制点名；两槽是兄妹，不是嵌套 innermost。"
-                                            </Label>
-                                        },
-                                    ) }
-                                </Droppable>
-                            </Box>
-                        </Box>
+                        <Show when={!parked.get()}>
+                            <Draggable id="token" item_type="token">
+                                { token_chip() }
+                            </Draggable>
+                        </Show>
+                        <Show when={parked.get()}>
+                            { vacated_slot("已放入右侧") }
+                        </Show>
+                        <Droppable id="dock" accept="token">
+                            { drop_park_zone("dock", parked, || {
+                                ui! {
+                                    <Draggable id="token:dock" item_type="token">
+                                        { token_chip() }
+                                    </Draggable>
+                                }
+                            }) }
+                        </Droppable>
                         <DragOverlay />
                     </HStack>
                 }
-            }),
-    );
+            })
+    };
+
+    let collision_prefer = drag_scope("gal-drag-cfn")
+        .collision(CollisionAlg::MostIntersecting)
+        .collision_fn(|input| {
+            if input.droppables.iter().any(|c| c.id == "hit-prefer") {
+                Some("hit-prefer".into())
+            } else {
+                detect(
+                    CollisionAlg::MostIntersecting,
+                    input.pointer,
+                    input.dragged,
+                    input.droppables,
+                    input.active_id,
+                )
+            }
+        })
+        .child(|| {
+            ui! {
+                <HStack gap="0.75rem" w="100%" items="start" wrap="wrap">
+                    <Draggable id="cfn-probe" item_type="probe">
+                        { card_chip("探测块") }
+                    </Draggable>
+                    <Box relative={true} grow="1" min_w="18rem" min_h="8.5rem">
+                        <Box absolute={true} left="0" top="0" w="72%" h="8rem">
+                            <Droppable id="hit-outer" accept="probe">
+                                { collision_hit_zone(
+                                    "hit-outer",
+                                    "更大 overlap · outer",
+                                    ui! {
+                                        <Box h="4.5rem">
+                                            <Label text_size="0.75rem" color="muted-foreground">
+                                                "MostIntersecting 会选这块"
+                                            </Label>
+                                        </Box>
+                                    },
+                                ) }
+                            </Droppable>
+                        </Box>
+                        <Box absolute={true} left="38%" top="1.5rem" w="58%" h="6rem">
+                            <Droppable id="hit-prefer" accept="probe">
+                                { collision_hit_zone(
+                                    "hit-prefer",
+                                    "collision_fn · prefer",
+                                    ui! {
+                                        <Label text_size="0.75rem" color="muted-foreground">
+                                            "重叠区函数强制点名；两槽是兄妹，不是嵌套 innermost。"
+                                        </Label>
+                                    },
+                                ) }
+                            </Droppable>
+                        </Box>
+                    </Box>
+                    <DragOverlay />
+                </HStack>
+            }
+        });
 
     let snap_grid = SnapGrid::new(32.0, 32.0).offset([16.0, 16.0]);
     let snap_end_grid = SnapGrid::new(32.0, 32.0)
@@ -2877,8 +2856,7 @@ pub(crate) fn DragShowcase() -> Element {
         .end_only(true);
     let snap_origin = Rc::new(Cell::new([0.0; 2]));
     let snap_targets = local_snap_targets(SnapTargets::new([snap_grid]), snap_origin.clone());
-    let snap_board = Element::from(
-        drag_scope("gal-drag-snap")
+    let snap_board = drag_scope("gal-drag-snap")
             .axis(Axis::Xy)
             .restrict(Restrict::Parent)
             .snap_targets(snap_targets)
@@ -2902,8 +2880,7 @@ pub(crate) fn DragShowcase() -> Element {
                         </Draggable>
                     </Box>
                 }
-            }),
-    );
+            });
 
     let snap_fine_grid = SnapGrid::new(8.0, 8.0);
     let snap_multi_origin = Rc::new(Cell::new([0.0; 2]));
@@ -2911,8 +2888,7 @@ pub(crate) fn DragShowcase() -> Element {
         SnapTargets::new([snap_fine_grid, snap_grid]).range(14.0),
         snap_multi_origin.clone(),
     );
-    let snap_multi_board = Element::from(
-        drag_scope("gal-drag-snap-multi")
+    let snap_multi_board = drag_scope("gal-drag-snap-multi")
             .axis(Axis::Xy)
             .restrict(Restrict::Parent)
             .snap_targets(snap_multi)
@@ -2940,8 +2916,7 @@ pub(crate) fn DragShowcase() -> Element {
                         </Draggable>
                     </Box>
                 }
-            }),
-    );
+            });
 
     let (snap_fn_guide, snap_fn_line) = magnetic_snap_line();
     let snap_fn_board = ui! {
@@ -3010,8 +2985,7 @@ pub(crate) fn DragShowcase() -> Element {
         SnapTargets::new([snap_end_grid]).end_only(true),
         snap_end_origin.clone(),
     );
-    let snap_end_board = Element::from(
-        drag_scope("gal-drag-snap-end")
+    let snap_end_board = drag_scope("gal-drag-snap-end")
             .axis(Axis::Xy)
             .restrict(Restrict::Parent)
             .restrict_anchor(RestrictAnchor::CENTER)
@@ -3036,11 +3010,9 @@ pub(crate) fn DragShowcase() -> Element {
                         </Draggable>
                     </Box>
                 }
-            }),
-    );
+            });
 
-    let start_lock_board = Element::from(
-        drag_scope("gal-drag-start-lock")
+    let start_lock_board = drag_scope("gal-drag-start-lock")
             .axis(Axis::Start)
             .start_axis(Axis::Xy)
             .restrict(Restrict::Parent)
@@ -3063,35 +3035,32 @@ pub(crate) fn DragShowcase() -> Element {
                         </Draggable>
                     </Box>
                 }
-            }),
-    );
+            });
 
-    let fling_board = Element::from(
-        drag_scope("gal-drag-fling")
-            .axis(Axis::Xy)
-            .restrict(Restrict::Parent)
-            .inertia(true)
-            .on_drag_end(persist_delta_pos(fling_pos))
-            .child(move || {
-                ui! {
-                    <Box
-                        relative={true}
-                        w="100%"
-                        min_h="10rem"
-                        overflow="hidden"
-                        rounded="0.75rem"
-                        bg="background"
-                        border_style="dashed"
-                        border_width="1px"
-                        border_color="border"
-                    >
-                        <Draggable id="fling-tile" stack="auto">
-                            { free_move_tile("F", "甩出去 · inertia", fling_pos, 0, "primary") }
-                        </Draggable>
-                    </Box>
-                }
-            }),
-    );
+    let fling_board = drag_scope("gal-drag-fling")
+        .axis(Axis::Xy)
+        .restrict(Restrict::Parent)
+        .inertia(true)
+        .on_drag_end(persist_delta_pos(fling_pos))
+        .child(move || {
+            ui! {
+                <Box
+                    relative={true}
+                    w="100%"
+                    min_h="10rem"
+                    overflow="hidden"
+                    rounded="0.75rem"
+                    bg="background"
+                    border_style="dashed"
+                    border_width="1px"
+                    border_color="border"
+                >
+                    <Draggable id="fling-tile" stack="auto">
+                        { free_move_tile("F", "甩出去 · inertia", fling_pos, 0, "primary") }
+                    </Draggable>
+                </Box>
+            }
+        });
 
     let ga_now = gesture_a.get();
     let gb_now = gesture_b.get();
@@ -3112,57 +3081,55 @@ pub(crate) fn DragShowcase() -> Element {
         ),
         None => "触屏双指会写 last_gesture()（桌面用两个圆点模拟）；set_gesture_opts(autoscroll) 开边缘滚".to_string(),
     };
-    let gesture_board = Element::from(
-        drag_scope("gal-drag-gesture")
-            .restrict(Restrict::Parent)
-            .on_drag_start(move |_| gesture_delta.set_silent([0.0; 2]))
-            .on_drag_move(move |ev| gesture_delta.set_silent(ev.delta))
-            .on_drag_end(move |ev: &DragEvent| {
-                let pos = if ev.draggable_id.contains("g-a") {
-                    gesture_a
-                } else {
-                    gesture_b
-                };
-                let p = pos.peek();
-                pos.set([p[0] + ev.delta[0], p[1] + ev.delta[1]]);
-            })
-            .child(move || {
-                let drag = use_drag().unwrap();
-                let preview = gesture_preview(
-                    Element::new()
-                        .w(72.0)
-                        .h(48.0)
-                        .rounded("0.5rem")
-                        .bg("accent")
-                        .opacity(0.35),
-                    drag,
-                    [gesture_a, gesture_b],
-                    gesture_delta,
-                    gesture_preview_visible,
-                );
-                ui! {
-                    <Box
-                        relative={true}
-                        w="100%"
-                        min_h="12rem"
-                        overflow="hidden"
-                        rounded="0.75rem"
-                        bg="background"
-                        border_style="dashed"
-                        border_width="1px"
-                        border_color="border"
-                    >
-                        { preview }
-                        <Draggable id="g-a" stack="auto">
-                            { gesture_dot("1", gesture_a) }
-                        </Draggable>
-                        <Draggable id="g-b" stack="auto">
-                            { gesture_dot("2", gesture_b) }
-                        </Draggable>
-                    </Box>
-                }
-            }),
-    );
+    let gesture_board = drag_scope("gal-drag-gesture")
+        .restrict(Restrict::Parent)
+        .on_drag_start(move |_| gesture_delta.set_silent([0.0; 2]))
+        .on_drag_move(move |ev| gesture_delta.set_silent(ev.delta))
+        .on_drag_end(move |ev: &DragEvent| {
+            let pos = if ev.draggable_id.contains("g-a") {
+                gesture_a
+            } else {
+                gesture_b
+            };
+            let p = pos.peek();
+            pos.set([p[0] + ev.delta[0], p[1] + ev.delta[1]]);
+        })
+        .child(move || {
+            let drag = use_drag().unwrap();
+            let preview = gesture_preview(
+                Element::new()
+                    .w(72.0)
+                    .h(48.0)
+                    .rounded("0.5rem")
+                    .bg("accent")
+                    .opacity(0.35),
+                drag,
+                [gesture_a, gesture_b],
+                gesture_delta,
+                gesture_preview_visible,
+            );
+            ui! {
+                <Box
+                    relative={true}
+                    w="100%"
+                    min_h="12rem"
+                    overflow="hidden"
+                    rounded="0.75rem"
+                    bg="background"
+                    border_style="dashed"
+                    border_width="1px"
+                    border_color="border"
+                >
+                    { preview }
+                    <Draggable id="g-a" stack="auto">
+                        { gesture_dot("1", gesture_a) }
+                    </Draggable>
+                    <Draggable id="g-b" stack="auto">
+                        { gesture_dot("2", gesture_b) }
+                    </Draggable>
+                </Box>
+            }
+        });
 
     ui! {
         <MyCard title="Drag（utils::drag · WP-DRAG.1–2）">
@@ -3711,7 +3678,7 @@ pub(crate) fn DragShowcase() -> Element {
                         drag_overlay()
                             .align(OverlayAlign::Center)
                             .source_opacity(0.0)
-                            .child_for(|item| typed_overlay_ghost(item)),
+                            .child_for(typed_overlay_ghost),
                     ) }
                 </DragProvider>
 

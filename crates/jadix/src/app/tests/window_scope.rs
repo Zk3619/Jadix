@@ -49,7 +49,7 @@ fn nested_effect_rerun_keeps_owner_window_scope() {
     });
     let scopes = seen.peek();
     assert!(
-        scopes.iter().any(|s| *s == WindowScope::Secondary(99)),
+        scopes.contains(&WindowScope::Secondary(99)),
         "effect re-run must see Secondary(99), got {scopes:?}"
     );
     let _ = set_signal_key_scope(0);

@@ -860,10 +860,10 @@ pub(crate) fn find_by_template_id_mut<'a>(
     find_in_tree_mut(root, |el| template_id_eq_normalized(el, &want))
 }
 
-pub fn find_in_tree_mut<'a>(
-    root: &'a mut Element,
+pub fn find_in_tree_mut(
+    root: &mut Element,
     mut pred: impl FnMut(&Element) -> bool,
-) -> Option<&'a mut Element> {
+) -> Option<&mut Element> {
     let mut stack: Vec<*mut Element> = vec![root as *mut Element];
     while let Some(ptr) = stack.pop() {
         // SAFETY: exclusive subtree walk; we return immediately on match.
@@ -1139,6 +1139,10 @@ pub struct ElementInner {
 const INNER_SLAB_CAP: usize = 4096;
 
 struct InnerSlab {
+    #[expect(
+        clippy::vec_box,
+        reason = "The pool keeps heap allocations and their addresses stable while owners and callbacks retain references"
+    )]
     free: Vec<Box<ElementInner>>,
 }
 
@@ -1287,6 +1291,7 @@ fn recycle_inner_box(mut inner: Box<ElementInner>) {
 }
 
 #[cfg(test)]
+#[cfg(all(test, feature = "product-tests"))]
 pub(crate) fn element_inner_slab_len() -> usize {
     INNER_SLAB
         .try_with(|cell| cell.borrow().free.len())
@@ -1294,6 +1299,7 @@ pub(crate) fn element_inner_slab_len() -> usize {
 }
 
 #[cfg(test)]
+#[cfg(all(test, feature = "product-tests"))]
 pub(crate) fn drain_element_inner_slab() {
     let _ = INNER_SLAB.try_with(|cell| cell.borrow_mut().free.clear());
 }
@@ -3058,7 +3064,7 @@ impl Element {
             } else if token
                 .bytes()
                 .next()
-                .map_or(false, |b| b.is_ascii_digit() || b == b'.')
+                .is_some_and(|b| b.is_ascii_digit() || b == b'.')
             {
                 self.style.outline_width = (*token).into_f32();
             } else {
@@ -3186,7 +3192,7 @@ impl Element {
         let props: Vec<TransitionProperty> = value
             .as_ref()
             .split(',')
-            .map(|s| TransitionProperty::from_css(s))
+            .map(TransitionProperty::from_css)
             .collect();
         if self.style.transition.is_empty() {
             for p in props {

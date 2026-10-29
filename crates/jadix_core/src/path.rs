@@ -543,6 +543,10 @@ fn flatten_quad_rec(p0: Point2, p1: Point2, p2: Point2, depth: u8, out: &mut Vec
 }
 
 /// SVG elliptical arc → polyline (W3C endpoint-to-center parameterization).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "SVG endpoint-to-center conversion takes the endpoint arc parameters and output buffer"
+)]
 fn flatten_arc(
     p0: Point2,
     mut rx: f32,

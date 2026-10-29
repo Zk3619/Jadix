@@ -376,7 +376,7 @@ fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
                     }
                     true
                 }
-                k if crate::utils::keyboard::is_enter_or_space(&k) => {
+                k if crate::utils::keyboard::is_enter_or_space(k) => {
                     let ix = sub_active.peek();
                     if ix == ACTIVE_NONE {
                         return true;
@@ -455,7 +455,7 @@ fn attach_trigger_keys(mut trigger: Element, ctx: &ContextMenuCtx) -> Element {
                 }
                 true
             }
-            k if crate::utils::keyboard::is_enter_or_space(&k) => {
+            k if crate::utils::keyboard::is_enter_or_space(k) => {
                 let ix = active_keys.peek();
                 if ix == ACTIVE_NONE {
                     return false;
@@ -602,7 +602,7 @@ pub fn context_menu_content(
         reset_radio_seq(&menu_id);
         // isolate_reads：嵌套 SubContent 的 reactive_anchor 必须能注册；勿订阅 sub open
         //（否则整棵 Content 重建会拆掉悬停目标，子菜单 hover 不跟手）。
-        let rows = isolate_reads(|| body());
+        let rows = isolate_reads(&body);
         let scroll_id = format!("{menu_id}__ctx_scroll");
         // 外层 chrome 承载 floating max_h；内层 ScrollArea 负责溢出滚动。
         let viewport: Element = untrack(|| {
@@ -671,7 +671,7 @@ plain [] children: Option<Element>,
     let on_click = Rc::new(RefCell::new(on_click));
     let activate = {
         let on_click = on_click.clone();
-        let open = open;
+
         Rc::new(move || {
             if !disabled {
                 on_click.borrow_mut().call(());
@@ -788,7 +788,7 @@ plain [] children: Option<Element>,
     let on_click = Rc::new(RefCell::new(on_click));
     let activate = {
         let on_click = on_click.clone();
-        let check = check;
+
         Rc::new(move || {
             if disabled {
                 return;
@@ -961,8 +961,8 @@ plain [] children: Option<Element>,
     let activate = {
         let on_click = on_click.clone();
         let item_value = item_value.clone();
-        let group_value = group_value;
-        let open = open;
+
+
         Rc::new(move || {
             if disabled {
                 return;
@@ -1129,7 +1129,7 @@ plain [] children: Option<Element>,
 
     let activate = {
         let sub_id = sub_id.clone();
-        let sub_open = sub_open;
+
         Rc::new(move || {
             if !disabled {
                 open_or_remount_sub_ex(&sub_id, sub_open, false);

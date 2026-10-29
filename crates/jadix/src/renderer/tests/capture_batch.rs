@@ -138,7 +138,6 @@ fn image_capture_batch_matches_separate_sizes_dependencies_and_pending_sources()
             let late = images.remove("source").unwrap();
             images.insert("late".into(), late);
             assert!(flush(&captures[4..], &mut images));
-            drop(flush);
             let mut result = vec![];
             for cap in &captures {
                 assert_eq!(images[&cap.key]._texture.format(), format);

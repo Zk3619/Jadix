@@ -115,7 +115,7 @@ fn deref_get_lowers_to_bind() {
     let n = use_signal("__jadix_wp_r7_deref", || 3_i32);
     n.set_silent(3);
     let el = ui! {
-        <Box>{ (*&n).get().to_string() }</Box>
+        <Box>{ n.get().to_string() }</Box>
     };
     assert!(
         template_contains(&el, ":bind#"),
@@ -465,7 +465,7 @@ fn match_when_arms_lower_to_match_when_reactive() {
 #[test]
 fn for_each_get_with_key_and_fallback_stays_keyed() {
     reset_registered_anchors();
-    let items = use_signal("__jadix_wp_r7_for_fb", || Vec::<i32>::new());
+    let items = use_signal("__jadix_wp_r7_for_fb", Vec::<i32>::new);
     items.set_silent(Vec::new());
     FOR_RENDER_COUNTS.with(|m| m.borrow_mut().clear());
     let mounted = Rc::new(RefCell::new(None::<Element>));

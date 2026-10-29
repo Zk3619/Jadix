@@ -536,8 +536,8 @@ fn alpha_coverage_to_sdf_rgba(rgba: &[u8], width: u32, height: u32) -> Vec<u8> {
     let h = height as usize;
     let n = w * h;
     let mut inside = vec![false; n];
-    for i in 0..n {
-        inside[i] = rgba.get(i * 4 + 3).copied().unwrap_or(0) >= 128;
+    for (index, covered) in inside.iter_mut().enumerate() {
+        *covered = rgba.get(index * 4 + 3).copied().unwrap_or(0) >= 128;
     }
 
     let mut seed_r = vec![false; n];

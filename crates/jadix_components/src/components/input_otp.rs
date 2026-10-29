@@ -266,6 +266,10 @@ fn patch_slot_group_edges(el: &mut Element, is_first: bool, is_last: bool) {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn sync_otp_slot_paint(
     el: &mut Element,
     index: usize,
@@ -488,7 +492,7 @@ fn register_otp_redraw(instance_id: &str, value: Signal<String>, active: Signal<
 
 /// Peel single anonymous wrappers (OTP Slot often wrapped once), then shared `take_packed`.
 fn take_otp_packed(mut el: Element) -> Vec<Element> {
-    while el.attrs.get(ATTR_SLOT).is_none()
+    while !el.attrs.contains_key(ATTR_SLOT)
         && el.children.len() == 1
         && el.text.as_ref().is_none_or(|t| t.is_empty())
         && el.on_click.is_none()
@@ -736,19 +740,16 @@ fn build_default_slots(max_length: usize, separator_at: Option<usize>) -> Elemen
             frag_kids.push(InputOTPGroup(InputOTPGroupProps {
                 children: Some(g.children(std::mem::take(&mut group_kids))),
                 base: None,
-                ..Default::default()
             }));
             frag_kids.push(InputOTPSeparator(InputOTPSeparatorProps {
                 children: None,
                 base: None,
-                ..Default::default()
             }));
         }
         group_kids.push(InputOTPSlot(InputOTPSlotProps {
             index: Some(i as i32),
             children: None,
             base: None,
-            ..Default::default()
         }));
     }
     if !group_kids.is_empty() {
@@ -757,7 +758,6 @@ fn build_default_slots(max_length: usize, separator_at: Option<usize>) -> Elemen
         frag_kids.push(InputOTPGroup(InputOTPGroupProps {
             children: Some(g.children(group_kids)),
             base: None,
-            ..Default::default()
         }));
     }
     let mut frag = Element::new();
@@ -992,7 +992,6 @@ impl From<InputOtpSlotBuilder> for Element {
             index: Some(builder.index),
             children: None,
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

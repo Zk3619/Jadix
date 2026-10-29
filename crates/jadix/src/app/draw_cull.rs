@@ -494,7 +494,7 @@ pub(crate) fn paint_dirty_is_caret_overlay(
     }
     let w = dirty.bounds[2];
     let h = dirty.bounds[3];
-    if w > crate::utils::text_field::TEXT_EDIT_CARET_W + 2.5 || w < 0.5 || h < 8.0 {
+    if !(0.5..=crate::utils::text_field::TEXT_EDIT_CARET_W + 2.5).contains(&w) || h < 8.0 {
         return false;
     }
     let has_keyed = paints_has_keyed_slot(dirty.key, dirty.bounds, node_paints);
@@ -646,8 +646,9 @@ pub(crate) fn visible_instance_runs(
     let start = start.min(end);
     let mut runs = Vec::new();
     let mut run_start: Option<usize> = None;
-    for i in start..end {
-        if cull.hits_instance(&instances[i]) {
+    for (offset, instance) in instances[start..end].iter().enumerate() {
+        let i = start + offset;
+        if cull.hits_instance(instance) {
             if run_start.is_none() {
                 run_start = Some(i);
             }
@@ -1456,11 +1457,11 @@ pub(crate) fn grazing_caption_replay_runs(
         }
         let lo = paint.text.0.min(texts.len());
         let hi = paint.text.1.min(texts.len());
-        for index in lo..hi {
+        for (offset, node) in texts[lo..hi].iter().enumerate() {
+            let index = lo + offset;
             if selected.contains(&index) {
                 continue;
             }
-            let node = &texts[index];
             let mut repair: Option<TextLayoutInfo> = None;
             for hole in cleared {
                 let Some(clipped) = clip_text_node_to_grazing_rect(node, *hole) else {
@@ -1806,7 +1807,7 @@ fn unchanged_caption_glyph(
     else {
         return false;
     };
-    if !leaves.iter().any(|face| *face == leaf.bounds) {
+    if !leaves.contains(&leaf.bounds) {
         return false;
     }
     // The button dest-reset covers this leaf and wipes the glyphs. Skipping
@@ -1977,8 +1978,9 @@ fn slot_own_chrome_replay(
     let lo = owner.instance.0.min(instances.len());
     let hi = owner.instance.1.min(instances.len());
     let mut end = lo;
-    for i in lo..hi {
-        if instance_is_slot_own_chrome(&instances[i], slot) {
+    for (offset, instance) in instances[lo..hi].iter().enumerate() {
+        let i = lo + offset;
+        if instance_is_slot_own_chrome(instance, slot) {
             end = i + 1;
         } else {
             break;
@@ -5487,8 +5489,9 @@ fn collect_dirty_slot_glyphs(
         let lo = paint.text.0.min(page_text.len());
         let hi = paint.text.1.min(page_text.len());
         let broad = (paint.bounds[2] * paint.bounds[3]).max(0.0) > dirty_area * 2.0 + 1.0;
-        for i in lo..hi {
-            if !broad || text_hits_damage(&page_text[i], dirty.bounds) {
+        for (offset, text) in page_text[lo..hi].iter().enumerate() {
+            let i = lo + offset;
+            if !broad || text_hits_damage(text, dirty.bounds) {
                 indices.insert(i);
             }
         }
@@ -5860,9 +5863,7 @@ fn owner_clip_for_glyph(
             });
         }
     }
-    let Some(owner) = acc else {
-        return None;
-    };
+    let owner = acc?;
     // Region / expanded prev∪now dirty boxes run through the title bar.
     // Intersect to the live ScrollArea so capture cannot stamp Shimmer /
     // Delivered / On it into 「基础」.
@@ -5889,6 +5890,7 @@ fn owner_clip_for_glyph(
 /// Capture glyphs that `capture_text_renderer.render()` would stamp into `dirty`'s
 /// scissor even though they are not owned by that dirty node.
 #[cfg(test)]
+#[cfg(all(test, feature = "product-tests"))]
 pub(crate) fn node_present_foreign_glyph_indices(
     dirty: &PaintDirty,
     page_text: &[TextLayoutInfo],
@@ -6149,6 +6151,7 @@ pub(crate) fn node_present_layered_underlay_capture_text(
 /// scissor, so a clip that covers the chip redraws the wrapping line on top of
 /// the plate ("es is the" through Latest).
 #[cfg(test)]
+#[cfg(all(test, feature = "product-tests"))]
 pub(crate) fn opaque_slot_fill_aabb(
     dirty_key: u64,
     dirty_bounds: [f32; 4],

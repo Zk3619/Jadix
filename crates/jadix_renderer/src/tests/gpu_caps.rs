@@ -33,8 +33,10 @@ fn metal_and_dx12_follow_native_compute() {
 
 #[test]
 fn low_storage_textures_disables_compute() {
-    let mut l = wgpu::Limits::default();
-    l.max_storage_textures_per_shader_stage = 1;
+    let l = wgpu::Limits {
+        max_storage_textures_per_shader_stage: 1,
+        ..Default::default()
+    };
     assert!(!probe_from(wgpu::Backend::Vulkan, &l).compute);
 }
 
@@ -52,8 +54,10 @@ fn gl_limits_for_does_not_copy_adapter_compute() {
 
 #[test]
 fn varying_request_does_not_exceed_reported_limit() {
-    let mut adapter = wgpu::Limits::default();
-    adapter.max_inter_stage_shader_variables = 8;
+    let adapter = wgpu::Limits {
+        max_inter_stage_shader_variables: 8,
+        ..Default::default()
+    };
     let limits = limits_for_backend(wgpu::Backend::Gl, &adapter);
     assert!(limits.check_limits(&adapter));
     assert_eq!(limits.max_inter_stage_shader_variables, 8);

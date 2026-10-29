@@ -12,9 +12,10 @@ pub const ENV_PATH: &str = "JADIX_WINDOW_STATE_PATH";
 ///
 /// Explicit [`Self::File`] / [`Self::Directory`] always win over the env var.
 /// [`Self::CurrentDir`] (default) and [`Self::ExecutableDir`] honour `JADIX_WINDOW_STATE_PATH`.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum StorageLocation {
     /// Process working directory — **运行路径** (default).
+    #[default]
     CurrentDir,
     /// Directory containing `std::env::current_exe()`.
     ExecutableDir,
@@ -22,12 +23,6 @@ pub enum StorageLocation {
     File(PathBuf),
     /// Directory; `filename` is joined.
     Directory(PathBuf),
-}
-
-impl Default for StorageLocation {
-    fn default() -> Self {
-        Self::CurrentDir
-    }
 }
 
 /// Resolve the TOML path.

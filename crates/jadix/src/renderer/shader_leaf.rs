@@ -615,10 +615,7 @@ fn create_pipeline(
     source: &str,
     format: wgpu::TextureFormat,
 ) -> Option<wgpu::RenderPipeline> {
-    let module = match super::wgpu_compat::try_shader_module(device, "jadix-shader-user", source) {
-        Some(m) => m,
-        None => return None,
-    };
+    let module = super::wgpu_compat::try_shader_module(device, "jadix-shader-user", source)?;
 
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let pipeline = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {

@@ -174,7 +174,7 @@ pub fn parse_scroll_freeze(s: &str) -> ScrollFreeze {
         "overlay" | "floating" | "float" => ScrollFreeze::Overlay,
         "all" | "app" | "program" | "full" | "both" => ScrollFreeze::All,
         "none" | "off" | "false" | "0" | "no" => ScrollFreeze::None,
-        other if other.is_empty() => ScrollFreeze::None,
+        "" => ScrollFreeze::None,
         _ => ScrollFreeze::Page,
     }
 }

@@ -63,12 +63,14 @@ fn ellipsis_truncates_latin_phrase() {
 fn hidden_hit_test_outside_box_reaches_hidden_glyphs() {
     let mut fs = test_font_system();
     let text = "abcdefghijklmnop";
-    let mut style = TextStyle::default();
-    style.size = Some(14.0);
-    style.weight = Some(400);
-    style.line_height_px = Some(21.0);
-    style.overflow = TextOverflow::Hidden;
-    style.scroll_x = 40.0;
+    let style = TextStyle {
+        size: Some(14.0),
+        weight: Some(400),
+        line_height_px: Some(21.0),
+        overflow: TextOverflow::Hidden,
+        scroll_x: 40.0,
+        ..Default::default()
+    };
     let bounds = [10.0, 0.0, 40.0, 21.0];
     // Pointer 20px left of the leaf: should hit earlier than the visible start.
     let left = hit_test_input_text_index(&mut fs, text, -10.0, 10.0, bounds, &style, 1.0);
@@ -204,11 +206,13 @@ fn textarea_click_line_padding_does_not_jump_to_doc_end() {
 fn line_side_blank_detects_padding_and_ink_gap() {
     let mut fs = test_font_system();
     let text = "hi";
-    let mut style = TextStyle::default();
-    style.size = Some(14.0);
-    style.weight = Some(400);
-    style.line_height_px = Some(21.0);
-    style.overflow = TextOverflow::Hidden;
+    let style = TextStyle {
+        size: Some(14.0),
+        weight: Some(400),
+        line_height_px: Some(21.0),
+        overflow: TextOverflow::Hidden,
+        ..Default::default()
+    };
     // Wide leaf so the right side past "hi" is blank.
     let bounds = [10.0, 0.0, 200.0, 21.0];
     assert!(
@@ -249,10 +253,12 @@ fn line_side_blank_multiline_uses_hard_line() {
 #[test]
 fn textarea_below_last_line_detects_blank_under_ink() {
     let text = "line1\nline2";
-    let mut style = TextStyle::default();
-    style.size = Some(14.0);
-    style.weight = Some(400);
-    style.line_height_px = Some(21.0);
+    let style = TextStyle {
+        size: Some(14.0),
+        weight: Some(400),
+        line_height_px: Some(21.0),
+        ..Default::default()
+    };
     let bounds = [0.0, 0.0, 200.0, 80.0];
     assert!(
         hit_test_textarea_below_last_line(text, 50.0, bounds, &style),

@@ -249,7 +249,7 @@ fn rasterize_svg_rgba(
 
     #[cfg(feature = "svg")]
     {
-        return crate::media::svg_raster::rasterize_lucide_icon_rgba(&inner, color, side);
+        crate::media::svg_raster::rasterize_lucide_icon_rgba(&inner, color, side)
     }
 
     #[cfg(not(feature = "svg"))]

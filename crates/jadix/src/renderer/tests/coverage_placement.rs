@@ -15,9 +15,11 @@ fn naive_capture_line_height(st: &TextStyle, ui_scale: f32) -> f32 {
 
 #[test]
 fn lucide_line_height_is_em_not_tailwind_leading() {
-    let mut st = TextStyle::default();
-    st.font_family = Some("lucide".into());
-    st.size = Some(16.0);
+    let st = TextStyle {
+        font_family: Some("lucide".into()),
+        size: Some(16.0),
+        ..Default::default()
+    };
     let coverage = coverage_line_height(&st, 1.0, false);
     assert!(
         (coverage - 16.0).abs() < 1e-4,
@@ -53,10 +55,12 @@ fn wrapping_cjk_label_does_not_invent_dy() {
 fn label_leading_none_agrees_with_naive_capture_lh() {
     // Gallery Dialog rows use Label defaults (leading-none). Line-height matched;
     // remaining jitter was wrap/weight/shaping — which only unify via prepare_text_frame.
-    let mut st = TextStyle::default();
-    st.size = Some(14.0);
-    st.line_height_scale = Some(1.0);
-    st.white_space = WhiteSpace::Normal;
+    let st = TextStyle {
+        size: Some(14.0),
+        line_height_scale: Some(1.0),
+        white_space: WhiteSpace::Normal,
+        ..Default::default()
+    };
     let coverage = coverage_line_height(&st, 1.0, false);
     let naive = naive_capture_line_height(&st, 1.0);
     assert!((coverage - naive).abs() < 1e-4);

@@ -48,6 +48,7 @@ pub(super) fn prepare(path: &Path) -> Result<PreparedAsset, String> {
     }
 }
 
+#[cfg(feature = "hot-reload")]
 pub(super) fn image_keys(asset: &PreparedAsset) -> Vec<String> {
     match asset {
         PreparedAsset::Images(images) => images.iter().map(|(key, _)| key.clone()).collect(),

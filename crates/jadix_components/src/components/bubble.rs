@@ -807,6 +807,10 @@ fn take_content_pack_chrome(el: &Element) -> SlotChrome {
         .unwrap_or_default()
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn register_bubble_reactions_entry(
     id: String,
     focus_id: String,
@@ -946,7 +950,6 @@ fn register_bubble_reactions_redraw(reactions_id: &str, expanded: Signal<bool>) 
             let _ = expanded.get();
             crate::app::runtime::request_redraw();
         });
-        ()
     });
 }
 
@@ -995,12 +998,10 @@ fn build_reaction_expand_panel(
 }
 
 fn find_reactions_inner_mut(el: &mut Element) -> Option<&mut Element> {
-    for child in &mut el.children {
-        if child.attrs.get(ATTR_REACTIONS_INNER).map(|s| s.as_str()) == Some("1") {
-            return Some(child);
-        }
-    }
-    None
+    el.children
+        .iter_mut()
+        .find(|child| child.attrs.get(ATTR_REACTIONS_INNER).map(|s| s.as_str()) == Some("1"))
+        .map(|v| v as _)
 }
 
 fn rebuild_reactions_inner(el: &mut Element, id: &str, visible: usize) {

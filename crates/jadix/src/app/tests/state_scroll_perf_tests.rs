@@ -52,7 +52,7 @@ fn gallery_native_scroll_segment_cost() {
             // CARGO_MANIFEST_DIR image constant points at jadix/assets. Seed the
             // same source key from the real Gallery fixture before it mounts.
             let logo_key = super::super::pending_images::texture_key_for_src(
-                crate::pages::layout::FILTER_DEMO_LOGO,
+                crate::app::test_support::FILTER_DEMO_LOGO,
             );
             assert!(super::super::pending_images::queue_image_from_src(
                 logo_key,

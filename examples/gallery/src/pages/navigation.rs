@@ -412,14 +412,14 @@ fn gallery_title_bar(title: &'static str, fill: String) -> Element {
             <Button size="icon-xs" variant="ghost" on_click={move || set_window_minimized(true)}>
                 <Icon name="minus" size="0.75rem" color="foreground" />
             </Button>
-            <Button size="icon-xs" variant="ghost" on_click={move || toggle_window_maximized()}>
+            <Button size="icon-xs" variant="ghost" on_click={toggle_window_maximized}>
                 <Icon name="square" size="0.75rem" color="foreground" />
             </Button>
             <Button
                 size="icon-xs"
                 variant="ghost"
                 class="hover:bg-destructive hover:text-destructive-foreground dark:hover:bg-destructive dark:hover:text-destructive-foreground"
-                on_click={move || close_window()}
+                on_click={close_window}
             >
                 <Icon name="x" size="0.75rem" color="foreground" />
             </Button>
@@ -737,16 +737,13 @@ pub(crate) fn SidebarShowcase() -> Element {
         let btn: Element = sidebar_menu_button(id)
             .size("sm")
             .text(label)
-            .on_click({
-                let picked = picked;
-                move || picked.set(key.to_string())
-            })
+            .on_click(move || picked.set(key.to_string()))
             .into();
         jadix::app::reactive::bind_prop(
             btn,
             format!("{id}__active"),
             move || picked.get() == key,
-            |mounted, active| apply_bound_sidebar_menu_button_active(mounted, active),
+            apply_bound_sidebar_menu_button_active,
         )
     }
 
@@ -776,7 +773,6 @@ pub(crate) fn SidebarShowcase() -> Element {
         .into();
 
     let tree_shell: Element = {
-        let picked = picked;
         sidebar("gal-sidebar-demo-c")
             .w("14rem")
             .header(Element::from(
@@ -932,10 +928,8 @@ pub(crate) fn NavbarNavigationMenuShowcase() -> Element {
 
     // B. Builder（便捷）—— 与下方 RSX 等价
     let builder_bar: Element = {
-        let picked = picked;
         let nav_menu: Element = navigation_menu("gal-navmenu-builder")
             .link("overview", "Overview", {
-                let picked = picked;
                 move || picked.set("Overview".into())
             })
             .trigger(
@@ -943,21 +937,16 @@ pub(crate) fn NavbarNavigationMenuShowcase() -> Element {
                 "Components",
                 vec![
                     NavigationMenuLinkData::new("dialog", "Dialog", {
-                        let picked = picked;
                         move || picked.set("Dialog".into())
                     })
                     .description("Modal surface with header / body / footer"),
                     NavigationMenuLinkData::new("tabs", "Tabs", {
-                        let picked = picked;
                         move || picked.set("Tabs".into())
                     })
                     .description("Compound Tabs + headless strip"),
                 ],
             )
-            .link("about", "About", {
-                let picked = picked;
-                move || picked.set("About".into())
-            })
+            .link("about", "About", move || picked.set("About".into()))
             .into();
         navbar()
             .brand(label("").text("Jadix").font_weight(600.0))

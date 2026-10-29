@@ -3,6 +3,7 @@
 //! Resolution order for [`resolve_icon`]:
 //! 1. [`register_icon`] overlay
 //! 2. [`set_icon_provider`] (if any)
+//!
 //! Lucide is installed explicitly by `jadix_lucide::install()`.
 //!
 //! `<Icon name="check">` still works. Custom assets:
@@ -613,6 +614,7 @@ fn svg_markup_to_data_url(markup: &str) -> String {
 }
 
 #[cfg(test)]
+#[cfg(all(test, feature = "product-tests"))]
 fn with_icon_test<R>(f: impl FnOnce() -> R) -> R {
     clear_registered_icons();
     clear_icon_provider();

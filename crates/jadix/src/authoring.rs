@@ -594,6 +594,7 @@ macro_rules! impl_simple_slot_builder {
 
         impl From<$builder> for $crate::core::tree::Element {
             fn from(builder: $builder) -> Self {
+                #[allow(clippy::needless_update, reason = "Shared slot builders also initialize props with additional defaulted fields")]
                 let el = $comp($props {
                     children: $crate::authoring::packed_children(builder.children),
                     base: None,

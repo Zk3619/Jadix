@@ -388,10 +388,7 @@ fn split_segments(text: &str) -> Vec<(String, bool)> {
         } else if c == '\u{2060}' || c == '\u{FEFF}' {
             // Word Joiner / ZWNBSP: glue into the current unbreakable run.
             buf.push(c);
-        } else if c == '\u{200B}' {
-            flush_word(&mut buf, &mut out);
-            out.push((c.to_string(), true));
-        } else if c.is_whitespace() || is_cjk(c) {
+        } else if c == '\u{200B}' || c.is_whitespace() || is_cjk(c) {
             flush_word(&mut buf, &mut out);
             out.push((c.to_string(), true));
         } else if matches!(c, '-' | '\u{2010}' | '\u{2011}' | '\u{2012}' | '\u{2013}') {

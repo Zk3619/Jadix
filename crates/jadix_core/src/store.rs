@@ -266,13 +266,15 @@ impl<T: Clone + PartialEq + 'static> Store<T> {
     }
 }
 
+type FieldSetter<T, U> = Rc<dyn Fn(&mut T, U)>;
+
 /// Fine-grained store path (I-8). Clone freely; not `Copy` (holds getters).
 pub struct StoreField<T, U> {
     root: Signal<T>,
     trigger: Signal<u32>,
     path: Rc<str>,
     get: Rc<dyn Fn(&T) -> U>,
-    set: Rc<dyn Fn(&mut T, U)>,
+    set: FieldSetter<T, U>,
 }
 
 impl<T, U> Clone for StoreField<T, U> {

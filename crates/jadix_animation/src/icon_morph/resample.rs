@@ -157,9 +157,9 @@ pub fn resample_path(
     }
     let mut lens = vec![0.0; m];
     let mut l_tot = 0.0;
-    for k in 0..m {
-        lens[k] = seg_len(p, k, 1.0);
-        l_tot += lens[k];
+    for (segment_index, length) in lens.iter_mut().enumerate() {
+        *length = seg_len(p, segment_index, 1.0);
+        l_tot += *length;
     }
     if l_tot < 1e-12 {
         fill(&mut out);

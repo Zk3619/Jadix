@@ -440,7 +440,7 @@ fn render_stack(
         pile = pile.child(card);
     }
 
-    interactive(Element::from(pile))
+    interactive(pile)
         .on_hover(move |h| {
             if is_toast_dragging() {
                 if h {
@@ -562,7 +562,7 @@ fn render_list(items: &[&ToastItem], from_bottom: bool, swipe: ToastSwipeDirs) -
         pile = pile.child(card);
     }
 
-    Element::from(pile)
+    pile
 }
 
 pub(super) fn render_queue(

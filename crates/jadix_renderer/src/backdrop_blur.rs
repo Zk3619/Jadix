@@ -540,6 +540,10 @@ impl BackdropBlurPipeline {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "GPU passes receive explicit device, resources, geometry and encoding state without intermediate allocations"
+    )]
     fn blur_impl(
         &mut self,
         device: &wgpu::Device,
@@ -816,6 +820,10 @@ impl BackdropBlurPipeline {
         })
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "GPU passes receive explicit device, resources, geometry and encoding state without intermediate allocations"
+    )]
     fn upsample_from(
         pipeline: &wgpu::RenderPipeline,
         uniforms_buffer: &wgpu::Buffer,
@@ -852,6 +860,10 @@ impl BackdropBlurPipeline {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "GPU passes receive explicit device, resources, geometry and encoding state without intermediate allocations"
+    )]
     fn try_compute_hv(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -898,6 +910,10 @@ impl BackdropBlurPipeline {
         true
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "GPU passes receive explicit device, resources, geometry and encoding state without intermediate allocations"
+    )]
     fn try_compute_from_scene(
         device: &wgpu::Device,
         queue: &wgpu::Queue,
@@ -1027,6 +1043,10 @@ impl BackdropBlurPipeline {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "GPU passes receive explicit device, resources, geometry and encoding state without intermediate allocations"
+    )]
     fn dispatch_pass(
         pass_slot: &mut u32,
         pipeline: &wgpu::RenderPipeline,

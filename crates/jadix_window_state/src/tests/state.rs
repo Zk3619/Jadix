@@ -3,9 +3,11 @@ use super::*;
 #[test]
 fn placeholder_is_default() {
     assert!(WindowState::default().is_placeholder());
-    let mut s = WindowState::default();
-    s.width = 800;
-    s.height = 600;
+    let s = WindowState {
+        width: 800,
+        height: 600,
+        ..Default::default()
+    };
     assert!(!s.is_placeholder());
 }
 

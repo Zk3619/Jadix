@@ -29,7 +29,7 @@ fn native_hidden_maximize_waits_for_explicit_show() {
         }
         unsafe {
             CallWindowProcW(
-                std::mem::transmute(ORIGINAL.load(Ordering::Relaxed)),
+                std::mem::transmute::<isize, WNDPROC>(ORIGINAL.load(Ordering::Relaxed)),
                 hwnd,
                 message,
                 wparam,

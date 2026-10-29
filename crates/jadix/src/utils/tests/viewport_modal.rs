@@ -275,7 +275,7 @@ fn slide_exit_seeds_before_and_after_portal_hoist() {
         );
         root.children.retain(|c| {
             c.template_id.as_deref() == Some(PORTAL_LAYER_ID)
-                || c.attrs.get("jadix_portal").is_none()
+                || !c.attrs.contains_key("jadix_portal")
         });
         root.children.insert(0, exiting);
         assert!(hoist_portal_subtrees(&mut root) >= 1);

@@ -33,7 +33,7 @@ fn secondary_scroll_chases_targets_and_honors_explicit_jump_in_its_scope() {
                 advance_secondary_scroll(&metrics, &mut motion, 1.0 / 60.0, 1.0);
             }
             assert_eq!(offset.peek(), 300.0);
-            use_signal(&keys.behavior, || String::new()).set_silent("jump".into());
+            use_signal(&keys.behavior, String::new).set_silent("jump".into());
             target.set_silent(500.0);
             assert!(!advance_secondary_scroll(
                 &metrics,

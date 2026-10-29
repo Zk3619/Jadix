@@ -24,7 +24,7 @@ fn specialized_filter_modes_match_dynamic_shader() {
     };
     let textured = TexturedQuadPipeline::new(&gpu.device, &config);
     let pixels: Vec<u8> = (0..16 * 16 * 4)
-        .map(|i| ((i * 73 ^ (i / 17)) & 255) as u8)
+        .map(|i| (((i * 73) ^ (i / 17)) & 255) as u8)
         .collect();
     let input = crate::app::image_registry::upload_rgba8(
         &gpu.device,
@@ -367,9 +367,11 @@ fn batched_filters_preserve_uniforms_dependencies_and_pending_sources() {
         for key in ["input", "red", "shifted", "blue"] {
             filter.ensure_target(&gpu.device, &textured, &mut images, key, 32, 32);
         }
-        let mut flood = FilterUniforms::default();
-        flood.mode = 5.0;
-        flood.color = [1.0, 0.0, 0.0, 1.0];
+        let mut flood = FilterUniforms {
+            mode: 5.0,
+            color: [1.0, 0.0, 0.0, 1.0],
+            ..Default::default()
+        };
         assert!(filter.draw(
             &gpu.device,
             &gpu.queue,
@@ -383,12 +385,14 @@ fn batched_filters_preserve_uniforms_dependencies_and_pending_sources() {
         if !batch {
             filter.submit_pending(&gpu.queue);
         }
-        let mut offset = FilterUniforms::default();
-        offset.mode = 1.0;
-        offset.m0 = [0.5, 0.0, 0.0, 0.0];
-        offset.m1 = [0.0, 1.0, 0.0, 0.0];
-        offset.m2 = [0.0, 0.0, 1.0, 0.0];
-        offset.m3 = [0.0, 0.0, 0.0, 1.0];
+        let offset = FilterUniforms {
+            mode: 1.0,
+            m0: [0.5, 0.0, 0.0, 0.0],
+            m1: [0.0, 1.0, 0.0, 0.0],
+            m2: [0.0, 0.0, 1.0, 0.0],
+            m3: [0.0, 0.0, 0.0, 1.0],
+            ..Default::default()
+        };
         assert!(filter.draw(
             &gpu.device,
             &gpu.queue,

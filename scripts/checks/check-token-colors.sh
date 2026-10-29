@@ -8,14 +8,20 @@ patterns=(
   '\.bg\(\s*\[\s*0(\.0+)?\s*,\s*0(\.0+)?\s*,\s*0(\.0+)?\s*,\s*0\.[1-9]'
 )
 dirs=(
-  "$root/crates/jadix/src/components"
+  "$root/crates/jadix_components/src/components"
   "$root/crates/jadix/src/primitives"
   "$root/crates/jadix/src/app/navigator"
 )
 hits=""
+for dir in "${dirs[@]}"; do
+  if [[ ! -d "$dir" ]]; then
+    echo "Missing product source directory: $dir" >&2
+    exit 1
+  fi
+done
 for pat in "${patterns[@]}"; do
   for dir in "${dirs[@]}"; do
-    hits+=$(grep -REn --include='*.rs' "$pat" "$dir" 2>/dev/null || true)
+    hits+=$(grep -REn --include='*.rs' --exclude-dir=tests --exclude-dir=crate_tests "$pat" "$dir" 2>/dev/null || true)
     hits+=$'\n'
   done
 done

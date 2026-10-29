@@ -978,9 +978,9 @@ fn forms_section_under_isolate_reads_keeps_mark_invalid_caption() {
                 // Match App: `<When>` arm builds the section component (isolate_reads inside).
                 let mut tree =
                     jadix::core::reactivity::isolate_reads(|| gallery_section_body("forms"));
-                fn find_btn<'a>(
-                    el: &'a jadix::core::tree::Element,
-                ) -> Option<&'a jadix::core::tree::Element> {
+                fn find_btn(
+                    el: &jadix::core::tree::Element,
+                ) -> Option<&jadix::core::tree::Element> {
                     if el.template_id.as_deref() == Some("gal-s2-mark-invalid") {
                         return Some(el);
                     }
@@ -1461,6 +1461,10 @@ fn forms_input_showcase_keeps_caret_when_first_field_partially_clipped() {
                 )
                 .set("query".into());
 
+                #[expect(
+                    clippy::type_complexity,
+                    reason = "The test probe returns the existing set of independent observations for comparison"
+                )]
                 fn collect_after_clip(
                     focus_rest: &str,
                     vw: f32,
@@ -1803,9 +1807,9 @@ fn data_section_table_texts_survive_skip_and_hover() {
                 }
 
                 let (mouse, on_hover) = {
-                    fn find_row<'a>(
-                        el: &'a jadix::core::tree::Element,
-                    ) -> Option<&'a jadix::core::tree::Element> {
+                    fn find_row(
+                        el: &jadix::core::tree::Element,
+                    ) -> Option<&jadix::core::tree::Element> {
                         if el.focus_id.as_deref() == Some("inv-0") {
                             return Some(el);
                         }
@@ -1869,9 +1873,9 @@ fn forms_input_showcase_mark_invalid_button_has_caption() {
     let (_handle, _) = create_root(|| {
         create_effect(|| {
             let mut tree = InputShowcase(InputShowcaseProps::default());
-            fn find_caption<'a>(
-                el: &'a mut jadix::core::tree::Element,
-            ) -> Option<&'a mut jadix::core::tree::Element> {
+            fn find_caption(
+                el: &mut jadix::core::tree::Element,
+            ) -> Option<&mut jadix::core::tree::Element> {
                 if el.text.as_deref() == Some("Mark invalid") {
                     return Some(el);
                 }

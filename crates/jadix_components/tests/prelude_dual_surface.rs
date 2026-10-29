@@ -405,7 +405,6 @@ fn prelude_input_adornment_dual_surface_compiles() {
             InputAdornmentText(InputAdornmentTextProps {
                 children: Some(Element::new().text("https://")),
                 base: None,
-                ..Default::default()
             }),
         )
         .child(

@@ -57,10 +57,8 @@ pub fn clear(id: &str) {
 }
 
 fn settle_open(open: Signal<bool>, trigger_hovered: Signal<bool>, content_hovered: Signal<bool>) {
-    if trigger_hovered.peek() || content_hovered.peek() {
-        if !open.peek() {
-            open.set(true);
-        }
+    if (trigger_hovered.peek() || content_hovered.peek()) && !open.peek() {
+        open.set(true);
     }
 }
 
@@ -150,19 +148,15 @@ pub fn tick_hover_intent() -> bool {
     for (_id, t) in due {
         match t.kind {
             TimerKind::Open => {
-                if t.trigger_hovered.peek() || t.content_hovered.peek() {
-                    if !t.open.peek() {
-                        t.open.set(true);
-                        changed = true;
-                    }
+                if (t.trigger_hovered.peek() || t.content_hovered.peek()) && !t.open.peek() {
+                    t.open.set(true);
+                    changed = true;
                 }
             }
             TimerKind::Close => {
-                if !t.trigger_hovered.peek() && !t.content_hovered.peek() {
-                    if t.open.peek() {
-                        t.open.set(false);
-                        changed = true;
-                    }
+                if !t.trigger_hovered.peek() && !t.content_hovered.peek() && t.open.peek() {
+                    t.open.set(false);
+                    changed = true;
                 }
             }
         }

@@ -701,10 +701,8 @@ impl super::App {
                             None => false,
                         }
                     };
-                    if should_outside {
-                        if super::portal_overlay::try_dismiss_outside_press() {
-                            self.outside_dismiss_on_down = true;
-                        }
+                    if should_outside && super::portal_overlay::try_dismiss_outside_press() {
+                        self.outside_dismiss_on_down = true;
                     }
                 }
 
@@ -975,13 +973,13 @@ impl super::App {
             return;
         }
 
-        if matches!(event.logical_key, Key::Named(NamedKey::Escape)) {
-            if super::portal_overlay::try_close_top() {
-                if let Some(sec) = self.secondaries.borrow().get(&id) {
-                    sec.window.request_redraw();
-                }
-                return;
+        if matches!(event.logical_key, Key::Named(NamedKey::Escape))
+            && super::portal_overlay::try_close_top()
+        {
+            if let Some(sec) = self.secondaries.borrow().get(&id) {
+                sec.window.request_redraw();
             }
+            return;
         }
 
         if matches!(event.logical_key, Key::Named(NamedKey::Tab)) && !event.repeat {

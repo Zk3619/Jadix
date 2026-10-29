@@ -28,6 +28,10 @@ pub(crate) fn clip_mouse_debug(s: Option<&str>) -> String {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 pub(crate) fn format_mouse_log_fields(
     event_type: &str,
     detail: u8,
@@ -149,21 +153,16 @@ pub(crate) fn MouseEventShowcase() -> Element {
     let lca = use_signal("gal_mouse_lca_clicks", || 0i32);
     let swallow_parent_downs = use_signal("gal_mouse_swallow_parent_downs", || 0i32);
 
-    let write = {
-        let log = log;
-        move |e: &MouseEvent| log.set(format_mouse_log(e))
-    };
+    let write = { move |e: &MouseEvent| log.set(format_mouse_log(e)) };
 
     let playground: Element = {
-        let w_md = write.clone();
-        let w_mu = write.clone();
-        let w_mm = write.clone();
-        let w_ov = write.clone();
-        let w_ot = write.clone();
-        let w_db = write.clone();
-        let clicks = clicks;
-        let dbls = dbls;
-        let overs = overs;
+        let w_md = write;
+        let w_mu = write;
+        let w_mm = write;
+        let w_ov = write;
+        let w_ot = write;
+        let w_db = write;
+
         interactive(
             r#box()
                 .w("100%")

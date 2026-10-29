@@ -3,8 +3,10 @@ use crate::style::{LineStyle, Style};
 
 #[test]
 fn representative_color_uses_first_opaque_side_when_uniform_is_clear() {
-    let mut style = Style::default();
-    style.border_style = LineStyle::Solid;
+    let mut style = Style {
+        border_style: LineStyle::Solid,
+        ..Default::default()
+    };
     style.set_border_side_color(0, [1.0, 0.0, 0.0, 1.0]);
     style.set_border_side_color(1, [0.0, 1.0, 0.0, 1.0]);
     let c = representative_border_color(&style);
@@ -16,9 +18,11 @@ fn representative_color_uses_first_opaque_side_when_uniform_is_clear() {
 
 #[test]
 fn representative_color_prefers_uniform_when_set() {
-    let mut style = Style::default();
-    style.border_style = LineStyle::Solid;
-    style.border_color = [0.0, 0.0, 1.0, 1.0];
+    let style = Style {
+        border_style: LineStyle::Solid,
+        border_color: [0.0, 0.0, 1.0, 1.0],
+        ..Default::default()
+    };
     let c = representative_border_color(&style);
     assert!((c[2] - 1.0).abs() < 1e-5);
 }

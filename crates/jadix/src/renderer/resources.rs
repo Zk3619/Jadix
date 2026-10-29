@@ -120,6 +120,10 @@ impl TexturePool {
         self.map.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.map.is_empty()
+    }
+
     pub fn frame(&self) -> u64 {
         self.frame
     }
@@ -218,7 +222,7 @@ impl TexturePool {
         }
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "hot-reload"))]
     pub(crate) fn invalidate(&mut self, key: &str) {
         self.map.remove(key);
         self.meta.remove(key);

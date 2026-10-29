@@ -331,6 +331,10 @@ fn infer_x(marks: &[ChartMark], has_bar: bool) -> AxisSpec {
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Chart rendering passes explicit scales, geometry and interaction state"
+)]
 fn make_ctx<'a>(
     scales: &'a super::scale::ResolvedScales,
     theme: &'a ChartTheme,
@@ -449,7 +453,9 @@ fn cartesian_frame(
     frame.child(plot.overflow("hidden"))
 }
 
-fn compile_layers(layers: &[SceneLayer]) -> (Vec<(Vec<PathCommand>, PathStyle)>, Vec<Point2>, f32) {
+type CompiledLayers = (Vec<(Vec<PathCommand>, PathStyle)>, Vec<Point2>, f32);
+
+fn compile_layers(layers: &[SceneLayer]) -> CompiledLayers {
     let mut out = Vec::new();
     let mut markers = Vec::new();
     let mut marker_r = 0.0f32;
@@ -1126,6 +1132,10 @@ fn chart_tooltip_content(
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Chart rendering passes explicit scales, geometry and interaction state"
+)]
 fn pin_overlay_layer(
     pin: ChartPin,
     theme: &ChartTheme,
@@ -1225,6 +1235,10 @@ fn pin_overlay_layer(
     layer
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Chart rendering passes explicit scales, geometry and interaction state"
+)]
 fn attach_pin_overlay(
     plot: Element,
     pin: ChartPin,
@@ -1328,6 +1342,10 @@ fn snap_plot_px(v: f32) -> f32 {
     (v / 4.0).round() * 4.0
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Chart rendering passes explicit scales, geometry and interaction state"
+)]
 fn apply_chart_hover_from_client(
     marks: &[ChartMark],
     scales: &super::scale::ResolvedScales,
@@ -1398,6 +1416,10 @@ fn apply_chart_hover_from_client(
     );
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Chart rendering passes explicit scales, geometry and interaction state"
+)]
 fn attach_chart_pointer(
     mut plot: Element,
     marks: Vec<ChartMark>,
@@ -1915,7 +1937,7 @@ fn compile_polar(builder: ChartBuilder) -> Element {
         let ch = m.channels();
         y_nums.extend(ch.y_nums);
         y_nums.extend(ch.polar_values.iter().copied());
-        for l in ch.polar_labels.into_iter().chain(ch.x_cats.into_iter()) {
+        for l in ch.polar_labels.into_iter().chain(ch.x_cats) {
             if !x_cats.iter().any(|e| e == &l) {
                 x_cats.push(l);
             }
@@ -2046,12 +2068,7 @@ fn compile_polar(builder: ChartBuilder) -> Element {
 
     let ch = marks.iter().find(|m| m.is_polar()).map(|m| m.channels());
     let pairs: Vec<(String, f32)> = ch
-        .map(|c| {
-            c.polar_labels
-                .into_iter()
-                .zip(c.polar_values.into_iter())
-                .collect()
-        })
+        .map(|c| c.polar_labels.into_iter().zip(c.polar_values).collect())
         .unwrap_or_default();
     let mut legend_el = pie_legend_rows(&pairs, &theme, &config, selected);
     legend_el.set_attr("data-slot", "chart-legend");

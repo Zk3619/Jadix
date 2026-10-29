@@ -90,7 +90,7 @@ mod menu_events;
 pub mod multi_window;
 pub mod window_session;
 pub use window_session::{WindowClosed, WindowSession};
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, any(feature = "hot-reload", test)))]
 mod hot_reload_assets;
 pub mod native_menu;
 pub mod navigator;
@@ -109,8 +109,9 @@ mod state;
 #[cfg(test)]
 pub(crate) use state::{
     hoist_portal_subtrees_refreshing_scroll_flags, recompute_scroll_viewport_flags,
-    update_scrollbar_elements_for_test, ScrollbarUpdateMode,
 };
+#[cfg(all(test, feature = "product-tests"))]
+pub(crate) use state::{update_scrollbar_elements_for_test, ScrollbarUpdateMode};
 #[cfg(all(test, windows))]
 #[path = "app/tests/desktop_window_tests.rs"]
 mod desktop_window_tests;

@@ -693,7 +693,7 @@ fn synthetic_stream_frame(phase: u32) -> Vec<u8> {
                 rgba[i + 2] = 250;
                 rgba[i + 3] = 255;
             } else {
-                let stripe = ((x + phase / 2) / 24) % 2 == 0;
+                let stripe = ((x + phase / 2) / 24).is_multiple_of(2);
                 let g = if stripe { 52 } else { 148 };
                 rgba[i] = g;
                 rgba[i + 1] = g.saturating_add(8);

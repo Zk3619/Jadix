@@ -157,10 +157,8 @@ fn run(window: Arc<dyn Window>) {
             .filter(|(index, (a, b))| {
                 let x = (*index as u32 % current.width) as f32 / scale;
                 let y = (*index as u32 / current.width) as f32 / scale;
-                x >= 50.0
-                    && x < 240.0
-                    && y >= 140.0
-                    && y < 350.0
+                (50.0..240.0).contains(&x)
+                    && (140.0..350.0).contains(&y)
                     && a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 6)
             })
             .count();

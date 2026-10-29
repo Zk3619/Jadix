@@ -62,7 +62,7 @@ impl RetainedBuffer {
             // Cap geometric growth at the device's binding limit. The caller's
             // requested size still goes through wgpu validation if it exceeds it.
             let limit = if self.usage.contains(wgpu::BufferUsages::STORAGE) {
-                u64::from(device.limits().max_storage_buffer_binding_size)
+                device.limits().max_storage_buffer_binding_size
             } else {
                 device.limits().max_buffer_size
             };

@@ -289,13 +289,7 @@ fn decode_dib_xor_and(data: &[u8], hotspot: Option<(u16, u16)>) -> Option<Decode
         return None;
     }
     let abs_h = height_raw.unsigned_abs();
-    let xor_h = if abs_h >= width && abs_h % 2 == 0 && abs_h / 2 == width || abs_h == width * 2 {
-        abs_h / 2
-    } else if abs_h > width {
-        abs_h / 2
-    } else {
-        abs_h
-    };
+    let xor_h = if abs_h > width { abs_h / 2 } else { abs_h };
     if width == 0 || xor_h == 0 {
         return None;
     }
@@ -330,7 +324,7 @@ fn decode_dib_xor_and(data: &[u8], hotspot: Option<(u16, u16)>) -> Option<Decode
         }
     }
     let and_off = header + xor_size;
-    let and_stride = ((width as usize + 31) / 32) * 4;
+    let and_stride = (width as usize).div_ceil(32) * 4;
     if let Some(and) = data.get(and_off..and_off + and_stride * xor_h as usize) {
         for y in 0..xor_h as usize {
             let src_y = xor_h as usize - 1 - y;

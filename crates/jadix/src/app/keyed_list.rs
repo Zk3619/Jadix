@@ -4,6 +4,7 @@
 //!   reorder item owners; unchanged keys do not re-run item `render`.
 //! - [`index_reactive`]: fixed index identity; per-index [`Signal`] accessor; same-index value
 //!   updates propagate through `bind_*` without rebuilding the item subtree.
+//!
 //! Theme / stylesheet changes rebuild item fragments under their existing owners.
 
 use std::any::Any;

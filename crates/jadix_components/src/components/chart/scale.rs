@@ -97,7 +97,7 @@ pub fn format_time_label(unix_ms: i64, span_ms: i64) -> String {
 pub fn unix_ms_to_utc(ms: i64) -> (i32, u8, u8, u8, u8) {
     let secs = ms.div_euclid(1000);
     let days = secs.div_euclid(86_400);
-    let rem = secs.rem_euclid(86_400) as i64;
+    let rem = secs.rem_euclid(86_400);
     let hour = (rem / 3600) as u8;
     let min = ((rem % 3600) / 60) as u8;
     // days since 1970-01-01 → days since 0000-03-01 (Hinnant serial)
@@ -459,6 +459,10 @@ fn numeric_domain(spec: &AxisSpec, values: &[f32], include_zero: bool, is_log: b
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Chart rendering passes explicit scales, geometry and interaction state"
+)]
 pub(crate) fn resolve_scales(
     plot_w: f32,
     plot_h: f32,
@@ -484,6 +488,10 @@ pub(crate) fn resolve_scales(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Chart rendering passes explicit scales, geometry and interaction state"
+)]
 pub(crate) fn resolve_scales_pad(
     plot_w: f32,
     plot_h: f32,

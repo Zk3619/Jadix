@@ -218,15 +218,16 @@ impl super::App {
                     log::info!("JADIX_IME_DIAG Disabled fid={}", fid);
                 }
             }
-            Ime::Preedit(_, _) | Ime::Commit(_) if ime_support::ime_end_drain_active() => {
+            Ime::Preedit(_, _) | Ime::Commit(_)
+                if ime_support::ime_end_drain_active()
                 // App already ended composition; ignore OS CPS_CANCEL / teardown echoes
                 // until Disabled clears the drain.
-                if ime_support::ime_diag_enabled() {
-                    log::info!(
-                        "JADIX_IME_DIAG drop compose echo during end-drain fid={}",
-                        fid
-                    );
-                }
+                && ime_support::ime_diag_enabled() =>
+            {
+                log::info!(
+                    "JADIX_IME_DIAG drop compose echo during end-drain fid={}",
+                    fid
+                );
             }
             Ime::Preedit(s, cursor) => {
                 let (cursor_chars, attrs) = {
@@ -288,7 +289,7 @@ impl super::App {
                             );
                             crate::utils::text_field::commit_value_sig(
                                 rest,
-                                val_sig.clone(),
+                                val_sig,
                                 committed.clone(),
                             );
                             crate::utils::text_field::store_text_cursors(rest, &cs);

@@ -480,16 +480,13 @@ fn apply_viewport_scroll(
         crate::layout::layout_tree::scroll_viewport_content_metrics(layout_tree, el);
     let item_extent_h = layout_scrollable_content_height(el, layout_tree);
 
-    let viewport_h = layout_metrics
-        .map(|(_, vh)| vh)
-        .filter(|vh| *vh > 1.0)
-        .or_else(|| {
-            if signal_metrics.1 > 1.0 {
-                Some(signal_metrics.1)
-            } else {
-                None
-            }
-        });
+    let viewport_h = layout_metrics.map(|(_, vh)| vh).filter(|vh| *vh > 1.0).or({
+        if signal_metrics.1 > 1.0 {
+            Some(signal_metrics.1)
+        } else {
+            None
+        }
+    });
     let Some(viewport_h) = viewport_h else {
         return LayoutStatus::Clean;
     };
@@ -926,7 +923,7 @@ pub fn message_scroller_scope(
         );
         let kids = take_fragment(body());
         let mut el = if kids.len() == 1 {
-            kids.into_iter().next().unwrap_or_else(Element::new)
+            kids.into_iter().next().unwrap_or_default()
         } else {
             let mut frag = Element::new();
             frag.set_attr("jadix_fragment", "1");
@@ -955,7 +952,7 @@ plain [] children: Option<Element>,
         default_scroll_position,
         scroll_edge_threshold.unwrap_or(DEFAULT_EDGE_THRESHOLD),
         scroll_previous_item_peek.unwrap_or(DEFAULT_PREVIOUS_PEEK),
-        move || children.unwrap_or_else(Element::new),
+        move || children.unwrap_or_default(),
     )
 }
 }
@@ -1325,7 +1322,7 @@ impl From<MessageScrollerProviderBuilder> for Element {
             builder.default_scroll_position,
             builder.scroll_edge_threshold,
             builder.scroll_previous_item_peek,
-            move || packed_children(collect_delayed(builder.children)).unwrap_or_else(Element::new),
+            move || packed_children(collect_delayed(builder.children)).unwrap_or_default(),
         );
         chrome.apply(el)
     }
@@ -1387,7 +1384,6 @@ impl From<MessageScrollerBuilder> for Element {
             children: packed_children(collect_delayed(builder.children)),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         if let Some(w) = builder.w {
             el = el.w(w);
@@ -1440,7 +1436,6 @@ impl From<MessageScrollerViewportBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1479,7 +1474,6 @@ impl From<MessageScrollerContentBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1534,7 +1528,6 @@ impl From<MessageScrollerItemBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1597,7 +1590,6 @@ impl From<MessageScrollerButtonBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

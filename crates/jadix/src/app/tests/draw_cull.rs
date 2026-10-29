@@ -119,7 +119,7 @@ fn joined_border_fringe_keeps_local_repairs_but_transformed_ink_is_ordered() {
     assert!(!slot_requires_ordered_replay(
         1,
         first.bounds,
-        &[first.clone(), second.clone()]
+        &[first, second]
     ));
     second.bounds = [28.0, 22.0, 44.0, 36.0];
     assert!(slot_requires_ordered_replay(
@@ -841,14 +841,8 @@ fn ancestor_text_range_still_cuts_jump_fill_out_of_wrap_clip() {
     scroller.layered = true;
     scroller.instance = (0, 1);
     let viewport = [0.0, 0.0, 320.0, 384.0];
-    let parts = clip_minus_foreign_opaque_plates(
-        0,
-        viewport,
-        &[wrap.clone()],
-        &[scroller.clone()],
-        &[fill],
-        1.0,
-    );
+    let parts =
+        clip_minus_foreign_opaque_plates(0, viewport, &[wrap.clone()], &[scroller], &[fill], 1.0);
     for c in &parts {
         assert!(
             crate::app::damage::intersect_rects(*c, plate).is_none(),
@@ -994,7 +988,7 @@ fn layered_text_wrapper_resets_glyphs_owned_by_its_leaf() {
     leaf.instance = (1, 1);
     leaf.layered = true;
     leaf.rest = Some(bounds);
-    let mut wrapper = leaf.clone();
+    let mut wrapper = leaf;
     wrapper.key = 2;
     let paints = [leaf, wrapper];
     let mut card = blank_instance(0.0, 0.0, 320.0, 240.0);
@@ -1254,7 +1248,7 @@ fn entering_scrollbar_must_not_suppress_textarea_focus_repaint() {
                 !skip_in_flow_under_layered_overlay(
                     &field_dirty,
                     &[field_dirty, rail_dirty],
-                    &[field.clone(), track.clone()],
+                    &[field, track],
                     &[focus, fade],
                 ),
                 "a fading rail cannot own the field repaint: spread={spread} alpha={alpha}"
@@ -1691,27 +1685,22 @@ fn horizontal_track_reset_keeps_span_over_earlier_textarea_viewport() {
             "alpha={alpha}: viewport carved the rail down to its right end"
         );
     }
-    let foreground = clip_rect_against_layered_siblings(
-        track,
-        3,
-        track,
-        &[paints[2].clone(), paints[0].clone()],
-        1.0,
-    );
+    let foreground =
+        clip_rect_against_layered_siblings(track, 3, track, &[paints[2], paints[0]], 1.0);
     assert_eq!(
         foreground,
         [549.0, 460.0, 10.0, 8.0],
         "later foreground must still clip"
     );
 
-    let mut title = paints[0].clone();
+    let mut title = paints[0];
     title.bounds = [319.0, 440.0, 230.0, 20.0];
     title.rest = Some(title.bounds);
     let caption_clip = clip_rect_against_layered_siblings(
         [311.0, 440.0, 248.0, 28.0],
         3,
         track,
-        &[title, paints[2].clone()],
+        &[title, paints[2]],
         1.0,
     );
     assert_eq!(
@@ -3243,17 +3232,9 @@ fn node_reset_ignores_foreground_chrome_when_resolving_underlay() {
             instance.rect_size = instance.rect_size.map(|value| value * scale);
             instance.radii = instance.radii.map(|value| value * scale);
         }
-        let reset = node_present_dest_reset_full(
-            7,
-            bounds,
-            &[paint.clone()],
-            &instances,
-            &[],
-            &[],
-            scale,
-            None,
-        )
-        .expect("page underlay");
+        let reset =
+            node_present_dest_reset_full(7, bounds, &[paint], &instances, &[], &[], scale, None)
+                .expect("page underlay");
         assert_eq!(reset.clear, page.color, "scale={scale}");
         assert_eq!(reset.replay, (0, 0), "scale={scale}");
     }
@@ -3285,7 +3266,7 @@ fn patterned_underlay_requires_region_replay_for_hover_reset() {
         let reset = node_present_dest_reset_full(
             7,
             paint.bounds,
-            &[paint.clone()],
+            &[paint],
             &[page, stripe, button],
             &[],
             &[],
@@ -3795,7 +3776,7 @@ fn caret_blink_must_not_recapture_placeholder_glyphs() {
         paint_dirty_is_caret_overlay(&dirty, &[p_on], &[card]),
         "blink I-beam dirty must be caret overlay (encode skips dest-reset + recapture)"
     );
-    let prev_on = last_present_visual_slots(&[p_on], &[card], &[], &texts, &[caret.clone()])
+    let prev_on = last_present_visual_slots(&[p_on], &[card], &[], &texts, &[caret])
         .into_iter()
         .find(|(k, _)| *k == 5)
         .map(|(_, b)| b)
@@ -4821,14 +4802,15 @@ fn dest_reset_filter_wrap_shrink_must_union_prev() {
         textured: (0, 1),
         ..p_big
     };
-    let prev = node_paint_visual_bounds(&p_big, &[card, fill], &[big.clone()], &[], &[]);
+    let prev =
+        node_paint_visual_bounds(&p_big, &[card, fill], std::slice::from_ref(&big), &[], &[]);
     let blob = textured_paint_bounds(&big);
     let (wipe, _) = node_present_dest_reset_scaled(
         23,
         box_,
         &[p_small],
         &[card, fill],
-        &[small.clone()],
+        std::slice::from_ref(&small),
         1.0,
         Some(prev),
     )
@@ -7062,7 +7044,7 @@ fn named_scroll_blit_pins_keep_hover_scale_leftover_past_caption() {
         2,
         rest,
         &[(2, scaled)],
-        &[chip_p.clone(), cap_p.clone()],
+        &[chip_p, cap_p],
         8.0,
     );
     assert!(

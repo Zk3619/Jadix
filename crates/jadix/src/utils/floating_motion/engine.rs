@@ -1614,6 +1614,7 @@ fn find_template_id<'a>(el: &'a Element, want: &str) -> Option<&'a Element> {
 }
 
 #[cfg(test)]
+#[cfg(all(test, feature = "product-tests"))]
 pub(crate) fn debug_floating_registry(root: &Element) -> String {
     PRESENCE_REGISTRY.with(|reg| {
         reg.borrow()

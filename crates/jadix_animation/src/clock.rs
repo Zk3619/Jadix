@@ -85,12 +85,7 @@ pub fn prefers_reduced_motion() -> bool {
     if let Some(v) = PREFERS_REDUCED_MOTION.get() {
         return v;
     }
-    match std::env::var("JADIX_REDUCED_MOTION") {
-        Ok(s) if s == "1" || s.eq_ignore_ascii_case("true") || s.eq_ignore_ascii_case("reduce") => {
-            true
-        }
-        _ => false,
-    }
+    matches!(std::env::var("JADIX_REDUCED_MOTION"), Ok(value) if value == "1" || value.eq_ignore_ascii_case("true") || value.eq_ignore_ascii_case("reduce"))
 }
 
 pub fn css_transition_max_step_ms() -> Option<f32> {

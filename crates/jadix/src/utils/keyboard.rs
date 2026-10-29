@@ -207,12 +207,10 @@ pub fn caret_move_vertical(s: &str, caret: usize, delta_lines: i32) -> usize {
         return s.floor_char_boundary(caret.min(s.len()));
     }
     let (t_start, t_body) = lines[target];
-    let mut n = 0usize;
-    for (i, _) in t_body.char_indices() {
-        if n == col {
+    for (column, (i, _)) in t_body.char_indices().enumerate() {
+        if column == col {
             return t_start + i;
         }
-        n += 1;
     }
     t_start + t_body.len()
 }
@@ -269,12 +267,10 @@ pub fn caret_move_vertical_visual_pref(
         }
     }
     let t_body = &s[t_start..t_end];
-    let mut n = 0usize;
-    for (i, _) in t_body.char_indices() {
-        if n == col {
+    for (column, (i, _)) in t_body.char_indices().enumerate() {
+        if column == col {
             return t_start + i;
         }
-        n += 1;
     }
     t_end
 }

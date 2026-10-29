@@ -156,7 +156,7 @@ pub fn today_ymd() -> (i32, u32, u32) {
 }
 
 pub fn add_months(y: i32, m: u32, delta: i32) -> (i32, u32) {
-    let idx = (y as i32) * 12 + (m as i32 - 1) + delta;
+    let idx = y * 12 + (m as i32 - 1) + delta;
     let yy = idx.div_euclid(12);
     let mm = idx.rem_euclid(12) + 1;
     (yy, mm as u32)
@@ -455,6 +455,10 @@ pub(crate) fn calendar_year_select(
     caption_select_flex_item(b.into(), CAPTION_YEAR_GROW)
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn build_calendar_view(
     props: CalendarRenderProps,
     val: Signal<String>,
@@ -477,11 +481,6 @@ fn build_calendar_view(
     // 改写的 year/month），会整树重建 caption Select → 选一次后再也打不开。
     let sync_id = format!("{id}__cap_sync");
     {
-        let year = year;
-        let month = month;
-        let focus_day = focus_day;
-        let month_sel = month_sel;
-        let year_sel = year_sel;
         reactive_anchor(sync_id.clone(), move || {
             let ms = month_sel.get();
             let ys = year_sel.get();
@@ -605,7 +604,7 @@ fn build_calendar_view(
                         mm = nm;
                         dd = clamp_day(yy, mm, dd);
                     }
-                    k if crate::utils::keyboard::is_enter_or_space(&k) => {
+                    k if crate::utils::keyboard::is_enter_or_space(k) => {
                         let s = format_ymd(yy, mm, dd);
                         v_k.set(s.clone());
                         if let Some(cb) = &on_k {
@@ -635,9 +634,6 @@ fn build_calendar_view(
                 .size("icon-sm")
                 .disabled(disabled)
                 .on_click({
-                    let y_sig = y_sig;
-                    let m_sig = m_sig;
-                    let f_sig = f_sig;
                     let msel = month_sel;
                     let ysel = year_sel;
                     move || {
@@ -661,9 +657,6 @@ fn build_calendar_view(
                 .size("icon-sm")
                 .disabled(disabled)
                 .on_click({
-                    let y_sig = y_sig;
-                    let m_sig = m_sig;
-                    let f_sig = f_sig;
                     let msel = month_sel;
                     let ysel = year_sel;
                     move || {
@@ -754,6 +747,10 @@ fn build_calendar_view(
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn build_calendar_day_grid(
     id: &str,
     disabled: bool,

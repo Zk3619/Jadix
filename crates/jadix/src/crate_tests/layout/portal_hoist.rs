@@ -379,7 +379,7 @@ fn hoist_mount_attr_attaches_to_named_host() {
             .unwrap()
             .children
             .iter()
-            .all(|c| c.attrs.get("jadix_portal").is_none()),
+            .all(|c| !c.attrs.contains_key("jadix_portal")),
         "source portal marker removed from main"
     );
 }
@@ -421,7 +421,7 @@ fn local_mount_clears_stacking_context_when_overlay_closes() {
 
     fn strip_slots(el: &mut Element) {
         el.children
-            .retain(|c| c.attrs.get(ATTR_PORTAL_SLOT).is_none());
+            .retain(|c| !c.attrs.contains_key(ATTR_PORTAL_SLOT));
         for c in &mut el.children {
             strip_slots(c);
         }
@@ -430,7 +430,7 @@ fn local_mount_clears_stacking_context_when_overlay_closes() {
     let _ = hoist_portal_subtrees(&mut root);
     let host = find_by_tid(&root, "card-host").expect("host after close");
     assert!(
-        host.attrs.get("data-stacking-context").is_none(),
+        !host.attrs.contains_key("data-stacking-context"),
         "closed local overlay must not leave the host as a stacking context"
     );
     assert!(
@@ -463,7 +463,7 @@ fn local_mount_keeps_author_stacking_context_after_close() {
     assert!(hoist_portal_subtrees(&mut root) >= 1);
     fn strip_slots(el: &mut Element) {
         el.children
-            .retain(|c| c.attrs.get(ATTR_PORTAL_SLOT).is_none());
+            .retain(|c| !c.attrs.contains_key(ATTR_PORTAL_SLOT));
         for c in &mut el.children {
             strip_slots(c);
         }
@@ -669,7 +669,7 @@ fn hoist_select_portal_inside_already_hoisted_dialog() {
         Some("1")
     );
     assert!(
-        menu.attrs.get("jadix_portal").is_none(),
+        !menu.attrs.contains_key("jadix_portal"),
         "jadix_portal attr cleared after hoist"
     );
     assert!(
@@ -694,7 +694,7 @@ fn hoist_select_portal_inside_already_hoisted_dialog() {
         panel
             .children
             .iter()
-            .any(|c| c.attrs.get(ATTR_PORTAL_SLOT).is_some()),
+            .any(|c| c.attrs.contains_key(ATTR_PORTAL_SLOT)),
         "panel keeps a portal slot for the lifted select"
     );
 

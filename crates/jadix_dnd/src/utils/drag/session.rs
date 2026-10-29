@@ -1380,7 +1380,7 @@ fn ghost_origin(
     };
     let origin = ctx.origin_of(apply_modifiers(delta, &pipeline, &ctx));
     let overflow = scope_restrict_overflow(&sess.scope_id);
-    if overflow.is_hidden() && !(sess.restrict_end_only && !at_end) {
+    if (at_end || !sess.restrict_end_only) && overflow.is_hidden() {
         // Failed Element/Parent lookup must keep the last clip box. Clearing it
         // remounts the overlay without a shell, and `write_ghost_origin` then
         // walks the clip shell with the chip — the ghost escapes the parent.
@@ -2923,7 +2923,7 @@ pub fn collect_hits(root: &Element) -> Vec<DragHit> {
 
 /// `also_droppable` + `w=100%` islands report layout bounds taller than the
 /// row pitch. Hits must be **slot** rects (origin + pitch), not paint extent.
-fn cap_stretched_indexed_rects(hits: &mut Vec<DragHit>) {
+fn cap_stretched_indexed_rects(hits: &mut [DragHit]) {
     use std::collections::HashSet;
     let lists: HashSet<String> = hits
         .iter()
@@ -3508,6 +3508,10 @@ fn pack_same_list_origins(
     map
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The drag adapter receives independent session, geometry and owner state without changing its existing interface"
+)]
 fn pack_item_translate(
     hits: &[DragHit],
     my_list: Option<&str>,

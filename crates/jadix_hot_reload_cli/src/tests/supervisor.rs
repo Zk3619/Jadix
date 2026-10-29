@@ -21,10 +21,10 @@ fn rejected_manual_draft_does_not_replace_the_compiled_source_baseline() {
         sources: HashMap::from([(file.clone(), file_signature(&file))]),
     };
     std::fs::write(&file, original.replace("w=96.0", "w={captured_width()}")).unwrap();
-    assert!(supervisor.needs_restart(&[file.clone()]));
+    assert!(supervisor.needs_restart(std::slice::from_ref(&file)));
     assert!(!supervisor.restart_if_managed().unwrap());
     assert!(
-        supervisor.needs_restart(&[file.clone()]),
+        supervisor.needs_restart(std::slice::from_ref(&file)),
         "an unchanged rejected draft still differs from compiled Rust"
     );
     std::fs::write(
@@ -33,7 +33,7 @@ fn rejected_manual_draft_does_not_replace_the_compiled_source_baseline() {
     )
     .unwrap();
     assert!(
-        !supervisor.needs_restart(&[file.clone()]),
+        !supervisor.needs_restart(std::slice::from_ref(&file)),
         "restoring compiled Rust slots must allow a live patch"
     );
     std::fs::remove_file(file).unwrap();

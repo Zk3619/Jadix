@@ -118,7 +118,7 @@ fn is_caption_text_leaf(el: &Element) -> bool {
         && el.switch_checked_sync.is_none()
         && el.radio_selected_sync.is_none()
         && el.on_click.is_none()
-        && el.focus_id.as_deref().map_or(true, |s| s.is_empty())
+        && el.focus_id.as_deref().is_none_or(|s| s.is_empty())
         && el.attrs.get("accesskit_role").map(|s| s.as_str()) != Some("label")
 }
 
@@ -398,7 +398,7 @@ plain [] children: Option<Element>,
         Some(mut c) => {
             fill_default_text_size(&mut c, 14.0);
             fill_default_text_weight(&mut c, 500);
-            if c.attrs.get("accesskit_role").is_none() {
+            if !c.attrs.contains_key("accesskit_role") {
                 c = c.accesskit_role("label");
             }
             c
@@ -497,7 +497,7 @@ plain [] children: Option<Element>,
     }
     // 无 options：若宏未走 scope（纯 Props），仍包一层 scope 以支持 children 内 Item。
     radio_group_scope(&id, sig, default_value, disabled, || {
-        children.unwrap_or_else(Element::new)
+        children.unwrap_or_default()
     })
 }
 }
@@ -644,7 +644,6 @@ impl From<RadioGroupItemBuilder> for Element {
             disabled: Some(builder.disabled),
             children: crate::components::base::packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -686,7 +685,7 @@ fn sync_radio_checked_node(
     if let Some(sel) = el.radio_selected_sync {
         if !sel.is_alive() {
             el.radio_selected_sync = None;
-        } else if el.attrs.get(ATTR_RADIO_VALUE).is_some() {
+        } else if el.attrs.contains_key(ATTR_RADIO_VALUE) {
             // TabsTrigger / 菜单外复用 `radio_selected_sync` 只表示选中值，没有
             // `jadix_radio_value`。若仍走本分支会插入 size-4 Indicator，毁掉文案叶测宽，
             // gallery TabsList 芯片会全部挤在左侧重叠（内容宽变成圆点宽）。

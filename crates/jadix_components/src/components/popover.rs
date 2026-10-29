@@ -595,7 +595,6 @@ impl From<PopoverPanelBuilder> for Element {
                 .kind(OverlayKind::Popover)
                 .width("18rem")
                 .child(move || popover_surface(build(), None))
-                .into()
         } else {
             anchored_overlay(&id)
                 .open(open)
@@ -608,7 +607,6 @@ impl From<PopoverPanelBuilder> for Element {
                         .top("1rem")
                         .right("1rem")
                 })
-                .into()
         }
     }
 }

@@ -161,6 +161,10 @@ impl Inertia {
     }
 
     /// Displacement to add to the current origin this frame.
+    #[expect(
+        clippy::manual_clamp,
+        reason = "max/min deliberately maps NaN to the lower bound; clamp would preserve NaN"
+    )]
     pub fn step(&mut self, dt: f32) -> Option<[f32; 2]> {
         let dt = dt.max(0.0).min(0.05);
         match &mut self.kind {
@@ -198,11 +202,7 @@ impl Inertia {
                 let b = ease_out_cubic((*t / *duration).clamp(0.0, 1.0));
                 let dx = (to[0] - from[0]) * (b - a);
                 let dy = (to[1] - from[1]) * (b - a);
-                if *t >= *duration {
-                    Some([dx, dy])
-                } else {
-                    Some([dx, dy])
-                }
+                Some([dx, dy])
             }
         }
     }

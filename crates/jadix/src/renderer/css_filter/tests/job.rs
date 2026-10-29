@@ -60,7 +60,7 @@ fn image_only_filters_share_source_capture_but_keep_distinct_outputs() {
     assert_ne!(filters[0].output_key, filters[1].output_key);
 
     let empty = FilterList::new();
-    let original = filter_cache_id(&empty, bounds, &[], &[image.clone()]);
+    let original = filter_cache_id(&empty, bounds, &[], std::slice::from_ref(&image));
     let mut changed = image.clone();
     changed.tint_rgb[0] = 0.5;
     assert_ne!(original, filter_cache_id(&empty, bounds, &[], &[changed]));
@@ -99,7 +99,7 @@ fn cache_id_survives_fractional_scroll_with_painted_content() {
     instance.rect_size = [48.0, 16.0];
     let draw = TexturedDraw::clipped([17.2, 32.2, 48.0, 16.0], None, "stable-svg", 1.0).unwrap();
     let bounds = [10.0, 20.0, 64.0, 32.0];
-    let original = filter_cache_id(&list, bounds, &[instance], &[draw.clone()]);
+    let original = filter_cache_id(&list, bounds, &[instance], std::slice::from_ref(&draw));
     for scroll in [0.1, 240.3, 4096.7, 12000.3] {
         let mut shifted = instance;
         shifted.rect_pos[1] -= scroll;

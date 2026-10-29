@@ -64,9 +64,18 @@ fn unequal_subpaths_cell_division() {
 }
 
 #[test]
+fn unordered_alignment_keeps_the_scale_floor() {
+    let source = [-1.0, 0.0, 1.0, 0.0];
+    let target = [f64::NAN, 0.0, 1.0, 0.0];
+    let alignment = procrustes(&source, &target, [0.0, 0.0], [0.0, 0.0]);
+    assert!(alignment.theta.is_nan());
+    assert_eq!(alignment.sigma, 1e-6);
+}
+
+#[test]
 fn markup_lucide_inner() {
     let inner = r#"<path d="M4 6h16"/><path d="M4 12h16"/><path d="M4 18h16"/>"#;
-    let input = markup_to_icon(&inner, true).unwrap();
+    let input = markup_to_icon(inner, true).unwrap();
     let cubics = icon_to_cubics(&input).unwrap();
     assert_eq!(cubics.len(), 3);
 }

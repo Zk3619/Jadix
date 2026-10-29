@@ -155,6 +155,10 @@ fn register_label(labels: Signal<HashMap<String, String>>, value: &str, label: &
 // ---------------------------------------------------------------------------
 
 /// 一个 Select **实例**的根：自带 owner，再 `provide_context`（Trigger + Content 同属该实例）。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The public scope adapter retains its existing signal and event parameters"
+)]
 pub fn select_scope(
     id: impl Into<String>,
     open: Option<Signal<bool>>,
@@ -387,7 +391,7 @@ plain [] children: Option<Element>,
 // ---------------------------------------------------------------------------
 
 /// `<SelectContent>` / [`select_content`] 选项。
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct SelectContentOpts {
     pub panel: crate::components::base::SlotChrome,
     pub match_trigger: Option<bool>,
@@ -398,21 +402,6 @@ pub struct SelectContentOpts {
     pub placement: Option<PopupPlacement>,
     /// `none` | `start` | `center`；空则用根 [`SelectCtx::scroll_selected`]。
     pub scroll_selected: Option<String>,
-}
-
-impl Default for SelectContentOpts {
-    fn default() -> Self {
-        Self {
-            panel: Default::default(),
-            match_trigger: None,
-            menu_width: None,
-            menu_height: None,
-            min_height: None,
-            max_height: None,
-            placement: None,
-            scroll_selected: None,
-        }
-    }
 }
 
 impl SelectContentOpts {
@@ -463,7 +452,7 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
     };
     anchored_overlay_content(ao_opts, move || {
         // untrack：Item/ScrollArea 构建期不可订到 hover/scroll 信号，否则菜单一开就整树重建。
-        let rows = untrack(|| body());
+        let rows = untrack(&body);
         let scroll_id = format!("{id_for_effect}:menu_scroll");
         let open_now = ctx.open.try_peek().unwrap_or(false);
         if !open_now {
@@ -860,7 +849,6 @@ impl From<SelectItemBuilder> for Element {
             align: None,
             children: crate::components::base::packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

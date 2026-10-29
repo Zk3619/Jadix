@@ -396,7 +396,7 @@ pub fn queue_image_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: V
     bump_dynamic_texture_epoch();
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, any(feature = "hot-reload", test)))]
 pub(crate) fn prepare_local_reload(
     path: &std::path::Path,
 ) -> Result<Vec<(String, DecodedImage)>, String> {
@@ -440,7 +440,7 @@ pub(crate) fn prepare_local_reload(
     Ok(prepared)
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, any(feature = "hot-reload", test)))]
 pub(crate) fn commit_local_reload(images: Vec<(String, DecodedImage)>) {
     for (key, image) in images {
         if let Some(playback) = GIF_PLAY.lock().unwrap().as_mut() {

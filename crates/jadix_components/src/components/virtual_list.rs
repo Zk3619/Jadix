@@ -219,6 +219,10 @@ fn build_body(
 }
 
 /// Incremental window update: reuse still-visible keyed rows; create/drop the rest.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn apply_body_window(
     root: &mut Element,
     list_id: &str,

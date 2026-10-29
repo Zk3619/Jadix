@@ -93,9 +93,10 @@ impl ValueDriver {
     }
 
     pub fn inertia(velocity: f32) -> Self {
-        let mut opts = InertiaOptions::default();
-        opts.velocity = velocity;
-        Self::Inertia(opts)
+        Self::Inertia(InertiaOptions {
+            velocity,
+            ..InertiaOptions::default()
+        })
     }
 }
 
@@ -387,8 +388,7 @@ impl AnimatedNumber {
 
     /// Idle follower (Motion `springValue` / `followValue`). Aim with [`Self::set`].
     pub fn follow(initial: f32) -> Self {
-        let n = Self::spring(initial, initial);
-        n
+        Self::spring(initial, initial)
     }
 
     pub fn delay(self, ms: f32) -> Self {

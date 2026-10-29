@@ -39,7 +39,7 @@ moka = { version = "0.12.16", default-features = false }
 
 # --- window / GPU ---
 # Local facade fork; backends/core are pinned together (see jadix_winit/README.md).
-winit = { package = "jadix_winit", path = "crates/jadix_winit", version = "0.31.0-beta.3-jadix.1" }
+winit = { package = "jadix_winit", path = "crates/jadix_winit", version = "=0.31.0-beta.3-jadix.1" }
 winit-ohos = { "package" = "jadix_winit_ohos", "version" = "=0.31.0-beta.3-jadix.1", "path" = "vendor/winit-ohos", "default-features" = false }
 wry = "=0.57.0"
 gtk = "0.18"
@@ -94,7 +94,7 @@ x11rb = { version = "0.13", features = ["xfixes"] }
 # objc2 0.6 matches rfd / wgpu-hal / winit 0.31.
 objc2 = "0.6"
 objc2-foundation = "0.3"
-objc2-app-kit = "0.3"
+objc2-app-kit = { version = "0.3", default-features = false }
 objc2-ui-kit = "0.3"
 rfd = "0.17.2"
 # default-features off: skip Linux libxdo / libappindicator. gtk still required on Linux if this feature is on.

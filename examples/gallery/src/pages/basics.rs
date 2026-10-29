@@ -1588,10 +1588,11 @@ pub(crate) fn bubble_showcase_desc() -> Element {
 }
 
 pub(crate) fn bubble_showcase_placement() -> Element {
-    let mut kids: Vec<Element> = Vec::new();
-    kids.push(bubble_placement_heading());
-    kids.push(bubble_placement_group_a());
-    kids.push(bubble_placement_group_b());
+    let kids: Vec<Element> = vec![
+        bubble_placement_heading(),
+        bubble_placement_group_a(),
+        bubble_placement_group_b(),
+    ];
     Element::from(vstack().w("100%").min_w(0.0).gap("0.5rem").children(kids))
 }
 
@@ -1625,10 +1626,11 @@ pub(crate) fn bubble_placement_group_a() -> Element {
 }
 
 pub(crate) fn bubble_placement_group_b() -> Element {
-    let mut kids: Vec<Element> = Vec::new();
-    kids.push(bubble_placement_b1());
-    kids.push(bubble_placement_b2());
-    kids.push(bubble_placement_b3());
+    let kids: Vec<Element> = vec![
+        bubble_placement_b1(),
+        bubble_placement_b2(),
+        bubble_placement_b3(),
+    ];
     bubble_group().children(kids).into()
 }
 
@@ -1671,12 +1673,13 @@ pub(crate) fn bubble_placement_b3() -> Element {
 
 #[component]
 pub(crate) fn BubbleShowcase() -> jadix::core::tree::Element {
-    let mut kids: Vec<Element> = Vec::new();
-    kids.push(bubble_showcase_desc());
-    kids.push(bubble_showcase_conversation());
-    kids.push(bubble_showcase_variants());
-    kids.push(bubble_showcase_reactions());
-    kids.push(bubble_showcase_placement());
+    let kids: Vec<Element> = vec![
+        bubble_showcase_desc(),
+        bubble_showcase_conversation(),
+        bubble_showcase_variants(),
+        bubble_showcase_reactions(),
+        bubble_showcase_placement(),
+    ];
     let body: Element = vstack()
         .w("100%")
         .min_w(0.0)
@@ -2385,10 +2388,7 @@ pub(crate) fn GeneratorShowcase() -> jadix::core::tree::Element {
                     <HStack gap="0.5rem" items="center" wrap="wrap">
                         <Label font_weight="700" text_size="0.75rem">"inertia · pingpong · sequence"</Label>
                         <Button size="sm" variant="outline" on_click={move || {
-                            let mut opts = InertiaOptions::default();
-                            opts.velocity = 720.0;
-                            opts.max = Some(travel);
-                            opts.min = Some(0.0);
+                            let opts = InertiaOptions { velocity: 720.0, max: Some(travel), min: Some(0.0), ..Default::default() };
                             inert_h.restart(inert_h.peek(), ValueDriver::Inertia(opts));
                         }}>"flick →"</Button>
                         <Button size="sm" variant="outline" on_click={move || wave_pause.pause()}>"pause"</Button>

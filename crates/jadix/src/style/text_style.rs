@@ -386,7 +386,7 @@ pub enum TextDecorationStyle {
 }
 
 /// Caret draw params for single-line inputs.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct InputCaretDraw {
     /// UTF-8 byte index in display text; caret is drawn before this index.
     pub caret_byte_index: usize,
@@ -419,25 +419,6 @@ pub struct InputCaretDraw {
     /// `selection-foreground` (inverse of `selection-background`). Override via
     /// [`crate::components::input::InputBuilder::selection_foreground`].
     pub selection_foreground: Option<[u8; 4]>,
-}
-
-impl Default for InputCaretDraw {
-    fn default() -> Self {
-        Self {
-            caret_byte_index: 0,
-            selection: None,
-            extra_carets: Vec::new(),
-            extra_selections: Vec::new(),
-            selection_bg: [0; 4],
-            overwrite_highlight: None,
-            preedit_underline: None,
-            extra_preedit_underlines: Vec::new(),
-            preedit_ul: Vec::new(),
-            drop_caret: false,
-            caret_color: None,
-            selection_foreground: None,
-        }
-    }
 }
 
 impl InputCaretDraw {

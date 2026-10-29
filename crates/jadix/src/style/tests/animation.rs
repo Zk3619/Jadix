@@ -254,8 +254,10 @@ fn tick_element_animations_forwards_keeps_end() {
     use crate::style::{
         AnimationEntry, AnimationFillMode, AnimationIterationCount, TimingFunction,
     };
-    let mut style = crate::style::Style::default();
-    style.opacity = 1.0;
+    let mut style = crate::style::Style {
+        opacity: 1.0,
+        ..Default::default()
+    };
     style.animations.push(AnimationEntry {
         name: "fade-out".into(),
         duration_ms: 100.0,
@@ -751,8 +753,10 @@ fn parse_animation_shorthand_keeps_steps_token() {
 #[test]
 fn reduced_motion_snaps_keyframes_to_end() {
     set_prefers_reduced_motion(Some(true));
-    let mut style = crate::style::Style::default();
-    style.opacity = 1.0;
+    let mut style = crate::style::Style {
+        opacity: 1.0,
+        ..Default::default()
+    };
     style.animations.push(keyframes_anim_entry(
         "fade-out-0",
         400.0,
@@ -810,8 +814,10 @@ fn color_transition_writes_text_style() {
         delay_ms: 0.0,
         timing: TimingFunction::Linear,
     });
-    let mut text = crate::style::TextStyle::default();
-    text.color = Some([0, 0, 0, 255]);
+    let mut text = crate::style::TextStyle {
+        color: Some([0, 0, 0, 255]),
+        ..Default::default()
+    };
     let mut snap = TransitionSnapshot::default();
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
@@ -852,8 +858,10 @@ fn grid_template_rows_transition_lerps_fr() {
     use crate::layout::{first_track_fr, track_fr};
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.grid_template_rows = vec![track_fr(0.0)];
+    let mut style = crate::style::Style {
+        grid_template_rows: vec![track_fr(0.0)],
+        ..Default::default()
+    };
     style.transition.push(crate::style::TransitionEntry {
         property: crate::style::TransitionProperty::GridTemplateRows,
         duration_ms: 100.0,
@@ -881,8 +889,10 @@ fn grid_template_rows_transition_lerps_equal_length_list() {
     use crate::layout::{track_fr, tracks_fr_list};
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.grid_template_rows = vec![track_fr(0.0), track_fr(0.0)];
+    let mut style = crate::style::Style {
+        grid_template_rows: vec![track_fr(0.0), track_fr(0.0)],
+        ..Default::default()
+    };
     style.transition.push(crate::style::TransitionEntry {
         property: crate::style::TransitionProperty::GridTemplateRows,
         duration_ms: 100.0,
@@ -924,8 +934,10 @@ fn animation_composition_add_stacks_opacity() {
             KeyframeStop::at(1.0).opacity(0.2),
         ],
     );
-    let mut style = crate::style::Style::default();
-    style.opacity = 0.0;
+    let mut style = crate::style::Style {
+        opacity: 0.0,
+        ..Default::default()
+    };
     let mut a = keyframes_anim_entry(
         "anim6-hold-03",
         1000.0,
@@ -966,10 +978,12 @@ fn interpolate_size_allow_keywords_tweens_auto_height() {
         delay_ms: 0.0,
         timing: TimingFunction::Linear,
     });
-    let mut used = UsedLayout::default();
-    used.content_height = 100.0;
-    used.intrinsic_height = 100.0;
-    used.border_box = [0.0, 0.0, 40.0, 100.0];
+    let used = UsedLayout {
+        content_height: 100.0,
+        intrinsic_height: 100.0,
+        border_box: [0.0, 0.0, 40.0, 100.0],
+        ..Default::default()
+    };
     let mut text = crate::style::TextStyle::default();
     let mut snap = TransitionSnapshot::default();
     let _ = tick_element_transitions_with_text_used(
@@ -1011,8 +1025,10 @@ fn interpolate_size_allow_keywords_tweens_auto_height() {
 #[cfg(feature = "animation-base")]
 fn scroll_timeline_samples_progress_not_elapsed() {
     use crate::style::{AnimationFillMode, AnimationTimeline, TimingFunction};
-    let mut style = crate::style::Style::default();
-    style.opacity = 1.0;
+    let mut style = crate::style::Style {
+        opacity: 1.0,
+        ..Default::default()
+    };
     let mut entry = keyframes_anim_entry(
         "fade-in",
         10_000.0,
@@ -1115,8 +1131,10 @@ fn named_scroll_timeline_drives_descendant_animation() {
         named[0].1
     );
 
-    let mut style = crate::style::Style::default();
-    style.opacity = 1.0;
+    let mut style = crate::style::Style {
+        opacity: 1.0,
+        ..Default::default()
+    };
     let mut entry = keyframes_anim_entry(
         "fade-in",
         10_000.0,
@@ -1171,10 +1189,12 @@ fn calc_size_keyframes_animate_to_used_plus_n() {
         TimingFunction::Linear,
         AnimationFillMode::Both,
     ));
-    let mut used = UsedLayout::default();
-    used.content_height = 100.0;
-    used.intrinsic_height = 100.0;
-    used.border_box = [0.0, 0.0, 40.0, 100.0];
+    let used = UsedLayout {
+        content_height: 100.0,
+        intrinsic_height: 100.0,
+        border_box: [0.0, 0.0, 40.0, 100.0],
+        ..Default::default()
+    };
     let mut text = crate::style::TextStyle::default();
     let mut snap = AnimationSnapshot::default();
     let _ = tick_element_animations_ex(&mut style, &mut text, &used, &mut snap, 0.0);

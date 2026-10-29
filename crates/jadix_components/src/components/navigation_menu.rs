@@ -582,7 +582,7 @@ plain [] children: Option<Element>,
         } else {
             Some(value)
         },
-        || children.unwrap_or_else(Element::new),
+        || children.unwrap_or_default(),
     )
 }
 }

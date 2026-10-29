@@ -63,7 +63,7 @@ pub fn parse_markdown_blocks(src: &str) -> Element {
                 children.push(list_element(&blocks[start..index], ordered));
             }
             DocumentBlockKind::Code { language } => {
-                if block.edit_range.as_ref().map_or(true, |range| {
+                if block.edit_range.as_ref().is_none_or(|range| {
                     index == 0
                         || blocks[index - 1].edit_range.as_ref() != Some(range)
                         || !matches!(blocks[index - 1].kind, DocumentBlockKind::Code { .. })

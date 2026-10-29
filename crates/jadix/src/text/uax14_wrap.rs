@@ -9,7 +9,7 @@
 use std::sync::Arc;
 
 use glyphon::{Attrs, Buffer, Family, FontSystem, Metrics, Shaping, Wrap};
-use unicode_linebreak::{linebreaks, BreakOpportunity};
+use unicode_linebreak::linebreaks;
 
 use crate::renderer::font_loader::ensure_coverage_for_text;
 use crate::renderer::text_hit::best_font_family;
@@ -133,11 +133,7 @@ pub fn soft_wrap_logical(
     }
 
     // Allowed (and mandatory) break byte indices; always includes `text.len()`.
-    let mut breaks: Vec<usize> = linebreaks(text)
-        .filter_map(|(i, op)| match op {
-            BreakOpportunity::Allowed | BreakOpportunity::Mandatory => Some(i),
-        })
-        .collect();
+    let mut breaks: Vec<usize> = linebreaks(text).map(|(index, _)| index).collect();
     if breaks.last().copied() != Some(text.len()) {
         breaks.push(text.len());
     }

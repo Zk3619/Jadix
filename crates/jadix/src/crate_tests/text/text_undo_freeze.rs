@@ -38,10 +38,12 @@ fn freeze_z_y_chords_are_consumed_not_typed() {
 #[cfg(not(feature = "text-undo"))]
 #[test]
 fn freeze_text_undo_is_opt_in_not_default() {
-    assert!(
-        !cfg!(feature = "text-undo"),
-        "`text-undo` must stay out of crate default features"
-    );
+    const {
+        assert!(
+            !cfg!(feature = "text-undo"),
+            "`text-undo` must stay out of crate default features"
+        );
+    }
 }
 
 #[cfg(not(feature = "text-undo"))]
@@ -82,7 +84,9 @@ mod on {
 
     #[test]
     fn freeze_feature_on_compiles_history() {
-        assert!(cfg!(feature = "text-undo"));
+        const {
+            assert!(cfg!(feature = "text-undo"));
+        }
     }
 
     #[test]

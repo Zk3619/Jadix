@@ -280,14 +280,12 @@ fn label_line(key: &str, val: &str) -> Element {
                     .text(super::locale::text(key))
                     .text_size("0.6875rem")
                     .text_color(parse_text_color("muted-foreground"))
-                    .into()
             },
             super::controls::label(val)
                 .text(super::locale::text(val))
                 .text_size("0.75rem")
                 .font_weight("500")
-                .w("100%")
-                .into(),
+                .w("100%"),
         ]),
     )
 }
@@ -298,14 +296,12 @@ fn edge_row(left: &str, right: &str) -> Element {
             super::controls::label(left)
                 .text(left)
                 .text_size("0.6875rem")
-                .font_weight("600")
-                .into(),
+                .font_weight("600"),
             super::controls::label(right)
                 .text(right)
                 .text_size("0.6875rem")
                 .text_color(parse_text_color("muted-foreground"))
-                .w("100%")
-                .into(),
+                .w("100%"),
         ]),
     )
 }

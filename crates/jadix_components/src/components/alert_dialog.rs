@@ -269,15 +269,15 @@ fn repaint_alert_dialog_descendants(el: &mut Element, chrome: &SemanticChrome) {
             if !is_variant_style_overridden(&node.attrs, VariantStyleField::Fg) {
                 paint_description_node_on_place(node, chrome.muted_fg);
             }
-        } else if is_icon_child(node) {
-            if !is_variant_style_overridden(&node.attrs, VariantStyleField::Fg) {
-                if node.text.is_some() {
-                    node.text_style.color = Some(chrome.fg);
-                }
-                for child in &mut node.children {
-                    if child.text.is_some() {
-                        child.text_style.color = Some(chrome.fg);
-                    }
+        } else if is_icon_child(node)
+            && !is_variant_style_overridden(&node.attrs, VariantStyleField::Fg)
+        {
+            if node.text.is_some() {
+                node.text_style.color = Some(chrome.fg);
+            }
+            for child in &mut node.children {
+                if child.text.is_some() {
+                    child.text_style.color = Some(chrome.fg);
                 }
             }
         }
@@ -334,7 +334,7 @@ fn overlay_scrim_from_shell_attrs(el: &Element, variant: AlertDialogVariant) -> 
     )
 }
 
-fn find_alert_dialog_content_mut<'a>(el: &'a mut Element) -> Option<&'a mut Element> {
+fn find_alert_dialog_content_mut(el: &mut Element) -> Option<&mut Element> {
     crate::core::tree::find_in_tree_mut(el, |n| slot_of(n) == Some(SLOT_CONTENT))
 }
 
@@ -921,7 +921,7 @@ pub fn AlertDialogBody(
 plain [] children: Option<Element>,
 ) -> Element {
     let ctx = require_alert_dialog("AlertDialogBody");
-    let child = children.unwrap_or_else(Element::new);
+    let child = children.unwrap_or_default();
     let scroll_id = format!("{}__body", ctx.id);
     let mut el: Element = scroll_area(scroll_id.as_str())
         .overflow_x("hidden")
@@ -1003,7 +1003,7 @@ plain [] children: Option<Element>,
                     .into_iter()
                     .map(|kid| {
                         chain_click(kid, {
-                            let open = open;
+
                             move || open.set(false)
                         })
                     })

@@ -32,7 +32,7 @@ pub fn load_stylesheet(path: impl AsRef<Path>) -> Result<Stylesheet, StylesheetE
     if ext != "toml" {
         return Err(with_path(
             path.to_path_buf(),
-            StylesheetError::UnsupportedExtension(ext.into()),
+            StylesheetError::UnsupportedExtension(ext),
         ));
     }
     let raw = std::fs::read_to_string(path).map_err(StylesheetError::Io)?;

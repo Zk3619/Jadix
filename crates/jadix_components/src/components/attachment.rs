@@ -1251,7 +1251,6 @@ impl From<AttachmentMediaBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1289,7 +1288,6 @@ impl From<AttachmentTitleBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1327,7 +1325,6 @@ impl From<AttachmentDescriptionBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1387,7 +1384,6 @@ impl From<AttachmentContentBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1439,7 +1435,6 @@ impl From<AttachmentActionBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1487,7 +1482,6 @@ impl From<AttachmentActionsBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1523,7 +1517,6 @@ impl From<AttachmentTriggerBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1556,7 +1549,6 @@ impl From<AttachmentGroupBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1706,7 +1698,6 @@ impl From<AttachmentBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

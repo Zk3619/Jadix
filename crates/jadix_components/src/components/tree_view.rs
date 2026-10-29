@@ -288,8 +288,10 @@ fn toggle_node_expanded_key(key: &str, node_id: &str) {
     toggle_node_expanded(sig, node_id);
 }
 
+type SelectCallback = Rc<dyn Fn(String)>;
+
 thread_local! {
-    static TREE_ON_SELECT: RefCell<HashMap<String, Rc<dyn Fn(String)>>> = RefCell::new(HashMap::new());
+    static TREE_ON_SELECT: RefCell<HashMap<String, SelectCallback>> = RefCell::new(HashMap::new());
 }
 
 fn register_tree_on_select(tree_id: &str, cb: Option<Rc<dyn Fn(String)>>) {
@@ -915,6 +917,10 @@ fn build_from_nodes(
 // ── Scope ─────────────────────────────────────────────────────────────────────
 
 /// 提供 TreeView 上下文并构建根壳（`ui!` `<TreeView>` / Builder 共用）。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The public scope adapter retains its existing signal and event parameters"
+)]
 pub fn tree_view_scope(
     id: impl Into<String>,
     variant: TreeViewVariant,
@@ -1085,7 +1091,7 @@ plain [] children: Option<Element>,
         selected,
         None,
         Vec::new(),
-        move || children.unwrap_or_else(Element::new),
+        move || children.unwrap_or_default(),
     )
 }
 }
@@ -1102,7 +1108,7 @@ plain [] children: Option<Element>,
 ) -> Element {
     let label = label.unwrap_or_else(|| id.clone());
     let mut el = tree_view_item_scope(id.clone(), label.clone(), disabled, move || {
-        children.unwrap_or_else(Element::new)
+        children.unwrap_or_default()
     });
     el.attrs.insert("jadix_tree_item_label".to_string(), label);
     el

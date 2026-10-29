@@ -174,11 +174,26 @@ fn lost_ack_retries_the_same_transaction_without_a_second_commit() {
     });
     let mut cache = HashMap::new();
     let mut client = DevClient::default();
-    assert!(send_dev_batch(&address, &[file.clone()], &[], &[], &mut cache, &mut client).is_err());
+    assert!(send_dev_batch(
+        &address,
+        std::slice::from_ref(&file),
+        &[],
+        &[],
+        &mut cache,
+        &mut client
+    )
+    .is_err());
     assert!(cache.is_empty());
     assert!(client.pending.is_some());
     assert!(matches!(
-        send_dev_batch(&address, &[file.clone()], &[], &[], &mut cache, &mut client),
+        send_dev_batch(
+            &address,
+            std::slice::from_ref(&file),
+            &[],
+            &[],
+            &mut cache,
+            &mut client
+        ),
         Ok(SendOutcome::Sent { .. })
     ));
     assert!(!cache.is_empty());
@@ -240,16 +255,37 @@ fn stylesheet_content_changes_at_the_same_path_are_not_duplicates() {
     let mut cache = HashMap::new();
     let mut client = DevClient::default();
     assert!(matches!(
-        send_dev_batch(&address, &[], &[], &[file.clone()], &mut cache, &mut client),
+        send_dev_batch(
+            &address,
+            &[],
+            &[],
+            std::slice::from_ref(&file),
+            &mut cache,
+            &mut client
+        ),
         Ok(SendOutcome::Sent { .. })
     ));
     fs::write(&file, ".card { padding: 8px; }").unwrap();
     assert!(matches!(
-        send_dev_batch(&address, &[], &[], &[file.clone()], &mut cache, &mut client),
+        send_dev_batch(
+            &address,
+            &[],
+            &[],
+            std::slice::from_ref(&file),
+            &mut cache,
+            &mut client
+        ),
         Ok(SendOutcome::Sent { .. })
     ));
     assert!(matches!(
-        send_dev_batch(&address, &[], &[], &[file.clone()], &mut cache, &mut client),
+        send_dev_batch(
+            &address,
+            &[],
+            &[],
+            std::slice::from_ref(&file),
+            &mut cache,
+            &mut client
+        ),
         Ok(SendOutcome::Duplicate)
     ));
     server.join().unwrap();
@@ -309,16 +345,37 @@ fn binary_image_changes_at_the_same_path_are_sent_and_deduplicated() {
     let mut cache = HashMap::new();
     let mut client = DevClient::default();
     assert!(matches!(
-        send_dev_batch(&address, &[], &[file.clone()], &[], &mut cache, &mut client),
+        send_dev_batch(
+            &address,
+            &[],
+            std::slice::from_ref(&file),
+            &[],
+            &mut cache,
+            &mut client
+        ),
         Ok(SendOutcome::Sent { .. })
     ));
     fs::write(&file, [0xff, 0x00, 0x80, 0x20]).unwrap();
     assert!(matches!(
-        send_dev_batch(&address, &[], &[file.clone()], &[], &mut cache, &mut client),
+        send_dev_batch(
+            &address,
+            &[],
+            std::slice::from_ref(&file),
+            &[],
+            &mut cache,
+            &mut client
+        ),
         Ok(SendOutcome::Sent { .. })
     ));
     assert!(matches!(
-        send_dev_batch(&address, &[], &[file.clone()], &[], &mut cache, &mut client),
+        send_dev_batch(
+            &address,
+            &[],
+            std::slice::from_ref(&file),
+            &[],
+            &mut cache,
+            &mut client
+        ),
         Ok(SendOutcome::Duplicate)
     ));
     server.join().unwrap();

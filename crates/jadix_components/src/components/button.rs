@@ -14,7 +14,9 @@
 //!
 //! ## Notes
 //! - **Alignment ShadCN/solid-ui**: Normal copy default `whitespace-nowrap` + `flex-shrink: 0`
+//!
 //!  (Base class `inline-flex shrink-0 … whitespace-nowrap`), when the dynamic copy becomes wider, the button will be widened instead of wrapping internally.
+//!
 //!  Lucide 图标叶不加 nowrap，避免方按钮内图标偏右。
 //! - **`id` is optional**: RSX `<Button>` without `id` gets a compile-time
 //!   `__jadix_button_auto_N` (same contract as Input/Checkbox/Switch). Builder
@@ -807,10 +809,9 @@ impl From<ButtonBuilder> for Element {
             // hoist that glyph into a caption leaf — it strips `jadix_morph_icon` and
             // the morph bind can no longer find the instance.
             if tree_holds_morph_icon(&child) {
-                if child
+                if !child
                     .attrs
-                    .get(crate::core::tree::ATTR_POINTER_EVENTS)
-                    .is_none()
+                    .contains_key(crate::core::tree::ATTR_POINTER_EVENTS)
                     && child.attrs.contains_key("jadix_morph_icon")
                 {
                     child = child.pointer_events("none");

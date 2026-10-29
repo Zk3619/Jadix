@@ -3030,12 +3030,11 @@ fn overlay_scrollbar_pin_must_not_expand_pass_scissor_over_copied_overlap() {
         contains_point(legacy, mid),
         "sanity: viewport∪pin covers the copied overlap mid {mid:?}"
     );
-    match scroll_blit_pass_scissor_logical(&[plan], &[pin]) {
-        Some(sc) => assert!(
+    if let Some(sc) = scroll_blit_pass_scissor_logical(&[plan], &[pin]) {
+        assert!(
             !contains_point(sc, mid),
             "pass scissor {sc:?} must not cover copied overlap mid {mid:?}"
-        ),
-        None => {}
+        )
     }
     let no_pin = scroll_blit_pass_scissor_logical(&[plan], &[]).expect("single strip");
     assert_eq!(no_pin, plan.exposed);

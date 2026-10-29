@@ -394,7 +394,7 @@ unsafe fn latch_candidate_near(app: HWND, ax: i32, ay: i32) {
             continue;
         }
         let raw = target as isize;
-        if tracked.iter().any(|&t| t == raw) {
+        if tracked.contains(&raw) {
             continue;
         }
         tracked.push(raw);
@@ -549,7 +549,7 @@ fn ensure_subclass(hwnd: HWND) {
     let Ok(mut installed) = SUBCLASSED_HWNDS.lock() else {
         return;
     };
-    if installed.iter().any(|&h| h == raw) {
+    if installed.contains(&raw) {
         return;
     }
     unsafe {

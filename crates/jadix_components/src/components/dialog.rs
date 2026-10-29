@@ -249,6 +249,10 @@ fn apply_semantic_dialog_shell_surface(
 }
 
 /// Chromed motion panel (no portal / presence). Shell mounts via [`viewport_modal_layer`].
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 pub(crate) fn dialog_shell_panel(
     modal_id: &str,
     inner: Element,
@@ -644,7 +648,7 @@ pub fn DialogBody(
 plain [] children: Option<Element>,
 ) -> Element {
     let ctx = require_dialog("DialogBody");
-    let child = children.unwrap_or_else(Element::new);
+    let child = children.unwrap_or_default();
     let scroll_id = format!("{}__body", ctx.id);
     let (ring_blur, ring_spread) = crate::style::focus_ring_params(crate::style::focus_ring_style());
     let ring_gutter = (ring_blur * 2.0 + ring_spread + 2.0).max(4.0);

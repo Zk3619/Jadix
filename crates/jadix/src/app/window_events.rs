@@ -87,11 +87,8 @@ fn hit_input_caret_at(
     y: f32,
     rest: &str,
 ) -> Option<usize> {
-    let Some((bounds, display_el, style, leaf_scroll)) =
-        super::tree_hit::find_input_text_leaf_for_rest(root, None, rest)
-    else {
-        return None;
-    };
+    let (bounds, display_el, style, leaf_scroll) =
+        super::tree_hit::find_input_text_leaf_for_rest(root, None, rest)?;
     let vk = crate::utils::text_field::input_value_signal_key(rest);
     let pk = crate::utils::text_field::input_preedit_signal_key(rest);
     let committed = crate::core::reactivity::use_signal(&vk, String::new).peek();
@@ -910,7 +907,7 @@ impl super::App {
             caret_x
         } else {
             super::ime_support::estimate_caret_x_in_field(
-                font_system.as_deref_mut(),
+                font_system,
                 compose_prefix,
                 line_full,
                 &text_style,
@@ -2691,11 +2688,9 @@ impl super::App {
                 } else {
                     false
                 };
-                if should_outside_dismiss {
-                    if super::portal_overlay::try_dismiss_outside_press() {
-                        self.outside_dismiss_on_down = true;
-                        need_paint_sync_redraw = true;
-                    }
+                if should_outside_dismiss && super::portal_overlay::try_dismiss_outside_press() {
+                    self.outside_dismiss_on_down = true;
+                    need_paint_sync_redraw = true;
                 }
             }
 
@@ -4660,7 +4655,10 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 if super::state::render_profile_log_enabled() {
                     static SAMPLES: std::sync::atomic::AtomicUsize =
                         std::sync::atomic::AtomicUsize::new(0);
-                    if SAMPLES.fetch_add(1, std::sync::atomic::Ordering::Relaxed) % 120 == 0 {
+                    if SAMPLES
+                        .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+                        .is_multiple_of(120)
+                    {
                         log::warn!("frame pumps: scroll={smooth_scroll_animating} bar={scrollbar_fade_animating} svg={svg_smil_active} icon={anim_icon_active} gif={} canvas={canvas_after_paint} modal={modal_css_active} css={page_css_active} ui={ui_anim_active} theme={theme_anim_active}", crate::app::pending_images::any_gif_playing());
                     }
                 }
@@ -5109,11 +5107,12 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     let should_outside_dismiss = !on_exclusive && !on_trigger;
                     let ended_panel_drag =
                         crate::utils::anchored_overlay::take_ended_floating_panel_drag();
-                    if should_outside_dismiss && !self.outside_dismiss_on_down && !ended_panel_drag
+                    if should_outside_dismiss
+                        && !self.outside_dismiss_on_down
+                        && !ended_panel_drag
+                        && super::portal_overlay::try_dismiss_outside_press()
                     {
-                        if super::portal_overlay::try_dismiss_outside_press() {
-                            super::runtime::request_redraw();
-                        }
+                        super::runtime::request_redraw();
                     }
                     self.outside_dismiss_on_down = false;
                     crate::utils::popup::arm_underlay_close();

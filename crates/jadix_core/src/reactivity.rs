@@ -95,7 +95,7 @@ fn enter_owner_window_scope(rt: &Runtime, owner: OwnerId) -> OwnerWindowScopeGua
 
 fn remap_window_local_signal_key(id_str: &str) -> std::borrow::Cow<'_, str> {
     let scope = SIGNAL_KEY_SCOPE.get();
-    if scope == 0 || !WINDOW_LOCAL_SIGNAL_KEYS.iter().any(|k| *k == id_str) {
+    if scope == 0 || !WINDOW_LOCAL_SIGNAL_KEYS.contains(&id_str) {
         std::borrow::Cow::Borrowed(id_str)
     } else {
         std::borrow::Cow::Owned(format!("{id_str}__w{scope}"))
@@ -657,7 +657,7 @@ fn flush_deferred_effects(rt: &Runtime) {
             break;
         }
         rounds += 1;
-        if rounds == 1 || rounds % 50 == 0 {
+        if rounds == 1 || rounds.is_multiple_of(50) {
             log::debug!("flush_deferred: round={rounds} batch={}", ids.len());
         }
         if rounds > 100_000 {
@@ -2050,6 +2050,12 @@ pub fn use_signal<T: 'static>(id_str: &str, init: impl FnOnce() -> T) -> Signal<
 #[derive(Clone, Copy)]
 pub struct Trigger {
     id: SignalId,
+}
+
+impl Default for Trigger {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl Trigger {

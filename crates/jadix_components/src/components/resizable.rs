@@ -287,11 +287,11 @@ fn flatten_body_children(mut body: Element) -> Vec<Element> {
     if body.children.is_empty()
         && body.text.as_ref().is_none_or(|t| t.is_empty())
         && body.template_id.is_none()
-        && body.attrs.get(ATTR_SLOT).is_none()
+        && !body.attrs.contains_key(ATTR_SLOT)
     {
         return Vec::new();
     }
-    if body.attrs.get(ATTR_SLOT).is_some() {
+    if body.attrs.contains_key(ATTR_SLOT) {
         return vec![body];
     }
     std::mem::take(&mut body.children)
@@ -506,6 +506,10 @@ fn grip_icon(horizontal_group: bool) -> Element {
     grip
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn build_handle(
     group_id: &str,
     orientation: ResizableOrientation,
@@ -800,7 +804,6 @@ fn build_group_from_parts(
         }
     }
 
-    let group_bounds = group_bounds;
     let init_sizes = sizes.peek();
 
     let mut kids: Vec<Element> = Vec::new();
@@ -958,7 +961,7 @@ plain [] children: Option<Element>,
     let ori = orientation.unwrap_or_else(|| "horizontal".into());
     let height = h.or(height);
     resizable_panel_group_scope(id, ori, height, sizes, || {
-        children.unwrap_or_else(Element::new)
+        children.unwrap_or_default()
     })
 }
 }
@@ -976,7 +979,7 @@ plain [] children: Option<Element>,
     let mut el: Element = r#box()
         .w("100%")
         .h("100%")
-        .child(children.unwrap_or_else(Element::new))
+        .child(children.unwrap_or_default())
         .into();
     el.attrs
         .insert(ATTR_SLOT.to_string(), SLOT_PANEL.to_string());
@@ -1064,7 +1067,6 @@ impl From<ResizablePanelBuilder> for Element {
             max_size: builder.max_size,
             children: crate::components::base::packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1103,7 +1105,6 @@ impl From<ResizableHandleBuilder> for Element {
             with_handle: Some(builder.with_handle),
             children: None,
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1267,7 +1268,7 @@ impl ResizableBuilder {
     }
 
     pub fn right(mut self, f: impl Fn() -> Element + 'static) -> Self {
-        while self.panels.len() < 1 {
+        while self.panels.is_empty() {
             self.panels
                 .push(Box::new(|| r#box().w("100%").h("100%").into()));
         }

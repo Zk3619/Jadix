@@ -762,14 +762,14 @@ impl From<SliderBuilder> for Element {
                     return false;
                 }
                 let cur = val_key.peek();
-                let dec = match ev.logical_key {
-                    Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowDown) => true,
-                    _ => false,
-                };
-                let inc = match ev.logical_key {
-                    Key::Named(NamedKey::ArrowRight) | Key::Named(NamedKey::ArrowUp) => true,
-                    _ => false,
-                };
+                let dec = matches!(
+                    ev.logical_key,
+                    Key::Named(NamedKey::ArrowLeft) | Key::Named(NamedKey::ArrowDown)
+                );
+                let inc = matches!(
+                    ev.logical_key,
+                    Key::Named(NamedKey::ArrowRight) | Key::Named(NamedKey::ArrowUp)
+                );
                 if dec {
                     val_key.set(quantize(cur - step, min, max, step));
                     true

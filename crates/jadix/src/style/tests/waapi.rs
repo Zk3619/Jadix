@@ -100,8 +100,10 @@ fn keyframe_objects_offset_and_default_duration_zero() {
     );
     assert!(anim.effect().name.starts_with("__waapi_"));
     assert!((KeyframeEffect::new().duration_ms).abs() < 1e-6);
-    let mut style = crate::style::Style::default();
-    style.opacity = 1.0;
+    let mut style = crate::style::Style {
+        opacity: 1.0,
+        ..Default::default()
+    };
     style.animations.push(anim.to_entry());
     let mut snap = AnimationSnapshot::default();
     let _ = tick_element_animations(&mut style, &mut snap, 0.15);

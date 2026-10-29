@@ -200,7 +200,7 @@ pub fn parse_snap_points(value: impl AsRef<str>) -> Vec<DrawerSnapPoint> {
         &value
             .as_ref()
             .split([',', ' '])
-            .filter_map(|s| parse_snap_point_token(s))
+            .filter_map(parse_snap_point_token)
             .collect::<Vec<_>>(),
     )
 }
@@ -692,6 +692,10 @@ fn apply_drawer_shell_surface(
     panel
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn drawer_shell_panel(
     modal_id: &str,
     open: Signal<bool>,
@@ -1217,7 +1221,7 @@ pub fn DrawerBody(
 plain [] children: Option<Element>,
 ) -> Element {
     let ctx = require_drawer("DrawerBody");
-    let child = children.unwrap_or_else(Element::new);
+    let child = children.unwrap_or_default();
     let scroll_id = format!("{}__body", ctx.id);
     // `scroll_area` defaults to `h: 100%`. As a flex sibling of Header/Footer that
     // preferred size plus `min-h: 0` shrinks the body to 0 on a half-open rest
@@ -1575,6 +1579,10 @@ fn axis_delta(direction: DrawerDirection, drag: &DrawerDrag, x: f32, y: f32) -> 
     }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn begin_drawer_drag(
     id: String,
     direction: DrawerDirection,
@@ -1944,6 +1952,10 @@ fn should_dismiss_drawer(frac: f32, velocity: f32, lowest_snap: f32) -> bool {
     velocity > DRAWER_CLOSE_VELOCITY && frac < lowest_snap && frac < threshold + lowest_snap * 0.16
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn bind_drawer_drag_region(
     el: Element,
     drawer_id: &str,

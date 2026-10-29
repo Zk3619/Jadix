@@ -78,7 +78,7 @@ fn apply_transition_and_animate_attrs() {
     );
     // Must not also set `jadix_transition` — that dual-drove UI springs against the
     // CSS tween and kept gallery `hover:scale-*` tiles dirty while hovering the sidebar.
-    assert!(el.attrs.get("jadix_transition").is_none());
+    assert!(!el.attrs.contains_key("jadix_transition"));
 }
 
 #[test]
@@ -148,7 +148,7 @@ fn apply_shimmer_box_utility() {
             .map(|s| s.as_str()),
         Some("1")
     );
-    assert!(el.attrs.get(crate::renderer::ATTR_GLYPH_FX).is_none());
+    assert!(!el.attrs.contains_key(crate::renderer::ATTR_GLYPH_FX));
     assert_eq!(el.style.animations[0].name, "tw-shimmer");
     assert_eq!(el.style.animations[0].duration_ms, 800.0);
     assert!(matches!(
@@ -166,7 +166,7 @@ fn apply_shimmer_box_utility() {
     );
 
     apply_class_list(&mut el, "animate-shimmer shimmer-none");
-    assert!(el.attrs.get(crate::renderer::ATTR_SHIMMER_BOX).is_none());
+    assert!(!el.attrs.contains_key(crate::renderer::ATTR_SHIMMER_BOX));
 }
 
 #[test]
@@ -197,7 +197,7 @@ fn shimmer_box_does_not_inherit_to_children() {
     root.children.push(Element::new().text("Thinking..."));
     crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut root);
     let leaf = &root.children[0];
-    assert!(leaf.attrs.get(crate::renderer::ATTR_SHIMMER_BOX).is_none());
+    assert!(!leaf.attrs.contains_key(crate::renderer::ATTR_SHIMMER_BOX));
     assert!(leaf
         .attrs
         .get(crate::renderer::ATTR_GLYPH_FX)

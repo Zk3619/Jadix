@@ -196,11 +196,6 @@ pub(crate) fn ShadowShowcase() -> jadix::core::tree::Element {
     }
 }
 
-/// MDN-style filter demo subject (downloaded into `examples/gallery/assets/`).
-#[cfg(test)]
-pub(crate) const FILTER_DEMO_LOGO: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/assets/firefox-logo.svg");
-
 pub(crate) fn filter_demo_tile(label: &str, logo: Element) -> Element {
     ui! {
         <VStack gap="0.25rem" items="center">
@@ -569,10 +564,10 @@ pub(crate) fn GradientShowcase() -> jadix::core::tree::Element {
     })
     .collect();
 
-    let tw_tile = Element::from(jadix::style::with_class_list(
+    let tw_tile = jadix::style::with_class_list(
         r#box().w("7.5rem").h("4.5rem").rounded("0.5rem").into(),
         "bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500",
-    ));
+    );
 
     let color_fmt_tiles: Vec<Element> = [
         (
@@ -2184,7 +2179,7 @@ pub(crate) fn DamageShowcase() -> jadix::core::tree::Element {
     let base_full = use_signal("gal_wp22_base_full", || 0_u64);
     let base_skip = use_signal("gal_wp22_base_skip", || 0_u64);
     let base_patch = use_signal("gal_wp22_base_patch", || 0_u64);
-    let scene_line = use_signal("gal_wp22_scene", || String::new());
+    let scene_line = use_signal("gal_wp22_scene", String::new);
 
     let apply_snap = move |s: jadix::PolicySnapshot| {
         partial_snap.set(s.partial_load);
@@ -2292,9 +2287,9 @@ pub(crate) fn FgMatrixShowcase() -> jadix::core::tree::Element {
     let n = use_signal("gal_fg_n", || 0_u32);
     let last_render = use_signal("gal_fg_render", || 0_usize);
     let last_total = use_signal("gal_fg_total", || 0_usize);
-    let root_deps = use_signal("gal_fg_root", || ui_root_effect_dep_count());
-    let miss = use_signal("gal_fg_miss", || bind_miss_count());
-    let unkeyed = use_signal("gal_fg_unkeyed", || unkeyed_for_rebuild_count());
+    let root_deps = use_signal("gal_fg_root", ui_root_effect_dep_count);
+    let miss = use_signal("gal_fg_miss", bind_miss_count);
+    let unkeyed = use_signal("gal_fg_unkeyed", unkeyed_for_rebuild_count);
 
     ui! {
         <MyCard title="FG 矩阵（建议 · 不替代库测）">
@@ -2464,10 +2459,10 @@ pub(crate) fn OwnerRegistryShowcase() -> jadix::core::tree::Element {
                     }}>
                         { if mount.get() { "卸载岛" } else { "挂载岛" } }
                     </Button>
-                    <Button variant="secondary" on_click={move || refresh_cur()}>
+                    <Button variant="secondary" on_click={refresh_cur}>
                         "刷新当前"
                     </Button>
-                    <Button variant="default" on_click={move || capture_baseline()}>
+                    <Button variant="default" on_click={capture_baseline}>
                         "记当前为卸载基线"
                     </Button>
                 </HStack>
@@ -2529,7 +2524,7 @@ pub(crate) fn StoreResourceShowcase() -> jadix::core::tree::Element {
     let action_note = use_signal("gal_wp25_action_note", || "尚未操作".to_string());
     create_effect({
         let name = name.clone();
-        let name_ticks = name_ticks;
+
         move || {
             let _ = name.get();
             name_ticks.update(|n| *n = n.wrapping_add(1));
@@ -2537,7 +2532,7 @@ pub(crate) fn StoreResourceShowcase() -> jadix::core::tree::Element {
     });
     create_effect({
         let age = age.clone();
-        let age_ticks = age_ticks;
+
         move || {
             let _ = age.get();
             age_ticks.update(|n| *n = n.wrapping_add(1));
@@ -2680,7 +2675,7 @@ pub(crate) fn StoreResourceShowcase() -> jadix::core::tree::Element {
 pub(crate) fn RootBareGetShowcase() -> jadix::core::tree::Element {
     use jadix::core::reactivity::ui_root_effect_dep_count;
 
-    let root_deps = use_signal("gal_wp27_root_deps", || ui_root_effect_dep_count());
+    let root_deps = use_signal("gal_wp27_root_deps", ui_root_effect_dep_count);
     let baseline = use_signal("gal_wp27_baseline", || None::<usize>);
     let label_n = use_signal("gal_wp27_label_n", || 0_u32);
     let panel_open = use_signal("gal_wp27_panel", || true);
@@ -2751,13 +2746,13 @@ pub(crate) fn RootBareGetShowcase() -> jadix::core::tree::Element {
                     } }
                 </Label>
                 <HStack gap="0.75rem" items="center" wrap="wrap">
-                    <Button variant="secondary" on_click={move || refresh_deps()}>
+                    <Button variant="secondary" on_click={refresh_deps}>
                         "刷新根 dep"
                     </Button>
-                    <Button variant="default" on_click={move || capture_baseline()}>
+                    <Button variant="default" on_click={capture_baseline}>
                         "记为基线"
                     </Button>
-                    <Button variant="outline" on_click={move || compare_baseline()}>
+                    <Button variant="outline" on_click={compare_baseline}>
                         "对照基线"
                     </Button>
                 </HStack>
@@ -2948,10 +2943,7 @@ pub(crate) fn BoxModelShowcase() -> jadix::core::tree::Element {
                     .color(parse_text_color("primary-foreground")),
             )),
     )
-    .on_click({
-        let hits = hits;
-        move || hits.update(|n| *n = n.wrapping_add(1))
-    });
+    .on_click(move || hits.update(|n| *n = n.wrapping_add(1)));
     let onion = gal_box_model_onion();
 
     ui! {

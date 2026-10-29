@@ -63,8 +63,7 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
                 >
                     { if open.get() { "关闭 Builder Trigger" } else { "打开 Builder Trigger" } }
                 </Button>
-                { Element::from(
-                    anchored_overlay("gal-ao-trig-b")
+                { anchored_overlay("gal-ao-trig-b")
                         .open(open)
                         .placement(Placement::Trigger {
                             focus_id: "gal-ao-trig-b-btn".into(),
@@ -84,8 +83,7 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
                                     }
                                 },
                             )
-                        }),
-                ) }
+                        }) }
             </HStack>
         }
     };
@@ -108,8 +106,7 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
                 >
                     { if point_b_open.get() { "关闭 Builder Point" } else { "打开 Builder Point" } }
                 </Button>
-                { Element::from(
-                    anchored_overlay("gal-ao-point-b")
+                { anchored_overlay("gal-ao-point-b")
                         .open(open)
                         .pinned(true)
                         .placement(Placement::Point { pos, gap: 0.0 })
@@ -160,8 +157,7 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
                                     </VStack>
                                 },
                             )
-                        }),
-                ) }
+                        }) }
             </HStack>
         }
     };
@@ -184,8 +180,7 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
                 >
                     { if open.get() { "关闭 Builder HUD" } else { "打开 Builder Unanchored" } }
                 </Button>
-                { Element::from(
-                    anchored_overlay("gal-ao-hud-b")
+                { anchored_overlay("gal-ao-hud-b")
                         .open(open)
                         .trigger_id("gal-ao-hud-b-btn")
                         .placement(Placement::Unanchored)
@@ -215,8 +210,7 @@ pub(crate) fn AnchoredOverlayShowcase() -> Element {
                                     <Button size="sm" on_click={move || open.set(false)}>"关闭"</Button>
                                 </VStack>
                             })
-                        }),
-                ) }
+                        }) }
             </HStack>
         }
     };
@@ -453,8 +447,7 @@ pub(crate) fn ViewportModalShowcase() -> Element {
                 >
                     { if open.get() { "关闭 Builder Sheet" } else { "打开 Builder ViewportModal" } }
                 </Button>
-                { Element::from(
-                    jadix::utils::viewport_modal::viewport_modal("gal-vm-sheet-b")
+                { jadix::utils::viewport_modal::viewport_modal("gal-vm-sheet-b")
                         .open(open)
                         .overlay_opacity(0.3)
                         .motion(jadix::utils::viewport_modal::ModalSurfaceMotion::SlideFromRight)
@@ -480,8 +473,7 @@ pub(crate) fn ViewportModalShowcase() -> Element {
                                     <Button size="sm" on_click={move || open.set(false)}>"关闭"</Button>
                                 </VStack>
                             })
-                        }),
-                ) }
+                        }) }
             </HStack>
         }
     };

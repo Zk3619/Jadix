@@ -22,9 +22,9 @@ pub(crate) use engine::{
 };
 
 #[cfg(test)]
-pub(crate) use engine::{
-    clear_pending_modal_enter, finish_modal_exit_for_test, set_modal_css_needs_frame_for_test,
-};
+pub(crate) use engine::finish_modal_exit_for_test;
+#[cfg(all(test, feature = "product-tests"))]
+pub(crate) use engine::{clear_pending_modal_enter, set_modal_css_needs_frame_for_test};
 
 pub use engine::{
     arm_modal_slide_settle, note_modal_shell_drag, patch_modal_overlay_opacity,

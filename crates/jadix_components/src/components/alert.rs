@@ -376,10 +376,10 @@ fn repaint_alert_descendants(el: &mut Element, chrome: &SemanticChrome) {
             if !is_variant_style_overridden(&node.attrs, VariantStyleField::Fg) {
                 paint_description_node_on_place(node, chrome.muted_fg);
             }
-        } else if is_icon_child(node) {
-            if !is_variant_style_overridden(&node.attrs, VariantStyleField::Fg) {
-                paint_icon_node_on_place(node, chrome.fg);
-            }
+        } else if is_icon_child(node)
+            && !is_variant_style_overridden(&node.attrs, VariantStyleField::Fg)
+        {
+            paint_icon_node_on_place(node, chrome.fg);
         }
     });
 }
@@ -582,7 +582,6 @@ impl From<AlertTitleBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -626,7 +625,6 @@ impl From<AlertDescriptionBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -665,7 +663,6 @@ impl From<AlertActionBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

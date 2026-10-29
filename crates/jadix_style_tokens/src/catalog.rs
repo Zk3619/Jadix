@@ -1268,9 +1268,8 @@ fn parse_scale_value(rest: &str) -> Option<f32> {
 
 /// Parse `zoom-*` values: `zoom-150` → 1.5, `zoom-[2.5]` → 2.5, `zoom-normal` → 1.0.
 fn parse_zoom_token(rest: &str) -> Option<f32> {
-    match rest {
-        "normal" => return Some(1.0),
-        _ => {}
+    if rest == "normal" {
+        return Some(1.0);
     }
     if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
         let inner = inner.trim();

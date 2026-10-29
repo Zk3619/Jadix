@@ -9,8 +9,10 @@ use std::sync::Arc;
 
 use super::element_style::{StepJumpTerm, TimingFunction};
 
+type LinearStops = Arc<[(f32, f32)]>;
+
 thread_local! {
-    static LINEAR_STOPS: RefCell<Vec<Arc<[(f32, f32)]>>> = const { RefCell::new(Vec::new()) };
+    static LINEAR_STOPS: RefCell<Vec<LinearStops>> = const { RefCell::new(Vec::new()) };
 }
 
 /// CSS Easing 1 `steps(n, jump-*)` at local progress `t` ∈ [0, 1].

@@ -260,10 +260,8 @@ impl DockData {
         if source != target && tabs.iter().any(|t| t.key == key) {
             return false;
         }
-        if source == target {
-            if place != DockPlacement::Center && tabs.len() == 1 {
-                return false;
-            }
+        if source == target && place != DockPlacement::Center && tabs.len() == 1 {
+            return false;
         }
         let Some(tab) = self.layout.take(source, key) else {
             return false;
@@ -437,7 +435,7 @@ impl DockState {
                             )
                             .bg("background")
                             .border("border", 1.0)
-                            .shadow([0.0, 0.0, 0.0, 0.22], 12.0)
+                            .shadow(crate::tokens::shadow_ink(0.22), 12.0)
                     })))
                     .into()
             });

@@ -22,7 +22,7 @@ cargo test -p jadix --test css_alignment --locked --offline
 cargo test -p jadix_components --test input_fidelity --locked --offline
 ```
 
-`--offline` 要求依赖已缓存；首次安装先获取依赖。图标工具契约使用 Pillow。
+`--offline` 要求依赖已缓存；首次安装先获取依赖。图标工具契约使用 Pillow，workflow 契约使用 PyYAML。
 不得把 ignored、零命中或只编译当作已运行通过。GPU／原生用例按平台显式选择 `--ignored --exact`，需要可用桌面与驱动，不与其他窗口验收并发。
 记录 package、target、feature、命令、退出码与日志；迁移后核对完整身份，不只比较数量。
 
@@ -30,3 +30,23 @@ cargo test -p jadix_components --test input_fidelity --locked --offline
 原始日志、性能记录和截图保留在开发证据仓，不作为公开文档或生产资源。
 
 维护叉保留上游测试目录和发现方式，避免扩大合并差异；其来源与本地补丁一并维护。纯公开契约包无需为了目录一致而新增空的私有测试树。测试专用 helper 随用例放入所属 `tests/`，生产模块仅保留被其他测试桥实际使用的 cfg(test) hook。
+
+GitHub 托管 runner 不可用时，先在本机重放轻量门，再运行编译与用例：
+
+```sh
+python scripts/checks/check-ci-workflow.py --output target/governance/ci-workflow.json
+python -m unittest discover -s scripts/tests -p "test_*.py"
+python scripts/checks/check-test-layout.py --output target/governance/test-layout.json
+python scripts/checks/check-public-docs.py --output target/governance/public-docs.json
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --no-deps --locked -- -D warnings
+cargo clippy -p jadix --all-targets --no-deps --features remote-asset --locked -- -D warnings
+cargo clippy -p jadix --all-targets --no-deps --features image-stream --locked -- -D warnings
+cargo clippy -p jadix --all-targets --no-deps --features text-undo --locked -- -D warnings
+cargo clippy -p jadix --all-targets --no-deps --features remote-asset,image-stream,text-undo --locked -- -D warnings
+cargo deny check licenses bans sources
+cargo build --workspace --all-targets --locked
+cargo test --workspace --locked
+```
+
+workflow 引用检查覆盖静态包名、显式 feature、test/example 名称与脚本文件；CI 使用 `--tracked-only`，同时确认脚本包含在 checkout 中。本地检查不替代 workflow 的平台依赖安装、额外 feature 组合和 GPU 用例；Linux、Windows、macOS 分别记录结果。对 CI 的修改应由包含修复的新提交触发验证，不能把旧提交的重跑结果作为新提交证据。

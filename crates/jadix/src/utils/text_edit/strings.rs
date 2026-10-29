@@ -310,12 +310,10 @@ pub(crate) fn text_edit_layout_measure_text(
     show_placeholder: bool,
     placeholder: &str,
     committed: &str,
-    preedit: &str,
+    _preedit: &str,
 ) -> String {
     if show_placeholder {
         placeholder.to_string()
-    } else if preedit.is_empty() {
-        committed.to_string()
     } else {
         committed.to_string()
     }

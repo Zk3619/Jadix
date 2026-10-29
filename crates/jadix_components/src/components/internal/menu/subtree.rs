@@ -67,10 +67,8 @@ pub fn focus_submenu_first_item(sid: &str, active_slot: &str, activate_count: us
     let active = use_signal(format!("{sid}__{active_slot}").as_str(), || usize::MAX);
     let next = if activate_count == 0 {
         0
-    } else if let Some(i) = roving_edge(activate_count, false) {
-        i
     } else {
-        0
+        roving_edge(activate_count, false).unwrap_or_default()
     };
     set_menu_active(active, next);
 }

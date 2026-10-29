@@ -559,10 +559,8 @@ fn shape_buffer_to_model(
         hard_starts.push(byte);
         let line_len = line.text().len();
         byte = byte.saturating_add(line_len);
-        if li + 1 < buffer.lines.len() {
-            if text.as_bytes().get(byte) == Some(&b'\n') {
-                byte += 1;
-            }
+        if li + 1 < buffer.lines.len() && text.as_bytes().get(byte) == Some(&b'\n') {
+            byte += 1;
         }
     }
 

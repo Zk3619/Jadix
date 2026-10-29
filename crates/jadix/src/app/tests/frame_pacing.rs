@@ -33,15 +33,16 @@ fn late_wakes_do_not_accumulate_into_a_lower_frame_rate() {
 fn coalesces_until_deadline_without_postponing_it_on_input() {
     let mut pacer = FramePacer::default();
     let start = Instant::now();
-    let interval = Some(Duration::from_secs_f64(1.0 / 60.0));
+    let period = Duration::from_secs_f64(1.0 / 60.0);
+    let interval = Some(period);
     assert!(pacer.begin_frame(start, interval));
     for ms in 1..16 {
         let now = start + Duration::from_millis(ms);
         assert!(!pacer.begin_frame(now, interval));
-        assert_eq!(pacer.deadline(now, interval), start + interval.unwrap());
+        assert_eq!(pacer.deadline(now, interval), start + period);
         assert!(pacer.pending);
     }
-    assert!(pacer.begin_frame(start + interval.unwrap(), interval));
+    assert!(pacer.begin_frame(start + period, interval));
     assert!(!pacer.pending);
 }
 

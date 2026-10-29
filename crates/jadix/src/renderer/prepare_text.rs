@@ -264,7 +264,7 @@ fn stamp_shadow_glyph(
             // Widen intermediates so checked builds can also vectorize this loop;
             // even a full u16 destination cannot overflow these u32 products/sums.
             let src = (u32::from(a) * u32::from(alpha)) / 255;
-            *dest = (src + (u32::from(*dest) * (255 - src) + 254) / 255) as u16;
+            *dest = (src + (u32::from(*dest) * (255 - src)).div_ceil(255)) as u16;
         }
     }
 }
@@ -902,7 +902,7 @@ fn input_line_height(style: &crate::style::TextStyle, scaled_size: f32, ui_scale
     } else {
         let scale = style
             .line_height_scale
-            .unwrap_or_else(|| crate::utils::text_field::text_edit_default_leading_scale());
+            .unwrap_or_else(crate::utils::text_field::text_edit_default_leading_scale);
         scaled_size * scale
     };
     lh.max(scaled_size * crate::utils::text_field::text_edit_default_leading_scale())
@@ -1070,7 +1070,6 @@ fn assign_shaped_slot(
             take_pooled_entry(pool, shape_hash)
                 .unwrap_or_else(|| make_dummy_cache_entry(font_system)),
         );
-        return;
     }
 }
 
@@ -2065,9 +2064,7 @@ fn rasterize_colr_glyph_unclipped(
     let mut rcx = Scratch::new();
 
     for i in 0..outline.len() {
-        let Some(layer) = outline.get(i) else {
-            return None;
-        };
+        let layer = outline.get(i)?;
         scratch.clear();
         let placement = Mask::with_scratch(layer.path(), &mut rcx)
             .origin(Origin::BottomLeft)
@@ -2314,9 +2311,7 @@ fn expand_clip_for_text_decoration(
     ui_scale: f32,
     paint_scale: f32,
 ) -> Option<[f32; 4]> {
-    let Some(c) = clip else {
-        return None;
-    };
+    let c = clip?;
     let grow = (offset.max(0.0) * ui_scale * paint_scale) + ul_h + 1.0;
     let mut y = c[1];
     let mut h = c[3];

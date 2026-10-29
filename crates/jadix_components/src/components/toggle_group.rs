@@ -575,6 +575,10 @@ fn is_toggle_item(el: &Element) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Provide ToggleGroup context, then build the flex shell (RSX compound / Builder shared).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The public scope adapter retains its existing signal and event parameters"
+)]
 pub fn toggle_group_scope(
     id: impl Into<String>,
     value: Option<Signal<String>>,
@@ -926,7 +930,7 @@ plain [] children: Option<Element>,
         joined,
         false,
         required,
-        || children.unwrap_or_else(Element::new),
+        || children.unwrap_or_default(),
     )
 }
 }
@@ -1221,7 +1225,6 @@ impl From<ToggleGroupItemBuilder> for Element {
             disabled: Some(builder.disabled),
             children: crate::components::base::packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

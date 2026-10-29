@@ -442,6 +442,10 @@ impl MediaEvent {
 
 /// Payload of a session-tagged observation. Untagged events cannot be applied.
 #[derive(Clone, Debug, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "Backend observations retain the public owned snapshot payload without a heap allocation"
+)]
 pub enum MediaEventKind {
     Snapshot(MediaSnapshot),
     StateChanged {

@@ -72,7 +72,7 @@ fn registry_does_not_grow_across_repeated_owner_cycles() {
                 let aid = format!("wp24_cycle_a_{i}");
                 let bid = format!("wp24_cycle_b_{i}");
                 let cid = format!("wp24_cycle_c_{i}");
-                reactive_anchor(aid, || Element::new());
+                reactive_anchor(aid, Element::new);
                 kept_effect
                     .borrow_mut()
                     .push(bind_text(bid, || "x".to_string()));

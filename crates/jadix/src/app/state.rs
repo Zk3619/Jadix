@@ -664,11 +664,12 @@ fn draw_sdf_range_with_clip<'a>(
         // 808 bind groups, ~170ms encode) and only then test the scissor.
         let mut hit_inst = Vec::new();
         let mut hit_poly = Vec::new();
-        for i in lo..hi {
-            if !cull.hits_instance(&instances[i]) {
+        for (offset, instance) in instances[lo..hi].iter().enumerate() {
+            let i = lo + offset;
+            if !cull.hits_instance(instance) {
                 continue;
             }
-            hit_inst.push(instances[i]);
+            hit_inst.push(*instance);
             hit_poly.push(
                 clip_polys
                     .get(i)
@@ -2830,7 +2831,6 @@ impl AppState {
 
     /// Logical padding around paint damage for shadows / AA lives in
     /// [`super::draw_cull::DAMAGE_CULL_PAD_LOGICAL`] (keep scissor and cull pads equal).
-
     /// GPU PartialLoad: UI draws into `present_retain`; swapchain only gets a full blit.
     /// Default **on** (draw-list cull + scissor). `JADIX_PARTIAL_DAMAGE=0` forces surface FullClear.
     /// Overlay portal membership scissors to overlay bounds. Scroll uses viewport-layer
@@ -3617,17 +3617,16 @@ impl AppState {
                                     dirty.bounds,
                                     node_paints,
                                 )
+                                && node_dest_reset.is_some()
                             {
-                                if node_dest_reset.is_some() {
-                                    // CLEAR already ran. Recapture wrapping even when
-                                    // restore_underlay is false (hide-settle Latest
-                                    // often has no dest-ink / keyed layered slot).
-                                    self.capture_underlay_text_renderer.render(render_pass);
-                                    super::frame_stats::note_scene_batch(
-                                        super::frame_stats::SceneKind::Text,
-                                        1,
-                                    );
-                                }
+                                // CLEAR already ran. Recapture wrapping even when
+                                // restore_underlay is false (hide-settle Latest
+                                // often has no dest-ink / keyed layered slot).
+                                self.capture_underlay_text_renderer.render(render_pass);
+                                super::frame_stats::note_scene_batch(
+                                    super::frame_stats::SceneKind::Text,
+                                    1,
+                                );
                             }
                             let overlay_cull = node_dest_reset
                                 .as_ref()
@@ -4178,13 +4177,18 @@ impl AppState {
         ) {
             match op {
                 crate::layout::layout_tree::PaintOp::Rects { start, count } => {
-                    for i in start as usize..(start + count) as usize {
+                    for (offset, instance) in scaled_instances
+                        [start as usize..(start + count) as usize]
+                        .iter()
+                        .enumerate()
+                    {
+                        let i = start as usize + offset;
                         if let Some(c) = cull {
-                            if !c.hits_instance(&scaled_instances[i]) {
+                            if !c.hits_instance(instance) {
                                 continue;
                             }
                         }
-                        batch_inst.push(scaled_instances[i]);
+                        batch_inst.push(*instance);
                         batch_poly.push(
                             clip_polys
                                 .get(i)
@@ -4903,6 +4907,10 @@ impl AppState {
         status
     }
 
+    #[expect(
+        clippy::vec_box,
+        reason = "The pool keeps heap allocations and their addresses stable while owners and callbacks retain references"
+    )]
     fn reconcile_pair(
         new_el: &mut Element,
         old_el: &mut Element,
@@ -5148,6 +5156,7 @@ impl AppState {
     }
 
     #[cfg(test)]
+    #[cfg(all(test, feature = "product-tests"))]
     fn path_has_button_ancestor(root: &Element, path: &[usize]) -> bool {
         let mut node = root;
         for &index in path {
@@ -5239,9 +5248,7 @@ impl AppState {
         use crate::app::devtools::{
             apply_cssom_text, cssom_text_from_element, find_element_by_path_mut,
         };
-        let Some(el) = find_element_by_path_mut(&mut self.root_element, path) else {
-            return None;
-        };
+        let el = find_element_by_path_mut(&mut self.root_element, path)?;
         let bounds = el.layout_bounds;
         let status = apply_cssom_text(el, css);
         let dump = cssom_text_from_element(el);
@@ -5297,6 +5304,10 @@ impl AppState {
                 == children.len()
     }
 
+    #[expect(
+        clippy::vec_box,
+        reason = "The pool keeps heap allocations and their addresses stable while owners and callbacks retain references"
+    )]
     fn reconcile_keyed_children(
         new_el: &mut Element,
         old_el: &mut Element,
@@ -5371,6 +5382,10 @@ impl AppState {
     /// `reactive_view` placeholder can still promote a mounted island) and keep
     /// unmatched new nodes. Unkeyed children are not positionally paired — that
     /// would attach the wrong subtree when a list grows or shrinks.
+    #[expect(
+        clippy::vec_box,
+        reason = "The pool keeps heap allocations and their addresses stable while owners and callbacks retain references"
+    )]
     fn reconcile_children_by_identity(
         new_el: &mut Element,
         old_el: &mut Element,
@@ -5423,12 +5438,12 @@ impl AppState {
         });
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "hot-reload"))]
     pub(super) fn invalidate_hot_reload_image(&mut self, key: &str) {
         self.image_textures.invalidate(key);
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "hot-reload"))]
     pub(super) fn preflight_hot_reload_templates(
         &self,
         templates: &[crate::app::hot_reload::TemplateFragment],
@@ -5846,7 +5861,7 @@ impl AppState {
             &mut sync_collect,
         );
         self.pending_layout_dirty
-            .extend(sync_collect.layout_dirty.drain(..));
+            .append(&mut sync_collect.layout_dirty);
         // Snapshot before chrome merges into `sync_impact` (button/slider/… may also LayoutChanged).
         let portal_only_reactive_layout =
             matches!(sync_impact, crate::core::tree::LayoutStatus::LayoutChanged)
@@ -6555,7 +6570,6 @@ impl AppState {
             self.window.request_redraw();
         }
         crate::utils::drag::routing::queue_frame(&self.root_element, mouse_pos[0], mouse_pos[1]);
-        drop(acc_layout_prof);
         let layout_done = Instant::now();
         #[cfg(feature = "webview")]
         self.webviews.sync(
@@ -8254,12 +8268,12 @@ impl AppState {
                 }
             }
             let frame_fp = hasher.finish();
-            if self.has_presented_frame
-                && !self.force_present
-                && !self.theme_transition.needs_frame()
-                && !(crate::style::theme_transition_config().enabled
+            if !(!self.has_presented_frame
+                || self.force_present
+                || self.theme_transition.needs_frame()
+                || self.force_full_redraw
+                || crate::style::theme_transition_config().enabled
                     && !self.present_retain.contents_valid())
-                && !self.force_full_redraw
                 && self.damage_nodes.is_empty()
                 && !self.scroll_layer_clear
                 && !self.overlay_restore_clear
@@ -8343,39 +8357,40 @@ impl AppState {
                 .prepare(&self.device, &mut encoder, &self.present_retain);
         }
         let mut strip_copy_committed = self.scroll_strip_blit.is_empty();
-        if use_partial_damage && self.present_retain.contents_valid() {
-            if !self.scroll_strip_blit.is_empty() {
-                let mut copied = 0usize;
-                for job in &self.scroll_strip_blit {
-                    let Some(copy) = super::damage::scroll_strip_copy_physical(
-                        &job.plan,
-                        ui_scale,
-                        self.config.width,
-                        self.config.height,
-                    ) else {
-                        break;
-                    };
-                    if !self.present_retain.copy_scroll_strip(
-                        &mut encoder,
-                        copy.src_x,
-                        copy.src_y,
-                        copy.dst_x,
-                        copy.dst_y,
-                        copy.width,
-                        copy.height,
-                    ) {
-                        break;
-                    }
-                    super::damage::note_scroll_strip_blit();
-                    copied += 1;
+        if use_partial_damage
+            && self.present_retain.contents_valid()
+            && !self.scroll_strip_blit.is_empty()
+        {
+            let mut copied = 0usize;
+            for job in &self.scroll_strip_blit {
+                let Some(copy) = super::damage::scroll_strip_copy_physical(
+                    &job.plan,
+                    ui_scale,
+                    self.config.width,
+                    self.config.height,
+                ) else {
+                    break;
+                };
+                if !self.present_retain.copy_scroll_strip(
+                    &mut encoder,
+                    copy.src_x,
+                    copy.src_y,
+                    copy.dst_x,
+                    copy.dst_y,
+                    copy.width,
+                    copy.height,
+                ) {
+                    break;
                 }
-                strip_copy_committed = copied == self.scroll_strip_blit.len();
-                if !strip_copy_committed {
-                    // Load + strip-only redraw over an unmoved retain is empty
-                    // cards / doubled glyphs. Keep this frame's pixels; FullClear next.
-                    self.force_full_redraw = true;
-                    self.window.request_redraw();
-                }
+                super::damage::note_scroll_strip_blit();
+                copied += 1;
+            }
+            strip_copy_committed = copied == self.scroll_strip_blit.len();
+            if !strip_copy_committed {
+                // Load + strip-only redraw over an unmoved retain is empty
+                // cards / doubled glyphs. Keep this frame's pixels; FullClear next.
+                self.force_full_redraw = true;
+                self.window.request_redraw();
             }
         }
         let retain_unmoved_scroll = super::damage::should_retain_unmoved_scroll(
@@ -10103,7 +10118,7 @@ fn update_scrollbar_element_self(
 }
 
 /// Test hook: same scrollbar prepass as `render` (`Full` / `ViewportsOnly`).
-#[cfg(test)]
+#[cfg(all(test, any(feature = "product-tests", feature = "devtools")))]
 pub(crate) fn update_scrollbar_elements_for_test(
     el: &mut Element,
     layout_tree: &mut crate::layout::layout_tree::LayoutTree,
@@ -11060,7 +11075,7 @@ pub(super) mod hot_reload_inject {
         let mut plans = Vec::new();
         for template in templates {
             for path in crate::app::hot_reload::find_template_paths(root, &template.id) {
-                let mut target = &*root;
+                let mut target = root;
                 for index in &path {
                     target = &target.children[*index];
                 }

@@ -132,6 +132,7 @@ impl HotReloadState {
 #[derive(Debug, Clone, Default)]
 pub(super) struct HotReloadBatch {
     pub(super) count: usize,
+    #[cfg(all(debug_assertions, feature = "hot-reload"))]
     pub(super) transactions: Vec<(
         jadix_hot_reload::Transaction,
         Option<std::sync::mpsc::Sender<jadix_hot_reload::CommitAck>>,
@@ -475,7 +476,7 @@ thread_local! {
     static COMMITTED_TEMPLATES: std::cell::RefCell<Vec<TemplateFragment>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, feature = "hot-reload"))]
 fn remember_templates(templates: &[TemplateFragment]) {
     COMMITTED_TEMPLATES.with(|stored| {
         super::state::hot_reload_inject::upsert_overrides(&mut stored.borrow_mut(), templates)

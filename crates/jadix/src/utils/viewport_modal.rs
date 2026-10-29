@@ -279,14 +279,7 @@ pub fn viewport_modal_content(
 
     reactive_anchor(view_id.clone(), move || {
         arm_modal_open_sync(&id, open, &presence);
-        assemble_modal(
-            &id,
-            open,
-            &presence,
-            &overlay,
-            opts,
-            isolate_reads(|| body()),
-        )
+        assemble_modal(&id, open, &presence, &overlay, opts, isolate_reads(&body))
     });
     flow_hidden_portal_host(reactive_placeholder_sized(view_id, 0.0, 0.0))
 }
@@ -464,12 +457,14 @@ pub fn retained_viewport_modal_layer(
 }
 
 #[cfg(test)]
+#[cfg(all(test, feature = "product-tests"))]
 pub(crate) fn viewport_modal_clear_pending_enter(id: &str) {
     crate::utils::modal_motion::clear_pending_modal_enter(&use_modal_presence(id));
 }
 
 #[cfg(test)]
 #[cfg(feature = "animation-base")]
+#[cfg(all(test, feature = "product-tests"))]
 pub(crate) fn viewport_modal_force_unmount(id: &str) {
     mounted_signal(&use_modal_presence(id)).set(false);
 }

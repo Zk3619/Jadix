@@ -76,7 +76,7 @@ pub(crate) fn PrimitivesShowcase() -> jadix::core::tree::Element {
                                     .overscan(8)
                                     .scrollbar_visibility("always")
                                     .render_item(|i| {
-                                        label(&format!("virt-row-{i}"))
+                                        label(format!("virt-row-{i}"))
                                             .text(format!("virtual row {i:04}"))
                                             .into()
                                     }),
@@ -945,6 +945,10 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
         .into();
 
     #[inline(never)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+    )]
     fn gal_overlay_card(
         open_cmd: Signal<bool>,
         open_cmd_dlg: Signal<bool>,

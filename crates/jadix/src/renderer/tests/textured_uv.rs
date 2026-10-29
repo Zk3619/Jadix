@@ -196,7 +196,8 @@ fn clipped_draw_does_not_squash_into_sliver_without_uv() {
 fn rotated_overflow_keeps_full_quad_and_gpu_clips() {
     // vertical-rl bake: swap 40×120 → 120×40, then rotate 90° about center.
     let full = [0.0, 40.0, 120.0, 40.0];
-    let parent = Some([40.0, 0.0, 40.0, 120.0]);
+    let parent_rect = [40.0, 0.0, 40.0, 120.0];
+    let parent = Some(parent_rect);
     let squeezed =
         TexturedDraw::clipped(full, parent, "jadix_text_xform_v3:cpu", 1.0).expect("cpu intersect");
     assert!(
@@ -227,7 +228,7 @@ fn rotated_overflow_keeps_full_quad_and_gpu_clips() {
         (vis[2] - 40.0).abs() < 0.5 && (vis[3] - 120.0).abs() < 0.5,
         "90° of swapped bake must recover the layout AABB, got {vis:?}"
     );
-    assert!(!super::aabbs_disjoint(vis, parent.unwrap()));
+    assert!(!super::aabbs_disjoint(vis, parent_rect));
 
     let keep_rot = keep.clone().with_transform(xform);
     let vis_c = [vis[0] + vis[2] * 0.5, vis[1] + vis[3] * 0.5];

@@ -701,10 +701,7 @@ pub fn pick_element_path(
 
 /// Prefer the nearest inspectable ancestor over anonymous text-only leaves.
 pub fn normalize_devtools_pick(root: &Element, mut path: ElementPath) -> ElementPath {
-    loop {
-        let Some(el) = find_element_by_path(root, &path) else {
-            break;
-        };
+    while let Some(el) = find_element_by_path(root, &path) {
         if !is_anonymous_text_leaf(el) {
             break;
         }

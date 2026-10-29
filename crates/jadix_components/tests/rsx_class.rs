@@ -113,7 +113,7 @@ fn table_rsx_w_is_layout_chrome_not_col() {
         <TableHead w="100px">"Invoice"</TableHead>
     };
     assert!(
-        el.attrs.get("data-table-col-w").is_none(),
+        !el.attrs.contains_key("data-table-col-w"),
         "RSX w is layout chrome, not a column track"
     );
 }

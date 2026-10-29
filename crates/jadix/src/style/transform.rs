@@ -557,7 +557,7 @@ pub fn compute_combined_transform(
         || rotate_deg.abs() > 1e-6
         || (scale[0] - 1.0).abs() > 1e-6
         || (scale[1] - 1.0).abs() > 1e-6;
-    let has_list = transform_list.map_or(false, |l| !l.is_empty());
+    let has_list = transform_list.is_some_and(|l| !l.is_empty());
 
     if !has_indep && !has_list {
         return MAT2D_IDENTITY;

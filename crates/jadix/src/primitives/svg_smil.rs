@@ -552,13 +552,7 @@ fn apply_smil_node(node: &SvgNode, t: f32) -> SvgNode {
                         apply_group_attr(&mut xf, &mut op, &children[i], t);
                         i += 1;
                     }
-                    smil if matches!(
-                        smil,
-                        SvgNode::Animate { .. }
-                            | SvgNode::Set { .. }
-                            | SvgNode::AnimateTransform { .. }
-                    ) =>
-                    {
+                    SvgNode::Animate { .. } | SvgNode::Set { .. } => {
                         // Shape-targeted SMIL with no preceding shape in this group — drop.
                         i += 1;
                     }

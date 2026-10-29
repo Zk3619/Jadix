@@ -133,7 +133,7 @@ fn error_boundary_empty_id_is_not_blank_identity() {
         let out = Rc::new(RefCell::new(None::<String>));
         let out2 = out.clone();
         create_effect(move || {
-            let el = error_boundary("", |_| Element::new(), || Element::new());
+            let el = error_boundary("", |_| Element::new(), Element::new);
             *out2.borrow_mut() = el.template_id.clone();
         });
         let tid = out.borrow().clone().expect("template_id");

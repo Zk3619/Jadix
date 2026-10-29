@@ -159,7 +159,7 @@ pub fn direction_local_t(direction: AnimationDirection, iteration_index: u32, cy
         AnimationDirection::Normal => false,
         AnimationDirection::Reverse => true,
         AnimationDirection::Alternate => iteration_index % 2 == 1,
-        AnimationDirection::AlternateReverse => iteration_index % 2 == 0,
+        AnimationDirection::AlternateReverse => iteration_index.is_multiple_of(2),
     };
     if reverse {
         1.0 - cycle_t

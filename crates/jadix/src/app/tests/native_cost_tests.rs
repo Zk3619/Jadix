@@ -1,6 +1,8 @@
 use crate::core::tree::Element;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
+use windows_sys::Win32::Foundation::FILETIME;
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, GetProcessTimes};
 use winit::application::ApplicationHandler;
 use winit::event::{ButtonSource, ElementState, MouseButton, PointerSource, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
@@ -39,20 +41,13 @@ fn scene(revision: usize, offset: f32, translation: f32) -> Element {
         .child(viewport)
 }
 
-#[link(name = "kernel32")]
-extern "system" {
-    fn GetCurrentProcess() -> *mut std::ffi::c_void;
-    fn GetProcessTimes(
-        process: *mut std::ffi::c_void,
-        creation: *mut u64,
-        exit: *mut u64,
-        kernel: *mut u64,
-        user: *mut u64,
-    ) -> i32;
-}
-
 fn cpu_ms() -> f64 {
-    let (mut creation, mut exit, mut kernel, mut user) = (0_u64, 0_u64, 0_u64, 0_u64);
+    let (mut creation, mut exit, mut kernel, mut user) = (
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+        FILETIME::default(),
+    );
     assert_ne!(
         unsafe {
             GetProcessTimes(
@@ -65,6 +60,8 @@ fn cpu_ms() -> f64 {
         },
         0
     );
+    let kernel = (u64::from(kernel.dwHighDateTime) << 32) | u64::from(kernel.dwLowDateTime);
+    let user = (u64::from(user.dwHighDateTime) << 32) | u64::from(user.dwLowDateTime);
     (kernel + user) as f64 / 10_000.0
 }
 

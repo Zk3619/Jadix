@@ -296,12 +296,8 @@ pub fn tick_panel_cells<E>(
                     needs_frame = true;
                     None
                 }
-            } else if c.enter_active && c.gate.phase() == PresencePhase::Present {
-                needs_frame = true;
-                None
-            } else if hold_while_needs_enter
-                && c.gate.phase() == PresencePhase::Present
-                && c.needs_enter
+            } else if c.gate.phase() == PresencePhase::Present
+                && (c.enter_active || (hold_while_needs_enter && c.needs_enter))
             {
                 needs_frame = true;
                 None

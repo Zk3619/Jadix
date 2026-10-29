@@ -221,6 +221,7 @@ pub(crate) fn set_modal_css_needs_frame_for_test(v: bool) {
 
 /// Skip unflushed enter so tests can assert post-enter paint (focus, layout).
 #[cfg(test)]
+#[cfg(all(test, feature = "product-tests"))]
 pub(crate) fn clear_pending_modal_enter(handle: &ModalPresenceHandle) {
     let mut c = handle.cell.borrow_mut();
     c.needs_enter = false;
@@ -468,14 +469,13 @@ pub(crate) fn tick_modal_presence() -> bool {
                         needs_frame = true;
                         None
                     }
-                } else if c.enter_active && c.gate.phase() == PresencePhase::Present {
-                    needs_frame = true;
-                    None
                 } else if c.gate.phase() == PresencePhase::Present
-                    && c.shell
-                        .as_ref()
-                        .is_some_and(|s| s.motion == ModalSurfaceMotion::DialogFade)
-                    && c.needs_enter
+                    && (c.enter_active
+                        || (c
+                            .shell
+                            .as_ref()
+                            .is_some_and(|s| s.motion == ModalSurfaceMotion::DialogFade)
+                            && c.needs_enter))
                 {
                     needs_frame = true;
                     None

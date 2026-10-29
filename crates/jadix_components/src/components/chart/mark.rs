@@ -440,11 +440,7 @@ impl MarkRender for BarYMark {
         let gap = 2.0;
         let mut layers = Vec::new();
         for (xi, lab) in labels.iter().enumerate() {
-            let band = if self.horizontal {
-                ctx.scales.bandwidth.max(1.0)
-            } else {
-                ctx.scales.bandwidth.max(1.0)
-            };
+            let band = ctx.scales.bandwidth.max(1.0);
             let slot = ((band - gap * (n_s.saturating_sub(1)) as f32) / n_s as f32).max(1.0);
             for (si, ser) in series.iter().enumerate() {
                 let Some((di, val)) = value_for(&self.rows, lab, ser).or_else(|| {
@@ -718,9 +714,7 @@ impl MarkRender for LineYMark {
     }
     fn channels(&self) -> MarkChannels {
         let times: Vec<i64> = self.rows.iter().filter_map(|r| r.time).collect();
-        let cats = if !times.is_empty() {
-            Vec::new()
-        } else if labels_are_indexish(&self.rows) {
+        let cats = if !times.is_empty() || labels_are_indexish(&self.rows) {
             Vec::new()
         } else {
             unique_labels(&self.rows)
@@ -1066,9 +1060,7 @@ impl MarkRender for DotMark {
     }
     fn channels(&self) -> MarkChannels {
         let times: Vec<i64> = self.rows.iter().filter_map(|r| r.time).collect();
-        let cats = if !times.is_empty() {
-            Vec::new()
-        } else if labels_are_indexish(&self.rows) {
+        let cats = if !times.is_empty() || labels_are_indexish(&self.rows) {
             Vec::new()
         } else {
             unique_labels(&self.rows)
@@ -1290,11 +1282,14 @@ impl From<RuleMark> for ChartMark {
 // custom_mark (TanStack createMark narrowing)
 // ---------------------------------------------------------------------------
 
+type MarkRenderer = Rc<dyn Fn(&MarkRenderContext<'_>) -> Vec<SceneLayer>>;
+type MarkHitTest = Rc<dyn Fn(&MarkRenderContext<'_>, Point2) -> Option<usize>>;
+
 struct CustomMarkInner {
     id: String,
     channels: MarkChannels,
-    render: Rc<dyn Fn(&MarkRenderContext<'_>) -> Vec<SceneLayer>>,
-    hit: Option<Rc<dyn Fn(&MarkRenderContext<'_>, Point2) -> Option<usize>>>,
+    render: MarkRenderer,
+    hit: Option<MarkHitTest>,
     polar: bool,
 }
 
@@ -1343,8 +1338,8 @@ pub fn custom_mark(
 pub struct CustomMarkBuilder {
     id: String,
     channels: MarkChannels,
-    render: Rc<dyn Fn(&MarkRenderContext<'_>) -> Vec<SceneLayer>>,
-    hit: Option<Rc<dyn Fn(&MarkRenderContext<'_>, Point2) -> Option<usize>>>,
+    render: MarkRenderer,
+    hit: Option<MarkHitTest>,
     polar: bool,
 }
 

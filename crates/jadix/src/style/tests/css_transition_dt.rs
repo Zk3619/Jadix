@@ -7,8 +7,10 @@ use crate::style::TimingFunction;
 fn spring_transition_retargets_from_current_value() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.opacity = 0.0;
+    let mut style = crate::style::Style {
+        opacity: 0.0,
+        ..Default::default()
+    };
     style.transition.push(TransitionEntry {
         property: TransitionProperty::Opacity,
         duration_ms: 0.0,
@@ -38,8 +40,10 @@ fn spring_transition_retargets_from_current_value() {
 #[cfg(feature = "animation-base")]
 fn monotonic_timeline_ignores_dt_storm() {
     set_css_transition_virtual_timeline(false);
-    let mut style = crate::style::Style::default();
-    style.scale = [1.0, 1.0];
+    let mut style = crate::style::Style {
+        scale: [1.0, 1.0],
+        ..Default::default()
+    };
     style.transition.push(TransitionEntry {
         property: TransitionProperty::Transform,
         duration_ms: 150.0,
@@ -93,8 +97,10 @@ fn duration_authored_css_spring_finishes_at_its_declared_time() {
 fn virtual_timeline_advances_only_when_seeked() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.scale = [1.0, 1.0];
+    let mut style = crate::style::Style {
+        scale: [1.0, 1.0],
+        ..Default::default()
+    };
     style.transition.push(TransitionEntry {
         property: TransitionProperty::Transform,
         duration_ms: 150.0,
@@ -133,8 +139,10 @@ fn virtual_timeline_advances_only_when_seeked() {
 fn retarget_continues_from_current_computed_value() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.opacity = 0.5;
+    let mut style = crate::style::Style {
+        opacity: 0.5,
+        ..Default::default()
+    };
     style.transition.push(TransitionEntry {
         property: TransitionProperty::Opacity,
         duration_ms: 200.0,
@@ -171,9 +179,11 @@ fn retarget_continues_from_current_computed_value() {
 fn transform_transition_includes_translate() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.translate = [0.0, 0.0];
-    style.scale = [1.0, 1.0];
+    let mut style = crate::style::Style {
+        translate: [0.0, 0.0],
+        scale: [1.0, 1.0],
+        ..Default::default()
+    };
     style.transition.push(TransitionEntry {
         property: TransitionProperty::Transform,
         duration_ms: 100.0,
@@ -210,8 +220,10 @@ fn duration_tween_idle_instant_jump_keeps_a_mid_frame() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_max_step_ms(Some(1000.0 / 60.0));
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.translate = [0.0, 0.0];
+    let mut style = crate::style::Style {
+        translate: [0.0, 0.0],
+        ..Default::default()
+    };
     style.transition.push(TransitionEntry {
         property: TransitionProperty::Translate,
         duration_ms: 300.0,
@@ -243,8 +255,10 @@ fn spring_tween_idle_instant_jump_keeps_a_mid_frame() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_max_step_ms(Some(1000.0 / 60.0));
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.translate = [0.0, 0.0];
+    let mut style = crate::style::Style {
+        translate: [0.0, 0.0],
+        ..Default::default()
+    };
     style.transition.push(TransitionEntry {
         property: TransitionProperty::Translate,
         duration_ms: 0.0,
@@ -303,8 +317,10 @@ fn bind_specified_translate_commit_keeps_first_paint_at_start() {
 fn translate_transition_interpolates_percent() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.translate_pct = [0.0, 0.5];
+    let mut style = crate::style::Style {
+        translate_pct: [0.0, 0.5],
+        ..Default::default()
+    };
     style.transition.push(TransitionEntry {
         property: TransitionProperty::Translate,
         duration_ms: 100.0,
@@ -332,8 +348,10 @@ fn duration_tween_sub_idle_frame_is_realtime() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_max_step_ms(Some(1000.0 / 60.0));
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.translate = [0.0, 0.0];
+    let mut style = crate::style::Style {
+        translate: [0.0, 0.0],
+        ..Default::default()
+    };
     style.transition.push(TransitionEntry {
         property: TransitionProperty::Translate,
         duration_ms: 300.0,
@@ -360,8 +378,10 @@ fn duration_tween_sub_idle_frame_is_realtime() {
 fn snap_baseline_then_new_target_still_animates() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.translate = [-100.0, 0.0];
+    let mut style = crate::style::Style {
+        translate: [-100.0, 0.0],
+        ..Default::default()
+    };
     // Simulate Carousel seamless jump: pin at -100 and seed, then write new target -300.
     style.transition.push(TransitionEntry {
         property: TransitionProperty::Transform,
@@ -392,8 +412,10 @@ fn snap_baseline_then_new_target_still_animates() {
 fn snap_baseline_then_new_target_still_animates_with_translate() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.translate = [-100.0, 0.0];
+    let mut style = crate::style::Style {
+        translate: [-100.0, 0.0],
+        ..Default::default()
+    };
     style.transition.push(TransitionEntry {
         property: TransitionProperty::Translate,
         duration_ms: 100.0,
@@ -428,8 +450,10 @@ fn snap_baseline_then_new_target_still_animates_with_translate() {
 
 #[test]
 fn snap_while_transition_empty_does_not_seed() {
-    let mut style = crate::style::Style::default();
-    style.translate = [0.0, -100.0];
+    let mut style = crate::style::Style {
+        translate: [0.0, -100.0],
+        ..Default::default()
+    };
     let mut snap = TransitionSnapshot::default();
     snap_element_transitions_to_current(&style, &mut snap);
     assert!(

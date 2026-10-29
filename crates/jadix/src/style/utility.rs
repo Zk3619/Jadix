@@ -572,7 +572,6 @@ pub fn patch_class_set_base_layout(element: &mut Element) {
 /// Questionnaire (and any hover-class node) that toggles `Display::None` would
 /// otherwise flash Flex for one frame whenever a `data-*` attr changes the
 /// variant fingerprint.
-
 pub fn patch_class_set_base_display(el: &mut Element) {
     let display = el.style.display;
     let Some(cs) = el.class_set.as_mut() else {
@@ -1648,9 +1647,8 @@ fn pointer_inside_for_class_hover(
     ancestor_scale: [f32; 2],
 ) -> bool {
     let in_box = crate::core::tree::point_in_aabb(mouse_pos, vis_box);
-    let in_clip = clip.map_or(true, |c| {
-        c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c)
-    });
+    let in_clip = clip
+        .is_none_or(|c| c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c));
     if !(in_box && in_clip) {
         return false;
     }
@@ -1936,10 +1934,10 @@ fn record_peer_hover(
         ancestor_scale,
     );
     let child_hovered = crate::core::tree::point_in_aabb(mouse_pos, child_paint)
-        && child_clip.map_or(true, |c| {
+        && child_clip.is_none_or(|c| {
             c[2] > 0.0 && c[3] > 0.0 && crate::core::tree::point_in_aabb(mouse_pos, c)
         })
-        && child_clip_round.map_or(true, |(rect, radii)| {
+        && child_clip_round.is_none_or(|(rect, radii)| {
             crate::style::rounded_rect_contains(rect, radii, mouse_pos)
         });
     if !child_hovered {
@@ -2504,10 +2502,12 @@ fn apply_or_update_named_animation(
     count: Option<f32>,
     reverse: bool,
 ) {
-    let mut entry = crate::style::AnimationEntry::default();
-    entry.name = name.to_string();
-    entry.duration_ms = duration_ms.max(1.0);
-    entry.timing = crate::style::TimingFunction::from_css(timing);
+    let mut entry = crate::style::AnimationEntry {
+        name: name.to_string(),
+        duration_ms: duration_ms.max(1.0),
+        timing: crate::style::TimingFunction::from_css(timing),
+        ..Default::default()
+    };
     entry.iteration_count = match count {
         Some(n) if n > 0.0 && n.is_finite() => crate::style::AnimationIterationCount::Finite(n),
         _ => crate::style::AnimationIterationCount::Infinite,
@@ -2595,8 +2595,10 @@ fn apply_builtin_animation(
     iteration: &str,
 ) {
     el.style.animations.clear();
-    let mut entry = crate::style::AnimationEntry::default();
-    entry.name = name.to_string();
+    let mut entry = crate::style::AnimationEntry {
+        name: name.to_string(),
+        ..Default::default()
+    };
     if let Some(ms) = crate::core::tree::parse_css_time_ms_strict(duration) {
         entry.duration_ms = ms;
     }
@@ -3498,9 +3500,9 @@ fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -
             // Initial class apply (`mark_overrides`): don't clobber an already-authored offset
             // (author `underline-offset-[2px]` / `.text_underline_offset()` before CVA).
             // Variant re-resolve must still apply `hover:underline-offset-*`.
-            if mark_overrides && el.text_style.underline_offset.is_some() {
-                LayoutStatus::Clean
-            } else if el.text_style.underline_offset == Some(px) {
+            if (mark_overrides && el.text_style.underline_offset.is_some())
+                || el.text_style.underline_offset == Some(px)
+            {
                 LayoutStatus::Clean
             } else {
                 el.text_style.underline_offset = Some(px);

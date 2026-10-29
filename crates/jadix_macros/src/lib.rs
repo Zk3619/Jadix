@@ -269,11 +269,11 @@ fn parse_rsx_brace_child(content: ParseStream) -> syn::Result<Expr> {
         return Err(content.error("empty `{}` expression child"));
     }
     let fork = content.fork();
-    if let Ok(expr) = fork.parse::<Expr>() {
-        if fork.is_empty() {
-            content.advance_to(&fork);
-            return Ok(expr);
-        }
+    if let Ok(expr) = fork.parse::<Expr>()
+        && fork.is_empty()
+    {
+        content.advance_to(&fork);
+        return Ok(expr);
     }
     let inner: proc_macro2::TokenStream = content.parse()?;
     syn::parse2(quote! {{ #inner }})
@@ -4810,7 +4810,7 @@ fn expand_node_inner(
                         .unwrap_or_else(|| quote! { "center".to_string() });
                     let side_offset = get_attr("side_offset")
                         .or_else(|| get_attr("sideOffset"))
-                        .map(|e| quote_length_f32(e))
+                        .map(quote_length_f32)
                         .unwrap_or_else(|| quote! { jadix::utils::popup::FLOATING_TRIGGER_GAP });
                     let class = get_attr("class")
                         .map(|e| quote! { Some((#e).to_string()) })
@@ -4886,7 +4886,7 @@ fn expand_node_inner(
                         .unwrap_or_else(|| quote! { "start".to_string() });
                     let side_offset = get_attr("side_offset")
                         .or_else(|| get_attr("sideOffset"))
-                        .map(|e| quote_length_f32(e))
+                        .map(quote_length_f32)
                         .unwrap_or_else(|| quote! { jadix::utils::popup::FLOATING_TRIGGER_GAP });
                     let focus_id = get_attr("focus_id")
                         .or_else(|| get_attr("focusId"))
@@ -4900,13 +4900,13 @@ fn expand_node_inner(
                         .map(|e| quote! { Some(#e) })
                         .unwrap_or_else(|| quote! { None });
                     let x = get_attr("x")
-                        .map(|e| quote_length_f32(e))
+                        .map(quote_length_f32)
                         .unwrap_or_else(|| quote! { 0.0f32 });
                     let y = get_attr("y")
-                        .map(|e| quote_length_f32(e))
+                        .map(quote_length_f32)
                         .unwrap_or_else(|| quote! { 0.0f32 });
                     let gap = get_attr("gap")
-                        .map(|e| quote_length_f32(e))
+                        .map(quote_length_f32)
                         .unwrap_or_else(|| quote! { 0.0f32 });
                     let kind = get_attr("kind")
                         .map(|e| {
@@ -5078,7 +5078,7 @@ fn expand_node_inner(
                         .unwrap_or_else(|| quote! { "center".to_string() });
                     let side_offset = get_attr("side_offset")
                         .or_else(|| get_attr("sideOffset"))
-                        .map(|e| quote_length_f32(e))
+                        .map(quote_length_f32)
                         .unwrap_or_else(|| quote! { jadix::utils::popup::FLOATING_TRIGGER_GAP });
                     let class = get_attr("class")
                         .map(|e| quote! { Some((#e).to_string()) })

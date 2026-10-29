@@ -190,7 +190,7 @@ pub enum CollapseHeightEffect {
     Idle,
 }
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct CollapseHeightOpts {
     /// Pin exit `max-height` to the current clip (Expand). Accordion uses `auto`.
     pub pin_exit_height: bool,
@@ -198,15 +198,6 @@ pub struct CollapseHeightOpts {
     /// so in-page panels size to content. Auto on a floating Select ScrollArea is a
     /// one-row hitch (min-content) that placement then covers up.
     pub keep_open_max_height: bool,
-}
-
-impl Default for CollapseHeightOpts {
-    fn default() -> Self {
-        Self {
-            pin_exit_height: false,
-            keep_open_max_height: false,
-        }
-    }
 }
 
 /// Height keyframes + presence flags. Does not force `width: 100%` / `display: flex`.

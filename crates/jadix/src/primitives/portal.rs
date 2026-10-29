@@ -58,7 +58,7 @@ pub fn Portal(id: String, mount: Option<String>, children: Option<Element>) -> E
 }
 
 fn portal_element(id: String, mount: Option<String>, children: Option<Element>) -> Element {
-    let mut inner = children.unwrap_or_else(Element::new);
+    let mut inner = children.unwrap_or_default();
     inner.template_id = Some(id.clone());
     inner.set_attr("jadix_portal", "1");
     inner.set_attr(ATTR_PORTAL_KEY, id.as_str());

@@ -179,7 +179,7 @@ fn bind_field_invalid(child: Element, name: &str) -> Element {
         child,
         bind_key,
         move || field_invalid(&field),
-        |el, invalid| apply_control_invalid(el, invalid),
+        apply_control_invalid,
     )
 }
 

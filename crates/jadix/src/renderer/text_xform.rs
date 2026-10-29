@@ -230,7 +230,7 @@ pub fn element_wants_sticky_xform(el: &Element) -> bool {
 /// draw quad carry the scale. Multiplying font size by 0.90 every frame forces a
 /// new glyph atlas — Dialog stutter vs Sheet `translate` (paint_scale stays 1).
 pub fn bake_source_scale(paint_scale: f32) -> f32 {
-    if paint_scale >= 0.85 && paint_scale <= 1.15 {
+    if (0.85..=1.15).contains(&paint_scale) {
         1.0
     } else {
         paint_scale.max(0.01)
@@ -258,7 +258,7 @@ pub fn resolve_glyph_raster(
         return GlyphRasterMode::Coverage;
     }
     let s = mat2d_uniform_scale(world_linear).max(paint_scale.max(1e-6));
-    if s >= BAKE_SCALE_MIN && s <= BAKE_SCALE_MAX {
+    if (BAKE_SCALE_MIN..=BAKE_SCALE_MAX).contains(&s) {
         GlyphRasterMode::Bake
     } else {
         GlyphRasterMode::Msdf

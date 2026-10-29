@@ -924,7 +924,7 @@ where
         Element::new().template_id(id.clone()),
         id,
         compute,
-        |el, next| apply_bound_text_value(el, next),
+        apply_bound_text_value,
     )
 }
 
@@ -1478,11 +1478,11 @@ where
 /// Re-evaluates inside a dedicated [`reactive_view`] so `when={…get()}` does not subscribe the
 /// root / component boundary. Prefer this over nested [`show_reactive`] for multi-arm branches
 /// that are boolean (key-based arms still use [`switch_reactive`]).
-pub fn match_when_reactive<F>(anchor_id: impl Into<String>, mut pick: F) -> Element
+pub fn match_when_reactive<F>(anchor_id: impl Into<String>, pick: F) -> Element
 where
     F: FnMut() -> Element + 'static,
 {
-    reactive_view(anchor_id, move || pick())
+    reactive_view(anchor_id, pick)
 }
 
 /// In-place `attrs[key] = value` for `ui!` auto-bind of otherwise unknown attributes.
@@ -1760,7 +1760,7 @@ impl<T: Clone + IntoPaintColor + 'static> IntoNodeBg for Signal<T> {
             el,
             id,
             move || self.get().into_paint_color(),
-            |el, color| crate::style::apply_user_bg(el, color),
+            crate::style::apply_user_bg,
         )
     }
 }
@@ -1777,7 +1777,7 @@ where
             el,
             caller_bind_key("bg"),
             move || compute().into_paint_color(),
-            |el, color| crate::style::apply_user_bg(el, color),
+            crate::style::apply_user_bg,
         )
     }
 }
@@ -1790,7 +1790,7 @@ impl<T: Clone + IntoTextColor + 'static> IntoNodeFg for Signal<T> {
             el,
             id,
             move || self.get().into_text_color(),
-            |el, color| crate::style::apply_user_fg(el, color),
+            crate::style::apply_user_fg,
         )
     }
 }
@@ -1807,7 +1807,7 @@ where
             el,
             caller_bind_key("fg"),
             move || compute().into_text_color(),
-            |el, color| crate::style::apply_user_fg(el, color),
+            crate::style::apply_user_fg,
         )
     }
 }
@@ -1836,13 +1836,10 @@ where
 {
     #[track_caller]
     fn apply_node_opacity(self, el: Element) -> Element {
-        let mut compute = self;
-        bind_node_prop(
-            el,
-            caller_bind_key("opacity"),
-            move || compute(),
-            |el, o| apply_bound_opacity(el, o),
-        )
+        let compute = self;
+        bind_node_prop(el, caller_bind_key("opacity"), compute, |el, o| {
+            apply_bound_opacity(el, o)
+        })
     }
 }
 

@@ -44,7 +44,10 @@ fn set_window_composition_attribute() -> Option<SetWindowCompositionAttributeFn>
             user32,
             windows_sys::core::s!("SetWindowCompositionAttribute"),
         )?;
-        Some(std::mem::transmute(proc))
+        Some(std::mem::transmute::<
+            unsafe extern "system" fn() -> isize,
+            SetWindowCompositionAttributeFn,
+        >(proc))
     })
 }
 
@@ -104,15 +107,15 @@ pub fn apply_accent_policy(hwnd: windows_sys::Win32::Foundation::HWND, options: 
         options.blur && build >= BUILD_WIN11_SYSTEM_BACKDROP && !options.wants_custom_dcomp();
     let accent_state = if !options.blur || system_backdrop {
         0
-    } else if build >= BUILD_WIN11_SYSTEM_BACKDROP {
-        ACCENT_ENABLE_ACRYLICBLURBEHIND
-    } else if matches!(
-        options.backdrop,
-        crate::app::WindowBackdrop::Acrylic
-            | crate::app::WindowBackdrop::Aero
-            | crate::app::WindowBackdrop::Mica
-            | crate::app::WindowBackdrop::MicaAlt
-    ) {
+    } else if build >= BUILD_WIN11_SYSTEM_BACKDROP
+        || matches!(
+            options.backdrop,
+            crate::app::WindowBackdrop::Acrylic
+                | crate::app::WindowBackdrop::Aero
+                | crate::app::WindowBackdrop::Mica
+                | crate::app::WindowBackdrop::MicaAlt
+        )
+    {
         ACCENT_ENABLE_ACRYLICBLURBEHIND
     } else {
         ACCENT_ENABLE_BLURBEHIND

@@ -295,7 +295,7 @@ fn build() -> Element {
                 .map(|name| name.to_string_lossy().into_owned())
                 .unwrap_or_else(|| format!("untitled-{}.rs", file.id + 1));
             tabs = tabs.child(Element::from(
-                button(&format!("ide-tab-{}", file.id))
+                button(format!("ide-tab-{}", file.id))
                     .variant(if index == active {
                         "secondary"
                     } else {

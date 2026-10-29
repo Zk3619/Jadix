@@ -677,7 +677,6 @@ impl From<MarkerIconBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         apply_slot_chrome(el, &builder.class, builder.style)
     }
@@ -737,7 +736,6 @@ impl From<MarkerContentBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         apply_slot_chrome(el, &builder.class, builder.style)
     }
@@ -866,7 +864,6 @@ impl From<MarkerBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         el = apply_slot_chrome(el, &builder.class, builder.style);
         sync_cluster_axis(&mut el);

@@ -65,7 +65,7 @@ fn portal_content_survives_second_hoist_pass() {
     assert!(
         root.children
             .iter()
-            .any(|c| c.attrs.get(ATTR_PORTAL_SLOT).is_some()),
+            .any(|c| c.attrs.contains_key(ATTR_PORTAL_SLOT)),
         "slot marker must remain in source tree"
     );
 
@@ -2300,7 +2300,7 @@ fn portal_drops_when_slot_removed() {
 
     // Overlay closed: reactive tree no longer declares the portal/slot.
     root.children.retain(|c| {
-        c.template_id.as_deref() == Some(PORTAL_LAYER_ID) || c.attrs.get(ATTR_PORTAL_SLOT).is_none()
+        c.template_id.as_deref() == Some(PORTAL_LAYER_ID) || !c.attrs.contains_key(ATTR_PORTAL_SLOT)
     });
 
     let _ = hoist_portal_subtrees(&mut root);
@@ -2562,7 +2562,7 @@ fn local_mount_scrim_follows_scroll_with_stale_position_fixed() {
         .expect("scrim");
 
     crate::core::tree::walk_elements_mut(&mut viewport, |el| {
-        if el.attrs.get(ATTR_HOISTED_MOUNT).is_some() {
+        if el.attrs.contains_key(ATTR_HOISTED_MOUNT) {
             el.style.position_fixed = true;
         }
     });

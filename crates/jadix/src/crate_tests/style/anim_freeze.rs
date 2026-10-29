@@ -52,8 +52,10 @@ fn from_css_recognizes_independent_scale_rotate() {
 fn independent_scale_transition_lerps_without_transform_shorthand() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.scale = [1.0, 1.0];
+    let mut style = crate::style::Style {
+        scale: [1.0, 1.0],
+        ..Default::default()
+    };
     style
         .transition
         .push(linear_transition(TransitionProperty::Scale, 100.0));
@@ -78,8 +80,10 @@ fn independent_scale_transition_lerps_without_transform_shorthand() {
 fn independent_rotate_transition_lerps() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.rotate_deg = 0.0;
+    let mut style = crate::style::Style {
+        rotate_deg: 0.0,
+        ..Default::default()
+    };
     style
         .transition
         .push(linear_transition(TransitionProperty::Rotate, 100.0));
@@ -106,8 +110,10 @@ fn clip_path_polygon_transition_lerps_vertices() {
     let from =
         crate::style::parse_clip_path("polygon(0% 0%, 100% 0%, 100% 100%, 0% 100%)").unwrap();
     let to = crate::style::parse_clip_path("polygon(25% 25%, 75% 25%, 75% 75%, 25% 75%)").unwrap();
-    let mut style = crate::style::Style::default();
-    style.clip_path = from;
+    let mut style = crate::style::Style {
+        clip_path: from,
+        ..Default::default()
+    };
     style
         .transition
         .push(linear_transition(TransitionProperty::ClipPath, 100.0));
@@ -201,8 +207,10 @@ fn dual_engine_background_color_mid() {
     let _ = tick_element_animations_ex(&mut kf, &mut text, &used, &mut kf_snap, 0.0);
     let _ = tick_element_animations_ex(&mut kf, &mut text, &used, &mut kf_snap, 0.05);
 
-    let mut tr = crate::style::Style::default();
-    tr.bg_color = [0.0, 0.0, 0.0, 1.0];
+    let mut tr = crate::style::Style {
+        bg_color: [0.0, 0.0, 0.0, 1.0],
+        ..Default::default()
+    };
     tr.transition.push(linear_transition(
         TransitionProperty::BackgroundColor,
         100.0,
@@ -306,8 +314,10 @@ fn dual_engine_border_radius_mid() {
     let _ = tick_element_animations_ex(&mut kf, &mut text, &used, &mut kf_snap, 0.0);
     let _ = tick_element_animations_ex(&mut kf, &mut text, &used, &mut kf_snap, 0.05);
 
-    let mut tr = crate::style::Style::default();
-    tr.radii = [0.0; 4];
+    let mut tr = crate::style::Style {
+        radii: [0.0; 4],
+        ..Default::default()
+    };
     tr.transition
         .push(linear_transition(TransitionProperty::BorderRadius, 100.0));
     set_css_transition_virtual_timeline(true);
@@ -344,8 +354,10 @@ fn dual_engine_filter_blur_mid() {
             KeyframeStop::at(1.0).filter(to.clone()),
         ],
     );
-    let mut kf = crate::style::Style::default();
-    kf.filter = from.clone();
+    let mut kf = crate::style::Style {
+        filter: from.clone(),
+        ..Default::default()
+    };
     kf.animations.push(keyframes_anim_entry(
         "anim-freeze-filter",
         100.0,
@@ -358,8 +370,10 @@ fn dual_engine_filter_blur_mid() {
     let _ = tick_element_animations_ex(&mut kf, &mut text, &used, &mut kf_snap, 0.0);
     let _ = tick_element_animations_ex(&mut kf, &mut text, &used, &mut kf_snap, 0.05);
 
-    let mut tr = crate::style::Style::default();
-    tr.filter = from;
+    let mut tr = crate::style::Style {
+        filter: from,
+        ..Default::default()
+    };
     tr.transition
         .push(linear_transition(TransitionProperty::Filter, 100.0));
     set_css_transition_virtual_timeline(true);
@@ -402,8 +416,10 @@ fn dual_engine_text_color_mid() {
         AnimationFillMode::Both,
     ));
     let mut kf_snap = AnimationSnapshot::default();
-    let mut kf_text = crate::style::TextStyle::default();
-    kf_text.color = Some([0, 0, 0, 255]);
+    let mut kf_text = crate::style::TextStyle {
+        color: Some([0, 0, 0, 255]),
+        ..Default::default()
+    };
     let used = crate::style::UsedLayout::default();
     let _ = tick_element_animations_ex(&mut kf, &mut kf_text, &used, &mut kf_snap, 0.0);
     let _ = tick_element_animations_ex(&mut kf, &mut kf_text, &used, &mut kf_snap, 0.05);
@@ -411,8 +427,10 @@ fn dual_engine_text_color_mid() {
     let mut tr = crate::style::Style::default();
     tr.transition
         .push(linear_transition(TransitionProperty::Color, 100.0));
-    let mut tr_text = crate::style::TextStyle::default();
-    tr_text.color = Some([0, 0, 0, 255]);
+    let mut tr_text = crate::style::TextStyle {
+        color: Some([0, 0, 0, 255]),
+        ..Default::default()
+    };
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
     let mut snap = TransitionSnapshot::default();
@@ -481,8 +499,10 @@ fn extra_shadows_list_lerps_equal_length() {
     use crate::style::BoxShadow;
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = crate::style::Style::default();
-    style.shadow_offset = [0.0, 0.0];
+    let mut style = crate::style::Style {
+        shadow_offset: [0.0, 0.0],
+        ..Default::default()
+    };
     style.extra_shadows = vec![BoxShadow {
         offset: [0.0, 0.0],
         ..Default::default()
@@ -521,8 +541,10 @@ fn waapi_keyframe_objects_share_css_tick() {
         vec![Keyframe::new().opacity(0.0), Keyframe::new().opacity(1.0)],
         KeyframeEffect::new().duration(100.0),
     );
-    let mut style = crate::style::Style::default();
-    style.opacity = 1.0;
+    let mut style = crate::style::Style {
+        opacity: 1.0,
+        ..Default::default()
+    };
     style.animations.push(anim.to_entry());
     let mut snap = crate::style::AnimationSnapshot::default();
     let _ = tick_element_animations(&mut style, &mut snap, 0.05);
@@ -580,8 +602,10 @@ fn property_id_table_is_full_u8_bitmap() {
 #[test]
 fn reduced_motion_snaps_keyframes_to_end() {
     set_prefers_reduced_motion(Some(true));
-    let mut style = crate::style::Style::default();
-    style.opacity = 1.0;
+    let mut style = crate::style::Style {
+        opacity: 1.0,
+        ..Default::default()
+    };
     style.animations.push(keyframes_anim_entry(
         "fade-out-0",
         400.0,
@@ -608,8 +632,10 @@ fn fill_mode_none_restores_specified_opacity() {
             KeyframeStop::at(1.0).opacity(0.0),
         ],
     );
-    let mut style = crate::style::Style::default();
-    style.opacity = 1.0;
+    let mut style = crate::style::Style {
+        opacity: 1.0,
+        ..Default::default()
+    };
     style.animations.push(keyframes_anim_entry(
         "anim-freeze-fade-out",
         80.0,
@@ -647,8 +673,10 @@ fn fill_mode_forwards_holds_end_opacity() {
             KeyframeStop::at(1.0).opacity(0.0),
         ],
     );
-    let mut style = crate::style::Style::default();
-    style.opacity = 1.0;
+    let mut style = crate::style::Style {
+        opacity: 1.0,
+        ..Default::default()
+    };
     style.animations.push(keyframes_anim_entry(
         "anim-freeze-fade-out-fwd",
         80.0,

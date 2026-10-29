@@ -111,7 +111,7 @@ fn suspense_empty_id_is_not_blank_identity() {
         let out = Rc::new(RefCell::new(None::<String>));
         let out2 = out.clone();
         create_effect(move || {
-            let el = suspense("", || Element::new(), || Element::new());
+            let el = suspense("", Element::new, Element::new);
             *out2.borrow_mut() = el.template_id.clone();
         });
         let tid = out.borrow().clone().expect("template_id");
@@ -147,7 +147,6 @@ fn create_resource_err_sets_state_and_bridges_to_eb() {
     let saw2 = saw.clone();
     let _bridge = create_root(|| {
         create_effect({
-            let resource = resource;
             move || {
                 let frame = push_error_frame();
                 // Track Err so effect re-runs if state were to change later.

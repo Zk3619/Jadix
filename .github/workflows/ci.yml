@@ -4,6 +4,14 @@ on:
   push:
     branches: [main, master]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 env:
   CARGO_TERM_COLOR: always
@@ -12,14 +20,17 @@ env:
 jobs:
   documentation-and-test-layout:
     name: documentation + test ownership
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
       - name: Install icon test dependency
-        run: python -m pip install Pillow
+        run: python -m pip install Pillow PyYAML
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Workflow package, feature and script references
+        run: python scripts/checks/check-ci-workflow.py --tracked-only --output target/governance/ci-workflow.json
       - name: Tool contracts
         run: python -m unittest discover -s scripts/tests -p "test_*.py"
       - name: Test ownership
@@ -29,7 +40,7 @@ jobs:
 
   lint:
     name: fmt + clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -39,7 +50,7 @@ jobs:
       - name: Install Linux build deps
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev pkg-config
+          sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev libgtk-3-dev pkg-config
       - name: Format
         run: cargo fmt --all -- --check
       - name: Clippy
@@ -50,18 +61,21 @@ jobs:
         run: cargo clippy -p jadix --all-targets --no-deps --features image-stream -- -D warnings
       - name: Clippy (text-undo)
         run: cargo clippy -p jadix --all-targets --no-deps --features text-undo -- -D warnings
+      - name: Clippy (combined optional features)
+        run: cargo clippy -p jadix --all-targets --no-deps --features remote-asset,image-stream,text-undo -- -D warnings
       - name: Install cargo-deny
         run: cargo install cargo-deny --locked
       - name: License + dependency policy (deny.toml)
         run: cargo deny check licenses bans sources
 
   test:
+    needs: [documentation-and-test-layout, lint]
     name: test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -70,7 +84,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev pkg-config mesa-vulkan-drivers
+          sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev libgtk-3-dev pkg-config mesa-vulkan-drivers
       - name: PowerShell tool contracts (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -136,7 +150,7 @@ jobs:
           cargo test -p jadix_components --features macros,themes,animation-path,document-editing,document-diff,document-science --tests
       - name: Wayland configure capability projection
         if: runner.os == 'Linux'
-        run: cargo test -p winit-wayland --lib projects_real_configure
+        run: cargo test -p jadix_winit_wayland --lib projects_real_configure
       - name: Test
         run: cargo test --workspace
       - name: Native menu contracts (Windows)
@@ -178,12 +192,13 @@ jobs:
         run: cargo test -p jadix --lib --features text-undo text_undo_freeze -- --nocapture
 
   offscreen:
+    needs: [documentation-and-test-layout, lint]
     name: offscreen smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
+        os: [ubuntu-24.04, windows-latest, macos-latest]
     env:
       # Prefer a software adapter so headless runners without a GPU still exercise the pixel path.
       JADIX_FORCE_SOFTWARE: "1"
@@ -195,7 +210,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev pkg-config mesa-vulkan-drivers
+          sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev libgtk-3-dev pkg-config mesa-vulkan-drivers
       - name: Offscreen clear/readback + golden
         run: cargo test -p jadix --lib offscreen -- --nocapture
       - name: ImageStream YUV GPU convert (WP-M.3)

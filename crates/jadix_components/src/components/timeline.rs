@@ -294,7 +294,7 @@ pub fn timeline_line_active(active: i32, index: usize, is_last: bool) -> bool {
     if is_last {
         false
     } else {
-        active >= 0 && active >= (index as i32) + 1
+        active >= 0 && active > (index as i32)
     }
 }
 

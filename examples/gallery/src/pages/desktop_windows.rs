@@ -293,8 +293,8 @@ pub(crate) fn gallery_desktop_window_root(independent: bool, on_top: bool) -> El
                             if result.is_ok() { topmost.set(enabled); }
                             desktop_result(result, "已更新本窗置顶设置");
                         }}>{if topmost.get() { "取消全局置顶" } else { "启用全局置顶" }}</Button>
-                        <Button id="gal-desktop-window-close" size="sm" variant="outline" on_click={move || close_window()}>"仅关闭本窗"</Button>
-                        <Button id="gal-desktop-window-quit" size="sm" variant="destructive" on_click={move || request_exit()}>"退出整个进程"</Button>
+                        <Button id="gal-desktop-window-close" size="sm" variant="outline" on_click={close_window}>"仅关闭本窗"</Button>
+                        <Button id="gal-desktop-window-quit" size="sm" variant="destructive" on_click={request_exit}>"退出整个进程"</Button>
                     </HStack>
                     <FullscreenShowcase />
                     <MultiWindowShowcase />
@@ -315,8 +315,8 @@ pub(crate) fn gallery_instance_demo_root() -> Element {
                     <FullscreenShowcase />
                     <MultiWindowShowcase />
                     <HStack w="100%" gap="0.5rem" wrap="wrap">
-                        <Button id="gal-desktop-primary-close" size="sm" variant="outline" on_click={move || close_window()}>"关闭主窗（验证独立存活）"</Button>
-                        <Button size="sm" variant="destructive" on_click={move || request_exit()}>"退出整个演示进程"</Button>
+                        <Button id="gal-desktop-primary-close" size="sm" variant="outline" on_click={close_window}>"关闭主窗（验证独立存活）"</Button>
+                        <Button size="sm" variant="destructive" on_click={request_exit}>"退出整个演示进程"</Button>
                     </HStack>
                 </VStack>
             </ScrollArea>

@@ -29,10 +29,10 @@ jadix_lucide = { workspace = true, features = ["animated", "animation-path", "ma
 jadix_dnd = { workspace = true, features = ["macros"] }
 jadix_window_state = { workspace = true, features = ["jadix"] }
 log = { workspace = true }
-winit = { "package" = "jadix_winit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../crates/jadix_winit", "optional" = true }
+winit = { workspace = true, optional = true }
 
 [dev-dependencies]
-winit = { "package" = "jadix_winit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../crates/jadix_winit" }
+winit = { workspace = true }
 
 [features]
 default = ["webview", "performance", "devtools", "hot-reload"]

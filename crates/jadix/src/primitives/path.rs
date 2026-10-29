@@ -250,6 +250,10 @@ pub(crate) struct PathGpuMesh {
 }
 
 #[derive(Clone, Debug, PartialEq)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The existing value enum retains its public payload shape and avoids an additional per-value allocation"
+)]
 pub(crate) enum PathGpuOp {
     Fill(PathGpuFill),
     Mesh(PathGpuMesh),
@@ -1058,7 +1062,6 @@ fn fan_fill(pts: &[Point2], color: [f32; 4], out: &mut Vec<PathTri>) {
 
 /// Sagitta bounds the distance from the arc to each chord. Unlike an arc-length
 /// heuristic, this adds geometry only where it improves the rendered silhouette.
-
 fn disc_fan(center: Point2, radius: f32, color: [f32; 4], out: &mut Vec<PathTri>) {
     let r = radius.max(0.5);
     if color[3] <= 0.0 {
@@ -1850,10 +1853,10 @@ fn point_in_stroke(cmds: &[PathCommand], style: &PathStyle, p: Point2) -> bool {
         if closed && pts.len() >= 2 {
             let a = pts[pts.len() - 1];
             let b = pts[0];
-            if (a.0 - b.0).abs() > 1e-4 || (a.1 - b.1).abs() > 1e-4 {
-                if dist_to_segment(p, a, b) <= hw {
-                    return true;
-                }
+            if ((a.0 - b.0).abs() > 1e-4 || (a.1 - b.1).abs() > 1e-4)
+                && dist_to_segment(p, a, b) <= hw
+            {
+                return true;
             }
         }
         if !closed && pts.len() >= 2 {

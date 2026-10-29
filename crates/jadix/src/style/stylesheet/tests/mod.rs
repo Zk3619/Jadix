@@ -190,7 +190,7 @@ fn match_1000x50_under_budget() {
         .collect();
     let t = std::time::Instant::now();
     for el in &mut els {
-        let taken = std::mem::replace(el, Element::new());
+        let taken = std::mem::take(el);
         *el = apply_stylesheet_rules(taken);
     }
     let ms = t.elapsed().as_secs_f64() * 1000.0;

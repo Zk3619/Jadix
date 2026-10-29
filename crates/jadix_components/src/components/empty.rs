@@ -420,7 +420,6 @@ impl From<EmptyHeaderBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -458,7 +457,6 @@ impl From<EmptyTitleBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -496,7 +494,6 @@ impl From<EmptyDescriptionBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -529,7 +526,6 @@ impl From<EmptyContentBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -605,7 +601,6 @@ impl From<EmptyBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -651,7 +646,6 @@ impl From<EmptyMediaBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

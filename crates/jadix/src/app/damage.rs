@@ -114,7 +114,7 @@ fn bounds_key(bounds: [f32; 4]) -> u64 {
 /// Stable key for a laid-out element (Taffy `NodeId`, else the visual box).
 pub fn paint_element_key(el: &Element) -> u64 {
     el.layout_node
-        .map(|n| u64::from(n))
+        .map(u64::from)
         .unwrap_or_else(|| bounds_key(el.layout_bounds))
 }
 
@@ -1452,10 +1452,10 @@ pub fn overlay_band_should_encode(
     remaining_stamp_keys: &[u64],
     overlay_band_keys: &[u64],
 ) -> bool {
-    if band_key != 0 && overlay_dirty_keys.iter().any(|k| *k == band_key) {
+    if band_key != 0 && overlay_dirty_keys.contains(&band_key) {
         return true;
     }
-    if closed_restore && band_key != 0 && remaining_stamp_keys.iter().any(|k| *k == band_key) {
+    if closed_restore && band_key != 0 && remaining_stamp_keys.contains(&band_key) {
         return true;
     }
     if band_key == 0 {
@@ -1463,7 +1463,7 @@ pub fn overlay_band_should_encode(
     }
     let dirty_has_keyed_band = overlay_dirty_keys
         .iter()
-        .any(|k| *k != 0 && overlay_band_keys.iter().any(|b| *b == *k));
+        .any(|k| *k != 0 && overlay_band_keys.contains(k));
     if dirty_has_keyed_band {
         return false;
     }

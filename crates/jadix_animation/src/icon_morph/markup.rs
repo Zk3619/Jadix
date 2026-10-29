@@ -86,13 +86,9 @@ fn read_attrs(raw: &str) -> HashMap<String, String> {
 
 fn view_box_of(markup: &str) -> Option<String> {
     let lower = markup.to_ascii_lowercase();
-    let Some(svg) = lower.find("<svg") else {
-        return None;
-    };
+    let svg = lower.find("<svg")?;
     let rest = &markup[svg..];
-    let Some(end) = rest.find('>') else {
-        return None;
-    };
+    let end = rest.find('>')?;
     let head = &rest[..end];
     let attrs = read_attrs(head);
     attrs

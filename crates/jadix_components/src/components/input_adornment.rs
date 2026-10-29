@@ -525,11 +525,10 @@ plain [] children: Option<Element>,
     } else {
         for mut k in kids {
             // 图标 / 文案默认 muted
-            if k.text_style.color == Some([0, 0, 0, 0]) || k.text.is_some() {
-                if k.text_style.font_family.as_deref() == Some("lucide") || k.text.is_some() {
+            if (k.text_style.color == Some([0, 0, 0, 0]) || k.text.is_some())
+                && (k.text_style.font_family.as_deref() == Some("lucide") || k.text.is_some()) {
                     k = k.text_color(parse_text_color("muted-foreground"));
                 }
-            }
             row = row.child(k);
         }
     }
@@ -699,7 +698,6 @@ impl From<InputAdornmentAddonBuilder> for Element {
             align: Some(builder.align.as_str().to_string()),
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -742,7 +740,6 @@ impl From<InputAdornmentTextBuilder> for Element {
         let el = InputAdornmentText(InputAdornmentTextProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

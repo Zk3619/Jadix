@@ -463,7 +463,6 @@ impl From<ListHeaderBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -507,7 +506,6 @@ impl From<ListDescriptionBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -559,7 +557,6 @@ impl From<ListItemBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -662,7 +659,6 @@ impl From<ListBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

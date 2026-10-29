@@ -71,13 +71,12 @@ impl ClipCoord {
 }
 
 /// Author `clip-path` (reference box = border box).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub enum ClipPath {
+    #[default]
     None,
     /// CSS `inset(t r b l)` (1–4 value shorthand already expanded).
-    Inset {
-        trbl: [ClipCoord; 4],
-    },
+    Inset { trbl: [ClipCoord; 4] },
     Polygon {
         fill: ClipFillRule,
         points: Vec<[ClipCoord; 2]>,
@@ -95,12 +94,6 @@ pub enum ClipPath {
     },
     /// `url(#id)` — resolved via [`lookup_clip_path`] (document definition table).
     Url(String),
-}
-
-impl Default for ClipPath {
-    fn default() -> Self {
-        Self::None
-    }
 }
 
 impl ClipPath {

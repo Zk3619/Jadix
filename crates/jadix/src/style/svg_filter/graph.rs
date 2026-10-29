@@ -198,23 +198,12 @@ pub enum LightSource {
     },
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct PrimitiveRegion {
     pub x: Option<CssDim>,
     pub y: Option<CssDim>,
     pub width: Option<CssDim>,
     pub height: Option<CssDim>,
-}
-
-impl Default for PrimitiveRegion {
-    fn default() -> Self {
-        Self {
-            x: None,
-            y: None,
-            width: None,
-            height: None,
-        }
-    }
 }
 
 /// One SVG filter primitive.

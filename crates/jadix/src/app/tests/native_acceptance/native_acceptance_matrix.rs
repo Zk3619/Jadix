@@ -21,21 +21,6 @@ fn compiled_matrix_scene()->Element {
     register_description(compiled_builder_scene(),BODY)
 }
 
-fn matrix_updated_scene()->Element {
-    let text_node=|id:&str,value:&str| {
-        let text:Element=crate::primitives::text(value).into();
-        text.hot_reload_node_type("Text").hot_reload_declaration_base(&[],false).template_id(id)
-    };
-    let group:Element=crate::primitives::vstack().into();
-    let group=group.hot_reload_node_type("VStack").hot_reload_declaration_base(&["w","h"],false)
-        .template_id("hr6-group").w("50%").h(64.0)
-        .child(text_node("hr6-first","重复")).child(text_node("hr6-last","中文转义\""));
-    let badge=badge_factory().hot_reload_node_type("HrNativeBadge")
-        .hot_reload_declaration_base(&["w","h"],false).template_id("hr6-badge").w(24.0).h(24.0);
-    register_description(Element::new().hot_reload_node_type("Box")
-        .hot_reload_declaration_base(&["w","h","bg"],false).w(128.0).h(64.0).bg("#ff0000")
-        .child(group).child(badge).child(Element::new().text("HR6 B30")),MATRIX_UPDATED)
-}
 
 fn construct_root(mode:&str)->Element {
     let mut root=Element::new().w("100%").h("100%").bg("#ffffff");
@@ -70,7 +55,7 @@ impl Harness {
         let state=app.state.borrow();let primary=snapshot_tree(&state.as_ref().unwrap().root_element);
         let mut instances=primary.iter().filter(|node|node.template_id.as_deref()==Some(ID)).map(|node|node.instance_id).collect::<Vec<_>>();
         assert_eq!(instances.len(),2);
-        let expected_width=if self.mode.starts_with("cold-") || self.step%2==0 {128.0}else{96.0};
+        let expected_width=if self.mode.starts_with("cold-") || self.step.is_multiple_of(2) {128.0}else{96.0};
         for secondary in secondaries.values() {
             let nodes=snapshot_tree(&secondary.root_element);
             let Some(node)=nodes.iter().find(|node|node.template_id.as_deref()==Some(ID)) else{return false;};

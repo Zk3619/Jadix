@@ -211,7 +211,7 @@ fn performance_panel_stays_viewport_anchored_across_scroll_and_resize() {
             if frame % 10 == 0 {
                 root.children
                     .push(jadix::utils::keyed_overlay::viewport_portal_stage(
-                        &format!("hover-scroll-{frame}"),
+                        format!("hover-scroll-{frame}"),
                         Element::new()
                             .w(240.0)
                             .h(100.0)

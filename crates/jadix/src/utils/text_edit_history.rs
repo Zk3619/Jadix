@@ -376,23 +376,12 @@ mod stack {
         UndoGroup, UndoPayload,
     };
 
-    #[derive(Clone, Debug, PartialEq, Eq)]
+    #[derive(Clone, Debug, PartialEq, Eq, Default)]
     pub struct TextEditSnapshot {
         pub value: String,
         pub caret: usize,
         pub selection: Option<(usize, usize)>,
         pub extra_carets: Vec<(usize, usize)>,
-    }
-
-    impl Default for TextEditSnapshot {
-        fn default() -> Self {
-            Self {
-                value: String::new(),
-                caret: 0,
-                selection: None,
-                extra_carets: Vec::new(),
-            }
-        }
     }
 
     impl TextEditSnapshot {
@@ -672,13 +661,12 @@ mod stack {
                 } else {
                     match &mut g.payload {
                         UndoPayload::Changes(chs) if chs.len() == 1 && g.kind == kind => {
-                            if try_merge_change(&mut chs[0], &ch, kind) {
+                            let merged = try_merge_change(&mut chs[0], &ch, kind);
+                            if merged {
                                 g.state_after = after.point();
                                 g.at = Instant::now();
-                                true
-                            } else {
-                                false
                             }
+                            merged
                         }
                         _ => false,
                     }

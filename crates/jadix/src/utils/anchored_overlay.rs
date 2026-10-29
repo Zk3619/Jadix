@@ -630,7 +630,7 @@ pub fn anchored_overlay_content(
             trigger_fid,
             &presence,
             &opts,
-            isolate_reads(|| body()),
+            isolate_reads(&body),
             phase,
             oz,
         )
@@ -753,6 +753,7 @@ pub(crate) fn anchored_overlay_is_mounted(id: &str, opts: &AnchoredOverlayConten
 /// Smoke: apply panel motion without exposing the presence handle.
 #[cfg(test)]
 #[cfg(feature = "animation-base")]
+#[cfg(all(test, feature = "product-tests"))]
 pub(crate) fn apply_anchored_overlay_panel_motion(
     id: &str,
     panel: &mut Element,
@@ -1110,7 +1111,7 @@ fn note_point_overlay_tick_damage() {
 
 fn point_overlay_matches_drag(el: &Element, id: &str) -> bool {
     el.attrs.get(ATTR_FLOATING).map(String::as_str) == Some(id)
-        && el.attrs.get(ATTR_FLOATING_POINT).is_some()
+        && el.attrs.contains_key(ATTR_FLOATING_POINT)
 }
 
 /// Fingerprint skip would freeze the panel at last Taffy origin (geom_key is Taffy abs).

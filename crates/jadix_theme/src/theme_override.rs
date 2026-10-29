@@ -232,7 +232,7 @@ pub fn load_theme_overrides(path: impl AsRef<Path>) -> Result<ThemeOverrides, Th
         .unwrap_or("")
         .to_ascii_lowercase();
     if ext != "toml" {
-        return Err(ThemeOverrideError::UnsupportedExtension(ext.into()));
+        return Err(ThemeOverrideError::UnsupportedExtension(ext));
     }
     let raw = fs::read_to_string(path).map_err(ThemeOverrideError::Io)?;
     parse_theme_overrides_str(&raw)

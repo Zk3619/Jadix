@@ -76,7 +76,7 @@ pub fn highlight_code(source: &str, language: &str, dark: bool) -> Vec<Highlight
                 Err(_) => spans.push(HighlightSpan::new(line)),
             }
         }
-        return spans;
+        spans
     }
     #[cfg(not(feature = "syntax"))]
     {

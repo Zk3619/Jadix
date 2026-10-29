@@ -97,7 +97,7 @@ pub fn CardHeader(
 plain [] children: Option<Element>,
 ) -> Element {
     let kids = children.map(take_packed).unwrap_or_default();
-    let (actions, rest): (Vec<_>, Vec<_>) = kids.into_iter().partition(|c| is_card_action(c));
+    let (actions, rest): (Vec<_>, Vec<_>) = kids.into_iter().partition(is_card_action);
 
     if actions.is_empty() {
         return stamp_slot(Element::from(
@@ -285,7 +285,6 @@ impl From<CardTitleBuilder> for Element {
         let el = CardTitle(CardTitleProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -328,7 +327,6 @@ impl From<CardDescriptionBuilder> for Element {
         let el = CardDescription(CardDescriptionProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -366,7 +364,6 @@ impl From<CardActionBuilder> for Element {
         let el = CardAction(CardActionProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -443,7 +440,6 @@ impl From<CardHeaderBuilder> for Element {
         let el = CardHeader(CardHeaderProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -481,7 +477,6 @@ impl From<CardContentBuilder> for Element {
         let el = CardContent(CardContentProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -519,7 +514,6 @@ impl From<CardFooterBuilder> for Element {
         let el = CardFooter(CardFooterProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -590,7 +584,6 @@ impl From<CardBuilder> for Element {
         let el = Card(CardProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

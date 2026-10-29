@@ -3,8 +3,12 @@ use super::*;
 #[test]
 fn advance_equals_ink_plus_bearings() {
     assert!((EMOJI_ADVANCE_EM - (EMOJI_INK_EM + 2.0 * EMOJI_BEARING_EM)).abs() < 1e-6);
-    assert!(EMOJI_ADVANCE_EM > EMOJI_INK_EM);
-    assert!(EMOJI_BEARING_EM > 0.0);
+    const {
+        assert!(EMOJI_ADVANCE_EM > EMOJI_INK_EM);
+    }
+    const {
+        assert!(EMOJI_BEARING_EM > 0.0);
+    }
 }
 
 #[test]

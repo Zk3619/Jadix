@@ -403,13 +403,11 @@ fn panel_header(pick: bool, tab: DevToolsTab) -> Element {
                     .child(inspector_icon("monitor-smartphone", "▣").text_size(16.0))
                     .on_click(super::device::toggle)
                     .into(),
-                Element::from(
-                    label("dt-title")
-                        .text("DevTools")
-                        .text_size(12.0)
-                        .font_weight("600"),
-                )
-                .flex_shrink(0.0),
+                label("dt-title")
+                    .text("DevTools")
+                    .text_size(12.0)
+                    .font_weight("600")
+                    .flex_shrink(0.0),
                 panel_navigation(tab),
             ]
             .into_iter()
@@ -1226,15 +1224,13 @@ fn breadcrumbs(
 
 fn closing_tree_row(node: &InspectorNodeSnapshot) -> Element {
     let tag = node.tag_hint.as_deref().unwrap_or("box");
-    let caption = Element::from(
-        label(format!(
-            "dt-closing-{}",
-            super::snapshot::path_to_key(&node.path)
-        ))
-        .text(format!("</{tag}>"))
-        .text_size(11.0)
-        .text_color(parse_text_color("muted-foreground")),
-    )
+    let caption = label(format!(
+        "dt-closing-{}",
+        super::snapshot::path_to_key(&node.path)
+    ))
+    .text(format!("</{tag}>"))
+    .text_size(11.0)
+    .text_color(parse_text_color("muted-foreground"))
     .font_family("Consolas")
     .min_w(0.0)
     .flex_grow(1.0)
@@ -1330,22 +1326,20 @@ fn tree_row(
     } else {
         parse_color("background")
     };
-    let text = Element::from(
-        label(format!("dt-lbl-{key}"))
-            .text(caption)
-            .text_color(parse_text_color(if selected {
-                "accent-foreground"
-            } else {
-                "primary"
-            }))
-            .text_size(11.0),
-    )
-    .text_wrap("char")
-    .text_leading(2.0)
-    .min_w(0.0)
-    .flex_grow(1.0)
-    .flex_shrink(1.0)
-    .flex_basis(0.0);
+    let text = label(format!("dt-lbl-{key}"))
+        .text(caption)
+        .text_color(parse_text_color(if selected {
+            "accent-foreground"
+        } else {
+            "primary"
+        }))
+        .text_size(11.0)
+        .text_wrap("char")
+        .text_leading(2.0)
+        .min_w(0.0)
+        .flex_grow(1.0)
+        .flex_shrink(1.0)
+        .flex_basis(0.0);
     let mut row: Element = hstack()
         .id(format!("dt-row-{key}"))
         .w("100%")
@@ -1417,7 +1411,6 @@ fn tree_row(
                 LayoutStatus::StyleChanged
             }
         })
-        .into()
 }
 
 fn source_for_path(root: &Element, path: &[usize]) -> Option<super::snapshot::SourceLocation> {
@@ -1592,21 +1585,17 @@ fn computed_pane(node: &InspectorNodeSnapshot, root: &Element) -> Element {
             .children(properties.into_iter().map(|(name, value)| {
                 Element::from(
                     hstack().w("100%").px(8.0).py(3.0).gap(8.0).children([
-                        Element::from(
-                            label(format!("dt-computed-{name}"))
-                                .text(name)
-                                .text_size(11.0)
-                                .text_color(parse_text_color("#2563eb")),
-                        )
-                        .w("48%")
-                        .flex_shrink(0.0),
-                        Element::from(
-                            label(format!("dt-computed-value-{name}"))
-                                .text(value)
-                                .text_size(11.0),
-                        )
-                        .min_w(0.0)
-                        .flex_grow(1.0),
+                        label(format!("dt-computed-{name}"))
+                            .text(name)
+                            .text_size(11.0)
+                            .text_color(parse_text_color("#2563eb"))
+                            .w("48%")
+                            .flex_shrink(0.0),
+                        label(format!("dt-computed-value-{name}"))
+                            .text(value)
+                            .text_size(11.0)
+                            .min_w(0.0)
+                            .flex_grow(1.0),
                     ]),
                 )
                 .font_family("Consolas")
@@ -1675,15 +1664,13 @@ fn element_style_editor(path: &[usize], instance_id: u64, css: &str) -> Element 
             let path_click = path.to_vec();
             let property_click = property.clone();
             let fallback = css.to_string();
-            let mut property_label = Element::from(
-                label(format!("{field}-name"))
-                    .text(format!("{property}:"))
-                    .text_size(11.0)
-                    .text_color(parse_text_color("#2563eb")),
-            )
-            .font_family("Consolas")
-            .w("42%")
-            .min_w(0.0);
+            let mut property_label = label(format!("{field}-name"))
+                .text(format!("{property}:"))
+                .text_size(11.0)
+                .text_color(parse_text_color("#2563eb"))
+                .font_family("Consolas")
+                .w("42%")
+                .min_w(0.0);
             if property.contains("color") || property == "background" {
                 property_label = Element::from(
                     hstack().w("42%").items("center").gap(4.0).children([
@@ -1813,12 +1800,12 @@ fn details_pane(selected: Option<&InspectorNodeSnapshot>, root: &Element) -> Ele
     fields.push(element_style_editor(&path, instance_id, &cssom_seed));
     let error = use_signal(&cssom_error_key(instance_id), String::new).get();
     if !error.is_empty() {
-        fields.push(Element::from(
+        fields.push(
             label(format!("dt-cssom-error-{instance_id}"))
                 .text(error)
                 .text_size(11.0)
                 .text_color(parse_text_color("#ef4444")),
-        ));
+        );
     }
     fields.push(section("Declarations"));
     fields.push(cssom_editor(path, instance_id, cssom_seed));
@@ -1967,13 +1954,11 @@ fn kv(k: &str, v: &str) -> Element {
             label(format!("dt-k-{k}"))
                 .text(text(k))
                 .text_size("0.625rem")
-                .text_color(parse_text_color("muted-foreground"))
-                .into(),
+                .text_color(parse_text_color("muted-foreground")),
             label(format!("dt-v-{k}"))
                 .text(text(v))
                 .text_size("0.75rem")
-                .w("100%")
-                .into(),
+                .w("100%"),
         ]),
     )
 }

@@ -22,6 +22,6 @@ jadix = ["winit", "dep:jadix"]
 log = { workspace = true }
 serde = { workspace = true }
 toml = { workspace = true }
-winit = { "package" = "jadix_winit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../jadix_winit", "optional" = true }
+winit = { workspace = true, optional = true }
 # Optional core engine integration.
 jadix = { workspace = true, optional = true }

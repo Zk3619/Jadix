@@ -102,9 +102,11 @@ fn dirty_subtree_reuses_snapshot_storage() {
     let node = el.layout_node.unwrap();
     // Supply a valid stamp: hash zero intentionally bypasses cache storage.
     el.collect_paint_hash = 1;
-    assert!(subtree_is_skippable(&el));
-    let mut cache = CollectSkipState::default();
-    cache.allowed = true;
+    assert!(subtree_is_skippable(el));
+    let mut cache = CollectSkipState {
+        allowed: true,
+        ..Default::default()
+    };
     let store = |cache: &mut CollectSkipState, el: &Element| {
         cache.store(
             node,
@@ -169,8 +171,10 @@ fn nested_snapshots_share_payload_and_bound_history() {
     let result = crate::layout::layout_tree::LayoutTree::new()
         .build_and_layout(&mut root, 80.0, 40.0, [-1.0; 2]);
     let root = &mut root.children[0];
-    let mut cache = CollectSkipState::default();
-    cache.allowed = true;
+    let mut cache = CollectSkipState {
+        allowed: true,
+        ..Default::default()
+    };
     for frame in 0..8 {
         cache.begin_frame();
         let mut element = &mut *root;

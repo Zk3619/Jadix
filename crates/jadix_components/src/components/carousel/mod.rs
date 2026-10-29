@@ -703,8 +703,6 @@ fn scroll_next(ctx: &CarouselCtx) {
             return;
         }
         ctx.index.set((cur + d) % n.max(1));
-    } else if !wraps_nav(ctx) {
-        ctx.index.set((cur + d).min(hi));
     } else {
         ctx.index.set((cur + d).min(hi));
     }
@@ -759,15 +757,15 @@ fn resume_autoplay_clock(id: &str, paused: Signal<bool>, autoplay_ms: u64) {
 
 // ── Scope ────────────────────────────────────────────────────────────────────
 
-fn classify_carousel_kids(
-    kids: Vec<Element>,
-) -> (
+type CarouselKids = (
     Option<Element>,
     Option<Element>,
     Option<Element>,
     Option<Element>,
     Vec<Element>,
-) {
+);
+
+fn classify_carousel_kids(kids: Vec<Element>) -> CarouselKids {
     let mut content = None;
     let mut prev = None;
     let mut next = None;
@@ -818,7 +816,7 @@ fn assemble_carousel_chrome(
     if dots.is_none() && ctx.show_dots {
         dots = Some(content::CarouselDots(content::CarouselDotsProps::default()));
     }
-    let stage_body = content.unwrap_or_else(Element::new);
+    let stage_body = content.unwrap_or_default();
     let horizontal = ctx.orientation == CarouselOrientation::Horizontal;
 
     let mut col: Element = match ctx.controls {

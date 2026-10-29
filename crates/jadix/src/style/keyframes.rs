@@ -500,7 +500,7 @@ pub(crate) fn keyframe_revision(name: &str) -> u64 {
     REVISIONS.with(|revisions| revisions.borrow().get(name).copied().unwrap_or(0))
 }
 
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, any(feature = "hot-reload", test)))]
 pub(crate) fn remove_keyframes(name: &str) {
     let removed = REGISTRY.with(|registry| registry.borrow_mut().remove(name).is_some());
     if removed {

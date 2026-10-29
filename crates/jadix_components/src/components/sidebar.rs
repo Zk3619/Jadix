@@ -616,11 +616,7 @@ fn sidebar_collapsible_attr(el: &Element) -> SidebarCollapsible {
         .unwrap_or_default()
 }
 
-fn rail_width_css_for_state<'a>(
-    open: bool,
-    expanded: &'a str,
-    collapsible: SidebarCollapsible,
-) -> &'a str {
+fn rail_width_css_for_state(open: bool, expanded: &str, collapsible: SidebarCollapsible) -> &str {
     if open {
         return expanded;
     }
@@ -632,8 +628,8 @@ fn rail_width_css_for_state<'a>(
 }
 
 fn is_sidebar_icon_node(el: &Element) -> bool {
-    el.attrs.get(ATTR_ICON_NAME).is_some()
-        || el.attrs.get(ATTR_ICON_SRC).is_some()
+    el.attrs.contains_key(ATTR_ICON_NAME)
+        || el.attrs.contains_key(ATTR_ICON_SRC)
         || el.text_style.font_family.as_deref() == Some("lucide")
 }
 

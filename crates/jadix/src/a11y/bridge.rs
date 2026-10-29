@@ -371,7 +371,7 @@ fn is_plain_text_name_leaf_or_empty(el: &Element) -> bool {
         return is_plain_text_name_leaf(el);
     }
     el.on_click.is_none()
-        && el.focus_id.as_deref().map_or(true, |s| s.is_empty())
+        && el.focus_id.as_deref().is_none_or(|s| s.is_empty())
         && !el.attrs.contains_key("accesskit_role")
         && structural_role(el).is_none()
         && !has_a11y_name_desc_live_attr(el)

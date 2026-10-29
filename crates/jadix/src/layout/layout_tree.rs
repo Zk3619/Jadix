@@ -67,6 +67,7 @@ pub(crate) mod stack_probe {
         });
     }
 
+    #[cfg(all(test, feature = "product-tests"))]
     pub fn reset() {
         BASE.with(|c| c.set(0));
         MIN.with(|c| c.set(usize::MAX));
@@ -85,6 +86,7 @@ pub(crate) mod stack_probe {
         note(&CASCADE);
     }
 
+    #[cfg(all(test, feature = "product-tests"))]
     pub fn used() -> usize {
         let base = BASE.with(|c| c.get());
         let min = MIN.with(|c| c.get());
@@ -95,15 +97,19 @@ pub(crate) mod stack_probe {
         }
     }
 
+    #[cfg(all(test, feature = "product-tests"))]
     pub fn collect_max_frame() -> usize {
         COLLECT.with(|c| c.get().2)
     }
+    #[cfg(all(test, feature = "product-tests"))]
     pub fn build_max_frame() -> usize {
         BUILD.with(|c| c.get().2)
     }
+    #[cfg(all(test, feature = "product-tests"))]
     pub fn cascade_max_frame() -> usize {
         CASCADE.with(|c| c.get().2)
     }
+    #[cfg(all(test, feature = "product-tests"))]
     pub fn collect_marks() -> u32 {
         COLLECT.with(|c| c.get().0)
     }
@@ -566,7 +572,7 @@ fn count_jadix_portal_nodes(node: &Element) -> usize {
             continue;
         }
         for c in node.children.iter().rev() {
-            if c.attrs.get(ATTR_PORTAL_SLOT).is_some() {
+            if c.attrs.contains_key(ATTR_PORTAL_SLOT) {
                 continue;
             }
             if c.attrs.get("jadix_portal").map(|s| s.as_str()) == Some("1") {
@@ -1069,7 +1075,7 @@ fn hoist_portal_rec_with_slots(node: &mut Element, lifted: &mut Vec<Element>) {
                     continue;
                 }
                 if node.children[i].template_id.as_deref() == Some(PORTAL_LAYER_ID)
-                    || node.children[i].attrs.get(ATTR_PORTAL_SLOT).is_some()
+                    || node.children[i].attrs.contains_key(ATTR_PORTAL_SLOT)
                 {
                     stack.push(Frame {
                         ptr: frame.ptr,
@@ -1807,6 +1813,7 @@ fn seed_scroll_signals_from_collect(
 }
 
 /// Reused collect buffers — cleared each frame, capacity retained (Wave P P.3.5).
+#[derive(Default)]
 struct CollectScratch {
     instances: Vec<InstanceInput>,
     textured_draws: Vec<TexturedDraw>,
@@ -1816,21 +1823,6 @@ struct CollectScratch {
     scroll_paint_bounds: Vec<(String, [f32; 4])>,
     tex_keys: Vec<String>,
     clip_polys: Vec<crate::style::GpuClipPoly>,
-}
-
-impl Default for CollectScratch {
-    fn default() -> Self {
-        Self {
-            instances: Vec::new(),
-            textured_draws: Vec::new(),
-            text_nodes: Vec::new(),
-            input_chrome_instances: Vec::new(),
-            scroll_metrics: Vec::new(),
-            scroll_paint_bounds: Vec::new(),
-            tex_keys: Vec::new(),
-            clip_polys: Vec::new(),
-        }
-    }
 }
 
 impl CollectScratch {
@@ -2320,7 +2312,7 @@ fn overflow_dest_aabb(
 }
 
 thread_local! {
-    static NODE_PAINTS: std::cell::RefCell<Vec<NodePaint>> = std::cell::RefCell::new(Vec::new());
+    static NODE_PAINTS: std::cell::RefCell<Vec<NodePaint>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 fn begin_node_paint_collect() {
@@ -3447,6 +3439,10 @@ struct CollectPainted {
     scroll_acc: [f32; 2],
 }
 
+#[expect(
+    clippy::large_enum_variant,
+    reason = "The existing value enum retains its public payload shape and avoids an additional per-value allocation"
+)]
 enum CollectPaintOutcome {
     Done([f32; 2]),
     Ready(CollectPainted),
@@ -3526,11 +3522,7 @@ struct CollectFrame {
     overlay_stamp: Option<u64>,
 }
 
-fn collect_commit_extent(
-    stack: &mut Vec<CollectFrame>,
-    extent: [f32; 2],
-    root_extent: &mut [f32; 2],
-) {
+fn collect_commit_extent(stack: &mut [CollectFrame], extent: [f32; 2], root_extent: &mut [f32; 2]) {
     if let Some(parent) = stack.last_mut() {
         if let Some(walk) = parent.walk.as_mut() {
             walk.max_right = walk.max_right.max(extent[0]);
@@ -3709,10 +3701,10 @@ impl LayoutTree {
                     output.baselines = offset_text_baselines(baselines, || {
                         let padding = style
                             .padding
-                            .resolve_or_zero(inputs.parent_size.width, &|_, _| 0.0);
+                            .resolve_or_zero(inputs.parent_size.width, |_, _| 0.0);
                         let border = style
                             .border
-                            .resolve_or_zero(inputs.parent_size.width, &|_, _| 0.0);
+                            .resolve_or_zero(inputs.parent_size.width, |_, _| 0.0);
                         padding.top + border.top
                     });
                     output
@@ -4919,11 +4911,13 @@ impl LayoutTree {
             let w = crate::text::intrinsic_width(&prepared).max(8.0);
             let h = lh * n_lines;
             crate::utils::text_sel_move::note_ghost_paint([g.x, g.y, w, h]);
-            let mut style = TextStyle::default();
-            style.size = Some(g.size);
-            style.weight = Some(g.weight);
-            style.color = Some(g.color);
-            style.line_height_px = Some(lh);
+            let style = TextStyle {
+                size: Some(g.size),
+                weight: Some(g.weight),
+                color: Some(g.color),
+                line_height_px: Some(lh),
+                ..Default::default()
+            };
             scratch.text_nodes.push(TextLayoutInfo {
                 text: g.text,
                 shape_suffix: None,
@@ -5036,7 +5030,7 @@ impl LayoutTree {
             let new_style = element
                 .style
                 .to_taffy_style_with_parent(&ctx, self.parent_flex_direction(element));
-            let changed = self.taffy.style(node_id).ok().map_or(true, |old| {
+            let changed = self.taffy.style(node_id).ok().is_none_or(|old| {
                 old.size != new_style.size
                     || old.min_size != new_style.min_size
                     || old.max_size != new_style.max_size
@@ -5139,11 +5133,7 @@ impl LayoutTree {
                             // set_style / set_children dirty the node even when the value is
                             // identical. Portal hoist (Dialog open) rewrites only the overlay
                             // layer — the page walk must not remasure every gallery text leaf.
-                            let style_changed = self
-                                .taffy
-                                .style(existing_id)
-                                .ok()
-                                .map_or(true, |old| old != &style);
+                            let style_changed = self.taffy.style(existing_id).ok() != Some(&style);
                             if style_changed {
                                 self.taffy.set_style(existing_id, style).unwrap();
                             }
@@ -5637,10 +5627,9 @@ impl LayoutTree {
                         && mouse_pos[0] <= lx + lw
                         && mouse_pos[1] >= ly
                         && mouse_pos[1] <= ly + lh
+                        && element.cursor.is_some()
                     {
-                        if element.cursor.is_some() {
-                            *hover_cursor = element.cursor.clone();
-                        }
+                        *hover_cursor = element.cursor.clone();
                     }
                     collect_commit_extent(&mut stack, extent, &mut root_extent);
                     continue;
@@ -7959,8 +7948,8 @@ impl LayoutTree {
         ancestor_scroll_viewport_rest: Option<&str>,
         ancestor_linear: crate::style::Mat2d,
         ancestor_sticky_xform: bool,
-        instances: &Vec<InstanceInput>,
-        textured_draws: &Vec<TexturedDraw>,
+        instances: &[InstanceInput],
+        textured_draws: &[TexturedDraw],
         text_count: usize,
         overlay_split: &mut OverlayPaintSplit,
         painted: CollectPainted,
@@ -8039,32 +8028,26 @@ impl LayoutTree {
         } else {
             0
         };
-        let (cap_inst0, cap_tex0, cap_text0, cap_children) = if painted.opacity_layer.is_some() {
-            (
-                painted.filter_cap_inst0,
-                painted.filter_cap_tex0,
-                painted.opacity_cap_text0,
-                true,
-            )
-        } else if painted.filter_capture {
-            (
-                painted.filter_cap_inst0,
-                painted.filter_cap_tex0,
-                painted.opacity_cap_text0,
-                true,
-            )
-        } else if painted.scale_layer.is_some() {
-            (
-                painted.scale_cap_inst0,
-                painted.scale_cap_tex0,
-                painted.scale_cap_text0,
-                true,
-            )
-        } else if fx_capture_children {
-            (fx_cap_inst0, fx_cap_tex0, text_count, true)
-        } else {
-            (0, 0, 0, false)
-        };
+        let (cap_inst0, cap_tex0, cap_text0, cap_children) =
+            if painted.opacity_layer.is_some() || painted.filter_capture {
+                (
+                    painted.filter_cap_inst0,
+                    painted.filter_cap_tex0,
+                    painted.opacity_cap_text0,
+                    true,
+                )
+            } else if painted.scale_layer.is_some() {
+                (
+                    painted.scale_cap_inst0,
+                    painted.scale_cap_tex0,
+                    painted.scale_cap_text0,
+                    true,
+                )
+            } else if fx_capture_children {
+                (fx_cap_inst0, fx_cap_tex0, text_count, true)
+            } else {
+                (0, 0, 0, false)
+            };
 
         let (child_clip, child_clip_poly) =
             if painted.filter_capture || painted.scale_layer.is_some() {
@@ -8173,10 +8156,10 @@ impl LayoutTree {
 
     fn collect_push_portal_band(
         overlay_split: &mut OverlayPaintSplit,
-        instances: &Vec<InstanceInput>,
-        textured_draws: &Vec<TexturedDraw>,
-        text_nodes: &Vec<TextLayoutInfo>,
-        input_chrome_instances: &Vec<InstanceInput>,
+        instances: &[InstanceInput],
+        textured_draws: &[TexturedDraw],
+        text_nodes: &[TextLayoutInfo],
+        input_chrome_instances: &[InstanceInput],
         paint_ops_len: usize,
         band_root: &Element,
         ancestor_opacity: f32,
@@ -8214,9 +8197,7 @@ impl LayoutTree {
                 0
             },
         };
-        if is_body_portal_layer {
-            overlay_split.bands.push(band);
-        } else if overlay_split.marked && any_stacking {
+        if is_body_portal_layer || (overlay_split.marked && any_stacking) {
             overlay_split.bands.push(band);
         } else if record_page_stack_bands {
             overlay_split.page_stack_bands.push(band);
@@ -8228,10 +8209,10 @@ impl LayoutTree {
         element: &mut Element,
         walk: &mut CollectWalk,
         i: usize,
-        instances: &Vec<InstanceInput>,
-        textured_draws: &Vec<TexturedDraw>,
-        text_nodes: &Vec<TextLayoutInfo>,
-        input_chrome_instances: &Vec<InstanceInput>,
+        instances: &[InstanceInput],
+        textured_draws: &[TexturedDraw],
+        text_nodes: &[TextLayoutInfo],
+        input_chrome_instances: &[InstanceInput],
         overlay_split: &mut OverlayPaintSplit,
         paint_rec: &mut PaintRecorder,
     ) -> CollectChildJob {
@@ -8284,10 +8265,10 @@ impl LayoutTree {
         walk: &mut CollectWalk,
         _scroll_only: bool,
         scrollbar_overlay_collect: bool,
-        instances: &mut Vec<InstanceInput>,
-        textured_draws: &mut Vec<TexturedDraw>,
-        text_nodes: &mut Vec<TextLayoutInfo>,
-        input_chrome_instances: &mut Vec<InstanceInput>,
+        instances: &mut [InstanceInput],
+        textured_draws: &mut [TexturedDraw],
+        text_nodes: &mut [TextLayoutInfo],
+        input_chrome_instances: &mut [InstanceInput],
         overlay_split: &mut OverlayPaintSplit,
         paint_rec: &mut PaintRecorder,
         scroll_signals_cache: &mut Option<&mut HashMap<String, ScrollAreaSignalsCached>>,

@@ -565,8 +565,10 @@ impl CssFilterPassGpu {
         ui_scale: f32,
         compute: Option<&mut ComputeBlur>,
     ) -> bool {
-        let mut u = FilterUniforms::default();
-        u.texel = texel;
+        let mut u = FilterUniforms {
+            texel,
+            ..Default::default()
+        };
 
         match prim {
             FilterPrimitive::ColorMatrix {
@@ -908,9 +910,11 @@ impl CssFilterPassGpu {
         let dst_view = dst
             ._texture
             .create_view(&wgpu::TextureViewDescriptor::default());
-        let mut u = FilterUniforms::default();
-        u.mode = 0.0;
-        u.texel = texel;
+        let u = FilterUniforms {
+            mode: 0.0,
+            texel,
+            ..Default::default()
+        };
         let tex_bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("jadix-css-filter-tex-bg"),
             layout: &self.tex_bgl,
@@ -980,9 +984,11 @@ impl CssFilterPassGpu {
         if src_key == dst_key {
             return true;
         }
-        let mut u = FilterUniforms::default();
-        u.mode = 0.0;
-        u.texel = texel;
+        let u = FilterUniforms {
+            mode: 0.0,
+            texel,
+            ..Default::default()
+        };
         self.draw(
             device, queue, textured, images, src_key, src_key, dst_key, &u,
         )
@@ -1078,7 +1084,7 @@ impl CssFilterPassGpu {
     }
 
     fn prepare_pipeline(&mut self, device: &wgpu::Device, mode: f32) -> u32 {
-        debug_assert!(mode >= 0.0 && mode <= 17.0 && mode.fract() == 0.0);
+        debug_assert!((0.0..=17.0).contains(&mode) && mode.fract() == 0.0);
         let mode = mode as u32;
         #[cfg(test)]
         let mode = if self.force_dynamic_pipeline {

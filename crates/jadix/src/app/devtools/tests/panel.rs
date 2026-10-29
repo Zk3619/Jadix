@@ -1037,7 +1037,7 @@ fn developer_panels_build_without_source_selection() {
                 .expect("header is present");
             assert!(super::super::snapshot::find_element_by_template(header, "dt-nav").is_some());
             for (id, title, candidate) in devtools_tabs() {
-                let button = super::super::snapshot::find_element_by_template(&header, id)
+                let button = super::super::snapshot::find_element_by_template(header, id)
                     .unwrap_or_else(|| panic!("missing navigation button {id}"));
                 assert_eq!(
                     button.attrs.get("aria-label").map(String::as_str),

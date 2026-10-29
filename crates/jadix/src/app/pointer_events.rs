@@ -333,13 +333,11 @@ pub fn same_hit_node(a: &HitPathEntry, b: &HitPathEntry) -> bool {
         (Some(_), None) | (None, Some(_)) => {}
         (None, None) => {}
     }
-    match (&a.portal_key, &b.portal_key) {
-        (Some(x), Some(y)) => return x == y,
-        _ => {}
+    if let (Some(x), Some(y)) = (&a.portal_key, &b.portal_key) {
+        return x == y;
     }
-    match (&a.floating_id, &b.floating_id) {
-        (Some(x), Some(y)) => return x == y,
-        _ => {}
+    if let (Some(x), Some(y)) = (&a.floating_id, &b.floating_id) {
+        return x == y;
     }
     if let (Some(ha), Some(hb)) = (&a.on_click, &b.on_click) {
         if Rc::ptr_eq(ha, hb) {

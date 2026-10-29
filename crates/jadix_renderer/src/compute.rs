@@ -179,6 +179,10 @@ impl ComputeBlur {
     }
 
     /// Two-pass separable Gaussian into the caller's encoder. Result is [`Self::result_view`].
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "GPU passes receive explicit device, resources, geometry and encoding state without intermediate allocations"
+    )]
     pub fn blur_encode(
         &mut self,
         device: &wgpu::Device,
@@ -550,6 +554,10 @@ impl ComputeParticles {
         }
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "GPU passes receive explicit device, resources, geometry and encoding state without intermediate allocations"
+    )]
     pub fn submit(
         &mut self,
         device: &wgpu::Device,
@@ -566,9 +574,7 @@ impl ComputeParticles {
         if !self.scratch.as_ref().is_some_and(|s| s.w == w && s.h == h) {
             self.scratch = Some(make_scratch(device, w, h, "jadix-particle-cs"));
         }
-        let Some(dst) = self.scratch.as_ref() else {
-            return None;
-        };
+        let dst = self.scratch.as_ref()?;
         let params = ParticleParams {
             time,
             strength,
@@ -694,6 +700,10 @@ fn make_linear_sampler(device: &wgpu::Device, label: &str) -> wgpu::Sampler {
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "GPU passes receive explicit device, resources, geometry and encoding state without intermediate allocations"
+)]
 fn dispatch_blur(
     device: &wgpu::Device,
     _queue: &wgpu::Queue,

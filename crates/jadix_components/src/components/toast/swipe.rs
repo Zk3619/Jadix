@@ -24,16 +24,12 @@ impl ToastSwipeDirs {
 }
 
 pub fn clamp_swipe_offset(dx: f32, dy: f32, dirs: ToastSwipeDirs) -> [f32; 2] {
-    let ox = if dirs.left && dx < 0.0 {
-        dx
-    } else if dirs.right && dx > 0.0 {
+    let ox = if (dirs.left && dx < 0.0) || (dirs.right && dx > 0.0) {
         dx
     } else {
         0.0
     };
-    let oy = if dirs.up && dy < 0.0 {
-        dy
-    } else if dirs.down && dy > 0.0 {
+    let oy = if (dirs.up && dy < 0.0) || (dirs.down && dy > 0.0) {
         dy
     } else {
         0.0

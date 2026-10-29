@@ -175,7 +175,7 @@ fn glyphs_for_falls_back_to_wrap_sibling() {
         wrap_width_q: 11, // different wrap bucket
     };
     assert!(
-        cache.entries.get(&key_b).is_none(),
+        !cache.entries.contains_key(&key_b),
         "exact wrap miss expected"
     );
     assert_eq!(

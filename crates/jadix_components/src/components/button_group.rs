@@ -129,7 +129,6 @@ impl From<String> for ButtonGroupOrientation {
 }
 
 /// `ui!` multi-child packs into `jadix_fragment` / anonymous shell; unpack via `take_packed`, then rearrange by group direction.
-
 fn slot_of(el: &Element) -> Option<&str> {
     el.attrs.get(ATTR_SLOT).map(String::as_str)
 }
@@ -282,7 +281,6 @@ fn join_divider(vertical_group: bool, color: [f32; 4]) -> Element {
         }),
         children: None,
         base: None,
-        ..Default::default()
     });
     paint_seam(&mut el, color);
     el
@@ -390,9 +388,7 @@ fn apply_group_join(
         };
         mark_join_segment(&mut kids[i], edge, orientation, fill_r);
     }
-    let Some(frame) = frame else {
-        return None;
-    };
+    let frame = frame?;
     // Rebuild so adjacent segments gain one strip. An author separator already
     // is that strip — don't stack a second line beside it.
     let mut rebuilt = Vec::with_capacity(kids.len() + n);
@@ -537,10 +533,7 @@ plain [] children: Option<Element>,
 ) -> Element {
     let _ = children;
     // ShadCN defaults to vertical separator (horizontal groups share vertical lines).
-    let vertical = match orientation.as_deref().map(str::trim) {
-        Some("horizontal") | Some("row") => false,
-        _ => true,
-    };
+    let vertical = !matches!(orientation.as_deref().map(str::trim), Some("horizontal") | Some("row"));
     let mut el: Element = separator().vertical(vertical).into();
     el.set_attr(ATTR_SLOT, SLOT_SEPARATOR);
     el.set_attr(
@@ -606,7 +599,6 @@ impl From<ButtonGroupTextBuilder> for Element {
         let el = ButtonGroupText(ButtonGroupTextProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -650,7 +642,6 @@ impl From<ButtonGroupSeparatorBuilder> for Element {
             orientation: Some(orient.into()),
             children: None,
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -740,11 +731,11 @@ impl ButtonGroupBuilder {
     /// Convenience: outline button + optional click.
     pub fn button(mut self, label: impl Into<String>, on_click: impl FnMut() + 'static) -> Self {
         use crate::components::button::button;
-        let mut click = on_click;
+        let click = on_click;
         let el: Element = button("")
             .variant("outline")
             .text(label)
-            .on_click(move || click())
+            .on_click(click)
             .into();
         self.parts.push(el);
         self

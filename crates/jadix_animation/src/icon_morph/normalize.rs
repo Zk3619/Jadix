@@ -60,6 +60,10 @@ impl Builder {
         );
     }
 
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "SVG arcs supply radii, rotation, flags and endpoint coordinates"
+    )]
     fn arc(&mut self, rx0: f64, ry0: f64, rot_deg: f64, large: u8, sweep: u8, x: f64, y: f64) {
         let x1 = self.cx;
         let y1 = self.cy;

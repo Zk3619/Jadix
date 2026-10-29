@@ -16,15 +16,21 @@ $patterns = @(
     '\.bg\(\s*\[\s*0(?:\.0+)?\s*,\s*0(?:\.0+)?\s*,\s*0(?:\.0+)?\s*,\s*0\.[1-9]'
 )
 $dirs = @(
-    (Join-Path $root "crates\jadix\src\components"),
+    (Join-Path $root "crates\jadix_components\src\components"),
     (Join-Path $root "crates\jadix\src\primitives"),
     (Join-Path $root "crates\jadix\src\app\navigator")
 )
 $hits = @()
+foreach ($dir in $dirs) {
+    if (-not (Test-Path -LiteralPath $dir -PathType Container)) {
+        throw "Missing product source directory: $dir"
+    }
+}
 foreach ($pat in $patterns) {
     foreach ($dir in $dirs) {
         $hits += @(
             Get-ChildItem -Path $dir -Recurse -Filter *.rs |
+                Where-Object { $_.FullName -notmatch '[\\/](tests|crate_tests)[\\/]' } |
                 Select-String -Pattern $pat |
                 ForEach-Object { "{0}:{1}:{2}" -f $_.Path, $_.LineNumber, $_.Line.Trim() }
         )

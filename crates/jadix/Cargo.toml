@@ -177,10 +177,10 @@ jadix_tasks.workspace = true
 jadix_tokio = { workspace = true, optional = true }
 moka = { workspace = true, optional = true, features = ["sync"] }
 jadix_net = { workspace = true, optional = true }
-winit = { "package" = "jadix_winit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../jadix_winit" }
+winit = { workspace = true }
 wgpu = { workspace = true }
 wgpu-hal = { "package" = "jadix_wgpu_hal", "version" = "=30.0.0", "path" = "../../vendor/wgpu-hal", "default-features" = false, "optional" = true }
-taffy = { "package" = "jadix_taffy", "version" = "=0.15.0", "path" = "../../vendor/taffy", "features" = ["parse"] }
+taffy = { workspace = true, features = ["parse"] }
 bytemuck = { workspace = true }
 glyphon = { workspace = true }
 env_logger = { workspace = true, optional = true }
@@ -219,7 +219,7 @@ jadix_accesskit_ohos = { path = "../jadix_accesskit_ohos", version = "0.1.0", op
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true, optional = true }
-winit = { "package" = "jadix_winit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../jadix_winit", "features" = ["android-native-activity"] }
+winit = { workspace = true, features = ["android-native-activity"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { workspace = true, features = [
@@ -235,7 +235,7 @@ wgpu = { workspace = true, "features" = ["webgpu", "webgl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true }
-objc2-app-kit = { version = "0.3", optional = true, default-features = false, features = ["std", "NSView", "NSWindow", "NSResponder", "NSGraphics"] }
+objc2-app-kit = { workspace = true, optional = true, default-features = false, features = ["std", "NSView", "NSWindow", "NSResponder", "NSGraphics"] }
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 muda = { workspace = true, optional = true }

@@ -333,7 +333,7 @@ fn finish_progress(
         default_value,
         orientation,
         move || {
-            let raw = body.map(|b| b()).unwrap_or_else(Element::new);
+            let raw = body.map(|b| b()).unwrap_or_default();
             ensure_progress_track(raw, &track_chrome)
         },
     ))
@@ -342,7 +342,7 @@ fn finish_progress(
 fn ensure_progress_track(body: Element, chrome: &SlotChrome) -> Element {
     let mut kids = flatten_kids(body);
     if kids.iter().any(is_progress_track) {
-        return packed_children(kids).unwrap_or_else(Element::new);
+        return packed_children(kids).unwrap_or_default();
     }
     kids.push(progress_track(ProgressTrackOpts {
         chrome: chrome.clone(),
@@ -350,7 +350,7 @@ fn ensure_progress_track(body: Element, chrome: &SlotChrome) -> Element {
         id: None,
         orientation: None,
     }));
-    packed_children(kids).unwrap_or_else(Element::new)
+    packed_children(kids).unwrap_or_default()
 }
 
 impl ProgressBuilder {

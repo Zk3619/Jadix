@@ -83,7 +83,7 @@ fn take_url(input: &str) -> Option<(String, &str)> {
     if after_kw.starts_with('"') || after_kw.starts_with('\'') {
         let quote = after_kw.as_bytes()[0];
         let inner = &after_kw[1..];
-        let end = inner.find(|c| c == quote as char)?;
+        let end = inner.find(quote as char)?;
         let src = inner[..end].to_string();
         let after_q = inner[end + 1..].trim_start();
         let after_q = after_q.strip_prefix(')')?;

@@ -217,8 +217,10 @@ pub struct ChartTheme {
     pub palette: Vec<[f32; 4]>,
 }
 
+type ChromeColors = ([f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4]);
+
 impl ChartTheme {
-    fn chrome() -> ([f32; 4], [f32; 4], [f32; 4], [f32; 4], [f32; 4]) {
+    fn chrome() -> ChromeColors {
         (
             parse_color("transparent"),
             parse_color("foreground"),

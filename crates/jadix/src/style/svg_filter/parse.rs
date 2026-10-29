@@ -473,10 +473,9 @@ fn build_primitive(
                     Some("none") => EdgeMode::None,
                     _ => EdgeMode::Duplicate,
                 },
-                kernel_unit_length: attrs.get("kernelunitlength").map(|s| {
-                    let p = parse_std_deviation(s);
-                    p
-                }),
+                kernel_unit_length: attrs
+                    .get("kernelunitlength")
+                    .map(|s| parse_std_deviation(s)),
                 preserve_alpha: attrs
                     .get("preservealpha")
                     .map(|s| s == "true")

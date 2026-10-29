@@ -478,7 +478,7 @@ pub fn command_dialog_scope(
     let reset_view = format!("{id}__cmd_reset");
     reactive_anchor(reset_view.clone(), {
         let reset_id = id.clone();
-        let open = open;
+
         move || {
             // Match CommandOverlay: keep highlight stable during exit animation.
             // Resetting `active` to 0 while the dialog is still mounted forces the
@@ -962,13 +962,12 @@ plain [] children: Option<Element>,
         let list = visible.peek();
         let n = list.len();
         match &ev.logical_key {
-            Key::Named(NamedKey::Escape) => {
-                if dismissible {
+            Key::Named(NamedKey::Escape)
+                if dismissible => {
                     open.set(false);
                     clear_button_focus();
                     return true;
                 }
-            }
             Key::Named(NamedKey::ArrowDown) | Key::Named(NamedKey::ArrowUp) => {
                 let next = if active.peek() == NO_ACTIVE_COMMAND {
                     if n == 0 {
@@ -1564,7 +1563,6 @@ impl From<CommandGroupBuilder> for Element {
             heading: builder.heading,
             children: crate::components::base::packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1625,7 +1623,6 @@ impl From<CommandItemBuilder> for Element {
             on_click: Default::default(),
             children: crate::components::base::packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

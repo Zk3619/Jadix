@@ -387,10 +387,10 @@ fn apply_badge_metrics(el: &mut Element, size: AvatarSize) {
     let icon_px = size.badge_icon_px();
     if icon_px > 0.0 {
         for c in &mut el.children {
-            if c.text_style.font_family.as_deref() == Some("lucide") {
-                if c.text_style.size_resolved() <= 1.0 {
-                    c.text_style.size = Some(icon_px);
-                }
+            if c.text_style.font_family.as_deref() == Some("lucide")
+                && c.text_style.size_resolved() <= 1.0
+            {
+                c.text_style.size = Some(icon_px);
             }
         }
     } else {
@@ -735,19 +735,15 @@ fn extract_face_spec(el: &Element) -> Option<AvatarFaceSpec> {
     let mut src = None;
     let mut fallback = None;
     crate::core::tree::walk_elements(el, |n| match n.attrs.get(ATTR_SLOT).map(|s| s.as_str()) {
-        Some(SLOT_IMAGE) => {
-            if src.is_none() {
-                if let Some(s) = n.attrs.get(ATTR_AVATAR_SRC).filter(|s| !s.is_empty()) {
-                    src = Some(s.clone());
-                } else if let Some(key) = n.image_texture.as_deref() {
-                    src = src_from_avatar_texture_key(key);
-                }
+        Some(SLOT_IMAGE) if src.is_none() => {
+            if let Some(s) = n.attrs.get(ATTR_AVATAR_SRC).filter(|s| !s.is_empty()) {
+                src = Some(s.clone());
+            } else if let Some(key) = n.image_texture.as_deref() {
+                src = src_from_avatar_texture_key(key);
             }
         }
-        Some(SLOT_FALLBACK) => {
-            if fallback.is_none() {
-                fallback = extract_fallback_label(n);
-            }
+        Some(SLOT_FALLBACK) if fallback.is_none() => {
+            fallback = extract_fallback_label(n);
         }
         _ => {}
     });
@@ -857,6 +853,10 @@ thread_local! {
 
 static AVATAR_GROUP_SEQ: AtomicUsize = AtomicUsize::new(0);
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn register_avatar_group_entry(
     id: String,
     focus_id: String,
@@ -1165,12 +1165,10 @@ fn build_avatar_group_row_element(
 }
 
 fn find_avatar_group_row_mut(el: &mut Element) -> Option<&mut Element> {
-    for child in &mut el.children {
-        if child.attrs.get(ATTR_GROUP_ROW).map(|s| s.as_str()) == Some("1") {
-            return Some(child);
-        }
-    }
-    None
+    el.children
+        .iter_mut()
+        .find(|child| child.attrs.get(ATTR_GROUP_ROW).map(|s| s.as_str()) == Some("1"))
+        .map(|v| v as _)
 }
 
 #[cfg(all(test, feature = "product-tests"))]
@@ -1777,7 +1775,7 @@ impl From<AvatarBuilder> for Element {
         let style = builder.chrome.style.clone();
         let body = builder.body;
         let mut el = avatar_scope(builder.id, builder.size, builder.shape, class, move || {
-            body.map(|b| b()).unwrap_or_else(Element::new)
+            body.map(|b| b()).unwrap_or_default()
         });
         if let Some(style) = style {
             el = style(BaseComponentBuilder::new(el)).el;

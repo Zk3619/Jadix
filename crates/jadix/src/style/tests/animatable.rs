@@ -3,8 +3,10 @@ use crate::layout::track_fr;
 
 #[test]
 fn grid_template_rows_fr_lerps() {
-    let mut style = Style::default();
-    style.grid_template_rows = vec![track_fr(0.0)];
+    let mut style = Style {
+        grid_template_rows: vec![track_fr(0.0)],
+        ..Default::default()
+    };
     let text = TextStyle::default();
     let a = read_value(&style, &text, PropertyId::GridTemplateRows);
     style.grid_template_rows = vec![track_fr(1.0)];
@@ -22,8 +24,10 @@ fn grid_template_rows_fr_lerps() {
 
 #[test]
 fn grid_template_equal_length_fr_list_lerps() {
-    let mut style = Style::default();
-    style.grid_template_rows = vec![track_fr(0.0), track_fr(0.0)];
+    let mut style = Style {
+        grid_template_rows: vec![track_fr(0.0), track_fr(0.0)],
+        ..Default::default()
+    };
     let text = TextStyle::default();
     let a = read_value(&style, &text, PropertyId::GridTemplateRows);
     style.grid_template_rows = vec![track_fr(1.0), track_fr(1.0)];

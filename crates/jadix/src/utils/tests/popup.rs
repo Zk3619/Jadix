@@ -1,4 +1,5 @@
 use super::*;
+use crate::layout::layout_tree::PORTAL_LAYER_ID;
 
 #[test]
 fn scaled_anchor_follows_nested_scroll_in_paint_space() {
@@ -1082,10 +1083,9 @@ fn sync_floating_flip_uses_attr_max_h_not_unconstrained_content() {
         "capped 256px fits below (270px); must not flip above, got {top}"
     );
     assert!(
-        root.children[1]
+        !root.children[1]
             .attrs
-            .get(ATTR_FLOATING_ANCHOR_EDGE_Y)
-            .is_none(),
+            .contains_key(ATTR_FLOATING_ANCHOR_EDGE_Y),
         "must not glue a wrong above-edge after an unconstrained-content flip"
     );
 }

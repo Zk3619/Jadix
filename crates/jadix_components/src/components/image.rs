@@ -145,7 +145,6 @@ impl From<ImageBuilder> for Element {
             children,
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

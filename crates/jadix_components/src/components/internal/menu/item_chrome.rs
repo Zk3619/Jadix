@@ -71,7 +71,7 @@ pub fn sync_item_paint_node(
     cfg: &ItemPaintConfig,
 ) {
     let slot = el.attrs.get(cfg.attr_slot).map(String::as_str);
-    if slot.is_some_and(|s| cfg.interactive_slots.iter().any(|want| *want == s)) {
+    if slot.is_some_and(|s| cfg.interactive_slots.contains(&s)) {
         let disabled = el.attrs.get(cfg.attr_disabled).map(String::as_str) == Some("1");
         let destructive = el.attrs.get(cfg.attr_destructive).map(String::as_str) == Some("1");
         let ix = el

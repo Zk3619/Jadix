@@ -10,7 +10,7 @@ fn read_src_bytes_still_rejects_http() {
 
 #[test]
 fn large_png_decodes_without_cap() {
-    let big = vec![0u8; 129 * 1 * 4];
+    let big = vec![0u8; 129 * 4];
     let png = encode_png(&DecodedImage {
         width: 129,
         height: 1,

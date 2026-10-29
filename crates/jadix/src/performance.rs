@@ -61,17 +61,12 @@ pub use windows::{current_thread_id, Sampler};
 mod windows {
     use super::*;
     use std::{ffi::c_void, ptr};
+    use windows_sys::Win32::Foundation::FILETIME;
+    use windows_sys::Win32::System::Threading::{GetProcessTimes, GetThreadTimes};
     type Handle = *mut c_void;
-    #[repr(C)]
-    #[derive(Default)]
-    struct FileTime {
-        low: u32,
-        high: u32,
-    }
-    impl FileTime {
-        fn ticks(&self) -> u64 {
-            (u64::from(self.high) << 32) | u64::from(self.low)
-        }
+    type FileTime = FILETIME;
+    fn filetime_ticks(time: &FileTime) -> u64 {
+        (u64::from(time.dwHighDateTime) << 32) | u64::from(time.dwLowDateTime)
     }
     #[repr(C)]
     #[derive(Default)]
@@ -102,20 +97,6 @@ mod windows {
     unsafe extern "system" {
         fn GetCurrentProcess() -> Handle;
         fn GetCurrentThreadId() -> u32;
-        fn GetProcessTimes(
-            h: Handle,
-            create: *mut FileTime,
-            exit: *mut FileTime,
-            kernel: *mut FileTime,
-            user: *mut FileTime,
-        ) -> i32;
-        fn GetThreadTimes(
-            h: Handle,
-            create: *mut FileTime,
-            exit: *mut FileTime,
-            kernel: *mut FileTime,
-            user: *mut FileTime,
-        ) -> i32;
         fn OpenThread(access: u32, inherit: i32, id: u32) -> Handle;
         fn CloseHandle(h: Handle) -> i32;
         fn K32GetProcessMemoryInfo(h: Handle, counters: *mut Memory, size: u32) -> i32;
@@ -163,7 +144,7 @@ mod windows {
                 )
             }
         };
-        (ok != 0).then(|| kernel.ticks() + user.ticks())
+        (ok != 0).then(|| filetime_ticks(&kernel) + filetime_ticks(&user))
     }
 
     /// Holds process/thread counter baselines and owns OS sampling handles.

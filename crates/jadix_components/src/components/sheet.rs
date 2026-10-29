@@ -691,7 +691,7 @@ pub fn SheetBody(
 plain [] children: Option<Element>,
 ) -> Element {
     let ctx = require_sheet("SheetBody");
-    let child = children.unwrap_or_else(Element::new);
+    let child = children.unwrap_or_default();
     let scroll_id = format!("{}__body", ctx.id);
     scroll_area(scroll_id.as_str())
         .overflow_x("hidden")

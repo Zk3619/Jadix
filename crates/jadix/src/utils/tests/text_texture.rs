@@ -188,7 +188,7 @@ fn reaction_chip_hover_scale_twemoji_bake_is_not_clipped_in_rt() {
 
 #[test]
 fn text_texture_reject_empty_alpha() {
-    let empty = vec![0u8; 4 * 4 * 4];
+    let empty = [0u8; 4 * 4 * 4];
     assert!(!empty.chunks_exact(4).any(|p| p[3] > 0));
 }
 
@@ -620,7 +620,7 @@ fn box_downscale(rgba: &[u8], w: u32, h: u32, factor: u32) -> (u32, u32, Vec<u8>
     let nw = (w / f).max(1);
     let nh = (h / f).max(1);
     let mut out = vec![0u8; (nw * nh * 4) as usize];
-    let f2 = (f * f) as u32;
+    let f2 = f * f;
     for y in 0..nh {
         for x in 0..nw {
             let mut a = 0u32;

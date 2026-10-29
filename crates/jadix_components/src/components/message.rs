@@ -247,7 +247,7 @@ struct MessageParts {
 }
 
 fn absorb_message_child(mut child: Element, parts: &mut MessageParts) {
-    let slot = child.attrs.get(ATTR_SLOT).map(|s| s.clone());
+    let slot = child.attrs.get(ATTR_SLOT).cloned();
     match slot.as_deref() {
         Some(SLOT_UPPER | SLOT_FOOTER_ROW | SLOT_CONTENT) => {
             for nested in std::mem::take(&mut child.children) {
@@ -770,7 +770,6 @@ impl From<MessageGroupBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -810,7 +809,6 @@ impl From<MessageAvatarBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -855,7 +853,6 @@ impl From<MessageHeaderBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -900,7 +897,6 @@ impl From<MessageFooterBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -964,7 +960,6 @@ impl From<MessageContentBuilder> for Element {
             children: packed_children(builder.children),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1118,7 +1113,6 @@ impl From<MessageBuilder> for Element {
             children: packed_children(kids),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

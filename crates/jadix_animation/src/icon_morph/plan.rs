@@ -106,7 +106,7 @@ pub fn procrustes(a: &[f64], b: &[f64], ca: [f64; 2], cb: [f64; 2]) -> Similarit
     let theta = (sxy - syx).atan2(sxx + syy);
     let num = theta.cos() * (sxx + syy) + theta.sin() * (sxy - syx);
     let mut sigma = if na > 1e-12 { num / na } else { 1.0 };
-    if !(sigma > 1e-6) {
+    if sigma.partial_cmp(&1e-6) != Some(std::cmp::Ordering::Greater) {
         sigma = 1e-6;
     }
     let res2 = (sigma * sigma * na - 2.0 * sigma * num + nb).max(0.0);
@@ -204,9 +204,9 @@ fn best_permutation(c: &[Vec<f64>]) -> Vec<usize> {
     let n = c.len();
     if n > PERM_MAX {
         let mut pairs = Vec::new();
-        for i in 0..n {
-            for j in 0..n {
-                pairs.push((c[i][j], i, j));
+        for (source_index, row) in c.iter().enumerate() {
+            for (target_index, &cost) in row.iter().enumerate().take(n) {
+                pairs.push((cost, source_index, target_index));
             }
         }
         pairs.sort_by(|x, y| x.0.partial_cmp(&y.0).unwrap_or(std::cmp::Ordering::Equal));
@@ -298,6 +298,10 @@ fn best_surjection(c: &[Vec<f64>]) -> Result<Vec<usize>, MorphError> {
     let mut bc = f64::INFINITY;
     let mut f = vec![0usize; b];
     let mut mult = vec![0usize; s];
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "The bounded surjection search passes its recursion state without allocating per step"
+    )]
     fn rec(
         i: usize,
         acc: f64,
@@ -400,18 +404,18 @@ pub fn build_plan(src: &[Sampled], dst: &[Sampled]) -> Result<MorphPlan, MorphEr
     let mut pairs: Vec<(usize, usize)> = Vec::new();
     if p == q {
         let perm = best_permutation(&cost_matrix(&a, &b));
-        for i in 0..p {
-            pairs.push((i, perm[i]));
+        for (source_index, target_index) in perm.into_iter().enumerate() {
+            pairs.push((source_index, target_index));
         }
     } else if p < q {
         let f = best_surjection(&cost_matrix(&b, &a))?;
-        for j in 0..q {
-            pairs.push((f[j], j));
+        for (target_index, source_index) in f.into_iter().enumerate() {
+            pairs.push((source_index, target_index));
         }
     } else {
         let f = best_surjection(&cost_matrix(&a, &b))?;
-        for i in 0..p {
-            pairs.push((i, f[i]));
+        for (source_index, target_index) in f.into_iter().enumerate() {
+            pairs.push((source_index, target_index));
         }
     }
     let n = a[0].len() / 2;

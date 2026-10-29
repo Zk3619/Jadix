@@ -417,6 +417,7 @@ fn polyline_points_length(points: &str) -> f32 {
 /// Matches motion-dom `addSVGPathValue`:
 /// - `stroke-dasharray = `${pathLength} ${pathSpacing ?? 1 - pathLength}``
 /// - `stroke-dashoffset = ${-pathOffset}`  (negative!)
+///
 /// then scaled by real path length because resvg ignores SVG `pathLength`.
 fn motion_dash_attrs(pl: f32, po: f32, total_len: f32) -> String {
     motion_dash_attrs_ex(pl, po, None, total_len)
@@ -510,6 +511,10 @@ fn xf_attr_xy(tx: f32, ty: f32, rotate: f32, sx: f32, sy: f32) -> String {
     )
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn emit_recipe_node(
     out: &mut String,
     node: &RecipeNode,
@@ -927,7 +932,7 @@ pub(crate) fn ensure_animated_icon_recipe_texture(
     {
         let tex =
             crate::media::svg_raster::ensure_svg_document_texture_with_key(tex, &doc, side, side)?;
-        return Some((tex, side as f32));
+        Some((tex, side as f32))
     }
     #[cfg(not(feature = "svg"))]
     {

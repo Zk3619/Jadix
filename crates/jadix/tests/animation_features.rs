@@ -201,8 +201,10 @@ fn base_spring_and_css_work_without_the_enhanced_layer() {
     set_prefers_reduced_motion(Some(false));
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);
-    let mut style = Style::default();
-    style.opacity = 0.0;
+    let mut style = Style {
+        opacity: 0.0,
+        ..Default::default()
+    };
     style.transition.push(TransitionEntry {
         property: TransitionProperty::Opacity,
         duration_ms: 1000.0,
@@ -238,7 +240,9 @@ fn animation_path_morph_is_renderable() {
 #[test]
 fn enhanced_motion_implies_base_and_exposes_the_existing_api() {
     use jadix::prelude::*;
-    assert!(cfg!(feature = "animation-base"));
+    const {
+        assert!(cfg!(feature = "animation-base"));
+    }
     let (_owner, ()) = jadix::core::reactivity::create_root(|| {
         let state = use_motion("feature-enhanced-motion");
         let element = Element::new().motion(&state, Motion::new(MotionTarget::default()));

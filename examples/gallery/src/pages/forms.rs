@@ -193,7 +193,7 @@ pub(crate) fn InputAdornmentShowcase() -> jadix::core::tree::Element {
 
 #[component]
 pub(crate) fn InputOTPShowcase() -> jadix::core::tree::Element {
-    let code = use_signal("gal_otp_code", || String::new());
+    let code = use_signal("gal_otp_code", String::new);
     ui! {
         <MyCard title="2c) InputOTP（对位 ShadCN）">
             <VStack w="100%" gap="0.75rem">
@@ -292,7 +292,7 @@ pub(crate) fn FormValidateShowcase() -> jadix::core::tree::Element {
 
 #[component]
 pub(crate) fn QuestionnaireShowcase() -> jadix::core::tree::Element {
-    let summary = use_signal("gal-q-summary", || String::new());
+    let summary = use_signal("gal-q-summary", String::new);
     let summary_submit = summary;
     let builder_el: Element = questionnaire("gal-q-builder")
         .class("gap-8")
@@ -775,7 +775,7 @@ pub(crate) fn SelectPopoverTabShowcase() -> jadix::core::tree::Element {
     let pop_open = use_signal("gallery_popover_open", || false);
     let pop_builder_open = use_signal("gallery_popover_builder_open", || false);
     let select_val = use_signal("gallery_select_plan", || "basic".to_string());
-    let fruit_val = use_signal("gallery_select_fruit", || String::new());
+    let fruit_val = use_signal("gallery_select_fruit", String::new);
 
     ui! {
         <MyCard title="10) Select · Popover · Tab strip (AccessKit)">
@@ -848,8 +848,7 @@ pub(crate) fn SelectPopoverTabShowcase() -> jadix::core::tree::Element {
                     <Label text_size="0.75rem" color="muted-foreground" leading="normal">
                         "Popover Builder 双写（open_signal + PopoverTrigger / popover_content）："
                     </Label>
-                    { Element::from(
-                        popover("gallery:popover_builder")
+                    { popover("gallery:popover_builder")
                             .open_signal(pop_builder_open)
                             .child(|| {
                                 let mut frag = Element::new();
@@ -900,8 +899,7 @@ pub(crate) fn SelectPopoverTabShowcase() -> jadix::core::tree::Element {
                                         },
                                     ),
                                 ])
-                            }),
-                    ) }
+                            }) }
                     <VStack gap="0.75rem" w="100%">
                         <Label text_size="0.75rem" color="muted-foreground">
                             { format!(

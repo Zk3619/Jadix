@@ -54,21 +54,21 @@ pub(super) fn expand(
             .map(|e| quote! { __jadix_dnd::RestrictOverflow::parse(&(#e)) })
             .unwrap_or_else(|| quote! { __jadix_dnd::RestrictOverflow::Visible });
         let threshold = get_attr("threshold")
-            .map(|e| quote_unitless_f32(e))
+            .map(quote_unitless_f32)
             .unwrap_or_else(|| quote! { 4.0f32 });
         let restrict = get_attr("restrict")
             .map(|e| quote! { (#e).to_string() })
-            .unwrap_or_else(|| quote! { String::new() });
+            .unwrap_or_else(|| quote! { "" });
         let delay_ms = get_attr("delay_ms")
             .or_else(|| get_attr("delayMs"))
-            .map(|e| quote_unitless_f32(e))
+            .map(quote_unitless_f32)
             .unwrap_or_else(|| quote! { 0.0f32 });
         let activation = get_attr("activation")
             .map(|e| quote! { __jadix_dnd::Activation::parse(&(#e)) })
             .unwrap_or_else(|| quote! { __jadix_dnd::Activation::And });
         let empty_insert = get_attr("empty_insert")
             .or_else(|| get_attr("emptyInsert"))
-            .map(|e| quote_unitless_f32(e))
+            .map(quote_unitless_f32)
             .unwrap_or_else(|| quote! { 8.0f32 });
         let autoscroll = get_attr("autoscroll")
             .map(|e| quote! { #e })
@@ -88,8 +88,6 @@ pub(super) fn expand(
                     quote! { "y".to_string() }
                 } else if get_attr("scroll_lock_none").is_some() {
                     quote! { "none".to_string() }
-                } else if get_attr("scroll_lock_auto").is_some() {
-                    quote! { "auto".to_string() }
                 } else {
                     quote! { "auto".to_string() }
                 }

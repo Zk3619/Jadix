@@ -13,11 +13,12 @@ Run commands from the repository root. Scripts resolve repository resources from
 
 ```sh
 python -m unittest discover -s scripts/tests -p "test_*.py"
+python scripts/checks/check-ci-workflow.py --output target/governance/ci-workflow.json
 python scripts/checks/check-test-layout.py --output target/governance/test-layout.json
 python scripts/checks/check-public-docs.py --output target/governance/public-docs.json
 python scripts/assets/app-icons.py --help
 ```
 
-Python tools require Python 3.11 or newer; image contracts additionally require Pillow. Native Windows and GPU tools require their stated desktop, driver and executable inputs. Inspect parameters before invoking build, measurement or publication tools. Fixture-only gate tests establish tool behavior and do not count as application performance evidence. Historical one-shot source rewrites and old measurement outputs are archived separately.
+Python tools require Python 3.11 or newer; image contracts additionally require Pillow; workflow contracts require PyYAML. Native Windows and GPU tools require their stated desktop, driver and executable inputs. Inspect parameters before invoking build, measurement or publication tools. Fixture-only gate tests establish tool behavior and do not count as application performance evidence. Historical one-shot source rewrites and old measurement outputs are archived separately.
 
 Lucide SVG files are reproducible with `python scripts/assets/export_lucide_svg.py --check`. For a local Windows crates.io login, run `scripts/release/login-crates-io.ps1` interactively: it hides input and sends the token on stdin to Cargo's Windows Credential Manager provider. Login never publishes.

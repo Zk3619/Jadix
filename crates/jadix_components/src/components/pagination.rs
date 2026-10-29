@@ -350,12 +350,7 @@ fn compact_pagination_range(
         2 => {
             if page_count == 1 {
                 vec![PaginationPage::Number(1)]
-            } else if page == 1 {
-                vec![
-                    PaginationPage::Number(1),
-                    PaginationPage::Number(page_count),
-                ]
-            } else if page == page_count {
+            } else if page == 1 || page == page_count {
                 vec![
                     PaginationPage::Number(1),
                     PaginationPage::Number(page_count),
@@ -928,7 +923,7 @@ fn paint_jumper(
     row = row.child(input_el);
 
     let jump_on_click = Rc::clone(&do_jump);
-    let jump_btn: Element = button(&format!("{id_prefix}__jump_btn"))
+    let jump_btn: Element = button(format!("{id_prefix}__jump_btn"))
         .variant("outline")
         .size("default")
         .text(button_text.to_string())
@@ -1170,6 +1165,10 @@ struct JumperPaint {
     button_text: String,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn paint_builder_content(
     id_prefix: &str,
     page: usize,

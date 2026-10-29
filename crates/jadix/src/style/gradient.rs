@@ -682,13 +682,7 @@ fn resolve_radial_radii(g: &RadialGradient, w: f32, h: f32) -> (f32, f32) {
                     // Approximate: use closest side axes scaled to reach closest corner.
                     let rx = sides[0].min(sides[1]).max(1e-6);
                     let ry = sides[2].min(sides[3]).max(1e-6);
-                    let t = corners
-                        .into_iter()
-                        .map(|c| {
-                            // Not exact; fall back to isotropic closest corner.
-                            c
-                        })
-                        .fold(f32::INFINITY, f32::min);
+                    let t = corners.into_iter().fold(f32::INFINITY, f32::min);
                     let _ = (rx, ry);
                     (t, t)
                 }
@@ -1435,15 +1429,13 @@ fn parse_conic_args(args: &str, repeating: bool) -> Option<ConicGradient> {
         let mut i = 0usize;
         while i < first_tokens.len() {
             let l = first_tokens[i].to_ascii_lowercase();
-            if l == "from" {
-                if i + 1 < first_tokens.len() {
-                    if let Some(css) = parse_css_angle_deg(first_tokens[i + 1]) {
-                        // CSS from 0deg = top; atan2 0 = right → internal from = css - 90
-                        from_deg = css_angle_to_internal(css);
-                    }
-                    i += 2;
-                    continue;
+            if l == "from" && i + 1 < first_tokens.len() {
+                if let Some(css) = parse_css_angle_deg(first_tokens[i + 1]) {
+                    // CSS from 0deg = top; atan2 0 = right → internal from = css - 90
+                    from_deg = css_angle_to_internal(css);
                 }
+                i += 2;
+                continue;
             }
             if l == "at" {
                 if let Some((pos, _)) = parse_at_position(&first_tokens[i..]) {

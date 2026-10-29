@@ -555,6 +555,10 @@ struct DatePickerRenderProps {
     disabled: bool,
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn build_date_picker_view(
     props: DatePickerRenderProps,
     open: Signal<bool>,
@@ -580,12 +584,7 @@ fn build_date_picker_view(
     let trig_anchor = format!("{id}__trigger_view");
     {
         let id = id.clone();
-        let kind = kind;
-        let disabled = disabled;
-        let open = open;
-        let val = val;
-        let year = year;
-        let month = month;
+
         let trigger_chrome = trigger_chrome.clone();
         reactive_anchor(trig_anchor.clone(), move || {
             let current = val.get();
@@ -635,7 +634,7 @@ fn build_date_picker_view(
                             close_picker_keyboard(open_k, trig.clone());
                             true
                         }
-                        k if crate::utils::keyboard::is_enter_or_space(&k) => {
+                        k if crate::utils::keyboard::is_enter_or_space(k) => {
                             if open_k.peek() {
                                 close_picker_keyboard(open_k, trig.clone());
                             } else {
@@ -701,15 +700,7 @@ fn build_date_picker_view(
             ..Default::default()
         };
         let id = id.clone();
-        let kind = kind;
-        let caption = caption;
-        let open = open;
-        let val = val;
-        let year = year;
-        let month = month;
-        let hour = hour;
-        let minute = minute;
-        let second = second;
+
         let content_chrome = content_chrome.clone();
         anchored_overlay_content(ao_opts, move || {
             if kind == DatePickerKind::Week {
@@ -734,6 +725,10 @@ fn build_date_picker_view(
     view
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn build_date_picker_panel_content(
     id: &str,
     kind: DatePickerKind,
@@ -807,13 +802,8 @@ fn build_date_picker_panel_content(
             // Select → year/month：独立订阅，避免重建 caption Select。
             let sync_id = format!("{id}__dp_month_sync");
             {
-                let year = year;
-                let month = month;
-                let val = val;
-                let open = open;
                 let id = id.to_string();
-                let y_sel = y_sel;
-                let m_sel = m_sel;
+
                 reactive_anchor(sync_id.clone(), move || {
                     let ys = y_sel.get();
                     let ms = m_sel.get();
@@ -865,7 +855,7 @@ fn build_date_picker_panel_content(
                 .child(vstack().w(CALENDAR_W).p("0.75rem").child(header));
         }
         DatePickerKind::Week => {
-            let (prev, next) = month_nav_buttons(&id, year, month);
+            let (prev, next) = month_nav_buttons(id, year, month);
             let title = build_text_node(
                 format_month_year(y, m),
                 TextNodeConfig {
@@ -901,7 +891,7 @@ fn build_date_picker_panel_content(
                 let y_c = y;
                 let m_c = m;
                 let day = d;
-                let trig = trigger_focus_id(&id);
+                let trig = trigger_focus_id(id);
                 let bid = format!("{id}:w{week_idx}");
                 let label = format!("W{week_idx} · {y_c:04}-{m_c:02}-{day:02}");
                 let row: Element = button(&bid)

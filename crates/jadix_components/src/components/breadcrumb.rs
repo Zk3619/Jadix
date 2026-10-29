@@ -304,9 +304,7 @@ plain [] children: Option<Element>,
     el.set_attr("aria-current", "page");
     if let Some(c) = children {
         let kids = take_packed(c);
-        if kids.len() == 1 && kids[0].text.as_ref().is_some_and(|t| !t.is_empty()) {
-            el = el.child(page_text_node(&label));
-        } else if kids.is_empty() && !label.is_empty() {
+        if (kids.len() == 1 && kids[0].text.as_ref().is_some_and(|text| !text.is_empty())) || (kids.is_empty() && !label.is_empty()) {
             el = el.child(page_text_node(&label));
         } else {
             for k in kids {
@@ -421,7 +419,6 @@ impl From<BreadcrumbItemBuilder> for Element {
         let el = BreadcrumbItem(BreadcrumbItemProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -514,7 +511,6 @@ impl From<BreadcrumbPageBuilder> for Element {
         let el = BreadcrumbPage(BreadcrumbPageProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -546,7 +542,6 @@ impl From<BreadcrumbSeparatorBuilder> for Element {
         let el = BreadcrumbSeparator(BreadcrumbSeparatorProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -571,7 +566,6 @@ impl From<BreadcrumbEllipsisBuilder> for Element {
         let el = BreadcrumbEllipsis(BreadcrumbEllipsisProps {
             children: None,
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -603,7 +597,6 @@ impl From<BreadcrumbListBuilder> for Element {
         let el = BreadcrumbList(BreadcrumbListProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -733,7 +726,6 @@ impl From<BreadcrumbBuilder> for Element {
                     BreadcrumbSeparatorProps {
                         children: None,
                         base: None,
-                        ..Default::default()
                     },
                 )));
             }
@@ -759,7 +751,6 @@ impl From<BreadcrumbBuilder> for Element {
                         BreadcrumbItemProps {
                             children: Some(link),
                             base: None,
-                            ..Default::default()
                         },
                     )));
                 }
@@ -767,13 +758,11 @@ impl From<BreadcrumbBuilder> for Element {
                     let page = chrome.apply(BreadcrumbPage(BreadcrumbPageProps {
                         children: Some(Element::new().text(label)),
                         base: None,
-                        ..Default::default()
                     }));
                     list_kids.push(builder.item_chrome.apply(BreadcrumbItem(
                         BreadcrumbItemProps {
                             children: Some(page),
                             base: None,
-                            ..Default::default()
                         },
                     )));
                 }
@@ -781,13 +770,11 @@ impl From<BreadcrumbBuilder> for Element {
                     let ellipsis = chrome.apply(BreadcrumbEllipsis(BreadcrumbEllipsisProps {
                         children: None,
                         base: None,
-                        ..Default::default()
                     }));
                     list_kids.push(builder.item_chrome.apply(BreadcrumbItem(
                         BreadcrumbItemProps {
                             children: Some(ellipsis),
                             base: None,
-                            ..Default::default()
                         },
                     )));
                 }
@@ -798,14 +785,12 @@ impl From<BreadcrumbBuilder> for Element {
             .apply(BreadcrumbList(BreadcrumbListProps {
                 children: packed_children(list_kids),
                 base: None,
-                ..Default::default()
             }));
         let mut el = Breadcrumb(BreadcrumbProps {
             id: builder.id,
             children: Some(list),
             base: None,
             base_builder: None,
-            ..Default::default()
         });
         if !builder.label.trim().is_empty() {
             el = el.aria_label(builder.label.trim());

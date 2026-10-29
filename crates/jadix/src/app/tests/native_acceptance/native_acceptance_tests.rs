@@ -195,7 +195,10 @@ impl Harness {
                     std::thread::sleep(Duration::from_secs(2));
                     proxy.wake_up();
                 });
-            } else if self.idle_started.unwrap().elapsed() >= Duration::from_secs(2) {
+            } else if self
+                .idle_started
+                .is_some_and(|started| started.elapsed() >= Duration::from_secs(2))
+            {
                 if let Some((started, redraws)) = self.idle_measurement {
                     if started.elapsed() >= Duration::from_secs(10) {
                         let extra = self.redraw_events - redraws;
@@ -264,7 +267,11 @@ impl Harness {
             {
                 return;
             }
-            let expected_width = if self.step % 2 == 0 { 128.0 } else { 96.0 };
+            let expected_width = if self.step.is_multiple_of(2) {
+                128.0
+            } else {
+                96.0
+            };
             if node.layout_bounds[2] != expected_width {
                 if !self.pending_layout_reported {
                     println!(
@@ -351,14 +358,18 @@ impl Harness {
                 self.arm_state(event_loop);
             }
         }
-        let width = if self.step % 2 == 0 { "128.0" } else { "96.0" };
+        let width = if self.step.is_multiple_of(2) {
+            "128.0"
+        } else {
+            "96.0"
+        };
         let source = if self.mode.contains("matrix") {
             MATRIX_UPDATED
                 .replace("128.0", "96.0")
                 .replace("HR6 B30", "HR6 A")
                 .replace(
                     "VStack",
-                    if self.step % 2 == 0 {
+                    if self.step.is_multiple_of(2) {
                         "VStack"
                     } else {
                         "GStack"

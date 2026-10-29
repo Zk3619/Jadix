@@ -773,7 +773,6 @@ impl From<TableRowBuilder> for Element {
             on_click: Default::default(),
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -837,7 +836,6 @@ impl From<TableHeadBuilder> for Element {
             align: builder.align,
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -901,7 +899,6 @@ impl From<TableCellBuilder> for Element {
             align: builder.align,
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -1235,7 +1232,6 @@ impl From<TableBuilder> for Element {
         let filter_sig = global_filter;
         let page_sig = pagination;
         let view_id = format!("{id}__table_view");
-        let caption = caption;
 
         reactive_view(view_id, move || {
             let _ = selected.get();

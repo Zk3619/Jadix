@@ -11,6 +11,7 @@
 //! ## Width (vs ShadCN)
 //! - **base** (this file): component does **not** hard-code width; demos override with `class="w-64"`.
 //! - **radix / new-york**: component class hard-codes `w-64`.
+//!
 //! Jadix follows **base**: content width by default; pass `width` / `class` when fixed width is needed (Gallery demo uses `w-64`).
 //!
 //! ## Open/close delays (Solid-style)

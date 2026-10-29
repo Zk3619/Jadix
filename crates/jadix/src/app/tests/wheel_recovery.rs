@@ -1,10 +1,18 @@
+#[cfg(feature = "product-tests")]
 use super::*;
+#[cfg(feature = "product-tests")]
 use crate::app::runtime::{clear_app_runtime, set_app_runtime, AppRuntime};
+#[cfg(feature = "product-tests")]
 use crate::core::reactivity::{create_root, use_signal};
+#[cfg(feature = "product-tests")]
 use crate::core::tree::Element;
+#[cfg(feature = "product-tests")]
 use winit::application::ApplicationHandler;
+#[cfg(feature = "product-tests")]
 use winit::event::WindowEvent;
+#[cfg(feature = "product-tests")]
 use winit::event_loop::{ActiveEventLoop, EventLoop};
+#[cfg(feature = "product-tests")]
 use winit::platform::windows::EventLoopBuilderExtWindows;
 
 #[test]

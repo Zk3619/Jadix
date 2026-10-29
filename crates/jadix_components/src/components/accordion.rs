@@ -199,10 +199,7 @@ pub fn accordion_use_grid_fr() -> bool {
     if let Some(v) = ACCORDION_USE_GRID_FR.get() {
         return v;
     }
-    match std::env::var("JADIX_ACCORDION_GRID_FR") {
-        Ok(s) if s == "1" || s.eq_ignore_ascii_case("true") => true,
-        _ => false,
-    }
+    matches!(std::env::var("JADIX_ACCORDION_GRID_FR"), Ok(s) if s == "1" || s.eq_ignore_ascii_case("true"))
 }
 
 fn use_accordion_panel_presence(key: &str) -> CollapsePanelPresence {
@@ -247,7 +244,6 @@ fn register_accordion_open_redraw_effect(instance_id: &str, open_sig: Signal<Vec
             }
             crate::app::runtime::request_redraw();
         });
-        ()
     });
 }
 
@@ -645,7 +641,7 @@ default [] disabled: bool,
 plain [] children: Option<Element>,
 ) -> Element {
     accordion_item_scope(value, disabled, move || {
-        children.unwrap_or_else(Element::new)
+        children.unwrap_or_default()
     })
 }
 }
@@ -769,7 +765,7 @@ plain [] children: Option<Element>,
     let value_for_presence = value.clone();
     sync_accordion_panel_open(open_sync, &value_for_presence, &presence);
 
-    let mut body = children.unwrap_or_else(Element::new);
+    let mut body = children.unwrap_or_default();
     if body.attrs.get("jadix_fragment").map(|s| s.as_str()) == Some("1") {
         let kids = std::mem::take(&mut body.children);
         body = vstack().w("100%").min_w(0.0).children(kids).into();
@@ -834,7 +830,7 @@ plain [] children: Option<Element>,
         default_value.unwrap_or_default(),
         multiple,
         disabled,
-        move || children.unwrap_or_else(Element::new),
+        move || children.unwrap_or_default(),
     )
 }
 }
@@ -888,7 +884,6 @@ impl From<AccordionTriggerBuilder> for Element {
             disabled: Some(builder.disabled),
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -919,7 +914,6 @@ impl From<AccordionContentBuilder> for Element {
         let el = AccordionContent(AccordionContentProps {
             children: packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -997,7 +991,7 @@ impl From<AccordionItemBuilder> for Element {
             if let Some(c) = content {
                 kids.push(c.into());
             }
-            packed_children(kids).unwrap_or_else(Element::new)
+            packed_children(kids).unwrap_or_default()
         });
         chrome.apply(el)
     }
@@ -1138,16 +1132,15 @@ impl From<AccordionBuilder> for Element {
                             disabled: None,
                             base: None,
                             children: Some(Element::new().text(title)),
-                            ..Default::default()
                         }),
-                        accordion_content(move || body()),
+                        accordion_content(body),
                     ])
                 }));
             }
             for custom in custom_items {
                 out.push(custom());
             }
-            packed_children(out).unwrap_or_else(Element::new)
+            packed_children(out).unwrap_or_default()
         });
         chrome.apply(el)
     }

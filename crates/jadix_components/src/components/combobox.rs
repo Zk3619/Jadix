@@ -191,6 +191,10 @@ fn label_matches_query(label: &str, query: &str) -> bool {
 /// Trigger + Content（下拉 portal / Item）都在这棵子树上构建；下拉 effect 的 parent owner
 /// 就是本实例，而不是外层 TimePicker / DatePicker。勿把三个 HMS Combobox 建在同一父 owner
 /// 上提供 context（后写覆盖前写）。
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The public scope adapter retains its existing signal and event parameters"
+)]
 pub fn combobox_scope(
     id: impl Into<String>,
     open: Option<Signal<bool>>,
@@ -456,9 +460,9 @@ plain [] children: Option<Element>,
 
     trigger = trigger
         .on_click({
-            let a_sig = a_sig;
-            let val_sig = val_sig;
-            let vis = vis;
+
+
+
             move || {
                 a_sig.set(active_index_for_value(&vis.peek(), &val_sig.peek()));
                 disarm_underlay_close();
@@ -536,7 +540,7 @@ plain [] children: Option<Element>,
 // ---------------------------------------------------------------------------
 
 /// `<ComboboxContent>` / [`combobox_content`] 选项。
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct ComboboxContentOpts {
     pub panel: crate::components::base::SlotChrome,
     pub match_trigger: Option<bool>,
@@ -547,21 +551,6 @@ pub struct ComboboxContentOpts {
     pub placement: Option<PopupPlacement>,
     /// `none` | `start` | `center`；空则用根 [`ComboboxCtx::scroll_selected`]。
     pub scroll_selected: Option<String>,
-}
-
-impl Default for ComboboxContentOpts {
-    fn default() -> Self {
-        Self {
-            panel: Default::default(),
-            match_trigger: None,
-            menu_width: None,
-            menu_height: None,
-            min_height: None,
-            max_height: None,
-            placement: None,
-            scroll_selected: None,
-        }
-    }
 }
 
 impl ComboboxContentOpts {
@@ -631,12 +620,12 @@ pub fn combobox_content(
             active.set_silent(ix0);
         }
         visible.set(Vec::new());
-        let mut rows = untrack(|| body());
+        let mut rows = untrack(&body);
         let ix = active_index_for_value(&visible.peek(), &cur);
         if active.peek() != ix {
             active.set_silent(ix);
             visible.set(Vec::new());
-            rows = untrack(|| body());
+            rows = untrack(&body);
         }
         let scroll_id = format!("{id_for_effect}:menu_scroll");
         let n = visible.peek().len().max(1);

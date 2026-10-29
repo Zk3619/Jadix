@@ -8,9 +8,10 @@ pub enum StepJumpTerm {
 }
 
 /// CSS `transition-timing-function` / `animation-timing-function`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub enum TimingFunction {
     Linear,
+    #[default]
     Ease,
     EaseIn,
     EaseOut,
@@ -30,12 +31,6 @@ pub enum TimingFunction {
         damping: f32,
         mass: f32,
     },
-}
-
-impl Default for TimingFunction {
-    fn default() -> Self {
-        Self::Ease
-    }
 }
 
 impl TimingFunction {

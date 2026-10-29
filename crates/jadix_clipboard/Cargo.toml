@@ -52,7 +52,7 @@ objc2-foundation = { workspace = true, features = [
     "NSEnumerator",
     "NSURL",
 ] }
-objc2-app-kit = { workspace = true, features = [
+objc2-app-kit = { workspace = true, default-features = true, features = [
     "NSPasteboard",
     "NSPasteboardItem",
     "NSImage",

@@ -101,14 +101,13 @@ fn local_hms_sane_on_supported_desktop() {
             assert!(h < 24 && m < 60 && s < 60, "hms=({h},{m},{s})");
         }
         None => {
-            assert!(
-                !cfg!(any(
-                    target_os = "windows",
-                    target_os = "macos",
-                    target_os = "linux"
-                )),
-                "Win/macOS/Linux must expose a local clock"
-            );
+            if cfg!(any(
+                target_os = "windows",
+                target_os = "macos",
+                target_os = "linux"
+            )) {
+                panic!("Win/macOS/Linux must expose a local clock");
+            }
         }
     }
 }

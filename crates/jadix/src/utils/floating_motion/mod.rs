@@ -19,5 +19,7 @@ pub(crate) use engine::{
     FloatingPresenceHandle,
 };
 
+#[cfg(all(test, feature = "product-tests"))]
+pub(crate) use engine::debug_floating_registry;
 #[cfg(test)]
-pub(crate) use engine::{debug_floating_registry, floating_mounted_signal, sync_floating_presence};
+pub(crate) use engine::{floating_mounted_signal, sync_floating_presence};

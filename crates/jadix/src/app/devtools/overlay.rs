@@ -687,7 +687,6 @@ fn edge_label(id: &str, text: String) -> Element {
         .text(text)
         .text_size("0.625rem")
         .text_color(parse_text_color("foreground"))
-        .into()
 }
 
 fn content_box(bm: &BoxModelSnapshot, active: HighlightLayer) -> Element {
@@ -762,8 +761,7 @@ fn ring_shell(
     let cap: Element = label(format!("dt-bm-cap-{caption}"))
         .text(caption)
         .text_size("0.625rem")
-        .text_color(parse_text_color("foreground"))
-        .into();
+        .text_color(parse_text_color("foreground"));
 
     // Normal flow: padding creates the ring gap, inner nests naturally.
     // Absolute-positioned fill strips paint the ring band without colouring inner area.

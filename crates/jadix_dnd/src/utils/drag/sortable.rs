@@ -87,6 +87,10 @@ pub fn sortable_source_to_hole(
 /// Same-list defers to [`sortable_shift`]. Cross-list: origin siblings stay
 /// put (the source shell has left the pack); target items at/after `hover`
 /// open a slot.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The drag adapter receives independent session, geometry and owner state without changing its existing interface"
+)]
 pub fn sortable_preview(
     from_list: Option<&str>,
     from_index: Option<usize>,
@@ -167,6 +171,10 @@ pub fn apply_event<T: Clone>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, ev: &Dr
 }
 
 /// Sortable Swap plugin: exchange two indices. Cross-list swaps values in place.
+#[expect(
+    clippy::ptr_arg,
+    reason = "The public swap adapter retains its existing mutable vector interface"
+)]
 pub fn apply_swap_event<T>(from: &mut Vec<T>, to: Option<&mut Vec<T>>, ev: &DragEvent) {
     let Some(fi) = ev.from_index else {
         return;

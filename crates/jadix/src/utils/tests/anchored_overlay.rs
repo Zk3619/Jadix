@@ -409,7 +409,7 @@ fn point_drag_patches_collect_origin() {
             Some([40.0, 55.0]),
             "collect must patch abs so occupancy / children follow"
         );
-        assert!(take_ended_floating_panel_drag() == false);
+        assert!(!take_ended_floating_panel_drag());
         clear_floating_panel_drag();
         sync_point_overlay_drag_insets(&mut panel);
         assert_eq!(
@@ -603,7 +603,7 @@ fn point_drag_collect_keeps_full_panel_box() {
     let _result = tree.build_and_layout(&mut root, 400.0, 300.0, [0.0, 0.0]);
 
     fn find_point(el: &Element) -> Option<&Element> {
-        if el.attrs.get(ATTR_FLOATING_POINT).is_some()
+        if el.attrs.contains_key(ATTR_FLOATING_POINT)
             && el.attrs.get(ATTR_FLOATING).map(String::as_str) == Some("ao-p-clip")
         {
             return Some(el);
@@ -843,7 +843,7 @@ fn trigger_first_open_must_not_flash_visible_panel_at_portal_origin() {
     let mut tree = LayoutTree::new();
     let mut out = tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
 
-    fn find_panel<'a>(el: &'a Element) -> Option<&'a Element> {
+    fn find_panel(el: &Element) -> Option<&Element> {
         if el.template_id.as_deref() == Some("ao-origin-flash__floating_panel") {
             return Some(el);
         }
@@ -1108,7 +1108,7 @@ fn fade_popover_join_stamp_matches_band_above_leftover_datepicker() {
         .map(|b| b.stamp_key)
         .collect();
     assert!(
-            band_keys.iter().any(|k| *k == panel_key),
+            band_keys.contains(&panel_key),
             "portal-layer band stamp must be overlay_portal_stamp_key of the Fade panel; panel_key={panel_key} bands={band_keys:?}"
         );
 

@@ -506,7 +506,7 @@ plain [] children: Option<Element>,
     let presence = use_collapse_panel_presence(&format!("{}:presence", ctx.id));
     sync_collapse_panel_open(open_sig, &presence);
 
-    let mut body = children.unwrap_or_else(Element::new);
+    let mut body = children.unwrap_or_default();
     if body.attrs.get("jadix_fragment").map(|s| s.as_str()) == Some("1") {
         let kids = std::mem::take(&mut body.children);
         body = vstack().w("100%").min_w(0.0).children(kids).into();
@@ -568,7 +568,7 @@ plain [] children: Option<Element>,
         disabled,
         exclusive,
         group,
-        move || children.unwrap_or_else(Element::new),
+        move || children.unwrap_or_default(),
     )
 }
 }

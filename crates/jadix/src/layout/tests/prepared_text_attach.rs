@@ -323,11 +323,13 @@ fn multiline_selection_rects_are_glyph_tight_per_line() {
     let lh = 21.0_f32;
     let box_w = 280.0_f32;
     let glyph_w = prefix_width_logical("啊", "啊".len(), 14.0, 400, lh);
-    let mut style = TextStyle::default();
-    style.size = Some(14.0);
-    style.weight = Some(400);
-    style.line_height_px = Some(lh);
-    style.color = Some([0, 0, 0, 255]);
+    let mut style = TextStyle {
+        size: Some(14.0),
+        weight: Some(400),
+        line_height_px: Some(lh),
+        color: Some([0, 0, 0, 255]),
+        ..Default::default()
+    };
     style.input_caret = Some(InputCaretDraw {
         caret_byte_index: text.len(),
         selection: Some((0, text.len())),
@@ -492,11 +494,13 @@ fn preedit_underline_sits_below_glyphs_and_caret_still_drawn() {
     let text = "你好hao";
     let lh = 21.0_f32;
     let y = 20.0_f32;
-    let mut style = TextStyle::default();
-    style.size = Some(14.0);
-    style.weight = Some(400);
-    style.line_height_px = Some(lh);
-    style.color = Some([0, 0, 0, 255]);
+    let mut style = TextStyle {
+        size: Some(14.0),
+        weight: Some(400),
+        line_height_px: Some(lh),
+        color: Some([0, 0, 0, 255]),
+        ..Default::default()
+    };
     style.input_caret = Some(InputCaretDraw {
         caret_byte_index: text.len(),
         selection: None,
@@ -548,11 +552,13 @@ fn preedit_underline_sits_below_glyphs_and_caret_still_drawn() {
 fn extra_carets_emit_additional_hairlines() {
     let text = "hello";
     let lh = 21.0_f32;
-    let mut style = TextStyle::default();
-    style.size = Some(14.0);
-    style.weight = Some(400);
-    style.line_height_px = Some(lh);
-    style.color = Some([0, 0, 0, 255]);
+    let mut style = TextStyle {
+        size: Some(14.0),
+        weight: Some(400),
+        line_height_px: Some(lh),
+        color: Some([0, 0, 0, 255]),
+        ..Default::default()
+    };
     style.input_caret = Some(InputCaretDraw {
         caret_byte_index: 1,
         selection: None,
@@ -775,11 +781,13 @@ fn wrap_char_caret_x_uses_soft_char_not_soft_word() {
 fn multiline_caret_slightly_taller_than_line_and_centered() {
     let text = "asd\nadj";
     let lh = 21.0_f32;
-    let mut style = TextStyle::default();
-    style.size = Some(14.0);
-    style.weight = Some(400);
-    style.line_height_px = Some(lh);
-    style.color = Some([0, 0, 0, 255]);
+    let mut style = TextStyle {
+        size: Some(14.0),
+        weight: Some(400),
+        line_height_px: Some(lh),
+        color: Some([0, 0, 0, 255]),
+        ..Default::default()
+    };
     style.input_caret = Some(InputCaretDraw {
         caret_byte_index: text.len(),
         selection: None,
@@ -933,13 +941,15 @@ fn hidden_overflow_caret_follows_scroll_not_box_clamp() {
         "fixture must overflow the box (prefix={prefix})"
     );
     let scroll_x = (prefix - box_w + 2.0).max(0.0);
-    let mut style = TextStyle::default();
-    style.size = Some(14.0);
-    style.weight = Some(400);
-    style.line_height_px = Some(lh);
-    style.color = Some([0, 0, 0, 255]);
-    style.overflow = TextOverflow::Hidden;
-    style.scroll_x = scroll_x;
+    let mut style = TextStyle {
+        size: Some(14.0),
+        weight: Some(400),
+        line_height_px: Some(lh),
+        color: Some([0, 0, 0, 255]),
+        overflow: TextOverflow::Hidden,
+        scroll_x,
+        ..Default::default()
+    };
     style.input_caret = Some(InputCaretDraw {
         caret_byte_index: text.len(),
         selection: None,
@@ -1221,11 +1231,13 @@ fn caret_after_cjk_in_latin_cjk_latin_is_past_glyph() {
     let text = "1是1";
     // Caret after "是" (IME replace middle of "1111").
     let caret_byte = "1是".len();
-    let mut style = TextStyle::default();
-    style.size = Some(14.0);
-    style.weight = Some(400);
-    style.line_height_px = Some(21.0);
-    style.color = Some([0, 0, 0, 255]);
+    let mut style = TextStyle {
+        size: Some(14.0),
+        weight: Some(400),
+        line_height_px: Some(21.0),
+        color: Some([0, 0, 0, 255]),
+        ..Default::default()
+    };
     style.input_caret = Some(InputCaretDraw {
         caret_byte_index: caret_byte,
         selection: None,

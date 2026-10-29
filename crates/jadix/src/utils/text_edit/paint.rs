@@ -36,6 +36,7 @@ thread_local! {
 
 /// Test hook: how many `text::prepare` calls the single-line caret-scroll path made.
 #[cfg(test)]
+#[cfg(all(test, feature = "product-tests"))]
 pub(crate) fn take_input_scroll_prepare_calls() -> usize {
     INPUT_SCROLL_PREPARE_CALLS.with(|c| c.replace(0))
 }
@@ -43,6 +44,7 @@ pub(crate) fn take_input_scroll_prepare_calls() -> usize {
 /// 每帧将 Input/Textarea 的显示状态与全局/每字段信号对齐（全部 `peek`，不触发根 `rebuild_ui`）。
 /// 测试 / 无视口场景：不裁剪（等价于超大 viewport）。
 #[cfg(test)]
+#[cfg(all(test, feature = "product-tests"))]
 pub(crate) fn sync_text_edit_paint_subtree(
     el: &mut Element,
     layout_tree: &mut LayoutTree,

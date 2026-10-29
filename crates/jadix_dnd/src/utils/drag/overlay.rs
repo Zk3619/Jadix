@@ -15,6 +15,8 @@
 use std::cell::Cell;
 use std::rc::Rc;
 
+type GhostBody = Rc<dyn Fn(&DragItemCtx) -> Element>;
+
 use crate::app::portal_overlay::{pinned_overlay_z, portal_sync, OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized};
 use crate::authoring::mount::pin_overlay_origin as pin_overlay_follow_insets;
@@ -252,7 +254,7 @@ pub(crate) fn note_ghost_follow_tick(visual: [f32; 2]) {
 }
 
 fn paint_target(el: &mut Element) -> &mut Element {
-    if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() && !el.children.is_empty() {
+    if el.attrs.contains_key(ATTR_DRAG_OVERLAY_CLIP) && !el.children.is_empty() {
         &mut el.children[0]
     } else {
         el
@@ -269,7 +271,7 @@ pub(crate) fn adjust_overlay_collect_origin(
 ) -> Option<[f32; 2]> {
     let scale = crate::authoring::mount::painted_scale(el);
     let measured = [measured[0] * scale[0], measured[1] * scale[1]];
-    if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
+    if el.attrs.contains_key(ATTR_DRAG_OVERLAY_CLIP) {
         return peek_restrict_clip()
             .filter(|b| b[2] > 0.5 && b[3] > 0.5)
             .map(|b| [b[0], b[1]]);
@@ -279,9 +281,7 @@ pub(crate) fn adjust_overlay_collect_origin(
         remember_ghost_follow_chrome(el, origin, measured);
         return Some(origin);
     }
-    if el.attrs.get(ATTR_DRAG_OVERLAY).is_none() {
-        return None;
-    }
+    el.attrs.get(ATTR_DRAG_OVERLAY)?;
     let scope = el
         .attrs
         .get(ATTR_FLOATING)?
@@ -295,9 +295,13 @@ pub(crate) fn adjust_overlay_collect_origin(
 
 const ATTR_GHOST_FOR: &str = "jadix_drag_ghost_for";
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The drag adapter receives independent session, geometry and owner state without changing its existing interface"
+)]
 fn build_ghost_body(
     custom: &Option<Rc<dyn Fn() -> Element>>,
-    body_for: &Option<Rc<dyn Fn(&DragItemCtx) -> Element>>,
+    body_for: &Option<GhostBody>,
     decorate: &Option<Rc<dyn Fn(Element) -> Element>>,
     source_id: Option<String>,
     scope_id: &str,
@@ -315,7 +319,7 @@ fn build_ghost_body(
 
 fn build_ghost_body_inner(
     custom: &Option<Rc<dyn Fn() -> Element>>,
-    body_for: &Option<Rc<dyn Fn(&DragItemCtx) -> Element>>,
+    body_for: &Option<GhostBody>,
     decorate: &Option<Rc<dyn Fn(Element) -> Element>>,
     source_id: Option<String>,
     scope_id: &str,
@@ -346,7 +350,7 @@ fn build_ghost_body_inner(
             if ids.len() > 1 {
                 stacked_ghost_panel(scope_id, &ids)
             } else {
-                clone_source_preview(scope_id, id).unwrap_or_else(Element::new)
+                clone_source_preview(scope_id, id).unwrap_or_default()
             }
         })
     } else {
@@ -392,6 +396,10 @@ fn write_placed_ghost(
 /// Paint-time ghost body + origin. The island itself must not remount on
 /// `overlay_open`: `try_reconcile_subtree` misses when AppState is borrowed
 /// (pointerdown / first activating move), and source chrome already hid the body.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The drag adapter receives independent session, geometry and owner state without changing its existing interface"
+)]
 fn sync_drag_overlay_ghost(
     panel: Element,
     open: Signal<bool>,
@@ -401,7 +409,7 @@ fn sync_drag_overlay_ghost(
     scope_id: String,
     ghost_id: String,
     custom: Option<Rc<dyn Fn() -> Element>>,
-    body_for: Option<Rc<dyn Fn(&DragItemCtx) -> Element>>,
+    body_for: Option<GhostBody>,
     decorate: Option<Rc<dyn Fn(Element) -> Element>>,
     drag_ctx: DragCtx,
 ) -> Element {
@@ -410,7 +418,7 @@ fn sync_drag_overlay_ghost(
         let is_open = open.peek();
         let source_id = active.peek();
         let clip = peek_restrict_clip().filter(|b| b[2] > 0.5 && b[3] > 0.5);
-        let have_clip = el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some();
+        let have_clip = el.attrs.contains_key(ATTR_DRAG_OVERLAY_CLIP);
         // Once Hidden opened a clip shell, keep it even if a tick fails to
         // resolve the restrict box (page scroll / stale hits). Dropping the
         // shell remounts an unclipped ghost that breaks out of the parent.
@@ -451,7 +459,7 @@ fn sync_drag_overlay_ghost(
         let origin = pos.peek();
         let clip_bbox = peek_restrict_clip();
         let old_shell = el.layout_bounds;
-        let (moved, size_moved) = if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
+        let (moved, size_moved) = if el.attrs.contains_key(ATTR_DRAG_OVERLAY_CLIP) {
             if let Some(bbox) = clip_bbox {
                 write_clip_shell(el, bbox, origin)
             } else {
@@ -495,14 +503,14 @@ pub(crate) fn sync_overlay_ghost_insets(el: &mut Element) {
     let mut stack: Vec<*mut Element> = vec![el as *mut Element];
     while let Some(ptr) = stack.pop() {
         let el = unsafe { &mut *ptr };
-        if el.attrs.get(ATTR_DRAG_OVERLAY).is_some() {
+        if el.attrs.contains_key(ATTR_DRAG_OVERLAY) {
             if let Some(scope) = el
                 .attrs
                 .get(ATTR_FLOATING)
                 .and_then(|fid| fid.strip_suffix("__ghost"))
                 .map(str::to_string)
             {
-                if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_none() {
+                if !el.attrs.contains_key(ATTR_DRAG_OVERLAY_CLIP) {
                     let [_, _, w, h] = el.layout_bounds;
                     if w > 1.0 && h > 1.0 {
                         remember_overlay_ghost_extent(&scope, [w, h]);
@@ -516,7 +524,7 @@ pub(crate) fn sync_overlay_ghost_insets(el: &mut Element) {
                 })
             });
             if let Some(p) = origin {
-                if el.attrs.get(ATTR_DRAG_OVERLAY_CLIP).is_some() {
+                if el.attrs.contains_key(ATTR_DRAG_OVERLAY_CLIP) {
                     if let Some(bbox) = peek_restrict_clip() {
                         let old = el.layout_bounds;
                         write_clip_shell(el, bbox, p);
@@ -561,7 +569,7 @@ fn pin_source_size_to_extent(mut panel: Element, extent: [f32; 2]) -> Element {
 /// [`Self::style`] is applied on top of that clone (or on a custom child).
 pub struct DragOverlayBuilder {
     body: Option<Rc<dyn Fn() -> Element>>,
-    body_for: Option<Rc<dyn Fn(&DragItemCtx) -> Element>>,
+    body_for: Option<GhostBody>,
     decorate: Option<Rc<dyn Fn(Element) -> Element>>,
     /// Source-island opacity while this overlay is open. Applied to the **body**,
     /// not the ghost. `None` → [`super::OVERLAY_SOURCE_OPACITY`].
@@ -664,7 +672,7 @@ pub(crate) fn stacked_ghost_panel(scope: &str, ids: &[String]) -> Element {
     };
     let extent = super::session::last_drag_extent(scope).unwrap_or([0.0, 0.0]);
     for id in ids {
-        let mut chip = clone_source_preview(scope, id).unwrap_or_else(Element::new);
+        let mut chip = clone_source_preview(scope, id).unwrap_or_default();
         chip = pin_source_size_to_extent(chip, extent).flex_shrink(0.0);
         wrap = wrap.child(chip);
     }

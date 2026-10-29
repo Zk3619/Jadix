@@ -363,7 +363,7 @@ pub(crate) fn TextAlignShowcase() -> jadix::core::tree::Element {
         .overscan(4)
         .scrollbar_visibility("always")
         .render_item(|i| {
-            label(&format!("gal-wp21-virt-{i}"))
+            label(format!("gal-wp21-virt-{i}"))
                 .text(format!("virtual row {i:03}"))
                 .size(14.0)
                 .leading(1.5)

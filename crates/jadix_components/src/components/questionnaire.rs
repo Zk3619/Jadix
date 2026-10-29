@@ -972,7 +972,6 @@ fn register_questionnaire_redraw(
             let _ = order.get();
             crate::app::runtime::request_redraw();
         });
-        ()
     });
 }
 
@@ -1086,6 +1085,10 @@ fn children_or_text(
 // ── Scope ─────────────────────────────────────────────────────────────────────
 
 /// Provide Questionnaire context and build the root shell (`ui!` `<Questionnaire>` / Builder).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The public scope adapter retains its existing signal and event parameters"
+)]
 pub fn questionnaire_scope(
     id: impl Into<String>,
     item: Option<Signal<String>>,
@@ -1231,7 +1234,6 @@ pub fn questionnaire_item_scope(
             let _ = invalid_shown.get();
             crate::app::runtime::request_redraw();
         });
-        ()
     });
     let item_ctx = QuestionnaireItemCtx {
         root_id: root.id.clone(),
@@ -1331,7 +1333,7 @@ plain [] children: Option<Element>,
         items.unwrap_or_default(),
         on_submit,
         None,
-        move || children.unwrap_or_else(Element::new),
+        move || children.unwrap_or_default(),
     )
 }
 }
@@ -1354,7 +1356,7 @@ plain [] children: Option<Element>,
         disabled,
         invalid,
         None,
-        move || children.unwrap_or_else(Element::new),
+        move || children.unwrap_or_default(),
     )
 }
 }
@@ -1785,7 +1787,7 @@ plain [] children: Option<Element>,
                 status.set(QuestionnaireItemStatus::Unanswered);
             }
         });
-        ()
+
     });
     let sync_freeform = item.freeform;
     let sync_invalid = item.invalid_shown;
@@ -2167,7 +2169,6 @@ impl From<QuestionnaireChoiceBuilder> for Element {
             default_checked: Some(builder.default_checked),
             children: crate::components::base::packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }

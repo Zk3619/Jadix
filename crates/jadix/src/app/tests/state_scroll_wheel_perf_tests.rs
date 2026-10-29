@@ -32,7 +32,7 @@ pub(super) fn run() {
                 gallery.join("styles.toml"),
             ]);
             let logo = super::super::super::pending_images::texture_key_for_src(
-                crate::pages::layout::FILTER_DEMO_LOGO,
+                crate::app::test_support::FILTER_DEMO_LOGO,
             );
             assert!(super::super::super::pending_images::queue_image_from_src(
                 logo,

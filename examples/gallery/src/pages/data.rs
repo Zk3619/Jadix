@@ -57,7 +57,7 @@ pub(crate) fn TableShowcase() -> Element {
     let composite_sel = use_signal("gal_tbl_comp_sel", || None::<usize>);
     let table_sel = use_signal("gal_dt_sel", || None::<usize>);
     let table_sort = use_signal("gal_tbl_sort", TableSortState::default);
-    let table_filter = use_signal("gal_tbl_filter", || String::new());
+    let table_filter = use_signal("gal_tbl_filter", String::new);
     let table_page = use_signal("gal_tbl_page", TablePaginationState::default);
 
     let pick0 = composite_sel;

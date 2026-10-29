@@ -796,7 +796,6 @@ impl From<TabsTriggerBuilder> for Element {
             disabled: Some(builder.disabled),
             children: crate::components::base::packed_children(builder.children),
             base: None,
-            ..Default::default()
         });
         builder.chrome.apply(el)
     }
@@ -817,7 +816,7 @@ default [] value: String,
 plain [] children: Option<Element>,
 ) -> Element {
     let ctx = require_tabs("TabsContent");
-    let mut panel = children.unwrap_or_else(Element::new);
+    let mut panel = children.unwrap_or_default();
     if panel.attrs.get("jadix_fragment").map(|s| s.as_str()) == Some("1") {
         let kids = std::mem::take(&mut panel.children);
         panel = vstack().w("100%").min_w(0.0).children(kids).into();

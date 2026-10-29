@@ -350,6 +350,7 @@ impl ThemeTransition {
     }
 
     #[cfg(test)]
+    #[cfg(all(test, feature = "product-tests"))]
     pub(crate) fn presented_texture_for_test(&self) -> Option<&wgpu::Texture> {
         if self.started_ms.is_some() && self.valid {
             self.targets.as_ref().map(|targets| &targets.presented)

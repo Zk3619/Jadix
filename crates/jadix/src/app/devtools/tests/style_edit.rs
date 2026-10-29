@@ -164,7 +164,7 @@ fn committed_overrides_reapply_after_style_wipe() {
     // Simulate chrome / variant restore wiping live style back to class base.
     if let Some(cs) = root.children[0].class_set.as_ref() {
         if let Some(base) = cs.base_style.as_ref() {
-            root.children[0].style = Box::new(base.clone());
+            *root.children[0].style = base.clone();
         }
     }
     let mut layout = crate::layout::layout_tree::LayoutTree::new();

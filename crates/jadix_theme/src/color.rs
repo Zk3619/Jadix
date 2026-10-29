@@ -566,11 +566,11 @@ fn parse_relative_rgb_hsl(inner: &str, as_rgb: bool) -> Option<[f32; 4]> {
     }
 
     if as_rgb {
-        let r = eval_rel_channel(&channel_tokens[0], origin_c, RelSpace::Rgb)?;
-        let g = eval_rel_channel(&channel_tokens[1], origin_c, RelSpace::Rgb)?;
-        let b = eval_rel_channel(&channel_tokens[2], origin_c, RelSpace::Rgb)?;
+        let r = eval_rel_channel(channel_tokens[0], origin_c, RelSpace::Rgb)?;
+        let g = eval_rel_channel(channel_tokens[1], origin_c, RelSpace::Rgb)?;
+        let b = eval_rel_channel(channel_tokens[2], origin_c, RelSpace::Rgb)?;
         let a = if channel_tokens.len() >= 4 {
-            eval_rel_channel(&channel_tokens[3], origin_c, RelSpace::Rgb)?
+            eval_rel_channel(channel_tokens[3], origin_c, RelSpace::Rgb)?
         } else {
             origin_c[3]
         };
@@ -582,11 +582,11 @@ fn parse_relative_rgb_hsl(inner: &str, as_rgb: bool) -> Option<[f32; 4]> {
         ])
     } else {
         let (oh, os, ol) = rgb_to_hsl(origin_c[0], origin_c[1], origin_c[2]);
-        let h = eval_rel_hsl_channel(&channel_tokens[0], oh, os, ol, origin_c[3], true)?;
-        let s = eval_rel_hsl_channel(&channel_tokens[1], oh, os, ol, origin_c[3], false)?;
-        let l = eval_rel_hsl_channel(&channel_tokens[2], oh, os, ol, origin_c[3], false)?;
+        let h = eval_rel_hsl_channel(channel_tokens[0], oh, os, ol, origin_c[3], true)?;
+        let s = eval_rel_hsl_channel(channel_tokens[1], oh, os, ol, origin_c[3], false)?;
+        let l = eval_rel_hsl_channel(channel_tokens[2], oh, os, ol, origin_c[3], false)?;
         let a = if channel_tokens.len() >= 4 {
-            eval_rel_hsl_channel(&channel_tokens[3], oh, os, ol, origin_c[3], false)?
+            eval_rel_hsl_channel(channel_tokens[3], oh, os, ol, origin_c[3], false)?
         } else {
             origin_c[3]
         };
@@ -1039,7 +1039,7 @@ pub fn parse_color(s: &str) -> [f32; 4] {
 }
 
 pub fn try_parse_text_color(s: &str) -> Option<[u8; 4]> {
-    try_parse_color(s).map(|c| f32_to_u8(c))
+    try_parse_color(s).map(f32_to_u8)
 }
 
 pub fn parse_text_color(s: &str) -> [u8; 4] {

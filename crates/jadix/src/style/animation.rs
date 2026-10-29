@@ -1863,11 +1863,11 @@ fn tween_sample_configured_spring(
     }
     let mut out = tween.from;
     let mut done = true;
-    for i in 0..tween.components as usize {
+    for (i, output_component) in out[..tween.components as usize].iter_mut().enumerate() {
         let spring = tween.springs[i]
             .get_or_insert_with(|| Spring::new(tween.from[i], tween.to[i], tween.vel[i], opts));
         let sample = spring.next(elapsed - tween.delay_ms);
-        out[i] = sample.value;
+        *output_component = sample.value;
         tween.vel[i] = sample.velocity;
         done &= sample.done;
     }
@@ -1898,7 +1898,7 @@ fn tween_sample_spring(
     let mut out = tween.from;
     let mut all_settled = true;
     let n = tween.components as usize;
-    for i in 0..n {
+    for (i, output_component) in out[..n].iter_mut().enumerate() {
         if tween.springs[i].is_none() {
             tween.springs[i] = Some(
                 Spring::from_physics(tween.from[i], tween.to[i], tween.vel[i], physics)
@@ -1912,7 +1912,7 @@ fn tween_sample_spring(
                 done: true,
             },
         );
-        out[i] = sample.value;
+        *output_component = sample.value;
         tween.vel[i] = sample.velocity;
         all_settled &= sample.done;
     }

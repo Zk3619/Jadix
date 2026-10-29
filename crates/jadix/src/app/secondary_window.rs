@@ -510,7 +510,7 @@ impl SecondaryWindowState {
             &mut sync_collect,
         );
         self.pending_layout_dirty
-            .extend(sync_collect.layout_dirty.drain(..));
+            .append(&mut sync_collect.layout_dirty);
         // Same mouse as CSS `:hover` below (`[-1,-1]` when the pointer is off this window).
         crate::app::tree_hit::apply_pointer_hover_reconcile(
             &self.root_element,
@@ -1265,12 +1265,12 @@ impl SecondaryWindowState {
         self.window.set_visible(false);
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "hot-reload"))]
     pub(super) fn invalidate_hot_reload_image(&mut self, key: &str) {
         self.image_textures.invalidate(key);
     }
 
-    #[cfg(debug_assertions)]
+    #[cfg(all(debug_assertions, feature = "hot-reload"))]
     pub(super) fn invalidate_hot_reload(
         &mut self,
         templates: &[super::hot_reload::TemplateFragment],

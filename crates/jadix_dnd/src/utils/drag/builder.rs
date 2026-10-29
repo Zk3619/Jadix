@@ -219,6 +219,10 @@ fn is_cloning_overlay_ghost() -> bool {
     CLONING_OVERLAY_GHOST.with(|c| c.get())
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The drag adapter receives independent session, geometry and owner state without changing its existing interface"
+)]
 fn register_drag_slot_meta(
     scope: &str,
     id: &str,
@@ -526,6 +530,10 @@ fn dims_changed(a: AuthorBlock, b: AuthorBlock) -> bool {
 /// stacking-context DragProvider root). Nested pill `z-index` is not a
 /// sibling of the other item, so page_stack bands would never split and
 /// lower glyphs would paint after every shell.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The drag adapter receives independent session, geometry and owner state without changing its existing interface"
+)]
 fn apply_shell_stack_z(
     el: &mut Element,
     id: &str,
@@ -652,6 +660,10 @@ fn apply_shell_stack_z(
 }
 
 /// Same-list FLIP translate for a sortable row (source placeholder or sibling).
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The drag adapter receives independent session, geometry and owner state without changing its existing interface"
+)]
 fn live_sortable_translate(
     also_droppable: bool,
     axis: Axis,
@@ -677,6 +689,10 @@ fn live_sortable_translate(
 }
 
 /// Dimmed overlay source: sit in the insert hole siblings just opened.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The drag adapter receives independent session, geometry and owner state without changing its existing interface"
+)]
 fn live_source_hole_translate(
     axis: Axis,
     list: Option<&str>,
@@ -770,6 +786,10 @@ fn write_flag_attr(el: &mut Element, key: &str, on: bool) -> bool {
 /// Live sortable chrome (opacity / sibling translate) is paint-only.
 /// Subscribing `hover_index` / `overlay_pos` inside the island remounts every
 /// pointer move; `h=auto` placeholders then collapse and the list height jitters.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The drag adapter receives independent session, geometry and owner state without changing its existing interface"
+)]
 fn apply_live_drag_chrome(
     el: &mut Element,
     scope: &str,
@@ -1276,6 +1296,10 @@ fn empty_list_hole_local(list_el: &Element) -> Option<[f32; 2]> {
 /// Translate (not inset) tracks the hole so origin-column vacate does not
 /// LayoutChanged every pointer move. `w=100%` is pinned to the target slot —
 /// the overlay ghost already does this via `pin_source_size_to_extent`.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The drag adapter receives independent session, geometry and owner state without changing its existing interface"
+)]
 fn sync_cross_list_hole_preview(
     el: &mut Element,
     scope: &str,
@@ -1371,6 +1395,10 @@ fn sync_cross_list_hole_preview(
 /// on the **hover target**, not the origin list. Cross-list hover parents a
 /// hole preview here so the dimmed body is a target descendant. Colors stay
 /// with the caller.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The drag adapter receives independent session, geometry and owner state without changing its existing interface"
+)]
 fn apply_live_droppable_chrome(
     el: &mut Element,
     scope: &str,

@@ -24,7 +24,7 @@ thread_local! {
 }
 
 thread_local! {
-    static SVG_OPT: RefCell<Option<resvg::usvg::Options<'static>>> = RefCell::new(None);
+    static SVG_OPT: RefCell<Option<resvg::usvg::Options<'static>>> = const { RefCell::new(None) };
 }
 
 fn parse_usvg_tree(bytes: &[u8]) -> Option<resvg::usvg::Tree> {

@@ -184,7 +184,7 @@ pub(super) fn ensure_alpha_texture(id: &str, c: Rgba) -> String {
         for y in 0..h {
             for x in 0..w {
                 let a = x as f32 / (w - 1).max(1) as f32;
-                let checker = if ((x / cell) + (y / cell)) % 2 == 0 {
+                let checker = if ((x / cell) + (y / cell)).is_multiple_of(2) {
                     220.0
                 } else {
                     160.0
@@ -503,6 +503,10 @@ pub(super) fn wire_pointer_drag(mut el: Element, fid: String, drag: ColorDrag) -
     })
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The picker view receives the existing independent channel and interaction signals"
+)]
 pub(super) fn sv_area(
     id: &str,
     height: &str,
@@ -620,10 +624,9 @@ pub(super) fn hue_slider(
         .value_signal(hue)
         .track_texture(ensure_hue_texture())
         // Re-mark needed each sync so TexturePool eviction rehydrates the ramp.
-        .track_texture_fn(|| ensure_hue_texture())
+        .track_texture_fn(ensure_hue_texture)
         .disabled(disabled)
         .thumb_fill({
-            let hue = hue;
             move || {
                 let (r, g, b) = hsv_to_rgb(hue.peek().rem_euclid(360.0), 1.0, 1.0);
                 [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0]
@@ -644,10 +647,6 @@ pub(super) fn alpha_slider(
         rgba.peek().a.clamp(0.0, 1.0)
     });
     create_effect({
-        let rgba = rgba;
-        let out = out;
-        let fmt_sig = fmt_sig;
-        let alpha = alpha;
         move || {
             let a = alpha.get();
             let c = rgba.peek();
@@ -668,18 +667,10 @@ pub(super) fn alpha_slider(
         .step(0.01)
         .value_signal(alpha)
         .track_texture(ensure_alpha_texture(id, rgba.peek()))
-        .track_texture_fn({
-            let rgba = rgba;
-            let alpha_id = alpha_id;
-            move || ensure_alpha_texture(&alpha_id, rgba.peek())
-        })
+        .track_texture_fn(move || ensure_alpha_texture(&alpha_id, rgba.peek()))
         .disabled(disabled)
-        .thumb_fill({
-            let rgba = rgba;
-            move || rgba.peek().to_f32()
-        })
+        .thumb_fill(move || rgba.peek().to_f32())
         .on_sync({
-            let alpha = alpha;
             move || {
                 let c = rgba.peek();
                 let want = if show_alpha { c.a.clamp(0.0, 1.0) } else { 1.0 };
@@ -691,6 +682,10 @@ pub(super) fn alpha_slider(
         .into()
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The picker view receives the existing independent channel and interaction signals"
+)]
 pub(super) fn hsv_sliders(
     id: &str,
     variant: ColorPickerVariant,
@@ -783,6 +778,10 @@ pub(super) fn write_channel_byte(mut c: Rgba, part: &str, v: u8) -> Rgba {
     c
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The picker view receives the existing independent channel and interaction signals"
+)]
 pub(super) fn channel_track(
     id: &str,
     part: &str,
@@ -830,6 +829,10 @@ pub(super) fn channel_track(
         .into()
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The picker view receives the existing independent channel and interaction signals"
+)]
 pub(super) fn rgb_sliders(
     id: &str,
     rgba: Signal<Rgba>,
@@ -906,6 +909,10 @@ pub(super) fn rgb_sliders(
     row.into()
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The picker view receives the existing independent channel and interaction signals"
+)]
 pub(super) fn format_value_row(
     id: &str,
     rgba: Signal<Rgba>,
@@ -988,7 +995,6 @@ pub(super) fn preview_bar(id: &str, rgba: Signal<Rgba>, fmt_sig: Signal<ColorFor
     let mut bar: Element = r#box().w("100%").h("3.25rem").rounded("0.5rem").into();
     bar = bar.bg(c.to_f32()).border(tokens::border(), 1.0).relative();
     bar = bind_style(bar, format!("{id}__cp_preview"), {
-        let rgba = rgba;
         move || StylePatch {
             bg: Some(rgba.get().to_f32()),
             ..Default::default()
@@ -1003,8 +1009,6 @@ pub(super) fn preview_bar(id: &str, rgba: Signal<Rgba>, fmt_sig: Signal<ColorFor
             .pointer_events("none")
             .child(
                 bind_text(format!("{id}__cp_preview_label"), {
-                    let rgba = rgba;
-                    let fmt_sig = fmt_sig;
                     move || format_color(rgba.get(), fmt_sig.get())
                 })
                 .text_size(0.875 * 16.0)
@@ -1014,6 +1018,10 @@ pub(super) fn preview_bar(id: &str, rgba: Signal<Rgba>, fmt_sig: Signal<ColorFor
     bar
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The picker view receives the existing independent channel and interaction signals"
+)]
 pub(super) fn swatch_grid(
     id: &str,
     variant: ColorPickerVariant,
@@ -1093,6 +1101,10 @@ pub(super) fn panel_shell(width: &str, body: Element) -> Element {
     panel
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The picker view receives the existing independent channel and interaction signals"
+)]
 pub(super) fn build_panel(
     id: &str,
     variant: ColorPickerVariant,
@@ -1198,6 +1210,10 @@ pub(super) fn build_panel(
     slots.paint("color-picker-content", panel_shell(width, body))
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The picker view receives the existing independent channel and interaction signals"
+)]
 pub(super) fn build_color_picker_view(
     props: ColorPickerRenderProps,
     open: Signal<bool>,
@@ -1227,15 +1243,12 @@ pub(super) fn build_color_picker_view(
     swatch = swatch.border(tokens::border(), 1.0);
     let swatch_id = format!("{id}__cp_trig_swatch");
     swatch = bind_style(swatch, swatch_id, {
-        let rgba = rgba;
         move || StylePatch {
             bg: Some(rgba.get().to_f32()),
             ..Default::default()
         }
     });
     let main = bind_text(format!("{id}__cp_trig_label"), {
-        let rgba = rgba;
-        let fmt_sig = fmt_sig;
         move || format_color(rgba.get(), fmt_sig.get())
     })
     .text_size(0.875 * 16.0)
@@ -1292,7 +1305,7 @@ pub(super) fn build_color_picker_view(
                         focus_by_id(trig.clone());
                         true
                     }
-                    k if crate::utils::keyboard::is_enter_or_space(&k) => {
+                    k if crate::utils::keyboard::is_enter_or_space(k) => {
                         if open_k.peek() {
                             open_k.set(false);
                             focus_by_id(trig.clone());

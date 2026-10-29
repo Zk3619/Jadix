@@ -22,7 +22,7 @@ fn apply_disabled_stamps_attr_and_focus() {
 fn apply_disabled_restores_focus_on_paint_sync_nodes() {
     let mut el: Element = hstack().into();
     el.disabled_sync = Some(|element, disabled| {
-        let changed = element.attrs.get("test_disabled").is_some() != disabled;
+        let changed = element.attrs.contains_key("test_disabled") != disabled;
         if disabled {
             element.set_attr("test_disabled", "true");
         } else {

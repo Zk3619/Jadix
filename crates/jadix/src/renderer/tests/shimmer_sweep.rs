@@ -66,9 +66,11 @@ fn shimmer_recolor_must_keep_oliver_is_typing_on_one_line() {
     buffer.shape_until_scroll(&mut fs, false);
     let before = buffer_lines(&buffer);
 
-    let mut st = TextStyle::default();
-    st.size = Some(size);
-    st.color = Some([115, 115, 115, 255]);
+    let st = TextStyle {
+        size: Some(size),
+        color: Some([115, 115, 115, 255]),
+        ..Default::default()
+    };
     crate::style::utility::set_frame_dt(1.0 / 60.0);
     for i in 0..8 {
         super::apply_shimmer_sweep(

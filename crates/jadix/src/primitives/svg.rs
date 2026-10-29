@@ -386,10 +386,8 @@ fn collect_paint_defs(nodes: &[SvgNode], out: &mut HashMap<String, crate::style:
                 y2,
                 stops,
                 ..
-            } => {
-                if !id.is_empty() {
-                    out.insert(id.clone(), linear_gradient_to_css(x1, y1, x2, y2, stops));
-                }
+            } if !id.is_empty() => {
+                out.insert(id.clone(), linear_gradient_to_css(x1, y1, x2, y2, stops));
             }
             SvgNode::RadialGradient {
                 id,
@@ -398,10 +396,8 @@ fn collect_paint_defs(nodes: &[SvgNode], out: &mut HashMap<String, crate::style:
                 r,
                 stops,
                 ..
-            } => {
-                if !id.is_empty() {
-                    out.insert(id.clone(), radial_gradient_to_css(cx, cy, r, stops));
-                }
+            } if !id.is_empty() => {
+                out.insert(id.clone(), radial_gradient_to_css(cx, cy, r, stops));
             }
             _ => {}
         }
@@ -2066,7 +2062,7 @@ pub fn svg_raster_from_element_attrs(
         } else {
             crate::media::svg_raster::ensure_svg_document_texture(&doc, w, h)?
         };
-        return Some((tex, target[0], target[1]));
+        Some((tex, target[0], target[1]))
     }
     #[cfg(not(feature = "svg"))]
     {
@@ -2210,10 +2206,9 @@ impl From<SvgBuilder> for Element {
             el.text_style.color = Some(crate::style::parse_text_color("foreground"));
         }
         // SVG leaf defaults to `bounding-box` (MDN SVG-only: hit the container); callers may override.
-        if el
+        if !el
             .attrs
-            .get(crate::core::tree::ATTR_POINTER_EVENTS)
-            .is_none()
+            .contains_key(crate::core::tree::ATTR_POINTER_EVENTS)
         {
             el = el.pointer_events("bounding-box");
         }

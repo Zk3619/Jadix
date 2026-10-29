@@ -402,10 +402,8 @@ impl From<BadgeBuilder> for Element {
                 {
                     child = child.text_size(IntoF32::into_f32("0.75rem"));
                 }
-                if child.text.is_some() {
-                    if builder.chrome_enabled {
-                        child.text_style.color = Some(text_color);
-                    }
+                if child.text.is_some() && builder.chrome_enabled {
+                    child.text_style.color = Some(text_color);
                 }
                 el = el.child(child);
             }
@@ -431,7 +429,7 @@ pub fn apply_bound_badge_chrome(el: &mut Element, enabled: bool) -> LayoutStatus
         let key = el
             .attrs
             .get(ATTR_VARIANT)
-            .map(|s| s.clone())
+            .cloned()
             .unwrap_or_else(|| "default".to_string());
         apply_chrome(el, key.as_str());
     }

@@ -112,10 +112,7 @@ fn raster_has_fill_and_stroke_coverage() {
         "circle fill center, a={}",
         alpha(40, 40)
     );
-    assert!(
-        alpha(40, 80.min(79)) > 40 || alpha(40, 72) > 80,
-        "path stroke"
-    );
+    assert!(alpha(40, 79) > 40 || alpha(40, 72) > 80, "path stroke");
     assert!(
         alpha(2, 2) < 20,
         "outside should be empty, a={}",

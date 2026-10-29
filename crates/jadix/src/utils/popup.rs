@@ -15,7 +15,7 @@ use crate::app::window_scope::{self, WindowScope};
 use crate::core::reactivity::{use_signal, Signal};
 use crate::core::scroll_viewport::SCROLL_VIEWPORT_FOCUS_PREFIX;
 use crate::core::tree::Element;
-use crate::layout::layout_tree::{ATTR_ESCAPE_OVERFLOW_CLIP, ATTR_PORTAL_KEY, PORTAL_LAYER_ID};
+use crate::layout::layout_tree::{ATTR_ESCAPE_OVERFLOW_CLIP, ATTR_PORTAL_KEY};
 use crate::primitives::overlay::overlay;
 
 thread_local! {
@@ -1224,8 +1224,8 @@ fn apply_floating_menus(
     // treats the panel / toggle as inside — without PLACEMENT or POINT, do not
     // rewrite left/top (author `fixed` / inset is the geometry).
     let has_point = floating_point_of(el).is_some();
-    let has_placement_attr = el.attrs.get(ATTR_FLOATING_PLACEMENT).is_some()
-        || el.attrs.get("jadix_select_placement").is_some();
+    let has_placement_attr = el.attrs.contains_key(ATTR_FLOATING_PLACEMENT)
+        || el.attrs.contains_key("jadix_select_placement");
     let is_select = el.attrs.contains_key("jadix_select_menu");
     if !has_point && !has_placement_attr && !is_select {
         for c in &mut el.children {

@@ -137,7 +137,7 @@ pub use keyframes::{
     sample_keyframes_eased, KeyframeBase, KeyframeCoverage, KeyframeSample, KeyframeStop,
 };
 pub use keyframes_parse::parse_and_register_keyframes;
-#[cfg(debug_assertions)]
+#[cfg(all(debug_assertions, any(feature = "hot-reload", test)))]
 pub(crate) use keyframes_parse::parse_keyframe_definitions;
 pub use offset_path::{parse_offset_path, OffsetPath};
 pub use scroll_timeline::{
@@ -190,8 +190,7 @@ pub use theme_override::{
 };
 pub(crate) use theme_override::{restore_theme_overrides, snapshot_theme_overrides};
 pub use theme_style::{set_theme_preset, theme_preset, ThemePreset, ThemeStyles};
-#[cfg(all(test, target_os = "windows"))]
-#[cfg(all(test, target_os = "windows"))]
+#[cfg(all(test, target_os = "windows", feature = "product-tests"))]
 pub(crate) use timeline::set_global_time_for_test;
 pub use timeline::{
     any_timeline_playing, cubic_from_css, global_time_s, keyframe, lerp, tick_timelines, Repeat,

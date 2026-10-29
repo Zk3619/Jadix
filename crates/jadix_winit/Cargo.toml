@@ -50,7 +50,7 @@ winit-ohos = { "package" = "jadix_winit_ohos", "version" = "=0.31.0-beta.3-jadix
 winit-appkit = { "package" = "jadix_winit_appkit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-appkit" }
 objc2 = { workspace = true }
 objc2-foundation = { workspace = true, features = ["std", "NSUserDefaults", "NSString", "NSGeometry"] }
-objc2-app-kit = { workspace = true, features = ["std", "NSWindow", "NSView", "NSButton", "NSControl", "NSResponder"] }
+objc2-app-kit = { workspace = true, default-features = true, features = ["std", "NSWindow", "NSView", "NSButton", "NSControl", "NSResponder"] }
 
 [target.'cfg(all(target_vendor = "apple", not(target_os = "macos")))'.dependencies]
 winit-uikit = { "package" = "jadix_winit_uikit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-uikit" }

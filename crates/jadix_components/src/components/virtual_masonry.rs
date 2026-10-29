@@ -127,7 +127,7 @@ fn collect_heights(
     item_height: &dyn Fn(usize, f32) -> f32,
 ) -> Vec<f32> {
     (0..count)
-        .map(|i| height_from_cache(cache, i, col_w, |idx, w| item_height(idx, w)))
+        .map(|i| height_from_cache(cache, i, col_w, item_height))
         .collect()
 }
 

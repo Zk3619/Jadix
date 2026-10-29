@@ -139,7 +139,7 @@ fn toolbar() -> Element {
                 .w(72.0)
                 .text_size(11.0)
                 .into(),
-            label("dt-device-by").text("×").text_size(12.0).into(),
+            label("dt-device-by").text("×").text_size(12.0),
             input("dt-device-height")
                 .h(27.0)
                 .w(72.0)
@@ -172,8 +172,7 @@ fn toolbar() -> Element {
                 .into(),
             label("dt-device-size")
                 .text(format!("{:.0} × {:.0}", viewport.width, viewport.height))
-                .text_size(10.0)
-                .into(),
+                .text_size(10.0),
         ])
         .into();
     Element::from(
@@ -366,6 +365,10 @@ fn sync_bounds(element: &mut Element, tree: &mut LayoutTree, bounds: [f32; 4]) -
     true
 }
 
+#[expect(
+    clippy::manual_clamp,
+    reason = "max/min deliberately maps NaN to the lower bound; clamp would preserve NaN"
+)]
 pub(super) fn sync(root: &mut Element, tree: &mut LayoutTree) -> LayoutStatus {
     let Some(host) = find_element_by_template_mut(root, "__jadix_app_host") else {
         return LayoutStatus::Clean;

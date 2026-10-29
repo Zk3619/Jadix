@@ -387,7 +387,7 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
                     }
                     true
                 }
-                k if crate::utils::keyboard::is_enter_or_space(&k) => {
+                k if crate::utils::keyboard::is_enter_or_space(k) => {
                     let ix = sub_active.peek();
                     if ix == ACTIVE_NONE {
                         return true;
@@ -466,7 +466,7 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
                 }
                 true
             }
-            k if crate::utils::keyboard::is_enter_or_space(&k) => {
+            k if crate::utils::keyboard::is_enter_or_space(k) => {
                 let ix = active_keys.peek();
                 if ix == ACTIVE_NONE {
                     return false;
@@ -638,7 +638,7 @@ pub fn dropdown_menu_content(
         reset_activates(&menu_id);
         reset_sub_seq(&menu_id);
         reset_radio_seq(&menu_id);
-        let rows = isolate_reads(|| body());
+        let rows = isolate_reads(&body);
         let scroll_id = format!("{menu_id}__dd_scroll");
         let viewport: Element = untrack(|| {
             scroll_area(scroll_id.as_str())
@@ -706,7 +706,7 @@ plain [] children: Option<Element>,
     let on_click = Rc::new(RefCell::new(on_click));
     let activate = {
         let on_click = on_click.clone();
-        let open = open;
+
         Rc::new(move || {
             if !disabled {
                 on_click.borrow_mut().call(());
@@ -822,7 +822,7 @@ plain [] children: Option<Element>,
     let on_click = Rc::new(RefCell::new(on_click));
     let activate = {
         let on_click = on_click.clone();
-        let check = check;
+
         Rc::new(move || {
             if disabled {
                 return;
@@ -994,8 +994,8 @@ plain [] children: Option<Element>,
     let activate = {
         let on_click = on_click.clone();
         let item_value = item_value.clone();
-        let group_value = group_value;
-        let open = open;
+
+
         Rc::new(move || {
             if disabled {
                 return;
@@ -1161,7 +1161,7 @@ plain [] children: Option<Element>,
 
     let activate = {
         let sub_id = sub_id.clone();
-        let sub_open = sub_open;
+
         Rc::new(move || {
             if !disabled {
                 // Keyboard Enter/Space: do not refresh hover (resting pointer would steal).
@@ -1663,7 +1663,7 @@ impl From<DropdownMenuBuilder> for Element {
                     panel: content_chrome,
                     motion: FloatingMotionKind::Expand,
                 },
-                move || menu(),
+                menu,
             );
             let mut frag = Element::new();
             frag.set_attr("jadix_fragment", "1");

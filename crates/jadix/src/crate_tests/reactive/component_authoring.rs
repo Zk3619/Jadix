@@ -78,7 +78,6 @@ fn component_root_sibling_context_isolated() {
         for label in ["hour", "second"] {
             let label = label.to_string();
             component_root({
-                let tick = tick;
                 move || {
                     let ctx = probe_ctx();
                     provide_context(ctx, label.clone());
@@ -105,7 +104,7 @@ fn untrack_skips_anchor_but_isolate_reads_registers() {
     create_root(|| {
         let before = registered_anchor_count();
         untrack(|| {
-            reactive_anchor("wp314_untrack_anchor", || Element::new());
+            reactive_anchor("wp314_untrack_anchor", Element::new);
         });
         assert_eq!(
             registered_anchor_count(),
@@ -114,7 +113,7 @@ fn untrack_skips_anchor_but_isolate_reads_registers() {
         );
         create_effect(|| {
             isolate_reads(|| {
-                reactive_anchor("wp314_isolate_anchor", || Element::new());
+                reactive_anchor("wp314_isolate_anchor", Element::new);
             });
         });
         assert!(

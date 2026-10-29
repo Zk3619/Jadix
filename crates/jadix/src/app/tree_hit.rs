@@ -1756,6 +1756,10 @@ fn text_drag_edge_overshoot(pointer: f32, min: f32, max: f32) -> Option<(bool, f
 /// Browser-like `<input>` drag-select: ~1 glyph/line at the edge, jump to the end when far.
 ///
 /// `unit_px` is one character (horizontal) or one line box (vertical).
+#[expect(
+    clippy::manual_clamp,
+    reason = "max/min deliberately maps NaN to the lower bound; clamp would preserve NaN"
+)]
 pub(super) fn text_drag_edge_scroll_step(
     overshoot_px: f32,
     unit_px: f32,

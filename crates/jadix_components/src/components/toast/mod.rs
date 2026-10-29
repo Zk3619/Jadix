@@ -52,6 +52,7 @@
 //! - 点击通知本体**不会**关闭；悬停时暂停自动消失计时。
 //! - `position`：`top-left` / `top-center` / `top-right` / `bottom-left` / `bottom-center` / `bottom-right`。
 //! - 入场/退场/堆叠位移用壳上的 **CSS `transition-transform` + `transition-opacity`**
+//!
 //!  （与 CarouselStack 同口径）：只写目标；mid 由 `transition_snapshot` 推进。
 //!   稳定靠 `toast-card-{id}` reconcile 保留 + portal 同 key 调和，勿再挂每卡 cubic。
 //! - 堆叠父级带 `data-stacking-context`；框架对带 `z-index` 的子树按卡 **rects→text**
@@ -1089,12 +1090,10 @@ fn rebalance_visible_queue_commit(notify: bool) {
     }
 
     let mut promoted = false;
-    if active_count(&q) < lim && !p.is_empty() {
-        if active_count(&q) == 0 {
-            expanded_signal().set_silent(false);
-            apply_stack_timer_pause(false, &q, &p);
-            let _ = prune_expired_pending_into(&mut p);
-        }
+    if active_count(&q) < lim && !p.is_empty() && active_count(&q) == 0 {
+        expanded_signal().set_silent(false);
+        apply_stack_timer_pause(false, &q, &p);
+        let _ = prune_expired_pending_into(&mut p);
     }
     while active_count(&q) < lim {
         if p.is_empty() {
@@ -1391,6 +1390,10 @@ pub fn toast_push(message: impl Into<String>, duration_ms: u64) -> u64 {
     toast(message).duration(duration_ms).show()
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "The existing rendering adapter keeps its independent geometry, state and callback parameters"
+)]
 fn toast_push_item(
     title: impl Into<String>,
     description: impl Into<String>,

@@ -193,7 +193,7 @@ pub fn try_reconcile_subtree(
     }
     #[cfg(test)]
     {
-        return test_reconcile_subtree(anchor_id, new_fragment);
+        test_reconcile_subtree(anchor_id, new_fragment)
     }
     #[cfg(not(test))]
     {
@@ -524,7 +524,7 @@ where
     }
     #[cfg(test)]
     {
-        return test_update_element_by_template_id(template_id, patch);
+        test_update_element_by_template_id(template_id, patch)
     }
     #[cfg(not(test))]
     {
