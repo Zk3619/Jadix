@@ -206,6 +206,11 @@ fn gallery_sidebar_groups_preserve_insets_and_stable_chevrons() {
                 Some(0.0)
             );
             for position in 0..GALLERY_GROUPS.len() {
+                assert_eq!(
+                    jadix::layout::lp_length_px(menu.children[position].style.gap.height),
+                    Some(4.0),
+                    "parent-to-child spacing must match the SidebarMenu item gap"
+                );
                 let chevron = gallery_find_by_tid(
                     &menu,
                     &format!("gal-inset-test-branch-{position}-chevron"),

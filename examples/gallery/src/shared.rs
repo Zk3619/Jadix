@@ -377,8 +377,9 @@ fn performance_resources_subscribe_without_rebuilding_the_panel() {
 }
 
 /// Packaged resources live beside the executable; cargo run uses the source tree.
+pub(crate) static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
+
 pub(crate) fn gallery_resource_root() -> &'static std::path::Path {
-    static ROOT: std::sync::OnceLock<std::path::PathBuf> = std::sync::OnceLock::new();
     ROOT.get_or_init(|| {
         std::env::current_exe()
             .ok()

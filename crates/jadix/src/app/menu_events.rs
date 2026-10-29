@@ -3,12 +3,20 @@
 
 #[cfg(not(all(
     feature = "system-tray",
-    any(windows, target_os = "macos", target_os = "linux")
+    any(
+        windows,
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
 )))]
 use muda::MenuEvent;
 #[cfg(all(
     feature = "system-tray",
-    any(windows, target_os = "macos", target_os = "linux")
+    any(
+        windows,
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
 ))]
 use tray_icon::menu::MenuEvent;
 
@@ -20,7 +28,11 @@ pub(super) fn install() {
             super::run_on_ui_thread(move || {
                 #[cfg(all(
                     feature = "system-tray",
-                    any(windows, target_os = "macos", target_os = "linux")
+                    any(
+                        windows,
+                        target_os = "macos",
+                        all(target_os = "linux", not(target_env = "ohos"))
+                    )
                 ))]
                 super::tray::dispatch_tray_menu_click(&id);
                 super::native_menu::dispatch(&id);

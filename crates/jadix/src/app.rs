@@ -82,7 +82,11 @@ mod lifecycle;
 #[cfg(any(
     all(
         feature = "system-tray",
-        any(windows, target_os = "macos", target_os = "linux")
+        any(
+            windows,
+            target_os = "macos",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )
     ),
     all(feature = "native-menu", any(windows, target_os = "macos"))
 ))]

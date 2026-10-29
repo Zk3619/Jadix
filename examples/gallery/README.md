@@ -12,6 +12,14 @@ cargo run -p gallery --no-default-features
 
 默认 `full` 启用 WebView、Inspector、热重载、性能面板、托盘、远程资源、3D、图像流、GPU compute、窗口材质、国际化、无障碍、图像格式、Tokio 与网络。文档编辑、Diff、科学文档、语法高亮、动画、主题、SVG、拖放、原生剪贴板和文件对话框由基础依赖启用。`--no-default-features` 关闭 Gallery 的可选集成，仍保留这些基础依赖。
 
+`src/lib.rs` 提供共享展示与启动逻辑，桌面 `main.rs` 调用它；Android/OHOS 由 `../gallery_mobile` 提供真实应用入口和资源安装。移动端不编译 `jadix_window_state`；OHOS 桌面单独通过 `ohos-desktop` 启用。APK、手机 HAP、桌面 HAP 的构建与图标/托盘方案见 [移动宿主说明](../gallery_mobile/README.md)。
+
+Linux full 构建需要 GTK 3 与 WebKitGTK 4.1 开发包，在 Linux 或 WSL 中运行 `bash examples/gallery/build-linux.sh`。脚本保留系统 pkg-config 库路径供 Zig 查找，并将资源与可执行文件一起打包。默认以 Ubuntu 24.04 的 glibc 2.39 为基线；第一个参数可指定带 glibc 版本的 Zig 目标，但 sysroot 中 GTK/WebKit 的 glibc 要求必须与之匹配，不能混用新系统库与旧 libc。
+
+Linux Gallery 同时启用 GLES 与 Vulkan，允许在 GL 无法连接当前窗口系统时继续尝试 Vulkan，包括支持该窗口系统的 CPU 驱动。运行机需提供可用的 Mesa/厂商图形驱动；仅安装 GTK/WebKit 开发包不能保证 GPU 可用。
+
+X11 动态键盘库、中文字体与运行包的依赖安装说明见 [Linux 运行说明](LINUX.md)，该说明也随 Linux release 包分发。
+
 `--all-features` 还编译 CPU benchmark 入口；通过环境变量 `JADIX_CPU_TELEMETRY` 显式启用。窗口材质、托盘、WebView 等依赖宿主平台支持。远程图片需要网络，页面也提供本地内容。
 
 ```powershell
@@ -38,6 +46,8 @@ Inspector 默认启用，F12 切换。排查宿主问题时可使用 `JADIX_DEVT
 侧栏与页面标题共享 `src/app.rs` 中的 `GALLERY_GROUPS` / `GALLERY_SECTIONS`。页面测试覆盖所有目录项在不同视口下的布局，分组扩充时应同步路由与测试中的页面构造。
 
 各分组使用 Collapsible 构成可折叠的层级导航；点击或 Enter/Space 切换，分组聚焦后左右方向键收起/展开。切换到某分组内的页面会展开对应分支，选中页面与分组展开状态独立。
+
+父项到第一个子项、相邻子项以及相邻分组均使用 4px 间距。
 
 导航整体保留左右各 8px 内缩，子项另加 12px 层级缩进；父项沿用 SidebarMenuButton 的悬停外观。箭头在同一图标上以 200ms 旋转，可在展开过程中反向收起。Collapsible 内容默认不附加底部内边距，内容间距由使用方设置。
 

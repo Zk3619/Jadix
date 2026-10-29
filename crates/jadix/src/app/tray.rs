@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 thread_local! {
     static MENU_CLICKS: RefCell<HashMap<String, Rc<dyn Fn()>>> = RefCell::new(HashMap::new());
-    #[cfg(all(feature = "system-tray", any(windows, target_os = "macos", target_os = "linux")))]
+    #[cfg(all(feature = "system-tray", any(windows, target_os = "macos", all(target_os = "linux", not(target_env = "ohos")))))]
     static NATIVE: RefCell<HashMap<u64, NativeTray>> = RefCell::new(HashMap::new());
 }
 
@@ -56,7 +56,11 @@ fn unregister_menu_callbacks(keys: &[String]) {
 pub(crate) fn dispose_trays_for_shutdown() {
     #[cfg(all(
         feature = "system-tray",
-        any(windows, target_os = "macos", target_os = "linux")
+        any(
+            windows,
+            target_os = "macos",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )
     ))]
     {
         let natives = NATIVE
@@ -84,7 +88,11 @@ pub(crate) fn dispatch_tray_menu_click(menu_id: &str) {
 pub const fn system_tray_native() -> bool {
     cfg!(all(
         feature = "system-tray",
-        any(windows, target_os = "macos", target_os = "linux")
+        any(
+            windows,
+            target_os = "macos",
+            all(target_os = "linux", not(target_env = "ohos"))
+        )
     ))
 }
 
@@ -127,7 +135,11 @@ pub struct TrayIcon {
     #[cfg_attr(
         not(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         )),
         allow(dead_code)
     )]
@@ -137,7 +149,11 @@ pub struct TrayIcon {
 
 #[cfg(all(
     feature = "system-tray",
-    any(windows, target_os = "macos", target_os = "linux")
+    any(
+        windows,
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
 ))]
 struct NativeTray {
     icon: tray_icon::TrayIcon,
@@ -186,7 +202,11 @@ impl TrayIconBuilder {
     pub fn try_build(self) -> Result<TrayIcon, String> {
         #[cfg(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         ))]
         {
             let instance = next_instance();
@@ -203,7 +223,11 @@ impl TrayIconBuilder {
         }
         #[cfg(not(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         )))]
         Err("native tray unavailable: enable system-tray on a supported desktop platform".into())
     }
@@ -215,7 +239,11 @@ impl TrayIconBuilder {
 
         #[cfg(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         ))]
         {
             super::menu_events::install();
@@ -239,7 +267,11 @@ impl TrayIconBuilder {
         }
         #[cfg(not(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         )))]
         {
             let _ = &self.icon_rgba;
@@ -259,7 +291,11 @@ impl TrayIcon {
     pub fn is_native(&self) -> bool {
         #[cfg(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         ))]
         {
             NATIVE
@@ -268,7 +304,11 @@ impl TrayIcon {
         }
         #[cfg(not(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         )))]
         {
             false
@@ -279,7 +319,11 @@ impl TrayIcon {
     pub fn set_icon(&self, icon: super::AppIcon) -> Result<(), String> {
         #[cfg(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         ))]
         {
             let icon =
@@ -295,7 +339,11 @@ impl TrayIcon {
         }
         #[cfg(not(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         )))]
         {
             let _ = icon;
@@ -307,7 +355,11 @@ impl TrayIcon {
     pub fn show(&self) {
         #[cfg(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         ))]
         {
             let _ = NATIVE.try_with(|m| {
@@ -324,7 +376,11 @@ impl TrayIcon {
     pub fn hide(&self) {
         #[cfg(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         ))]
         {
             let _ = NATIVE.try_with(|m| {
@@ -342,7 +398,11 @@ impl TrayIcon {
         self.tooltip = s.into();
         #[cfg(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         ))]
         {
             let _ = NATIVE.try_with(|m| {
@@ -366,7 +426,11 @@ impl Drop for TrayIcon {
         unregister_menu_callbacks(&self.callback_keys);
         #[cfg(all(
             feature = "system-tray",
-            any(windows, target_os = "macos", target_os = "linux")
+            any(
+                windows,
+                target_os = "macos",
+                all(target_os = "linux", not(target_env = "ohos"))
+            )
         ))]
         {
             let native = NATIVE
@@ -380,7 +444,11 @@ impl Drop for TrayIcon {
 
 #[cfg(all(
     feature = "system-tray",
-    any(windows, target_os = "macos", target_os = "linux")
+    any(
+        windows,
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
 ))]
 fn default_tray_rgba() -> (Vec<u8>, u32, u32) {
     const S: u32 = 32;
@@ -403,7 +471,11 @@ fn default_tray_rgba() -> (Vec<u8>, u32, u32) {
 
 #[cfg(all(
     feature = "system-tray",
-    any(windows, target_os = "macos", target_os = "linux")
+    any(
+        windows,
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
 ))]
 fn try_build_native(builder: &TrayIconBuilder, instance: u64) -> Result<NativeTray, String> {
     use tray_icon::menu::{Menu, MenuItem};

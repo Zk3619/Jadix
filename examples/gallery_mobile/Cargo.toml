@@ -1,0 +1,48 @@
+[package]
+name = "gallery_mobile"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[features]
+default = ["full"]
+full = ["gallery/full"]
+ohos-desktop = ["gallery/ohos-desktop"]
+
+[dependencies]
+gallery = { path = "../gallery", default-features = false }
+jadix = { workspace = true }
+log = { workspace = true }
+
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { workspace = true, features = ["android-native-activity"] }
+
+[target.'cfg(target_env = "ohos")'.dependencies]
+openharmony-ability = { workspace = true }
+openharmony-ability-derive = { workspace = true }
+napi-ohos = { workspace = true }
+napi-derive-ohos = { workspace = true }
+
+[build-dependencies]
+napi-build-ohos = { workspace = true }
+
+[package.metadata.android]
+package = "org.jadix.gallery"
+apk_name = "jadix-gallery"
+assets = "../gallery/assets"
+build_targets = ["aarch64-linux-android"]
+
+[package.metadata.android.sdk]
+min_sdk_version = 28
+target_sdk_version = 35
+
+[package.metadata.android.application]
+label = "Jadix Gallery"
+theme = "@android:style/Theme.Material.NoActionBar"
+
+[package.metadata.android.application.activity]
+config_changes = "orientation|keyboardHidden|screenSize|screenLayout|uiMode|density"

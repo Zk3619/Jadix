@@ -264,6 +264,7 @@ pub(crate) fn gallery_nav_menu(
             });
             collapsible(id)
                 .open(expanded)
+                .style(|style| style.gap("0.25rem"))
                 .trigger(move || {
                     let mut chevron = ui! {
                         <Icon name="chevron-right" size="14px" pointer_events="none" />

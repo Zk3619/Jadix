@@ -239,6 +239,7 @@ objc2-app-kit = { workspace = true, optional = true, default-features = false, f
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
 muda = { workspace = true, optional = true }
+tray-icon = { workspace = true, optional = true }
 
 [target.'cfg(windows)'.dependencies]
 webview2-com = { version = "0.39.1", optional = true }
@@ -292,15 +293,13 @@ jadix_renderer = { workspace = true, features = ["test-hooks"] }
 name = "layout_baseline"
 harness = false
 
-[target.'cfg(any(windows, target_os = "macos", target_os = "linux"))'.dependencies]
-tray-icon = { workspace = true, optional = true }
-
 # System native WebViews. Windows retains composition for portal support.
 [target.'cfg(any(target_os = "macos", target_os = "ios", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
 wry = { workspace = true, optional = true }
 
 [target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
 gtk = { workspace = true, optional = true }
+tray-icon = { workspace = true, optional = true, features = ["ksni"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2 = { workspace = true, optional = true }

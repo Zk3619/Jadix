@@ -143,7 +143,7 @@ impl Browser {
                             h.round().max(0.0) as i32,
                         ));
                     window.shape_combine_region(Some(&region), 0, 0);
-                    window.input_shape_combine_region(Some(&region), 0, 0);
+                    window.input_shape_combine_region(&region, 0, 0);
                 }
             }
         }

@@ -27,7 +27,6 @@ jadix = { workspace = true, features = ["images", "native-clipboard", "macros", 
 jadix_components = { workspace = true, features = ["macros", "dnd", "svg", "text-undo", "themes", "animation-path", "code", "scale-preview", "document-editing", "document-diff", "document-math", "document-science", "file-dialog"] }
 jadix_lucide = { workspace = true, features = ["animated", "animation-path", "macros"] }
 jadix_dnd = { workspace = true, features = ["macros"] }
-jadix_window_state = { workspace = true, features = ["jadix"] }
 jadix_animation = { workspace = true, features = ["animation"] }
 jadix_core = { workspace = true }
 jadix_document = { workspace = true, features = ["markdown", "document-editing", "document-math", "science", "diff", "syntax"] }
@@ -47,8 +46,18 @@ jadix_macros = { workspace = true }
 log = { workspace = true }
 winit = { workspace = true }
 
+[target.'cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))'.dependencies]
+jadix_window_state = { workspace = true, features = ["jadix"] }
+
+[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
+jadix = { workspace = true, features = ["backend-vulkan"] }
+
+[target.'cfg(target_env = "ohos")'.dependencies]
+jadix_window_state = { workspace = true, features = ["jadix"], optional = true }
+
 [features]
 default = ["full"]
+ohos-desktop = ["dep:jadix_window_state"]
 full = ["webview", "performance", "devtools", "hot-reload", "runtime-logging", "system-tray", "remote-asset", "scene3d", "image-stream", "compute", "glass", "i18n", "a11y", "all-images", "tokio", "net", "net-json"]
 # Gallery owns sampling policy and the HUD; the framework supplies telemetry.
 performance = ["jadix/performance"]
