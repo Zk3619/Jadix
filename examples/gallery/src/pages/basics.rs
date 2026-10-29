@@ -2430,7 +2430,7 @@ pub(crate) fn GeneratorShowcase() -> jadix::core::tree::Element {
     }.template_id("gal-generator-showcase")
 }
 
-/// WP-R.7：`format!(…, signal.get())` 走自动 bind_text；`#[component(reactive)]` 体不因 count 重跑。
+/// 能力：`format!(…, signal.get())` 走自动 bind_text；`#[component(reactive)]` 体不因 count 重跑。
 #[component(reactive)]
 pub(crate) fn ReactiveCountChip(
     id: String,

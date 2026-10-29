@@ -393,10 +393,10 @@ pub(crate) const PRIMITIVES_SHOWCASE_REACTIVE: &str =
     "examples/gallery/PrimitivesShowcase:controls";
 pub(crate) const TEXT_ALIGN_WP21_VIRT: &str = "gal-wp21-virt";
 pub(crate) const PRIMITIVES_VIRT: &str = "gal-virt-demo";
-/// WP-R.6: stable structure-island `template_id` (hot reload / reconcile slot).
+/// 能力: stable structure-island `template_id` (hot reload / reconcile slot).
 /// Do not switch to `file:line:col` — that moves when the source is edited.
 pub(crate) const GRID_DRAG_REACTIVE: &str = "examples/gallery/GridAndDragShowcase:main";
-/// WP-R.6: second gallery example of an explicit reactive slot (Navigator body).
+/// 能力: second gallery example of an explicit reactive slot (Navigator body).
 pub(crate) const NAVIGATOR_SHOWCASE_REACTIVE: &str = "examples/gallery/NavigatorShowcase:main";
 pub(crate) const GAL_SHELL_ROUTER_ID: &str = "gal_shell_router";
 pub(crate) const GAL_SHELL_BRIDGE: &str = "gal_shell_bridge_count";

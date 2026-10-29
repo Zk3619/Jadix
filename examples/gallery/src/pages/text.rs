@@ -77,7 +77,7 @@ fn font_rsx_family_tile(_id: &str, caption: &str, sample: Element) -> Element {
     }
 }
 
-/// 族 / 字重 / 字号 / 行高覆盖验收（对照 `docs/engine/font.md`）。
+/// 族 / 字重 / 字号 / 行高覆盖展示（对照 `docs/engine/font.md`）。
 #[component]
 pub(crate) fn FontOverrideShowcase() -> jadix::core::tree::Element {
     let family_sans = font_family_tile(
@@ -175,7 +175,7 @@ pub(crate) fn FontOverrideShowcase() -> jadix::core::tree::Element {
     );
 
     ui! {
-        <MyCard title="7) 字体族 / 字重 / 行高覆盖（验收）">
+        <MyCard title="7) 字体族 / 字重 / 行高覆盖（展示）">
             <VStack w="100%" min_w="0" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "对照 docs/engine/font.md · font_strategy.md。默认栈 Inter → Inter Variable → Segoe/SF → CJK 后段。进程级 JADIX_FONT_FAMILY / WindowOptions::default_font* 不在本卡切换。"
@@ -231,7 +231,7 @@ pub(crate) fn FontOverrideShowcase() -> jadix::core::tree::Element {
 
                 <Label font_weight="700" text_size="0.875rem" leading="none">"行高 leading-*（CJK 裁切对照）"</Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Label 默认 leading-none。盒外墨水会被 prepare_text / overflow 裁掉；验收时看「字」顶底是否缺笔，而不是和 Chrome 像素对齐。"
+                    "Label 默认 leading-none。盒外墨水会被 prepare_text / overflow 裁掉；展示时看「字」顶底是否缺笔，而不是和 Chrome 像素对齐。"
                 </Label>
                 <VStack w="100%" min_w="0" gap="0.75rem">
                     { lead_none }
@@ -372,10 +372,10 @@ pub(crate) fn TextAlignShowcase() -> jadix::core::tree::Element {
         .into();
 
     ui! {
-        <MyCard title="WP-2.1) 测宽 ≡ glyphon 分行">
+        <MyCard title="能力) 测宽 ≡ glyphon 分行">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "Gallery 验收（对照 docs/engine/text_align.md）：窄框多行软折不横溢；Chip/Mention 整段原子；VirtualList 行高 = item_height_for_text(14, 1.5)。"
+                    "Gallery 展示（对照 docs/engine/text_align.md）：窄框多行软折不横溢；Chip/Mention 整段原子；VirtualList 行高 = item_height_for_text(14, 1.5)。"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     { format!("勾选：① ASCII 窄折 ② CJK 窄折 ③ Chip/Mention 不中段断开 ④ VirtualList 行高 {row_h}px、滚动只挂可见行") }

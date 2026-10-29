@@ -2,6 +2,7 @@
 
 use crate::imports::*;
 use crate::pages::*;
+use crate::shared::{MyCard, MyCardProps};
 
 pub(crate) fn gallery_nav_menu(
     section: Signal<String>,
@@ -366,18 +367,32 @@ pub(crate) fn GallerySectionAbout() -> Element {
         ui! {
             <ScrollArea id="scroll-about" flex_grow="1" min_h="0" overflow_y="auto" overflow_x="auto" scroll_behavior="smooth">
                 <VStack w="100%" min_w="0" gap="1rem" class="p-3 sm:p-4 lg:p-6" transition="padding 200ms ease-out" max_w="48rem">
-                    <Box bg="secondary" p="1.5rem" rounded="0.75rem" w="100%">
+                    <MyCard title="Jadix capability gallery">
                         <VStack gap="0.5rem">
-                            <Label font_weight="700">"Technical Stack"</Label>
-                            <Label>"Layout: Taffy (Flexbox / Grid)"</Label>
-                            <Label>"Text: Glyphon (Cosmic-text)"</Label>
-                            <Label>"Rendering: WGPU"</Label>
-                            <Label>"Reactivity: Signal fine-grained updates"</Label>
-                            <Label>"A11y: AccessKit bridge"</Label>
+                            <Label color="muted-foreground">"A runnable reference for the framework and component library, built from the same public crates used by applications."</Label>
+                            <Label>"Static ui! and imperative Builder composition are intentionally mixed throughout the pages."</Label>
                         </VStack>
-                    </Box>
+                    </MyCard>
+                    <MyCard title="Runtime crates in this consumer">
+                        <VStack gap="0.5rem">
+                            <Label>"jadix · jadix_core · jadix_layout · jadix_renderer"</Label>
+                            <Label>"jadix_components · jadix_dnd · jadix_lucide"</Label>
+                            <Label>"jadix_animation · jadix_theme · jadix_style_tokens"</Label>
+                            <Label>"jadix_document · jadix_lsp · jadix_hot_reload"</Label>
+                            <Label>"jadix_media · jadix_net · jadix_tasks · jadix_tokio"</Label>
+                            <Label>"jadix_window_state · jadix_window_materials · jadix_clipboard"</Label>
+                        </VStack>
+                    </MyCard>
+                    <MyCard title="Enabled capability groups">
+                        <VStack gap="0.5rem">
+                            <Label>"themes · animation · SVG · images · document editing · diff · science"</Label>
+                            <Label>"code · syntax · scale preview · drag and drop · text undo · file dialogs"</Label>
+                            <Label>"webview · hot reload · devtools · remote assets · compute · scene3d"</Label>
+                            <Label>"i18n · accessibility · system tray · window materials · native clipboard"</Label>
+                        </VStack>
+                    </MyCard>
                     <Label text_size="0.875rem" color="muted-foreground">
-                        "侧栏分区对应 ENGINEERING_IMPLEMENTATION_PLAN WP-3.1 Gallery 覆盖矩阵。"
+                        "侧栏分区对应 Gallery 能力目录。"
                     </Label>
                 </VStack>
             </ScrollArea>
@@ -540,7 +555,7 @@ fn build_gallery_home() -> Element {
                                 </When>
                                 <When when={section.get() == "draw"}>
                                     <Label id="gal-section-desc" w="100%" min_w="0" text_size="0.875rem" color="muted-foreground" text_overflow="ellipsis">
-                                        "WP-3.11 <svg> · WP-3.12 <canvas> · WP-3.13 <scene3d> feature · shader() 叶 · lucide-animated。"
+                                        "能力 <svg> · 能力 <canvas> · 能力 <scene3d> feature · shader() 叶 · lucide-animated。"
                                     </Label>
                                 </When>
                                 <When when={section.get() == "theme"}>

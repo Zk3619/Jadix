@@ -279,7 +279,7 @@ pub(crate) fn wp39_form_demo() -> Element {
 #[component]
 pub(crate) fn FormValidateShowcase() -> jadix::core::tree::Element {
     ui! {
-        <MyCard title="Form 校验（WP-3.9）">
+        <MyCard title="Form 校验（能力）">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "form_provider + form_field：错误文案与 Input invalid 环同源。空提交 →「必填」+ 红环；清除错误 → 文案与环一起消失。"
@@ -434,7 +434,7 @@ pub(crate) fn PickerPlaceholdersShowcase() -> jadix::core::tree::Element {
             <MyCard title="2b) Pickers (file · color · date/time)">
                 <VStack w="100%" min_w="0" gap="0.75rem">
                     <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                        "WP-3.3：触发器行 + Date/Time Tabs（芯片按内容宽并折行；仅挂载当前项，避免 forms 滚入时一次冷启动整排 picker）。"
+                        "能力：触发器行 + Date/Time Tabs（芯片按内容宽并折行；仅挂载当前项，避免 forms 滚入时一次冷启动整排 picker）。"
                     </Label>
                     <HStack gap="0.5rem" items="start" wrap="wrap" w="100%">
                         <Button

@@ -18,7 +18,7 @@ icon = [
 find-msvc-tools = { workspace = true }
 
 [dependencies]
-# Keep lucide embedded so Icon PUA glyphs never tofu when cwd ≠ workspace.
+# Gallery is the integration consumer: keep every local runtime crate in the dependency graph.
 jadix = { workspace = true, features = ["images", "native-clipboard", "macros", "backend-dx12", "backend-gles", "backend-metal", "theme-shadcn",
     "svg",
     "text-undo",
@@ -28,6 +28,22 @@ jadix_components = { workspace = true, features = ["macros", "dnd", "svg", "text
 jadix_lucide = { workspace = true, features = ["animated", "animation-path", "macros"] }
 jadix_dnd = { workspace = true, features = ["macros"] }
 jadix_window_state = { workspace = true, features = ["jadix"] }
+jadix_animation = { workspace = true, features = ["animation"] }
+jadix_core = { workspace = true }
+jadix_document = { workspace = true, features = ["markdown", "document-editing", "document-math", "science", "diff", "syntax"] }
+jadix_hot_reload = { workspace = true, features = ["syntax"] }
+jadix_layout = { workspace = true }
+jadix_lsp = { workspace = true }
+jadix_media = { workspace = true }
+jadix_net = { workspace = true, features = ["json"] }
+jadix_renderer = { workspace = true, features = ["compute", "backend-dx12"] }
+jadix_style_tokens = { workspace = true }
+jadix_tasks = { workspace = true }
+jadix_theme = { workspace = true, features = ["themes"] }
+jadix_tokio = { workspace = true }
+jadix_window_materials = { workspace = true, features = ["windows-dcomp"] }
+jadix_clipboard = { workspace = true }
+jadix_macros = { workspace = true }
 log = { workspace = true }
 winit = { workspace = true, optional = true }
 
@@ -35,7 +51,8 @@ winit = { workspace = true, optional = true }
 winit = { workspace = true }
 
 [features]
-default = ["webview", "performance", "devtools", "hot-reload"]
+default = ["full"]
+full = ["webview", "performance", "devtools", "hot-reload", "runtime-logging", "system-tray", "remote-asset", "scene3d", "image-stream", "compute", "glass", "i18n", "a11y", "all-images", "tokio", "net", "net-json"]
 # Gallery owns sampling policy and the HUD; the framework supplies telemetry.
 performance = ["jadix/performance"]
 webview = ["jadix/webview", "jadix_components/webview"]
@@ -45,7 +62,7 @@ cpu-bench = ["dep:winit", "performance"]
 #   cargo run -p gallery --features runtime-logging
 #   $env:JADIX_LOG_FILE="jadix.log"; $env:RUST_LOG="info"
 runtime-logging = ["jadix/runtime-logging"]
-# Native tray demo (WP-3.6). Off by default so `cargo check -p gallery` stays lean.
+# Native tray demo. The full gallery profile enables it by default.
 #   cargo run -p gallery --features system-tray
 system-tray = ["jadix/system-tray"]
 # Remote http(s) Image/Avatar src via app fetcher. cargo run -p gallery --features remote-asset
@@ -53,10 +70,10 @@ remote-asset = ["jadix/remote-asset"]
 # B1 Inspector (F12). cargo run -p gallery --features devtools
 devtools = ["jadix/devtools"]
 hot-reload = ["jadix/hot-reload"]
-# WP-3.13 rotating cube. Off by default.
+# Rotating cube scene.
 #   cargo run -p gallery --features scene3d
 scene3d = ["jadix/scene3d"]
-# WP-M.3 I420 Gallery path. Off by default.
+# I420 image stream path.
 #   cargo run -p gallery --features image-stream
 image-stream = ["jadix/image-stream"]
 # Optional wgpu compute (blur / histogram / particles / backdrop-filter).
@@ -71,3 +88,7 @@ i18n = ["jadix/i18n", "jadix_components/i18n"]
 a11y = ["jadix/a11y"]
 # Deprecated alias (raster formats are always available via jadix's image core).
 images = ["jadix/images"]
+all-images = ["images", "jadix/image-bmp", "jadix/image-tiff", "jadix/image-avif", "jadix/image-exr", "jadix/image-hdr", "jadix/image-pnm", "jadix/image-qoi", "jadix/image-tga", "jadix/image-ff", "jadix/image-full", "jadix/emoji-svg"]
+tokio = ["jadix/runtime-tokio"]
+net = ["jadix/net"]
+net-json = ["jadix/net-json"]

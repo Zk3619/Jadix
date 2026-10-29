@@ -272,7 +272,7 @@ pub(crate) fn ThemeStyleShowcase() -> Element {
                                 <Box class="absolute bottom-4 left-4">
                                 <Popover id="gal-theme-popover" open={popover_open}>
                                     <PopoverTrigger>
-                                        <Button id="gal-theme-preview-popover" variant="outline">"验收光学浮层"</Button>
+                                        <Button id="gal-theme-preview-popover" variant="outline">"展示光学浮层"</Button>
                                     </PopoverTrigger>
                                     <PopoverContent side="right" align="end" sideOffset=12>
                                         <PopoverHeader>
@@ -287,7 +287,7 @@ pub(crate) fn ThemeStyleShowcase() -> Element {
                             <HStack gap="0.5rem" wrap="wrap">
                                 <Dialog id="gal-theme-dialog" open={dialog_open}>
                                     <DialogTrigger>
-                                        <Button id="gal-theme-preview-dialog" variant="outline">"验收模态面板"</Button>
+                                        <Button id="gal-theme-preview-dialog" variant="outline">"展示模态面板"</Button>
                                     </DialogTrigger>
                                     <DialogContent>
                                         <DialogHeader>
@@ -302,7 +302,7 @@ pub(crate) fn ThemeStyleShowcase() -> Element {
                     </CardContent>
                 </Card>
             </VStack>
-            <MyCard title="连体组与状态切换验收">
+            <MyCard title="连体组与状态切换展示">
                 <HStack w="100%" gap="1.5rem" items="start" wrap="wrap">
                     <VStack gap="0.5rem">
                         <Label>"ButtonGroup · vertical"</Label>

@@ -1,4 +1,4 @@
-//! WP-DRAG.1: solid-dnd / SortableJS / interact.js kit — RSX + Builder gallery.
+//! 能力: solid-dnd / SortableJS / interact.js kit — RSX + Builder gallery.
 
 use crate::imports::*;
 use crate::shared::*;
@@ -3132,7 +3132,7 @@ pub(crate) fn DragShowcase() -> Element {
         });
 
     ui! {
-        <MyCard title="Drag（utils::drag · WP-DRAG.1–2）">
+        <MyCard title="Drag（utils::drag · 能力–2）">
             <VStack gap="0.75rem" w="100%">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
                     "utils::drag：solid-dnd 原语 + 超越 Sortable 的自动滚、实时让位、Esc 取消、方向键改插入点。替身默认跟随本体并钉在视口（才能拖出父级进另一个容器）；DragOverlay 子树可整段替换，或 Builder child_for 按 item_type 分支。松手后由 onDragEnd 把源项挂进 Droppable。不进 prelude。"

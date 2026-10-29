@@ -754,7 +754,7 @@ pub(crate) fn VirtualMasonryShowcase() -> Element {
         })
         .into();
     ui! {
-        <MyCard title="VirtualMasonry（WP-3.10）">
+        <MyCard title="VirtualMasonry（能力）">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "1000 张变高卡片、3 列最短列优先；只挂视口+overscan。滚动应只换可见格，不掉帧。experimental，不进稳定面。"

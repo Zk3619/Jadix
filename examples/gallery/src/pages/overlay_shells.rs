@@ -1,4 +1,4 @@
-//! WP-OVL.2 / WP-OVL.3：`anchored_overlay` 三种定位 + RSX/Builder 双写。
+//! 能力 / 能力：`anchored_overlay` 三种定位 + RSX/Builder 双写。
 
 use crate::imports::*;
 use crate::shared::*;

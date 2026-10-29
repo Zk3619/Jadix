@@ -1567,11 +1567,11 @@ fn forms_section_mounts_wp_r7_reactive_chips() {
             });
             assert!(
                 gallery_find_tid(&tree, "gal-status-badge__component"),
-                "WP-R.7 ReactiveStatusBadge placeholder"
+                "能力 ReactiveStatusBadge placeholder"
             );
             assert!(
                 gallery_find_tid(&tree, "gal-count-chip__component"),
-                "WP-R.7 ReactiveCountChip placeholder"
+                "能力 ReactiveCountChip placeholder"
             );
             assert!(
                 gallery_tid_contains(&tree, ":bind#")
@@ -1597,7 +1597,7 @@ fn forms_section_mounts_wp39_submit() {
             });
             assert!(
                 gallery_find_tid(&tree, "gal-wp39-submit"),
-                "WP-3.9 card must mount submit (gal-wp39-submit)"
+                "能力 card must mount submit (gal-wp39-submit)"
             );
         });
     });
@@ -1614,7 +1614,7 @@ fn data_section_mounts_wp310_masonry() {
             });
             assert!(
                 gallery_find_tid(&tree, GAL_WP310_MASONRY),
-                "WP-3.10 card must mount masonry (gal-wp310-masonry)"
+                "能力 card must mount masonry (gal-wp310-masonry)"
             );
         });
     });
@@ -2599,11 +2599,11 @@ fn navigation_section_mounts_shell_router_view() {
         }
         assert!(
             find_tid(&tree, "gal_shell_router__router_view"),
-            "WP-3.5: navigation section must mount Router.view() placeholder"
+            "能力: navigation section must mount Router.view() placeholder"
         );
         assert!(
             find_tid(&tree, GAL_SHELL_TRAY_SHOW),
-            "WP-3.6: navigation section must mount tray Show button"
+            "能力: navigation section must mount tray Show button"
         );
         assert!(
             find_tid(&tree, GAL_SHELL_FRAMELESS),

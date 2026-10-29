@@ -2116,14 +2116,14 @@ pub(crate) fn ResizableShowcase() -> jadix::core::tree::Element {
     }
 }
 
-/// WP-2.3 Gallery 验收：嵌套 flex 加宽子项 → wrap 行增高，footer 下移（非错误裁剪）。
+/// 能力 Gallery 展示：嵌套 flex 加宽子项 → wrap 行增高，footer 下移（非错误裁剪）。
 /// 对照 docs/engine/layout_subtree.md；live 路径为 mark_dirty + app-root compute。
 #[component]
 pub(crate) fn LayoutSubtreeShowcase() -> jadix::core::tree::Element {
     let wide = use_signal("gal_wp23_wide", || false);
 
     ui! {
-        <MyCard title="WP-2.3) 子树布局上溢升父">
+        <MyCard title="能力) 子树布局上溢升父">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "对照 docs/engine/layout_subtree.md。中间行为 Auto 高 + wrap；加宽 chip 后行应折行增高，下方 footer 下移（不得被裁切叠住）。"
@@ -2163,7 +2163,7 @@ pub(crate) fn LayoutSubtreeShowcase() -> jadix::core::tree::Element {
     }
 }
 
-/// WP-2.2 Gallery 验收（策略可测）：同宽 bind_text → 逻辑 PartialLoad；结构变更 → FullClear。
+/// 能力 Gallery 展示（策略可测）：同宽 bind_text → 逻辑 PartialLoad；结构变更 → FullClear。
 /// 计数在动作的 **下一帧 present 后** 写入，刷新快照会 suppress 自身那帧，避免 +1 污染。
 #[component]
 pub(crate) fn DamageShowcase() -> jadix::core::tree::Element {
@@ -2194,7 +2194,7 @@ pub(crate) fn DamageShowcase() -> jadix::core::tree::Element {
     };
 
     let mut root = ui! {
-        <MyCard title="WP-2.2) 细粒度 damage（策略可测）">
+        <MyCard title="能力) 细粒度 damage（策略可测）">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "对照 docs/engine/damage.md。数字是上次动作 present 后的累计（不含本卡片改字那一帧）。paint-only 默认 GPU retain+裁剪；滚动失效视口层；结构仍 FullClear。"
@@ -2345,7 +2345,7 @@ pub(crate) fn FgMatrixShowcase() -> jadix::core::tree::Element {
     }
 }
 
-/// WP-2.4 Gallery 验收：Owner dispose 后 Anchors/Bindings 不残留；scoped id 可演示。
+/// 能力 Gallery 展示：Owner dispose 后 Anchors/Bindings 不残留；scoped id 可演示。
 #[component]
 pub(crate) fn OwnerRegistryShowcase() -> jadix::core::tree::Element {
     use jadix::app::reactive::{
@@ -2383,10 +2383,10 @@ pub(crate) fn OwnerRegistryShowcase() -> jadix::core::tree::Element {
     };
 
     ui! {
-        <MyCard title="WP-2.4) Owner 注册表 + scoped ID">
+        <MyCard title="能力) Owner 注册表 + scoped ID">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "权威判定：库测全绿即 WP-2.4 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「WP-2.4 验收」。"
+                    "权威判定：库测全绿即 能力 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「能力 展示」。"
                 </Label>
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
                     "A · 库测（必须）"
@@ -2549,10 +2549,10 @@ pub(crate) fn StoreResourceShowcase() -> jadix::core::tree::Element {
     });
 
     ui! {
-        <MyCard title="WP-2.5) Store produce + Resource→EB">
+        <MyCard title="能力) Store produce + Resource→EB">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "权威判定：库测全绿即 WP-2.5 通过。本卡片只做手工对照；细则见 development-docs/AUTHORITY.md「WP-2.5 验收」与 development-docs/error_handling.md。"
+                    "权威判定：库测全绿即 能力 通过。本卡片只做手工对照；细则见 development-docs/AUTHORITY.md「能力 展示」与 development-docs/error_handling.md。"
                 </Label>
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
                     "A · 库测（必须）"
@@ -2670,7 +2670,7 @@ pub(crate) fn StoreResourceShowcase() -> jadix::core::tree::Element {
     }
 }
 
-/// WP-2.7 Gallery 验收：根裸 `get()` 可观测；bind / Show 不抬高 UI-root dep。
+/// 能力 Gallery 展示：根裸 `get()` 可观测；bind / Show 不抬高 UI-root dep。
 #[component]
 pub(crate) fn RootBareGetShowcase() -> jadix::core::tree::Element {
     use jadix::core::reactivity::ui_root_effect_dep_count;
@@ -2714,10 +2714,10 @@ pub(crate) fn RootBareGetShowcase() -> jadix::core::tree::Element {
     };
 
     ui! {
-        <MyCard title="WP-2.7) 根裸 get() 可观测">
+        <MyCard title="能力) 根裸 get() 可观测">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "权威判定：库测全绿即 WP-2.7 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「WP-2.7 验收」。"
+                    "权威判定：库测全绿即 能力 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「能力 展示」。"
                 </Label>
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
                     "A · 库测（必须）"
@@ -2797,7 +2797,7 @@ pub(crate) fn RootBareGetShowcase() -> jadix::core::tree::Element {
     }
 }
 
-/// WP-2.8 Gallery 验收：展示型无必填 id；空串不写身份；Toggle scoped 试点。
+/// 能力 Gallery 展示：展示型无必填 id；空串不写身份；Toggle scoped 试点。
 #[component]
 pub(crate) fn IdentityApiShowcase() -> jadix::core::tree::Element {
     let note = use_signal("gal_wp28_note", || "尚未操作".to_string());
@@ -2807,10 +2807,10 @@ pub(crate) fn IdentityApiShowcase() -> jadix::core::tree::Element {
     let toggle_el: Element = toggle("").text("B").variant("outline").into();
 
     ui! {
-        <MyCard title="WP-2.8) 身份 API 收敛">
+        <MyCard title="能力) 身份 API 收敛">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "权威判定：库测全绿即 WP-2.8 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「WP-2.8 验收」。"
+                    "权威判定：库测全绿即 能力 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「能力 展示」。"
                 </Label>
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
                     "A · 库测（必须）"
@@ -2923,7 +2923,7 @@ pub(crate) fn gal_box_model_onion() -> Element {
     )
 }
 
-/// WP-2.9 / B15 Gallery：完整 CSS 盒模型（单位 · box-sizing · 分边 border · outline）。
+/// 能力 / B15 Gallery：完整 CSS 盒模型（单位 · box-sizing · 分边 border · outline）。
 #[component]
 pub(crate) fn BoxModelShowcase() -> jadix::core::tree::Element {
     let hits = use_signal("gal_wp29_outline_hits", || 0_u32);
@@ -2947,7 +2947,7 @@ pub(crate) fn BoxModelShowcase() -> jadix::core::tree::Element {
     let onion = gal_box_model_onion();
 
     ui! {
-        <MyCard title="WP-2.9 / B15) CSS 盒模型">
+        <MyCard title="能力 / B15) CSS 盒模型">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "手册 docs/engine/box_model.md。默认 BorderBox；% = 父 content-box；outline/shadow 不进布局。库测：cargo test -p jadix --lib box_model_contract"
@@ -2972,7 +2972,7 @@ pub(crate) fn BoxModelShowcase() -> jadix::core::tree::Element {
                 </HStack>
 
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "2 · 单位：拖动窗口边缘验收 vw/vh/%（条应变长/变短）"
+                    "2 · 单位：拖动窗口边缘展示 vw/vh/%（条应变长/变短）"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "灰轨 = 卡片 100%。主色条 = 25vw / 25dvw（相对窗口，不是卡片）。拉宽/拉高窗口，视口条应变；% 条跟卡片宽。"
@@ -3252,7 +3252,7 @@ pub(crate) fn LogicalShowcase() -> jadix::core::tree::Element {
     }
 }
 
-/// WP-2.1 visual acceptance: narrow soft-wrap, Chip/Mention atomic, VirtualList font row height.
+/// 能力 visual showcase: narrow soft-wrap, Chip/Mention atomic, VirtualList font row height.
 
 #[component]
 pub(crate) fn UtilityClassShowcase() -> jadix::core::tree::Element {

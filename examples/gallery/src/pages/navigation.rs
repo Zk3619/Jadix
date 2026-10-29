@@ -960,7 +960,7 @@ pub(crate) fn NavbarNavigationMenuShowcase() -> Element {
         <MyCard title="Navbar · NavigationMenu">
             <VStack w="100%" gap="1rem">
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "双写法：复合 RSX（推荐，宏 → navigation_menu_scope / navigation_menu_content）与 Builder。Navbar 是布局壳（WP-2.8：无用户 id）；导览非 Menubar 命令、非页面栈。"
+                    "双写法：复合 RSX（推荐，宏 → navigation_menu_scope / navigation_menu_content）与 Builder。Navbar 是布局壳（能力：无用户 id）；导览非 Menubar 命令、非页面栈。"
                 </Label>
 
                 <Label text_size="0.75rem" font_weight="600">"A. 复合 RSX"</Label>

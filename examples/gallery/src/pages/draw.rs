@@ -28,7 +28,7 @@ pub(crate) fn DrawingSvgShowcase() -> Element {
         .into();
 
     ui! {
-        <MyCard title="Svg · 矢量场景图（WP-3.11）">
+        <MyCard title="Svg · 矢量场景图（能力）">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
                     "公开 <svg> 叶：圆 fill=chart-1 + stroke=foreground；path 仅描边 destructive。Light 下 primary≡foreground，演示不用 primary 以免看不出描边。子形状不占 taffy。emoji-svg ≠ 本页。"
@@ -635,10 +635,10 @@ pub(crate) fn DrawingCanvasShowcase() -> Element {
         .to_string();
 
     ui! {
-        <MyCard title="Canvas · 自定义绘制（WP-3.12）">
+        <MyCard title="Canvas · 自定义绘制（能力）">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "公开 <canvas> 叶：paint 回调 + Canvas2D MVP。path 走同一 PathCommand 核。paint 内 peek，不订根 effect。Light 下演示 fill=chart-1 / stroke=foreground。右半 clip + 斜线 rotate（WP-3.13 2D）。"
+                    "公开 <canvas> 叶：paint 回调 + Canvas2D MVP。path 走同一 PathCommand 核。paint 内 peek，不订根 effect。Light 下演示 fill=chart-1 / stroke=foreground。右半 clip + 斜线 rotate（能力 2D）。"
                 </Label>
                 <Label font_weight="600" text_size="0.875rem">{ "ui! 标签：fill_rect + clip + rotate" }</Label>
                 <canvas w={200.0} h={72.0} paint={move |ctx: &mut dyn Canvas2D, size: CanvasSize| {
@@ -791,7 +791,7 @@ pub(crate) fn ImageStreamShowcase() -> Element {
     );
 
     ui! {
-        <MyCard title="ImageStream · 合成 RGBA 流（WP-M.2）">
+        <MyCard title="ImageStream · 合成 RGBA 流（能力）">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
                     "引擎只收帧：CPU 色条 → queue_media_frame → <Image texture>。无 FFmpeg / 无播放器。应看到亮/暗竖纹 + 一条横向移动的蓝条。`--features image-stream` 时色条以 I420 投递（引擎转 RGBA），不要在热路径上再做 RGBA→YUV→RGBA 往返。"
@@ -806,7 +806,7 @@ pub(crate) fn ImageStreamShowcase() -> Element {
 pub(crate) fn DrawingScene3dShowcase() -> Element {
     let cube: Element = scene3d().w(220.0).h(160.0).label("Jadix 3D").into();
     ui! {
-        <MyCard title="Scene3d · 透视立方（WP-3.13）">
+        <MyCard title="Scene3d · 透视立方（能力）">
             <VStack w="100%" gap="0.75rem" flex_shrink={0.0}>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">
                     "实验 feature scene3d（默认关）。同一 wgpu device，无 glTF / 无 three.js。启用：cargo run -p gallery --features scene3d。`.label` 走三通道 MSDF；透视翘曲见下方 Billboard 卡。"
