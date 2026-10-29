@@ -372,7 +372,7 @@ pub(crate) fn TextAlignShowcase() -> jadix::core::tree::Element {
         .into();
 
     ui! {
-        <MyCard title="能力) 测宽 ≡ glyphon 分行">
+        <MyCard title="文本测量与自动换行">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "Gallery 展示（对照 docs/engine/text_align.md）：窄框多行软折不横溢；Chip/Mention 整段原子；VirtualList 行高 = item_height_for_text(14, 1.5)。"
@@ -483,7 +483,7 @@ pub(crate) fn TextCompatibilityShowcase() -> jadix::core::tree::Element {
                             "Bidirectional sample: English 123 - \u{2068}العربية\u{2060}٤٥٦\u{2069}\u{200B}- \u{2068}עברית\u{2060}789\u{2069}"
                         </Label>
                         <Label w="100%" leading="normal" id="gal-rtl-emoji-mixed">
-                            "RTL+emoji+Latin: عربي 😀 English مرحبا 👍🏽 — 固定回归样例"
+                            "RTL+emoji+Latin: عربي 😀 English مرحبا 👍🏽 — 多语言混合排版"
                         </Label>
                         <Label w="8rem" leading="normal" id="gal-narrow-multiline-emoji">
                             "Narrow wrap: Mixed: Rust 👩‍💻 + 中文 + عربي 🔥 second line 456"
@@ -504,7 +504,7 @@ pub(crate) fn EmojiRealtimeRegressionShowcase() -> jadix::core::tree::Element {
         <MyCard title="6b) Windows Emoji Realtime Regression">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "实时输入回归：输入法候选上屏、粘贴、退格与替换后，Emoji 应在当帧或下一帧可见。"
+                    "实时输入：体验输入法、粘贴、退格和替换时的 Emoji 混合排版。"
                 </Label>
                 <Input id="gal-emoji-regression-input" placeholder="输入或粘贴: 😀 👨‍👩‍👧‍👦 👍🏽 🇨🇳 1️⃣" w="100%" />
                 <Box bg="background" rounded="0.5rem" p="0.75rem" w="100%">

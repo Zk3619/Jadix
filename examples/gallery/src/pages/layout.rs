@@ -2123,7 +2123,7 @@ pub(crate) fn LayoutSubtreeShowcase() -> jadix::core::tree::Element {
     let wide = use_signal("gal_wp23_wide", || false);
 
     ui! {
-        <MyCard title="能力) 子树布局上溢升父">
+        <MyCard title="子树布局与父容器适配">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "对照 docs/engine/layout_subtree.md。中间行为 Auto 高 + wrap；加宽 chip 后行应折行增高，下方 footer 下移（不得被裁切叠住）。"
@@ -2194,7 +2194,7 @@ pub(crate) fn DamageShowcase() -> jadix::core::tree::Element {
     };
 
     let mut root = ui! {
-        <MyCard title="能力) 细粒度 damage（策略可测）">
+        <MyCard title="局部重绘与更新范围">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
                     "对照 docs/engine/damage.md。数字是上次动作 present 后的累计（不含本卡片改字那一帧）。paint-only 默认 GPU retain+裁剪；滚动失效视口层；结构仍 FullClear。"
@@ -2278,7 +2278,7 @@ pub(crate) fn DamageShowcase() -> jadix::core::tree::Element {
     root
 }
 
-/// Fine-grained matrix (suggested): who ran this `set`. Not a D1–D7 / B8 exit gate.
+/// Shows which reactive effects run when a value changes.
 #[component]
 pub(crate) fn FgMatrixShowcase() -> jadix::core::tree::Element {
     use jadix::app::reactive::{bind_miss_count, unkeyed_for_rebuild_count};
@@ -2292,14 +2292,12 @@ pub(crate) fn FgMatrixShowcase() -> jadix::core::tree::Element {
     let unkeyed = use_signal("gal_fg_unkeyed", unkeyed_for_rebuild_count);
 
     ui! {
-        <MyCard title="FG 矩阵（建议 · 不替代库测）">
+        <MyCard title="响应式更新路径">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "对照 plans/true-fine-grained.md §5。点「同宽 +1」后读本次 flush：期望 Render≈1、根 dep 不抬、无 bind miss。不要把 PartialLoad / GPU 填色当 D1–D7 退出门。"
+                    "更新同宽数字，观察渲染 effect、根订阅和局部绑定的变化。计数用于了解当前更新路径。"
                 </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "权威仍是库测（builder_live_ / graph_flush_ / menubar_trigger_open_patches）。本卡只做手工对照；点按会 drain take_flushed_effects，勿与其它诊断卡同时点。"
-                </Label>
+
                 <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
                     { format!(
                         "n={:02}  |  last Render={}  |  last flush={}  |  root_deps={}  |  bind_miss={}  |  unkeyed_For={}",
@@ -2345,155 +2343,27 @@ pub(crate) fn FgMatrixShowcase() -> jadix::core::tree::Element {
     }
 }
 
-/// 能力 Gallery 展示：Owner dispose 后 Anchors/Bindings 不残留；scoped id 可演示。
 #[component]
-pub(crate) fn OwnerRegistryShowcase() -> jadix::core::tree::Element {
-    use jadix::app::reactive::{
-        component_props_count, registered_anchor_count, registered_binding_count,
-    };
+pub(crate) fn OwnerRegistryShowcase() -> Element {
     use jadix::core::reactivity::{scoped_focus_id, scoped_template_id};
-
-    let mount = use_signal("gal_wp24_mount", || true);
-    let cycles = use_signal("gal_wp24_cycles", || 0_u32);
-    let isle_n = use_signal("gal_wp24_isle_n", || 0_u32);
-    // Baseline captured while island is *unmounted* (Gallery other islands still counted).
-    let base_a = use_signal("gal_wp24_base_a", || None::<usize>);
-    let base_b = use_signal("gal_wp24_base_b", || None::<usize>);
-    let base_p = use_signal("gal_wp24_base_p", || None::<usize>);
-    let cur_a = use_signal("gal_wp24_cur_a", || 0_usize);
-    let cur_b = use_signal("gal_wp24_cur_b", || 0_usize);
-    let cur_p = use_signal("gal_wp24_cur_p", || 0_usize);
-
-    let refresh_cur = move || {
-        cur_a.set(registered_anchor_count());
-        cur_b.set(registered_binding_count());
-        cur_p.set(component_props_count());
-    };
-
-    let capture_baseline = move || {
-        refresh_cur();
-        // Only valid while this card's island is unmounted; otherwise baseline is inflated.
-        if mount.peek() {
-            return;
-        }
-        base_a.set(Some(cur_a.peek()));
-        base_b.set(Some(cur_b.peek()));
-        base_p.set(Some(cur_p.peek()));
-        cycles.set(0);
-    };
-
+    let mounted = use_signal("gallery-scope-mounted", || true);
+    let count = use_signal("gallery-scope-count", || 0_u32);
     ui! {
-        <MyCard title="能力) Owner 注册表 + scoped ID">
-            <VStack w="100%" gap="0.75rem">
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "权威判定：库测全绿即 能力 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「能力 展示」。"
-                </Label>
-                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "A · 库测（必须）"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "命令：cargo test -p jadix --lib registry_owner"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "通过：2 passed。失败：任一 FAILED。"
-                </Label>
-                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "B · Gallery 手工（建议）"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "1) 若岛已挂载 → 先点「卸载岛」  2) 「刷新当前」  3) 「记当前为卸载基线」（仅卸载态有效）  4) 「挂载岛」→「刷新当前」→ a 应 ≥ 基线 a+1  5) 「卸载岛」→「刷新当前」→ a/b/p 均 ≤ 基线  6) 重复至 cycles≥10，最后卸载态仍 ≤ 基线  7) 挂载时两行须含 ::tpl:gal_wp24_isle 与 ::focus:gal_wp24_btn。"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "说明：基线含其它 Gallery 岛，故判「≤ 基线」而非归零。卸载后任一计数 > 基线 = 泄漏失败。"
-                </Label>
-                <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
-                    { {
-                        let ba = base_a.get();
-                        let bb = base_b.get();
-                        let bp = base_p.get();
-                        let mounted = mount.get();
-                        match (ba, bb, bp) {
-                            (Some(ba), Some(bb), Some(bp)) => format!(
-                                "基线(卸载): a={} b={} p={}  |  当前: a={} b={} p={}  |  cycles={}  |  {}",
-                                ba,
-                                bb,
-                                bp,
-                                cur_a.get(),
-                                cur_b.get(),
-                                cur_p.get(),
-                                cycles.get(),
-                                if mounted {
-                                    "状态: 已挂载（卸后再刷新才能判通过）"
-                                } else if cur_a.get() <= ba
-                                    && cur_b.get() <= bb
-                                    && cur_p.get() <= bp
-                                {
-                                    if cycles.get() >= 10 {
-                                        "手工判定: 通过（卸载≤基线 且 cycles≥10）"
-                                    } else {
-                                        "手工判定: 卸载≤基线（请继续循环到 cycles≥10）"
-                                    }
-                                } else {
-                                    "手工判定: 失败（卸载后计数 > 基线）"
-                                }
-                            ),
-                            _ => {
-                                if mount.get() {
-                                    "尚未记基线：先「卸载岛」→「刷新当前」→「记当前为卸载基线」。"
-                                        .to_string()
-                                } else {
-                                    "尚未记基线：点「刷新当前」后点「记当前为卸载基线」。"
-                                        .to_string()
-                                }
-                            }
-                        }
-                    } }
-                </Label>
-                <HStack gap="0.75rem" items="center" wrap="wrap">
-                    <Button variant="outline" on_click={move || {
-                        let next = !mount.peek();
-                        mount.set(next);
-                        if !next {
-                            cycles.set(cycles.peek().wrapping_add(1));
-                        }
-                    }}>
-                        { if mount.get() { "卸载岛" } else { "挂载岛" } }
-                    </Button>
-                    <Button variant="secondary" on_click={refresh_cur}>
-                        "刷新当前"
-                    </Button>
-                    <Button variant="default" on_click={capture_baseline}>
-                        "记当前为卸载基线"
-                    </Button>
-                </HStack>
-                <Show when={mount.get()}>
-                    <Box bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
-                        <VStack gap="0.5rem" w="100%">
-                            <Label text_size="0.875rem" font_weight="600">"结构岛（挂载时注册 anchor）"</Label>
-                            <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                                { format!(
-                                    "scoped template_id = {}\nscoped focus_id = {}",
-                                    scoped_template_id("gal_wp24_isle"),
-                                    scoped_focus_id("gal_wp24_btn")
-                                ) }
-                            </Label>
-                            <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                                "通过条件：上一行须同时出现 \"::tpl:gal_wp24_isle\" 与 \"::focus:gal_wp24_btn\"（前面有 root…/ 路径）。"
-                            </Label>
-                            <Reactive id="gal_wp24_isle">
-                                <VStack gap="0.5rem" w="100%">
-                                    <Label text_size="0.875rem">
-                                        { format!("reactive ticks = {}", isle_n.get()) }
-                                    </Label>
-                                    <Button variant="secondary" size="sm" on_click={move || {
-                                        isle_n.set(isle_n.peek().wrapping_add(1));
-                                    }}>
-                                        "岛内 +1"
-                                    </Button>
-                                </VStack>
-                            </Reactive>
+        <MyCard title="作用域与组件生命周期">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" color="muted-foreground">"挂载和卸载局部视图，观察作用域标识与响应式计数。命名状态在本次会话内保留。"</Label>
+                <Button id="gallery-scope-toggle" variant="outline" on_click={move || mounted.set(!mounted.peek())}>
+                    {if mounted.get() { "卸载视图" } else { "挂载视图" }}
+                </Button>
+                <Show when={mounted.get()}>
+                    <Reactive id="gallery-scope-island">
+                        <VStack w="100%" min_w="0" gap="0.5rem" p="1rem" bg="muted" rounded="0.375rem">
+                            <Label w="100%" text_size="0.75rem">{format!("模板标识：{}", scoped_template_id("gallery-scope-island"))}</Label>
+                            <Label w="100%" text_size="0.75rem">{format!("焦点标识：{}", scoped_focus_id("gallery-scope-increment"))}</Label>
+                            <Label id="gallery-scope-value">{format!("局部计数：{}", count.get())}</Label>
+                            <Button id="gallery-scope-increment" on_click={move || count.update(|value| *value += 1)}>"计数 +1"</Button>
                         </VStack>
-                    </Box>
+                    </Reactive>
                 </Show>
             </VStack>
         </MyCard>
@@ -2549,26 +2419,9 @@ pub(crate) fn StoreResourceShowcase() -> jadix::core::tree::Element {
     });
 
     ui! {
-        <MyCard title="能力) Store produce + Resource→EB">
+        <MyCard title="结构化状态与异步边界">
             <VStack w="100%" gap="0.75rem">
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "权威判定：库测全绿即 能力 通过。本卡片只做手工对照；细则见 development-docs/AUTHORITY.md「能力 展示」与 development-docs/error_handling.md。"
-                </Label>
-                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "A · 库测（必须）"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "命令：cargo test -p jadix --lib produce_notifies   与   cargo test -p jadix --lib resource_err_to_error_boundary   与   cargo test -p jadix --lib create_resource_err_sets"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "通过：三测均 passed。失败：任一 FAILED。"
-                </Label>
-                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "B1 · produce 切片（建议）"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "1) 记下 name_ticks / age_ticks  2) 「age+1」→ 仅 age_ticks +1，name_ticks 不变  3) 「改名」→ 仅 name_ticks +1  4) 「同值再 set」→ ticks 不变，下方 note 写「未通知」。"
-                </Label>
+
                 <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
                     { format!(
                         "name={:?} age={}  |  name_ticks={}  age_ticks={}",
@@ -2605,19 +2458,19 @@ pub(crate) fn StoreResourceShowcase() -> jadix::core::tree::Element {
                         let same_ticks =
                             name_ticks.peek() == before_n && age_ticks.peek() == before_a;
                         action_note.set(if same_ticks {
-                            "同值再 set：未通知（符合契约）".into()
+                            "同值再 set：未发送更新通知".into()
                         } else {
-                            "同值再 set：失败（ticks 不应变化）".into()
+                            "同值再 set：字段订阅收到更新".into()
                         });
                     }}>
                         "同值再 set"
                     </Button>
                 </HStack>
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "B2 · Resource Err → ErrorBoundary；Loading → Suspense（建议）"
+                    "Resource、Suspense 与错误边界"
                 </Label>
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "契约：巩固期须显式 throw_resource_error。1) 初始 children ok  2) 「注入 Loading」→ 框内 loading…  3) 「注入 Err」→ fallback: gallery boom  4) 「复位 Ready」→ children ok。旁路行 resource= 应同步变。"
+                    "切换加载、错误和就绪状态，观察 Suspense 与 ErrorBoundary 的内容切换。示例通过 throw_resource_error 显式转交资源错误。"
                 </Label>
                 <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
                     { format!("resource(旁路) = {}  |  note: {}", res_summary.get(), action_note.get()) }
@@ -2670,126 +2523,34 @@ pub(crate) fn StoreResourceShowcase() -> jadix::core::tree::Element {
     }
 }
 
-/// 能力 Gallery 展示：根裸 `get()` 可观测；bind / Show 不抬高 UI-root dep。
 #[component]
-pub(crate) fn RootBareGetShowcase() -> jadix::core::tree::Element {
-    use jadix::core::reactivity::ui_root_effect_dep_count;
-
-    let root_deps = use_signal("gal_wp27_root_deps", ui_root_effect_dep_count);
-    let baseline = use_signal("gal_wp27_baseline", || None::<usize>);
-    let label_n = use_signal("gal_wp27_label_n", || 0_u32);
-    let panel_open = use_signal("gal_wp27_panel", || true);
-    let verdict = use_signal("gal_wp27_verdict", || {
-        "尚未判定：先「刷新根 dep」并「记为基线」。".to_string()
-    });
-
-    let refresh_deps = move || {
-        root_deps.set(ui_root_effect_dep_count());
-    };
-
-    let capture_baseline = move || {
-        refresh_deps();
-        baseline.set(Some(root_deps.peek()));
-        verdict.set(format!(
-            "已记基线 root_deps={}。再做 B1/B2 后点「对照基线」。",
-            root_deps.peek()
-        ));
-    };
-
-    let compare_baseline = move || {
-        refresh_deps();
-        let cur = root_deps.peek();
-        match baseline.peek() {
-            Some(b) if cur == b => verdict.set(format!(
-                "手工判定: 通过（root_deps={cur} 相对基线 {b} 未抬高）"
-            )),
-            Some(b) if cur < b => verdict.set(format!(
-                "手工判定: 通过（root_deps={cur} < 基线 {b}；可能其它岛卸载）"
-            )),
-            Some(b) => verdict.set(format!(
-                "手工判定: 失败（root_deps={cur} > 基线 {b}；本卡操作或别处新增了根订阅）"
-            )),
-            None => verdict.set("尚未记基线：先点「记为基线」。".into()),
-        }
-    };
-
+pub(crate) fn RootBareGetShowcase() -> Element {
+    let count = use_signal("gallery-binding-count", || 0_u32);
+    let visible = use_signal("gallery-binding-visible", || true);
+    let controls: Element = hstack()
+        .gap("0.75rem")
+        .wrap("wrap")
+        .children([
+            button("gallery-binding-increment")
+                .text("更新文案")
+                .on_click(move || count.update(|value| *value += 1))
+                .into(),
+            button("gallery-binding-toggle")
+                .variant("outline")
+                .text("切换面板")
+                .on_click(move || visible.set(!visible.peek()))
+                .into(),
+        ])
+        .into();
     ui! {
-        <MyCard title="能力) 根裸 get() 可观测">
-            <VStack w="100%" gap="0.75rem">
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "权威判定：库测全绿即 能力 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「能力 展示」。"
-                </Label>
-                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "A · 库测（必须）"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "命令：cargo test -p jadix --lib root_bare_get"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "通过：3 passed（裸 get 可观测 + bind + Show 根 dep=0）。失败：任一 FAILED。"
-                </Label>
-                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "B · Gallery 手工（建议）"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "1) 「刷新根 dep」→「记为基线」  2) B1 点「文案 +1」数次，文案应变  3) B2 切换「面板」  4) 「对照基线」→ root_deps 不得高于基线。说明：数值是整棵 Gallery 根 effect 订阅面；卫生目标多为 0；本卡只验证 bind/Show 不抬高。"
-                </Label>
-                <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
-                    { {
-                        let b = baseline.get();
-                        format!(
-                            "ui_root_effect_dep_count = {}  |  基线 = {}  |  {}",
-                            root_deps.get(),
-                            b.map(|n| n.to_string()).unwrap_or_else(|| "—".into()),
-                            verdict.get()
-                        )
-                    } }
-                </Label>
-                <HStack gap="0.75rem" items="center" wrap="wrap">
-                    <Button variant="secondary" on_click={refresh_deps}>
-                        "刷新根 dep"
-                    </Button>
-                    <Button variant="default" on_click={capture_baseline}>
-                        "记为基线"
-                    </Button>
-                    <Button variant="outline" on_click={compare_baseline}>
-                        "对照基线"
-                    </Button>
-                </HStack>
-                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "B1 · bind_text（正确档）"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "属性走 bind，不订根。点「文案 +1」后文案变；对照基线应仍通过。"
-                </Label>
-                <HStack gap="0.75rem" items="center" wrap="wrap">
-                    <Label text_size="0.875rem" font_weight="600">
-                        { format!("bind label = {}", label_n.get()) }
-                    </Label>
-                    <Button variant="outline" size="sm" on_click={move || {
-                        label_n.set(label_n.peek().wrapping_add(1));
-                    }}>
-                        "文案 +1"
-                    </Button>
-                </HStack>
-                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "B2 · Show（结构档）"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "条件挂载走 show_reactive / Show，不在根 builder 裸 if get()。"
-                </Label>
-                <HStack gap="0.75rem" items="center" wrap="wrap">
-                    <Button variant="outline" size="sm" on_click={move || {
-                        panel_open.set(!panel_open.peek());
-                    }}>
-                        { if panel_open.get() { "卸载面板" } else { "挂载面板" } }
-                    </Button>
-                </HStack>
-                <Show when={panel_open.get()}>
-                    <Box bg="muted" rounded="0.375rem" p="0.75rem" w="100%" borderStyle="solid" borderColor="border" borderWidth="0.0625">
-                        <Label text_size="0.875rem" leading="normal">
-                            "结构岛面板（Show when）— 切换不应抬高根 dep。"
-                        </Label>
+        <MyCard title="属性绑定与条件视图">
+            <VStack w="100%" min_w="0" gap="0.75rem">
+                <Label w="100%" color="muted-foreground">"Builder 按钮更新 Signal，ui! 文本绑定与 Show 条件视图响应同一份状态。"</Label>
+                {controls}
+                <Label id="gallery-binding-value">{format!("文案更新次数：{}", count.get())}</Label>
+                <Show when={visible.get()}>
+                    <Box w="100%" p="1rem" bg="muted" rounded="0.375rem">
+                        <Label>"这是由 Show 管理的局部视图。"</Label>
                     </Box>
                 </Show>
             </VStack>
@@ -2797,7 +2558,6 @@ pub(crate) fn RootBareGetShowcase() -> jadix::core::tree::Element {
     }
 }
 
-/// 能力 Gallery 展示：展示型无必填 id；空串不写身份；Toggle scoped 试点。
 #[component]
 pub(crate) fn IdentityApiShowcase() -> jadix::core::tree::Element {
     let note = use_signal("gal_wp28_note", || "尚未操作".to_string());
@@ -2807,26 +2567,9 @@ pub(crate) fn IdentityApiShowcase() -> jadix::core::tree::Element {
     let toggle_el: Element = toggle("").text("B").variant("outline").into();
 
     ui! {
-        <MyCard title="能力) 身份 API 收敛">
+        <MyCard title="自动标识与独立状态">
             <VStack w="100%" gap="0.75rem">
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "权威判定：库测全绿即 能力 通过。本卡片只做手工对照；细则见 docs/AUTHORITY.md「能力 展示」。"
-                </Label>
-                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "A · 库测（必须）"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "命令：cargo test -p jadix --lib navbar_without_id   与   bar_chart_without_id   与   toggle_empty_id   与   toggle_uncontrolled_uses_scoped"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "通过：展示型无 template_id；Toggle 空 id 非空 focus/template；scoped 跨 Owner 独立。失败：任一 FAILED。"
-                </Label>
-                <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "B · Gallery 手工（建议）"
-                </Label>
-                <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "1) 下方 Navbar / Chart / Progress / Toggle 均无手写 gal-* id  2) Toggle 可点切换  3) 读屏/焦点不因空串崩溃（I-1）。展示型勿再堆无意义 id。"
-                </Label>
+
                 <Label w="100%" text_size="0.875rem" font_weight="600" leading="normal">
                     { note.get() }
                 </Label>
@@ -2923,7 +2666,7 @@ pub(crate) fn gal_box_model_onion() -> Element {
     )
 }
 
-/// 能力 / B15 Gallery：完整 CSS 盒模型（单位 · box-sizing · 分边 border · outline）。
+/// CSS box model: units, sizing, per-edge borders and outlines.
 #[component]
 pub(crate) fn BoxModelShowcase() -> jadix::core::tree::Element {
     let hits = use_signal("gal_wp29_outline_hits", || 0_u32);
@@ -2947,10 +2690,10 @@ pub(crate) fn BoxModelShowcase() -> jadix::core::tree::Element {
     let onion = gal_box_model_onion();
 
     ui! {
-        <MyCard title="能力 / B15) CSS 盒模型">
+        <MyCard title="CSS 盒模型">
             <VStack w="100%" gap="0.75rem">
                 <Label w="100%" text_size="0.75rem" color="muted-foreground" leading="normal">
-                    "手册 docs/engine/box_model.md。默认 BorderBox；% = 父 content-box；outline/shadow 不进布局。库测：cargo test -p jadix --lib box_model_contract"
+                    "默认 BorderBox；百分比相对于父容器 content-box；outline 与 shadow 不占据布局空间。"
                 </Label>
 
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
@@ -2960,7 +2703,7 @@ pub(crate) fn BoxModelShowcase() -> jadix::core::tree::Element {
                     { onion }
                     <VStack gap="0.25rem" min_w="10rem">
                         <Label text_size="0.75rem" color="muted-foreground" leading="normal">
-                            "外层 padding 模拟 margin；border 为 T8/R4/B12/L16 且四边异色（B15）。"
+                            "外层 padding 模拟 margin；border 为 T8/R4/B12/L16 且四边异色。"
                         </Label>
                         <HStack gap="0.5rem" wrap="wrap">
                             { gal_legend_chip(GAL_BM_MARGIN, "muted = margin") }
@@ -3035,7 +2778,7 @@ pub(crate) fn BoxModelShowcase() -> jadix::core::tree::Element {
                 </HStack>
 
                 <Label w="100%" text_size="0.75rem" font_weight="600" leading="normal">
-                    "4 · B15 分边 border：异宽异色 · 1–4 值简写"
+                    "4 · 分边 border：异宽异色 · 1–4 值简写"
                 </Label>
                 <HStack gap="0.75rem" wrap="wrap" items="end">
                     <VStack gap="0.25rem">

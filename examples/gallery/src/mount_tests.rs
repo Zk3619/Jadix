@@ -531,19 +531,111 @@ fn generator_go_reset_caption_keeps_its_authored_width() {
 /// Headless tests build one page at a time (same trees as the live `<When>` arms).
 fn gallery_section_body(section: &str) -> jadix::core::tree::Element {
     match section {
+        "basics" => GallerySectionBasics(GallerySectionBasicsProps::default()),
         "forms" => GallerySectionForms(GallerySectionFormsProps::default()),
-        "events" => GallerySectionEvents(GallerySectionEventsProps::default()),
-        "overlays" => GallerySectionOverlays(GallerySectionOverlaysProps::default()),
-        "draw" => GallerySectionDraw(GallerySectionDrawProps::default()),
+        "feedback" => GallerySectionFeedback(GallerySectionFeedbackProps::default()),
         "data" => GallerySectionData(GallerySectionDataProps::default()),
         "navigation" => GallerySectionNavigation(GallerySectionNavigationProps::default()),
+        "overlays" => GallerySectionOverlays(GallerySectionOverlaysProps::default()),
+        "events" => GallerySectionEvents(GallerySectionEventsProps::default()),
+        "drag" => GallerySectionDrag(GallerySectionDragProps::default()),
         "layout" => GallerySectionLayout(GallerySectionLayoutProps::default()),
-        "motion" => GallerySectionMotion(GallerySectionMotionProps::default()),
+        "responsive" => GallerySectionResponsive(GallerySectionResponsiveProps::default()),
+        "style" => GallerySectionStyle(GallerySectionStyleProps::default()),
+        "transforms" => GallerySectionTransforms(GallerySectionTransformsProps::default()),
         "text" => GallerySectionText(GallerySectionTextProps::default()),
         "theme" => GallerySectionTheme(GallerySectionThemeProps::default()),
+        "draw" => GallerySectionDraw(GallerySectionDrawProps::default()),
+        "scene" => GallerySectionScene(GallerySectionSceneProps::default()),
+        "media" => GallerySectionMedia(GallerySectionMediaProps::default()),
+        "motion" => GallerySectionMotion(GallerySectionMotionProps::default()),
+        "documents" => GallerySectionDocuments(GallerySectionDocumentsProps::default()),
+        "code" => GallerySectionCode(GallerySectionCodeProps::default()),
+        "desktop" => GallerySectionDesktop(GallerySectionDesktopProps::default()),
+        "workspace" => GallerySectionWorkspace(GallerySectionWorkspaceProps::default()),
+        "reactivity" => GallerySectionReactivity(GallerySectionReactivityProps::default()),
+        "rendering" => GallerySectionRendering(GallerySectionRenderingProps::default()),
         "about" => GallerySectionAbout(GallerySectionAboutProps::default()),
-        _ => GallerySectionBasics(GallerySectionBasicsProps::default()),
+        _ => panic!("unknown gallery section: {section}"),
     }
+}
+
+#[test]
+fn gallery_catalog_has_unique_pages_and_populated_groups() {
+    let keys: std::collections::HashSet<_> =
+        GALLERY_SECTIONS.iter().map(|entry| entry.key).collect();
+    assert_eq!(keys.len(), GALLERY_SECTIONS.len());
+    assert_eq!(GALLERY_GROUPS.len(), 7);
+    assert_eq!(keys.len(), 25);
+    for group in GALLERY_GROUPS {
+        assert!(GALLERY_SECTIONS.iter().any(|entry| entry.group == *group));
+    }
+    for entry in GALLERY_SECTIONS {
+        assert!(GALLERY_GROUPS.contains(&entry.group));
+        assert!(!entry.title.is_empty());
+    }
+}
+
+#[test]
+fn document_controls_switch_modes_and_restore_content() {
+    use jadix::text::{DocumentEditMode, DocumentEditorState};
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            let tree = DocumentEditingShowcase(Default::default());
+            let editor =
+                use_signal("gallery-document-state", || DocumentEditorState::new("")).peek();
+            let original = editor.document().source().text().to_string();
+            for (id, mode) in [
+                ("source", DocumentEditMode::Source),
+                ("preview", DocumentEditMode::Preview),
+                ("live", DocumentEditMode::LivePreview),
+            ] {
+                let button = gallery_find_by_tid(&tree, &format!("gallery-document-{id}")).unwrap();
+                (button.on_click.as_ref().unwrap().borrow_mut())();
+                assert_eq!(editor.snapshot().mode, mode);
+            }
+            editor.set_document("Changed document");
+            let reset = gallery_find_by_tid(&tree, "gallery-document-reset").unwrap();
+            (reset.on_click.as_ref().unwrap().borrow_mut())();
+            assert_eq!(editor.document().source().text(), original);
+        });
+        jadix::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
+fn code_and_diff_controls_update_their_independent_state() {
+    use jadix_document::DiffMode;
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            let code = CodeEditingShowcase(Default::default());
+            let source = use_signal("gallery-code-source", String::new);
+            let original = source.peek();
+            assert!(original.contains("ui!"));
+            assert!(original.contains("button("));
+            source.set("fn changed() {}".into());
+            let reset = gallery_find_by_tid(&code, "gallery-code-reset").unwrap();
+            (reset.on_click.as_ref().unwrap().borrow_mut())();
+            assert_eq!(source.peek(), original);
+            let diff = DocumentDiffShowcase(Default::default());
+            let mode = use_signal("gallery-diff-mode", || DiffMode::Split);
+            for (id, expected) in [("unified", DiffMode::Unified), ("split", DiffMode::Split)] {
+                let button = gallery_find_by_tid(&diff, &format!("gallery-diff-{id}")).unwrap();
+                (button.on_click.as_ref().unwrap().borrow_mut())();
+                assert_eq!(mode.peek(), expected);
+            }
+        });
+        jadix::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
+fn navigation_section_keeps_the_router_showcase() {
+    run_on_gallery_build_stack(|| {
+        let (_owner, tree) = create_root(|| gallery_section_body("navigation"));
+        assert!(find_tid(&tree, "gal_shell_router__router_view"));
+        jadix::app::reactive::reset_registered_anchors();
+    });
 }
 
 fn gallery_find_tid(el: &jadix::core::tree::Element, want: &str) -> bool {
@@ -2218,19 +2310,8 @@ fn headless_layout_all_sections_does_not_overflow() {
         jadix::app::reactive::reset_registered_anchors();
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                for key in [
-                    "basics",
-                    "events",
-                    "forms",
-                    "overlays",
-                    "data",
-                    "navigation",
-                    "layout",
-                    "text",
-                    "theme",
-                    "about",
-                ] {
-                    let mut tree = gallery_section_body(key);
+                for entry in GALLERY_SECTIONS {
+                    let mut tree = gallery_section_body(entry.key);
                     let mut layout = jadix::core::tree::LayoutTree::new();
                     let _ = layout.build_and_layout(&mut tree, 1280.0, 800.0, [0.0, 0.0]);
                 }
@@ -2239,26 +2320,29 @@ fn headless_layout_all_sections_does_not_overflow() {
     });
 }
 
-fn gallery_section_scroll_id(key: &str) -> &'static str {
-    match key {
-        "events" => "scroll-events",
-        "forms" => "scroll-forms",
-        "overlays" => "scroll-overlays",
-        "draw" => "scroll-draw",
-        "data" => "scroll-data",
-        "navigation" => "scroll-navigation",
-        "layout" => "scroll-layout",
-        "text" => "scroll-text",
-        "theme" => "scroll-theme",
-        "about" => "scroll-about",
-        _ => "scroll-basics",
-    }
+fn gallery_section_scroll_id(key: &str) -> String {
+    format!("scroll-{key}")
 }
 
 /// Page ScrollArea uses `overflow_x: auto`. Wrapping / 100% cards must not enable
 /// a horizontal thumb — the live Gallery bug after switching sidebar sections.
 #[test]
 fn gallery_section_pages_must_not_enable_x_scroll() {
+    fn overflow_bounds(root: &Element, width: f32, output: &mut Vec<String>) {
+        let [left, _, size, _] = root.layout_bounds;
+        if left + size > width + 0.5 {
+            output.push(format!(
+                "{:?} {:?} {:?} {:?}",
+                root.template_id,
+                root.focus_id,
+                root.attrs.get("data-slot"),
+                root.layout_bounds
+            ));
+        }
+        for child in &root.children {
+            overflow_bounds(child, width, output);
+        }
+    }
     run_on_gallery_build_stack(|| {
         jadix::app::reactive::reset_registered_anchors();
         let mut fs = jadix::renderer::font_loader::create_font_system();
@@ -2266,33 +2350,27 @@ fn gallery_section_pages_must_not_enable_x_scroll() {
         jadix::text::install_shared_font_system(&mut fs);
         let (_handle, _) = create_root(|| {
             create_effect(|| {
-                for key in [
-                    "basics",
-                    "events",
-                    "forms",
-                    "overlays",
-                    "draw",
-                    "data",
-                    "navigation",
-                    "layout",
-                    "text",
-                    "theme",
-                    "about",
-                ] {
+                for entry in GALLERY_SECTIONS {
+                    let key = entry.key;
                     jadix::app::reactive::reset_registered_anchors();
                     let rest = gallery_section_scroll_id(key);
                     let mut tree = gallery_section_body(key);
                     let mut layout = jadix::core::tree::LayoutTree::new();
                     for &(w, h) in &[(640.0, 700.0), (800.0, 700.0), (900.0, 700.0)] {
                         let result = layout.build_and_layout(&mut tree, w, h, [-1.0, -1.0]);
-                        let (vp, max, content) = scroll_metrics_xy(&result, rest);
+                        let (vp, max, content) = scroll_metrics_xy(&result, &rest);
+                        let mut overflow = Vec::new();
+                        if max[0] >= 0.5 {
+                            overflow_bounds(&tree, w, &mut overflow);
+                        }
                         assert!(
                             max[0] < 0.5,
                             "{key} at {w}x{h} must not enable horizontal scroll \
-                             (content_w={:.1} vp_w={:.1} max_x={:.1})",
+                             (content_w={:.1} vp_w={:.1} max_x={:.1}); overflowing nodes={:?}",
                             content[0],
                             vp[2],
-                            max[0]
+                            max[0],
+                            overflow
                         );
                     }
                 }
@@ -2558,10 +2636,10 @@ fn text_section_mounts_msdf_card() {
 }
 
 #[test]
-fn draw_section_mounts_billboard() {
+fn scene_section_mounts_billboard() {
     run_on_gallery_build_stack(|| {
         jadix::app::reactive::reset_registered_anchors();
-        let (_handle, tree) = create_root(|| gallery_section_body("draw"));
+        let (_handle, tree) = create_root(|| gallery_section_body("scene"));
         assert!(
             find_tid(&tree, "gal-billboard-default"),
             "draw section must mount default-pitch billboard"
@@ -2579,10 +2657,10 @@ fn draw_section_mounts_billboard() {
 }
 
 #[test]
-fn navigation_section_mounts_shell_router_view() {
+fn desktop_section_mounts_window_and_shell_controls() {
     run_on_gallery_build_stack(|| {
         jadix::app::reactive::reset_registered_anchors();
-        let (_handle, tree) = create_root(|| gallery_section_body("navigation"));
+        let (_handle, tree) = create_root(|| gallery_section_body("desktop"));
         for id in [
             "gal-desktop-fullscreen-toggle",
             "gal-desktop-fullscreen-exit",
@@ -2597,10 +2675,6 @@ fn navigation_section_mounts_shell_router_view() {
         ] {
             assert!(find_tid(&tree, id), "navigation must mount {id}");
         }
-        assert!(
-            find_tid(&tree, "gal_shell_router__router_view"),
-            "能力: navigation section must mount Router.view() placeholder"
-        );
         assert!(
             find_tid(&tree, GAL_SHELL_TRAY_SHOW),
             "能力: navigation section must mount tray Show button"

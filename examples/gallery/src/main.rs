@@ -4,8 +4,9 @@
 
 //! Jadix Gallery — 完整框架能力与组件 / 变体展示。
 //!
-//! 侧栏分区：基础 · 指针事件 · 表单 · 浮层 · 数据 · 绘制 · 导航（含 Router / 托盘 / 无边框窗） · 布局 · 文本 · 主题 · 关于。
-//! 运行：`cargo run -p gallery`；默认启用 Inspector（F12）与 hot-reload；监听：`cargo run -p jadix_hot_reload_cli -- .`；托盘原生：`--features system-tray`；远程图入口：`--features remote-asset`
+//! 侧栏按组件、交互导航、布局样式、图形媒体、文档开发、桌面运行时与 Gallery 分为七组。
+//! 运行：`cargo run -p gallery`；默认 full 启用 Inspector（F12）、热重载、文档、媒体与桌面能力。
+//! 热重载监听：`cargo run -p jadix_hot_reload_cli -- .`；分组与配置见 `examples/gallery/README.md`。
 //!
 //! `main` 只做启动（主题、可选远程图、窗口几何持久化）；壳在 [`app`]；分区页面在 [`pages`]。
 
@@ -94,6 +95,7 @@ fn main() {
     }
 
     let options = jadix::app::WindowOptions::new()
+        .title("Jadix Gallery")
         .icon(gallery_icon())
         .follow_theme(true);
     let options = if let Some(mode) = instance_demo {
@@ -110,7 +112,7 @@ fn main() {
         options
     };
     #[cfg(all(debug_assertions, feature = "devtools"))]
-    let options = options.devtools(true);
+    let options = options.devtools(std::env::var("JADIX_DEVTOOLS").as_deref() != Ok("0"));
     #[cfg(all(debug_assertions, feature = "devtools"))]
     if std::env::var("JADIX_DEVTOOLS_OPEN").as_deref() == Ok("1") {
         jadix::app::devtools::DevToolsState::set_open(true);

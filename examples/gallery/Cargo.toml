@@ -67,7 +67,7 @@ runtime-logging = ["jadix/runtime-logging"]
 system-tray = ["jadix/system-tray"]
 # Remote http(s) Image/Avatar src via app fetcher. cargo run -p gallery --features remote-asset
 remote-asset = ["jadix/remote-asset"]
-# B1 Inspector (F12). cargo run -p gallery --features devtools
+# Inspector (F12). cargo run -p gallery --features devtools
 devtools = ["jadix/devtools"]
 hot-reload = ["jadix/hot-reload"]
 # Rotating cube scene.
