@@ -1101,6 +1101,69 @@ fn inspector_seed_unbinds_stale_controlled_pairing() {
 }
 
 #[test]
+fn closed_inspector_preserves_full_size_app_layout() {
+    crate::core::reactivity::create_root(|| {
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(false);
+        super::super::device::disable();
+        let app: Element = r#box()
+            .w("100%")
+            .h("100%")
+            .overflow("hidden")
+            .children([vstack()
+                .w("100%")
+                .h("100%")
+                .children([label("Visible gallery content").into()])
+                .into()])
+            .into();
+        let mut root = crate::app::prepare_primary_ui(app);
+        let mut layout = crate::core::tree::LayoutTree::new();
+        sync_overlay_layout(&mut root, &mut layout);
+        layout.build_and_layout(&mut root, 980.0, 630.0, [-1.0; 2]);
+        let host = &root.children[0];
+        let app = &host.children[0];
+        assert_eq!(host.layout_bounds, [0.0, 0.0, 980.0, 630.0]);
+        assert_eq!(app.layout_bounds, [0.0, 0.0, 980.0, 630.0]);
+        assert!(app.children[0].children[0].layout_bounds[2] > 0.0);
+    });
+}
+
+#[test]
+fn primary_ui_rebuild_retains_inspector_and_mounted_navigation_page() {
+    fn contains(root: &Element, id: &str) -> bool {
+        root.template_id.as_deref() == Some(id)
+            || root.children.iter().any(|child| contains(child, id))
+    }
+    crate::core::reactivity::create_root(|| {
+        DevToolsState::enable_for_window();
+        DevToolsState::set_open(false);
+        let nav = crate::app::navigator::Navigator::new("rebuild-gallery", "home", ["home"]);
+        let build = || {
+            let app = crate::app::navigator::navigation_host(nav.clone(), |_| {
+                let mut page: Element = label("Gallery page remains visible").into();
+                page.template_id = Some("gallery-rebuild-page".into());
+                Element::new().child(page)
+            })
+            .into();
+            crate::app::prepare_primary_ui(app)
+        };
+        let mut mounted = crate::authoring::mount::with_inline_mount(build);
+        assert!(contains(&mounted, "gallery-rebuild-page"));
+        for _ in 0..3 {
+            let mut replacement = build();
+            assert!(contains(&replacement, "__jadix_app_host"));
+            crate::app::state::AppState::reconcile_elements_for_test(
+                &mut replacement,
+                &mut mounted,
+            );
+            assert!(contains(&replacement, "gallery-rebuild-page"));
+            mounted = replacement;
+        }
+        crate::app::reactive::reset_registered_anchors();
+    });
+}
+
+#[test]
 fn wrap_app_inserts_docked_panel_slot() {
     DevToolsState::enable_for_window();
     let root = wrap_app(Element::new().focus_id("app"));

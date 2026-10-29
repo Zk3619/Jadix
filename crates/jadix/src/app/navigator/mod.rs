@@ -456,12 +456,15 @@ fn set_active_navigator(host_id: String, pop: Rc<dyn Fn() -> bool>) {
 }
 
 fn clear_active_navigator(host_id: &str) {
-    let _ = ACTIVE_NAV.try_with(|c| {
+    let removed = ACTIVE_NAV.try_with(|c| {
         let mut b = c.borrow_mut();
         if b.as_ref().map(|(id, _)| id.as_str()) == Some(host_id) {
-            *b = None;
+            b.take()
+        } else {
+            None
         }
     });
+    drop(removed);
 }
 
 fn set_active_tick(host_id: String, tick: Rc<dyn Fn(f32) -> bool>) {
@@ -474,12 +477,15 @@ fn set_active_tick(host_id: String, tick: Rc<dyn Fn(f32) -> bool>) {
 }
 
 fn clear_active_tick(host_id: &str) {
-    let _ = ACTIVE_TICK.try_with(|c| {
+    let removed = ACTIVE_TICK.try_with(|c| {
         let mut b = c.borrow_mut();
         if b.as_ref().map(|(id, _)| id.as_str()) == Some(host_id) {
-            *b = None;
+            b.take()
+        } else {
+            None
         }
     });
+    drop(removed);
 }
 
 pub fn try_pop_active() -> bool {

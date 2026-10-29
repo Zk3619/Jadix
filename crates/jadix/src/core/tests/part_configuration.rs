@@ -83,3 +83,30 @@ fn unmeasured_parts_keep_finite_initial_geometry() {
         }
     });
 }
+
+#[test]
+fn initial_thumb_fits_a_track_smaller_than_cached_viewport() {
+    let (_owner, _) = crate::core::reactivity::create_root(|| {
+        for axis in ["x", "y"] {
+            let target = format!("resized-parts-{axis}");
+            for key in [
+                scroll_viewport_w_signal_key(&target),
+                scroll_viewport_h_signal_key(&target),
+                scroll_content_w_signal_key(&target),
+                scroll_content_h_signal_key(&target),
+            ] {
+                use_signal(&key, || 640.0_f32);
+            }
+            let mut track = Element::new();
+            let mut thumb = Element::new();
+            configure_scrollbar_parts(&mut track, &mut thumb, Some(&target), axis, "auto", 10.0);
+            track = track.w(180.0).h(180.0).min_w(0.0).min_h(0.0).child(thumb);
+            let mut layout = crate::core::tree::LayoutTree::new();
+            layout.build_and_layout(&mut track, 180.0, 180.0, [-1.0, -1.0]);
+            let thumb_bounds = track.children[0].layout_bounds;
+            let dimension = if axis == "x" { 2 } else { 3 };
+            assert!(thumb_bounds[dimension] > 0.0);
+            assert!(thumb_bounds[dimension] <= track.layout_bounds[dimension]);
+        }
+    });
+}

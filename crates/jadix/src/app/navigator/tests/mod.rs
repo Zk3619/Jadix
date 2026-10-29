@@ -135,3 +135,45 @@ fn replacing_active_navigator_drops_old_callback_outside_borrow() {
     set_active_navigator("new_nav".into(), Rc::new(|| true) as Rc<dyn Fn() -> bool>);
     assert!(try_pop_active());
 }
+
+#[test]
+fn clearing_active_navigator_drops_callback_outside_borrow() {
+    struct DropClearNav;
+    impl Drop for DropClearNav {
+        fn drop(&mut self) {
+            clear_active_navigator("clear_nav");
+        }
+    }
+    let guard = DropClearNav;
+    set_active_navigator(
+        "clear_nav".into(),
+        Rc::new(move || {
+            let _ = &guard;
+            true
+        }) as Rc<dyn Fn() -> bool>,
+    );
+
+    clear_active_navigator("clear_nav");
+    assert!(!try_pop_active());
+}
+
+#[test]
+fn clearing_active_tick_drops_callback_outside_borrow() {
+    struct DropClearTick;
+    impl Drop for DropClearTick {
+        fn drop(&mut self) {
+            clear_active_tick("clear_tick");
+        }
+    }
+    let guard = DropClearTick;
+    set_active_tick(
+        "clear_tick".into(),
+        Rc::new(move |_| {
+            let _ = &guard;
+            true
+        }) as Rc<dyn Fn(f32) -> bool>,
+    );
+
+    clear_active_tick("clear_tick");
+    assert!(!tick_active(0.016));
+}

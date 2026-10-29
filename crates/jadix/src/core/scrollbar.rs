@@ -106,6 +106,11 @@ pub fn configure_scrollbar_parts(
     thumb.style.size = geometry.style.size;
     thumb.style.min_size = geometry.style.min_size;
     thumb.style.margin = geometry.style.margin;
+    if horizontal {
+        thumb.style.max_size.width = taffy::style::Dimension::percent(1.0);
+    } else {
+        thumb.style.max_size.height = taffy::style::Dimension::percent(1.0);
+    }
 }
 
 pub fn scrollbar_visibility_signal_key(target_id: &str, axis: &str) -> String {

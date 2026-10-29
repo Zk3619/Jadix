@@ -820,10 +820,7 @@ impl super::App {
                     );
                     log::debug!("root_effect: before app_builder");
                     crate::style::track_style_changes();
-                    let new_root = (builder_ref.borrow_mut())();
-                    #[cfg(all(debug_assertions, feature = "devtools"))]
-                    let new_root = crate::app::devtools::wrap_app(new_root);
-                    let new_root = crate::style::apply_stylesheet_rules_tree(new_root);
+                    let new_root = super::prepare_primary_ui((builder_ref.borrow_mut())());
                     log::debug!(
                         "root_effect: after app_builder children={}",
                         new_root.children.len()

@@ -3373,6 +3373,7 @@ impl super::App {
                         let paths: Vec<_> = transaction.stylesheets.iter().map(std::path::PathBuf::from).collect();
                         crate::style::apply_style_file_batch(&paths).map_err(|reason| reason.to_string())?;
                         let new_root = super::with_ui_build_stack(|| (self.app_builder.borrow_mut())());
+                        let new_root = super::prepare_primary_ui(new_root);
                         state.rebuild_ui(new_root);
                         applied = true;
                     }
@@ -3446,6 +3447,7 @@ impl super::App {
 
                 if hot_reload.force_reload || stylesheet_applied {
                     let new_root = super::with_ui_build_stack(|| (self.app_builder.borrow_mut())());
+                    let new_root = super::prepare_primary_ui(new_root);
                     state.rebuild_ui(new_root);
                     requested_redraw = true;
                     if hot_reload.force_reload {
@@ -3490,6 +3492,7 @@ impl super::App {
         let locale_rebuild = false;
         if locale_rebuild {
             let new_root = super::with_ui_build_stack(|| (self.app_builder.borrow_mut())());
+            let new_root = super::prepare_primary_ui(new_root);
             state.rebuild_ui(new_root);
             state.window.request_redraw();
             self.force_redraw_count = self.force_redraw_count.max(2);

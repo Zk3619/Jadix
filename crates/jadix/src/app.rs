@@ -180,6 +180,12 @@ type ScrollMetrics = ([f32; 4], [f32; 2], [f32; 2]);
 
 pub use crate::core::reactivity::with_ui_build_stack;
 
+pub(crate) fn prepare_primary_ui(root: Element) -> Element {
+    #[cfg(all(debug_assertions, feature = "devtools"))]
+    let root = devtools::wrap_app(root);
+    crate::style::apply_stylesheet_rules_tree(root)
+}
+
 /// Textarea bottom-right resize-grip drag state.
 struct TextareaResizeDrag {
     field_id: String,
