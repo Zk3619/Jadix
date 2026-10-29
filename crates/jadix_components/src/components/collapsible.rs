@@ -12,7 +12,7 @@
 //! 与 Accordion 的 `accordion-down/up` **同形不同名**（官方 base 默认无动画；有动画时用独立 keyframes）。
 //!
 //! 间距对齐 ShadCN Root（普通块级容器，不是带 `gap` 的 flex）：Root 默认 `gap: 0`，
-//! Trigger↔Content 间距走 Content `pb-4`。收起后 `display:none`，打开后仍在文档流里长高度，
+//! Content 不额外添加内边距，由调用方安排内容间距。收起后 `display:none`，打开后仍在文档流里长高度，
 //! 不把占位改成 `absolute`。
 //!
 //! `<Collapsible>` in `ui!` / `<CollapsibleContent>` is expanded by macro ([`collapsible_scope`] /
@@ -333,13 +333,10 @@ pub fn collapsible_content(body: impl Fn() -> Element + 'static) -> Element {
             body = vstack().w("100%").min_w(0.0).children(kids).into();
         }
         stamp_content_text_weight(&mut body);
-        // 与 Trigger 同左缘：ShadCN Content 仅 `pb-4 pt-0`（无水平 padding）；
-        // padding 打在布局壳上，勿打在文本叶节点。
         let mut inner: Element = vstack()
             .w("100%")
             .min_w(0.0)
             .flex_shrink(0.0)
-            .pb(tokens::SPACE_4)
             .child(body)
             .into();
         inner
@@ -516,7 +513,6 @@ plain [] children: Option<Element>,
         .w("100%")
         .min_w(0.0)
         .flex_shrink(0.0)
-        .pb(tokens::SPACE_4)
         .child(body)
         .into();
     inner

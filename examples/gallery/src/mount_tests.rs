@@ -189,6 +189,88 @@ fn responsive_gallery_navigation_changes_section_and_closes_mobile_sheet() {
 }
 
 #[test]
+fn gallery_sidebar_groups_preserve_insets_and_stable_chevrons() {
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            let menu = gallery_nav_menu(Signal::new("basics".to_string()), "gal-inset-test", None);
+            assert_eq!(
+                jadix::layout::lp_length_px(menu.style.padding.left),
+                Some(8.0)
+            );
+            assert_eq!(
+                jadix::layout::lp_length_px(menu.style.padding.right),
+                Some(8.0)
+            );
+            assert_eq!(
+                jadix::layout::lp_length_px(menu.style.padding.bottom),
+                Some(0.0)
+            );
+            for position in 0..GALLERY_GROUPS.len() {
+                let chevron = gallery_find_by_tid(
+                    &menu,
+                    &format!("gal-inset-test-branch-{position}-chevron"),
+                )
+                .unwrap();
+                assert_eq!(chevron.style.rotate_deg, 90.0);
+                assert!(!chevron.style.transition.is_empty());
+                assert!(chevron.paint_region_replay);
+            }
+        });
+    });
+}
+
+#[test]
+fn gallery_sidebar_chevron_animates_and_reverses_without_remounting() {
+    fn find_mut<'a>(element: &'a mut Element, id: &str) -> Option<&'a mut Element> {
+        if element.template_id.as_deref() == Some(id) {
+            Some(element)
+        } else {
+            element
+                .children
+                .iter_mut()
+                .find_map(|child| find_mut(child, id))
+        }
+    }
+    run_on_gallery_build_stack(|| {
+        jadix::style::set_css_transition_virtual_timeline(true);
+        jadix::style::set_css_transition_timeline_ms(0.0);
+        create_root(|| {
+            let mut menu =
+                gallery_nav_menu(Signal::new("basics".to_string()), "gal-arrow-test", None);
+            let chevron = find_mut(&mut menu, "gal-arrow-test-branch-0-chevron").unwrap();
+            let expanded = use_signal("gal-arrow-test-branch-0-open", || true);
+            let sync = chevron.reactive_sync.clone().unwrap();
+            let mut tree = jadix::layout::LayoutTree::new();
+            let mut frame = |chevron: &mut Element| {
+                sync.run(chevron, &mut tree);
+                let mut snapshot = std::mem::take(&mut chevron.transition_snapshot);
+                jadix::style::tick_element_transitions(&mut chevron.style, &mut snapshot, 0.0);
+                chevron.transition_snapshot = snapshot;
+            };
+            frame(chevron);
+            assert_eq!(chevron.style.rotate_deg, 90.0);
+            expanded.set(false);
+            frame(chevron);
+            assert_eq!(chevron.style.rotate_deg, 90.0);
+            jadix::style::advance_css_transition_timeline_ms(80.0);
+            frame(chevron);
+            let middle = chevron.style.rotate_deg;
+            assert!(middle > 0.0 && middle < 90.0, "closing={middle}");
+            expanded.set(true);
+            frame(chevron);
+            assert!((chevron.style.rotate_deg - middle).abs() < 0.01);
+            jadix::style::advance_css_transition_timeline_ms(80.0);
+            frame(chevron);
+            assert!(chevron.style.rotate_deg > middle && chevron.style.rotate_deg < 90.0);
+            jadix::style::advance_css_transition_timeline_ms(200.0);
+            frame(chevron);
+            assert!((chevron.style.rotate_deg - 90.0).abs() < 0.01);
+        });
+        jadix::style::set_css_transition_virtual_timeline(false);
+    });
+}
+
+#[test]
 fn gallery_sidebar_branches_toggle_without_changing_the_selected_page() {
     run_on_gallery_build_stack(|| {
         create_root(|| {

@@ -1524,6 +1524,32 @@ fn menu_button_paint_sync_applies_hover_accent_from_signal() {
 }
 
 #[test]
+fn collapsible_menu_button_preserves_hover_chrome() {
+    use crate::core::reactivity::create_root;
+    use crate::core::tree::LayoutTree;
+    let (_owner, mut root): (_, Element) = create_root(|| {
+        crate::components::collapsible("nav-branch-hover")
+            .trigger(|| {
+                sidebar_menu_button("nav-branch-hover-trigger")
+                    .text("Group")
+                    .into()
+            })
+            .into()
+    });
+    use_signal("nav-branch-hover-trigger_hover", || false).set(true);
+    let mut tree = LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    super::sync_sidebar_menu_button_paint_subtree(&mut root, &mut tree, &mut impact);
+    let trigger = root
+        .children
+        .iter()
+        .find(|child| child.attrs.get(ATTR_SLOT).map(String::as_str) == Some("collapsible-trigger"))
+        .unwrap();
+    assert_eq!(trigger.style.bg_color, parse_color("sidebar-accent"));
+    assert_eq!(impact, LayoutStatus::StyleChanged);
+}
+
+#[test]
 fn bound_active_update_must_not_wipe_live_hover_chrome() {
     use crate::core::reactivity::create_root;
     use crate::core::tree::LayoutTree;

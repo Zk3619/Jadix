@@ -15,6 +15,21 @@ fn scope_sets_slot_and_template() {
 }
 
 #[test]
+fn content_does_not_add_unrequested_bottom_spacing() {
+    let (_owner, root): (_, Element) = create_root(|| {
+        collapsible("col-spacing")
+            .default_open(true)
+            .content_with(|content| content.child(Element::new().text("Body")))
+            .into()
+    });
+    let inner = find_slot(&root, SLOT_CONTENT_INNER).expect("content inner");
+    assert_eq!(
+        crate::layout::lp_length_px(inner.style.padding.bottom),
+        Some(0.0)
+    );
+}
+
+#[test]
 fn builder_trigger_class_and_style() {
     let (_o, el): (_, Element) = create_root(|| {
         collapsible("col-chrome")

@@ -249,46 +249,100 @@ pub(crate) fn gallery_nav_menu(
             let id = format!("{prefix}-branch-{position}");
             let expanded = use_signal(&format!("{id}-open"), || true);
             let trigger_id = format!("{id}:trigger");
+            let chevron_id = format!("{id}-chevron");
             let panel_id = format!("{id}:panel");
             let prefix = prefix.to_owned();
             create_effect(move || {
                 let selected = section.get();
-                if GALLERY_SECTIONS.iter().any(|entry| entry.key == selected && entry.group == group) && !expanded.peek() {
+                if GALLERY_SECTIONS
+                    .iter()
+                    .any(|entry| entry.key == selected && entry.group == group)
+                    && !expanded.peek()
+                {
                     expanded.set(true);
                 }
             });
             collapsible(id)
                 .open(expanded)
                 .trigger(move || {
+                    let mut chevron = ui! {
+                        <Icon name="chevron-right" size="14px" pointer_events="none" />
+                    }
+                    .transition("transform 200ms ease-out");
+                    chevron.template_id = Some(chevron_id.clone());
+                    chevron.style.rotate_deg = if expanded.peek() { 90.0 } else { 0.0 };
+                    chevron.paint_region_replay = true;
+                    let chevron = chevron.reactive_sync(move |element, _| {
+                        let target = if expanded.peek() { 90.0 } else { 0.0 };
+                        let changed = (element.style.rotate_deg - target).abs() > 0.01;
+                        element.style.rotate_deg = target;
+                        if changed
+                            || jadix::style::css_transition_needs_frame(
+                                &element.style,
+                                &element.transition_snapshot,
+                            )
+                            || element.transition_snapshot.has_active_tweens()
+                        {
+                            LayoutStatus::StyleChanged
+                        } else {
+                            LayoutStatus::Clean
+                        }
+                    });
                     let trigger = ui! {
                     <SidebarMenuButton id={trigger_id}>
                         <HStack w="100%" min_w="0" items="center" gap="0.5rem">
-                            <Icon name={if expanded.get() { "chevron-down" } else { "chevron-right" }} size="14px" pointer_events="none" />
+                            {chevron}
                             <Label grow="1" text_size="0.875rem" font_weight="600">{group}</Label>
                         </HStack>
                     </SidebarMenuButton>
                     };
-                    trigger.on_key_down(move |event| {
-                        if event.state != winit::event::ElementState::Pressed { return false; }
-                        match event.logical_key {
-                            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft) => { expanded.set(false); true }
-                            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight) => { expanded.set(true); true }
-                            _ => false,
-                        }
-                    }).reactive_sync(move |element, _| {
-                        let value = expanded.peek().to_string();
-                        if element.get_attr("aria-expanded") == Some(&value) { return LayoutStatus::Clean; }
-                        element.set_attr("aria-expanded", value);
-                        element.set_attr("aria-controls", panel_id.clone());
-                        LayoutStatus::StyleChanged
-                    })
+                    trigger
+                        .on_key_down(move |event| {
+                            if event.state != winit::event::ElementState::Pressed {
+                                return false;
+                            }
+                            match event.logical_key {
+                                winit::keyboard::Key::Named(
+                                    winit::keyboard::NamedKey::ArrowLeft,
+                                ) => {
+                                    expanded.set(false);
+                                    true
+                                }
+                                winit::keyboard::Key::Named(
+                                    winit::keyboard::NamedKey::ArrowRight,
+                                ) => {
+                                    expanded.set(true);
+                                    true
+                                }
+                                _ => false,
+                            }
+                        })
+                        .reactive_sync(move |element, _| {
+                            let value = expanded.peek().to_string();
+                            if element.get_attr("aria-expanded") == Some(&value) {
+                                return LayoutStatus::Clean;
+                            }
+                            element.set_attr("aria-expanded", value);
+                            element.set_attr("aria-controls", panel_id.clone());
+                            LayoutStatus::StyleChanged
+                        })
                 })
                 .content({
                     let prefix = prefix.to_owned();
                     move || {
-                        let items: Vec<Element> = GALLERY_SECTIONS.iter()
+                        let items: Vec<Element> = GALLERY_SECTIONS
+                            .iter()
                             .filter(|entry| entry.group == group)
-                            .map(|entry| gallery_nav_item(section, &prefix, entry.key, entry.title, entry.icon, close))
+                            .map(|entry| {
+                                gallery_nav_item(
+                                    section,
+                                    &prefix,
+                                    entry.key,
+                                    entry.title,
+                                    entry.icon,
+                                    close,
+                                )
+                            })
                             .collect();
                         ui! {
                             <SidebarGroupContent>
@@ -302,7 +356,7 @@ pub(crate) fn gallery_nav_menu(
                 .into()
         })
         .collect();
-    vstack().w("100%").gap("0.25rem").children(groups).into()
+    ui! { <SidebarGroup py="0" gap="0.25rem">{groups}</SidebarGroup> }
 }
 
 #[component]

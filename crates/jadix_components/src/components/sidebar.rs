@@ -1534,7 +1534,7 @@ fn sync_sidebar_menu_button_paint_node(
     layout_tree: &mut LayoutTree,
     impact: &mut LayoutStatus,
 ) {
-    if el.attrs.get(ATTR_SLOT).map(String::as_str) != Some(SLOT_MENU_BUTTON) {
+    if el.attrs.get(ATTR_SIDEBAR).map(String::as_str) != Some("menu-button") {
         return;
     }
     let variant = sidebar_menu_button_variant(el);
