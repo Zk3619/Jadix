@@ -59,11 +59,7 @@ impl Pipeline {
                 let mut mapped = D3D11_MAPPED_SUBRESOURCE::default();
                 c.Map(b, 0, D3D11_MAP_WRITE_DISCARD, 0, Some(&mut mapped))
                     .map_err(device_error)?;
-                core::ptr::copy_nonoverlapping(
-                    values.as_ptr(),
-                    mapped.pData.cast(),
-                    4,
-                );
+                core::ptr::copy_nonoverlapping(values.as_ptr(), mapped.pData.cast(), 4);
                 c.Unmap(b, 0);
             }
             *last = Some(values);
@@ -232,7 +228,9 @@ impl HalDevice {
             };
             out.push((e.binding, layout.visibility, binding));
         }
-        Ok(BindGroup { entries: out.into() })
+        Ok(BindGroup {
+            entries: out.into(),
+        })
     }
 }
 impl BindGroup {

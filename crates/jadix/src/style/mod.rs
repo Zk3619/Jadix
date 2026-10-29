@@ -24,7 +24,7 @@ mod focus_ring;
 mod generator;
 mod glass;
 pub(crate) mod gradient;
-mod into_value;
+pub(crate) mod into_value;
 pub mod keyframes;
 mod keyframes_parse;
 pub(crate) mod liquid_flow;
@@ -35,6 +35,7 @@ mod specified;
 pub mod stylesheet;
 pub mod svg_filter;
 mod tailwind_leading;
+mod text_align_last;
 mod text_style;
 mod theme;
 mod theme_override;
@@ -136,6 +137,8 @@ pub use keyframes::{
     sample_keyframes_eased, KeyframeBase, KeyframeCoverage, KeyframeSample, KeyframeStop,
 };
 pub use keyframes_parse::parse_and_register_keyframes;
+#[cfg(debug_assertions)]
+pub(crate) use keyframes_parse::parse_keyframe_definitions;
 pub use offset_path::{parse_offset_path, OffsetPath};
 pub use scroll_timeline::{
     lookup_named, map_animation_range, normalize_timeline_name, parse_range_progress,
@@ -167,6 +170,7 @@ pub use tailwind_leading::{
     TAILWIND_TEXT_BASE_LEADING_SCALE, TAILWIND_TEXT_LG_LEADING_SCALE,
     TAILWIND_TEXT_SM_LEADING_SCALE, TAILWIND_TEXT_XL_LEADING_SCALE, TAILWIND_TEXT_XS_LEADING_SCALE,
 };
+pub use text_align_last::{TextAlignLast, TextAlignLastDeclaration};
 pub use text_style::{
     parse_text_shadow, InputCaretDraw, TextAlign, TextAlignDeclaration, TextDecorationStyle,
     TextDirection, TextOverflow, TextSpan, TextSpanKind, TextStyle, WhiteSpace,

@@ -1,16 +1,22 @@
-# Jadix 应用接入手册
+# Jadix 项目文档
 
-> 此目录保留应用使用／集成文档；项目状态、执行和设计统一从 [development-docs](../development-docs/README.md) 进入。本页不声明所有平台均已验收。
+本目录仅维护项目权威使用说明、配置契约、架构边界和贡献规范。
+可执行示例与配置归 `examples/`；研究审计、阶段台账和原始证据另行保存。正常消费不依赖另行检出的开发文档仓。
 
-| 文档 | 内容与边界 |
+| 文档 | 内容 |
 | --- | --- |
-| [WebView](webview.md) | 系统 WebView 接入、平台要求、生命周期及实际验证限制 |
-| [异步与网络](async-architecture.md) | TaskScope、owner 桥与外部适配；设计项和已有接口分开 |
-| [桌面窗口](desktop-windows.md) | 桌面作者 API／行为；开发期契约补充见 [窗口规范](../development-docs/ops/native_window_and_menu.md) |
-| [DevTools 与热重载](devtools.md) | Gallery 使用与限制；内部机制见 [开发工具手册](../development-docs/ops/devtools.md) |
-| [ScalePreview](../crates/jadix/SCALE_PREVIEW.md) | 框架级逻辑视口缩放；支持非 DevTools 场景与独立浮层宿主 |
-| [应用图标与托盘](application-icons.md) | 产品集成；配置示例 [app-icons.example.toml](app-icons.example.toml) |
-| [自定义组件作者接口](component-authoring.md) | 框架共享样式／槽位、组件宏的显式运行时路径与兼容边界 |
-| [Feature 配置清单](FEATURES.md) | 已实现能力、默认值与核心保留范围；开发期候选/拆分/测试与文档治理见 development-docs |
+| [Feature](FEATURES.md) | 默认值、可选能力与后端 |
+| [状态管理](state-management.md) | Signal、Store 与 Owner |
+| [异步与网络](async-architecture.md) | 执行器、取消、背压及运行时适配 |
+| [远程资源](remote-assets.md) | 字节缓存与鉴权／失效边界 |
+| [组件作者接口](component-authoring.md) | Builder、宏、共享样式与宿主接入 |
+| [样式与对齐](styling.md) | Flex/Grid、文本与绘制边界 |
+| [桌面窗口](desktop-windows.md) | 全屏、实例与生命周期 |
+| [DevTools](devtools.md) | Inspector、Sources 与 Debug 热更 |
+| [应用图标](application-icons.md) | 生成与平台接入；[配置示例](../examples/config/app-icons.toml) |
+| [WebView](webview.md) | 系统 WebView 接入与限制 |
+| [迁移说明](migration.md) | 产品拆分、feature、宏路径与维护叉 |
+| [测试规范](testing.md) | 归属、发现入口与执行条件 |
+| [发布流程](releasing.md) | 归档、双语文档、权限与真实仓外验证 |
 
-源码、包或 feature 变化时同步使用示例；拆分迁移按 R2／R4 的实际发布入口更新，不能预写尚不存在的 import 为当前可用。
+包内手册：[动画](../crates/jadix/MOTION.md)、[缩放预览](../crates/jadix/SCALE_PREVIEW.md)、[主题](../crates/jadix/THEMES.md)、[文档编辑](../crates/jadix/DOCUMENT_EDITING.md)、[文本视图](../crates/jadix/TEXT_DOCUMENT_VIEWS.md)。

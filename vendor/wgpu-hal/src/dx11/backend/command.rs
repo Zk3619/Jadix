@@ -67,7 +67,9 @@ unsafe fn upload(c: &ID3D11DeviceContext, b: &Buffer, range: Range<u64>) -> Devi
                     .map_err(device_error)?;
                 // Partial queue writes already update the shadow; discard needs all bytes.
                 core::ptr::copy_nonoverlapping(
-                    b.bytes().as_ptr(), mapped.pData.cast(), b.bytes().len(),
+                    b.bytes().as_ptr(),
+                    mapped.pData.cast(),
+                    b.bytes().len(),
                 );
                 c.Unmap(raw, 0);
             } else if !range.is_empty() {

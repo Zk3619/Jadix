@@ -344,12 +344,20 @@ impl<'a, W: fmt::Write> super::Writer<'a, W> {
             writeln!(self.out, "{}uint {};", back::INDENT, SPECIAL_OTHER)?;
             writeln!(self.out, "}};")?;
             if self.options.shader_model == ShaderModel::V5_0 {
-                writeln!(self.out, "cbuffer NagaDrawConstants : register(b{}) {{ {} {}; }};",
-                    bt.register, SPECIAL_CBUF_TYPE, SPECIAL_CBUF_VAR)?;
+                writeln!(
+                    self.out,
+                    "cbuffer NagaDrawConstants : register(b{}) {{ {} {}; }};",
+                    bt.register, SPECIAL_CBUF_TYPE, SPECIAL_CBUF_VAR
+                )?;
             } else {
-                write!(self.out, "ConstantBuffer<{}> {}: register(b{}",
-                    SPECIAL_CBUF_TYPE, SPECIAL_CBUF_VAR, bt.register)?;
-                if bt.space != 0 { write!(self.out, ", space{}", bt.space)?; }
+                write!(
+                    self.out,
+                    "ConstantBuffer<{}> {}: register(b{}",
+                    SPECIAL_CBUF_TYPE, SPECIAL_CBUF_VAR, bt.register
+                )?;
+                if bt.space != 0 {
+                    write!(self.out, ", space{}", bt.space)?;
+                }
                 writeln!(self.out, ");")?;
             }
 

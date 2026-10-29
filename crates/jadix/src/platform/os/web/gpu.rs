@@ -8,14 +8,5 @@ pub(crate) fn gpu_backend_order(_compositor_alpha: bool) -> Vec<(wgpu::Backends,
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn web_prefers_webgpu() {
-        assert_eq!(
-            gpu_backend_order(false).first().map(|(_, n)| *n),
-            Some("webgpu")
-        );
-    }
-}
+#[path = "tests/gpu.rs"]
+mod tests;

@@ -235,12 +235,19 @@ pub(crate) fn filter_demo_logo(filter: Option<&str>, class: Option<&str>) -> Ele
 fn filter_image_capture_remains_stable_across_fractional_scroll() {
     jadix::init();
     jadix::core::reactivity::create_root(|| {
-        let mut root = Element::new().w(400.0).h(300.0).overflow("scroll")
-            .child(filter_demo_logo(Some("grayscale(1)"), None).absolute().left(20.1).top(4800.3));
+        let mut root = Element::new().w(400.0).h(300.0).overflow("scroll").child(
+            filter_demo_logo(Some("grayscale(1)"), None)
+                .absolute()
+                .left(20.1)
+                .top(4800.3),
+        );
         let mut layout = jadix::layout::LayoutTree::new();
         layout.set_collect_skip_allowed(true);
         let mut key = None;
-        for (frame, offset) in [0.0, 0.1, 0.5, 12.3, 20.7, 70.1, 100.7, 0.0].into_iter().enumerate() {
+        for (frame, offset) in [0.0, 0.1, 0.5, 12.3, 20.7, 70.1, 100.7, 0.0]
+            .into_iter()
+            .enumerate()
+        {
             root.scroll_offset[1] = 4720.0 + offset;
             let _ = jadix::renderer::take_capture_jobs();
             let _ = jadix::renderer::take_filter_jobs();
@@ -252,13 +259,22 @@ fn filter_image_capture_remains_stable_across_fractional_scroll() {
             let output = scene.textured_draws.iter().find(|draw|
                 draw.texture_key.starts_with("jadix_filter:")).unwrap_or_else(|| panic!("filtered image output missing at frame {frame}, offset {offset}, bounds {:?}, scroll {:?}", root.children[0].layout_bounds, root.scroll_offset));
             if let Some(key) = &key {
-                assert_eq!(&output.texture_key, key, "filter cache changed at scroll {offset}");
+                assert_eq!(
+                    &output.texture_key, key,
+                    "filter cache changed at scroll {offset}"
+                );
             } else {
                 key = Some(output.texture_key.clone());
             }
             for capture in jadix::renderer::take_capture_jobs() {
-                assert_eq!(capture.textured_draws.len(), 1, "SVG SourceGraphic lost at {offset}");
-                assert!(capture.textured_draws[0].texture_key.starts_with("jadix-src:"));
+                assert_eq!(
+                    capture.textured_draws.len(),
+                    1,
+                    "SVG SourceGraphic lost at {offset}"
+                );
+                assert!(capture.textured_draws[0]
+                    .texture_key
+                    .starts_with("jadix-src:"));
             }
         }
         let _ = jadix::renderer::take_filter_jobs();

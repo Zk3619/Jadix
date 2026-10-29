@@ -10,24 +10,27 @@ use super::color::{f32_to_u8, parse_color, parse_text_color, rgba_u8_to_f32};
 use super::cursor::{CursorKind, CursorValue};
 
 macro_rules! impl_strish {
-    ($trait:ident, $method:ident, $out:ty, $convert:expr) => {
+    ($trait:ident, $method:ident, $out:ty, $convert:expr $(, $checked_method:ident, $checked_convert:expr)?) => {
         impl $trait for &str {
             #[inline]
             fn $method(self) -> $out {
                 $convert(self)
             }
+            $(fn $checked_method(self) -> Option<$out> { $checked_convert(self) })?
         }
         impl $trait for String {
             #[inline]
             fn $method(self) -> $out {
                 $convert(self.as_str())
             }
+            $(fn $checked_method(self) -> Option<$out> { $checked_convert(self.as_str()) })?
         }
         impl $trait for &String {
             #[inline]
             fn $method(self) -> $out {
                 $convert(self.as_str())
             }
+            $(fn $checked_method(self) -> Option<$out> { $checked_convert(self.as_str()) })?
         }
     };
 }
@@ -130,6 +133,12 @@ pub fn overflow_as_str(o: Overflow) -> &'static str {
 /// CSS `justify-content` / Tailwind `justify-*`.
 pub trait IntoJustifyContent {
     fn into_justify_content(self) -> JustifyContent;
+    fn try_into_justify_content(self) -> Option<JustifyContent>
+    where
+        Self: Sized,
+    {
+        Some(self.into_justify_content())
+    }
 }
 
 impl IntoJustifyContent for JustifyContent {
@@ -143,24 +152,35 @@ impl_strish!(
     IntoJustifyContent,
     into_justify_content,
     JustifyContent,
-    parse_justify_content
+    parse_justify_content,
+    try_into_justify_content,
+    try_parse_justify_content
 );
 
 pub fn parse_justify_content(keyword: &str) -> JustifyContent {
-    match keyword.trim().to_ascii_lowercase().as_str() {
-        "center" => JustifyContent::CENTER,
-        "start" | "flex-start" => JustifyContent::FLEX_START,
-        "end" | "flex-end" => JustifyContent::FLEX_END,
-        "between" | "space-between" => JustifyContent::SPACE_BETWEEN,
-        "around" | "space-around" => JustifyContent::SPACE_AROUND,
-        "evenly" | "space-evenly" => JustifyContent::SPACE_EVENLY,
-        _ => JustifyContent::FLEX_START,
-    }
+    try_parse_justify_content(keyword).unwrap_or(JustifyContent::NORMAL)
+}
+
+pub fn try_parse_justify_content(keyword: &str) -> Option<JustifyContent> {
+    let normalized = normalize_alignment_keyword(keyword);
+    let keyword = match normalized.as_str() {
+        "between" => "space-between",
+        "around" => "space-around",
+        "evenly" => "space-evenly",
+        keyword => keyword,
+    };
+    keyword.parse().ok()
 }
 
 /// CSS `align-items` / Tailwind `items-*`.
 pub trait IntoAlignItems {
     fn into_align_items(self) -> AlignItems;
+    fn try_into_align_items(self) -> Option<AlignItems>
+    where
+        Self: Sized,
+    {
+        Some(self.into_align_items())
+    }
 }
 
 impl IntoAlignItems for AlignItems {
@@ -174,18 +194,25 @@ impl_strish!(
     IntoAlignItems,
     into_align_items,
     AlignItems,
-    parse_align_items
+    parse_align_items,
+    try_into_align_items,
+    try_parse_align_items
 );
 
 pub fn parse_align_items(keyword: &str) -> AlignItems {
-    match keyword.trim().to_ascii_lowercase().as_str() {
-        "center" => AlignItems::CENTER,
-        "start" | "flex-start" => AlignItems::FLEX_START,
-        "end" | "flex-end" => AlignItems::FLEX_END,
-        "stretch" => AlignItems::STRETCH,
-        "baseline" => AlignItems::BASELINE,
-        _ => AlignItems::STRETCH,
-    }
+    try_parse_align_items(keyword).unwrap_or(AlignItems::NORMAL)
+}
+
+pub fn try_parse_align_items(keyword: &str) -> Option<AlignItems> {
+    normalize_alignment_keyword(keyword).parse().ok()
+}
+
+pub(crate) fn normalize_alignment_keyword(keyword: &str) -> String {
+    keyword
+        .split_ascii_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
 }
 
 /// CSS `flex-wrap`.
@@ -245,62 +272,5 @@ impl_strish!(
 );
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::style::{parse_color, LineStyle, TextAlign, TextAlignDeclaration, TextOverflow};
-
-    #[test]
-    fn paint_color_dual_accepts_token_and_array() {
-        let from_token = "primary".into_paint_color();
-        let parsed = parse_color("primary");
-        assert_eq!(from_token, parsed);
-        let arr = [0.1, 0.2, 0.3, 1.0];
-        assert_eq!(arr.into_paint_color(), arr);
-        assert_eq!((&arr).into_paint_color(), arr);
-    }
-
-    #[test]
-    fn overflow_dual_accepts_keyword_and_enum() {
-        assert_eq!("hidden".into_overflow(), Overflow::Hidden);
-        assert_eq!(Overflow::Clip.into_overflow(), Overflow::Clip);
-        assert_eq!(overflow_as_str(parse_overflow_keyword("auto")), "scroll");
-    }
-
-    #[test]
-    fn justify_and_items_parse_tailwind_aliases() {
-        assert_eq!(
-            "between".into_justify_content(),
-            JustifyContent::SPACE_BETWEEN
-        );
-        assert_eq!("center".into_align_items(), AlignItems::CENTER);
-        assert_eq!("wrap-reverse".into_flex_wrap(), FlexWrap::WrapReverse);
-    }
-
-    #[test]
-    fn local_enums_from_str_and_self() {
-        let overflow: TextOverflow = "ellipsis".into();
-        assert_eq!(overflow, TextOverflow::Ellipsis);
-        let align: TextAlign = "center".into();
-        assert_eq!(align, TextAlign::Center);
-        let decl: TextAlignDeclaration = "inherit".into();
-        assert_eq!(decl, TextAlignDeclaration::Inherit);
-        let decl2: TextAlignDeclaration = TextAlign::Right.into();
-        assert_eq!(decl2, TextAlignDeclaration::Value(TextAlign::Right));
-        let style: LineStyle = "dashed".into();
-        assert_eq!(style, LineStyle::Dashed);
-        assert_eq!(LineStyle::Solid, LineStyle::from("solid"));
-    }
-
-    #[test]
-    fn cursor_kind_and_inherit() {
-        assert_eq!(
-            CursorKind::Text.into_cursor().map(|c| c.kind),
-            Some(CursorKind::Text)
-        );
-        assert_eq!("inherit".into_cursor(), None);
-        assert_eq!(
-            "pointer".into_cursor().map(|c| c.kind),
-            Some(CursorKind::Pointer)
-        );
-    }
-}
+#[path = "tests/into_value.rs"]
+mod tests;

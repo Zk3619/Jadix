@@ -218,6 +218,12 @@ impl TexturePool {
         }
     }
 
+    #[cfg(debug_assertions)]
+    pub(crate) fn invalidate(&mut self, key: &str) {
+        self.map.remove(key);
+        self.meta.remove(key);
+    }
+
     pub fn get(&self, key: &str) -> Option<&GpuImageTexture> {
         self.map.get(key)
     }
@@ -302,59 +308,5 @@ impl DerefMut for TexturePool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::ResourceKind;
-
-    #[test]
-    fn resource_kind_from_key() {
-        assert_eq!(ResourceKind::from_key("jadix_path:ab"), ResourceKind::Path);
-        assert_eq!(
-            ResourceKind::from_key("jadix_canvas:01"),
-            ResourceKind::Canvas
-        );
-        assert_eq!(
-            ResourceKind::from_key("jadix_scene3d:8x8"),
-            ResourceKind::Scene3d
-        );
-        assert_eq!(
-            ResourceKind::from_key("jadix_shader:01"),
-            ResourceKind::Shader
-        );
-        assert_eq!(
-            ResourceKind::from_key("jadix_capture:x"),
-            ResourceKind::Capture
-        );
-        assert_eq!(
-            ResourceKind::from_key("jadix_filter_cap:x"),
-            ResourceKind::Capture
-        );
-        assert_eq!(
-            ResourceKind::from_key("jadix_zoom_cap:x"),
-            ResourceKind::Capture
-        );
-        assert_eq!(
-            ResourceKind::from_key("jadix_fx:blur"),
-            ResourceKind::Effect
-        );
-        assert_eq!(
-            ResourceKind::from_key("jadix_filter:1x1"),
-            ResourceKind::Effect
-        );
-        assert_eq!(
-            ResourceKind::from_key("jadix-src:a.png"),
-            ResourceKind::Image
-        );
-        assert_eq!(
-            ResourceKind::from_key("jadix-grad:deadbeef"),
-            ResourceKind::Gradient
-        );
-        assert_eq!(
-            ResourceKind::from_key("jadix_text_xform_v3:abc"),
-            ResourceKind::TextXform
-        );
-        assert_eq!(
-            ResourceKind::from_key("jadix_text_msdf_v2:abc"),
-            ResourceKind::TextXform
-        );
-    }
-}
+#[path = "tests/resources.rs"]
+mod tests;

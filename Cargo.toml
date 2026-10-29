@@ -1,37 +1,7 @@
 [workspace]
 members = ["crates/*", "examples/*"]
-exclude = [
-    "vendor/glyphon",
-    "vendor/taffy",
-    "vendor/naga",
-    "vendor/wgpu-core",
-    "vendor/wgpu-types",
-    "vendor/wgpu-hal",
-    "vendor/gpui-pre-windows-0.3.9",
-    "vendor/gpui-fast-windows-0.1.9",
-    "vendor/winit-wayland",
-    "vendor/winit-win32",
-]
+exclude = ["examples/config", "vendor/glyphon", "vendor/taffy", "vendor/naga", "vendor/wgpu-core", "vendor/wgpu-types", "vendor/wgpu-hal", "vendor/gpui-pre-windows-0.3.9", "vendor/gpui-fast-windows-0.1.9", "vendor/winit-wayland", "vendor/winit-win32", "vendor/wgpu", "vendor/wgpu-core-deps-apple", "vendor/wgpu-core-deps-emscripten", "vendor/wgpu-core-deps-wasm", "vendor/wgpu-core-deps-windows-linux-android", "vendor/wgpu-naga-bridge", "vendor/winit-android", "vendor/winit-appkit", "vendor/winit-common", "vendor/winit-core", "vendor/winit-ohos", "vendor/winit-orbital", "vendor/winit-uikit", "vendor/winit-web", "vendor/winit-x11"]
 resolver = "2"
-
-[patch.crates-io]
-naga = { path = "vendor/naga" }
-wgpu-core = { path = "vendor/wgpu-core" }
-wgpu-types = { path = "vendor/wgpu-types" }
-# Optional Windows EGL/ANGLE D3D11 path; default WGL/DX12 behavior is preserved.
-wgpu-hal = { path = "vendor/wgpu-hal" }
-# Batch on-demand glyph uploads; retain atlas pixels across growth instead of
-# rasterizing the same glyphs again. See vendor/glyphon/JADIX_PATCH.md.
-glyphon = { path = "vendor/glyphon" }
-# Retain intrinsic measurements across out-of-flow updates; see JADIX_PATCH.md.
-taffy = { path = "vendor/taffy" }
-# Some transitive crates also consume DPI types; keep those identical to Winit.
-dpi = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
-
-# OHOS uses Winit's fork URL; bind it to the exact same core/DPI as our facade.
-[patch."https://github.com/richerfu/winit.git"]
-winit-core = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
-dpi = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
 
 [workspace.package]
 version = "0.1.0"
@@ -40,7 +10,7 @@ license = "Apache-2.0"
 repository = "https://github.com/Zk3619/Jadix"
 
 # Single source of truth for versions. Member crates use `{ workspace = true }`
-# plus crate-local features / optional. Policy: development-docs/ops/crate_deps.md
+# plus crate-local features / optional. Package features and optionality remain local.
 [workspace.dependencies]
 jadix_window_materials = { path = "crates/jadix_window_materials", version = "0.1.0", default-features = false }
 jadix_renderer = { path = "crates/jadix_renderer", version = "0.1.0", default-features = false }
@@ -70,7 +40,7 @@ moka = { version = "0.12.16", default-features = false }
 # --- window / GPU ---
 # Local facade fork; backends/core are pinned together (see jadix_winit/README.md).
 winit = { package = "jadix_winit", path = "crates/jadix_winit", version = "0.31.0-beta.3-jadix.1" }
-winit-ohos = { git = "https://github.com/ohos-rs/winit-ohos.git", rev = "af4063b4e75b62b152a315d2606d799ca65bda84", version = "=0.31.0-beta.3", default-features = false }
+winit-ohos = { "package" = "jadix_winit_ohos", "version" = "=0.31.0-beta.3-jadix.1", "path" = "vendor/winit-ohos", "default-features" = false }
 wry = "=0.57.0"
 gtk = "0.18"
 jni = "0.21.1"
@@ -87,19 +57,15 @@ accesskit = "0.24.1"
 # Vulkan+GLES on Windows). Backends are selected by each consumer; jadix enables DX12 for the
 # Windows frame path. Vulkan stays opt-in.
 # glyphon 0.12 pins wgpu 30 + cosmic-text 0.19; swash/ttf-parser follow that stack.
-wgpu = { version = "30", default-features = false, features = [
-    "std",
-    "parking_lot",
-    "wgsl",
-] }
+wgpu = { "package" = "jadix_wgpu", "version" = "=30.0.0", "path" = "vendor/wgpu", "default-features" = false, "features" = ["std", "parking_lot", "wgsl"] }
 
 # --- layout / text ---
-taffy = "=0.15.0"
+taffy = { "package" = "jadix_taffy", "version" = "=0.15.0", "path" = "vendor/taffy" }
 bytemuck = { version = "1.25", features = ["derive"] }
 # Upstream glyphon 0.12 (Coverage only). CSS transform text uses Bake/Msdf offscreen path.
-glyphon = { version = "0.12", default-features = false }
+glyphon = { "package" = "jadix_glyphon", "version" = "=0.12.0", "path" = "vendor/glyphon", "default-features" = false }
 # Stack pin (not a direct dep). glyphon re-exports `glyphon::cosmic_text`.
-cosmic-text = "0.19"
+cosmic-text = { package = "jadix_cosmic_text", version = "=0.19.0", path = "vendor/cosmic-text" }
 swash = "0.2.6"
 ttf-parser = "0.25"
 unicode-segmentation = "1.11.0"

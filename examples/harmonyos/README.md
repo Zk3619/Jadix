@@ -31,13 +31,9 @@ cargo check -p harmonyos_host --lib --target aarch64-unknown-linux-ohos
 cargo check -p jadix_winit --lib --all-features --target aarch64-unknown-linux-ohos
 ```
 
-The cross-target Rust checks passed on 2026-10-16. These commands do not link a
-cdylib or certify GPU presentation, IME, focus, surface recreation, permissions,
-plugin deployment or exit on a device. Fork provenance and update requirements are
-in [jadix_winit](../../crates/jadix_winit/README.md); detailed acceptance records are
-in [the window manual](../../development-docs/ops/native_window_and_menu.md).
+These commands do not link a cdylib or certify GPU presentation, IME, focus, surface recreation, permissions, plugin deployment or device teardown. Fork provenance and update requirements are in [jadix_winit](../../crates/jadix_winit/README.md).
 
-## Native accessibility (2026-10-16)
+## Native accessibility
 
 Enable the a11y feature for the native ArkUI provider:
 
@@ -47,7 +43,7 @@ Enable the a11y feature for the native ArkUI provider:
     cargo test -p jadix --lib --features a11y a11y:: -- --test-threads=1
 
 Winit PR #4684 (head c9ee2bff) and AccessKit PR #828 (head b50ecd7e)
-were both OPEN, not merged, when checked on 2026-10-16. The pinned winit-ohos
+identify the imported source revisions. The pinned winit-ohos
 already supplies #4684's backend and the Ability accessibility state plugin.
 It does not supply the AccessKit semantic tree. The local jadix_accesskit_ohos
 crate backports #828 to AccessKit 0.24.1 / consumer 0.38.0. It uses API-15
@@ -57,7 +53,7 @@ The native semantic provider uses the XComponent API and does not require an
 additional HAR. Screen-reader state/font-scale APIs are separate extended
 plugins and require their matching HARs if enabled.
 
-Device acceptance remains PENDING: enable/disable the system screen reader;
+Verify on each supported device: enable/disable the system screen reader;
 verify role/name/value and reading order; activate buttons; move focus; change
 DPI; background/foreground the Ability; destroy/recreate the XComponent; ensure
 old callbacks/actions cannot affect a replacement; repeat with supported

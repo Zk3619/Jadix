@@ -1,5 +1,5 @@
 //! GPU regression for the modal's blur + blit in a single command encoder.
-use jadix::renderer::{BackdropBlurPipeline, offscreen::OffscreenGpu};
+use jadix::renderer::{offscreen::OffscreenGpu, BackdropBlurPipeline};
 
 fn blur_then_blit_preserves_pass_uniforms() {
     let gpu = OffscreenGpu::with_backends(wgpu::Backends::GL).expect("GL adapter");
@@ -126,8 +126,10 @@ fn blur_then_blit_preserves_pass_uniforms() {
         for x in 48..80 {
             for channel in 0..4 {
                 let index = (y * 128 + x) * 4 + channel;
-                assert!(full[index].abs_diff(cropped[index]) <= 1,
-                    "local blur seam at {x},{y}, channel {channel}");
+                assert!(
+                    full[index].abs_diff(cropped[index]) <= 1,
+                    "local blur seam at {x},{y}, channel {channel}"
+                );
             }
         }
     }
@@ -157,8 +159,10 @@ fn blur_then_blit_preserves_pass_uniforms() {
         let pixels = render(&mut blur, false, 20.0, None);
         let actual = pixels[(64 * 128 + 64) * 4 + 3];
         let expected = (alpha * 255.0).round() as u8;
-        assert!(actual.abs_diff(expected) <= 2,
-            "blur must preserve material alpha {alpha}, got {actual}/255");
+        assert!(
+            actual.abs_diff(expected) <= 2,
+            "blur must preserve material alpha {alpha}, got {actual}/255"
+        );
     }
 }
 

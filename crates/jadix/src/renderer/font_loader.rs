@@ -497,7 +497,10 @@ fn load_lazy_cjk(db: &mut Database, state: &mut LazyFontState) {
     // Prefer project Noto when explicitly requested / featured.
     #[cfg(feature = "bundled-cjk")]
     {
-        load_static_bytes(db, include_bytes!("../../assets/NotoSansCJK.ttc"));
+        load_static_bytes(
+            db,
+            include_bytes!(concat!(env!("JADIX_BUNDLED_FONT_DIR"), "/NotoSansCJK.ttc")),
+        );
     }
     #[cfg(not(feature = "bundled-cjk"))]
     {
@@ -516,7 +519,10 @@ fn load_lazy_cjk(db: &mut Database, state: &mut LazyFontState) {
     if env_flag_enabled("JADIX_LOAD_CJK_SERIF") || cfg!(feature = "fonts-cjk-serif") {
         #[cfg(feature = "bundled-cjk-serif")]
         {
-            load_static_bytes(db, include_bytes!("../../assets/NotoSerifCJK.ttc"));
+            load_static_bytes(
+                db,
+                include_bytes!(concat!(env!("JADIX_BUNDLED_FONT_DIR"), "/NotoSerifCJK.ttc")),
+            );
         }
         #[cfg(not(feature = "bundled-cjk-serif"))]
         {
@@ -530,9 +536,18 @@ fn load_lazy_emoji(db: &mut Database, state: &mut LazyFontState) {
     {
         load_static_bytes(
             db,
-            include_bytes!("../../assets/NotoColorEmoji_WindowsCompatible.ttf"),
+            include_bytes!(concat!(
+                env!("JADIX_BUNDLED_FONT_DIR"),
+                "/NotoColorEmoji_WindowsCompatible.ttf"
+            )),
         );
-        load_static_bytes(db, include_bytes!("../../assets/NotoColorEmoji.ttf"));
+        load_static_bytes(
+            db,
+            include_bytes!(concat!(
+                env!("JADIX_BUNDLED_FONT_DIR"),
+                "/NotoColorEmoji.ttf"
+            )),
+        );
     }
     #[cfg(not(feature = "bundled-emoji"))]
     {
@@ -565,13 +580,34 @@ fn load_lazy_symbols(db: &mut Database, state: &mut LazyFontState) {
     if env_flag_enabled("JADIX_LOAD_SYMBOLS") || cfg!(feature = "bundled-symbols") {
         #[cfg(feature = "bundled-symbols")]
         {
-            load_static_bytes(db, include_bytes!("../../assets/NotoSansSymbols-wght.ttf"));
             load_static_bytes(
                 db,
-                include_bytes!("../../assets/NotoSansSymbols2-Regular.ttf"),
+                include_bytes!(concat!(
+                    env!("JADIX_BUNDLED_FONT_DIR"),
+                    "/NotoSansSymbols-wght.ttf"
+                )),
             );
-            load_static_bytes(db, include_bytes!("../../assets/NotoSansMath-Regular.ttf"));
-            load_static_bytes(db, include_bytes!("../../assets/NotoMusic-Regular.ttf"));
+            load_static_bytes(
+                db,
+                include_bytes!(concat!(
+                    env!("JADIX_BUNDLED_FONT_DIR"),
+                    "/NotoSansSymbols2-Regular.ttf"
+                )),
+            );
+            load_static_bytes(
+                db,
+                include_bytes!(concat!(
+                    env!("JADIX_BUNDLED_FONT_DIR"),
+                    "/NotoSansMath-Regular.ttf"
+                )),
+            );
+            load_static_bytes(
+                db,
+                include_bytes!(concat!(
+                    env!("JADIX_BUNDLED_FONT_DIR"),
+                    "/NotoMusic-Regular.ttf"
+                )),
+            );
         }
         #[cfg(not(feature = "bundled-symbols"))]
         {
@@ -768,7 +804,10 @@ fn load_eager_bundled_fonts(db: &mut Database, state: &mut LazyFontState) {
     // Escape hatches that force eager Noto loads (single-file / CI demos).
     #[cfg(feature = "bundled-cjk")]
     {
-        load_static_bytes(db, include_bytes!("../../assets/NotoSansCJK.ttc"));
+        load_static_bytes(
+            db,
+            include_bytes!(concat!(env!("JADIX_BUNDLED_FONT_DIR"), "/NotoSansCJK.ttc")),
+        );
         state.attempted.cjk = true;
     }
     #[cfg(not(feature = "bundled-cjk"))]
@@ -785,9 +824,18 @@ fn load_eager_bundled_fonts(db: &mut Database, state: &mut LazyFontState) {
     {
         load_static_bytes(
             db,
-            include_bytes!("../../assets/NotoColorEmoji_WindowsCompatible.ttf"),
+            include_bytes!(concat!(
+                env!("JADIX_BUNDLED_FONT_DIR"),
+                "/NotoColorEmoji_WindowsCompatible.ttf"
+            )),
         );
-        load_static_bytes(db, include_bytes!("../../assets/NotoColorEmoji.ttf"));
+        load_static_bytes(
+            db,
+            include_bytes!(concat!(
+                env!("JADIX_BUNDLED_FONT_DIR"),
+                "/NotoColorEmoji.ttf"
+            )),
+        );
         state.attempted.emoji = true;
     }
 
@@ -851,144 +899,5 @@ pub fn create_font_system() -> FontSystem {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn warm_coverage_does_not_wait_for_another_threads_font_load() {
-        use std::sync::mpsc;
-        use std::time::{Duration, Instant};
-
-        let mut fs = create_font_system();
-        ensure_coverage_for_text(&mut fs, "中文");
-        let (ready_tx, ready_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let loader = std::thread::spawn(move || {
-            with_lazy_state(|_state| {
-                ready_tx.send(()).unwrap();
-                let _ = release_rx.recv_timeout(Duration::from_secs(2));
-            });
-        });
-        ready_rx.recv().unwrap();
-        let start = Instant::now();
-        ensure_coverage_for_text(&mut fs, "中文");
-        let elapsed = start.elapsed();
-        let _ = release_tx.send(());
-        loader.join().unwrap();
-        assert!(
-            elapsed < Duration::from_millis(400),
-            "warm coverage blocked for {elapsed:?}"
-        );
-    }
-
-    #[test]
-    fn unix_symbol_fallback_preserves_warm_font_caches() {
-        let needs = ScriptNeeds {
-            symbols: true,
-            ..Default::default()
-        };
-        let mut source = create_font_system();
-        ensure_scripts(&mut source, needs);
-        // Reuse a real face but project Unix's fallback family into its fontdb
-        // metadata, so this regression also runs on Windows build hosts.
-        let mut face = source.db().faces().next().expect("UI font").clone();
-        let language = face.families[0].1;
-        face.families = vec![("DejaVu Sans".into(), language)];
-        let mut db = Database::new();
-        db.push_face_info(face);
-        let mut fs = FontSystem::new_with_locale_and_db("en-US".into(), db);
-        let attrs = glyphon::Attrs::new().family(glyphon::Family::Name("DejaVu Sans"));
-        let matches = fs.get_font_matches(&attrs);
-        let faces = fs.db().len();
-        for _ in 0..100 {
-            ensure_coverage_for_text(&mut fs, "∑ → ★");
-            assert!(
-                std::sync::Arc::ptr_eq(&matches, &fs.get_font_matches(&attrs)),
-                "an already loaded Unix symbol fallback must not clear font matching every frame"
-            );
-            assert_eq!(
-                fs.db().len(),
-                faces,
-                "must not inject duplicate fallback faces"
-            );
-        }
-    }
-
-    #[test]
-    fn shared_font_file_is_not_loaded_again() {
-        let path = crate::platform::eager_ui_font_files()
-            .iter()
-            .find_map(|name| crate::platform::resolve_system_font(name))
-            .expect("system UI font");
-        let bytes = std::sync::Arc::new(std::fs::read(&path).unwrap());
-        let mut db = Database::new();
-        db.load_font_source(glyphon::fontdb::Source::SharedFile(path.clone(), bytes));
-        let faces = db.len();
-        assert!(faces > 0);
-        assert!(try_load_font_path(
-            &mut db,
-            &path,
-            &mut LazyFontState::default()
-        ));
-        assert_eq!(
-            db.len(),
-            faces,
-            "cosmic-text's shared file source must remain deduplicated"
-        );
-    }
-
-    #[test]
-    fn deferred_emoji_coverage_preserves_font_match_cache() {
-        if env_flag_enabled("JADIX_LOAD_SYSTEM_EMOJI") {
-            return;
-        }
-        let mut fs = create_font_system();
-        let attrs = glyphon::Attrs::new().family(glyphon::Family::SansSerif);
-        let matches = fs.get_font_matches(&attrs);
-        for _ in 0..3 {
-            ensure_scripts(
-                &mut fs,
-                ScriptNeeds {
-                    emoji: true,
-                    ..Default::default()
-                },
-            );
-            assert!(
-                std::sync::Arc::ptr_eq(&matches, &fs.get_font_matches(&attrs)),
-                "deferred emoji coverage must not invalidate font matching"
-            );
-        }
-    }
-
-    #[test]
-    fn ensure_coverage_injects_cjk_into_each_font_system() {
-        let mut layout_fs = create_font_system();
-        let mut render_fs = create_font_system();
-        ensure_coverage_for_text(&mut layout_fs, "中文");
-        ensure_coverage_for_text(&mut render_fs, "日本語");
-        assert!(
-            cjk_coverage_present(layout_fs.db()),
-            "layout FontSystem missing CJK after ensure_coverage"
-        );
-        assert!(
-            cjk_coverage_present(render_fs.db()),
-            "render FontSystem missing CJK after ensure_coverage (global loaded_paths short-circuit regression)"
-        );
-    }
-
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn windows_eager_opens_times_new_roman_when_present() {
-        let path = std::path::PathBuf::from(r"C:\Windows\Fonts\times.ttf");
-        if !path.is_file() {
-            return;
-        }
-        let fs = create_font_system();
-        assert!(
-            fs.db()
-                .faces()
-                .any(|face| face.families.iter().any(|(f, _)| f == "Times New Roman")),
-            "times.ttf is on disk but Times New Roman is missing from fontdb"
-        );
-    }
-}
+#[path = "tests/font_loader.rs"]
+mod tests;

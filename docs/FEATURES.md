@@ -9,14 +9,9 @@
 `remote-asset-cache` 启用 remote-asset 与 Moka 字节缓存，需要显式安装 CachedRemoteAssetFetcher。
 详见[异步架构](async-architecture.md)、[共享远程资源缓存](remote-assets.md)与[状态管理](state-management.md)。
 
-## 拆分状态总览
+## 包与能力边界
 
-本页回答三个不同问题：**已拆成 feature 的能力**见下表及各能力明细；
-**仍默认保留且不能通过 feature 关闭的能力**见[框架核心表](#始终保留的框架核心不受-feature-裁剪)；
-**可以继续拆成 feature、但目前还未拆分的能力**见[开发期候选表](../development-docs/engine/FEATURES.md)。
-独立包的现状与候选见 [CRATES.md](../development-docs/engine/CRATES.md)；有 feature 不等于已经有独立 crate，
-已有独立 crate 也不等于它是可选依赖。
-具体审计、解耦、实施与验收步骤见 [拆分流程](../development-docs/plans/SPLITTING.md)。
+本页以当前 Cargo 清单为准，区分核心、默认能力、可选 feature 和兼容别名。独立包不等于可选依赖；安装和产品拆分见[迁移说明](migration.md)。
 
 高层拖放的宿主输入、唤醒、布局和 collect 接入现通过 `utils::drag::runtime` 登记，内置 DnD 在产品侧实现适配。`drag::pointer`／`drag::routing`／`drag::runtime` 是实际接口；`drag` 控制基础拖动，高层产品已迁到独立 `jadix_dnd`；框架不再提供 `dnd` 开关，用法和限制见[组件作者接口](component-authoring.md#高层拖放的宿主接入)。
 
@@ -71,7 +66,7 @@
 | `product-tests` | 否 | 同源宿主测试桥，启用 drag 与宏以保留历史回归身份 | 不参与生产产品分发 |
 | `file-persistence` | 否 | 窗口状态及编辑器等落盘能力 | 不写入持久化文件；内存状态仍保留 |
 | `native-clipboard` | 是 | 可选 `jadix_clipboard` 及系统文本读写；快捷键和输入协议不随之裁剪 | 读取返回 None，写入不访问系统剪贴板；不维护隐式替代剪贴板 |
-| `macros` | 是（兼容现有默认作者面） | 可选 `jadix_macros`、`ui!`、`#[component]`、`#[main]` 及原语的宏专用 Props | 纯框架关闭默认 features 后可用普通函数／Builder；R2 过渡期旧 `components` 仍显式启用此项，新产品不得继承这一强制关系 |
+| `macros` | 是（兼容现有默认作者面） | 可选 `jadix_macros`、`ui!`、`#[component]`、`#[main]` 及原语的宏专用 Props | 纯框架关闭默认 features 后可用普通函数／Builder；独立产品通过各自的 `macros` feature 显式选择宏作者入口 |
 | `drag` | 是（由组件间接开启） | 基础指针会话及 routing/runtime 宿主桥；不包含高层 DnD 实现 | 关闭后指针会话／注册不启动；选择与原生窗口拖动仍由核心输入处理 |
 | `default` | 是 | `macros`、`backend-dx12`、`backend-gles`、`backend-metal`、`window-materials`、`theme-shadcn`、`animation-base`、`native-clipboard`、`images` | `default-features = false` 后由应用自行选择后端、剪贴板及图片格式 |
 | `theme-shadcn` | 是 | 将 Shadcn 加入可选预设列表 | 基础令牌仍在核心；不再加入预设列表 |
@@ -194,12 +189,6 @@ AccessKit 的 Windows 依赖由 `a11y` 接管，不再把隐式依赖名 `access
 | `net` | 否 | 可选 jadix_net | 不加入网络客户端能力 |
 | `net-json` | 否 | `net` + jadix_net/json | 不加入 JSON 网络便利 API |
 
-## 开发期拆分资料
-
-后续 feature 候选与保留边界见 [开发候选清单](../development-docs/engine/FEATURES.md)，
-独立包现状与候选见 [Crate 清单](../development-docs/engine/CRATES.md)，
-实施与验收见 [拆分流程](../development-docs/plans/SPLITTING.md)。
-这些页面属于独立开发文档仓库；本页的已实现配置表不依赖其检出即可使用或校验。
 
 ## 配置组合与依赖边界
 
@@ -228,8 +217,8 @@ jadix = { version = "0.1", default-features = false, features = [
 Cargo 同次构建会合并同一个包的 feature，因此精简依赖检查要使用 `-p jadix` 或独立应用，
 不能拿 Gallery/整个工作区的依赖图代表最小配置。实际窗口仍需选择平台支持的 GPU 后端。
 
-源码仓的 `scripts/check-features.ps1 -InventoryOnly` 校验本清单覆盖所有已声明开关；
-开发期编译、测试与迁移验收命令统一维护在拆分/测试治理流程中。
+源码仓的 `scripts/checks/check-features.ps1 -InventoryOnly` 校验本清单覆盖所有已声明开关；
+测试配置与执行条件见[测试规范](testing.md)。
 
 ## 框架与产品的验证配置
 
@@ -237,7 +226,7 @@ Cargo 同次构建会合并同一个包的 feature，因此精简依赖检查要
 
 GPU 集成测试需要选择当前平台支持的后端；完全不启用后端的配置验证 CPU／协议能力，不代表执行过 GPU 绘制。Gallery 仍位于 `examples/gallery`，可用 `cargo build -p gallery` 验证产品组合。
 
-### Lucide 统一产品（R2）
+### Lucide 图标产品
 
 `jadix_lucide` 是一个包，包含静态目录、字体、SVG 路径、UI 适配及动画配方；不需额外数据 crate。
 默认 `ui,paths` 提供可直接安装的静态图标产品，不启用 UI 宏；调用 `jadix_lucide::install()` 注册目录与字体。

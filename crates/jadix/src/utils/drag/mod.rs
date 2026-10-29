@@ -160,5 +160,5 @@ pub const ATTR_DRAG_SELECTED: &str = "jadix_drag_selected";
 pub const ATTR_DRAG_HOLE_PREVIEW: &str = "jadix_drag_hole_preview";
 
 #[cfg(all(test, feature = "product-tests"))]
-#[path = "../../../../jadix_dnd/src/utils/drag/window_tests.rs"]
+#[path = "../../../../jadix_dnd/src/utils/drag/tests/window.rs"]
 mod window_tests;

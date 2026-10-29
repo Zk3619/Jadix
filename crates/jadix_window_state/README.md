@@ -1,62 +1,34 @@
 # jadix_window_state
 
-跨平台窗口状态持久化（位置 / 尺寸 / 最大化 / 全屏 / 装饰 / 可见性）。状态以 **TOML** 落盘；默认写在**运行路径**（`std::env::current_dir()`），可用 Builder 或环境变量覆盖。
+[English](README.md) | [简体中文](README.zh.md)
 
-这是 W4 伞形下的**可选能力 crate**（与 `jadix_icons` / `jadix_devtools` 同分层）：Jadix 核心不内置持久化，只保留极薄的 `WindowLifecycleHook`。应用显式依赖本 crate。
+Cross-platform window state persistence (TOML) for jadix / winit apps.
 
-参考实现：[tauri-plugin-window-state](https://github.com/tauri-apps/plugins-workspace/tree/v2/plugins/window-state)（JSON → TOML，默认路径从 app-config-dir → 运行路径）。
+Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; prepared version `0.1.0`, not yet published.** Local archives and manifests do not prove registry availability.
 
-| Platform | Supported |
-|----------|-----------|
-| Linux    | ✓         |
-| Windows  | ✓         |
-| macOS    | ✓         |
-| Android / iOS | ×    |
+## Installation
 
-## Install
+After the prepared version is published:
 
 ```toml
 [dependencies]
-jadix_window_state = { version = "0.1", features = ["jadix"] }
+jadix_window_state = "=0.1.0"
 ```
 
-## Usage
+Before publication, use the source workspace. Consumers use one registry graph without copying private path/git/patch overrides. Platform-specific packages require the corresponding SDK.
 
-```rust
-fn main() {
-    jadix_window_state::Builder::new()
-        .with_filename("my-app.window-state.toml")
-        // .with_path("D:/data/windows.toml")  // 覆盖默认运行路径
-        // .with_storage(StorageLocation::ExecutableDir)
-        .install()
-        .expect("window state");
+## Features and scope
 
-    jadix::app::run(build_ui);
-}
-```
+Default features: `winit`. See [Cargo.toml](Cargo.toml) for the complete feature/dependency graph. A feature flag does not establish platform runtime validation. Applications normally select internal GPU/window packages through their facade rather than depending on platform internals.
 
-默认文件：`{cwd}/window-state.toml`。覆盖优先级：
+## Usage details
 
-1. `Builder::with_path` / `with_storage(File | Directory)`（代码显式路径）
-2. 环境变量 `JADIX_WINDOW_STATE_PATH`（文件或目录）
-3. `StorageLocation::CurrentDir`（默认运行路径）或 `ExecutableDir`
+The existing [package guide](GUIDE.md) retains additional API, platform and source details; it may use another language.
 
-主窗默认 label 为 `main`。副窗须在 `WindowOptions::window_label` 上命名才会被跟踪。
+## Documentation and contributions
 
-通过 `Builder::install` 接入 Jadix 时，创建回调仅恢复几何等状态，首次显示和聚焦由
-渲染器负责，避免 GPU 初始化期间提前暴露空白窗口。保存的可见性仍保留；手动调用
-`WindowStateManager::restore` 时仍按 `StateFlags::VISIBLE` 恢复可见性。
+[Project documentation](https://github.com/Zk3619/Jadix/tree/main/docs) covers usage, migration, testing and releases. Preserve test discovery and keep private module tests separate from public integration contracts. Update both README languages when changing package setup.
 
-```toml
-[windows.main]
-width = 1440
-height = 900
-x = 80
-y = 40
-prev_x = 80
-prev_y = 40
-maximized = false
-visible = true
-decorated = true
-fullscreen = false
-```
+## License
+
+Apache-2.0. Preserve [LICENSE](LICENSE) and dependency notices.

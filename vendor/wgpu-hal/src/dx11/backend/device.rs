@@ -42,9 +42,17 @@ impl crate::Device for HalDevice {
                             ByteWidth: allocated
                                 .try_into()
                                 .map_err(|_| crate::DeviceError::OutOfMemory)?,
-                            Usage: if uniform { D3D11_USAGE_DYNAMIC } else { D3D11_USAGE_DEFAULT },
+                            Usage: if uniform {
+                                D3D11_USAGE_DYNAMIC
+                            } else {
+                                D3D11_USAGE_DEFAULT
+                            },
                             BindFlags: flags,
-                            CPUAccessFlags: if uniform { D3D11_CPU_ACCESS_WRITE.0 as u32 } else { 0 },
+                            CPUAccessFlags: if uniform {
+                                D3D11_CPU_ACCESS_WRITE.0 as u32
+                            } else {
+                                0
+                            },
                             MiscFlags: if flags & D3D11_BIND_SHADER_RESOURCE.0 as u32 != 0 {
                                 D3D11_RESOURCE_MISC_BUFFER_ALLOW_RAW_VIEWS.0 as u32
                             } else {

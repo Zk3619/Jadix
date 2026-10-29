@@ -669,6 +669,8 @@ impl Drop for UnmountHook {
 
 impl Drop for Element {
     fn drop(&mut self) {
+        #[cfg(all(debug_assertions, feature = "devtools"))]
+        crate::app::devtools::forget_instance(self.inspector_instance_id);
         // Default recursive `Vec<Element>` Drop still overflows on tall trees: each
         // handle drops `Box<ElementInner>` which owns `children`. Drain iteratively
         // and recycle detached inners into the TLS slab (retained-tree analog of
@@ -948,7 +950,21 @@ pub fn find_path_in_tree(
 
 /// Heap payload of [`Element`]. Public fields stay reachable via `Deref`
 /// (`el.style`, `el.children`, …) so builder / layout call sites do not change.
+#[cfg(debug_assertions)]
+#[derive(Clone)]
+pub(crate) struct HotReloadDeclarationBase {
+    pub style: Box<crate::style::Style>,
+    pub text_style: Box<TextStyle>,
+    pub class_set: Option<crate::style::ClassSet>,
+    pub names: Vec<String>,
+    pub opaque: bool,
+}
+
+pub use jadix_hot_reload::TemplateDescription;
+
 pub struct ElementInner {
+    #[cfg(debug_assertions)]
+    pub(crate) hot_reload_declaration_base: Option<Box<HotReloadDeclarationBase>>,
     pub style: Box<crate::style::Style>,
     pub children: Vec<Element>,
     pub text: Option<String>,
@@ -958,7 +974,7 @@ pub struct ElementInner {
     pub text_shape_suffix: Option<String>,
     pub text_style: Box<TextStyle>,
     pub(crate) inherited_text_style: Option<Box<TextStyle>>,
-    #[cfg(all(debug_assertions, feature = "devtools"))]
+    #[cfg(debug_assertions)]
     pub(crate) inspector_instance_id: u64,
     pub layout_bounds: [f32; 4],
     /// Last fully collected subtree extent (`max_right`, `max_bottom`) in abs layout px.
@@ -1138,9 +1154,11 @@ fn blank_inner() -> ElementInner {
         text: None,
         text_spans: None,
         text_shape_suffix: None,
+        #[cfg(debug_assertions)]
+        hot_reload_declaration_base: None,
         text_style: Box::new(TextStyle::default()),
         inherited_text_style: None,
-        #[cfg(all(debug_assertions, feature = "devtools"))]
+        #[cfg(debug_assertions)]
         inspector_instance_id: {
             static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
             NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -1256,6 +1274,8 @@ fn alloc_inner() -> Box<ElementInner> {
 }
 
 fn recycle_inner_box(mut inner: Box<ElementInner>) {
+    #[cfg(all(debug_assertions, feature = "devtools"))]
+    crate::app::devtools::forget_instance(inner.inspector_instance_id);
     let _ = INNER_SLAB.try_with(|cell| {
         let mut slab = cell.borrow_mut();
         if slab.free.len() >= INNER_SLAB_CAP {
@@ -1963,6 +1983,53 @@ impl Element {
         crate::app::tree_hit::collision_hit_box(self, self.paint_scroll_acc)
     }
 
+    pub fn hot_reload_declaration_base(self, names: &[&str], opaque: bool) -> Self {
+        #[cfg(debug_assertions)]
+        {
+            let mut element = self;
+            element.hot_reload_declaration_base = Some(Box::new(HotReloadDeclarationBase {
+                style: element.style.clone(),
+                text_style: element.text_style.clone(),
+                class_set: element.class_set.clone(),
+                names: names.iter().map(|name| (*name).to_string()).collect(),
+                opaque,
+            }));
+            element
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = (names, opaque);
+            self
+        }
+    }
+
+    pub fn hot_reload_node_type(mut self, name: &str) -> Self {
+        #[cfg(debug_assertions)]
+        self.set_attr("jadix_ui_node_type", name);
+        #[cfg(not(debug_assertions))]
+        let _ = name;
+        self
+    }
+
+    pub fn hot_reload_description(self, description: TemplateDescription) -> Self {
+        #[cfg(debug_assertions)]
+        {
+            let mut element = self;
+            if let Some(tree) = &description.tree {
+                crate::core::hot_reload::bind(&mut element, tree);
+            }
+            if let Ok(description) = serde_json::to_string(&description) {
+                element.set_attr("jadix_ui_description", description);
+            }
+            element
+        }
+        #[cfg(not(debug_assertions))]
+        {
+            let _ = description;
+            self
+        }
+    }
+
     pub fn template_hash(mut self, hash: impl Into<String>) -> Self {
         self.template_hash = Some(hash.into());
         self
@@ -2404,22 +2471,77 @@ impl Element {
         self
     }
     pub fn text_align(mut self, align: impl Into<TextAlignDeclaration>) -> Self {
-        use crate::style::TextAlign;
-        match align.into() {
-            TextAlignDeclaration::Inherit => {
-                self.text_style.align = None;
-            }
-            TextAlignDeclaration::Initial => {
-                self.text_style.align = Some(TextAlign::Start);
-            }
-            TextAlignDeclaration::Value(v) => {
-                self.text_style.align = Some(v);
-            }
-        }
+        self.set_text_align(align);
         self
+    }
+
+    pub fn set_text_align(&mut self, align: impl Into<TextAlignDeclaration>) -> LayoutStatus {
+        use crate::style::TextAlign;
+        let align = match align.into() {
+            TextAlignDeclaration::Inherit => None,
+            TextAlignDeclaration::Initial => Some(TextAlign::Start),
+            TextAlignDeclaration::Value(value) => Some(value),
+            TextAlignDeclaration::Invalid => return LayoutStatus::Clean,
+        };
+        let changed = self.text_style.align != align;
+        if let Some(inherited) = self.inherited_text_style.as_mut() {
+            inherited.align = None;
+        }
+        if let Some(base) = self
+            .class_set
+            .as_mut()
+            .and_then(|classes| classes.base_text_style.as_mut())
+        {
+            base.align = align;
+        }
+        self.text_style.align = align;
+        if changed {
+            self.text_style.computed_align = None;
+        }
+        if changed {
+            LayoutStatus::LayoutChanged
+        } else {
+            LayoutStatus::Clean
+        }
     }
     pub fn text_center(self) -> Self {
         self.text_align("center")
+    }
+
+    pub fn text_align_last(
+        mut self,
+        align: impl Into<crate::style::TextAlignLastDeclaration>,
+    ) -> Self {
+        self.set_text_align_last(align);
+        self
+    }
+
+    pub fn set_text_align_last(
+        &mut self,
+        align: impl Into<crate::style::TextAlignLastDeclaration>,
+    ) -> LayoutStatus {
+        let align = match align.into() {
+            crate::style::TextAlignLastDeclaration::Value(value) => Some(value),
+            crate::style::TextAlignLastDeclaration::Inherit => None,
+            crate::style::TextAlignLastDeclaration::Invalid => return LayoutStatus::Clean,
+        };
+        let changed = self.text_style.align_last != align;
+        if let Some(inherited) = self.inherited_text_style.as_mut() {
+            inherited.align_last = None;
+        }
+        if let Some(base) = self
+            .class_set
+            .as_mut()
+            .and_then(|classes| classes.base_text_style.as_mut())
+        {
+            base.align_last = align;
+        }
+        self.text_style.align_last = align;
+        if changed {
+            LayoutStatus::LayoutChanged
+        } else {
+            LayoutStatus::Clean
+        }
     }
     pub fn text_left(self) -> Self {
         self.text_align("left")
@@ -3546,13 +3668,17 @@ impl Element {
 
     /// `justify-content`，与 CSS / Tailwind `justify-*` 一致（区别于 [`Self::flex_items`] / `align-items`）。
     pub fn justify(mut self, keyword: impl IntoJustifyContent) -> Self {
-        self.style.justify_content = Some(keyword.into_justify_content());
+        if let Some(value) = keyword.try_into_justify_content() {
+            self.style.justify_content = Some(value);
+        }
         self
     }
 
     /// `align-items`，与 RSX `items` / `align`、Tailwind `items-*` 一致。
     pub fn flex_items(mut self, keyword: impl IntoAlignItems) -> Self {
-        self.style.align_items = Some(keyword.into_align_items());
+        if let Some(value) = keyword.try_into_align_items() {
+            self.style.align_items = Some(value);
+        }
         self
     }
 
@@ -3744,63 +3870,41 @@ impl Element {
         self.set_css(UnitSlot::FlexBasis, basis)
     }
 
-    /// `align-self`，与 Tailwind `self-*` 一致；`auto` / 未知关键字清除为继承父级 `align-items`。
+    /// `align-self`，与 Tailwind `self-*` 一致；`auto` 使用父级 `align-items`，无效值不应用。
     pub fn align_self_kw(mut self, keyword: impl AsRef<str>) -> Self {
-        let s = keyword.as_ref().trim().to_ascii_lowercase();
-        self.style.align_self = match s.as_str() {
-            "" | "auto" => None,
-            "center" => Some(AlignSelf::CENTER),
-            "start" | "flex-start" => Some(AlignSelf::FLEX_START),
-            "end" | "flex-end" => Some(AlignSelf::FLEX_END),
-            "stretch" => Some(AlignSelf::STRETCH),
-            "baseline" => Some(AlignSelf::BASELINE),
-            _ => None,
-        };
+        let keyword = crate::style::into_value::normalize_alignment_keyword(keyword.as_ref());
+        if keyword == "auto" {
+            self.style.align_self = None;
+        } else if let Ok(value) = keyword.parse() {
+            self.style.align_self = Some(value);
+        }
         self
     }
 
     /// `align-content`（多行 flex / grid 轴上分布）。
     pub fn align_content_kw(mut self, keyword: impl AsRef<str>) -> Self {
-        let s = keyword.as_ref().trim().to_ascii_lowercase();
-        self.style.align_content = Some(match s.as_str() {
-            "start" | "flex-start" => AlignContent::FLEX_START,
-            "end" | "flex-end" => AlignContent::FLEX_END,
-            "center" => AlignContent::CENTER,
-            "stretch" => AlignContent::STRETCH,
-            "space-between" | "between" => AlignContent::SPACE_BETWEEN,
-            "space-around" | "around" => AlignContent::SPACE_AROUND,
-            "space-evenly" | "evenly" => AlignContent::SPACE_EVENLY,
-            _ => AlignContent::STRETCH,
-        });
+        if let Some(value) = crate::style::into_value::try_parse_justify_content(keyword.as_ref()) {
+            self.style.align_content = Some(value);
+        }
         self
     }
 
     /// Grid 容器 `justify-items`。
     pub fn justify_items_kw(mut self, keyword: impl AsRef<str>) -> Self {
-        let s = keyword.as_ref().trim().to_ascii_lowercase();
-        self.style.justify_items = Some(match s.as_str() {
-            "center" => AlignItems::CENTER,
-            "start" | "flex-start" => AlignItems::FLEX_START,
-            "end" | "flex-end" => AlignItems::FLEX_END,
-            "stretch" => AlignItems::STRETCH,
-            "baseline" => AlignItems::BASELINE,
-            _ => AlignItems::STRETCH,
-        });
+        if let Some(value) = crate::style::into_value::try_parse_align_items(keyword.as_ref()) {
+            self.style.justify_items = Some(value);
+        }
         self
     }
 
-    /// Grid 子项 `justify-self`；`auto` / 未知清除为继承父级 `justify-items`。
+    /// Grid 子项 `justify-self`；`auto` 使用父级 `justify-items`，无效值不应用。
     pub fn justify_self_kw(mut self, keyword: impl AsRef<str>) -> Self {
-        let s = keyword.as_ref().trim().to_ascii_lowercase();
-        self.style.justify_self = match s.as_str() {
-            "" | "auto" => None,
-            "center" => Some(AlignSelf::CENTER),
-            "start" | "flex-start" => Some(AlignSelf::FLEX_START),
-            "end" | "flex-end" => Some(AlignSelf::FLEX_END),
-            "stretch" => Some(AlignSelf::STRETCH),
-            "baseline" => Some(AlignSelf::BASELINE),
-            _ => None,
-        };
+        let keyword = crate::style::into_value::normalize_alignment_keyword(keyword.as_ref());
+        if keyword == "auto" {
+            self.style.justify_self = None;
+        } else if let Ok(value) = keyword.parse() {
+            self.style.justify_self = Some(value);
+        }
         self
     }
 
@@ -5089,234 +5193,5 @@ impl From<Option<Element>> for Element {
 }
 
 #[cfg(test)]
-mod p1_builder_tests {
-    use super::*;
-    use crate::style::{TextDirection, TextSpan};
-
-    #[test]
-    fn reactive_sync_keeps_the_correct_spine_across_dfs_siblings() {
-        let changed = || Element::new().reactive_sync(|_, _| LayoutStatus::StyleChanged);
-        let mut root = Element::new()
-            .child(
-                Element::new()
-                    .child(Element::new().child(changed()))
-                    .child(Element::new()),
-            )
-            .child(Element::new().child(Element::new()))
-            .child(changed());
-        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, false);
-        walk_elements_post_order_mut(&mut root, |el| el.collect_paint_hash = 42);
-        let mut tree = LayoutTree::new();
-        let mut impact = LayoutStatus::Clean;
-        sync_reactive_elements_subtree(&mut root, &mut tree, &mut impact, 400.0, 300.0, [0.0; 2]);
-        assert_eq!(impact, LayoutStatus::StyleChanged);
-        assert_eq!(root.collect_paint_hash, 0);
-        assert_eq!(root.children[0].collect_paint_hash, 0);
-        assert_eq!(root.children[0].children[0].collect_paint_hash, 0);
-        assert_eq!(
-            root.children[0].children[0].children[0].collect_paint_hash,
-            0
-        );
-        assert_eq!(root.children[0].children[1].collect_paint_hash, 42);
-        assert_eq!(root.children[1].collect_paint_hash, 42);
-        assert_eq!(root.children[1].children[0].collect_paint_hash, 42);
-        assert_eq!(root.children[2].collect_paint_hash, 0);
-    }
-
-    #[test]
-    fn reactive_hover_damage_stays_inside_scrolled_viewport() {
-        crate::core::reactivity::create_root(|| {
-            let mut row = Element::new().reactive_sync(|element, _| {
-                element.style.bg_color = [0.2, 0.3, 0.4, 1.0];
-                LayoutStatus::StyleChanged
-            });
-            row.layout_bounds = [100.0, 210.0, 600.0, 22.0];
-            let mut root = Element::new()
-                .focus_id(crate::core::scroll_viewport::focus_id_for_scroll_viewport(
-                    "hover-damage",
-                ))
-                .overflow("hidden")
-                .child(row);
-            root.layout_bounds = [100.0, 100.0, 160.0, 100.0];
-            root.scroll_offset = [80.0, 100.0];
-            let mut tree = LayoutTree::new();
-            let mut impact = LayoutStatus::Clean;
-            crate::app::damage::take_frame_paint_nodes();
-            for (offset, expected) in [
-                ([80.0, 100.0], Some([100.0, 110.0, 160.0, 22.0])),
-                ([400.0, 90.0], Some([100.0, 120.0, 160.0, 22.0])),
-                ([400.0, 125.0], Some([100.0, 100.0, 160.0, 7.0])),
-                ([400.0, 400.0], None),
-            ] {
-                root.scroll_offset = offset;
-                sync_reactive_elements_subtree(
-                    &mut root,
-                    &mut tree,
-                    &mut impact,
-                    800.0,
-                    600.0,
-                    [0.0; 2],
-                );
-                let damage = crate::app::damage::take_frame_paint_nodes();
-                if let Some(bounds) = expected {
-                    assert_eq!(damage.len(), 1);
-                    assert_eq!(damage[0].bounds, bounds);
-                    assert_eq!(damage[0].kind, crate::app::damage::PaintDirtyKind::Region);
-                } else {
-                    assert!(damage.is_empty());
-                }
-            }
-        });
-    }
-
-    #[test]
-    fn reactive_sync_summary_tracks_invalidated_mounts() {
-        let calls = std::rc::Rc::new(std::cell::Cell::new(0));
-        let mut root = Element::new().child(Element::new().child(Element::new()));
-        let mut tree = LayoutTree::new();
-        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, false);
-        assert!(!root.subtree_reactive_sync);
-        let counter = calls.clone();
-        root.children[0]
-            .children
-            .push(Element::new().reactive_sync(move |_, _| {
-                counter.set(counter.get() + 1);
-                LayoutStatus::Clean
-            }));
-        crate::layout::collect_cache::invalidate_collect_paint_hash_path(&mut root, &[0]);
-        let sync = |root: &mut Element, tree: &mut LayoutTree| {
-            let mut impact = LayoutStatus::Clean;
-            sync_reactive_elements_subtree(root, tree, &mut impact, 400.0, 300.0, [0.0; 2]);
-            assert_eq!(impact, LayoutStatus::Clean);
-        };
-        // A newly mounted callback must run even before the next stamp.
-        sync(&mut root, &mut tree);
-        assert_eq!(calls.get(), 1);
-        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, true);
-        assert!(root.subtree_reactive_sync);
-        assert!(!root.children[0].children[0].subtree_reactive_sync);
-        sync(&mut root, &mut tree);
-        assert_eq!(calls.get(), 2);
-        root.children[0].children.pop();
-        crate::layout::collect_cache::invalidate_collect_paint_hash_path(&mut root, &[0]);
-        crate::layout::collect_cache::stamp_subtree_paint_hashes(&mut root, true);
-        assert!(!root.subtree_reactive_sync);
-        sync(&mut root, &mut tree);
-        assert_eq!(calls.get(), 2);
-    }
-
-    #[test]
-    fn text_spans_builder_sets_concat_text() {
-        let el = Element::new().text_spans(vec![
-            TextSpan::new("Hello").weight(700),
-            TextSpan::new(" "),
-            TextSpan::new("world").color([255, 0, 0, 255]),
-        ]);
-        assert_eq!(el.text.as_deref(), Some("Hello world"));
-        assert_eq!(el.text_spans.as_ref().map(|s| s.len()), Some(3));
-    }
-
-    #[test]
-    fn text_direction_builder() {
-        let el = Element::new().text("hi").text_direction(TextDirection::Rtl);
-        assert_eq!(el.text_style.direction, TextDirection::Rtl);
-    }
-
-    #[test]
-    fn text_overflow_modes_set_whitespace_and_box_overflow() {
-        let clip = Element::new().text("hi").text_overflow("clip");
-        assert_eq!(clip.text_style.overflow, TextOverflow::Clip);
-        assert_eq!(
-            clip.text_style.white_space,
-            crate::style::WhiteSpace::Nowrap
-        );
-        assert_eq!(clip.style.overflow.x, taffy::style::Overflow::Hidden);
-        assert_eq!(clip.style.overflow.y, taffy::style::Overflow::Visible);
-
-        let ellipsis = Element::new().text("hi").text_overflow_ellipsis();
-        assert_eq!(ellipsis.style.overflow.x, taffy::style::Overflow::Hidden);
-        assert_eq!(ellipsis.style.overflow.y, taffy::style::Overflow::Visible);
-
-        let hidden = Element::new().text("hi").text_overflow_hidden();
-        assert_eq!(hidden.text_style.overflow, TextOverflow::Hidden);
-        assert_eq!(
-            hidden.text_style.white_space,
-            crate::style::WhiteSpace::Nowrap
-        );
-        assert_eq!(hidden.style.overflow.x, taffy::style::Overflow::Hidden);
-        assert_eq!(hidden.style.overflow.y, taffy::style::Overflow::Hidden);
-
-        let wrap = Element::new()
-            .text("hi")
-            .text_overflow_ellipsis()
-            .text_overflow_newline();
-        assert_eq!(wrap.text_style.overflow, TextOverflow::Newline);
-        assert_eq!(
-            wrap.text_style.white_space,
-            crate::style::WhiteSpace::Normal
-        );
-        assert_eq!(wrap.style.overflow.x, taffy::style::Overflow::Visible);
-    }
-
-    #[test]
-    fn fixed_sets_absolute_and_flag() {
-        let el = Element::new().fixed();
-        assert_eq!(el.style.position, Position::Absolute);
-        assert!(el.style.position_fixed);
-    }
-
-    #[test]
-    fn unpack_fragment_children_expands_jadix_fragment() {
-        let mut frag = Element::new();
-        frag.set_attr("jadix_fragment", "1");
-        let frag = frag
-            .child(Element::new().text("a"))
-            .child(Element::new().text("b"));
-        let kids = Element::unpack_fragment_children(Some(frag));
-        assert_eq!(kids.len(), 2);
-        assert_eq!(kids[0].text.as_deref(), Some("a"));
-        assert_eq!(kids[1].text.as_deref(), Some("b"));
-    }
-
-    #[test]
-    fn unpack_fragment_children_keeps_plain_element() {
-        let el = Element::new().text("only");
-        let kids = Element::unpack_fragment_children(Some(el));
-        assert_eq!(kids.len(), 1);
-        assert_eq!(kids[0].text.as_deref(), Some("only"));
-    }
-
-    #[test]
-    fn unpack_fragment_children_none_is_empty() {
-        assert!(Element::unpack_fragment_children(None).is_empty());
-    }
-
-    #[test]
-    fn into_element_list_flattens_jadix_fragment() {
-        let mut frag = Element::new();
-        frag.set_attr("jadix_fragment", "1");
-        let frag = frag
-            .child(Element::new().text("a"))
-            .child(Element::new().text("b"));
-        let kids = frag.into_element_list();
-        assert_eq!(kids.len(), 2);
-        assert_eq!(kids[0].text.as_deref(), Some("a"));
-        assert_eq!(kids[1].text.as_deref(), Some("b"));
-    }
-
-    #[test]
-    fn bind_element_ref_writes_template_id() {
-        let slot = crate::core::reactivity::create_signal(None::<String>);
-        let el = Element::new().template_id("tid:ref");
-        bind_element_ref(&slot, &el);
-        assert_eq!(slot.get().as_deref(), Some("tid:ref"));
-    }
-
-    #[test]
-    fn into_dynamic_component_calls_closure() {
-        let el = (|| Element::new().text("dyn")).into_dynamic_component();
-        assert_eq!(el.text.as_deref(), Some("dyn"));
-        let el2 = Element::new().text("plain").into_dynamic_component();
-        assert_eq!(el2.text.as_deref(), Some("plain"));
-    }
-}
+#[path = "tests/p1_builder.rs"]
+mod p1_builder_tests;

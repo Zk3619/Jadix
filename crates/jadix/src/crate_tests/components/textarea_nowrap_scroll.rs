@@ -1,7 +1,6 @@
 //! wrap=off textarea: horizontal scroll metrics + caret follow-scroll cap at line end.
 
 use crate::components::input::{input_caret_signal_key, input_value_signal_key};
-use crate::utils::text_edit::sync_text_edit_paint_subtree;
 use crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX;
 use crate::components::textarea::textarea;
 use crate::core::reactivity::{create_effect, create_root, use_signal};
@@ -13,6 +12,7 @@ use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::renderer::font_loader;
 use crate::text::install_shared_font_system;
+use crate::utils::text_edit::sync_text_edit_paint_subtree;
 use crate::utils::text_field::{
     ensure_caret_visible_scroll_x, input_text_template_id, text_edit_line_box_px,
     textarea_scroll_rest, TEXTAREA_SCROLLPORT_PAD_X, TEXT_EDIT_CARET_W,

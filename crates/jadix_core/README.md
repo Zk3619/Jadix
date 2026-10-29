@@ -1,10 +1,30 @@
 # jadix_core
 
-Reactive ownership, signals and stores without a UI or renderer
+[English](README.md) | [简体中文](README.zh.md)
 
-See [state management and scopes](../../docs/state-management.md) for read-only
-Store views, checked `store_field!` paths, Context and owner lifetimes.
+Reactive ownership, signals and stores without a UI or renderer.
 
-The framework still owns the Element tree and its host runtime; this crate owns the extracted reactive and geometry subsystems. This crate never depends on jadix or product crates. For source distribution, copy src and the dependencies and features from Cargo.toml into a local crate. Crate installation is recommended for updates.
+Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; prepared version `0.1.0`, not yet published.** Local archives and manifests do not prove registry availability.
 
-Shared `path` commands, SVG path decoding/encoding and adaptive flattening are also owned here, so animation and rendering use identical geometry without reverse dependencies.
+## Installation
+
+After the prepared version is published:
+
+```toml
+[dependencies]
+jadix_core = "=0.1.0"
+```
+
+Before publication, use the source workspace. Consumers use one registry graph without copying private path/git/patch overrides. Platform-specific packages require the corresponding SDK.
+
+## Features and scope
+
+Default features: none. See [Cargo.toml](Cargo.toml) for the complete feature/dependency graph. A feature flag does not establish platform runtime validation. Applications normally select internal GPU/window packages through their facade rather than depending on platform internals.
+
+## Documentation and contributions
+
+[Project documentation](https://github.com/Zk3619/Jadix/tree/main/docs) covers usage, migration, testing and releases. Preserve test discovery and keep private module tests separate from public integration contracts. Update both README languages when changing package setup.
+
+## License
+
+Apache-2.0. Preserve [LICENSE](LICENSE) and dependency notices.

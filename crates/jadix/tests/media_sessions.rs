@@ -98,11 +98,9 @@ fn rejected_load_restores_active_observations_and_never_reuses_its_token() {
         );
         let previous = controller.current();
         reject.set(true);
-        assert!(
-            controller
-                .load("rejected", MediaLoadOptions::default())
-                .is_err()
-        );
+        assert!(controller
+            .load("rejected", MediaLoadOptions::default())
+            .is_err());
         assert_eq!(controller.current(), previous);
         assert!(controller.request_error().peek().is_some());
         assert!(!controller.publish(MediaEvent::new(
@@ -112,15 +110,13 @@ fn rejected_load_restores_active_observations_and_never_reuses_its_token() {
                 "late rejected event"
             ))
         )));
-        assert!(
-            controller
-                .request(MediaCommand::Load {
-                    load_session: 6,
-                    source: "reused".into(),
-                    options: MediaLoadOptions::default()
-                })
-                .is_err()
-        );
+        assert!(controller
+            .request(MediaCommand::Load {
+                load_session: 6,
+                source: "reused".into(),
+                options: MediaLoadOptions::default()
+            })
+            .is_err());
         reject.set(false);
         assert_eq!(
             controller
@@ -156,11 +152,9 @@ fn synchronous_backend_observations_see_the_new_fence_and_survive_sink_rejection
                 Ok(())
             });
         *handle.borrow_mut() = Some(controller.clone());
-        assert!(
-            controller
-                .load("source", MediaLoadOptions::default())
-                .is_err()
-        );
+        assert!(controller
+            .load("source", MediaLoadOptions::default())
+            .is_err());
         assert_eq!(controller.current().load_session, 1);
         assert_eq!(controller.current().state, PlaybackState::Ready);
         handle.borrow_mut().take();
@@ -193,11 +187,9 @@ fn outer_rejection_cannot_roll_back_a_reentrant_newer_load() {
                 Ok(())
             });
         *handle.borrow_mut() = Some(controller.clone());
-        assert!(
-            controller
-                .load("older", MediaLoadOptions::default())
-                .is_err()
-        );
+        assert!(controller
+            .load("older", MediaLoadOptions::default())
+            .is_err());
         assert_eq!(controller.current().load_session, 2);
         assert_eq!(controller.current().source, Some("newer".into()));
         handle.borrow_mut().take();

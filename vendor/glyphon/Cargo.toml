@@ -1,14 +1,29 @@
-[package]
-name = "glyphon"
-description = "Fast, simple 2D text rendering for wgpu"
-version = "0.12.0"
-edition = "2021"
-repository = "https://github.com/grovesNL/glyphon"
-license = "MIT OR Apache-2.0 OR Zlib"
 
-[dependencies]
-wgpu = { version = "30.0.0", default-features = false, features = ["wgsl"] }
-etagere = "0.3.0"
-cosmic-text = "0.19"
-lru = { version = "0.16.2", default-features = false }
-rustc-hash = "2.1.1"
+["package"]
+"name" = "jadix_glyphon"
+"description" = "Fast, simple 2D text rendering for wgpu"
+"version" = "0.12.0"
+"edition" = "2021"
+repository = "https://github.com/Zk3619/Jadix"
+"license" = "MIT OR Apache-2.0 OR Zlib"
+"exclude" = ["Cargo.toml.orig", ".cargo_vcs_info.json"]
+
+readme = "README.md"
+["dependencies"]
+"etagere" = "0.3.0"
+"cosmic-text" = { "package" = "jadix_cosmic_text", "version" = "=0.19.0", "path" = "../cosmic-text" }
+"rustc-hash" = "2.1.1"
+
+["dependencies"."wgpu"]
+"package" = "jadix_wgpu"
+"version" = "=30.0.0"
+"path" = "../wgpu"
+"default-features" = false
+"features" = ["wgsl"]
+
+["dependencies"."lru"]
+"version" = "0.16.2"
+"default-features" = false
+
+[lib]
+name = "glyphon"

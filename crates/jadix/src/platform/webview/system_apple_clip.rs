@@ -54,7 +54,9 @@ impl ClipView {
         }
     }
     pub fn visible(&self, visible: bool) {
-        unsafe { let _: () = msg_send![&*self.view, setHidden: !visible]; }
+        unsafe {
+            let _: () = msg_send![&*self.view, setHidden: !visible];
+        }
     }
     pub fn update(&self, browser: &wry::WebView, spec: &WebViewSpec) -> Result<(), String> {
         let [x, y, w, h] = spec.clip;

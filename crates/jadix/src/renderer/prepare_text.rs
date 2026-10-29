@@ -49,21 +49,6 @@ fn stable_physical_text_y(y: f32) -> f32 {
     }
 }
 
-#[test]
-fn physical_text_y_removes_scroll_noise_without_rounding_fractional_layout() {
-    for (actual, expected) in [
-        (201.99998, 202.0),
-        (224.00002, 224.0),
-        (-201.99998, -202.0),
-        (-224.00002, -224.0),
-        (201.25, 201.25),
-        (201.75, 201.75),
-        (-201.75, -201.75),
-    ] {
-        assert_eq!(stable_physical_text_y(actual), expected);
-    }
-}
-
 /// Replace each emoji grapheme with a single-width slot so layout advance matches the
 /// custom glyph square. Keeps ZWJ/RI clusters from reserving 2–3× em of invisible Mask width.
 fn plan_emoji_layout(text: &str) -> (String, Vec<TextSegment>) {
@@ -557,7 +542,9 @@ fn node_shape_hash(
 }
 
 fn rich_shape_identity_hash(base: u64, spans: Option<&[crate::style::TextSpan]>) -> u64 {
-    let Some(spans) = spans.filter(|spans| !spans.is_empty()) else { return base; };
+    let Some(spans) = spans.filter(|spans| !spans.is_empty()) else {
+        return base;
+    };
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     base.hash(&mut hash);
     spans.len().hash(&mut hash);
@@ -602,6 +589,99 @@ fn make_dummy_cache_entry(font_system: &mut glyphon::FontSystem) -> super::text:
     }
 }
 
+fn set_buffer_text_alignment(
+    buffer: &mut glyphon::Buffer,
+    prewrapped_source: Option<&str>,
+    align: glyphon::cosmic_text::Align,
+    style: &crate::style::TextStyle,
+    use_css_alignment: bool,
+) {
+    use glyphon::cosmic_text::{Align, AlignLast, BidiParagraphs};
+    let count_content = |text: &str| {
+        text.chars()
+            .filter(|character| !character.is_whitespace() && *character != '\u{200b}')
+            .count()
+    };
+    let source = prewrapped_source.map(crate::renderer::emoji_layout::shape_text_for_layout);
+    let mut source_paragraphs = Vec::new();
+    if let Some(source) = source.as_deref() {
+        let mut paragraphs = BidiParagraphs::new(source);
+        while let Some((paragraph, rtl)) = paragraphs.next_with_direction() {
+            source_paragraphs.push((count_content(paragraph), rtl));
+        }
+    }
+    let mut paragraphs = source_paragraphs.into_iter();
+    let mut paragraph = paragraphs.next().unwrap_or((0, false));
+    for line in &mut buffer.lines {
+        let content = count_content(line.text());
+        let (final_line, paragraph_rtl) = if source.is_some() {
+            while paragraph.0 == 0 && content > 0 {
+                paragraph = paragraphs.next().unwrap_or((content, false));
+            }
+            let rtl = paragraph.1;
+            paragraph.0 = paragraph.0.saturating_sub(content);
+            (paragraph.0 == 0, rtl)
+        } else {
+            let rtl = BidiParagraphs::new(line.text())
+                .next_with_direction()
+                .is_some_and(|(_, rtl)| rtl);
+            (true, rtl)
+        };
+        let rtl = match style.direction {
+            TextDirection::Ltr => false,
+            TextDirection::Rtl => true,
+            TextDirection::Auto => paragraph_rtl,
+        };
+        let start = if rtl { Align::Right } else { Align::Left };
+        let end = if rtl { Align::Left } else { Align::Right };
+        let line_align = if use_css_alignment {
+            match style.align_resolved() {
+                crate::style::TextAlign::Start | crate::style::TextAlign::MatchParent => start,
+                crate::style::TextAlign::End => end,
+                _ => align,
+            }
+        } else {
+            align
+        };
+        let last = if final_line {
+            match style
+                .align_last_resolved()
+                .to_glyphon(style.align_resolved())
+            {
+                Some(AlignLast::Start) => Some(if rtl {
+                    AlignLast::Right
+                } else {
+                    AlignLast::Left
+                }),
+                Some(AlignLast::End) => Some(if rtl {
+                    AlignLast::Left
+                } else {
+                    AlignLast::Right
+                }),
+                None if source.is_some() && line_align == Align::Justified => Some(if rtl {
+                    AlignLast::Right
+                } else {
+                    AlignLast::Left
+                }),
+                last => last,
+            }
+        } else if line_align == Align::Justified {
+            Some(AlignLast::Justified)
+        } else {
+            None
+        };
+        line.set_align(Some(line_align));
+        line.set_align_last(last);
+        if source.is_some() && final_line {
+            paragraph = paragraphs.next().unwrap_or((0, false));
+        }
+    }
+}
+
+#[cfg(test)]
+#[path = "tests/text_alignment.rs"]
+mod text_alignment_tests;
+
 /// After shaping: if cosmic ink spills the leaf horizontally **or** soft-wrap line count
 /// exceeds the leaf height, run one `glyphon_fit` (fills FIT_CACHE) and request relayout.
 /// During resize/scroll fast mode, skip the expensive fit (settle frame corrects).
@@ -621,6 +701,7 @@ fn correct_bidi_ink_spill(
     wrap_w: f32,
     nowrap: bool,
     force_fast: bool,
+    text_style: &crate::style::TextStyle,
 ) -> f32 {
     if nowrap || soft_w_target <= 8.0 {
         return wrap_w;
@@ -650,7 +731,11 @@ fn correct_bidi_ink_spill(
             .first()
             .map(|l| glyphon::AttrsOwned::new(&l.attrs_list().defaults()))
             .unwrap_or_else(|| glyphon::AttrsOwned::new(&glyphon::Attrs::new()));
-        let aligns: Vec<_> = buffer.lines.iter().map(|l| l.align()).collect();
+        let align = buffer
+            .lines
+            .first()
+            .and_then(|line| line.align())
+            .unwrap_or(glyphon::cosmic_text::Align::Left);
         buffer.set_wrap(glyphon::Wrap::None);
         // fit.shape_text may already contain emoji object slots — keep them invisible.
         set_shaped_buffer_text(
@@ -664,9 +749,13 @@ fn correct_bidi_ink_spill(
             line_height,
             &[],
         );
-        for (line, align) in buffer.lines.iter_mut().zip(aligns) {
-            line.set_align(align);
-        }
+        set_buffer_text_alignment(
+            buffer,
+            Some(text),
+            align,
+            text_style,
+            text_style.input_caret.is_none(),
+        );
         buffer.set_size(Some(fit_w), height_opt);
         buffer.shape_until_scroll(font_system, false);
     } else if horizontal_spill && (fit_w - wrap_w).abs() > 0.5 {
@@ -1292,7 +1381,9 @@ fn set_document_rich_text(
 ) {
     if !spans.iter().any(|(text, _)| text.contains('\r')) {
         buffer.set_rich_text(
-            spans.iter().map(|(text, attributes)| (text.as_str(), attributes.clone())),
+            spans
+                .iter()
+                .map(|(text, attributes)| (text.as_str(), attributes.clone())),
             attrs,
             shaping,
             None,
@@ -1831,62 +1922,8 @@ fn emoji_fallback_engines() -> MutexGuard<'static, (glyphon::FontSystem, glyphon
 }
 
 #[cfg(test)]
-mod isolated_emoji_tests {
-    use super::*;
-
-    #[test]
-    fn isolated_emoji_engine_does_not_load_ui_fonts() {
-        let engines = emoji_fallback_engines();
-        let families: Vec<_> = engines
-            .0
-            .db()
-            .faces()
-            .flat_map(|face| face.families.iter().map(|(name, _)| name.as_str()))
-            .collect();
-        assert!(
-            !families.iter().any(|family| matches!(
-                *family,
-                "lucide" | "Inter" | "Inter Variable" | "Segoe UI" | "Times New Roman"
-            )),
-            "isolated emoji loaded unrelated UI faces: {families:?}"
-        );
-    }
-
-    #[test]
-    #[ignore = "cold emoji raster timing and optional pixel capture"]
-    fn isolated_emoji_cold_raster_cost() {
-        for (name, sequence) in [
-            ("thumb", "👍"),
-            ("wow", "😮"),
-            ("party", "🎉"),
-            ("family", "👨‍👩‍👧‍👦"),
-            ("face", "😂"),
-        ] {
-            let now = std::time::Instant::now();
-            let raster = load_font_fallback_raster(sequence, 36, 400)
-                .unwrap_or_else(|| panic!("missing emoji raster for {sequence}"));
-            eprintln!(
-                "emoji-cold/{name}: ms={:.3} size={}x{}",
-                now.elapsed().as_secs_f64() * 1000.0,
-                raster.width,
-                raster.height
-            );
-            assert!(raster.rgba.chunks_exact(4).any(|p| p[3] > 0));
-            if let Some(dir) = std::env::var_os("JADIX_EMOJI_CAPTURE_DIR") {
-                let dir = std::path::PathBuf::from(dir);
-                std::fs::create_dir_all(&dir).unwrap();
-                image::save_buffer(
-                    dir.join(format!("{name}.png")),
-                    &raster.rgba,
-                    raster.width.into(),
-                    raster.height.into(),
-                    image::ColorType::Rgba8,
-                )
-                .unwrap();
-            }
-        }
-    }
-}
+#[path = "tests/isolated_emoji.rs"]
+mod isolated_emoji_tests;
 
 struct FallbackGlyphBlit {
     x0: i32,
@@ -2767,6 +2804,13 @@ pub fn prepare_text_frame_at(
             resolved_face.synthetic_bold,
         );
         shape_hash = rich_shape_identity_hash(shape_hash, info.spans.as_deref());
+        {
+            let mut hash = std::collections::hash_map::DefaultHasher::new();
+            shape_hash.hash(&mut hash);
+            st.align_last_resolved().hash(&mut hash);
+            st.align_resolved().as_str().hash(&mut hash);
+            shape_hash = hash.finish();
+        }
         // Glyph recolor is baked into Attrs; Exact reuse must miss when the range/color moves.
         if let Some(caret) = st.input_caret.as_ref() {
             let ranges = caret.selection_recolor_ranges();
@@ -2972,6 +3016,7 @@ pub fn prepare_text_frame_at(
                                 wrap_w,
                                 nowrap,
                                 force_fast_mode,
+                                st,
                             );
                             entry.measured_text_w = entry
                                 .buffer
@@ -3035,6 +3080,7 @@ pub fn prepare_text_frame_at(
                                 wrap_w,
                                 nowrap,
                                 force_fast_mode,
+                                st,
                             );
                             entry.measured_text_w = entry
                                 .buffer
@@ -3108,6 +3154,7 @@ pub fn prepare_text_frame_at(
                         wrap_w,
                         nowrap,
                         force_fast_mode,
+                        st,
                     );
                     let measured = entry
                         .buffer
@@ -3158,6 +3205,7 @@ pub fn prepare_text_frame_at(
                             wrap_w,
                             nowrap,
                             force_fast_mode,
+                            st,
                         );
                         let measured = entry
                             .buffer
@@ -3314,9 +3362,17 @@ pub fn prepare_text_frame_at(
                         &mapped,
                     );
                 }
-                for line in buffer.lines.iter_mut() {
-                    line.set_align(Some(align));
-                }
+                let prewrapped_source = prewrapped
+                    .as_ref()
+                    .filter(|_| info.spans.as_ref().is_none_or(|spans| spans.is_empty()))
+                    .map(|_| info.text.as_str());
+                set_buffer_text_alignment(
+                    &mut buffer,
+                    prewrapped_source,
+                    align,
+                    st,
+                    !is_input_text,
+                );
                 if is_input_text {
                     buffer.set_scroll(glyphon::cosmic_text::Scroll::default());
                 }
@@ -3340,6 +3396,7 @@ pub fn prepare_text_frame_at(
                     buffer_soft_w,
                     nowrap,
                     force_fast_mode,
+                    st,
                 );
                 let measured = buffer
                     .layout_runs()
@@ -4270,1667 +4327,32 @@ pub fn prepare_text_frame_at(
 }
 
 #[cfg(test)]
-mod coverage_placement_tests {
-    use super::{coverage_line_height, coverage_nowrap_glyph_dy};
-    use crate::style::{tailwind_default_leading_scale, TextStyle, WhiteSpace};
-
-    /// The deleted capture `Buffer::set_text` recipe (Tailwind leading, no lucide 1em).
-    fn naive_capture_line_height(st: &TextStyle, ui_scale: f32) -> f32 {
-        let size = (st.size_resolved() * ui_scale).max(1.0);
-        if let Some(px) = st.line_height_px {
-            px * ui_scale
-        } else if let Some(sc) = st.line_height_scale {
-            size * sc
-        } else {
-            size * tailwind_default_leading_scale(st.size_resolved())
-        }
-    }
-
-    #[test]
-    fn lucide_line_height_is_em_not_tailwind_leading() {
-        let mut st = TextStyle::default();
-        st.font_family = Some("lucide".into());
-        st.size = Some(16.0);
-        let coverage = coverage_line_height(&st, 1.0, false);
-        assert!(
-            (coverage - 16.0).abs() < 1e-4,
-            "lucide Coverage line box must be 1em; got {coverage}"
-        );
-        let naive = naive_capture_line_height(&st, 1.0);
-        assert!(
-            (naive - coverage).abs() > 1.0,
-            "Select chevron sat low because capture used Tailwind leading ({naive}) instead of 1em"
-        );
-    }
-
-    #[test]
-    fn nowrap_single_line_centers_in_tall_leaf() {
-        // SelectTrigger is h-8 (32px) with items-center; a nowrap caption leaf can
-        // still be taller than its line box if padding wins. Coverage centers it.
-        let lh = 14.0 * 1.25;
-        let dy = coverage_nowrap_glyph_dy(false, true, 1, 32.0, lh);
-        assert!((dy - (32.0 - lh) * 0.5).abs() < 1e-4, "got dy={dy}");
-        let naive_top = 0.0;
-        assert!(
-            (dy - naive_top).abs() > 4.0,
-            "capture-without-dy would sit at the leaf top"
-        );
-    }
-
-    #[test]
-    fn wrapping_cjk_label_does_not_invent_dy() {
-        assert_eq!(coverage_nowrap_glyph_dy(false, false, 1, 32.0, 14.0), 0.0);
-    }
-
-    #[test]
-    fn label_leading_none_agrees_with_naive_capture_lh() {
-        // Gallery Dialog rows use Label defaults (leading-none). Line-height matched;
-        // remaining jitter was wrap/weight/shaping — which only unify via prepare_text_frame.
-        let mut st = TextStyle::default();
-        st.size = Some(14.0);
-        st.line_height_scale = Some(1.0);
-        st.white_space = WhiteSpace::Normal;
-        let coverage = coverage_line_height(&st, 1.0, false);
-        let naive = naive_capture_line_height(&st, 1.0);
-        assert!((coverage - naive).abs() < 1e-4);
-        assert!((coverage - 14.0).abs() < 1e-4);
-    }
-}
+#[path = "tests/coverage_placement.rs"]
+mod coverage_placement_tests;
 
 #[cfg(test)]
-mod text_shadow_tests {
-    use super::{generate_shadow_bitmap, text_shadow_active};
-    use crate::renderer::font_loader;
-    use crate::renderer::text_hit::best_font_family;
-
-    fn glyph_ink_bottom(
-        buffer: &glyphon::Buffer,
-        fs: &mut glyphon::FontSystem,
-        swash: &mut glyphon::SwashCache,
-    ) -> Option<i32> {
-        let mut max_y = i32::MIN;
-        let mut any = false;
-        for run in buffer.layout_runs() {
-            let line_y_px = run.line_y.round() as i32;
-            for g in run.glyphs.iter() {
-                let physical = g.physical((0.0, 0.0), 1.0);
-                let Some(img) = swash.get_image_uncached(fs, physical.cache_key) else {
-                    continue;
-                };
-                any = true;
-                let py = line_y_px + physical.y - img.placement.top;
-                max_y = max_y.max(py + img.placement.height as i32);
-            }
-        }
-        any.then_some(max_y)
-    }
-
-    #[test]
-    fn shadow_coverage_clipping_matches_scalar_composite() {
-        let coverage: Vec<u8> = (0..35).map(|i| [0, 1, 64, 127, 255][i % 5]).collect();
-        for y in -7..10 {
-            for x in -9..12 {
-                let mut expected: Vec<u16> = (0..99).map(|i| (i * 37 % 256) as u16).collect();
-                let mut actual = expected.clone();
-                // Multiple translucent overlapping stamps must preserve integer rounding.
-                for alpha in [0_u8, 1, 17, 128, 254, 255] {
-                    for row in 0..5_i32 {
-                        for col in 0..7_i32 {
-                            let (bx, by) = (x + col, y + row);
-                            if (0..11).contains(&bx) && (0..9).contains(&by) {
-                                let src =
-                                    coverage[(row * 7 + col) as usize] as u16 * alpha as u16 / 255;
-                                let dst = &mut expected[(by * 11 + bx) as usize];
-                                *dst = src + *dst - src * *dst / 255;
-                            }
-                        }
-                    }
-                    super::stamp_shadow_glyph(
-                        &mut actual,
-                        [11, 9],
-                        &coverage,
-                        [7, 5],
-                        [x, y],
-                        alpha,
-                    );
-                    assert_eq!(actual, expected, "origin=({x},{y}) alpha={alpha}");
-                }
-            }
-        }
-    }
-
-    #[test]
-    fn text_sm_line_box_covers_gallery_descenders() {
-        // Tailwind `text-sm` is 14px / 1.25rem. That strut covers Latin `g`/`y`;
-        // `leading-none` (1em) does not — but CSS still paints the overflow.
-        // Do not invent an ink pad; production `set_size(w, None)` plus the
-        // menu-button token (not a taller Cosmic buffer) is the browser model.
-        let size = 14.0_f32;
-        let sm_lh = size * crate::style::TAILWIND_TEXT_SM_LEADING_SCALE;
-        let mut fs = font_loader::create_font_system();
-        font_loader::apply_default_families(fs.db_mut());
-        let family = best_font_family(&fs);
-        let mut swash = glyphon::SwashCache::new();
-        let attrs = glyphon::Attrs::new()
-            .family(family)
-            .weight(glyphon::fontdb::Weight(700));
-
-        let mut none_box = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, size));
-        none_box.set_size(Some(400.0), None);
-        none_box.set_text("Gallery", &attrs, glyphon::Shaping::Advanced, None);
-        none_box.shape_until_scroll(&mut fs, false);
-        let Some(ink_none) = glyph_ink_bottom(&none_box, &mut fs, &mut swash) else {
-            return;
-        };
-
-        let mut sm = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, sm_lh));
-        sm.set_size(Some(400.0), None);
-        sm.set_text("Gallery", &attrs, glyphon::Shaping::Advanced, None);
-        sm.shape_until_scroll(&mut fs, false);
-        let Some(ink_sm) = glyph_ink_bottom(&sm, &mut fs, &mut swash) else {
-            return;
-        };
-
-        assert!(
-            (ink_none as f32) > size + 0.5,
-            "Gallery descenders sit below the 1em em-box (ink={ink_none} em={size})"
-        );
-        assert!(
-            (ink_sm as f32) <= sm_lh + 1.0,
-            "text-sm line box must cover those descenders without a pad (ink={ink_sm} lh={sm_lh})"
-        );
-    }
-
-    #[test]
-    fn text_shadow_active_allows_zero_blur_with_offset() {
-        assert!(text_shadow_active(Some([0, 0, 0, 255]), [4.0, 0.0], 0.0));
-        assert!(text_shadow_active(Some([0, 0, 0, 255]), [0.0, 0.0], 2.0));
-        assert!(!text_shadow_active(Some([0, 0, 0, 255]), [0.0, 0.0], 0.0));
-        assert!(!text_shadow_active(None, [4.0, 4.0], 2.0));
-        assert!(!text_shadow_active(Some([0, 0, 0, 0]), [4.0, 4.0], 2.0));
-    }
-
-    #[test]
-    fn synthetic_bold_must_not_bake_textured_shadow() {
-        // Gallery chase: sidebar 「数据」 / CSS-filter captions use font-medium
-        // synthesis (blur 0.32). A baked quad desyncs from Coverage CJK.
-        assert!(
-            !super::uses_textured_shadow_bitmap(false, 0.32),
-            "synthetic-bold must stay on the glyphon layer"
-        );
-        assert!(
-            !super::uses_textured_shadow_bitmap(true, 0.32),
-            "sharp user text-shadow must stay on the glyphon layer"
-        );
-        assert!(
-            super::uses_textured_shadow_bitmap(true, 4.0),
-            "soft user text-shadow may still bake a bitmap"
-        );
-    }
-
-    #[test]
-    fn shadow_tex_instance_clip_disables_on_empty() {
-        assert_eq!(
-            super::shadow_tex_instance_clip(None),
-            ([0.0, 0.0], [-1.0, -1.0])
-        );
-        assert_eq!(
-            super::shadow_tex_instance_clip(Some([10.0, 20.0, 0.0, 8.0])),
-            ([0.0, 0.0], [-1.0, -1.0])
-        );
-        assert_eq!(
-            super::shadow_tex_instance_clip(Some([10.0, 20.0, 100.0, 40.0])),
-            ([10.0, 20.0], [100.0, 40.0])
-        );
-    }
-
-    #[test]
-    fn integerize_clip_rect_matches_glyphon_text_bounds_edges() {
-        let i = super::integerize_clip_rect([10.2, 20.8, 30.3, 40.1]).expect("positive");
-        assert!((i[0] - 10.0).abs() < 1e-4, "floor(10.2)=10, got {}", i[0]);
-        assert!((i[1] - 20.0).abs() < 1e-4, "floor(20.8)=20, got {}", i[1]);
-        let right = i[0] + i[2];
-        let bottom = i[1] + i[3];
-        assert!(
-            (right - 40.0).abs() < 1e-4,
-            "floor(10.2+30.3)=40, got {right}"
-        );
-        assert!(
-            (bottom - 60.0).abs() < 1e-4,
-            "floor(20.8+40.1)=60, got {bottom}"
-        );
-        assert!(super::integerize_clip_rect([5.0, 5.0, 0.0, 8.0]).is_none());
-    }
-
-    #[test]
-    fn integerize_clip_rect_does_not_expand_past_overflow_edge() {
-        // Gallery sidebar: last visible label clip bottom 463.25, footer rule at 463.25.
-        let i = super::integerize_clip_rect([16.0, 458.0, 42.0, 5.25]).expect("positive");
-        let bottom = i[1] + i[3];
-        assert!(
-            bottom <= 463.25,
-            "far-edge floor must not paint past overflow:hidden (got {bottom})"
-        );
-        assert!(
-            (bottom - 463.0).abs() < 1e-4,
-            "floor(463.25)=463, got {bottom}"
-        );
-    }
-
-    #[test]
-    fn paint_overflow_clip_sliver_skips_instead_of_unclipping() {
-        assert!(
-            super::paint_overflow_clip(Some([0.0, 463.0, 80.0, 0.4]), true).is_none(),
-            "sub-pixel leftover at the clip edge must not disable the scissor"
-        );
-        assert_eq!(
-            super::paint_overflow_clip(None, false),
-            Some(None),
-            "no overflow ancestor still draws unclipped"
-        );
-        assert!(
-            super::paint_overflow_clip(None, true).is_none(),
-            "off-screen intersect must skip, not fill the viewport"
-        );
-    }
-
-    #[test]
-    fn shadow_bitmap_keeps_positive_dy_mass_below_centroid() {
-        // Regression: textured UV now maps top→row0; Y-flipping the shadow bitmap
-        // inverted soft shadows after the Bake/capture UV fix.
-        let mut fs = font_loader::create_font_system();
-        font_loader::apply_default_families(fs.db_mut());
-        let family = best_font_family(&fs);
-        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(24.0, 36.0));
-        buffer.set_size(Some(200.0), Some(48.0));
-        let attrs = glyphon::Attrs::new()
-            .family(family)
-            .weight(glyphon::fontdb::Weight(700));
-        buffer.set_text("Shadow", &attrs, glyphon::Shaping::Advanced, None);
-        buffer.shape_until_scroll(&mut fs, false);
-        let mut swash = glyphon::SwashCache::new();
-        let Some(bmp) =
-            generate_shadow_bitmap(&buffer, &mut fs, &mut swash, [0, 0, 0, 200], 0.0, 8.0, 2.0)
-        else {
-            // Fonts unavailable in some CI images.
-            return;
-        };
-        assert!(bmp.width > 0 && bmp.height > 0);
-        assert!(bmp.rgba.chunks_exact(4).any(|p| p[3] > 0));
-        let raster_count = swash.image_cache.len();
-        assert!(
-            raster_count > 0,
-            "shadow must share cached glyph rasters with text"
-        );
-        let repeated =
-            generate_shadow_bitmap(&buffer, &mut fs, &mut swash, [0, 0, 0, 200], 0.0, 8.0, 2.0)
-                .unwrap();
-        assert_eq!(swash.image_cache.len(), raster_count);
-        assert_eq!(
-            bmp.rgba, repeated.rgba,
-            "cached shadow must preserve every pixel"
-        );
-
-        let mut sum_a = 0.0_f64;
-        let mut sum_ay = 0.0_f64;
-        for y in 0..bmp.height as usize {
-            for x in 0..bmp.width as usize {
-                let a = bmp.rgba[(y * bmp.width as usize + x) * 4 + 3] as f64;
-                if a > 0.0 {
-                    sum_a += a;
-                    sum_ay += a * y as f64;
-                }
-            }
-        }
-        assert!(sum_a > 0.0);
-        let cy = sum_ay / sum_a;
-        // draw_rect origin is content_min - pad; with +dy the alpha mass sits in the
-        // lower half of the bitmap (not the top — that was the inverted/flipped bug).
-        assert!(
-            cy > bmp.height as f64 * 0.35,
-            "shadow alpha centroid y={cy} should not sit in the top third of h={}",
-            bmp.height
-        );
-    }
-}
+#[path = "tests/text_shadow.rs"]
+mod text_shadow_tests;
 
 #[cfg(test)]
-mod shimmer_sweep_tests {
-    use crate::renderer::font_loader;
-    use crate::renderer::text_hit::best_font_family;
-    use crate::style::TextStyle;
-    use crate::text::install_shared_font_system;
-
-    fn buffer_lines(buffer: &glyphon::Buffer) -> Vec<String> {
-        buffer
-            .layout_runs()
-            .map(|run| run.text.to_string())
-            .collect()
-    }
-
-    fn glyph_plain(buffer: &glyphon::Buffer) -> String {
-        let mut s = String::new();
-        for run in buffer.layout_runs() {
-            let line = run.text;
-            let mut starts: Vec<usize> = run
-                .glyphs
-                .iter()
-                .filter(|g| g.w > 0.0)
-                .map(|g| g.start)
-                .collect();
-            starts.sort_unstable();
-            starts.dedup();
-            for start in starts {
-                if start >= line.len() || !line.is_char_boundary(start) {
-                    continue;
-                }
-                if let Some(ch) = line[start..].chars().next() {
-                    s.push(ch);
-                }
-            }
-        }
-        s
-    }
-
-    fn ink_width(buffer: &glyphon::Buffer) -> f32 {
-        buffer
-            .layout_runs()
-            .map(|run| run.line_w)
-            .fold(0.0_f32, f32::max)
-    }
-
-    /// Gallery Status (Marker inside Message): per-glyph shimmer `set_rich_text`
-    /// used to re-wrap 「Oliver is typing...」 at the hug width into 「Oliver i」
-    /// (second line clipped by the 1-line leaf) and dest-reset flashed the stub.
-    #[test]
-    fn shimmer_recolor_must_keep_oliver_is_typing_on_one_line() {
-        let text = "Oliver is typing...";
-        let mut fs = font_loader::create_font_system();
-        font_loader::apply_default_families(fs.db_mut());
-        install_shared_font_system(&mut fs);
-        let family = best_font_family(&fs);
-        let size = 14.0_f32;
-        let lh = size * crate::style::TAILWIND_TEXT_SM_LEADING_SCALE;
-        let attrs = glyphon::Attrs::new()
-            .family(family)
-            .weight(glyphon::fontdb::Weight(400));
-        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        // Default cosmic wrap is Word — same as TextStyle::default white_space Normal.
-        buffer.set_size(Some(400.0), None);
-        buffer.set_text(text, &attrs, glyphon::Shaping::Advanced, None);
-        buffer.shape_until_scroll(&mut fs, false);
-        let hug = ink_width(&buffer).max(1.0);
-        buffer.set_size(Some(hug), None);
-        buffer.shape_until_scroll(&mut fs, false);
-        let before = buffer_lines(&buffer);
-
-        let mut st = TextStyle::default();
-        st.size = Some(size);
-        st.color = Some([115, 115, 115, 255]);
-        crate::style::utility::set_frame_dt(1.0 / 60.0);
-        for i in 0..8 {
-            super::apply_shimmer_sweep(
-                &mut buffer,
-                &mut fs,
-                text,
-                &st,
-                family,
-                400,
-                glyphon::Shaping::Advanced,
-                &crate::renderer::ShimmerParams::default(),
-            );
-            let lines = buffer_lines(&buffer);
-            let glyphs = glyph_plain(&buffer);
-            assert!(
-                glyphs.contains("typing"),
-                "i={i} shimmer set_rich_text dropped glyphs of 「Oliver is typing...」\n before={before:?}\n after_lines={lines:?}\n glyphs={glyphs:?}\n hug={hug:.1}"
-            );
-            assert!(
-                lines.len() == 1 && glyphs.contains("Oliver is typing"),
-                "i={i} shimmer recolor must not wrap/clip the caption into a stub\n before={before:?}\n after_lines={lines:?}\n glyphs={glyphs:?}\n hug={hug:.1}"
-            );
-        }
-    }
-}
+#[path = "tests/shimmer_sweep.rs"]
+mod shimmer_sweep_tests;
 
 #[cfg(test)]
-mod shape_cache_key_tests {
-    use super::{
-        apply_letter_spacing_approx, node_shape_hash, node_shape_identity_hash,
-        node_shape_key_from_identity,
-    };
-    use crate::style::TextDirection;
-    use std::borrow::Cow;
-    use std::time::Instant;
-
-    #[test]
-    fn document_rich_text_preserves_crlf_lines_and_attributes() {
-        let mut fonts = glyphon::FontSystem::new();
-        let mut buffer = glyphon::Buffer::new(&mut fonts, glyphon::Metrics::new(14.0, 21.0));
-        let attrs = glyphon::Attrs::new();
-        let accent = attrs.clone().color(glyphon::Color::rgb(90, 120, 210));
-        let spans = vec![("fn\r".into(), accent), ("\nmain\r\n".into(), attrs.clone())];
-        super::set_document_rich_text(&mut buffer, &spans, &attrs, glyphon::Shaping::Advanced);
-        assert_eq!(buffer.lines.len(), 3);
-        assert_eq!(buffer.lines[0].text(), "fn");
-        assert_eq!(buffer.lines[1].text(), "main");
-        assert_eq!(buffer.lines[0].ending().as_str(), "\r\n");
-        assert_eq!(buffer.lines[1].ending().as_str(), "\r\n");
-        assert_ne!(buffer.lines[0].attrs_list(), buffer.lines[1].attrs_list());
-    }
-
-    #[test]
-    fn document_span_colors_invalidate_shape_identity() {
-        let original = vec![crate::style::TextSpan::new("fn").color([90, 120, 210, 255])];
-        let changed = vec![crate::style::TextSpan::new("fn").color([190, 90, 110, 255])];
-        assert_ne!(super::rich_shape_identity_hash(1, Some(&original)), super::rich_shape_identity_hash(1, Some(&changed)));
-        assert_ne!(super::rich_shape_identity_hash(1, None), super::rich_shape_identity_hash(1, Some(&original)));
-    }
-
-    #[test]
-    fn ltr_and_auto_do_not_inject_lrm() {
-        assert_eq!(super::direction_mark(TextDirection::Auto), "");
-        assert_eq!(super::direction_mark(TextDirection::Ltr), "");
-        assert_eq!(super::direction_mark(TextDirection::Rtl), "\u{200F}");
-    }
-
-    fn glyph_rgba(c: glyphon::Color) -> [u8; 4] {
-        let v = c.0;
-        [
-            ((v >> 16) & 0xff) as u8,
-            ((v >> 8) & 0xff) as u8,
-            (v & 0xff) as u8,
-            ((v >> 24) & 0xff) as u8,
-        ]
-    }
-
-    #[test]
-    fn selection_rich_text_sets_color_opt_on_selected_range() {
-        use crate::renderer::font_loader;
-        use crate::text::install_shared_font_system;
-
-        let mut fs = font_loader::create_font_system();
-        font_loader::apply_default_families(fs.db_mut());
-        install_shared_font_system(&mut fs);
-        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
-        buffer.set_size(Some(400.0), Some(40.0));
-        let attrs = glyphon::Attrs::new().color(glyphon::Color::rgba(1, 2, 3, 255));
-        super::set_selection_colored_buffer_text(
-            &mut buffer,
-            "abc",
-            1,
-            2,
-            [9, 8, 7, 255],
-            &attrs,
-            glyphon::Shaping::Advanced,
-        );
-        buffer.shape_until_scroll(&mut fs, false);
-        let mut found_sel = false;
-        let mut found_other = false;
-        for run in buffer.layout_runs() {
-            for g in run.glyphs.iter() {
-                let rgba = g.color_opt.map(glyph_rgba);
-                if g.start >= 1 && g.start < 2 {
-                    assert_eq!(rgba, Some([9, 8, 7, 255]), "selected glyph {:?}", g.start);
-                    found_sel = true;
-                } else {
-                    assert_eq!(rgba, Some([1, 2, 3, 255]), "unselected glyph {:?}", g.start);
-                    found_other = true;
-                }
-            }
-        }
-        assert!(found_sel, "expected a glyph in the selected byte range");
-        assert!(found_other, "expected a glyph outside the selected range");
-    }
-
-    #[test]
-    fn selection_rich_text_recolors_disjoint_ranges() {
-        use crate::renderer::font_loader;
-        use crate::text::install_shared_font_system;
-
-        let mut fs = font_loader::create_font_system();
-        font_loader::apply_default_families(fs.db_mut());
-        install_shared_font_system(&mut fs);
-        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
-        buffer.set_size(Some(400.0), Some(80.0));
-        let attrs = glyphon::Attrs::new().color(glyphon::Color::rgba(1, 2, 3, 255));
-        let text = "abcd\nefgh";
-        super::set_selection_colored_buffer_ranges(
-            &mut buffer,
-            text,
-            &[((0, 2), [9, 8, 7, 255]), ((5, 7), [9, 8, 7, 255])],
-            &attrs,
-            glyphon::Shaping::Advanced,
-        );
-        buffer.shape_until_scroll(&mut fs, false);
-        let mut found_sel = 0usize;
-        let mut found_other = 0usize;
-        for run in buffer.layout_runs() {
-            for g in run.glyphs.iter() {
-                let rgba = g.color_opt.map(glyph_rgba);
-                let selected = g.start < 2 || (g.start >= 5 && g.start < 7);
-                if selected {
-                    assert_eq!(rgba, Some([9, 8, 7, 255]), "selected glyph {:?}", g.start);
-                    found_sel += 1;
-                } else {
-                    assert_eq!(rgba, Some([1, 2, 3, 255]), "unselected glyph {:?}", g.start);
-                    found_other += 1;
-                }
-            }
-        }
-        assert!(
-            found_sel >= 2,
-            "expected glyphs in both extra selection ranges"
-        );
-        assert!(
-            found_other >= 1,
-            "expected a glyph outside the selected ranges"
-        );
-    }
-
-    #[test]
-    fn slotted_layout_stays_invisible_even_when_hide_flag_is_false() {
-        use crate::renderer::emoji_layout::{
-            glyph_is_emoji_layout_slot, plan_emoji_layout_text, EMOJI_LAYOUT_SLOT,
-        };
-        use crate::renderer::font_loader;
-        use crate::text::install_shared_font_system;
-
-        let mut fs = font_loader::create_font_system();
-        font_loader::apply_default_families(fs.db_mut());
-        font_loader::ensure_coverage_for_text(&mut fs, &EMOJI_LAYOUT_SLOT.to_string());
-        install_shared_font_system(&mut fs);
-        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(12.0, 12.0));
-        buffer.set_size(Some(64.0), Some(24.0));
-        let attrs = glyphon::Attrs::new().color(glyphon::Color::rgba(17, 17, 17, 255));
-        let layout = plan_emoji_layout_text("👍");
-        assert!(
-            layout.contains(EMOJI_LAYOUT_SLOT),
-            "chip layout is the object slot, not the original emoji"
-        );
-        super::set_shaped_buffer_text(
-            &mut buffer,
-            &mut fs,
-            &layout,
-            attrs,
-            glyphon::Shaping::Advanced,
-            false,
-            12.0,
-            12.0,
-            &[],
-        );
-        buffer.shape_until_scroll(&mut fs, false);
-        let mut found = 0usize;
-        for run in buffer.layout_runs() {
-            for g in run.glyphs.iter() {
-                if !glyph_is_emoji_layout_slot(&run, g) {
-                    continue;
-                }
-                let alpha = g.color_opt.map(|c| c.a()).unwrap_or(255);
-                assert_eq!(
-                    alpha, 0,
-                    "already-slotted paint_text must hide `一` even when hide_emoji=false \
-                     (got color_opt={:?})",
-                    g.color_opt
-                );
-                found += 1;
-            }
-        }
-        assert!(found >= 1, "expected an invisible slot glyph");
-    }
-
-    #[test]
-    fn selection_recolor_applies_to_text_around_emoji() {
-        use crate::renderer::emoji_layout::plan_emoji_layout_text;
-        use crate::renderer::font_loader;
-        use crate::text::install_shared_font_system;
-
-        let mut fs = font_loader::create_font_system();
-        font_loader::apply_default_families(fs.db_mut());
-        install_shared_font_system(&mut fs);
-        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
-        buffer.set_size(Some(400.0), Some(40.0));
-        let attrs = glyphon::Attrs::new().color(glyphon::Color::rgba(1, 2, 3, 255));
-        let text = "ab😀cd";
-        let fg = [9_u8, 8, 7, 255];
-        super::set_shaped_buffer_text(
-            &mut buffer,
-            &mut fs,
-            text,
-            attrs,
-            glyphon::Shaping::Advanced,
-            true,
-            14.0,
-            21.0,
-            &[((0, text.len()), fg)],
-        );
-        buffer.shape_until_scroll(&mut fs, false);
-        let layout = plan_emoji_layout_text(text);
-        let mut found_plain = false;
-        for run in buffer.layout_runs() {
-            for g in run.glyphs.iter() {
-                let slice = layout.get(g.start..g.end.min(layout.len())).unwrap_or("");
-                if slice.chars().all(|c| c.is_ascii_alphabetic()) && !slice.is_empty() {
-                    let rgba = g.color_opt.map(glyph_rgba);
-                    assert_eq!(
-                        rgba,
-                        Some(fg),
-                        "plain glyph {slice:?} should use selection fg"
-                    );
-                    found_plain = true;
-                }
-            }
-        }
-        assert!(
-            found_plain,
-            "expected recolored Latin glyphs around the emoji"
-        );
-    }
-
-    #[test]
-    fn bidi_wj_selection_keeps_all_glyphs() {
-        use crate::renderer::font_loader;
-        use crate::text::install_shared_font_system;
-
-        let mut fs = font_loader::create_font_system();
-        font_loader::apply_default_families(fs.db_mut());
-        install_shared_font_system(&mut fs);
-        let text = "Hello עברית\u{2060}789 and العربية — soft wrap keeps WJ pairs.";
-        let attrs = glyphon::Attrs::new().color(glyphon::Color::rgba(20, 20, 20, 255));
-        let mut plain = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
-        plain.set_size(Some(256.0), Some(120.0));
-        plain.set_text(text, &attrs, glyphon::Shaping::Advanced, None);
-        plain.shape_until_scroll(&mut fs, false);
-        let plain_keys: Vec<(usize, usize)> = plain
-            .layout_runs()
-            .flat_map(|run| run.glyphs.iter().map(|g| (g.start, g.end)))
-            .collect();
-
-        let mut selected = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(14.0, 21.0));
-        selected.set_size(Some(256.0), Some(120.0));
-        super::set_selection_colored_buffer_text(
-            &mut selected,
-            text,
-            0,
-            text.len(),
-            [240, 240, 240, 255],
-            &attrs,
-            glyphon::Shaping::Advanced,
-        );
-        selected.shape_until_scroll(&mut fs, false);
-        let sel_keys: Vec<(usize, usize)> = selected
-            .layout_runs()
-            .flat_map(|run| run.glyphs.iter().map(|g| (g.start, g.end)))
-            .collect();
-        assert_eq!(
-            plain_keys, sel_keys,
-            "selection recolor must not drop or split BiDi/WJ glyphs"
-        );
-        assert!(
-            !sel_keys.is_empty(),
-            "gallery BiDi+WJ string must produce glyphs"
-        );
-    }
-
-    #[test]
-    fn emoji_wrap_width_q_buckets_one_px_jitter() {
-        assert_eq!(
-            super::emoji_wrap_width_q(400.0),
-            super::emoji_wrap_width_q(407.0)
-        );
-        assert_ne!(
-            super::emoji_wrap_width_q(400.0),
-            super::emoji_wrap_width_q(408.0)
-        );
-    }
-
-    #[test]
-    fn emoji_sequence_hash_is_content_only() {
-        let a = super::emoji_sequence_content_hash("Family: 👨‍👩‍👧‍👦");
-        let b = super::emoji_sequence_content_hash("Family: 👨‍👩‍👧‍👦");
-        let c = super::emoji_sequence_content_hash("Skin tone: 👍🏽");
-        assert_eq!(a, b);
-        assert_ne!(a, c);
-    }
-
-    #[test]
-    fn letter_spacing_zero_borrows_without_alloc() {
-        let s = "The quick brown fox 中文 عربي 😀";
-        match apply_letter_spacing_approx(s, 0.0, 14.0) {
-            Cow::Borrowed(b) => assert_eq!(b, s),
-            Cow::Owned(_) => panic!("zero letter-spacing must not allocate on scroll hot path"),
-        }
-    }
-
-    #[test]
-    fn shape_key_from_identity_avoids_rehashing_text() {
-        let family = glyphon::Family::SansSerif;
-        let align = glyphon::cosmic_text::Align::Left;
-        let shaping = glyphon::Shaping::Advanced;
-        let text = "日本語テスト：こんにちは世界。汉字・かな";
-        let identity = node_shape_identity_hash(
-            text,
-            14.0,
-            21.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            [0, 0, 0, 255],
-            400,
-            false,
-        );
-        let from_id = node_shape_key_from_identity(identity, 320.0, 40.0, false);
-        let full = node_shape_hash(
-            text,
-            14.0,
-            21.0,
-            320.0,
-            40.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            [0, 0, 0, 255],
-            false,
-        );
-        assert_eq!(from_id, full);
-    }
-
-    /// Feedback loop: scroll-like CPU for dense multilingual labels must stay cheap.
-    /// Pre-fix: every node did text.to_string() + double full-text hash each frame.
-    #[test]
-    fn scroll_like_label_cpu_stays_under_budget() {
-        let samples = [
-            "The quick brown fox jumps over the lazy dog. Pack my box with five dozen liquor jugs.",
-            "中文测试：输入法、标点符号、全角半角、换行和字距表现。",
-            "日本語テスト：こんにちは世界。漢字・かな・カタカナ・句読点「」『』の表示確認。",
-            "Arabic: مرحبا بالعالم، هذا اختبار لاتجاه الكتابة والمحاذاة وعرض الحروف.",
-            "Emoji: 😀 😁 😂 🤣 😅 🥲 🧠 🧪 🚀 🌍 🔥 ✅ ❌ 💡 🧩 👨‍👩‍👧‍👦",
-            "Bidirectional sample: English 123 - العربية ٤٥٦ - עברית 789",
-        ];
-        // Simulate ~80 visible labels (text page band) × 60 scroll frames.
-        let labels: Vec<&str> = samples.iter().cycle().take(80).copied().collect();
-        let family = glyphon::Family::SansSerif;
-        let align = glyphon::cosmic_text::Align::Left;
-        let shaping = glyphon::Shaping::Advanced;
-        let t0 = Instant::now();
-        for _ in 0..60 {
-            for (i, text) in labels.iter().enumerate() {
-                let spaced = apply_letter_spacing_approx(text, 0.0, 14.0);
-                assert!(matches!(spaced, Cow::Borrowed(_)));
-                let identity = node_shape_identity_hash(
-                    spaced.as_ref(),
-                    14.0,
-                    21.0,
-                    400,
-                    family,
-                    align,
-                    shaping,
-                    0.0,
-                    TextDirection::Auto,
-                    [0, 0, 0, 255],
-                    400,
-                    false,
-                );
-                let _key =
-                    node_shape_key_from_identity(identity, 400.0 + (i % 7) as f32, 24.0, false);
-            }
-        }
-        let ms = t0.elapsed().as_secs_f64() * 1000.0;
-        // Debug + CI headroom: 80×60 identity hashes must stay well under a frame budget.
-        // (Was allocating+double-hashing full strings — multi× slower.)
-        assert!(
-            ms < 50.0,
-            "scroll-like shape-key CPU too slow: {ms:.2}ms for 80 labels × 60 frames"
-        );
-    }
-
-    #[test]
-    fn shape_hash_changes_when_text_alpha_flips() {
-        let family = glyphon::Family::SansSerif;
-        let align = glyphon::cosmic_text::Align::Left;
-        let shaping = glyphon::Shaping::Advanced;
-        let hidden = node_shape_hash(
-            "x",
-            14.0,
-            14.0,
-            20.0,
-            20.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            [100, 100, 100, 0],
-            false,
-        );
-        let shown = node_shape_hash(
-            "x",
-            14.0,
-            14.0,
-            20.0,
-            20.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            [100, 100, 100, 200],
-            false,
-        );
-        assert_ne!(
-            hidden, shown,
-            "opacity/color alpha must invalidate shaped cache (Input adornments)"
-        );
-    }
-
-    #[test]
-    fn bounds_miss_keeps_shape_identity_when_only_width_changes() {
-        let family = glyphon::Family::SansSerif;
-        let align = glyphon::cosmic_text::Align::Left;
-        let shaping = glyphon::Shaping::Advanced;
-        let text = "Bidirectional sample: English 123 - العربية";
-        let color = [30u8, 30, 30, 255];
-        let shape_a = node_shape_identity_hash(
-            text,
-            14.0,
-            21.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            color,
-            400,
-            false,
-        );
-        let shape_b = node_shape_identity_hash(
-            text,
-            14.0,
-            21.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            color,
-            400,
-            false,
-        );
-        assert_eq!(shape_a, shape_b, "identity must ignore leaf bounds");
-
-        let key_narrow = node_shape_hash(
-            text,
-            14.0,
-            21.0,
-            160.0,
-            42.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            color,
-            false,
-        );
-        let key_wide = node_shape_hash(
-            text,
-            14.0,
-            21.0,
-            260.0,
-            42.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            color,
-            false,
-        );
-        assert_ne!(key_narrow, key_wide, "bounds change must miss Exact key");
-        // Same shape_hash + different key_hash ⇒ Bounds path (iced Difference::Bounds).
-        assert_eq!(
-            node_shape_identity_hash(
-                text,
-                14.0,
-                21.0,
-                400,
-                family,
-                align,
-                shaping,
-                0.0,
-                TextDirection::Auto,
-                color,
-                400,
-                false,
-            ),
-            shape_a
-        );
-    }
-
-    #[test]
-    fn paint_key_hash_ignores_force_fast_flag() {
-        // prepare_text_frame always passes force_fast=false into node_shape_hash so
-        // scroll fast↔settle does not mass-miss (text page white flash).
-        let family = glyphon::Family::SansSerif;
-        let align = glyphon::cosmic_text::Align::Left;
-        let shaping = glyphon::Shaping::Advanced;
-        let color = [0u8, 0, 0, 255];
-        let settle = node_shape_hash(
-            "Typography",
-            14.0,
-            21.0,
-            201.0,
-            40.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Ltr,
-            color,
-            false,
-        );
-        let scroll = node_shape_hash(
-            "Typography",
-            14.0,
-            21.0,
-            201.0,
-            40.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Ltr,
-            color,
-            false,
-        );
-        assert_eq!(settle, scroll);
-    }
-
-    #[test]
-    fn fast_mode_quantizes_bounds_to_cut_exact_churn() {
-        let family = glyphon::Family::SansSerif;
-        let align = glyphon::cosmic_text::Align::Left;
-        let shaping = glyphon::Shaping::Advanced;
-        let color = [0u8, 0, 0, 255];
-        let a = node_shape_hash(
-            "hi",
-            14.0,
-            21.0,
-            201.0,
-            40.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            color,
-            true,
-        );
-        let b = node_shape_hash(
-            "hi",
-            14.0,
-            21.0,
-            202.0,
-            40.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            color,
-            true,
-        );
-        assert_eq!(
-            a, b,
-            "2px quantize during fast should collapse nearby widths"
-        );
-        let c = node_shape_hash(
-            "hi",
-            14.0,
-            21.0,
-            201.0,
-            40.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            color,
-            false,
-        );
-        let d = node_shape_hash(
-            "hi",
-            14.0,
-            21.0,
-            202.0,
-            40.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            color,
-            false,
-        );
-        assert_ne!(c, d, "rest path keeps 1px Exact sensitivity");
-    }
-}
+#[path = "tests/shape_cache_key.rs"]
+mod shape_cache_key_tests;
 
 #[cfg(test)]
-mod hidden_scroll_cull_tests {
-    use super::clip_rect_to_bounds;
-
-    #[test]
-    fn caret_pan_cull_uses_unshifted_origin() {
-        let scroll = 80.0_f32;
-        let field = [10.0, 0.0, 40.0, 20.0];
-        let shifted_x = field[0] - scroll;
-        let shifted = clip_rect_to_bounds([shifted_x, 0.0, field[2], field[3]], Some(field));
-        assert!(
-            shifted.is_none(),
-            "shifted viewport-sized rect must miss the field"
-        );
-        let cull = clip_rect_to_bounds([shifted_x + scroll, 0.0, field[2], field[3]], Some(field));
-        assert!(cull.is_some(), "unshifted origin must overlap the field");
-    }
-
-    #[test]
-    fn ellipsis_buffer_uses_box_width_not_intrinsic() {
-        use crate::style::TextOverflow;
-        let intrinsic = 240.0_f32;
-        let box_w = 80.0_f32;
-        let w = super::nowrap_buffer_width(TextOverflow::Ellipsis, true, intrinsic, box_w);
-        assert!((w - box_w).abs() < 0.01, "ellipsis buffer w={w}");
-        let hidden = super::nowrap_buffer_width(TextOverflow::Hidden, true, intrinsic, box_w);
-        assert!(
-            (hidden - intrinsic).abs() < 0.01,
-            "hidden still shapes the full line, got {hidden}"
-        );
-    }
-
-    #[test]
-    fn overflowing_text_overflow_forces_start_align() {
-        assert!(crate::style::TextOverflow::Ellipsis.start_align_when_line_overflows());
-        assert!(crate::style::TextOverflow::Hidden.start_align_when_line_overflows());
-        assert!(!crate::style::TextOverflow::Newline.start_align_when_line_overflows());
-    }
-}
+#[path = "tests/hidden_scroll_cull.rs"]
+mod hidden_scroll_cull_tests;
 
 #[cfg(test)]
-mod input_shaping_stability_tests {
-    use super::node_shape_identity_hash;
-    use super::nowrap_layout_width_from_text;
-    use crate::renderer::font_loader;
-    use crate::renderer::text_hit::best_font_family;
-    use crate::renderer::text_prepare_debug::is_input_inline_text;
-    use crate::style::TextDirection;
-    use crate::style::TextOverflow;
-
-    fn shaped_line_w(fs: &mut glyphon::FontSystem, text: &str, shaping: glyphon::Shaping) -> f32 {
-        let size = 14.0_f32;
-        let lh = size * 1.5;
-        let family = best_font_family(fs);
-        let mut buffer = glyphon::Buffer::new(fs, glyphon::Metrics::new(size, lh));
-        buffer.set_size(Some(1024.0), Some(lh + 2.0));
-        buffer.set_text(
-            text,
-            &glyphon::Attrs::new()
-                .family(family)
-                .weight(glyphon::fontdb::Weight(400)),
-            shaping,
-            None,
-        );
-        buffer.shape_until_scroll(fs, false);
-        buffer
-            .layout_runs()
-            .map(|run| run.line_w)
-            .fold(0.0_f32, f32::max)
-    }
-
-    #[test]
-    fn scroll_fast_skips_reshape_only_for_idle_inputs() {
-        assert!(super::scroll_fast_skips_input_reshape(true, true, false));
-        assert!(
-            !super::scroll_fast_skips_input_reshape(true, true, true),
-            "focused caret must reshape"
-        );
-        assert!(!super::scroll_fast_skips_input_reshape(true, false, false));
-        assert!(!super::scroll_fast_skips_input_reshape(false, true, false));
-    }
-
-    #[test]
-    fn scroll_fast_skips_intrinsic_only_for_idle_unpanned_inputs() {
-        assert!(super::scroll_fast_skips_input_intrinsic_prepare(
-            true, true, false, 0.0
-        ));
-        assert!(!super::scroll_fast_skips_input_intrinsic_prepare(
-            true, true, true, 0.0
-        ));
-        assert!(!super::scroll_fast_skips_input_intrinsic_prepare(
-            true, true, false, 12.0
-        ));
-        assert!(!super::scroll_fast_skips_input_intrinsic_prepare(
-            false, true, false, 0.0
-        ));
-    }
-
-    fn dummy_shaped(
-        fs: &mut glyphon::FontSystem,
-        hash: u64,
-        measured: f32,
-    ) -> crate::renderer::text::ShapedTextEntry {
-        let mut e = super::make_dummy_cache_entry(fs);
-        e.shape_hash = hash;
-        e.key_hash = hash.wrapping_mul(3);
-        e.measured_text_w = measured;
-        e
-    }
-
-    fn reclaim_dummy(
-        cache: &mut Vec<crate::renderer::text::ShapedTextEntry>,
-        pool: &mut super::ShapedIdentityPool,
-        fs: &mut glyphon::FontSystem,
-        i: usize,
-        hash: u64,
-    ) {
-        super::assign_shaped_slot(cache, pool, fs, i, hash);
-    }
-
-    fn grow_and_reclaim(
-        cache: &mut Vec<crate::renderer::text::ShapedTextEntry>,
-        pool: &mut super::ShapedIdentityPool,
-        fs: &mut glyphon::FontSystem,
-        hashes: &[u64],
-    ) {
-        super::park_shaped_suffix(cache, pool, hashes.len(), super::SHAPED_IDENTITY_POOL_CAP);
-        for (i, &hash) in hashes.iter().enumerate() {
-            super::assign_shaped_slot(cache, pool, fs, i, hash);
-        }
-    }
-
-    #[test]
-    fn unchanged_prefix_survives_suffix_reorder_clip_and_restore() {
-        let mut fs = crate::renderer::font_loader::create_font_system();
-        let mut cache: Vec<_> = [0xA, 0xB, 0xC, 0xC, 0xD]
-            .into_iter()
-            .map(|hash| dummy_shaped(&mut fs, hash, hash as f32))
-            .collect();
-        let mut pool = super::ShapedIdentityPool::new();
-        let stable = [0xA, 0xB, 0xC, 0xC, 0xD];
-        grow_and_reclaim(&mut cache, &mut pool, &mut fs, &stable);
-        assert!(
-            pool.is_empty(),
-            "unchanged slots must stay outside the pool"
-        );
-        for hashes in [
-            &[0xA, 0xB, 0xD, 0xC, 0xC][..],
-            &[0xC, 0xD][..],
-            &stable[..],
-            &[0xA, 0xB, 0xC][..],
-            &stable[..],
-        ] {
-            grow_and_reclaim(&mut cache, &mut pool, &mut fs, hashes);
-            assert_eq!(cache.len(), hashes.len());
-            for (entry, &hash) in cache.iter().zip(hashes) {
-                assert_eq!(entry.shape_hash, hash, "existing runs must not reshape");
-                assert_eq!(entry.measured_text_w, hash as f32);
-            }
-        }
-    }
-
-    #[test]
-    #[ignore = "isolated shaped-cache CPU comparison; run without concurrent workloads"]
-    fn shaped_slot_reuse_cost() {
-        let mut fs = crate::renderer::font_loader::create_font_system();
-        let hashes: Vec<_> = (1..=80).collect();
-        let mut cache: Vec<_> = hashes
-            .iter()
-            .map(|&hash| dummy_shaped(&mut fs, hash, hash as f32))
-            .collect();
-        let mut pool = super::ShapedIdentityPool::new();
-        for eager in [true, false] {
-            let start = std::time::Instant::now();
-            for _ in 0..2000 {
-                if eager {
-                    super::park_shaped_cache(&mut cache, &mut pool);
-                }
-                grow_and_reclaim(&mut cache, &mut pool, &mut fs, &hashes);
-            }
-            eprintln!(
-                "shaped-cache eager={eager} us/frame={:.3}",
-                start.elapsed().as_secs_f64() * 1_000_000.0 / 2000.0
-            );
-            assert!(pool.is_empty());
-            assert!(cache
-                .iter()
-                .zip(&hashes)
-                .all(|(entry, hash)| entry.shape_hash == *hash));
-        }
-    }
-
-    #[test]
-    fn shaped_identity_pool_reclaims_across_index_churn() {
-        let mut fs = crate::renderer::font_loader::create_font_system();
-        let mut cache = vec![dummy_shaped(&mut fs, 0xB0B, 7.0)];
-        let mut pool = super::ShapedIdentityPool::new();
-        super::park_shaped_entry(&mut pool, dummy_shaped(&mut fs, 0xA11CE, 42.0));
-        reclaim_dummy(&mut cache, &mut pool, &mut fs, 0, 0xA11CE);
-        assert_eq!(cache[0].shape_hash, 0xA11CE);
-        assert_eq!(cache[0].measured_text_w, 42.0);
-        assert!(pool.contains_key(&0xB0B));
-        assert!(!pool.contains_key(&0xA11CE));
-    }
-
-    #[test]
-    fn prefix_insert_reclaims_from_identity_pool() {
-        let mut fs = crate::renderer::font_loader::create_font_system();
-        let mut cache = vec![
-            dummy_shaped(&mut fs, 0xB, 2.0),
-            dummy_shaped(&mut fs, 0xC, 3.0),
-            dummy_shaped(&mut fs, 0, 0.0),
-        ];
-        let mut pool = super::ShapedIdentityPool::new();
-        super::park_shaped_entry(&mut pool, dummy_shaped(&mut fs, 0xA, 1.0));
-        reclaim_dummy(&mut cache, &mut pool, &mut fs, 0, 0xA);
-        assert_eq!(cache[0].shape_hash, 0xA);
-        assert_eq!(cache[0].measured_text_w, 1.0);
-        reclaim_dummy(&mut cache, &mut pool, &mut fs, 1, 0xB);
-        assert_eq!(cache[1].shape_hash, 0xB);
-        reclaim_dummy(&mut cache, &mut pool, &mut fs, 2, 0xC);
-        assert_eq!(cache[2].shape_hash, 0xC);
-    }
-
-    /// Gallery scroll: first visible run leaves, everyone else shifts, a new run
-    /// enters. Pre-fix (index-aligned, no park-all): every live slot Miss-reshaped.
-    #[test]
-    fn band_cull_prefix_drop_reclaims_after_park_all() {
-        let mut fs = crate::renderer::font_loader::create_font_system();
-        let mut cache = vec![
-            dummy_shaped(&mut fs, 0xA, 1.0),
-            dummy_shaped(&mut fs, 0xB, 2.0),
-            dummy_shaped(&mut fs, 0xC, 3.0),
-            dummy_shaped(&mut fs, 0xD, 4.0),
-            dummy_shaped(&mut fs, 0xE, 5.0),
-        ];
-        let mut pool = super::ShapedIdentityPool::new();
-        super::park_shaped_cache(&mut cache, &mut pool);
-        grow_and_reclaim(&mut cache, &mut pool, &mut fs, &[0xB, 0xC, 0xD, 0xE, 0xF]);
-        assert_eq!(cache[0].shape_hash, 0xB);
-        assert_eq!(cache[0].measured_text_w, 2.0);
-        assert_eq!(cache[1].shape_hash, 0xC);
-        assert_eq!(cache[1].measured_text_w, 3.0);
-        assert_eq!(cache[2].shape_hash, 0xD);
-        assert_eq!(cache[2].measured_text_w, 4.0);
-        assert_eq!(cache[3].shape_hash, 0xE);
-        assert_eq!(cache[3].measured_text_w, 5.0);
-        assert_eq!(
-            cache[4].shape_hash, 0,
-            "unmatched F stays a dummy; Miss path will shape it"
-        );
-    }
-
-    /// Scroll Clear submits only the damage-strip subset, then the next frame
-    /// submits the full visible window again. Pool must keep the parked majority.
-    #[test]
-    fn subset_then_full_window_reclaims() {
-        let mut fs = crate::renderer::font_loader::create_font_system();
-        let mut cache = vec![
-            dummy_shaped(&mut fs, 0xA, 1.0),
-            dummy_shaped(&mut fs, 0xB, 2.0),
-            dummy_shaped(&mut fs, 0xC, 3.0),
-            dummy_shaped(&mut fs, 0xD, 4.0),
-            dummy_shaped(&mut fs, 0xE, 5.0),
-        ];
-        let mut pool = super::ShapedIdentityPool::new();
-        super::park_shaped_cache(&mut cache, &mut pool);
-        grow_and_reclaim(&mut cache, &mut pool, &mut fs, &[0xC, 0xD]);
-        assert_eq!(cache[0].measured_text_w, 3.0);
-        assert_eq!(cache[1].measured_text_w, 4.0);
-        super::park_shaped_cache(&mut cache, &mut pool);
-        grow_and_reclaim(&mut cache, &mut pool, &mut fs, &[0xA, 0xB, 0xC, 0xD, 0xE]);
-        assert_eq!(cache[0].measured_text_w, 1.0);
-        assert_eq!(cache[1].measured_text_w, 2.0);
-        assert_eq!(cache[2].measured_text_w, 3.0);
-        assert_eq!(cache[3].measured_text_w, 4.0);
-        assert_eq!(cache[4].measured_text_w, 5.0);
-    }
-
-    /// Clip-strip duplication and repeated reaction emoji share `shape_hash`.
-    /// HashMap last-write-wins dropped the extra copy; FIFO must keep both.
-    #[test]
-    fn duplicate_hash_copies_both_survive_pool() {
-        let mut fs = crate::renderer::font_loader::create_font_system();
-        let mut cache = vec![
-            dummy_shaped(&mut fs, 0x11, 10.0),
-            dummy_shaped(&mut fs, 0x11, 20.0),
-        ];
-        let mut pool = super::ShapedIdentityPool::new();
-        super::park_shaped_cache(&mut cache, &mut pool);
-        grow_and_reclaim(&mut cache, &mut pool, &mut fs, &[0x11, 0x11]);
-        assert_eq!(cache[0].measured_text_w, 10.0);
-        assert_eq!(cache[1].measured_text_w, 20.0);
-    }
-
-    /// Saturated pool + park-all used to evict the live set (gallery: 60 nodes,
-    /// cap 256, leftover 225 ⇒ 29 perpetual misses, hits = cap − leftover).
-    #[test]
-    fn park_all_does_not_evict_live_when_pool_is_full() {
-        let mut fs = crate::renderer::font_loader::create_font_system();
-        let mut pool = super::ShapedIdentityPool::new();
-        for i in 0..4u64 {
-            super::park_shaped_entry(
-                &mut pool,
-                dummy_shaped(&mut fs, 0x1000 + i, 100.0 + i as f32),
-            );
-        }
-        assert_eq!(super::identity_pool_len(&pool), 4);
-        let mut cache = vec![
-            dummy_shaped(&mut fs, 0xA, 1.0),
-            dummy_shaped(&mut fs, 0xB, 2.0),
-            dummy_shaped(&mut fs, 0xC, 3.0),
-        ];
-        super::park_shaped_cache_with_cap(&mut cache, &mut pool, 4);
-        grow_and_reclaim(&mut cache, &mut pool, &mut fs, &[0xA, 0xB, 0xC]);
-        assert_eq!(
-            cache[0].measured_text_w, 1.0,
-            "live A must survive a full pool"
-        );
-        assert_eq!(
-            cache[1].measured_text_w, 2.0,
-            "live B must survive a full pool"
-        );
-        assert_eq!(
-            cache[2].measured_text_w, 3.0,
-            "live C must survive a full pool"
-        );
-    }
-
-    #[test]
-    fn identity_hash_includes_requested_weight() {
-        let family = glyphon::Family::SansSerif;
-        let align = glyphon::cosmic_text::Align::Left;
-        let shaping = glyphon::Shaping::Advanced;
-        let color = [30u8, 30, 30, 255];
-        let medium = node_shape_identity_hash(
-            "数据",
-            14.0,
-            14.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            color,
-            500,
-            true,
-        );
-        let bold = node_shape_identity_hash(
-            "数据",
-            14.0,
-            14.0,
-            400,
-            family,
-            align,
-            shaping,
-            0.0,
-            TextDirection::Auto,
-            color,
-            700,
-            true,
-        );
-        assert_ne!(
-            medium, bold,
-            "sidebar medium vs page-title bold must not share shape_hash when attrs_weight matches"
-        );
-    }
-
-    #[test]
-    fn password_placeholder_basic_vs_advanced_differs() {
-        // Documents why Input must not flip shaping on focus (caret install).
-        let mut fs = font_loader::create_font_system();
-        font_loader::apply_default_families(fs.db_mut());
-        let basic = shaped_line_w(&mut fs, "Password", glyphon::Shaping::Basic);
-        let advanced = shaped_line_w(&mut fs, "Password", glyphon::Shaping::Advanced);
-        assert!(
-            (basic - advanced).abs() > 0.05,
-            "expected Basic/Advanced advance difference for Password; basic={basic} adv={advanced}"
-        );
-    }
-
-    #[test]
-    fn input_inline_template_id_detected() {
-        assert!(is_input_inline_text(Some("__jadix_input:pw:text")));
-        assert!(!is_input_inline_text(Some("__jadix_input:pw:clear")));
-        assert!(!is_input_inline_text(Some("label")));
-        assert!(!is_input_inline_text(None));
-    }
-
-    #[test]
-    fn nowrap_live_intrinsic_prevents_soft_wrap_after_cjk_latin_preedit() {
-        // Textarea IME: committed CJK + in-flight pinyin under a narrow leaf.
-        // Stale prepared intrinsic (CJK only) + Word wrap → extra runs → line jumps down.
-        let mut fs = font_loader::create_font_system();
-        font_loader::apply_default_families(fs.db_mut());
-        crate::text::install_shared_font_system(&mut fs);
-
-        let size = 14.0_f32;
-        let lh = 21.0_f32;
-        let box_w = 72.0_f32;
-        let committed = "你好世界";
-        let live = format!("{committed}nihaoshijie");
-        let stale = crate::text::prepare(committed, size, 400, lh);
-        let stale_w = crate::text::intrinsic_width(&stale);
-        let live_w =
-            nowrap_layout_width_from_text(&live, size, 400, lh, TextOverflow::Clip, false, box_w);
-        assert!(
-            live_w > stale_w + 8.0,
-            "live wrap must exceed stale CJK-only intrinsic (live={live_w} stale={stale_w})"
-        );
-
-        let family = best_font_family(&fs);
-        let attrs = glyphon::Attrs::new()
-            .family(family)
-            .weight(glyphon::fontdb::Weight(400));
-
-        let mut soft = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        soft.set_size(Some(stale_w.max(box_w)), None);
-        soft.set_text(&live, &attrs, glyphon::Shaping::Advanced, None);
-        soft.shape_until_scroll(&mut fs, false);
-        let soft_runs = soft.layout_runs().count();
-
-        let mut hard = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(size, lh));
-        hard.set_wrap(glyphon::Wrap::None);
-        hard.set_size(Some(live_w), None);
-        hard.set_text(&live, &attrs, glyphon::Shaping::Advanced, None);
-        hard.shape_until_scroll(&mut fs, false);
-        let hard_runs = hard.layout_runs().count();
-
-        assert!(
-            soft_runs > 1,
-            "stale narrow Word-wrap must invent extra runs (got {soft_runs})"
-        );
-        assert_eq!(
-            hard_runs, 1,
-            "nowrap + live intrinsic must keep one run; got {hard_runs}"
-        );
-    }
-
-    #[test]
-    fn resize_rgba_nn_letterboxes_tall_source() {
-        // Tall 8x16 opaque block → 16x16 must stay ~8px wide (not stretched to 16).
-        let mut rgba = vec![0u8; 8 * 16 * 4];
-        for px in rgba.chunks_exact_mut(4) {
-            px.copy_from_slice(&[255, 200, 0, 255]);
-        }
-        let src = crate::renderer::text::EmojiRaster::new(8, 16, rgba);
-        let out = super::resize_rgba_nn(&src, 16);
-        assert_eq!((out.width, out.height), (16, 16));
-        let mut minx = 16usize;
-        let mut maxx = 0usize;
-        let mut last_row = 0usize;
-        for y in 0..16 {
-            for x in 0..16 {
-                if out.rgba[(y * 16 + x) * 4 + 3] > 0 {
-                    minx = minx.min(x);
-                    maxx = maxx.max(x);
-                    if y == 15 {
-                        last_row += 1;
-                    }
-                }
-            }
-        }
-        let ink_w = maxx + 1 - minx;
-        assert!(
-            ink_w <= 9,
-            "letterbox must preserve aspect (got ink_w={ink_w}; stretch would be ~16)"
-        );
-        assert_eq!(last_row, 0, "safe inset must keep last row transparent");
-    }
-
-    #[test]
-    fn resize_rgba_nn_pads_full_bleed_source() {
-        let mut rgba = vec![0u8; 14 * 14 * 4];
-        for px in rgba.chunks_exact_mut(4) {
-            px.copy_from_slice(&[255, 220, 0, 255]);
-        }
-        let src = crate::renderer::text::EmojiRaster::new(14, 14, rgba);
-        let out = super::resize_rgba_nn(&src, 14);
-        let last = (0..14)
-            .filter(|&x| out.rgba[(13 * 14 + x) * 4 + 3] > 0)
-            .count();
-        let first = (0..14).filter(|&x| out.rgba[x * 4 + 3] > 0).count();
-        assert_eq!(last, 0, "full-bleed source must gain bottom pad");
-        assert_eq!(first, 0, "full-bleed source must gain top pad");
-    }
-
-    #[test]
-    fn caret_blink_solid_then_off_then_on() {
-        assert!(super::caret_blink_visible_at_elapsed(0));
-        assert!(super::caret_blink_visible_at_elapsed(399));
-        assert!(
-            !super::caret_blink_visible_at_elapsed(400),
-            "first blink beat after the solid pause is hidden"
-        );
-        assert!(!super::caret_blink_visible_at_elapsed(400 + 519));
-        assert!(super::caret_blink_visible_at_elapsed(400 + 520));
-        assert_eq!(super::caret_blink_next_remain_ms(0), 400);
-        assert_eq!(super::caret_blink_next_remain_ms(400), 520);
-    }
-
-    #[test]
-    fn underline_offset_positive_moves_away_from_text() {
-        // CSS text-underline-offset: larger → further below the box (larger Y).
-        let y0 = super::underline_line_y(10.0, 20.0, 2.0, 0.0, 1.0, 1.0);
-        let y4 = super::underline_line_y(10.0, 20.0, 2.0, 4.0, 1.0, 1.0);
-        assert!(
-            (y4 - y0 - 4.0).abs() < 0.01,
-            "underline-offset-4 must shift +4px down (y0={y0}, y4={y4})"
-        );
-    }
-
-    #[test]
-    fn underline_offset_survives_tight_text_box_clip() {
-        // Tight leaf scissor = text box; CSS +offset paints below the box.
-        let box_clip = Some([10.0, 10.0, 40.0, 14.0]);
-        let ul_h = 1.0;
-        let y = super::underline_line_y(10.0, 14.0, ul_h, 2.0, 1.0, 1.0);
-        assert!(
-            super::clip_rect_to_bounds([10.0, y, 40.0, ul_h], box_clip).is_none(),
-            "without expansion the underline is fully clipped"
-        );
-        let expanded =
-            super::expand_clip_for_text_decoration(box_clip, true, false, 2.0, ul_h, 1.0, 1.0);
-        assert!(
-            super::clip_rect_to_bounds([10.0, y, 40.0, ul_h], expanded).is_some(),
-            "decoration clip expand must keep underline visible"
-        );
-    }
-
-    #[test]
-    fn decoration_ink_extends_below_the_layout_box() {
-        let mut n = crate::layout::layout_tree::TextLayoutInfo {
-            text: "Home".into(),
-            shape_suffix: None,
-            spans: None,
-            template_id: None,
-            x: 10.0,
-            y: 10.0,
-            width: 40.0,
-            height: 20.0,
-            clip_bounds: None,
-            style: crate::style::TextStyle::default(),
-            prepared: None,
-            glyph_fx: None,
-            shimmer: None,
-            paint_scale: 1.0,
-            paint_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-            paint_origin: [30.0, 20.0],
-            glyph_raster: crate::renderer::GlyphRasterMode::Coverage,
-        };
-        n.style.underline = Some(true);
-        n.style.underline_offset = Some(4.0);
-        n.style.size = Some(14.0);
-        let ink = super::text_decoration_ink_logical(&n, 1.0).expect("ink");
-        let box_bottom = n.y + n.height;
-        assert!(
-            ink[1] + ink[3] > box_bottom + 3.0,
-            "offset 4px must leave the layout box (ink={ink:?} bottom={box_bottom})"
-        );
-    }
-}
+#[path = "tests/input_shaping_stability.rs"]
+mod input_shaping_stability_tests;
 
 #[cfg(test)]
-mod glyph_fragment_visibility_tests {
-    use super::glyph_node_visible_this_frame;
+#[path = "tests/glyph_fragment_visibility.rs"]
+mod glyph_fragment_visibility_tests;
 
-    #[test]
-    fn scrolled_caption_split_keeps_both_scripts_visible() {
-        // Visual origin already subtracted scroll_x. The left (CJK) wipe ends
-        // before the scroll-restored leaf, so the leaf test drops it and the
-        // non-ASCII warmup draws it a frame after the Latin wipe.
-        let viewport = [0.0, 0.0, 800.0, 600.0];
-        let origin = [100.0, 10.0];
-        let size = [124.0, 21.0];
-        let scroll_x = 80.0;
-        let cjk = Some([100.0, 10.0, 36.0, 21.0]);
-        let latin = Some([136.0, 10.0, 88.0, 21.0]);
-        assert!(
-            glyph_node_visible_this_frame(origin, size, scroll_x, cjk, viewport),
-            "CJK wipe is on screen and must prepare with the Latin wipe"
-        );
-        assert!(glyph_node_visible_this_frame(
-            origin, size, scroll_x, latin, viewport
-        ));
-    }
-
-    #[test]
-    fn offscreen_caption_wipe_stays_deferred() {
-        let viewport = [0.0, 0.0, 800.0, 600.0];
-        assert!(!glyph_node_visible_this_frame(
-            [100.0, 10.0],
-            [124.0, 21.0],
-            0.0,
-            Some([900.0, 10.0, 20.0, 21.0]),
-            viewport,
-        ));
-    }
-}
+#[cfg(test)]
+include!("tests/prepare_text_cases.rs");

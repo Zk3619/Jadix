@@ -35,11 +35,22 @@ impl ThemeTransition {
         Self::with_compositor_encoding(device, format, false)
     }
 
-    pub(crate) fn new_for_surface(device: &wgpu::Device, config: &wgpu::SurfaceConfiguration) -> Self {
-        Self::with_compositor_encoding(device, config.format, super::present_retain::surface_needs_compositor_encoding(config))
+    pub(crate) fn new_for_surface(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+    ) -> Self {
+        Self::with_compositor_encoding(
+            device,
+            config.format,
+            super::present_retain::surface_needs_compositor_encoding(config),
+        )
     }
 
-    fn with_compositor_encoding(device: &wgpu::Device, format: wgpu::TextureFormat, compositor_encode: bool) -> Self {
+    fn with_compositor_encoding(
+        device: &wgpu::Device,
+        format: wgpu::TextureFormat,
+        compositor_encode: bool,
+    ) -> Self {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some("Theme transition layout"),
             entries: &[
@@ -90,31 +101,33 @@ impl ThemeTransition {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let pipeline_for = |entry_point| device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Theme transition pipeline"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: Some("vs_main"),
-                buffers: &[Some(VertexInput::desc())],
-                compilation_options: Default::default(),
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: Some(entry_point),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format,
-                    blend: None,
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-                compilation_options: Default::default(),
-            }),
-            primitive: Default::default(),
-            depth_stencil: None,
-            multisample: Default::default(),
-            multiview_mask: None,
-            cache: None,
-        });
+        let pipeline_for = |entry_point| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Theme transition pipeline"),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: Some("vs_main"),
+                    buffers: &[Some(VertexInput::desc())],
+                    compilation_options: Default::default(),
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: Some(entry_point),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                    compilation_options: Default::default(),
+                }),
+                primitive: Default::default(),
+                depth_stencil: None,
+                multisample: Default::default(),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
         let pipeline = pipeline_for("fs_main");
         let surface_pipeline = compositor_encode.then(|| pipeline_for("fs_compositor"));
         let vertices = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -386,5 +399,5 @@ impl ThemeTransition {
 }
 
 #[cfg(test)]
-#[path = "theme_transition_tests.rs"]
+#[path = "tests/theme_transition.rs"]
 mod tests;

@@ -15,8 +15,10 @@ crates/jadix/tmp_stack_crumb.txt
 
 # Keep this file manageable in Git
 !.gitignore
+!.gitattributes
 
 !README.md
+!README.zh.md
 !CONTEXT.md
 !LICENSE
 !NOTICE
@@ -31,6 +33,9 @@ crates/jadix/tmp_stack_crumb.txt
 vendor/*
 !vendor/glyphon/
 !vendor/glyphon/**
+!vendor/cosmic-text/
+!vendor/cosmic-text/**
+vendor/cosmic-text/target/
 !vendor/taffy/
 !vendor/taffy/**
 vendor/taffy/target/
@@ -57,6 +62,77 @@ vendor/wgpu-hal/target/
 !vendor/winit-win32/**
 vendor/winit-wayland/target/
 vendor/winit-win32/target/
+
+!vendor/RELEASE_FORKS.json
+!vendor/glyphon/
+!vendor/glyphon/**
+vendor/glyphon/target/
+!vendor/naga/
+!vendor/naga/**
+vendor/naga/target/
+!vendor/taffy/
+!vendor/taffy/**
+vendor/taffy/target/
+!vendor/wgpu/
+!vendor/wgpu/**
+vendor/wgpu/target/
+!vendor/wgpu-core/
+!vendor/wgpu-core/**
+vendor/wgpu-core/target/
+!vendor/wgpu-core-deps-apple/
+!vendor/wgpu-core-deps-apple/**
+vendor/wgpu-core-deps-apple/target/
+!vendor/wgpu-core-deps-emscripten/
+!vendor/wgpu-core-deps-emscripten/**
+vendor/wgpu-core-deps-emscripten/target/
+!vendor/wgpu-core-deps-wasm/
+!vendor/wgpu-core-deps-wasm/**
+vendor/wgpu-core-deps-wasm/target/
+!vendor/wgpu-core-deps-windows-linux-android/
+!vendor/wgpu-core-deps-windows-linux-android/**
+vendor/wgpu-core-deps-windows-linux-android/target/
+!vendor/wgpu-hal/
+!vendor/wgpu-hal/**
+vendor/wgpu-hal/target/
+!vendor/wgpu-naga-bridge/
+!vendor/wgpu-naga-bridge/**
+vendor/wgpu-naga-bridge/target/
+!vendor/wgpu-types/
+!vendor/wgpu-types/**
+vendor/wgpu-types/target/
+!vendor/winit-android/
+!vendor/winit-android/**
+vendor/winit-android/target/
+!vendor/winit-appkit/
+!vendor/winit-appkit/**
+vendor/winit-appkit/target/
+!vendor/winit-common/
+!vendor/winit-common/**
+vendor/winit-common/target/
+!vendor/winit-core/
+!vendor/winit-core/**
+vendor/winit-core/target/
+!vendor/winit-ohos/
+!vendor/winit-ohos/**
+vendor/winit-ohos/target/
+!vendor/winit-orbital/
+!vendor/winit-orbital/**
+vendor/winit-orbital/target/
+!vendor/winit-uikit/
+!vendor/winit-uikit/**
+vendor/winit-uikit/target/
+!vendor/winit-wayland/
+!vendor/winit-wayland/**
+vendor/winit-wayland/target/
+!vendor/winit-web/
+!vendor/winit-web/**
+vendor/winit-web/target/
+!vendor/winit-win32/
+!vendor/winit-win32/**
+vendor/winit-win32/target/
+!vendor/winit-x11/
+!vendor/winit-x11/**
+vendor/winit-x11/target/
 
 # Allow the two main source directories and all contents
 !crates/
@@ -99,8 +175,10 @@ development-docs/
 !docs/devtools.md
 !docs/FEATURES.md
 !docs/README.md
+!docs/*.md
 !docs/component-authoring.md
-scripts/__pycache__/
+scripts/**/__pycache__/
+scripts/**/target/
 
 !assets/
 assets/*
@@ -108,3 +186,4 @@ assets/*
 !assets/app-icons.toml
 !assets/icons/
 !assets/icons/**
+!docs/css-properties-checklist.md

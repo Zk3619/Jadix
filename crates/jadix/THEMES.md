@@ -15,7 +15,7 @@
 
 Windows 的 GPU alpha 与原生透明窗口属性分开管理：`follow_theme(true)` 预留支持 alpha 的合成 surface，切换预设时复用同一个 HWND 和 surface；只有显式请求桌面穿透时才设置 winit 的原生透明属性。Gallery 默认启用 WebView，使用独立的 DirectComposition 内容树，Fluent 的系统 Mica 仍需通过 `DwmExtendFrameIntoClientArea` 扩展到客户区，不能因 swapchain 支持 alpha 而跳过。未启用 WebView 时，DX12 玻璃窗口使用自定义 DComp 背景与内容视觉树，不再叠加系统材质或 AccentPolicy。自定义配方不可用时按当前明暗模式的 `colors.background` token 回退。
 
-本地 DWMBlurGlass 参考实现有两条不同路径：`Section/DwmAPIEffect.cpp` 设置系统 `DWMWA_SYSTEMBACKDROP_TYPE`；`Backdrops/BackdropFactory.cpp` 的自定义配方则由注入 DWM 的视觉树承载。Jadix 在应用进程中合成，复用了配方思路，并不注入 DWM，也不需要创建额外的透明顶层窗口。原生回归：构建 Gallery 后运行 `python scripts/window-material-check.py`，检查 Fluent 的实际合成像素、明暗切换、resize、重新进入预设及 HWND 数量；PNG、日志和 JSON 写入 `.tmp/window-material/`。
+本地 DWMBlurGlass 参考实现有两条不同路径：`Section/DwmAPIEffect.cpp` 设置系统 `DWMWA_SYSTEMBACKDROP_TYPE`；`Backdrops/BackdropFactory.cpp` 的自定义配方则由注入 DWM 的视觉树承载。Jadix 在应用进程中合成，复用了配方思路，并不注入 DWM，也不需要创建额外的透明顶层窗口。原生回归：构建 Gallery 后运行 `python scripts/acceptance/window-material-check.py`，检查 Fluent 的实际合成像素、明暗切换、resize、重新进入预设及 HWND 数量；PNG、日志和 JSON 写入 `.tmp/window-material/`。
 
 WinUI 3 是 Fluent 的 Windows 落地组件库，不再作为第五种设计语言。旧配置名仍可读取，重新序列化统一写为 `fluent`；`ThemePreset::WinUi3` 保留为弃用的源码兼容常量。统一预设不依赖 WinUI 或 windows-reactor 运行时，也不把跨平台阴影与模糊称为系统 Acrylic / Mica。Tooltip 使用 4px 圆角，内容 Card 使用 4px，常规浮层使用 8px；操作标签沿用 Fluent Semibold，正文保持 Regular。
 
@@ -117,12 +117,3 @@ easing = "ease-in-out"
 也可直接给任何具有背景盒的元素使用 `class="glass"` 或 `class="glass-[1.46_12_0.025_0.6]"`。`glass-none` 关闭光学材质；完整不透明降级为 `glass-none backdrop-blur-none bg-card`。不支持背景捕获的路径使用自身背景色作为降级，因此部署时应保留合适的底色。纯透明玻璃不保证任意背景上的文字对比度；可提高 `surface-opacity`，或对正文面板采用不透明降级。
 
 这是实时屏幕空间的光学近似，不包含场景几何追踪、真实环境探针、多次内部反射或物理级焦散，也不读取窗口外的桌面背景。全屏原生窗口材质与组件材质是独立能力。
-
-## 开发参考与验证记录
-
-主题研究依据、Gallery 验证与历史复验已集中到 development-docs：
-
-- [官方参考与视觉验收依据](../../development-docs/comparison/theme-references-20261020.md)。
-- [Gallery 验证与历史复验](../../development-docs/engine/theme-validation-20261021.md)。
-
-开发文档为独立仓库内容；公开主题 API 与配置仍以本手册和源码为准。

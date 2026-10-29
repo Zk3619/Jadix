@@ -17,37 +17,60 @@ fn measure_function(
     node_context: Option<&mut NodeContext>,
     font_metrics: &FontMetrics,
 ) -> Size<f32> {
-    if let Size { width: Some(width), height: Some(height) } = known_dimensions {
+    if let Size {
+        width: Some(width),
+        height: Some(height),
+    } = known_dimensions
+    {
         return Size { width, height };
     }
 
     match node_context {
         None => Size::ZERO,
-        Some(NodeContext::Text(text_context)) => {
-            text_measure_function(known_dimensions, available_space, &*text_context, font_metrics)
+        Some(NodeContext::Text(text_context)) => text_measure_function(
+            known_dimensions,
+            available_space,
+            &*text_context,
+            font_metrics,
+        ),
+        Some(NodeContext::Image(image_context)) => {
+            image_measure_function(known_dimensions, image_context)
         }
-        Some(NodeContext::Image(image_context)) => image_measure_function(known_dimensions, image_context),
     }
 }
 
 fn main() -> Result<(), taffy::TaffyError> {
     let mut taffy: TaffyTree<NodeContext> = TaffyTree::new();
 
-    let font_metrics = FontMetrics { char_width: 10.0, char_height: 10.0 };
+    let font_metrics = FontMetrics {
+        char_width: 10.0,
+        char_height: 10.0,
+    };
 
     let text_node = taffy.new_leaf_with_context(
         Style::default(),
-        NodeContext::Text(TextContext { text_content: LOREM_IPSUM.into(), writing_mode: WritingMode::Horizontal }),
+        NodeContext::Text(TextContext {
+            text_content: LOREM_IPSUM.into(),
+            writing_mode: WritingMode::Horizontal,
+        }),
     )?;
 
-    let image_node = taffy
-        .new_leaf_with_context(Style::default(), NodeContext::Image(ImageContext { width: 400.0, height: 300.0 }))?;
+    let image_node = taffy.new_leaf_with_context(
+        Style::default(),
+        NodeContext::Image(ImageContext {
+            width: 400.0,
+            height: 300.0,
+        }),
+    )?;
 
     let root = taffy.new_with_children(
         Style {
             display: Display::Flex,
             flex_direction: FlexDirection::Column,
-            size: Size { width: length(200.0), height: auto() },
+            size: Size {
+                width: length(200.0),
+                height: auto(),
+            },
             ..Default::default()
         },
         &[text_node, image_node],
@@ -65,7 +88,12 @@ fn main() -> Result<(), taffy::TaffyError> {
                 style,
                 |_, _| 0.0,
                 |known_dimensions, available_space| {
-                    measure_function(known_dimensions, available_space, node_context, &font_metrics)
+                    measure_function(
+                        known_dimensions,
+                        available_space,
+                        node_context,
+                        &font_metrics,
+                    )
                 },
             )
         },

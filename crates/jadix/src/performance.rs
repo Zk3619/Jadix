@@ -55,7 +55,7 @@ pub fn current_thread_id() -> u32 {
 }
 
 #[cfg(windows)]
-pub use windows::{Sampler, current_thread_id};
+pub use windows::{current_thread_id, Sampler};
 
 #[cfg(windows)]
 mod windows {
@@ -232,7 +232,7 @@ mod windows {
             if status != 0x800007D2 || bytes == 0 {
                 return None;
             } // PDH_MORE_DATA
-            // PDH items include pointers into the buffer; keep aligned storage alive until copied.
+              // PDH items include pointers into the buffer; keep aligned storage alive until copied.
             let mut buffer = vec![0_u64; (bytes as usize).div_ceil(8)];
             let items = buffer.as_mut_ptr().cast::<CounterItem>();
             if unsafe {
@@ -341,25 +341,5 @@ mod windows {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    #[cfg(windows)]
-    #[test]
-    fn windows_sampler_reads_live_process_and_thread_counters() {
-        let mut sampler = Sampler::new(current_thread_id());
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        let sample = sampler.sample();
-        assert_eq!(sample.process_id, std::process::id());
-        assert!(sample.process_percent.is_some());
-        assert!(sample.ui_percent.is_some());
-        assert!(sample.working_set.is_some_and(|bytes| bytes > 0));
-        assert!(sample.private_bytes.is_some_and(|bytes| bytes > 0));
-        assert!(sample.logical_cpus >= 1);
-    }
-
-    #[test]
-    fn cpu_percent_uses_measured_time_and_core_capacity() {
-        assert_eq!(cpu_percent(0, 20_000_000, 0.5), 400.0);
-        assert_eq!(cpu_percent(20_000_000, 0, 0.5), 0.0);
-    }
-}
+#[path = "tests/performance.rs"]
+mod tests;

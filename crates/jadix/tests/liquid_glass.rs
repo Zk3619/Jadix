@@ -1,8 +1,13 @@
-#![cfg(any(feature = "backend-dx12", feature = "backend-gles", feature = "backend-metal", feature = "backend-vulkan"))]
+#![cfg(any(
+    feature = "backend-dx12",
+    feature = "backend-gles",
+    feature = "backend-metal",
+    feature = "backend-vulkan"
+))]
 
 use jadix::renderer::{
-    InstanceInput, JadixPipeline,
     offscreen::{OffscreenGpu, RgbaImage},
+    InstanceInput, JadixPipeline,
 };
 use wgpu::util::DeviceExt;
 
@@ -403,12 +408,10 @@ fn liquid_glass_gpu_refraction_dispersion_and_highlights_are_independent() {
         changed > 300,
         "refraction must displace the actual backdrop: {changed}"
     );
-    assert!(
-        refracted
-            .pixels
-            .chunks_exact(4)
-            .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2])
-    );
+    assert!(refracted
+        .pixels
+        .chunks_exact(4)
+        .all(|pixel| pixel[0] == pixel[1] && pixel[1] == pixel[2]));
     let colored = dispersed
         .pixels
         .chunks_exact(4)

@@ -106,9 +106,5 @@ pub fn set_os_dark_all(os_dark: bool) {
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn accent_module_loads() {
-        assert!(super::accent::nt_build_number() > 0);
-    }
-}
+#[path = "tests/mod.rs"]
+mod tests;

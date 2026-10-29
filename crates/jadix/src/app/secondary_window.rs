@@ -13,8 +13,8 @@ use winit::window::Window;
 use crate::core::reactivity::OwnerHandle;
 use crate::core::tree::{Element, LayoutStatus, LayoutTree};
 use crate::renderer::{
-    JadixPipeline, JadixTextRenderer, ScaledTexturedDraw, TexturePool, TexturedQuadPipeline,
     prepare_text_frame, scale_clip_polys_in_place, scale_instances, scale_textured_draws,
+    JadixPipeline, JadixTextRenderer, ScaledTexturedDraw, TexturePool, TexturedQuadPipeline,
 };
 
 /// Factory for a secondary window's root [`Element`].
@@ -155,6 +155,8 @@ impl SecondaryWindowState {
         mut root_element: Element,
         chrome: super::window_chrome::WindowOptions,
     ) -> Result<Self, String> {
+        #[cfg(debug_assertions)]
+        super::hot_reload::replay_committed(&mut root_element);
         let compositor_alpha = chrome.compositor_alpha();
         let size = window.surface_size();
         let surface = instance
@@ -179,7 +181,8 @@ impl SecondaryWindowState {
         super::window_chrome::apply_created_window(window.as_ref(), &chrome, false);
 
         let mut pipeline = JadixPipeline::new(&device, &config);
-        let present_retain = crate::renderer::PresentRetainPipeline::new_for_surface(&device, &config);
+        let present_retain =
+            crate::renderer::PresentRetainPipeline::new_for_surface(&device, &config);
         let theme_transition =
             crate::renderer::theme_transition::ThemeTransition::new_for_surface(&device, &config);
         let (textured_pipeline, textured_instance_buffer) =
@@ -271,6 +274,8 @@ impl SecondaryWindowState {
         chrome: super::window_chrome::WindowOptions,
         composition_swapchain: bool,
     ) -> Self {
+        #[cfg(debug_assertions)]
+        super::hot_reload::replay_committed(&mut root_element);
         let compositor_alpha = true;
         let super::glass_gpu::CompositorGpu {
             instance,
@@ -283,7 +288,8 @@ impl SecondaryWindowState {
         super::window_chrome::apply_created_window(window.as_ref(), &chrome, composition_swapchain);
 
         let mut pipeline = JadixPipeline::new(&device, &config);
-        let present_retain = crate::renderer::PresentRetainPipeline::new_for_surface(&device, &config);
+        let present_retain =
+            crate::renderer::PresentRetainPipeline::new_for_surface(&device, &config);
         let theme_transition =
             crate::renderer::theme_transition::ThemeTransition::new_for_surface(&device, &config);
         let (textured_pipeline, textured_instance_buffer) =
@@ -384,7 +390,10 @@ impl SecondaryWindowState {
         self.surface.configure(&self.device, &self.config);
         if !self.pending_window_chrome {
             super::window_chrome::apply_created_window(
-                self.window.as_ref(), &self.chrome, self.composition_swapchain);
+                self.window.as_ref(),
+                &self.chrome,
+                self.composition_swapchain,
+            );
         }
         self.pipeline
             .update_resolution(&self.queue, self.config.width, self.config.height);
@@ -400,17 +409,24 @@ impl SecondaryWindowState {
         self.surface.configure(&self.device, &self.config);
         if !self.pending_window_chrome {
             super::window_chrome::apply_created_window(
-                self.window.as_ref(), &self.chrome, self.composition_swapchain);
+                self.window.as_ref(),
+                &self.chrome,
+                self.composition_swapchain,
+            );
         }
     }
 
     pub(super) fn sync_window_theme(&mut self) {
-        self.window.set_theme(super::window_chrome::native_theme_preference());
+        self.window
+            .set_theme(super::window_chrome::native_theme_preference());
         self.scrollbar_base_style.clear();
         self.pending_window_chrome = true;
         if self.chrome.themed().blur {
             super::window_chrome::apply_created_window(
-                self.window.as_ref(), &self.chrome, self.composition_swapchain);
+                self.window.as_ref(),
+                &self.chrome,
+                self.composition_swapchain,
+            );
             crate::platform::glass_sync_jadix_theme(self.window.as_ref());
             self.pending_window_chrome = false;
         }
@@ -448,13 +464,29 @@ impl SecondaryWindowState {
         let logical_h = self.config.height as f32 / scale.max(1.0);
 
         let now = std::time::Instant::now();
-        let frame_dt = now.duration_since(self.last_frame_at).as_secs_f32().clamp(1.0 / 240.0, 0.05);
+        let frame_dt = now
+            .duration_since(self.last_frame_at)
+            .as_secs_f32()
+            .clamp(1.0 / 240.0, 0.05);
         crate::style::utility::set_frame_dt(frame_dt);
-        if advance_secondary_scroll(&self.last_render_scroll_metrics, &mut self.scroll_motion, frame_dt, scale) {
+        if advance_secondary_scroll(
+            &self.last_render_scroll_metrics,
+            &mut self.scroll_motion,
+            frame_dt,
+            scale,
+        ) {
             self.window.request_redraw();
         }
-        sync_secondary_scrollbars(&self.last_render_scroll_metrics, mouse_pos, &mut self.scrollbar_activity);
-        if self.scrollbar_activity.values().any(|(_, deadlines)| deadlines.iter().any(|until| *until > now)) {
+        sync_secondary_scrollbars(
+            &self.last_render_scroll_metrics,
+            mouse_pos,
+            &mut self.scrollbar_activity,
+        );
+        if self
+            .scrollbar_activity
+            .values()
+            .any(|(_, deadlines)| deadlines.iter().any(|until| *until > now))
+        {
             self.window.request_redraw();
         }
         crate::style::tick_animations(frame_dt);
@@ -487,15 +519,14 @@ impl SecondaryWindowState {
             mouse_pos[0] < 0.0 && mouse_pos[1] < 0.0,
         );
 
-
         sync_impact = sync_impact.merge(crate::authoring::presentation::sync_tree(
             &mut self.root_element,
             &mut self.layout_tree,
             crate::authoring::presentation::Context {
                 phase: crate::authoring::presentation::Phase::Hover,
                 viewport: [logical_w, logical_h],
-            width_budget: None,
-},
+                width_budget: None,
+            },
         ));
         let _ = super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
 
@@ -505,8 +536,8 @@ impl SecondaryWindowState {
             crate::authoring::presentation::Context {
                 phase: crate::authoring::presentation::Phase::State,
                 viewport: [logical_w, logical_h],
-            width_budget: None,
-},
+                width_budget: None,
+            },
         ));
 
         // Same chrome pass as primary [`AppState::render`]: Input/Textarea ring + caret are
@@ -553,9 +584,12 @@ impl SecondaryWindowState {
         );
 
         sync_impact = sync_impact.merge(crate::authoring::presentation::sync_tree(
-            &mut self.root_element, &mut self.layout_tree,
+            &mut self.root_element,
+            &mut self.layout_tree,
             crate::authoring::presentation::Context::new(
-                crate::authoring::presentation::Phase::BeforeLayout, [logical_w, logical_h]),
+                crate::authoring::presentation::Phase::BeforeLayout,
+                [logical_w, logical_h],
+            ),
         ));
         let use_full =
             self.layout_tree.root_node.is_none() || self.root_element.layout_node.is_none();
@@ -564,10 +598,13 @@ impl SecondaryWindowState {
             impact,
             LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
         );
-        let geometry_dirty = self.layout_tree.root_node
+        let geometry_dirty = self
+            .layout_tree
+            .root_node
             .is_some_and(|node| self.layout_tree.taffy.dirty(node).unwrap_or(false));
         let paint_only = impact == LayoutStatus::Clean
-            && self.pending_layout_dirty.is_empty() && !geometry_dirty;
+            && self.pending_layout_dirty.is_empty()
+            && !geometry_dirty;
 
         if !use_full {
             let dirty: std::collections::HashSet<_> = self.pending_layout_dirty.drain(..).collect();
@@ -589,7 +626,8 @@ impl SecondaryWindowState {
         crate::text::set_layout_text_fast_mode(false);
         crate::authoring::input::set_geometry_changing(geometry_motion);
         if geometry_motion || text_settle {
-            self.layout_tree.mark_all_text_leaves_dirty(&self.root_element);
+            self.layout_tree
+                .mark_all_text_leaves_dirty(&self.root_element);
             self.window.request_redraw();
         }
         self.layout_tree
@@ -616,13 +654,24 @@ impl SecondaryWindowState {
         };
 
         let overflow_impact = crate::authoring::presentation::sync_tree(
-            &mut self.root_element, &mut self.layout_tree,
+            &mut self.root_element,
+            &mut self.layout_tree,
             crate::authoring::presentation::Context::new(
-                crate::authoring::presentation::Phase::AfterGeometry, [logical_w, logical_h]),
+                crate::authoring::presentation::Phase::AfterGeometry,
+                [logical_w, logical_h],
+            ),
         );
-        if matches!(overflow_impact, LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged) {
+        if matches!(
+            overflow_impact,
+            LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
+        ) {
             render_result = self.layout_tree.build_and_layout_fast(
-                &mut self.root_element, logical_w, logical_h, mouse_pos, false, false,
+                &mut self.root_element,
+                logical_w,
+                logical_h,
+                mouse_pos,
+                false,
+                false,
             );
         }
 
@@ -651,24 +700,27 @@ impl SecondaryWindowState {
                 self.layout_tree
                     .collect_animation_frame(&mut self.root_element, mouse_pos, false);
         }
-        let floating_needs_frame = crate::utils::floating_motion::flush_floating_motion_subtree(
-            &mut self.root_element,
-        );
-        let floating_css_ticking = crate::utils::floating_motion::tick_hoisted_floating_css(
-            &mut self.root_element,
-        );
+        let floating_needs_frame =
+            crate::utils::floating_motion::flush_floating_motion_subtree(&mut self.root_element);
+        let floating_css_ticking =
+            crate::utils::floating_motion::tick_hoisted_floating_css(&mut self.root_element);
         if crate::utils::floating_motion::floating_motion_needs_relayout() {
             crate::utils::floating_motion::mark_floating_panels_layout_dirty(
                 &self.root_element,
                 &mut self.layout_tree,
             );
             render_result = self.layout_tree.relayout_overlay_follow_and_collect(
-                &mut self.root_element, logical_w, logical_h, mouse_pos, false, false,
+                &mut self.root_element,
+                logical_w,
+                logical_h,
+                mouse_pos,
+                false,
+                false,
             );
         } else if floating_css_ticking {
-            render_result = self.layout_tree.collect_animation_frame(
-                &mut self.root_element, mouse_pos, false,
-            );
+            render_result =
+                self.layout_tree
+                    .collect_animation_frame(&mut self.root_element, mouse_pos, false);
         }
         if floating_needs_frame || floating_css_ticking {
             self.window.request_redraw();
@@ -826,9 +878,9 @@ impl SecondaryWindowState {
                 label: Some("Secondary Render Encoder"),
             });
 
-        let draw_to_retain =
-            self.present_retain.needs_compositor_encoding()
-                || crate::style::theme_transition_config().enabled || self.theme_transition.needs_frame();
+        let draw_to_retain = self.present_retain.needs_compositor_encoding()
+            || crate::style::theme_transition_config().enabled
+            || self.theme_transition.needs_frame();
         if draw_to_retain {
             self.present_retain
                 .ensure_size(&self.device, self.config.width, self.config.height);
@@ -851,7 +903,8 @@ impl SecondaryWindowState {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(crate::renderer::surface_clear_color(
-                            self.compositor_alpha && (self.chrome.transparent || self.chrome.themed().blur),
+                            self.compositor_alpha
+                                && (self.chrome.transparent || self.chrome.themed().blur),
                         )),
                         store: wgpu::StoreOp::Store,
                     },
@@ -1069,7 +1122,9 @@ impl SecondaryWindowState {
                 &mut encoder,
                 &self.present_retain,
                 &view,
-                crate::renderer::surface_clear_color(self.compositor_alpha && (self.chrome.transparent || self.chrome.themed().blur)),
+                crate::renderer::surface_clear_color(
+                    self.compositor_alpha && (self.chrome.transparent || self.chrome.themed().blur),
+                ),
                 |_| {},
             ) {
                 self.window.request_redraw();
@@ -1210,7 +1265,29 @@ impl SecondaryWindowState {
         self.window.set_visible(false);
     }
 
+    #[cfg(debug_assertions)]
+    pub(super) fn invalidate_hot_reload_image(&mut self, key: &str) {
+        self.image_textures.invalidate(key);
+    }
+
+    #[cfg(debug_assertions)]
+    pub(super) fn invalidate_hot_reload(
+        &mut self,
+        templates: &[super::hot_reload::TemplateFragment],
+    ) {
+        super::state::hot_reload_inject::sync_template_layout(
+            &self.root_element,
+            templates,
+            &mut self.layout_tree,
+        );
+        self.layout_status = LayoutStatus::StructureChanged;
+        self.template_paths.clear();
+        self.window.request_redraw();
+    }
+
     pub(super) fn replace_root(&mut self, mut root: Element) {
+        #[cfg(debug_assertions)]
+        super::hot_reload::replay_committed(&mut root);
         let status = super::state::AppState::reconcile_elements(
             &mut root,
             &mut self.root_element,
@@ -1227,6 +1304,8 @@ impl SecondaryWindowState {
         anchor_id: &str,
         mut new_fragment: Element,
     ) -> Option<LayoutStatus> {
+        #[cfg(debug_assertions)]
+        super::hot_reload::replay_committed(&mut new_fragment);
         let want = anchor_id.replace('\\', "/").to_ascii_lowercase();
         let old = find_template_mut(&mut self.root_element, &want)?;
         let needs_portal_hoist = element_contains_jadix_portal(&new_fragment);
@@ -1279,27 +1358,43 @@ fn advance_secondary_scroll(
     scale: f32,
 ) -> bool {
     use crate::core::reactivity::use_signal;
-    use crate::core::scroll_viewport::{ScrollViewportSignalKeys, DEFAULT_SCROLL_BEHAVIOR, scroll_behavior_is_smooth};
+    use crate::core::scroll_viewport::{
+        scroll_behavior_is_smooth, ScrollViewportSignalKeys, DEFAULT_SCROLL_BEHAVIOR,
+    };
     motion.retain(|rest, _| metrics.iter().any(|(id, _, _, _)| id == rest));
     let mut active = false;
     for (rest, _, maximum, _) in metrics {
         let keys = ScrollViewportSignalKeys::new(rest);
-        let smooth = scroll_behavior_is_smooth(&use_signal(&keys.behavior, || DEFAULT_SCROLL_BEHAVIOR.to_string()).peek());
-        let offsets = [use_signal(&keys.offset_x, || 0.0_f32), use_signal(&keys.offset_y, || 0.0_f32)];
-        let targets = [use_signal(&keys.target_x, || 0.0_f32), use_signal(&keys.target_y, || 0.0_f32)];
-        let axes = motion.entry(rest.clone()).or_insert_with(|| offsets.map(|offset|
-            super::scroll_support::SmoothScrollAxis::new(offset.peek())));
+        let smooth = scroll_behavior_is_smooth(
+            &use_signal(&keys.behavior, || DEFAULT_SCROLL_BEHAVIOR.to_string()).peek(),
+        );
+        let offsets = [
+            use_signal(&keys.offset_x, || 0.0_f32),
+            use_signal(&keys.offset_y, || 0.0_f32),
+        ];
+        let targets = [
+            use_signal(&keys.target_x, || 0.0_f32),
+            use_signal(&keys.target_y, || 0.0_f32),
+        ];
+        let axes = motion.entry(rest.clone()).or_insert_with(|| {
+            offsets.map(|offset| super::scroll_support::SmoothScrollAxis::new(offset.peek()))
+        });
         let mut moving = false;
         for axis in 0..2 {
             let current = offsets[axis].peek().clamp(0.0, maximum[axis].max(0.0));
             let target = targets[axis].peek().clamp(0.0, maximum[axis].max(0.0));
             targets[axis].set_silent(target);
-            let (next, chasing) = if smooth { axes[axis].step(current, target, dt, scale) }
-                else { (target, false) };
+            let (next, chasing) = if smooth {
+                axes[axis].step(current, target, dt, scale)
+            } else {
+                (target, false)
+            };
             offsets[axis].set_silent(next.clamp(0.0, maximum[axis].max(0.0)));
             moving |= chasing;
         }
-        if !moving { motion.remove(rest); }
+        if !moving {
+            motion.remove(rest);
+        }
         active |= moving;
     }
     active
@@ -1328,7 +1423,10 @@ fn sync_secondary_scroll_metrics(
                 changed = true;
             }
         }
-        for (key, maximum) in [(&keys.offset_x, max_scroll[0]), (&keys.offset_y, max_scroll[1])] {
+        for (key, maximum) in [
+            (&keys.offset_x, max_scroll[0]),
+            (&keys.offset_y, max_scroll[1]),
+        ] {
             let signal = use_signal(key, || 0.0_f32);
             let value = signal.peek().clamp(0.0, maximum.max(0.0));
             if (signal.peek() - value).abs() > 0.1 {
@@ -1337,7 +1435,11 @@ fn sync_secondary_scroll_metrics(
             }
         }
         changed |= super::scroll_support::apply_pending_scroll_align(
-            rest, *bounds, content[0], content[1], pending.get(rest).copied(),
+            rest,
+            *bounds,
+            content[0],
+            content[1],
+            pending.get(rest).copied(),
         );
     }
     changed
@@ -1354,27 +1456,51 @@ fn sync_secondary_scrollbars(
     let now = std::time::Instant::now();
     for (rest, bounds, maximum, _) in metrics {
         let keys = ScrollViewportSignalKeys::new(rest);
-        let inside = mouse_pos[0] >= bounds[0] && mouse_pos[0] < bounds[0] + bounds[2]
-            && mouse_pos[1] >= bounds[1] && mouse_pos[1] < bounds[1] + bounds[3];
-        let offsets = [use_signal(&keys.offset_x, || 0.0_f32).peek(), use_signal(&keys.offset_y, || 0.0_f32).peek()];
+        let inside = mouse_pos[0] >= bounds[0]
+            && mouse_pos[0] < bounds[0] + bounds[2]
+            && mouse_pos[1] >= bounds[1]
+            && mouse_pos[1] < bounds[1] + bounds[3];
+        let offsets = [
+            use_signal(&keys.offset_x, || 0.0_f32).peek(),
+            use_signal(&keys.offset_y, || 0.0_f32).peek(),
+        ];
         let (previous, deadlines) = activity.entry(rest.clone()).or_insert((offsets, [now; 2]));
         for (axis, (visibility, spring, axis_hover, extent)) in [
-            (&keys.scrollbar_visibility_x, &keys.spring_x, &keys.hover_axis_x, maximum[0]),
-            (&keys.scrollbar_visibility_y, &keys.spring_y, &keys.hover_axis_y, maximum[1]),
-        ].into_iter().enumerate() {
+            (
+                &keys.scrollbar_visibility_x,
+                &keys.spring_x,
+                &keys.hover_axis_x,
+                maximum[0],
+            ),
+            (
+                &keys.scrollbar_visibility_y,
+                &keys.spring_y,
+                &keys.hover_axis_y,
+                maximum[1],
+            ),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             if (previous[axis] - offsets[axis]).abs() > 0.1 {
                 deadlines[axis] = now + std::time::Duration::from_millis(700);
             }
-            let hovered = inside && if axis == 0 {
-                mouse_pos[1] >= bounds[1] + bounds[3] - 12.0
-            } else {
-                mouse_pos[0] >= bounds[0] + bounds[2] - 12.0
-            };
+            let hovered = inside
+                && if axis == 0 {
+                    mouse_pos[1] >= bounds[1] + bounds[3] - 12.0
+                } else {
+                    mouse_pos[0] >= bounds[0] + bounds[2] - 12.0
+                };
             let mode = use_signal(visibility, || "auto".to_string()).peek();
             let dragging = use_signal(axis_hover, || false).peek();
-            let shown = extent > 0.5 && (mode == "always" || (mode != "never" && (hovered || dragging || deadlines[axis] > now)));
-            crate::style::use_ui_transition_cubic(spring, 0.0)
-                .set_at_frame_start(if shown { 1.0 } else { 0.0 });
+            let shown = extent > 0.5
+                && (mode == "always"
+                    || (mode != "never" && (hovered || dragging || deadlines[axis] > now)));
+            crate::style::use_ui_transition_cubic(spring, 0.0).set_at_frame_start(if shown {
+                1.0
+            } else {
+                0.0
+            });
         }
         *previous = offsets;
     }
@@ -1406,82 +1532,5 @@ fn element_contains_jadix_portal(el: &Element) -> bool {
 }
 
 #[cfg(test)]
-mod scroll_tests {
-    use super::*;
-    use crate::core::reactivity::{create_root, use_signal};
-    use crate::core::scroll_viewport::{activate_scroll_viewport, ScrollViewportSignalKeys};
-
-    #[test]
-    fn secondary_scroll_chases_targets_and_honors_explicit_jump_in_its_scope() {
-        create_root(|| {
-            let primary_keys = ScrollViewportSignalKeys::new("primary-scroll-id");
-            let primary = use_signal(&primary_keys.offset_y, || 17.0_f32);
-            let keys = ScrollViewportSignalKeys::new("secondary-scroll-id");
-            let _scope = crate::app::window_scope::enter(crate::app::window_scope::WindowScope::Secondary(9018));
-            let (_owner, ()) = create_root(|| {
-            crate::core::reactivity::bind_current_owner_window_key_scope(9018);
-            let metrics = vec![("secondary-scroll-id".into(), [0.0, 0.0, 200.0, 100.0], [400.0, 900.0], [600.0, 1000.0])];
-            let mut motion = HashMap::new();
-            let offset = use_signal(&keys.offset_y, || 0.0_f32);
-            let target = use_signal(&keys.target_y, || 0.0_f32);
-            target.set_silent(300.0);
-            assert!(advance_secondary_scroll(&metrics, &mut motion, 1.0 / 60.0, 1.0));
-            assert!(offset.peek() > 0.0 && offset.peek() < target.peek());
-            for _ in 0..180 { advance_secondary_scroll(&metrics, &mut motion, 1.0 / 60.0, 1.0); }
-            assert_eq!(offset.peek(), 300.0);
-            use_signal(&keys.behavior, || String::new()).set_silent("jump".into());
-            target.set_silent(500.0);
-            assert!(!advance_secondary_scroll(&metrics, &mut motion, 1.0 / 60.0, 1.0));
-            assert_eq!(offset.peek(), 500.0);
-            target.set_silent(1200.0);
-            advance_secondary_scroll(&metrics, &mut motion, 1.0 / 60.0, 1.0);
-            assert_eq!(offset.peek(), 900.0);
-            assert_eq!(target.peek(), 900.0);
-            });
-            assert_eq!(primary.peek(), 17.0);
-        });
-    }
-
-    #[test]
-    fn secondary_metrics_enable_scrollbars_and_apply_alignment_in_the_owning_window() {
-        create_root(|| {
-            let rest = "secondary-metrics-test";
-            let keys = ScrollViewportSignalKeys::new(rest);
-            let primary = use_signal("__jadix_scroll_y_primary-app-content", || 17.0_f32);
-            let _scope = crate::app::window_scope::enter(crate::app::window_scope::WindowScope::Secondary(9017));
-            let mut viewport = activate_scroll_viewport(
-                Element::new().w(200.0).h(100.0).flex_col().child(
-                    Element::new().w(600.0).h(1000.0).min_h(1000.0).flex_shrink(0.0).child(
-                        Element::new().template_id("secondary-target").absolute()
-                            .top(600.0).left(400.0).w(20.0).h(20.0),
-                    ),
-                ), rest, "auto", "auto", "jump", "scrollbar",
-            );
-            let mut layout = LayoutTree::new();
-            let result = layout.build_and_layout(&mut viewport, 200.0, 100.0, [-1.0; 2]);
-            super::super::scroll_support::request_scroll_descendant_into_view_when(
-                rest, "secondary-target",
-                super::super::scroll_support::ScrollItemAlign::Center,
-                super::super::scroll_support::ScrollAlignWhen::Before,
-            );
-            assert!(sync_secondary_scroll_metrics(&viewport, &result.scroll_metrics));
-            assert_eq!(use_signal(&keys.viewport_h, || 0.0_f32).peek(), 100.0);
-            assert_eq!(use_signal(&keys.content_h, || 0.0_f32).peek(), 1000.0);
-            assert_eq!(use_signal(&keys.offset_y, || 0.0_f32).peek(), 560.0);
-            assert_eq!(use_signal(&keys.offset_x, || 0.0_f32).peek(), 310.0);
-            assert_eq!(primary.peek(), 17.0, "must not scroll the primary window");
-            let mut activity = HashMap::new();
-            sync_secondary_scrollbars(&result.scroll_metrics, [199.0, 50.0], &mut activity);
-            for _ in 0..12 {
-                crate::style::tick_animations(0.05);
-            }
-            assert!(crate::style::use_ui_transition_cubic(&keys.spring_y, 0.0).peek() > 0.9);
-            assert!(crate::style::use_ui_transition_cubic(&keys.spring_x, 0.0).peek() < 0.01);
-            sync_secondary_scrollbars(&result.scroll_metrics, [-1.0, -1.0], &mut activity);
-            for _ in 0..12 {
-                crate::style::tick_animations(0.05);
-            }
-            assert!(crate::style::use_ui_transition_cubic(&keys.spring_y, 0.0).peek() < 0.01);
-        });
-    }
-}
+#[path = "tests/scroll.rs"]
+mod scroll_tests;

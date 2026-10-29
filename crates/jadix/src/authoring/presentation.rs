@@ -4,8 +4,8 @@ use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::LayoutTree;
 use std::rc::Rc;
 mod tree;
-pub use tree::{attach_tree, attach_tree_with_cleanup, TreeSync};
 pub(crate) use tree::Retirements;
+pub use tree::{attach_tree, attach_tree_with_cleanup, TreeSync};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PaintEdge {
@@ -133,7 +133,9 @@ pub fn is_cached_static(element: &Element) -> bool {
 }
 
 /// Invalidate this node after attaching product-owned paint work.
-pub fn invalidate_paint(element: &mut Element) { element.collect_paint_hash = 0; }
+pub fn invalidate_paint(element: &mut Element) {
+    element.collect_paint_hash = 0;
+}
 
 /// One traversal replaces product-specific whole-host paint scans.
 pub fn sync_tree(root: &mut Element, layout: &mut LayoutTree, context: Context) -> LayoutStatus {

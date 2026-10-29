@@ -1,15 +1,15 @@
 //! D2D effect wrappers for Windows.UI.Composition `CreateEffectFactory`.
 
+use windows::core::{implement, Interface, GUID, HSTRING, PCWSTR};
 use windows::Foundation::{IPropertyValue, PropertyValue};
 use windows::Graphics::Effects::{
-    IGraphicsEffect, IGraphicsEffect_Impl, IGraphicsEffectSource, IGraphicsEffectSource_Impl,
+    IGraphicsEffect, IGraphicsEffectSource, IGraphicsEffectSource_Impl, IGraphicsEffect_Impl,
 };
 use windows::Win32::System::WinRT::Graphics::Direct2D::{
-    GRAPHICS_EFFECT_PROPERTY_MAPPING, GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR4,
-    GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT, GRAPHICS_EFFECT_PROPERTY_MAPPING_UNKNOWN,
-    IGraphicsEffectD2D1Interop, IGraphicsEffectD2D1Interop_Impl,
+    IGraphicsEffectD2D1Interop, IGraphicsEffectD2D1Interop_Impl, GRAPHICS_EFFECT_PROPERTY_MAPPING,
+    GRAPHICS_EFFECT_PROPERTY_MAPPING_COLOR_TO_VECTOR4, GRAPHICS_EFFECT_PROPERTY_MAPPING_DIRECT,
+    GRAPHICS_EFFECT_PROPERTY_MAPPING_UNKNOWN,
 };
-use windows::core::{GUID, HSTRING, Interface, PCWSTR, implement};
 
 pub use windows::Win32::Graphics::Direct2D::{
     CLSID_D2D1Blend as CLSID_BLEND, CLSID_D2D1Border as CLSID_BORDER,

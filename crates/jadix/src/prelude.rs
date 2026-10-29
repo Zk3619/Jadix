@@ -220,8 +220,9 @@ pub use crate::style::{
     theme_transition_config, toggle_theme_mode, watch_stylesheets, ClassPart, DesignTokensPatch,
     FocusRingStyle, GlassMaterial, IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent,
     IntoOverflow, IntoPaintColor, IntoTextColor, LineStyle, MatchedStyleRule, Selector, StyleRule,
-    Stylesheet, StylesheetError, TextAlign, TextOverflow, Theme, ThemeMode, ThemeOverrideError,
-    ThemeOverrides, ThemePreference, ThemePreset, ThemeStyles, ThemeTransitionConfig, TRANSPARENT,
+    Stylesheet, StylesheetError, TextAlign, TextAlignLast, TextAlignLastDeclaration, TextOverflow,
+    Theme, ThemeMode, ThemeOverrideError, ThemeOverrides, ThemePreference, ThemePreset,
+    ThemeStyles, ThemeTransitionConfig, TRANSPARENT,
 };
 
 // ---------------------------------------------------------------------------

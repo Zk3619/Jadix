@@ -26,11 +26,9 @@ fn commands_require_capabilities_and_finite_values() {
         );
     }
     for invalid in [f32::NAN, f32::INFINITY, 0.0, -1.0] {
-        assert!(
-            MediaCommand::SetPlaybackRate(invalid)
-                .validate(&snapshot)
-                .is_err()
-        );
+        assert!(MediaCommand::SetPlaybackRate(invalid)
+            .validate(&snapshot)
+            .is_err());
     }
     assert!(MediaCommand::SetVolume(0.0).validate(&snapshot).is_ok());
     assert!(MediaCommand::SetVolume(1.0).validate(&snapshot).is_ok());
@@ -53,11 +51,9 @@ fn vod_live_and_empty_seek_windows_have_explicit_semantics() {
     snapshot.duration = None;
     snapshot.seekable = Some(MediaTimeRange::new(seconds(300), seconds(360)).unwrap());
     assert!(MediaCommand::Seek(seconds(330)).validate(&snapshot).is_ok());
-    assert!(
-        MediaCommand::Seek(seconds(299))
-            .validate(&snapshot)
-            .is_err()
-    );
+    assert!(MediaCommand::Seek(seconds(299))
+        .validate(&snapshot)
+        .is_err());
     snapshot.seekable = Some(MediaTimeRange::new(seconds(300), seconds(300)).unwrap());
     assert!(snapshot.seek_window().is_none());
     assert!(MediaTimeRange::new(seconds(2), seconds(1)).is_err());
@@ -121,27 +117,21 @@ fn load_is_validated_without_opening_any_resource() {
         source: source.into(),
         options,
     };
-    assert!(
-        load("file:///music.ogg", MediaLoadOptions::default())
-            .validate(&snapshot)
-            .is_ok()
-    );
-    assert!(
-        load(" ", MediaLoadOptions::default())
-            .validate(&snapshot)
-            .is_err()
-    );
-    assert!(
-        load(
-            "asset:track",
-            MediaLoadOptions {
-                volume: f32::NAN,
-                ..Default::default()
-            }
-        )
+    assert!(load("file:///music.ogg", MediaLoadOptions::default())
         .validate(&snapshot)
-        .is_err()
-    );
+        .is_ok());
+    assert!(load(" ", MediaLoadOptions::default())
+        .validate(&snapshot)
+        .is_err());
+    assert!(load(
+        "asset:track",
+        MediaLoadOptions {
+            volume: f32::NAN,
+            ..Default::default()
+        }
+    )
+    .validate(&snapshot)
+    .is_err());
 }
 
 #[test]
@@ -305,11 +295,9 @@ fn memory_sources_share_encoded_bytes_and_validate_without_dumping_payloads() {
         options: MediaLoadOptions::default(),
     };
     assert!(command(source).validate(&MediaSnapshot::default()).is_ok());
-    assert!(
-        command(Vec::<u8>::new().into())
-            .validate(&MediaSnapshot::default())
-            .is_err()
-    );
+    assert!(command(Vec::<u8>::new().into())
+        .validate(&MediaSnapshot::default())
+        .is_err());
     let snapshot = MediaSnapshot {
         load_session: 1,
         ..Default::default()

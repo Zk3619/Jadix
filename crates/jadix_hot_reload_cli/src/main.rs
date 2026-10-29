@@ -1,9 +1,9 @@
+use jadix_hot_reload::{StyleAttr, TemplateFragment, TextReplacement};
 use notify::{Config, Event, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::Serialize;
-use jadix_hot_reload::{TemplateFragment, StyleAttr, TextReplacement};
 use std::collections::HashMap;
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
@@ -83,7 +83,7 @@ fn event_loop(
     let mut last_poll = Instant::now();
     let mut changed = std::collections::BTreeSet::new();
     let mut deadline = None;
-    let mut last_wire_payload = None;
+    let mut last_wire_payload = DevClient::default();
     while !supervisor::stop_requested() {
         match rx.recv_timeout(Duration::from_millis(100)) {
             Ok(Ok(event)) => {
@@ -122,11 +122,15 @@ fn event_loop(
         }
         let files: Vec<_> = changed.iter().cloned().collect();
         if supervisor.needs_restart(&files) {
-            if let Err(error) = supervisor.restart() {
-                hmr_log::error(&format!("restart failed: {error}"));
+            match supervisor.restart_if_managed() {
+                Ok(true) => {
+                    supervisor.accept_sources(&files);
+                    template_cache = build_initial_cache(watch_path);
+                    last_wire_payload = DevClient::default();
+                },
+                Ok(false) => hmr_log::error("Rust logic or compiled slots changed; rebuild the manually launched application"),
+                Err(error) => hmr_log::error(&format!("restart failed: {error}")),
             }
-            template_cache = build_initial_cache(watch_path);
-            last_wire_payload = None;
             changed.clear();
             deadline = None;
             continue;
@@ -145,11 +149,25 @@ fn event_loop(
                     templates,
                     wgsl,
                     styles,
+                    status,
                 } = outcome
                 {
-                    hmr_log::update(&hmr_update_detail(
-                        &files[0], watch_path, templates, wgsl, styles,
+                    hmr_log::update(&format!(
+                        "{} · {status:?}",
+                        hmr_update_detail(&files[0], watch_path, templates, wgsl, styles,)
                     ));
+                }
+                if let SendOutcome::NeedsRebuild(reason) = outcome {
+                    hmr_log::error(&format!("rebuild required: {reason}"));
+                    match supervisor.restart_if_managed() {
+                        Ok(true) => {
+                            supervisor.accept_sources(&files);
+                            template_cache = build_initial_cache(watch_path);
+                            last_wire_payload = DevClient::default();
+                        }
+                        Ok(false) => {}
+                        Err(error) => hmr_log::error(&format!("restart failed: {error}")),
+                    }
                 }
                 changed.clear();
                 deadline = None;
@@ -253,10 +271,17 @@ fn is_project_source_file(path: &Path, root: &Path) -> bool {
     is_rust_source(path) && within_workspace(path, root)
 }
 
-fn is_tracked_wgsl(path: &Path, root: &Path) -> bool {
+fn is_tracked_asset(path: &Path, root: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
-        .map(|e| e.eq_ignore_ascii_case("wgsl"))
+        .map(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "wgsl" | "png" | "jpg" | "jpeg" | "gif" | "webp" | "bmp" | "ico"
+            ) || path
+                .file_name()
+                .is_some_and(|name| name.to_string_lossy().ends_with(".keyframes.css"))
+        })
         .unwrap_or(false)
         && within_workspace(path, root)
 }
@@ -298,7 +323,7 @@ fn is_tracked_project_file(path: &Path, root: &Path) -> bool {
         return false;
     }
     is_project_source_file(path, root)
-        || is_tracked_wgsl(path, root)
+        || is_tracked_asset(path, root)
         || is_tracked_stylesheet(path, root)
         || (path.starts_with(root)
             && path
@@ -313,7 +338,7 @@ fn partition_tracked(paths: &[PathBuf], root: &Path) -> (Vec<PathBuf>, Vec<PathB
     for p in paths {
         if is_project_source_file(p, root) {
             rust.push(p.clone());
-        } else if is_tracked_wgsl(p, root) {
+        } else if is_tracked_asset(p, root) {
             wgsl.push(p.clone());
         } else if is_tracked_stylesheet(p, root) {
             style.push(p.clone());
@@ -387,12 +412,21 @@ fn build_template_patch_msg(
     }
 }
 
+#[derive(Default)]
+struct DevClient {
+    last_payload: Option<String>,
+    last_build: Option<String>,
+    pending: Option<(String, jadix_hot_reload::Transaction)>,
+}
+
 enum SendOutcome {
     Sent {
         templates: usize,
         wgsl: usize,
         styles: usize,
+        status: jadix_hot_reload::CommitStatus,
     },
+    NeedsRebuild(String),
     Duplicate,
     Empty,
 }
@@ -403,7 +437,7 @@ fn send_dev_batch(
     wgsl_files: &[PathBuf],
     style_files: &[PathBuf],
     template_cache: &mut HashMap<String, Vec<TemplateFragment>>,
-    last_wire_payload: &mut Option<String>,
+    last_wire_payload: &mut DevClient,
 ) -> std::io::Result<SendOutcome> {
     let mut next_cache = template_cache.clone();
     let mut wire_chunks: Vec<String> = Vec::new();
@@ -458,22 +492,102 @@ fn send_dev_batch(
         wire_fingerprint.push_str(chunk);
         wire_fingerprint.push('\n');
     }
-    if last_wire_payload.as_ref() == Some(&wire_fingerprint) {
+    for path in wgsl_files.iter().chain(style_files) {
+        let contents = fs::read(path)?;
+        wire_fingerprint.push_str(&stable_bytes_hash(&contents));
+        wire_fingerprint.push('\n');
+    }
+    let stream = TcpStream::connect(addr)?;
+    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
+    stream.set_read_timeout(Some(Duration::from_secs(3)))?;
+    let mut connection = BufReader::new(stream);
+    connection.get_mut().write_all(b"{\"kind\":\"hello\"}\n")?;
+    let mut line = read_protocol_line(&mut connection)?;
+    let session: jadix_hot_reload::SessionInfo = serde_json::from_str(&line)
+        .map_err(|reason| std::io::Error::new(std::io::ErrorKind::InvalidData, reason))?;
+    if session.protocol != jadix_hot_reload::PROTOCOL_VERSION
+        || session.schema != jadix_hot_reload::SCHEMA_VERSION
+        || session.capabilities.transaction_ack != 1
+        || session.capabilities.static_tree != 1
+        || session.capabilities.declaration_reset != 1
+    {
+        return Ok(SendOutcome::NeedsRebuild(
+            "incompatible receiver capability/schema".into(),
+        ));
+    }
+    if last_wire_payload.last_payload.as_ref() == Some(&wire_fingerprint)
+        && last_wire_payload.last_build.as_ref() == Some(&session.build)
+    {
         return Ok(SendOutcome::Duplicate);
     }
-    let mut stream = TcpStream::connect(addr)?;
-    stream.set_write_timeout(Some(Duration::from_secs(2)))?;
-    for chunk in &wire_chunks {
-        stream.write_all(chunk.as_bytes())?;
-        stream.write_all(b"\n")?;
+    let mut transaction = match &last_wire_payload.pending {
+        Some((payload, pending))
+            if payload == &wire_fingerprint && pending.build == session.build =>
+        {
+            pending.clone()
+        }
+        _ => jadix_hot_reload::Transaction::new(&session)
+            .ok_or_else(|| std::io::Error::other("hot-reload revision exhausted"))?,
+    };
+    if last_wire_payload
+        .pending
+        .as_ref()
+        .is_none_or(|(payload, pending)| {
+            payload != &wire_fingerprint || pending.build != session.build
+        })
+    {
+        for chunk in &wire_chunks {
+            let message: jadix_hot_reload::IncomingMessage = serde_json::from_str(chunk)
+                .map_err(|reason| std::io::Error::new(std::io::ErrorKind::InvalidData, reason))?;
+            match message {
+                jadix_hot_reload::IncomingMessage::TemplatePatch { templates, .. } => {
+                    transaction.templates.extend(templates)
+                }
+                jadix_hot_reload::IncomingMessage::AssetReload { paths } => {
+                    transaction.assets.extend(paths)
+                }
+                jadix_hot_reload::IncomingMessage::StylesheetReload { paths } => {
+                    transaction.stylesheets.extend(paths)
+                }
+                _ => return Err(std::io::Error::other("unexpected outgoing command")),
+            }
+        }
     }
-    stream.flush()?;
+    last_wire_payload.pending = Some((wire_fingerprint.clone(), transaction.clone()));
+    let mut payload =
+        serde_json::to_vec(&serde_json::json!({"kind": "transaction", "transaction": transaction}))
+            .map_err(std::io::Error::other)?;
+    payload.push(b'\n');
+    if payload.len() > session.capabilities.max_frame_bytes {
+        last_wire_payload.pending = None;
+        return Ok(SendOutcome::NeedsRebuild(
+            "transaction exceeds receiver frame budget".into(),
+        ));
+    }
+    connection.get_mut().write_all(&payload)?;
+    connection.get_mut().flush()?;
+    line = read_protocol_line(&mut connection)?;
+    let acknowledgement: jadix_hot_reload::CommitAck = serde_json::from_str(&line)
+        .map_err(|reason| std::io::Error::new(std::io::ErrorKind::InvalidData, reason))?;
+    if acknowledgement.build != transaction.build
+        || !acknowledgement.committed()
+        || acknowledgement.revision != transaction.revision
+    {
+        last_wire_payload.pending = None;
+        return Ok(SendOutcome::NeedsRebuild(format!(
+            "{:?}: {}",
+            acknowledgement.status, acknowledgement.reason
+        )));
+    }
+    last_wire_payload.pending = None;
     *template_cache = next_cache;
-    *last_wire_payload = Some(wire_fingerprint);
+    last_wire_payload.last_payload = Some(wire_fingerprint);
+    last_wire_payload.last_build = Some(session.build);
     Ok(SendOutcome::Sent {
         templates: template_count,
         wgsl: wgsl_n,
         styles: style_n,
+        status: acknowledgement.status,
     })
 }
 
@@ -496,10 +610,24 @@ struct OutgoingStylesheetReload {
     paths: Vec<String>,
 }
 
+fn read_protocol_line(connection: &mut impl BufRead) -> std::io::Result<String> {
+    let mut line = String::new();
+    connection.take(4 * 1024 * 1024 + 1).read_line(&mut line)?;
+    if line.len() > 4 * 1024 * 1024 || !line.ends_with('\n') {
+        return Err(std::io::Error::other(
+            "incomplete or oversized receiver frame",
+        ));
+    }
+    Ok(line)
+}
+
 fn stable_hash(text: &str) -> String {
-    let normalized = normalize_template_source(text);
+    stable_bytes_hash(normalize_template_source(text).as_bytes())
+}
+
+fn stable_bytes_hash(bytes: &[u8]) -> String {
     let mut hash: u64 = 0xcbf29ce484222325;
-    for &b in normalized.as_bytes() {
+    for &b in bytes {
         hash ^= b as u64;
         hash = hash.wrapping_mul(0x100000001b3);
     }
@@ -624,6 +752,13 @@ fn collect_templates_for_file(file: &Path, key: &str) -> Vec<TemplateFragment> {
                     id: format!("{}:{}:{}", key, tpl.line, tpl.column),
                     hash: stable_hash(&tpl.body),
                     len: tpl.body.len(),
+                    signature: jadix_hot_reload::syntax::template_signature(&tpl.body)
+                        .unwrap_or_default(),
+                    declarations_signature: jadix_hot_reload::syntax::declarations_signature(
+                        &tpl.body,
+                    )
+                    .unwrap_or_default(),
+                    tree: jadix_hot_reload::syntax::template_tree(&tpl.body),
                     index: 0, // Assigned in build_template_patch_msg
                     text_literals: rsx_text_order::extract_text_literals_tree_order(&tpl.body),
                     text_replacements: Vec::new(),
@@ -669,222 +804,5 @@ fn apply_text_replacements(prev: &[TemplateFragment], next: &mut [TemplateFragme
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn workspace_sources_are_not_limited_to_crates_and_examples() {
-        let root = Path::new("workspace");
-        for name in ["src/main.rs", "ui/widgets.rs", "shaders/app.wgsl"] {
-            assert!(is_tracked_project_file(&root.join(name), root), "{name}");
-        }
-        assert!(!is_tracked_project_file(
-            &root.join("target/generated.rs"),
-            root
-        ));
-    }
-    use std::path::Path;
-
-    #[test]
-    fn gallery_button_template_extracts_text_replacement() {
-        let file = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../examples/gallery/src/pages/basics.rs");
-        let key = normalize_path_for_id(&file);
-        let previous = collect_templates_for_file(&file, &key);
-        let source = fs::read_to_string(&file).unwrap().replace("\r\n", "\n");
-        let changed = source.replacen(
-            "\"Secondary\"\n                    </Button>",
-            "\"HMR VERIFIED\"\n                    </Button>",
-            1,
-        );
-        assert_ne!(
-            changed, source,
-            "Gallery Button fixture must contain the target label"
-        );
-        let templates = extract_ui_templates(&changed);
-        let block = templates
-            .iter()
-            .enumerate()
-            .find(|(_, block)| block.body.contains("HMR VERIFIED"))
-            .unwrap();
-        let mut current = TemplateFragment {
-            id: format!("{}:{}:{}", key, block.1.line, block.1.column),
-            hash: stable_hash(&block.1.body),
-            len: block.1.body.len(),
-            index: block.0,
-            text_literals: rsx_text_order::extract_text_literals_tree_order(&block.1.body),
-            text_replacements: vec![],
-            style_attrs: vec![],
-        };
-        apply_text_replacements_single(&previous, &mut current);
-        assert!(
-            current
-                .text_replacements
-                .iter()
-                .any(|change| change.from == "Secondary" && change.to == "HMR VERIFIED"),
-            "{:?}",
-            current.text_literals
-        );
-    }
-
-    #[test]
-    fn strip_prefix_ci_ignores_drive_letter_case() {
-        assert_eq!(
-            strip_prefix_ci(
-                "d:/projects/jadix/examples/gallery/src/main.rs",
-                "D:/projects/jadix"
-            ),
-            Some("/examples/gallery/src/main.rs")
-        );
-        assert_eq!(
-            strip_prefix_ci("d:/projects/jadix-extra/src/main.rs", "d:/projects/jadix"),
-            None
-        );
-    }
-
-    #[test]
-    fn extract_ui_templates_records_char_column() {
-        let src = "    ui! { \"hi\" }\n";
-        let blocks = extract_ui_templates(src);
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].line, 1);
-        assert_eq!(blocks[0].column, 5);
-        assert!(blocks[0].body.contains("hi"));
-    }
-
-    #[test]
-    fn extraction_ignores_comments_strings_and_literal_braces() {
-        let source = r##"// ui! { fake }
-fn demo() {
-    let ignored = "ui! { fake }";
-    let ignored_raw = r#"ui! { fake }"#;
-    ui! { <Box><Label> "}" </Label><Label> "ui! { literal }" </Label></Box> }
-    ui! { <Box class="p-2" /> }
-}"##;
-        let blocks = extract_ui_templates(source);
-        assert_eq!(blocks.len(), 2);
-        assert_eq!(blocks[0].line, 5);
-        assert_eq!(
-            blocks[0].body,
-            r#"<Box><Label> "}" </Label><Label> "ui! { literal }" </Label></Box>"#
-        );
-        assert_eq!(blocks[1].line, 6);
-        assert_eq!(
-            rsx_text_order::extract_text_literals_tree_order(&blocks[0].body),
-            vec!["}", "ui! { literal }"]
-        );
-    }
-
-    #[test]
-    fn extraction_preserves_unicode_columns_and_unspaced_tags() {
-        let blocks =
-            extract_ui_templates("fn demo() { let 中文 = 1; ui! { <Label> \"hi\" </Label> } }");
-        assert_eq!(blocks.len(), 1);
-        assert_eq!(blocks[0].column, 25);
-        assert!(blocks[0].body.starts_with("<Label>"));
-    }
-
-    #[test]
-    fn failed_send_keeps_cache_and_fingerprint_for_retry() {
-        use std::io::Read;
-        use std::net::TcpListener;
-        let root = std::env::temp_dir().join(format!("jadix-hmr-retry-{}", std::process::id()));
-        fs::create_dir_all(&root).unwrap();
-        let file = root.join("source.rs");
-        fs::write(&file, r#"fn demo() { ui! { <Label> "old" </Label> } }"#).unwrap();
-        let files = vec![file.clone()];
-        let mut cache = HashMap::new();
-        build_template_patch_msg(&files, &mut cache);
-        let key = normalize_path_for_id(&file);
-        let old_hash = cache[&key][0].hash.clone();
-        fs::write(&file, r#"fn demo() { ui! { <Label> "new" </Label> } }"#).unwrap();
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let address = listener.local_addr().unwrap();
-        drop(listener);
-        let mut fingerprint = None;
-        assert!(send_dev_batch(
-            &address.to_string(),
-            &files,
-            &[],
-            &[],
-            &mut cache,
-            &mut fingerprint
-        )
-        .is_err());
-        assert_eq!(cache[&key][0].hash, old_hash);
-        assert!(fingerprint.is_none());
-        let listener = TcpListener::bind(address).unwrap();
-        assert!(matches!(
-            send_dev_batch(
-                &address.to_string(),
-                &files,
-                &[],
-                &[],
-                &mut cache,
-                &mut fingerprint
-            ),
-            Ok(SendOutcome::Sent { templates: 1, .. })
-        ));
-        let (mut stream, _) = listener.accept().unwrap();
-        stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .unwrap();
-        let mut payload = String::new();
-        stream.read_to_string(&mut payload).unwrap();
-        assert!(payload.contains("new"));
-        assert_ne!(cache[&key][0].hash, old_hash);
-        assert!(fingerprint.is_some());
-        assert!(matches!(
-            send_dev_batch(
-                &address.to_string(),
-                &files,
-                &[],
-                &[],
-                &mut cache,
-                &mut fingerprint
-            ),
-            Ok(SendOutcome::Empty)
-        ));
-        fs::remove_file(file).unwrap();
-        fs::remove_dir(root).unwrap();
-    }
-
-    #[test]
-    fn tracks_gallery_theme_and_styles_not_cargo_toml() {
-        let root = Path::new(".");
-        assert!(is_stylesheet_name(Path::new("examples/gallery/theme.toml")));
-        assert!(is_stylesheet_name(Path::new("styles.css")));
-        assert!(!is_stylesheet_name(Path::new("Cargo.toml")));
-        assert!(is_tracked_stylesheet(
-            Path::new("examples/gallery/styles.toml"),
-            root
-        ));
-        assert!(!is_tracked_stylesheet(Path::new("Cargo.toml"), root));
-    }
-
-    #[test]
-    fn normalize_path_for_id_uses_forward_slashes() {
-        let p = Path::new("examples")
-            .join("gallery")
-            .join("src")
-            .join("main.rs");
-        let key = normalize_path_for_id(&p);
-        assert!(!key.contains('\\'));
-    }
-
-    #[test]
-    fn normalize_path_text_strips_windows_verbatim_prefixes() {
-        assert_eq!(
-            normalize_path_text(Path::new(r"\\?\C:\workspace\src\main.rs")),
-            "C:/workspace/src/main.rs"
-        );
-        assert_eq!(
-            normalize_path_text(Path::new(r"\\?\UNC\server\share\src\main.rs")),
-            "//server/share/src/main.rs"
-        );
-        assert_eq!(
-            normalize_path_text(Path::new(r"\\server\share\src\main.rs")),
-            "//server/share/src/main.rs"
-        );
-    }
-}
+#[path = "tests/main.rs"]
+mod tests;

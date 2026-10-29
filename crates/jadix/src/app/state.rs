@@ -1,15 +1,15 @@
 use std::borrow::Cow;
 #[cfg(all(test, target_os = "windows"))]
-#[path = "state_hybrid_tests.rs"]
+#[path = "tests/state_hybrid_tests.rs"]
 mod hybrid_tests;
 #[cfg(test)]
-#[path = "state_present_tests.rs"]
+#[path = "tests/state_present_tests.rs"]
 mod present_pixel_tests;
 #[cfg(all(test, target_os = "windows", feature = "gallery-tests"))]
-#[path = "state_scroll_perf_tests.rs"]
+#[path = "tests/state_scroll_perf_tests.rs"]
 mod scroll_perf_tests;
 #[cfg(all(test, target_os = "windows"))]
-#[path = "state_theme_present_tests.rs"]
+#[path = "tests/state_theme_present_tests.rs"]
 mod theme_present_tests;
 use std::collections::HashMap;
 use std::hash::Hasher;
@@ -59,39 +59,6 @@ fn promote_page_stack_text_cache_slot<T>(
 ) {
     keys[slot..=found].rotate_right(1);
     renderers[slot..=found].rotate_right(1);
-}
-
-#[cfg(test)]
-#[test]
-fn page_stack_text_cache_keeps_recent_hosts_on_reentry() {
-    let mut keys: Vec<u64> = (1..=64).collect();
-    let mut renderers: Vec<u64> = keys.iter().map(|k| k * 100).collect();
-    keys.push(65);
-    renderers.push(6500);
-    promote_page_stack_text_cache_slot(&mut keys, &mut renderers, 0, 64);
-    keys.truncate(64);
-    renderers.truncate(64);
-    assert_eq!(
-        &keys[..3],
-        &[65, 1, 2],
-        "the host just left must survive a full cache"
-    );
-    assert!(!keys.contains(&64), "the least recent host should leave");
-    promote_page_stack_text_cache_slot(&mut keys, &mut renderers, 0, 1);
-    assert_eq!(&keys[..3], &[1, 65, 2]);
-    assert_eq!(
-        &renderers[..3],
-        &[100, 6500, 200],
-        "reentry must retain the same renderer"
-    );
-    // A second live stacking host must not displace the first host or its history.
-    keys.push(66);
-    renderers.push(6600);
-    promote_page_stack_text_cache_slot(&mut keys, &mut renderers, 1, 64);
-    keys.truncate(64);
-    renderers.truncate(64);
-    assert_eq!(&keys[..4], &[1, 66, 65, 2]);
-    assert_eq!(&renderers[..4], &[100, 6600, 6500, 200]);
 }
 
 pub(crate) fn render_profile_log_enabled() -> bool {
@@ -1569,179 +1536,47 @@ fn local_backdrop_must_recapture(
 }
 
 #[cfg(test)]
-mod local_backdrop_capture_tests {
-    use super::*;
-    use crate::layout::layout_tree::OverlayBandRange;
-    use bytemuck::Zeroable;
-
-    fn band_instances(lo: usize, hi: usize) -> OverlayBandRange {
-        OverlayBandRange {
-            instance: (lo, hi),
-            textured: (0, 0),
-            text: (0, 0),
-            chrome: (0, 0),
-            paint_ops: (0, 0),
-            backdrop_blur: 0.0,
-            underlay_opacity: 1.0,
-            stamp_key: 0,
-        }
-    }
-
-    #[test]
-    fn foreground_damage_does_not_invalidate_local_backdrop() {
-        use crate::app::damage::{PaintDirty, PaintDirtyKind};
-        let band = band_instances(10, 20);
-        let node = crate::layout::layout_tree::NodePaint {
-            key: 42,
-            bounds: [100.0, 200.0, 100.0, 100.0],
-            overlay: false,
-            instance: (2, 3),
-            textured: (0, 0),
-            text: (0, 0),
-            chrome: (0, 0),
-            paint_ops: (0, 0),
-            overflow_clip: None,
-            layered: false,
-            rest: None,
-        };
-        let dirty = PaintDirty {
-            key: 42,
-            bounds: node.bounds,
-            kind: PaintDirtyKind::Node,
-        };
-        assert!(local_backdrop_source_damage(&dirty, &[node], &band));
-        assert!(!local_backdrop_source_damage(
-            &dirty,
-            &[crate::layout::layout_tree::NodePaint {
-                overlay: true,
-                ..node
-            }],
-            &band
-        ));
-        assert!(!local_backdrop_source_damage(
-            &dirty,
-            &[crate::layout::layout_tree::NodePaint {
-                instance: (20, 21),
-                ..node
-            }],
-            &band
-        ));
-        for kind in [PaintDirtyKind::Overlay, PaintDirtyKind::OverlayRestore] {
-            assert!(!local_backdrop_source_damage(
-                &PaintDirty { kind, ..dirty },
-                &[],
-                &band
-            ));
-        }
-    }
-
-    #[test]
-    fn local_blur_radius_is_zero_when_instance_buffer_was_taken() {
-        // Regression: `mem::take(render_result.instances)` left an empty vec; looking
-        // there for backdrop_blur skipped capture and the scrim sampled the dummy.
-        let band = band_instances(0, 4);
-        assert_eq!(band_instance_backdrop_blur(&[], &band), 0.0);
-    }
-
-    #[test]
-    fn local_blur_radius_reads_scaled_instance_buffer() {
-        let mut inst = InstanceInput::zeroed();
-        inst.backdrop_blur = 16.0;
-        inst.rect_size = [100.0, 80.0];
-        inst.clip_size = InstanceInput::NO_CLIP_SIZE;
-        let band = band_instances(0, 1);
-        assert!((band_instance_backdrop_blur(&[inst], &band) - 16.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn local_frost_still_captures_when_modal_underlay_will_blur() {
-        assert!(
-            should_capture_page_stack_local_backdrops(true, true),
-            "page-stack frost must run even if a ViewportModal underlay will also blur"
-        );
-        assert!(!should_capture_page_stack_local_backdrops(false, true));
-        assert!(!should_capture_page_stack_local_backdrops(true, false));
-    }
-
-    #[test]
-    fn host_scissor_uses_physical_clip_without_rescaling() {
-        let mut inst = InstanceInput::zeroed();
-        inst.backdrop_blur = 16.0;
-        inst.clip_pos = [100.0, 200.0];
-        inst.clip_size = [220.0, 140.0];
-        let band = band_instances(0, 1);
-        let sc = local_backdrop_host_scissor_physical(&[inst], &band, 800, 600).expect("scissor");
-        assert_eq!(sc, (100, 200, 220, 140));
-    }
-
-    #[test]
-    fn optical_capture_is_local_and_includes_refracted_samples() {
-        let mut instance = InstanceInput::zeroed();
-        instance.backdrop_blur = 2.0;
-        instance.glass = [1.46, 10.0, 0.1, 0.6];
-        instance.rect_pos = [100.0, 120.0];
-        instance.rect_size = [200.0, 80.0];
-        instance.clip_size = [800.0, 600.0];
-        let scissor =
-            local_backdrop_host_scissor_physical(&[instance], &band_instances(0, 1), 800, 600);
-        assert_eq!(scissor, Some((78, 98, 244, 124)));
-    }
-
-    #[test]
-    fn kernel_pad_covers_the_full_gaussian_support() {
-        assert_eq!(local_backdrop_kernel_pad_px(2.0), 10);
-        assert_eq!(local_backdrop_kernel_pad_px(12.0), 62);
-    }
-
-    #[test]
-    fn expand_scissor_clamps_to_surface() {
-        let expanded = expand_physical_scissor((10, 10, 20, 20), 8, 800, 600);
-        assert_eq!(expanded, (2, 2, 36, 36));
-        let edge = expand_physical_scissor((0, 0, 10, 10), 8, 800, 600);
-        assert_eq!(edge, (0, 0, 18, 18));
-    }
-
-    #[test]
-    fn skip_recapture_when_partial_damage_misses_host() {
-        let host = Some((100, 200, 220, 140));
-        assert!(
-            !local_backdrop_must_recapture(
-                true,
-                true,
-                false,
-                host,
-                &[[10.0, 10.0, 40.0, 20.0]],
-                1.0,
-            ),
-            "hover elsewhere must keep last frost"
-        );
-        assert!(
-            local_backdrop_must_recapture(
-                true,
-                true,
-                false,
-                host,
-                &[[120.0, 220.0, 10.0, 10.0]],
-                1.0,
-            ),
-            "damage on the host must recapture"
-        );
-        assert!(
-            local_backdrop_must_recapture(true, true, true, host, &[], 1.0),
-            "scroll blit moves pixels under the scrim"
-        );
-        assert!(
-            local_backdrop_must_recapture(false, true, false, host, &[], 1.0),
-            "first frame has no cached frost"
-        );
-        assert!(
-            !local_backdrop_must_recapture(true, true, false, host, &[], 1.0),
-            "overlay-only PartialLoad with empty dirty keeps frost"
-        );
-    }
-}
+#[path = "tests/local_backdrop_capture.rs"]
+mod local_backdrop_capture_tests;
 
 impl AppState {
+    #[cfg(all(
+        test,
+        windows,
+        debug_assertions,
+        feature = "images",
+        any(feature = "devtools", feature = "hot-reload")
+    ))]
+    pub(super) fn capture_hr6_native_frame(&self, path: &std::path::Path) {
+        assert!(self.has_presented_frame);
+        let texture = self.present_retain.color_texture_for_test().unwrap();
+        let mut image = crate::renderer::offscreen::readback_texture(
+            &self.device,
+            &self.queue,
+            texture,
+            self.config.width,
+            self.config.height,
+            self.device.create_command_encoder(&Default::default()),
+        )
+        .unwrap();
+        if matches!(
+            texture.format(),
+            wgpu::TextureFormat::Bgra8Unorm | wgpu::TextureFormat::Bgra8UnormSrgb
+        ) {
+            for pixel in image.pixels.chunks_exact_mut(4) {
+                pixel.swap(0, 2);
+            }
+        }
+        ::image::save_buffer(
+            path,
+            &image.pixels,
+            image.width,
+            image.height,
+            ::image::ColorType::Rgba8,
+        )
+        .unwrap();
+    }
+
     fn cpu_hybrid_text_only() -> bool {
         static ENABLED: OnceLock<bool> = OnceLock::new();
         *ENABLED.get_or_init(|| {
@@ -4652,7 +4487,11 @@ impl AppState {
         let mut root_element = {
             let mut r = root_element;
             if !self.hot_reload_overrides.is_empty() {
-                hot_reload_inject::apply_templates_to_tree(&mut r, &self.hot_reload_overrides);
+                if let Err(reason) =
+                    hot_reload_inject::apply_templates_to_tree(&mut r, &self.hot_reload_overrides)
+                {
+                    crate::app::hmr_log::error(&reason);
+                }
             }
             r
         };
@@ -5077,6 +4916,18 @@ impl AppState {
             return LayoutStatus::StructureChanged;
         }
 
+        #[cfg(all(debug_assertions, feature = "devtools"))]
+        if new_el.attrs.contains_key("jadix_ui_node_type")
+            && new_el.focus_id == old_el.focus_id
+            && new_el.attrs.get("data-slot") == old_el.attrs.get("data-slot")
+            && new_el.attrs.get("jadix_ui_node_type") == old_el.attrs.get("jadix_ui_node_type")
+            && new_el.text.is_some() == old_el.text.is_some()
+        {
+            crate::app::devtools::forget_instance(new_el.inspector_instance_id);
+            new_el.inspector_instance_id = old_el.inspector_instance_id;
+            old_el.inspector_instance_id = 0;
+        }
+
         new_el.layout_node = old_el.layout_node;
         new_el.layout_bounds = old_el.layout_bounds;
         new_el.paint_scroll_acc = old_el.paint_scroll_acc;
@@ -5151,6 +5002,27 @@ impl AppState {
         } else if new_el.children.len() == old_el.children.len() {
             let n = new_el.children.len();
             for i in (0..n).rev() {
+                let duplicate = new_el.children[i]
+                    .template_id
+                    .as_ref()
+                    .is_some_and(|identity| {
+                        new_el
+                            .children
+                            .iter()
+                            .filter(|child| child.template_id.as_ref() == Some(identity))
+                            .count()
+                            != 1
+                            || old_el
+                                .children
+                                .iter()
+                                .filter(|child| child.template_id.as_ref() == Some(identity))
+                                .count()
+                                != 1
+                    });
+                if duplicate {
+                    status = LayoutStatus::StructureChanged;
+                    continue;
+                }
                 stack.push((
                     std::ptr::addr_of_mut!(new_el.children[i]),
                     std::ptr::addr_of_mut!(old_el.children[i]),
@@ -5415,7 +5287,14 @@ impl AppState {
     fn children_all_keyed(children: &[Element]) -> bool {
         // `Iterator::all` is vacuously true on an empty slice; keyed reconciliation is only defined
         // for non-empty child lists (empty vs empty uses the positional same-length branch).
-        !children.is_empty() && children.iter().all(|c| c.template_id.is_some())
+        !children.is_empty()
+            && children.iter().all(|child| child.template_id.is_some())
+            && children
+                .iter()
+                .filter_map(|child| child.template_id.as_ref())
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                == children.len()
     }
 
     fn reconcile_keyed_children(
@@ -5545,14 +5424,72 @@ impl AppState {
     }
 
     #[cfg(debug_assertions)]
+    pub(super) fn invalidate_hot_reload_image(&mut self, key: &str) {
+        self.image_textures.invalidate(key);
+    }
+
+    #[cfg(debug_assertions)]
+    pub(super) fn preflight_hot_reload_templates(
+        &self,
+        templates: &[crate::app::hot_reload::TemplateFragment],
+    ) -> Result<(), String> {
+        for template in templates {
+            let paths =
+                crate::app::hot_reload::find_template_paths(&self.root_element, &template.id);
+            if paths.is_empty() {
+                let mut ids = Vec::new();
+                crate::app::hot_reload::collect_template_ids(&self.root_element, &mut ids);
+                if ids
+                    .iter()
+                    .any(|id| crate::app::hot_reload::template_id_rank(&template.id, id).is_some())
+                {
+                    return Err(format!(
+                        "ambiguous or shifted template identity: {}",
+                        template.id
+                    ));
+                }
+            }
+            for (ordinal, path) in paths.iter().enumerate() {
+                if paths
+                    .iter()
+                    .skip(ordinal + 1)
+                    .any(|other| other.starts_with(path) || path.starts_with(other))
+                {
+                    return Err("nested instances need separate template transactions".into());
+                }
+                let mut target = &self.root_element;
+                for index in path {
+                    target = &target.children[*index];
+                }
+                if paths.len() > 1 && template.signature.is_empty() {
+                    return Err("multiple instances require a compiled signature".into());
+                }
+                hot_reload_inject::preflight(target, template)?;
+            }
+        }
+        Ok(())
+    }
+
+    #[cfg(debug_assertions)]
     pub(super) fn inject_hot_reload_partial(
         &mut self,
         templates: &[crate::app::hot_reload::TemplateFragment],
-    ) -> bool {
+    ) -> Result<bool, String> {
+        let prepared = hot_reload_inject::prepare_templates(&self.root_element, templates)?;
+        self.inject_hot_reload_prepared(templates, prepared)
+    }
+
+    #[cfg(debug_assertions)]
+    pub(super) fn inject_hot_reload_prepared(
+        &mut self,
+        templates: &[crate::app::hot_reload::TemplateFragment],
+        prepared: Vec<hot_reload_inject::PreparedPatch>,
+    ) -> Result<bool, String> {
         if templates.is_empty() {
-            return false;
+            return Ok(false);
         }
         let previous_overrides = self.hot_reload_overrides.clone();
+        let previous_hashes = self.last_applied_template_hash.clone();
         let mut any_applied = false;
         for tpl in templates {
             if tpl.text_replacements.is_empty() {
@@ -5578,25 +5515,53 @@ impl AppState {
                 .insert(tpl.id.clone(), tpl.hash.clone());
         }
         if !any_applied {
-            return true;
+            return Ok(true);
         }
         // Always persist overrides, even when the patched `ui!` is not mounted
         // (Gallery `switch_reactive` only builds the current section). Entering
         // that page later replays via `apply_hot_reload_overrides_to_fragment`.
         let incoming_ids: Vec<String> = templates.iter().map(|t| t.id.clone()).collect();
         let live = crate::app::hot_reload::has_any_template_id(&self.root_element, &incoming_ids);
-        hot_reload_inject::apply_templates_to_tree(
-            &mut self.root_element,
-            &self.hot_reload_overrides,
-        );
+        let mut impact = crate::core::tree::LayoutStatus::Clean;
+        for template in templates {
+            for path in
+                crate::app::hot_reload::find_template_paths(&self.root_element, &template.id)
+            {
+                let mut target = &self.root_element;
+                for index in path {
+                    target = &target.children[index];
+                }
+                impact = impact.merge(match &template.tree {
+                    Some(tree) if target.attrs.contains_key("jadix_hr_tree") => {
+                        crate::core::hot_reload::impact(target, tree)
+                    }
+                    _ => crate::core::tree::LayoutStatus::LayoutChanged,
+                });
+            }
+        }
+        if let Err(reason) =
+            hot_reload_inject::apply_prepared_templates(&mut self.root_element, prepared)
+        {
+            self.hot_reload_overrides = previous_overrides;
+            self.last_applied_template_hash = previous_hashes;
+            return Err(reason);
+        }
         if live {
-            self.layout_status = Self::merge_layout_status(
-                self.layout_status,
-                crate::core::tree::LayoutStatus::LayoutChanged,
-            );
+            if matches!(
+                impact,
+                crate::core::tree::LayoutStatus::LayoutChanged
+                    | crate::core::tree::LayoutStatus::StructureChanged
+            ) {
+                hot_reload_inject::sync_template_layout(
+                    &self.root_element,
+                    templates,
+                    &mut self.layout_tree,
+                );
+            }
+            self.layout_status = Self::merge_layout_status(self.layout_status, impact);
             self.mark_full_redraw();
         }
-        true
+        Ok(true)
     }
 
     #[cfg(debug_assertions)]
@@ -5604,7 +5569,11 @@ impl AppState {
         if self.hot_reload_overrides.is_empty() {
             return;
         }
-        hot_reload_inject::apply_templates_to_tree(fragment, &self.hot_reload_overrides);
+        if let Err(reason) =
+            hot_reload_inject::apply_templates_to_tree(fragment, &self.hot_reload_overrides)
+        {
+            crate::app::hmr_log::error(&reason);
+        }
     }
 
     /// 开发态：按路径重载内置 WGSL（当前仅 `rounded_rect.wgsl` 会作用于主渲染管线）。
@@ -5837,12 +5806,15 @@ impl AppState {
         #[cfg(all(debug_assertions, feature = "devtools"))]
         {
             // Apply queued CSSOM edits before chrome sync; committed map is reasserted after.
-            for edit in crate::app::devtools::take_pending_inspector_edits() {
-                if !crate::app::devtools::find_element_by_path(&self.root_element, &edit.path)
-                    .is_some_and(|el| el.inspector_instance_id == edit.instance_id)
-                {
+            for mut edit in crate::app::devtools::take_pending_inspector_edits() {
+                let Some(path) =
+                    crate::core::tree::find_path_in_tree(&self.root_element, |element| {
+                        element.inspector_instance_id == edit.instance_id
+                    })
+                else {
                     continue;
-                }
+                };
+                edit.path = path;
                 crate::app::devtools::commit_inspector_cssom(
                     &self.root_element,
                     &edit.path,
@@ -7410,9 +7382,7 @@ impl AppState {
         // Every cleared pixel needs both primitives and glyphs from this frame.
         // FullClear prepares complete bands; partial repair uses the same holes
         // for text and primitive submission.
-        let page_text_cull = if !gpu_present.use_node_present
-            && gpu_present.use_partial_damage
-        {
+        let page_text_cull = if !gpu_present.use_node_present && gpu_present.use_partial_damage {
             // Prepare exactly the pixels reset below, including viewport-clear
             // fallback and pins outside the scrolled viewport.
             cull_phys
@@ -8506,7 +8476,8 @@ impl AppState {
                 let optical = scaled_instances[band.instance.0..band.instance.1]
                     .iter()
                     .any(|instance| instance.glass[0] >= 1.0 && instance.glass[1] > 0.0);
-                if (band.backdrop_blur > 0.5 || reuse_modal_source) && !optical {
+                let fullscreen_underlay = band_i >= capture_page_count && band.backdrop_blur > 0.5;
+                if (fullscreen_underlay || reuse_modal_source) && !optical {
                     continue;
                 }
                 // `render_result.instances` was `take`n into `scaled_instances` (physical).
@@ -10253,10 +10224,146 @@ pub(super) fn update_scrollbar_elements(
 }
 
 #[cfg(debug_assertions)]
-mod hot_reload_inject {
+pub(super) mod hot_reload_inject {
     use std::path::{Path, PathBuf};
 
     use crate::core::tree::Element;
+
+    pub(super) fn preflight(
+        target: &Element,
+        template: &crate::app::hot_reload::TemplateFragment,
+    ) -> Result<(), String> {
+        let description = target
+            .attrs
+            .get("jadix_ui_description")
+            .and_then(|description| {
+                serde_json::from_str::<jadix_hot_reload::TemplateDescription>(description).ok()
+            });
+        if !template.signature.is_empty()
+            && description.as_ref().is_none_or(|compiled| {
+                compiled.schema != jadix_hot_reload::SCHEMA_VERSION
+                    || compiled.signature != template.signature
+            })
+        {
+            return Err("compiled template or opaque Rust slot changed; rebuild required".into());
+        }
+        if let Some(tree) = &template.tree {
+            if target.attrs.contains_key("jadix_hr_tree") {
+                crate::core::hot_reload::preflight(target, tree)?;
+                fn validate(tree: &jadix_hot_reload::TemplateNode) -> Result<(), String> {
+                    if let jadix_hot_reload::TemplateNode::Element {
+                        attributes,
+                        children,
+                        ..
+                    } = tree
+                    {
+                        for (name, value) in attributes {
+                            validate_attribute(name, value)?;
+                        }
+                        for child in children {
+                            validate(child)?;
+                        }
+                    }
+                    Ok(())
+                }
+                return validate(tree);
+            }
+            if description
+                .as_ref()
+                .and_then(|description| description.tree.as_ref())
+                .is_some_and(|compiled| !compiled.same_shape(tree))
+            {
+                return Err("component has no structural registration; rebuild required".into());
+            }
+        }
+        let targets = style_targets(target);
+        let declarations_changed = !template.declarations_signature.is_empty()
+            && description.as_ref().is_none_or(|compiled| {
+                compiled.declarations_signature != template.declarations_signature
+            });
+        if declarations_changed
+            && targets.iter().any(|element| {
+                element.hot_reload_declaration_base.is_none()
+                    && (element.text.is_none() || element.template_id.is_some())
+            })
+        {
+            return Err(
+                "this component has no declaration reset capability; rebuild required".into(),
+            );
+        }
+        let count = count_text_nodes(target);
+        if !template.text_literals.is_empty() && count != template.text_literals.len() {
+            return Err("text or compiled-slot shape changed; rebuild required".into());
+        }
+        for replacement in &template.text_replacements {
+            if replacement.index >= count {
+                return Err("text slot is outside the compiled template".into());
+            }
+        }
+        for attribute in &template.style_attrs {
+            let Some(element) = targets.get(attribute.element_index) else {
+                return Err("attribute is outside the compiled template".into());
+            };
+            if attribute.name == "class"
+                && element
+                    .hot_reload_declaration_base
+                    .as_ref()
+                    .is_none_or(|base| base.opaque)
+            {
+                return Err(
+                    "class reset overlaps opaque or unregistered style logic; rebuild required"
+                        .into(),
+                );
+            }
+            validate_attribute(&attribute.name, &attribute.value)?;
+        }
+        Ok(())
+    }
+
+    fn validate_attribute(name: &str, value: &str) -> Result<(), String> {
+        let valid = match name {
+            "w" | "width" | "h" | "height" => parse_dimension(value).is_some(),
+            "p" | "padding" | "m" | "margin" | "gap" | "rounded" | "radius" | "font_size"
+            | "text_size" => parse_length_px(value).is_some(),
+            "font_weight" | "text_weight" => value.parse::<u16>().is_ok(),
+            "bg" | "color" | "text_decoration_color" => {
+                crate::style::try_parse_color(value).is_some()
+            }
+            "animation_duration" | "transition_duration" => value.split(',').all(|value| {
+                crate::core::tree::parse_css_time_ms_strict(value.trim())
+                    .is_some_and(|time| time.is_finite() && time >= 0.0)
+            }),
+            "animation_delay" | "transition_delay" => value.split(',').all(|value| {
+                crate::core::tree::parse_css_time_ms_strict(value.trim())
+                    .is_some_and(|time| time.is_finite())
+            }),
+            "animation_play_state" => value
+                .split(',')
+                .all(|value| matches!(value.trim(), "running" | "paused")),
+            "animation_direction" => value.split(',').all(|value| {
+                matches!(
+                    value.trim(),
+                    "normal" | "reverse" | "alternate" | "alternate-reverse"
+                )
+            }),
+            "animation_fill_mode" => value
+                .split(',')
+                .all(|value| matches!(value.trim(), "none" | "forwards" | "backwards" | "both")),
+            "animation_iteration_count" => value.split(',').all(|value| {
+                value.trim() == "infinite"
+                    || value
+                        .trim()
+                        .parse::<f32>()
+                        .is_ok_and(|count| count.is_finite() && count >= 0.0)
+            }),
+            _ => true,
+        };
+        if valid {
+            Ok(())
+        } else {
+            Err(format!("invalid {name} value"))
+        }
+    }
 
     #[allow(dead_code)]
     pub(super) fn inject_text_literals_by_id(
@@ -10301,9 +10408,6 @@ mod hot_reload_inject {
         template_root: &mut Element,
         attrs: &[crate::app::hot_reload::StyleAttr],
     ) -> bool {
-        if attrs.is_empty() {
-            return false;
-        }
         let mut changed = false;
 
         // First, group attributes by element index because we don't want to re-traverse for every single attribute
@@ -10315,10 +10419,34 @@ mod hot_reload_inject {
             by_index.entry(attr.element_index).or_default().push(attr);
         }
 
+        for (index, element) in style_targets(template_root).iter().enumerate() {
+            if element
+                .hot_reload_declaration_base
+                .as_ref()
+                .is_some_and(|base| !base.names.is_empty())
+            {
+                by_index.entry(index).or_default();
+            }
+        }
         for (idx, element_attrs) in by_index {
             let mut current_idx = 0usize;
             if let Some(target) = find_element_at_index_inner(template_root, idx, &mut current_idx)
             {
+                if let Some(mut baseline) = target.hot_reload_declaration_base.take() {
+                    let names: Vec<String> = element_attrs
+                        .iter()
+                        .filter(|attribute| jadix_hot_reload::is_live_attribute(&attribute.name))
+                        .map(|attribute| attribute.name.clone())
+                        .collect();
+                    let mut reset = baseline.names.clone();
+                    reset.extend(names.iter().cloned());
+                    for name in &reset {
+                        reset_declaration(target, &baseline, name);
+                    }
+                    baseline.names = names;
+                    target.hot_reload_declaration_base = Some(baseline);
+                    changed |= !reset.is_empty();
+                }
                 for attr in element_attrs {
                     let v = attr.value.as_str();
                     match attr.name.as_str() {
@@ -10544,6 +10672,73 @@ mod hot_reload_inject {
         changed
     }
 
+    fn reset_declaration(
+        target: &mut Element,
+        baseline: &crate::core::tree::HotReloadDeclarationBase,
+        name: &str,
+    ) {
+        let style = &baseline.style;
+        let text = &baseline.text_style;
+        match name {
+            "class" if !baseline.opaque => {
+                target.style = style.clone();
+                target.text_style = text.clone();
+                target.class_set = baseline.class_set.clone();
+                target.attrs.remove("jadix_utility_class");
+            }
+            "bg" => target.style.bg_color = style.bg_color,
+            "color" => target.text_style.color = text.color,
+            "text_size" | "font_size" => target.text_style.size = text.size,
+            "font_weight" | "text_weight" => target.text_style.weight = text.weight,
+            "text_decoration" | "text_decoration_line" => {
+                target.text_style.underline = text.underline;
+                target.text_style.overline = text.overline;
+                target.text_style.line_through = text.line_through;
+                target.text_style.decoration_style = text.decoration_style;
+            }
+            "text_decoration_style" => target.text_style.decoration_style = text.decoration_style,
+            "text_decoration_color" => {
+                target.text_style.decoration_color = text.decoration_color;
+                target.text_style.decoration_color_specified = text.decoration_color_specified;
+            }
+            "rounded" | "radius" => target.style.radii = style.radii,
+            "p" | "padding" => target.style.padding = style.padding,
+            "m" | "margin" => target.style.margin = style.margin,
+            "w" | "width" => target.style.size.width = style.size.width,
+            "h" | "height" => target.style.size.height = style.size.height,
+            "gap" => target.style.gap = style.gap,
+            name if name.starts_with("animation") => {
+                target.style.animations = style.animations.clone()
+            }
+            name if name.starts_with("transition") => {
+                target.style.transition = style.transition.clone()
+            }
+            _ => {}
+        }
+    }
+
+    fn style_targets(root: &Element) -> Vec<&Element> {
+        let mut targets = Vec::new();
+        let mut stack = vec![(root, true)];
+        while let Some((element, descend)) = stack.pop() {
+            if hot_reload_style_omit(element) {
+                continue;
+            }
+            if !hot_reload_style_transparent(element) {
+                targets.push(element);
+            }
+            if descend {
+                for child in element.children.iter().rev() {
+                    stack.push((
+                        child,
+                        child.template_id.is_none() || hot_reload_style_transparent(child),
+                    ));
+                }
+            }
+        }
+        targets
+    }
+
     /// Runtime wrappers the CLI RSX DFS never counts (`<ScrollArea>` body is just
     /// `<VStack>…`, but `From<ScrollAreaBuilder>` inserts a `scroll:` viewport and
     /// `__jadix_*_scrollbar_*` chrome). Walking those as real elements shifted
@@ -10628,12 +10823,18 @@ mod hot_reload_inject {
         let s = raw.trim();
         if let Some(v) = s.strip_suffix("rem") {
             let n = v.trim().parse::<f32>().ok()?;
-            return Some(n * crate::layout::dimension::css_root_font_size_px());
+            return n
+                .is_finite()
+                .then_some(n * crate::layout::dimension::css_root_font_size_px());
         }
         if let Some(v) = s.strip_suffix("px") {
-            return v.trim().parse::<f32>().ok();
+            return v
+                .trim()
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite());
         }
-        s.parse::<f32>().ok()
+        s.parse::<f32>().ok().filter(|value| value.is_finite())
     }
 
     fn parse_dimension(raw: &str) -> Option<taffy::style::Dimension> {
@@ -10646,6 +10847,7 @@ mod hot_reload_inject {
                 .trim()
                 .parse::<f32>()
                 .ok()
+                .filter(|value| value.is_finite())
                 .map(|n| taffy::style::Dimension::percent(n / 100.0));
         }
         parse_length_px(s).map(taffy::style::Dimension::length)
@@ -10690,17 +10892,6 @@ mod hot_reload_inject {
     fn find_template_target_mut<'a>(el: &'a mut Element, id: &str) -> Option<&'a mut Element> {
         let path = crate::app::hot_reload::find_best_template_path(el, id)?;
         crate::app::hot_reload::follow_template_path_mut(el, &path)
-    }
-
-    fn path_component_match_fuzzy(a: &str, b: &str) -> bool {
-        let a = crate::app::hot_reload::parse_template_id(a);
-        let b = crate::app::hot_reload::parse_template_id(b);
-        let ap = a.path;
-        let bp = b.path;
-        if ap == bp {
-            return true;
-        }
-        ap.ends_with(&bp) || bp.ends_with(&ap)
     }
 
     #[allow(dead_code)]
@@ -10801,7 +10992,7 @@ mod hot_reload_inject {
         n
     }
 
-    pub(super) fn upsert_overrides(
+    pub(in crate::app) fn upsert_overrides(
         store: &mut Vec<crate::app::hot_reload::TemplateFragment>,
         incoming: &[crate::app::hot_reload::TemplateFragment],
     ) {
@@ -10810,7 +11001,7 @@ mod hot_reload_inject {
                 if v.id == tpl.id || crate::app::hot_reload::template_id_matches(&v.id, &tpl.id) {
                     return true;
                 }
-                path_component_match_fuzzy(&v.id, &tpl.id) && v.index == tpl.index
+                false
             }) {
                 *existing = tpl.clone();
             } else {
@@ -10819,34 +11010,143 @@ mod hot_reload_inject {
         }
     }
 
-    pub(super) fn apply_templates_to_tree(
+    pub(in crate::app) struct PreparedPatch {
+        template: crate::app::hot_reload::TemplateFragment,
+        instance: u64,
+        prepared: Option<crate::core::hot_reload::PreparedTemplate>,
+    }
+
+    pub(in crate::app) fn apply_templates_to_tree(
         root: &mut Element,
         templates: &[crate::app::hot_reload::TemplateFragment],
-    ) {
-        for tpl in templates {
-            let Some(target) = find_template_target_mut(root, &tpl.id) else {
-                continue;
-            };
-            if target
-                .template_hash
-                .as_deref()
-                .is_some_and(|h| h == tpl.hash.as_str())
-            {
-                //Same hash as CLI: the tree comes from the newly compiled ui!, do not overwrite by index (easy to misalign with `{expr}` slot).
-                continue;
-            }
-            let _ = inject_style_attrs(target, &tpl.style_attrs);
-            // 从 ui!() 回调得到的新树是编译期字符串；热更的增量 replacement 的 `from` 是「上一版热更」
-            // 的 literal，与当前树中的字往往对不上，单靠 replacement 会在 resize/信号重绘时失效。
-            // When persistence contains a complete `text_literals` snapshot, DFS writes it back in one go (consistent with inject_hot_reload_partial).
-            let mut text_ok = false;
-            if !tpl.text_literals.is_empty() {
-                text_ok = inject_text_literals(target, &tpl.text_literals);
-            }
-            if !text_ok {
-                let _ = inject_text_replacements(target, &tpl.text_replacements);
+    ) -> Result<(), String> {
+        let prepared = prepare_templates(root, templates)?;
+        apply_prepared_templates(root, prepared)
+    }
+
+    pub(in crate::app) fn validate_templates(
+        root: &Element,
+        templates: &[crate::app::hot_reload::TemplateFragment],
+    ) -> Result<(), String> {
+        let mut targets: Vec<Vec<usize>> = Vec::new();
+        for template in templates {
+            let paths = crate::app::hot_reload::find_template_paths(root, &template.id);
+            for path in &paths {
+                if targets
+                    .iter()
+                    .any(|other| other.starts_with(path) || path.starts_with(other))
+                {
+                    return Err("overlapping template instances".into());
+                }
+                targets.push(path.clone());
+                let mut target = root;
+                for index in path {
+                    target = &target.children[*index];
+                }
+                if paths.len() > 1 && template.signature.is_empty() {
+                    return Err("multiple instances require a compiled description".into());
+                }
+                preflight(target, template)?;
             }
         }
+        Ok(())
+    }
+
+    pub(in crate::app) fn prepare_templates(
+        root: &Element,
+        templates: &[crate::app::hot_reload::TemplateFragment],
+    ) -> Result<Vec<PreparedPatch>, String> {
+        validate_templates(root, templates)?;
+        let mut plans = Vec::new();
+        for template in templates {
+            for path in crate::app::hot_reload::find_template_paths(root, &template.id) {
+                let mut target = &*root;
+                for index in &path {
+                    target = &target.children[*index];
+                }
+                if target.template_hash.as_deref() == Some(template.hash.as_str()) {
+                    continue;
+                }
+                preflight(target, template)?;
+                let prepared = match &template.tree {
+                    Some(tree) if target.attrs.contains_key("jadix_hr_tree") => {
+                        Some(crate::core::hot_reload::prepare(target, tree)?)
+                    }
+                    _ => None,
+                };
+                plans.push(PreparedPatch {
+                    template: template.clone(),
+                    instance: target.inspector_instance_id,
+                    prepared,
+                });
+            }
+        }
+        Ok(plans)
+    }
+
+    pub(in crate::app) fn sync_template_layout(
+        root: &Element,
+        templates: &[crate::app::hot_reload::TemplateFragment],
+        layout_tree: &mut crate::layout::layout_tree::LayoutTree,
+    ) {
+        for template in templates {
+            for path in crate::app::hot_reload::find_template_paths(root, &template.id) {
+                let target = path
+                    .iter()
+                    .fold(root, |element, index| &element.children[*index]);
+                layout_tree.mark_subtree_layout_dirty(target);
+            }
+        }
+    }
+
+    pub(in crate::app) fn apply_prepared_templates(
+        root: &mut Element,
+        plans: Vec<PreparedPatch>,
+    ) -> Result<(), String> {
+        fn instance_mut(root: &mut Element, identity: u64) -> Option<&mut Element> {
+            if root.inspector_instance_id == identity {
+                return Some(root);
+            }
+            root.children
+                .iter_mut()
+                .find_map(|child| instance_mut(child, identity))
+        }
+        for PreparedPatch {
+            template,
+            instance: identity,
+            prepared,
+        } in plans
+        {
+            let Some(target) = instance_mut(root, identity) else {
+                return Err("template owner unmounted during commit".into());
+            };
+            if let (Some(tree), Some(prepared)) = (&template.tree, prepared) {
+                crate::core::hot_reload::apply_prepared(
+                    target,
+                    tree,
+                    prepared,
+                    |element, attributes| {
+                        let attributes: Vec<_> = attributes
+                            .iter()
+                            .map(|(name, value)| crate::app::hot_reload::StyleAttr {
+                                element_index: 0,
+                                name: name.clone(),
+                                value: value.clone(),
+                            })
+                            .collect();
+                        inject_style_attrs(element, &attributes);
+                    },
+                );
+            } else {
+                inject_style_attrs(target, &template.style_attrs);
+                if template.text_literals.is_empty()
+                    || !inject_text_literals(target, &template.text_literals)
+                {
+                    inject_text_replacements(target, &template.text_replacements);
+                }
+            }
+        }
+        Ok(())
     }
 
     pub(super) fn derive_replacements_from_previous(
@@ -10854,9 +11154,7 @@ mod hot_reload_inject {
         current: &crate::app::hot_reload::TemplateFragment,
     ) -> Vec<crate::app::hot_reload::TextReplacement> {
         let Some(prev) = previous.iter().find(|v| {
-            v.id == current.id
-                || crate::app::hot_reload::template_id_matches(&v.id, &current.id)
-                || (v.index == current.index && path_component_match_fuzzy(&v.id, &current.id))
+            v.id == current.id || crate::app::hot_reload::template_id_matches(&v.id, &current.id)
         }) else {
             return Vec::new();
         };
@@ -10898,906 +11196,38 @@ mod hot_reload_inject {
     }
 
     #[cfg(test)]
-    mod inject_match_tests {
-        use super::*;
-        use crate::core::tree::Element;
-
-        fn tpl(
-            id: &str,
-            hash: &str,
-            literals: &[&str],
-        ) -> crate::app::hot_reload::TemplateFragment {
-            crate::app::hot_reload::TemplateFragment {
-                id: id.to_string(),
-                hash: hash.to_string(),
-                len: 1,
-                index: 0,
-                text_literals: literals.iter().map(|s| (*s).to_string()).collect(),
-                text_replacements: vec![],
-                style_attrs: vec![],
-            }
-        }
-
-        #[test]
-        fn apply_hits_matching_line_not_first_same_column() {
-            let mut root = Element::new().children(vec![
-                Element::new()
-                    .template_id("examples/gallery/src/main.rs:188:9")
-                    .template_hash("old-a")
-                    .text("first"),
-                Element::new()
-                    .template_id("examples/gallery/src/main.rs:400:9")
-                    .template_hash("old-b")
-                    .text("second"),
-            ]);
-            apply_templates_to_tree(
-                &mut root,
-                &[tpl(
-                    "d:/projects/jadix/examples/gallery/src/main.rs:400:9",
-                    "new-b",
-                    &["second-new"],
-                )],
-            );
-            assert_eq!(root.children[0].text.as_deref(), Some("first"));
-            assert_eq!(root.children[1].text.as_deref(), Some("second-new"));
-        }
-
-        #[test]
-        fn text_replacement_crosses_component_identity_but_not_nested_ui() {
-            let component = Element::new()
-                .template_id("examples/gallery/src/main.rs:188:Button#1")
-                .children(vec![Element::new().text("Secondary")]);
-            let nested = Element::new()
-                .template_id("examples/gallery/src/shared.rs:275:5")
-                .template_hash("nested")
-                .text("Secondary");
-            let mut root = Element::new()
-                .template_id("examples/gallery/src/main.rs:188:9")
-                .children(vec![component, nested]);
-            let mut patch = tpl("examples/gallery/src/main.rs:188:9", "changed", &[]);
-            patch.text_replacements = vec![crate::app::hot_reload::TextReplacement {
-                index: 0,
-                from: "Secondary".into(),
-                to: "Updated".into(),
-            }];
-            apply_templates_to_tree(&mut root, &[patch]);
-            assert_eq!(
-                root.children[0].children[0].text.as_deref(),
-                Some("Updated")
-            );
-            assert_eq!(root.children[1].text.as_deref(), Some("Secondary"));
-        }
-
-        #[test]
-        fn apply_follows_small_line_shift_to_same_column_block() {
-            let mut root = Element::new().children(vec![
-                Element::new()
-                    .template_id("examples/gallery/src/main.rs:188:9")
-                    .template_hash("old-a")
-                    .text("first"),
-                Element::new()
-                    .template_id("examples/gallery/src/main.rs:400:9")
-                    .template_hash("old-b")
-                    .text("second"),
-            ]);
-            apply_templates_to_tree(
-                &mut root,
-                &[tpl(
-                    "d:/projects/jadix/examples/gallery/src/main.rs:402:9",
-                    "new-b",
-                    &["second-new"],
-                )],
-            );
-            assert_eq!(root.children[0].text.as_deref(), Some("first"));
-            assert_eq!(root.children[1].text.as_deref(), Some("second-new"));
-        }
-
-        #[test]
-        fn apply_updates_label_inside_switch_reactive_island() {
-            // Gallery overwrites the page `ui!` template_id with `App:section_body`.
-            // Hot reload must still find the island via the preserved source id.
-            let mut island = Element::new()
-                .template_id("examples/gallery/App:section_body")
-                .template_hash("old-nav")
-                .children(vec![
-                    Element::new().children(vec![Element::new().text("导航")])
-                ]);
-            island.set_attr(
-                crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
-                "examples/gallery/src/main.rs:4334:21",
-            );
-            let mut root = Element::new().children(vec![
-                Element::new()
-                    .template_id("examples/gallery/src/main.rs:100:9")
-                    .text("chrome"),
-                island,
-            ]);
-            apply_templates_to_tree(
-                &mut root,
-                &[tpl(
-                    "d:/projects/jadix/examples/gallery/src/main.rs:4334:21",
-                    "new-nav",
-                    &["导航改"],
-                )],
-            );
-            assert_eq!(root.children[0].text.as_deref(), Some("chrome"));
-            assert_eq!(
-                root.children[1].children[0].children[0].text.as_deref(),
-                Some("导航改")
-            );
-            assert_eq!(
-                root.children[1].template_id.as_deref(),
-                Some("examples/gallery/App:section_body"),
-                "island identity must stay stable after inject"
-            );
-        }
-
-        #[test]
-        fn apply_twice_keeps_island_children_and_updates_text() {
-            let mut island = Element::new()
-                .template_id("examples/gallery/App:section_body")
-                .template_hash("old-nav")
-                .children(vec![
-                    Element::new().children(vec![Element::new().text("导航")])
-                ]);
-            island.set_attr(
-                crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
-                "examples/gallery/src/main.rs:4334:21",
-            );
-            let nested = Element::new()
-                .template_id("examples/gallery/src/main.rs:4179:5")
-                .template_hash("nested-showcase")
-                .text("navbar");
-            island.children[0].children.push(nested);
-            let mut root = Element::new().children(vec![island]);
-
-            apply_templates_to_tree(
-                &mut root,
-                &[tpl(
-                    "examples/gallery/src/main.rs:4334:21",
-                    "nav-1",
-                    &["导航改"],
-                )],
-            );
-            apply_templates_to_tree(
-                &mut root,
-                &[tpl(
-                    "examples/gallery/src/main.rs:4334:21",
-                    "nav-2",
-                    &["导航再改"],
-                )],
-            );
-            assert_eq!(
-                root.children[0].children[0].children[0].text.as_deref(),
-                Some("导航再改")
-            );
-            assert_eq!(
-                root.children[0].children[0].children.len(),
-                2,
-                "second inject must not drop nested showcase children"
-            );
-            assert_eq!(
-                root.children[0].children[0].children[1].text.as_deref(),
-                Some("navbar")
-            );
-        }
-
-        #[test]
-        fn apply_style_skips_scroll_viewport_and_scrollbar_chrome() {
-            // CLI RSX DFS: 0 ScrollArea, 1 VStack, 2 Label (text_size).
-            // Runtime `From<ScrollAreaBuilder>` wraps the body in a `scroll:` viewport
-            // and appends scrollbar siblings — those must not consume element_index.
-            let label = Element::new()
-                .text("导航")
-                .text_size(1.25 * crate::core::tree::CSS_ROOT_FONT_SIZE_PX);
-            let vstack = Element::new().children(vec![label]);
-            let viewport = Element::new()
-                .focus_id("scroll:scroll-navigation")
-                .children(vec![vstack]);
-            let vbar = Element::new()
-                .template_id("__jadix_v_scrollbar_scroll-navigation")
-                .focus_id("scrollbar-track:scroll-navigation:y");
-            let hbar = Element::new()
-                .template_id("__jadix_h_scrollbar_scroll-navigation")
-                .focus_id("scrollbar-track:scroll-navigation:x");
-            let mut island = Element::new()
-                .template_id("examples/gallery/App:section_body")
-                .template_hash("old-nav")
-                .children(vec![viewport, vbar, hbar]);
-            island.set_attr(
-                crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
-                "examples/gallery/src/main.rs:4334:21",
-            );
-            let mut root = Element::new().children(vec![island]);
-
-            let mut patch = tpl(
-                "examples/gallery/src/main.rs:4334:21",
-                "new-nav-size",
-                &["导航"],
-            );
-            patch.style_attrs = vec![crate::app::hot_reload::StyleAttr {
-                element_index: 2,
-                name: "text_size".into(),
-                value: "2rem".into(),
-            }];
-            apply_templates_to_tree(&mut root, &[patch]);
-
-            let vstack = &root.children[0].children[0].children[0];
-            let label = &vstack.children[0];
-            let expected = 2.0 * crate::core::tree::CSS_ROOT_FONT_SIZE_PX;
-            assert_eq!(
-                label.text_style.size_resolved(),
-                expected,
-                "text_size must land on Label (CLI index 2), not the viewport/VStack wrapper"
-            );
-            assert_eq!(
-                vstack.text_style.size, None,
-                "VStack must not receive the Label style patch"
-            );
-            assert_eq!(
-                label.text_style.size,
-                Some(expected),
-                "explicit size must survive cascade and not be overwritten"
-            );
-        }
-
-        #[test]
-        fn live_class_and_animation_updates_use_framework_parsers() {
-            let mut root = Element::new().template_id("live.rs:1:1").text("content");
-            let attrs = vec![
-                crate::app::hot_reload::StyleAttr {
-                    element_index: 0,
-                    name: "class".into(),
-                    value: "p-4 bg-red-500".into(),
-                },
-                crate::app::hot_reload::StyleAttr {
-                    element_index: 0,
-                    name: "animation".into(),
-                    value: "spin 2s linear infinite".into(),
-                },
-                crate::app::hot_reload::StyleAttr {
-                    element_index: 0,
-                    name: "transition".into(),
-                    value: "opacity 300ms ease-in".into(),
-                },
-            ];
-            assert!(inject_style_attrs_by_id(&mut root, "live.rs:1:1", &attrs));
-            assert_eq!(root.style.animations.len(), 1);
-            assert_eq!(root.style.animations[0].name, "spin");
-            assert!(!root.style.transition.is_empty());
-            assert_eq!(root.text.as_deref(), Some("content"));
-            assert!(root.class_set.is_some());
-        }
-
-        #[test]
-        fn deferred_override_applies_when_island_later_mounts() {
-            // CLI only sends the changed `ui!`. If that page is not mounted, the
-            // live tree has no match — the patch must still apply when the
-            // `switch_reactive` island is created later from compile-time source.
-            let patch = tpl(
-                "d:/projects/jadix/examples/gallery/src/main.rs:4334:21",
-                "hmr-nav-new",
-                &["导航改"],
-            );
-
-            let mut live = Element::new().children(vec![Element::new()
-                .template_id("examples/gallery/src/main.rs:100:9")
-                .template_hash("chrome")
-                .text("chrome")]);
-            apply_templates_to_tree(&mut live, std::slice::from_ref(&patch));
-            assert_eq!(
-                live.children[0].text.as_deref(),
-                Some("chrome"),
-                "unrelated mounted template must stay untouched"
-            );
-
-            let mut island = Element::new()
-                .template_id("examples/gallery/App:section_body")
-                .template_hash("compile-time-old")
-                .children(vec![Element::new()
-                    .focus_id("scroll:scroll-navigation")
-                    .children(vec![
-                        Element::new().children(vec![Element::new().text("导航")])
-                    ])]);
-            island.set_attr(
-                crate::app::reactive::ATTR_SOURCE_TEMPLATE_ID,
-                "examples/gallery/src/main.rs:4334:21",
-            );
-            apply_templates_to_tree(&mut island, std::slice::from_ref(&patch));
-            assert_eq!(
-                island.children[0].children[0].children[0].text.as_deref(),
-                Some("导航改"),
-                "entering the page must replay the stored hot-reload literals"
-            );
-        }
-    }
+    #[path = "tests/inject_match.rs"]
+    mod inject_match_tests;
 } // mod hot_reload_inject
 
 #[cfg(test)]
-mod text_shadow_draw_slot_tests {
-    use super::{text_shadow_draw_slot, TextShadowDrawSlot};
-
-    #[test]
-    fn page_stack_bands_require_per_band_shadow_slot() {
-        // Regression: drawing all text-shadows before page_stack band fills makes them
-        // invisible under opaque card backgrounds (gallery Text-shadow section).
-        assert_eq!(
-            text_shadow_draw_slot(true),
-            TextShadowDrawSlot::PerBandAfterRects
-        );
-        assert_eq!(
-            text_shadow_draw_slot(false),
-            TextShadowDrawSlot::AfterPageFills
-        );
-    }
-}
+#[path = "tests/text_shadow_draw_slot.rs"]
+mod text_shadow_draw_slot_tests;
 
 #[cfg(test)]
-mod template_path_tests {
-    use super::AppState;
-    use crate::core::tree::Element;
-
-    fn tree() -> Element {
-        Element::new().children(vec![
-            Element::new().template_id("a"),
-            Element::new().children(vec![Element::new().template_id("b")]),
-        ])
-    }
-
-    #[test]
-    fn finds_child_index_path() {
-        let root = tree();
-        let mut path = Vec::new();
-        assert!(AppState::find_template_path(&root, "b", &mut path));
-        assert_eq!(path, vec![1, 0]);
-
-        path.clear();
-        assert!(!AppState::find_template_path(&root, "missing", &mut path));
-        assert!(path.is_empty());
-    }
-
-    #[test]
-    fn path_validation_rejects_stale_and_out_of_range() {
-        let root = tree();
-        assert!(AppState::template_path_matches(&root, &[1, 0], "b"));
-        // Same shape, wrong node: the cached path must not be trusted blindly.
-        assert!(!AppState::template_path_matches(&root, &[1, 0], "a"));
-        // Shrunk subtree.
-        assert!(!AppState::template_path_matches(&root, &[9], "a"));
-    }
-}
+#[path = "tests/template_path.rs"]
+mod template_path_tests;
 
 #[cfg(test)]
 #[cfg(feature = "product-tests")]
-mod button_caption_damage_tests {
-    use super::AppState;
-    use crate::components::button::button;
-    use crate::core::tree::Element;
-
-    #[test]
-    fn rebuilt_hovered_button_keeps_its_used_chrome() {
-        crate::core::reactivity::create_root(|| {
-            crate::style::set_css_transition_virtual_timeline(true);
-            crate::style::set_css_transition_timeline_ms(0.0);
-            let mut tree = crate::layout::LayoutTree::new();
-            let mut previous: Element = button("rebuild-hover")
-                .variant("outline")
-                .text("Toggle")
-                .into();
-            tree.build_and_layout(&mut previous, 240.0, 120.0, [-1.0; 2]);
-            for time in [0.0, 200.0, 400.0] {
-                crate::style::set_css_transition_timeline_ms(time);
-                let mut impact = crate::core::tree::LayoutStatus::Clean;
-                crate::style::sync_class_variants_subtree(
-                    &mut previous,
-                    [10.0, 10.0],
-                    "",
-                    false,
-                    240.0,
-                    120.0,
-                    &mut tree,
-                    &mut impact,
-                );
-            }
-            let hovered = previous.style.bg_color;
-            let mut fresh: Element = button("rebuild-hover")
-                .variant("outline")
-                .text("Toggle")
-                .into();
-            AppState::reconcile_elements_for_test(&mut fresh, &mut previous);
-            for time in [416.0, 432.0, 448.0] {
-                crate::style::set_css_transition_timeline_ms(time);
-                let mut impact = crate::core::tree::LayoutStatus::Clean;
-                crate::style::sync_class_variants_subtree(
-                    &mut fresh,
-                    [10.0, 10.0],
-                    "",
-                    false,
-                    240.0,
-                    120.0,
-                    &mut tree,
-                    &mut impact,
-                );
-                assert_eq!(
-                    fresh.style.bg_color, hovered,
-                    "rebuild must not restart hover chrome"
-                );
-            }
-            crate::style::set_css_transition_timeline_ms(700.0);
-            let mut impact = crate::core::tree::LayoutStatus::Clean;
-            crate::style::sync_class_variants_subtree(
-                &mut fresh,
-                [-1.0; 2],
-                "",
-                false,
-                240.0,
-                120.0,
-                &mut tree,
-                &mut impact,
-            );
-            crate::style::set_css_transition_timeline_ms(1000.0);
-            crate::style::sync_class_variants_subtree(
-                &mut fresh,
-                [-1.0; 2],
-                "",
-                false,
-                240.0,
-                120.0,
-                &mut tree,
-                &mut impact,
-            );
-            assert_eq!(
-                fresh.style.bg_color[3], 0.0,
-                "preserving geometry must not pin hover"
-            );
-            crate::style::set_css_transition_virtual_timeline(false);
-        });
-    }
-
-    #[test]
-    fn caption_layout_change_stays_local_to_button() {
-        let root = Element::new().child(
-            Element::from(button("trigger").text("Open"))
-                .child(Element::new().template_id("trigger-caption")),
-        );
-        assert!(AppState::path_has_button_ancestor(&root, &[0, 0]));
-        assert!(!AppState::path_has_button_ancestor(&root, &[]));
-    }
-
-    #[test]
-    fn conditional_button_caption_change_is_local_layout_only() {
-        let old: Element = button("trigger").text("打开 RSX Trigger").into();
-        let new: Element = button("trigger").text("关闭 RSX Trigger").into();
-        assert!(AppState::button_caption_only_change(&new, &old));
-        let old_page = Element::new().child(old);
-        let new_page = Element::new().child(new);
-        assert!(AppState::button_caption_only_change(&new_page, &old_page));
-
-        let old_other = Element::new().child(Element::new().text("Open"));
-        let new_other = Element::new().child(Element::new().text("Close"));
-        assert!(!AppState::button_caption_only_change(
-            &new_other, &old_other
-        ));
-
-        let old_structural: Element = button("trigger").text("Open").into();
-        let mut new_structural: Element = button("trigger").text("Close").into();
-        new_structural.children.push(Element::new());
-        assert!(!AppState::button_caption_only_change(
-            &new_structural,
-            &old_structural
-        ));
-        assert!(AppState::has_button_caption_change(
-            &new_structural,
-            &old_structural
-        ));
-    }
-
-    #[test]
-    fn portal_only_structure_change_does_not_schedule_window_clear() {
-        let page_old: Element = crate::components::button::button("trigger")
-            .text("Open")
-            .into();
-        let page_new: Element = crate::components::button::button("trigger")
-            .text("Close")
-            .into();
-        let mut old_portal = Element::new().template_id("panel").text("old");
-        old_portal.set_attr("jadix_portal", "1");
-        let mut new_portal = Element::new().template_id("panel").text("new");
-        new_portal.set_attr("jadix_portal", "1");
-        let old = Element::new().child(page_old).child(old_portal);
-        let new = Element::new().child(page_new).child(new_portal);
-        assert!(AppState::portal_only_structure_change(&new, &old));
-
-        let changed_page = Element::new()
-            .child(Element::new().template_id("page").text("changed"))
-            .child({
-                let mut panel = Element::new().template_id("panel").text("new");
-                panel.set_attr("jadix_portal", "1");
-                panel
-            });
-        assert!(!AppState::portal_only_structure_change(&changed_page, &old));
-    }
-
-    #[test]
-    fn mixed_portal_caption_change_targets_trigger_only() {
-        let mut old_button: Element = crate::components::button::button("trigger")
-            .text("Open")
-            .into();
-        let mut new_button: Element = crate::components::button::button("trigger")
-            .text("Close")
-            .into();
-        old_button.layout_bounds = [10.0, 20.0, 80.0, 24.0];
-        new_button.layout_bounds = [10.0, 20.0, 92.0, 24.0];
-        let mut old_panel = Element::new().template_id("panel").text("old");
-        old_panel.set_attr("jadix_portal", "1");
-        let mut new_panel = Element::new().template_id("panel").text("new");
-        new_panel.set_attr("jadix_portal", "1");
-        let old = Element::new().child(old_button).child(old_panel);
-        let new = Element::new().child(new_button).child(new_panel);
-
-        let damage = AppState::portal_button_caption_damage(&new, &old)
-            .expect("caption change must produce trigger damage");
-        assert_ne!(damage.0, 0);
-        assert!(damage.1[2] > 0.0 && damage.1[3] > 0.0);
-    }
-}
+#[path = "tests/button_caption_damage.rs"]
+mod button_caption_damage_tests;
 
 #[cfg(test)]
-mod text_scroll_cache_tests {
-    use super::AppState;
-    use crate::core::tree::TextLayoutInfo;
-    use crate::renderer::GlyphRasterMode;
-    use crate::style::TextStyle;
-
-    fn node_at_y(y: f32) -> TextLayoutInfo {
-        TextLayoutInfo {
-            text: "hello".into(),
-            shape_suffix: None,
-            spans: None,
-            template_id: None,
-            x: 8.0,
-            y,
-            width: 40.0,
-            height: 16.0,
-            clip_bounds: Some([0.0, 0.0, 400.0, 300.0]),
-            style: TextStyle::default(),
-            prepared: None,
-            glyph_fx: None,
-            shimmer: None,
-            paint_scale: 1.0,
-            paint_transform: [1.0, 0.0, 0.0, 1.0, 0.0, 0.0],
-            paint_origin: [8.0, y],
-            glyph_raster: GlyphRasterMode::Coverage,
-        }
-    }
-
-    #[test]
-    fn idle_cache_tolerates_tiny_pos_noise() {
-        let a = [node_at_y(100.0)];
-        let b = [node_at_y(100.01)];
-        assert!(AppState::text_nodes_equal(&a, &b));
-    }
-
-    #[test]
-    fn position_drift_quarter_pixel_busts_cache() {
-        let a = [node_at_y(100.0)];
-        let b = [node_at_y(100.25)];
-        assert!(
-            !AppState::text_nodes_equal(&a, &b),
-            "0.25px scroll must not reuse glyphs parked behind rects (avatar label offset)"
-        );
-    }
-}
+#[path = "tests/text_scroll_cache.rs"]
+mod text_scroll_cache_tests;
 
 #[cfg(test)]
-mod surface_resize_tests {
-    use super::AppState;
-    use winit::dpi::PhysicalSize;
-
-    #[test]
-    fn shrink_prefers_resized_event_not_stale_large_inner() {
-        let inner = PhysicalSize::new(800, 947);
-        let resized = PhysicalSize::new(800, 525);
-        let target = AppState::resolve_surface_size(inner, Some(resized));
-        assert_eq!(
-            (target.width, target.height),
-            (800, 525),
-            "shrink must adopt Resized height; max(inner,resized) left layout tall and disabled scroll"
-        );
-    }
-
-    #[test]
-    fn grow_prefers_resized_event_when_inner_lags() {
-        let inner = PhysicalSize::new(800, 525);
-        let resized = PhysicalSize::new(800, 947);
-        let target = AppState::resolve_surface_size(inner, Some(resized));
-        assert_eq!((target.width, target.height), (800, 947));
-    }
-
-    #[test]
-    fn without_resized_event_uses_inner() {
-        let inner = PhysicalSize::new(640, 480);
-        let target = AppState::resolve_surface_size(inner, None);
-        assert_eq!((target.width, target.height), (640, 480));
-    }
-
-    #[test]
-    fn minimize_zero_size_does_not_pin_layout() {
-        let inner = PhysicalSize::new(800, 600);
-        let target = AppState::resolve_surface_size(inner, Some(PhysicalSize::new(0, 0)));
-        assert_eq!(
-            (target.width, target.height),
-            (800, 600),
-            "0×0 minimize must fall back to inner so restore can rebuild"
-        );
-    }
-}
+#[path = "tests/surface_resize.rs"]
+mod surface_resize_tests;
 
 #[cfg(test)]
-mod present_fingerprint_tests {
-    use super::hash_present_underline_layers;
-    use crate::renderer::InstanceInput;
-    use bytemuck::Zeroable;
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-
-    fn fp(page: &[InstanceInput], page_stack: &[Vec<InstanceInput>], underline: bool) -> u64 {
-        let mut h = DefaultHasher::new();
-        hash_present_underline_layers(&mut h, page, page_stack, &[]);
-        underline.hash(&mut h);
-        h.finish()
-    }
-
-    #[test]
-    fn page_stack_underline_leave_changes_present_hash() {
-        // Gallery / z-index pages use page_stack bands: `underline_instances` is empty.
-        let line = InstanceInput::zeroed();
-        let hovered = fp(&[], &[vec![line]], true);
-        let rest = fp(&[], &[Vec::new()], false);
-        assert_ne!(
-            hovered, rest,
-            "Link hover:underline leave must bust last_gpu_frame_fp on the page-stack path"
-        );
-    }
-
-    #[test]
-    fn page_stack_reuse_keeps_last_presented_underlines() {
-        let line = InstanceInput::zeroed();
-        let last = vec![line];
-        let reused = super::current_underline_layer(true, true, &[], &[], &last, None);
-        assert_eq!(reused.len(), 1);
-        let left = super::current_underline_layer(true, false, &[], &[], &last, None);
-        assert!(
-            left.is_empty(),
-            "leave (not reuse) must drop decorations so node present can erase"
-        );
-        let hovered = super::current_underline_layer(true, false, &[line], &[], &[], None);
-        assert_eq!(hovered.len(), 1);
-    }
-
-    #[test]
-    fn node_capture_replaces_only_refreshed_decorations() {
-        let mut changed = InstanceInput::zeroed();
-        changed.rect_pos = [10.0, 20.0];
-        changed.rect_size = [30.0, 1.0];
-        let mut neighbor = changed;
-        neighbor.rect_pos[0] = 100.0;
-        let bounds = [[10.0, 0.0, 30.0, 24.0]];
-        let previous = [changed, neighbor];
-        let left =
-            super::current_underline_layer(true, false, &[], &[], &previous, Some((&[], &bounds)));
-        assert_eq!(left.len(), 1);
-        assert_eq!(left[0].rect_pos, neighbor.rect_pos);
-        let hovered = super::current_underline_layer(
-            true,
-            false,
-            &[],
-            &[],
-            &previous,
-            Some((&[changed], &bounds)),
-        );
-        assert_eq!(
-            hovered.len(),
-            2,
-            "refresh must not duplicate old decorations"
-        );
-        assert_ne!(fp(&hovered, &[], false), fp(&left, &[], false));
-    }
-
-    #[test]
-    #[ignore = "requires GPU adapter; run with --ignored --nocapture"]
-    #[cfg(feature = "product-tests")]
-    fn breadcrumb_node_capture_draws_hover_underline_and_clears_on_leave() {
-        use crate::app::damage::{clear_frame_paint_nodes, take_frame_paint_nodes};
-        use crate::app::draw_cull::node_present_clipped_capture_text;
-        use crate::app::tree_hit::{apply_pointer_hover_reconcile, clear_hover_tracking};
-        use crate::components::breadcrumb::breadcrumb;
-        use crate::components::button::sync_button_hover_paint_subtree;
-        use crate::core::reactivity::create_root;
-        use crate::core::tree::{Element, LayoutStatus};
-        use crate::layout::layout_tree::LayoutTree;
-        use crate::renderer::{offscreen::OffscreenGpu, prepare_text_frame, JadixTextRenderer};
-        use crate::style::sync_class_variants_subtree;
-
-        const W: u32 = 400;
-        const H: u32 = 120;
-        let gpu = OffscreenGpu::new().expect("GPU adapter");
-        crate::style::set_theme_mode(crate::style::ThemeMode::Light);
-        for scale in [1.0, 1.5] {
-            clear_hover_tracking();
-            let (_handle, mut root) = create_root(|| {
-                Element::new()
-                    .w(W as f32 / scale)
-                    .h(H as f32 / scale)
-                    .child(
-                        breadcrumb()
-                            .link("Home", || {})
-                            .link("Components", || {})
-                            .page("Breadcrumb"),
-                    )
-            });
-            let mut tree = LayoutTree::new();
-            let initial =
-                tree.build_and_layout(&mut root, W as f32 / scale, H as f32 / scale, [-1.0; 2]);
-            tree.set_collect_skip_allowed(true);
-            let config = wgpu::SurfaceConfiguration {
-                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
-                format: wgpu::TextureFormat::Rgba8UnormSrgb,
-                width: W,
-                height: H,
-                present_mode: wgpu::PresentMode::Fifo,
-                desired_maximum_frame_latency: 2,
-                alpha_mode: wgpu::CompositeAlphaMode::Opaque,
-                view_formats: vec![],
-                color_space: Default::default(),
-            };
-            let mut renderer = JadixTextRenderer::new(&gpu.device, &gpu.queue, &config);
-            let mut previous = Vec::new();
-            for target in ["Home", "Components", "Breadcrumb", "Home", ""] {
-                let mouse = initial
-                    .text_nodes
-                    .iter()
-                    .find(|n| n.text == target)
-                    .map(|n| [n.x + n.width * 0.5, n.y + n.height * 0.5])
-                    .unwrap_or([-1.0; 2]);
-                clear_frame_paint_nodes();
-                apply_pointer_hover_reconcile(&root, mouse[0], mouse[1], true);
-                let mut impact = LayoutStatus::Clean;
-                sync_button_hover_paint_subtree(
-                    &mut root,
-                    &mut tree,
-                    &mut impact,
-                    W as f32 / scale,
-                    H as f32 / scale,
-                    [0.0; 2],
-                );
-                sync_class_variants_subtree(
-                    &mut root,
-                    mouse,
-                    "",
-                    false,
-                    W as f32 / scale,
-                    H as f32 / scale,
-                    &mut tree,
-                    &mut impact,
-                );
-                let frame = tree.build_and_layout_fast(
-                    &mut root,
-                    W as f32 / scale,
-                    H as f32 / scale,
-                    mouse,
-                    true,
-                    false,
-                );
-                let dirty = take_frame_paint_nodes();
-                let captured = node_present_clipped_capture_text(
-                    &dirty,
-                    &frame.text_nodes,
-                    &frame.node_paints,
-                );
-                let prep = prepare_text_frame(
-                    &mut renderer,
-                    &gpu.device,
-                    &gpu.queue,
-                    &config,
-                    &captured,
-                    scale,
-                    false,
-                    &Default::default(),
-                    &Default::default(),
-                );
-                let bounds: Vec<_> = captured
-                    .iter()
-                    .map(|n| super::captured_text_decoration_bounds(n, scale))
-                    .collect();
-                let layer = super::current_underline_layer(
-                    true,
-                    false,
-                    &[],
-                    &[],
-                    &previous,
-                    Some((&prep.underline_instances, &bounds)),
-                );
-                let hovered_link = target == "Home" || target == "Components";
-                assert_eq!(
-                    layer.len(),
-                    usize::from(hovered_link),
-                    "target={target} scale={scale} captured={:?} bounds={bounds:?}",
-                    captured
-                        .iter()
-                        .map(|n| (
-                            &n.text,
-                            n.x,
-                            n.y,
-                            n.width,
-                            n.height,
-                            n.style.underline_resolved()
-                        ))
-                        .collect::<Vec<_>>()
-                );
-                assert!(
-                    !frame
-                        .text_nodes
-                        .iter()
-                        .find(|n| n.text == "Breadcrumb")
-                        .unwrap()
-                        .style
-                        .underline_resolved(),
-                    "current page stays undecorated"
-                );
-                let image = gpu
-                    .render_instances_readback(W, H, wgpu::Color::WHITE, &layer)
-                    .expect("underline pixels");
-                let dark = (0..H)
-                    .flat_map(|y| (0..W).map(move |x| (x, y)))
-                    .filter(|&(x, y)| image.pixel(x, y).unwrap()[0] < 220)
-                    .count();
-                assert_eq!(
-                    dark > 10,
-                    hovered_link,
-                    "visible underline target={target} scale={scale}"
-                );
-                previous = layer;
-            }
-        }
-        clear_hover_tracking();
-    }
-}
+#[path = "tests/present_fingerprint.rs"]
+mod present_fingerprint_tests;
 
 #[cfg(test)]
-mod overlay_visual_bounds_tests {
-    use super::AppState;
-    use crate::renderer::InstanceInput;
-    use bytemuck::Zeroable;
+#[path = "tests/overlay_visual_bounds.rs"]
+mod overlay_visual_bounds_tests;
 
-    fn rect(x: f32, y: f32, w: f32, h: f32, alpha: f32) -> InstanceInput {
-        let mut i = InstanceInput::zeroed();
-        i.rect_pos = [x, y];
-        i.rect_size = [w, h];
-        i.color[3] = alpha;
-        i.transform = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
-        i.clip_size = InstanceInput::NO_CLIP_SIZE;
-        i
-    }
-
-    #[test]
-    fn transparent_fullscreen_portal_shell_does_not_expand_avatar_bounds() {
-        let shell = rect(0.0, 0.0, 1280.0, 720.0, 0.0);
-        let avatar_panel = rect(120.0, 80.0, 160.0, 48.0, 1.0);
-
-        let bounds =
-            AppState::overlay_visual_bounds_logical(&[shell, avatar_panel], &[], &[], &[], 1.0);
-
-        assert_eq!(bounds, Some([118.0, 78.0, 164.0, 52.0]));
-    }
-
-    #[test]
-    fn transparent_shell_does_not_hide_backdrop_visual_occupancy() {
-        let mut shell = rect(0.0, 0.0, 1280.0, 720.0, 0.0);
-        shell.backdrop_blur = 12.0;
-
-        let bounds = AppState::overlay_visual_bounds_logical(&[shell], &[], &[], &[], 1.0);
-
-        assert_eq!(bounds, Some([-2.0, -2.0, 1284.0, 724.0]));
-    }
-}
+#[cfg(test)]
+include!("tests/state_cases.rs");

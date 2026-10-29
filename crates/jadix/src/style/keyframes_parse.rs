@@ -8,12 +8,36 @@ use super::{parse_color, parse_filter, parse_transform};
 /// Parse one or more `@keyframes name { ... }` rules and register them.
 /// Returns registered names.
 pub fn parse_and_register_keyframes(css: &str) -> Result<Vec<String>, String> {
-    let mut names = Vec::new();
+    let definitions = collect_keyframe_definitions(css, false)?;
+    if definitions.is_empty() {
+        return Err("no @keyframes rule found".into());
+    }
+    let names = definitions.iter().map(|(name, _)| name.clone()).collect();
+    for (name, stops) in definitions {
+        register_keyframes(name, stops);
+    }
+    Ok(names)
+}
+
+pub(crate) fn parse_keyframe_definitions(
+    css: &str,
+) -> Result<Vec<(String, Vec<KeyframeStop>)>, String> {
+    collect_keyframe_definitions(css, true)
+}
+
+fn collect_keyframe_definitions(
+    css: &str,
+    strict: bool,
+) -> Result<Vec<(String, Vec<KeyframeStop>)>, String> {
+    let mut definitions = Vec::new();
     let mut rest = css;
     loop {
         let Some(at) = rest.find("@keyframes") else {
             break;
         };
+        if strict && !rest[..at].trim().is_empty() {
+            return Err("only @keyframes declarations are supported".into());
+        }
         rest = &rest[at + "@keyframes".len()..];
         let rest_trim = rest.trim_start();
         let name_end = rest_trim
@@ -29,14 +53,16 @@ pub fn parse_and_register_keyframes(css: &str) -> Result<Vec<String>, String> {
             .ok_or_else(|| format!("@keyframes {name}: missing block"))?;
         let (block, consumed) = extract_brace_block(&after_name[body_start..])?;
         let stops = parse_keyframe_block(block)?;
-        register_keyframes(name, stops);
-        names.push(name.to_string());
+        if definitions.iter().any(|(previous, _)| previous == name) {
+            return Err("duplicate keyframe definition".into());
+        }
+        definitions.push((name.to_string(), stops));
         rest = &after_name[body_start + consumed..];
     }
-    if names.is_empty() {
-        return Err("no @keyframes rule found".into());
+    if strict && !rest.trim().is_empty() {
+        return Err("unexpected data after keyframe definitions".into());
     }
-    Ok(names)
+    Ok(definitions)
 }
 
 fn extract_brace_block(s: &str) -> Result<(&str, usize), String> {
@@ -392,30 +418,5 @@ fn parse_shadow(s: &str) -> Option<AnimatableValue> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::style::keyframes::{lookup_keyframes, sample_keyframes};
-
-    #[test]
-    fn parses_from_to_opacity() {
-        parse_and_register_keyframes(
-            "@keyframes fade-x { from { opacity: 0; } to { opacity: 1; } }",
-        )
-        .unwrap();
-        let stops = lookup_keyframes("fade-x").unwrap();
-        let mid = sample_keyframes(&stops, 0.5);
-        assert!((mid.opacity.unwrap() - 0.5).abs() < 1e-3);
-    }
-
-    #[test]
-    fn parses_percent_and_color() {
-        parse_and_register_keyframes(
-            "@keyframes flash-bg { 0% { background-color: #000000; } 100% { background-color: #ffffff; } }",
-        )
-        .unwrap();
-        let stops = lookup_keyframes("flash-bg").unwrap();
-        assert!(stops
-            .iter()
-            .any(|s| s.get(PropertyId::BackgroundColor).is_some()));
-    }
-}
+#[path = "tests/keyframes_parse.rs"]
+mod tests;

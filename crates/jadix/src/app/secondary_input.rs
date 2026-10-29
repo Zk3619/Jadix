@@ -36,15 +36,28 @@ impl super::App {
 
         if self.left_button_down {
             if let Some(drag) = self.scrollbar_drag.as_ref() {
-                let pointer = if drag.axis == super::scroll_support::ScrollAxis::X { x } else { y };
+                let pointer = if drag.axis == super::scroll_support::ScrollAxis::X {
+                    x
+                } else {
+                    y
+                };
                 let span = (drag.track_len - drag.thumb_len).max(1.0);
                 let target = ((pointer - drag.track_start - drag.grab_offset) / span)
-                    .clamp(0.0, 1.0) * drag.max_offset;
+                    .clamp(0.0, 1.0)
+                    * drag.max_offset;
                 let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(&drag.rest);
-                let mut offset = [use_signal(&keys.offset_x, || 0.0_f32).peek(),
-                    use_signal(&keys.offset_y, || 0.0_f32).peek()];
-                offset[if drag.axis == super::scroll_support::ScrollAxis::X { 0 } else { 1 }] = target;
-                super::scroll_support::set_scroll_offset_with_behavior(&drag.rest, offset[0], offset[1], true);
+                let mut offset = [
+                    use_signal(&keys.offset_x, || 0.0_f32).peek(),
+                    use_signal(&keys.offset_y, || 0.0_f32).peek(),
+                ];
+                offset[if drag.axis == super::scroll_support::ScrollAxis::X {
+                    0
+                } else {
+                    1
+                }] = target;
+                super::scroll_support::set_scroll_offset_with_behavior(
+                    &drag.rest, offset[0], offset[1], true,
+                );
                 if let Some(sec) = self.secondaries.borrow().get(&id) {
                     sec.window.request_redraw();
                 }
@@ -121,7 +134,17 @@ impl super::App {
 
         let input_drag_active = self.input_drag_rest.is_some() && self.left_button_down;
 
-        let (x, y, path, captured_move_path, cursor_pick, hover_cbs, window, drag_move, product_move) = {
+        let (
+            x,
+            y,
+            path,
+            captured_move_path,
+            cursor_pick,
+            hover_cbs,
+            window,
+            drag_move,
+            product_move,
+        ) = {
             let mut secs = self.secondaries.borrow_mut();
             let Some(sec) = secs.get_mut(&id) else {
                 return;
@@ -134,18 +157,23 @@ impl super::App {
             let window = sec.window.clone();
             let overlay_dragging = crate::utils::drag::runtime::is_dragging()
                 || crate::utils::anchored_overlay::is_floating_panel_dragging();
-            if !overlay_dragging && crate::utils::drag::routing::sample_paint(&mut sec.root_element, x, y) {
+            if !overlay_dragging
+                && crate::utils::drag::routing::sample_paint(&mut sec.root_element, x, y)
+            {
                 sec.layout_tree.invalidate_collect_skip();
             }
             let size = window.surface_size();
             let scale = (window.scale_factor() as f32).max(1.0);
             let drag_move = crate::utils::drag::runtime::prepare_move(
-                Some(&sec.root_element), [x, y],
+                Some(&sec.root_element),
+                [x, y],
                 [size.width as f32 / scale, size.height as f32 / scale],
                 crate::utils::drag::runtime::MoveMode::Follow,
             );
             let product_move = crate::utils::drag::routing::prepare_move(
-                (!overlay_dragging).then_some(&sec.root_element), x, y,
+                (!overlay_dragging).then_some(&sec.root_element),
+                x,
+                y,
             );
             (
                 x,
@@ -261,7 +289,8 @@ impl super::App {
         if button == MouseButton::Left {
             if element_state == ElementState::Released {
                 if let Some(drag) = self.scrollbar_drag.take() {
-                    let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(&drag.rest);
+                    let keys =
+                        crate::core::scroll_viewport::ScrollViewportSignalKeys::new(&drag.rest);
                     use_signal(&keys.hover_axis_x, || false).set_silent(false);
                     use_signal(&keys.hover_axis_y, || false).set_silent(false);
                     if let Some(sec) = self.secondaries.borrow().get(&id) {
@@ -630,7 +659,10 @@ impl super::App {
                                     .set(String::new());
                             }
                         } else if self.secondaries.borrow().get(&id).is_some_and(|state| {
-                            crate::authoring::focus::blur_on_outside_press(&state.root_element, &focused)
+                            crate::authoring::focus::blur_on_outside_press(
+                                &state.root_element,
+                                &focused,
+                            )
                         }) {
                             let keep = {
                                 let secs = self.secondaries.borrow();
@@ -722,9 +754,11 @@ impl super::App {
                         &mut pev,
                         super::pointer_events::PointerKind::Up,
                     );
-                    let drag_end = self.secondaries.borrow().get(&id).map(|sec| {
-                        crate::utils::drag::runtime::prepare_end(&sec.root_element)
-                    });
+                    let drag_end = self
+                        .secondaries
+                        .borrow()
+                        .get(&id)
+                        .map(|sec| crate::utils::drag::runtime::prepare_end(&sec.root_element));
                     let ended_drag = drag_end.is_some_and(|work| work.dispatch());
                     crate::utils::drag::routing::finish_all();
                     crate::utils::drag::pointer::clear();
@@ -793,43 +827,89 @@ impl super::App {
     fn begin_secondary_scrollbar_drag(&mut self, id: WindowId, x: f32, y: f32) -> bool {
         let (drag, is_thumb) = {
             let windows = self.secondaries.borrow();
-            let Some(window) = windows.get(&id) else { return false };
-            let Some(focus) = super::tree_hit::find_focus_id_at(&window.root_element, x, y, [0.0; 2])
-                else { return false };
-            let Some((rest, axis, is_thumb)) = super::scroll_support::parse_scrollbar_focus_id(&focus)
-                else { return false };
-            let Some((_, maximum, _)) = window.scroll_metrics_cache.get(&rest)
-                else { return false };
-            let index = if axis == super::scroll_support::ScrollAxis::X { 0 } else { 1 };
-            let Some((track, thumb)) = super::scroll_support::scrollbar_drag_bounds(&window.root_element, &rest, axis)
-                else { return false };
+            let Some(window) = windows.get(&id) else {
+                return false;
+            };
+            let Some(focus) =
+                super::tree_hit::find_focus_id_at(&window.root_element, x, y, [0.0; 2])
+            else {
+                return false;
+            };
+            let Some((rest, axis, is_thumb)) =
+                super::scroll_support::parse_scrollbar_focus_id(&focus)
+            else {
+                return false;
+            };
+            let Some((_, maximum, _)) = window.scroll_metrics_cache.get(&rest) else {
+                return false;
+            };
+            let index = if axis == super::scroll_support::ScrollAxis::X {
+                0
+            } else {
+                1
+            };
+            let Some((track, thumb)) =
+                super::scroll_support::scrollbar_drag_bounds(&window.root_element, &rest, axis)
+            else {
+                return false;
+            };
             let pointer = if index == 0 { x } else { y };
-            (super::scroll_support::ScrollbarDragState {
-                rest, axis,
-                track_start: track[index],
-                track_len: track[index + 2],
-                thumb_len: thumb[index + 2],
-                max_offset: maximum[index],
-                grab_offset: if is_thumb {
-                    (pointer - thumb[index]).clamp(0.0, thumb[index + 2])
-                } else { thumb[index + 2] * 0.5 },
-            }, is_thumb)
+            (
+                super::scroll_support::ScrollbarDragState {
+                    rest,
+                    axis,
+                    track_start: track[index],
+                    track_len: track[index + 2],
+                    thumb_len: thumb[index + 2],
+                    max_offset: maximum[index],
+                    grab_offset: if is_thumb {
+                        (pointer - thumb[index]).clamp(0.0, thumb[index + 2])
+                    } else {
+                        thumb[index + 2] * 0.5
+                    },
+                },
+                is_thumb,
+            )
         };
         let keys = crate::core::scroll_viewport::ScrollViewportSignalKeys::new(&drag.rest);
-        let pointer = if drag.axis == super::scroll_support::ScrollAxis::X { x } else { y };
+        let pointer = if drag.axis == super::scroll_support::ScrollAxis::X {
+            x
+        } else {
+            y
+        };
         let target = ((pointer - drag.track_start - drag.grab_offset)
-            / (drag.track_len - drag.thumb_len).max(1.0)).clamp(0.0, 1.0) * drag.max_offset;
-        let mut offset = [use_signal(&keys.offset_x, || 0.0_f32).peek(),
-            use_signal(&keys.offset_y, || 0.0_f32).peek()];
+            / (drag.track_len - drag.thumb_len).max(1.0))
+        .clamp(0.0, 1.0)
+            * drag.max_offset;
+        let mut offset = [
+            use_signal(&keys.offset_x, || 0.0_f32).peek(),
+            use_signal(&keys.offset_y, || 0.0_f32).peek(),
+        ];
         let horizontal = drag.axis == super::scroll_support::ScrollAxis::X;
         offset[if horizontal { 0 } else { 1 }] = target;
-        use_signal(if horizontal { &keys.hover_axis_x } else { &keys.hover_axis_y }, || false).set_silent(true);
-        let behavior = use_signal(&keys.behavior,
-            || crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()).peek();
-        super::scroll_support::set_scroll_offset_with_behavior(&drag.rest, offset[0], offset[1],
-            is_thumb || crate::core::scroll_viewport::scroll_behavior_is_jump(&behavior));
+        use_signal(
+            if horizontal {
+                &keys.hover_axis_x
+            } else {
+                &keys.hover_axis_y
+            },
+            || false,
+        )
+        .set_silent(true);
+        let behavior = use_signal(&keys.behavior, || {
+            crate::core::scroll_viewport::DEFAULT_SCROLL_BEHAVIOR.to_string()
+        })
+        .peek();
+        super::scroll_support::set_scroll_offset_with_behavior(
+            &drag.rest,
+            offset[0],
+            offset[1],
+            is_thumb || crate::core::scroll_viewport::scroll_behavior_is_jump(&behavior),
+        );
         self.click_press_path = None;
-        if is_thumb { self.scrollbar_drag = Some(drag); }
+        if is_thumb {
+            self.scrollbar_drag = Some(drag);
+        }
         if let Some(window) = self.secondaries.borrow().get(&id) {
             window.window.request_redraw();
         }
@@ -868,7 +948,8 @@ impl super::App {
             let current_x = use_signal(&keys.target_x, || 0.0_f32).peek();
             let current_y = use_signal(&keys.target_y, || 0.0_f32).peek();
             if ((current_x - dx).clamp(0.0, *max_x) - current_x).abs() > 0.01
-                || ((current_y - dy).clamp(0.0, *max_y) - current_y).abs() > 0.01 {
+                || ((current_y - dy).clamp(0.0, *max_y) - current_y).abs() > 0.01
+            {
                 super::scroll_support::apply_scroll_navigation_delta(&rest, dx, dy, *max_x, *max_y);
                 scrolled = true;
                 break;

@@ -4,8 +4,8 @@
 //! distinct Dx11 identity, serialized commands, SM5 resources and DXGI surfaces.
 //! Compute, depth/stencil, MSAA and advanced binding types are not implemented.
 
-mod resources;
 mod backend;
+mod resources;
 pub use backend::{Api, Instance};
 pub use resources::{RenderPipeline, RenderTarget, UniformBuffer};
 

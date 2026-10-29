@@ -1,6 +1,6 @@
 # Change Log
 
-For changelogs after v0.14, see [the wgpu changelog](../CHANGELOG.md).
+For changelogs after v0.14, see [the wgpu changelog](https://github.com/gfx-rs/wgpu/blob/trunk/CHANGELOG.md).
 
 ## v0.14 (2023-10-25)
 

@@ -151,6 +151,7 @@ impl<'a> Parser<'a> {
                 None
             }
             _ => {
+                let start = self.i;
                 while self.peek().is_some_and(|value| {
                     !value.is_ascii_whitespace()
                         && value != b'>'
@@ -158,7 +159,9 @@ impl<'a> Parser<'a> {
                 }) {
                     self.i += 1;
                 }
-                None
+                jadix_hot_reload::syntax::numeric_attribute_literal(
+                    std::str::from_utf8(&self.src[start..self.i]).ok()?,
+                )
             }
         }
     }
@@ -357,6 +360,9 @@ fn dfs_collect_styles(node: &Node, out: &mut Vec<super::StyleAttr>, element_idx:
             let cur_idx = *element_idx;
             *element_idx += 1;
             for (k, v) in &el.attrs {
+                if !jadix_hot_reload::is_live_attribute(k) {
+                    continue;
+                }
                 out.push(super::StyleAttr {
                     element_index: cur_idx,
                     name: k.clone(),
@@ -374,49 +380,5 @@ fn dfs_collect_styles(node: &Node, out: &mut Vec<super::StyleAttr>, element_idx:
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn icon_inserts_glyph_between_button_labels() {
-        let body = r#"<HStack><Button variant="outline">"LG"</Button><Button><Icon name="star" color="primary-foreground" size="0.75rem" /></Button><Button>"Leading"</Button></HStack>"#;
-        let v = extract_text_literals_tree_order(body);
-        let star = icon_glyph_char("star").unwrap();
-        assert_eq!(v, vec!["LG".to_string(), star, "Leading".to_string()]);
-    }
-
-    /// 源码顺序：先 `<Icon/>` 再 `"Suffix"` → 与 `Button::content_slots` 一致 [glyph, Suffix]。
-    #[test]
-    fn text_after_icon_matches_runtime_dfs_order() {
-        let body = r#"<Button><Icon name="heart" />"Suffix"</Button>"#;
-        let v = extract_text_literals_tree_order(body);
-        let heart = icon_glyph_char("heart").unwrap();
-        assert_eq!(v, vec![heart, "Suffix".to_string()]);
-    }
-
-    /// 源码顺序：先 `"Prefix"` 再 `<Icon/>` → [Prefix, glyph]。
-    #[test]
-    fn text_before_icon_matches_runtime_dfs_order() {
-        let body = r#"<Button>"Prefix"<Icon name="star" /></Button>"#;
-        let v = extract_text_literals_tree_order(body);
-        let star = icon_glyph_char("star").unwrap();
-        assert_eq!(v, vec!["Prefix".to_string(), star]);
-    }
-
-    #[test]
-    fn scroll_area_label_text_size_is_element_index_two() {
-        let body = r#"<ScrollArea id="scroll-navigation"><VStack><Label text_size="1.25rem" font_weight="700">"导航"</Label></VStack></ScrollArea>"#;
-        let attrs = extract_style_attributes_tree_order(body);
-        let size = attrs
-            .iter()
-            .find(|a| a.name == "text_size")
-            .expect("text_size");
-        assert_eq!(size.element_index, 2);
-        assert_eq!(size.value, "1.25rem");
-        let weight = attrs
-            .iter()
-            .find(|a| a.name == "font_weight")
-            .expect("font_weight");
-        assert_eq!(weight.element_index, 2);
-    }
-}
+#[path = "tests/rsx_text_order.rs"]
+mod tests;

@@ -17,8 +17,8 @@ use crate::style::{
 use crate::style::{
     parse_filter, set_css_transition_timeline_ms, set_css_transition_virtual_timeline,
     tick_element_animations_ex, tick_element_transitions, tick_element_transitions_with_text,
-    AnimatableValue, AnimationEntry, AnimationLock, ClipCoord, ClipPath, FilterFunction, FilterList,
-    TransitionEntry, TransitionSnapshot, UsedLayout,
+    AnimatableValue, AnimationEntry, AnimationLock, ClipCoord, ClipPath, FilterFunction,
+    FilterList, TransitionEntry, TransitionSnapshot, UsedLayout,
 };
 
 #[cfg(feature = "animation-base")]

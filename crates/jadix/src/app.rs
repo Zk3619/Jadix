@@ -16,7 +16,9 @@ pub(super) enum JadixUserEvent {
         builder: SecondaryUiBuilder,
     },
     /// Close a window through the lifecycle policy (custom chrome Close).
-    CloseWindow { id: WindowId },
+    CloseWindow {
+        id: WindowId,
+    },
     SecondInstance(instance::InstanceLaunch),
     #[cfg(feature = "a11y")]
     AccessKit(crate::a11y::winit_adapter::Event),
@@ -65,25 +67,31 @@ pub use ime_support::{
     prepare_compose_anchor, take_last_ime_commit, take_last_ime_cursor_snapshot, ImeCursorSnapshot,
 };
 #[cfg(all(test, windows, feature = "native-menu"))]
+#[path = "app/tests/desktop_contract_tests.rs"]
 mod desktop_contract_tests;
 pub mod entry;
-pub mod instance;
 mod error_boundary;
 mod frame_pacing;
 mod glass_gpu;
-mod input_controller;
 pub mod icons;
+mod input_controller;
+pub mod instance;
 pub mod invalidation;
 pub mod keyed_list;
 mod lifecycle;
 #[cfg(any(
-    all(feature = "system-tray", any(windows, target_os = "macos", target_os = "linux")),
+    all(
+        feature = "system-tray",
+        any(windows, target_os = "macos", target_os = "linux")
+    ),
     all(feature = "native-menu", any(windows, target_os = "macos"))
 ))]
 mod menu_events;
 pub mod multi_window;
 pub mod window_session;
 pub use window_session::{WindowClosed, WindowSession};
+#[cfg(debug_assertions)]
+mod hot_reload_assets;
 pub mod native_menu;
 pub mod navigator;
 pub mod pending_images;
@@ -103,19 +111,33 @@ pub(crate) use state::{
     hoist_portal_subtrees_refreshing_scroll_flags, recompute_scroll_viewport_flags,
     update_scrollbar_elements_for_test, ScrollbarUpdateMode,
 };
+#[cfg(all(test, windows))]
+#[path = "app/tests/desktop_window_tests.rs"]
+mod desktop_window_tests;
 #[cfg(all(debug_assertions, feature = "devtools"))]
 pub mod devtools;
 pub(crate) mod glass_params;
+#[cfg(all(
+    test,
+    windows,
+    debug_assertions,
+    feature = "images",
+    any(feature = "devtools", feature = "hot-reload")
+))]
+#[path = "app/tests/native_acceptance/native_acceptance_tests.rs"]
+mod native_acceptance_tests;
+#[cfg(all(test, windows))]
+#[path = "app/tests/native_cost_tests.rs"]
+mod native_cost_tests;
+pub mod tasks;
 #[cfg(test)]
+#[path = "app/tests/support.rs"]
 pub(crate) mod test_support;
 pub mod tray;
 pub(crate) mod tree_hit;
-pub mod tasks;
 pub mod ui_bridge;
 pub(crate) mod window_chrome;
 mod window_events;
-#[cfg(all(test, windows))]
-mod desktop_window_tests;
 pub mod window_keys;
 pub(crate) mod window_lifecycle;
 pub(crate) mod window_scope;
@@ -137,13 +159,13 @@ pub use resource::{
     create_async_resource, create_resource, create_resource_on, suspense, Resource, ResourceState,
 };
 pub use router::Router;
-pub use tray::{system_tray_native, tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};
 pub use tasks::TaskScope;
+pub use tray::{system_tray_native, tray_icon, TrayIcon, TrayIconBuilder, TrayMenuItem};
 pub use ui_bridge::{request_exit, run_on_ui_thread, spawn_blocking};
 pub use window_chrome::{
-    close_window, set_window_fullscreen, set_window_maximized, set_window_minimized, start_window_drag,
-    toggle_window_fullscreen, toggle_window_maximized, window_is_fullscreen, window_is_maximized,
-    window_is_resizable, WindowBackdrop, WindowOptions, PRIMARY_WINDOW_LABEL,
+    close_window, set_window_fullscreen, set_window_maximized, set_window_minimized,
+    start_window_drag, toggle_window_fullscreen, toggle_window_maximized, window_is_fullscreen,
+    window_is_maximized, window_is_resizable, WindowBackdrop, WindowOptions, PRIMARY_WINDOW_LABEL,
 };
 pub use window_lifecycle::{set_window_lifecycle_hook, WindowLifecycleHook};
 

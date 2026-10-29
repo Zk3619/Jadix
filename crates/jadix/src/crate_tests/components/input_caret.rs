@@ -4,7 +4,6 @@
 use crate::components::input::{
     focus_id_for_input, input, input_selection_signal_key, input_value_signal_key,
 };
-use crate::utils::text_edit::sync_text_edit_paint_subtree;
 use crate::components::label::sync_label_selection_paint_subtree;
 use crate::components::textarea::textarea;
 use crate::core::reactivity::use_signal;
@@ -13,6 +12,7 @@ use crate::layout::layout_tree::LayoutTree;
 use crate::renderer::font_loader;
 use crate::style::{parse_text_color, InputCaretDraw};
 use crate::text::install_shared_font_system;
+use crate::utils::text_edit::sync_text_edit_paint_subtree;
 use crate::utils::text_field::focus_id_for_text_edit;
 
 /// Live frame order: class variants → text_edit paint → `sync_label_selection`.
@@ -125,7 +125,11 @@ fn ime_commit_with_unchanged_text_repairs_entire_preedit_run() {
         input_preedit_signal_key,
     };
     for multiline in [false, true] {
-        let id = if multiline { "ime-commit-ta" } else { "ime-commit-input" };
+        let id = if multiline {
+            "ime-commit-ta"
+        } else {
+            "ime-commit-input"
+        };
         use_signal("__jadix_button_focus_id", String::new)
             .set(focus_id_for_text_edit(id, multiline));
         let value = use_signal(&input_value_signal_key(id), String::new);
@@ -136,14 +140,24 @@ fn ime_commit_with_unchanged_text_repairs_entire_preedit_run() {
         let cursor = use_signal(&input_preedit_sel_signal_key(id), || None::<(usize, usize)>);
         preedit.set("Thus".into());
         cursor.set(Some((4, 4)));
-        let field: Element = if multiline { textarea(id).into() } else { input(id).into() };
+        let field: Element = if multiline {
+            textarea(id).into()
+        } else {
+            input(id).into()
+        };
         let mut root = Element::new().w(400.0).h(160.0).child(field);
         let mut tree = LayoutTree::new();
         tree.build_and_layout(&mut root, 400.0, 160.0, [-1.0, -1.0]);
         sync_paint_like_app(&mut root, &mut tree, &mut LayoutStatus::Clean);
         let leaf = find_caret_leaf(&root).unwrap();
         assert_eq!(leaf.text.as_deref(), Some("Thus"));
-        assert!(leaf.text_style.input_caret.as_ref().unwrap().preedit_underline.is_some());
+        assert!(leaf
+            .text_style
+            .input_caret
+            .as_ref()
+            .unwrap()
+            .preedit_underline
+            .is_some());
         let key = crate::app::damage::paint_element_key(leaf);
         crate::app::damage::take_frame_paint_nodes();
         value.set("Thus".into());
@@ -152,10 +166,20 @@ fn ime_commit_with_unchanged_text_repairs_entire_preedit_run() {
         sync_paint_like_app(&mut root, &mut tree, &mut LayoutStatus::Clean);
         let leaf = find_caret_leaf(&root).unwrap();
         assert_eq!(leaf.text.as_deref(), Some("Thus"));
-        assert!(leaf.text_style.input_caret.as_ref().unwrap().preedit_underline.is_none());
-        assert!(crate::app::damage::take_frame_paint_nodes().iter().any(|dirty|
-            dirty.key == key && dirty.kind == crate::app::damage::PaintDirtyKind::Region),
-            "committing identical display text must erase retained underline ink");
+        assert!(leaf
+            .text_style
+            .input_caret
+            .as_ref()
+            .unwrap()
+            .preedit_underline
+            .is_none());
+        assert!(
+            crate::app::damage::take_frame_paint_nodes()
+                .iter()
+                .any(|dirty| dirty.key == key
+                    && dirty.kind == crate::app::damage::PaintDirtyKind::Region),
+            "committing identical display text must erase retained underline ink"
+        );
     }
 }
 

@@ -24,9 +24,11 @@ pub fn scroll_by(viewport: &str, dx: f32, dy: f32) {
     }
     let keys = ScrollViewportSignalKeys::new(viewport);
     let max_x = (use_signal(keys.content_w.as_str(), || 0.0_f32).peek()
-        - use_signal(keys.viewport_w.as_str(), || 0.0_f32).peek()).max(0.0);
+        - use_signal(keys.viewport_w.as_str(), || 0.0_f32).peek())
+    .max(0.0);
     let max_y = (use_signal(keys.content_h.as_str(), || 0.0_f32).peek()
-        - use_signal(keys.viewport_h.as_str(), || 0.0_f32).peek()).max(0.0);
+        - use_signal(keys.viewport_h.as_str(), || 0.0_f32).peek())
+    .max(0.0);
     crate::app::scroll_support::apply_scroll_navigation_delta(viewport, -dx, -dy, max_x, max_y);
     crate::app::runtime::request_redraw_all();
 }
@@ -70,21 +72,5 @@ pub(crate) fn forget(scope: WindowScope) {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn scrolling_state_is_scoped_and_cleared_with_the_window() {
-        let _primary = window_scope::enter_primary();
-        set_geometry_changing(true);
-        {
-            let _secondary = window_scope::enter(WindowScope::Secondary(712));
-            assert!(!geometry_changing());
-            set_geometry_changing(true);
-            forget(WindowScope::Secondary(712));
-            assert!(!geometry_changing());
-        }
-        assert!(geometry_changing());
-        set_geometry_changing(false);
-    }
-}
+#[path = "tests/input.rs"]
+mod tests;

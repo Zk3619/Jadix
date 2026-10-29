@@ -183,14 +183,6 @@ unmounted-document editing/search, rich-style history and large-code viewport
 behavior. Native window/IME accessibility acceptance should also be performed
 on each supported platform; headless structural tests do not replace it.
 
-Windows/DX12 smoke captures verified the rendered document, clicked-line source
-reveal, Preview/Source switching, formula/chemistry images and molecular canvas.
-IME regression tests exercise committed/preedit stores and document history;
-they do not certify an operating-system IME candidate-window session. Mixed
+Native acceptance must cover rendered documents, source reveal, Preview/Source switching, formula/chemistry images, molecular canvas and an operating-system IME session. Mixed
 text/object inline layout currently wraps between runs; full typographic inline
 flow and cross-block preview selection remain follow-up work.
-
-## Development follow-ups
-
-Future model and pagination directions are maintained in [the development notes](../../development-docs/engine/document-model-followups.md).
-These are design directions, not currently available component APIs.

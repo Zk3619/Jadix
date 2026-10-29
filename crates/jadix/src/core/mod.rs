@@ -6,6 +6,8 @@
 //! building blocks belong in `primitives`.
 
 pub mod geometry;
+#[cfg(debug_assertions)]
+pub mod hot_reload;
 pub mod reactivity;
 pub(crate) mod registry_stats;
 pub mod resource;

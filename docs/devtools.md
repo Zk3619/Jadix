@@ -16,11 +16,11 @@ Gallery 的 debug 构建默认启用 `devtools`、`hot-reload`。Release 构建�
 
 在仓库根目录分别运行 `cargo run -p gallery` 与 `cargo run -p jadix_hot_reload_cli -- .`。监听器和 Gallery 的 `JADIX_HOT_RELOAD_ADDR` 必须一致。
 
-静态 UI 文本及受支持的静态样式变更可即时注入；Rust 逻辑、结构性或不支持的模板修改仍需重新构建，不承诺任意 Rust 代码热替换。Changes 显示更新和注入结果。
+静态文字、受支持的属性增改删、class、动画参数及已登记有限结构可在 UI 安全点提交；Rust 执行逻辑、新捕获、未编译类型与未知结构要求重新构建。Changes 显示实际版本事务与提交结果，不把 TCP 发送成功作为 UI 已更新。
 
-当前已规划但尚未实现的扩展见 [静态 ui! 热重载设计与实施计划](../development-docs/plans/static-ui-hot-reload.md)：扩大属性增删、class、动画及有限组件结构的热更范围；已编译能力不足或 Rust 表达式／闭包变化仍需重建。该方案纳入当前 HR0–HR6，不能把目标矩阵当作现有支持列表。
 
-2026-10-24 已把 DevTools 的“核心独立于宏”设计同步纳入 HR0–HR6：普通 Element／Builder 即使不用 ui!／未来 uix!、未登记热更描述也应能检查树、拾取和样式／布局；来源可选，热更能力按实际登记启用。稳定节点身份、选中／折叠与提交 ACK 联动，以及静态 ui! 安全热更范围贯穿 Sources／树／Styles／Changes，本轮均只设计，随热重载变更实施，不能当作当前新能力。DevTools 自身目前以 Element／Builder 组装；后续拆 crate 时不依赖产品组件库，也不要求应用使用某个宏。
+
+Inspector 已独立于 UI 宏：普通 Element／Builder 未登记热更描述也可检查树、拾取及样式/布局；缺来源明确不可用，只有实际登记才能授予模板更新能力。选择、hover、折叠和 CSS Apply 绑定运行时实例，提交 ACK 同步刷新路径，移除目标不会串到相似邻居。DevTools chrome 使用 Element／Builder，不依赖产品组件库，也不要求应用使用某个宏；未来 uix! 仅保留适配契约。
 
 
 该方案的核心通过普通描述与登记接口接收更新，`ui!` 是当前优先改造的作者入口。宏不是热重载前提；无宏登记也不能让修改后的任意 Rust 函数体自动生效，Builder 源码热更范围未因此扩大。
@@ -29,9 +29,13 @@ Apply CSS 只编辑运行中的树，不写磁盘。Sources 默认只读，需�
 
 Styles 的 `element.style` 初始列表展示当前节点与框架基线不同的本地运行时属性，包含组件默认样式，但不是源码声明的逐字还原。继承的文字属性不会冒充本地声明；“继承的文字样式（只读）”单独列出祖先路径及属性值，Computed 展示最终解析值（含字体、字号、字重）。通过检查器显式提交的声明（包括默认值覆盖）及未提交草稿保持不变。
 
+对齐属性的编辑框使用 CSS 值（如 `center`、`flex-start`、`space-between`、`safe center`），不会显示 `AlignContent { keyword: ..., safety: ... }` 等 Rust 调试结构。支持 `justify-content`、`align-content`、`align-items`、`align-self`、`justify-items`、`justify-self`；其中 `align-self` 和 `justify-self` 可用 `auto` 恢复父容器决定的对齐。单行对号与声明文本的 Apply CSS 使用同一解析和提交路径；不支持的对齐值会在 Styles 区域及 Changes 提示，拒绝本次提交并保留编辑草稿；改为受支持的值后再次提交，提示会清除。
+
+当前布局后端未提供物理方向 `left` / `right` 对齐关键字；要沿当前轴靠起点或终点排列，请用 `flex-start` / `flex-end`。`justify-content` 控制容器内子项的主轴分布，`align-items` 控制交叉轴对齐；它们不会移动容器自身。内容恰好填满容器时，对齐变化可能没有可见位移：验收时选有空余空间的容器，或先增大其 `width` / `height`。
+
 元素树中的 `<text>` 是含文字的底层 Element 的显示名称，不代表单独公开的 Text 组件，也不保证它是叶节点。`<Label>` 是带 14px / 500 字重及 foreground 颜色等默认值的产品组件；这些本地默认值可能覆盖父级对应的文字属性。未显式指定的文字属性从父级继承；组件内嵌文字也可能由组件直接设置字号、颜色等，因此不能仅凭 `<text>` 标签判断样式来源。布局、背景、边框等属性不因为容器嵌套而自动继承。
 
-CSSOM 覆盖先绑定运行时实例；重建后只在存在唯一且一致的模板／focus／源码身份时重新绑定，允许节点路径移动。匿名节点重建、身份重复或目标消失时丢弃覆盖，不把它套给同一路径的另一个节点。提交按钮也校验实例，过期面板的编辑不会误写新节点。此安全匹配不是任意结构修改下的通用源码定位保证。
+CSSOM 覆盖绑定框架分配的运行时实例。兼容协调且已登记节点类型、业务身份一致时保留实例；结构移动后按实例重新解析路径。匿名重建、类型替换、身份重复或目标消失使旧覆盖失效，保留编辑草稿，不选择邻近源码或相同尺寸的节点。提交按钮也校验实例；跨窗口相同路径不是同一目标。热更 ACK 的节点变更映射同时供树选择和 Changes 使用。
 
 例如在 Styles 中应用 `color: #ff0000;` 只改变目标 Element 的运行时文字颜色，不会自动生成 `.text_color(...)`，也不会改写 `<Label color="...">`、组件默认值或 `styles.toml`。只有在 Sources 中显式修改并保存 Rust 文件，磁盘源码才会改变；随后由监听器判断能否热更，否则需重建。
 
@@ -65,7 +69,11 @@ Gallery「导航 / 窗口」第一张卡片验证启动参数、双向消息和�
 
 `cargo run -p jadix_hot_reload_cli -- --run -- cargo run -p gallery`
 
-托管器对 Rust token 结构分类：支持的静态 UI 文本、直接样式、animation/transition 属性走实时补丁；Rust 逻辑、动态表达式、组件结构/非样式属性、class 列表、Cargo.toml/Cargo.lock 变化停止它自己启动的进程树，再运行命令。class 列表按重建处理，避免删除类名后旧样式残留。编译失败保留错误输出，后续修改可重新触发。仅 `--run` 或 TOML 的 `run` 托管模式才拥有停止它所启动进程的能力。动画 keyframes/复杂程序化动画或其他未支持变更仍需 Rust 重建，不承诺任意 Rust 逻辑热替换。
+托管器和 ui! 适配使用同一描述与能力签名。已登记的静态文本、支持的字面量属性增删、class 重算、animation/transition 参数和有限结构走版本化事务；属性删除恢复构造时声明基线。基础结构支持 Box、VStack、HStack、GStack、Text 及显式登记的无捕获工厂；不变 Rust 子树作为编译槽位移动，闭包不重复执行。新类型、未登记结构、改变闭包或捕获、Cargo.toml/Cargo.lock 仍要求重建。仅 `--run` 或 TOML 的 `run` 模式停止它启动的进程；非托管模式只报告需要手动重建。TCP 发送成功不代表已提交，Changes 展示 UI 安全点返回的 ACK。
+
+`.keyframes.css` 提供数据化动画定义热更：相同定义保留时钟，改变定义重启，删除恢复基线；普通 CSS 文件走 stylesheet 路径。WGSL 和缓存中的本地图片按资源专用事务更新，解析或解码失败保留旧资源。当前一个事务只更新一个资源，资源、stylesheet 和模板混合批次明确拒绝。未挂载模板的 `Deferred` 仅表示缓存，挂载后仍须通过编译能力校验，不表示已呈现。Portal 内登记节点可按实例更新；改变 Portal 宿主、任意动态 child 列表或根容器类型仍要求重建。
+
+纯 Builder 无来源／无登记也可使用 Inspector；来源栏显示不可用，不伪造 ui! 跳转。显式登记使用 `Element::hot_reload_description` 与 `jadix_hot_reload::TemplateDescription`，与 ui! 共用协议；声明基线和结构工厂需由作者明确提供。Debug 能力受编译门禁控制。验证需分别覆盖协议、真实文件保存到原生画面、状态保持及 Release 开销；单元或 TCP 成功不能替代原生窗口验证。
 
 
 ## TOML 监听配置

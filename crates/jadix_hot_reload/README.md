@@ -1,7 +1,34 @@
 # jadix_hot_reload
 
-Shared template/asset/stylesheet update protocol and TCP receiver, without a UI runtime dependency. The framework applies received commands only at its own safe points.
+[English](README.md) | [简体中文](README.zh.md)
 
-The watcher/sender remains in `jadix_hot_reload_cli`. Its RSX text-order analysis uses the Lucide catalog, so combining it with this receiver would produce a Cargo package dependency cycle through the optional Lucide UI integration. The receiver does not depend on the CLI or the icon product.
+Framework-neutral hot-reload protocol and receiver.
 
-Install the crate, or copy `src` and reproduce the dependencies from `Cargo.toml` in an application-owned module/crate. The transport is intended for trusted local development, not an authenticated production service.
+Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; prepared version `0.1.0`, not yet published.** Local archives and manifests do not prove registry availability.
+
+## Installation
+
+After the prepared version is published:
+
+```toml
+[dependencies]
+jadix_hot_reload = "=0.1.0"
+```
+
+Before publication, use the source workspace. Consumers use one registry graph without copying private path/git/patch overrides. Platform-specific packages require the corresponding SDK.
+
+## Features and scope
+
+Default features: none. See [Cargo.toml](Cargo.toml) for the complete feature/dependency graph. A feature flag does not establish platform runtime validation. Applications normally select internal GPU/window packages through their facade rather than depending on platform internals.
+
+## Usage details
+
+The existing [package guide](GUIDE.md) retains additional API, platform and source details; it may use another language.
+
+## Documentation and contributions
+
+[Project documentation](https://github.com/Zk3619/Jadix/tree/main/docs) covers usage, migration, testing and releases. Preserve test discovery and keep private module tests separate from public integration contracts. Update both README languages when changing package setup.
+
+## License
+
+Apache-2.0. Preserve [LICENSE](LICENSE) and dependency notices.

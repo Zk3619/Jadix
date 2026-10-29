@@ -32,7 +32,11 @@ pub fn apply_stylesheet_rules(mut el: Element) -> Element {
     if !classes.is_empty() || !theme_classes.is_empty() {
         // Tree mounts reach slots after caller classes have been applied. Keep those
         // utilities last, including their hover/dark rules, instead of replacing them.
-        let caller = el.attrs.get("jadix_utility_class").cloned().unwrap_or_default();
+        let caller = el
+            .attrs
+            .get("jadix_utility_class")
+            .cloned()
+            .unwrap_or_default();
         el.set_attr("jadix_theme_class", theme_classes);
         el.set_attr("jadix_stylesheet_class", classes);
         el = with_class_list(el, &caller);

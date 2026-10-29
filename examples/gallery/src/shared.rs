@@ -193,49 +193,98 @@ fn performance_panel_stays_viewport_anchored_across_scroll_and_resize() {
     }
     jadix::core::reactivity::create_root(|| {
         let mut root = jadix::authoring::mount::with_inline_mount(|| {
-            Element::new().w("100%").h("100%").child(
-                scroll_area("performance-position-scroll").w("100%").h("100%")
-                    .child(Element::new().w("100%").h(1800.0)),
-            ).child(gallery_performance_panel())
+            Element::new()
+                .w("100%")
+                .h("100%")
+                .child(
+                    scroll_area("performance-position-scroll")
+                        .w("100%")
+                        .h("100%")
+                        .child(Element::new().w("100%").h(1800.0)),
+                )
+                .child(gallery_performance_panel())
         });
         let mut layout = jadix::layout::LayoutTree::new();
         layout.set_collect_skip_allowed(true);
         layout.build_and_layout(&mut root, 640.0, 600.0, [-1.0; 2]);
         for frame in 0..120 {
             if frame % 10 == 0 {
-                root.children.push(jadix::utils::keyed_overlay::viewport_portal_stage(
-                    &format!("hover-scroll-{frame}"),
-                    Element::new().w(240.0).h(100.0).absolute().left(200.0).top(200.0)
-                        .bg("red").text("HoverCard"),
-                    1000,
-                ));
+                root.children
+                    .push(jadix::utils::keyed_overlay::viewport_portal_stage(
+                        &format!("hover-scroll-{frame}"),
+                        Element::new()
+                            .w(240.0)
+                            .h(100.0)
+                            .absolute()
+                            .left(200.0)
+                            .top(200.0)
+                            .bg("red")
+                            .text("HoverCard"),
+                        1000,
+                    ));
             }
-            let [width, height] = [[640.0, 600.0], [800.0, 500.0], [360.0, 640.0]][(frame / 20) % 3];
-            use_signal(&jadix::core::scroll_viewport::scroll_offset_y_signal_key(
-                "performance-position-scroll"), || 0.0_f32).set_silent((frame * 37 % 900) as f32);
+            let [width, height] =
+                [[640.0, 600.0], [800.0, 500.0], [360.0, 640.0]][(frame / 20) % 3];
+            use_signal(
+                &jadix::core::scroll_viewport::scroll_offset_y_signal_key(
+                    "performance-position-scroll",
+                ),
+                || 0.0_f32,
+            )
+            .set_silent((frame * 37 % 900) as f32);
             jadix::layout::layout_tree::hoist_portal_subtrees(&mut root);
-            let scene = layout.build_and_layout_fast(&mut root, width, height, [-1.0; 2], frame % 3 != 0, true);
-            let panel = find(&root, "gal-perf-panel")
-                .expect("performance panel");
+            let scene = layout.build_and_layout_fast(
+                &mut root,
+                width,
+                height,
+                [-1.0; 2],
+                frame % 3 != 0,
+                true,
+            );
+            let panel = find(&root, "gal-perf-panel").expect("performance panel");
             let bounds = panel.viewport_layout_bounds();
-            assert!((width - bounds[0] - bounds[2] - 12.0).abs() < 1.0,
-                "performance right anchor moved at frame {frame}: {bounds:?}");
-            assert!((height - bounds[1] - bounds[3] - 12.0).abs() < 1.0,
-                "performance bottom anchor moved at frame {frame}: {bounds:?}");
+            assert!(
+                (width - bounds[0] - bounds[2] - 12.0).abs() < 1.0,
+                "performance right anchor moved at frame {frame}: {bounds:?}"
+            );
+            assert!(
+                (height - bounds[1] - bounds[3] - 12.0).abs() < 1.0,
+                "performance bottom anchor moved at frame {frame}: {bounds:?}"
+            );
             let button = find(&root, "gal-perf-toggle").unwrap();
             let button = button.viewport_layout_bounds();
-            assert!((button[0] + button[2] - bounds[0] - bounds[2]).abs() < 1.0,
-                "performance button detached at frame {frame}: {button:?} / {bounds:?}");
-            let label = scene.text_nodes.iter().find(|node| node.text == "性能 / FPS")
+            assert!(
+                (button[0] + button[2] - bounds[0] - bounds[2]).abs() < 1.0,
+                "performance button detached at frame {frame}: {button:?} / {bounds:?}"
+            );
+            let label = scene
+                .text_nodes
+                .iter()
+                .find(|node| node.text == "性能 / FPS")
                 .expect("performance toggle paint");
-            assert!(label.x >= button[0] && label.x < button[0] + button[2]
-                && label.y >= button[1] && label.y < button[1] + button[3],
-                "performance toggle paint detached at {frame}: {}, {} / {button:?}", label.x, label.y);
-            let resources = scene.text_nodes.iter().find(|node| node.text == "Measuring…")
+            assert!(
+                label.x >= button[0]
+                    && label.x < button[0] + button[2]
+                    && label.y >= button[1]
+                    && label.y < button[1] + button[3],
+                "performance toggle paint detached at {frame}: {}, {} / {button:?}",
+                label.x,
+                label.y
+            );
+            let resources = scene
+                .text_nodes
+                .iter()
+                .find(|node| node.text == "Measuring…")
                 .expect("performance resources paint");
-            assert!(resources.x >= bounds[0] && resources.x < bounds[0] + bounds[2]
-                && resources.y >= bounds[1] && resources.y < bounds[1] + bounds[3],
-                "performance resources paint detached at {frame}: {}, {} / {bounds:?}", resources.x, resources.y);
+            assert!(
+                resources.x >= bounds[0]
+                    && resources.x < bounds[0] + bounds[2]
+                    && resources.y >= bounds[1]
+                    && resources.y < bounds[1] + bounds[3],
+                "performance resources paint detached at {frame}: {}, {} / {bounds:?}",
+                resources.x,
+                resources.y
+            );
         }
     });
 }
@@ -245,21 +294,35 @@ fn performance_panel_stays_viewport_anchored_across_scroll_and_resize() {
 fn performance_panel_fits_every_resource_line() {
     jadix::core::reactivity::create_root(|| {
         let text = "窗口呈现请求 67.0 FPS · 67 次/1.00s\n页面呈现 65.0 FPS · 65 次\n渲染调用 1.5 ms · 布局 0.4 · 文本 0.2\n进程 PID 25436 · 资源采样 0.50s\nCPU 进程 0.4% / 32 逻辑核\nCPU UI 线程 12.5% / 单核 · 进程 0.12 核\nGPU 进程 引擎峰值 14.2%\nGPU 进程 专用 0 · 共享 125 MiB\n内存 进程 工作集 236 · 私有 210 MiB";
-        let mut root = Element::new().flex_col().w(640.0).h(600.0)
-            .child(GalleryPerformanceResources(GalleryPerformanceResourcesProps {
-                text: Some(Signal::new(text.to_string())),
-                ..Default::default()
-            }));
+        let mut root =
+            Element::new()
+                .flex_col()
+                .w(640.0)
+                .h(600.0)
+                .child(GalleryPerformanceResources(
+                    GalleryPerformanceResourcesProps {
+                        text: Some(Signal::new(text.to_string())),
+                        ..Default::default()
+                    },
+                ));
         let mut layout = jadix::core::tree::LayoutTree::new();
         let scene = layout.build_and_layout(&mut root, 640.0, 600.0, [-1.0; 2]);
-        let label = scene.text_nodes.iter().find(|node| node.text.starts_with("窗口呈现请求"))
+        let label = scene
+            .text_nodes
+            .iter()
+            .find(|node| node.text.starts_with("窗口呈现请求"))
             .expect("performance resource label");
-        assert!(label.height >= text.lines().count() as f32 * 18.0,
-            "performance label clips its last line: height={}", label.height);
+        assert!(
+            label.height >= text.lines().count() as f32 * 18.0,
+            "performance label clips its last line: height={}",
+            label.height
+        );
         let panel = root.children[0].layout_bounds;
-        assert!(label.y + label.height <= panel[1] + panel[3] - 8.0 + 0.5,
+        assert!(
+            label.y + label.height <= panel[1] + panel[3] - 8.0 + 0.5,
             "performance resource text overflows its panel: bottom={}, panel={panel:?}",
-            label.y + label.height);
+            label.y + label.height
+        );
     });
 }
 
@@ -271,7 +334,9 @@ fn performance_resources_subscribe_without_rebuilding_the_panel() {
     use std::rc::Rc;
 
     create_root(|| {
-        let text = use_signal("performance-resource-binding-regression", || "Measuring…".to_string());
+        let text = use_signal("performance-resource-binding-regression", || {
+            "Measuring…".to_string()
+        });
         let panel = Rc::new(RefCell::new(None));
         let builds = Rc::new(Cell::new(0));
         create_effect({
@@ -279,21 +344,34 @@ fn performance_resources_subscribe_without_rebuilding_the_panel() {
             let builds = builds.clone();
             move || {
                 builds.set(builds.get() + 1);
-                *panel.borrow_mut() = Some(GalleryPerformanceResources(GalleryPerformanceResourcesProps {
-                    text: Some(text),
-                    ..Default::default()
-                }));
+                *panel.borrow_mut() = Some(GalleryPerformanceResources(
+                    GalleryPerformanceResourcesProps {
+                        text: Some(text),
+                        ..Default::default()
+                    },
+                ));
             }
         });
         for sample in ["CPU 1.0%", "CPU 2.0%\nGPU 3.0%"] {
             text.set(sample.to_string());
             let graph = reactivity_debug_snapshot();
-            let signal = graph.named_signal_entries.iter()
-                .find(|entry| entry.key == "performance-resource-binding-regression").unwrap();
-            assert!(graph.signal_effect_edges.iter().any(|edge|
-                edge.signal_id == signal.signal_id && !edge.effect_ids.is_empty()),
-                "the performance label must subscribe to live samples, not a String snapshot");
-            assert_eq!(builds.get(), 1, "sampling must not rebuild the panel or page animations");
+            let signal = graph
+                .named_signal_entries
+                .iter()
+                .find(|entry| entry.key == "performance-resource-binding-regression")
+                .unwrap();
+            assert!(
+                graph
+                    .signal_effect_edges
+                    .iter()
+                    .any(|edge| edge.signal_id == signal.signal_id && !edge.effect_ids.is_empty()),
+                "the performance label must subscribe to live samples, not a String snapshot"
+            );
+            assert_eq!(
+                builds.get(),
+                1,
+                "sampling must not rebuild the panel or page animations"
+            );
         }
     });
 }

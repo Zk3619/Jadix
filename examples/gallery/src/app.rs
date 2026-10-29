@@ -428,7 +428,8 @@ pub(crate) fn build_gallery_app() -> Element {
     navigation_host(navigator, move |route| match route {
         GalleryPageRoute::Gallery => build_gallery_home(),
         GalleryPageRoute::DockBrowser => dock_browser_page(page_nav.clone()),
-    }).into()
+    })
+    .into()
 }
 
 fn build_gallery_home() -> Element {

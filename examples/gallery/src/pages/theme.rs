@@ -7,9 +7,9 @@ use crate::shared::*;
 use jadix::prelude::{
     clear_stylesheets, clear_theme_overrides, get_theme, install_theme_overrides,
     load_and_install_theme_overrides, parse_stylesheet, parse_theme_overrides_str,
-    register_stylesheet, reload_stylesheets, set_theme_preset, theme_mode, theme_overrides,
-    theme_preset, theme_transition_config, toggle_theme_mode, set_theme_preference,
-    theme_preference, ThemeMode, ThemePreference, ThemePreset, ThemeStyles,
+    register_stylesheet, reload_stylesheets, set_theme_preference, set_theme_preset, theme_mode,
+    theme_overrides, theme_preference, theme_preset, theme_transition_config, toggle_theme_mode,
+    ThemeMode, ThemePreference, ThemePreset, ThemeStyles,
 };
 
 const THEME_TOML: &str = include_str!("../../theme.toml");
@@ -90,7 +90,11 @@ pub(crate) fn ThemeStyleShowcase() -> Element {
     .into_iter()
     .map(|(preference, name, title)| {
         button(format!("gal-theme-mode-{name}"))
-            .variant(if theme_preference() == preference { "secondary" } else { "outline" })
+            .variant(if theme_preference() == preference {
+                "secondary"
+            } else {
+                "outline"
+            })
             .size("sm")
             .text(title)
             .on_click(move || {
@@ -159,24 +163,56 @@ pub(crate) fn ThemeStyleShowcase() -> Element {
                 });
         })
     };
-    let blur = move || edit_styles(tick, |styles| {
-        let value = get_theme().styles.backdrop_blur.unwrap_or(0.0);
-        styles.backdrop_blur = Some(if value < 4.0 { 8.0 } else if value < 12.0 { 16.0 } else { 2.0 });
-    });
-    let thickness = move || edit_styles(tick, |styles| {
-        let mut glass = get_theme().styles.glass.unwrap_or_default();
-        glass.thickness = if glass.thickness < 12.0 { 16.0 } else if glass.thickness < 20.0 { 24.0 } else { 6.0 };
-        styles.glass = Some(glass);
-    });
-    let highlight = move || edit_styles(tick, |styles| {
-        let mut glass = get_theme().styles.glass.unwrap_or_default();
-        glass.highlight = if glass.highlight < 0.4 { 0.6 } else if glass.highlight < 0.8 { 1.0 } else { 0.0 };
-        styles.glass = Some(glass);
-    });
-    let opacity = move || edit_styles(tick, |styles| {
-        let value = get_theme().styles.surface_opacity.unwrap_or(1.0);
-        styles.surface_opacity = Some(if value < 0.4 { 0.6 } else if value < 0.8 { 1.0 } else { 0.25 });
-    });
+    let blur = move || {
+        edit_styles(tick, |styles| {
+            let value = get_theme().styles.backdrop_blur.unwrap_or(0.0);
+            styles.backdrop_blur = Some(if value < 4.0 {
+                8.0
+            } else if value < 12.0 {
+                16.0
+            } else {
+                2.0
+            });
+        })
+    };
+    let thickness = move || {
+        edit_styles(tick, |styles| {
+            let mut glass = get_theme().styles.glass.unwrap_or_default();
+            glass.thickness = if glass.thickness < 12.0 {
+                16.0
+            } else if glass.thickness < 20.0 {
+                24.0
+            } else {
+                6.0
+            };
+            styles.glass = Some(glass);
+        })
+    };
+    let highlight = move || {
+        edit_styles(tick, |styles| {
+            let mut glass = get_theme().styles.glass.unwrap_or_default();
+            glass.highlight = if glass.highlight < 0.4 {
+                0.6
+            } else if glass.highlight < 0.8 {
+                1.0
+            } else {
+                0.0
+            };
+            styles.glass = Some(glass);
+        })
+    };
+    let opacity = move || {
+        edit_styles(tick, |styles| {
+            let value = get_theme().styles.surface_opacity.unwrap_or(1.0);
+            styles.surface_opacity = Some(if value < 0.4 {
+                0.6
+            } else if value < 0.8 {
+                1.0
+            } else {
+                0.25
+            });
+        })
+    };
     let reset = move || edit_styles(tick, |styles| *styles = ThemeStyles::default());
 
     ui! {

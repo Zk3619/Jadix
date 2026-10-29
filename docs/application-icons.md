@@ -69,8 +69,8 @@ Gallery 已在启动时设置默认图标，并在“导航 → 系统托盘”�
 修改主图后，在仓库根目录重新生成并验证：
 
 ```sh
-python scripts/app-icons.py assets/app-icons.toml --output assets/icons
-python scripts/test-app-icons.py
+python scripts/assets/app-icons.py assets/app-icons.toml --output assets/icons
+python scripts/tests/test_app_icons.py
 ```
 
 Gallery 的主窗口、次级窗口、托盘及“Reset icon”共用生成的 `desktop/window.png`。
@@ -85,14 +85,14 @@ Android 与 iOS 的资源和清单合并片段也已生成；Gallery 尚无完�
 
 ### 其他应用的图标配置
 
-复制 `docs/app-icons.example.toml`，将 `source` 指向方形主图，建议至少 1024×1024 PNG。
+复制 `examples/config/app-icons.toml`，将 `source` 指向方形主图，建议至少 1024×1024 PNG。
 路径相对于 TOML 文件；桌面各平台、托盘、Android 前景和 iOS 主图可分别覆盖。
 脚本需要 Python 3.11+ 与 Pillow：
 
 ```sh
-python scripts/app-icons.py docs/app-icons.example.toml --output .tmp/generated-icons
+python scripts/assets/app-icons.py examples/config/app-icons.toml --output .tmp/generated-icons
 # 可限定平台；可重复传入 --platform。
-python scripts/app-icons.py app-icons.toml --output build/icons --platform android
+python scripts/assets/app-icons.py app-icons.toml --output build/icons --platform android
 ```
 
 此命令生成资源和合并片段，不会自动修改打包工程。

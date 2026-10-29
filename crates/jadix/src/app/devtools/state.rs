@@ -4,7 +4,7 @@
 //! input/render may already hold `AppState`. Cells + `request_redraw` avoid that.
 
 use std::cell::{Cell, RefCell};
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::snapshot::{key_to_path, path_to_key, ElementPath};
 
@@ -31,6 +31,7 @@ thread_local! {
     static OVERLAY_SIZE_HINT: Cell<(f32, f32)> = const { Cell::new((0.0, 0.0)) };
     static PANEL_W: Cell<f32> = const { Cell::new(640.0) };
     static EXPANDED: RefCell<HashSet<String>> = RefCell::new(HashSet::new());
+    static OUTLINE_INSTANCES: RefCell<HashMap<String, String>> = RefCell::new(HashMap::new());
     static TREE_REVEAL: RefCell<Option<String>> = const { RefCell::new(None) };
     static TREE_FILTER: RefCell<String> = const { RefCell::new(String::new()) };
     static COMPUTED: Cell<bool> = const { Cell::new(false) };
@@ -65,6 +66,10 @@ impl DevToolsTab {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "tests/identity.rs"]
+mod identity_tests;
 
 /// Which box-model ring is emphasized on the page overlay.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -176,6 +181,95 @@ impl DevToolsState {
             }
             Self::bump_chrome();
         }
+    }
+
+    pub(crate) fn record_commit(acknowledgement: &jadix_hot_reload::CommitAck) {
+        if acknowledgement.committed() {
+            let identity = Self::selected_identity();
+            if let Some(instance) = identity
+                .strip_prefix("runtime:")
+                .and_then(|value| value.parse::<u64>().ok())
+            {
+                if let Some(change) = acknowledgement
+                    .changes
+                    .iter()
+                    .find(|change| change.instance == instance)
+                {
+                    PATH.with(|path| {
+                        *path.borrow_mut() = change
+                            .after
+                            .as_ref()
+                            .map(|path| path_to_key(path))
+                            .unwrap_or_default()
+                    });
+                }
+            }
+        }
+        Self::record_change(
+            "HMR commit",
+            serde_json::to_string(acknowledgement)
+                .unwrap_or_else(|_| acknowledgement.reason.clone()),
+        );
+    }
+
+    pub(crate) fn resolve_selection(root: &crate::core::tree::Element) {
+        let instances = crate::core::hot_reload::instances(root);
+        let current: HashMap<_, _> = instances
+            .iter()
+            .map(|(instance, path)| (path_to_key(path), format!("runtime:{instance}")))
+            .collect();
+        let identities: HashSet<_> = current.values().cloned().collect();
+        let previous = OUTLINE_INSTANCES.with(|outline| outline.replace(current.clone()));
+        EXPANDED.with(|expanded| {
+            let mut expanded = expanded.borrow_mut();
+            let retained: HashSet<_> = expanded
+                .drain()
+                .filter_map(|key| {
+                    let identity = if key.starts_with("runtime:") {
+                        Some(key)
+                    } else {
+                        previous
+                            .get(&key)
+                            .or_else(|| {
+                                if previous.is_empty() {
+                                    current.get(&key)
+                                } else {
+                                    None
+                                }
+                            })
+                            .cloned()
+                    }?;
+                    identities.contains(&identity).then_some(identity)
+                })
+                .collect();
+            *expanded = retained;
+        });
+        let resolve = |identity: &str| {
+            current
+                .iter()
+                .find_map(|(path, candidate)| (candidate == identity).then(|| path.clone()))
+                .unwrap_or_default()
+        };
+        let identity = Self::selected_identity();
+        if identity.starts_with("runtime:") {
+            PATH.with(|path| *path.borrow_mut() = resolve(&identity));
+        }
+        let hover = Self::hover_identity();
+        if hover.starts_with("runtime:") {
+            let path = resolve(&hover);
+            if path.is_empty() {
+                Self::clear_hover_highlight();
+            } else {
+                HOVER_PATH.with(|current| *current.borrow_mut() = path);
+            }
+        }
+    }
+
+    fn outline_identity(path: &[usize]) -> String {
+        let key = path_to_key(path);
+        OUTLINE_INSTANCES
+            .with(|instances| instances.borrow().get(&key).cloned())
+            .unwrap_or(key)
     }
 
     pub fn selected_path() -> ElementPath {
@@ -324,7 +418,9 @@ impl DevToolsState {
     }
 
     pub(super) fn defer_pick_highlight_clear() {
-        HIGHLIGHT_UNTIL.set(Some(std::time::Instant::now() + std::time::Duration::from_millis(1200)));
+        HIGHLIGHT_UNTIL.set(Some(
+            std::time::Instant::now() + std::time::Duration::from_millis(1200),
+        ));
     }
 
     pub fn clear_hover_highlight() {
@@ -395,7 +491,7 @@ impl DevToolsState {
             let mut paths = expanded.borrow_mut();
             let mut expanded = false;
             for depth in 0..path.len() {
-                expanded |= paths.insert(path_to_key(&path[..depth]));
+                expanded |= paths.insert(Self::outline_identity(&path[..depth]));
             }
             expanded
         });
@@ -472,13 +568,13 @@ impl DevToolsState {
     }
 
     pub(crate) fn is_collapsed(path: &[usize]) -> bool {
-        EXPANDED.with(|expanded| !expanded.borrow().contains(&path_to_key(path)))
+        EXPANDED.with(|expanded| !expanded.borrow().contains(&Self::outline_identity(path)))
     }
 
     pub(crate) fn toggle_collapsed(path: &[usize]) {
         EXPANDED.with(|expanded| {
             let mut expanded = expanded.borrow_mut();
-            let key = path_to_key(path);
+            let key = Self::outline_identity(path);
             if !expanded.remove(&key) {
                 expanded.insert(key);
             }

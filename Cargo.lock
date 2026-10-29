@@ -901,11 +901,11 @@ name = "d3d11_probe"
 version = "0.1.0"
 dependencies = [
  "glow",
- "naga",
+ "jadix_naga",
+ "jadix_wgpu",
+ "jadix_wgpu_hal",
  "raw-window-handle",
  "serde_json",
- "wgpu",
- "wgpu-hal",
  "windows",
 ]
 
@@ -1038,7 +1038,8 @@ checksum = "75b325c5dbd37f80359721ad39aca5a29fb04c89279657cffdda8736d0c0b9d2"
 [[package]]
 name = "dpi"
 version = "0.1.2"
-source = "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 dependencies = [
  "mint",
  "serde",
@@ -1747,17 +1748,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "glyphon"
-version = "0.12.0"
-dependencies = [
- "cosmic-text",
- "etagere",
- "lru",
- "rustc-hash 2.1.1",
- "wgpu",
-]
-
-[[package]]
 name = "gobject-sys"
 version = "0.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1786,8 +1776,8 @@ dependencies = [
 name = "gpu_probe"
 version = "0.1.0"
 dependencies = [
+ "jadix_wgpu",
  "jadix_winit",
- "wgpu",
  "windows-sys 0.61.2",
 ]
 
@@ -2539,7 +2529,6 @@ dependencies = [
  "base64 0.22.1",
  "bytemuck",
  "env_logger",
- "glyphon",
  "gtk",
  "html5ever",
  "icu",
@@ -2550,6 +2539,7 @@ dependencies = [
  "jadix_clipboard",
  "jadix_core",
  "jadix_document",
+ "jadix_glyphon",
  "jadix_hot_reload",
  "jadix_layout",
  "jadix_lsp",
@@ -2558,9 +2548,12 @@ dependencies = [
  "jadix_net",
  "jadix_renderer",
  "jadix_style_tokens",
+ "jadix_taffy",
  "jadix_tasks",
  "jadix_theme",
  "jadix_tokio",
+ "jadix_wgpu",
+ "jadix_wgpu_hal",
  "jadix_window_materials",
  "jadix_winit",
  "jni",
@@ -2580,7 +2573,6 @@ dependencies = [
  "serde_json",
  "stacker",
  "swash",
- "taffy",
  "tokio",
  "toml",
  "tracing",
@@ -2591,8 +2583,6 @@ dependencies = [
  "wasm-bindgen",
  "web-sys",
  "webview2-com",
- "wgpu",
- "wgpu-hal",
  "windows",
  "windows-collections",
  "windows-core",
@@ -2608,11 +2598,11 @@ version = "0.1.0"
 dependencies = [
  "jadix",
  "jadix_components",
+ "jadix_wgpu",
+ "jadix_wgpu_hal",
  "jadix_winit",
  "log",
  "serde_json",
- "wgpu",
- "wgpu-hal",
  "windows",
 ]
 
@@ -2650,16 +2640,16 @@ dependencies = [
 name = "jadix_components"
 version = "0.1.0"
 dependencies = [
- "glyphon",
  "image",
  "jadix",
  "jadix_dnd",
+ "jadix_glyphon",
  "jadix_lucide",
+ "jadix_taffy",
  "jadix_winit",
  "log",
  "serde",
  "serde_json",
- "taffy",
  "unicode-segmentation",
 ]
 
@@ -2672,12 +2662,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "jadix_cosmic_text"
+version = "0.19.0"
+dependencies = [
+ "bitflags 2.11.0",
+ "fontdb 0.23.0",
+ "harfrust 0.5.2",
+ "linebender_resource_handle",
+ "log",
+ "rangemap",
+ "rustc-hash 2.1.1",
+ "self_cell",
+ "skrifa 0.40.0",
+ "smol_str",
+ "swash",
+ "sys-locale",
+ "unicode-bidi",
+ "unicode-linebreak",
+ "unicode-script",
+ "unicode-segmentation",
+]
+
+[[package]]
 name = "jadix_dnd"
 version = "0.1.0"
 dependencies = [
  "jadix",
+ "jadix_taffy",
  "jadix_winit",
- "taffy",
 ]
 
 [[package]]
@@ -2693,11 +2705,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "jadix_glyphon"
+version = "0.12.0"
+dependencies = [
+ "etagere",
+ "jadix_cosmic_text",
+ "jadix_wgpu",
+ "lru",
+ "rustc-hash 2.1.1",
+]
+
+[[package]]
 name = "jadix_hot_reload"
 version = "0.1.0"
 dependencies = [
+ "proc-macro2",
  "serde",
  "serde_json",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -2727,7 +2752,7 @@ dependencies = [
 name = "jadix_layout"
 version = "0.1.0"
 dependencies = [
- "taffy",
+ "jadix_taffy",
 ]
 
 [[package]]
@@ -2751,6 +2776,7 @@ dependencies = [
 name = "jadix_macros"
 version = "0.1.0"
 dependencies = [
+ "jadix_hot_reload",
  "jadix_style_tokens",
  "proc-macro2",
  "quote",
@@ -2772,6 +2798,30 @@ name = "jadix_media"
 version = "0.1.0"
 
 [[package]]
+name = "jadix_naga"
+version = "30.0.0"
+dependencies = [
+ "arrayvec",
+ "bit-set 0.10.0",
+ "bitflags 2.11.0",
+ "cfg-if",
+ "cfg_aliases",
+ "codespan-reporting",
+ "half",
+ "hashbrown 0.17.1",
+ "indexmap",
+ "libm",
+ "log",
+ "naga-types",
+ "num-traits",
+ "once_cell",
+ "rustc-hash 1.1.0",
+ "spirv",
+ "thiserror 2.0.20",
+ "unicode-ident",
+]
+
+[[package]]
 name = "jadix_net"
 version = "0.1.0"
 dependencies = [
@@ -2785,15 +2835,25 @@ name = "jadix_renderer"
 version = "0.1.0"
 dependencies = [
  "bytemuck",
+ "jadix_wgpu",
+ "jadix_wgpu_hal",
  "log",
  "unicode-segmentation",
- "wgpu",
- "wgpu-hal",
 ]
 
 [[package]]
 name = "jadix_style_tokens"
 version = "0.1.0"
+
+[[package]]
+name = "jadix_taffy"
+version = "0.15.0"
+dependencies = [
+ "cssparser",
+ "serde",
+ "slotmap",
+ "smallvec",
+]
 
 [[package]]
 name = "jadix_tasks"
@@ -2820,6 +2880,171 @@ dependencies = [
 ]
 
 [[package]]
+name = "jadix_wgpu"
+version = "30.0.0"
+dependencies = [
+ "arrayvec",
+ "bitflags 2.11.0",
+ "bytemuck",
+ "cfg-if",
+ "cfg_aliases",
+ "document-features",
+ "hashbrown 0.17.1",
+ "jadix_naga",
+ "jadix_wgpu_core",
+ "jadix_wgpu_hal",
+ "jadix_wgpu_types",
+ "js-sys",
+ "log",
+ "parking_lot",
+ "portable-atomic",
+ "profiling",
+ "raw-window-handle",
+ "smallvec",
+ "static_assertions",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+]
+
+[[package]]
+name = "jadix_wgpu_core"
+version = "30.0.0"
+dependencies = [
+ "arrayvec",
+ "bit-set 0.10.0",
+ "bit-vec 0.9.1",
+ "bitflags 2.11.0",
+ "bytemuck",
+ "cfg_aliases",
+ "document-features",
+ "hashbrown 0.17.1",
+ "indexmap",
+ "jadix_naga",
+ "jadix_wgpu_core_deps_apple",
+ "jadix_wgpu_core_deps_emscripten",
+ "jadix_wgpu_core_deps_wasm",
+ "jadix_wgpu_core_deps_windows_linux_android",
+ "jadix_wgpu_hal",
+ "jadix_wgpu_naga_bridge",
+ "jadix_wgpu_types",
+ "log",
+ "naga-types",
+ "once_cell",
+ "parking_lot",
+ "portable-atomic",
+ "profiling",
+ "raw-window-handle",
+ "rustc-hash 1.1.0",
+ "smallvec",
+ "thiserror 2.0.20",
+]
+
+[[package]]
+name = "jadix_wgpu_core_deps_apple"
+version = "30.0.0"
+dependencies = [
+ "jadix_wgpu_hal",
+]
+
+[[package]]
+name = "jadix_wgpu_core_deps_emscripten"
+version = "30.0.0"
+dependencies = [
+ "jadix_wgpu_hal",
+]
+
+[[package]]
+name = "jadix_wgpu_core_deps_wasm"
+version = "30.0.1"
+dependencies = [
+ "jadix_wgpu_hal",
+]
+
+[[package]]
+name = "jadix_wgpu_core_deps_windows_linux_android"
+version = "30.0.0"
+dependencies = [
+ "jadix_wgpu_hal",
+]
+
+[[package]]
+name = "jadix_wgpu_hal"
+version = "30.0.0"
+dependencies = [
+ "android_system_properties",
+ "arrayvec",
+ "ash",
+ "bit-set 0.10.0",
+ "bitflags 2.11.0",
+ "block2 0.6.2",
+ "bytemuck",
+ "cfg-if",
+ "cfg_aliases",
+ "glow",
+ "glutin_wgl_sys",
+ "gpu-allocator",
+ "hashbrown 0.17.1",
+ "jadix_naga",
+ "jadix_wgpu_naga_bridge",
+ "jadix_wgpu_types",
+ "js-sys",
+ "khronos-egl",
+ "libc",
+ "libloading 0.8.9",
+ "log",
+ "naga-types",
+ "ndk-sys",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+ "objc2-metal",
+ "objc2-quartz-core",
+ "once_cell",
+ "ordered-float",
+ "parking_lot",
+ "portable-atomic",
+ "portable-atomic-util",
+ "profiling",
+ "range-alloc",
+ "raw-window-handle",
+ "raw-window-metal",
+ "renderdoc-sys",
+ "smallvec",
+ "static_assertions",
+ "thiserror 2.0.20",
+ "wasm-bindgen",
+ "wayland-sys",
+ "web-sys",
+ "windows",
+ "windows-core",
+ "windows-result",
+]
+
+[[package]]
+name = "jadix_wgpu_naga_bridge"
+version = "30.0.0"
+dependencies = [
+ "jadix_naga",
+ "jadix_wgpu_types",
+]
+
+[[package]]
+name = "jadix_wgpu_types"
+version = "30.0.0"
+dependencies = [
+ "bitflags 2.11.0",
+ "bytemuck",
+ "js-sys",
+ "log",
+ "naga-types",
+ "raw-window-handle",
+ "static_assertions",
+ "web-sys",
+]
+
+[[package]]
 name = "jadix_window_materials"
 version = "0.1.0"
 
@@ -2842,6 +3067,17 @@ dependencies = [
  "cfg_aliases",
  "cursor-icon",
  "dpi",
+ "jadix_winit_android",
+ "jadix_winit_appkit",
+ "jadix_winit_common",
+ "jadix_winit_core",
+ "jadix_winit_ohos",
+ "jadix_winit_orbital",
+ "jadix_winit_uikit",
+ "jadix_winit_wayland",
+ "jadix_winit_web",
+ "jadix_winit_win32",
+ "jadix_winit_x11",
  "libc",
  "objc2 0.6.4",
  "objc2-app-kit",
@@ -2852,17 +3088,224 @@ dependencies = [
  "smol_str",
  "tracing",
  "windows-sys 0.61.2",
- "winit-android",
- "winit-appkit",
- "winit-common",
- "winit-core",
- "winit-ohos",
- "winit-orbital",
- "winit-uikit",
- "winit-wayland",
- "winit-web",
- "winit-win32",
- "winit-x11",
+]
+
+[[package]]
+name = "jadix_winit_android"
+version = "0.31.0-beta.3-jadix.1"
+dependencies = [
+ "android-activity",
+ "bitflags 2.11.0",
+ "dpi",
+ "jadix_winit_core",
+ "ndk",
+ "raw-window-handle",
+ "smol_str",
+ "tracing",
+]
+
+[[package]]
+name = "jadix_winit_appkit"
+version = "0.31.0-beta.3-jadix.1"
+dependencies = [
+ "bitflags 2.11.0",
+ "block2 0.6.2",
+ "dispatch2",
+ "dpi",
+ "jadix_winit_common",
+ "jadix_winit_core",
+ "objc2 0.6.4",
+ "objc2-app-kit",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-video",
+ "objc2-foundation 0.3.2",
+ "raw-window-handle",
+ "smol_str",
+ "tracing",
+]
+
+[[package]]
+name = "jadix_winit_common"
+version = "0.31.0-beta.3-jadix.1"
+dependencies = [
+ "block2 0.6.2",
+ "dpi",
+ "jadix_winit_core",
+ "memmap2",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "smol_str",
+ "tracing",
+ "x11-dl",
+ "xkbcommon-dl",
+]
+
+[[package]]
+name = "jadix_winit_core"
+version = "0.31.0-beta.3-jadix.1"
+dependencies = [
+ "bitflags 2.11.0",
+ "cursor-icon",
+ "dpi",
+ "keyboard-types",
+ "raw-window-handle",
+ "serde",
+ "smol_str",
+ "web-time",
+]
+
+[[package]]
+name = "jadix_winit_ohos"
+version = "0.31.0-beta.3-jadix.1"
+dependencies = [
+ "crossbeam-channel",
+ "dpi",
+ "futures-channel",
+ "futures-executor",
+ "jadix_winit_core",
+ "ohos-display-sys",
+ "ohos-fileshare-binding",
+ "ohos-fileuri-binding",
+ "ohos-vsync-binding",
+ "ohos-window-manager-binding",
+ "openharmony-ability",
+ "openharmony-ability-derive",
+ "openharmony-ability-plugin-accessibility",
+ "openharmony-ability-plugin-app-control",
+ "openharmony-ability-plugin-clipboard",
+ "openharmony-ability-plugin-files",
+ "openharmony-ability-plugin-menu",
+ "openharmony-ability-plugin-notification",
+ "openharmony-ability-plugin-permission",
+ "openharmony-ability-plugin-process",
+ "openharmony-ability-plugin-system-state",
+ "openharmony-ability-plugin-url",
+ "openharmony-ability-plugin-window",
+ "raw-window-handle",
+ "tracing",
+]
+
+[[package]]
+name = "jadix_winit_orbital"
+version = "0.31.0-beta.3-jadix.1"
+dependencies = [
+ "bitflags 2.11.0",
+ "dpi",
+ "jadix_winit_core",
+ "libredox",
+ "orbclient",
+ "raw-window-handle",
+ "redox_event",
+ "smol_str",
+ "tracing",
+]
+
+[[package]]
+name = "jadix_winit_uikit"
+version = "0.31.0-beta.3-jadix.1"
+dependencies = [
+ "bitflags 2.11.0",
+ "block2 0.6.2",
+ "dispatch2",
+ "dpi",
+ "jadix_winit_common",
+ "jadix_winit_core",
+ "objc2 0.6.4",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
+ "objc2-ui-kit",
+ "raw-window-handle",
+ "serde",
+ "smol_str",
+ "tracing",
+]
+
+[[package]]
+name = "jadix_winit_wayland"
+version = "0.31.0-beta.3-jadix.1"
+dependencies = [
+ "bitflags 2.11.0",
+ "calloop",
+ "cursor-icon",
+ "dpi",
+ "foldhash",
+ "jadix_winit_common",
+ "jadix_winit_core",
+ "libc",
+ "memmap2",
+ "percent-encoding",
+ "raw-window-handle",
+ "rustix",
+ "sctk-adwaita",
+ "smithay-client-toolkit",
+ "smol_str",
+ "tracing",
+ "wayland-backend",
+ "wayland-client",
+ "wayland-protocols",
+ "wayland-protocols-plasma",
+]
+
+[[package]]
+name = "jadix_winit_web"
+version = "0.31.0-beta.3-jadix.1"
+dependencies = [
+ "atomic-waker",
+ "bitflags 2.11.0",
+ "concurrent-queue",
+ "cursor-icon",
+ "dpi",
+ "jadix_winit_core",
+ "js-sys",
+ "pin-project",
+ "raw-window-handle",
+ "smol_str",
+ "tracing",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
+ "web-sys",
+ "web-time",
+]
+
+[[package]]
+name = "jadix_winit_win32"
+version = "0.31.0-beta.3-jadix.1"
+dependencies = [
+ "bitflags 2.11.0",
+ "cursor-icon",
+ "dpi",
+ "jadix_winit_common",
+ "jadix_winit_core",
+ "percent-encoding",
+ "raw-window-handle",
+ "smol_str",
+ "tracing",
+ "unicode-segmentation",
+ "windows-sys 0.61.2",
+]
+
+[[package]]
+name = "jadix_winit_x11"
+version = "0.31.0-beta.3-jadix.1"
+dependencies = [
+ "bitflags 2.11.0",
+ "bytemuck",
+ "calloop",
+ "cursor-icon",
+ "dpi",
+ "jadix_winit_common",
+ "jadix_winit_core",
+ "libc",
+ "percent-encoding",
+ "raw-window-handle",
+ "rustix",
+ "smol_str",
+ "tracing",
+ "x11-dl",
+ "x11rb",
+ "xkbcommon-dl",
 ]
 
 [[package]]
@@ -3283,30 +3726,6 @@ dependencies = [
  "png 0.18.1",
  "thiserror 2.0.20",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "naga"
-version = "30.0.0"
-dependencies = [
- "arrayvec",
- "bit-set 0.10.0",
- "bitflags 2.11.0",
- "cfg-if",
- "cfg_aliases",
- "codespan-reporting",
- "half",
- "hashbrown 0.17.1",
- "indexmap",
- "libm",
- "log",
- "naga-types",
- "num-traits",
- "once_cell",
- "rustc-hash 1.1.0",
- "spirv",
- "thiserror 2.0.20",
- "unicode-ident",
 ]
 
 [[package]]
@@ -5691,15 +6110,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "taffy"
-version = "0.15.0"
-dependencies = [
- "serde",
- "slotmap",
- "smallvec",
-]
-
-[[package]]
 name = "tagptr"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6502,183 +6912,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a28ac98ddc8b9274cb41bb4d9d4d5c425b6020c50c46f25559911905610b4a88"
 
 [[package]]
-name = "wgpu"
-version = "30.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6d8f4bd44d92da5270f03409dba9f952dab24f128e05d6a554926101d1bf9114"
-dependencies = [
- "arrayvec",
- "bitflags 2.11.0",
- "bytemuck",
- "cfg-if",
- "cfg_aliases",
- "document-features",
- "hashbrown 0.17.1",
- "js-sys",
- "log",
- "naga",
- "parking_lot",
- "portable-atomic",
- "profiling",
- "raw-window-handle",
- "smallvec",
- "static_assertions",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "wgpu-core",
- "wgpu-hal",
- "wgpu-types",
-]
-
-[[package]]
-name = "wgpu-core"
-version = "30.0.0"
-dependencies = [
- "arrayvec",
- "bit-set 0.10.0",
- "bit-vec 0.9.1",
- "bitflags 2.11.0",
- "bytemuck",
- "cfg_aliases",
- "document-features",
- "hashbrown 0.17.1",
- "indexmap",
- "log",
- "naga",
- "naga-types",
- "once_cell",
- "parking_lot",
- "portable-atomic",
- "profiling",
- "raw-window-handle",
- "rustc-hash 1.1.0",
- "smallvec",
- "thiserror 2.0.20",
- "wgpu-core-deps-apple",
- "wgpu-core-deps-emscripten",
- "wgpu-core-deps-wasm",
- "wgpu-core-deps-windows-linux-android",
- "wgpu-hal",
- "wgpu-naga-bridge",
- "wgpu-types",
-]
-
-[[package]]
-name = "wgpu-core-deps-apple"
-version = "30.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3283b6da70d7fc892de95840215aa36381b5d0cbc479e88ee2b173c7b992b225"
-dependencies = [
- "wgpu-hal",
-]
-
-[[package]]
-name = "wgpu-core-deps-emscripten"
-version = "30.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85dcf2b2e5c2afb9eda64c570a87a4e570304bf39e52eddbaaf222d655b656ad"
-dependencies = [
- "wgpu-hal",
-]
-
-[[package]]
-name = "wgpu-core-deps-wasm"
-version = "30.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d260ca2ca8adc654f513a869bf3cac0b47f5b8d3f87803d6942015f8de597aae"
-dependencies = [
- "wgpu-hal",
-]
-
-[[package]]
-name = "wgpu-core-deps-windows-linux-android"
-version = "30.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f76bc9c1c186ff3d9054e0d224c93c8c1c79d6653907c5249a5c1ea1a2cb1e43"
-dependencies = [
- "wgpu-hal",
-]
-
-[[package]]
-name = "wgpu-hal"
-version = "30.0.0"
-dependencies = [
- "android_system_properties",
- "arrayvec",
- "ash",
- "bit-set 0.10.0",
- "bitflags 2.11.0",
- "block2 0.6.2",
- "bytemuck",
- "cfg-if",
- "cfg_aliases",
- "glow",
- "glutin_wgl_sys",
- "gpu-allocator",
- "hashbrown 0.17.1",
- "js-sys",
- "khronos-egl",
- "libc",
- "libloading 0.8.9",
- "log",
- "naga",
- "naga-types",
- "ndk-sys",
- "objc2 0.6.4",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-foundation 0.3.2",
- "objc2-metal",
- "objc2-quartz-core",
- "once_cell",
- "ordered-float",
- "parking_lot",
- "portable-atomic",
- "portable-atomic-util",
- "profiling",
- "range-alloc",
- "raw-window-handle",
- "raw-window-metal",
- "renderdoc-sys",
- "smallvec",
- "static_assertions",
- "thiserror 2.0.20",
- "wasm-bindgen",
- "wayland-sys",
- "web-sys",
- "wgpu-naga-bridge",
- "wgpu-types",
- "windows",
- "windows-core",
- "windows-result",
-]
-
-[[package]]
-name = "wgpu-naga-bridge"
-version = "30.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c9eaac644e5008925c78567d272b9d66ef83da55a53cc17fc7daade7bb6e66e5"
-dependencies = [
- "naga",
- "wgpu-types",
-]
-
-[[package]]
-name = "wgpu-types"
-version = "30.0.0"
-dependencies = [
- "bitflags 2.11.0",
- "bytemuck",
- "js-sys",
- "log",
- "naga-types",
- "raw-window-handle",
- "static_assertions",
- "web-sys",
-]
-
-[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6911,233 +7144,6 @@ name = "windows_x86_64_msvc"
 version = "0.42.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9aec5da331524158c6d1a4ac0ab1541149c0b9505fde06423b02f5ef0106b9f0"
-
-[[package]]
-name = "winit-android"
-version = "0.31.0-beta.3"
-source = "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83"
-dependencies = [
- "android-activity",
- "bitflags 2.11.0",
- "dpi",
- "ndk",
- "raw-window-handle",
- "smol_str",
- "tracing",
- "winit-core",
-]
-
-[[package]]
-name = "winit-appkit"
-version = "0.31.0-beta.3"
-source = "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83"
-dependencies = [
- "bitflags 2.11.0",
- "block2 0.6.2",
- "dispatch2",
- "dpi",
- "objc2 0.6.4",
- "objc2-app-kit",
- "objc2-core-foundation",
- "objc2-core-graphics",
- "objc2-core-video",
- "objc2-foundation 0.3.2",
- "raw-window-handle",
- "smol_str",
- "tracing",
- "winit-common",
- "winit-core",
-]
-
-[[package]]
-name = "winit-common"
-version = "0.31.0-beta.3"
-source = "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83"
-dependencies = [
- "block2 0.6.2",
- "dpi",
- "memmap2",
- "objc2 0.6.4",
- "objc2-core-foundation",
- "objc2-foundation 0.3.2",
- "smol_str",
- "tracing",
- "winit-core",
- "x11-dl",
- "xkbcommon-dl",
-]
-
-[[package]]
-name = "winit-core"
-version = "0.31.0-beta.3"
-source = "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83"
-dependencies = [
- "bitflags 2.11.0",
- "cursor-icon",
- "dpi",
- "keyboard-types",
- "raw-window-handle",
- "serde",
- "smol_str",
- "web-time",
-]
-
-[[package]]
-name = "winit-ohos"
-version = "0.31.0-beta.3"
-source = "git+https://github.com/ohos-rs/winit-ohos.git?rev=af4063b4e75b62b152a315d2606d799ca65bda84#af4063b4e75b62b152a315d2606d799ca65bda84"
-dependencies = [
- "crossbeam-channel",
- "dpi",
- "futures-channel",
- "futures-executor",
- "ohos-display-sys",
- "ohos-fileshare-binding",
- "ohos-fileuri-binding",
- "ohos-vsync-binding",
- "ohos-window-manager-binding",
- "openharmony-ability",
- "openharmony-ability-derive",
- "openharmony-ability-plugin-accessibility",
- "openharmony-ability-plugin-app-control",
- "openharmony-ability-plugin-clipboard",
- "openharmony-ability-plugin-files",
- "openharmony-ability-plugin-menu",
- "openharmony-ability-plugin-notification",
- "openharmony-ability-plugin-permission",
- "openharmony-ability-plugin-process",
- "openharmony-ability-plugin-system-state",
- "openharmony-ability-plugin-url",
- "openharmony-ability-plugin-window",
- "raw-window-handle",
- "tracing",
- "winit-core",
-]
-
-[[package]]
-name = "winit-orbital"
-version = "0.31.0-beta.3"
-source = "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83"
-dependencies = [
- "bitflags 2.11.0",
- "dpi",
- "libredox",
- "orbclient",
- "raw-window-handle",
- "redox_event",
- "smol_str",
- "tracing",
- "winit-core",
-]
-
-[[package]]
-name = "winit-uikit"
-version = "0.31.0-beta.3"
-source = "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83"
-dependencies = [
- "bitflags 2.11.0",
- "block2 0.6.2",
- "dispatch2",
- "dpi",
- "objc2 0.6.4",
- "objc2-core-foundation",
- "objc2-foundation 0.3.2",
- "objc2-ui-kit",
- "raw-window-handle",
- "serde",
- "smol_str",
- "tracing",
- "winit-common",
- "winit-core",
-]
-
-[[package]]
-name = "winit-wayland"
-version = "0.31.0-beta.3"
-dependencies = [
- "bitflags 2.11.0",
- "calloop",
- "cursor-icon",
- "dpi",
- "foldhash",
- "libc",
- "memmap2",
- "percent-encoding",
- "raw-window-handle",
- "rustix",
- "sctk-adwaita",
- "smithay-client-toolkit",
- "smol_str",
- "tracing",
- "wayland-backend",
- "wayland-client",
- "wayland-protocols",
- "wayland-protocols-plasma",
- "winit-common",
- "winit-core",
-]
-
-[[package]]
-name = "winit-web"
-version = "0.31.0-beta.3"
-source = "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83"
-dependencies = [
- "atomic-waker",
- "bitflags 2.11.0",
- "concurrent-queue",
- "cursor-icon",
- "dpi",
- "js-sys",
- "pin-project",
- "raw-window-handle",
- "smol_str",
- "tracing",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
- "web-time",
- "winit-core",
-]
-
-[[package]]
-name = "winit-win32"
-version = "0.31.0-beta.3"
-dependencies = [
- "bitflags 2.11.0",
- "cursor-icon",
- "dpi",
- "percent-encoding",
- "raw-window-handle",
- "smol_str",
- "tracing",
- "unicode-segmentation",
- "windows-sys 0.61.2",
- "winit-common",
- "winit-core",
-]
-
-[[package]]
-name = "winit-x11"
-version = "0.31.0-beta.3"
-source = "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83"
-dependencies = [
- "bitflags 2.11.0",
- "bytemuck",
- "calloop",
- "cursor-icon",
- "dpi",
- "libc",
- "percent-encoding",
- "raw-window-handle",
- "rustix",
- "smol_str",
- "tracing",
- "winit-common",
- "winit-core",
- "x11-dl",
- "x11rb",
- "xkbcommon-dl",
-]
 
 [[package]]
 name = "winnow"

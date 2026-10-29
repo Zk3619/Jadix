@@ -1,0 +1,46 @@
+
+["package"]
+"edition" = "2021"
+"rust-version" = "1.76"
+"name" = "jadix_wgpu_core_deps_emscripten"
+"version" = "30.0.0"
+"authors" = ["gfx-rs developers"]
+"build" = false
+"autolib" = false
+"autobins" = false
+"autoexamples" = false
+"autotests" = false
+"autobenches" = false
+"description" = "Feature unification helper crate for the Emscripten platform"
+"homepage" = "https://wgpu.rs/"
+readme = "README.md"
+"keywords" = ["graphics"]
+"license" = "MIT OR Apache-2.0"
+repository = "https://github.com/Zk3619/Jadix"
+"exclude" = ["Cargo.toml.orig", ".cargo_vcs_info.json"]
+
+["features"]
+"gles" = ["wgpu-hal/gles"]
+
+["lib"]
+"name" = "wgpu_core_deps_emscripten"
+"path" = "src/lib.rs"
+
+["target"]
+
+["target"."cfg(target_os = \"emscripten\")"]
+
+["target"."cfg(target_os = \"emscripten\")"."dependencies"]
+
+["target"."cfg(target_os = \"emscripten\")"."dependencies"."wgpu-hal"]
+"package" = "jadix_wgpu_hal"
+"version" = "=30.0.0"
+"path" = "../wgpu-hal"
+
+["lints"]
+
+["lints"."clippy"]
+"ref_as_ptr" = "warn"
+
+["lints"."rust"]
+"missing_debug_implementations" = "warn"

@@ -11,7 +11,6 @@ const BOLD: &str = "\x1b[1m";
 const CYAN: &str = "\x1b[36m";
 const GREEN: &str = "\x1b[32m";
 const YELLOW: &str = "\x1b[33m";
-#[cfg(feature = "hot-reload")]
 const RED: &str = "\x1b[31m";
 
 fn color_enabled() -> bool {
@@ -84,17 +83,10 @@ pub(super) fn skip(detail: &str) {
     emit(YELLOW, "hmr skip", detail);
 }
 
-#[cfg(feature = "hot-reload")]
 pub(super) fn error(detail: &str) {
     emit(RED, "hmr error", detail);
 }
 
 #[cfg(test)]
-mod tests {
-    #[test]
-    fn format_12h_midnight_and_afternoon() {
-        assert_eq!(super::format_12h(0, 5, 9), "12:05:09 AM");
-        assert_eq!(super::format_12h(13, 0, 0), "1:00:00 PM");
-        assert_eq!(super::format_12h(12, 0, 0), "12:00:00 PM");
-    }
-}
+#[path = "tests/hmr_log.rs"]
+mod tests;

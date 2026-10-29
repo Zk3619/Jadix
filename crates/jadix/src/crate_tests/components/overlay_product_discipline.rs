@@ -26,7 +26,9 @@ fn walk_rs(dir: &Path, out: &mut Vec<PathBuf>) {
     for entry in entries.flatten() {
         let path = entry.path();
         if path.is_dir() {
-            walk_rs(&path, out);
+            if path.file_name().and_then(|name| name.to_str()) != Some("tests") {
+                walk_rs(&path, out);
+            }
         } else if path.extension().and_then(|e| e.to_str()) == Some("rs") {
             out.push(path);
         }
@@ -71,6 +73,9 @@ fn skip_ws(src: &[u8], mut i: usize) -> usize {
 fn skip_braced(src: &[u8], mut i: usize) -> usize {
     i = skip_ws(src, i);
     while i < src.len() && src[i] != b'{' {
+        if src[i] == b';' {
+            return i + 1;
+        }
         i += 1;
     }
     if i >= src.len() {
@@ -169,5 +174,7 @@ fn production_scan_preserves_real_calls_but_ignores_both_test_gates() {
         let production = production_source(&source);
         assert!(production.contains("portal_sync("));
         assert!(!production.contains("flush_modal_shell_motion_subtree("));
+        let external = format!("{gate}\n#[path = \"tests/dialog.rs\"]\nmod tests;\nfn production() {{ portal_sync(); }}");
+        assert!(production_source(&external).contains("portal_sync("));
     }
 }

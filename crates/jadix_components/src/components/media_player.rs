@@ -1045,5 +1045,5 @@ crate::impl_simple_slot_builder!(
 );
 
 #[cfg(all(test, feature = "product-tests"))]
-#[path = "media_player_tests.rs"]
+#[path = "media_player/tests/mod.rs"]
 mod tests;

@@ -2,26 +2,15 @@
 name = "jadix"
 version.workspace = true
 edition.workspace = true
-description = "Pure-Rust native UI framework (SolidJS-style reactivity + Tailwind/UnoCSS + ShadCN components)"
+description = "Pure-Rust native UI framework with fine-grained reactivity and optional static UI macros"
 license.workspace = true
 repository.workspace = true
-readme = "../../README.md"
+readme = "README.md"
 keywords = ["gui", "ui", "wgpu", "reactive", "desktop"]
 categories = ["gui"]
 
 # Ship workspace LICENSE + bundled-asset attributions with the crate tarball.
-include = [
-  "/Cargo.toml",
-  "/LICENSE",
-  "/NOTICE",
-  "/MOTION.md",
-  "/SCALE_PREVIEW.md",
-  "/src/**/*",
-  "/assets/**/*",
-  "/benches/**/*",
-  "/tests/**/*",
-  "/examples/**/*",
-]
+include = ["/Cargo.toml", "/LICENSE", "/NOTICE", "/MOTION.md", "/SCALE_PREVIEW.md", "/THEMES.md", "/DOCUMENT_EDITING.md", "/TEXT_DOCUMENT_VIEWS.md", "/build.rs", "/src/**/*", "/benches/**/*", "/tests/**/*", "/examples/**/*", "/README.md", "/README.zh.md", "/GUIDE.md"]
 
 [features]
 # Capability inventory and core/optional boundaries: docs/FEATURES.md.
@@ -157,7 +146,7 @@ compute = []
 image-stream = []
 # B1 runtime Inspector: Elements pick/highlight + Reactivity graph + style live edit.
 # Opt-in; not in default release surface (see docs/ops/devtools.md).
-devtools = ["scale-preview"]
+devtools = ["scale-preview", "taffy/parse"]
 # Allow `<Image src="https://…">` / Avatar / Icon to call an app-installed
 # [`RemoteAssetFetcher`] (no HTTP crate). See docs/ops/remote_asset.md.
 remote-asset = []
@@ -188,10 +177,10 @@ jadix_tasks.workspace = true
 jadix_tokio = { workspace = true, optional = true }
 moka = { workspace = true, optional = true, features = ["sync"] }
 jadix_net = { workspace = true, optional = true }
-winit = { workspace = true }
+winit = { "package" = "jadix_winit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../jadix_winit" }
 wgpu = { workspace = true }
-wgpu-hal = { version = "30", default-features = false, optional = true }
-taffy = { workspace = true }
+wgpu-hal = { "package" = "jadix_wgpu_hal", "version" = "=30.0.0", "path" = "../../vendor/wgpu-hal", "default-features" = false, "optional" = true }
+taffy = { "package" = "jadix_taffy", "version" = "=0.15.0", "path" = "../../vendor/taffy", "features" = ["parse"] }
 bytemuck = { workspace = true }
 glyphon = { workspace = true }
 env_logger = { workspace = true, optional = true }
@@ -230,7 +219,7 @@ jadix_accesskit_ohos = { path = "../jadix_accesskit_ohos", version = "0.1.0", op
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true, optional = true }
-winit = { workspace = true, features = ["android-native-activity"] }
+winit = { "package" = "jadix_winit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../jadix_winit", "features" = ["android-native-activity"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 web-sys = { workspace = true, features = [
@@ -242,7 +231,7 @@ web-sys = { workspace = true, features = [
     "Window",
 ] }
 wasm-bindgen = { workspace = true }
-wgpu = { workspace = true, features = ["webgpu", "webgl"] }
+wgpu = { workspace = true, "features" = ["webgpu", "webgl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = { workspace = true }
@@ -292,6 +281,7 @@ windows-numerics = { workspace = true, optional = true }
 windows-collections = { workspace = true, optional = true }
 
 [dev-dependencies]
+jadix_hot_reload = { workspace = true, features = ["syntax"] }
 tokio = { workspace = true, features = ["rt", "time", "sync"] }
 # Used by ignored `text_buffer_mid_insert` (P3 String vs ropey). Not a product dependency.
 ropey = { workspace = true }

@@ -5,14 +5,12 @@ use crate::app::draw_cull::node_present_dest_reset_full;
 use crate::components::input::{
     focus_id_for_input, input, input_password_reveal_signal_key, input_value_signal_key, InputType,
 };
-use crate::utils::text_edit::{
-    push_focused_text_edit_caret_damage, sync_text_edit_paint_subtree,
-};
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::renderer::font_loader;
 use crate::text::install_shared_font_system;
+use crate::utils::text_edit::{push_focused_text_edit_caret_damage, sync_text_edit_paint_subtree};
 
 fn find_text<'a>(el: &'a Element, tid: &str) -> Option<&'a str> {
     if el.template_id.as_deref() == Some(tid) {

@@ -44,7 +44,7 @@ decoded the source without re-encoding despite reporting an sRGB destination.
 The presentation shader preserves the queue's VAO/program/texture/sampler state.
 GLES only toggles FRAMEBUFFER_SRGB when GL_EXT_sRGB_write_control is available.
 
-`scripts/d3d11-verify.ps1` runs all three probes and rejects different GPUs. The
+`scripts/benchmarks/d3d11-verify.ps1` runs all three probes and rejects different GPUs. The
 ANGLE probe includes real SDF drawing with polygon clipping and window color /
 resize checks. UI correctness/performance still requires the separate native
 window comparison and existing Jadix GPU regressions.

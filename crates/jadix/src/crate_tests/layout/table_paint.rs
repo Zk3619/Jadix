@@ -803,7 +803,10 @@ fn composite_table_hover_paint_must_not_zero_row_border_width() {
     let before = row_bottom_border(&row);
     assert!(before > 0.5, "row must have border-b, got {before}");
     let authored = row.authored_style.expect("table hover authored style")(&row).unwrap();
-    assert_eq!(authored.resolved_border_widths(), row.style.resolved_border_widths());
+    assert_eq!(
+        authored.resolved_border_widths(),
+        row.style.resolved_border_widths()
+    );
     assert_eq!(authored.bg_color, [0.0; 4]);
 
     let mut impact = LayoutStatus::Clean;

@@ -3,7 +3,7 @@
 #[cfg(all(windows, feature = "angle"))]
 mod angle;
 #[cfg(all(windows, feature = "angle"))]
-#[path = "../../../scripts/gpui-compare/angle_identity.rs"]
+#[path = "../../../scripts/benchmarks/gpui-compare/angle_identity.rs"]
 mod angle_identity;
 #[cfg(windows)]
 mod native;

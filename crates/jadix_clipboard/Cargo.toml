@@ -5,16 +5,11 @@ edition.workspace = true
 description = "Cross-platform clipboard for Jadix (text, html, rtf, files, optional image). Fork of clipboard-rs aligned to workspace Windows/objc pins."
 license.workspace = true
 repository.workspace = true
-readme = false
+readme = "README.md"
 keywords = ["clipboard"]
 categories = ["os"]
 
-include = [
-    "/Cargo.toml",
-    "/LICENSE",
-    "/NOTICE",
-    "/src/**/*",
-]
+include = ["/Cargo.toml", "/LICENSE", "/NOTICE", "/src/**/*", "/README.md", "/README.zh.md"]
 
 [lints.rust]
 # `wayland.rs` is ported; the Cargo feature is reserved until `wl-clipboard-rs`

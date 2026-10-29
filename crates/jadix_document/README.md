@@ -1,20 +1,34 @@
 # jadix_document
 
-Immutable UTF-8 snapshots, checked edits and variable-height block indexing without a UI runtime, renderer, window or procedural macro dependency.
+[English](README.md) | [简体中文](README.zh.md)
 
-```rust
-use jadix_document::TextDocument;
+GUI-independent text snapshots, document height indexing and optional diffs.
 
-let original = TextDocument::new("hello\nworld");
-let edited = original.replace(6..11, "Jadix").unwrap();
-assert_eq!(edited.text(), "hello\nJadix");
-assert_eq!(original.text(), "hello\nworld");
+Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; prepared version `0.1.0`, not yet published.** Local archives and manifests do not prove registry availability.
+
+## Installation
+
+After the prepared version is published:
+
+```toml
+[dependencies]
+jadix_document = "=0.1.0"
 ```
 
-The optional `markdown` feature provides CommonMark blocks, table alignments (`DocumentAlignment`), source-preserving inline styles and document edit models; `document-editing`, `document-math` and `science` select the related document capabilities. Element/TextSpan conversion, text measurement and editor widgets remain host adapters.
+Before publication, use the source workspace. Consumers use one registry graph without copying private path/git/patch overrides. Platform-specific packages require the corresponding SDK.
 
-The optional `syntax` feature adds GUI-independent colored spans through `syntect`; the framework alone adapts these spans to UI text styles and maintains the UI line cache.
+## Features and scope
 
-The optional `diff` feature enables precomputed unified/split diffs through `similar`. Default builds have no dependencies. Jadix keeps its existing `text` paths as re-exports of these same types; no second snapshot counter or duplicate state model is created.
+Default features: none. See [Cargo.toml](Cargo.toml) for the complete feature/dependency graph. A feature flag does not establish platform runtime validation. Applications normally select internal GPU/window packages through their facade rather than depending on platform internals.
 
-For source distribution, copy `src/` and `LICENSE` into a local crate, retaining the module layout. The base needs only std; enabled features need the dependencies and configuration declared in `Cargo.toml` (including pulldown-cmark/serde for Markdown, similar for diff and syntect for syntax). Keep only the features your application actually enables. Crate consumption is recommended for routine updates.
+## Usage details
+
+The existing [package guide](GUIDE.md) retains additional API, platform and source details; it may use another language.
+
+## Documentation and contributions
+
+[Project documentation](https://github.com/Zk3619/Jadix/tree/main/docs) covers usage, migration, testing and releases. Preserve test discovery and keep private module tests separate from public integration contracts. Update both README languages when changing package setup.
+
+## License
+
+Apache-2.0. Preserve [LICENSE](LICENSE) and dependency notices.

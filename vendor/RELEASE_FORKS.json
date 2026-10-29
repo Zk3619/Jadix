@@ -1,0 +1,223 @@
+{
+  "schema": 1,
+  "publication": "Prepared source identities only; no registry publication or ownership assertion.",
+  "forks": [
+    {
+      "package": "jadix_cosmic_text",
+      "version": "0.19.0",
+      "upstream_package": "cosmic-text",
+      "upstream_version": "0.19.0",
+      "upstream_source": "registry cosmic-text 0.19.0; git c24886c2471e5606587c46090cd25dbbf209186b",
+      "upstream_manifest_sha256": "da18f50fdb123874469241e32d6ff4014638984ca995b724e90769ceaed1d560",
+      "directory": "vendor/cosmic-text"
+    },
+    {
+      "package": "jadix_glyphon",
+      "version": "0.12.0",
+      "upstream_package": "glyphon",
+      "upstream_version": "0.12.0",
+      "upstream_source": "repository-maintained-vendor",
+      "upstream_manifest_sha256": "22905428dadb9e46c1cebb4e97a42f5adaae9a0eb791e2caf37e7a24722ede97",
+      "directory": "vendor/glyphon"
+    },
+    {
+      "package": "jadix_naga",
+      "version": "30.0.0",
+      "upstream_package": "naga",
+      "upstream_version": "30.0.0",
+      "upstream_source": "repository-maintained-vendor",
+      "upstream_manifest_sha256": "bebaa398cf92fd7c649a05834e1d3678615b8065d1406be5cee1bc794f45431e",
+      "directory": "vendor/naga"
+    },
+    {
+      "package": "jadix_taffy",
+      "version": "0.15.0",
+      "upstream_package": "taffy",
+      "upstream_version": "0.15.0",
+      "upstream_source": "repository-maintained-vendor",
+      "upstream_manifest_sha256": "88d0ff10e7a1903ab09d81c3d738265e446a8485c57d8aa5196499d51fe2dec0",
+      "directory": "vendor/taffy"
+    },
+    {
+      "package": "jadix_wgpu",
+      "version": "30.0.0",
+      "upstream_package": "wgpu",
+      "upstream_version": "30.0.0",
+      "upstream_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "upstream_manifest_sha256": "a414351422b45d5d453ec8502da7d6e3e7b976594b942cd5da1f64b23540d3cb",
+      "directory": "vendor/wgpu"
+    },
+    {
+      "package": "jadix_wgpu_core",
+      "version": "30.0.0",
+      "upstream_package": "wgpu-core",
+      "upstream_version": "30.0.0",
+      "upstream_source": "repository-maintained-vendor",
+      "upstream_manifest_sha256": "2f789c81e309b9ffcaa5e1c4bb09006d717b6839e0a363a1f0a01ce11c924b0a",
+      "directory": "vendor/wgpu-core"
+    },
+    {
+      "package": "jadix_wgpu_core_deps_apple",
+      "version": "30.0.0",
+      "upstream_package": "wgpu-core-deps-apple",
+      "upstream_version": "30.0.0",
+      "upstream_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "upstream_manifest_sha256": "d9fe46082ea7d8646f8a3135bf6a7f4daffa3fc57d70e3618ca72ebc04b00125",
+      "directory": "vendor/wgpu-core-deps-apple"
+    },
+    {
+      "package": "jadix_wgpu_core_deps_emscripten",
+      "version": "30.0.0",
+      "upstream_package": "wgpu-core-deps-emscripten",
+      "upstream_version": "30.0.0",
+      "upstream_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "upstream_manifest_sha256": "c75ba889ff844a79f616b0ab2def6deeb4a98b7c015002e7511a6938ea9a12f6",
+      "directory": "vendor/wgpu-core-deps-emscripten"
+    },
+    {
+      "package": "jadix_wgpu_core_deps_wasm",
+      "version": "30.0.1",
+      "upstream_package": "wgpu-core-deps-wasm",
+      "upstream_version": "30.0.1",
+      "upstream_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "upstream_manifest_sha256": "c86cde66d31f2d55be05eff2687f9fd82cafe168785fc04fc31dec4ab63cd98d",
+      "directory": "vendor/wgpu-core-deps-wasm"
+    },
+    {
+      "package": "jadix_wgpu_core_deps_windows_linux_android",
+      "version": "30.0.0",
+      "upstream_package": "wgpu-core-deps-windows-linux-android",
+      "upstream_version": "30.0.0",
+      "upstream_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "upstream_manifest_sha256": "2065031082ee0e8667d9e1e43407be99b596d936a7cdda9acb49e9bc986563a5",
+      "directory": "vendor/wgpu-core-deps-windows-linux-android"
+    },
+    {
+      "package": "jadix_wgpu_hal",
+      "version": "30.0.0",
+      "upstream_package": "wgpu-hal",
+      "upstream_version": "30.0.0",
+      "upstream_source": "repository-maintained-vendor",
+      "upstream_manifest_sha256": "6252dbc7462ec8896240ab46da43c4c81f20b1f190f3e6fe448c9daa58d537fc",
+      "directory": "vendor/wgpu-hal"
+    },
+    {
+      "package": "jadix_wgpu_naga_bridge",
+      "version": "30.0.0",
+      "upstream_package": "wgpu-naga-bridge",
+      "upstream_version": "30.0.0",
+      "upstream_source": "registry+https://github.com/rust-lang/crates.io-index",
+      "upstream_manifest_sha256": "6aba1a253f4b553b20db8d997b3e9ad945eb71ad781c38de1a3bc9adf6fa3a30",
+      "directory": "vendor/wgpu-naga-bridge"
+    },
+    {
+      "package": "jadix_wgpu_types",
+      "version": "30.0.0",
+      "upstream_package": "wgpu-types",
+      "upstream_version": "30.0.0",
+      "upstream_source": "repository-maintained-vendor",
+      "upstream_manifest_sha256": "1787f0e57923f4b2f61a4ae8d05275fc5455f534c52398d46d9f16f776afd6ea",
+      "directory": "vendor/wgpu-types"
+    },
+    {
+      "package": "jadix_winit_android",
+      "version": "0.31.0-beta.3-jadix.1",
+      "upstream_package": "winit-android",
+      "upstream_version": "0.31.0-beta.3",
+      "upstream_source": "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83",
+      "upstream_manifest_sha256": "c2beb50628aaa572a736b91f61f06dae406874bbbd06c6d4e6a663f6eb33823f",
+      "directory": "vendor/winit-android"
+    },
+    {
+      "package": "jadix_winit_appkit",
+      "version": "0.31.0-beta.3-jadix.1",
+      "upstream_package": "winit-appkit",
+      "upstream_version": "0.31.0-beta.3",
+      "upstream_source": "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83",
+      "upstream_manifest_sha256": "d61e06a739b6d9b08048768241dc03abaeb5a76162ee93d6680f1c8cdfaee26f",
+      "directory": "vendor/winit-appkit"
+    },
+    {
+      "package": "jadix_winit_common",
+      "version": "0.31.0-beta.3-jadix.1",
+      "upstream_package": "winit-common",
+      "upstream_version": "0.31.0-beta.3",
+      "upstream_source": "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83",
+      "upstream_manifest_sha256": "c32ed1349b92a4233bbd164bac36fb7b0cc773b45fe954e3c58d10591c539b99",
+      "directory": "vendor/winit-common"
+    },
+    {
+      "package": "jadix_winit_core",
+      "version": "0.31.0-beta.3-jadix.1",
+      "upstream_package": "winit-core",
+      "upstream_version": "0.31.0-beta.3",
+      "upstream_source": "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83",
+      "upstream_manifest_sha256": "17597da95efbf0b6124fd04a1b65c483dadf7fcce7910d56a05e7ddb8cc5e102",
+      "directory": "vendor/winit-core"
+    },
+    {
+      "package": "jadix_winit_ohos",
+      "version": "0.31.0-beta.3-jadix.1",
+      "upstream_package": "winit-ohos",
+      "upstream_version": "0.31.0-beta.3",
+      "upstream_source": "git+https://github.com/ohos-rs/winit-ohos.git?rev=af4063b4e75b62b152a315d2606d799ca65bda84#af4063b4e75b62b152a315d2606d799ca65bda84",
+      "upstream_manifest_sha256": "3d92b9b25817d14002b5bd3e31f846cb48512f768193feac6c3c2bf4d1752e2d",
+      "directory": "vendor/winit-ohos"
+    },
+    {
+      "package": "jadix_winit_orbital",
+      "version": "0.31.0-beta.3-jadix.1",
+      "upstream_package": "winit-orbital",
+      "upstream_version": "0.31.0-beta.3",
+      "upstream_source": "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83",
+      "upstream_manifest_sha256": "c7a7eb8f39ad51b908825039c2c00fcb94befe474bc2c810f95f0821497cb1fd",
+      "directory": "vendor/winit-orbital"
+    },
+    {
+      "package": "jadix_winit_uikit",
+      "version": "0.31.0-beta.3-jadix.1",
+      "upstream_package": "winit-uikit",
+      "upstream_version": "0.31.0-beta.3",
+      "upstream_source": "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83",
+      "upstream_manifest_sha256": "6ca0727cbd298af1c47eae3db47786c10c0bc24963a0140c939b57f6296d0ad0",
+      "directory": "vendor/winit-uikit"
+    },
+    {
+      "package": "jadix_winit_wayland",
+      "version": "0.31.0-beta.3-jadix.1",
+      "upstream_package": "winit-wayland",
+      "upstream_version": "0.31.0-beta.3",
+      "upstream_source": "repository-maintained-vendor",
+      "upstream_manifest_sha256": "36ce5fe6a4d2c52368025a23d944c12dd7a2f45afe130564201a0a5b55746055",
+      "directory": "vendor/winit-wayland"
+    },
+    {
+      "package": "jadix_winit_web",
+      "version": "0.31.0-beta.3-jadix.1",
+      "upstream_package": "winit-web",
+      "upstream_version": "0.31.0-beta.3",
+      "upstream_source": "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83",
+      "upstream_manifest_sha256": "51b6c335cbdd195f5b486442e1217fdb3a234c8c0781d76418bada34162c3e25",
+      "directory": "vendor/winit-web"
+    },
+    {
+      "package": "jadix_winit_win32",
+      "version": "0.31.0-beta.3-jadix.1",
+      "upstream_package": "winit-win32",
+      "upstream_version": "0.31.0-beta.3",
+      "upstream_source": "repository-maintained-vendor",
+      "upstream_manifest_sha256": "8d65339c8de9805954b4b08b112664612a2daad46c76dddfde22710ad511773f",
+      "directory": "vendor/winit-win32"
+    },
+    {
+      "package": "jadix_winit_x11",
+      "version": "0.31.0-beta.3-jadix.1",
+      "upstream_package": "winit-x11",
+      "upstream_version": "0.31.0-beta.3",
+      "upstream_source": "git+https://github.com/rust-windowing/winit.git?rev=758a50e35a928dbf72bf05ae91f12fee7a540a83#758a50e35a928dbf72bf05ae91f12fee7a540a83",
+      "upstream_manifest_sha256": "644c83e4a0f0ca2dde21a20fb8531a94ceb7c9e5678e0e1bcbb36737b69ba35c",
+      "directory": "vendor/winit-x11"
+    }
+  ],
+  "dpi": "All window backends use published dpi =0.1.2; platform conversion and compilation must pass before acceptance."
+}

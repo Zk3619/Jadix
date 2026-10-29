@@ -150,7 +150,7 @@ const MORPH_PLAYGROUND_ICONS: &[&str] = &[
 
 /// morphicons.com playground caption: `from → to` + Procrustes θ / residual.
 fn morph_plan_caption(from: &str, to: &str) -> (String, String, String) {
-    use jadix::utils::icon_morph::{SAMPLE_N, build_plan, icon_input_from_src, resample_icon};
+    use jadix::utils::icon_morph::{build_plan, icon_input_from_src, resample_icon, SAMPLE_N};
     let pair = format!("{from} → {to}");
     let empty = (pair.clone(), String::new(), String::new());
     let Some(a) = icon_input_from_src(from) else {

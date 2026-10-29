@@ -47,7 +47,10 @@ fn css_filter_offscreen_capture_preserves_preceding_text() {
         let mut tree = LayoutTree::new();
         let result = tree.build_and_layout(&mut root, 300.0, 100.0, [-1.0; 2]);
         assert!(
-            result.text_nodes.iter().any(|text| text.text == "sidebar caption"),
+            result
+                .text_nodes
+                .iter()
+                .any(|text| text.text == "sidebar caption"),
             "filter capture at offset {offset} removed preceding text"
         );
         for paint in &result.node_paints {

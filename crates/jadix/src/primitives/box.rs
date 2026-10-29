@@ -30,6 +30,11 @@ impl Default for BoxBuilder {
 }
 
 impl BoxBuilder {
+    pub fn hot_reload_declaration_base(mut self, names: &[&str], opaque: bool) -> Self {
+        self.el = self.el.hot_reload_declaration_base(names, opaque);
+        self
+    }
+
     pub fn new() -> Self {
         Self {
             el: Element::new(),
@@ -570,6 +575,21 @@ impl BoxBuilder {
         self
     }
 
+    pub fn align_content_kw(mut self, keyword: impl AsRef<str>) -> Self {
+        self.el = self.el.align_content_kw(keyword);
+        self
+    }
+
+    pub fn justify_items_kw(mut self, keyword: impl AsRef<str>) -> Self {
+        self.el = self.el.justify_items_kw(keyword);
+        self
+    }
+
+    pub fn justify_self_kw(mut self, keyword: impl AsRef<str>) -> Self {
+        self.el = self.el.justify_self_kw(keyword);
+        self
+    }
+
     pub fn flex_basis(mut self, basis: impl IntoCssDim) -> Self {
         self.el = self.el.flex_basis(basis);
         self
@@ -934,6 +954,14 @@ impl BoxBuilder {
 
     pub fn text_align(mut self, align: impl Into<crate::style::TextAlignDeclaration>) -> Self {
         self.el = self.el.text_align(align);
+        self
+    }
+
+    pub fn text_align_last(
+        mut self,
+        align: impl Into<crate::style::TextAlignLastDeclaration>,
+    ) -> Self {
+        self.el = self.el.text_align_last(align);
         self
     }
     pub fn text_center(self) -> Self {

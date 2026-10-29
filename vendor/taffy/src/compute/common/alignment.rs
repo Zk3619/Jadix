@@ -1,5 +1,7 @@
 //! Generic CSS alignment code that is shared between both the Flexbox and CSS Grid algorithms.
-use crate::style::{AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, AlignmentSafety};
+use crate::style::{
+    AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyword, AlignmentSafety,
+};
 
 /// Resolve the `safe`/`unsafe` overflow-position fallback for a self-level alignment value
 /// (used by `align-self` / `justify-self`-style sites and by absolutely-positioned items in
@@ -8,7 +10,10 @@ use crate::style::{AlignContent, AlignContentKeyword, AlignItems, AlignItemsKeyw
 /// <https://www.w3.org/TR/css-align-3/#overflow-values>. Otherwise drop the safety modifier
 /// and return the bare keyword.
 #[inline]
-pub(crate) fn resolve_self_alignment_safety(alignment: AlignItems, overflows: bool) -> AlignItemsKeyword {
+pub(crate) fn resolve_self_alignment_safety(
+    alignment: AlignItems,
+    overflows: bool,
+) -> AlignItemsKeyword {
     if matches!(alignment.safety, AlignmentSafety::Safe) && overflows {
         AlignItemsKeyword::Start
     } else {
@@ -46,8 +51,12 @@ pub(crate) fn apply_alignment_fallback(
     //    https://www.w3.org/TR/css-align-3/#distribution-values
     if num_items <= 1 || free_space <= 0.0 {
         (keyword, is_safe) = match keyword {
-            AlignContentKeyword::Stretch | AlignContentKeyword::SpaceBetween => (AlignContentKeyword::FlexStart, true),
-            AlignContentKeyword::SpaceAround | AlignContentKeyword::SpaceEvenly => (AlignContentKeyword::Center, true),
+            AlignContentKeyword::Stretch | AlignContentKeyword::SpaceBetween => {
+                (AlignContentKeyword::FlexStart, true)
+            }
+            AlignContentKeyword::SpaceAround | AlignContentKeyword::SpaceEvenly => {
+                (AlignContentKeyword::Center, true)
+            }
             other => (other, is_safe),
         };
     }

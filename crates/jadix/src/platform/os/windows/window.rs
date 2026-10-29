@@ -2,9 +2,9 @@
 
 use winit::window::{Window, WindowAttributes};
 
-use crate::app::WindowOptions;
 #[cfg(feature = "windows-dwm")]
 use crate::app::WindowBackdrop;
+use crate::app::WindowOptions;
 
 pub(crate) fn decorate_window_attributes(
     attrs: WindowAttributes,
@@ -59,8 +59,8 @@ pub(crate) fn apply_created_window(
         return;
     };
     if composition_swapchain || super::glass::has_host(hwnd) {
-        let system_backdrop = options.uses_system_backdrop()
-            && super::glass::system_backdrop_available();
+        let system_backdrop =
+            options.uses_system_backdrop() && super::glass::system_backdrop_available();
         set_use_host_backdrop_brush(hwnd, options.blur && !system_backdrop);
         window.set_system_backdrop(if system_backdrop {
             backdrop_type(options.backdrop)

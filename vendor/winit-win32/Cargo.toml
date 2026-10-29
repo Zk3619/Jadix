@@ -1,62 +1,65 @@
-[package]
-description = "Winit's Win32/Windows backend"
-documentation = "https://docs.rs/winit-win32"
-edition = "2024"
-license = "Apache-2.0"
-name = "winit-win32"
+
+["package"]
+"description" = "Winit's Win32/Windows backend"
+documentation = "https://docs.rs/jadix_winit_win32"
+"edition" = "2024"
+"license" = "Apache-2.0"
+"name" = "jadix_winit_win32"
 repository = "https://github.com/Zk3619/Jadix"
-rust-version = "1.88"
-version = "0.31.0-beta.3"
-publish = false
+"rust-version" = "1.88"
+"version" = "0.31.0-beta.3-jadix.1"
+"exclude" = ["Cargo.toml.orig", ".cargo_vcs_info.json"]
 
-[features]
-serde = ["dep:serde", "bitflags/serde", "smol_str/serde", "dpi/serde", "winit-core/serde"]
+readme = "README.md"
+["package"."metadata"]
 
-[dependencies]
-bitflags = "2"
-cursor-icon = "1.1"
-dpi = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
-percent-encoding = "2"
-rwh_06 = { package = "raw-window-handle", version = "0.6", features = ["std"] }
-serde = { version = "1", features = ["serde_derive"], optional = true }
-smol_str = "0.3"
-tracing = { version = "0.1.40", default-features = false }
-winit-common = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83", features = ["positioner"] }
-winit-core = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+["package"."metadata"."docs"]
 
-# Platform-specific
-unicode-segmentation = "1.7.1"
-windows-sys = { version = "0.61", features = [
-    "Win32_Devices_HumanInterfaceDevice",
-    "Win32_Foundation",
-    "Win32_Globalization",
-    "Win32_Graphics_Dwm",
-    "Win32_Graphics_Gdi",
-    "Win32_Media",
-    "Win32_System_Com_StructuredStorage",
-    "Win32_System_Com",
-    "Win32_System_DataExchange",
-    "Win32_System_LibraryLoader",
-    "Win32_System_Memory",
-    "Win32_System_Ole",
-    "Win32_Security",
-    "Win32_System_SystemInformation",
-    "Win32_System_SystemServices",
-    "Win32_System_Threading",
-    "Win32_System_WindowsProgramming",
-    "Win32_UI_Accessibility",
-    "Win32_UI_Controls",
-    "Win32_UI_HiDpi",
-    "Win32_UI_Input_Ime",
-    "Win32_UI_Input_KeyboardAndMouse",
-    "Win32_UI_Input_Pointer",
-    "Win32_UI_Input_Touch",
-    "Win32_UI_Shell",
-    "Win32_UI_TextServices",
-    "Win32_UI_WindowsAndMessaging",
-] }
+["package"."metadata"."docs"."rs"]
+"all-features" = true
+"targets" = ["x86_64-pc-windows-msvc"]
 
+["features"]
+"serde" = ["dep:serde", "bitflags/serde", "smol_str/serde", "dpi/serde", "winit-core/serde"]
 
-[package.metadata.docs.rs]
-all-features = true
-targets = ["x86_64-pc-windows-msvc"]
+["dependencies"]
+"bitflags" = "2"
+"cursor-icon" = "1.1"
+"percent-encoding" = "2"
+"smol_str" = "0.3"
+"unicode-segmentation" = "1.7.1"
+
+["dependencies"."dpi"]
+"version" = "=0.1.2"
+
+["dependencies"."rwh_06"]
+"package" = "raw-window-handle"
+"version" = "0.6"
+"features" = ["std"]
+
+["dependencies"."serde"]
+"version" = "1"
+"features" = ["serde_derive"]
+"optional" = true
+
+["dependencies"."tracing"]
+"version" = "0.1.40"
+"default-features" = false
+
+["dependencies"."winit-common"]
+"package" = "jadix_winit_common"
+"version" = "=0.31.0-beta.3-jadix.1"
+"path" = "../winit-common"
+"features" = ["positioner"]
+
+["dependencies"."winit-core"]
+"package" = "jadix_winit_core"
+"version" = "=0.31.0-beta.3-jadix.1"
+"path" = "../winit-core"
+
+["dependencies"."windows-sys"]
+"version" = "0.61"
+"features" = ["Win32_Devices_HumanInterfaceDevice", "Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Media", "Win32_System_Com_StructuredStorage", "Win32_System_Com", "Win32_System_DataExchange", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_Security", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input_Pointer", "Win32_UI_Input_Touch", "Win32_UI_Shell", "Win32_UI_TextServices", "Win32_UI_WindowsAndMessaging"]
+
+[lib]
+name = "winit_win32"

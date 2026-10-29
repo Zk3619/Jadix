@@ -218,7 +218,10 @@ fn native_surfaces_yield_only_to_opted_in_drag_sessions() {
     reset();
     routing::register("external-chart", DragHandlers::new(moved, finished));
     assert!(!routing::blocks_native_input());
-    routing::register("external-chart", DragHandlers::new(moved, finished).block_native_input());
+    routing::register(
+        "external-chart",
+        DragHandlers::new(moved, finished).block_native_input(),
+    );
     assert!(routing::blocks_native_input());
     routing::finish_all();
     assert!(!routing::blocks_native_input());

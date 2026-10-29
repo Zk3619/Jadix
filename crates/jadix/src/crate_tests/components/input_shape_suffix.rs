@@ -1,12 +1,12 @@
 //! Focused Input must not attach Latin U+2009 shape_suffix (baseline / font mixing).
 
 use crate::components::input::{focus_id_for_input, input, input_value_signal_key};
-use crate::utils::text_edit::sync_text_edit_paint_subtree;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::renderer::font_loader;
 use crate::text::install_shared_font_system;
+use crate::utils::text_edit::sync_text_edit_paint_subtree;
 
 #[test]
 fn focused_cjk_input_has_no_shape_suffix() {

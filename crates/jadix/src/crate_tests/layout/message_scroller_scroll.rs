@@ -175,6 +175,47 @@ fn tall_message_scroller_root() -> Element {
         .child(scroller)
 }
 
+#[test]
+fn message_scroller_keeps_padding_outside_the_scrolling_viewport() {
+    create_root(|| {
+        let mut root = tall_message_scroller_root();
+        let mut tree = LayoutTree::new();
+        tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0; 2]);
+        use_signal("ms-layout-test:auto_scroll", || false).set_silent(false);
+        for offset in [0.0, 80.0] {
+            use_signal(
+                &scroll_offset_y_signal_key("ms-layout-test:viewport"),
+                || 0.0_f32,
+            )
+            .set_silent(offset);
+            find_slot_ms_mut(&mut root, "message-scroller-viewport")
+                .unwrap()
+                .scroll_offset[1] = offset;
+            let result = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0; 2]);
+            let frame = find_slot_ms(&root, "message-scroller")
+                .unwrap()
+                .layout_bounds;
+            let viewport = find_slot_ms(&root, "message-scroller-viewport")
+                .unwrap()
+                .layout_bounds;
+            assert_eq!(
+                find_slot_ms(&root, "message-scroller-viewport")
+                    .unwrap()
+                    .scroll_offset[1],
+                offset
+            );
+            assert!(!result.text_nodes.is_empty());
+            assert!((viewport[1] - frame[1] - 16.0).abs() < 0.01,
+                "scrolling content needs a persistent top inset: frame={frame:?} viewport={viewport:?}");
+            assert!((frame[1] + frame[3] - viewport[1] - viewport[3] - 16.0).abs() < 0.01);
+            assert!(result
+                .text_nodes
+                .iter()
+                .all(|text| text.clip_bounds.is_some_and(|clip| clip[1] >= viewport[1])));
+        }
+    });
+}
+
 fn gallery_like_message_scroller_with_jump() -> Element {
     let mut content = message_scroller_content();
     for (i, text) in GAL_MS_TEXTS.iter().enumerate() {
@@ -1371,14 +1412,23 @@ fn message_scroller_latest_enter_t0_must_not_punch_thread_and_hide_must_fade() {
                 let scene = tree.build_and_layout(&mut root, 320.0, 384.0, [-1.0; 2]);
                 let button = find_slot(&root, "message-scroller-button").unwrap();
                 let key = u64::from(button.layout_node.unwrap());
-                let paint = scene.node_paints.iter().find(|paint| paint.key == key).unwrap();
-                let fill = scene.instances[paint.instance.0..paint.instance.1].iter()
+                let paint = scene
+                    .node_paints
+                    .iter()
+                    .find(|paint| paint.key == key)
+                    .unwrap();
+                let fill = scene.instances[paint.instance.0..paint.instance.1]
+                    .iter()
                     .find(|instance| instance.color[3] > 0.0 && instance.rect_size[0] > 20.0);
                 if button.style.opacity >= 0.01 {
                     let fill = fill.expect("fading button fill");
-                    assert!((fill.color[3] - button.style.bg_color[3] * button.style.opacity).abs() < 0.01,
+                    assert!(
+                        (fill.color[3] - button.style.bg_color[3] * button.style.opacity).abs()
+                            < 0.01,
                         "Latest fill must fade with its label at {time}ms: fill={}, opacity={}",
-                        fill.color[3], button.style.opacity);
+                        fill.color[3],
+                        button.style.opacity
+                    );
                 } else {
                     assert!(fill.is_none(), "hidden button must leave no opaque plate");
                 }
@@ -5824,6 +5874,10 @@ fn message_scroller_latest_pill_pixels_hide_wrapping_line() {
             for settle in [false, true] {
                 crate::style::set_css_transition_timeline_ms(0.0);
                 let mut root = gallery_wrap_under_jump_root();
+                find_slot_ms_mut(&mut root, "message-scroller")
+                    .unwrap()
+                    .style
+                    .padding = crate::style::Style::default().padding;
                 let mut tree = LayoutTree::new();
                 let mut impact = LayoutStatus::Clean;
                 for _ in 0..4 {

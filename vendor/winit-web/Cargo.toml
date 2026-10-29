@@ -1,0 +1,92 @@
+
+["package"]
+"description" = "Winit's Web (WebAssembly) backend"
+documentation = "https://docs.rs/jadix_winit_web"
+"edition" = "2024"
+include = ["/src", "!/src/platform_impl/web/script", "/src/platform_impl/web/script/**/*.min.js", "README.md", "LICENSE", "JADIX_FORK.md", "/README.zh.md", "/GUIDE.md"]
+"license" = "Apache-2.0"
+"name" = "jadix_winit_web"
+repository = "https://github.com/Zk3619/Jadix"
+"rust-version" = "1.86"
+"version" = "0.31.0-beta.3-jadix.1"
+
+readme = "README.md"
+["package"."metadata"]
+
+["package"."metadata"."docs"]
+
+["package"."metadata"."docs"."rs"]
+"all-features" = true
+"targets" = ["wasm32-unknown-unknown"]
+
+["features"]
+"serde" = ["dep:serde", "bitflags/serde", "smol_str/serde", "dpi/serde"]
+
+["dependencies"]
+
+["dependencies"."bitflags"]
+"version" = "2"
+
+["dependencies"."cursor-icon"]
+"version" = "1.1.0"
+
+["dependencies"."dpi"]
+"version" = "=0.1.2"
+
+["dependencies"."rwh_06"]
+"package" = "raw-window-handle"
+"version" = "0.6"
+"features" = ["std"]
+
+["dependencies"."serde"]
+"version" = "1"
+"features" = ["serde_derive"]
+"optional" = true
+
+["dependencies"."smol_str"]
+"version" = "0.3"
+
+["dependencies"."tracing"]
+"version" = "0.1.40"
+"default-features" = false
+
+["dependencies"."winit-core"]
+"package" = "jadix_winit_core"
+"version" = "=0.31.0-beta.3-jadix.1"
+"path" = "../winit-core"
+
+["dependencies"."js-sys"]
+"version" = "0.3.70"
+
+["dependencies"."pin-project"]
+"version" = "1"
+
+["dependencies"."wasm-bindgen"]
+"version" = "0.2.93"
+
+["dependencies"."wasm-bindgen-futures"]
+"version" = "0.4.43"
+
+["dependencies"."web-time"]
+"version" = "1"
+
+["dependencies"."web_sys"]
+"package" = "web-sys"
+"version" = "0.3.70"
+"features" = ["AbortController", "AbortSignal", "Blob", "BlobPropertyBag", "console", "CssStyleDeclaration", "Document", "DomException", "DomRect", "DomRectReadOnly", "Element", "Event", "EventTarget", "FocusEvent", "HtmlCanvasElement", "HtmlElement", "HtmlHtmlElement", "HtmlImageElement", "ImageBitmap", "ImageBitmapOptions", "ImageBitmapRenderingContext", "ImageData", "IntersectionObserver", "IntersectionObserverEntry", "KeyboardEvent", "MediaQueryList", "MessageChannel", "MessagePort", "Navigator", "Node", "OrientationLockType", "OrientationType", "PageTransitionEvent", "Permissions", "PermissionState", "PermissionStatus", "PointerEvent", "PremultiplyAlpha", "ResizeObserver", "ResizeObserverBoxOptions", "ResizeObserverEntry", "ResizeObserverOptions", "ResizeObserverSize", "Screen", "ScreenOrientation", "Url", "VisibilityState", "WheelEvent", "Window", "Worker"]
+
+["target"]
+
+["target"."cfg(target_feature = \"atomics\")"]
+
+["target"."cfg(target_feature = \"atomics\")"."dependencies"]
+
+["target"."cfg(target_feature = \"atomics\")"."dependencies"."atomic-waker"]
+"version" = "1"
+
+["target"."cfg(target_feature = \"atomics\")"."dependencies"."concurrent-queue"]
+"version" = "2"
+"default-features" = false
+
+[lib]
+name = "winit_web"

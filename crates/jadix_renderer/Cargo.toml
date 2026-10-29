@@ -20,4 +20,4 @@ unicode-segmentation.workspace = true
 wgpu.workspace = true
 bytemuck.workspace = true
 log.workspace = true
-wgpu-hal = { version = "30", default-features = false, optional = true }
+wgpu-hal = { "package" = "jadix_wgpu_hal", "version" = "=30.0.0", "path" = "../../vendor/wgpu-hal", "default-features" = false, "optional" = true }

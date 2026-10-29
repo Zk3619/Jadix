@@ -1085,6 +1085,15 @@ pub(crate) fn push_focused_text_edit_caret_damage(el: &Element) {
         for &ix in &caret.extra_carets {
             dirty = crate::app::damage::union_rects(dirty, caret_ibeam_damage_box(el, leaf, ix));
         }
+        if el.text_style.overflow.allows_caret_scroll() {
+            let Some(clip) = crate::layout::layout_tree::hidden_input_text_clip(None, leaf) else {
+                return;
+            };
+            let Some(visible) = intersect_xywh(dirty, clip) else {
+                return;
+            };
+            dirty = visible;
+        }
         crate::app::damage::push_frame_paint_key(crate::app::damage::paint_element_key(el), dirty);
         return;
     }

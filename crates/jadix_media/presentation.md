@@ -98,5 +98,3 @@ presentation.publish(id, Ok(MediaHostState {
 PiP 扩展负责视频纹理 / 设备资源的共享、拥有者生命周期、窗口关闭、回到原位置及错误处理。平台只支持普通置顶窗口时，应明确暴露该能力，不能当作原生 PiP。播放器 owner 销毁后拒绝回调；Controller 的 Drop 不执行窗口或媒体操作，宿主应自行结束并回收窗口资源。
 
 ## 开发验证
-
-测试命令、Gallery 验证边界集中见 [媒体开发验证记录](../../development-docs/ops/media-validation.md)。

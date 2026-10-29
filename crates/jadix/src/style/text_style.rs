@@ -108,8 +108,8 @@ pub enum TextDirection {
 ///
 /// Keywords follow MDN: `start` | `end` | `left` | `right` | `center` | `justify` |
 /// `justify-all` | `match-parent`, plus vendor `-moz-center` / `-webkit-center` → [`Self::Center`].
-/// Global keywords (`inherit` / `initial` / `revert` / `revert-layer` / `unset`) are handled by
-/// [`Self::parse_declaration`] — not stored on this enum.
+/// Supported global keywords (`inherit` / `initial` / `unset`) are handled by
+/// [`Self::parse_declaration`]. Unsupported cascade rollback keywords are rejected.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum TextAlign {
     /// CSS initial / writing-mode start edge.
@@ -120,7 +120,7 @@ pub enum TextAlign {
     Right,
     Center,
     Justify,
-    /// Treated like [`Self::Justify`] for glyphon (no per-last-line force yet).
+    /// Justify every line, including each paragraph's final line.
     JustifyAll,
     /// Resolve against the parent's `text-align` + direction at cascade time.
     MatchParent,
@@ -130,10 +130,11 @@ pub enum TextAlign {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TextAlignDeclaration {
     Value(TextAlign),
-    /// `inherit` / `unset` / `revert` / `revert-layer` — clear local declaration, cascade inherits.
+    /// `inherit` / `unset` — clear local declaration, cascade inherits.
     Inherit,
     /// `initial` → [`TextAlign::Start`].
     Initial,
+    Invalid,
 }
 
 impl TextAlign {
@@ -141,18 +142,24 @@ impl TextAlign {
     pub fn parse(s: &str) -> Self {
         match Self::parse_declaration(s) {
             TextAlignDeclaration::Value(v) => v,
-            TextAlignDeclaration::Initial | TextAlignDeclaration::Inherit => Self::Start,
+            TextAlignDeclaration::Initial
+            | TextAlignDeclaration::Inherit
+            | TextAlignDeclaration::Invalid => Self::Start,
         }
     }
 
     /// Full declaration parse including global CSS keywords and vendor centers.
     pub fn parse_declaration(s: &str) -> TextAlignDeclaration {
+        Self::try_parse_declaration(s).unwrap_or(TextAlignDeclaration::Invalid)
+    }
+
+    pub fn try_parse_declaration(s: &str) -> Option<TextAlignDeclaration> {
         let t = s.trim();
         if t.is_empty() {
-            return TextAlignDeclaration::Value(Self::Start);
+            return None;
         }
-        match t.to_ascii_lowercase().as_str() {
-            "inherit" | "unset" | "revert" | "revert-layer" => TextAlignDeclaration::Inherit,
+        Some(match t.to_ascii_lowercase().as_str() {
+            "inherit" | "unset" => TextAlignDeclaration::Inherit,
             "initial" => TextAlignDeclaration::Initial,
             "start" => TextAlignDeclaration::Value(Self::Start),
             "end" => TextAlignDeclaration::Value(Self::End),
@@ -164,8 +171,8 @@ impl TextAlign {
             "justify" => TextAlignDeclaration::Value(Self::Justify),
             "justify-all" => TextAlignDeclaration::Value(Self::JustifyAll),
             "match-parent" => TextAlignDeclaration::Value(Self::MatchParent),
-            _ => TextAlignDeclaration::Value(Self::Start),
-        }
+            _ => return None,
+        })
     }
 
     pub fn as_str(self) -> &'static str {
@@ -520,6 +527,8 @@ pub struct TextStyle {
     pub line_height_scale: Option<f32>,
     /// CSS `text-align` (see [`TextAlign`]). `None` = inherit.
     pub align: Option<TextAlign>,
+    pub computed_align: Option<TextAlign>,
+    pub align_last: Option<super::TextAlignLast>,
     /// Overflow when the box is too small (`clip` / `hidden` / `ellipsis` / `newline`).
     pub overflow: TextOverflow,
     /// Soft-wrap policy (`normal` | `nowrap`). Button captions use `Nowrap` (ShadCN).
@@ -565,6 +574,8 @@ impl Default for TextStyle {
             line_height_px: None,
             line_height_scale: None,
             align: None,
+            computed_align: None,
+            align_last: None,
             overflow: TextOverflow::Clip,
             white_space: WhiteSpace::Normal,
             wrap_mode: crate::text::WrapMode::Word,
@@ -589,6 +600,7 @@ impl TextStyle {
 
     pub(crate) fn without_inherited(&self, inherited: Option<&Self>) -> Self {
         let mut specified = self.clone();
+        specified.computed_align = None;
         if let Some(inherited) = inherited {
             macro_rules! restore {
                 ($($field:ident),+ $(,)?) => {$(
@@ -603,6 +615,7 @@ impl TextStyle {
                 weight,
                 font_family,
                 align,
+                align_last,
                 underline,
                 overline,
                 line_through,
@@ -629,6 +642,7 @@ impl TextStyle {
             weight,
             font_family,
             align,
+            align_last,
             underline,
             overline,
             line_through,
@@ -648,6 +662,7 @@ impl TextStyle {
             weight: Some(defaults.weight),
             font_family: Some(crate::utils::font::default_ui_sans_family_list().to_string()),
             align: Some(TextAlign::Start),
+            align_last: Some(super::TextAlignLast::Auto),
             underline: Some(false),
             overline: Some(false),
             line_through: Some(false),
@@ -679,7 +694,14 @@ impl TextStyle {
 
     #[inline]
     pub fn align_resolved(&self) -> TextAlign {
-        self.align.unwrap_or(TextAlign::Start)
+        match self.align {
+            Some(TextAlign::MatchParent) => self.computed_align.unwrap_or(TextAlign::Start),
+            align => align.unwrap_or(TextAlign::Start),
+        }
+    }
+
+    pub fn align_last_resolved(&self) -> super::TextAlignLast {
+        self.align_last.unwrap_or_default()
     }
 
     #[inline]
@@ -718,7 +740,13 @@ impl TextStyle {
         out.color = self.color.or(parent.color);
         out.size = self.size.or(parent.size);
         out.weight = self.weight.or(parent.weight);
-        out.align = self.align.or(parent.align);
+        out.align = Some(if self.align.is_some() {
+            self.align_resolved()
+        } else {
+            parent.align_resolved()
+        });
+        out.computed_align = None;
+        out.align_last = self.align_last.or(parent.align_last);
         out.underline = self.underline.or(parent.underline);
         out.overline = self.overline.or(parent.overline);
         out.line_through = self.line_through.or(parent.line_through);
@@ -755,6 +783,9 @@ impl TextStyle {
         }
         if self.align.is_none() {
             self.align = Some(self.align_resolved());
+        }
+        if self.align_last.is_none() {
+            self.align_last = Some(self.align_last_resolved());
         }
         if self.underline.is_none() {
             self.underline = Some(self.underline_resolved());
@@ -861,206 +892,5 @@ pub fn parse_text_shadow(s: impl AsRef<str>) -> (Option<[u8; 4]>, [f32; 2], f32)
 }
 
 #[cfg(test)]
-mod tests {
-    use super::{
-        parse_text_shadow, TextAlign, TextAlignDeclaration, TextDirection, TextOverflow, TextSpan,
-        TextSpanKind, TextStyle, WhiteSpace,
-    };
-
-    #[test]
-    fn text_span_chip_builder() {
-        let s = TextSpan::new("alice")
-            .chip()
-            .background([40, 40, 50, 255])
-            .padding_x(6.0)
-            .color([200, 200, 255, 255]);
-        assert_eq!(s.kind, TextSpanKind::Chip);
-        assert_eq!(s.padding_x, 6.0);
-        assert_eq!(s.background, Some([40, 40, 50, 255]));
-        assert_eq!(s.color, Some([200, 200, 255, 255]));
-        let m = TextSpan::new("@bob").mention();
-        assert_eq!(m.kind, TextSpanKind::Mention);
-        assert_eq!(m.padding_x, 4.0);
-        assert_eq!(m.background, Some([37, 99, 235, 40]));
-        assert_eq!(m.color, Some([37, 99, 235, 255]));
-        let m_override = TextSpan::new("@bob")
-            .mention()
-            .padding_x(8.0)
-            .background([1, 2, 3, 4])
-            .color([5, 6, 7, 8]);
-        assert_eq!(m_override.padding_x, 8.0);
-        assert_eq!(m_override.background, Some([1, 2, 3, 4]));
-        assert_eq!(m_override.color, Some([5, 6, 7, 8]));
-        let plain = TextSpan::new("hi");
-        assert_eq!(plain.kind, TextSpanKind::Text);
-        assert_eq!(plain.padding_x, 0.0);
-        assert!(plain.background.is_none());
-    }
-
-    #[test]
-    fn text_style_overflow_and_selectable_defaults() {
-        let s = TextStyle::default();
-        assert_eq!(s.overflow, TextOverflow::Clip);
-        assert_eq!(s.white_space, WhiteSpace::Normal);
-        assert_eq!(s.wrap_mode, crate::text::WrapMode::Word);
-        assert!(!s.selectable);
-        assert_eq!(s.direction, super::TextDirection::Auto);
-        assert_eq!(s.letter_spacing, 0.0);
-    }
-
-    #[test]
-    fn element_selectable_and_overflow_roundtrip() {
-        let el = crate::core::tree::Element::new()
-            .text("hi")
-            .selectable(true)
-            .text_overflow_ellipsis();
-        assert!(el.text_style.selectable);
-        assert_eq!(el.text_style.overflow, TextOverflow::Ellipsis);
-        assert_eq!(el.text_style.white_space, WhiteSpace::Nowrap);
-        assert_eq!(el.style.overflow.x, taffy::style::Overflow::Hidden);
-    }
-
-    #[test]
-    fn text_align_parse_mdn_keywords() {
-        assert_eq!(TextAlign::parse("start"), TextAlign::Start);
-        assert_eq!(TextAlign::parse("end"), TextAlign::End);
-        assert_eq!(TextAlign::parse("left"), TextAlign::Left);
-        assert_eq!(TextAlign::parse("right"), TextAlign::Right);
-        assert_eq!(TextAlign::parse("center"), TextAlign::Center);
-        assert_eq!(TextAlign::parse("JUSTIFY"), TextAlign::Justify);
-        assert_eq!(TextAlign::parse("justify-all"), TextAlign::JustifyAll);
-        assert_eq!(TextAlign::parse("match-parent"), TextAlign::MatchParent);
-        assert_eq!(TextAlign::parse("-moz-center"), TextAlign::Center);
-        assert_eq!(TextAlign::parse("-webkit-center"), TextAlign::Center);
-        assert_eq!(
-            TextAlign::parse_declaration("inherit"),
-            TextAlignDeclaration::Inherit
-        );
-        assert_eq!(
-            TextAlign::parse_declaration("initial"),
-            TextAlignDeclaration::Initial
-        );
-        assert_eq!(
-            TextAlign::parse_declaration("unset"),
-            TextAlignDeclaration::Inherit
-        );
-        assert_eq!(
-            TextAlign::parse_declaration("revert"),
-            TextAlignDeclaration::Inherit
-        );
-        assert_eq!(
-            TextAlign::parse_declaration("revert-layer"),
-            TextAlignDeclaration::Inherit
-        );
-        assert_eq!(
-            TextAlign::Start.to_glyphon(TextDirection::Ltr),
-            glyphon::cosmic_text::Align::Left
-        );
-        assert_eq!(
-            TextAlign::Start.to_glyphon(TextDirection::Rtl),
-            glyphon::cosmic_text::Align::Right
-        );
-        assert_eq!(
-            TextAlign::Left.to_glyphon(TextDirection::Rtl),
-            glyphon::cosmic_text::Align::Left
-        );
-        assert_eq!(
-            TextAlign::End.to_glyphon(TextDirection::Auto),
-            glyphon::cosmic_text::Align::End
-        );
-        assert_eq!(
-            TextAlign::Justify.to_glyphon(TextDirection::Auto),
-            glyphon::cosmic_text::Align::Justified
-        );
-        assert_eq!(
-            TextAlign::resolve_match_parent(TextAlign::Start, TextDirection::Rtl),
-            TextAlign::Right
-        );
-        assert_eq!(TextStyle::default().align, None);
-    }
-
-    #[test]
-    fn text_overflow_parse_clip_ellipsis_newline() {
-        assert_eq!(TextOverflow::parse("clip"), TextOverflow::Clip);
-        assert_eq!(TextOverflow::parse("hidden"), TextOverflow::Hidden);
-        assert_eq!(TextOverflow::parse("ellipsis"), TextOverflow::Ellipsis);
-        assert_eq!(TextOverflow::parse("truncate"), TextOverflow::Ellipsis);
-        assert_eq!(TextOverflow::parse("newline"), TextOverflow::Newline);
-        assert_eq!(TextOverflow::parse("wrap"), TextOverflow::Newline);
-        assert!(TextOverflow::Clip.nowrap());
-        assert!(TextOverflow::Hidden.nowrap());
-        assert!(TextOverflow::Ellipsis.nowrap());
-        assert!(!TextOverflow::Newline.nowrap());
-        assert_eq!(TextOverflow::editable_single_line(), TextOverflow::Hidden);
-        assert_eq!(TextOverflow::editable_placeholder(), TextOverflow::Ellipsis);
-        assert!(TextOverflow::Hidden.allows_caret_scroll());
-        assert!(!TextOverflow::editable_placeholder().allows_caret_scroll());
-        assert!(!TextOverflow::Clip.allows_caret_scroll());
-        assert!(TextOverflow::Ellipsis.start_align_when_line_overflows());
-        assert!(!TextOverflow::Newline.start_align_when_line_overflows());
-    }
-
-    fn approx_eq(a: f32, b: f32) {
-        assert!((a - b).abs() < 0.001, "expected {a} ~= {b}");
-    }
-
-    #[test]
-    fn text_shadow_unsuffixed_defaults_to_rem() {
-        let (_, offset, blur) = parse_text_shadow("1 0.5 0.25");
-        approx_eq(offset[0], 16.0);
-        approx_eq(offset[1], 8.0);
-        approx_eq(blur, 4.0);
-    }
-
-    #[test]
-    fn text_shadow_supports_px_rem_em_conversion() {
-        let (_, offset, blur) = parse_text_shadow("4px 0.5rem 0.25em");
-        approx_eq(offset[0], 4.0);
-        approx_eq(offset[1], 8.0);
-        approx_eq(blur, 4.0);
-    }
-
-    #[test]
-    fn letter_spacing_inherits_when_unspecified() {
-        let parent = TextStyle {
-            letter_spacing: 0.4,
-            letter_spacing_specified: true,
-            ..Default::default()
-        };
-        let child = TextStyle::default();
-        let out = child.effective_ancestry(&parent);
-        assert!((out.letter_spacing - 0.4).abs() < f32::EPSILON);
-        assert!(!out.letter_spacing_specified);
-    }
-
-    #[test]
-    fn letter_spacing_specified_zero_does_not_inherit() {
-        let parent = TextStyle {
-            letter_spacing: 0.4,
-            letter_spacing_specified: true,
-            ..Default::default()
-        };
-        let child = TextStyle {
-            letter_spacing: 0.0,
-            letter_spacing_specified: true,
-            ..Default::default()
-        };
-        let out = child.effective_ancestry(&parent);
-        assert!(out.letter_spacing.abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn letter_spacing_cascades_to_unspecified_child() {
-        let child = crate::core::tree::Element::new().text("x");
-        let mut root = crate::core::tree::Element::new()
-            .letter_spacing(0.4)
-            .child(child);
-        crate::layout::layout_tree::cascade_inheritable_text_style_for_test(&mut root);
-        assert!(
-            (root.children[0].text_style.letter_spacing - 0.4).abs() < 1e-4,
-            "got {}",
-            root.children[0].text_style.letter_spacing
-        );
-        assert!(!root.children[0].text_style.letter_spacing_specified);
-    }
-}
+#[path = "tests/text_style.rs"]
+mod tests;

@@ -11,17 +11,35 @@ use crate::primitives::r#box::r#box;
 fn scaled_preview_child_translation_uses_logical_distance() {
     let (_owner, _) = create_root(|| {
         for zoom in [0.35, 0.57, 1.0, 1.5] {
-            let mut root = Element::new().w(400.0).h(240.0).scale(zoom)
-                .transform_origin("left top").child(
-                    Element::new().absolute().left(20.0).top(30.0).w(40.0).h(20.0)
+            let mut root = Element::new()
+                .w(400.0)
+                .h(240.0)
+                .scale(zoom)
+                .transform_origin("left top")
+                .child(
+                    Element::new()
+                        .absolute()
+                        .left(20.0)
+                        .top(30.0)
+                        .w(40.0)
+                        .h(20.0)
                         .bg([1.0, 0.0, 0.0, 1.0]),
                 );
             let mut layout = LayoutTree::new();
             let first = layout.build_and_layout(&mut root, 400.0, 240.0, [-1.0; 2]);
-            let initial = first.instances.iter().find(|fill| fill.color[0] > 0.9).unwrap().rect_pos;
+            let initial = first
+                .instances
+                .iter()
+                .find(|fill| fill.color[0] > 0.9)
+                .unwrap()
+                .rect_pos;
             root.children[0].style.translate = [100.0, 60.0];
             let moved = layout.build_and_layout(&mut root, 400.0, 240.0, [-1.0; 2]);
-            let fill = moved.instances.iter().find(|fill| fill.color[0] > 0.9).unwrap();
+            let fill = moved
+                .instances
+                .iter()
+                .find(|fill| fill.color[0] > 0.9)
+                .unwrap();
             for axis in 0..2 {
                 let expected = [100.0, 60.0][axis] * zoom;
                 assert!((fill.rect_pos[axis] - initial[axis] - expected).abs() < 0.1,
@@ -38,20 +56,45 @@ fn scaled_preview_child_translation_uses_logical_distance() {
 fn scaled_preview_transform_list_translation_matches_paint_and_hit() {
     let (_owner, _) = create_root(|| {
         for zoom in [0.35, 0.57, 1.0, 1.5] {
-            let mut child = Element::new().absolute().left(20.0).top(30.0)
-                .w(80.0).h(40.0).bg([1.0, 0.0, 0.0, 1.0]);
+            let mut child = Element::new()
+                .absolute()
+                .left(20.0)
+                .top(30.0)
+                .w(80.0)
+                .h(40.0)
+                .bg([1.0, 0.0, 0.0, 1.0]);
             child.style.transform = crate::style::parse_transform("translate(100px, 50%)");
-            let mut root = Element::new().w(400.0).h(240.0).scale(zoom)
-                .transform_origin("left top").child(child);
+            let mut root = Element::new()
+                .w(400.0)
+                .h(240.0)
+                .scale(zoom)
+                .transform_origin("left top")
+                .child(child);
             let mut tree = LayoutTree::new();
             let result = tree.build_and_layout(&mut root, 400.0, 240.0, [-1.0; 2]);
-            let fill = result.instances.iter().find(|quad| quad.color[0] > 0.9).unwrap();
+            let fill = result
+                .instances
+                .iter()
+                .find(|quad| quad.color[0] > 0.9)
+                .unwrap();
             let rendered = crate::style::aabb_of_centered_transform(
-                [fill.rect_pos[0], fill.rect_pos[1], fill.rect_size[0], fill.rect_size[1]],
-                &fill.transform);
+                [
+                    fill.rect_pos[0],
+                    fill.rect_pos[1],
+                    fill.rect_size[0],
+                    fill.rect_size[1],
+                ],
+                &fill.transform,
+            );
             let hit = visual_paint_aabb(&root.children[0], [0.0; 2]);
-            assert!((rendered[0] - 120.0 * zoom).abs() < 0.1, "zoom={zoom}, rect={rendered:?}");
-            assert!((rendered[1] - 50.0 * zoom).abs() < 0.1, "zoom={zoom}, rect={rendered:?}");
+            assert!(
+                (rendered[0] - 120.0 * zoom).abs() < 0.1,
+                "zoom={zoom}, rect={rendered:?}"
+            );
+            assert!(
+                (rendered[1] - 50.0 * zoom).abs() < 0.1,
+                "zoom={zoom}, rect={rendered:?}"
+            );
             for axis in 0..4 {
                 assert!((rendered[axis] - hit[axis]).abs() < 0.1);
             }
@@ -64,7 +107,11 @@ fn scaled_preview_input_chrome_matches_glyph_scale() {
     let (_owner, _) = create_root(|| {
         let mut baseline = None;
         for zoom in [1.0, 0.35, 0.57, 1.5] {
-            let mut field = Element::new().w(240.0).h(28.0).text("Shanghai").text_size(14.0);
+            let mut field = Element::new()
+                .w(240.0)
+                .h(28.0)
+                .text("Shanghai")
+                .text_size(14.0);
             field.text_style.input_caret = Some(crate::style::InputCaretDraw {
                 caret_byte_index: 8,
                 selection: Some((0, 8)),
@@ -79,23 +126,38 @@ fn scaled_preview_input_chrome_matches_glyph_scale() {
                 caret_color: None,
                 selection_foreground: None,
             });
-            let mut root = Element::new().w(400.0).h(240.0).scale(zoom)
-                .transform_origin("left top").child(field);
+            let mut root = Element::new()
+                .w(400.0)
+                .h(240.0)
+                .scale(zoom)
+                .transform_origin("left top")
+                .child(field);
             let mut layout = LayoutTree::new();
             let result = layout.build_and_layout(&mut root, 400.0, 240.0, [-1.0; 2]);
             let text = result.text_nodes.first().unwrap();
-            let chrome: Vec<_> = result.instances.iter().chain(&result.input_chrome_instances)
-                .map(|quad| [(quad.rect_pos[0] - text.x) / zoom,
-                    (quad.rect_pos[1] - text.y) / zoom,
-                    quad.rect_size[0] / zoom, quad.rect_size[1] / zoom]).collect();
+            let chrome: Vec<_> = result
+                .instances
+                .iter()
+                .chain(&result.input_chrome_instances)
+                .map(|quad| {
+                    [
+                        (quad.rect_pos[0] - text.x) / zoom,
+                        (quad.rect_pos[1] - text.y) / zoom,
+                        quad.rect_size[0] / zoom,
+                        quad.rect_size[1] / zoom,
+                    ]
+                })
+                .collect();
             assert!(!chrome.is_empty());
             if let Some(expected) = baseline.as_ref() {
                 let expected: &Vec<[f32; 4]> = expected;
                 assert_eq!(chrome.len(), expected.len());
                 for (actual, expected) in chrome.iter().zip(expected) {
                     for axis in 0..4 {
-                        assert!((actual[axis] - expected[axis]).abs() < 0.1,
-                            "zoom={zoom}, chrome={actual:?}, expected={expected:?}");
+                        assert!(
+                            (actual[axis] - expected[axis]).abs() < 0.1,
+                            "zoom={zoom}, chrome={actual:?}, expected={expected:?}"
+                        );
                     }
                 }
             } else {

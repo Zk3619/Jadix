@@ -8,11 +8,11 @@ use std::{
 use winit::{event::WindowEvent, window::Window};
 
 #[cfg(all(windows, feature = "backend-dx11-angle"))]
-#[path = "../../../scripts/gpui-compare/angle_identity.rs"]
+#[path = "../../../scripts/benchmarks/gpui-compare/angle_identity.rs"]
 mod angle_identity;
-#[path = "../../../scripts/gpui-compare/gpu_identity.rs"]
+#[path = "../../../scripts/benchmarks/gpui-compare/gpu_identity.rs"]
 mod gpu_identity;
-#[path = "../../../scripts/gpui-compare/workload.rs"]
+#[path = "../../../scripts/benchmarks/gpui-compare/workload.rs"]
 mod workload;
 
 struct Telemetry {

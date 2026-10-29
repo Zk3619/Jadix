@@ -12,10 +12,10 @@ native-hal = ["dep:wgpu-hal", "wgpu-hal/dx11", "dep:naga"]
 [dependencies]
 serde_json.workspace = true
 glow = { version = "0.17", optional = true }
-naga = { version = "30", features = ["wgsl-in"], optional = true }
+naga = { "package" = "jadix_naga", "version" = "=30.0.0", "path" = "../../vendor/naga", "features" = ["wgsl-in"], "optional" = true }
 raw-window-handle = { version = "0.6", optional = true }
-wgpu = { workspace = true, optional = true }
-wgpu-hal = { version = "30", default-features = false, optional = true }
+wgpu = { workspace = true, "optional" = true }
+wgpu-hal = { "package" = "jadix_wgpu_hal", "version" = "=30.0.0", "path" = "../../vendor/wgpu-hal", "default-features" = false, "optional" = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = ["Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }

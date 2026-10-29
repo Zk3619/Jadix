@@ -1,18 +1,42 @@
 # jadix_lucide
 
-统一的 Lucide 静态目录、字体、SVG、lucide-animated 播放与动画配方；不再分发 data 包。
+[English](README.md) | [简体中文](README.zh.md)
+
+Lucide static icons, animated playback and recipes for Jadix.
+
+Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; prepared version `0.1.0`, not yet published.** Local archives and manifests do not prove registry availability.
+
+## Installation
+
+After the prepared version is published:
 
 ```toml
-jadix_lucide = "0.1"
+[dependencies]
+jadix_lucide = "=0.1.0"
 ```
 
-默认启用 `ui,paths`，在 UI 线程、创建窗口前调用 `jadix_lucide::install()?` 安装目录与字体。
-静态图标使用框架的 `icon_named("check")` / `<Icon name="check" />`。
-`animated` 增加动画配方与播放（启用框架 animation-base）；`svg` 使用真实 SVG 帧绘制。
-`animation-path` 显式启用路径插值与 MorphIcon 协作（包含 SVG 和框架增强动画）；仅启用 `svg` 不会隐式启用路径动画。
-`macros` 可选，不强制依赖 UI 解析包；动画 RSX 使用 `jadix_lucide::ui!`。
-纯数据工具可关闭默认 feature，按需开启 `paths,font`，不会依赖 Jadix/GPU。
+Before publication, use the source workspace. Consumers use one registry graph without copying private path/git/patch overrides. Platform-specific packages require the corresponding SDK.
 
-推荐安装 crate。源码定制复制本包 src/assets/LICENSE/NOTICE 并保留实际 Cargo 依赖与 feature。
-框架仅通过通用 IconProvider/字体/播放契约使用目录，不反向依赖本包。
-验证入口：`scripts/check-product-distributions.ps1 -Offline`。
+## Features and scope
+
+Default features: `ui`, `paths`. See [Cargo.toml](Cargo.toml) for the complete feature/dependency graph. A feature flag does not establish platform runtime validation. Applications normally select internal GPU/window packages through their facade rather than depending on platform internals.
+
+## Three ways to use icons
+
+1. Static UI icons: call `install()` before creating the window, then use `icon_named("check")` or `<Icon name="check" />`.
+2. Animated icons: opt into `animated`; add `svg` for SVG frame rendering and `animation-path` only when path interpolation is needed.
+3. Standalone SVG sources: copy individual files from [`assets/svg`](assets/svg), or call `svg_document("check")` with `default-features = false, features = ["paths"]`. This data-only mode does not depend on Jadix/GPU. The 1,703 canonical SVGs come from this package's frozen path catalog; legacy font aliases are not a promise of additional SVG geometry. `unlock` resolves to `lock-open` in the lookup API.
+
+SVG sources use the 24×24 view box, `fill="none"` and `stroke="currentColor"`. You can edit SVG `fill` and `stroke` for suitable closed shapes. Lucide is designed as an outline set: open paths, holes and overlapping strokes do not automatically become a coherent solid icon. Font glyph color changes the outlined glyph; it cannot fill its interior. For a dependable solid silhouette, provide a purpose-designed SVG. Preserve [NOTICE](NOTICE) when copying sources.
+
+## Usage details
+
+The existing [package guide](GUIDE.md) retains additional API, platform and source details; it may use another language.
+
+## Documentation and contributions
+
+[Project documentation](https://github.com/Zk3619/Jadix/tree/main/docs) covers usage, migration, testing and releases. Preserve test discovery and keep private module tests separate from public integration contracts. Update both README languages when changing package setup.
+
+## License
+
+Apache-2.0. Preserve [LICENSE](LICENSE), [NOTICE](NOTICE) and dependency notices.

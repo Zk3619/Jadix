@@ -6,10 +6,7 @@ description = "Shared Tailwind/Uno-style utility token catalog and variant parsi
 license.workspace = true
 repository.workspace = true
 
-include = [
-  "/Cargo.toml",
-  "/LICENSE",
-  "/src/**/*",
-]
+include = ["/Cargo.toml", "/LICENSE", "/src/**/*", "/README.md", "/README.zh.md"]
 
+readme = "README.md"
 [dependencies]

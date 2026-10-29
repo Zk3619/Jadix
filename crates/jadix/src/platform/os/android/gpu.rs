@@ -13,14 +13,5 @@ pub(crate) fn gpu_backend_order(compositor_alpha: bool) -> Vec<(wgpu::Backends, 
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn android_opaque_leads_with_gles() {
-        assert_eq!(
-            gpu_backend_order(false).first().map(|(_, n)| *n),
-            Some("gl")
-        );
-    }
-}
+#[path = "tests/gpu.rs"]
+mod tests;

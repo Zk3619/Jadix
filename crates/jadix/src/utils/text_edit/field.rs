@@ -91,9 +91,8 @@ impl InputType {
     }
 
     /// Whether OS IME (CJK composition) is allowed while this field is focused.
-    /// Password fields force ASCII and must not open a candidate window.
     pub fn allows_ime(self) -> bool {
-        !matches!(self, Self::Password)
+        true
     }
 
     /// 空 placeholder 时的默认提示文案。
@@ -137,59 +136,35 @@ impl From<String> for InputType {
     }
 }
 
-/// 过滤 `type="number"` 可插入文本：数字、至多一个前导 `-`、至多一个 `.`。
-pub fn filter_number_insert(existing: &str, insert: &str) -> String {
-    let mut out = String::new();
-    let mut has_dot = existing.contains('.');
-    let allow_minus_at_start = existing.is_empty();
-    for (i, ch) in insert.chars().enumerate() {
-        match ch {
-            '0'..='9' => out.push(ch),
-            '.' if !has_dot => {
-                has_dot = true;
-                out.push(ch);
-            }
-            '-' if allow_minus_at_start
-                && i == 0
-                && out.is_empty()
-                && !existing.starts_with('-') =>
-            {
-                out.push(ch);
-            }
-            _ => {}
-        }
-    }
-    out
+/// 保留数值编辑文本；格式错误由 `validate_value` 反馈。
+pub fn filter_number_insert(_existing: &str, insert: &str) -> String {
+    strip_single_line_controls(insert)
 }
 
-/// 过滤 `type="tel"`：数字与常见电话符号。
+/// 保留电话编辑文本，移除单行输入不支持的控制符。
 pub fn filter_tel_insert(_existing: &str, insert: &str) -> String {
-    insert
-        .chars()
-        .filter(|c| matches!(c, '0'..='9' | '+' | '-' | ' ' | '(' | ')' | '.' | '*'))
-        .collect()
+    strip_single_line_controls(insert)
 }
 
-/// Filter `type="email"`: common characters in local part and domain name (excluding spaces).
+/// Preserve email text; validation must not rewrite an address.
 pub fn filter_email_insert(_existing: &str, insert: &str) -> String {
-    insert
-        .chars()
-        .filter(|c| {
-            c.is_ascii_alphanumeric() || matches!(c, '@' | '.' | '_' | '%' | '+' | '-' | '!')
-        })
-        .collect()
+    strip_single_line_controls(insert)
 }
 
-/// Filter `type="url"`: print ASCII, remove whitespace and control characters.
+/// Preserve URL text, including Unicode, without normalization.
 pub fn filter_url_insert(_existing: &str, insert: &str) -> String {
-    insert.chars().filter(|c| c.is_ascii_graphic()).collect()
+    strip_single_line_controls(insert)
 }
 
-/// 过滤 `type="password"`：仅非控制 ASCII（禁用 IME 后的兜底）。
+/// 保留 Unicode 密码及空格，仅移除控制符。
 pub fn filter_password_insert(_existing: &str, insert: &str) -> String {
+    strip_single_line_controls(insert)
+}
+
+fn strip_single_line_controls(insert: &str) -> String {
     insert
         .chars()
-        .filter(|c| c.is_ascii() && !c.is_ascii_control())
+        .filter(|character| !character.is_control())
         .collect()
 }
 
@@ -225,7 +200,7 @@ fn validate_email(v: &str) -> bool {
     }
     local
         .chars()
-        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '%' | '+' | '-' | '!'))
+        .all(|c| c.is_ascii_alphanumeric() || ".!#$%&'*+-/=?^_`{|}~".contains(c))
         && domain
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-'))
@@ -235,7 +210,7 @@ fn validate_tel(v: &str) -> bool {
     let digits = v.chars().filter(|c| c.is_ascii_digit()).count();
     digits >= 3
         && v.chars()
-            .all(|c| matches!(c, '0'..='9' | '+' | '-' | ' ' | '(' | ')' | '.' | '*'))
+            .all(|c| matches!(c, '0'..='9' | '+' | '-' | ' ' | '(' | ')' | '.' | '*' | '#'))
 }
 
 fn validate_url(v: &str) -> bool {
@@ -257,23 +232,7 @@ fn validate_url(v: &str) -> bool {
 }
 
 fn validate_number(v: &str) -> bool {
-    let mut chars = v.chars().peekable();
-    if chars.peek() == Some(&'-') {
-        chars.next();
-    }
-    let rest: String = chars.collect();
-    if rest.is_empty() {
-        return false;
-    }
-    let mut seen_dot = false;
-    for c in rest.chars() {
-        match c {
-            '0'..='9' => {}
-            '.' if !seen_dot => seen_dot = true,
-            _ => return false,
-        }
-    }
-    true
+    v.parse::<f64>().is_ok_and(f64::is_finite)
 }
 
 /// 将步进后的数值格式化为输入框字符串（整步优先整数，否则去掉尾随零）。
@@ -611,3 +570,7 @@ pub(crate) fn set_adornment_icon_name(btn: &mut Element, name: &str) -> bool {
     icon.set_attr(crate::utils::ATTR_ICON_NAME, name);
     true
 }
+
+#[cfg(test)]
+#[path = "tests/field.rs"]
+mod tests;

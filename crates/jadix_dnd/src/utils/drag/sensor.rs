@@ -145,20 +145,8 @@ pub fn try_sensors(scope_id: &str, builder: &[DragSensor], ctx: &DragSensorCtx) 
 }
 
 #[cfg(all(test, feature = "product-tests"))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn begin_draggable_missing_hit_returns_false() {
-        let begin: Rc<dyn Fn(BeginDrag)> = Rc::new(|_| {});
-        assert!(!begin_draggable("missing", "x", &begin));
-    }
-
-    #[test]
-    fn add_sensor_requires_scope() {
-        assert!(!add_sensor("missing", DragSensor::new("kbd", |_| false)));
-    }
-}
+#[path = "tests/sensor.rs"]
+mod tests;
 
 pub(super) fn take_scope(scope: &str) -> Vec<DragSensor> {
     EXTRA_SENSORS.with(|slots| slots.borrow_mut().remove(scope).unwrap_or_default())

@@ -20,23 +20,37 @@ fn prepared_portal_removal_keeps_remaining_hud_layout_during_scroll() {
     hover.set_attr(ATTR_PORTAL_KEY, "closing-hover");
     let hud = crate::utils::viewport_portal_stage(
         "persistent-hud",
-        Element::new().absolute().right(12.0).bottom(12.0)
-            .w(320.0).h(150.0).template_id("persistent-hud-panel"),
+        Element::new()
+            .absolute()
+            .right(12.0)
+            .bottom(12.0)
+            .w(320.0)
+            .h(150.0)
+            .template_id("persistent-hud-panel"),
         1_000_000,
     );
-    let mut root = Element::new().w(1000.0).h(700.0)
+    let mut root = Element::new()
+        .w(1000.0)
+        .h(700.0)
         .child(Element::new().w(0.0).h(0.0).child(hover))
         .child(Element::new().w(0.0).h(0.0).child(hud));
     let mut tree = LayoutTree::new();
     tree.build_and_layout(&mut root, 1000.0, 700.0, [-1.0; 2]);
     let rebuilds = tree.full_rebuilds;
-    let before = find_by_tid(&root, "persistent-hud-panel").unwrap().layout_bounds;
+    let before = find_by_tid(&root, "persistent-hud-panel")
+        .unwrap()
+        .layout_bounds;
     root.children[0].children.clear();
     let changed = hoist_portal_subtrees(&mut root);
     assert!(changed > 0);
     tree.note_portals_prepared(true);
     tree.build_and_layout_fast_ex(&mut root, 1000.0, 700.0, [-1.0; 2], true, true, None);
-    assert_eq!(find_by_tid(&root, "persistent-hud-panel").unwrap().layout_bounds, before);
+    assert_eq!(
+        find_by_tid(&root, "persistent-hud-panel")
+            .unwrap()
+            .layout_bounds,
+        before
+    );
     assert_eq!(tree.full_rebuilds, rebuilds);
     assert_eq!(count_in_layer(&root), 1);
 }

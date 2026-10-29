@@ -1,2 +1,4 @@
-crates/jadix/assets/NotoSansCJK.ttc filter=lfs diff=lfs merge=lfs -text
-crates/jadix/assets/NotoSerifCJK.ttc filter=lfs diff=lfs merge=lfs -text
+*.md whitespace=-blank-at-eol,-blank-at-eof
+vendor/cosmic-text/benches/layout.rs whitespace=-blank-at-eol
+vendor/cosmic-text/fonts/*-LICENSE whitespace=-blank-at-eol
+vendor/cosmic-text/sample/*.txt whitespace=-blank-at-eol

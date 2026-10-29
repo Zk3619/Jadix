@@ -33,4 +33,4 @@ tiled restore, CSD/SSD transitions and system-menu visual acceptance. Xdg client
 inset geometry, layer-shell and global menus are not added by this patch.
 
 On refresh, preserve this small delta, update the shared upstream revision and
-rerun scripts/check-window-deps.ps1; do not update only one core/DPI dependency.
+rerun scripts/checks/check-window-deps.ps1; do not update only one core/DPI dependency.

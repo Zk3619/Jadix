@@ -29,7 +29,7 @@ Local changes:
   maximization and actual monitor geometry, preserving the first-show boundary.
   Regression: `cargo test -p jadix_winit --lib native_hidden_maximize -- --ignored
   --test-threads=1` observes visibility and actual work-area coverage. The Gallery
-  process/persistence regression is `python scripts/window-restore-check.py`.
+  process/persistence regression is `python scripts/acceptance/window-restore-check.py`.
   Explicit show uses `SW_MAXIMIZE` directly when restoring maximization; it must
   never expose normal geometry via an earlier `SW_SHOW`. The native observer
   rejects visible normal-size `WM_WINDOWPOSCHANGED` events, and the persistence
@@ -47,5 +47,5 @@ WM_NCHITTEST, client masks, runtime fixed-size changes, invalid replacement,
 worker update/clear, HWND lifetime. No GPU is needed.
 
 On upstream refresh, compare these changes against this revision, update both
-local backends/provenance, and rerun scripts/check-window-deps.ps1. The other
+local backends/provenance, and rerun scripts/checks/check-window-deps.ps1. The other
 platform sources remain pinned upstream; this is an explicit maintenance delta.

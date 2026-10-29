@@ -16,12 +16,13 @@ pub(crate) fn apply_created_window(
 #[cfg(feature = "window-materials")]
 fn apply_glass(window: &dyn Window, options: &WindowOptions) -> bool {
     use objc2::{
-        MainThreadMarker, msg_send,
+        msg_send,
         rc::Retained,
         runtime::{AnyClass, Bool},
+        MainThreadMarker,
     };
     use objc2_app_kit::{NSAutoresizingMaskOptions, NSView, NSWindowOrderingMode};
-    use objc2_foundation::{NSString, ns_string};
+    use objc2_foundation::{ns_string, NSString};
     use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
     let Some(_) = MainThreadMarker::new() else {

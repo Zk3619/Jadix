@@ -4,9 +4,10 @@ version = "0.1.0"
 edition = "2024"
 rust-version = "1.88"
 license = "MIT OR Apache-2.0"
-publish = false
 description = "Pinned AccessKit OpenHarmony adapter backport for Jadix"
 
+readme = "README.md"
+repository = "https://github.com/Zk3619/Jadix"
 [features]
 default = ["api-15"]
 api-15 = ["ohos-accessibility-binding/api-15"]

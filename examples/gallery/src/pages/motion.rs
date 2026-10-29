@@ -1,10 +1,10 @@
 use crate::imports::*;
 use crate::shared::*;
 use jadix::motion::{
-    LayoutAnimation, Motion, MotionTarget, PreparedPath, bind_path_follow, bind_path_reveal,
-    use_layout_motion, use_motion,
+    bind_path_follow, bind_path_reveal, use_layout_motion, use_motion, LayoutAnimation, Motion,
+    MotionTarget, PreparedPath,
 };
-use jadix::primitives::path::{PathCommand, PathStyle, attach_path};
+use jadix::primitives::path::{attach_path, PathCommand, PathStyle};
 use jadix::style::{AnimatedNumber, TimingFunction, ValueDriver};
 
 #[component]

@@ -1,0 +1,95 @@
+
+["package"]
+"description" = "Winit's UIKit (iOS/tvOS/visionOS) backend"
+documentation = "https://docs.rs/jadix_winit_uikit"
+"edition" = "2024"
+"license" = "Apache-2.0"
+"name" = "jadix_winit_uikit"
+repository = "https://github.com/Zk3619/Jadix"
+"rust-version" = "1.86"
+"version" = "0.31.0-beta.3-jadix.1"
+"exclude" = ["Cargo.toml.orig", ".cargo_vcs_info.json"]
+
+readme = "README.md"
+["package"."metadata"]
+
+["package"."metadata"."docs"]
+
+["package"."metadata"."docs"."rs"]
+"all-features" = true
+"targets" = ["aarch64-apple-ios", "aarch64-apple-ios-macabi"]
+
+["features"]
+"serde" = ["dep:serde", "bitflags/serde", "smol_str/serde", "dpi/serde"]
+
+["dependencies"]
+
+["dependencies"."bitflags"]
+"version" = "2"
+
+["dependencies"."dpi"]
+"version" = "=0.1.2"
+
+["dependencies"."rwh_06"]
+"package" = "raw-window-handle"
+"version" = "0.6"
+"features" = ["std"]
+
+["dependencies"."serde"]
+"version" = "1"
+"features" = ["serde_derive"]
+"optional" = true
+
+["dependencies"."smol_str"]
+"version" = "0.3"
+
+["dependencies"."tracing"]
+"version" = "0.1.40"
+"default-features" = false
+
+["dependencies"."winit-core"]
+"package" = "jadix_winit_core"
+"version" = "=0.31.0-beta.3-jadix.1"
+"path" = "../winit-core"
+
+["target"]
+
+["target"."cfg(target_vendor = \"apple\")"]
+
+["target"."cfg(target_vendor = \"apple\")"."dependencies"]
+
+["target"."cfg(target_vendor = \"apple\")"."dependencies"."block2"]
+"version" = "0.6.1"
+
+["target"."cfg(target_vendor = \"apple\")"."dependencies"."dispatch2"]
+"version" = "0.3.0"
+"default-features" = false
+"features" = ["std", "objc2"]
+
+["target"."cfg(target_vendor = \"apple\")"."dependencies"."objc2"]
+"version" = "0.6.1"
+"features" = ["relax-sign-encoding"]
+
+["target"."cfg(target_vendor = \"apple\")"."dependencies"."objc2-core-foundation"]
+"version" = "0.3.2"
+"default-features" = false
+"features" = ["std", "CFCGTypes", "CFBase", "CFRunLoop", "CFString"]
+
+["target"."cfg(target_vendor = \"apple\")"."dependencies"."objc2-foundation"]
+"version" = "0.3.2"
+"default-features" = false
+"features" = ["std", "block2", "objc2-core-foundation", "NSArray", "NSEnumerator", "NSGeometry", "NSObjCRuntime", "NSOperation", "NSString", "NSThread", "NSSet"]
+
+["target"."cfg(target_vendor = \"apple\")"."dependencies"."objc2-ui-kit"]
+"version" = "0.3.2"
+"default-features" = false
+"features" = ["std", "objc2-core-foundation", "UIApplication", "UIDevice", "UIEvent", "UIGeometry", "UIGestureRecognizer", "UITextInput", "UITextInputTraits", "UIOrientation", "UIPanGestureRecognizer", "UIPinchGestureRecognizer", "UIResponder", "UIRotationGestureRecognizer", "UIScreen", "UIScreenMode", "UITapGestureRecognizer", "UITouch", "UITraitCollection", "UIView", "UIViewController", "UIWindow"]
+
+["target"."cfg(target_vendor = \"apple\")"."dependencies"."winit-common"]
+"package" = "jadix_winit_common"
+"version" = "=0.31.0-beta.3-jadix.1"
+"path" = "../winit-common"
+"features" = ["core-foundation", "event-handler", "foundation"]
+
+[lib]
+name = "winit_uikit"

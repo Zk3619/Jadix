@@ -849,11 +849,13 @@ fn persist_delta_pos(pos: Signal<[f32; 2]>) -> impl FnMut(&DragEvent) {
 
 fn local_snap_targets(targets: SnapTargets, origin: Rc<Cell<[f32; 2]>>) -> SnapTargets {
     let end_only = targets.end_only;
-    SnapTargets::default().end_only(end_only).with_fn(Rc::new(move |x, y| {
-        let [left, top] = origin.get();
-        let point = targets.apply(x - left, y - top);
-        Some([point[0] + left, point[1] + top])
-    }))
+    SnapTargets::default()
+        .end_only(end_only)
+        .with_fn(Rc::new(move |x, y| {
+            let [left, top] = origin.get();
+            let point = targets.apply(x - left, y - top);
+            Some([point[0] + left, point[1] + top])
+        }))
 }
 
 pub(crate) fn snap_grid_lines(
@@ -1330,28 +1332,42 @@ mod drop_position_tests {
                         row.set_attr("data-padding-test-row", "1");
                     }
                     Element::new().w(600.0).flex_col().children(rows)
-                })).w(600.0).h(1200.0)
+                }))
+                .w(600.0)
+                .h(1200.0)
             });
             let mut layout = jadix::layout::LayoutTree::new();
             let scene = layout.build_and_layout(&mut root, 600.0, 1200.0, [-1.0; 2]);
-            let rows: Vec<_> = root.children.iter()
+            let rows: Vec<_> = root
+                .children
+                .iter()
                 .filter(|row| row.get_attr("data-padding-test-row").is_some())
                 .collect();
             assert_eq!(rows.len(), 9);
             for row in rows {
                 let bounds = row.viewport_layout_bounds();
-                let labels: Vec<_> = scene.text_nodes.iter().filter(|text| {
-                    text.style.font_family.as_deref() != Some("lucide")
-                        && text.y >= bounds[1]
-                        && text.y < bounds[1] + bounds[3]
-                }).collect();
-                assert!(!labels.is_empty(), "drag row must contain a label: {bounds:?}");
+                let labels: Vec<_> = scene
+                    .text_nodes
+                    .iter()
+                    .filter(|text| {
+                        text.style.font_family.as_deref() != Some("lucide")
+                            && text.y >= bounds[1]
+                            && text.y < bounds[1] + bounds[3]
+                    })
+                    .collect();
+                assert!(
+                    !labels.is_empty(),
+                    "drag row must contain a label: {bounds:?}"
+                );
                 for text in labels {
-                    assert!(text.x >= bounds[0] + 8.0
-                        && text.y >= bounds[1] + 5.0
-                        && text.y + text.height <= bounds[1] + bounds[3] - 5.0,
+                    assert!(
+                        text.x >= bounds[0] + 8.0
+                            && text.y >= bounds[1] + 5.0
+                            && text.y + text.height <= bounds[1] + bounds[3] - 5.0,
                         "drag row lost padding: {:?}, row={bounds:?}, text={:?}",
-                        text.text, [text.x, text.y, text.width, text.height]);
+                        text.text,
+                        [text.x, text.y, text.width, text.height]
+                    );
                 }
             }
         });
@@ -1364,8 +1380,18 @@ mod drop_position_tests {
             let items = Signal::new(vec!["Mercury".to_string(), "Jupiter".to_string()]);
             let mut root = jadix::authoring::mount::with_inline_mount(|| {
                 Element::from(drag_scope("chip-height-test").child(|| {
-                    keyed_sortable_chips("chip-height-rows", items, "planet", "planets", "planets", "", 0.5)
-                })).w(600.0).h(300.0)
+                    keyed_sortable_chips(
+                        "chip-height-rows",
+                        items,
+                        "planet",
+                        "planets",
+                        "planets",
+                        "",
+                        0.5,
+                    )
+                }))
+                .w(600.0)
+                .h(300.0)
             });
             let mut layout = jadix::layout::LayoutTree::new();
             let scene = layout.build_and_layout(&mut root, 600.0, 300.0, [-1.0; 2]);
@@ -1373,16 +1399,22 @@ mod drop_position_tests {
                 if element.get_attr("jadix_drag_draggable").is_some() {
                     *rows += 1;
                     let bounds = element.viewport_layout_bounds();
-                    let text = scene.text_nodes.iter().find(|node| {
-                        matches!(node.text.as_str(), "Mercury" | "Jupiter")
-                            && node.y >= bounds[1]
-                            && node.y < bounds[1] + bounds[3]
-                    }).expect("sortable row text");
+                    let text = scene
+                        .text_nodes
+                        .iter()
+                        .find(|node| {
+                            matches!(node.text.as_str(), "Mercury" | "Jupiter")
+                                && node.y >= bounds[1]
+                                && node.y < bounds[1] + bounds[3]
+                        })
+                        .expect("sortable row text");
                     assert!(text.y >= bounds[1] + 4.0
                         && text.y + text.height <= bounds[1] + bounds[3] - 4.0,
                         "sortable row must leave room above and below its text: row={bounds:?}, text_y={}, text_height={}", text.y, text.height);
                 }
-                for child in &element.children { check(child, scene, rows); }
+                for child in &element.children {
+                    check(child, scene, rows);
+                }
             }
             let mut rows = 0;
             check(&root, &scene, &mut rows);
@@ -2876,7 +2908,8 @@ pub(crate) fn DragShowcase() -> Element {
     let snap_fine_grid = SnapGrid::new(8.0, 8.0);
     let snap_multi_origin = Rc::new(Cell::new([0.0; 2]));
     let snap_multi = local_snap_targets(
-        SnapTargets::new([snap_fine_grid, snap_grid]).range(14.0), snap_multi_origin.clone(),
+        SnapTargets::new([snap_fine_grid, snap_grid]).range(14.0),
+        snap_multi_origin.clone(),
     );
     let snap_multi_board = Element::from(
         drag_scope("gal-drag-snap-multi")
@@ -2974,7 +3007,8 @@ pub(crate) fn DragShowcase() -> Element {
 
     let snap_end_origin = Rc::new(Cell::new([0.0; 2]));
     let snap_end_targets = local_snap_targets(
-        SnapTargets::new([snap_end_grid]).end_only(true), snap_end_origin.clone(),
+        SnapTargets::new([snap_end_grid]).end_only(true),
+        snap_end_origin.clone(),
     );
     let snap_end_board = Element::from(
         drag_scope("gal-drag-snap-end")

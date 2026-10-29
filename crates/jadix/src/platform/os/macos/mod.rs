@@ -8,9 +8,9 @@ mod gpu;
 mod window;
 
 pub(crate) use crate::platform::desktop::{
-    apply_ime_cursor_area, cancel_active_composition,
-    decorate_window_attributes, end_composition_ui, ime_disallow, process_private_mb,
-    release_ui_control, sync_focus_owner, system_scroll_lines,
+    apply_ime_cursor_area, cancel_active_composition, decorate_window_attributes,
+    end_composition_ui, ime_disallow, process_private_mb, release_ui_control, sync_focus_owner,
+    system_scroll_lines,
 };
 #[cfg(any(debug_assertions, test))]
 pub(crate) use crate::platform::desktop::{enable_ansi_stderr, local_hms};

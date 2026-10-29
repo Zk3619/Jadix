@@ -4,13 +4,13 @@ use crate::components::input::{
     input_ime_anchor_signal_key, input_preedit_sel_signal_key, input_preedit_signal_key,
     input_value_signal_key,
 };
-use crate::utils::text_edit::sync_text_edit_paint_subtree;
 use crate::components::textarea::textarea;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::renderer::font_loader;
 use crate::text::install_shared_font_system;
+use crate::utils::text_edit::sync_text_edit_paint_subtree;
 use crate::utils::text_field::{input_text_template_id, text_edit_line_box_px};
 
 fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {

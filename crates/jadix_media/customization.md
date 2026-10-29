@@ -1,6 +1,6 @@
 # 可定制 VideoPlayer 与扩展接入
 
-2026-10-20。保持默认 shadcn 外观，借鉴 ArtPlayer 的 controls / layers / settings 分层；不移植其 DOM、HTML 字符串、媒体执行或全局插件管理器。
+默认外观采用 shadcn 风格，controls / layers / settings 分层参考 ArtPlayer；不包含其 DOM、HTML 字符串、媒体执行或全局插件管理器。
 
 参考的上游原始接口：
 
@@ -149,5 +149,3 @@ let slots = MediaPlayerSlots::new().replace(MediaPlayerSlot::Timeline, move || {
 MediaBackend、Audio / Video 原语和会话过滤契约不因 UI 扩展而耦合插件包。编码媒体、网络密钥和翻译凭证不应放进样式或任意 HTML 字符串；本设计只接受受类型约束的元素、值与闭包。
 
 ## 开发验证
-
-测试命令、Gallery 验证边界集中见 [媒体开发验证记录](../../development-docs/ops/media-validation.md)。

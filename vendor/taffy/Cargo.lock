@@ -55,6 +55,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "jadix_taffy"
+version = "0.15.0"
+dependencies = [
+ "cssparser",
+ "document-features",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "slotmap",
+ "smallvec",
+]
+
+[[package]]
 name = "litrs"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -160,19 +173,6 @@ dependencies = [
  "proc-macro2",
  "quote",
  "unicode-ident",
-]
-
-[[package]]
-name = "taffy"
-version = "0.15.0"
-dependencies = [
- "cssparser",
- "document-features",
- "roxmltree",
- "serde",
- "serde_json",
- "slotmap",
- "smallvec",
 ]
 
 [[package]]

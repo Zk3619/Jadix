@@ -1,6 +1,6 @@
 use crate::imports::*;
 use crate::shared::*;
-use jadix::text::{LayoutCursor, TextExclusion, TextFlowRect, layout_text_flow, prepare};
+use jadix::text::{layout_text_flow, prepare, LayoutCursor, TextExclusion, TextFlowRect};
 
 const ENGLISH: &str = "A page is more than a stack of rectangles. Words can follow the edge of an illustration, divide around a circle, and meet again on the other side. The empty space becomes part of the story.\n\nPrepare the paragraph once. Then give each row its own position and available width. When an object moves, the same measured words find a new route without measuring the whole paragraph again.\n\nThis is continuous text, not separate captions placed beside a picture. Read from left to right, then down the column. At the bottom, the cursor carries the next word into the following column or page. Nothing is clipped or discarded.\n\nTry a narrower page, change the column height, or click either colored shape. The circular contour changes a little on every row; the rectangular pull quote leaves a clean edge. Hide the obstacles to see the original flow return.\n\nGood typography is a conversation between content and space. A native interface can offer the same playful freedom as an editorial page, while keeping text sharp at every scale.";
 
@@ -166,13 +166,15 @@ pub(crate) fn text_flow_scene(
                 .flex_col()
                 .flex_items("center")
                 .justify_center()
-                .child(Element::new()
-                    .template_id("gal-flow-quote-label")
-                    .text("MAKE\nSPACE")
-                    .text_size(15.0)
-                    .text_line_height(24.0)
-                    .text_align("center")
-                    .text_color("#ffffff"))
+                .child(
+                    Element::new()
+                        .template_id("gal-flow-quote-label")
+                        .text("MAKE\nSPACE")
+                        .text_size(15.0)
+                        .text_line_height(24.0)
+                        .text_align("center")
+                        .text_color("#ffffff"),
+                )
                 .on_click(move || shifted.set(!shifted.peek())),
         );
     }
@@ -219,7 +221,9 @@ pub(crate) fn TextFlowShowcase() -> Element {
             }
             last.set(Some(settings));
             host.children = vec![jadix::core::reactivity::isolate_reads(|| {
-                text_flow_scene(settings.0, settings.1, shifted, settings.3, settings.4, settings.5)
+                text_flow_scene(
+                    settings.0, settings.1, shifted, settings.3, settings.4, settings.5,
+                )
             })];
             LayoutStatus::StructureChanged
         });
@@ -314,8 +318,20 @@ mod tests {
                                                 })
                                                 .unwrap()
                                                 .layout_bounds;
-                                            assert!((label[0] + label[2] * 0.5 - quote_box[0] - quote_box[2] * 0.5).abs() < 0.5);
-                                            assert!((label[1] + label[3] * 0.5 - quote_box[1] - quote_box[3] * 0.5).abs() < 0.5);
+                                            assert!(
+                                                (label[0] + label[2] * 0.5
+                                                    - quote_box[0]
+                                                    - quote_box[2] * 0.5)
+                                                    .abs()
+                                                    < 0.5
+                                            );
+                                            assert!(
+                                                (label[1] + label[3] * 0.5
+                                                    - quote_box[1]
+                                                    - quote_box[3] * 0.5)
+                                                    .abs()
+                                                    < 0.5
+                                            );
                                         }
                                         let body: Vec<_> = output
                                             .text_nodes
@@ -331,16 +347,12 @@ mod tests {
                                                 / columns as f32;
                                         let radius = (column_width * 0.23).min(68.0);
                                         let center = [
-                                            24.0 + column_width * if shifted.peek() {
-                                                0.32
-                                            } else {
-                                                0.65
-                                            },
+                                            24.0 + column_width
+                                                * if shifted.peek() { 0.32 } else { 0.65 },
                                             142.0 + radius,
                                         ];
                                         let quote = TextFlowRect {
-                                            x: 24.0
-                                                + (columns - 1) as f32 * (column_width + 28.0),
+                                            x: 24.0 + (columns - 1) as f32 * (column_width + 28.0),
                                             y: if columns == 1 {
                                                 (170.0 + radius * 2.0).min(24.0 + height)
                                             } else {
@@ -364,13 +376,12 @@ mod tests {
                                             );
                                             assert!((node.height - 24.0).abs() < 0.5);
                                             if obstacles && node.y < height + 152.0 {
-                                                let closest_x = center[0]
-                                                    .max(node.x)
-                                                    .min(node.x + node.width);
-                                                let closest_y = center[1]
-                                                    .max(node.y)
-                                                    .min(node.y + node.height);
-                                                let circle_overlap = (closest_x - center[0]).powi(2)
+                                                let closest_x =
+                                                    center[0].max(node.x).min(node.x + node.width);
+                                                let closest_y =
+                                                    center[1].max(node.y).min(node.y + node.height);
+                                                let circle_overlap = (closest_x - center[0])
+                                                    .powi(2)
                                                     + (closest_y - center[1]).powi(2)
                                                     < (radius - 0.01).powi(2);
                                                 assert!(

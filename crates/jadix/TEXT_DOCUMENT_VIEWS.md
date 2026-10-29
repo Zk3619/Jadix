@@ -78,8 +78,3 @@ syntax highlighting, patch import, hunk collapsing, merge or conflict resolution
 in these new views. Diff source text excludes line numbers and change markers
 when copied. Change color is supplemented by `+` / `-` in both modes;
 split rows expose `data-change`, source-line and line-ending attributes.
-
-## Development follow-ups
-
-Future model and pagination directions are maintained in [the development notes](../../development-docs/engine/document-model-followups.md).
-These are design directions, not currently available component APIs.

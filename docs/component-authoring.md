@@ -28,7 +28,7 @@ let element = caption(
 
 `BaseComponentBuilder::finish()` 保持既有语义；其中 `.text()` 写入供产品 Builder 消费的 label 元数据，不能当作修改普通 Element 正文的接口。普通函数直接使用 `Element::text`。
 
-## 无宏框架消费（R2 首批）
+## 无宏框架消费
 
 ```toml
 [dependencies]
@@ -64,7 +64,7 @@ pub fn Caption(value: String, children: Option<Element>) -> Element {
 
 `jadix::ui!` 携带运行时路径；外部产品门面还可通过隐藏的 `__ui_runtime!` 显式选择 `components`、`dnd`、`icons` 模块路径。特殊标签由可选 `jadix_macros` 的显式产品路径规则展开；过程宏现由 `jadix/macros` 控制。关闭默认 features 后可以只使用普通函数／Builder；三个独立产品默认关闭 `macros`，Props／Builder 不依赖 UI 宏或解析包。
 
-2026-10-26 已确认后续 R2 迁包要求：组件、图标及高层 DnD 提供不依赖 UI 宏／解析包的普通函数／Builder 模式，并通过默认关闭的可选 `macros` feature 保留宏作者写法；Gallery／宏示例迁移时显式开启。框架的传递依赖、生成的公共类型和源码复制闭包一并处理；R2 首批已解除纯框架的强制宏依赖；产品迁包与各产品的无宏模式仍待完成。`scripts/check-optional-macros.ps1 -Offline` 使用独立 workspace、重命名 `ui_runtime` 分别验证 Builder／宏消费，并检查 normal/build 依赖树中的 `jadix_macros` 是否随开关出现；其他正常依赖的 derive／syn／quote 不在排除范围。该本地 path 消费沿用根 patch 和锁文件，不代表无 patch 的 registry 消费，后者仍归发布闭包。实施与验收约束见 [宏专项](../development-docs/plans/SPLITTING.md#6-宏专项独立包不等于可选作者层)。
+
 
 ## 自定义控件的指针拖动
 
@@ -90,13 +90,13 @@ pub fn Caption(value: String, children: Option<Element>) -> Element {
 
 自动滚动采样允许以 `set_silent` 更新滚动偏移，然后收集滚动后的命中几何；产品拖拽回调与响应式写入放进返回的更新闭包。惯性采样只保留命中快照，步进、移动和结束回调均在提交阶段执行。内置 DnD 的待提交滚动更新还绑定具体会话，取消、结束、重新开始或惯性恢复后，旧更新不能推进新会话。
 
-R1 的运行时协议尚未冻结：实现者现在须提供 `prepare_autoscroll`／`prepare_inertia`，同仓外部实现与源码消费样例已同步迁移。原 `pump_autoscroll`／`pump_inertia` 同步入口保留，适合调用方已保证无宿主树借用的场景；宿主使用采样加延后 `dispatch`。这只保证本协议中的拖拽产品回调已移出借用，布局回调仍遵循前述约束。框架 `drag` 与独立 `jadix_dnd` 已分离；发布来源闭包仍归 R3–R5。
+实现者须提供 `prepare_autoscroll`／`prepare_inertia`，先采样并延后 `dispatch`。`pump_autoscroll`／`pump_inertia` 同步入口适用于调用方已保证无宿主树借用的场景。拖拽产品回调不持有宿主树借用；布局回调仍须遵循前述借用约束。框架的 `drag` 桥与独立 `jadix_dnd` 产品分别选择。
 
-[外部 BoardDrag 示例](../crates/jadix/tests/fixtures/authoring/board_drag.rs)只依赖公开框架接口。同一份源码既作为独立 provider crate 的模块编译，也直接作为消费者模块嵌入；`scripts/check-authoring.ps1 -Offline` 验证重命名运行时下的两种消费方式。该验证使用工作区构建产物，尚未验证已发布 crate 安装，也不代表现有完整组件库或 Lucide 资源已经可以直接复制使用。
+[外部 BoardDrag 示例](../crates/jadix/tests/fixtures/authoring/board_drag.rs)只依赖公开框架接口。同一份源码既作为独立 provider crate 的模块编译，也直接作为消费者模块嵌入；`scripts/checks/check-authoring.ps1 -Offline` 验证重命名运行时下的两种消费方式。该验证使用工作区构建产物，尚未验证已发布 crate 安装，也不代表现有完整组件库或 Lucide 资源已经可以直接复制使用。
 
 ## 分发边界
 
-本接口可以供项目内自定义组件或外部组件 crate 使用。独立 `jadix_components`／`jadix_lucide`／`jadix_dnd` 已迁包；`scripts/check-product-distributions.ps1` 分别验证 crate path 与原样源码/资源复制、Builder 与可选宏；复制必须保留依赖、feature 和许可证，不是孤立粘贴一个文件。开发验证见 [R1 作者接口记录](../development-docs/ops/r1-authoring-20261025.md)，当前能力开关见 [FEATURES](FEATURES.md)。
+本接口适用于项目内自定义组件或外部组件 crate。`jadix_components`、`jadix_lucide`、`jadix_dnd` 分别提供独立产品；普通 Builder 与可选宏共用运行时接口。复制源码时必须同时保留依赖、feature、资源和许可证。能力开关见 [FEATURES](FEATURES.md)，分发验证见[测试规范](testing.md)。
 
 
 ## 挂载、命中与保留绘制
@@ -130,9 +130,9 @@ R1 的运行时协议尚未冻结：实现者现在须提供 `prepare_autoscroll
 
 通过 `jadix::ui!` 调用框架 RSX 时，展开会携带实际运行时路径；产品标签改用 `jadix_components::ui!` / `jadix_dnd::ui!` / `jadix_lucide::ui!` 或显式产品路径，不能依赖已删除的框架内置产品。依赖改名的 Builder 与宏消费均由仓外夹具验证。`#[component(crate_path = "runtime")]` 的显式路径契约继续适用。直接使用底层 `jadix_macros::ui!` 仍保留原来的 `jadix` 路径约定；应用和组件作者优先使用运行时重导出的宏。
 
-`scripts/check-authoring.ps1` 验证跨 crate 自定义组件及同一 BoardDrag 源码的两种消费方式。`scripts/check-dnd-source.ps1` 把完整高层 DnD 实现复制到全新目录，保留共享的 pointer／routing／runtime 协议身份后编译独立外部 crate，验证会话独立、布局、Owner 清理和旧任务失效。它们使用当前工作区构建产物，不证明发布 registry、无根 patch 消费或所有组件源码都能直接复制。
+`scripts/checks/check-authoring.ps1` 验证跨 crate 自定义组件及同一 BoardDrag 源码的两种消费方式。`scripts/checks/check-dnd-source.ps1` 把完整高层 DnD 实现复制到全新目录，保留共享的 pointer／routing／runtime 协议身份后编译独立外部 crate，验证会话独立、布局、Owner 清理和旧任务失效。它们使用当前工作区构建产物，不证明发布 registry、无根 patch 消费或所有组件源码都能直接复制。
 
-`scripts/check-lucide-source.ps1` 委托统一产品分发验证，覆盖单一 `jadix_lucide` 的目录、字体、配方、hover、morph 和纹理。纯 Rust 文件复制不足以代替资源/依赖闭包；这些本地验证不冒充 registry 发布。
+`scripts/checks/check-lucide-source.ps1` 委托统一产品分发验证，覆盖单一 `jadix_lucide` 的目录、字体、配方、hover、morph 和纹理。纯 Rust 文件复制不足以代替资源/依赖闭包；这些本地验证不冒充 registry 发布。
 
 ## 窗口、定时与输入
 
@@ -183,7 +183,7 @@ let panel = SlotMap::default()
     );
 ```
 
-这是显式组合入口，既有组件可以逐步采用；当前 WebView 用独立 surface 承载加载背景。实现位于不依赖产品组件的 `authoring` 层，没有将主题、组件名或产品策略引入宿主。本接口不代表产品 crate 拆分或 R1/R2 阶段签收。
+这是显式组合入口。WebView 用独立 surface 承载加载背景；接口位于不依赖产品组件的 `authoring` 层，宿主不包含主题、组件名或产品策略。
 
 ## 滚动默认值与端部箭头
 
@@ -214,4 +214,4 @@ let rsx: Element = ui! {
 
 应用的 `app().opacity_groups(bool)`／`<App opacity_groups={…}>` 设置进程级总开关，也可直接调用 `set_opacity_groups_enabled(bool)`，通过 `opacity_groups_enabled()` 查询。总开关默认开启，仅决定是否执行节点已请求的合成；不会自动给全部节点开启整组合成。关闭后回到逐节点透明度，保留节点请求，重新开启即可恢复。多个窗口共享这一策略，最后一次显式设置生效；省略 App 属性时保持当前策略。运行时切换请求所有已登记窗口重绘，不重建组件或清空文字资源缓存。
 
-合成在有效透明度介于 0 和 1 时使用离屏纹理，对容器与其绘制子树统一应用透明度；节点自带非空 filter 或 modal zoom 捕获时沿用已有捕获路径。`jadix_opacity_group` 是内部命名空间标记，用于区分框架协议与用户自定义属性；应用和可独立分发的组件源码应使用公开方法。实现、策略、缓存失效及基础宏入口均属于框架；产品组件只提出节点请求，不向框架引入产品依赖、默认样式或组件名判断。本接口不代表 R1/R2 阶段签收。
+合成在有效透明度介于 0 和 1 时使用离屏纹理，对容器与绘制子树统一应用透明度；节点自带非空 filter 或 modal zoom 捕获时沿用已有路径。`jadix_opacity_group` 是框架内部标记；应用和独立组件应使用公开方法。产品组件只提出节点请求，策略、缓存失效和宏入口由框架维护，不引入产品依赖、默认样式或组件名判断。

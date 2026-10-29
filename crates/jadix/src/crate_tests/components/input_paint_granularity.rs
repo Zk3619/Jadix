@@ -4,15 +4,13 @@
 use crate::components::input::{
     focus_id_for_input, input, input_caret_signal_key, input_value_signal_key,
 };
-use crate::utils::text_edit::{
-    sync_text_edit_paint_subtree, take_input_scroll_prepare_calls,
-};
 use crate::components::textarea::textarea;
 use crate::core::reactivity::use_signal;
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::layout_tree::LayoutTree;
 use crate::renderer::font_loader;
 use crate::text::install_shared_font_system;
+use crate::utils::text_edit::{sync_text_edit_paint_subtree, take_input_scroll_prepare_calls};
 use crate::utils::text_field::input_text_template_id;
 
 fn find_tid<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
@@ -282,6 +280,55 @@ fn drag_select_does_not_jump_scroll_to_line_end() {
         sx.abs() < 1.0,
         "drag-select must not ensure-caret-jump to the line end; sx={sx}"
     );
+}
+
+#[test]
+fn panned_input_caret_damage_stays_inside_its_paint_clip() {
+    use crate::app::damage::take_frame_paint_nodes;
+    use crate::style::{InputCaretDraw, TextOverflow};
+    use crate::utils::text_edit::push_focused_text_edit_caret_damage;
+
+    let mut fs = font_loader::create_font_system();
+    font_loader::apply_default_families(fs.db_mut());
+    install_shared_font_system(&mut fs);
+    let text = "abcdefghijklmnopqrstuvwxyz";
+    let mut leaf = Element::new().text(text).text_size(14.0);
+    leaf.layout_bounds = [10.0, 20.0, 40.0, 20.0];
+    leaf.text_style.overflow = TextOverflow::editable_single_line();
+    leaf.text_style.input_caret = Some(InputCaretDraw {
+        caret_byte_index: text.len(),
+        ..Default::default()
+    });
+    let _ = take_frame_paint_nodes();
+    push_focused_text_edit_caret_damage(&leaf);
+    assert!(
+        take_frame_paint_nodes().is_empty(),
+        "fully clipped caret must not dirty retained text"
+    );
+
+    let prefix = crate::text::measure_prefix_advance(text, 14.0, 400, 20.0);
+    leaf.text_style.scroll_x = prefix - 41.0;
+    push_focused_text_edit_caret_damage(&leaf);
+    let right = take_frame_paint_nodes();
+    assert_eq!(right.len(), 1);
+    assert!((right[0].bounds[0] - 51.0).abs() < 0.05);
+    assert!((right[0].bounds[2] - 1.0).abs() < 0.05);
+
+    leaf.text_style
+        .input_caret
+        .as_mut()
+        .unwrap()
+        .caret_byte_index = 0;
+    leaf.text_style.scroll_x = 3.0;
+    push_focused_text_edit_caret_damage(&leaf);
+    let left = take_frame_paint_nodes();
+    assert_eq!(left.len(), 1);
+    assert!((left[0].bounds[0] - 8.0).abs() < 0.05);
+    assert!((left[0].bounds[2] - 1.0).abs() < 0.05);
+
+    leaf.text_style.scroll_x = 20.0;
+    push_focused_text_edit_caret_damage(&leaf);
+    assert!(take_frame_paint_nodes().is_empty());
 }
 
 #[test]

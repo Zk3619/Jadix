@@ -7,7 +7,6 @@
 //! User `shader()` leaves stay fragment.
 
 use bytemuck::{Pod, Zeroable};
-#[cfg(feature = "compute")]
 use wgpu::util::DeviceExt;
 
 use super::gpu_caps::GpuCaps;
@@ -697,7 +696,7 @@ fn make_linear_sampler(device: &wgpu::Device, label: &str) -> wgpu::Sampler {
 
 fn dispatch_blur(
     device: &wgpu::Device,
-    queue: &wgpu::Queue,
+    _queue: &wgpu::Queue,
     encoder: &mut wgpu::CommandEncoder,
     pipeline: &wgpu::ComputePipeline,
     bgl: &wgpu::BindGroupLayout,
@@ -718,7 +717,18 @@ fn dispatch_blur(
         _pad0: 0.0,
         _pad1: [0.0, 0.0],
     };
-    queue.write_buffer(uniform_buf, 0, bytemuck::bytes_of(&params));
+    let upload = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+        label: Some("jadix-blur-cs-params"),
+        contents: bytemuck::bytes_of(&params),
+        usage: wgpu::BufferUsages::COPY_SRC,
+    });
+    encoder.copy_buffer_to_buffer(
+        &upload,
+        0,
+        uniform_buf,
+        0,
+        std::mem::size_of::<BlurParams>() as u64,
+    );
     let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("jadix-blur-cs-bg"),
         layout: bgl,
@@ -777,44 +787,5 @@ fn make_scratch(device: &wgpu::Device, w: u32, h: u32, label: &str) -> Scratch {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::gpu_caps::GpuCaps;
-
-    #[test]
-    fn pipelines_stay_none_when_compute_off() {
-        let caps = GpuCaps::none();
-        assert!(!caps.compute);
-        let idle = ComputePipelines {
-            blur: None,
-            histogram: None,
-            particles: None,
-        };
-        assert!(!idle.enabled());
-    }
-
-    #[test]
-    fn blur_params_match_wgsl() {
-        assert_eq!(std::mem::size_of::<BlurParams>(), 32);
-        assert_eq!(std::mem::size_of::<ParticleParams>(), 16);
-        assert_eq!(HIST_BYTES, 1024);
-    }
-
-    #[test]
-    #[cfg(not(feature = "compute"))]
-    fn feature_off_new_clears_caps() {
-        let mut caps = GpuCaps {
-            backend: wgpu::Backend::Vulkan,
-            compute: true,
-        };
-        // No device needed: feature-off branch returns before try_new.
-        let idle = ComputePipelines {
-            blur: None,
-            histogram: None,
-            particles: None,
-        };
-        let _ = idle;
-        caps.compute = false;
-        assert!(!caps.compute);
-    }
-}
+#[path = "tests/compute.rs"]
+mod tests;

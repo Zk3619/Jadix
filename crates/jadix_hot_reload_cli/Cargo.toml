@@ -12,7 +12,7 @@ name = "jadix-hot-reload"
 path = "src/main.rs"
 
 [dependencies]
-jadix_hot_reload.workspace = true
+jadix_hot_reload = { workspace = true, features = ["syntax"] }
 jadix_lucide.workspace = true
 notify.workspace = true
 serde.workspace = true

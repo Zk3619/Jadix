@@ -6,8 +6,7 @@ rust-version = "1.88"
 license = "Apache-2.0"
 repository.workspace = true
 description = "Jadix's Winit facade fork with a unified OpenHarmony backend"
-publish = false
-
+readme = "README.md"
 [features]
 default = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"]
 android-game-activity = ["winit-android/game-activity"]
@@ -34,41 +33,41 @@ cfg_aliases = "0.2.2"
 [dependencies]
 bitflags = "2"
 cursor-icon = "1.1"
-dpi = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+dpi = { "version" = "=0.1.2" }
 rwh_06 = { package = "raw-window-handle", version = "0.6", features = ["std"] }
 serde = { version = "1", features = ["serde_derive"], optional = true }
 smol_str = "0.3"
 tracing = { version = "0.1.40", default-features = false }
-winit-core = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+winit-core = { "package" = "jadix_winit_core", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-core" }
 
 [target.'cfg(target_os = "android")'.dependencies]
-winit-android = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+winit-android = { "package" = "jadix_winit_android", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-android" }
 
 [target.'cfg(target_env = "ohos")'.dependencies]
-winit-ohos = { workspace = true }
+winit-ohos = { "package" = "jadix_winit_ohos", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-ohos" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-winit-appkit = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+winit-appkit = { "package" = "jadix_winit_appkit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-appkit" }
 objc2 = { workspace = true }
 objc2-foundation = { workspace = true, features = ["std", "NSUserDefaults", "NSString", "NSGeometry"] }
 objc2-app-kit = { workspace = true, features = ["std", "NSWindow", "NSView", "NSButton", "NSControl", "NSResponder"] }
 
 [target.'cfg(all(target_vendor = "apple", not(target_os = "macos")))'.dependencies]
-winit-uikit = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+winit-uikit = { "package" = "jadix_winit_uikit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-uikit" }
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winit-win32 = { path = "../../vendor/winit-win32", version = "=0.31.0-beta.3" }
+winit-win32 = { "package" = "jadix_winit_win32", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-win32" }
 windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
 
 [target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_vendor = "apple", target_env = "ohos"))))'.dependencies]
 libc = { workspace = true }
 rustix = { version = "1.0.7", default-features = false, features = ["std", "thread"] }
-winit-common = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83", features = ["xkb"] }
-winit-wayland = { path = "../../vendor/winit-wayland", version = "=0.31.0-beta.3", optional = true, default-features = false }
-winit-x11 = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83", optional = true }
+winit-common = { "package" = "jadix_winit_common", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-common", "features" = ["xkb"] }
+winit-wayland = { "package" = "jadix_winit_wayland", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-wayland", "optional" = true, "default-features" = false }
+winit-x11 = { "package" = "jadix_winit_x11", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-x11", "optional" = true }
 
 [target.'cfg(target_os = "redox")'.dependencies]
-winit-orbital = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+winit-orbital = { "package" = "jadix_winit_orbital", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-orbital" }
 
 [target.'cfg(target_family = "wasm")'.dependencies]
-winit-web = { git = "https://github.com/rust-windowing/winit.git", rev = "758a50e35a928dbf72bf05ae91f12fee7a540a83" }
+winit-web = { "package" = "jadix_winit_web", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-web" }

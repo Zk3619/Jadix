@@ -10,6 +10,23 @@ env:
   RUST_BACKTRACE: 1
 
 jobs:
+  documentation-and-test-layout:
+    name: documentation + test ownership
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install icon test dependency
+        run: python -m pip install Pillow
+      - name: Tool contracts
+        run: python -m unittest discover -s scripts/tests -p "test_*.py"
+      - name: Test ownership
+        run: python scripts/checks/check-test-layout.py --output target/governance/test-layout.json
+      - name: Public documentation
+        run: python scripts/checks/check-public-docs.py --output target/governance/public-docs.json
+
   lint:
     name: fmt + clippy
     runs-on: ubuntu-latest
@@ -54,16 +71,24 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libx11-dev libxkbcommon-dev libwayland-dev pkg-config mesa-vulkan-drivers
+      - name: PowerShell tool contracts (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/tests/test_application_frame_budget.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Frame-budget tool contracts failed' }
+          pwsh -NoProfile -File scripts/tests/test_acceptance_powershell.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Acceptance runner contracts failed' }
       - name: Build
         run: cargo build --workspace --all-targets
       - name: Window backend dependency identities
         shell: pwsh
-        run: ./scripts/check-window-deps.ps1
+        run: ./scripts/checks/check-window-deps.ps1
       - name: Isolated capabilities and minimal dependencies (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          ./scripts/check-features.ps1
+          ./scripts/checks/check-features.ps1
           cargo test -p jadix --no-default-features --lib -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p jadix --no-default-features --test animation_features --test optional_macros -- --test-threads=1
@@ -76,19 +101,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p jadix --no-default-features --features macros --lib --test optional_macros -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./scripts/check-optional-macros.ps1
+          ./scripts/checks/check-optional-macros.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./scripts/check-authoring.ps1
-          ./scripts/check-dnd-source.ps1
+          ./scripts/checks/check-authoring.ps1
+          ./scripts/checks/check-dnd-source.ps1
           cargo test -p jadix_dnd --features macros --tests -- --test-threads=1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p jadix_lucide --no-default-features
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test -p jadix_lucide --features animated,svg,macros --all-targets
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./scripts/check-product-distributions.ps1
+          ./scripts/checks/check-product-distributions.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ./scripts/check-extracted-kernels.ps1
+          ./scripts/checks/check-extracted-kernels.ps1
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           foreach ($capability in @('theme-fluent', 'theme-material3', 'theme-liquid-glass', 'code', 'markdown', 'syntax-highlighting', 'code-lsp', 'scale-preview', 'windows-dwm', 'windows-dcomp', 'svg')) {
             cargo test -p jadix --no-default-features --features $capability --test feature_contracts
@@ -143,10 +168,10 @@ jobs:
         run: cargo test -p jadix --lib color_space -- --nocapture
       - name: Token color audit (WP-STY.1)
         if: runner.os != 'Windows'
-        run: bash scripts/check-token-colors.sh
+        run: bash scripts/checks/check-token-colors.sh
       - name: Token color audit (WP-STY.1)
         if: runner.os == 'Windows'
-        run: powershell -File scripts/check-token-colors.ps1
+        run: powershell -File scripts/checks/check-token-colors.ps1
       - name: Text undo/redo contract (freeze)
         run: cargo test -p jadix --lib text_undo_freeze -- --nocapture
       - name: Text undo/redo contract (freeze, text-undo)
@@ -197,10 +222,10 @@ jobs:
         run: cargo test -p jadix --lib color_space -- --nocapture
       - name: Token color audit (WP-STY.1)
         if: runner.os != 'Windows'
-        run: bash scripts/check-token-colors.sh
+        run: bash scripts/checks/check-token-colors.sh
       - name: Token color audit (WP-STY.1)
         if: runner.os == 'Windows'
-        run: powershell -File scripts/check-token-colors.ps1
+        run: powershell -File scripts/checks/check-token-colors.ps1
       - name: Text undo/redo contract (freeze)
         run: cargo test -p jadix --lib text_undo_freeze -- --nocapture
       - name: Text undo/redo contract (freeze, text-undo)
