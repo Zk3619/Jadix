@@ -110,7 +110,8 @@ fn build_stack_content(ctx: &CarouselCtx, items: Vec<Element>) -> Element {
             let tx = dist_f * step;
             let (sc, op, z) = stack_card_appearance(ad, sides, idx, count);
 
-            let dragging = is_carousel_dragging_id(&sync_ctx.id);
+            let dragging =
+                is_carousel_dragging_id(&sync_ctx.id) || super::wheel::owns_offset(&sync_ctx);
             if dragging {
                 el.style.transition.clear();
                 el.transition_snapshot = Default::default();

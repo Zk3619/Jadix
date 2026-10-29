@@ -227,3 +227,78 @@ fn ime_preedit_does_not_parse_or_replace_native_composition() {
         assert_eq!(bridge.active.as_ref().unwrap().text, "text");
     });
 }
+
+#[test]
+fn live_preview_blur_commits_native_text_and_restores_preview() {
+    let (_owner, ()) = crate::core::reactivity::create_root(|| {
+        let state = DocumentEditorState::new("**before**");
+        state.set_selection(DocumentSelection::caret(3)).unwrap();
+        let mut bridge = EditorBridge {
+            state: state.clone(),
+            field: "doc-blur-test".into(),
+            value: Signal::new(String::new()),
+            active: None,
+            next_mount: 0,
+        };
+        bridge.sync();
+        text_field::commit_value(&bridge.field, "**after**".into());
+        let focus = use_signal("__jadix_button_focus_id", String::new);
+        focus.set("another-control".into());
+        bridge.sync();
+        assert_eq!(state.document().source().text(), "**after**");
+        assert!(!state.snapshot().editing);
+        assert!(bridge.active.is_none());
+        assert_eq!(focus.peek(), "another-control");
+    });
+}
+
+#[test]
+fn markdown_table_has_cells_shared_grid_edges_and_hidden_delimiter() {
+    use crate::components::document_view::{is_table_separator, render_document_block};
+    let document = crate::text::Document::markdown("| A | B |\n| :--- | ---: |\n| one | two |\n");
+    let mut rows = 0;
+    let mut separators = 0;
+    for block in document.blocks() {
+        let mut element = render_document_block(&document, block, &None, None);
+        if let DocumentBlockKind::TableRow { header } = block.kind {
+            rows += 1;
+            assert_eq!(element.children.len(), 2);
+            assert_eq!(
+                element
+                    .get_attr("data-document-table-row")
+                    .map(String::as_str),
+                Some(if header { "header" } else { "body" })
+            );
+            assert_eq!(
+                element.children[0].text_style.align,
+                Some(crate::style::TextAlign::Left)
+            );
+            assert_eq!(
+                element.children[1].text_style.align,
+                Some(crate::style::TextAlign::Right)
+            );
+            assert!(
+                element.children[0]
+                    .style
+                    .border_width_sides
+                    .unwrap_or([0.0; 4])[1]
+                    > 0.0
+            );
+            let mut layout = crate::layout::LayoutTree::new();
+            layout.build_and_layout(&mut element, 420.0, 200.0, [-1.0; 2]);
+            for cell in element.children.iter().take(2) {
+                let content = &cell.children[0];
+                assert!((content.layout_bounds[0] - cell.layout_bounds[0] - 12.0).abs() < 0.1);
+                assert!((content.layout_bounds[1] - cell.layout_bounds[1] - 8.0).abs() < 0.1);
+            }
+        } else if is_table_separator(&document, block) {
+            separators += 1;
+            assert_eq!(
+                crate::layout::dim_length_px(element.style.size.height),
+                Some(0.0)
+            );
+        }
+    }
+    assert_eq!(rows, 2);
+    assert_eq!(separators, 1);
+}

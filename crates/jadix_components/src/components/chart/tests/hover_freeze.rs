@@ -121,7 +121,7 @@ fn tooltip_regression_pointer_moves_do_not_rebuild() {
 }
 
 #[test]
-fn tooltip_regression_pointer_sync_follows_and_flips_without_layout() {
+fn tooltip_regression_pointer_sync_clamps_continuously_without_layout() {
     create_root(|| {
         let scene = Rc::new(RefCell::new(None));
         let mut builder = define_chart()
@@ -145,11 +145,7 @@ fn tooltip_regression_pointer_sync_follows_and_flips_without_layout() {
         let mut tree = crate::layout::layout_tree::LayoutTree::new();
         tree.build_and_layout(&mut root, 200.0, 80.0, [-1.0, -1.0]);
         let original = root.children[0].children[2].layout_bounds;
-        for (x, y, flip) in [
-            (50.0, 25.0, false),
-            (190.0, 75.0, true),
-            (40.0, 15.0, false),
-        ] {
+        for (x, y) in [(50.0, 25.0), (190.0, 75.0), (40.0, 15.0)] {
             assign_chart_hover(
                 sig,
                 ChartHover {
@@ -158,14 +154,13 @@ fn tooltip_regression_pointer_sync_follows_and_flips_without_layout() {
                     index: Some(0),
                 },
             );
-            let mut impact = LayoutStatus::Clean;
-            crate::core::tree::sync_reactive_elements_subtree(
+            let impact = crate::authoring::presentation::sync_tree(
                 &mut root,
                 &mut tree,
-                &mut impact,
-                200.0,
-                80.0,
-                [0.0, 0.0],
+                crate::authoring::presentation::Context::new(
+                    crate::authoring::presentation::Phase::AfterLayout,
+                    [200.0, 80.0],
+                ),
             );
             assert_eq!(impact, LayoutStatus::StyleChanged);
             let layer = &root.children[0];
@@ -174,16 +169,8 @@ fn tooltip_regression_pointer_sync_follows_and_flips_without_layout() {
                 tip.layout_bounds, original,
                 "movement must retain the layout box"
             );
-            let expected_x = x + if flip {
-                -original[2] - TOOLTIP_GAP_PX
-            } else {
-                TOOLTIP_GAP_PX
-            };
-            let expected_y = y + if flip {
-                -original[3] - TOOLTIP_GAP_PX
-            } else {
-                TOOLTIP_GAP_PX
-            };
+            let [expected_x, expected_y] =
+                tooltip_origin([x, y], [200.0, 80.0], [original[2], original[3]]);
             assert!((tip.layout_bounds[0] + tip.style.translate[0] - expected_x).abs() < 0.01);
             assert!((tip.layout_bounds[1] + tip.style.translate[1] - expected_y).abs() < 0.01);
             assert!(

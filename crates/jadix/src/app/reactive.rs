@@ -368,6 +368,7 @@ fn subtree_is_clone_safe(root: &Element) -> bool {
     let mut stack = vec![root];
     while let Some(el) = stack.pop() {
         if el.on_click.is_some()
+            || el.on_wheel.is_some()
             || el.on_hover.is_some()
             || el.on_mousedown.is_some()
             || el.on_mouseup.is_some()

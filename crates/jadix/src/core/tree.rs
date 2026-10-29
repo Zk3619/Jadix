@@ -1043,6 +1043,7 @@ pub struct ElementInner {
     /// Layout-pass used sizes for `max-height: auto` → content px keyframes.
     pub used_layout: crate::style::UsedLayout,
     pub on_click: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>>,
+    pub on_wheel: Option<crate::app::pointer_events::WheelHandler>,
     pub on_hover: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>,
     /// DOM [`mousedown`](https://developer.mozilla.org/zh-CN/docs/Web/API/Element/mousedown_event).
     /// [`Self::on_pointer_down`] is a compatibility alias of this slot.
@@ -1201,6 +1202,7 @@ fn blank_inner() -> ElementInner {
         specified_present: Default::default(),
         used_layout: Default::default(),
         on_click: None,
+        on_wheel: None,
         on_hover: None,
         on_mousedown: None,
         on_mouseup: None,
@@ -2078,6 +2080,11 @@ impl Element {
     }
     pub fn on_click(mut self, handler: impl FnMut() + 'static) -> Self {
         self.on_click = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
+    pub fn on_wheel(mut self, handler: impl FnMut([f32; 2]) -> bool + 'static) -> Self {
+        self.on_wheel = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
         self
     }
 

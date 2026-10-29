@@ -2739,6 +2739,13 @@ pub struct LayoutTreeStats {
 }
 
 impl LayoutTree {
+    pub(crate) fn defer_initial_layout_motion(&mut self) {
+        self.layout_motion_registry.defer_initial = true;
+    }
+
+    pub(crate) fn commit_presentation(&mut self) {
+        self.layout_motion_registry.commit_presentation();
+    }
     pub(crate) fn begin_presentation_frame(&mut self) {
         self.take_caret_blink_request();
         self.deadlines.begin_frame();

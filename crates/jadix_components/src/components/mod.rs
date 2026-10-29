@@ -278,7 +278,7 @@ pub use carousel::content::{
 pub use carousel::{
     carousel_scope, use_carousel, CarouselControls, CarouselCtx, CarouselEndAlign,
     CarouselItemSizing, CarouselKind, CarouselOrientation, CarouselPageSnap, CarouselScrollBy,
-    CarouselVariant,
+    CarouselVariant, CarouselWheelMode, CarouselWheelOptions,
 };
 pub use chart::{
     area_chart, area_y, bar_chart, bar_x, bar_y, custom_mark, define_chart, donut_chart, dot,

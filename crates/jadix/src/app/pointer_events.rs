@@ -219,6 +219,17 @@ impl MouseEvent {
 
 pub type PointerHandler = Rc<RefCell<dyn FnMut(&PointerEvent)>>;
 
+pub type WheelHandler = Rc<RefCell<dyn FnMut([f32; 2]) -> bool>>;
+
+pub fn dispatch_wheel(path: &[HitPathEntry], delta: [f32; 2]) -> bool {
+    path.iter().rev().any(|entry| {
+        entry
+            .on_wheel
+            .as_ref()
+            .is_some_and(|handler| handler.borrow_mut()(delta))
+    })
+}
+
 /// One node on the hit path (root → … → leaf).
 #[derive(Clone, Default)]
 pub struct HitPathEntry {
@@ -228,6 +239,7 @@ pub struct HitPathEntry {
     pub on_mousedown: Option<PointerHandler>,
     pub on_mouseup: Option<PointerHandler>,
     pub on_click: Option<Rc<RefCell<dyn FnMut()>>>,
+    pub on_wheel: Option<WheelHandler>,
     pub on_context_menu: Option<PointerHandler>,
     pub on_double_click: Option<PointerHandler>,
     pub on_mousemove: Option<PointerHandler>,
@@ -276,6 +288,7 @@ impl HitPathEntry {
             on_mousedown: el.on_mousedown.clone(),
             on_mouseup: el.on_mouseup.clone(),
             on_click: el.on_click.clone(),
+            on_wheel: el.on_wheel.clone(),
             on_context_menu: el.on_context_menu.clone(),
             on_double_click: el.on_double_click.clone(),
             on_mousemove: el.on_mousemove.clone(),

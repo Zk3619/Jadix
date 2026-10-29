@@ -66,6 +66,7 @@ struct LayoutInner {
     channels: [AnimatedNumber; 4],
     last_sample: Option<[f32; 4]>,
     context: ProjectionContext,
+    presented: bool,
 }
 
 /// Retain one handle per keyed element, including across list reordering.
@@ -87,6 +88,7 @@ impl LayoutMotion {
             channels: std::array::from_fn(|_| AnimatedNumber::follow(0.0)),
             last_sample: None,
             context: ProjectionContext::default(),
+            presented: true,
         })))
     }
 
@@ -131,6 +133,7 @@ impl LayoutMotion {
                 .target
                 .is_none_or(|target| (target[index] - value).abs() > 1e-4);
             if reduced
+                || !state.presented
                 || !animate
                 || state.target.is_none()
                 || state
@@ -190,6 +193,7 @@ impl LayoutMotion {
         }
         state.target = Some(bounds);
         state.last_sample = None;
+        state.presented = true;
     }
 
     fn sync(&self) -> LayoutStatus {
@@ -289,9 +293,16 @@ struct SharedLayout {
 #[derive(Default)]
 pub(crate) struct LayoutRegistry {
     shared: HashMap<String, SharedLayout>,
+    pub(crate) defer_initial: bool,
+    pending: Vec<Weak<RefCell<LayoutInner>>>,
 }
 
 impl LayoutRegistry {
+    pub(crate) fn commit_presentation(&mut self) {
+        for motion in self.pending.drain(..).filter_map(|motion| motion.upgrade()) {
+            motion.borrow_mut().presented = true;
+        }
+    }
     pub(crate) fn measure(&mut self, root: &mut Element, taffy: &taffy::TaffyTree<()>) {
         let mut counts = HashMap::<String, usize>::new();
         crate::core::tree::walk_elements_pruned(root, |element| {
@@ -337,6 +348,10 @@ impl LayoutRegistry {
                 .get("jadix_layout_id")
                 .filter(|id| counts.get(*id) == Some(&1) && axis_aligned);
             if let Some(motion) = &element.layout_motion {
+                if self.defer_initial && motion.0.borrow().target.is_none() {
+                    motion.0.borrow_mut().presented = false;
+                    self.pending.push(Rc::downgrade(&motion.0));
+                }
                 motion.0.borrow_mut().context = context;
                 if let Some(previous) = id.and_then(|id| self.shared.get(id)) {
                     if !previous.owner.ptr_eq(&Rc::downgrade(&motion.0))

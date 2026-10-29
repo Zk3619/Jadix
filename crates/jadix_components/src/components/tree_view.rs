@@ -469,11 +469,13 @@ fn sync_tree_view_hover_paint_node(
 // ── Shared chrome ─────────────────────────────────────────────────────────────
 
 fn chevron_right_icon() -> Element {
-    build_lucide_icon_text_node_or("chevron-right", "›")
+    let mut icon = build_lucide_icon_text_node_or("chevron-right", "›")
         .text_size(CHEVRON_PX)
         .w(CHEVRON_PX)
         .h(CHEVRON_PX)
-        .text_color(parse_text_color("muted-foreground"))
+        .text_color(parse_text_color("muted-foreground"));
+    icon.paint_region_replay = true;
+    icon
 }
 
 fn chevron_transition_entries() -> [TransitionEntry; 1] {

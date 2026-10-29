@@ -1134,7 +1134,10 @@ fn tooltip_label_lives_inside_styled_percent_bubble() {
         bubble.style.radii.iter().all(|r| *r > 4.0),
         "tooltip must keep CSS corner radii (no square path backing)"
     );
-    let tracks_plot = bubble.style.unit_specs.iter().any(|(slot, dim)| {
+    let tracks_plot = matches!(
+        crate::layout::dimension::lpa_kind(bubble.style.inset.left),
+        crate::layout::dimension::DimKind::Percent(_)
+    ) || bubble.style.unit_specs.iter().any(|(slot, dim)| {
         matches!(*slot, UnitSlot::InsetL | UnitSlot::InsetR)
             && matches!(
                 dim,
@@ -1145,7 +1148,10 @@ fn tooltip_label_lives_inside_styled_percent_bubble() {
         tracks_plot,
         "tooltip left/right must be % / calc(% ± px) so stretch cannot split box and text"
     );
-    let below_pin = bubble.style.unit_specs.iter().any(|(slot, dim)| {
+    let below_pin = matches!(
+        crate::layout::dimension::lpa_kind(bubble.style.inset.top),
+        crate::layout::dimension::DimKind::Percent(_)
+    ) || bubble.style.unit_specs.iter().any(|(slot, dim)| {
         *slot == UnitSlot::InsetT
             && matches!(
                 dim,
@@ -1159,41 +1165,26 @@ fn tooltip_label_lives_inside_styled_percent_bubble() {
 }
 
 #[test]
-fn tooltip_pin_flips_near_plot_edges() {
-    use super::datum::ChartTooltipItem;
-    use super::define::tooltip_pin_place;
-    let item = |label: &str, v: f32| ChartTooltipItem {
-        label: label.into(),
-        value: v,
-        series_key: None,
-        header: None,
-    };
-    assert!(
-        !tooltip_pin_place(40.0, 40.0, 200.0, 80.0, &item("Tue", 0.40)).flip_x,
-        "room on the right → keep tooltip to the right of the pin"
-    );
-    assert!(
-        tooltip_pin_place(190.0, 40.0, 200.0, 80.0, &item("Fri", 0.90)).flip_x,
-        "near right edge → flip to the left so overflow:hidden cannot clip"
-    );
-    assert!(
-        !tooltip_pin_place(100.0, 6.0, 200.0, 80.0, &item("A", 1.00)).flip_y,
-        "near top → keep tooltip below the pointer"
-    );
-    assert!(
-        !tooltip_pin_place(100.0, 20.0, 200.0, 80.0, &item("A", 1.00)).flip_y,
-        "enough room below → keep tooltip below the pointer"
-    );
-    assert!(
-        tooltip_pin_place(100.0, 70.0, 200.0, 80.0, &item("A", 1.00)).flip_y,
-        "near bottom → flip above so the bubble stays in plot"
-    );
+fn tooltip_stays_inside_plot_and_moves_continuously_at_edges() {
+    use super::define::tooltip_origin;
+    let mut previous = tooltip_origin([0.0, 0.0], [200.0, 80.0], [96.0, 32.0]);
+    for step in 1..=200 {
+        let next = tooltip_origin(
+            [step as f32, step as f32 * 0.4],
+            [200.0, 80.0],
+            [96.0, 32.0],
+        );
+        assert!(next[0] >= 0.0 && next[0] + 96.0 <= 200.0);
+        assert!(next[1] >= 0.0 && next[1] + 32.0 <= 80.0);
+        assert!((next[0] - previous[0]).abs() <= 1.01);
+        assert!((next[1] - previous[1]).abs() <= 0.41);
+        previous = next;
+    }
 }
 
 #[test]
-fn tooltip_near_right_edge_anchors_from_right() {
+fn tooltip_near_right_edge_keeps_one_stable_anchor() {
     use crate::core::tree::UnitSlot;
-    use crate::layout::dimension::CssDim;
     let el: Element = bar_chart()
         .values([0.2, 0.4, 0.6, 0.8, 0.9])
         .labels(["Mon", "Tue", "Wed", "Thu", "Fri"])
@@ -1213,21 +1204,22 @@ fn tooltip_near_right_edge_anchors_from_right() {
         el.children.iter().find_map(|c| find_bubble(c, needle))
     }
     let bubble = find_bubble(&el, "Fri").expect("Fri tooltip bubble");
-    let from_right = bubble.style.unit_specs.iter().any(|(slot, dim)| {
-        *slot == UnitSlot::InsetR
-            && matches!(
-                dim,
-                CssDim::Percent(_) | CssDim::CalcAdd(_, _) | CssDim::CalcSub(_, _)
-            )
-    });
-    let from_left = bubble
+    let from_right = bubble
+        .style
+        .unit_specs
+        .iter()
+        .any(|(slot, _)| *slot == UnitSlot::InsetR);
+    let from_left = matches!(
+        crate::layout::dimension::lpa_kind(bubble.style.inset.left),
+        crate::layout::dimension::DimKind::Percent(_)
+    ) || bubble
         .style
         .unit_specs
         .iter()
         .any(|(slot, _)| *slot == UnitSlot::InsetL);
     assert!(
-        from_right && !from_left,
-        "last category must pin with `right`, not `left`"
+        !from_right && from_left,
+        "tooltip must keep its left anchor across plot edges"
     );
 }
 

@@ -164,6 +164,7 @@ pub(crate) fn decorate_editor(
             }
         });
     labels.set_attr("data-editor-line-numbers", "true");
+    labels.set_attr("jadix_text_edit_ignore", "true");
     editor.child(
         Element::new()
             .absolute()

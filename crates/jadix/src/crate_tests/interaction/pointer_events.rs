@@ -10,6 +10,35 @@ use crate::core::tree::{
 use crate::style::apply_class_list;
 
 #[test]
+fn wheel_bubbles_from_deepest_handler_and_stops_when_consumed() {
+    use crate::app::pointer_events::{dispatch_wheel, HitPathEntry};
+    use std::{cell::RefCell, rc::Rc};
+    let calls = Rc::new(RefCell::new(Vec::new()));
+    let parent_calls = calls.clone();
+    let child_calls = calls.clone();
+    let parent = Element::new().on_wheel(move |delta| {
+        parent_calls.borrow_mut().push(("parent", delta));
+        true
+    });
+    let child = Element::new().on_wheel(move |delta| {
+        child_calls.borrow_mut().push(("child", delta));
+        delta[1] < 0.0
+    });
+    let path = [
+        HitPathEntry::from_element(&parent, [0.0; 4]),
+        HitPathEntry::from_element(&child, [0.0; 4]),
+    ];
+    assert!(dispatch_wheel(&path, [0.0, -10.0]));
+    assert_eq!(&*calls.borrow(), &[("child", [0.0, -10.0])]);
+    calls.borrow_mut().clear();
+    assert!(dispatch_wheel(&path, [0.0, 10.0]));
+    assert_eq!(
+        &*calls.borrow(),
+        &[("child", [0.0, 10.0]), ("parent", [0.0, 10.0])]
+    );
+}
+
+#[test]
 fn pointer_events_parse_modes() {
     // CSS 通用
     assert_eq!(PointerEvents::parse("none"), PointerEvents::None);

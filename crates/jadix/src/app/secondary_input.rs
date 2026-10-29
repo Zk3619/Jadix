@@ -542,14 +542,17 @@ impl super::App {
                                 crate::renderer::restart_caret_blink();
                             }
                         } else {
-                            let restore_selection = !was_focused
+                            let extend_selection = self.modifiers.shift_key() && pre_empty;
+                            let restore_selection = !extend_selection
+                                && !was_focused
                                 && line_sel.is_none()
                                 && pre_empty
                                 && sel_range.is_some();
                             if !restore_selection {
                                 crate::utils::text_field::clear_extra_carets(&rest);
                             }
-                            let can_move = was_focused
+                            let can_move = !extend_selection
+                                && was_focused
                                 && line_sel.is_none()
                                 && pre_empty
                                 && !password
@@ -600,6 +603,17 @@ impl super::App {
                                 self.input_drag_anchor = caret_ix;
                             } else if restore_selection {
                                 self.input_drag_anchor = caret_ix;
+                                crate::renderer::restart_caret_blink();
+                            } else if extend_selection {
+                                let previous =
+                                    use_signal(&ck, || None::<usize>).peek().unwrap_or(caret_ix);
+                                let anchor = existing
+                                    .map(|(start, end)| if previous == start { end } else { start })
+                                    .unwrap_or(previous);
+                                use_signal(&ck, || None::<usize>).set(Some(caret_ix));
+                                use_signal(&sk, || None::<(usize, usize)>)
+                                    .set(Some((anchor.min(caret_ix), anchor.max(caret_ix))));
+                                self.input_drag_anchor = anchor;
                                 crate::renderer::restart_caret_blink();
                             } else if let Some((lo, hi)) = line_sel {
                                 use_signal(&ck, || None::<usize>).set(Some(hi));
@@ -926,6 +940,26 @@ impl super::App {
         let (dx, dy) = super::scroll_support::wheel_delta_logical_px(delta, scale);
         let x = self.cursor_pos.x as f32 / scale.max(1.0);
         let y = self.cursor_pos.y as f32 / scale.max(1.0);
+        let wheel_path = super::pointer_events::hit_path(&sec.root_element, x, y);
+        if crate::utils::drag::routing::freezes_scroll()
+            || (super::portal_overlay::active_scroll_freeze()
+                != super::portal_overlay::ScrollFreeze::None
+                && super::portal_overlay::overlay_blocks_wheel(&wheel_path))
+        {
+            return;
+        }
+        drop(secs);
+        if super::pointer_events::dispatch_wheel(&wheel_path, [dx, dy]) {
+            self.note_user_scroll_after_press();
+            if let Some(sec) = self.secondaries.borrow().get(&id) {
+                sec.window.request_redraw();
+            }
+            return;
+        }
+        let mut secs = self.secondaries.borrow_mut();
+        let Some(sec) = secs.get_mut(&id) else {
+            return;
+        };
         let mut rests = Vec::new();
         super::scroll_support::collect_scroll_rest_chain_at(
             &sec.root_element,

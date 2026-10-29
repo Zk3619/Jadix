@@ -889,6 +889,7 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
         }
     }
     sync_chip_label_fg(el);
+    el.transition_snapshot.cascade_assigned();
     if el.text_style.align == Some(TextAlign::MatchParent) && el.text_style.computed_align.is_none()
     {
         impact = impact.merge(LayoutStatus::LayoutChanged);
@@ -903,23 +904,36 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
 /// in-flight transition. Overlay writes the *specified* hover target; tick then
 /// retargets from the last used value (`PropertyTween::written`).
 fn apply_matching_color_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> LayoutStatus {
+    let before = el.style.clone();
+    let before_text = el.text_style.clone();
     let mut apply: Vec<String> = Vec::new();
     if let Some(cs) = el.class_set.as_ref() {
         for (sels, util) in &cs.variants {
             if !sels.iter().all(|s| ctx.matches_selector(s)) {
                 continue;
             }
-            if is_hover_paint_utility(util) || is_linear_xform_utility(util) {
+            if is_hover_paint_utility(util)
+                || is_linear_xform_utility(util)
+                || sels
+                    .iter()
+                    .any(|selector| matches!(selector, VariantSelector::Hover))
+            {
                 apply.push(util.clone());
             }
         }
     }
     let mut impact = LayoutStatus::Clean;
+    let class_set = el.class_set.take();
     for util in apply {
         impact = impact.merge(apply_known_utility_ex(el, &util, false));
     }
+    el.class_set = class_set;
     sync_chip_label_fg(el);
-    impact
+    if el.style == before && el.text_style == before_text {
+        LayoutStatus::Clean
+    } else {
+        impact
+    }
 }
 
 /// Last matching `bg-*` / `text-*` variant for `ctx` (author class, CSS order).
@@ -1749,7 +1763,11 @@ fn class_hover_should_enter(
     let Some(cs) = el.class_set.as_ref() else {
         return false;
     };
-    if !cs.has_hover_color() && !cs.has_pointer_hover_linear_xform() {
+    if !cs.variants.iter().any(|(selectors, _)| {
+        selectors
+            .iter()
+            .any(|selector| matches!(selector, VariantSelector::Hover))
+    }) {
         return false;
     }
     let vis_box = crate::core::tree::visual_paint_aabb_with_ancestor(

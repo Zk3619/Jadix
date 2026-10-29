@@ -312,8 +312,33 @@ pub(crate) fn DataChartShowcase() -> Element {
         .theme(ChartTheme::tokens())
         .on_select(move |i| chart_sel.set(Some(i)))
         .into();
+    let wheel_continuous: Element = carousel_multi("gal-carousel-wheel-continuous")
+        .per_view(2.2)
+        .wheel(true)
+        .wheel_mode(CarouselWheelMode::Continuous)
+        .wheel_speed(1.25)
+        .slide(|| ui! { <Box w="100%" h="6rem" bg="muted" items="center" justify="center"><Label>"Builder A"</Label></Box> })
+        .slide(|| ui! { <Box w="100%" h="6rem" bg="secondary" items="center" justify="center"><Label>"Builder B"</Label></Box> })
+        .slide(|| ui! { <Box w="100%" h="6rem" bg="accent" items="center" justify="center"><Label>"Builder C"</Label></Box> })
+        .slide(|| ui! { <Box w="100%" h="6rem" bg="muted" items="center" justify="center"><Label>"Builder D"</Label></Box> })
+        .into();
     let carousel_el = ui! {
         <VStack w="100%" max_w="36rem" mx="auto" gap="1.25rem">
+            <VStack w="100%" gap="0.5rem">
+                <Label font_weight="600">"滚轮逐项切换 · ui!"</Label>
+                <Label w="100%" color="muted-foreground" leading="normal">"悬停后滚轮逐项切换，间隔 220ms；反向滚动立即响应。"</Label>
+                <Carousel id="gal-carousel-wheel-discrete" wheel={true} wheelMode="discrete" wheelIntervalMs={220}>
+                    <CarouselContent>
+                        <CarouselItem><Box w="100%" h="6rem" bg="muted" items="center" justify="center"><Label>"第一项"</Label></Box></CarouselItem>
+                        <CarouselItem><Box w="100%" h="6rem" bg="secondary" items="center" justify="center"><Label>"第二项"</Label></Box></CarouselItem>
+                        <CarouselItem><Box w="100%" h="6rem" bg="accent" items="center" justify="center"><Label>"第三项"</Label></Box></CarouselItem>
+                    </CarouselContent>
+                    <CarouselPrevious /><CarouselNext /><CarouselDots />
+                </Carousel>
+                <Label font_weight="600">"滚轮连续位移 · Builder + ui!"</Label>
+                <Label w="100%" color="muted-foreground" leading="normal">"按滚轮与触控板的位移连续推进，速度倍率 1.25；可在任意位置停留。"</Label>
+                {wheel_continuous}
+            </VStack>
             <VStack w="100%" gap="0.5rem">
                 <Label font_weight="600" text_size="0.875rem">{ "CarouselSingle · autoplay" }</Label>
                 <Label text_size="0.75rem" color="muted-foreground" leading="normal">

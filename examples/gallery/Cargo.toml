@@ -22,9 +22,9 @@ find-msvc-tools = { workspace = true }
 jadix = { workspace = true, features = ["images", "native-clipboard", "macros", "backend-dx12", "backend-gles", "backend-metal", "theme-shadcn",
     "svg",
     "text-undo",
-    "themes", "animation-path", "code", "scale-preview", "windows-dcomp", "document-editing", "document-diff", "document-science", "file-dialog",
+    "themes", "animation-path", "code", "scale-preview", "windows-dcomp", "document-editing", "document-diff", "document-math", "document-science", "file-dialog",
 ] }
-jadix_components = { workspace = true, features = ["macros", "dnd", "svg", "text-undo", "themes", "animation-path", "code", "scale-preview", "document-editing", "document-diff", "document-science", "file-dialog"] }
+jadix_components = { workspace = true, features = ["macros", "dnd", "svg", "text-undo", "themes", "animation-path", "code", "scale-preview", "document-editing", "document-diff", "document-math", "document-science", "file-dialog"] }
 jadix_lucide = { workspace = true, features = ["animated", "animation-path", "macros"] }
 jadix_dnd = { workspace = true, features = ["macros"] }
 jadix_window_state = { workspace = true, features = ["jadix"] }
@@ -45,9 +45,6 @@ jadix_window_materials = { workspace = true, features = ["windows-dcomp"] }
 jadix_clipboard = { workspace = true }
 jadix_macros = { workspace = true }
 log = { workspace = true }
-winit = { workspace = true, optional = true }
-
-[dev-dependencies]
 winit = { workspace = true }
 
 [features]
@@ -57,7 +54,7 @@ full = ["webview", "performance", "devtools", "hot-reload", "runtime-logging", "
 performance = ["jadix/performance"]
 webview = ["jadix/webview", "jadix_components/webview"]
 # Native CPU benchmark telemetry; uses the production Gallery and event loop.
-cpu-bench = ["dep:winit", "performance"]
+cpu-bench = ["performance"]
 # Optional logger: console + JADIX_LOG_FILE (via jadix/runtime-logging).
 #   cargo run -p gallery --features runtime-logging
 #   $env:JADIX_LOG_FILE="jadix.log"; $env:RUST_LOG="info"

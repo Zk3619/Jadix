@@ -9,6 +9,24 @@ fn linear() -> ValueDriver {
     ValueDriver::tween(100.0, TimingFunction::Linear)
 }
 
+#[test]
+fn initial_layout_settles_until_first_present_then_reflows_animate() {
+    let motion = LayoutMotion::new(LayoutAnimation::Both).transition(linear());
+    let mut root = Element::new().child(Element::new().w(100.0).h(40.0).layout_motion(&motion));
+    let mut tree = LayoutTree::new();
+    tree.defer_initial_layout_motion();
+    tree.build_and_layout(&mut root, 400.0, 200.0, [-1.0; 2]);
+    root.children[0].style.size.width = taffy::style::Dimension::length(180.0);
+    tree.build_and_layout(&mut root, 400.0, 200.0, [-1.0; 2]);
+    assert!(!motion.is_active());
+    close(motion.bounds().unwrap()[2], 180.0);
+    tree.commit_presentation();
+    root.children[0].style.size.width = taffy::style::Dimension::length(240.0);
+    tree.build_and_layout(&mut root, 400.0, 200.0, [-1.0; 2]);
+    assert!(motion.is_active());
+    close(motion.bounds().unwrap()[2], 180.0);
+}
+
 fn sync(element: &mut Element) -> LayoutStatus {
     element
         .reactive_sync

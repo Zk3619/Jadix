@@ -658,63 +658,64 @@ fn attach_overlay_pointer_sync(
     selected: Option<usize>,
     sc: &TooltipScene,
 ) -> Element {
-    let bounds = Rc::new(Cell::new([0.0; 4]));
-    let parent_bounds = bounds.clone();
     layer = attach_overlay_scroll_hide(layer, sig);
-    let hide = layer.reactive_sync.take().expect("overlay scroll sync");
-    layer = layer.reactive_sync(move |el, tree| {
-        parent_bounds.set(el.layout_bounds);
-        hide.run(el, tree)
-    });
     let (logic_w, logic_h) = (sc.logic_w.max(1.0), sc.logic_h.max(1.0));
-    for (i, child) in layer.children.iter_mut().enumerate() {
-        let bounds = bounds.clone();
-        let tooltip = child
-            .get_attr("data-slot")
-            .is_some_and(|s| s == "chart-tooltip");
-        let crosshair = sc.crosshair;
-        let previous = child.reactive_sync.take();
-        *child = std::mem::take(child).reactive_sync(move |el, tree| {
-            let status = previous
-                .as_ref()
-                .map_or(LayoutStatus::Clean, |sync| sync.run(el, tree));
+    let crosshair = sc.crosshair;
+    crate::authoring::presentation::attach(
+        &mut layer,
+        crate::authoring::presentation::Phase::AfterLayout,
+        move |el, tree, _| {
             let hov = sig.peek();
             if hov == ChartHover::default() || (hov.index.is_none() && selected.is_some()) {
-                return status;
+                return LayoutStatus::Clean;
             }
-            let [bx, by, bw, bh] = bounds.get();
+            let Some(parent) = el
+                .layout_node_id()
+                .and_then(|node| tree.taffy.layout(node).ok())
+            else {
+                return LayoutStatus::Clean;
+            };
+            let (bw, bh) = (parent.size.width, parent.size.height);
             if bw <= 0.0 || bh <= 0.0 {
-                return status;
+                return LayoutStatus::Clean;
             }
             let x = (hov.x / logic_w).clamp(0.0, 1.0) * bw;
             let y = (hov.y / logic_h).clamp(0.0, 1.0) * bh;
-            let [ex, ey, ew, eh] = el.layout_bounds;
-            let target = if tooltip {
-                let gap = TOOLTIP_GAP_PX;
-                let margin = TOOLTIP_MARGIN_PX;
-                let flip_x = ew > bw - x - gap - margin && x >= bw - x;
-                let flip_y = eh > bh - y - gap - margin && y >= bh - y;
-                [
-                    bx + x + if flip_x { -ew - gap } else { gap },
-                    by + y + if flip_y { -eh - gap } else { gap },
-                ]
-            } else if crosshair && i == 0 {
-                [bx + x, ey]
-            } else if crosshair && i == 1 {
-                [ex, by + y]
-            } else if crosshair && i == 2 {
-                [bx + x - ew / 2.0, by + y - eh / 2.0]
-            } else {
-                return status;
-            };
-            let translate = [target[0] - ex, target[1] - ey];
-            if el.style.translate == translate {
-                return status;
+            let mut status = LayoutStatus::Clean;
+            for (index, child) in el.children.iter_mut().enumerate() {
+                let Some(layout) = child
+                    .layout_node_id()
+                    .and_then(|node| tree.taffy.layout(node).ok())
+                else {
+                    continue;
+                };
+                let (left, top) = (layout.location.x, layout.location.y);
+                let (width, height) = (layout.size.width, layout.size.height);
+                let tooltip = child
+                    .get_attr("data-slot")
+                    .is_some_and(|slot| slot == "chart-tooltip");
+                let target = if tooltip {
+                    tooltip_origin([x, y], [bw, bh], [width, height])
+                } else if crosshair && index == 0 {
+                    [x, top]
+                } else if crosshair && index == 1 {
+                    [left, y]
+                } else if crosshair && index == 2 {
+                    [x - width / 2.0, y - height / 2.0]
+                } else {
+                    continue;
+                };
+                let translate = [target[0] - left, target[1] - top];
+                if child.style.translate != translate {
+                    crate::authoring::mount::invalidate_paint(child);
+                    child.style.translate = translate;
+                    crate::authoring::presentation::invalidate_paint(child);
+                    status = LayoutStatus::StyleChanged;
+                }
             }
-            el.style.translate = translate;
-            status.merge(LayoutStatus::StyleChanged)
-        });
-    }
+            status
+        },
+    );
     layer
 }
 
@@ -976,33 +977,12 @@ fn estimate_tooltip_px(item: &ChartTooltipItem) -> (f32, f32) {
     (tw, th)
 }
 
-/// 画布内翻转：默认指针右下；不足则翻到左/上。
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct TooltipPinPlace {
-    pub flip_x: bool,
-    pub flip_y: bool,
-}
-
-/// 默认锚在指针右下方；空间不足时翻到左/上方。
-pub(crate) fn tooltip_pin_place(
-    lx: f32,
-    ly: f32,
-    logic_w: f32,
-    logic_h: f32,
-    item: &ChartTooltipItem,
-) -> TooltipPinPlace {
-    let (tw, th) = estimate_tooltip_px(item);
-    let w = logic_w.max(1.0);
-    let h = logic_h.max(1.0);
-    let gap = TOOLTIP_GAP_PX + TOOLTIP_MARGIN_PX;
-    let room_right = (w - lx - gap).max(0.0);
-    let room_left = (lx - gap).max(0.0);
-    let room_above = (ly - gap).max(0.0);
-    let room_below = (h - ly - gap).max(0.0);
-    TooltipPinPlace {
-        flip_x: tw > room_right && room_left >= room_right,
-        flip_y: th > room_below && room_above >= room_below,
-    }
+pub(crate) fn tooltip_origin(pointer: [f32; 2], viewport: [f32; 2], size: [f32; 2]) -> [f32; 2] {
+    std::array::from_fn(|axis| {
+        let margin = TOOLTIP_MARGIN_PX.min((viewport[axis] - size[axis]).max(0.0) * 0.5);
+        (pointer[axis] + TOOLTIP_GAP_PX)
+            .clamp(margin, (viewport[axis] - size[axis] - margin).max(margin))
+    })
 }
 
 fn tooltip_indicator_el(indicator: TooltipIndicator, color: [f32; 4]) -> Element {
@@ -1204,32 +1184,17 @@ fn pin_overlay_layer(
         }
     }
     if tooltip && !pin.item.label.is_empty() {
-        let place = tooltip_pin_place(lx, ly, logic_w, logic_h, &pin.item);
-        let gap = TOOLTIP_GAP_PX;
+        let (width, height) = estimate_tooltip_px(&pin.item);
+        let origin = tooltip_origin([lx, ly], [logic_w, logic_h], [width, height]);
         let body = chart_tooltip_content(&pin.item, pin.color, tooltip_indicator);
         let mut tip = chart_tooltip_bubble(body, tooltip_chrome);
         tip.paint_region_replay = true;
         tip = tip.absolute().pointer_events("none");
-        if place.flip_x {
-            let from_right = (100.0 - x_pct).clamp(0.0, 100.0);
-            tip = tip.right(format!("calc({from_right:.2}% + {gap}px)"));
-        } else {
-            tip = tip.left(format!("calc({x_pct:.2}% + {gap}px)"));
-        }
-        if place.flip_y {
-            // 下方空间不足：翻到指针上方。
-            let from_bottom = (100.0 - y_pct).clamp(0.0, 100.0);
-            tip = tip.bottom(format!("calc({from_bottom:.2}% + {gap}px)"));
-        } else {
-            // 默认：指针右下方。
-            tip = tip.top(format!("calc({y_pct:.2}% + {gap}px)"));
-        }
-        let room_w = if place.flip_x {
-            (lx - gap - TOOLTIP_MARGIN_PX).max(96.0)
-        } else {
-            (logic_w - lx - gap - TOOLTIP_MARGIN_PX).max(96.0)
-        };
-        tip = tip.max_w(format!("{room_w}px"));
+        tip = tip
+            .left(format!("{}%", origin[0] / logic_w.max(1.0) * 100.0))
+            .top(format!("{}%", origin[1] / logic_h.max(1.0) * 100.0))
+            .min_w(0.0)
+            .max_w((logic_w - 2.0 * TOOLTIP_MARGIN_PX).max(1.0));
         layer = layer.child(tip);
     }
     layer

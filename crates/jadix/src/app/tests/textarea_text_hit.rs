@@ -4,6 +4,19 @@ use crate::utils::text_field::text_edit_line_box_px;
 use crate::utils::text_field::TEXTAREA_FOCUS_PREFIX;
 use taffy::style::Overflow;
 
+#[test]
+fn editor_line_numbers_do_not_own_caret_hit_testing() {
+    let (mut root, _) = textarea_like_tree();
+    let mut gutter = Element::new().text("1\n2\n3").pointer_events_none();
+    gutter.set_attr("jadix_text_edit_ignore", "true");
+    gutter.layout_bounds = [0.0, 0.0, 30.0, 100.0];
+    root.children.push(gutter);
+    let (_, text, _, _) = find_input_text_leaf_for_rest(&root, None, "ta-hit").unwrap();
+    assert_eq!(text, "啊\n啊\n啊");
+    let hit = find_input_text_at(&root, None, 120.0, 80.0, [0.0, 0.0]).unwrap();
+    assert_eq!(hit.2, text);
+}
+
 fn textarea_like_tree() -> (Element, f32) {
     let lh = text_edit_line_box_px(14.0, None, None);
     let field_id = "ta-hit";

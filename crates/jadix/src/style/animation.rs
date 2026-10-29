@@ -184,6 +184,20 @@ pub struct TransitionSnapshot {
 }
 
 impl TransitionSnapshot {
+    pub(crate) fn cascade_assigned(&mut self) {
+        for tween in self.tweens.values_mut() {
+            tween.written = None;
+        }
+        if let Some(tween) = &mut self.filter_tween {
+            tween.written = None;
+        }
+        if let Some(tween) = &mut self.clip_tween {
+            tween.written = None;
+        }
+        if let Some(tween) = &mut self.shadow_tween {
+            tween.written = None;
+        }
+    }
     /// True while at least one property tween is still interpolating.
     pub fn has_active_tweens(&self) -> bool {
         self.tweens.values().any(|t| t.active)
@@ -330,9 +344,13 @@ pub struct AnimationSnapshot {
     /// Last CSS-timeline sample (ms). CursorMoved extra paints often arrive with
     /// `dt≈0`; without this, summing frame delta freezes `animate-spin`.
     last_tick_ms: Option<f64>,
+    defer_first_tick: bool,
 }
 
 impl AnimationSnapshot {
+    pub(crate) fn start_on_next_sample(&mut self) {
+        self.defer_first_tick = true;
+    }
     /// Drop the CSS-timeline stamp so the next tick advances by the caller-supplied
     /// `dt` only. Modal shell already caps that `dt`; keeping `last_tick_ms` would
     /// apply an 80–150ms first-open layout hitch as keyframe wall time and skip a
@@ -566,6 +584,10 @@ fn animation_tick_dt_ms(snap: &mut AnimationSnapshot, dt_secs: f32, reduced: boo
         return 1.0e9;
     }
     let now_ms = css_timeline_now_ms();
+    if std::mem::take(&mut snap.defer_first_tick) {
+        snap.last_tick_ms = Some(now_ms);
+        return 0.0;
+    }
     let frame = if dt_secs > 1.0e-4 {
         (dt_secs * 1000.0).min(80.0)
     } else {

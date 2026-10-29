@@ -1067,7 +1067,7 @@ pub(crate) fn AnimAlignmentShowcase() -> jadix::core::tree::Element {
                 </Label>
                 <Label text_size="0.7rem" font_weight="600">"padding 布局动画"</Label>
                 <Box w="8rem" h="3.5rem" bg="muted" rounded="0.5rem" overflow="hidden">
-                    <Box w="100%" h="100%" class="p-1 transition-padding duration-300 hover:p-4">
+                    <Box id="gal-padding-hover" w="100%" h="100%" class="p-1 transition-padding duration-300 hover:p-4">
                         <Label text_size="0.65rem">"hover padding"</Label>
                     </Box>
                 </Box>

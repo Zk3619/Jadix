@@ -863,6 +863,8 @@ pub use crate::components::{
     CarouselPreviousProps,
     CarouselScrollBy,
     CarouselVariant,
+    CarouselWheelMode,
+    CarouselWheelOptions,
     Chart,
     ChartBuilder,
     ChartConfig,

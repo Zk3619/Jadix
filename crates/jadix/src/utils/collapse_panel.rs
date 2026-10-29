@@ -143,8 +143,13 @@ pub fn seed_collapse_enter_anim(el: &mut Element, keys: CollapseKeyframes) {
 }
 
 fn seed_enter_anim(el: &mut Element, keys: CollapseKeyframes) {
+    let height = panel_content_height(el);
     clear_motion(el);
-    el.style.max_size.height = Dimension::auto();
+    el.style.max_size.height = if height > 1.0 {
+        Dimension::length(height)
+    } else {
+        Dimension::auto()
+    };
     el.style.animations = vec![keyframes_anim_entry(
         keys.down,
         keys.duration_ms,
@@ -152,6 +157,7 @@ fn seed_enter_anim(el: &mut Element, keys: CollapseKeyframes) {
         AnimationFillMode::Both,
     )];
     reset_anim_snapshot(el);
+    el.animation_snapshot.start_on_next_sample();
 }
 
 /// Seed `*-up` keyframes（库测 / 自定义退场入口）。
@@ -166,7 +172,10 @@ pub fn seed_collapse_exit_anim_from(
     from_h: Option<f32>,
 ) {
     clear_motion(el);
-    el.style.max_size.height = match from_h.filter(|h| *h > 1.0) {
+    el.style.max_size.height = match from_h.filter(|h| *h > 1.0).or_else(|| {
+        let height = panel_content_height(el);
+        (height > 1.0).then_some(height)
+    }) {
         Some(h) => Dimension::length(h),
         None => Dimension::auto(),
     };
@@ -177,6 +186,7 @@ pub fn seed_collapse_exit_anim_from(
         AnimationFillMode::Both,
     )];
     reset_anim_snapshot(el);
+    el.animation_snapshot.start_on_next_sample();
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

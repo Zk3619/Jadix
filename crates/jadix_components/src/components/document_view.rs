@@ -13,6 +13,20 @@ use crate::text::{Document, DocumentBlock, DocumentBlockKind, DocumentInline, Do
 
 pub type DocumentBlockRenderer = Rc<dyn Fn(&Document, &DocumentBlock) -> Option<Element>>;
 
+pub(crate) fn is_table_separator(document: &Document, block: &DocumentBlock) -> bool {
+    block.kind == DocumentBlockKind::Syntax
+        && block
+            .edit_range
+            .as_ref()
+            .and_then(|range| document.block_at(range.start))
+            .is_some_and(|index| {
+                matches!(
+                    document.blocks()[index].kind,
+                    DocumentBlockKind::TableRow { .. }
+                )
+            })
+}
+
 pub fn document_view(id: impl Into<String>) -> DocumentViewBuilder {
     DocumentViewBuilder {
         id: id.into(),
@@ -254,6 +268,9 @@ pub(crate) fn render_document_block(
     let mut result = match &block.kind {
         DocumentBlockKind::Blank => Element::new().h(12.0),
         DocumentBlockKind::Syntax => {
+            if is_table_separator(document, block) {
+                return Element::new().h(0.0);
+            }
             let opening = block
                 .edit_range
                 .as_ref()
@@ -402,23 +419,45 @@ pub(crate) fn render_document_block(
                 .flex_row()
                 .w("100%")
                 .min_h(32.0)
+                .flex_items("stretch")
                 .border("border", 1.0);
+            if !header {
+                row = row.border_top_width(0.0);
+            }
+            row = row.accesskit_role("row");
+            row.set_attr(
+                "data-document-table-row",
+                if *header { "header" } else { "body" },
+            );
             for (position, cell) in block.cells.iter().enumerate() {
-                let mut cell = render_inlines(cell, 16.0, asset_root)
+                let mut content = render_inlines(cell, 16.0, asset_root)
+                    .w("100%")
+                    .text_line_height(24.0);
+                if *header {
+                    content = content.font_weight(700);
+                }
+                let alignment = match block.alignments.get(position) {
+                    Some(crate::text::DocumentAlignment::Center) => "center",
+                    Some(crate::text::DocumentAlignment::Right) => "right",
+                    _ => "left",
+                };
+                content = content.text_align(alignment);
+                let mut cell = Element::new()
+                    .display_flex()
+                    .flex_col()
                     .flex_grow(1.0)
                     .flex_basis(0.0)
-                    .min_w(40.0)
-                    .px(8.0)
-                    .py(4.0);
+                    .min_w(0.0)
+                    .px(12.0)
+                    .py(8.0)
+                    .text_align(alignment)
+                    .child(content);
+                if position + 1 < block.cells.len() {
+                    cell = cell.border_right("border", 1.0);
+                }
+                cell = cell.accesskit_role(if *header { "columnheader" } else { "cell" });
                 if *header {
                     cell = cell.font_weight(700).bg("muted");
-                }
-                if let Some(alignment) = block.alignments.get(position) {
-                    cell = cell.text_align(match alignment {
-                        crate::text::DocumentAlignment::Center => "center",
-                        crate::text::DocumentAlignment::Right => "right",
-                        _ => "left",
-                    });
                 }
                 row = row.child(cell);
             }

@@ -51,6 +51,7 @@ fn has_slot(el: &Element) -> bool {
 fn is_preserved_shell(el: &Element) -> bool {
     has_slot(el)
         || el.on_click.is_some()
+        || el.on_wheel.is_some()
         || el.focus_id.is_some()
         || !el.authoring_state.is_empty()
         || el.paint_edge.is_some()

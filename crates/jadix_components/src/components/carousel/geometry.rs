@@ -207,7 +207,7 @@ pub(super) fn sync_offset_target(ctx: &CarouselCtx) {
 /// Tracks are automatically aligned every frame: only `snap` mode pulls the offset back to the index grid point.
 /// When `snap=false`, the offset is authoritative (it cannot be pulled back by the nearest index after being freely dragged and docked).
 pub(super) fn auto_sync_offset_if_snapping(ctx: &CarouselCtx) {
-    if !effective_snap(ctx) {
+    if !effective_snap(ctx) || super::wheel::owns_offset(ctx) {
         return;
     }
     sync_offset_target(ctx);
@@ -316,7 +316,7 @@ pub(super) fn apply_viewport_len(ctx: &CarouselCtx, new_len: f32) -> bool {
         return true;
     }
     // Free drag: retain the current offset (fraction is scaled according to the viewport ratio), only clamp/wrap, and do not pull back the index grid point.
-    if !effective_snap(ctx) {
+    if !effective_snap(ctx) || super::wheel::owns_offset(ctx) {
         if prev <= 1.0 {
             snap_offset_to(&ctx.id, ideal_offset(ctx));
             return false;

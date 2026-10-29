@@ -156,6 +156,10 @@ impl EditorBridge {
             return;
         }
         let mut snapshot = self.state.snapshot();
+        let follows_native = self
+            .active
+            .as_ref()
+            .is_some_and(|active| active.epoch == snapshot.epoch);
         let preedit = use_signal(&input_preedit_signal_key(&self.field), String::new);
         if !preedit.peek().is_empty() {
             return;
@@ -194,6 +198,14 @@ impl EditorBridge {
                     active.epoch = snapshot.epoch;
                 }
             }
+        }
+        if follows_native
+            && snapshot.mode == DocumentEditMode::LivePreview
+            && use_signal("__jadix_button_focus_id", String::new).peek()
+                != text_field::textarea_focus_id(&self.field)
+        {
+            self.state.finish_editing();
+            snapshot = self.state.snapshot();
         }
         let desired = reveal_range(&snapshot);
         let Some(range) = desired else {

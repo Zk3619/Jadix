@@ -37,11 +37,19 @@ Inspector 默认启用，F12 切换。排查宿主问题时可使用 `JADIX_DEVT
 
 侧栏与页面标题共享 `src/app.rs` 中的 `GALLERY_GROUPS` / `GALLERY_SECTIONS`。页面测试覆盖所有目录项在不同视口下的布局，分组扩充时应同步路由与测试中的页面构造。
 
+各分组使用 Collapsible 构成可折叠的层级导航；点击或 Enter/Space 切换，分组聚焦后左右方向键收起/展开。切换到某分组内的页面会展开对应分支，选中页面与分组展开状态独立。
+
+响应式页首次进入直接呈现最终布局；首帧成功呈现之后的断点和尺寸变化才触发布局过渡。进入动画需要单独显式设计，不借用首次布局测量的中间尺寸。
+
 ## Builder 与 `ui!`
 
 页面使用两种写法共同构建同一棵 Element 树。`src/pages/documents.rs` 中，Builder 创建编辑器和动态模式按钮，`ui!` 组织卡片、操作栏和响应式分支；代码编辑器中的可编辑示例也展示这种组合。`src/app.rs` 中侧栏分组使用 `ui!` 生成，再交给 Builder 组合。
 
 Markdown 支持实时预览、源码和阅读三种模式，并提供撤销、重做和重置。代码编辑器支持高亮、行号及选区编辑；Diff 按钮切换同一份文档的比较方式。代码文本不会执行。
+
+`data` 页还展示可选的 Carousel 滚轮交互：`ui!` 使用 `wheel={true} wheelMode="discrete" wheelIntervalMs={220}` 逐项切换；Builder 使用 `.wheel(true).wheel_mode(CarouselWheelMode::Continuous).wheel_speed(1.25)` 按实际滚动位移连续推进。默认关闭滚轮接管；启用后仅在命中该 Carousel 且存在可滚动内容时消费事件。连续模式允许停在两项之间，方向键、导航按钮及拖拽仍可使用。
+
+文档分层：`jadix_document` 管语义、源码位置和格式解析；`jadix` 管通用输入命中、IME、选区、事务和绘制失效；`jadix_components` 管实时预览策略、表格网格及编辑器外观；应用管主题、文件流程和偏好。表格配色、间距与类似 Typora 的视觉样式不进入 `jadix_document`，修饰键选字和旧选区擦除则应修在共享输入/绘制路径。
 
 ## crate 与实际实现边界
 

@@ -72,6 +72,9 @@ mod geometry;
 mod loop_anim;
 mod snap;
 mod track;
+mod wheel;
+
+pub use wheel::{CarouselWheelMode, CarouselWheelOptions};
 
 pub use builder::{carousel, carousel_multi, carousel_single, carousel_stack, CarouselBuilder};
 #[allow(unused_imports)] // used by external crates / window layer
@@ -434,6 +437,7 @@ fn resolve_loop_anim_keep_offset(id: &str, index: Signal<usize>) {
 
 /// Clean up thread_local residue when mounting.
 fn reset_carousel_ephemeral(id: &str) {
+    use_signal(&format!("{id}__wheel_free"), || false).set_silent(false);
     let _ = take_loop_anim(id);
     let _ = take_instant_snap_to(id);
     LAST_VISUAL_OFFSET.with(|m| {
@@ -633,6 +637,7 @@ fn can_scroll_next(ctx: &CarouselCtx) -> bool {
 }
 
 fn scroll_prev(ctx: &CarouselCtx) {
+    wheel::release_free_offset(ctx);
     let n = ctx.count.peek();
     if n == 0 {
         return;
@@ -674,6 +679,7 @@ fn scroll_prev(ctx: &CarouselCtx) {
 }
 
 fn scroll_next(ctx: &CarouselCtx) {
+    wheel::release_free_offset(ctx);
     let n = ctx.count.peek();
     if n == 0 {
         return;
@@ -894,6 +900,7 @@ pub fn carousel_scope(
     item_width: impl Into<String>,
     dots: Option<bool>,
     stack_sides: u32,
+    wheel: CarouselWheelOptions,
     body: impl FnOnce() -> Element,
 ) -> Element {
     use crate::layout::dimension::IntoF32;
@@ -1083,7 +1090,7 @@ pub fn carousel_scope(
             }
         })
         .into();
-    root
+    wheel::attach(root, ctx, wheel)
 }
 
 // ── RSX parts ────────────────────────────────────────────────────────────────

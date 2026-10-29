@@ -6,7 +6,7 @@ use proc_macro::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::parse::{Parse, ParseStream, Parser};
 use syn::visit::Visit;
-use syn::{Expr, Ident, Token, braced};
+use syn::{braced, Expr, Ident, Token};
 
 /// RSX 中省略 `id` 的 `<Input>`：编译期为每个标签分配序号，生成稳定字面量，避免多个 Input 共用空 `id` 导致信号冲突。
 static INPUT_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);
@@ -4029,6 +4029,18 @@ fn expand_node_inner(
                     } else {
                         quote! { 1u32 }
                     };
+                    let wheel_enabled = get_attr("wheel")
+                        .map(|value| quote! { jadix::core::tree::parse_bool_like(#value) })
+                        .unwrap_or_else(|| quote! { false });
+                    let wheel_mode = get_attr("wheel_mode").or_else(|| get_attr("wheelMode")).map(|value| quote! { __jadix_components::CarouselWheelMode::parse(&(#value).to_string()) }).unwrap_or_else(|| quote! { __jadix_components::CarouselWheelMode::Discrete });
+                    let wheel_interval = get_attr("wheel_interval_ms")
+                        .or_else(|| get_attr("wheelIntervalMs"))
+                        .map(|value| quote! { (#value) as u64 })
+                        .unwrap_or_else(|| quote! { 180u64 });
+                    let wheel_speed = get_attr("wheel_speed")
+                        .or_else(|| get_attr("wheelSpeed"))
+                        .map(|value| quote! { (#value) as f32 })
+                        .unwrap_or_else(|| quote! { 1.0f32 });
                     return quote! {
                         __jadix_components::carousel_scope(
                             #id_ts,
@@ -4048,6 +4060,12 @@ fn expand_node_inner(
                             #item_width_ts,
                             #dots_ts,
                             #stack_sides_ts,
+                            __jadix_components::CarouselWheelOptions {
+                                enabled: #wheel_enabled,
+                                mode: #wheel_mode,
+                                interval_ms: #wheel_interval,
+                                speed: #wheel_speed,
+                            },
                             || #child_el,
                         )
                     };
@@ -9703,6 +9721,7 @@ fn expand_node_inner(
                     }
                     "on_click" | "onClick" => element = quote! { #element.on_click(#value) },
                     "on_hover" | "onHover" => element = quote! { #element.on_hover(#value) },
+                    "on_wheel" | "onWheel" => element = quote! { #element.on_wheel(#value) },
                     "on_mousedown" | "onMouseDown" => {
                         element = quote! { #element.on_mousedown(#value) }
                     }

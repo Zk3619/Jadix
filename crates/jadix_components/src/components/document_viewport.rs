@@ -96,6 +96,9 @@ fn project(surface: &DocumentSurface) -> Vec<Item> {
                 continue;
             }
         }
+        if crate::components::document_view::is_table_separator(&surface.document, block) {
+            continue;
+        }
         items.push(Item {
             block: position,
             key: block.id,

@@ -207,7 +207,7 @@ fn gallery_section(key: &str) -> &'static GallerySection {
         .unwrap_or(&GALLERY_SECTIONS[0])
 }
 
-fn gallery_nav_item(
+pub(crate) fn gallery_nav_item(
     section: Signal<String>,
     prefix: &str,
     key: &'static str,
@@ -243,20 +243,63 @@ pub(crate) fn gallery_nav_menu(
 ) -> Element {
     let groups: Vec<Element> = GALLERY_GROUPS
         .iter()
-        .map(|group| {
-            let items: Vec<Element> = GALLERY_SECTIONS
-                .iter()
-                .filter(|entry| entry.group == *group)
-                .map(|entry| {
-                    gallery_nav_item(section, prefix, entry.key, entry.title, entry.icon, close)
+        .enumerate()
+        .map(|(position, group)| {
+            let group = *group;
+            let id = format!("{prefix}-branch-{position}");
+            let expanded = use_signal(&format!("{id}-open"), || true);
+            let trigger_id = format!("{id}:trigger");
+            let panel_id = format!("{id}:panel");
+            let prefix = prefix.to_owned();
+            create_effect(move || {
+                let selected = section.get();
+                if GALLERY_SECTIONS.iter().any(|entry| entry.key == selected && entry.group == group) && !expanded.peek() {
+                    expanded.set(true);
+                }
+            });
+            collapsible(id)
+                .open(expanded)
+                .trigger(move || {
+                    let trigger = ui! {
+                    <SidebarMenuButton id={trigger_id}>
+                        <HStack w="100%" min_w="0" items="center" gap="0.5rem">
+                            <Icon name={if expanded.get() { "chevron-down" } else { "chevron-right" }} size="14px" pointer_events="none" />
+                            <Label grow="1" text_size="0.875rem" font_weight="600">{group}</Label>
+                        </HStack>
+                    </SidebarMenuButton>
+                    };
+                    trigger.on_key_down(move |event| {
+                        if event.state != winit::event::ElementState::Pressed { return false; }
+                        match event.logical_key {
+                            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowLeft) => { expanded.set(false); true }
+                            winit::keyboard::Key::Named(winit::keyboard::NamedKey::ArrowRight) => { expanded.set(true); true }
+                            _ => false,
+                        }
+                    }).reactive_sync(move |element, _| {
+                        let value = expanded.peek().to_string();
+                        if element.get_attr("aria-expanded") == Some(&value) { return LayoutStatus::Clean; }
+                        element.set_attr("aria-expanded", value);
+                        element.set_attr("aria-controls", panel_id.clone());
+                        LayoutStatus::StyleChanged
+                    })
                 })
-                .collect();
-            ui! {
-                <SidebarGroup>
-                    <SidebarGroupLabel>{*group}</SidebarGroupLabel>
-                    <SidebarGroupContent><SidebarMenu>{items}</SidebarMenu></SidebarGroupContent>
-                </SidebarGroup>
-            }
+                .content({
+                    let prefix = prefix.to_owned();
+                    move || {
+                        let items: Vec<Element> = GALLERY_SECTIONS.iter()
+                            .filter(|entry| entry.group == group)
+                            .map(|entry| gallery_nav_item(section, &prefix, entry.key, entry.title, entry.icon, close))
+                            .collect();
+                        ui! {
+                            <SidebarGroupContent>
+                                <VStack w="100%" min_w="0" pl="0.75rem">
+                                    <SidebarMenu>{items}</SidebarMenu>
+                                </VStack>
+                            </SidebarGroupContent>
+                        }
+                    }
+                })
+                .into()
         })
         .collect();
     vstack().w("100%").gap("0.25rem").children(groups).into()
@@ -756,9 +799,9 @@ fn build_gallery_home() -> Element {
                     >
                         <SidebarTrigger id="gal-sidebar-trigger" />
                         <Separator vertical={true} />
-                        <VStack gap="0.125rem" min_w="0" grow="1">
-                            <Label id="gal-section-title" w="100%" min_w="0" text_size="1.25rem" font_weight="700" text_overflow="ellipsis">{gallery_section(&section.get()).title}</Label>
-                            <Label id="gal-section-desc" w="100%" min_w="0" text_size="0.875rem" color="muted-foreground" text_overflow="ellipsis">{gallery_section(&section.get()).description}</Label>
+                        <VStack gap="0.125rem" min_w="0" grow="1" overflow="hidden">
+                            <Label id="gal-section-title" w="100%" min_w="0" h="1.5rem" leading="1.2" text_size="1.25rem" font_weight="700" text_overflow="ellipsis">{gallery_section(&section.get()).title}</Label>
+                            <Label id="gal-section-desc" w="100%" min_w="0" h="1.25rem" leading="1.4285714" text_size="0.875rem" color="muted-foreground" text_overflow="ellipsis">{gallery_section(&section.get()).description}</Label>
                         </VStack>
                     </HStack>
                     <VStack min_w="0" min_h="0" grow="1">

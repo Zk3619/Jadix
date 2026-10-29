@@ -5,6 +5,61 @@ use crate::shared::*;
 use jadix::core::reactivity::{create_effect, create_root};
 
 #[test]
+fn padding_hover_demo_keeps_an_interactive_box_through_reversals() {
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            jadix::style::set_css_transition_virtual_timeline(true);
+            jadix::style::set_css_transition_timeline_ms(0.0);
+            let mut root = crate::pages::layout::AnimAlignmentShowcase(Default::default());
+            let mut tree = jadix::layout::LayoutTree::new();
+            tree.build_and_layout(&mut root, 900.0, 3000.0, [-1.0; 2]);
+            let bounds = gallery_find_by_tid(&root, "gal-padding-hover")
+                .unwrap()
+                .layout_bounds;
+            assert!(bounds[2] > 100.0 && bounds[3] > 40.0, "{bounds:?}");
+            for (step, hovered) in [true, false, true, false, true].into_iter().enumerate() {
+                let mouse = if hovered {
+                    [bounds[0] + bounds[2] * 0.5, bounds[1] + bounds[3] * 0.5]
+                } else {
+                    [-1.0; 2]
+                };
+                let mut impact = LayoutStatus::Clean;
+                jadix::style::tick_active_css_transitions_subtree(
+                    &mut root,
+                    mouse,
+                    "",
+                    true,
+                    900.0,
+                    3000.0,
+                    [0.0; 2],
+                    &mut tree,
+                    &mut impact,
+                );
+                jadix::style::set_css_transition_timeline_ms((step + 1) as f64 * 500.0);
+                jadix::style::tick_active_css_transitions_subtree(
+                    &mut root,
+                    mouse,
+                    "",
+                    true,
+                    900.0,
+                    3000.0,
+                    [0.0; 2],
+                    &mut tree,
+                    &mut impact,
+                );
+                let target = gallery_find_by_tid(&root, "gal-padding-hover").unwrap();
+                let padding = jadix::layout::lp_length_px(target.style.padding.left).unwrap();
+                assert!(
+                    (padding - if hovered { 16.0 } else { 4.0 }).abs() < 0.1,
+                    "hover={hovered} padding={padding}"
+                );
+            }
+            jadix::style::set_css_transition_virtual_timeline(false);
+        });
+    });
+}
+
+#[test]
 fn drawing_canvas_preserves_strokes_on_remount_and_clears_independently() {
     fn canvas(root: &Element) -> Option<&Element> {
         if root.on_mousedown.is_some()
@@ -116,10 +171,38 @@ fn responsive_gallery_navigation_changes_section_and_closes_mobile_sheet() {
             let section = Signal::new("basics".to_string());
             let open = Signal::new(true);
             let menu = gallery_nav_menu(section, "gal-mobile-test", Some(open));
-            let action = gallery_find_by_tid(&menu, "gal-mobile-test-nav-forms").unwrap();
+            assert!(gallery_find_by_tid(&menu, "gal-mobile-test-branch-0:trigger").is_some());
+            let item = gallery_nav_item(
+                section,
+                "gal-mobile-test",
+                "forms",
+                "表单与输入",
+                "file-text",
+                Some(open),
+            );
+            let action = gallery_find_by_tid(&item, "gal-mobile-test-nav-forms").unwrap();
             (action.on_click.as_ref().unwrap().borrow_mut())();
             assert_eq!(section.peek(), "forms");
             assert!(!open.peek());
+        });
+    });
+}
+
+#[test]
+fn gallery_sidebar_branches_toggle_without_changing_the_selected_page() {
+    run_on_gallery_build_stack(|| {
+        create_root(|| {
+            let section = Signal::new("basics".to_string());
+            let menu = gallery_nav_menu(section, "gal-tree-test", None);
+            let trigger = gallery_find_by_tid(&menu, "gal-tree-test-branch-0:trigger").unwrap();
+            let expanded = use_signal("gal-tree-test-branch-0-open", || true);
+            assert!(expanded.peek());
+            trigger.on_click.as_ref().unwrap().borrow_mut()();
+            assert!(!expanded.peek());
+            assert_eq!(section.peek(), "basics");
+            trigger.on_click.as_ref().unwrap().borrow_mut()();
+            assert!(expanded.peek());
+            assert_eq!(section.peek(), "basics");
         });
     });
 }
@@ -288,12 +371,20 @@ fn responsive_gallery_breakpoint_keeps_previous_presented_cards() {
                     let old = grid(&root).unwrap().children[1].layout_bounds;
                     let frame = tree.build_and_layout(&mut root, width, 1000.0, [-1.0; 2]);
                     if width == 900.0 {
-                        assert!(frame.instances.iter().any(|instance| {
-                            (instance.rect_pos[0] - old[0]).abs() < 0.1
-                                && (instance.rect_pos[1] - old[1]).abs() < 0.1
-                                && (instance.rect_size[0] - old[2]).abs() < 0.1
-                                && (instance.rect_size[1] - old[3]).abs() < 0.1
-                        }), "breakpoint change snapped instead of projecting the previous card: old={old:?}, paints={:?}", frame.instances.iter().map(|instance| (instance.rect_pos, instance.rect_size)).collect::<Vec<_>>());
+                        assert!(
+                            frame.instances.iter().any(|instance| {
+                                (instance.rect_pos[0] - old[0]).abs() < 0.1
+                                    && (instance.rect_pos[1] - old[1]).abs() < 0.1
+                                    && (instance.rect_size[0] - old[2]).abs() < 0.1
+                                    && (instance.rect_size[1] - old[3]).abs() < 0.1
+                            }),
+                            "breakpoint change snapped instead of projecting the previous card: old={old:?}, paints={:?}",
+                            frame
+                                .instances
+                                .iter()
+                                .map(|instance| (instance.rect_pos, instance.rect_size))
+                                .collect::<Vec<_>>()
+                        );
                     }
                 }
             });
@@ -468,8 +559,10 @@ fn responsive_gallery_shell_padding_starts_from_previous_spacing() {
                     );
                     jadix::style::advance_css_transition_timeline_ms(100.0);
                     let middle = frame(&mut root, &mut tree, width);
-                    assert!(middle > previous.min(target) && middle < previous.max(target),
-                        "expected a real padding intermediate frame: {previous} -> {middle} -> {target}");
+                    assert!(
+                        middle > previous.min(target) && middle < previous.max(target),
+                        "expected a real padding intermediate frame: {previous} -> {middle} -> {target}"
+                    );
                     jadix::style::advance_css_transition_timeline_ms(100.0);
                     let end = frame(&mut root, &mut tree, width);
                     assert!((end - target).abs() < 0.1);

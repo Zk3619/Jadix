@@ -4,6 +4,55 @@ use crate::style::TimingFunction;
 
 #[test]
 #[cfg(feature = "animation-base")]
+fn padding_hover_reversal_at_first_sample_keeps_the_latest_target() {
+    use crate::style::utility::{resolve_class_variants, VariantContext};
+    set_css_transition_virtual_timeline(true);
+    set_css_transition_timeline_ms(0.0);
+    let mut element =
+        crate::core::tree::Element::new().class("p-1 transition-padding duration-300 hover:p-4");
+    {
+        let inner = &mut *element.inner;
+        tick_element_transitions(&mut inner.style, &mut inner.transition_snapshot, 0.0);
+    }
+    for (time, hovered) in [
+        (0.0, true),
+        (0.0, false),
+        (30.0, true),
+        (60.0, false),
+        (80.0, true),
+        (90.0, false),
+    ] {
+        set_css_transition_timeline_ms(time);
+        resolve_class_variants(
+            &mut element,
+            &VariantContext {
+                hovered,
+                ..Default::default()
+            },
+        );
+        {
+            let inner = &mut *element.inner;
+            tick_element_transitions(&mut inner.style, &mut inner.transition_snapshot, 0.0);
+        }
+        if time == 0.0 && !hovered {
+            assert_eq!(
+                element.transition_snapshot.tweens[&TransitionProperty::Padding].to[3],
+                4.0
+            );
+        }
+    }
+    set_css_transition_timeline_ms(500.0);
+    {
+        let inner = &mut *element.inner;
+        tick_element_transitions(&mut inner.style, &mut inner.transition_snapshot, 0.0);
+    }
+    assert!((extract_prop(&element.style, TransitionProperty::Padding).0[3] - 4.0).abs() < 0.01);
+    assert!(!element.transition_snapshot.has_active_tweens());
+    set_css_transition_virtual_timeline(false);
+}
+
+#[test]
+#[cfg(feature = "animation-base")]
 fn spring_transition_retargets_from_current_value() {
     set_css_transition_virtual_timeline(true);
     set_css_transition_timeline_ms(0.0);

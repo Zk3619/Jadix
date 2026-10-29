@@ -246,6 +246,9 @@ pub(crate) fn element_self_pointer_hit_with(
 /// Preserve `input:` / `textarea:` focus through inner scroll viewports (`scroll:`).
 #[inline]
 fn inherit_text_edit_focus_id<'a>(el: &'a Element, inherited: Option<&'a str>) -> Option<&'a str> {
+    if el.attrs.contains_key("jadix_text_edit_ignore") {
+        return None;
+    }
     if matches!(
         el.attrs.get("data-slot").map(String::as_str),
         Some("input-adornment-addon" | "input-adornment-text" | "input-adornment-button")

@@ -2,6 +2,66 @@ use super::*;
 use crate::core::reactivity::create_root;
 
 #[test]
+fn first_collapse_sample_does_not_inherit_the_idle_frame_duration() {
+    let mut panel = Element::new();
+    panel.layout_bounds = [0.0, 0.0, 200.0, 160.0];
+    let bounds = panel.layout_bounds;
+    panel.used_layout.stamp_border_box(bounds, false);
+    seed_collapse_enter_anim(&mut panel, CollapseKeyframes::COLLAPSIBLE);
+    panel.tick_css_animations(1.0);
+    assert!(crate::layout::dim_length_px(panel.style.max_size.height).unwrap() < 1.0);
+    assert!(animation_run_active(
+        &panel.style,
+        &panel.animation_snapshot
+    ));
+    panel.tick_css_animations(0.1);
+    let height = crate::layout::dim_length_px(panel.style.max_size.height).unwrap();
+    assert!(height > 1.0 && height < 160.0, "height={height}");
+}
+
+#[test]
+fn collapse_keyframe_endpoint_stays_at_the_measured_height() {
+    crate::style::set_css_transition_virtual_timeline(true);
+    crate::style::set_css_transition_timeline_ms(0.0);
+    let mut panel = Element::new();
+    panel.layout_bounds = [0.0, 0.0, 200.0, 160.0];
+    let bounds = panel.layout_bounds;
+    panel.used_layout.stamp_border_box(bounds, false);
+    seed_collapse_enter_anim(&mut panel, CollapseKeyframes::COLLAPSIBLE);
+    panel.tick_css_animations(0.0);
+    crate::style::set_css_transition_timeline_ms(64.0);
+    panel.tick_css_animations(0.0);
+    let before = panel.style.max_size.height;
+    panel.used_layout.intrinsic_height = 180.0;
+    panel.tick_css_animations(0.0);
+    assert_eq!(panel.style.max_size.height, before);
+    crate::style::set_css_transition_virtual_timeline(false);
+}
+
+#[test]
+fn opening_survives_repeated_sync_before_first_animation_tick() {
+    let (_owner, ()) = create_root(|| {
+        let presence = use_collapse_panel_presence("unticked-open");
+        sync_collapse_panel_presence(&presence, false);
+        sync_collapse_panel_presence(&presence, true);
+        let mut panel = Element::new();
+        panel.layout_bounds = [0.0, 0.0, 200.0, 160.0];
+        let bounds = panel.layout_bounds;
+        panel.used_layout.stamp_border_box(bounds, false);
+        let keys = CollapseKeyframes::COLLAPSIBLE;
+        assert_eq!(
+            apply_collapse_height(&mut panel, &presence, keys, CollapseHeightOpts::default()),
+            CollapseHeightEffect::SeededEnter
+        );
+        assert_eq!(
+            apply_collapse_height(&mut panel, &presence, keys, CollapseHeightOpts::default()),
+            CollapseHeightEffect::Animating
+        );
+        assert_eq!(panel.style.animations[0].name, keys.down);
+    });
+}
+
+#[test]
 fn collapse_work_discovers_mount_before_restamp_and_consumes_damage() {
     use crate::layout::collect_cache::{
         invalidate_collect_paint_hash_path, stamp_subtree_paint_hashes,

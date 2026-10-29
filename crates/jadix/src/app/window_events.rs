@@ -2512,12 +2512,17 @@ impl super::App {
                         crate::renderer::restart_caret_blink();
                     }
                 } else {
-                    let restore_selection =
-                        !was_focused && line_sel.is_none() && pre_empty && sel_range.is_some();
+                    let extend_selection = self.modifiers.shift_key() && pre_empty;
+                    let restore_selection = !extend_selection
+                        && !was_focused
+                        && line_sel.is_none()
+                        && pre_empty
+                        && sel_range.is_some();
                     if !restore_selection {
                         crate::utils::text_field::clear_extra_carets(&rest);
                     }
-                    let can_move = was_focused
+                    let can_move = !extend_selection
+                        && was_focused
                         && line_sel.is_none()
                         && pre_empty
                         && !password
@@ -2568,6 +2573,19 @@ impl super::App {
                         // A retained blur selection is restored on the first
                         // refocus click; do not collapse it into a caret.
                         self.input_drag_anchor = caret_ix;
+                        crate::renderer::restart_caret_blink();
+                    } else if extend_selection {
+                        let previous = crate::core::reactivity::use_signal(&ck, || None::<usize>)
+                            .peek()
+                            .unwrap_or(caret_ix);
+                        let anchor = existing
+                            .map(|(start, end)| if previous == start { end } else { start })
+                            .unwrap_or(previous);
+                        crate::core::reactivity::use_signal(&ck, || None::<usize>)
+                            .set(Some(caret_ix));
+                        crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
+                            .set(Some((anchor.min(caret_ix), anchor.max(caret_ix))));
+                        self.input_drag_anchor = anchor;
                         crate::renderer::restart_caret_blink();
                     } else if let Some((lo, hi)) = line_sel {
                         crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(hi));
@@ -2925,6 +2943,22 @@ impl super::App {
             drop(state_borrow);
             return;
         }
+        let wheel_path = super::pointer_events::hit_path(&state.root_element, x, y);
+        drop(state_borrow);
+        if super::pointer_events::dispatch_wheel(&wheel_path, [dx, dy]) {
+            self.note_user_scroll_after_press();
+            if let Some(state) = self.state.borrow().as_ref() {
+                state.window.request_redraw();
+            }
+            return;
+        }
+        let mut state_borrow = self.state.borrow_mut();
+        let Some(state) = state_borrow
+            .as_mut()
+            .filter(|state| state.window.id() == id)
+        else {
+            return;
+        };
         let overlay_rests = if matches!(
             freeze,
             super::portal_overlay::ScrollFreeze::Page
@@ -4662,7 +4696,10 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed)
                         .is_multiple_of(120)
                     {
-                        log::warn!("frame pumps: scroll={smooth_scroll_animating} bar={scrollbar_fade_animating} svg={svg_smil_active} icon={anim_icon_active} gif={} canvas={canvas_after_paint} modal={modal_css_active} css={page_css_active} ui={ui_anim_active} theme={theme_anim_active}", crate::app::pending_images::any_gif_playing());
+                        log::warn!(
+                            "frame pumps: scroll={smooth_scroll_animating} bar={scrollbar_fade_animating} svg={svg_smil_active} icon={anim_icon_active} gif={} canvas={canvas_after_paint} modal={modal_css_active} css={page_css_active} ui={ui_anim_active} theme={theme_anim_active}",
+                            crate::app::pending_images::any_gif_playing()
+                        );
                     }
                 }
                 self.paint_clock_active = smooth_scroll_animating

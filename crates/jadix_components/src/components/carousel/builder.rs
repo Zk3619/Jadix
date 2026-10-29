@@ -40,6 +40,7 @@ pub struct CarouselBuilder {
     item_width: String,
     dots: Option<bool>,
     stack_sides: u32,
+    wheel: CarouselWheelOptions,
     chrome: SlotChrome,
     content_chrome: SlotChrome,
     item_chrome: SlotChrome,
@@ -69,6 +70,7 @@ pub fn carousel(id: impl Into<String>) -> CarouselBuilder {
         item_width: "12rem".into(),
         dots: None,
         stack_sides: 1,
+        wheel: CarouselWheelOptions::default(),
         chrome: SlotChrome::default(),
         content_chrome: SlotChrome::default(),
         item_chrome: SlotChrome::default(),
@@ -188,6 +190,26 @@ impl CarouselBuilder {
         self
     }
 
+    pub fn wheel(mut self, enabled: bool) -> Self {
+        self.wheel.enabled = enabled;
+        self
+    }
+
+    pub fn wheel_mode(mut self, mode: CarouselWheelMode) -> Self {
+        self.wheel.mode = mode;
+        self
+    }
+
+    pub fn wheel_interval_ms(mut self, interval: u64) -> Self {
+        self.wheel.interval_ms = interval;
+        self
+    }
+
+    pub fn wheel_speed(mut self, speed: f32) -> Self {
+        self.wheel.speed = speed;
+        self
+    }
+
     impl_slot_chrome_methods!();
 
     pub fn content_with(
@@ -241,6 +263,7 @@ impl CarouselBuilder {
             self.item_width,
             self.dots,
             self.stack_sides,
+            self.wheel,
             body,
         );
         chrome.apply(el)
@@ -268,6 +291,7 @@ impl From<CarouselBuilder> for Element {
             item_width,
             dots,
             stack_sides,
+            wheel,
             chrome,
             content_chrome,
             item_chrome,
@@ -295,6 +319,7 @@ impl From<CarouselBuilder> for Element {
             item_width,
             dots,
             stack_sides,
+            wheel,
             move || {
                 let mut items = Vec::new();
                 for build in &slides_for_content {

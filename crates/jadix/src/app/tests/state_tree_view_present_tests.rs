@@ -126,6 +126,15 @@ fn read_frame(s: &AppState) -> RgbaImage {
 }
 
 fn frame(state: &Rc<RefCell<Option<AppState>>>, mouse: [f32; 2], action: &str, tick: usize) {
+    fn geometry(root: &Element) -> Vec<(Option<String>, [f32; 4])> {
+        let mut result = Vec::new();
+        crate::core::tree::walk_elements(root, |element| {
+            if element.get_attr("data-slot").map(String::as_str) == Some("collapsible-content") {
+                result.push((element.template_id.clone(), element.layout_bounds));
+            }
+        });
+        result
+    }
     crate::style::advance_css_transition_timeline_ms(16.0);
     crate::utils::collapse_panel::tick_collapse_panel_presence();
     crate::app::reactive::drain_deferred_view_remounts();
@@ -141,6 +150,7 @@ fn frame(state: &Rc<RefCell<Option<AppState>>>, mouse: [f32; 2], action: &str, t
     )
     .unwrap();
     let partial = read_frame(s);
+    let before_geometry = geometry(&s.root_element);
     if tick == 21 {
         let id = if action.starts_with("native-tree-builder") {
             "native-tree-builder"
@@ -179,6 +189,15 @@ fn frame(state: &Rc<RefCell<Option<AppState>>>, mouse: [f32; 2], action: &str, t
     )
     .unwrap();
     let full = read_frame(s);
+    let after_geometry = geometry(&s.root_element);
+    assert_eq!(before_geometry.len(), after_geometry.len());
+    for ((before_id, before), (after_id, after)) in before_geometry.iter().zip(&after_geometry) {
+        assert_eq!(before_id, after_id);
+        assert!(
+            before.iter().zip(after).all(|(before, after)| (before - after).abs() < 0.001),
+            "{action} tick {tick}: a repaint at the same time must preserve collapse geometry: {before:?} => {after:?}"
+        );
+    }
     crate::style::utility::set_frame_dt(0.016);
     let changed = partial
         .pixels
@@ -272,6 +291,12 @@ fn run_frames(window: Arc<dyn Window>) {
                     Element::new().text("RSX · independent"),
                     rsx,
                     Element::new().text("Stable footer · 收起后不能残留节点"),
+                    crate::ui! {
+                        <Box id="native-hover-padding" w="128px" h="56px"
+                            class="p-1 transition-padding duration-300 hover:p-4">
+                            <Label>"Padding motion"</Label>
+                        </Box>
+                    },
                 ])
                 .into();
             live.borrow_mut().as_mut().unwrap().rebuild_ui(root);
@@ -279,6 +304,77 @@ fn run_frames(window: Arc<dyn Window>) {
     });
     for tick in 0..6 {
         frame(&state, [-1.0, -1.0], "initial", tick);
+    }
+    let padding_bounds = {
+        let state_ref = state.borrow();
+        crate::core::tree::find_in_tree(&state_ref.as_ref().unwrap().root_element, |element| {
+            element.template_id.as_deref() == Some("native-hover-padding")
+        })
+        .unwrap()
+        .layout_bounds
+    };
+    for hovered in [true, false, true, false, true, false] {
+        let mouse = if hovered {
+            [padding_bounds[0] + 64.0, padding_bounds[1] + 28.0]
+        } else {
+            [-1.0; 2]
+        };
+        for _ in 0..23 {
+            crate::style::advance_css_transition_timeline_ms(16.0);
+            let mut state_ref = state.borrow_mut();
+            let app = state_ref.as_mut().unwrap();
+            app.render(
+                mouse,
+                ScrollbarUpdateMode::ViewportsOnly,
+                None,
+                false,
+                false,
+                true,
+            )
+            .unwrap();
+            let target = crate::core::tree::find_in_tree(&app.root_element, |element| {
+                element.template_id.as_deref() == Some("native-hover-padding")
+            })
+            .unwrap();
+            let padding = crate::layout::lp_length_px(target.style.padding.left).unwrap();
+            let offset = target.children[0].layout_bounds[0] - target.layout_bounds[0];
+            assert!(
+                (offset - padding).abs() < 0.02,
+                "animated padding must update text geometry on fast frames: {padding} != {offset}"
+            );
+        }
+        let mut state_ref = state.borrow_mut();
+        let app = state_ref.as_mut().unwrap();
+        let target = crate::core::tree::find_in_tree(&app.root_element, |element| {
+            element.template_id.as_deref() == Some("native-hover-padding")
+        })
+        .unwrap();
+        let padding = crate::layout::lp_length_px(target.style.padding.left).unwrap();
+        assert!((padding - if hovered { 16.0 } else { 4.0 }).abs() < 0.02);
+        let partial = read_frame(app);
+        app.mark_full_redraw();
+        crate::style::utility::set_frame_dt(0.0);
+        app.render(
+            mouse,
+            ScrollbarUpdateMode::ViewportsOnly,
+            None,
+            false,
+            false,
+            true,
+        )
+        .unwrap();
+        let full = read_frame(app);
+        crate::style::utility::set_frame_dt(0.016);
+        let changed = partial
+            .pixels
+            .iter()
+            .zip(&full.pixels)
+            .filter(|(before, after)| before.abs_diff(**after) > 6)
+            .count();
+        assert_eq!(
+            changed, 0,
+            "padding motion must repaint moved text without stale pixels"
+        );
     }
     for id in ["native-tree-builder", "native-tree-rsx"] {
         for (action, label, ticks) in [

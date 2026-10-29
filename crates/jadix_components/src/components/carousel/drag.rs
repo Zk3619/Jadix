@@ -46,6 +46,7 @@ crate::authoring::window::window_local! {
 }
 
 pub(super) fn begin_carousel_drag(drag: CarouselDrag) {
+    use_signal(&format!("{}__wheel_free", drag.id), || false).set_silent(false);
     // When dragging to interrupt a seamless segment, you must settle, and you cannot just drop the flag (otherwise the spring will stop halfway and the target will remain).
     finish_loop_anim(&drag.id, drag.index);
     clear_autoplay_deadline(&drag.id, drag.autoplay_ms);

@@ -2056,6 +2056,7 @@ impl AppState {
         );
 
         let mut layout_tree = LayoutTree::new();
+        layout_tree.defer_initial_layout_motion();
         let scale = window.scale_factor() as f32;
         let logical_w = config.width as f32 / scale.max(1.0);
         let logical_h = config.height as f32 / scale.max(1.0);
@@ -5911,6 +5912,7 @@ impl AppState {
         // reconcile is then an idempotent Rc-refresh after layout.
         let chrome_sync_needed =
             self.root_element.collect_paint_hash == 0 || self.root_element.subtree_paint_sync;
+        let mut css_impact = LayoutStatus::Clean;
         if !defer_pointer_chrome {
             crate::app::tree_hit::apply_pointer_hover_reconcile(
                 &self.root_element,
@@ -5967,7 +5969,7 @@ impl AppState {
                     viewport_h,
                     [0.0, 0.0],
                     &mut self.layout_tree,
-                    &mut sync_impact,
+                    &mut css_impact,
                 );
             } else {
                 crate::style::sync_class_variants_subtree(
@@ -5978,9 +5980,10 @@ impl AppState {
                     viewport_w,
                     viewport_h,
                     &mut self.layout_tree,
-                    &mut sync_impact,
+                    &mut css_impact,
                 );
             }
+            sync_impact = sync_impact.merge(css_impact);
         }
         // Input/label caret+selection after class variants so chrome resets cannot wipe
         // `text_style.input_caret` before collect. Same as button hover: do **not** skip
@@ -6046,7 +6049,12 @@ impl AppState {
         // changes move pixels under the main tree → PartialLoad+scissor is unsafe (FullClear).
         // Portal-local LayoutChanged (toast pile height) and overlay portal membership
         // (bubble +N expand, popover) only dirty overlay nodes — do not Clear the whole gallery.
-        let page_geom = self.page_geom_dirty || sync_collect.page_layout_changed;
+        let page_geom = self.page_geom_dirty
+            || sync_collect.page_layout_changed
+            || matches!(
+                css_impact,
+                LayoutStatus::LayoutChanged | LayoutStatus::StructureChanged
+            );
         let portal_skip = portal_only_reactive_layout
             || super::damage::skip_full_clear_for_portal_structure(
                 self.portal_membership_dirty,
@@ -6348,9 +6356,10 @@ impl AppState {
                     ))
                 || (scroll_paint_only
                     && (portal_only_structure
-                        || !matches!(
+                        || matches!(
                             layout_for_build,
-                            crate::core::tree::LayoutStatus::StructureChanged
+                            crate::core::tree::LayoutStatus::Clean
+                                | crate::core::tree::LayoutStatus::StyleChanged
                         ))
                     && (portal_only_structure
                         || !matches!(
@@ -9454,6 +9463,7 @@ impl AppState {
         let submit_done = Instant::now();
         let present_begin = Instant::now();
         self.queue.present(output);
+        self.layout_tree.commit_presentation();
         if self.pending_window_chrome && !self.theme_transition.needs_frame() {
             super::window_chrome::apply_created_window(
                 self.window.as_ref(),
