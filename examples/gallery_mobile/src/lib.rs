@@ -13,6 +13,14 @@ pub fn android_main(app: winit::platform::android::activity::AndroidApp) {
 #[openharmony_ability_derive::ability]
 pub fn openharmony_app(app: openharmony_ability::OpenHarmonyApp) {
     let directory = app.pref_path().expect("OHOS application data directory");
+    let log_path = std::path::Path::new(&directory).join("gallery.log");
+    std::env::set_var("JADIX_LOG_FILE", log_path);
+    let panic_path = std::path::Path::new(&directory).join("gallery-panic.log");
+    let previous_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |information| {
+        let _ = std::fs::write(&panic_path, information.to_string());
+        previous_hook(information);
+    }));
     gallery::prepare_resources(std::path::Path::new(&directory))
         .expect("install Gallery resources");
     #[cfg(feature = "ohos-desktop")]

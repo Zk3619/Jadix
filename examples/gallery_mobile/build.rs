@@ -12,7 +12,13 @@ fn main() {
             "linux-x86_64"
         };
         let toolchain = ndk.join("toolchains/llvm/prebuilt").join(host);
-        let libraries = toolchain.join("sysroot/usr/lib/aarch64-linux-android");
+        let architecture = std::env::var("CARGO_CFG_TARGET_ARCH").expect("target architecture");
+        let (triple, clang_architecture) = match architecture.as_str() {
+            "aarch64" => ("aarch64-linux-android", "aarch64"),
+            "x86_64" => ("x86_64-linux-android", "x86_64"),
+            other => panic!("unsupported Android architecture: {other}"),
+        };
+        let libraries = toolchain.join("sysroot/usr/lib").join(triple);
         println!(
             "cargo:rustc-link-search=native={}",
             libraries.join("28").display()
@@ -21,7 +27,7 @@ fn main() {
             .expect("NDK clang versions")
             .flatten()
         {
-            let unwind = version.path().join("lib/linux/aarch64");
+            let unwind = version.path().join("lib/linux").join(clang_architecture);
             if unwind.join("libunwind.a").is_file() {
                 println!("cargo:rustc-link-search=native={}", unwind.display());
             }

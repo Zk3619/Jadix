@@ -1,6 +1,8 @@
 {
   "apiType": "stageMode",
-  "buildOption": {},
+  "buildOption": {
+    "arkOptions": { "runtimeOnly": { "packages": ["libgallery_mobile.so"] } }
+  },
   "buildOptionSet": [{"name": "release", "arkOptions": {
     "obfuscation": {"ruleOptions": {"enable": false}}
   }}],

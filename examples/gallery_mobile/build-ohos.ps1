@@ -1,37 +1,70 @@
 param(
     [ValidateSet('phone', 'desktop')][string]$Device = 'phone',
-    [string]$OutputDirectory = (Join-Path $PSScriptRoot 'dist/ohos'),
+    [ValidateSet('arm64', 'x86_64')][string]$Architecture = 'arm64',
+    [string]$OutputDirectory,
+    [string]$ProjectDirectory,
     [switch]$SkipBuild,
-    [switch]$Unsigned
+    [string]$NativeLibrary,
+    [switch]$Unsigned,
+    [switch]$LocalTestSignature,
+    [string]$SigningConfigFile,
+    [string]$SigningConfigName = 'default'
 )
 $ErrorActionPreference = 'Stop'
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
+$target = if ($Architecture -eq 'arm64') { 'aarch64-unknown-linux-ohos' } else { 'x86_64-unknown-linux-ohos' }
+$sdkTarget = if ($Architecture -eq 'arm64') { 'aarch64-linux-ohos' } else { 'x86_64-linux-ohos' }
+$abi = if ($Architecture -eq 'arm64') { 'arm64-v8a' } else { 'x86_64' }
+if (!$OutputDirectory) { $OutputDirectory = Join-Path $PSScriptRoot "dist/ohos-$Device-$Architecture" }
 if (!$env:DEVECO_SDK_HOME) { throw 'Set DEVECO_SDK_HOME to the DevEco SDK directory (API 22 or later).' }
 $sdk = Join-Path $env:DEVECO_SDK_HOME 'default/openharmony'
+$deveco = Split-Path -Parent $env:DEVECO_SDK_HOME
+$signingModes = [int]$Unsigned.IsPresent + [int]$LocalTestSignature.IsPresent + [int][bool]$SigningConfigFile
+if ($signingModes -gt 1) { throw 'Choose only one of -Unsigned, -LocalTestSignature or -SigningConfigFile.' }
+if ($NativeLibrary -and !$SkipBuild) { throw '-NativeLibrary requires -SkipBuild.' }
+$signing = $null
+if ($SigningConfigFile) {
+    . (Join-Path $PSScriptRoot 'ohos-signing.ps1')
+    $signing = Read-GalleryOhosSigningConfig -Path $SigningConfigFile -Name $SigningConfigName -DevecoHome $deveco
+}
+if ($LocalTestSignature) {
+    Write-Warning 'Local test certificates are not trusted by retail HarmonyOS devices. This HAP is for systems that explicitly trust the test root.'
+} elseif (!$signing) {
+    Write-Warning 'Producing an unsigned HAP for systems that allow unsigned installation. Retail devices require a valid Huawei developer profile and -SigningConfigFile.'
+}
 $env:OHOS_NDK_HOME = $sdk
 $env:LIBCLANG_PATH = Join-Path $sdk 'native/llvm/bin'
 $OutputDirectory = [IO.Path]::GetFullPath($OutputDirectory)
-$project = Join-Path $OutputDirectory "project-$Device"
-New-Item -ItemType Directory -Force $project | Out-Null
+$project = if ($ProjectDirectory) { [IO.Path]::GetFullPath($ProjectDirectory) } else { Join-Path $OutputDirectory "project-$Device-$Architecture" }
+New-Item -ItemType Directory -Force $OutputDirectory, $project | Out-Null
 if (!$env:HVIGOR_USER_HOME) { $env:HVIGOR_USER_HOME = Join-Path $OutputDirectory 'hvigor-cache' }
 if (!$SkipBuild) {
     $native = Join-Path $sdk 'native'
     $linker = Join-Path $OutputDirectory 'ohos-sdk-link.cmd'
-    "@echo off`r`n`"$native/llvm/bin/clang.exe`" --target=aarch64-linux-ohos --sysroot=`"$native/sysroot`" %*" | Set-Content -LiteralPath $linker
-    if (!$env:CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER) {
-        $env:CARGO_TARGET_AARCH64_UNKNOWN_LINUX_OHOS_LINKER = $linker
-    }
+    "@echo off`r`n`"$native/llvm/bin/clang.exe`" --target=$sdkTarget --sysroot=`"$native/sysroot`" %*" | Set-Content -LiteralPath $linker
+    [Environment]::SetEnvironmentVariable(('CARGO_TARGET_' + $target.Replace('-', '_').ToUpperInvariant() + '_LINKER'), $linker, 'Process')
     Remove-Item Env:ZIG_LIBC -ErrorAction SilentlyContinue
     $features = if ($Device -eq 'desktop') { 'full,ohos-desktop' } else { 'full' }
     Push-Location $workspace
     try {
-        cargo zigbuild -p gallery_mobile --lib --release --locked --no-default-features --features $features --target aarch64-unknown-linux-ohos
+        cargo zigbuild -p gallery_mobile --lib --release --locked --no-default-features --features $features --target $target
         if ($LASTEXITCODE -ne 0) { throw 'OHOS native build failed.' }
     } finally { Pop-Location }
 }
-$library = Join-Path $workspace 'target/aarch64-unknown-linux-ohos/release/libgallery_mobile.so'
+$library = if ($NativeLibrary) { [IO.Path]::GetFullPath($NativeLibrary) } else {
+    Join-Path $workspace "target/$target/release/libgallery_mobile.so"
+}
 if (!(Test-Path -LiteralPath $library)) { throw "Missing $library" }
-Copy-Item -LiteralPath $library -Destination (Join-Path $OutputDirectory "libgallery-$Device.so") -Force
+$header = [byte[]]::new(20)
+$nativeStream = [IO.File]::OpenRead($library)
+try { $headerLength = $nativeStream.Read($header, 0, $header.Length) } finally { $nativeStream.Dispose() }
+$machine = if ($Architecture -eq 'arm64') { 183 } else { 62 }
+if ($headerLength -ne 20 -or [Text.Encoding]::ASCII.GetString($header, 0, 4) -ne "`u{007f}ELF" -or
+    $header[4] -ne 2 -or $header[5] -ne 1 -or [BitConverter]::ToUInt16($header, 18) -ne $machine) {
+    throw "Native library does not match OHOS $Architecture (ELF64 little-endian). Choose the corresponding -NativeLibrary."
+}
+$libraryBackup = Join-Path $OutputDirectory "libgallery-$Device-$Architecture.so"
+if ($library -ne $libraryBackup) { Copy-Item -LiteralPath $library -Destination $libraryBackup -Force }
 $source = Join-Path $PSScriptRoot 'ohos'
 foreach ($file in Get-ChildItem -LiteralPath $source -Recurse -File) {
     $relative = [IO.Path]::GetRelativePath($source, $file.FullName)
@@ -40,6 +73,16 @@ foreach ($file in Get-ChildItem -LiteralPath $source -Recurse -File) {
     New-Item -ItemType Directory -Force ([IO.Path]::GetDirectoryName($destination)) | Out-Null
     Copy-Item -LiteralPath $file.FullName -Destination $destination -Force
 }
+$buildProfilePath = Join-Path $project 'build-profile.json5'
+$buildProfile = Get-Content -LiteralPath $buildProfilePath -Raw | ConvertFrom-Json
+if ($signing) {
+    $buildProfile.app | Add-Member -Force -NotePropertyName signingConfigs -NotePropertyValue @($signing)
+    $buildProfile.app.products[0] | Add-Member -Force -NotePropertyName signingConfig -NotePropertyValue $SigningConfigName
+} else {
+    $buildProfile.app.PSObject.Properties.Remove('signingConfigs')
+    $buildProfile.app.products[0].PSObject.Properties.Remove('signingConfig')
+}
+$buildProfile | ConvertTo-Json -Depth 30 | Set-Content -LiteralPath $buildProfilePath
 if ($Device -eq 'desktop') {
     $modulePath = Join-Path $project 'entry/src/main/module.json5'
     $module = Get-Content -LiteralPath $modulePath -Raw | ConvertFrom-Json
@@ -56,13 +99,12 @@ if ($Device -eq 'desktop') {
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'ohos-desktop/StatusBar.ets') -Destination (Join-Path $project 'entry/src/main/ets/pages') -Force
     '{"src":["pages/Index","pages/StatusBar"]}' | Set-Content -LiteralPath (Join-Path $project 'entry/src/main/resources/base/profile/main_pages.json')
 }
-$libs = Join-Path $project 'entry/libs/arm64-v8a'
+$libs = Join-Path $project "entry/libs/$abi"
 New-Item -ItemType Directory -Force $libs | Out-Null
 Copy-Item -LiteralPath $library -Destination (Join-Path $libs 'libgallery_mobile.so') -Force
-Copy-Item -LiteralPath (Join-Path $sdk 'native/llvm/lib/aarch64-linux-ohos/libc++_shared.so') -Destination $libs -Force
+Copy-Item -LiteralPath (Join-Path $sdk "native/llvm/lib/$sdkTarget/libc++_shared.so") -Destination $libs -Force
 Push-Location $project
 try {
-    $deveco = Split-Path -Parent $env:DEVECO_SDK_HOME
     $env:NODE_HOME = Join-Path $deveco 'tools/node'
     $env:PATH = "$env:NODE_HOME;$env:PATH"
     & (Join-Path $deveco 'tools/ohpm/bin/ohpm.bat') install --all
@@ -72,9 +114,17 @@ try {
 } finally { Pop-Location }
 $hap = Get-ChildItem -LiteralPath (Join-Path $project 'entry/build') -Recurse -Filter '*-unsigned.hap' | Select-Object -First 1
 if (!$hap) { throw 'Hvigor did not produce an unsigned HAP.' }
-$unsignedHap = Join-Path $OutputDirectory "jadix-gallery-ohos-$Device-arm64-release-unsigned.hap"
+$unsignedHap = Join-Path $OutputDirectory "jadix-gallery-ohos-$Device-$Architecture-release-unsigned.hap"
 Copy-Item -LiteralPath $hap.FullName -Destination $unsignedHap -Force
-if (!$Unsigned) {
+if ($signing) {
+    $signed = Get-ChildItem -LiteralPath (Join-Path $project 'entry/build') -Recurse -Filter '*-signed.hap' | Select-Object -First 1
+    if (!$signed) { throw 'Hvigor did not produce a developer-signed HAP.' }
+    $signedHap = Join-Path $OutputDirectory "jadix-gallery-ohos-$Device-$Architecture-release-signed.hap"
+    Copy-Item -LiteralPath $signed.FullName -Destination $signedHap -Force
+    & (Join-Path $env:JAVA_HOME 'bin/java.exe') -jar (Join-Path $sdk 'toolchains/lib/hap-sign-tool.jar') verify-app -inFile $signedHap -outCertChain (Join-Path $OutputDirectory 'verified-chain.cer') -outProfile (Join-Path $OutputDirectory 'verified-profile.p7b')
+    if ($LASTEXITCODE -ne 0) { throw 'OHOS developer HAP signature verification failed.' }
+    Get-FileHash -LiteralPath $signedHap -Algorithm SHA256
+} elseif ($LocalTestSignature) {
     $java = Join-Path $env:JAVA_HOME 'bin/java.exe'
     $signingTools = Join-Path $sdk 'toolchains/lib'
     $signer = Join-Path $signingTools 'hap-sign-tool.jar'
@@ -116,7 +166,7 @@ if (!$Unsigned) {
     $signedProfile = Join-Path $OutputDirectory 'local-test-profile.p7b'
     & $java -jar $signer sign-profile -mode localSign -keyAlias gallery-profile -keyPwd $password -profileCertFile $profileCertificate -inFile $profilePath -signAlg SHA256withECDSA -keystoreFile $keystore -keystorePwd $password -outFile $signedProfile
     if ($LASTEXITCODE -ne 0) { throw 'Local test profile signing failed.' }
-    $signedHap = Join-Path $OutputDirectory "jadix-gallery-ohos-$Device-arm64-release-local-test-signed.hap"
+    $signedHap = Join-Path $OutputDirectory "jadix-gallery-ohos-$Device-$Architecture-release-local-test-signed.hap"
     & $java -jar $signer sign-app -mode localSign -keyAlias gallery-app -keyPwd $password -appCertFile $certificatePath -profileFile $signedProfile -inFile $unsignedHap -signAlg SHA256withECDSA -keystoreFile $keystore -keystorePwd $password -compatibleVersion 22 -outFile $signedHap
     if ($LASTEXITCODE -ne 0) { throw 'Local test HAP signing failed.' }
     & $java -jar $signer verify-app -inFile $signedHap -outCertChain (Join-Path $OutputDirectory 'verified-chain.cer') -outProfile (Join-Path $OutputDirectory 'verified-profile.p7b')
