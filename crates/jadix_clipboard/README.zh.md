@@ -4,7 +4,7 @@
 
 与 Jadix Windows／Objective-C 依赖栈对齐的跨平台剪贴板维护叉，支持文本、HTML、RTF、文件及可选图像。
 
-本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.0`。** 本地归档和清单不代表 registry 已可安装。
+本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.1`。** 本地归档和清单不代表 registry 已可安装。
 
 ## 安装
 
@@ -12,7 +12,7 @@
 
 ```toml
 [dependencies]
-jadix_clipboard = "=0.1.0"
+jadix_clipboard = "=0.1.1"
 ```
 
 发布前使用源码工作区。普通应用从同一 registry 解析依赖图，不复制本仓私有 path／git／patch；平台专用包仍需对应 SDK。

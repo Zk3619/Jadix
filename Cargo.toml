@@ -25,7 +25,7 @@ jadix_dnd = { path = "crates/jadix_dnd", version = "0.1.0", default-features = f
 jadix_macros = { path = "crates/jadix_macros", version = "0.1.0" }
 jadix_style_tokens = { path = "crates/jadix_style_tokens", version = "0.1.0" }
 jadix_window_state = { path = "crates/jadix_window_state", version = "0.1.0" }
-jadix_clipboard = { path = "crates/jadix_clipboard", version = "0.1.0", default-features = false }
+jadix_clipboard = { path = "crates/jadix_clipboard", version = "0.1.1", default-features = false }
 jadix_media = { path = "crates/jadix_media", version = "0.1.0" }
 jadix_lucide = { path = "crates/jadix_lucide", version = "0.1.0", default-features = false }
 jadix_lsp = { path = "crates/jadix_lsp", version = "0.1.0" }

@@ -4,7 +4,7 @@
 
 Cross-platform clipboard for Jadix (text, html, rtf, files, optional image). Fork of clipboard-rs aligned to workspace Windows/objc pins.
 
-Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; version `0.1.0`.** Local archives and manifests do not prove registry availability.
+Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; version `0.1.1`.** Local archives and manifests do not prove registry availability.
 
 ## Installation
 
@@ -12,7 +12,7 @@ Use the version available in the target registry:
 
 ```toml
 [dependencies]
-jadix_clipboard = "=0.1.0"
+jadix_clipboard = "=0.1.1"
 ```
 
 Before publication, use the source workspace. Consumers use one registry graph without copying private path/git/patch overrides. Platform-specific packages require the corresponding SDK.
