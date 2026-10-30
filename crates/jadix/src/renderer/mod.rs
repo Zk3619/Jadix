@@ -2,6 +2,7 @@
 
 pub mod backdrop_blur;
 pub(crate) mod buffer_upload;
+pub(crate) mod clip_buffer;
 pub mod compute;
 pub mod cpu_text;
 pub mod css_filter;

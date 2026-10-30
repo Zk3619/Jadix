@@ -2,6 +2,10 @@
 // intentionally dense; refactoring them into newtypes is tracked separately.
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
+#[cfg(any(target_os = "android", target_env = "ohos", test))]
+#[cfg_attr(any(target_os = "android", target_env = "ohos"), macro_use)]
+mod thread_local;
+
 #[cfg(all(test, feature = "product-tests"))]
 #[allow(unexpected_cfgs)]
 #[path = "../../jadix_lucide/src/catalog.rs"]

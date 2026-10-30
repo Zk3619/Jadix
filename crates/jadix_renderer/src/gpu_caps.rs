@@ -58,7 +58,11 @@ pub fn limits_for(adapter: &wgpu::Adapter) -> wgpu::Limits {
 
 /// Shared by the window device, glass compositor, and offscreen goldens.
 pub fn limits_for_backend(backend: wgpu::Backend, adapter: &wgpu::Limits) -> wgpu::Limits {
-    let mut l = wgpu::Limits::downlevel_defaults();
+    let mut l = if backend == wgpu::Backend::Gl {
+        wgpu::Limits::downlevel_webgl2_defaults()
+    } else {
+        wgpu::Limits::downlevel_defaults()
+    };
     l.max_texture_dimension_1d = adapter.max_texture_dimension_1d;
     l.max_texture_dimension_2d = adapter.max_texture_dimension_2d;
     l.max_texture_dimension_3d = adapter

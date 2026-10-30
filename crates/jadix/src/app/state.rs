@@ -644,6 +644,7 @@ fn draw_sdf_range_with_clip<'a>(
     pass: &mut wgpu::RenderPass<'a>,
     pipeline: &'a JadixPipeline,
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
     dummy: &'a wgpu::BindGroup,
     instances: &[InstanceInput],
     clip_polys: &[crate::style::GpuClipPoly],
@@ -681,7 +682,9 @@ fn draw_sdf_range_with_clip<'a>(
         if hit_inst.is_empty() {
             return;
         }
-        draw_uploaded_sdf_with_clip(pass, pipeline, device, dummy, &hit_inst, &hit_poly, None);
+        draw_uploaded_sdf_with_clip(
+            pass, pipeline, device, queue, dummy, &hit_inst, &hit_poly, None,
+        );
         return;
     }
     let inst_slice = &instances[lo..hi];
@@ -693,7 +696,9 @@ fn draw_sdf_range_with_clip<'a>(
     while polys.len() < inst_slice.len() {
         polys.push(crate::style::GpuClipPoly::NONE);
     }
-    draw_uploaded_sdf_with_clip(pass, pipeline, device, dummy, inst_slice, &polys, None);
+    draw_uploaded_sdf_with_clip(
+        pass, pipeline, device, queue, dummy, inst_slice, &polys, None,
+    );
 }
 
 /// One clip-poly bind group for an already-gathered instance list.
@@ -705,6 +710,7 @@ fn draw_uploaded_sdf_with_clip<'a>(
     pass: &mut wgpu::RenderPass<'a>,
     pipeline: &'a JadixPipeline,
     device: &wgpu::Device,
+    queue: &wgpu::Queue,
     dummy: &'a wgpu::BindGroup,
     instances: &[InstanceInput],
     polys: &[crate::style::GpuClipPoly],
@@ -730,7 +736,7 @@ fn draw_uploaded_sdf_with_clip<'a>(
             padded.resize(instances.len(), crate::style::GpuClipPoly::NONE);
             &padded
         };
-        Some(pipeline.bind_sdf_with_clip_polys(pass, device, dummy, polys))
+        Some(pipeline.bind_sdf_with_clip_polys(pass, device, queue, dummy, polys))
     } else {
         pipeline.bind_sdf(pass, false, dummy);
         None
@@ -3469,6 +3475,7 @@ impl AppState {
                                         render_pass,
                                         &self.pipeline,
                                         &self.device,
+                                        &self.queue,
                                         dummy,
                                         scaled_instances,
                                         clip_polys,
@@ -4159,6 +4166,7 @@ impl AppState {
             pass: &mut wgpu::RenderPass<'a>,
             pipeline: &'a JadixPipeline,
             device: &'a wgpu::Device,
+            queue: &wgpu::Queue,
             dummy: &'a wgpu::BindGroup,
             insts: &mut Vec<InstanceInput>,
             polys: &mut Vec<crate::style::GpuClipPoly>,
@@ -4166,7 +4174,7 @@ impl AppState {
             if insts.is_empty() {
                 return;
             }
-            draw_uploaded_sdf_with_clip(pass, pipeline, device, dummy, insts, polys, None);
+            draw_uploaded_sdf_with_clip(pass, pipeline, device, queue, dummy, insts, polys, None);
             insts.clear();
             polys.clear();
         }
@@ -4214,6 +4222,7 @@ impl AppState {
                         render_pass,
                         &self.pipeline,
                         &self.device,
+                        &self.queue,
                         dummy,
                         &mut batch_inst,
                         &mut batch_poly,
@@ -4235,6 +4244,7 @@ impl AppState {
             render_pass,
             &self.pipeline,
             &self.device,
+            &self.queue,
             dummy,
             &mut batch_inst,
             &mut batch_poly,
@@ -4276,6 +4286,7 @@ impl AppState {
                                 render_pass,
                                 &self.pipeline,
                                 &self.device,
+                                &self.queue,
                                 dummy,
                                 scaled_instances,
                                 clip_polys,

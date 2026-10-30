@@ -44,7 +44,7 @@ fn low_storage_textures_disables_compute() {
 fn gl_limits_for_does_not_copy_adapter_compute() {
     let adapter = wgpu::Limits::default();
     let l = limits_for_backend(wgpu::Backend::Gl, &adapter);
-    let down = wgpu::Limits::downlevel_defaults();
+    let down = wgpu::Limits::downlevel_webgl2_defaults();
     assert_eq!(
         l.max_compute_workgroup_size_x,
         down.max_compute_workgroup_size_x
@@ -61,6 +61,15 @@ fn varying_request_does_not_exceed_reported_limit() {
     let limits = limits_for_backend(wgpu::Backend::Gl, &adapter);
     assert!(limits.check_limits(&adapter));
     assert_eq!(limits.max_inter_stage_shader_variables, 8);
+}
+
+#[test]
+fn gles_without_compute_accepts_requested_limits() {
+    let adapter = wgpu::Limits::downlevel_webgl2_defaults();
+    let limits = limits_for_backend(wgpu::Backend::Gl, &adapter);
+    assert!(limits.check_limits(&adapter));
+    assert_eq!(limits.max_compute_workgroups_per_dimension, 0);
+    assert_eq!(limits.max_storage_buffers_per_shader_stage, 0);
 }
 
 #[test]

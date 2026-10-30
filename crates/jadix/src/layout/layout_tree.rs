@@ -37,6 +37,10 @@ fn for_each_element<'a>(root: &'a Element, visit: impl FnMut(&'a Element)) {
 #[cfg(test)]
 pub(crate) mod stack_probe {
     use std::cell::Cell;
+    #[cfg(any(target_os = "android", target_env = "ohos"))]
+    use crate::thread_local::LocalKey;
+    #[cfg(not(any(target_os = "android", target_env = "ohos")))]
+    use std::thread::LocalKey;
 
     thread_local! {
         static BASE: Cell<usize> = const { Cell::new(0) };
@@ -52,7 +56,7 @@ pub(crate) mod stack_probe {
         &x as *const u8 as usize
     }
 
-    fn note(slot: &'static std::thread::LocalKey<Cell<(u32, usize, usize)>>) {
+    fn note(slot: &'static LocalKey<Cell<(u32, usize, usize)>>) {
         let p = sp();
         BASE.with(|b| {
             if b.get() == 0 {

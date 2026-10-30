@@ -278,8 +278,8 @@ pub struct JadixPipeline {
     _dummy_backdrop_tex: wgpu::Texture,
     _dummy_backdrop_sampler: wgpu::Sampler,
     globals_clip_poly_buffer: wgpu::Buffer,
-    clip_poly_buffer: super::buffer_upload::RetainedBuffer,
-    clip_poly_none_buffer: wgpu::Buffer,
+    clip_poly_buffer: super::clip_buffer::ClipBuffer,
+    clip_poly_none_buffer: super::clip_buffer::ClipBuffer,
     main_clip_needed: Vec<bool>,
     premultiply: f32,
     resolution: std::sync::Mutex<[u32; 2]>,
@@ -319,7 +319,10 @@ impl JadixPipeline {
         let premultiply = compositor_premultiply(config.alpha_mode);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("Rounded Rect Shader"),
-            source: wgpu::ShaderSource::Wgsl(wgsl_source.into()),
+            source: wgpu::ShaderSource::Wgsl(super::clip_buffer::shader_source(
+                device,
+                wgsl_source,
+            )),
         });
 
         let globals_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -342,18 +345,8 @@ impl JadixPipeline {
                 usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
             });
 
-        let clip_none = crate::style::GpuClipPoly::NONE;
-        let clip_poly_none_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Clip poly NONE"),
-            contents: bytemuck::bytes_of(&clip_none),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
-        let clip_poly_buffer = super::buffer_upload::RetainedBuffer::new(
-            device,
-            "Clip poly storage",
-            wgpu::BufferUsages::STORAGE,
-            bytemuck::bytes_of(&clip_none),
-        );
+        let clip_poly_none_buffer = super::clip_buffer::ClipBuffer::new(device, "Clip poly NONE");
+        let clip_poly_buffer = super::clip_buffer::ClipBuffer::new(device, "Clip poly storage");
 
         let bind_group_layout = Self::create_bind_group_layout(device);
         let backdrop_bgl = Self::create_backdrop_bind_group_layout(device);
@@ -369,7 +362,7 @@ impl JadixPipeline {
             device,
             &bind_group_layout,
             &globals_clip_poly_buffer,
-            &clip_poly_buffer.buffer,
+            &clip_poly_buffer,
         );
         let render_pipeline =
             Self::make_render_pipeline(device, config, &shader, &bind_group_layout, &backdrop_bgl);
@@ -479,11 +472,7 @@ impl JadixPipeline {
                 wgpu::BindGroupLayoutEntry {
                     binding: 1,
                     visibility: wgpu::ShaderStages::FRAGMENT,
-                    ty: wgpu::BindingType::Buffer {
-                        ty: wgpu::BufferBindingType::Storage { read_only: true },
-                        has_dynamic_offset: false,
-                        min_binding_size: None,
-                    },
+                    ty: super::clip_buffer::ClipBuffer::binding_type(device),
                     count: None,
                 },
             ],
@@ -578,7 +567,7 @@ impl JadixPipeline {
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
         globals_buffer: &wgpu::Buffer,
-        clip_poly_buffer: &wgpu::Buffer,
+        clip_poly_buffer: &super::clip_buffer::ClipBuffer,
     ) -> wgpu::BindGroup {
         device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("Globals Bind Group"),
@@ -590,7 +579,7 @@ impl JadixPipeline {
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
-                    resource: clip_poly_buffer.as_entire_binding(),
+                    resource: clip_poly_buffer.binding(),
                 },
             ],
         })
@@ -754,15 +743,12 @@ impl JadixPipeline {
         self.main_clip_needed.clear();
         let none = [crate::style::GpuClipPoly::NONE];
         let data = if polys.is_empty() { &none[..] } else { polys };
-        if self
-            .clip_poly_buffer
-            .upload(device, queue, bytemuck::cast_slice(data))
-        {
+        if self.clip_poly_buffer.upload(device, queue, data) {
             self.bind_group_clip_poly = Self::make_bind_group(
                 device,
                 &self.bind_group_layout,
                 &self.globals_clip_poly_buffer,
-                &self.clip_poly_buffer.buffer,
+                &self.clip_poly_buffer,
             );
         }
     }
@@ -776,10 +762,11 @@ impl JadixPipeline {
         config: &wgpu::SurfaceConfiguration,
         wgsl_source: &str,
     ) -> bool {
+        let adapted_source = super::clip_buffer::shader_source(device, wgsl_source);
         let Some(shader) = crate::renderer::wgpu_compat::try_shader_module(
             device,
             "Rounded Rect Shader (hot reload)",
-            wgsl_source,
+            &adapted_source,
         ) else {
             log::warn!("hot-reload WGSL: shader module failed; keeping previous pipeline");
             return false;
@@ -796,7 +783,7 @@ impl JadixPipeline {
                 device,
                 &self.bind_group_layout,
                 &self.globals_clip_poly_buffer,
-                &self.clip_poly_buffer.buffer,
+                &self.clip_poly_buffer,
             );
             let render_pipeline = Self::make_render_pipeline(
                 device,
@@ -1043,29 +1030,27 @@ impl JadixPipeline {
         pass.set_bind_group(1, backdrop, &[]);
     }
 
-    /// Bind SDF with a clip-poly SSBO that starts at index 0.
+    /// Bind SDF with clip data that starts at index 0.
     ///
     /// Pair with an instance vertex buffer that also starts at 0. GLES `instance_index`
-    /// is relative to `firstInstance`; a ranged draw against the full SSBO would clip
-    /// to `clip_polys[0]` (another widget) instead of this range. The returned buffer
-    /// and bind group must stay alive until the draw is encoded.
+    /// is relative to `firstInstance`; a ranged draw against the full clip data would
+    /// clip to another widget. The returned bind group owns the range resource and
+    /// must stay alive until the draw is encoded.
     pub fn bind_sdf_with_clip_polys<'a>(
         &'a self,
         pass: &mut wgpu::RenderPass<'a>,
         device: &wgpu::Device,
+        queue: &wgpu::Queue,
         backdrop: &'a wgpu::BindGroup,
         polys: &[crate::style::GpuClipPoly],
-    ) -> (wgpu::Buffer, wgpu::BindGroup) {
+    ) -> wgpu::BindGroup {
         let data: Vec<crate::style::GpuClipPoly> = if polys.is_empty() {
             vec![crate::style::GpuClipPoly::NONE]
         } else {
             polys.to_vec()
         };
-        let buf = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Clip poly range"),
-            contents: bytemuck::cast_slice(&data),
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
+        let mut buf = super::clip_buffer::ClipBuffer::new(device, "Clip poly range");
+        buf.upload(device, queue, &data);
         let bg = Self::make_bind_group(
             device,
             &self.bind_group_layout,
@@ -1075,7 +1060,7 @@ impl JadixPipeline {
         pass.set_pipeline(&self.render_pipeline);
         pass.set_bind_group(0, &bg, &[]);
         pass.set_bind_group(1, backdrop, &[]);
-        (buf, bg)
+        bg
     }
 
     pub fn update_resolution(&self, queue: &wgpu::Queue, width: u32, height: u32) {
