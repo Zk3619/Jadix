@@ -4,11 +4,11 @@
 
 wgpu-core 面向 wasm 的内部依赖选择维护包，不是应用绘制入口。
 
-本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；待发布版本 `30.0.1`，尚未发布。** 本地归档和清单不代表 registry 已可安装。
+本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `30.0.1`。** 本地归档和清单不代表 registry 已可安装。
 
 ## 安装
 
-待对应版本实际发布后：
+使用目标 registry 中可用的对应版本：
 
 ```toml
 [dependencies]

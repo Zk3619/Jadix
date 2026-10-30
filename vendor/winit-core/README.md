@@ -4,11 +4,11 @@
 
 winit core API.
 
-Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; prepared version `0.31.0-beta.3-jadix.1`, not yet published.** Local archives and manifests do not prove registry availability.
+Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; version `0.31.0-beta.3-jadix.1`.** Local archives and manifests do not prove registry availability.
 
 ## Installation
 
-After the prepared version is published:
+Use the version available in the target registry:
 
 ```toml
 [dependencies]

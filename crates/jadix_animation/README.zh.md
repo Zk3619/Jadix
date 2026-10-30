@@ -4,11 +4,11 @@
 
 无框架依赖的动画时钟、缓动、弹簧／惯性、标量播放器、时间线和可选路径运算；绘制由适配层处理。
 
-本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；待发布版本 `0.1.0`，尚未发布。** 本地归档和清单不代表 registry 已可安装。
+本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.0`。** 本地归档和清单不代表 registry 已可安装。
 
 ## 安装
 
-待对应版本实际发布后：
+使用目标 registry 中可用的对应版本：
 
 ```toml
 [dependencies]

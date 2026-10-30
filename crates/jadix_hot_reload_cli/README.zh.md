@@ -4,11 +4,11 @@
 
 Debug 文件监听与静态模板补丁发送命令；运行时接收是独立 Debug feature，不支持的 Rust 变更需重编译。
 
-本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；待发布版本 `0.1.0`，尚未发布。** 本地归档和清单不代表 registry 已可安装。
+本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.0`。** 本地归档和清单不代表 registry 已可安装。
 
 ## 安装
 
-待对应版本实际发布后：
+使用目标 registry 中可用的对应版本：
 
 ```sh
 cargo install jadix_hot_reload_cli --version "=0.1.0"

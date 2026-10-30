@@ -4,11 +4,11 @@
 
 Jadix 窗口门面与统一平台后端依赖图，包含 OpenHarmony；内部后端通常由门面传递选择。
 
-本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；待发布版本 `0.31.0-beta.3-jadix.1`，尚未发布。** 本地归档和清单不代表 registry 已可安装。
+本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.31.0-beta.3-jadix.1`。** 本地归档和清单不代表 registry 已可安装。
 
 ## 安装
 
-待对应版本实际发布后：
+使用目标 registry 中可用的对应版本：
 
 ```toml
 [dependencies]

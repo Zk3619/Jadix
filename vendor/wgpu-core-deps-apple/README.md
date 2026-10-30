@@ -4,11 +4,11 @@
 
 Feature unification helper crate for Apple platforms.
 
-Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; prepared version `30.0.0`, not yet published.** Local archives and manifests do not prove registry availability.
+Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; version `30.0.0`.** Local archives and manifests do not prove registry availability.
 
 ## Installation
 
-After the prepared version is published:
+Use the version available in the target registry:
 
 ```toml
 [dependencies]

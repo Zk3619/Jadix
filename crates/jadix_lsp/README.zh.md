@@ -4,11 +4,11 @@
 
 无 UI 依赖的语言服务器传输与 UTF-16 文本编辑操作，应用提供服务器进程和 UI 分发。
 
-本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；待发布版本 `0.1.0`，尚未发布。** 本地归档和清单不代表 registry 已可安装。
+本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.0`。** 本地归档和清单不代表 registry 已可安装。
 
 ## 安装
 
-待对应版本实际发布后：
+使用目标 registry 中可用的对应版本：
 
 ```toml
 [dependencies]
