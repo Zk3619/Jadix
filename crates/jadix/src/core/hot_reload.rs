@@ -407,7 +407,11 @@ pub(crate) fn apply_prepared(
     bind(root, tree);
 }
 
-#[cfg(any(all(debug_assertions, feature = "hot-reload"), feature = "devtools", test))]
+#[cfg(any(
+    all(debug_assertions, feature = "hot-reload"),
+    feature = "devtools",
+    test
+))]
 pub(crate) fn instances(root: &Element) -> HashMap<u64, Vec<usize>> {
     let mut output = HashMap::new();
     let mut stack = vec![(root, Vec::new())];
