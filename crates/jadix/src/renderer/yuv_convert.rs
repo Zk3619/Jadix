@@ -3,6 +3,8 @@
 //! Shader matrix matches [`crate::media::yuv::bt709_yuv_to_rgb`]. Runtime drain still
 //! uploads CPU-converted RGBA (same kernel) so Image textures stay `COPY_DST` only.
 //! This pass validates WGSL and is compared against the CPU oracle offscreen.
+//! The matrix already produces encoded RGB, so the output uses an unorm target
+//! to preserve those bytes without applying another sRGB transfer function.
 
 use bytemuck::{Pod, Zeroable};
 
@@ -70,7 +72,7 @@ impl YuvConvertGpu {
                 module: &shader,
                 entry_point: Some("fs_main"),
                 targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8UnormSrgb,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
                     blend: None,
                     write_mask: wgpu::ColorWrites::ALL,
                 })],
@@ -170,7 +172,7 @@ impl YuvConvertGpu {
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            format: wgpu::TextureFormat::Rgba8Unorm,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
