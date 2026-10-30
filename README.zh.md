@@ -5,7 +5,7 @@
 Rust 原生 UI 框架，提供响应式状态、GPU 绘制与可选声明式宏。
 使用普通 Rust Builder 构建应用，按需加入独立产品库，通过 Cargo feature 选择能力。
 
-> **Alpha · 尚未发布。** API 仍在演进。清单版本是待发布版本，不代表 crates.io 已可安装。当前原生验证覆盖 Windows / DX12；其他平台有源码不等于已完成该平台运行验证。
+> **Alpha · 尚未发布。** API 仍在演进。清单版本是待发布版本，不代表 crates.io 已可安装。各平台、架构的验证程度不同，已验证配置及待完成的宿主、打包和设备工作见[构建指南](docs/BUILD.zh.md)。
 
 ## 核心能力
 
@@ -26,6 +26,8 @@ git clone https://github.com/Zk3619/Jadix.git
 cd Jadix
 cargo run -p gallery
 ```
+
+[构建指南](docs/BUILD.zh.md) 覆盖 Windows、macOS、Linux、Android、iOS 和 OHOS，说明架构选择、SDK 准备、release 构建、打包签名、设备/模拟器验证及常见问题。Android/OHOS 提供独立的 ARM64/x86_64 构建，OHOS 进一步区分手机与桌面配置；iOS 尚需实现 Gallery 应用宿主。
 
 ## 最小应用
 
@@ -64,6 +66,7 @@ fn main() {
 ## 文档与贡献
 
 - [项目文档索引](docs/README.md)：维护中的权威使用说明。
+- [编译与打包](docs/BUILD.zh.md)（[English](docs/BUILD.md)）：平台前置条件、架构、构建命令、验证与已知限制。
 - [Feature](docs/FEATURES.md)、[状态管理](docs/state-management.md)、[异步集成](docs/async-architecture.md)、[远程资源](docs/remote-assets.md)。
 - [组件作者接口](docs/component-authoring.md)、[桌面窗口](docs/desktop-windows.md)、[应用图标](docs/application-icons.md)、[WebView](docs/webview.md)、[DevTools](docs/devtools.md)。
 - [迁移说明](docs/migration.md)、[测试规范](docs/testing.md)、[发布流程](docs/releasing.md)。

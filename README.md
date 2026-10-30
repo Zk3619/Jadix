@@ -5,7 +5,7 @@
 A Rust-native UI framework with reactive state, GPU rendering, and optional declarative macros.
 Use ordinary Rust builders, add product libraries independently, and select capabilities with Cargo features.
 
-> **Alpha · unreleased.** APIs are evolving. Manifest versions are prepared versions, not proof of availability on crates.io. Native validation currently covers Windows / DX12; platform source code does not establish validation on other targets.
+> **Alpha · unreleased.** APIs are evolving. Manifest versions are prepared versions, not proof of availability on crates.io. Platform and architecture validation varies; see the [build guide](docs/BUILD.md) for tested configurations and remaining host, packaging and device work.
 
 ## Features
 
@@ -26,6 +26,8 @@ git clone https://github.com/Zk3619/Jadix.git
 cd Jadix
 cargo run -p gallery
 ```
+
+The [build guide](docs/BUILD.md) covers Windows, macOS, Linux, Android, iOS and OHOS: architectures, SDK setup, release builds, packaging, signing, device/emulator checks and troubleshooting. Android and OHOS provide separate ARM64/x86_64 builds, with distinct OHOS phone and desktop configurations; iOS still requires a Gallery application host.
 
 ## Minimal application
 
@@ -64,6 +66,7 @@ The `vendor/` tree contains explicitly named Jadix maintenance forks. Preserve t
 ## Documentation and contributions
 
 - [Documentation index](docs/README.md): maintained project instructions; most detailed guides are currently in Chinese.
+- [Building and packaging](docs/BUILD.md) ([简体中文](docs/BUILD.zh.md)): platform prerequisites, architectures, commands, verification and known limitations.
 - [Features](docs/FEATURES.md), [state](docs/state-management.md), [async integration](docs/async-architecture.md), [remote assets](docs/remote-assets.md).
 - [Components](docs/component-authoring.md), [windows](docs/desktop-windows.md), [icons](docs/application-icons.md), [WebView](docs/webview.md), [DevTools](docs/devtools.md).
 - [Migration](docs/migration.md), [testing](docs/testing.md), and [release process](docs/releasing.md).

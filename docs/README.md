@@ -5,6 +5,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
+| [编译与打包](BUILD.zh.md) / [English](BUILD.md) | 六平台架构、SDK、release 构建、签名安装与问题排查 |
 | [Feature](FEATURES.md) | 默认值、可选能力与后端 |
 | [状态管理](state-management.md) | Signal、Store 与 Owner |
 | [异步与网络](async-architecture.md) | 执行器、取消、背压及运行时适配 |

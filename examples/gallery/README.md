@@ -67,7 +67,7 @@ Markdown 支持实时预览、源码和阅读三种模式，并提供撤销、�
 
 Gallery 直接依赖工作区运行库：`jadix`、`jadix_core`、`jadix_layout`、`jadix_renderer`、`jadix_components`、`jadix_dnd`、`jadix_lucide`、`jadix_animation`、`jadix_document`、`jadix_theme`、`jadix_style_tokens`、`jadix_media`、`jadix_net`、`jadix_tasks`、`jadix_tokio`、`jadix_window_state`、`jadix_window_materials`、`jadix_clipboard`、`jadix_hot_reload`、`jadix_lsp` 与 `jadix_macros`。宏在编译期使用，基础设施 crate 由对应组件及运行时路径使用，CLI 工具单独运行。
 
-能力范围以 `development-docs/STATUS.md`、`development-docs/AUTHORITY.md`、各 crate 的代码和公开 feature 表为准。Jadix 仍为 Alpha；`jadix_lsp` 是实验性语言服务基础设施，Gallery 的代码编辑器不代表完整 IDE。`jadix_native` / `jadix_shell` 尚未实现，不列为可用后端。热重载支持静态内容、样式及受管重建；任意 Rust 逻辑修改仍需重新编译。
+能力范围以各 crate 的代码、公开 README 和 [feature 表](../../docs/FEATURES.md)为准；各平台构建流程与实际验证范围见[构建指南](../../docs/BUILD.zh.md)，发布与仓外消费要求见[发布流程](../../docs/releasing.md)。Jadix 仍为 Alpha；`jadix_lsp` 是实验性语言服务基础设施，Gallery 的代码编辑器不代表完整 IDE。`jadix_native` / `jadix_shell` 尚未实现，不列为可用后端。热重载支持静态内容、样式及受管重建；任意 Rust 逻辑修改仍需重新编译。
 
 热重载监听单独启动：
 
