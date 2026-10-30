@@ -3,7 +3,7 @@
 
 struct Params {
     // 0 = I420 (Y + U + V), 1 = NV12 / P010 (Y + interleaved UV in u_tex)
-    layout: f32,
+    plane_layout: f32,
     _pad0: f32,
     _pad1: f32,
     _pad2: f32,
@@ -45,7 +45,7 @@ fn fs_main(in: VsOut) -> @location(0) vec4<f32> {
     let y = textureSampleLevel(y_tex, samp, in.uv, 0.0).r;
     var u: f32;
     var v: f32;
-    if (params.layout < 0.5) {
+    if (params.plane_layout < 0.5) {
         u = textureSampleLevel(u_tex, samp, in.uv, 0.0).r;
         v = textureSampleLevel(v_tex, samp, in.uv, 0.0).r;
     } else {
