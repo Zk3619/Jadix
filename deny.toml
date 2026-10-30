@@ -37,6 +37,11 @@ confidence-threshold = 0.8
 [licenses.private]
 ignore = true
 
+[[licenses.exceptions]]
+name = "ksni"
+version = "=0.3.7"
+allow = ["Unlicense"]
+
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
