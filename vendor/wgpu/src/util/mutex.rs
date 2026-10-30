@@ -1,9 +1,9 @@
 //! Provides a [`Mutex`] for internal use based on what features are available.
 
 cfg_if::cfg_if! {
-    if #[cfg(feature = "parking_lot")] {
+    if #[cfg(jadix_wgpu_feature_parking_lot)] {
         use parking_lot::Mutex as MutexInner;
-    } else if #[cfg(std)] {
+    } else if #[cfg(jadix_wgpu_std)] {
         use std::sync::Mutex as MutexInner;
     } else {
         use core::cell::RefCell as MutexInner;
@@ -40,9 +40,9 @@ impl<T> Mutex<T> {
 impl<T: ?Sized> Mutex<T> {
     pub fn lock(&self) -> impl core::ops::DerefMut<Target = T> + '_ {
         cfg_if::cfg_if! {
-            if #[cfg(feature = "parking_lot")] {
+            if #[cfg(jadix_wgpu_feature_parking_lot)] {
                 self.inner.lock()
-            } else if #[cfg(std)] {
+            } else if #[cfg(jadix_wgpu_std)] {
                 self.inner.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
             } else {
                 loop {

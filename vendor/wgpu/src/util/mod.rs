@@ -5,7 +5,7 @@
 
 // TODO: For [`belt::StagingBelt`] to be available in `no_std` its usage of [`std::sync::mpsc`]
 // must be replaced with an appropriate alternative.
-#[cfg(std)]
+#[cfg(jadix_wgpu_std)]
 mod belt;
 mod device;
 mod encoder;
@@ -17,17 +17,17 @@ mod texture_blitter;
 
 use alloc::{format, string::String};
 
-#[cfg(std)]
+pub use crate::__types::{
+    math::*, DispatchIndirectArgs, DrawIndexedIndirectArgs, DrawIndirectArgs, TextureDataOrder,
+};
+#[cfg(jadix_wgpu_std)]
 pub use belt::StagingBelt;
 pub use device::{BufferInitDescriptor, DeviceExt};
 pub use encoder::RenderEncoder;
 pub use init::*;
 pub use spirv::*;
-#[cfg(feature = "wgsl")]
+#[cfg(jadix_wgpu_feature_wgsl)]
 pub use texture_blitter::{TextureBlitter, TextureBlitterBuilder};
-pub use wgt::{
-    math::*, DispatchIndirectArgs, DrawIndexedIndirectArgs, DrawIndirectArgs, TextureDataOrder,
-};
 
 pub(crate) use mutex::Mutex;
 pub(crate) use panicking::is_panicking;
@@ -160,9 +160,9 @@ impl core::ops::Deref for DownloadBuffer {
 /// ```
 ///
 /// [`PipelineCache`]: super::PipelineCache
-pub fn pipeline_cache_key(adapter_info: &wgt::AdapterInfo) -> Option<String> {
+pub fn pipeline_cache_key(adapter_info: &crate::__types::AdapterInfo) -> Option<String> {
     match adapter_info.backend {
-        wgt::Backend::Vulkan => Some(format!(
+        crate::__types::Backend::Vulkan => Some(format!(
             // The vendor/device should uniquely define a driver
             // We/the driver will also later validate that the vendor/device and driver
             // version match, which may lead to clearing an outdated
@@ -184,7 +184,7 @@ pub trait TextureFormatExt {
     /// use wgpu::util::TextureFormatExt;
     /// assert_eq!(wgpu::TextureFormat::from_storage_format(wgpu::naga::StorageFormat::Bgra8Unorm), wgpu::TextureFormat::Bgra8Unorm);
     /// ```
-    #[cfg(wgpu_core)]
+    #[cfg(jadix_wgpu_wgpu_core)]
     fn from_storage_format(storage_format: crate::naga::StorageFormat) -> Self;
 
     /// Finds the [`StorageFormat`](wgc::naga::StorageFormat) corresponding to the given [`TextureFormat`](wgt::TextureFormat).
@@ -197,18 +197,18 @@ pub trait TextureFormatExt {
     /// use wgpu::util::TextureFormatExt;
     /// assert_eq!(wgpu::TextureFormat::Bgra8Unorm.to_storage_format(), Some(wgpu::naga::StorageFormat::Bgra8Unorm));
     /// ```
-    #[cfg(wgpu_core)]
+    #[cfg(jadix_wgpu_wgpu_core)]
     fn to_storage_format(&self) -> Option<crate::naga::StorageFormat>;
 }
 
-impl TextureFormatExt for wgt::TextureFormat {
-    #[cfg(wgpu_core)]
+impl TextureFormatExt for crate::__types::TextureFormat {
+    #[cfg(jadix_wgpu_wgpu_core)]
     fn from_storage_format(storage_format: crate::naga::StorageFormat) -> Self {
-        wgc::map_storage_format_from_naga(storage_format)
+        crate::__core::map_storage_format_from_naga(storage_format)
     }
 
-    #[cfg(wgpu_core)]
+    #[cfg(jadix_wgpu_wgpu_core)]
     fn to_storage_format(&self) -> Option<crate::naga::StorageFormat> {
-        wgc::map_storage_format_to_naga(*self)
+        crate::__core::map_storage_format_to_naga(*self)
     }
 }

@@ -13,13 +13,13 @@ pub struct SurfaceTexture {
     pub(crate) presented: bool,
     pub(crate) detail: dispatch::DispatchSurfaceOutputDetail,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(SurfaceTexture: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(SurfaceTexture => .texture.inner);
 
 impl SurfaceTexture {
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of SurfaceTexture (if custom backend and is internally T)
     pub fn as_custom<T: crate::custom::SurfaceOutputDetailInterface>(&self) -> Option<&T> {
         self.detail.as_custom()
@@ -81,7 +81,7 @@ pub enum CurrentSurfaceTexture {
 
 fn thread_panicking() -> bool {
     cfg_if::cfg_if! {
-        if #[cfg(std)] {
+        if #[cfg(jadix_wgpu_std)] {
             std::thread::panicking()
         } else if #[cfg(panic = "abort")] {
             // If `panic = "abort"` then a thread _cannot_ be observably panicking by definition.

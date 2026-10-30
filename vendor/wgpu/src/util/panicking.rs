@@ -1,9 +1,9 @@
-#[cfg(feature = "std")]
+#[cfg(jadix_wgpu_feature_std)]
 pub fn is_panicking() -> bool {
     std::thread::panicking()
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(not(jadix_wgpu_feature_std))]
 pub fn is_panicking() -> bool {
     false
 }

@@ -45,7 +45,7 @@ features = ["bmp", "png", "jpeg"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { workspace = true }
-objc2-foundation = { workspace = true, features = [
+objc2-foundation = { workspace = true, default-features = true, features = [
     "NSArray",
     "NSData",
     "NSString",
@@ -66,7 +66,7 @@ features = ["tiff", "png", "jpeg"]
 
 [target.'cfg(target_os = "ios")'.dependencies]
 objc2 = { workspace = true }
-objc2-foundation = { workspace = true, features = [
+objc2-foundation = { workspace = true, default-features = true, features = [
     "NSArray",
     "NSData",
     "NSDictionary",
@@ -77,4 +77,4 @@ objc2-foundation = { workspace = true, features = [
 objc2-ui-kit = { workspace = true, features = ["UIPasteboard", "UIImage"] }
 
 [target.'cfg(all(unix, not(any(target_os = "macos", target_os = "android", target_os = "ios", target_os = "emscripten"))))'.dependencies]
-x11rb = { workspace = true }
+x11rb = { workspace = true, default-features = true }

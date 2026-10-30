@@ -5,13 +5,16 @@ import tomllib
 from pathlib import Path
 
 
-def inspect_crate(directory):
+def inspect_crate(directory, bundled=()):
     source = directory / "src"
-    groups = {"private": [], "host_contracts": [], "public_contracts": [], "fixtures": [], "inline": []}
+    groups = {"private": [], "host_contracts": [], "public_contracts": [], "fixtures": [], "inline": [], "upstream": []}
     issues = []
     for path in sorted(source.rglob("*.rs")) if source.exists() else []:
         relative = path.relative_to(directory).as_posix()
         parts = path.relative_to(source).parts
+        if any(path.is_relative_to(parent) for parent in bundled):
+            groups["upstream"].append(relative)
+            continue
         if "tests" in parts:
             groups["private"].append(relative)
         elif "crate_tests" in parts:
@@ -40,8 +43,10 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
-    own = [inspect_crate(path.parent) for path in sorted((root / "crates").glob("*/Cargo.toml"))]
-    forks = json.loads((root / "vendor/RELEASE_FORKS.json").read_text(encoding="utf-8"))["forks"]
+    provenance = json.loads((root / "vendor/RELEASE_FORKS.json").read_text(encoding="utf-8"))
+    bundled = [root / source["directory"] for source in provenance.get("bundled_sources", []) if source.get("directory")]
+    own = [inspect_crate(path.parent, bundled) for path in sorted((root / "crates").glob("*/Cargo.toml"))]
+    forks = provenance["forks"]
     maintained = []
     for fork in forks:
         directory = root / fork["directory"]

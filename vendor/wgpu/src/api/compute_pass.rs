@@ -22,7 +22,7 @@ pub struct ComputePass<'encoder> {
     pub(crate) _encoder_guard: crate::api::PhantomDrop<&'encoder ()>,
 }
 
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(ComputePass<'_>: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(ComputePass<'_> => .inner);
@@ -133,15 +133,15 @@ impl ComputePass<'_> {
     ///
     pub fn transition_resources<'a>(
         &mut self,
-        buffer_transitions: impl Iterator<Item = wgt::BufferTransition<&'a Buffer>>,
-        texture_transitions: impl Iterator<Item = wgt::TextureTransition<&'a TextureView>>,
+        buffer_transitions: impl Iterator<Item = crate::__types::BufferTransition<&'a Buffer>>,
+        texture_transitions: impl Iterator<Item = crate::__types::TextureTransition<&'a TextureView>>,
     ) {
         self.inner.transition_resources(
-            &mut buffer_transitions.map(|t| wgt::BufferTransition {
+            &mut buffer_transitions.map(|t| crate::__types::BufferTransition {
                 buffer: &t.buffer.inner,
                 state: t.state,
             }),
-            &mut texture_transitions.map(|t| wgt::TextureTransition {
+            &mut texture_transitions.map(|t| crate::__types::TextureTransition {
                 texture: &t.texture.inner,
                 selector: t.selector,
                 state: t.state,
@@ -151,7 +151,7 @@ impl ComputePass<'_> {
 
     impl_deferred_command_buffer_actions!();
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of ComputePass (if custom backend and is internally T)
     pub fn as_custom<T: custom::ComputePassInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -223,7 +223,7 @@ pub struct ComputePassTimestampWrites<'a> {
     /// The index of the query set at which an end timestamp of this pass is written, if any.
     pub end_of_pass_write_index: Option<u32>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(ComputePassTimestampWrites<'_>: Send, Sync);
 
 /// Describes the attachments of a compute pass.
@@ -241,5 +241,5 @@ pub struct ComputePassDescriptor<'a> {
     /// Requires [`Features::TIMESTAMP_QUERY`] to be enabled.
     pub timestamp_writes: Option<ComputePassTimestampWrites<'a>>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(ComputePassDescriptor<'_>: Send, Sync);

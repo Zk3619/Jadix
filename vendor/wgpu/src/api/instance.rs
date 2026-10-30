@@ -32,7 +32,7 @@ bitflags::bitflags! {
 pub struct Instance {
     inner: dispatch::DispatchInstance,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(Instance: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(Instance => .inner);
@@ -68,9 +68,9 @@ impl Instance {
             );
         }
 
-        #[cfg(webgpu)]
+        #[cfg(jadix_wgpu_webgpu)]
         {
-            let is_only_available_backend = !cfg!(wgpu_core);
+            let is_only_available_backend = !cfg!(jadix_wgpu_wgpu_core);
             let requested_webgpu = desc.backends.contains(Backends::BROWSER_WEBGPU);
             let support_webgpu = crate::backend::get_browser_gpu_property()
                 .map(|maybe_gpu| maybe_gpu.is_some())
@@ -83,7 +83,7 @@ impl Instance {
             }
         }
 
-        #[cfg(wgpu_core)]
+        #[cfg(jadix_wgpu_wgpu_core)]
         {
             return Self {
                 inner: crate::backend::ContextWgpuCore::new(desc).into(),
@@ -108,22 +108,22 @@ impl Instance {
     pub const fn enabled_backend_features() -> Backends {
         let mut backends = Backends::empty();
         // `.set` and `|=` don't work in a `const` context.
-        if cfg!(noop) {
+        if cfg!(jadix_wgpu_noop) {
             backends = backends.union(Backends::NOOP);
         }
-        if cfg!(vulkan) {
+        if cfg!(jadix_wgpu_vulkan) {
             backends = backends.union(Backends::VULKAN);
         }
-        if cfg!(any(gles, webgl)) {
+        if cfg!(any(jadix_wgpu_gles, jadix_wgpu_webgl)) {
             backends = backends.union(Backends::GL);
         }
-        if cfg!(metal) {
+        if cfg!(jadix_wgpu_metal) {
             backends = backends.union(Backends::METAL);
         }
-        if cfg!(dx12) {
+        if cfg!(jadix_wgpu_dx12) {
             backends = backends.union(Backends::DX12);
         }
-        if cfg!(webgpu) {
+        if cfg!(jadix_wgpu_webgpu) {
             backends = backends.union(Backends::BROWSER_WEBGPU);
         }
         backends
@@ -132,7 +132,7 @@ impl Instance {
     /// Returns the set of [WGSL language extensions] supported by this instance.
     ///
     /// [WGSL language extensions]: https://www.w3.org/TR/webgpu/#gpuwgsllanguagefeatures
-    #[cfg(feature = "wgsl")]
+    #[cfg(jadix_wgpu_feature_wgsl)]
     pub fn wgsl_language_features(&self) -> WgslLanguageFeatures {
         self.inner.wgsl_language_features()
     }
@@ -214,7 +214,7 @@ impl Instance {
 
                 surface
             }?,
-            #[cfg(web)]
+            #[cfg(jadix_wgpu_web)]
             SurfaceTarget::Canvas(canvas) => {
                 handle_source = None;
 
@@ -232,7 +232,7 @@ impl Instance {
                     })
                 }?
             }
-            #[cfg(web)]
+            #[cfg(jadix_wgpu_web)]
             SurfaceTarget::OffscreenCanvas(canvas) => {
                 handle_source = None;
 
@@ -305,14 +305,14 @@ impl Instance {
     ///
     /// Returns `None` if the feature is not supported by the backend
     /// which happens only when WebGPU is pre-selected by the instance creation.
-    #[cfg(wgpu_core)]
-    pub fn generate_report(&self) -> Option<wgc::global::GlobalReport> {
+    #[cfg(jadix_wgpu_wgpu_core)]
+    pub fn generate_report(&self) -> Option<crate::__core::global::GlobalReport> {
         self.inner.as_core_opt().map(|ctx| ctx.generate_report())
     }
 }
 
 /// Interop with wgpu-hal.
-#[cfg(wgpu_core)]
+#[cfg(jadix_wgpu_wgpu_core)]
 impl Instance {
     /// Create an new instance of wgpu from a wgpu-hal instance. This is often useful
     /// when you need to do backend specific logic, or interop with an existing backend
@@ -332,7 +332,7 @@ impl Instance {
     /// - The `hal_instance` must be a valid and usable instance of the backend specified by `A`.
     /// - wgpu will act like it has complete ownership of this instance, and will destroy it
     ///   when the last reference to the instance, internal or external, is dropped.
-    pub unsafe fn from_hal<A: hal::Api>(hal_instance: A::Instance) -> Self {
+    pub unsafe fn from_hal<A: crate::__hal::Api>(hal_instance: A::Instance) -> Self {
         Self {
             inner: unsafe {
                 crate::backend::ContextWgpuCore::from_hal_instance::<A>(hal_instance).into()
@@ -342,7 +342,7 @@ impl Instance {
 
     /// Get the [`wgpu_hal`] instance from this `Instance`.
     ///
-    /// Find the Api struct corresponding to the active backend in [`wgpu_hal::api`],
+    /// Find the Api struct corresponding to the active backend in [`wgpu::hal::api`],
     /// and pass that struct to the to the `A` type parameter.
     ///
     /// Returns a guard that dereferences to the type of the hal backend
@@ -369,7 +369,7 @@ impl Instance {
     /// - All the safety requirements of wgpu-hal must be upheld.
     ///
     /// [`A::Instance`]: hal::Api::Instance
-    pub unsafe fn as_hal<A: hal::Api>(&self) -> Option<&A::Instance> {
+    pub unsafe fn as_hal<A: crate::__hal::Api>(&self) -> Option<&A::Instance> {
         self.inner
             .as_core_opt()
             .and_then(|ctx| unsafe { ctx.instance_as_hal::<A>() })
@@ -389,9 +389,9 @@ impl Instance {
     /// # Safety
     ///
     /// `hal_adapter` must be created from this instance internal handle.
-    pub unsafe fn create_adapter_from_hal<A: hal::Api>(
+    pub unsafe fn create_adapter_from_hal<A: crate::__hal::Api>(
         &self,
-        hal_adapter: hal::ExposedAdapter<A>,
+        hal_adapter: crate::__hal::ExposedAdapter<A>,
     ) -> Adapter {
         let core_instance = self.inner.as_core();
         let adapter = unsafe { core_instance.create_adapter_from_hal(hal_adapter) };
@@ -405,7 +405,7 @@ impl Instance {
 }
 
 /// Interop with wgpu-core.
-#[cfg(wgpu_core)]
+#[cfg(jadix_wgpu_wgpu_core)]
 impl Instance {
     /// Create an new instance of wgpu from a wgpu-core instance.
     ///
@@ -416,7 +416,7 @@ impl Instance {
     /// # Safety
     ///
     /// Refer to the creation of wgpu-core Instance.
-    pub unsafe fn from_core(core_instance: wgc::instance::Instance) -> Self {
+    pub unsafe fn from_core(core_instance: crate::__core::instance::Instance) -> Self {
         Self {
             inner: unsafe {
                 crate::backend::ContextWgpuCore::from_core_instance(core_instance).into()
@@ -426,7 +426,7 @@ impl Instance {
 }
 
 /// Interop with custom backends.
-#[cfg(custom)]
+#[cfg(jadix_wgpu_custom)]
 impl Instance {
     /// Creates instance from custom context implementation
     pub fn from_custom<T: InstanceInterface>(instance: T) -> Self {
@@ -435,7 +435,7 @@ impl Instance {
         }
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of Instance (if custom backend and is internally T)
     pub fn as_custom<T: custom::InstanceInterface>(&self) -> Option<&T> {
         self.inner.as_custom()

@@ -2,7 +2,7 @@ use super::angle::block_on;
 use wgpu::util::DeviceExt;
 pub fn run() -> Result<(serde_json::Value, Vec<u8>), Box<dyn std::error::Error>> {
     let instance = unsafe {
-        wgpu::Instance::from_hal::<wgpu_hal::dx11::Api>(wgpu_hal::dx11::Instance::new()?)
+        wgpu::Instance::from_hal::<wgpu::hal::dx11::Api>(wgpu::hal::dx11::Instance::new()?)
     };
     let (mut report, pixels) = super::angle::run_with_instance(instance.clone(), true)?;
     verify_updates(&instance)?;
@@ -317,18 +317,18 @@ fn native_wgpu_resource_and_window_oracle() {
 
 #[cfg(test)]
 mod sm5_register_tests {
-    use naga::back::hlsl::*;
+    use wgpu::naga::back::hlsl::*;
     #[test]
     fn fixed_samplers_and_draw_constants_only_for_sm5() {
-        let module=naga::front::wgsl::parse_str(r#"
+        let module=wgpu::naga::front::wgsl::parse_str(r#"
         @group(2) @binding(3) var tex:texture_2d<f32>;
         @group(2) @binding(5) var tex_sampler:sampler;
         @vertex fn vs(@builtin(vertex_index) id:u32)->@builtin(position) vec4f {return vec4f(f32(id),0.,0.,1.);}
         @fragment fn fs()->@location(0) vec4f{return textureSample(tex,tex_sampler,vec2f(0.5));}
         "#).unwrap();
-        let info = naga::valid::Validator::new(
-            naga::valid::ValidationFlags::all(),
-            naga::valid::Capabilities::empty(),
+        let info = wgpu::naga::valid::Validator::new(
+            wgpu::naga::valid::ValidationFlags::all(),
+            wgpu::naga::valid::Capabilities::empty(),
         )
         .validate(&module)
         .unwrap();
@@ -343,7 +343,7 @@ mod sm5_register_tests {
                 ..Default::default()
             };
             options.binding_map.insert(
-                naga::ResourceBinding {
+                wgpu::naga::ResourceBinding {
                     group: 2,
                     binding: 3,
                 },
@@ -353,7 +353,7 @@ mod sm5_register_tests {
                 },
             );
             options.binding_map.insert(
-                naga::ResourceBinding {
+                wgpu::naga::ResourceBinding {
                     group: 2,
                     binding: 5,
                 },

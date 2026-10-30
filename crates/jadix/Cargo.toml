@@ -57,7 +57,7 @@ i18n = ["dep:icu", "dep:icu_provider_blob", "dep:writeable"]
 # `accesskit_winit` still tracks winit 0.30. The OS hook is in-tree
 # (`a11y::winit_adapter`) with a Windows subclass and OHOS native ArkUI provider.
 a11y = ["dep:accesskit", "dep:accesskit_windows", "dep:jadix_accesskit_ohos"]
-# Dev-time TCP hot reload (`jadix_hot_reload_cli`). Requires debug build.
+# Dev-time TCP hot reload (`jadix_hot_reload`). Requires debug build.
 hot-reload = []
 # Optional runtime logger: console (stderr) + optional file via JADIX_LOG_FILE (env_logger).
 runtime-logging = ["dep:env_logger"]
@@ -80,9 +80,9 @@ backend-metal = ["wgpu/metal"]
 # Native graphics HAL and ANGLE are independently selectable.
 # Experimental: native-window color and sustained presentation are not accepted yet.
 
-# Experimental native SM5 graphics subset; see vendor/wgpu-hal/JADIX_DX11_PATCH.md.
-backend-dx11-native = ["jadix_renderer/backend-dx11-native", "dep:wgpu-hal", "wgpu-hal/dx11"]
-backend-dx11-angle = ["jadix_renderer/backend-dx11-angle", "backend-gles", "dep:wgpu-hal", "wgpu-hal/gles-angle"]
+# Experimental native SM5 graphics subset; see vendor/wgpu/upstream/wgpu-hal/JADIX_DX11_PATCH.md.
+backend-dx11-native = ["jadix_renderer/backend-dx11-native", "wgpu/dx11"]
+backend-dx11-angle = ["jadix_renderer/backend-dx11-angle", "backend-gles", "wgpu/gles-angle"]
 backend-dx11 = ["backend-dx11-native"]
 # Embed large fonts into the binary (single-file distro; dramatically increases size).
 bundled-cjk = []
@@ -179,13 +179,12 @@ moka = { workspace = true, optional = true, features = ["sync"] }
 jadix_net = { workspace = true, optional = true }
 winit = { workspace = true }
 wgpu = { workspace = true }
-wgpu-hal = { "package" = "jadix_wgpu_hal", "version" = "=30.0.0", "path" = "../../vendor/wgpu-hal", "default-features" = false, "optional" = true }
 taffy = { workspace = true, features = ["parse"] }
-bytemuck = { workspace = true }
+bytemuck = { workspace = true, default-features = true }
 glyphon = { workspace = true }
 env_logger = { workspace = true, optional = true }
 log = { workspace = true }
-tracing = { workspace = true, optional = true }
+tracing = { workspace = true, default-features = true, optional = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
@@ -303,7 +302,7 @@ tray-icon = { workspace = true, optional = true, features = ["ksni"] }
 
 [target.'cfg(any(target_os = "macos", target_os = "ios"))'.dependencies]
 objc2 = { workspace = true, optional = true }
-objc2-foundation = { workspace = true, optional = true, features = ["NSGeometry"] }
+objc2-foundation = { workspace = true, default-features = true, optional = true, features = ["NSGeometry"] }
 
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]

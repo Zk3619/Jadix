@@ -1063,9 +1063,7 @@ name = "d3d11_probe"
 version = "0.1.0"
 dependencies = [
  "glow",
- "jadix_naga",
  "jadix_wgpu",
- "jadix_wgpu_hal",
  "raw-window-handle",
  "serde_json",
  "windows",
@@ -2812,7 +2810,6 @@ dependencies = [
  "jadix_theme",
  "jadix_tokio",
  "jadix_wgpu",
- "jadix_wgpu_hal",
  "jadix_window_materials",
  "jadix_winit",
  "jni",
@@ -2858,7 +2855,6 @@ dependencies = [
  "jadix",
  "jadix_components",
  "jadix_wgpu",
- "jadix_wgpu_hal",
  "jadix_winit",
  "log",
  "serde_json",
@@ -2976,24 +2972,13 @@ dependencies = [
 
 [[package]]
 name = "jadix_hot_reload"
-version = "0.1.0"
+version = "0.1.1"
 dependencies = [
- "proc-macro2",
- "serde",
- "serde_json",
- "syn 2.0.117",
-]
-
-[[package]]
-name = "jadix_hot_reload_cli"
-version = "0.1.0"
-dependencies = [
- "jadix_hot_reload",
- "jadix_lucide",
  "notify",
  "proc-macro2",
  "serde",
  "serde_json",
+ "syn 2.0.117",
  "toml",
 ]
 
@@ -3057,30 +3042,6 @@ name = "jadix_media"
 version = "0.1.0"
 
 [[package]]
-name = "jadix_naga"
-version = "30.0.0"
-dependencies = [
- "arrayvec",
- "bit-set 0.10.0",
- "bitflags 2.11.0",
- "cfg-if",
- "cfg_aliases",
- "codespan-reporting",
- "half",
- "hashbrown 0.17.1",
- "indexmap",
- "libm",
- "log",
- "naga-types",
- "num-traits",
- "once_cell",
- "rustc-hash 1.1.0",
- "spirv",
- "thiserror 2.0.20",
- "unicode-ident",
-]
-
-[[package]]
 name = "jadix_net"
 version = "0.1.0"
 dependencies = [
@@ -3095,7 +3056,6 @@ version = "0.1.0"
 dependencies = [
  "bytemuck",
  "jadix_wgpu",
- "jadix_wgpu_hal",
  "log",
  "unicode-segmentation",
 ]
@@ -3142,118 +3102,32 @@ dependencies = [
 name = "jadix_wgpu"
 version = "30.0.0"
 dependencies = [
- "arrayvec",
- "bitflags 2.11.0",
- "bytemuck",
- "cfg-if",
- "cfg_aliases",
- "document-features",
- "hashbrown 0.17.1",
- "jadix_naga",
- "jadix_wgpu_core",
- "jadix_wgpu_hal",
- "jadix_wgpu_types",
- "js-sys",
- "log",
- "parking_lot",
- "portable-atomic",
- "profiling",
- "raw-window-handle",
- "smallvec",
- "static_assertions",
- "wasm-bindgen",
- "wasm-bindgen-futures",
- "web-sys",
-]
-
-[[package]]
-name = "jadix_wgpu_core"
-version = "30.0.0"
-dependencies = [
- "arrayvec",
- "bit-set 0.10.0",
- "bit-vec 0.9.1",
- "bitflags 2.11.0",
- "bytemuck",
- "cfg_aliases",
- "document-features",
- "hashbrown 0.17.1",
- "indexmap",
- "jadix_naga",
- "jadix_wgpu_core_deps_apple",
- "jadix_wgpu_core_deps_emscripten",
- "jadix_wgpu_core_deps_wasm",
- "jadix_wgpu_core_deps_windows_linux_android",
- "jadix_wgpu_hal",
- "jadix_wgpu_naga_bridge",
- "jadix_wgpu_types",
- "log",
- "naga-types",
- "once_cell",
- "parking_lot",
- "portable-atomic",
- "profiling",
- "raw-window-handle",
- "rustc-hash 1.1.0",
- "smallvec",
- "thiserror 2.0.20",
-]
-
-[[package]]
-name = "jadix_wgpu_core_deps_apple"
-version = "30.0.0"
-dependencies = [
- "jadix_wgpu_hal",
-]
-
-[[package]]
-name = "jadix_wgpu_core_deps_emscripten"
-version = "30.0.0"
-dependencies = [
- "jadix_wgpu_hal",
-]
-
-[[package]]
-name = "jadix_wgpu_core_deps_wasm"
-version = "30.0.1"
-dependencies = [
- "jadix_wgpu_hal",
-]
-
-[[package]]
-name = "jadix_wgpu_core_deps_windows_linux_android"
-version = "30.0.0"
-dependencies = [
- "jadix_wgpu_hal",
-]
-
-[[package]]
-name = "jadix_wgpu_hal"
-version = "30.0.0"
-dependencies = [
  "android_system_properties",
  "arrayvec",
  "ash",
  "bit-set 0.10.0",
+ "bit-vec 0.9.1",
  "bitflags 2.11.0",
  "block2 0.6.2",
  "bytemuck",
  "cfg-if",
- "cfg_aliases",
+ "codespan-reporting",
+ "document-features",
  "glow",
  "glutin_wgl_sys",
  "gpu-allocator",
+ "half",
  "hashbrown 0.17.1",
- "jadix_naga",
- "jadix_wgpu_naga_bridge",
- "jadix_wgpu_types",
+ "indexmap",
  "js-sys",
  "khronos-egl",
  "libc",
  "libloading 0.8.9",
+ "libm",
  "log",
  "naga-types",
  "ndk-sys",
+ "num-traits",
  "objc2 0.6.4",
  "objc2-core-foundation",
  "objc2-core-graphics",
@@ -3270,37 +3144,19 @@ dependencies = [
  "raw-window-handle",
  "raw-window-metal",
  "renderdoc-sys",
+ "rustc-hash 1.1.0",
  "smallvec",
+ "spirv",
  "static_assertions",
  "thiserror 2.0.20",
+ "unicode-ident",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wayland-sys",
  "web-sys",
  "windows",
  "windows-core",
  "windows-result",
-]
-
-[[package]]
-name = "jadix_wgpu_naga_bridge"
-version = "30.0.0"
-dependencies = [
- "jadix_naga",
- "jadix_wgpu_types",
-]
-
-[[package]]
-name = "jadix_wgpu_types"
-version = "30.0.0"
-dependencies = [
- "bitflags 2.11.0",
- "bytemuck",
- "js-sys",
- "log",
- "naga-types",
- "raw-window-handle",
- "static_assertions",
- "web-sys",
 ]
 
 [[package]]
@@ -3322,108 +3178,34 @@ dependencies = [
 name = "jadix_winit"
 version = "0.31.0-beta.3-jadix.1"
 dependencies = [
- "bitflags 2.11.0",
- "cfg_aliases",
- "cursor-icon",
- "dpi",
- "jadix_winit_android",
- "jadix_winit_appkit",
- "jadix_winit_common",
- "jadix_winit_core",
- "jadix_winit_ohos",
- "jadix_winit_orbital",
- "jadix_winit_uikit",
- "jadix_winit_wayland",
- "jadix_winit_web",
- "jadix_winit_win32",
- "jadix_winit_x11",
- "libc",
- "objc2 0.6.4",
- "objc2-app-kit",
- "objc2-foundation 0.3.2",
- "raw-window-handle",
- "rustix",
- "serde",
- "smol_str",
- "tracing",
- "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "jadix_winit_android"
-version = "0.31.0-beta.3-jadix.1"
-dependencies = [
  "android-activity",
- "bitflags 2.11.0",
- "dpi",
- "jadix_winit_core",
- "ndk",
- "raw-window-handle",
- "smol_str",
- "tracing",
-]
-
-[[package]]
-name = "jadix_winit_appkit"
-version = "0.31.0-beta.3-jadix.1"
-dependencies = [
+ "atomic-waker",
  "bitflags 2.11.0",
  "block2 0.6.2",
+ "bytemuck",
+ "calloop",
+ "cfg_aliases",
+ "concurrent-queue",
+ "crossbeam-channel",
+ "cursor-icon",
  "dispatch2",
  "dpi",
- "jadix_winit_common",
- "jadix_winit_core",
+ "foldhash",
+ "futures-channel",
+ "futures-executor",
+ "js-sys",
+ "keyboard-types",
+ "libc",
+ "libredox",
+ "memmap2",
+ "ndk",
  "objc2 0.6.4",
  "objc2-app-kit",
  "objc2-core-foundation",
  "objc2-core-graphics",
  "objc2-core-video",
  "objc2-foundation 0.3.2",
- "raw-window-handle",
- "smol_str",
- "tracing",
-]
-
-[[package]]
-name = "jadix_winit_common"
-version = "0.31.0-beta.3-jadix.1"
-dependencies = [
- "block2 0.6.2",
- "dpi",
- "jadix_winit_core",
- "memmap2",
- "objc2 0.6.4",
- "objc2-core-foundation",
- "objc2-foundation 0.3.2",
- "smol_str",
- "tracing",
- "x11-dl",
- "xkbcommon-dl",
-]
-
-[[package]]
-name = "jadix_winit_core"
-version = "0.31.0-beta.3-jadix.1"
-dependencies = [
- "bitflags 2.11.0",
- "cursor-icon",
- "dpi",
- "keyboard-types",
- "raw-window-handle",
- "serde",
- "smol_str",
- "web-time",
-]
-
-[[package]]
-name = "jadix_winit_ohos"
-version = "0.31.0-beta.3-jadix.1"
-dependencies = [
- "crossbeam-channel",
- "dpi",
- "futures-channel",
- "futures-executor",
- "jadix_winit_core",
+ "objc2-ui-kit",
  "ohos-display-sys",
  "ohos-fileshare-binding",
  "ohos-fileuri-binding",
@@ -3442,126 +3224,27 @@ dependencies = [
  "openharmony-ability-plugin-system-state",
  "openharmony-ability-plugin-url",
  "openharmony-ability-plugin-window",
- "raw-window-handle",
- "tracing",
-]
-
-[[package]]
-name = "jadix_winit_orbital"
-version = "0.31.0-beta.3-jadix.1"
-dependencies = [
- "bitflags 2.11.0",
- "dpi",
- "jadix_winit_core",
- "libredox",
  "orbclient",
+ "percent-encoding",
+ "pin-project",
  "raw-window-handle",
  "redox_event",
- "smol_str",
- "tracing",
-]
-
-[[package]]
-name = "jadix_winit_uikit"
-version = "0.31.0-beta.3-jadix.1"
-dependencies = [
- "bitflags 2.11.0",
- "block2 0.6.2",
- "dispatch2",
- "dpi",
- "jadix_winit_common",
- "jadix_winit_core",
- "objc2 0.6.4",
- "objc2-core-foundation",
- "objc2-foundation 0.3.2",
- "objc2-ui-kit",
- "raw-window-handle",
- "serde",
- "smol_str",
- "tracing",
-]
-
-[[package]]
-name = "jadix_winit_wayland"
-version = "0.31.0-beta.3-jadix.1"
-dependencies = [
- "bitflags 2.11.0",
- "calloop",
- "cursor-icon",
- "dpi",
- "foldhash",
- "jadix_winit_common",
- "jadix_winit_core",
- "libc",
- "memmap2",
- "percent-encoding",
- "raw-window-handle",
  "rustix",
  "sctk-adwaita",
+ "serde",
  "smithay-client-toolkit",
  "smol_str",
  "tracing",
+ "unicode-segmentation",
+ "wasm-bindgen",
+ "wasm-bindgen-futures",
  "wayland-backend",
  "wayland-client",
  "wayland-protocols",
  "wayland-protocols-plasma",
-]
-
-[[package]]
-name = "jadix_winit_web"
-version = "0.31.0-beta.3-jadix.1"
-dependencies = [
- "atomic-waker",
- "bitflags 2.11.0",
- "concurrent-queue",
- "cursor-icon",
- "dpi",
- "jadix_winit_core",
- "js-sys",
- "pin-project",
- "raw-window-handle",
- "smol_str",
- "tracing",
- "wasm-bindgen",
- "wasm-bindgen-futures",
  "web-sys",
  "web-time",
-]
-
-[[package]]
-name = "jadix_winit_win32"
-version = "0.31.0-beta.3-jadix.1"
-dependencies = [
- "bitflags 2.11.0",
- "cursor-icon",
- "dpi",
- "jadix_winit_common",
- "jadix_winit_core",
- "percent-encoding",
- "raw-window-handle",
- "smol_str",
- "tracing",
- "unicode-segmentation",
  "windows-sys 0.61.2",
-]
-
-[[package]]
-name = "jadix_winit_x11"
-version = "0.31.0-beta.3-jadix.1"
-dependencies = [
- "bitflags 2.11.0",
- "bytemuck",
- "calloop",
- "cursor-icon",
- "dpi",
- "jadix_winit_common",
- "jadix_winit_core",
- "libc",
- "percent-encoding",
- "raw-window-handle",
- "rustix",
- "smol_str",
- "tracing",
  "x11-dl",
  "x11rb",
  "xkbcommon-dl",

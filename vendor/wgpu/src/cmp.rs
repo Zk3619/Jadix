@@ -4,9 +4,9 @@
 //!
 //! For types (like WebGPU) that don't have such a property, we generate an identifier and use that.
 
-#[cfg(supports_64bit_atomics)]
+#[cfg(jadix_wgpu_supports_64bit_atomics)]
 pub use core::sync::atomic::AtomicU64;
-#[cfg(not(supports_64bit_atomics))]
+#[cfg(not(jadix_wgpu_supports_64bit_atomics))]
 pub use portable_atomic::AtomicU64;
 
 use core::{num::NonZeroU64, sync::atomic::Ordering};
@@ -67,7 +67,10 @@ macro_rules! impl_eq_ord_hash_proxy {
 /// ```ignore
 /// impl_eq_ord_hash_arc_address!(MyType => .field);
 /// ```
-#[cfg_attr(not(any(wgpu_core, custom)), expect(unused_macros))]
+#[cfg_attr(
+    not(any(jadix_wgpu_wgpu_core, jadix_wgpu_custom)),
+    expect(unused_macros)
+)]
 macro_rules! impl_eq_ord_hash_arc_address {
     ($type:ty => $($access:tt)*) => {
         impl PartialEq for $type {
@@ -105,5 +108,8 @@ macro_rules! impl_eq_ord_hash_arc_address {
     };
 }
 
-#[cfg_attr(not(any(wgpu_core, custom)), expect(unused_imports))]
+#[cfg_attr(
+    not(any(jadix_wgpu_wgpu_core, jadix_wgpu_custom)),
+    expect(unused_imports)
+)]
 pub(crate) use {impl_eq_ord_hash_arc_address, impl_eq_ord_hash_proxy};

@@ -4,22 +4,22 @@
 //! the no_std implementation is a stub that does not
 //! actually distinguish between threads.
 
-#[cfg(feature = "std")]
+#[cfg(jadix_wgpu_feature_std)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ThreadId(std::thread::ThreadId);
 
-#[cfg(feature = "std")]
+#[cfg(jadix_wgpu_feature_std)]
 impl ThreadId {
     pub fn current() -> Self {
         ThreadId(std::thread::current().id())
     }
 }
 
-#[cfg(not(feature = "std"))]
+#[cfg(not(jadix_wgpu_feature_std))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct ThreadId(());
 
-#[cfg(not(feature = "std"))]
+#[cfg(not(jadix_wgpu_feature_std))]
 impl ThreadId {
     pub fn current() -> Self {
         // A simple stub implementation for non-std environments. On

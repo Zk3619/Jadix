@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*", "examples/*"]
-exclude = ["examples/config", "vendor/glyphon", "vendor/taffy", "vendor/naga", "vendor/wgpu-core", "vendor/wgpu-types", "vendor/wgpu-hal", "vendor/gpui-pre-windows-0.3.9", "vendor/gpui-fast-windows-0.1.9", "vendor/winit-wayland", "vendor/winit-win32", "vendor/wgpu", "vendor/wgpu-core-deps-apple", "vendor/wgpu-core-deps-emscripten", "vendor/wgpu-core-deps-wasm", "vendor/wgpu-core-deps-windows-linux-android", "vendor/wgpu-naga-bridge", "vendor/winit-android", "vendor/winit-appkit", "vendor/winit-common", "vendor/winit-core", "vendor/winit-ohos", "vendor/winit-orbital", "vendor/winit-uikit", "vendor/winit-web", "vendor/winit-x11"]
+exclude = ["examples/config", "vendor/glyphon", "vendor/taffy", "vendor/gpui-pre-windows-0.3.9", "vendor/gpui-fast-windows-0.1.9", "vendor/wgpu"]
 resolver = "2"
 
 [workspace.package]
@@ -30,7 +30,7 @@ jadix_media = { path = "crates/jadix_media", version = "0.1.0" }
 jadix_lucide = { path = "crates/jadix_lucide", version = "0.1.0", default-features = false }
 jadix_lsp = { path = "crates/jadix_lsp", version = "0.1.0" }
 jadix_document = { path = "crates/jadix_document", version = "0.1.0", default-features = false }
-jadix_hot_reload = { path = "crates/jadix_hot_reload", version = "0.1.0", default-features = false }
+jadix_hot_reload = { path = "crates/jadix_hot_reload", version = "0.1.1", default-features = false }
 jadix_net = { path = "crates/jadix_net", version = "0.1.0", default-features = false }
 jadix_tasks = { path = "crates/jadix_tasks", version = "0.1.0" }
 jadix_tokio = { path = "crates/jadix_tokio", version = "0.1.0" }
@@ -40,7 +40,6 @@ moka = { version = "0.12.16", default-features = false }
 # --- window / GPU ---
 # Local facade fork; backends/core are pinned together (see jadix_winit/README.md).
 winit = { package = "jadix_winit", path = "crates/jadix_winit", version = "=0.31.0-beta.3-jadix.1" }
-winit-ohos = { "package" = "jadix_winit_ohos", "version" = "=0.31.0-beta.3-jadix.1", "path" = "vendor/winit-ohos", "default-features" = false }
 wry = "=0.57.0"
 gtk = "0.18"
 jni = "0.21.1"
@@ -61,7 +60,7 @@ wgpu = { "package" = "jadix_wgpu", "version" = "=30.0.0", "path" = "vendor/wgpu"
 
 # --- layout / text ---
 taffy = { "package" = "jadix_taffy", "version" = "=0.15.0", "path" = "vendor/taffy" }
-bytemuck = { version = "1.25", features = ["derive"] }
+bytemuck = { version = "1.25", default-features = false, features = ["derive"] }
 # Upstream glyphon 0.12 (Coverage only). CSS transform text uses Bake/Msdf offscreen path.
 glyphon = { "package" = "jadix_glyphon", "version" = "=0.12.0", "path" = "vendor/glyphon", "default-features" = false }
 # Stack pin (not a direct dep). glyphon re-exports `glyphon::cosmic_text`.
@@ -77,7 +76,7 @@ latex-rust = "=2.1.1"
 # --- logging / serde ---
 env_logger = "0.11"
 log = "0.4"
-tracing = "0.1"
+tracing = { version = "0.1.40", default-features = false }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 toml = "0.8"
@@ -90,10 +89,10 @@ proc-macro2 = "1.0"
 # --- desktop helpers ---
 # Clipboard lives in `jadix_clipboard` (fork of clipboard-rs; Windows → `windows` 0.62).
 clipboard-win = { version = "5.4", features = ["monitor"] }
-x11rb = { version = "0.13", features = ["xfixes"] }
+x11rb = { version = "0.13", default-features = false, features = ["xfixes"] }
 # objc2 0.6 matches rfd / wgpu-hal / winit 0.31.
 objc2 = "0.6"
-objc2-foundation = "0.3"
+objc2-foundation = { version = "0.3.2", default-features = false }
 objc2-app-kit = { version = "0.3", default-features = false }
 objc2-ui-kit = "0.3"
 rfd = "0.17.2"
@@ -125,6 +124,15 @@ windows-core = "0.62"
 windows-numerics = "0.3"
 windows-collections = "0.3"
 find-msvc-tools = "0.1.9"
+
+bitflags = { version = "2" }
+block2 = { version = "0.6.1" }
+cursor-icon = { version = "1.1.0" }
+dpi = { version = "=0.1.2" }
+objc2-core-foundation = { version = "0.3.2", default-features = false }
+percent-encoding = { version = "2" }
+rwh_06 = { package = "raw-window-handle", version = "0.6" }
+smol_str = { version = "0.3" }
 
 [profile.release]
 codegen-units = 1

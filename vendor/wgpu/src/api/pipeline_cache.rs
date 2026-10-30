@@ -72,7 +72,7 @@ pub struct PipelineCache {
     pub(crate) inner: crate::dispatch::DispatchPipelineCache,
 }
 
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(PipelineCache: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(PipelineCache => .inner);
@@ -88,7 +88,7 @@ impl PipelineCache {
         self.inner.get_data()
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of PipelineCache (if custom backend and is internally T)
     pub fn as_custom<T: custom::PipelineCacheInterface>(&self) -> Option<&T> {
         self.inner.as_custom()

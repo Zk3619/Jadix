@@ -709,7 +709,7 @@ fn verify_surface(
 fn native_identity(adapter: &wgpu::Adapter) -> serde_json::Value {
     #[cfg(feature = "native-wgpu")]
     {
-        let hal = unsafe { adapter.as_hal::<wgpu_hal::dx11::Api>() }.unwrap();
+        let hal = unsafe { adapter.as_hal::<wgpu::hal::dx11::Api>() }.unwrap();
         let d = unsafe { hal.raw_adapter().GetDesc1() }.unwrap();
         return serde_json::json!({"vendor_id":d.VendorId,"device_id":d.DeviceId,"adapter_luid":[d.AdapterLuid.HighPart,d.AdapterLuid.LowPart]});
     }

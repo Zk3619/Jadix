@@ -32,7 +32,7 @@ fn main() {
 | --- | --- |
 | `macros` | `ui!` 和 `component` 的静态作者入口；不改变 Release 的 Rust 执行模型 |
 | `devtools` | Debug Inspector：未使用宏、未登记来源的普通 Element 也可检查；缺失来源明确显示 |
-| `hot-reload` | Debug 热更接收端；另启动 `jadix_hot_reload_cli` 文件监听器 |
+| `hot-reload` | Debug 热更接收端；另启动 `jadix_hot_reload` 文件监听器 |
 | `svg` / `animation-base` / `animation-path` | 按需启用 SVG、基础动画或路径动画及其声明依赖 |
 | `a11y` | 可访问性桥接；平台行为按实际设备验证 |
 

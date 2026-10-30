@@ -1,3 +1,4 @@
+use crate::__types::Features;
 use crate::{
     util::align_to, Buffer, BufferAddress, BufferDescriptor, BufferSize, BufferSlice, BufferUsages,
     BufferViewMut, CommandEncoder, Device, MapMode,
@@ -5,7 +6,6 @@ use crate::{
 use alloc::vec::Vec;
 use core::fmt;
 use std::sync::mpsc;
-use wgt::Features;
 
 use crate::COPY_BUFFER_ALIGNMENT;
 

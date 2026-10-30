@@ -53,11 +53,11 @@ impl<'a> RenderBundleEncoder<'a> {
     /// Finishes recording and returns a [`RenderBundle`] that can be executed in other render passes.
     pub fn finish(self, desc: &RenderBundleDescriptor<'_>) -> RenderBundle {
         let bundle = match self.inner {
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             dispatch::DispatchRenderBundleEncoder::Core(b) => b.finish(desc),
-            #[cfg(webgpu)]
+            #[cfg(jadix_wgpu_webgpu)]
             dispatch::DispatchRenderBundleEncoder::WebGPU(b) => b.finish(desc),
-            #[cfg(custom)]
+            #[cfg(jadix_wgpu_custom)]
             dispatch::DispatchRenderBundleEncoder::Custom(b) => b.finish_boxed(desc),
         };
 
@@ -207,7 +207,7 @@ impl<'a> RenderBundleEncoder<'a> {
             .draw_indexed_indirect(&indirect_buffer.inner, indirect_offset);
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of RenderBundleEncoder (if custom backend and is internally T)
     pub fn as_custom<T: custom::RenderBundleEncoderInterface>(&self) -> Option<&T> {
         self.inner.as_custom()

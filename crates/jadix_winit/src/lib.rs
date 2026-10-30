@@ -306,7 +306,7 @@ pub use rwh_06 as raw_window_handle;
 pub mod changelog;
 pub mod chrome;
 pub mod event_loop;
-pub use winit_core::{
+pub use crate::winit_core::{
     application, cursor, data_transfer, error, event, icon, keyboard, monitor, window,
 };
 #[macro_use]
@@ -314,3 +314,94 @@ mod os_error;
 mod platform_impl;
 
 pub mod platform;
+
+#[allow(clippy::all, unreachable_patterns)]
+#[doc(hidden)]
+pub mod winit_core;
+
+#[cfg(any(
+    target_os = "windows",
+    target_vendor = "apple",
+    all(
+        unix,
+        not(any(
+            target_os = "redox",
+            target_family = "wasm",
+            target_os = "android",
+            target_vendor = "apple",
+            target_env = "ohos"
+        ))
+    )
+))]
+#[allow(clippy::all, unreachable_patterns)]
+#[doc(hidden)]
+pub mod winit_common;
+
+#[cfg(target_os = "windows")]
+#[allow(clippy::all, unreachable_patterns)]
+#[doc(hidden)]
+pub mod winit_win32;
+
+#[cfg(all(
+    all(
+        unix,
+        not(any(
+            target_os = "redox",
+            target_family = "wasm",
+            target_os = "android",
+            target_vendor = "apple",
+            target_env = "ohos"
+        ))
+    ),
+    feature = "wayland"
+))]
+#[allow(clippy::all, unreachable_patterns)]
+#[doc(hidden)]
+pub mod winit_wayland;
+
+#[cfg(all(
+    all(
+        unix,
+        not(any(
+            target_os = "redox",
+            target_family = "wasm",
+            target_os = "android",
+            target_vendor = "apple",
+            target_env = "ohos"
+        ))
+    ),
+    feature = "x11"
+))]
+#[allow(clippy::all, unreachable_patterns)]
+#[doc(hidden)]
+pub mod winit_x11;
+
+#[cfg(target_os = "android")]
+#[allow(clippy::all, unreachable_patterns)]
+#[doc(hidden)]
+pub mod winit_android;
+
+#[cfg(target_os = "macos")]
+#[allow(clippy::all, unreachable_patterns)]
+#[doc(hidden)]
+pub mod winit_appkit;
+
+#[cfg(all(target_vendor = "apple", not(target_os = "macos")))]
+#[allow(clippy::all, unreachable_patterns)]
+#[doc(hidden)]
+pub mod winit_uikit;
+
+#[cfg(target_env = "ohos")]
+#[allow(clippy::all, unreachable_patterns)]
+#[doc(hidden)]
+pub mod winit_ohos;
+
+#[cfg(target_os = "redox")]
+#[allow(clippy::all, unreachable_patterns)]
+#[doc(hidden)]
+pub mod winit_orbital;
+
+#[cfg(target_family = "wasm")]
+#[allow(clippy::all, unreachable_patterns)]
+#[doc(hidden)]
+pub mod winit_web;

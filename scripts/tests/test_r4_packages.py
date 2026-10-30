@@ -36,6 +36,19 @@ class CandidateContracts(unittest.TestCase):
             with self.assertRaises(ValueError):
                 packages.validate_upload_size(path, limit=3)
 
+    def test_bundled_source_provenance_must_be_present_and_exact(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            path = directory / "upstream" / "original" / "JADIX_FORK.md"
+            path.parent.mkdir(parents=True)
+            path.write_text("# Bundled source\n", encoding="utf-8")
+            with self.assertRaises(ValueError):
+                packages.validate_provenance(directory, {})
+            key = path.relative_to(directory).as_posix()
+            packages.validate_provenance(directory, {key: hashlib.sha256(path.read_bytes()).hexdigest()})
+            with self.assertRaises(ValueError):
+                packages.validate_provenance(directory, {key: "different"})
+
     def test_registry_paths(self):
         self.assertEqual([packages.index_path(name) for name in ("a", "ab", "abc", "jadix")],
                          ["1/a", "2/ab", "3/a/abc", "ja/di/jadix"])
@@ -80,8 +93,8 @@ class CandidateContracts(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             path=Path(temporary)/"cli.log"
             path.write_text("Running unittests src/main.rs (target/debug/deps/jadix_hot_reload-012abc.exe)\ntest supervisor::repair ... ok\n",encoding="utf-8")
-            record,=identities.qualified_tests(path,"jadix_hot_reload_cli","bin:jadix-hot-reload",["default"])
-            self.assertEqual(record["package"],"jadix_hot_reload_cli")
+            record,=identities.qualified_tests(path,"jadix_hot_reload","bin:jadix-hot-reload",["default"])
+            self.assertEqual(record["package"],"jadix_hot_reload")
             self.assertEqual(record["target"],"bin:jadix-hot-reload")
 
     def test_historical_utf16_and_current_utf8_keep_test_identities(self):

@@ -126,9 +126,9 @@ use crate::*;
 /// with `f32` values like this:
 ///
 /// ```
-/// # #[cfg(feature = "noop")]
+/// # #[cfg(jadix_wgpu_feature_noop)]
 /// # let (device, _queue) = wgpu::Device::noop(&wgpu::DeviceDescriptor::default());
-/// # #[cfg(not(feature = "noop"))]
+/// # #[cfg(not(jadix_wgpu_feature_noop))]
 /// # let device: wgpu::Device = { return; };
 /// #
 /// # let buffer = device.create_buffer(&wgpu::BufferDescriptor {
@@ -222,11 +222,11 @@ use crate::*;
 pub struct Buffer {
     pub(crate) inner: dispatch::DispatchBuffer,
     pub(crate) map_context: Arc<Mutex<MapContext>>,
-    pub(crate) size: wgt::BufferAddress,
+    pub(crate) size: crate::__types::BufferAddress,
     pub(crate) usage: BufferUsages,
     // Todo: missing map_state https://www.w3.org/TR/webgpu/#dom-gpubuffer-mapstate
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(Buffer: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(Buffer => .inner);
@@ -248,7 +248,7 @@ impl Buffer {
 
     /// Get the [`wgpu_hal`] buffer from this `Buffer`.
     ///
-    /// Find the Api struct corresponding to the active backend in [`wgpu_hal::api`],
+    /// Find the Api struct corresponding to the active backend in [`wgpu::hal::api`],
     /// and pass that struct to the to the `A` type parameter.
     ///
     /// Returns a guard that dereferences to the type of the hal backend
@@ -286,8 +286,8 @@ impl Buffer {
     /// - All the safety requirements of wgpu-hal must be upheld.
     ///
     /// [`A::Buffer`]: hal::Api::Buffer
-    #[cfg(wgpu_core)]
-    pub unsafe fn as_hal<A: hal::Api>(
+    #[cfg(jadix_wgpu_wgpu_core)]
+    pub unsafe fn as_hal<A: crate::__hal::Api>(
         &self,
     ) -> Option<impl core::ops::Deref<Target = A::Buffer> + WasmNotSendSync> {
         let buffer = self.inner.as_core_opt()?;
@@ -452,7 +452,7 @@ impl Buffer {
         self.slice(bounds).get_mapped_range_mut()
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of Buffer (if custom backend and is internally T)
     pub fn as_custom<T: custom::BufferInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -460,7 +460,7 @@ impl Buffer {
 
     /// Returns the underlying [`webgpu::GpuBuffer`] handle if this `Buffer`
     /// is on the WebGPU backend, otherwise `None`.
-    #[cfg(webgpu)]
+    #[cfg(jadix_wgpu_webgpu)]
     pub fn as_webgpu(&self) -> Option<&webgpu::GpuBuffer> {
         self.inner.as_webgpu_opt().map(|wb| &wb.inner)
     }
@@ -512,7 +512,7 @@ pub struct BufferSlice<'a> {
     pub(crate) offset: BufferAddress,
     pub(crate) size: BufferAddress,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(BufferSlice<'_>: Send, Sync);
 
 impl<'a> BufferSlice<'a> {
@@ -870,7 +870,7 @@ impl MapContext {
 ///
 /// Corresponds to [WebGPU `GPUBufferDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpubufferdescriptor).
-pub type BufferDescriptor<'a> = wgt::BufferDescriptor<Label<'a>>;
+pub type BufferDescriptor<'a> = crate::__types::BufferDescriptor<Label<'a>>;
 static_assertions::assert_impl_all!(BufferDescriptor<'_>: Send, Sync);
 
 /// Error occurred when trying to async map a buffer.
@@ -1004,7 +1004,7 @@ impl Drop for BufferViewMut {
     }
 }
 
-#[cfg(webgpu)]
+#[cfg(jadix_wgpu_webgpu)]
 impl BufferView {
     /// Provides the same data as dereferencing the view, but as a `Uint8Array` in js.
     /// This can be MUCH faster than dereferencing the view which copies the data into

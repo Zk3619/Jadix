@@ -50,7 +50,7 @@ try {
     Run-Check 'lucide-animated' 'cargo' (@('test', '-p', 'jadix_lucide', '--features', 'animated,animation-path,macros', '--all-targets') + $mode)
     Run-Check 'runtime-kernels-minimal' 'cargo' (@('test', '-p', 'jadix_renderer', '-p', 'jadix_animation', '--no-default-features') + $mode + @('--', '--test-threads=1'))
     Run-Check 'runtime-kernels' 'cargo' (@('test', '-p', 'jadix_core', '-p', 'jadix_layout', '-p', 'jadix_renderer', '-p', 'jadix_animation', '-p', 'jadix_theme', '-p', 'jadix_window_materials', '--all-features') + $mode + @('--', '--test-threads=1'))
-    Run-Check 'kernels-macros-cli' 'cargo' (@('test', '-p', 'jadix_document', '-p', 'jadix_lsp', '-p', 'jadix_macros', '-p', 'jadix_hot_reload', '-p', 'jadix_hot_reload_cli', '--all-features', '--all-targets') + $mode)
+    Run-Check 'kernels-macros-cli' 'cargo' (@('test', '-p', 'jadix_document', '-p', 'jadix_lsp', '-p', 'jadix_macros', '-p', 'jadix_hot_reload', '--all-features', '--all-targets') + $mode)
     foreach ($script in @('check-product-distributions', 'check-extracted-kernels', 'check-optional-macros', 'check-authoring', 'check-dnd-source')) {
         Run-Check $script $powerShell (@('-NoProfile', '-File', "scripts/checks/$script.ps1") + $(if ($Offline) { '-Offline' }))
     }

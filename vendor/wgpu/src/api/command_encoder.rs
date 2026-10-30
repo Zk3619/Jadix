@@ -23,7 +23,7 @@ pub struct CommandEncoder {
     pub(crate) inner: dispatch::DispatchCommandEncoder,
     pub(crate) actions: SharedDeferredCommandBufferActions,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(CommandEncoder: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(CommandEncoder => .inner);
@@ -34,25 +34,25 @@ crate::cmp::impl_eq_ord_hash_proxy!(CommandEncoder => .inner);
 ///
 /// Corresponds to [WebGPU `GPUCommandEncoderDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpucommandencoderdescriptor).
-pub type CommandEncoderDescriptor<'a> = wgt::CommandEncoderDescriptor<Label<'a>>;
+pub type CommandEncoderDescriptor<'a> = crate::__types::CommandEncoderDescriptor<Label<'a>>;
 static_assertions::assert_impl_all!(CommandEncoderDescriptor<'_>: Send, Sync);
 
-pub use wgt::TexelCopyBufferInfo as TexelCopyBufferInfoBase;
+pub use crate::__types::TexelCopyBufferInfo as TexelCopyBufferInfoBase;
 /// View of a buffer which can be used to copy to/from a texture.
 ///
 /// Corresponds to [WebGPU `GPUTexelCopyBufferInfo`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuimagecopybuffer).
 pub type TexelCopyBufferInfo<'a> = TexelCopyBufferInfoBase<&'a Buffer>;
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(TexelCopyBufferInfo<'_>: Send, Sync);
 
-pub use wgt::TexelCopyTextureInfo as TexelCopyTextureInfoBase;
+pub use crate::__types::TexelCopyTextureInfo as TexelCopyTextureInfoBase;
 /// View of a texture which can be used to copy to/from a buffer/texture.
 ///
 /// Corresponds to [WebGPU `GPUTexelCopyTextureInfo`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuimagecopytexture).
 pub type TexelCopyTextureInfo<'a> = TexelCopyTextureInfoBase<&'a Texture>;
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(TexelCopyTextureInfo<'_>: Send, Sync);
 
 impl CommandEncoder {
@@ -273,8 +273,12 @@ impl CommandEncoder {
     /// - You must not end the command buffer; wgpu will do it when you call finish.
     /// - The wgpu command encoder must not be interacted with in any way while recording is
     ///   happening to the wgpu_hal or backend command encoder.
-    #[cfg(wgpu_core)]
-    pub unsafe fn as_hal_mut<A: hal::Api, F: FnOnce(Option<&mut A::CommandEncoder>) -> R, R>(
+    #[cfg(jadix_wgpu_wgpu_core)]
+    pub unsafe fn as_hal_mut<
+        A: crate::__hal::Api,
+        F: FnOnce(Option<&mut A::CommandEncoder>) -> R,
+        R,
+    >(
         &mut self,
         hal_command_encoder_callback: F,
     ) -> R {
@@ -289,7 +293,7 @@ impl CommandEncoder {
         }
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of CommandEncoder (if custom backend and is internally T)
     pub fn as_custom<T: custom::CommandEncoderInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -430,15 +434,15 @@ impl CommandEncoder {
     /// the native API commands, for synchronization and resource state transition purposes.
     pub fn transition_resources<'a>(
         &mut self,
-        buffer_transitions: impl Iterator<Item = wgt::BufferTransition<&'a Buffer>>,
-        texture_transitions: impl Iterator<Item = wgt::TextureTransition<&'a Texture>>,
+        buffer_transitions: impl Iterator<Item = crate::__types::BufferTransition<&'a Buffer>>,
+        texture_transitions: impl Iterator<Item = crate::__types::TextureTransition<&'a Texture>>,
     ) {
         self.inner.transition_resources(
-            &mut buffer_transitions.map(|t| wgt::BufferTransition {
+            &mut buffer_transitions.map(|t| crate::__types::BufferTransition {
                 buffer: &t.buffer.inner,
                 state: t.state,
             }),
-            &mut texture_transitions.map(|t| wgt::TextureTransition {
+            &mut texture_transitions.map(|t| crate::__types::TextureTransition {
                 texture: &t.texture.inner,
                 selector: t.selector,
                 state: t.state,

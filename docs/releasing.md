@@ -19,13 +19,13 @@ python scripts/release/check-r4-documents.py --help
 
 ## 安全登录与待发布门
 
-Windows 发布者在本机交互运行 `./scripts/release/login-crates-io.ps1`：隐藏输入 token，经 stdin 交给 `cargo login --registry crates-io`，由 `cargo:wincred` 保存到 Windows Credential Manager。不要把 token 放进命令参数、仓库、日志或聊天。Cargo 用户配置中的 crates-io provider 应为 `cargo:wincred`；下载镜像与发布地址分开配置。配置 provider 并不代表已经登录，也不证明 token 拥有全部 48 包的发布权限。
+Windows 发布者在本机交互运行 `./scripts/release/login-crates-io.ps1`：隐藏输入 token，经 stdin 交给 `cargo login --registry crates-io`，由 `cargo:wincred` 保存到 Windows Credential Manager。不要把 token 放进命令参数、仓库、日志或聊天。Cargo 用户配置中的 crates-io provider 应为 `cargo:wincred`；下载镜像与发布地址分开配置。配置 provider 并不代表已经登录，也不证明 token 拥有当前闭包全部包的发布权限。
 
 发布前须通过 `cargo fmt --all -- --check`、公开文档与测试布局门、工具契约、当前源码归档对照及默认 10 MiB 上传体积门。已获得 registry 单包扩容许可时须另存授权证据，不能自行假设无限制。CI 的代码或测试失败应先修复；若托管 CI 因付款、额度等外部原因无法启动，可由发布负责人明确接受该限制，记录授权、实际本地替代检查及未覆盖平台后继续发布，不把未执行的 job 标为通过。预检脚本存在或外部限制例外均不能代替实际测试、上传和消费证据。
 
 ## 实际发布与验证
 
-按当前 48 包 DAG 从叶子到门面发布至 `crates-io`。逐项记录命令、退出码和上传归档摘要，等待 index 可解析后推进依赖者。
+按重新计算的发布 DAG 从叶子到门面发布至 `crates-io`。逐项记录命令、退出码和上传归档摘要，等待 index 可解析后推进依赖者。
 既有版本不能覆盖；同名同版本已存在时核对内容和所有权，不自动换版本或静默跳过。
 发布输入必须绑定实际提交及归档摘要；工作树存在改动时明确记录，不伪造干净提交身份。
 
@@ -34,3 +34,11 @@ Windows 发布者在本机交互运行 `./scripts/release/login-crates-io.ps1`�
 发布后在工作区外建立两个项目：框架 Builder 最小窗口、框架加组件／图标／拖拽。仅依赖真实 registry 的已发布版本，不使用根 patch 或 path/git 旁路。
 记录 metadata、锁文件、构建和真实原生启动／退出，核对下载与上传 checksum，并检查用户手册及迁移说明。
 这些步骤完成后才登记基线发布完成；项目仍为 Alpha，不自动升级为 Beta。
+
+## 包的发布边界
+
+窗口后端与公共类型作为模块随 `jadix_winit` 发布；GPU core、HAL、类型、桥接与修改后的 Naga 作为模块随 `jadix_wgpu` 发布。内部目录不形成独立发布包。平台条件、后端 feature 与原始许可证仍保留。
+
+未修改的第三方依赖直接使用上游 registry 身份，不为闭包重命名成 `jadix_*`。必要的上游源码若整合进维护包，保留来源、许可和修改记录，不另发重命名包。来源清单 `vendor/RELEASE_FORKS.json` 将独立维护包与随包源码分别登记。
+
+开发监听器 `jadix-hot-reload` 是 `jadix_hot_reload` 的可选 `cli` 二进制目标，库的默认构建不启用监听器依赖。已发布的 `0.1.0` 归档保持原样，合并后的版本为 `0.1.1`。

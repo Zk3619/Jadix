@@ -12,9 +12,9 @@ use std::marker::PhantomData;
 #[cfg(any(x11_platform, wayland_platform))]
 use std::os::unix::io::{AsFd, AsRawFd, BorrowedFd, RawFd};
 
+use crate::winit_core::error::CustomCursorError;
+pub use crate::winit_core::event_loop::*;
 use rwh_06::{DisplayHandle, HandleError, HasDisplayHandle};
-use winit_core::error::CustomCursorError;
-pub use winit_core::event_loop::*;
 
 use crate::application::ApplicationHandler;
 use crate::cursor::{CustomCursor, CustomCursorSource};
@@ -166,7 +166,7 @@ impl EventLoop {
     /// [`run_app_on_demand`]: crate::event_loop::run_on_demand::EventLoopExtRunOnDemand::run_app_on_demand
     /// [`run_app_never_return`]: crate::event_loop::never_return::EventLoopExtNeverReturn::run_app_never_return
     /// [`register_app`]: crate::event_loop::register::EventLoopExtRegister::register_app
-    /// [`EventLoopProvider`]: winit_core::event_loop::EventLoopProvider
+    /// [`EventLoopProvider`]: jadix_winit::event_loop::EventLoopProvider
     ///
     /// ## Static
     ///
@@ -307,12 +307,12 @@ impl AsRawFd for EventLoop {
     wayland_platform,
     docsrs,
 ))]
-impl winit_core::event_loop::pump_events::EventLoopExtPumpEvents for EventLoop {
+impl crate::winit_core::event_loop::pump_events::EventLoopExtPumpEvents for EventLoop {
     fn pump_app_events<A: ApplicationHandler>(
         &mut self,
         timeout: Option<std::time::Duration>,
         app: A,
-    ) -> winit_core::event_loop::pump_events::PumpStatus {
+    ) -> crate::winit_core::event_loop::pump_events::PumpStatus {
         self.event_loop.pump_app_events(timeout, app)
     }
 }
@@ -327,44 +327,47 @@ impl winit_core::event_loop::pump_events::EventLoopExtPumpEvents for EventLoop {
     wayland_platform,
     docsrs,
 ))]
-impl winit_core::event_loop::run_on_demand::EventLoopExtRunOnDemand for EventLoop {
+impl crate::winit_core::event_loop::run_on_demand::EventLoopExtRunOnDemand for EventLoop {
     fn run_app_on_demand<A: ApplicationHandler>(&mut self, app: A) -> Result<(), EventLoopError> {
         self.event_loop.run_app_on_demand(app)
     }
 }
 
 #[cfg(any(web_platform, ohos_platform, docsrs))]
-impl winit_core::event_loop::register::EventLoopExtRegister for EventLoop {
+impl crate::winit_core::event_loop::register::EventLoopExtRegister for EventLoop {
     fn register_app<A: ApplicationHandler + 'static>(self, app: A) {
         self.event_loop.register_app(app)
     }
 }
 
 #[cfg(ohos_platform)]
-impl winit_ohos::EventLoopExtOpenHarmony for EventLoop {
-    fn openharmony_app(&self) -> &winit_ohos::ability::OpenHarmonyApp {
+impl crate::winit_ohos::EventLoopExtOpenHarmony for EventLoop {
+    fn openharmony_app(&self) -> &crate::winit_ohos::ability::OpenHarmonyApp {
         &self.event_loop.openharmony_app
     }
 }
 
 #[cfg(ohos_platform)]
-impl winit_ohos::EventLoopBuilderExtOpenHarmony for EventLoopBuilder {
-    fn with_openharmony_app(&mut self, app: winit_ohos::ability::OpenHarmonyApp) -> &mut Self {
+impl crate::winit_ohos::EventLoopBuilderExtOpenHarmony for EventLoopBuilder {
+    fn with_openharmony_app(
+        &mut self,
+        app: crate::winit_ohos::ability::OpenHarmonyApp,
+    ) -> &mut Self {
         self.platform_specific.openharmony_app = Some(app);
         self
     }
 }
 
 #[cfg(android_platform)]
-impl winit_android::EventLoopExtAndroid for EventLoop {
-    fn android_app(&self) -> &winit_android::activity::AndroidApp {
+impl crate::winit_android::EventLoopExtAndroid for EventLoop {
+    fn android_app(&self) -> &crate::winit_android::activity::AndroidApp {
         &self.event_loop.android_app
     }
 }
 
 #[cfg(android_platform)]
-impl winit_android::EventLoopBuilderExtAndroid for EventLoopBuilder {
-    fn with_android_app(&mut self, app: winit_android::activity::AndroidApp) -> &mut Self {
+impl crate::winit_android::EventLoopBuilderExtAndroid for EventLoopBuilder {
+    fn with_android_app(&mut self, app: crate::winit_android::activity::AndroidApp) -> &mut Self {
         self.platform_specific.android_app = Some(app);
         self
     }
@@ -376,11 +379,11 @@ impl winit_android::EventLoopBuilderExtAndroid for EventLoopBuilder {
 }
 
 #[cfg(macos_platform)]
-impl winit_appkit::EventLoopBuilderExtMacOS for EventLoopBuilder {
+impl crate::winit_appkit::EventLoopBuilderExtMacOS for EventLoopBuilder {
     #[inline]
     fn with_activation_policy(
         &mut self,
-        activation_policy: winit_appkit::ActivationPolicy,
+        activation_policy: crate::winit_appkit::ActivationPolicy,
     ) -> &mut Self {
         self.platform_specific.activation_policy = Some(activation_policy);
         self
@@ -400,7 +403,7 @@ impl winit_appkit::EventLoopBuilderExtMacOS for EventLoopBuilder {
 }
 
 #[cfg(wayland_platform)]
-impl winit_wayland::EventLoopExtWayland for EventLoop {
+impl crate::winit_wayland::EventLoopExtWayland for EventLoop {
     #[inline]
     fn is_wayland(&self) -> bool {
         self.event_loop.is_wayland()
@@ -408,7 +411,7 @@ impl winit_wayland::EventLoopExtWayland for EventLoop {
 }
 
 #[cfg(wayland_platform)]
-impl winit_wayland::EventLoopBuilderExtWayland for EventLoopBuilder {
+impl crate::winit_wayland::EventLoopBuilderExtWayland for EventLoopBuilder {
     #[inline]
     fn with_wayland(&mut self) -> &mut Self {
         self.platform_specific.forced_backend = Some(crate::platform_impl::Backend::Wayland);
@@ -423,38 +426,38 @@ impl winit_wayland::EventLoopBuilderExtWayland for EventLoopBuilder {
 }
 
 #[cfg(web_platform)]
-impl winit_web::EventLoopExtWeb for EventLoop {
-    fn set_poll_strategy(&self, strategy: winit_web::PollStrategy) {
+impl crate::winit_web::EventLoopExtWeb for EventLoop {
+    fn set_poll_strategy(&self, strategy: crate::winit_web::PollStrategy) {
         self.event_loop.set_poll_strategy(strategy);
     }
 
-    fn poll_strategy(&self) -> winit_web::PollStrategy {
+    fn poll_strategy(&self) -> crate::winit_web::PollStrategy {
         self.event_loop.poll_strategy()
     }
 
-    fn set_wait_until_strategy(&self, strategy: winit_web::WaitUntilStrategy) {
+    fn set_wait_until_strategy(&self, strategy: crate::winit_web::WaitUntilStrategy) {
         self.event_loop.set_wait_until_strategy(strategy);
     }
 
-    fn wait_until_strategy(&self) -> winit_web::WaitUntilStrategy {
+    fn wait_until_strategy(&self) -> crate::winit_web::WaitUntilStrategy {
         self.event_loop.wait_until_strategy()
     }
 
-    fn has_multiple_screens(&self) -> Result<bool, winit_core::error::NotSupportedError> {
+    fn has_multiple_screens(&self) -> Result<bool, crate::winit_core::error::NotSupportedError> {
         self.event_loop.has_multiple_screens()
     }
 
-    fn request_detailed_monitor_permission(&self) -> winit_web::MonitorPermissionFuture {
+    fn request_detailed_monitor_permission(&self) -> crate::winit_web::MonitorPermissionFuture {
         self.event_loop.request_detailed_monitor_permission()
     }
 
-    fn has_detailed_monitor_permission(&self) -> winit_web::HasMonitorPermissionFuture {
+    fn has_detailed_monitor_permission(&self) -> crate::winit_web::HasMonitorPermissionFuture {
         self.event_loop.has_detailed_monitor_permission()
     }
 }
 
 #[cfg(windows_platform)]
-impl winit_win32::EventLoopBuilderExtWindows for EventLoopBuilder {
+impl crate::winit_win32::EventLoopBuilderExtWindows for EventLoopBuilder {
     #[inline]
     fn with_any_thread(&mut self, any_thread: bool) -> &mut Self {
         self.platform_specific.any_thread = any_thread;
@@ -478,7 +481,7 @@ impl winit_win32::EventLoopBuilderExtWindows for EventLoopBuilder {
 }
 
 #[cfg(x11_platform)]
-impl winit_x11::EventLoopExtX11 for EventLoop {
+impl crate::winit_x11::EventLoopExtX11 for EventLoop {
     #[inline]
     fn is_x11(&self) -> bool {
         !self.event_loop.is_wayland()
@@ -486,7 +489,7 @@ impl winit_x11::EventLoopExtX11 for EventLoop {
 }
 
 #[cfg(x11_platform)]
-impl winit_x11::EventLoopBuilderExtX11 for EventLoopBuilder {
+impl crate::winit_x11::EventLoopBuilderExtX11 for EventLoopBuilder {
     #[inline]
     fn with_x11(&mut self) -> &mut Self {
         self.platform_specific.forced_backend = Some(crate::platform_impl::Backend::X);

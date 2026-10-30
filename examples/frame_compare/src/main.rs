@@ -45,7 +45,7 @@ impl jadix::app::WindowLifecycleHook for Telemetry {
         #[cfg(all(windows, feature = "backend-dx11-native"))]
         let dxgi = if info.backend == wgpu::Backend::Dx11 {
             let hal =
-                unsafe { adapter.as_hal::<wgpu_hal::dx11::Api>() }.expect("native DX11 adapter");
+                unsafe { adapter.as_hal::<wgpu::hal::dx11::Api>() }.expect("native DX11 adapter");
             let desc = unsafe { hal.raw_adapter().GetDesc1() }.expect("native DXGI identity");
             serde_json::json!({"vendor_id":desc.VendorId,"device_id":desc.DeviceId,"adapter_luid":[desc.AdapterLuid.HighPart,desc.AdapterLuid.LowPart]})
         } else {

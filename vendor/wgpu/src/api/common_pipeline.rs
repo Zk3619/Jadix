@@ -54,5 +54,5 @@ pub struct PipelineCacheDescriptor<'a> {
     /// Recommended to set to true
     pub fallback: bool,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(PipelineCacheDescriptor<'_>: Send, Sync);

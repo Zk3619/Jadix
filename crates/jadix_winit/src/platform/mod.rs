@@ -23,23 +23,23 @@
 //! - `startup_notify`, available on Wayland and X11.
 
 #[cfg(android_platform)]
-pub use winit_android as android;
+pub use crate::winit_android as android;
 #[cfg(macos_platform)]
 pub mod macos;
 #[cfg(ohos_platform)]
-pub use winit_ohos as ohos;
+pub use crate::winit_ohos as ohos;
 #[cfg(orbital_platform)]
-pub use winit_orbital as orbital;
+pub use crate::winit_orbital as orbital;
 #[cfg(ios_platform)]
-pub use winit_uikit as ios;
+pub use crate::winit_uikit as ios;
 #[cfg(wayland_platform)]
-pub use winit_wayland as wayland;
+pub use crate::winit_wayland as wayland;
 #[cfg(web_platform)]
-pub use winit_web as web;
+pub use crate::winit_web as web;
 #[cfg(windows_platform)]
 pub mod windows;
 #[cfg(x11_platform)]
-pub use winit_x11 as x11;
+pub use crate::winit_x11 as x11;
 
 #[cfg(any(
     windows_platform,

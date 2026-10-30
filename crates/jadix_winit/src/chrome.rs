@@ -99,7 +99,7 @@ impl WindowExtJadix for dyn Window + '_ {
             tiled: TiledEdges::default(),
         };
         #[cfg(wayland_platform)]
-        if let Some(window) = self.cast_ref::<winit_wayland::Window>() {
+        if let Some(window) = self.cast_ref::<crate::winit_wayland::Window>() {
             if let Some(frame) = window.frame_state() {
                 state.decorated |= frame.server_decorated;
                 state.buttons &= frame.buttons;
@@ -156,7 +156,7 @@ impl WindowExtJadix for dyn Window + '_ {
             return Ok(());
         }
         #[cfg(wayland_platform)]
-        if let Some(window) = self.cast_ref::<winit_wayland::Window>() {
+        if let Some(window) = self.cast_ref::<crate::winit_wayland::Window>() {
             return window.try_show_window_menu(position);
         }
         #[allow(unreachable_code)]

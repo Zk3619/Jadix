@@ -12,13 +12,13 @@ use crate::*;
 pub struct BindGroup {
     pub(crate) inner: dispatch::DispatchBindGroup,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(BindGroup: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(BindGroup => .inner);
 
 impl BindGroup {
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of BindGroup (if custom backend and is internally T)
     pub fn as_custom<T: custom::BindGroupInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -97,7 +97,7 @@ pub enum BindingResource<'a> {
     /// Corresponds to [`wgt::BindingType::ExternalTexture`].
     ExternalTexture(&'a ExternalTexture),
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(BindingResource<'_>: Send, Sync);
 
 /// Describes the segment of a buffer to bind.
@@ -129,7 +129,7 @@ pub struct BufferBinding<'a> {
     /// Size of the binding in bytes, or `None` for using the rest of the buffer.
     pub size: Option<BufferSize>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(BufferBinding<'_>: Send, Sync);
 
 /// An element of a [`BindGroupDescriptor`], consisting of a bindable resource
@@ -145,7 +145,7 @@ pub struct BindGroupEntry<'a> {
     /// Resource to attach to the binding
     pub resource: BindingResource<'a>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(BindGroupEntry<'_>: Send, Sync);
 
 /// Describes a group of bindings and the resources to be bound.
@@ -163,5 +163,5 @@ pub struct BindGroupDescriptor<'a> {
     /// The resources to bind to this bind group.
     pub entries: &'a [BindGroupEntry<'a>],
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(BindGroupDescriptor<'_>: Send, Sync);

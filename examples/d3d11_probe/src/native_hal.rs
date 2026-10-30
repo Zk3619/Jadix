@@ -1,4 +1,4 @@
-use wgpu_hal::dx11::Device;
+use wgpu::hal::dx11::Device;
 
 const SHADER: &str = "
 @group(2) @binding(7) var<uniform> color: vec4f;
@@ -13,18 +13,18 @@ fn color_bytes(color: [f32; 4]) -> Vec<u8> {
     color.into_iter().flat_map(f32::to_ne_bytes).collect()
 }
 
-fn shader() -> (naga::Module, naga::valid::ModuleInfo) {
-    let module = naga::front::wgsl::parse_str(SHADER).unwrap();
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
+fn shader() -> (wgpu::naga::Module, wgpu::naga::valid::ModuleInfo) {
+    let module = wgpu::naga::front::wgsl::parse_str(SHADER).unwrap();
+    let info = wgpu::naga::valid::Validator::new(
+        wgpu::naga::valid::ValidationFlags::all(),
+        wgpu::naga::valid::Capabilities::empty(),
     )
     .validate(&module)
     .unwrap();
     (module, info)
 }
 
-const BINDING: naga::ResourceBinding = naga::ResourceBinding {
+const BINDING: wgpu::naga::ResourceBinding = wgpu::naga::ResourceBinding {
     group: 2,
     binding: 7,
 };
@@ -65,7 +65,7 @@ pub fn render(
 
 #[test]
 fn native_resources_update_clip_and_reject_invalid_commands() {
-    let adapter = wgpu_hal::dx11::enumerate_adapters().unwrap().remove(0);
+    let adapter = wgpu::hal::dx11::enumerate_adapters().unwrap().remove(0);
     let device = adapter.open().unwrap();
     let (module, info) = shader();
     let pipeline = device
@@ -96,10 +96,10 @@ fn native_resources_update_clip_and_reject_invalid_commands() {
         "struct Output { @location(0) color: vec4f, @builtin(frag_depth) depth: f32 };\n\
          @fragment fn ps_main() -> Output { return Output(color, 0.5); }",
     );
-    let extra_module = naga::front::wgsl::parse_str(&extra_output).unwrap();
-    let extra_info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
+    let extra_module = wgpu::naga::front::wgsl::parse_str(&extra_output).unwrap();
+    let extra_info = wgpu::naga::valid::Validator::new(
+        wgpu::naga::valid::ValidationFlags::all(),
+        wgpu::naga::valid::Capabilities::empty(),
     )
     .validate(&extra_module)
     .unwrap();

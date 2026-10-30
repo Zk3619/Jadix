@@ -150,7 +150,7 @@ jobs:
           cargo test -p jadix_components --features macros,themes,animation-path,document-editing,document-diff,document-science --tests
       - name: Wayland configure capability projection
         if: runner.os == 'Linux'
-        run: cargo test -p jadix_winit_wayland --lib projects_real_configure
+        run: cargo test -p jadix_winit --lib projects_real_configure
       - name: Test
         run: cargo test --workspace
       - name: Native menu contracts (Windows)

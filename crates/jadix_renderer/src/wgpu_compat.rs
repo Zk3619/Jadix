@@ -15,8 +15,8 @@ pub fn instance(backends: wgpu::Backends) -> wgpu::Instance {
     #[cfg(all(windows, feature = "backend-dx11-native"))]
     if backends == wgpu::Backends::DX11 {
         return unsafe {
-            wgpu::Instance::from_hal::<wgpu_hal::dx11::Api>(
-                wgpu_hal::dx11::Instance::new().expect("native D3D11 instance"),
+            wgpu::Instance::from_hal::<wgpu::hal::dx11::Api>(
+                wgpu::hal::dx11::Instance::new().expect("native D3D11 instance"),
             )
         };
     }

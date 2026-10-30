@@ -6,16 +6,14 @@ publish = false
 
 [features]
 native-wgpu = ["native-hal", "angle"]
-angle = ["dep:wgpu", "dep:wgpu-hal", "dep:glow", "dep:raw-window-handle", "wgpu-hal/gles-angle"]
-native-hal = ["dep:wgpu-hal", "wgpu-hal/dx11", "dep:naga"]
+angle = ["dep:wgpu", "dep:glow", "dep:raw-window-handle", "wgpu/gles-angle"]
+native-hal = ["dep:wgpu", "wgpu/dx11", "wgpu/naga-ir", "wgpu/wgsl"]
 
 [dependencies]
 serde_json.workspace = true
 glow = { version = "0.17", optional = true }
-naga = { "package" = "jadix_naga", "version" = "=30.0.0", "path" = "../../vendor/naga", "features" = ["wgsl-in"], "optional" = true }
 raw-window-handle = { version = "0.6", optional = true }
 wgpu = { workspace = true, "optional" = true }
-wgpu-hal = { "package" = "jadix_wgpu_hal", "version" = "=30.0.0", "path" = "../../vendor/wgpu-hal", "default-features" = false, "optional" = true }
 
 [target.'cfg(windows)'.dependencies]
 windows = { workspace = true, features = ["Win32_Graphics_Direct3D11", "Win32_Graphics_Direct3D_Fxc", "Win32_Graphics_Dxgi_Common", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }

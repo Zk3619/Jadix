@@ -1,5 +1,5 @@
 //! Convenience macros
-#![cfg_attr(not(wgpu_core), expect(unused_macros, unused_imports))]
+#![cfg_attr(not(jadix_wgpu_wgpu_core), expect(unused_macros, unused_imports))]
 
 #[cfg(doc)]
 use crate::{VertexAttribute, VertexBufferLayout, VertexFormat};
@@ -112,7 +112,7 @@ fn make_spirv_be_pass() {
 ///
 /// Return type: [`crate::ShaderModuleDescriptor`]
 #[macro_export]
-#[cfg(feature = "spirv")]
+#[cfg(jadix_wgpu_feature_spirv)]
 macro_rules! include_spirv {
     ($($token:tt)*) => {
         {
@@ -126,7 +126,7 @@ macro_rules! include_spirv {
     };
 }
 
-#[cfg(all(feature = "spirv", test))]
+#[cfg(all(jadix_wgpu_feature_spirv, test))]
 #[expect(dead_code)]
 static SPIRV: crate::ShaderModuleDescriptor<'_> = include_spirv!("le-aligned.spv");
 
@@ -192,14 +192,14 @@ macro_rules! include_wgsl {
 // so cannot have more than one line, so cannot use internal cfgs.
 
 /// Helper macro to generate the documentation for dx12 hal methods, referencing the hal type.
-#[cfg(dx12)]
+#[cfg(jadix_wgpu_dx12)]
 macro_rules! hal_type_dx12 {
     ($ty: literal) => {
         concat!("- [`hal::api::Dx12`] uses [`hal::dx12::", $ty, "`]")
     };
 }
 /// Helper macro to generate the documentation for dx12 hal methods, referencing the hal type.
-#[cfg(not(dx12))]
+#[cfg(not(jadix_wgpu_dx12))]
 macro_rules! hal_type_dx12 {
     ($ty: literal) => {
         concat!("- `hal::api::Dx12` uses `hal::dx12::", $ty, "`")
@@ -208,14 +208,14 @@ macro_rules! hal_type_dx12 {
 pub(crate) use hal_type_dx12;
 
 /// Helper macro to generate the documentation for metal hal methods, referencing the hal type.
-#[cfg(metal)]
+#[cfg(jadix_wgpu_metal)]
 macro_rules! hal_type_metal {
     ($ty: literal) => {
         concat!("- [`hal::api::Metal`] uses [`hal::metal::", $ty, "`]")
     };
 }
 /// Helper macro to generate the documentation for metal hal methods, referencing the hal type.
-#[cfg(not(metal))]
+#[cfg(not(jadix_wgpu_metal))]
 macro_rules! hal_type_metal {
     ($ty: literal) => {
         concat!("- `hal::api::Metal` uses `hal::metal::", $ty, "`")
@@ -224,14 +224,14 @@ macro_rules! hal_type_metal {
 pub(crate) use hal_type_metal;
 
 /// Helper macro to generate the documentation for vulkan hal methods, referencing the hal type.
-#[cfg(vulkan)]
+#[cfg(jadix_wgpu_vulkan)]
 macro_rules! hal_type_vulkan {
     ($ty: literal) => {
         concat!("- [`hal::api::Vulkan`] uses [`hal::vulkan::", $ty, "`]")
     };
 }
 /// Helper macro to generate the documentation for vulkan hal methods, referencing the hal type.
-#[cfg(not(vulkan))]
+#[cfg(not(jadix_wgpu_vulkan))]
 macro_rules! hal_type_vulkan {
     ($ty: literal) => {
         concat!("- `hal::api::Vulkan` uses `hal::vulkan::", $ty, "`")
@@ -240,14 +240,14 @@ macro_rules! hal_type_vulkan {
 pub(crate) use hal_type_vulkan;
 
 /// Helper macro to generate the documentation for gles hal methods, referencing the hal type.
-#[cfg(gles)]
+#[cfg(jadix_wgpu_gles)]
 macro_rules! hal_type_gles {
     ($ty: literal) => {
         concat!("- [`hal::api::Gles`] uses [`hal::gles::", $ty, "`]")
     };
 }
 /// Helper macro to generate the documentation for gles hal methods, referencing the hal type.
-#[cfg(not(gles))]
+#[cfg(not(jadix_wgpu_gles))]
 macro_rules! hal_type_gles {
     ($ty: literal) => {
         concat!("- `hal::api::Gles` uses `hal::gles::", $ty, "`")

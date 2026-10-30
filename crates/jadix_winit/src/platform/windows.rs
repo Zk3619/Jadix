@@ -1,8 +1,8 @@
 //! Win32 extensions plus native caption hit regions (including Snap hover).
 use crate::error::RequestError;
 use crate::window::Window as CoreWindow;
+pub use crate::winit_win32::*;
 use std::sync::Arc;
-pub use winit_win32::*;
 
 /// Publish logical caption rectangles after layout. The backend owns their
 /// lifetime and checks current native flags during WM_NCHITTEST. Empty clears.

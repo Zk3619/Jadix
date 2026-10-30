@@ -13,13 +13,13 @@ use crate::*;
 pub struct RenderBundle {
     pub(crate) inner: dispatch::DispatchRenderBundle,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(RenderBundle: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(RenderBundle => .inner);
 
 impl RenderBundle {
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of RenderBundle (if custom backend and is internally T)
     pub fn as_custom<T: custom::RenderBundleInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -32,5 +32,5 @@ impl RenderBundle {
 ///
 /// Corresponds to [WebGPU `GPURenderBundleDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpurenderbundledescriptor).
-pub type RenderBundleDescriptor<'a> = wgt::RenderBundleDescriptor<Label<'a>>;
+pub type RenderBundleDescriptor<'a> = crate::__types::RenderBundleDescriptor<Label<'a>>;
 static_assertions::assert_impl_all!(RenderBundleDescriptor<'_>: Send, Sync);

@@ -16,7 +16,7 @@ impl Default for InitOptions {
     fn default() -> Self {
         Self {
             // 与历史 `lifecycle` 默认一致：框架告警级，压制部分噪声依赖。
-            default_filter: "warn,wgpu_hal::vulkan::instance=off,fontdb=error",
+            default_filter: "warn,wgpu::hal::vulkan::instance=off,fontdb=error",
         }
     }
 }

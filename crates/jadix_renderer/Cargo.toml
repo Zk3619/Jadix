@@ -12,12 +12,11 @@ default = []
 compute = []
 backend-dx12 = ["wgpu/dx12", "compute"]
 backend-dx11-angle = ["wgpu/gles"]
-backend-dx11-native = ["dep:wgpu-hal", "wgpu-hal/dx11"]
+backend-dx11-native = ["wgpu/dx11"]
 test-hooks = []
 
 [dependencies]
 unicode-segmentation.workspace = true
 wgpu.workspace = true
-bytemuck.workspace = true
+bytemuck = { workspace = true, default-features = true }
 log.workspace = true
-wgpu-hal = { "package" = "jadix_wgpu_hal", "version" = "=30.0.0", "path" = "../../vendor/wgpu-hal", "default-features" = false, "optional" = true }

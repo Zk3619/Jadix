@@ -15,13 +15,13 @@ use crate::*;
 pub struct BindGroupLayout {
     pub(crate) inner: dispatch::DispatchBindGroupLayout,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(BindGroupLayout: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(BindGroupLayout => .inner);
 
 impl BindGroupLayout {
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of BindGroupLayout (if custom backend and is internally T)
     pub fn as_custom<T: custom::BindGroupLayoutInterface>(&self) -> Option<&T> {
         self.inner.as_custom()

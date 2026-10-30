@@ -13,13 +13,13 @@ use crate::*;
 pub struct Sampler {
     pub(crate) inner: dispatch::DispatchSampler,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(Sampler: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(Sampler => .inner);
 
 impl Sampler {
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of Sampler (if custom backend and is internally T)
     pub fn as_custom<T: custom::SamplerInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -32,5 +32,5 @@ impl Sampler {
 ///
 /// Corresponds to [WebGPU `GPUSamplerDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpusamplerdescriptor).
-pub type SamplerDescriptor<'a> = wgt::SamplerDescriptor<Label<'a>>;
+pub type SamplerDescriptor<'a> = crate::__types::SamplerDescriptor<Label<'a>>;
 static_assertions::assert_impl_all!(SamplerDescriptor<'_>: Send, Sync);

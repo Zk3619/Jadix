@@ -9,7 +9,7 @@ use crate::*;
 pub struct ExternalTexture {
     pub(crate) inner: dispatch::DispatchExternalTexture,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(ExternalTexture: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(ExternalTexture => .inner);
@@ -21,7 +21,7 @@ impl ExternalTexture {
     }
 
     /// Returns custom implementation of ExternalTexture (if custom backend and is internally T)
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     pub fn as_custom<T: custom::ExternalTextureInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
     }
@@ -33,5 +33,5 @@ impl ExternalTexture {
 ///
 /// Corresponds to [WebGPU `GPUExternalTextureDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuexternaltexturedescriptor).
-pub type ExternalTextureDescriptor<'a> = wgt::ExternalTextureDescriptor<Label<'a>>;
+pub type ExternalTextureDescriptor<'a> = crate::__types::ExternalTextureDescriptor<Label<'a>>;
 static_assertions::assert_impl_all!(ExternalTextureDescriptor<'_>: Send, Sync);

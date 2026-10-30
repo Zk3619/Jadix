@@ -1,5 +1,5 @@
 //! AppKit extensions. Native traffic lights, tabs and materials remain AppKit-owned.
-pub use winit_appkit::*;
+pub use crate::winit_appkit::*;
 
 use crate::chrome::WindowExtJadix;
 use crate::error::{NotSupportedError, RequestError};

@@ -1,42 +1,42 @@
-#[cfg(wgpu_core)]
+#[cfg(jadix_wgpu_wgpu_core)]
 use core::ops::Deref;
 
 use alloc::{boxed::Box, vec::Vec};
 
-use wgt::{WasmNotSend, WasmNotSendSync};
+use crate::__types::{WasmNotSend, WasmNotSendSync};
 
 use crate::dispatch;
 use crate::{Buffer, Label};
 
 /// Descriptor for the size defining attributes of a triangle geometry, for a bottom level acceleration structure.
-pub type BlasTriangleGeometrySizeDescriptor = wgt::BlasTriangleGeometrySizeDescriptor;
+pub type BlasTriangleGeometrySizeDescriptor = crate::__types::BlasTriangleGeometrySizeDescriptor;
 static_assertions::assert_impl_all!(BlasTriangleGeometrySizeDescriptor: Send, Sync);
 
 /// Descriptor for the size defining attributes of an AABB geometry group in a bottom level acceleration structure.
-pub type BlasAABBGeometrySizeDescriptor = wgt::BlasAABBGeometrySizeDescriptor;
+pub type BlasAABBGeometrySizeDescriptor = crate::__types::BlasAABBGeometrySizeDescriptor;
 static_assertions::assert_impl_all!(BlasAABBGeometrySizeDescriptor: Send, Sync);
 
 /// Minimum stride for AABB geometry (24 bytes: two `vec3<f32>`).
-pub use wgt::AABB_GEOMETRY_MIN_STRIDE;
+pub use crate::__types::AABB_GEOMETRY_MIN_STRIDE;
 
 /// Descriptor for the size defining attributes, for a bottom level acceleration structure.
-pub type BlasGeometrySizeDescriptors = wgt::BlasGeometrySizeDescriptors;
+pub type BlasGeometrySizeDescriptors = crate::__types::BlasGeometrySizeDescriptors;
 static_assertions::assert_impl_all!(BlasGeometrySizeDescriptors: Send, Sync);
 
 /// Flags for an acceleration structure.
-pub type AccelerationStructureFlags = wgt::AccelerationStructureFlags;
+pub type AccelerationStructureFlags = crate::__types::AccelerationStructureFlags;
 static_assertions::assert_impl_all!(AccelerationStructureFlags: Send, Sync);
 
 /// Flags for a geometry inside a bottom level acceleration structure.
-pub type AccelerationStructureGeometryFlags = wgt::AccelerationStructureGeometryFlags;
+pub type AccelerationStructureGeometryFlags = crate::__types::AccelerationStructureGeometryFlags;
 static_assertions::assert_impl_all!(AccelerationStructureGeometryFlags: Send, Sync);
 
 /// Update mode for acceleration structure builds.
-pub type AccelerationStructureUpdateMode = wgt::AccelerationStructureUpdateMode;
+pub type AccelerationStructureUpdateMode = crate::__types::AccelerationStructureUpdateMode;
 static_assertions::assert_impl_all!(AccelerationStructureUpdateMode: Send, Sync);
 
 /// Descriptor to create bottom level acceleration structures.
-pub type CreateBlasDescriptor<'a> = wgt::CreateBlasDescriptor<Label<'a>>;
+pub type CreateBlasDescriptor<'a> = crate::__types::CreateBlasDescriptor<Label<'a>>;
 static_assertions::assert_impl_all!(CreateBlasDescriptor<'_>: Send, Sync);
 
 /// Safe instance for a [Tlas].
@@ -98,7 +98,7 @@ impl TlasInstance {
 
     /// Returns custom implementation of the BLAS referenced by this instance
     /// (if the custom backend is active and the BLAS is internally of type T).
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     pub fn blas_as_custom<T: crate::custom::BlasInterface>(&self) -> Option<&T> {
         self.blas.as_custom()
     }
@@ -116,9 +116,9 @@ pub struct BlasTriangleGeometry<'a> {
     pub vertex_buffer: &'a Buffer,
     /// Offset into the vertex buffer as a factor of the vertex stride.
     pub first_vertex: u32,
-    /// Vertex stride, must be greater than [`wgpu_types::VertexFormat::min_acceleration_structure_vertex_stride`]
-    /// of the format and must be a multiple of [`wgpu_types::VertexFormat::acceleration_structure_stride_alignment`].
-    pub vertex_stride: wgt::BufferAddress,
+    /// Vertex stride, must be greater than [`wgpu::wgt::VertexFormat::min_acceleration_structure_vertex_stride`]
+    /// of the format and must be a multiple of [`wgpu::wgt::VertexFormat::acceleration_structure_stride_alignment`].
+    pub vertex_stride: crate::__types::BufferAddress,
     /// Index buffer (optional).
     pub index_buffer: Option<&'a Buffer>,
     /// Number of indexes to skip in the index buffer (optional, required if index buffer is present).
@@ -126,7 +126,7 @@ pub struct BlasTriangleGeometry<'a> {
     /// Transform buffer containing 3x4 (rows x columns, row major) affine transform matrices `[f32; 12]` (optional).
     pub transform_buffer: Option<&'a Buffer>,
     /// Transform buffer offset in bytes (optional, required if transform buffer is present).
-    pub transform_buffer_offset: Option<wgt::BufferAddress>,
+    pub transform_buffer_offset: Option<crate::__types::BufferAddress>,
 }
 static_assertions::assert_impl_all!(BlasTriangleGeometry<'_>: WasmNotSendSync);
 
@@ -140,7 +140,7 @@ pub struct BlasAabbGeometry<'a> {
     pub size: &'a BlasAABBGeometrySizeDescriptor,
     /// Stride in bytes between consecutive AABB primitives in the buffer (at least
     /// [`AABB_GEOMETRY_MIN_STRIDE`], and must be a multiple of 8).
-    pub stride: wgt::BufferAddress,
+    pub stride: crate::__types::BufferAddress,
     /// Buffer containing packed AABB primitives (layout determined by `size.stride`).
     pub aabb_buffer: &'a Buffer,
     /// Byte offset to the first AABB primitive (must be a multiple of 8).
@@ -192,7 +192,7 @@ impl Blas {
 
     /// Get the [`wgpu_hal`] acceleration structure from this `Blas`.
     ///
-    /// Find the Api struct corresponding to the active backend in [`wgpu_hal::api`],
+    /// Find the Api struct corresponding to the active backend in [`wgpu::hal::api`],
     /// and pass that struct to the to the `A` type parameter.
     ///
     /// Returns a guard that dereferences to the type of the hal backend
@@ -227,15 +227,15 @@ impl Blas {
     /// - All the safety requirements of wgpu-hal must be upheld.
     ///
     /// [`A::AccelerationStructure`]: hal::Api::AccelerationStructure
-    #[cfg(wgpu_core)]
-    pub unsafe fn as_hal<A: hal::Api>(
+    #[cfg(jadix_wgpu_wgpu_core)]
+    pub unsafe fn as_hal<A: crate::__hal::Api>(
         &mut self,
     ) -> Option<impl Deref<Target = A::AccelerationStructure> + WasmNotSendSync> {
         let blas = self.inner.as_core_opt()?;
         unsafe { blas.context.blas_as_hal::<A>(blas) }
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of Blas (if custom backend and is internally T)
     pub fn as_custom<T: crate::custom::BlasInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -256,11 +256,11 @@ pub struct ContextBlasTriangleGeometry<'a> {
     #[expect(dead_code)]
     pub(crate) first_vertex: u32,
     #[expect(dead_code)]
-    pub(crate) vertex_stride: wgt::BufferAddress,
+    pub(crate) vertex_stride: crate::__types::BufferAddress,
     #[expect(dead_code)]
-    pub(crate) index_buffer_offset: Option<wgt::BufferAddress>,
+    pub(crate) index_buffer_offset: Option<crate::__types::BufferAddress>,
     #[expect(dead_code)]
-    pub(crate) transform_buffer_offset: Option<wgt::BufferAddress>,
+    pub(crate) transform_buffer_offset: Option<crate::__types::BufferAddress>,
 }
 
 /// Context version of [BlasGeometries].
@@ -278,7 +278,7 @@ pub struct ContextBlasAabbGeometry<'a> {
     #[expect(dead_code)]
     pub(crate) size: &'a BlasAABBGeometrySizeDescriptor,
     #[expect(dead_code)]
-    pub(crate) stride: wgt::BufferAddress,
+    pub(crate) stride: crate::__types::BufferAddress,
     #[expect(dead_code)]
     pub(crate) aabb_buffer: &'a dispatch::DispatchBuffer,
     #[expect(dead_code)]
@@ -322,8 +322,8 @@ impl Blas {
     /// [`PollType::Wait`] (optionally with a submission index greater
     /// than the last submit the BLAS was used in) will guarantee callback is called.
     ///
-    /// [`PollType::Poll`]: wgpu_types::PollType::Poll
-    /// [`PollType::Wait`]: wgpu_types::PollType::Wait
+    /// [`PollType::Poll`]: wgpu::wgt::PollType::Poll
+    /// [`PollType::Wait`]: wgpu::wgt::PollType::Wait
     pub fn prepare_compaction_async(
         &self,
         callback: impl FnOnce(Result<(), BlasAsyncError>) + WasmNotSend + 'static,

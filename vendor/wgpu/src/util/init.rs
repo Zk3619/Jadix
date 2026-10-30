@@ -4,21 +4,21 @@ use crate::{Adapter, Instance, RequestAdapterOptions, Surface};
 use crate::Backends;
 
 /// Initialize the adapter obeying the `WGPU_ADAPTER_NAME` environment variable.
-#[cfg(wgpu_core)]
-#[cfg_attr(not(std), expect(unused_variables, unreachable_code))]
+#[cfg(jadix_wgpu_wgpu_core)]
+#[cfg_attr(not(jadix_wgpu_std), expect(unused_variables, unreachable_code))]
 pub async fn initialize_adapter_from_env(
     instance: &Instance,
     compatible_surface: Option<&Surface<'_>>,
-) -> Result<Adapter, wgt::RequestAdapterError> {
+) -> Result<Adapter, crate::__types::RequestAdapterError> {
     let desired_adapter_name: alloc::string::String = {
         cfg_if::cfg_if! {
-            if #[cfg(std)] {
+            if #[cfg(jadix_wgpu_std)] {
                 std::env::var("WGPU_ADAPTER_NAME")
                     .as_deref()
                     .map(str::to_lowercase)
-                    .map_err(|_| wgt::RequestAdapterError::EnvNotSet)?
+                    .map_err(|_| crate::__types::RequestAdapterError::EnvNotSet)?
             } else {
-                return Err(wgt::RequestAdapterError::EnvNotSet)
+                return Err(crate::__types::RequestAdapterError::EnvNotSet)
             }
         }
     };
@@ -45,19 +45,19 @@ pub async fn initialize_adapter_from_env(
 }
 
 /// Initialize the adapter obeying the `WGPU_ADAPTER_NAME` environment variable.
-#[cfg(not(wgpu_core))]
+#[cfg(not(jadix_wgpu_wgpu_core))]
 pub async fn initialize_adapter_from_env(
     _instance: &Instance,
     _compatible_surface: Option<&Surface<'_>>,
-) -> Result<Adapter, wgt::RequestAdapterError> {
-    Err(wgt::RequestAdapterError::EnvNotSet)
+) -> Result<Adapter, crate::__types::RequestAdapterError> {
+    Err(crate::__types::RequestAdapterError::EnvNotSet)
 }
 
 /// Initialize the adapter obeying the `WGPU_ADAPTER_NAME` environment variable and if it doesn't exist fall back on a default adapter.
 pub async fn initialize_adapter_from_env_or_default(
     instance: &Instance,
     compatible_surface: Option<&Surface<'_>>,
-) -> Result<Adapter, wgt::RequestAdapterError> {
+) -> Result<Adapter, crate::__types::RequestAdapterError> {
     match initialize_adapter_from_env(instance, compatible_surface).await {
         Ok(a) => Ok(a),
         Err(_) => {
@@ -77,7 +77,7 @@ pub async fn initialize_adapter_from_env_or_default(
 /// The result can only be true if this is called from the main thread or a dedicated worker.
 /// For convenience, this is also supported on non-wasm targets, always returning false there.
 pub async fn is_browser_webgpu_supported() -> bool {
-    #[cfg(webgpu)]
+    #[cfg(jadix_wgpu_webgpu)]
     {
         // In theory it should be enough to check for the presence of the `gpu` property...
         let gpu = crate::backend::get_browser_gpu_property();
@@ -92,7 +92,7 @@ pub async fn is_browser_webgpu_supported() -> bool {
             .await
             .is_ok_and(|adapter| !adapter.is_undefined() && !adapter.is_null())
     }
-    #[cfg(not(webgpu))]
+    #[cfg(not(jadix_wgpu_webgpu))]
     {
         false
     }
@@ -114,14 +114,16 @@ pub async fn is_browser_webgpu_supported() -> bool {
 /// If no backend feature for the active target platform is enabled,
 /// this method will panic, see [`Instance::enabled_backend_features()`].
 pub async fn new_instance_with_webgpu_detection(
-    mut instance_desc: wgt::InstanceDescriptor,
+    mut instance_desc: crate::__types::InstanceDescriptor,
 ) -> crate::Instance {
     if instance_desc
         .backends
-        .contains(wgt::Backends::BROWSER_WEBGPU)
+        .contains(crate::__types::Backends::BROWSER_WEBGPU)
         && !is_browser_webgpu_supported().await
     {
-        instance_desc.backends.remove(wgt::Backends::BROWSER_WEBGPU);
+        instance_desc
+            .backends
+            .remove(crate::__types::Backends::BROWSER_WEBGPU);
     }
 
     crate::Instance::new(instance_desc)

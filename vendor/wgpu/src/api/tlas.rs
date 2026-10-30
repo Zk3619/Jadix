@@ -1,13 +1,13 @@
+use crate::__types::WasmNotSendSync;
 use crate::{api::blas::TlasInstance, dispatch};
 use crate::{BindingResource, Label};
 use alloc::vec::Vec;
-#[cfg(wgpu_core)]
+#[cfg(jadix_wgpu_wgpu_core)]
 use core::ops::Deref;
 use core::ops::{Index, IndexMut, Range};
-use wgt::WasmNotSendSync;
 
 /// Descriptor to create top level acceleration structures.
-pub type CreateTlasDescriptor<'a> = wgt::CreateTlasDescriptor<Label<'a>>;
+pub type CreateTlasDescriptor<'a> = crate::__types::CreateTlasDescriptor<Label<'a>>;
 static_assertions::assert_impl_all!(CreateTlasDescriptor<'_>: Send, Sync);
 
 #[derive(Debug, Clone)]
@@ -32,7 +32,7 @@ crate::cmp::impl_eq_ord_hash_proxy!(Tlas => .inner);
 impl Tlas {
     /// Get the [`wgpu_hal`] acceleration structure from this `Tlas`.
     ///
-    /// Find the Api struct corresponding to the active backend in [`wgpu_hal::api`],
+    /// Find the Api struct corresponding to the active backend in [`wgpu::hal::api`],
     /// and pass that struct to the to the `A` type parameter.
     ///
     /// Returns a guard that dereferences to the type of the hal backend
@@ -67,8 +67,8 @@ impl Tlas {
     /// - All the safety requirements of wgpu-hal must be upheld.
     ///
     /// [`A::AccelerationStructure`]: hal::Api::AccelerationStructure
-    #[cfg(wgpu_core)]
-    pub unsafe fn as_hal<A: hal::Api>(
+    #[cfg(jadix_wgpu_wgpu_core)]
+    pub unsafe fn as_hal<A: crate::__hal::Api>(
         &mut self,
     ) -> Option<impl Deref<Target = A::AccelerationStructure>> {
         let tlas = self.inner.as_core_opt()?;
@@ -76,13 +76,13 @@ impl Tlas {
     }
 
     /// Returns custom implementation of Tlas (if custom backend and is internally T)
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     pub fn as_custom<T: crate::custom::TlasInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
     }
     /// Returns the index of the first instance that has not been modified since the last build.
     /// Custom backends use this to perform partial TLAS updates.
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     pub fn lowest_unmodified(&self) -> u32 {
         self.lowest_unmodified
     }

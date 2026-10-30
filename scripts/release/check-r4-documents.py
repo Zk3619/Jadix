@@ -23,8 +23,8 @@ def main():
     parser.add_argument("--output", type=Path, required=True)
     arguments = parser.parse_args()
     packages = [row for row in json.loads(arguments.archives.read_text(encoding="utf-8")) if row["local"]]
-    if len(packages) != 48:
-        raise ValueError("expected the frozen 48-package publication closure")
+    if not packages or len({package["name"] for package in packages}) != len(packages):
+        raise ValueError("expected a nonempty publication closure with unique package names")
     links = []
     manuals = {}
     archives = []

@@ -15,19 +15,19 @@ use crate::{api::DeferredCommandBufferActions, *};
 pub struct Queue {
     pub(crate) inner: dispatch::DispatchQueue,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(Queue: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(Queue => .inner);
 
 impl Queue {
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of Queue (if custom backend and is internally T)
     pub fn as_custom<T: custom::QueueInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Creates Queue from custom implementation
     pub fn from_custom<T: custom::QueueInterface>(queue: T) -> Self {
         Self {
@@ -39,7 +39,7 @@ impl Queue {
     /// is on the WebGPU backend, otherwise `None`.
     ///
     /// [`webgpu::GpuQueue`]: crate::webgpu::GpuQueue
-    #[cfg(webgpu)]
+    #[cfg(jadix_wgpu_webgpu)]
     pub fn as_webgpu(&self) -> Option<&webgpu::GpuQueue> {
         self.inner.as_webgpu_opt().map(|wq| &wq.inner)
     }
@@ -55,12 +55,12 @@ impl Queue {
 pub struct SubmissionIndex {
     pub(crate) index: u64,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(SubmissionIndex: Send, Sync);
 
 /// Passed to [`Device::poll`] to control how and if it should block.
-pub type PollType = wgt::PollType<SubmissionIndex>;
-#[cfg(send_sync)]
+pub type PollType = crate::__types::PollType<SubmissionIndex>;
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(PollType: Send, Sync);
 
 /// A write-only view into a staging buffer.
@@ -72,11 +72,11 @@ pub struct QueueWriteBufferView {
     offset: BufferAddress,
     inner: dispatch::DispatchQueueWriteBuffer,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(QueueWriteBufferView: Send, Sync);
 
 impl QueueWriteBufferView {
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of QueueWriteBufferView (if custom backend and is internally T)
     pub fn as_custom<T: custom::QueueWriteBufferInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -261,11 +261,11 @@ impl Queue {
     }
 
     /// Schedule a copy of data from `image` into `texture`.
-    #[cfg(web)]
+    #[cfg(jadix_wgpu_web)]
     pub fn copy_external_image_to_texture(
         &self,
-        source: &wgt::CopyExternalImageSourceInfo,
-        dest: wgt::CopyExternalImageDestInfo<&api::Texture>,
+        source: &crate::__types::CopyExternalImageSourceInfo,
+        dest: crate::__types::CopyExternalImageDestInfo<&api::Texture>,
         size: Extent3d,
     ) {
         self.inner
@@ -325,7 +325,7 @@ impl Queue {
 
     /// Get the [`wgpu_hal`] device from this `Queue`.
     ///
-    /// Find the Api struct corresponding to the active backend in [`wgpu_hal::api`],
+    /// Find the Api struct corresponding to the active backend in [`wgpu::hal::api`],
     /// and pass that struct to the to the `A` type parameter.
     ///
     /// Returns a guard that dereferences to the type of the hal backend
@@ -356,8 +356,8 @@ impl Queue {
     /// - All the safety requirements of wgpu-hal must be upheld.
     ///
     /// [`A::Queue`]: hal::Api::Queue
-    #[cfg(wgpu_core)]
-    pub unsafe fn as_hal<A: hal::Api>(
+    #[cfg(jadix_wgpu_wgpu_core)]
+    pub unsafe fn as_hal<A: crate::__hal::Api>(
         &self,
     ) -> Option<impl core::ops::Deref<Target = A::Queue> + WasmNotSendSync> {
         let queue = self.inner.as_core_opt()?;

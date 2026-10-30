@@ -10,7 +10,7 @@ try {
     $packages = @{}
     foreach ($package in $metadata.packages) { $packages[$package.name] = $package }
     $lower = @('jadix_core', 'jadix_layout', 'jadix_renderer', 'jadix_animation', 'jadix_theme', 'jadix_window_materials', 'jadix_document', 'jadix_hot_reload', 'jadix_lsp', 'jadix_media', 'jadix_net', 'jadix_tasks', 'jadix_tokio', 'jadix_style_tokens')
-    $forbidden = @('jadix', 'jadix_components', 'jadix_dnd', 'jadix_lucide', 'jadix_hot_reload_cli', 'jadix_macros', 'jadix_winit')
+    $forbidden = @('jadix', 'jadix_components', 'jadix_dnd', 'jadix_lucide', 'jadix_macros', 'jadix_winit')
     foreach ($name in $lower) {
         if (-not $packages.ContainsKey($name)) { throw "Missing lower package: $name" }
         $pending = [Collections.Generic.Queue[string]]::new()
@@ -28,7 +28,7 @@ try {
         Write-Host "Lower boundary passed: $name ($($visited.Count) workspace packages)"
     }
     foreach ($dependency in $packages['jadix'].dependencies) {
-        if ($dependency.kind -ne 'dev' -and $dependency.name -in @('jadix_components', 'jadix_dnd', 'jadix_lucide', 'jadix_hot_reload_cli')) {
+        if ($dependency.kind -ne 'dev' -and $dependency.name -in @('jadix_components', 'jadix_dnd', 'jadix_lucide', 'jadix_hot_reload')) {
             throw "Framework depends on product: $($dependency.name)"
         }
     }

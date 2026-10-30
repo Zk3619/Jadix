@@ -3,7 +3,7 @@
 use alloc::borrow::Cow;
 use core::mem;
 
-#[cfg_attr(not(any(feature = "spirv", doc)), expect(unused_imports))]
+#[cfg_attr(not(any(jadix_wgpu_feature_spirv, doc)), expect(unused_imports))]
 use crate::ShaderSource;
 
 #[cfg(doc)]
@@ -21,7 +21,7 @@ const SPIRV_MAGIC_NUMBER: u32 = 0x0723_0203;
 /// - `data` does not begin with the SPIR-V magic number
 ///
 /// It does not check that the data is a valid SPIR-V module in any other way.
-#[cfg(feature = "spirv")] // ShaderSource::SpirV only exists in this case
+#[cfg(jadix_wgpu_feature_spirv)] // ShaderSource::SpirV only exists in this case
 pub fn make_spirv(data: &[u8]) -> ShaderSource<'_> {
     ShaderSource::SpirV(make_spirv_raw(data))
 }
@@ -75,7 +75,7 @@ const fn assert_has_spirv_magic_number_and_length(bytes: &[u8]) -> bool {
     }
 }
 
-#[cfg_attr(not(feature = "spirv"), expect(rustdoc::broken_intra_doc_links))]
+#[cfg_attr(not(jadix_wgpu_feature_spirv), expect(rustdoc::broken_intra_doc_links))]
 /// Version of [`make_spirv()`] intended for use with
 /// [`Device::create_shader_module_passthrough()`].
 ///

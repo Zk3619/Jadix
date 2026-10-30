@@ -1,4 +1,4 @@
-#[cfg(wgpu_core)]
+#[cfg(jadix_wgpu_wgpu_core)]
 use core::ops::Deref;
 
 use crate::*;
@@ -17,7 +17,7 @@ pub struct TextureView {
     pub(crate) inner: dispatch::DispatchTextureView,
     pub(crate) texture: Texture,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(TextureView: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(TextureView => .inner);
@@ -33,7 +33,7 @@ impl TextureView {
 
     /// Get the [`wgpu_hal`] texture view from this `TextureView`.
     ///
-    /// Find the Api struct corresponding to the active backend in [`wgpu_hal::api`],
+    /// Find the Api struct corresponding to the active backend in [`wgpu::hal::api`],
     /// and pass that struct to the to the `A` type parameter.
     ///
     /// Returns a guard that dereferences to the type of the hal backend
@@ -70,8 +70,10 @@ impl TextureView {
     /// - All the safety requirements of wgpu-hal must be upheld.
     ///
     /// [`A::TextureView`]: hal::Api::TextureView
-    #[cfg(wgpu_core)]
-    pub unsafe fn as_hal<A: hal::Api>(&self) -> Option<impl Deref<Target = A::TextureView>> {
+    #[cfg(jadix_wgpu_wgpu_core)]
+    pub unsafe fn as_hal<A: crate::__hal::Api>(
+        &self,
+    ) -> Option<impl Deref<Target = A::TextureView>> {
         let view = self.inner.as_core_opt()?;
         unsafe { view.context.texture_view_as_hal::<A>(view) }
     }
@@ -80,12 +82,12 @@ impl TextureView {
     /// is on the WebGPU backend, otherwise `None`.
     ///
     /// [`webgpu::GpuTextureView`]: crate::webgpu::GpuTextureView
-    #[cfg(webgpu)]
+    #[cfg(jadix_wgpu_webgpu)]
     pub fn as_webgpu(&self) -> Option<&webgpu::GpuTextureView> {
         self.inner.as_webgpu_opt().map(|wv| &wv.inner)
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of TextureView (if custom backend and is internally T)
     pub fn as_custom<T: custom::TextureViewInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -98,5 +100,5 @@ impl TextureView {
 ///
 /// Corresponds to [WebGPU `GPUTextureViewDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gputextureviewdescriptor).
-pub type TextureViewDescriptor<'a> = wgt::TextureViewDescriptor<Label<'a>>;
+pub type TextureViewDescriptor<'a> = crate::__types::TextureViewDescriptor<Label<'a>>;
 static_assertions::assert_impl_all!(TextureViewDescriptor<'_>: Send, Sync);

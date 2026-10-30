@@ -1,4 +1,4 @@
-#[cfg(wgpu_core)]
+#[cfg(jadix_wgpu_wgpu_core)]
 use core::ops::Deref;
 
 use crate::*;
@@ -13,7 +13,7 @@ pub struct Texture {
     pub(crate) inner: dispatch::DispatchTexture,
     pub(crate) descriptor: TextureDescriptor<'static>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(Texture: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(Texture => .inner);
@@ -21,7 +21,7 @@ crate::cmp::impl_eq_ord_hash_proxy!(Texture => .inner);
 impl Texture {
     /// Get the [`wgpu_hal`] texture from this `Texture`.
     ///
-    /// Find the Api struct corresponding to the active backend in [`wgpu_hal::api`],
+    /// Find the Api struct corresponding to the active backend in [`wgpu::hal::api`],
     /// and pass that struct to the to the `A` type parameter.
     ///
     /// Returns a guard that dereferences to the type of the hal backend
@@ -58,8 +58,8 @@ impl Texture {
     /// - All the safety requirements of wgpu-hal must be upheld.
     ///
     /// [`A::Texture`]: hal::Api::Texture
-    #[cfg(wgpu_core)]
-    pub unsafe fn as_hal<A: hal::Api>(&self) -> Option<impl Deref<Target = A::Texture>> {
+    #[cfg(jadix_wgpu_wgpu_core)]
+    pub unsafe fn as_hal<A: crate::__hal::Api>(&self) -> Option<impl Deref<Target = A::Texture>> {
         let texture = self.inner.as_core_opt()?;
         unsafe { texture.context.texture_as_hal::<A>(texture) }
     }
@@ -72,18 +72,18 @@ impl Texture {
     /// The returned handle is the same JS object wgpu uses internally; it can
     /// be passed to other WebGPU-aware JS APIs, used for identity comparison,
     /// or fed back into [`Device::create_texture_from_webgpu_handle`].
-    #[cfg(webgpu)]
+    #[cfg(jadix_wgpu_webgpu)]
     pub fn as_webgpu(&self) -> Option<&webgpu::GpuTexture> {
         self.inner.as_webgpu_opt().map(|wt| &wt.inner)
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of Texture (if custom backend and is internally T)
     pub fn as_custom<T: custom::TextureInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Creates a texture from already created custom implementation with the given description
     pub fn from_custom<T: custom::TextureInterface>(
         texture: T,
@@ -198,5 +198,5 @@ impl Texture {
 ///
 /// Corresponds to [WebGPU `GPUTextureDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gputexturedescriptor).
-pub type TextureDescriptor<'a> = wgt::TextureDescriptor<Label<'a>, &'a [TextureFormat]>;
+pub type TextureDescriptor<'a> = crate::__types::TextureDescriptor<Label<'a>, &'a [TextureFormat]>;
 static_assertions::assert_impl_all!(TextureDescriptor<'_>: Send, Sync);

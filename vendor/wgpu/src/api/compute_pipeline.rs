@@ -10,7 +10,7 @@ use crate::*;
 pub struct ComputePipeline {
     pub(crate) inner: dispatch::DispatchComputePipeline,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(ComputePipeline: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(ComputePipeline => .inner);
@@ -28,7 +28,7 @@ impl ComputePipeline {
         BindGroupLayout { inner: bind_group }
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of ComputePipeline (if custom backend and is internally T)
     pub fn as_custom<T: custom::ComputePipelineInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -83,5 +83,5 @@ pub struct ComputePipelineDescriptor<'a> {
     /// The pipeline cache to use when creating this pipeline.
     pub cache: Option<&'a PipelineCache>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(ComputePipelineDescriptor<'_>: Send, Sync);

@@ -1,10 +1,10 @@
 use core::{num::NonZeroU32, ops::Range};
 
+pub use crate::__types::{LoadOp, Operations, StoreOp};
 use crate::{
     api::{impl_deferred_command_buffer_actions, SharedDeferredCommandBufferActions},
     *,
 };
-pub use wgt::{LoadOp, Operations, StoreOp};
 
 /// In-progress recording of a render pass: a list of render commands in a [`CommandEncoder`].
 ///
@@ -35,7 +35,7 @@ pub struct RenderPass<'encoder> {
     pub(crate) _encoder_guard: PhantomDrop<&'encoder ()>,
 }
 
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(RenderPass<'_>: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(RenderPass<'_> => .inner);
@@ -405,7 +405,7 @@ impl RenderPass<'_> {
             .multi_draw_mesh_tasks_indirect(&indirect_buffer.inner, indirect_offset, count);
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of RenderPass (if custom backend and is internally T)
     pub fn as_custom<T: custom::RenderPassInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -608,7 +608,7 @@ pub struct RenderPassTimestampWrites<'a> {
     /// The index of the query set at which an end timestamp of this pass is written, if any.
     pub end_of_pass_write_index: Option<u32>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(RenderPassTimestampWrites<'_>: Send, Sync);
 
 /// Describes a color attachment to a [`RenderPass`].
@@ -630,7 +630,7 @@ pub struct RenderPassColorAttachment<'tex> {
     /// What operations will be performed on this color attachment.
     pub ops: Operations<Color>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(RenderPassColorAttachment<'_>: Send, Sync);
 
 /// Describes a depth/stencil attachment to a [`RenderPass`].
@@ -648,7 +648,7 @@ pub struct RenderPassDepthStencilAttachment<'tex> {
     /// What operations will be performed on the stencil part of the attachment.
     pub stencil_ops: Option<Operations<u32>>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(RenderPassDepthStencilAttachment<'_>: Send, Sync);
 
 /// Describes the attachments of a render pass.
@@ -681,5 +681,5 @@ pub struct RenderPassDescriptor<'a> {
     /// therefore affecting all attachments. Meaning, this affects only any shaders executed on the `RenderPass`.
     pub multiview_mask: Option<NonZeroU32>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(RenderPassDescriptor<'_>: Send, Sync);

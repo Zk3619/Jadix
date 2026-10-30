@@ -38,3 +38,9 @@ The existing [package guide](GUIDE.md) retains additional API, platform and sour
 ## License
 
 MIT OR Apache-2.0. Preserve [LICENSE.APACHE](LICENSE.APACHE), [LICENSE.MIT](LICENSE.MIT) and dependency notices.
+
+## Distribution
+
+Core, HAL, shared types, the Naga bridge and the modified Naga implementation ship as modules in this one package. Platform feature helpers are folded into the package manifest and build configuration. Use `wgpu::hal` and `wgpu::naga` for the supported low level integrations. Original licenses and patch notes are included under `upstream/`.
+
+When building WebGPU/WebGL with the workspace's locked `web-sys 0.3.91`, set `RUSTFLAGS="--cfg web_sys_unstable_apis"` to expose its `VideoFrame` bindings. Later `web-sys` releases may expose these bindings without that flag.

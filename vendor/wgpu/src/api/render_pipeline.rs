@@ -12,7 +12,7 @@ use crate::*;
 pub struct RenderPipeline {
     pub(crate) inner: dispatch::DispatchRenderPipeline,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(RenderPipeline: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(RenderPipeline => .inner);
@@ -29,7 +29,7 @@ impl RenderPipeline {
         BindGroupLayout { inner: layout }
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of RenderPipeline (if custom backend and is internally T)
     pub fn as_custom<T: custom::RenderPipelineInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -114,7 +114,7 @@ pub struct VertexState<'a> {
     /// locations and types of the inputs to the `entry_point` function.
     pub buffers: &'a [Option<VertexBufferLayout<'a>>],
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(VertexState<'_>: Send, Sync);
 
 /// Describes the fragment processing in a render pipeline.
@@ -142,7 +142,7 @@ pub struct FragmentState<'a> {
     /// The color state of the render targets.
     pub targets: &'a [Option<ColorTargetState>],
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(FragmentState<'_>: Send, Sync);
 
 /// Describes the task shader stage in a mesh shader pipeline.
@@ -165,7 +165,7 @@ pub struct TaskState<'a> {
     /// This implements `Default`, and for most users can be set to `Default::default()`
     pub compilation_options: PipelineCompilationOptions<'a>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(TaskState<'_>: Send, Sync);
 
 /// Describes the mesh shader stage in a mesh shader pipeline.
@@ -186,7 +186,7 @@ pub struct MeshState<'a> {
     /// This implements `Default`, and for most users can be set to `Default::default()`
     pub compilation_options: PipelineCompilationOptions<'a>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(MeshState<'_>: Send, Sync);
 
 /// Describes a render (graphics) pipeline.
@@ -239,7 +239,7 @@ pub struct RenderPipelineDescriptor<'a> {
     /// The pipeline cache to use when creating this pipeline.
     pub cache: Option<&'a PipelineCache>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(RenderPipelineDescriptor<'_>: Send, Sync);
 
 /// Describes a mesh shader (graphics) pipeline.
@@ -277,7 +277,7 @@ static_assertions::assert_impl_all!(RenderPipelineDescriptor<'_>: Send, Sync);
 /// `draw_mesh_tasks` are used to decide how many invocations of the mesh shader
 /// to invoke directly, without a task payload.
 ///
-/// [vertex formats]: wgpu_types::VertexFormat
+/// [vertex formats]: wgpu::wgt::VertexFormat
 /// [`task`]: Self::task
 /// [`mesh`]: Self::mesh
 /// [`fragment`]: Self::fragment
@@ -330,5 +330,5 @@ pub struct MeshPipelineDescriptor<'a> {
     /// The pipeline cache to use when creating this pipeline.
     pub cache: Option<&'a PipelineCache>,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(MeshPipelineDescriptor<'_>: Send, Sync);

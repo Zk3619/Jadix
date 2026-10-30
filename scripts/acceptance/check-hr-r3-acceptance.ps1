@@ -58,7 +58,7 @@ try {
     Run-Check 'source' 'git' @('rev-parse', 'HEAD')
     Run-Check 'working-tree' 'git' @('status', '--porcelain=v1', '--untracked-files=normal')
     Run-Check 'diff' 'git' @('diff', '--stat', 'HEAD')
-    Run-Check 'protocol-macros-cli' 'cargo' (@('test', '-p', 'jadix_hot_reload', '-p', 'jadix_hot_reload_cli', '-p', 'jadix_macros', '--all-features', '--locked') + $mode) -RequireTests
+    Run-Check 'protocol-macros-cli' 'cargo' (@('test', '-p', 'jadix_hot_reload', '-p', 'jadix_macros', '--all-features', '--locked') + $mode) -RequireTests
     Run-Check 'framework-hot-reload' 'cargo' (@('test', '-p', 'jadix', '--features', 'hot-reload,devtools,gallery-tests', '--lib', 'hot_reload', '--locked') + $mode + @('--', '--test-threads=1')) -RequireTests
     $enhanced = Host-Binary 'framework-hot-reload'
     foreach ($filter in @('app::devtools::', 'keyframes', 'style::animation::tests::', 'app::pending_images::', 'reconcile', 'stylesheet')) {

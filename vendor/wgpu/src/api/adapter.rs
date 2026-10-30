@@ -1,6 +1,6 @@
 use alloc::vec::Vec;
 use core::future::Future;
-#[cfg(wgpu_core)]
+#[cfg(jadix_wgpu_wgpu_core)]
 use core::ops::Deref;
 
 use crate::*;
@@ -20,12 +20,12 @@ use crate::*;
 pub struct Adapter {
     pub(crate) inner: dispatch::DispatchAdapter,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(Adapter: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(Adapter => .inner);
 
-pub use wgt::RequestAdapterOptions as RequestAdapterOptionsBase;
+pub use crate::__types::RequestAdapterOptions as RequestAdapterOptionsBase;
 /// Additional information required when requesting an adapter.
 ///
 /// For use with [`Instance::request_adapter`].
@@ -33,7 +33,7 @@ pub use wgt::RequestAdapterOptions as RequestAdapterOptionsBase;
 /// Corresponds to [WebGPU `GPURequestAdapterOptions`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpurequestadapteroptions).
 pub type RequestAdapterOptions<'a, 'b> = RequestAdapterOptionsBase<&'a Surface<'b>>;
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(RequestAdapterOptions<'_, '_>: Send, Sync);
 
 impl Adapter {
@@ -73,10 +73,10 @@ impl Adapter {
     ///
     /// - `hal_device` must be created from this adapter internal handle.
     /// - `desc.features` must be a subset of `hal_device`'s supported features.
-    #[cfg(wgpu_core)]
-    pub unsafe fn create_device_from_hal<A: hal::Api>(
+    #[cfg(jadix_wgpu_wgpu_core)]
+    pub unsafe fn create_device_from_hal<A: crate::__hal::Api>(
         &self,
-        hal_device: hal::OpenDevice<A>,
+        hal_device: crate::__hal::OpenDevice<A>,
         desc: &DeviceDescriptor<'_>,
     ) -> Result<(Device, Queue), RequestDeviceError> {
         let core_adapter = self.inner.as_core();
@@ -98,7 +98,7 @@ impl Adapter {
 
     /// Get the [`wgpu_hal`] adapter from this `Adapter`.
     ///
-    /// Find the Api struct corresponding to the active backend in [`wgpu_hal::api`],
+    /// Find the Api struct corresponding to the active backend in [`wgpu::hal::api`],
     /// and pass that struct to the to the `A` type parameter.
     ///
     /// Returns a guard that dereferences to the type of the hal backend
@@ -127,8 +127,8 @@ impl Adapter {
     /// - All the safety requirements of wgpu-hal must be upheld.
     ///
     /// [`A::Adapter`]: hal::Api::Adapter
-    #[cfg(wgpu_core)]
-    pub unsafe fn as_hal<A: hal::Api>(
+    #[cfg(jadix_wgpu_wgpu_core)]
+    pub unsafe fn as_hal<A: crate::__hal::Api>(
         &self,
     ) -> Option<impl Deref<Target = A::Adapter> + WasmNotSendSync> {
         let adapter = self.inner.as_core_opt()?;
@@ -136,13 +136,13 @@ impl Adapter {
         unsafe { adapter.context.adapter_as_hal::<A>(adapter) }
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of adapter (if custom backend and is internally T)
     pub fn as_custom<T: custom::AdapterInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Creates Adapter from custom implementation
     pub fn from_custom<T: custom::AdapterInterface>(adapter: T) -> Self {
         Self {

@@ -237,17 +237,18 @@
     clippy::bool_comparison,
 )]
 // NOTE: Keep this in sync with `wgpu-core`.
-#![cfg_attr(not(send_sync), allow(clippy::arc_with_non_send_sync))]
-#![cfg_attr(not(any(wgpu_core, webgpu)), allow(unused))]
+#![cfg_attr(not(jadix_wgpu_send_sync), allow(clippy::arc_with_non_send_sync))]
+#![cfg_attr(not(any(jadix_wgpu_wgpu_core, jadix_wgpu_webgpu)), allow(unused))]
 
 extern crate alloc;
-#[cfg(any(std, test))]
+#[cfg(any(jadix_wgpu_std, test))]
+#[macro_use]
 extern crate std;
-#[cfg(wgpu_core)]
-pub extern crate wgpu_core as wgc;
-#[cfg(wgpu_core)]
-pub extern crate wgpu_hal as hal;
-pub extern crate wgpu_types as wgt;
+#[cfg(jadix_wgpu_wgpu_core)]
+pub use crate::__core as wgc;
+#[cfg(jadix_wgpu_wgpu_core)]
+pub use crate::__hal as hal;
+pub use crate::__types as wgt;
 
 //
 //
@@ -268,11 +269,10 @@ pub mod util;
 //
 //
 
-#[cfg(custom)]
+#[cfg(jadix_wgpu_custom)]
 pub use backend::custom;
 
-pub use api::*;
-pub use wgt::{
+pub use crate::__types::{
     AdapterInfo, AddressMode, AllocatorReport, AstcBlock, AstcChannel, Backend, BackendOptions,
     Backends, BindGroupLayoutEntry, BindingType, BlendComponent, BlendFactor, BlendOperation,
     BlendState, BufferAddress, BufferBindingType, BufferSize, BufferTextureCopyInfo,
@@ -302,27 +302,28 @@ pub use wgt::{
     IMMEDIATE_DATA_ALIGNMENT, MAP_ALIGNMENT, MAXIMUM_SUBGROUP_MAX_SIZE, MINIMUM_SUBGROUP_MIN_SIZE,
     QUERY_RESOLVE_BUFFER_ALIGNMENT, QUERY_SET_MAX_QUERIES, QUERY_SIZE, VERTEX_ALIGNMENT,
 };
+pub use api::*;
 
 #[expect(deprecated)]
-pub use wgt::VERTEX_STRIDE_ALIGNMENT;
+pub use crate::__types::VERTEX_STRIDE_ALIGNMENT;
 
 // wasm-only types, we try to keep as many types non-platform
 // specific, but these need to depend on web-sys.
-#[cfg(web)]
-pub use wgt::{CopyExternalImageSourceInfo, ExternalImageSource};
+#[cfg(jadix_wgpu_web)]
+pub use crate::__types::{CopyExternalImageSourceInfo, ExternalImageSource};
 
 /// Re-export of our `naga` dependency.
 ///
-#[cfg(wgpu_core)]
-#[cfg_attr(docsrs, doc(cfg(any(wgpu_core, naga))))]
+#[cfg(jadix_wgpu_wgpu_core)]
+#[cfg_attr(docsrs, doc(cfg(any(jadix_wgpu_wgpu_core, jadix_wgpu_naga))))]
 // We re-export wgpu-core's re-export of naga, as we may not have direct access to it.
-pub use ::wgc::naga;
+pub use crate::__core::naga;
 /// Re-export of our `naga` dependency.
 ///
-#[cfg(all(not(wgpu_core), naga))]
-#[cfg_attr(docsrs, doc(cfg(any(wgpu_core, naga))))]
+#[cfg(all(not(jadix_wgpu_wgpu_core), jadix_wgpu_naga))]
+#[cfg_attr(docsrs, doc(cfg(any(jadix_wgpu_wgpu_core, jadix_wgpu_naga))))]
 // If that's not available, we re-export our own.
-pub use naga;
+pub use crate::__naga as naga;
 
 /// Re-export of our `raw-window-handle` dependency.
 ///
@@ -330,7 +331,7 @@ pub use raw_window_handle as rwh;
 
 /// Re-export of our `web-sys` dependency.
 ///
-#[cfg(web)]
+#[cfg(jadix_wgpu_web)]
 pub use web_sys;
 
 /// Vendored WebGPU JS-handle types used by the WebGPU backend.
@@ -343,7 +344,7 @@ pub use web_sys;
 /// A `web_sys::GpuTexture` from a consumer's own `web-sys` dependency wraps
 /// the same JS object as a `wgpu::webgpu::GpuTexture`; convert between them
 /// with [`wasm_bindgen::JsCast::unchecked_into`].
-#[cfg(webgpu)]
+#[cfg(jadix_wgpu_webgpu)]
 pub mod webgpu {
     pub use crate::backend::webgpu::webgpu_sys::{
         GpuBuffer, GpuDevice, GpuQueue, GpuTexture, GpuTextureView,
@@ -353,3 +354,32 @@ pub mod webgpu {
 
 #[doc(hidden)]
 pub use macros::helpers as __macro_helpers;
+
+#[cfg(jadix_wgpu_core_enabled)]
+#[allow(elided_lifetimes_in_paths)]
+#[allow(missing_docs)]
+#[doc(hidden)]
+pub mod __core;
+
+#[cfg(jadix_wgpu_hal_enabled)]
+#[allow(elided_lifetimes_in_paths)]
+#[allow(missing_docs)]
+#[doc(hidden)]
+pub mod __hal;
+
+#[cfg(jadix_wgpu_types_enabled)]
+#[allow(elided_lifetimes_in_paths)]
+#[doc(hidden)]
+pub mod __types;
+
+#[cfg(jadix_wgpu_naga_bridge_enabled)]
+#[allow(elided_lifetimes_in_paths)]
+#[allow(missing_docs)]
+#[doc(hidden)]
+pub mod __bridge;
+
+#[cfg(jadix_naga_enabled)]
+#[allow(elided_lifetimes_in_paths)]
+#[allow(missing_docs)]
+#[doc(hidden)]
+pub mod __naga;

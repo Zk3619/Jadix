@@ -4,7 +4,7 @@
 
 Framework-neutral hot-reload protocol and receiver.
 
-Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; version `0.1.0`.** Local archives and manifests do not prove registry availability.
+Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; version `0.1.1`.** Local archives and manifests do not prove registry availability.
 
 ## Installation
 
@@ -12,7 +12,7 @@ Use the version available in the target registry:
 
 ```toml
 [dependencies]
-jadix_hot_reload = "=0.1.0"
+jadix_hot_reload = "=0.1.1"
 ```
 
 Before publication, use the source workspace. Consumers use one registry graph without copying private path/git/patch overrides. Platform-specific packages require the corresponding SDK.
@@ -32,3 +32,10 @@ The existing [package guide](GUIDE.md) retains additional API, platform and sour
 ## License
 
 Apache-2.0. Preserve [LICENSE](LICENSE) and dependency notices.
+
+## Optional development CLI
+
+```sh
+cargo install jadix_hot_reload --version "=0.1.1" --features cli --bin jadix-hot-reload
+jadix-hot-reload --help
+```

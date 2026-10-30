@@ -65,8 +65,10 @@ def run(arguments, directory, log):
 
 
 def validate_provenance(directory, files):
-    for path in directory.glob("JADIX_*.md"):
-        if files.get(path.name) != digest(path):
+    notices = list(directory.glob("JADIX_*.md"))
+    notices.extend((directory / "upstream").rglob("JADIX_*.md"))
+    for path in notices:
+        if files.get(path.relative_to(directory).as_posix()) != digest(path):
             raise ValueError(f"provenance absent or changed in archive: {path}")
 
 

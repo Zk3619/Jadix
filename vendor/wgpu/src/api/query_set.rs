@@ -28,14 +28,14 @@ pub struct QuerySet {
     pub(crate) ty: QueryType,
     pub(crate) count: u32,
 }
-#[cfg(send_sync)]
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(QuerySet: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(QuerySet => .inner);
 
 impl QuerySet {
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of QuerySet (if custom backend and is internally T)
     pub fn as_custom<T: custom::QuerySetInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -63,5 +63,5 @@ impl QuerySet {
 ///
 /// Corresponds to [WebGPU `GPUQuerySetDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpuquerysetdescriptor).
-pub type QuerySetDescriptor<'a> = wgt::QuerySetDescriptor<Label<'a>>;
+pub type QuerySetDescriptor<'a> = crate::__types::QuerySetDescriptor<Label<'a>>;
 static_assertions::assert_impl_all!(QuerySetDescriptor<'_>: Send, Sync);

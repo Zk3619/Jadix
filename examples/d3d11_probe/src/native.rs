@@ -27,41 +27,51 @@ float4 ps_main() : SV_Target { return float4(0.25, 0.5, 0.75, 1); }
 fn native_compiler_rejects_missing_entries_and_unimplemented_bindings() {
     let source = "@group(0) @binding(0) var<uniform> value: vec4f;
         @fragment fn main() -> @location(0) vec4f { return value; }";
-    let module = naga::front::wgsl::parse_str(source).unwrap();
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
+    let module = wgpu::naga::front::wgsl::parse_str(source).unwrap();
+    let info = wgpu::naga::valid::Validator::new(
+        wgpu::naga::valid::ValidationFlags::all(),
+        wgpu::naga::valid::Capabilities::empty(),
     )
     .validate(&module)
     .unwrap();
     assert!(matches!(
-        wgpu_hal::dx11::compile_shader(&module, &info, naga::ShaderStage::Fragment, "main"),
-        Err(wgpu_hal::dx11::Error::Unsupported(
+        wgpu::hal::dx11::compile_shader(&module, &info, wgpu::naga::ShaderStage::Fragment, "main"),
+        Err(wgpu::hal::dx11::Error::Unsupported(
             "shader resource register layout is not implemented"
         ))
     ));
-    let module = naga::front::wgsl::parse_str(
+    let module = wgpu::naga::front::wgsl::parse_str(
         "@fragment fn main() -> @location(0) vec4f { return vec4f(1.); }",
     )
     .unwrap();
-    let info = naga::valid::Validator::new(
-        naga::valid::ValidationFlags::all(),
-        naga::valid::Capabilities::empty(),
+    let info = wgpu::naga::valid::Validator::new(
+        wgpu::naga::valid::ValidationFlags::all(),
+        wgpu::naga::valid::Capabilities::empty(),
     )
     .validate(&module)
     .unwrap();
-    assert!(
-        wgpu_hal::dx11::compile_shader(&module, &info, naga::ShaderStage::Fragment, "missing")
-            .is_err()
-    );
-    assert!(
-        wgpu_hal::dx11::compile_shader(&module, &info, naga::ShaderStage::Vertex, "main").is_err()
-    );
-    assert!(
-        !wgpu_hal::dx11::compile_shader(&module, &info, naga::ShaderStage::Fragment, "main")
-            .unwrap()
-            .is_empty()
-    );
+    assert!(wgpu::hal::dx11::compile_shader(
+        &module,
+        &info,
+        wgpu::naga::ShaderStage::Fragment,
+        "missing"
+    )
+    .is_err());
+    assert!(wgpu::hal::dx11::compile_shader(
+        &module,
+        &info,
+        wgpu::naga::ShaderStage::Vertex,
+        "main"
+    )
+    .is_err());
+    assert!(!wgpu::hal::dx11::compile_shader(
+        &module,
+        &info,
+        wgpu::naga::ShaderStage::Fragment,
+        "main"
+    )
+    .unwrap()
+    .is_empty());
 }
 
 unsafe fn compile(entry: PCSTR, target: PCSTR) -> Result<ID3DBlob, Box<dyn std::error::Error>> {
@@ -97,7 +107,7 @@ pub fn run(use_hal: bool) -> Result<(serde_json::Value, Vec<u8>), Box<dyn std::e
     #[cfg(feature = "native-hal")]
     if use_hal {
         let mut failures = Vec::new();
-        for adapter in wgpu_hal::dx11::enumerate_adapters()? {
+        for adapter in wgpu::hal::dx11::enumerate_adapters()? {
             match adapter.open() {
                 Ok(device) => {
                     return native_hal::render(&adapter.description, &device);

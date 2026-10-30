@@ -15,7 +15,7 @@ use crate::*;
 pub struct ShaderModule {
     pub(crate) inner: dispatch::DispatchShaderModule,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(ShaderModule: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(ShaderModule => .inner);
@@ -26,7 +26,7 @@ impl ShaderModule {
         self.inner.get_compilation_info()
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of ShaderModule (if custom backend and is internally T)
     pub fn as_custom<T: custom::ShaderModuleInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -89,7 +89,7 @@ pub struct SourceLocation {
     pub length: u32,
 }
 
-#[cfg(all(feature = "wgsl", wgpu_core))]
+#[cfg(all(jadix_wgpu_feature_wgsl, jadix_wgpu_wgpu_core))]
 impl From<crate::naga::error::ShaderError<crate::naga::front::wgsl::ParseError>>
     for CompilationInfo
 {
@@ -104,9 +104,13 @@ impl From<crate::naga::error::ShaderError<crate::naga::front::wgsl::ParseError>>
         }
     }
 }
-#[cfg(feature = "glsl")]
-impl From<naga::error::ShaderError<naga::front::glsl::ParseErrors>> for CompilationInfo {
-    fn from(value: naga::error::ShaderError<naga::front::glsl::ParseErrors>) -> Self {
+#[cfg(jadix_wgpu_feature_glsl)]
+impl From<crate::__naga::error::ShaderError<crate::__naga::front::glsl::ParseErrors>>
+    for CompilationInfo
+{
+    fn from(
+        value: crate::__naga::error::ShaderError<crate::__naga::front::glsl::ParseErrors>,
+    ) -> Self {
         use alloc::string::ToString;
         let messages = value
             .inner
@@ -122,9 +126,9 @@ impl From<naga::error::ShaderError<naga::front::glsl::ParseErrors>> for Compilat
     }
 }
 
-#[cfg(feature = "spirv")]
-impl From<naga::error::ShaderError<naga::front::spv::Error>> for CompilationInfo {
-    fn from(value: naga::error::ShaderError<naga::front::spv::Error>) -> Self {
+#[cfg(jadix_wgpu_feature_spirv)]
+impl From<crate::__naga::error::ShaderError<crate::__naga::front::spv::Error>> for CompilationInfo {
+    fn from(value: crate::__naga::error::ShaderError<crate::__naga::front::spv::Error>) -> Self {
         use alloc::{string::ToString, vec};
         CompilationInfo {
             messages: vec![CompilationMessage {
@@ -136,7 +140,7 @@ impl From<naga::error::ShaderError<naga::front::spv::Error>> for CompilationInfo
     }
 }
 
-#[cfg(any(wgpu_core, naga))]
+#[cfg(any(jadix_wgpu_wgpu_core, jadix_wgpu_naga))]
 impl
     From<
         crate::naga::error::ShaderError<crate::naga::WithSpan<crate::naga::valid::ValidationError>>,
@@ -158,7 +162,7 @@ impl
     }
 }
 
-#[cfg(any(wgpu_core, naga))]
+#[cfg(any(jadix_wgpu_wgpu_core, jadix_wgpu_naga))]
 impl From<crate::naga::SourceLocation> for SourceLocation {
     fn from(value: crate::naga::SourceLocation) -> Self {
         SourceLocation {
@@ -179,35 +183,35 @@ impl From<crate::naga::SourceLocation> for SourceLocation {
 ///
 /// This type is unique to the Rust API of `wgpu`. In the WebGPU specification,
 /// only WGSL source code strings are accepted.
-#[cfg_attr(feature = "naga-ir", expect(clippy::large_enum_variant))]
+#[cfg_attr(jadix_wgpu_feature_naga_ir, expect(clippy::large_enum_variant))]
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub enum ShaderSource<'a> {
     /// SPIR-V module represented as a slice of words.
     ///
     /// See also: [`util::make_spirv`], [`include_spirv`]
-    #[cfg(feature = "spirv")]
+    #[cfg(jadix_wgpu_feature_spirv)]
     SpirV(alloc::borrow::Cow<'a, [u32]>),
     /// GLSL module as a string slice.
     ///
     /// Note: GLSL is not yet fully supported and must be a specific ShaderStage.
-    #[cfg(feature = "glsl")]
+    #[cfg(jadix_wgpu_feature_glsl)]
     Glsl {
         /// The source code of the shader.
         shader: alloc::borrow::Cow<'a, str>,
-        /// The shader stage that the shader targets. For example, `naga::ShaderStage::Vertex`
-        stage: naga::ShaderStage,
+        /// The shader stage that the shader targets. For example, `wgpu::naga::ShaderStage::Vertex`
+        stage: crate::__naga::ShaderStage,
         /// Key-value pairs to represent defines sent to the glsl preprocessor.
         ///
         /// If the same name is defined multiple times, the last value is used.
         defines: &'a [(&'a str, &'a str)],
     },
     /// WGSL module as a string slice.
-    #[cfg(feature = "wgsl")]
+    #[cfg(jadix_wgpu_feature_wgsl)]
     Wgsl(alloc::borrow::Cow<'a, str>),
     /// Naga module.
-    #[cfg(feature = "naga-ir")]
-    Naga(alloc::borrow::Cow<'static, naga::Module>),
+    #[cfg(jadix_wgpu_feature_naga_ir)]
+    Naga(alloc::borrow::Cow<'static, crate::__naga::Module>),
     /// Dummy variant because `Naga` doesn't have a lifetime and without enough active features it
     /// could be the last one active.
     #[doc(hidden)]
@@ -234,4 +238,4 @@ static_assertions::assert_impl_all!(ShaderModuleDescriptor<'_>: Send, Sync);
 /// This type is unique to the Rust API of `wgpu`. In the WebGPU specification,
 /// only WGSL source code strings are accepted.
 pub type ShaderModuleDescriptorPassthrough<'a> =
-    wgt::CreateShaderModuleDescriptorPassthrough<'a, Label<'a>>;
+    crate::__types::CreateShaderModuleDescriptorPassthrough<'a, Label<'a>>;

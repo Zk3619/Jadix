@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, string::String, vec, vec::Vec};
-#[cfg(wgpu_core)]
+#[cfg(jadix_wgpu_wgpu_core)]
 use core::ops::Deref;
 use core::{error, fmt};
 
@@ -14,7 +14,7 @@ use crate::*;
 ///
 /// Corresponds to [WebGPU `GPUCanvasConfiguration`](
 /// https://gpuweb.github.io/gpuweb/#canvas-configuration).
-pub type SurfaceConfiguration = wgt::SurfaceConfiguration<Vec<TextureFormat>>;
+pub type SurfaceConfiguration = crate::__types::SurfaceConfiguration<Vec<TextureFormat>>;
 static_assertions::assert_impl_all!(SurfaceConfiguration: Send, Sync);
 
 /// Handle to a presentable surface.
@@ -88,14 +88,14 @@ impl Surface<'_> {
     ) -> Option<SurfaceConfiguration> {
         let caps = self.get_capabilities(adapter);
         Some(SurfaceConfiguration {
-            usage: wgt::TextureUsages::RENDER_ATTACHMENT,
+            usage: crate::__types::TextureUsages::RENDER_ATTACHMENT,
             format: *caps.formats.first()?,
-            color_space: wgt::SurfaceColorSpace::Auto,
+            color_space: crate::__types::SurfaceColorSpace::Auto,
             width,
             height,
             desired_maximum_frame_latency: 2,
             present_mode: *caps.present_modes.first()?,
-            alpha_mode: wgt::CompositeAlphaMode::Auto,
+            alpha_mode: crate::__types::CompositeAlphaMode::Auto,
             view_formats: vec![],
         })
     }
@@ -200,7 +200,7 @@ impl Surface<'_> {
 
     /// Get the [`wgpu_hal`] surface from this `Surface`.
     ///
-    /// Find the Api struct corresponding to the active backend in [`wgpu_hal::api`],
+    /// Find the Api struct corresponding to the active backend in [`wgpu::hal::api`],
     /// and pass that struct to the to the `A` type parameter.
     ///
     /// Returns a guard that dereferences to the type of the hal backend
@@ -229,8 +229,8 @@ impl Surface<'_> {
     /// - All the safety requirements of wgpu-hal must be upheld.
     ///
     /// [`A::Surface`]: hal::Api::Surface
-    #[cfg(wgpu_core)]
-    pub unsafe fn as_hal<A: hal::Api>(
+    #[cfg(jadix_wgpu_wgpu_core)]
+    pub unsafe fn as_hal<A: crate::__hal::Api>(
         &self,
     ) -> Option<impl Deref<Target = A::Surface> + WasmNotSendSync> {
         let core_surface = self.inner.as_core_opt()?;
@@ -238,7 +238,7 @@ impl Surface<'_> {
         unsafe { core_surface.context.surface_as_hal::<A>(core_surface) }
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of Surface (if custom backend and is internally T)
     pub fn as_custom<T: custom::SurfaceInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -264,7 +264,7 @@ impl fmt::Debug for Surface<'_> {
     }
 }
 
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(Surface<'_>: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(Surface<'_> => .inner);
@@ -324,7 +324,7 @@ pub enum SurfaceTarget<'window> {
     ///
     /// - On WebGL2: surface creation will return an error if the browser does not support WebGL2,
     ///   or declines to provide GPU access (such as due to a resource shortage).
-    #[cfg(web)]
+    #[cfg(jadix_wgpu_web)]
     Canvas(web_sys::HtmlCanvasElement),
 
     /// Surface from a `web_sys::OffscreenCanvas`.
@@ -336,7 +336,7 @@ pub enum SurfaceTarget<'window> {
     ///
     /// - On WebGL2: surface creation will return an error if the browser does not support WebGL2,
     ///   or declines to provide GPU access (such as due to a resource shortage).
-    #[cfg(web)]
+    #[cfg(jadix_wgpu_web)]
     OffscreenCanvas(web_sys::OffscreenCanvas),
 }
 
@@ -345,9 +345,9 @@ impl fmt::Debug for SurfaceTarget<'_> {
         match self {
             Self::DisplayAndWindow(_) => f.debug_tuple("DisplayAndWindow").finish_non_exhaustive(),
             Self::Window(_) => f.debug_tuple("Window").finish_non_exhaustive(),
-            #[cfg(web)]
+            #[cfg(jadix_wgpu_web)]
             Self::Canvas(canvas) => f.debug_tuple("Canvas").field(canvas).finish(),
-            #[cfg(web)]
+            #[cfg(jadix_wgpu_web)]
             Self::OffscreenCanvas(canvas) => {
                 f.debug_tuple("OffscreenCanvas").field(canvas).finish()
             }
@@ -411,7 +411,7 @@ pub enum SurfaceTargetUnsafe {
     ///
     /// - All parameters must point to valid DRM values and remain valid for as long as the resulting [`Surface`] exists.
     /// - The file descriptor (`fd`), plane, connector, and mode configuration must be valid and compatible.
-    #[cfg(drm)]
+    #[cfg(jadix_wgpu_drm)]
     Drm {
         /// The file descriptor of the DRM device.
         fd: i32,
@@ -432,7 +432,7 @@ pub enum SurfaceTargetUnsafe {
     /// # Safety
     ///
     /// - layer must be a valid object to create a surface upon.
-    #[cfg(metal)]
+    #[cfg(jadix_wgpu_metal)]
     CoreAnimationLayer(*mut core::ffi::c_void),
 
     /// Surface from `IDCompositionVisual`.
@@ -440,7 +440,7 @@ pub enum SurfaceTargetUnsafe {
     /// # Safety
     ///
     /// - visual must be a valid `IDCompositionVisual` to create a surface upon.  Its refcount will be incremented internally and kept live as long as the resulting [`Surface`] is live.
-    #[cfg(dx12)]
+    #[cfg(jadix_wgpu_dx12)]
     CompositionVisual(*mut core::ffi::c_void),
 
     /// Surface from DX12 `DirectComposition` handle.
@@ -451,7 +451,7 @@ pub enum SurfaceTargetUnsafe {
     ///
     /// - surface_handle must be a valid `DirectComposition` handle to create a surface upon.   Its lifetime **will not** be internally managed: this handle **should not** be freed before
     ///   the resulting [`Surface`] is destroyed.
-    #[cfg(dx12)]
+    #[cfg(jadix_wgpu_dx12)]
     SurfaceHandle(*mut core::ffi::c_void),
 
     /// Surface from DX12 `SwapChainPanel`.
@@ -459,7 +459,7 @@ pub enum SurfaceTargetUnsafe {
     /// # Safety
     ///
     /// - visual must be a valid SwapChainPanel to create a surface upon.  Its refcount will be incremented internally and kept live as long as the resulting [`Surface`] is live.
-    #[cfg(dx12)]
+    #[cfg(jadix_wgpu_dx12)]
     SwapChainPanel(*mut core::ffi::c_void),
 }
 
@@ -510,11 +510,11 @@ pub struct CreateSurfaceError {
 #[derive(Clone, Debug)]
 pub(crate) enum CreateSurfaceErrorKind {
     /// Error from [`wgpu_hal`].
-    #[cfg(wgpu_core)]
-    Hal(wgc::instance::CreateSurfaceError),
+    #[cfg(jadix_wgpu_wgpu_core)]
+    Hal(crate::__core::instance::CreateSurfaceError),
 
     /// Error from WebGPU surface creation.
-    #[cfg_attr(not(webgpu), expect(dead_code))]
+    #[cfg_attr(not(jadix_wgpu_webgpu), expect(dead_code))]
     Web(String),
 
     /// Error when trying to get a [`RawDisplayHandle`][rdh] or a
@@ -529,7 +529,7 @@ static_assertions::assert_impl_all!(CreateSurfaceError: Send, Sync);
 impl fmt::Display for CreateSurfaceError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.inner {
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             CreateSurfaceErrorKind::Hal(e) => e.fmt(f),
             CreateSurfaceErrorKind::Web(e) => e.fmt(f),
             CreateSurfaceErrorKind::RawHandle(e) => e.fmt(f),
@@ -540,20 +540,20 @@ impl fmt::Display for CreateSurfaceError {
 impl error::Error for CreateSurfaceError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match &self.inner {
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             CreateSurfaceErrorKind::Hal(e) => e.source(),
             CreateSurfaceErrorKind::Web(_) => None,
-            #[cfg(feature = "std")]
+            #[cfg(jadix_wgpu_feature_std)]
             CreateSurfaceErrorKind::RawHandle(e) => e.source(),
-            #[cfg(not(feature = "std"))]
+            #[cfg(not(jadix_wgpu_feature_std))]
             CreateSurfaceErrorKind::RawHandle(_) => None,
         }
     }
 }
 
-#[cfg(wgpu_core)]
-impl From<wgc::instance::CreateSurfaceError> for CreateSurfaceError {
-    fn from(e: wgc::instance::CreateSurfaceError) -> Self {
+#[cfg(jadix_wgpu_wgpu_core)]
+impl From<crate::__core::instance::CreateSurfaceError> for CreateSurfaceError {
+    fn from(e: crate::__core::instance::CreateSurfaceError) -> Self {
         Self {
             inner: CreateSurfaceErrorKind::Hal(e),
         }

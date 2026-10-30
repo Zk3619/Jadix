@@ -38,3 +38,9 @@ wgpu = { package = "jadix_wgpu", version = "=30.0.0" }
 ## 许可证
 
 MIT OR Apache-2.0。保留 [LICENSE.APACHE](LICENSE.APACHE), [LICENSE.MIT](LICENSE.MIT) 及依赖的来源声明。
+
+## 发布边界
+
+Core、HAL、公共类型、Naga 桥接及修改后的 Naga 以模块随本包一起发布；平台 feature 辅助包收进本包配置。底层集成使用 `wgpu::hal`、`wgpu::naga`，不再依赖独立的 `jadix_wgpu_*`／`jadix_naga` 包。原始许可和补丁记录保留在 `upstream/`。
+
+使用工作区锁定的 `web-sys 0.3.91` 构建 WebGPU/WebGL 时，设置 `RUSTFLAGS="--cfg web_sys_unstable_apis"` 以启用其 `VideoFrame` 绑定。较新的 `web-sys` 版本可能已直接公开这些绑定。

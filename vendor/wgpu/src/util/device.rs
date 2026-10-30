@@ -1,6 +1,6 @@
 use alloc::borrow::ToOwned as _;
 
-use wgt::TextureDataOrder;
+use crate::__types::TextureDataOrder;
 
 /// Describes a [Buffer](crate::Buffer) when allocating.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -11,7 +11,7 @@ pub struct BufferInitDescriptor<'a> {
     pub contents: &'a [u8],
     /// Usages of a buffer. If the buffer is used in any way that isn't specified here, the operation
     /// will panic.
-    pub usage: wgt::BufferUsages,
+    pub usage: crate::__types::BufferUsages,
 }
 
 /// Utility methods not meant to be in the main API.
@@ -120,7 +120,7 @@ impl DeviceExt for crate::Device {
 
                 let mut mip_size = desc.mip_level_size(mip).unwrap();
                 // copying layers separately
-                if desc.dimension != wgt::TextureDimension::D3 {
+                if desc.dimension != crate::__types::TextureDimension::D3 {
                     mip_size.depth_or_array_layers = 1;
                 }
 
@@ -148,7 +148,7 @@ impl DeviceExt for crate::Device {
                             y: 0,
                             z: layer,
                         },
-                        aspect: wgt::TextureAspect::All,
+                        aspect: crate::__types::TextureAspect::All,
                     },
                     &data[binary_offset..end_offset],
                     crate::TexelCopyBufferLayout {

@@ -1,6 +1,6 @@
 use core::ops::Range;
 
-use wgt::{BufferAddress, DynamicOffset, IndexFormat};
+use crate::__types::{BufferAddress, DynamicOffset, IndexFormat};
 
 use crate::{BindGroup, Buffer, BufferSlice, RenderBundleEncoder, RenderPass, RenderPipeline};
 

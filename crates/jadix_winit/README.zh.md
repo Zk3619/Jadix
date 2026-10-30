@@ -32,3 +32,7 @@ jadix_winit = "=0.31.0-beta.3-jadix.1"
 ## 许可证
 
 Apache-2.0。保留 [LICENSE](LICENSE) 及依赖的来源声明。
+
+## 发布边界
+
+核心类型和各平台后端以内部模块随本包一起发布，不再独立发布 `jadix_winit_*` 后端包。原始来源、许可证和平台补丁记录保留在 `upstream/`。

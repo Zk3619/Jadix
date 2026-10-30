@@ -14,7 +14,7 @@ Gallery 的 debug 构建默认启用 `devtools`、`hot-reload`。Release 构建�
 
 ## 热更新与源码保存
 
-在仓库根目录分别运行 `cargo run -p gallery` 与 `cargo run -p jadix_hot_reload_cli -- .`。监听器和 Gallery 的 `JADIX_HOT_RELOAD_ADDR` 必须一致。
+在仓库根目录分别运行 `cargo run -p gallery` 与 `cargo run -p jadix_hot_reload --features cli --bin jadix-hot-reload -- .`。监听器和 Gallery 的 `JADIX_HOT_RELOAD_ADDR` 必须一致。
 
 静态文字、受支持的属性增改删、class、动画参数及已登记有限结构可在 UI 安全点提交；Rust 执行逻辑、新捕获、未编译类型与未知结构要求重新构建。Changes 显示实际版本事务与提交结果，不把 TCP 发送成功作为 UI 已更新。
 
@@ -61,13 +61,13 @@ Gallery「导航 / 窗口」第一张卡片验证启动参数、双向消息和�
 
 默认通过 Cargo 定位整个 workspace，不再限定 crates/examples。默认跳过 target、.git、.tmp、.codegraph、node_modules、reference。旧式 `ROOT ADDR` 参数继续支持。
 
-`cargo run -p jadix_hot_reload_cli -- --root . --watch examples/gallery --watch crates/jadix/src --exclude crates/jadix/src/platform`
+`cargo run -p jadix_hot_reload --features cli --bin jadix-hot-reload -- --root . --watch examples/gallery --watch crates/jadix/src --exclude crates/jadix/src/platform`
 
 `--watch` 和 `--exclude` 可重复，路径相对 root，监听路径必须在 root 内。也可用 `JADIX_HOT_RELOAD_ROOT`、`JADIX_HOT_RELOAD_WATCH`（平台路径列表分隔符）和 `JADIX_HOT_RELOAD_ADDR` 配置。
 
 要自动退出、重新构建并启动 Gallery，只运行以下命令，不再另外启动 Gallery：
 
-`cargo run -p jadix_hot_reload_cli -- --run -- cargo run -p gallery`
+`cargo run -p jadix_hot_reload --features cli --bin jadix-hot-reload -- --run -- cargo run -p gallery`
 
 托管器和 ui! 适配使用同一描述与能力签名。已登记的静态文本、支持的字面量属性增删、class 重算、animation/transition 参数和有限结构走版本化事务；属性删除恢复构造时声明基线。基础结构支持 Box、VStack、HStack、GStack、Text 及显式登记的无捕获工厂；不变 Rust 子树作为编译槽位移动，闭包不重复执行。新类型、未登记结构、改变闭包或捕获、Cargo.toml/Cargo.lock 仍要求重建。仅 `--run` 或 TOML 的 `run` 模式停止它启动的进程；非托管模式只报告需要手动重建。TCP 发送成功不代表已提交，Changes 展示 UI 安全点返回的 ACK。
 
@@ -80,7 +80,7 @@ Gallery「导航 / 窗口」第一张卡片验证启动参数、双向消息和�
 
 监听器自动读取 Cargo 工作区根目录的 `jadix.dev.toml`，也可显式指定：
 
-`cargo run -p jadix_hot_reload_cli -- --config path/to/dev.toml`
+`cargo run -p jadix_hot_reload --features cli --bin jadix-hot-reload -- --config path/to/dev.toml`
 
 ```toml
 [hot-reload]

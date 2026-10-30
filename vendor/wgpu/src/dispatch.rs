@@ -31,11 +31,11 @@ use crate::{Blas, Tlas, WasmNotSend, WasmNotSendSync, WriteOnly};
 use alloc::{boxed::Box, string::String, sync::Arc, vec::Vec};
 use core::{any::Any, fmt::Debug, future::Future, hash::Hash, ops::Range, pin::Pin};
 
-#[cfg(custom)]
+#[cfg(jadix_wgpu_custom)]
 use crate::backend::custom::*;
-#[cfg(webgpu)]
+#[cfg(jadix_wgpu_webgpu)]
 use crate::backend::webgpu::*;
-#[cfg(wgpu_core)]
+#[cfg(jadix_wgpu_wgpu_core)]
 use crate::backend::wgpu_core::*;
 
 /// Create a single trait with the given supertraits and a blanket impl for all types that implement them.
@@ -49,33 +49,33 @@ macro_rules! trait_alias {
 }
 
 // Various return futures in the API.
-trait_alias!(RequestAdapterFuture: Future<Output = Result<DispatchAdapter, wgt::RequestAdapterError>> + WasmNotSend + 'static);
+trait_alias!(RequestAdapterFuture: Future<Output = Result<DispatchAdapter, crate::__types::RequestAdapterError>> + WasmNotSend + 'static);
 trait_alias!(RequestDeviceFuture: Future<Output = Result<(DispatchDevice, DispatchQueue), crate::RequestDeviceError>> + WasmNotSend + 'static);
 trait_alias!(PopErrorScopeFuture: Future<Output = Option<crate::Error>> + WasmNotSend + 'static);
 trait_alias!(ShaderCompilationInfoFuture: Future<Output = crate::CompilationInfo> + WasmNotSend + 'static);
 trait_alias!(EnumerateAdapterFuture: Future<Output = Vec<DispatchAdapter>> + WasmNotSend + 'static);
 
 // We can't use trait aliases here, as you can't convert from a dyn Trait to dyn Supertrait _yet_.
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 pub type BoxDeviceLostCallback = Box<dyn FnOnce(crate::DeviceLostReason, String) + Send + 'static>;
-#[cfg(not(send_sync))]
+#[cfg(not(jadix_wgpu_send_sync))]
 pub type BoxDeviceLostCallback = Box<dyn FnOnce(crate::DeviceLostReason, String) + 'static>;
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 pub type BoxSubmittedWorkDoneCallback = Box<dyn FnOnce() + Send + 'static>;
-#[cfg(not(send_sync))]
+#[cfg(not(jadix_wgpu_send_sync))]
 pub type BoxSubmittedWorkDoneCallback = Box<dyn FnOnce() + 'static>;
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 pub type BufferMapCallback = Box<dyn FnOnce(Result<(), crate::BufferAsyncError>) + Send + 'static>;
-#[cfg(not(send_sync))]
+#[cfg(not(jadix_wgpu_send_sync))]
 pub type BufferMapCallback = Box<dyn FnOnce(Result<(), crate::BufferAsyncError>) + 'static>;
 
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 pub type BlasCompactCallback = Box<dyn FnOnce(Result<(), crate::BlasAsyncError>) + Send + 'static>;
-#[cfg(not(send_sync))]
+#[cfg(not(jadix_wgpu_send_sync))]
 pub type BlasCompactCallback = Box<dyn FnOnce(Result<(), crate::BlasAsyncError>) + 'static>;
 
 // remove when rust 1.86
-#[cfg_attr(not(custom), expect(dead_code))]
+#[cfg_attr(not(jadix_wgpu_custom), expect(dead_code))]
 pub trait AsAny {
     fn as_any(&self) -> &dyn Any;
 }
@@ -106,7 +106,7 @@ pub trait InstanceInterface: CommonTraits {
 
     fn poll_all_devices(&self, force_wait: bool) -> bool;
 
-    #[cfg(feature = "wgsl")]
+    #[cfg(jadix_wgpu_feature_wgsl)]
     fn wgsl_language_features(&self) -> crate::WgslLanguageFeatures;
 
     fn enumerate_adapters(&self, backends: crate::Backends)
@@ -214,7 +214,10 @@ pub trait DeviceInterface: CommonTraits {
     unsafe fn start_graphics_debugger_capture(&self);
     unsafe fn stop_graphics_debugger_capture(&self);
 
-    fn poll(&self, poll_type: wgt::PollType<u64>) -> Result<crate::PollStatus, crate::PollError>;
+    fn poll(
+        &self,
+        poll_type: crate::__types::PollType<u64>,
+    ) -> Result<crate::PollStatus, crate::PollError>;
 
     fn get_internal_counters(&self) -> crate::InternalCounters;
     fn generate_allocator_report(&self) -> Option<crate::AllocatorReport>;
@@ -246,7 +249,7 @@ pub trait QueueInterface: CommonTraits {
         data_layout: crate::TexelCopyBufferLayout,
         size: crate::Extent3d,
     );
-    #[cfg(web)]
+    #[cfg(jadix_wgpu_web)]
     fn copy_external_image_to_texture(
         &self,
         source: &crate::CopyExternalImageSourceInfo,
@@ -385,8 +388,12 @@ pub trait CommandEncoderInterface: CommonTraits {
 
     fn transition_resources<'a>(
         &mut self,
-        buffer_transitions: &mut dyn Iterator<Item = wgt::BufferTransition<&'a DispatchBuffer>>,
-        texture_transitions: &mut dyn Iterator<Item = wgt::TextureTransition<&'a DispatchTexture>>,
+        buffer_transitions: &mut dyn Iterator<
+            Item = crate::__types::BufferTransition<&'a DispatchBuffer>,
+        >,
+        texture_transitions: &mut dyn Iterator<
+            Item = crate::__types::TextureTransition<&'a DispatchTexture>,
+        >,
     );
 }
 pub trait ComputePassInterface: CommonTraits + Drop {
@@ -416,9 +423,11 @@ pub trait ComputePassInterface: CommonTraits + Drop {
 
     fn transition_resources<'a>(
         &mut self,
-        buffer_transitions: &mut dyn Iterator<Item = wgt::BufferTransition<&'a DispatchBuffer>>,
+        buffer_transitions: &mut dyn Iterator<
+            Item = crate::__types::BufferTransition<&'a DispatchBuffer>,
+        >,
         texture_transitions: &mut dyn Iterator<
-            Item = wgt::TextureTransition<&'a DispatchTextureView>,
+            Item = crate::__types::TextureTransition<&'a DispatchTextureView>,
         >,
     );
 }
@@ -584,7 +593,7 @@ pub trait RenderBundleEncoderInterface: CommonTraits {
     ///     (*self).finish(desc)
     /// }
     /// ```
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     fn finish_boxed(
         self: Box<Self>,
         desc: &crate::RenderBundleDescriptor<'_>,
@@ -632,7 +641,7 @@ pub trait QueueWriteBufferInterface: CommonTraits {
 
 pub trait BufferMappedRangeInterface: CommonTraits {
     // Used only in wgpu_core's `impl QueueWriteBufferInterface`
-    #[cfg_attr(not(wgpu_core), expect(unused))]
+    #[cfg_attr(not(jadix_wgpu_wgpu_core), expect(unused))]
     fn len(&self) -> usize;
 
     /// # Safety
@@ -645,7 +654,7 @@ pub trait BufferMappedRangeInterface: CommonTraits {
     /// Must only be used on write, not read, mappings.
     unsafe fn write_slice(&mut self) -> WriteOnly<'_, [u8]>;
 
-    #[cfg(webgpu)]
+    #[cfg(jadix_wgpu_webgpu)]
     fn as_uint8array(&self) -> &js_sys::Uint8Array;
 }
 
@@ -687,11 +696,11 @@ pub trait BufferMappedRangeInterface: CommonTraits {
 ///
 /// ```ignore
 /// pub enum DispatchBuffer {
-///     #[cfg(wgpu_core)]
+///     #[cfg(jadix_wgpu_wgpu_core)]
 ///     Core(Arc<CoreBuffer>),
-///     #[cfg(webgpu)]
+///     #[cfg(jadix_wgpu_webgpu)]
 ///     WebGPU(WebBuffer),
-///     #[cfg(custom)]
+///     #[cfg(jadix_wgpu_custom)]
 ///     Custom(DynBuffer),
 /// }
 /// ```
@@ -726,17 +735,17 @@ macro_rules! dispatch_types {
     ) => {
         #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
         pub enum $name {
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             Core(Arc<$core_type>),
-            #[cfg(webgpu)]
+            #[cfg(jadix_wgpu_webgpu)]
             WebGPU($webgpu_type),
             #[allow(clippy::allow_attributes, private_interfaces)]
-            #[cfg(custom)]
+            #[cfg(jadix_wgpu_custom)]
             Custom($custom_type),
         }
 
         impl $name {
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_core(&self) -> &$core_type {
@@ -746,7 +755,7 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_core_opt(&self) -> Option<&$core_type> {
@@ -756,7 +765,7 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(custom)]
+            #[cfg(jadix_wgpu_custom)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_custom<T: $interface>(&self) -> Option<&T> {
@@ -766,7 +775,7 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(webgpu)]
+            #[cfg(jadix_wgpu_webgpu)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_webgpu(&self) -> &$webgpu_type {
@@ -776,7 +785,7 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(webgpu)]
+            #[cfg(jadix_wgpu_webgpu)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_webgpu_opt(&self) -> Option<&$webgpu_type> {
@@ -786,14 +795,14 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(custom)]
+            #[cfg(jadix_wgpu_custom)]
             #[inline]
             pub fn custom<T: $interface>(t: T) -> Self {
                 Self::Custom($custom_type::new(t))
             }
         }
 
-        #[cfg(wgpu_core)]
+        #[cfg(jadix_wgpu_wgpu_core)]
         impl From<$core_type> for $name {
             #[inline]
             fn from(value: $core_type) -> Self {
@@ -801,7 +810,7 @@ macro_rules! dispatch_types {
             }
         }
 
-        #[cfg(webgpu)]
+        #[cfg(jadix_wgpu_webgpu)]
         impl From<$webgpu_type> for $name {
             #[inline]
             fn from(value: $webgpu_type) -> Self {
@@ -815,13 +824,13 @@ macro_rules! dispatch_types {
             #[inline]
             fn deref(&self) -> &Self::Target {
                 match self {
-                    #[cfg(wgpu_core)]
+                    #[cfg(jadix_wgpu_wgpu_core)]
                     Self::Core(value) => value.as_ref(),
-                    #[cfg(webgpu)]
+                    #[cfg(jadix_wgpu_webgpu)]
                     Self::WebGPU(value) => value,
-                    #[cfg(custom)]
+                    #[cfg(jadix_wgpu_custom)]
                     Self::Custom(value) => value.deref(),
-                    #[cfg(not(any(wgpu_core, webgpu)))]
+                    #[cfg(not(any(jadix_wgpu_wgpu_core, jadix_wgpu_webgpu)))]
                     _ => panic!("No context available. You need to enable one of wgpu's backend feature build flags."),
                 }
             }
@@ -832,17 +841,17 @@ macro_rules! dispatch_types {
     ) => {
         #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub enum $name {
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             Core($core_type),
-            #[cfg(webgpu)]
+            #[cfg(jadix_wgpu_webgpu)]
             WebGPU($webgpu_type),
             #[allow(clippy::allow_attributes, private_interfaces)]
-            #[cfg(custom)]
+            #[cfg(jadix_wgpu_custom)]
             Custom($custom_type),
         }
 
         impl $name {
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_core(&self) -> &$core_type {
@@ -852,7 +861,7 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_core_mut(&mut self) -> &mut $core_type {
@@ -862,7 +871,7 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_core_opt(&self) -> Option<&$core_type> {
@@ -872,7 +881,7 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_core_mut_opt(
@@ -884,7 +893,7 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(custom)]
+            #[cfg(jadix_wgpu_custom)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_custom<T: $interface>(&self) -> Option<&T> {
@@ -894,7 +903,7 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(webgpu)]
+            #[cfg(jadix_wgpu_webgpu)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_webgpu(&self) -> &$webgpu_type {
@@ -904,7 +913,7 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(webgpu)]
+            #[cfg(jadix_wgpu_webgpu)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_webgpu_mut(&mut self) -> &mut $webgpu_type {
@@ -914,7 +923,7 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(webgpu)]
+            #[cfg(jadix_wgpu_webgpu)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_webgpu_opt(&self) -> Option<&$webgpu_type> {
@@ -924,7 +933,7 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(webgpu)]
+            #[cfg(jadix_wgpu_webgpu)]
             #[inline]
             #[allow(clippy::allow_attributes, unused)]
             pub fn as_webgpu_mut_opt(
@@ -936,14 +945,14 @@ macro_rules! dispatch_types {
                 }
             }
 
-            #[cfg(custom)]
+            #[cfg(jadix_wgpu_custom)]
             #[inline]
             pub fn custom<T: $interface>(t: T) -> Self {
                 Self::Custom($custom_type::new(t))
             }
         }
 
-        #[cfg(wgpu_core)]
+        #[cfg(jadix_wgpu_wgpu_core)]
         impl From<$core_type> for $name {
             #[inline]
             fn from(value: $core_type) -> Self {
@@ -951,7 +960,7 @@ macro_rules! dispatch_types {
             }
         }
 
-        #[cfg(webgpu)]
+        #[cfg(jadix_wgpu_webgpu)]
         impl From<$webgpu_type> for $name {
             #[inline]
             fn from(value: $webgpu_type) -> Self {
@@ -965,13 +974,13 @@ macro_rules! dispatch_types {
             #[inline]
             fn deref(&self) -> &Self::Target {
                 match self {
-                    #[cfg(wgpu_core)]
+                    #[cfg(jadix_wgpu_wgpu_core)]
                     Self::Core(value) => value,
-                    #[cfg(webgpu)]
+                    #[cfg(jadix_wgpu_webgpu)]
                     Self::WebGPU(value) => value,
-                    #[cfg(custom)]
+                    #[cfg(jadix_wgpu_custom)]
                     Self::Custom(value) => value.deref(),
-                    #[cfg(not(any(wgpu_core, webgpu)))]
+                    #[cfg(not(any(jadix_wgpu_wgpu_core, jadix_wgpu_webgpu)))]
                     _ => panic!("No context available. You need to enable one of wgpu's backend feature build flags."),
                 }
             }
@@ -981,13 +990,13 @@ macro_rules! dispatch_types {
             #[inline]
             fn deref_mut(&mut self) -> &mut Self::Target {
                 match self {
-                    #[cfg(wgpu_core)]
+                    #[cfg(jadix_wgpu_wgpu_core)]
                     Self::Core(value) => value,
-                    #[cfg(webgpu)]
+                    #[cfg(jadix_wgpu_webgpu)]
                     Self::WebGPU(value) => value,
-                    #[cfg(custom)]
+                    #[cfg(jadix_wgpu_custom)]
                     Self::Custom(value) => value.deref_mut(),
-                    #[cfg(not(any(wgpu_core, webgpu)))]
+                    #[cfg(not(any(jadix_wgpu_wgpu_core, jadix_wgpu_webgpu)))]
                     _ => panic!("No context available. You need to enable one of wgpu's backend feature build flags."),
                 }
             }

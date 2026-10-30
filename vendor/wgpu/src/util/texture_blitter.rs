@@ -1,6 +1,6 @@
-#![cfg(feature = "wgsl")]
+#![cfg(jadix_wgpu_feature_wgsl)]
 
-use wgt::BlendState;
+use crate::__types::BlendState;
 
 use crate::{
     include_wgsl, AddressMode, BindGroupDescriptor, BindGroupEntry, BindGroupLayout,
@@ -116,7 +116,7 @@ impl<'a> TextureBlitterBuilder<'a> {
                     front_face: FrontFace::Ccw,
                     cull_mode: None,
                     unclipped_depth: false,
-                    polygon_mode: wgt::PolygonMode::Fill,
+                    polygon_mode: crate::__types::PolygonMode::Fill,
                     conservative: false,
                 },
                 depth_stencil: None,
@@ -203,7 +203,7 @@ impl TextureBlitter {
                 view: target,
                 depth_slice: None,
                 resolve_target: None,
-                ops: wgt::Operations {
+                ops: crate::__types::Operations {
                     load: LoadOp::Load,
                     store: StoreOp::Store,
                 },

@@ -32,3 +32,7 @@ The existing [package guide](GUIDE.md) retains additional API, platform and sour
 ## License
 
 Apache-2.0. Preserve [LICENSE](LICENSE) and dependency notices.
+
+## Distribution
+
+Core types and all platform implementations ship as modules in this one package. There are no separately released `jadix_winit_*` backend packages. Original source identities, licenses and native patch notes are included under `upstream/`.

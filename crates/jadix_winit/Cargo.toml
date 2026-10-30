@@ -1,73 +1,555 @@
-[package]
-name = "jadix_winit"
-version = "0.31.0-beta.3-jadix.1"
-edition = "2024"
-rust-version = "1.88"
-license = "Apache-2.0"
-repository.workspace = true
-description = "Jadix's Winit facade fork with a unified OpenHarmony backend"
-readme = "README.md"
-[features]
-default = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"]
-android-game-activity = ["winit-android/game-activity"]
-android-native-activity = ["winit-android/native-activity"]
-mint = ["dpi/mint"]
-private-apple-apis = ["winit-appkit/private-apple-apis"]
-serde = ["dep:serde", "cursor-icon/serde", "smol_str/serde", "dpi/serde", "bitflags/serde", "winit-core/serde", "winit-uikit/serde"]
-wayland = ["dep:winit-wayland"]
-wayland-csd-adwaita = ["winit-wayland/csd-adwaita"]
-wayland-csd-adwaita-cosmic-text = ["winit-wayland/csd-adwaita-cosmic-text"]
-wayland-csd-adwaita-crossfont = ["winit-wayland/csd-adwaita-crossfont"]
-wayland-csd-adwaita-notitle = ["winit-wayland/csd-adwaita-notitle"]
-wayland-csd-adwaita-notitlebar = ["winit-wayland/csd-adwaita-notitlebar"]
-wayland-csd-adwaita-skrifa = ["winit-wayland/csd-adwaita-skrifa"]
-wayland-dlopen = ["winit-wayland/dlopen"]
-x11 = ["dep:winit-x11"]
-ohos-window-plugin = ["winit-ohos/plugin-window"]
-ohos-native-vsync = ["winit-ohos/native-vsync"]
-ohos-extended-plugins = ["winit-ohos/extended-plugins"]
+["package"]
+"name" = "jadix_winit"
+"version" = "0.31.0-beta.3-jadix.1"
+"edition" = "2024"
+"rust-version" = "1.88"
+"license" = "Apache-2.0"
+"description" = "Jadix's Winit facade fork with a unified OpenHarmony backend"
+"readme" = "README.md"
 
-[build-dependencies]
-cfg_aliases = "0.2.2"
+["package"."repository"]
+"workspace" = true
 
-[dependencies]
-bitflags = "2"
-cursor-icon = "1.1"
-dpi = { "version" = "=0.1.2" }
-rwh_06 = { package = "raw-window-handle", version = "0.6", features = ["std"] }
-serde = { version = "1", features = ["serde_derive"], optional = true }
-smol_str = "0.3"
-tracing = { version = "0.1.40", default-features = false }
-winit-core = { "package" = "jadix_winit_core", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-core" }
+["features"]
+"default" = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"]
+"android-game-activity" = ["android-activity/game-activity"]
+"android-native-activity" = ["android-activity/native-activity"]
+"mint" = ["dpi/mint"]
+"private-apple-apis" = []
+"serde" = ["dep:serde", "cursor-icon/serde", "smol_str/serde", "dpi/serde", "bitflags/serde", "keyboard-types/serde"]
+"wayland" = []
+"wayland-csd-adwaita" = ["sctk-adwaita", "sctk-adwaita/ab_glyph"]
+"wayland-csd-adwaita-cosmic-text" = ["sctk-adwaita", "sctk-adwaita/cosmic-text"]
+"wayland-csd-adwaita-crossfont" = ["sctk-adwaita", "sctk-adwaita/crossfont"]
+"wayland-csd-adwaita-notitle" = ["sctk-adwaita"]
+"wayland-csd-adwaita-notitlebar" = ["sctk-adwaita"]
+"wayland-csd-adwaita-skrifa" = ["sctk-adwaita", "sctk-adwaita/skrifa"]
+"wayland-dlopen" = ["wayland-backend/dlopen"]
+"x11" = []
+"ohos-window-plugin" = []
+"ohos-native-vsync" = ["dep:ohos-vsync-binding"]
+"ohos-extended-plugins" = ["dep:openharmony-ability-plugin-menu", "dep:openharmony-ability-plugin-notification", "dep:openharmony-ability-plugin-process", "dep:openharmony-ability-plugin-system-state", "dep:openharmony-ability-plugin-accessibility", "dep:crossbeam-channel"]
 
-[target.'cfg(target_os = "android")'.dependencies]
-winit-android = { "package" = "jadix_winit_android", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-android" }
+["build-dependencies"]
+"cfg_aliases" = "0.2.2"
 
-[target.'cfg(target_env = "ohos")'.dependencies]
-winit-ohos = { "package" = "jadix_winit_ohos", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-ohos" }
+["dependencies"."bitflags"]
+"workspace" = true
+"features" = []
 
-[target.'cfg(target_os = "macos")'.dependencies]
-winit-appkit = { "package" = "jadix_winit_appkit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-appkit" }
-objc2 = { workspace = true }
-objc2-foundation = { workspace = true, features = ["std", "NSUserDefaults", "NSString", "NSGeometry"] }
-objc2-app-kit = { workspace = true, default-features = true, features = ["std", "NSWindow", "NSView", "NSButton", "NSControl", "NSResponder"] }
+["dependencies"."cursor-icon"]
+"workspace" = true
+"features" = []
 
-[target.'cfg(all(target_vendor = "apple", not(target_os = "macos")))'.dependencies]
-winit-uikit = { "package" = "jadix_winit_uikit", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-uikit" }
+["dependencies"."dpi"]
+"workspace" = true
+"features" = []
 
-[target.'cfg(target_os = "windows")'.dependencies]
-winit-win32 = { "package" = "jadix_winit_win32", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-win32" }
-windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_UI_WindowsAndMessaging"] }
+["dependencies"."keyboard-types"]
+"version" = "0.8.0"
 
-[target.'cfg(all(unix, not(any(target_os = "redox", target_family = "wasm", target_os = "android", target_vendor = "apple", target_env = "ohos"))))'.dependencies]
-libc = { workspace = true }
-rustix = { version = "1.0.7", default-features = false, features = ["std", "thread"] }
-winit-common = { "package" = "jadix_winit_common", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-common", "features" = ["xkb"] }
-winit-wayland = { "package" = "jadix_winit_wayland", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-wayland", "optional" = true, "default-features" = false }
-winit-x11 = { "package" = "jadix_winit_x11", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-x11", "optional" = true }
+["dependencies"."rwh_06"]
+"workspace" = true
+"features" = ["std"]
 
-[target.'cfg(target_os = "redox")'.dependencies]
-winit-orbital = { "package" = "jadix_winit_orbital", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-orbital" }
+["dependencies"."serde"]
+"version" = "1"
+"features" = ["serde_derive"]
+"optional" = true
 
-[target.'cfg(target_family = "wasm")'.dependencies]
-winit-web = { "package" = "jadix_winit_web", "version" = "=0.31.0-beta.3-jadix.1", "path" = "../../vendor/winit-web" }
+["dependencies"."smol_str"]
+"workspace" = true
+"features" = []
+
+["dependencies"."tracing"]
+"workspace" = true
+"default-features" = false
+
+["target"."cfg(all(target_family = \"wasm\", any(target_os = \"unknown\", target_os = \"none\")))"."dependencies"."web-time"]
+"version" = "1"
+
+["target"."cfg(any(target_os = \"windows\", target_vendor = \"apple\", all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\")))))"."dependencies"."dpi"]
+"workspace" = true
+
+["target"."cfg(any(target_os = \"windows\", target_vendor = \"apple\", all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\")))))"."dependencies"."smol_str"]
+"workspace" = true
+
+["target"."cfg(any(target_os = \"windows\", target_vendor = \"apple\", all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\")))))"."dependencies"."tracing"]
+"workspace" = true
+"default-features" = false
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."memmap2"]
+"version" = "0.9.0"
+"features" = []
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."x11-dl"]
+"version" = "2.19.1"
+"features" = []
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."xkbcommon-dl"]
+"version" = "0.4.2"
+"features" = ["x11"]
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."bitflags"]
+"workspace" = true
+"features" = []
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."cursor-icon"]
+"workspace" = true
+"features" = []
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."percent-encoding"]
+"workspace" = true
+"features" = []
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."smol_str"]
+"workspace" = true
+"features" = []
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."calloop"]
+"version" = "0.14.3"
+"features" = []
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."libc"]
+"workspace" = true
+"features" = []
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."wayland-client"]
+"version" = "0.31.10"
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."dpi"]
+"workspace" = true
+"features" = []
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."rwh_06"]
+"workspace" = true
+"features" = ["std"]
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."serde"]
+"version" = "1"
+"features" = ["serde_derive"]
+"optional" = true
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."tracing"]
+"workspace" = true
+"default-features" = false
+"features" = []
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."foldhash"]
+"version" = "0.2"
+"default-features" = false
+"features" = ["std"]
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."rustix"]
+"version" = "1.0.7"
+"default-features" = false
+"features" = ["event", "pipe", "process", "std", "system", "thread"]
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."sctk"]
+"package" = "smithay-client-toolkit"
+"version" = "0.21.0"
+"default-features" = false
+"features" = ["calloop"]
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."sctk-adwaita"]
+"version" = "0.12.0"
+"default-features" = false
+"optional" = true
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."wayland-backend"]
+"version" = "0.3.10"
+"default-features" = false
+"features" = ["client_system"]
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."wayland-protocols"]
+"version" = "0.32.12"
+"features" = ["staging", "unstable"]
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."wayland-protocols-plasma"]
+"version" = "0.3.8"
+"features" = ["client"]
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."bytemuck"]
+"workspace" = true
+"default-features" = false
+
+["target"."cfg(all(unix, not(any(target_os = \"redox\", target_family = \"wasm\", target_os = \"android\", target_vendor = \"apple\", target_env = \"ohos\"))))"."dependencies"."x11rb"]
+"workspace" = true
+"default-features" = false
+"features" = ["allow-unsafe-code", "cursor", "dl-libxcb", "randr", "resource_manager", "sync", "xinput", "xkb"]
+
+["target"."cfg(target_vendor = \"apple\")"."dependencies"."block2"]
+"workspace" = true
+
+["target"."cfg(target_vendor = \"apple\")"."dependencies"."objc2"]
+"workspace" = true
+"features" = ["relax-sign-encoding"]
+
+["target"."cfg(target_vendor = \"apple\")"."dependencies"."objc2-core-foundation"]
+"workspace" = true
+"default-features" = false
+"features" = ["std", "block2", "objc2", "CFRunLoop", "CFString"]
+
+["target"."cfg(target_vendor = \"apple\")"."dependencies"."objc2-foundation"]
+"workspace" = true
+"default-features" = false
+"features" = ["std", "block2", "NSNotification", "NSString", "NSOperation"]
+
+["target"."cfg(target_os = \"windows\")"."dependencies"."bitflags"]
+"workspace" = true
+
+["target"."cfg(target_os = \"windows\")"."dependencies"."cursor-icon"]
+"workspace" = true
+
+["target"."cfg(target_os = \"windows\")"."dependencies"."percent-encoding"]
+"workspace" = true
+
+["target"."cfg(target_os = \"windows\")"."dependencies"."smol_str"]
+"workspace" = true
+
+["target"."cfg(target_os = \"windows\")"."dependencies"."unicode-segmentation"]
+"workspace" = true
+
+["target"."cfg(target_os = \"windows\")"."dependencies"."dpi"]
+"workspace" = true
+
+["target"."cfg(target_os = \"windows\")"."dependencies"."rwh_06"]
+"workspace" = true
+"features" = ["std"]
+
+["target"."cfg(target_os = \"windows\")"."dependencies"."serde"]
+"version" = "1"
+"features" = ["serde_derive"]
+"optional" = true
+
+["target"."cfg(target_os = \"windows\")"."dependencies"."tracing"]
+"workspace" = true
+"default-features" = false
+
+["target"."cfg(target_os = \"windows\")"."dependencies"."windows-sys"]
+"workspace" = true
+"features" = ["Win32_Devices_HumanInterfaceDevice", "Win32_Foundation", "Win32_Globalization", "Win32_Graphics_Dwm", "Win32_Graphics_Gdi", "Win32_Media", "Win32_Security", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_DataExchange", "Win32_System_LibraryLoader", "Win32_System_Memory", "Win32_System_Ole", "Win32_System_SystemInformation", "Win32_System_SystemServices", "Win32_System_Threading", "Win32_System_WindowsProgramming", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Input_Pointer", "Win32_UI_Input_Touch", "Win32_UI_Shell", "Win32_UI_TextServices", "Win32_UI_WindowsAndMessaging"]
+
+["target"."cfg(target_os = \"android\")"."dependencies"."bitflags"]
+"workspace" = true
+
+["target"."cfg(target_os = \"android\")"."dependencies"."dpi"]
+"workspace" = true
+
+["target"."cfg(target_os = \"android\")"."dependencies"."rwh_06"]
+"workspace" = true
+"features" = ["std"]
+
+["target"."cfg(target_os = \"android\")"."dependencies"."serde"]
+"version" = "1"
+"features" = ["serde_derive"]
+"optional" = true
+
+["target"."cfg(target_os = \"android\")"."dependencies"."smol_str"]
+"workspace" = true
+
+["target"."cfg(target_os = \"android\")"."dependencies"."tracing"]
+"workspace" = true
+"default-features" = false
+
+["target"."cfg(all(target_os = \"android\", target_os = \"android\"))"."dependencies"."android-activity"]
+"version" = "0.6.0"
+
+["target"."cfg(all(target_os = \"android\", target_os = \"android\"))"."dependencies"."ndk"]
+"version" = "0.9.0"
+"features" = ["rwh_06"]
+"default-features" = false
+
+["target"."cfg(target_os = \"macos\")"."dependencies"."bitflags"]
+"workspace" = true
+
+["target"."cfg(target_os = \"macos\")"."dependencies"."dpi"]
+"workspace" = true
+
+["target"."cfg(target_os = \"macos\")"."dependencies"."rwh_06"]
+"workspace" = true
+"features" = ["std"]
+
+["target"."cfg(target_os = \"macos\")"."dependencies"."serde"]
+"version" = "1"
+"features" = ["serde_derive"]
+"optional" = true
+
+["target"."cfg(target_os = \"macos\")"."dependencies"."smol_str"]
+"workspace" = true
+
+["target"."cfg(target_os = \"macos\")"."dependencies"."tracing"]
+"workspace" = true
+"default-features" = false
+
+["target"."cfg(target_os = \"macos\")"."dependencies"."objc2"]
+"workspace" = true
+"features" = []
+
+["target"."cfg(target_os = \"macos\")"."dependencies"."objc2-foundation"]
+"workspace" = true
+"features" = ["std", "NSUserDefaults", "NSString", "NSGeometry"]
+
+["target"."cfg(target_os = \"macos\")"."dependencies"."objc2-app-kit"]
+"workspace" = true
+"default-features" = true
+"features" = ["std", "NSWindow", "NSView", "NSButton", "NSControl", "NSResponder"]
+
+["target"."cfg(all(target_os = \"macos\", target_vendor = \"apple\"))"."dependencies"."block2"]
+"workspace" = true
+
+["target"."cfg(all(target_os = \"macos\", target_vendor = \"apple\"))"."dependencies"."dispatch2"]
+"version" = "0.3.0"
+"default-features" = false
+"features" = ["std", "objc2"]
+
+["target"."cfg(all(target_os = \"macos\", target_vendor = \"apple\"))"."dependencies"."objc2"]
+"workspace" = true
+"features" = ["relax-sign-encoding"]
+
+["target"."cfg(all(target_os = \"macos\", target_vendor = \"apple\"))"."dependencies"."objc2-app-kit"]
+"workspace" = true
+"default-features" = false
+"features" = ["std", "objc2-core-foundation", "NSAppearance", "NSApplication", "NSBitmapImageRep", "NSButton", "NSColor", "NSControl", "NSCursor", "NSDragging", "NSDraggingItem", "NSDraggingSession", "NSEvent", "NSGraphics", "NSGraphicsContext", "NSImage", "NSImageRep", "NSMenu", "NSMenuItem", "NSOpenGLView", "NSPanel", "NSPasteboard", "NSPasteboardItem", "NSResponder", "NSRunningApplication", "NSScreen", "NSTextInputClient", "NSTextInputContext", "NSTrackingArea", "NSToolbar", "NSView", "NSVisualEffectView", "NSWindow", "NSWindowScripting", "NSWindowTabGroup"]
+
+["target"."cfg(all(target_os = \"macos\", target_vendor = \"apple\"))"."dependencies"."objc2-core-foundation"]
+"workspace" = true
+"default-features" = false
+"features" = ["std", "block2", "CFBase", "CFCGTypes", "CFData", "CFRunLoop", "CFString", "CFUUID"]
+
+["target"."cfg(all(target_os = \"macos\", target_vendor = \"apple\"))"."dependencies"."objc2-core-graphics"]
+"version" = "0.3.2"
+"default-features" = false
+"features" = ["std", "libc", "CGDirectDisplay", "CGDisplayConfiguration", "CGDisplayFade", "CGError", "CGRemoteOperation", "CGWindowLevel"]
+
+["target"."cfg(all(target_os = \"macos\", target_vendor = \"apple\"))"."dependencies"."objc2-core-video"]
+"version" = "0.3.2"
+"default-features" = false
+"features" = ["std", "objc2-core-graphics", "CVBase", "CVReturn", "CVDisplayLink"]
+
+["target"."cfg(all(target_os = \"macos\", target_vendor = \"apple\"))"."dependencies"."objc2-foundation"]
+"workspace" = true
+"default-features" = false
+"features" = ["std", "block2", "objc2-core-foundation", "NSArray", "NSAttributedString", "NSData", "NSDictionary", "NSDistributedNotificationCenter", "NSEnumerator", "NSGeometry", "NSKeyValueObserving", "NSNotification", "NSObjCRuntime", "NSOperation", "NSPathUtilities", "NSProcessInfo", "NSRunLoop", "NSString", "NSThread", "NSValue"]
+
+["target"."cfg(all(target_vendor = \"apple\", not(target_os = \"macos\")))"."dependencies"."bitflags"]
+"workspace" = true
+
+["target"."cfg(all(target_vendor = \"apple\", not(target_os = \"macos\")))"."dependencies"."dpi"]
+"workspace" = true
+
+["target"."cfg(all(target_vendor = \"apple\", not(target_os = \"macos\")))"."dependencies"."rwh_06"]
+"workspace" = true
+"features" = ["std"]
+
+["target"."cfg(all(target_vendor = \"apple\", not(target_os = \"macos\")))"."dependencies"."serde"]
+"version" = "1"
+"features" = ["serde_derive"]
+"optional" = true
+
+["target"."cfg(all(target_vendor = \"apple\", not(target_os = \"macos\")))"."dependencies"."smol_str"]
+"workspace" = true
+
+["target"."cfg(all(target_vendor = \"apple\", not(target_os = \"macos\")))"."dependencies"."tracing"]
+"workspace" = true
+"default-features" = false
+
+["target"."cfg(all(all(target_vendor = \"apple\", not(target_os = \"macos\")), target_vendor = \"apple\"))"."dependencies"."block2"]
+"workspace" = true
+
+["target"."cfg(all(all(target_vendor = \"apple\", not(target_os = \"macos\")), target_vendor = \"apple\"))"."dependencies"."dispatch2"]
+"version" = "0.3.0"
+"default-features" = false
+"features" = ["std", "objc2"]
+
+["target"."cfg(all(all(target_vendor = \"apple\", not(target_os = \"macos\")), target_vendor = \"apple\"))"."dependencies"."objc2"]
+"workspace" = true
+"features" = ["relax-sign-encoding"]
+
+["target"."cfg(all(all(target_vendor = \"apple\", not(target_os = \"macos\")), target_vendor = \"apple\"))"."dependencies"."objc2-core-foundation"]
+"workspace" = true
+"default-features" = false
+"features" = ["std", "CFCGTypes", "CFBase", "CFRunLoop", "CFString"]
+
+["target"."cfg(all(all(target_vendor = \"apple\", not(target_os = \"macos\")), target_vendor = \"apple\"))"."dependencies"."objc2-foundation"]
+"workspace" = true
+"default-features" = false
+"features" = ["std", "block2", "objc2-core-foundation", "NSArray", "NSEnumerator", "NSGeometry", "NSObjCRuntime", "NSOperation", "NSString", "NSThread", "NSSet"]
+
+["target"."cfg(all(all(target_vendor = \"apple\", not(target_os = \"macos\")), target_vendor = \"apple\"))"."dependencies"."objc2-ui-kit"]
+"version" = "0.3.2"
+"default-features" = false
+"features" = ["std", "objc2-core-foundation", "UIApplication", "UIDevice", "UIEvent", "UIGeometry", "UIGestureRecognizer", "UITextInput", "UITextInputTraits", "UIOrientation", "UIPanGestureRecognizer", "UIPinchGestureRecognizer", "UIResponder", "UIRotationGestureRecognizer", "UIScreen", "UIScreenMode", "UITapGestureRecognizer", "UITouch", "UITraitCollection", "UIView", "UIViewController", "UIWindow"]
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability-derive"]
+"version" = "=1.0.0-beta.3"
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability-plugin-window"]
+"version" = "=1.0.0-beta.3"
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."futures-channel"]
+"version" = "0.3"
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."ohos-fileuri-binding"]
+"version" = "0.1"
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."ohos-fileshare-binding"]
+"version" = "0.2.4"
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability-plugin-clipboard"]
+"version" = "=1.0.0-beta.3"
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability-plugin-url"]
+"version" = "=1.0.0-beta.3"
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability-plugin-files"]
+"version" = "=1.0.0-beta.3"
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability-plugin-app-control"]
+"version" = "=1.0.0-beta.3"
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability-plugin-permission"]
+"version" = "=1.0.0-beta.3"
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."tracing"]
+"workspace" = true
+"default-features" = false
+"features" = ["log"]
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."dpi"]
+"workspace" = true
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."rwh_06"]
+"workspace" = true
+"features" = ["std"]
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability"]
+"version" = "=1.0.0-beta.3"
+"features" = ["keyboard", "mouse", "drag", "stylus"]
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."futures-executor"]
+"version" = "0.3"
+"features" = ["thread-pool"]
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."ohos-window-manager-binding"]
+"version" = "0.1.1"
+"features" = ["api-22"]
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."ohos-display-sys"]
+"version" = "0.1.4"
+"features" = ["api-14"]
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."ohos-vsync-binding"]
+"version" = "0.3.1"
+"optional" = true
+"default-features" = false
+"features" = ["api-20"]
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."crossbeam-channel"]
+"version" = "0.5"
+"optional" = true
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability-plugin-menu"]
+"version" = "=1.0.0-beta.3"
+"optional" = true
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability-plugin-notification"]
+"version" = "=1.0.0-beta.3"
+"optional" = true
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability-plugin-process"]
+"version" = "=1.0.0-beta.3"
+"optional" = true
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability-plugin-system-state"]
+"version" = "=1.0.0-beta.3"
+"optional" = true
+
+["target"."cfg(target_env = \"ohos\")"."dependencies"."openharmony-ability-plugin-accessibility"]
+"version" = "=1.0.0-beta.3"
+"optional" = true
+
+["target"."cfg(target_os = \"redox\")"."dependencies"."bitflags"]
+"workspace" = true
+
+["target"."cfg(target_os = \"redox\")"."dependencies"."dpi"]
+"workspace" = true
+
+["target"."cfg(target_os = \"redox\")"."dependencies"."rwh_06"]
+"workspace" = true
+"features" = ["std"]
+
+["target"."cfg(target_os = \"redox\")"."dependencies"."serde"]
+"version" = "1"
+"features" = ["serde_derive"]
+"optional" = true
+
+["target"."cfg(target_os = \"redox\")"."dependencies"."smol_str"]
+"workspace" = true
+
+["target"."cfg(target_os = \"redox\")"."dependencies"."tracing"]
+"workspace" = true
+"default-features" = false
+
+["target"."cfg(target_os = \"redox\")"."dependencies"."libredox"]
+"version" = "0.1.12"
+
+["target"."cfg(target_os = \"redox\")"."dependencies"."orbclient"]
+"version" = "0.4.3"
+"default-features" = false
+
+["target"."cfg(target_os = \"redox\")"."dependencies"."redox_event"]
+"package" = "redox_event"
+"version" = "0.4.8"
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."bitflags"]
+"workspace" = true
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."cursor-icon"]
+"workspace" = true
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."dpi"]
+"workspace" = true
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."rwh_06"]
+"workspace" = true
+"features" = ["std"]
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."serde"]
+"version" = "1"
+"features" = ["serde_derive"]
+"optional" = true
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."smol_str"]
+"workspace" = true
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."tracing"]
+"workspace" = true
+"default-features" = false
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."js-sys"]
+"version" = "0.3.70"
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."pin-project"]
+"version" = "1"
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."wasm-bindgen"]
+"version" = "0.2.93"
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."wasm-bindgen-futures"]
+"version" = "0.4.43"
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."web-time"]
+"version" = "1"
+
+["target"."cfg(target_family = \"wasm\")"."dependencies"."web_sys"]
+"package" = "web-sys"
+"version" = "0.3.70"
+"features" = ["AbortController", "AbortSignal", "Blob", "BlobPropertyBag", "console", "CssStyleDeclaration", "Document", "DomException", "DomRect", "DomRectReadOnly", "Element", "Event", "EventTarget", "FocusEvent", "HtmlCanvasElement", "HtmlElement", "HtmlHtmlElement", "HtmlImageElement", "ImageBitmap", "ImageBitmapOptions", "ImageBitmapRenderingContext", "ImageData", "IntersectionObserver", "IntersectionObserverEntry", "KeyboardEvent", "MediaQueryList", "MessageChannel", "MessagePort", "Navigator", "Node", "OrientationLockType", "OrientationType", "PageTransitionEvent", "Permissions", "PermissionState", "PermissionStatus", "PointerEvent", "PremultiplyAlpha", "ResizeObserver", "ResizeObserverBoxOptions", "ResizeObserverEntry", "ResizeObserverOptions", "ResizeObserverSize", "Screen", "ScreenOrientation", "Url", "VisibilityState", "WheelEvent", "Window", "Worker"]
+
+["target"."cfg(all(target_family = \"wasm\", target_feature = \"atomics\"))"."dependencies"."atomic-waker"]
+"version" = "1"
+
+["target"."cfg(all(target_family = \"wasm\", target_feature = \"atomics\"))"."dependencies"."concurrent-queue"]
+"version" = "2"
+"default-features" = false

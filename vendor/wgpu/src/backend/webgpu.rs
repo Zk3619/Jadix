@@ -5,6 +5,7 @@ mod ext_bindings;
 #[allow(clippy::allow_attributes)]
 pub(crate) mod webgpu_sys;
 
+use crate::__types::Backends;
 use alloc::{
     boxed::Box,
     format,
@@ -23,7 +24,6 @@ use core::{
     sync::atomic::{AtomicU8, Ordering},
     task::{self, Poll},
 };
-use wgt::Backends;
 
 use js_sys::Promise;
 use wasm_bindgen::{prelude::*, JsCast};
@@ -44,9 +44,9 @@ use defined_non_null_js_value::DefinedNonNullJsValue;
 // not implement `Send` and `Sync` on the webgpu handle types.
 macro_rules! impl_send_sync {
     ($name:ty) => {
-        #[cfg(send_sync)]
+        #[cfg(jadix_wgpu_send_sync)]
         unsafe impl Send for $name {}
-        #[cfg(send_sync)]
+        #[cfg(jadix_wgpu_send_sync)]
         unsafe impl Sync for $name {}
     };
 }
@@ -91,7 +91,7 @@ impl crate::Error {
 /// owned WebGPU resource (e.g. a `GpuTexture` passed to
 /// [`crate::Device::create_texture_from_webgpu_handle`]).
 ///
-/// This is the WebGPU counterpart of [`wgpu_hal::DropCallback`].
+/// This is the WebGPU counterpart of [`wgpu::hal::DropCallback`].
 pub type DropCallback = Box<dyn FnOnce() + 'static>;
 
 pub(crate) struct DropGuard {
@@ -230,12 +230,14 @@ impl<F, M> MakeSendFuture<F, M> {
     }
 }
 
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 unsafe impl<F, M> Send for MakeSendFuture<F, M> {}
 
-fn map_texture_format(texture_format: wgt::TextureFormat) -> webgpu_sys::GpuTextureFormat {
+fn map_texture_format(
+    texture_format: crate::__types::TextureFormat,
+) -> webgpu_sys::GpuTextureFormat {
+    use crate::__types::TextureFormat;
     use webgpu_sys::GpuTextureFormat as tf;
-    use wgt::TextureFormat;
     match texture_format {
         // 8-bit formats
         TextureFormat::R8Unorm => tf::R8unorm,
@@ -314,39 +316,39 @@ fn map_texture_format(texture_format: wgt::TextureFormat) -> webgpu_sys::GpuText
         TextureFormat::EacRg11Unorm => tf::EacRg11unorm,
         TextureFormat::EacRg11Snorm => tf::EacRg11snorm,
         TextureFormat::Astc { block, channel } => match channel {
-            wgt::AstcChannel::Unorm => match block {
-                wgt::AstcBlock::B4x4 => tf::Astc4x4Unorm,
-                wgt::AstcBlock::B5x4 => tf::Astc5x4Unorm,
-                wgt::AstcBlock::B5x5 => tf::Astc5x5Unorm,
-                wgt::AstcBlock::B6x5 => tf::Astc6x5Unorm,
-                wgt::AstcBlock::B6x6 => tf::Astc6x6Unorm,
-                wgt::AstcBlock::B8x5 => tf::Astc8x5Unorm,
-                wgt::AstcBlock::B8x6 => tf::Astc8x6Unorm,
-                wgt::AstcBlock::B8x8 => tf::Astc8x8Unorm,
-                wgt::AstcBlock::B10x5 => tf::Astc10x5Unorm,
-                wgt::AstcBlock::B10x6 => tf::Astc10x6Unorm,
-                wgt::AstcBlock::B10x8 => tf::Astc10x8Unorm,
-                wgt::AstcBlock::B10x10 => tf::Astc10x10Unorm,
-                wgt::AstcBlock::B12x10 => tf::Astc12x10Unorm,
-                wgt::AstcBlock::B12x12 => tf::Astc12x12Unorm,
+            crate::__types::AstcChannel::Unorm => match block {
+                crate::__types::AstcBlock::B4x4 => tf::Astc4x4Unorm,
+                crate::__types::AstcBlock::B5x4 => tf::Astc5x4Unorm,
+                crate::__types::AstcBlock::B5x5 => tf::Astc5x5Unorm,
+                crate::__types::AstcBlock::B6x5 => tf::Astc6x5Unorm,
+                crate::__types::AstcBlock::B6x6 => tf::Astc6x6Unorm,
+                crate::__types::AstcBlock::B8x5 => tf::Astc8x5Unorm,
+                crate::__types::AstcBlock::B8x6 => tf::Astc8x6Unorm,
+                crate::__types::AstcBlock::B8x8 => tf::Astc8x8Unorm,
+                crate::__types::AstcBlock::B10x5 => tf::Astc10x5Unorm,
+                crate::__types::AstcBlock::B10x6 => tf::Astc10x6Unorm,
+                crate::__types::AstcBlock::B10x8 => tf::Astc10x8Unorm,
+                crate::__types::AstcBlock::B10x10 => tf::Astc10x10Unorm,
+                crate::__types::AstcBlock::B12x10 => tf::Astc12x10Unorm,
+                crate::__types::AstcBlock::B12x12 => tf::Astc12x12Unorm,
             },
-            wgt::AstcChannel::UnormSrgb => match block {
-                wgt::AstcBlock::B4x4 => tf::Astc4x4UnormSrgb,
-                wgt::AstcBlock::B5x4 => tf::Astc5x4UnormSrgb,
-                wgt::AstcBlock::B5x5 => tf::Astc5x5UnormSrgb,
-                wgt::AstcBlock::B6x5 => tf::Astc6x5UnormSrgb,
-                wgt::AstcBlock::B6x6 => tf::Astc6x6UnormSrgb,
-                wgt::AstcBlock::B8x5 => tf::Astc8x5UnormSrgb,
-                wgt::AstcBlock::B8x6 => tf::Astc8x6UnormSrgb,
-                wgt::AstcBlock::B8x8 => tf::Astc8x8UnormSrgb,
-                wgt::AstcBlock::B10x5 => tf::Astc10x5UnormSrgb,
-                wgt::AstcBlock::B10x6 => tf::Astc10x6UnormSrgb,
-                wgt::AstcBlock::B10x8 => tf::Astc10x8UnormSrgb,
-                wgt::AstcBlock::B10x10 => tf::Astc10x10UnormSrgb,
-                wgt::AstcBlock::B12x10 => tf::Astc12x10UnormSrgb,
-                wgt::AstcBlock::B12x12 => tf::Astc12x12UnormSrgb,
+            crate::__types::AstcChannel::UnormSrgb => match block {
+                crate::__types::AstcBlock::B4x4 => tf::Astc4x4UnormSrgb,
+                crate::__types::AstcBlock::B5x4 => tf::Astc5x4UnormSrgb,
+                crate::__types::AstcBlock::B5x5 => tf::Astc5x5UnormSrgb,
+                crate::__types::AstcBlock::B6x5 => tf::Astc6x5UnormSrgb,
+                crate::__types::AstcBlock::B6x6 => tf::Astc6x6UnormSrgb,
+                crate::__types::AstcBlock::B8x5 => tf::Astc8x5UnormSrgb,
+                crate::__types::AstcBlock::B8x6 => tf::Astc8x6UnormSrgb,
+                crate::__types::AstcBlock::B8x8 => tf::Astc8x8UnormSrgb,
+                crate::__types::AstcBlock::B10x5 => tf::Astc10x5UnormSrgb,
+                crate::__types::AstcBlock::B10x6 => tf::Astc10x6UnormSrgb,
+                crate::__types::AstcBlock::B10x8 => tf::Astc10x8UnormSrgb,
+                crate::__types::AstcBlock::B10x10 => tf::Astc10x10UnormSrgb,
+                crate::__types::AstcBlock::B12x10 => tf::Astc12x10UnormSrgb,
+                crate::__types::AstcBlock::B12x12 => tf::Astc12x12UnormSrgb,
             },
-            wgt::AstcChannel::Hdr => {
+            crate::__types::AstcChannel::Hdr => {
                 unimplemented!("Format {texture_format:?} has no WebGPU equivalent")
             }
         },
@@ -355,10 +357,10 @@ fn map_texture_format(texture_format: wgt::TextureFormat) -> webgpu_sys::GpuText
 }
 
 fn map_texture_component_type(
-    sample_type: wgt::TextureSampleType,
+    sample_type: crate::__types::TextureSampleType,
 ) -> webgpu_sys::GpuTextureSampleType {
+    use crate::__types::TextureSampleType;
     use webgpu_sys::GpuTextureSampleType as ts;
-    use wgt::TextureSampleType;
     match sample_type {
         TextureSampleType::Float { filterable: true } => ts::Float,
         TextureSampleType::Float { filterable: false } => ts::UnfilterableFloat,
@@ -368,9 +370,9 @@ fn map_texture_component_type(
     }
 }
 
-fn map_cull_mode(cull_mode: Option<wgt::Face>) -> webgpu_sys::GpuCullMode {
+fn map_cull_mode(cull_mode: Option<crate::__types::Face>) -> webgpu_sys::GpuCullMode {
+    use crate::__types::Face;
     use webgpu_sys::GpuCullMode as cm;
-    use wgt::Face;
     match cull_mode {
         None => cm::None,
         Some(Face::Front) => cm::Front,
@@ -378,18 +380,20 @@ fn map_cull_mode(cull_mode: Option<wgt::Face>) -> webgpu_sys::GpuCullMode {
     }
 }
 
-fn map_front_face(front_face: wgt::FrontFace) -> webgpu_sys::GpuFrontFace {
+fn map_front_face(front_face: crate::__types::FrontFace) -> webgpu_sys::GpuFrontFace {
+    use crate::__types::FrontFace;
     use webgpu_sys::GpuFrontFace as ff;
-    use wgt::FrontFace;
     match front_face {
         FrontFace::Ccw => ff::Ccw,
         FrontFace::Cw => ff::Cw,
     }
 }
 
-fn map_primitive_state(primitive: &wgt::PrimitiveState) -> webgpu_sys::GpuPrimitiveState {
+fn map_primitive_state(
+    primitive: &crate::__types::PrimitiveState,
+) -> webgpu_sys::GpuPrimitiveState {
+    use crate::__types::PrimitiveTopology;
     use webgpu_sys::GpuPrimitiveTopology as pt;
-    use wgt::PrimitiveTopology;
 
     let mapped = webgpu_sys::GpuPrimitiveState::new();
     mapped.set_cull_mode(map_cull_mode(primitive.cull_mode));
@@ -410,23 +414,25 @@ fn map_primitive_state(primitive: &wgt::PrimitiveState) -> webgpu_sys::GpuPrimit
     mapped.set_unclipped_depth(primitive.unclipped_depth);
 
     match primitive.polygon_mode {
-        wgt::PolygonMode::Fill => {}
-        wgt::PolygonMode::Line => panic!(
+        crate::__types::PolygonMode::Fill => {}
+        crate::__types::PolygonMode::Line => panic!(
             "{:?} is not enabled for this backend",
-            wgt::Features::POLYGON_MODE_LINE
+            crate::__types::Features::POLYGON_MODE_LINE
         ),
-        wgt::PolygonMode::Point => panic!(
+        crate::__types::PolygonMode::Point => panic!(
             "{:?} is not enabled for this backend",
-            wgt::Features::POLYGON_MODE_POINT
+            crate::__types::Features::POLYGON_MODE_POINT
         ),
     }
 
     mapped
 }
 
-fn map_compare_function(compare_fn: wgt::CompareFunction) -> webgpu_sys::GpuCompareFunction {
+fn map_compare_function(
+    compare_fn: crate::__types::CompareFunction,
+) -> webgpu_sys::GpuCompareFunction {
+    use crate::__types::CompareFunction;
     use webgpu_sys::GpuCompareFunction as cf;
-    use wgt::CompareFunction;
     match compare_fn {
         CompareFunction::Never => cf::Never,
         CompareFunction::Less => cf::Less,
@@ -439,9 +445,9 @@ fn map_compare_function(compare_fn: wgt::CompareFunction) -> webgpu_sys::GpuComp
     }
 }
 
-fn map_stencil_operation(op: wgt::StencilOperation) -> webgpu_sys::GpuStencilOperation {
+fn map_stencil_operation(op: crate::__types::StencilOperation) -> webgpu_sys::GpuStencilOperation {
+    use crate::__types::StencilOperation;
     use webgpu_sys::GpuStencilOperation as so;
-    use wgt::StencilOperation;
     match op {
         StencilOperation::Keep => so::Keep,
         StencilOperation::Zero => so::Zero,
@@ -454,7 +460,9 @@ fn map_stencil_operation(op: wgt::StencilOperation) -> webgpu_sys::GpuStencilOpe
     }
 }
 
-fn map_stencil_state_face(desc: &wgt::StencilFaceState) -> webgpu_sys::GpuStencilFaceState {
+fn map_stencil_state_face(
+    desc: &crate::__types::StencilFaceState,
+) -> webgpu_sys::GpuStencilFaceState {
     let mapped = webgpu_sys::GpuStencilFaceState::new();
     mapped.set_compare(map_compare_function(desc.compare));
     mapped.set_depth_fail_op(map_stencil_operation(desc.depth_fail_op));
@@ -463,7 +471,9 @@ fn map_stencil_state_face(desc: &wgt::StencilFaceState) -> webgpu_sys::GpuStenci
     mapped
 }
 
-fn map_depth_stencil_state(desc: &wgt::DepthStencilState) -> webgpu_sys::GpuDepthStencilState {
+fn map_depth_stencil_state(
+    desc: &crate::__types::DepthStencilState,
+) -> webgpu_sys::GpuDepthStencilState {
     let mapped = webgpu_sys::GpuDepthStencilState::new(map_texture_format(desc.format));
     if let Some(compare) = desc.depth_compare {
         mapped.set_depth_compare(map_compare_function(compare));
@@ -481,7 +491,7 @@ fn map_depth_stencil_state(desc: &wgt::DepthStencilState) -> webgpu_sys::GpuDept
     mapped
 }
 
-fn map_blend_component(desc: &wgt::BlendComponent) -> webgpu_sys::GpuBlendComponent {
+fn map_blend_component(desc: &crate::__types::BlendComponent) -> webgpu_sys::GpuBlendComponent {
     let mapped = webgpu_sys::GpuBlendComponent::new();
     mapped.set_dst_factor(map_blend_factor(desc.dst_factor));
     mapped.set_operation(map_blend_operation(desc.operation));
@@ -489,9 +499,9 @@ fn map_blend_component(desc: &wgt::BlendComponent) -> webgpu_sys::GpuBlendCompon
     mapped
 }
 
-fn map_blend_factor(factor: wgt::BlendFactor) -> webgpu_sys::GpuBlendFactor {
+fn map_blend_factor(factor: crate::__types::BlendFactor) -> webgpu_sys::GpuBlendFactor {
+    use crate::__types::BlendFactor;
     use webgpu_sys::GpuBlendFactor as bf;
-    use wgt::BlendFactor;
     match factor {
         BlendFactor::Zero => bf::Zero,
         BlendFactor::One => bf::One,
@@ -513,9 +523,9 @@ fn map_blend_factor(factor: wgt::BlendFactor) -> webgpu_sys::GpuBlendFactor {
     }
 }
 
-fn map_blend_operation(op: wgt::BlendOperation) -> webgpu_sys::GpuBlendOperation {
+fn map_blend_operation(op: crate::__types::BlendOperation) -> webgpu_sys::GpuBlendOperation {
+    use crate::__types::BlendOperation;
     use webgpu_sys::GpuBlendOperation as bo;
-    use wgt::BlendOperation;
     match op {
         BlendOperation::Add => bo::Add,
         BlendOperation::Subtract => bo::Subtract,
@@ -525,18 +535,18 @@ fn map_blend_operation(op: wgt::BlendOperation) -> webgpu_sys::GpuBlendOperation
     }
 }
 
-fn map_index_format(format: wgt::IndexFormat) -> webgpu_sys::GpuIndexFormat {
+fn map_index_format(format: crate::__types::IndexFormat) -> webgpu_sys::GpuIndexFormat {
+    use crate::__types::IndexFormat;
     use webgpu_sys::GpuIndexFormat as f;
-    use wgt::IndexFormat;
     match format {
         IndexFormat::Uint16 => f::Uint16,
         IndexFormat::Uint32 => f::Uint32,
     }
 }
 
-fn map_vertex_format(format: wgt::VertexFormat) -> webgpu_sys::GpuVertexFormat {
+fn map_vertex_format(format: crate::__types::VertexFormat) -> webgpu_sys::GpuVertexFormat {
+    use crate::__types::VertexFormat;
     use webgpu_sys::GpuVertexFormat as vf;
-    use wgt::VertexFormat;
     match format {
         VertexFormat::Uint8 => vf::Uint8,
         VertexFormat::Uint8x2 => vf::Uint8x2,
@@ -588,30 +598,30 @@ fn map_vertex_format(format: wgt::VertexFormat) -> webgpu_sys::GpuVertexFormat {
     }
 }
 
-fn map_vertex_step_mode(mode: wgt::VertexStepMode) -> webgpu_sys::GpuVertexStepMode {
+fn map_vertex_step_mode(mode: crate::__types::VertexStepMode) -> webgpu_sys::GpuVertexStepMode {
+    use crate::__types::VertexStepMode;
     use webgpu_sys::GpuVertexStepMode as sm;
-    use wgt::VertexStepMode;
     match mode {
         VertexStepMode::Vertex => sm::Vertex,
         VertexStepMode::Instance => sm::Instance,
     }
 }
 
-fn map_extent_3d(extent: wgt::Extent3d) -> webgpu_sys::GpuExtent3dDict {
+fn map_extent_3d(extent: crate::__types::Extent3d) -> webgpu_sys::GpuExtent3dDict {
     let mapped = webgpu_sys::GpuExtent3dDict::new(extent.width);
     mapped.set_height(extent.height);
     mapped.set_depth_or_array_layers(extent.depth_or_array_layers);
     mapped
 }
 
-fn map_origin_2d(extent: wgt::Origin2d) -> webgpu_sys::GpuOrigin2dDict {
+fn map_origin_2d(extent: crate::__types::Origin2d) -> webgpu_sys::GpuOrigin2dDict {
     let mapped = webgpu_sys::GpuOrigin2dDict::new();
     mapped.set_x(extent.x);
     mapped.set_y(extent.y);
     mapped
 }
 
-fn map_origin_3d(origin: wgt::Origin3d) -> webgpu_sys::GpuOrigin3dDict {
+fn map_origin_3d(origin: crate::__types::Origin3d) -> webgpu_sys::GpuOrigin3dDict {
     let mapped = webgpu_sys::GpuOrigin3dDict::new();
     mapped.set_x(origin.x);
     mapped.set_y(origin.y);
@@ -620,26 +630,26 @@ fn map_origin_3d(origin: wgt::Origin3d) -> webgpu_sys::GpuOrigin3dDict {
 }
 
 fn map_texture_dimension(
-    texture_dimension: wgt::TextureDimension,
+    texture_dimension: crate::__types::TextureDimension,
 ) -> webgpu_sys::GpuTextureDimension {
     match texture_dimension {
-        wgt::TextureDimension::D1 => webgpu_sys::GpuTextureDimension::N1d,
-        wgt::TextureDimension::D2 => webgpu_sys::GpuTextureDimension::N2d,
-        wgt::TextureDimension::D3 => webgpu_sys::GpuTextureDimension::N3d,
+        crate::__types::TextureDimension::D1 => webgpu_sys::GpuTextureDimension::N1d,
+        crate::__types::TextureDimension::D2 => webgpu_sys::GpuTextureDimension::N2d,
+        crate::__types::TextureDimension::D3 => webgpu_sys::GpuTextureDimension::N3d,
     }
 }
 
 fn map_texture_view_dimension(
-    texture_view_dimension: wgt::TextureViewDimension,
+    texture_view_dimension: crate::__types::TextureViewDimension,
 ) -> webgpu_sys::GpuTextureViewDimension {
     use webgpu_sys::GpuTextureViewDimension as tvd;
     match texture_view_dimension {
-        wgt::TextureViewDimension::D1 => tvd::N1d,
-        wgt::TextureViewDimension::D2 => tvd::N2d,
-        wgt::TextureViewDimension::D2Array => tvd::N2dArray,
-        wgt::TextureViewDimension::Cube => tvd::Cube,
-        wgt::TextureViewDimension::CubeArray => tvd::CubeArray,
-        wgt::TextureViewDimension::D3 => tvd::N3d,
+        crate::__types::TextureViewDimension::D1 => tvd::N1d,
+        crate::__types::TextureViewDimension::D2 => tvd::N2d,
+        crate::__types::TextureViewDimension::D2Array => tvd::N2dArray,
+        crate::__types::TextureViewDimension::Cube => tvd::Cube,
+        crate::__types::TextureViewDimension::CubeArray => tvd::CubeArray,
+        crate::__types::TextureViewDimension::D3 => tvd::N3d,
     }
 }
 
@@ -713,41 +723,45 @@ fn map_external_texture_copy_view(
     mapped
 }
 
-fn map_texture_aspect(aspect: wgt::TextureAspect) -> webgpu_sys::GpuTextureAspect {
+fn map_texture_aspect(aspect: crate::__types::TextureAspect) -> webgpu_sys::GpuTextureAspect {
     match aspect {
-        wgt::TextureAspect::All => webgpu_sys::GpuTextureAspect::All,
-        wgt::TextureAspect::StencilOnly => webgpu_sys::GpuTextureAspect::StencilOnly,
-        wgt::TextureAspect::DepthOnly => webgpu_sys::GpuTextureAspect::DepthOnly,
-        wgt::TextureAspect::Plane0 | wgt::TextureAspect::Plane1 | wgt::TextureAspect::Plane2 => {
+        crate::__types::TextureAspect::All => webgpu_sys::GpuTextureAspect::All,
+        crate::__types::TextureAspect::StencilOnly => webgpu_sys::GpuTextureAspect::StencilOnly,
+        crate::__types::TextureAspect::DepthOnly => webgpu_sys::GpuTextureAspect::DepthOnly,
+        crate::__types::TextureAspect::Plane0
+        | crate::__types::TextureAspect::Plane1
+        | crate::__types::TextureAspect::Plane2 => {
             panic!("multi-plane textures are not supported")
         }
     }
 }
 
-fn map_filter_mode(mode: wgt::FilterMode) -> webgpu_sys::GpuFilterMode {
+fn map_filter_mode(mode: crate::__types::FilterMode) -> webgpu_sys::GpuFilterMode {
     match mode {
-        wgt::FilterMode::Nearest => webgpu_sys::GpuFilterMode::Nearest,
-        wgt::FilterMode::Linear => webgpu_sys::GpuFilterMode::Linear,
+        crate::__types::FilterMode::Nearest => webgpu_sys::GpuFilterMode::Nearest,
+        crate::__types::FilterMode::Linear => webgpu_sys::GpuFilterMode::Linear,
     }
 }
 
-fn map_mipmap_filter_mode(mode: wgt::MipmapFilterMode) -> webgpu_sys::GpuMipmapFilterMode {
+fn map_mipmap_filter_mode(
+    mode: crate::__types::MipmapFilterMode,
+) -> webgpu_sys::GpuMipmapFilterMode {
     match mode {
-        wgt::MipmapFilterMode::Nearest => webgpu_sys::GpuMipmapFilterMode::Nearest,
-        wgt::MipmapFilterMode::Linear => webgpu_sys::GpuMipmapFilterMode::Linear,
+        crate::__types::MipmapFilterMode::Nearest => webgpu_sys::GpuMipmapFilterMode::Nearest,
+        crate::__types::MipmapFilterMode::Linear => webgpu_sys::GpuMipmapFilterMode::Linear,
     }
 }
 
-fn map_address_mode(mode: wgt::AddressMode) -> webgpu_sys::GpuAddressMode {
+fn map_address_mode(mode: crate::__types::AddressMode) -> webgpu_sys::GpuAddressMode {
     match mode {
-        wgt::AddressMode::ClampToEdge => webgpu_sys::GpuAddressMode::ClampToEdge,
-        wgt::AddressMode::Repeat => webgpu_sys::GpuAddressMode::Repeat,
-        wgt::AddressMode::MirrorRepeat => webgpu_sys::GpuAddressMode::MirrorRepeat,
-        wgt::AddressMode::ClampToBorder => panic!("Clamp to border is not supported"),
+        crate::__types::AddressMode::ClampToEdge => webgpu_sys::GpuAddressMode::ClampToEdge,
+        crate::__types::AddressMode::Repeat => webgpu_sys::GpuAddressMode::Repeat,
+        crate::__types::AddressMode::MirrorRepeat => webgpu_sys::GpuAddressMode::MirrorRepeat,
+        crate::__types::AddressMode::ClampToBorder => panic!("Clamp to border is not supported"),
     }
 }
 
-fn map_color(color: wgt::Color) -> webgpu_sys::GpuColorDict {
+fn map_color(color: crate::__types::Color) -> webgpu_sys::GpuColorDict {
     webgpu_sys::GpuColorDict::new(color.a, color.b, color.g, color.r)
 }
 
@@ -765,75 +779,77 @@ fn map_map_mode(mode: crate::MapMode) -> u32 {
     }
 }
 
-const FEATURES_MAPPING: [(wgt::Features, webgpu_sys::GpuFeatureName); 16] = [
+const FEATURES_MAPPING: [(crate::__types::Features, webgpu_sys::GpuFeatureName); 16] = [
     (
-        wgt::Features::DEPTH_CLIP_CONTROL,
+        crate::__types::Features::DEPTH_CLIP_CONTROL,
         webgpu_sys::GpuFeatureName::DepthClipControl,
     ),
     (
-        wgt::Features::DEPTH32FLOAT_STENCIL8,
+        crate::__types::Features::DEPTH32FLOAT_STENCIL8,
         webgpu_sys::GpuFeatureName::Depth32floatStencil8,
     ),
     (
-        wgt::Features::TEXTURE_COMPRESSION_BC,
+        crate::__types::Features::TEXTURE_COMPRESSION_BC,
         webgpu_sys::GpuFeatureName::TextureCompressionBc,
     ),
     (
-        wgt::Features::TEXTURE_COMPRESSION_BC_SLICED_3D,
+        crate::__types::Features::TEXTURE_COMPRESSION_BC_SLICED_3D,
         webgpu_sys::GpuFeatureName::TextureCompressionBcSliced3d,
     ),
     (
-        wgt::Features::TEXTURE_COMPRESSION_ETC2,
+        crate::__types::Features::TEXTURE_COMPRESSION_ETC2,
         webgpu_sys::GpuFeatureName::TextureCompressionEtc2,
     ),
     (
-        wgt::Features::TEXTURE_COMPRESSION_ASTC,
+        crate::__types::Features::TEXTURE_COMPRESSION_ASTC,
         webgpu_sys::GpuFeatureName::TextureCompressionAstc,
     ),
     (
-        wgt::Features::TEXTURE_COMPRESSION_ASTC_SLICED_3D,
+        crate::__types::Features::TEXTURE_COMPRESSION_ASTC_SLICED_3D,
         webgpu_sys::GpuFeatureName::TextureCompressionAstcSliced3d,
     ),
     (
-        wgt::Features::TIMESTAMP_QUERY,
+        crate::__types::Features::TIMESTAMP_QUERY,
         webgpu_sys::GpuFeatureName::TimestampQuery,
     ),
     (
-        wgt::Features::INDIRECT_FIRST_INSTANCE,
+        crate::__types::Features::INDIRECT_FIRST_INSTANCE,
         webgpu_sys::GpuFeatureName::IndirectFirstInstance,
     ),
     (
-        wgt::Features::SHADER_F16,
+        crate::__types::Features::SHADER_F16,
         webgpu_sys::GpuFeatureName::ShaderF16,
     ),
     (
-        wgt::Features::RG11B10UFLOAT_RENDERABLE,
+        crate::__types::Features::RG11B10UFLOAT_RENDERABLE,
         webgpu_sys::GpuFeatureName::Rg11b10ufloatRenderable,
     ),
     (
-        wgt::Features::BGRA8UNORM_STORAGE,
+        crate::__types::Features::BGRA8UNORM_STORAGE,
         webgpu_sys::GpuFeatureName::Bgra8unormStorage,
     ),
     (
-        wgt::Features::FLOAT32_FILTERABLE,
+        crate::__types::Features::FLOAT32_FILTERABLE,
         webgpu_sys::GpuFeatureName::Float32Filterable,
     ),
     (
-        wgt::Features::FLOAT32_BLENDABLE,
+        crate::__types::Features::FLOAT32_BLENDABLE,
         webgpu_sys::GpuFeatureName::Float32Blendable,
     ),
     (
-        wgt::Features::DUAL_SOURCE_BLENDING,
+        crate::__types::Features::DUAL_SOURCE_BLENDING,
         webgpu_sys::GpuFeatureName::DualSourceBlending,
     ),
     (
-        wgt::Features::CLIP_DISTANCES,
+        crate::__types::Features::CLIP_DISTANCES,
         webgpu_sys::GpuFeatureName::ClipDistances,
     ),
 ];
 
-fn map_wgt_features(supported_features: webgpu_sys::GpuSupportedFeatures) -> wgt::Features {
-    let mut features = wgt::Features::empty();
+fn map_wgt_features(
+    supported_features: webgpu_sys::GpuSupportedFeatures,
+) -> crate::__types::Features {
+    let mut features = crate::__types::Features::empty();
     for (wgpu_feat, web_feat) in FEATURES_MAPPING {
         match wasm_bindgen::JsValue::from(web_feat).as_string() {
             Some(value) if supported_features.has(&value) => features |= wgpu_feat,
@@ -843,8 +859,8 @@ fn map_wgt_features(supported_features: webgpu_sys::GpuSupportedFeatures) -> wgt
     features
 }
 
-fn map_wgt_limits(limits: webgpu_sys::GpuSupportedLimits) -> wgt::Limits {
-    wgt::Limits {
+fn map_wgt_limits(limits: webgpu_sys::GpuSupportedLimits) -> crate::__types::Limits {
+    crate::__types::Limits {
         max_texture_dimension_1d: limits.max_texture_dimension_1d(),
         max_texture_dimension_2d: limits.max_texture_dimension_2d(),
         max_texture_dimension_3d: limits.max_texture_dimension_3d(),
@@ -881,57 +897,62 @@ fn map_wgt_limits(limits: webgpu_sys::GpuSupportedLimits) -> wgt::Limits {
         max_compute_workgroup_size_y: limits.max_compute_workgroup_size_y(),
         max_compute_workgroup_size_z: limits.max_compute_workgroup_size_z(),
         max_compute_workgroups_per_dimension: limits.max_compute_workgroups_per_dimension(),
-        max_immediate_size: wgt::Limits::default().max_immediate_size,
-        max_non_sampler_bindings: wgt::Limits::default().max_non_sampler_bindings,
+        max_immediate_size: crate::__types::Limits::default().max_immediate_size,
+        max_non_sampler_bindings: crate::__types::Limits::default().max_non_sampler_bindings,
 
-        max_task_workgroup_total_count: wgt::Limits::default().max_task_workgroup_total_count,
-        max_task_workgroups_per_dimension: wgt::Limits::default().max_task_workgroups_per_dimension,
-        max_mesh_workgroup_total_count: wgt::Limits::default().max_mesh_workgroup_total_count,
-        max_mesh_workgroups_per_dimension: wgt::Limits::default().max_mesh_workgroups_per_dimension,
-        max_task_invocations_per_workgroup: wgt::Limits::default()
+        max_task_workgroup_total_count: crate::__types::Limits::default()
+            .max_task_workgroup_total_count,
+        max_task_workgroups_per_dimension: crate::__types::Limits::default()
+            .max_task_workgroups_per_dimension,
+        max_mesh_workgroup_total_count: crate::__types::Limits::default()
+            .max_mesh_workgroup_total_count,
+        max_mesh_workgroups_per_dimension: crate::__types::Limits::default()
+            .max_mesh_workgroups_per_dimension,
+        max_task_invocations_per_workgroup: crate::__types::Limits::default()
             .max_task_invocations_per_workgroup,
-        max_task_invocations_per_dimension: wgt::Limits::default()
+        max_task_invocations_per_dimension: crate::__types::Limits::default()
             .max_task_invocations_per_dimension,
-        max_mesh_invocations_per_workgroup: wgt::Limits::default()
+        max_mesh_invocations_per_workgroup: crate::__types::Limits::default()
             .max_mesh_invocations_per_workgroup,
-        max_mesh_invocations_per_dimension: wgt::Limits::default()
+        max_mesh_invocations_per_dimension: crate::__types::Limits::default()
             .max_mesh_invocations_per_dimension,
-        max_task_payload_size: wgt::Limits::default().max_task_payload_size,
-        max_mesh_output_vertices: wgt::Limits::default().max_mesh_output_vertices,
-        max_mesh_output_primitives: wgt::Limits::default().max_mesh_output_primitives,
-        max_mesh_output_layers: wgt::Limits::default().max_mesh_output_layers,
-        max_mesh_multiview_view_count: wgt::Limits::default().max_mesh_multiview_view_count,
+        max_task_payload_size: crate::__types::Limits::default().max_task_payload_size,
+        max_mesh_output_vertices: crate::__types::Limits::default().max_mesh_output_vertices,
+        max_mesh_output_primitives: crate::__types::Limits::default().max_mesh_output_primitives,
+        max_mesh_output_layers: crate::__types::Limits::default().max_mesh_output_layers,
+        max_mesh_multiview_view_count: crate::__types::Limits::default()
+            .max_mesh_multiview_view_count,
 
-        max_blas_primitive_count: wgt::Limits::default().max_blas_primitive_count,
-        max_blas_geometry_count: wgt::Limits::default().max_blas_geometry_count,
-        max_tlas_instance_count: wgt::Limits::default().max_tlas_instance_count,
-        max_acceleration_structures_per_shader_stage: wgt::Limits::default()
+        max_blas_primitive_count: crate::__types::Limits::default().max_blas_primitive_count,
+        max_blas_geometry_count: crate::__types::Limits::default().max_blas_geometry_count,
+        max_tlas_instance_count: crate::__types::Limits::default().max_tlas_instance_count,
+        max_acceleration_structures_per_shader_stage: crate::__types::Limits::default()
             .max_acceleration_structures_per_shader_stage,
-        max_buffers_and_acceleration_structures_per_shader_stage: wgt::Limits::default()
+        max_buffers_and_acceleration_structures_per_shader_stage: crate::__types::Limits::default()
             .max_buffers_and_acceleration_structures_per_shader_stage,
 
-        max_multiview_view_count: wgt::Limits::default().max_multiview_view_count,
+        max_multiview_view_count: crate::__types::Limits::default().max_multiview_view_count,
 
-        max_ray_dispatch_count: wgt::Limits::default().max_ray_dispatch_count,
-        max_ray_recursion_depth: wgt::Limits::default().max_ray_recursion_depth,
+        max_ray_dispatch_count: crate::__types::Limits::default().max_ray_dispatch_count,
+        max_ray_recursion_depth: crate::__types::Limits::default().max_ray_recursion_depth,
     }
 }
 
-fn map_adapter_info(adapter_info: &webgpu_sys::GpuAdapterInfo) -> wgt::AdapterInfo {
+fn map_adapter_info(adapter_info: &webgpu_sys::GpuAdapterInfo) -> crate::__types::AdapterInfo {
     // TODO(https://github.com/gfx-rs/wgpu/issues/8819): populate more fields if/when possible
-    wgt::AdapterInfo {
+    crate::__types::AdapterInfo {
         name: adapter_info.description().to_string(),
         vendor: 0,
         device: 0,
         device_type: if adapter_info.is_fallback_adapter() {
-            wgt::DeviceType::Cpu
+            crate::__types::DeviceType::Cpu
         } else {
-            wgt::DeviceType::Other
+            crate::__types::DeviceType::Other
         },
         device_pci_bus_id: String::new(),
         driver: String::new(),
         driver_info: String::new(),
-        backend: wgt::Backend::BrowserWebGpu,
+        backend: crate::__types::Backend::BrowserWebGpu,
         subgroup_min_size: adapter_info.subgroup_min_size(),
         subgroup_max_size: adapter_info.subgroup_max_size(),
         transient_saves_memory: None,
@@ -939,7 +960,7 @@ fn map_adapter_info(adapter_info: &webgpu_sys::GpuAdapterInfo) -> wgt::AdapterIn
     }
 }
 
-fn map_js_sys_limits(limits: &wgt::Limits) -> js_sys::Object<js_sys::Number> {
+fn map_js_sys_limits(limits: &crate::__types::Limits) -> js_sys::Object<js_sys::Number> {
     let object = js_sys::Object::<js_sys::Number>::new_typed();
 
     macro_rules! set_properties {
@@ -1001,7 +1022,7 @@ fn map_js_sys_limits(limits: &wgt::Limits) -> js_sys::Object<js_sys::Number> {
 fn future_request_adapter(
     result: Result<js_sys::JsOption<webgpu_sys::GpuAdapter>, wasm_bindgen::JsValue>,
     requested_backends: Backends,
-) -> Result<dispatch::DispatchAdapter, wgt::RequestAdapterError> {
+) -> Result<dispatch::DispatchAdapter, crate::__types::RequestAdapterError> {
     result
         .map_err(|_| request_adapter_null_error(requested_backends))
         .and_then(|adapter| match adapter.into_option() {
@@ -1015,8 +1036,8 @@ fn future_request_adapter(
 }
 
 // Translate WebGPU’s null return into our error.
-fn request_adapter_null_error(requested_backends: Backends) -> wgt::RequestAdapterError {
-    wgt::RequestAdapterError::NotFound {
+fn request_adapter_null_error(requested_backends: Backends) -> crate::__types::RequestAdapterError {
+    crate::__types::RequestAdapterError::NotFound {
         active_backends: Backends::BROWSER_WEBGPU,
         requested_backends,
         // TODO: supported_backends should also include wgpu-core-based backends,
@@ -1150,7 +1171,7 @@ impl ContextWebGpu {
     /// Common portion of the internal branches of the public `instance_create_surface` function.
     ///
     /// Note: Analogous code also exists in the WebGL2 backend at
-    /// `wgpu_hal::gles::web::Instance`.
+    /// `wgpu::hal::gles::web::Instance`.
     fn create_surface_from_context(
         &self,
         canvas: Canvas,
@@ -1316,7 +1337,7 @@ struct WebBufferMapState {
     /// The mapped memory of the buffer.
     pub mapped_buffer: Option<js_sys::ArrayBuffer>,
     /// The total range which has been mapped in the buffer overall.
-    pub range: Range<wgt::BufferAddress>,
+    pub range: Range<crate::__types::BufferAddress>,
 }
 
 /// Stores the state of a GPU buffer and a reference to its mapped `ArrayBuffer` (if any).
@@ -1349,7 +1370,7 @@ impl WebBuffer {
     /// Obtains a reference to the re-usable buffer mapping as a Javascript array view.
     fn get_mapped_range(
         &self,
-        sub_range: Range<wgt::BufferAddress>,
+        sub_range: Range<crate::__types::BufferAddress>,
     ) -> Result<js_sys::Uint8Array, crate::MapRangeError> {
         let mut mapping = self.mapping.borrow_mut();
         let range = mapping.range.clone();
@@ -1372,7 +1393,7 @@ impl WebBuffer {
     }
 
     /// Sets the range of the buffer which is presently mapped.
-    fn set_mapped_range(&self, range: Range<wgt::BufferAddress>) {
+    fn set_mapped_range(&self, range: Range<crate::__types::BufferAddress>) {
         self.mapping.borrow_mut().range = range;
     }
 }
@@ -1667,9 +1688,9 @@ impl dispatch::InstanceInterface for ContextWebGpu {
         //TODO: support this check, return `None` if the flag is not set.
         // It's not trivial, since we need the Future logic to have this check,
         // and currently the Future here has no room for extra parameter `backends`.
-        if !(requested_backends.contains(wgt::Backends::BROWSER_WEBGPU)) {
+        if !(requested_backends.contains(crate::__types::Backends::BROWSER_WEBGPU)) {
             return Box::pin(core::future::ready(Err(
-                wgt::RequestAdapterError::NotFound {
+                crate::__types::RequestAdapterError::NotFound {
                     active_backends: Backends::BROWSER_WEBGPU,
                     requested_backends,
                     // TODO: supported_backends should also include wgpu-core-based backends,
@@ -1683,9 +1704,11 @@ impl dispatch::InstanceInterface for ContextWebGpu {
         }
         let mapped_options = webgpu_sys::GpuRequestAdapterOptions::new();
         let mapped_power_preference = match options.power_preference {
-            wgt::PowerPreference::None => None,
-            wgt::PowerPreference::LowPower => Some(webgpu_sys::GpuPowerPreference::LowPower),
-            wgt::PowerPreference::HighPerformance => {
+            crate::__types::PowerPreference::None => None,
+            crate::__types::PowerPreference::LowPower => {
+                Some(webgpu_sys::GpuPowerPreference::LowPower)
+            }
+            crate::__types::PowerPreference::HighPerformance => {
                 Some(webgpu_sys::GpuPowerPreference::HighPerformance)
             }
         };
@@ -1727,7 +1750,7 @@ impl dispatch::InstanceInterface for ContextWebGpu {
         true
     }
 
-    #[cfg(feature = "wgsl")]
+    #[cfg(jadix_wgpu_feature_wgsl)]
     fn wgsl_language_features(&self) -> crate::WgslLanguageFeatures {
         let mut wgsl_language_features = crate::WgslLanguageFeatures::empty();
         if let Some(gpu) = &self.gpu {
@@ -1773,7 +1796,7 @@ impl dispatch::AdapterInterface for WebAdapter {
         &self,
         desc: &crate::DeviceDescriptor<'_>,
     ) -> Pin<Box<dyn dispatch::RequestDeviceFuture>> {
-        if !matches!(desc.trace, wgt::Trace::Off) {
+        if !matches!(desc.trace, crate::__types::Trace::Off) {
             log::warn!("The `trace` parameter is not supported on the WebGPU backend.");
         }
 
@@ -1844,7 +1867,7 @@ impl dispatch::AdapterInterface for WebAdapter {
         crate::PresentationTimestamp::INVALID_TIMESTAMP
     }
 
-    fn cooperative_matrix_properties(&self) -> Vec<wgt::CooperativeMatrixProperties> {
+    fn cooperative_matrix_properties(&self) -> Vec<crate::__types::CooperativeMatrixProperties> {
         Vec::new()
     }
 }
@@ -1901,11 +1924,11 @@ impl dispatch::DeviceInterface for WebDevice {
         _shader_runtime_checks: crate::ShaderRuntimeChecks,
     ) -> dispatch::DispatchShaderModule {
         let shader_module_result = match desc.source {
-            #[cfg(feature = "spirv")]
+            #[cfg(jadix_wgpu_feature_spirv)]
             crate::ShaderSource::SpirV(ref spv) => {
-                use naga::front;
+                use crate::__naga::front;
 
-                let options = naga::front::spv::Options {
+                let options = crate::__naga::front::spv::Options {
                     adjust_coordinate_space: false,
                     strict_capabilities: true,
                     block_ctx_dump_prefix: None,
@@ -1914,7 +1937,7 @@ impl dispatch::DeviceInterface for WebDevice {
                 spv_parser
                     .parse()
                     .map_err(|inner| {
-                        crate::CompilationInfo::from(naga::error::ShaderError {
+                        crate::CompilationInfo::from(crate::__naga::error::ShaderError {
                             source: String::new(),
                             label: desc.label.map(|s| s.to_string()),
                             inner: Box::new(inner),
@@ -1931,13 +1954,13 @@ impl dispatch::DeviceInterface for WebDevice {
                         })
                     })
             }
-            #[cfg(feature = "glsl")]
+            #[cfg(jadix_wgpu_feature_glsl)]
             crate::ShaderSource::Glsl {
                 ref shader,
                 stage,
                 defines,
             } => {
-                use naga::front;
+                use crate::__naga::front;
 
                 // Parse the given shader code and store its representation.
                 let options = front::glsl::Options {
@@ -1951,7 +1974,7 @@ impl dispatch::DeviceInterface for WebDevice {
                 parser
                     .parse(&options, shader)
                     .map_err(|inner| {
-                        crate::CompilationInfo::from(naga::error::ShaderError {
+                        crate::CompilationInfo::from(crate::__naga::error::ShaderError {
                             source: shader.to_string(),
                             label: desc.label.map(|s| s.to_string()),
                             inner: Box::new(inner),
@@ -1968,7 +1991,7 @@ impl dispatch::DeviceInterface for WebDevice {
                         })
                     })
             }
-            #[cfg(feature = "wgsl")]
+            #[cfg(jadix_wgpu_feature_wgsl)]
             crate::ShaderSource::Wgsl(ref code) => {
                 let shader_module = webgpu_sys::GpuShaderModuleDescriptor::new(code);
                 Ok((
@@ -1978,7 +2001,7 @@ impl dispatch::DeviceInterface for WebDevice {
                     },
                 ))
             }
-            #[cfg(feature = "naga-ir")]
+            #[cfg(jadix_wgpu_feature_naga_ir)]
             crate::ShaderSource::Naga(ref module) => {
                 validate_transformed_shader_module(module, "", &desc).map(|v| {
                     (
@@ -1994,24 +2017,24 @@ impl dispatch::DeviceInterface for WebDevice {
             }
         };
 
-        #[cfg(naga)]
+        #[cfg(jadix_wgpu_naga)]
         fn validate_transformed_shader_module(
-            module: &naga::Module,
+            module: &crate::__naga::Module,
             source: &str,
             desc: &crate::ShaderModuleDescriptor<'_>,
         ) -> Result<webgpu_sys::GpuShaderModuleDescriptor, crate::CompilationInfo> {
-            use naga::{back, valid};
+            use crate::__naga::{back, valid};
             let mut validator =
                 valid::Validator::new(valid::ValidationFlags::all(), valid::Capabilities::all());
             let module_info = validator.validate(module).map_err(|err| {
-                crate::CompilationInfo::from(naga::error::ShaderError {
+                crate::CompilationInfo::from(crate::__naga::error::ShaderError {
                     source: source.to_string(),
                     label: desc.label.map(|s| s.to_string()),
                     inner: Box::new(err),
                 })
             })?;
 
-            let writer_flags = naga::back::wgsl::WriterFlags::empty();
+            let writer_flags = crate::__naga::back::wgsl::WriterFlags::empty();
             let wgsl_text = back::wgsl::write_string(module, &module_info, writer_flags).unwrap();
             Ok(webgpu_sys::GpuShaderModuleDescriptor::new(
                 wgsl_text.as_str(),
@@ -2088,7 +2111,7 @@ impl dispatch::DeviceInterface for WebDevice {
                     webgpu_sys::GpuBindGroupLayoutEntry::new(bind.binding, bind.visibility.bits());
 
                 match bind.ty {
-                    wgt::BindingType::Buffer {
+                    crate::__types::BindingType::Buffer {
                         ty,
                         has_dynamic_offset,
                         min_binding_size,
@@ -2099,34 +2122,34 @@ impl dispatch::DeviceInterface for WebDevice {
                             buffer.set_min_binding_size_f64(size.get() as f64);
                         }
                         buffer.set_type(match ty {
-                            wgt::BufferBindingType::Uniform => {
+                            crate::__types::BufferBindingType::Uniform => {
                                 webgpu_sys::GpuBufferBindingType::Uniform
                             }
-                            wgt::BufferBindingType::Storage { read_only: false } => {
+                            crate::__types::BufferBindingType::Storage { read_only: false } => {
                                 webgpu_sys::GpuBufferBindingType::Storage
                             }
-                            wgt::BufferBindingType::Storage { read_only: true } => {
+                            crate::__types::BufferBindingType::Storage { read_only: true } => {
                                 webgpu_sys::GpuBufferBindingType::ReadOnlyStorage
                             }
                         });
                         mapped_entry.set_buffer(&buffer);
                     }
-                    wgt::BindingType::Sampler(ty) => {
+                    crate::__types::BindingType::Sampler(ty) => {
                         let sampler = webgpu_sys::GpuSamplerBindingLayout::new();
                         sampler.set_type(match ty {
-                            wgt::SamplerBindingType::NonFiltering => {
+                            crate::__types::SamplerBindingType::NonFiltering => {
                                 webgpu_sys::GpuSamplerBindingType::NonFiltering
                             }
-                            wgt::SamplerBindingType::Filtering => {
+                            crate::__types::SamplerBindingType::Filtering => {
                                 webgpu_sys::GpuSamplerBindingType::Filtering
                             }
-                            wgt::SamplerBindingType::Comparison => {
+                            crate::__types::SamplerBindingType::Comparison => {
                                 webgpu_sys::GpuSamplerBindingType::Comparison
                             }
                         });
                         mapped_entry.set_sampler(&sampler);
                     }
-                    wgt::BindingType::Texture {
+                    crate::__types::BindingType::Texture {
                         multisampled,
                         sample_type,
                         view_dimension,
@@ -2137,22 +2160,22 @@ impl dispatch::DeviceInterface for WebDevice {
                         texture.set_view_dimension(map_texture_view_dimension(view_dimension));
                         mapped_entry.set_texture(&texture);
                     }
-                    wgt::BindingType::StorageTexture {
+                    crate::__types::BindingType::StorageTexture {
                         access,
                         format,
                         view_dimension,
                     } => {
                         let mapped_access = match access {
-                            wgt::StorageTextureAccess::WriteOnly => {
+                            crate::__types::StorageTextureAccess::WriteOnly => {
                                 webgpu_sys::GpuStorageTextureAccess::WriteOnly
                             }
-                            wgt::StorageTextureAccess::ReadOnly => {
+                            crate::__types::StorageTextureAccess::ReadOnly => {
                                 webgpu_sys::GpuStorageTextureAccess::ReadOnly
                             }
-                            wgt::StorageTextureAccess::ReadWrite => {
+                            crate::__types::StorageTextureAccess::ReadWrite => {
                                 webgpu_sys::GpuStorageTextureAccess::ReadWrite
                             }
-                            wgt::StorageTextureAccess::Atomic => {
+                            crate::__types::StorageTextureAccess::Atomic => {
                                 // Validated out by `BindGroupLayoutEntryError::StorageTextureAtomic`
                                 unreachable!()
                             }
@@ -2165,8 +2188,8 @@ impl dispatch::DeviceInterface for WebDevice {
                             .set_view_dimension(map_texture_view_dimension(view_dimension));
                         mapped_entry.set_storage_texture(&storage_texture);
                     }
-                    wgt::BindingType::AccelerationStructure { .. } => todo!(),
-                    wgt::BindingType::ExternalTexture => {
+                    crate::__types::BindingType::AccelerationStructure { .. } => todo!(),
+                    crate::__types::BindingType::ExternalTexture => {
                         mapped_entry.set_external_texture(
                             &webgpu_sys::GpuExternalTextureBindingLayout::new(),
                         );
@@ -2542,9 +2565,9 @@ impl dispatch::DeviceInterface for WebDevice {
 
     fn create_query_set(&self, desc: &crate::QuerySetDescriptor<'_>) -> dispatch::DispatchQuerySet {
         let ty = match desc.ty {
-            wgt::QueryType::Occlusion => webgpu_sys::GpuQueryType::Occlusion,
-            wgt::QueryType::Timestamp => webgpu_sys::GpuQueryType::Timestamp,
-            wgt::QueryType::PipelineStatistics(_) => unreachable!(),
+            crate::__types::QueryType::Occlusion => webgpu_sys::GpuQueryType::Occlusion,
+            crate::__types::QueryType::Timestamp => webgpu_sys::GpuQueryType::Timestamp,
+            crate::__types::QueryType::PipelineStatistics(_) => unreachable!(),
         };
         let mapped_desc = webgpu_sys::GpuQuerySetDescriptor::new(desc.count, ty);
         if let Some(label) = desc.label {
@@ -2695,7 +2718,10 @@ impl dispatch::DeviceInterface for WebDevice {
         // No capturing api in webgpu
     }
 
-    fn poll(&self, _poll_type: wgt::PollType<u64>) -> Result<crate::PollStatus, crate::PollError> {
+    fn poll(
+        &self,
+        _poll_type: crate::__types::PollType<u64>,
+    ) -> Result<crate::PollStatus, crate::PollError> {
         // Device is polled automatically
         Ok(crate::PollStatus::QueueEmpty)
     }
@@ -2704,7 +2730,7 @@ impl dispatch::DeviceInterface for WebDevice {
         crate::InternalCounters::default()
     }
 
-    fn generate_allocator_report(&self) -> Option<wgt::AllocatorReport> {
+    fn generate_allocator_report(&self) -> Option<crate::__types::AllocatorReport> {
         None
     }
 
@@ -2754,23 +2780,23 @@ impl dispatch::QueueInterface for WebQueue {
     fn validate_write_buffer(
         &self,
         buffer: &dispatch::DispatchBuffer,
-        offset: wgt::BufferAddress,
-        size: wgt::BufferSize,
+        offset: crate::__types::BufferAddress,
+        size: crate::__types::BufferSize,
     ) -> Option<()> {
         let buffer = buffer.as_webgpu();
 
-        let usage = wgt::BufferUsages::from_bits_truncate(buffer.inner.usage());
+        let usage = crate::__types::BufferUsages::from_bits_truncate(buffer.inner.usage());
         // TODO: actually send this down the error scope
-        if !usage.contains(wgt::BufferUsages::COPY_DST) {
+        if !usage.contains(crate::__types::BufferUsages::COPY_DST) {
             log::error!("Destination buffer is missing the `COPY_DST` usage flag");
             return None;
         }
         let write_size = u64::from(size);
-        if !write_size.is_multiple_of(wgt::COPY_BUFFER_ALIGNMENT) {
+        if !write_size.is_multiple_of(crate::__types::COPY_BUFFER_ALIGNMENT) {
             log::error!("Copy size {size} does not respect `COPY_BUFFER_ALIGNMENT`");
             return None;
         }
-        if !offset.is_multiple_of(wgt::COPY_BUFFER_ALIGNMENT) {
+        if !offset.is_multiple_of(crate::__types::COPY_BUFFER_ALIGNMENT) {
             log::error!(
                 "Buffer offset {offset} is not aligned to block size or `COPY_BUFFER_ALIGNMENT`"
             );
@@ -3004,7 +3030,11 @@ impl dispatch::TextureInterface for WebTexture {
         if let Some(label) = desc.label {
             mapped.set_label(label);
         }
-        mapped.set_usage(desc.usage.unwrap_or(wgt::TextureUsages::empty()).bits());
+        mapped.set_usage(
+            desc.usage
+                .unwrap_or(crate::__types::TextureUsages::empty())
+                .bits(),
+        );
 
         let view = self.inner.create_view_with_descriptor(&mapped).unwrap();
 
@@ -3442,10 +3472,10 @@ impl dispatch::CommandEncoderInterface for WebCommandEncoder {
     fn transition_resources<'a>(
         &mut self,
         _buffer_transitions: &mut dyn Iterator<
-            Item = wgt::BufferTransition<&'a dispatch::DispatchBuffer>,
+            Item = crate::__types::BufferTransition<&'a dispatch::DispatchBuffer>,
         >,
         _texture_transitions: &mut dyn Iterator<
-            Item = wgt::TextureTransition<&'a dispatch::DispatchTexture>,
+            Item = crate::__types::TextureTransition<&'a dispatch::DispatchTexture>,
         >,
     ) {
         // no-op
@@ -3548,10 +3578,10 @@ impl dispatch::ComputePassInterface for WebComputePassEncoder {
     fn transition_resources<'a>(
         &mut self,
         _buffer_transitions: &mut dyn Iterator<
-            Item = wgt::BufferTransition<&'a dispatch::DispatchBuffer>,
+            Item = crate::__types::BufferTransition<&'a dispatch::DispatchBuffer>,
         >,
         _texture_transitions: &mut dyn Iterator<
-            Item = wgt::TextureTransition<&'a dispatch::DispatchTextureView>,
+            Item = crate::__types::TextureTransition<&'a dispatch::DispatchTextureView>,
         >,
     ) {
         // noop
@@ -3994,7 +4024,7 @@ impl dispatch::RenderBundleEncoderInterface for WebRenderBundleEncoder {
         .into()
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     fn finish_boxed(
         self: Box<Self>,
         desc: &crate::RenderBundleDescriptor<'_>,
@@ -4024,13 +4054,13 @@ fn match_media_query(query: &str) -> Option<bool> {
 
 /// Classifies the display's gamut from CSS `color-gamut`, widest bucket first.
 /// `None` if there is no `Window` or the browser reports nothing.
-fn environment_color_gamut() -> Option<wgt::DisplayGamut> {
+fn environment_color_gamut() -> Option<crate::__types::DisplayGamut> {
     if match_media_query("(color-gamut: rec2020)") == Some(true) {
-        Some(wgt::DisplayGamut::Rec2020)
+        Some(crate::__types::DisplayGamut::Rec2020)
     } else if match_media_query("(color-gamut: p3)") == Some(true) {
-        Some(wgt::DisplayGamut::DisplayP3)
+        Some(crate::__types::DisplayGamut::DisplayP3)
     } else if match_media_query("(color-gamut: srgb)") == Some(true) {
-        Some(wgt::DisplayGamut::Srgb)
+        Some(crate::__types::DisplayGamut::Srgb)
     } else {
         None
     }
@@ -4101,7 +4131,7 @@ mod rgba16float_probe {
         let context: webgpu_sys::GpuCanvasContext = context.unchecked_into();
         let config = webgpu_sys::GpuCanvasConfiguration::new(
             device,
-            map_texture_format(wgt::TextureFormat::Rgba16Float),
+            map_texture_format(crate::__types::TextureFormat::Rgba16Float),
         );
         let supported = context.configure(&config).is_ok();
         if supported {
@@ -4113,15 +4143,18 @@ mod rgba16float_probe {
 }
 
 impl dispatch::SurfaceInterface for WebSurface {
-    fn get_capabilities(&self, _adapter: &dispatch::DispatchAdapter) -> wgt::SurfaceCapabilities {
+    fn get_capabilities(
+        &self,
+        _adapter: &dispatch::DispatchAdapter,
+    ) -> crate::__types::SurfaceCapabilities {
         let mut formats = vec![
-            wgt::TextureFormat::Rgba8Unorm,
-            wgt::TextureFormat::Bgra8Unorm,
+            crate::__types::TextureFormat::Rgba8Unorm,
+            crate::__types::TextureFormat::Bgra8Unorm,
         ];
         // Only advertise `Rgba16Float` where the browser can actually configure
         // it as a canvas (some, e.g. current Firefox, throw from `configure`).
         if rgba16float_probe::rgba16float_canvas_supported() {
-            formats.push(wgt::TextureFormat::Rgba16Float);
+            formats.push(crate::__types::TextureFormat::Rgba16Float);
         }
         let mut mapped_formats = formats.iter().map(|format| map_texture_format(*format));
         // Preferred canvas format will only be either "rgba8unorm" or "bgra8unorm".
@@ -4135,15 +4168,15 @@ impl dispatch::SurfaceInterface for WebSurface {
             formats.swap(0, index);
         }
 
-        wgt::SurfaceCapabilities {
+        crate::__types::SurfaceCapabilities {
             format_capabilities: formats
                 .iter()
                 .map(|&format| {
                     // Every WebGPU implementation supports the "srgb" and
                     // "display-p3" canvas color spaces.
                     // https://gpuweb.github.io/gpuweb/#canvas-configuration
-                    let mut color_spaces =
-                        wgt::SurfaceColorSpaces::SRGB | wgt::SurfaceColorSpaces::DISPLAY_P3;
+                    let mut color_spaces = crate::__types::SurfaceColorSpaces::SRGB
+                        | crate::__types::SurfaceColorSpaces::DISPLAY_P3;
                     // An fp16 canvas with "extended" tone mapping holds
                     // encoded extended-range values (the nonlinear sRGB OETF,
                     // continued beyond [0, 1]). "extended" tone mapping is a
@@ -4159,11 +4192,11 @@ impl dispatch::SurfaceInterface for WebSurface {
                     // `ExtendedSrgb` and, for the "display-p3" canvas, the
                     // wide-gamut `ExtendedDisplayP3` — not the linear
                     // `ExtendedSrgbLinear`.
-                    if format == wgt::TextureFormat::Rgba16Float {
-                        color_spaces |= wgt::SurfaceColorSpaces::EXTENDED_SRGB
-                            | wgt::SurfaceColorSpaces::EXTENDED_DISPLAY_P3;
+                    if format == crate::__types::TextureFormat::Rgba16Float {
+                        color_spaces |= crate::__types::SurfaceColorSpaces::EXTENDED_SRGB
+                            | crate::__types::SurfaceColorSpaces::EXTENDED_DISPLAY_P3;
                     }
-                    wgt::SurfaceFormatCapabilities {
+                    crate::__types::SurfaceFormatCapabilities {
                         format,
                         color_spaces,
                     }
@@ -4172,14 +4205,17 @@ impl dispatch::SurfaceInterface for WebSurface {
             // https://gpuweb.github.io/gpuweb/#supported-context-formats
             formats,
             // Doesn't really have meaning on the web.
-            present_modes: vec![wgt::PresentMode::Fifo],
-            alpha_modes: vec![wgt::CompositeAlphaMode::Opaque],
+            present_modes: vec![crate::__types::PresentMode::Fifo],
+            alpha_modes: vec![crate::__types::CompositeAlphaMode::Opaque],
             // Statically set to RENDER_ATTACHMENT for now. See https://gpuweb.github.io/gpuweb/#dom-gpucanvasconfiguration-usage
-            usages: wgt::TextureUsages::RENDER_ATTACHMENT,
+            usages: crate::__types::TextureUsages::RENDER_ATTACHMENT,
         }
     }
 
-    fn display_hdr_info(&self, _adapter: &dispatch::DispatchAdapter) -> wgt::DisplayHdrInfo {
+    fn display_hdr_info(
+        &self,
+        _adapter: &dispatch::DispatchAdapter,
+    ) -> crate::__types::DisplayHdrInfo {
         // The web exposes only coarse boolean dynamic-range + gamut buckets (CSS
         // media queries), no numeric luminance, so every numeric field stays
         // `None`. `(dynamic-range: high)` reports capability, not whether HDR is
@@ -4189,14 +4225,14 @@ impl dispatch::SurfaceInterface for WebSurface {
         let gamut = environment_color_gamut();
 
         let coarse = if high_dynamic_range.is_some() || gamut.is_some() {
-            Some(wgt::DisplayCoarseRange {
+            Some(crate::__types::DisplayCoarseRange {
                 high_dynamic_range,
                 gamut,
             })
         } else {
             None
         };
-        wgt::DisplayHdrInfo {
+        crate::__types::DisplayHdrInfo {
             luminance: None,
             headroom: None,
             chromaticity: None,
@@ -4219,16 +4255,20 @@ impl dispatch::SurfaceInterface for WebSurface {
             }
         }
 
-        if let wgt::PresentMode::Mailbox | wgt::PresentMode::Immediate = config.present_mode {
+        if let crate::__types::PresentMode::Mailbox | crate::__types::PresentMode::Immediate =
+            config.present_mode
+        {
             panic!("Only FIFO/Auto* is supported on web");
         }
-        if let wgt::CompositeAlphaMode::PostMultiplied | wgt::CompositeAlphaMode::Inherit =
-            config.alpha_mode
+        if let crate::__types::CompositeAlphaMode::PostMultiplied
+        | crate::__types::CompositeAlphaMode::Inherit = config.alpha_mode
         {
             panic!("Only Opaque/Auto or PreMultiplied alpha mode are supported on web");
         }
         let alpha_mode = match config.alpha_mode {
-            wgt::CompositeAlphaMode::PreMultiplied => webgpu_sys::GpuCanvasAlphaMode::Premultiplied,
+            crate::__types::CompositeAlphaMode::PreMultiplied => {
+                webgpu_sys::GpuCanvasAlphaMode::Premultiplied
+            }
             _ => webgpu_sys::GpuCanvasAlphaMode::Opaque,
         };
         let mapped = webgpu_sys::GpuCanvasConfiguration::new(
@@ -4241,8 +4281,8 @@ impl dispatch::SurfaceInterface for WebSurface {
             // `Auto` intentionally keeps the browser defaults (colorSpace
             // "srgb", standard tone mapping) even for fp16 formats, matching
             // wgpu's historical behavior on the web.
-            wgt::SurfaceColorSpace::Auto | wgt::SurfaceColorSpace::Srgb => {}
-            wgt::SurfaceColorSpace::DisplayP3 => {
+            crate::__types::SurfaceColorSpace::Auto | crate::__types::SurfaceColorSpace::Srgb => {}
+            crate::__types::SurfaceColorSpace::DisplayP3 => {
                 // The vendored bindings have no `colorSpace` setter, so set
                 // the dictionary member by reflection.
                 js_sys::Reflect::set(
@@ -4252,7 +4292,7 @@ impl dispatch::SurfaceInterface for WebSurface {
                 )
                 .expect("Setting the canvas configuration color space should never fail");
             }
-            wgt::SurfaceColorSpace::ExtendedSrgb => {
+            crate::__types::SurfaceColorSpace::ExtendedSrgb => {
                 // The canvas keeps the default "srgb" color space; "extended"
                 // tone mapping disables clamping to [0, 1], so an fp16 canvas
                 // holds sRGB-encoded extended-range values (the nonlinear sRGB
@@ -4262,7 +4302,7 @@ impl dispatch::SurfaceInterface for WebSurface {
                 tone_mapping.set_mode(webgpu_sys::GpuCanvasToneMappingMode::Extended);
                 mapped.set_tone_mapping(&tone_mapping);
             }
-            wgt::SurfaceColorSpace::ExtendedDisplayP3 => {
+            crate::__types::SurfaceColorSpace::ExtendedDisplayP3 => {
                 // Wide-gamut HDR: the "display-p3" canvas color space combined
                 // with "extended" tone mapping holds Display-P3-encoded
                 // extended-range values. Set both dictionary members (colorSpace
@@ -4277,9 +4317,9 @@ impl dispatch::SurfaceInterface for WebSurface {
                 tone_mapping.set_mode(webgpu_sys::GpuCanvasToneMappingMode::Extended);
                 mapped.set_tone_mapping(&tone_mapping);
             }
-            cs @ (wgt::SurfaceColorSpace::ExtendedSrgbLinear
-            | wgt::SurfaceColorSpace::Bt2100Pq
-            | wgt::SurfaceColorSpace::Bt2100Hlg) => {
+            cs @ (crate::__types::SurfaceColorSpace::ExtendedSrgbLinear
+            | crate::__types::SurfaceColorSpace::Bt2100Pq
+            | crate::__types::SurfaceColorSpace::Bt2100Hlg) => {
                 // Not representable on a WebGPU canvas: `ExtendedSrgbLinear`
                 // needs a linear-transfer canvas (WebGPU has none), and
                 // `Bt2100Pq`/`Bt2100Hlg` need PQ/HLG canvas signaling (browsers expose

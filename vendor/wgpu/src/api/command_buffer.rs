@@ -16,11 +16,11 @@ pub struct CommandBuffer {
     /// Deferred actions recorded at encode time, to run at Queue::submit.
     pub(crate) actions: SharedDeferredCommandBufferActions,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(CommandBuffer: Send, Sync);
 
 impl CommandBuffer {
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of CommandBuffer (if custom backend and is internally T)
     pub fn as_custom<T: custom::CommandBufferInterface>(&self) -> Option<&T> {
         self.buffer.as_custom()

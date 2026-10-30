@@ -1,5 +1,5 @@
 use alloc::{boxed::Box, string::String, sync::Arc, vec};
-#[cfg(wgpu_core)]
+#[cfg(jadix_wgpu_wgpu_core)]
 use core::ops::Deref;
 use core::{error, fmt, future::Future, marker::PhantomData};
 
@@ -20,7 +20,7 @@ use crate::*;
 pub struct Device {
     pub(crate) inner: dispatch::DispatchDevice,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(Device: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(Device => .inner);
@@ -31,17 +31,17 @@ crate::cmp::impl_eq_ord_hash_proxy!(Device => .inner);
 ///
 /// Corresponds to [WebGPU `GPUDeviceDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpudevicedescriptor).
-pub type DeviceDescriptor<'a> = wgt::DeviceDescriptor<Label<'a>>;
+pub type DeviceDescriptor<'a> = crate::__types::DeviceDescriptor<Label<'a>>;
 static_assertions::assert_impl_all!(DeviceDescriptor<'_>: Send, Sync);
 
 impl Device {
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of Device (if custom backend and is internally T)
     pub fn as_custom<T: custom::DeviceInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
     }
 
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Creates Device from custom implementation
     pub fn from_custom<T: custom::DeviceInterface>(device: T) -> Self {
         Self {
@@ -53,7 +53,7 @@ impl Device {
     ///
     /// This is a convenience function which avoids the configuration, `async`, and fallibility
     /// aspects of constructing a device through `Instance`.
-    #[cfg(feature = "noop")]
+    #[cfg(jadix_wgpu_feature_noop)]
     pub fn noop(desc: &DeviceDescriptor<'_>) -> (Device, Queue) {
         use core::future::Future as _;
         use core::pin::pin;
@@ -139,7 +139,7 @@ impl Device {
     pub fn create_shader_module(&self, desc: ShaderModuleDescriptor<'_>) -> ShaderModule {
         let module = self
             .inner
-            .create_shader_module(desc, wgt::ShaderRuntimeChecks::checked());
+            .create_shader_module(desc, crate::__types::ShaderRuntimeChecks::checked());
         ShaderModule { inner: module }
     }
 
@@ -336,13 +336,13 @@ impl Device {
     /// - `initial_state`, if it is not `TextureUses::UNINITIALIZED`, must
     ///   match the actual driver-side layout/state of the wrapped resource at
     ///   the moment of wrap.
-    #[cfg(wgpu_core)]
+    #[cfg(jadix_wgpu_wgpu_core)]
     #[must_use]
-    pub unsafe fn create_texture_from_hal<A: hal::Api>(
+    pub unsafe fn create_texture_from_hal<A: crate::__hal::Api>(
         &self,
         hal_texture: A::Texture,
         desc: &TextureDescriptor<'_>,
-        initial_state: wgt::TextureUses,
+        initial_state: crate::__types::TextureUses,
     ) -> Texture {
         let texture = unsafe {
             let core_device = self.inner.as_core();
@@ -379,7 +379,7 @@ impl Device {
     /// lifetime entirely on their own.
     ///
     /// This is the WebGPU counterpart of [`Self::create_texture_from_hal`].
-    /// A `Some` `drop_callback` plays the same role as `wgpu_hal::DropCallback`
+    /// A `Some` `drop_callback` plays the same role as `wgpu::hal::DropCallback`
     /// does on the Vulkan backend. The `None` case differs: here the texture is
     /// always external and wgpu never destroys it, whereas on Vulkan a `None`
     /// callback means wgpu takes ownership of the image and destroys it.
@@ -398,7 +398,7 @@ impl Device {
     ///    may use it (e.g. until any submitted command buffer that references
     ///    it has finished executing). If `drop_callback` is `Some`, it is
     ///    sufficient to keep the handle alive until the callback fires.
-    #[cfg(webgpu)]
+    #[cfg(jadix_wgpu_webgpu)]
     #[must_use]
     pub fn create_texture_from_webgpu_handle(
         &self,
@@ -422,7 +422,7 @@ impl Device {
 
     /// Returns the underlying [`webgpu::GpuDevice`] handle if this `Device`
     /// is on the WebGPU backend, otherwise `None`.
-    #[cfg(webgpu)]
+    #[cfg(jadix_wgpu_webgpu)]
     pub fn as_webgpu(&self) -> Option<&webgpu::GpuDevice> {
         self.inner.as_webgpu_opt().map(|wd| &wd.inner)
     }
@@ -458,9 +458,9 @@ impl Device {
     /// - `hal_buffer` must be created respecting `desc`
     /// - `hal_buffer` must be initialized
     /// - `hal_buffer` must not have zero size
-    #[cfg(wgpu_core)]
+    #[cfg(jadix_wgpu_wgpu_core)]
     #[must_use]
-    pub unsafe fn create_buffer_from_hal<A: hal::Api>(
+    pub unsafe fn create_buffer_from_hal<A: crate::__hal::Api>(
         &self,
         hal_buffer: A::Buffer,
         desc: &BufferDescriptor<'_>,
@@ -617,7 +617,7 @@ impl Device {
     ///
     /// If a counter is not set, its contains its default value (zero).
     #[must_use]
-    pub fn get_internal_counters(&self) -> wgt::InternalCounters {
+    pub fn get_internal_counters(&self) -> crate::__types::InternalCounters {
         self.inner.get_internal_counters()
     }
 
@@ -627,13 +627,13 @@ impl Device {
     /// Support it and still return `None` if it is not using performing sub-allocation,
     /// for example as a workaround for driver issues.
     #[must_use]
-    pub fn generate_allocator_report(&self) -> Option<wgt::AllocatorReport> {
+    pub fn generate_allocator_report(&self) -> Option<crate::__types::AllocatorReport> {
         self.inner.generate_allocator_report()
     }
 
     /// Get the [`wgpu_hal`] device from this `Device`.
     ///
-    /// Find the Api struct corresponding to the active backend in [`wgpu_hal::api`],
+    /// Find the Api struct corresponding to the active backend in [`wgpu::hal::api`],
     /// and pass that struct to the to the `A` type parameter.
     ///
     /// Returns a guard that dereferences to the type of the hal backend
@@ -664,8 +664,8 @@ impl Device {
     /// - All the safety requirements of wgpu-hal must be upheld.
     ///
     /// [`A::Device`]: hal::Api::Device
-    #[cfg(wgpu_core)]
-    pub unsafe fn as_hal<A: hal::Api>(
+    #[cfg(jadix_wgpu_wgpu_core)]
+    pub unsafe fn as_hal<A: crate::__hal::Api>(
         &self,
     ) -> Option<impl Deref<Target = A::Device> + WasmNotSendSync> {
         let device = self.inner.as_core_opt()?;
@@ -793,7 +793,7 @@ pub struct RequestDeviceError {
 
 impl RequestDeviceError {
     /// Construct an error from a custom backend message. This is mainly useful for custom backends.
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     pub fn from_message(message: String) -> Self {
         RequestDeviceError {
             inner: RequestDeviceErrorKind::Custom(message),
@@ -805,17 +805,17 @@ impl RequestDeviceError {
 pub(crate) enum RequestDeviceErrorKind {
     /// Error from [`wgpu_core`].
     // must match dependency cfg
-    #[cfg(wgpu_core)]
-    Core(wgc::instance::RequestDeviceError),
+    #[cfg(jadix_wgpu_wgpu_core)]
+    Core(crate::__core::instance::RequestDeviceError),
 
     /// Error from web API that was called by `wgpu` to request a device.
     ///
     /// (This is currently never used by the webgl backend, but it could be.)
-    #[cfg(webgpu)]
+    #[cfg(jadix_wgpu_webgpu)]
     WebGpu(String),
 
     /// Error from a custom backend.
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     Custom(String),
 }
 
@@ -824,15 +824,15 @@ static_assertions::assert_impl_all!(RequestDeviceError: Send, Sync);
 impl fmt::Display for RequestDeviceError {
     fn fmt(&self, _f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match &self.inner {
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             RequestDeviceErrorKind::Core(error) => error.fmt(_f),
-            #[cfg(webgpu)]
+            #[cfg(jadix_wgpu_webgpu)]
             RequestDeviceErrorKind::WebGpu(error) => {
                 write!(_f, "{error}")
             }
-            #[cfg(custom)]
+            #[cfg(jadix_wgpu_custom)]
             RequestDeviceErrorKind::Custom(msg) => write!(_f, "{msg}"),
-            #[cfg(not(any(webgpu, wgpu_core)))]
+            #[cfg(not(any(jadix_wgpu_webgpu, jadix_wgpu_wgpu_core)))]
             _ => unimplemented!("unknown `RequestDeviceErrorKind`"),
         }
     }
@@ -841,21 +841,21 @@ impl fmt::Display for RequestDeviceError {
 impl error::Error for RequestDeviceError {
     fn source(&self) -> Option<&(dyn error::Error + 'static)> {
         match &self.inner {
-            #[cfg(wgpu_core)]
+            #[cfg(jadix_wgpu_wgpu_core)]
             RequestDeviceErrorKind::Core(error) => error.source(),
-            #[cfg(webgpu)]
+            #[cfg(jadix_wgpu_webgpu)]
             RequestDeviceErrorKind::WebGpu(_) => None,
-            #[cfg(custom)]
+            #[cfg(jadix_wgpu_custom)]
             RequestDeviceErrorKind::Custom(_) => None,
-            #[cfg(not(any(webgpu, wgpu_core)))]
+            #[cfg(not(any(jadix_wgpu_webgpu, jadix_wgpu_wgpu_core)))]
             _ => unimplemented!("unknown `RequestDeviceErrorKind`"),
         }
     }
 }
 
-#[cfg(wgpu_core)]
-impl From<wgc::instance::RequestDeviceError> for RequestDeviceError {
-    fn from(error: wgc::instance::RequestDeviceError) -> Self {
+#[cfg(jadix_wgpu_wgpu_core)]
+impl From<crate::__core::instance::RequestDeviceError> for RequestDeviceError {
+    fn from(error: crate::__core::instance::RequestDeviceError) -> Self {
         Self {
             inner: RequestDeviceErrorKind::Core(error),
         }
@@ -883,13 +883,13 @@ static_assertions::assert_impl_all!(ErrorFilter: Send, Sync);
 /// Lower level source of the error.
 ///
 /// `Send + Sync` varies depending on configuration.
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 #[cfg_attr(docsrs, doc(cfg(all())))]
 pub type ErrorSource = Box<dyn error::Error + Send + Sync + 'static>;
 /// Lower level source of the error.
 ///
 /// `Send + Sync` varies depending on configuration.
-#[cfg(not(send_sync))]
+#[cfg(not(jadix_wgpu_send_sync))]
 #[cfg_attr(docsrs, doc(cfg(all())))]
 pub type ErrorSource = Box<dyn error::Error + 'static>;
 
@@ -922,7 +922,7 @@ pub enum Error {
         description: String,
     },
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(Error: Send, Sync);
 
 impl error::Error for Error {

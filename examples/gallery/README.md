@@ -72,7 +72,7 @@ Gallery 直接依赖工作区运行库：`jadix`、`jadix_core`、`jadix_layout`
 热重载监听单独启动：
 
 ```powershell
-cargo run -p jadix_hot_reload_cli -- .
+cargo run -p jadix_hot_reload --features cli --bin jadix-hot-reload -- .
 ```
 
 ## 验证

@@ -10,13 +10,13 @@ use crate::*;
 pub struct PipelineLayout {
     pub(crate) inner: dispatch::DispatchPipelineLayout,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(PipelineLayout: Send, Sync);
 
 crate::cmp::impl_eq_ord_hash_proxy!(PipelineLayout => .inner);
 
 impl PipelineLayout {
-    #[cfg(custom)]
+    #[cfg(jadix_wgpu_custom)]
     /// Returns custom implementation of PipelineLayout (if custom backend and is internally T)
     pub fn as_custom<T: custom::PipelineLayoutInterface>(&self) -> Option<&T> {
         self.inner.as_custom()
@@ -43,5 +43,5 @@ pub struct PipelineLayoutDescriptor<'a> {
     /// If this value is non-zero, [`Features::IMMEDIATES`] must be enabled.
     pub immediate_size: u32,
 }
-#[cfg(send_sync)]
+#[cfg(jadix_wgpu_send_sync)]
 static_assertions::assert_impl_all!(PipelineLayoutDescriptor<'_>: Send, Sync);

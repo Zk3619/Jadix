@@ -1,16 +1,12 @@
 # jadix_winit
 
 Jadix-owned source fork of the Winit **facade**, with small Win32 and Wayland
-backend patches. The facade uses pinned backend/common/core
-sources as explicit `jadix_winit_*` packages at `0.31.0-beta.3-jadix.1`.
-Normal/build dependencies use path plus registry versions, with no root patch
-or Git dependency required by consumers. Every backend and window helper shares
+backend patches. Backend, common and core sources are modules inside this single `jadix_winit` package at `0.31.0-beta.3-jadix.1`. They have no separate Cargo packages or release versions. Consumers need no root patch or Git dependency. Every backend and window helper shares
 registry `dpi = 0.1.2`. Workspace members retain the dependency alias `winit`.
 
-These packages are prepared for publication; this does not mean they have been
+This package is prepared for publication; this does not mean they have been
 uploaded or the registry names are owned. Source identities are recorded in
-`vendor/RELEASE_FORKS.json`, each `JADIX_FORK.md`, and the original
-`vendor/winit-{win32,wayland}/JADIX_PATCH.md`. Provenance identifies the imported source, not platform runtime validation.
+`vendor/RELEASE_FORKS.json`, the bundled records under `upstream/`, and the original native patch notes. Provenance identifies the imported source, not platform runtime validation.
 
 ## Source provenance (2026-10-16)
 
@@ -72,6 +68,10 @@ Kit consumes GPUI native backends; it does not have a separate OS event loop.
 
 Run `cargo test -p jadix_winit --lib` and the consuming application's window/proxy contracts. GPU/native window tests need separate interactive processes. Compile OHOS with its SDK, then verify focus, IME, surface recreation and teardown on a device.
 
-Keep the maintained core and all backends on compatible pinned versions. Reapply documented native patches and update source provenance together. A consumer resolves versioned packages without copying repository patches. Check Cargo metadata for one maintained Winit core and one registry DPI identity across all targets, then validate each supported platform.
+Keep the bundled core and backends on a compatible upstream revision. Reapply documented native patches and update source provenance together. A consumer resolves versioned packages without copying repository patches. Check Cargo metadata for one maintained Winit core and one registry DPI identity across all targets, then validate each supported platform.
 
 Traffic-light placement must be reapplied after native layout transitions. Callers must publish Windows caption regions after layout. Client frame geometry, layer-shell and application-global Linux menus are outside these extensions. Host compilation alone does not certify native interaction or accessibility.
+
+## Bundled source maintenance
+
+The bundled modules retain their upstream test layout and lint policies. Defensive wildcard matches on formerly cross-crate non-exhaustive enums are retained for upstream synchronization; the module boundary permits the newly unreachable patterns. Facade code continues to use strict Clippy checks. Update bundled modules together when refreshing their shared upstream revision.
