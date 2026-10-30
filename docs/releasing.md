@@ -21,7 +21,7 @@ python scripts/release/check-r4-documents.py --help
 
 Windows 发布者在本机交互运行 `./scripts/release/login-crates-io.ps1`：隐藏输入 token，经 stdin 交给 `cargo login --registry crates-io`，由 `cargo:wincred` 保存到 Windows Credential Manager。不要把 token 放进命令参数、仓库、日志或聊天。Cargo 用户配置中的 crates-io provider 应为 `cargo:wincred`；下载镜像与发布地址分开配置。配置 provider 并不代表已经登录，也不证明 token 拥有全部 48 包的发布权限。
 
-发布前须通过 `cargo fmt --all -- --check`、公开文档与测试布局门、工具契约、当前源码归档对照及默认 10 MiB 上传体积门。已获得 registry 单包扩容许可时须另存授权证据，不能自行假设无限制。CI 有失败时先修复并通过，再进行真实上传；不得因预检脚本存在就标为已签收。
+发布前须通过 `cargo fmt --all -- --check`、公开文档与测试布局门、工具契约、当前源码归档对照及默认 10 MiB 上传体积门。已获得 registry 单包扩容许可时须另存授权证据，不能自行假设无限制。CI 的代码或测试失败应先修复；若托管 CI 因付款、额度等外部原因无法启动，可由发布负责人明确接受该限制，记录授权、实际本地替代检查及未覆盖平台后继续发布，不把未执行的 job 标为通过。预检脚本存在或外部限制例外均不能代替实际测试、上传和消费证据。
 
 ## 实际发布与验证
 
