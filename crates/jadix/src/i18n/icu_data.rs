@@ -35,7 +35,7 @@ pub fn icu_locale(loc: &Locale) -> IcuLocale {
         loc.tag()
     };
     tag.parse::<IcuLocale>()
-        .unwrap_or_else(|_| icu::locale::locale!("en").into())
+        .unwrap_or(icu::locale::locale!("en"))
 }
 
 pub fn writeable_to_string(w: impl Writeable) -> String {

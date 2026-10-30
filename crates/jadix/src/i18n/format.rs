@@ -131,7 +131,7 @@ pub fn format_date_locale(
     let lang = locale.language();
     let month_long = month_name_for(locale, month, MonthNameStyle::Long);
     let month_short = month_name_for(locale, month, MonthNameStyle::Short);
-    let weekday = weekday_index(year, month, day).and_then(|w| Some(weekday_name_for(locale, w)));
+    let weekday = weekday_index(year, month, day).map(|weekday| weekday_name_for(locale, weekday));
     match (lang, style) {
         ("zh" | "ja", DateStyle::Short) => format!("{year}/{month}/{day}"),
         ("zh" | "ja", DateStyle::Medium | DateStyle::Long) => {

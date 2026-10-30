@@ -170,10 +170,8 @@ fn flatten_skip_meta(prefix: &str, value: &toml::Value, bundle: &mut MessageBund
                 flatten_skip_meta(&key, v, bundle);
             }
         }
-        toml::Value::String(s) => {
-            if !prefix.is_empty() {
-                bundle.insert(prefix, s.clone());
-            }
+        toml::Value::String(s) if !prefix.is_empty() => {
+            bundle.insert(prefix, s.clone());
         }
         toml::Value::Integer(n) => bundle.insert(prefix, n.to_string()),
         toml::Value::Float(n) => bundle.insert(prefix, n.to_string()),

@@ -252,7 +252,7 @@ fn note_missing(locale: &Locale, key: &str) {
 }
 
 fn apply_pseudo(loc: &Locale, text: String) -> String {
-    match loc.region().as_deref() {
+    match loc.region() {
         Some("XA") => pseudo::accent_xa(&text),
         Some("XB") => pseudo::wrap_xb(&text),
         _ => text,

@@ -48,9 +48,9 @@ fn format_inner(
         match ch {
             '\'' => {
                 let after = &rest[ch_len..];
-                if after.starts_with('\'') {
+                if let Some(stripped) = after.strip_prefix('\'') {
                     out.push('\'');
-                    rest = &after[1..];
+                    rest = stripped;
                 } else {
                     rest = after;
                     loop {
@@ -61,9 +61,9 @@ fn format_inner(
                         let q_len = q.len_utf8();
                         if q == '\'' {
                             let nxt = &rest[q_len..];
-                            if nxt.starts_with('\'') {
+                            if let Some(stripped) = nxt.strip_prefix('\'') {
                                 out.push('\'');
-                                rest = &nxt[1..];
+                                rest = stripped;
                             } else {
                                 rest = nxt;
                                 break;

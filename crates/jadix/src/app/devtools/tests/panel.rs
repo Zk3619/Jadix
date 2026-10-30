@@ -1113,7 +1113,7 @@ fn closed_inspector_preserves_full_size_app_layout() {
             .children([vstack()
                 .w("100%")
                 .h("100%")
-                .children([label("Visible gallery content").into()])
+                .children([label("Visible gallery content")])
                 .into()])
             .into();
         let mut root = crate::app::prepare_primary_ui(app);
@@ -1140,7 +1140,7 @@ fn primary_ui_rebuild_retains_inspector_and_mounted_navigation_page() {
         let nav = crate::app::navigator::Navigator::new("rebuild-gallery", "home", ["home"]);
         let build = || {
             let app = crate::app::navigator::navigation_host(nav.clone(), |_| {
-                let mut page: Element = label("Gallery page remains visible").into();
+                let mut page: Element = label("Gallery page remains visible");
                 page.template_id = Some("gallery-rebuild-page".into());
                 Element::new().child(page)
             })

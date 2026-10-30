@@ -69,12 +69,11 @@ impl Locale {
                 let mut chars = part.chars();
                 let first = chars.next()?.to_ascii_uppercase();
                 script = Some(format!("{first}{}", chars.as_str()));
-            } else if (part.len() == 2 && part.chars().all(|c| c.is_ascii_alphabetic()))
-                || (part.len() == 3 && part.chars().all(|c| c.is_ascii_digit()))
+            } else if ((part.len() == 2 && part.chars().all(|c| c.is_ascii_alphabetic()))
+                || (part.len() == 3 && part.chars().all(|c| c.is_ascii_digit())))
+                && region.is_none()
             {
-                if region.is_none() {
-                    region = Some(part.to_ascii_uppercase());
-                }
+                region = Some(part.to_ascii_uppercase());
             }
         }
         Some(Self {

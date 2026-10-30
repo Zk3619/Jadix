@@ -718,7 +718,7 @@ fn synthetic_i420_frame(phase: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
     for py in 0..h {
         for px in 0..w {
             let on_bar = (px as i32 - bar_x).abs() < STREAM_BAR_HALF;
-            let stripe = ((px + phase / 2) / 24) % 2 == 0;
+            let stripe = ((px + phase / 2) / 24).is_multiple_of(2);
             y[(py * w + px) as usize] = if on_bar {
                 140
             } else if stripe {

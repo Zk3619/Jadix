@@ -254,7 +254,7 @@ fn parse_material(attrs: &std::collections::HashMap<String, String>) -> Scene3dM
 
 #[cfg(feature = "scene3d")]
 thread_local! {
-    static JOBS: std::cell::RefCell<Vec<Scene3dJob>> = std::cell::RefCell::new(Vec::new());
+    static JOBS: std::cell::RefCell<Vec<Scene3dJob>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 #[cfg(feature = "scene3d")]

@@ -1511,7 +1511,7 @@ fn layered_scrollbar_only_crops_menu_repaint_while_it_emits_paint() {
     track.layered = true;
     for visible in [false, true] {
         track.instance = if visible { (1, 2) } else { (1, 1) };
-        let paints = [menu.clone(), track.clone()];
+        let paints = [menu, track];
         let clipped =
             clip_node_present_rect(menu_bounds, menu.key, menu_bounds, &paints, 1.0, true, &[]);
         assert_eq!(

@@ -6,7 +6,7 @@ use proc_macro::TokenStream;
 use quote::{quote, quote_spanned};
 use syn::parse::{Parse, ParseStream, Parser};
 use syn::visit::Visit;
-use syn::{braced, Expr, Ident, Token};
+use syn::{Expr, Ident, Token, braced};
 
 /// RSX 中省略 `id` 的 `<Input>`：编译期为每个标签分配序号，生成稳定字面量，避免多个 Input 共用空 `id` 导致信号冲突。
 static INPUT_RSX_ANON_SEQ: AtomicUsize = AtomicUsize::new(0);

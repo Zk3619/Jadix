@@ -36,9 +36,9 @@ fn for_each_element<'a>(root: &'a Element, visit: impl FnMut(&'a Element)) {
 /// `mark_*` samples a local; consecutive DFS entries approximate one frame.
 #[cfg(test)]
 pub(crate) mod stack_probe {
-    use std::cell::Cell;
     #[cfg(any(target_os = "android", target_env = "ohos"))]
     use crate::thread_local::LocalKey;
+    use std::cell::Cell;
     #[cfg(not(any(target_os = "android", target_env = "ohos")))]
     use std::thread::LocalKey;
 

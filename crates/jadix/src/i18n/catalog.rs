@@ -72,10 +72,8 @@ fn flatten_toml(prefix: &str, value: &toml::Value, out: &mut HashMap<String, Str
                 flatten_toml(&key, v, out);
             }
         }
-        toml::Value::String(s) => {
-            if !prefix.is_empty() {
-                out.insert(prefix.to_string(), s.clone());
-            }
+        toml::Value::String(s) if !prefix.is_empty() => {
+            out.insert(prefix.to_string(), s.clone());
         }
         toml::Value::Integer(n) => {
             out.insert(prefix.to_string(), n.to_string());
@@ -102,10 +100,8 @@ fn flatten_json(prefix: &str, value: &serde_json::Value, out: &mut HashMap<Strin
                 flatten_json(&key, v, out);
             }
         }
-        serde_json::Value::String(s) => {
-            if !prefix.is_empty() {
-                out.insert(prefix.to_string(), s.clone());
-            }
+        serde_json::Value::String(s) if !prefix.is_empty() => {
+            out.insert(prefix.to_string(), s.clone());
         }
         serde_json::Value::Number(n) => {
             out.insert(prefix.to_string(), n.to_string());

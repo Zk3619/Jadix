@@ -1406,7 +1406,8 @@ impl ApplicationHandler for super::App {
                 ..
             } => {
                 if let winit::event::ButtonSource::Touch { finger_id, .. } = &button {
-                    if self.primary_touch_id.is_none() || self.primary_touch_id == Some(*finger_id) {
+                    if self.primary_touch_id.is_none() || self.primary_touch_id == Some(*finger_id)
+                    {
                         if self.is_secondary_window(id) {
                             self.handle_secondary_cursor_moved(id, position, event_loop);
                         } else {
