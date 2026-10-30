@@ -55,6 +55,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets --no-deps -- -D warnings
+      - name: Clippy (optional hot-reload CLI)
+        run: cargo clippy -p jadix_hot_reload --features cli --all-targets --no-deps -- -D warnings
       - name: Clippy (remote-asset)
         run: cargo clippy -p jadix --all-targets --no-deps --features remote-asset -- -D warnings
       - name: Clippy (image-stream)
@@ -153,6 +155,8 @@ jobs:
         run: cargo test -p jadix_winit --lib projects_real_configure
       - name: Test
         run: cargo test --workspace
+      - name: Optional hot-reload CLI
+        run: cargo test -p jadix_hot_reload --features cli --all-targets
       - name: Native menu contracts (Windows)
         if: runner.os == 'Windows'
         run: 'cargo test -p jadix --lib --features native-menu,system-tray native_menu:: -- --test-threads=1'
