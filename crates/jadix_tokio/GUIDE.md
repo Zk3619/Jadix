@@ -48,5 +48,3 @@ on a dedicated background thread for GUI use; it only polls while `block_on` run
 Alternatively use a multi-thread runtime alongside the GUI main thread. Never
 block the UI to drive or shut down a runtime. Runtime destruction drops unfinished
 futures; TaskScope reports them as `Abandoned` unless already cancelled/closed.
-
-Verification: `cargo test -p jadix_tokio`.

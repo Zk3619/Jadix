@@ -1,7 +1,5 @@
 # Audio / Video 与媒体播放器组件
 
-
-
 ## 分层与依赖
 
 | 层 | 位置 | 职责 |
@@ -178,12 +176,3 @@ Contain 默认按视频尺寸居中留边，cover 保持比例裁剪 UV，fill �
 
 字幕、波形、封面、播放列表和音轨菜单可用现有 Label / Canvas / Image / Select / List 组合。字幕解析、音轨切换由外部扩展执行。播放器展示模式、窗口全屏及宿主全屏 / 画中画请求见 [展示与窗口接入](presentation.md)。
 
-## 验证和示例
-
-- cargo test -p jadix_media：数值、能力、VOD / DVR、事件和加载契约。
-- cargo test -p jadix --test media_player --features a11y：双 API、别名、嵌套隔离、命令与状态分离、禁用、owner 生命周期、无障碍值、视频几何与窄宽度布局。
-- cargo test -p jadix --test media_sessions：连续加载、过期事件、拒绝回滚、同步与重入确认、去重和会话溢出。
-- cargo test -p jadix --lib components::media_player::tests：后端更新无命令回送、指针定位与动态能力变化。
-- cargo test -p jadix_macros --lib：组件宏及现有标签兼容性。
-- cargo check -p gallery：示例构建。
-- Gallery → 绘图页 → Audio / Video：默认 VideoPlayer、自定义 AudioPlayer，明确标注的外部状态回传模拟。没有解码和声音输出。

@@ -4,18 +4,18 @@
 
 Lucide 静态图标与可选动画配方、路径运算，静态使用不要求完整动画栈。
 
-本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.0`。** 本地归档和清单不代表 registry 已可安装。
+本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.0`。**
 
 ## 安装
 
-使用目标 registry 中可用的对应版本：
+在应用中添加依赖：
 
 ```toml
 [dependencies]
 jadix_lucide = "=0.1.0"
 ```
 
-发布前使用源码工作区。普通应用从同一 registry 解析依赖图，不复制本仓私有 path／git／patch；平台专用包仍需对应 SDK。
+平台专用功能需要对应平台的 SDK。
 
 ## Feature 与边界
 
@@ -33,9 +33,9 @@ jadix_lucide = "=0.1.0"
 
 SVG 默认 24×24、`fill="none"`、`stroke="currentColor"`。对于合适的闭合轮廓，可以修改 SVG 的 `fill` 与 `stroke`。Lucide 按描边图标设计，开放路径、孔洞和交叠线条不会自动变成正确的实心图标。字体字形改色只改变已有描边，不能填满内部；需要可靠的实心轮廓时，应提供专门绘制的 SVG。复制时保留 [NOTICE](NOTICE)。
 
-## 文档与贡献
+## 文档
 
-[项目文档](https://github.com/Zk3619/Jadix/tree/main/docs)说明用法、迁移、测试和发布。保留测试发现入口，私有模块测试与公开契约分层；包配置变化同步两种 README。
+[项目文档](https://github.com/Zk3619/Jadix/tree/main/docs)介绍应用配置、平台接入、功能选择与 API 用法。
 
 ## 许可证
 

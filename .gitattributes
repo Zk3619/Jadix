@@ -1,4 +1,4 @@
 *.md whitespace=-blank-at-eol,-blank-at-eof
-vendor/cosmic-text/benches/layout.rs whitespace=-blank-at-eol
-vendor/cosmic-text/fonts/*-LICENSE whitespace=-blank-at-eol
-vendor/cosmic-text/sample/*.txt whitespace=-blank-at-eol
+crates/jadix_cosmic_text/benches/layout.rs whitespace=-blank-at-eol
+crates/jadix_cosmic_text/fonts/*-LICENSE whitespace=-blank-at-eol
+crates/jadix_cosmic_text/sample/*.txt whitespace=-blank-at-eol

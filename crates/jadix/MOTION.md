@@ -151,4 +151,3 @@ Gallery 所有分区的 `p-3 sm:p-4 lg:p-6` 容器显式声明 `padding 200ms ea
 全局 `prefers_reduced_motion` 对这些绑定即时生效，包括正在播放的动画；路径绑定直接到末态。
 `AnimatedNumber::jump(value)` 立即设置值，取消队列、pending target、跟随、速度和播放状态，保持信号身份。
 
-验证：`cargo test -p jadix --lib --features animation-path motion:: -- --test-threads=1`。

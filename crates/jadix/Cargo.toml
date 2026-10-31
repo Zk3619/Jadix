@@ -80,7 +80,7 @@ backend-metal = ["wgpu/metal"]
 # Native graphics HAL and ANGLE are independently selectable.
 # Experimental: native-window color and sustained presentation are not accepted yet.
 
-# Experimental native SM5 graphics subset; see vendor/wgpu/upstream/wgpu-hal/JADIX_DX11_PATCH.md.
+# Experimental native SM5 graphics subset; see crates/jadix_wgpu/upstream/wgpu-hal/JADIX_DX11_PATCH.md.
 backend-dx11-native = ["jadix_renderer/backend-dx11-native", "wgpu/dx11"]
 backend-dx11-angle = ["jadix_renderer/backend-dx11-angle", "backend-gles", "wgpu/gles-angle"]
 backend-dx11 = ["backend-dx11-native"]

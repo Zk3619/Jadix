@@ -41,7 +41,7 @@ let video_node: Element = video().id("movie").rotation("90").into();
 let floating: Element = portal("movie-overlay").mount("overlay-host").child(video_node).into();
 ```
 
-这是消费形式说明，不表示当前候选已经发布。应用要打开窗口还须选择对应 GPU 后端。`audio()`、`video()` 和 `portal(id)` 及其 Builder 不依赖 UI 过程宏；`Audio`／`Video`／`Portal` 与对应 `*Props` 仅供宏作者层，随 `macros` 门控。媒体 Builder 保持组件 Owner、隔离读取、样式处理的原顺序，宏适配调用相同运行时实现。现有默认配置保留宏兼容；应用可显式选择 `features = ["macros"]` 恢复 RSX 与属性宏。
+应用要打开窗口还须选择对应 GPU 后端。`audio()`、`video()` 和 `portal(id)` 及其 Builder 不依赖 UI 过程宏；`Audio`／`Video`／`Portal` 与对应 `*Props` 仅供宏作者层，随 `macros` 门控。媒体 Builder 保持组件 Owner、隔离读取、样式处理的原顺序，宏适配调用相同运行时实现。现有默认配置保留宏兼容；应用可显式选择 `features = ["macros"]` 恢复 RSX 与属性宏。
 
 ## 组件宏与显式运行时路径
 
@@ -63,8 +63,6 @@ pub fn Caption(value: String, children: Option<Element>) -> Element {
 调用方可以从另一 crate 引入生成的 `Caption`／`CaptionProps`。`impl_slot_map_methods!`、`impl_overlay_content_slot!`、`impl_simple_slot_builder!` 等既有声明式 Builder 宏从框架作者接口生成样式代码，宏名和调用方式不变。
 
 `jadix::ui!` 携带运行时路径；外部产品门面还可通过隐藏的 `__ui_runtime!` 显式选择 `components`、`dnd`、`icons` 模块路径。特殊标签由可选 `jadix_macros` 的显式产品路径规则展开；过程宏现由 `jadix/macros` 控制。关闭默认 features 后可以只使用普通函数／Builder；三个独立产品默认关闭 `macros`，Props／Builder 不依赖 UI 宏或解析包。
-
-
 
 ## 自定义控件的指针拖动
 
@@ -92,12 +90,7 @@ pub fn Caption(value: String, children: Option<Element>) -> Element {
 
 实现者须提供 `prepare_autoscroll`／`prepare_inertia`，先采样并延后 `dispatch`。`pump_autoscroll`／`pump_inertia` 同步入口适用于调用方已保证无宿主树借用的场景。拖拽产品回调不持有宿主树借用；布局回调仍须遵循前述借用约束。框架的 `drag` 桥与独立 `jadix_dnd` 产品分别选择。
 
-[外部 BoardDrag 示例](../crates/jadix/tests/fixtures/authoring/board_drag.rs)只依赖公开框架接口。同一份源码既作为独立 provider crate 的模块编译，也直接作为消费者模块嵌入；`scripts/checks/check-authoring.ps1 -Offline` 验证重命名运行时下的两种消费方式。该验证使用工作区构建产物，尚未验证已发布 crate 安装，也不代表现有完整组件库或 Lucide 资源已经可以直接复制使用。
-
-## 分发边界
-
-本接口适用于项目内自定义组件或外部组件 crate。`jadix_components`、`jadix_lucide`、`jadix_dnd` 分别提供独立产品；普通 Builder 与可选宏共用运行时接口。复制源码时必须同时保留依赖、feature、资源和许可证。能力开关见 [FEATURES](FEATURES.md)，分发验证见[测试规范](testing.md)。
-
+[外部 BoardDrag 示例](../crates/jadix/tests/fixtures/authoring/board_drag.rs)只依赖公开框架接口，可作为独立 provider crate 的模块使用，也可嵌入消费者模块。
 
 ## 挂载、命中与保留绘制
 
@@ -126,13 +119,9 @@ pub fn Caption(value: String, children: Option<Element>) -> Element {
 
 主、副窗均接入 Hover／State，布局 collect 接入两个 AfterLayout 阶段。当前 Switch、Checkbox、RadioGroup、Tabs、Sidebar 菜单按钮、TreeView 行、Command、ContextMenu、DropdownMenu 及 MessageScroller 已使用该接口；Button、Table、Avatar／Bubble 等也通过节点回调接入；Sidebar、MediaPlayer 与 Drawer 的跨树行为由节点持有。
 
-## 宏与源码复制的验证范围
+## 宏路径与源码定制
 
-通过 `jadix::ui!` 调用框架 RSX 时，展开会携带实际运行时路径；产品标签改用 `jadix_components::ui!` / `jadix_dnd::ui!` / `jadix_lucide::ui!` 或显式产品路径，不能依赖已删除的框架内置产品。依赖改名的 Builder 与宏消费均由仓外夹具验证。`#[component(crate_path = "runtime")]` 的显式路径契约继续适用。直接使用底层 `jadix_macros::ui!` 仍保留原来的 `jadix` 路径约定；应用和组件作者优先使用运行时重导出的宏。
-
-`scripts/checks/check-authoring.ps1` 验证跨 crate 自定义组件及同一 BoardDrag 源码的两种消费方式。`scripts/checks/check-dnd-source.ps1` 把完整高层 DnD 实现复制到全新目录，保留共享的 pointer／routing／runtime 协议身份后编译独立外部 crate，验证会话独立、布局、Owner 清理和旧任务失效。它们使用当前工作区构建产物，不证明发布 registry、无根 patch 消费或所有组件源码都能直接复制。
-
-`scripts/checks/check-lucide-source.ps1` 委托统一产品分发验证，覆盖单一 `jadix_lucide` 的目录、字体、配方、hover、morph 和纹理。纯 Rust 文件复制不足以代替资源/依赖闭包；这些本地验证不冒充 registry 发布。
+通过 `jadix::ui!` 调用框架 RSX 时，展开会携带实际运行时路径；产品标签改用 `jadix_components::ui!` / `jadix_dnd::ui!` / `jadix_lucide::ui!` 或显式产品路径，不能依赖已删除的框架内置产品。`#[component(crate_path = "runtime")]` 的显式路径契约继续适用。直接使用底层 `jadix_macros::ui!` 仍保留原来的 `jadix` 路径约定；应用和组件作者优先使用运行时重导出的宏。
 
 ## 窗口、定时与输入
 
@@ -157,7 +146,6 @@ WebView 的窗口原生宿主位于 `platform::webview`，UI 产品只负责页�
 `authoring::state::State` 是节点持有的按类型存储；`get`／`get_mut`／`set`／`remove` 不要求框架认识产品类型，克隆后修改采用写时复制。Button 的 variant、禁用描述和悬停缓动位于产品模块。`Element::authored_style` 只向 Inspector 返回普通 Style，`disabled_sync` 负责产品禁用策略，`paint_fill_inset`／`paint_caption_scope`／`owns_focus_paint` 声明局部绘制边界和焦点外观职责。框架不根据 Button variant 计算外观。
 
 Element 中历史命名的 `switch_checked_sync`／`checkbox_sync`／`radio_selected_sync` 仍保留同类型兼容接口；它们仅承载布尔／选择 Signal，用于共享 Switch／CheckBox／RadioButton 可访问性角色、checked 状态、订阅和诊断。具体产品的颜色、勾选标记、布局和状态推进由节点呈现回调完成。`TextEditPaintSync` 属于输入／IME／选择／光标的共享编辑协议；它不要求内置 Input／Textarea 产品模块参与编译。
-
 
 节点可用 `paint_opaque_fill` 声明不透明背景／边框在节点可见时保持填充，文字和图标仍使用节点透明度；`paint_region_replay` 让局部合成变化重绘周围页面区域；`paint_children_unculled` 让溢出且移动的子节点在仅滚动收集时仍被访问。默认全部关闭。框架不按组件的 `data-slot` 或名称猜测这些策略，属性参与绘制缓存指纹。
 

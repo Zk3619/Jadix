@@ -45,8 +45,9 @@ def main():
     root = Path(__file__).resolve().parents[2]
     provenance = json.loads((root / "vendor/RELEASE_FORKS.json").read_text(encoding="utf-8"))
     bundled = [root / source["directory"] for source in provenance.get("bundled_sources", []) if source.get("directory")]
-    own = [inspect_crate(path.parent, bundled) for path in sorted((root / "crates").glob("*/Cargo.toml"))]
     forks = provenance["forks"]
+    fork_directories = {root / fork["directory"] for fork in forks}
+    own = [inspect_crate(path.parent, bundled) for path in sorted((root / "crates").glob("*/Cargo.toml")) if path.parent not in fork_directories]
     maintained = []
     for fork in forks:
         directory = root / fork["directory"]

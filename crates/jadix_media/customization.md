@@ -148,4 +148,3 @@ let slots = MediaPlayerSlots::new().replace(MediaPlayerSlot::Timeline, move || {
 
 MediaBackend、Audio / Video 原语和会话过滤契约不因 UI 扩展而耦合插件包。编码媒体、网络密钥和翻译凭证不应放进样式或任意 HTML 字符串；本设计只接受受类型约束的元素、值与闭包。
 
-## 开发验证

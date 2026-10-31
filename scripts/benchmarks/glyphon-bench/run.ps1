@@ -21,14 +21,16 @@ New-Item -ItemType Directory -Force $lab | Out-Null
 if (!$SkipBuild) {
 # All instrumentation is applied to disposable copies, never to production sources.
 foreach ($variant in @('base', 'patch')) {
-    $source = if ($variant -eq 'base') { $upstream.FullName } else { Join-Path $repo 'vendor/glyphon' }
+    $source = if ($variant -eq 'base') { $upstream.FullName } else { Join-Path $repo 'crates/jadix_glyphon' }
     $destination = Join-Path $lab $variant
     New-Item -ItemType Directory -Force $destination | Out-Null
     Copy-Item (Join-Path $source 'src') $destination -Recurse -Force
-    $manifest = Get-Content (Join-Path $repo 'vendor/glyphon/Cargo.toml') -Raw
+    $manifest = Get-Content (Join-Path $repo 'crates/jadix_glyphon/Cargo.toml') -Raw
     $manifest = $manifest.Replace('"name" = "jadix_glyphon"', "`"name`" = `"glyphon_bench_$variant`"")
-    $gpuPath = (Join-Path $repo "vendor/wgpu").Replace("\", "/")
-    $manifest = $manifest.Replace('"path" = "../wgpu"', "`"path`" = `"$gpuPath`"")
+    $gpuPath = (Join-Path $repo "crates/jadix_wgpu").Replace("\", "/")
+    $manifest = $manifest.Replace('"path" = "../jadix_wgpu"', "`"path`" = `"$gpuPath`"")
+    $cosmicPath = (Join-Path $repo "crates/jadix_cosmic_text").Replace("\", "/")
+    $manifest = $manifest.Replace('"path" = "../jadix_cosmic_text"', "`"path`" = `"$cosmicPath`"")
     $manifest += "`n[features]`nbench-metrics = []`n"
     Set-Content (Join-Path $destination 'Cargo.toml') $manifest -Encoding utf8
     $libPath = Join-Path $destination 'src/lib.rs'
@@ -92,12 +94,12 @@ metrics = ["glyphon_patch?/bench-metrics", "glyphon_base?/bench-metrics"]
 [dependencies]
 glyphon_base = { package = "glyphon_bench_base", path = "../base", optional = true }
 glyphon_patch = { package = "glyphon_bench_patch", path = "../patch", optional = true }
-wgpu = { package = "jadix_wgpu", path = "GPU_PATH", version = "=30.0.0", default-features = false, features = ["std", "parking_lot", "wgsl", "gles", "dx12"] }
+wgpu = { package = "jadix_wgpu", path = "GPU_PATH", version = "=0.1.0", default-features = false, features = ["std", "parking_lot", "wgsl", "gles", "dx12"] }
 [profile.release]
 opt-level = 2
 lto = false
 codegen-units = 16
-'@.Replace('GPU_PATH', (Join-Path $repo 'vendor/wgpu').Replace('\', '/')) | Set-Content (Join-Path $project 'Cargo.toml') -Encoding utf8
+'@.Replace('GPU_PATH', (Join-Path $repo 'crates/jadix_wgpu').Replace('\', '/')) | Set-Content (Join-Path $project 'Cargo.toml') -Encoding utf8
 Copy-Item (Join-Path $repo 'Cargo.lock') (Join-Path $project 'Cargo.lock') -Force
 foreach ($variant in @('baseline', 'patched')) {
     foreach ($mode in @('timing', 'metrics')) {
@@ -123,7 +125,7 @@ $metadata = [ordered]@{
     graphics = @(Get-CimInstance Win32_VideoController | Select-Object Name, DriverVersion)
     upstream_source = $upstream.FullName
     font_sha256 = (Get-FileHash (Join-Path $repo 'crates/jadix/assets/NotoSansCJK.ttc')).Hash
-    patched_atlas_sha256 = (Get-FileHash (Join-Path $repo 'vendor/glyphon/src/text_atlas.rs')).Hash
+    patched_atlas_sha256 = (Get-FileHash (Join-Path $repo 'crates/jadix_glyphon/src/text_atlas.rs')).Hash
 }
 $metadata | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $lab "$Label-metadata.json") -Encoding utf8
 $font = Join-Path $repo 'crates/jadix/assets/NotoSansCJK.ttc'

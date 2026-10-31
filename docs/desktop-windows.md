@@ -118,13 +118,3 @@ cargo run -p gallery -- --gallery-instance-demo=multiple
 
 验证独立存活：在演示进程中打开一个跟随次窗和一个独立次窗，再点击「关闭主窗（验证独立存活）」。跟随次窗关闭，独立次窗保留；可以继续创建新窗口。若该进程为单例，再次启动相同单例会激活存活次窗，并在该窗口显示启动参数。关闭最后一个窗口结束进程。
 
-## 回归验证
-
-```powershell
-cargo test -p jadix --lib app::window_keys::tests -- --test-threads=1
-cargo test -p jadix --lib app::instance::desktop::tests -- --test-threads=1
-cargo test -p jadix --lib desktop_policies_are_explicit -- --test-threads=1
-cargo test -p jadix --lib independent_windows_survive_primary_and_last_close_exits -- --ignored --test-threads=1
-```
-
-最后一项需要交互式 Windows 桌面和可用 GPU，并且应与其他创建事件循环的测试分进程运行。

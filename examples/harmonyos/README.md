@@ -37,11 +37,6 @@ These commands do not link a cdylib or certify GPU presentation, IME, focus, sur
 
 Enable the a11y feature for the native ArkUI provider:
 
-    cargo check -p harmonyos_host --lib --features a11y --target aarch64-unknown-linux-ohos
-    cargo clippy -p jadix_accesskit_ohos --all-features --target aarch64-unknown-linux-ohos -- -D warnings
-    cargo test -p jadix_accesskit_ohos --lib
-    cargo test -p jadix --lib --features a11y a11y:: -- --test-threads=1
-
 Winit PR #4684 (head c9ee2bff) and AccessKit PR #828 (head b50ecd7e)
 identify the imported source revisions. The pinned winit-ohos
 already supplies #4684's backend and the Ability accessibility state plugin.

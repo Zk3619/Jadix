@@ -7,15 +7,22 @@ from pathlib import Path
 from urllib.parse import unquote, urlsplit
 
 STAGE = re.compile(r"(?<![A-Za-z0-9])(?:HR\d+|R[0-5]|TG\d+|DG\d+)(?![A-Za-z0-9])")
+MAINTAINER_COMMAND = re.compile(r"\bcargo\s+(?:publish|login|owner|yank|test)\b|scripts/(?:release|acceptance|checks)/|testing and releases|测试和发布|保留测试发现")
+DEVELOPMENT_RECORD = re.compile(r"\.theme-evidence[/\\]|发布候选|待发布版本|交接基线|手动上传至 crates\.io|manual publication to crates\.io", re.IGNORECASE)
 
 
 def documentation_issues(name, text):
     issues = []
+    upstream_reference = "/src/changelog/" in name or ("/upstream/" in name and not Path(name).name.startswith("JADIX_"))
     for number, line in enumerate(text.splitlines(), 1):
         if "development-docs" in line:
             issues.append({"path": name, "line": number, "reason": "private_development_document_reference"})
         if STAGE.search(line):
             issues.append({"path": name, "line": number, "reason": "internal_execution_stage"})
+        if not upstream_reference and MAINTAINER_COMMAND.search(line):
+            issues.append({"path": name, "line": number, "reason": "maintainer_operation_in_public_docs"})
+        if DEVELOPMENT_RECORD.search(line):
+            issues.append({"path": name, "line": number, "reason": "development_record_in_public_docs"})
     return issues
 
 

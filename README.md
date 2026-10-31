@@ -5,7 +5,7 @@
 A Rust-native UI framework with reactive state, GPU rendering, and optional declarative macros.
 Use ordinary Rust builders, add product libraries independently, and select capabilities with Cargo features.
 
-> **Alpha · unreleased.** APIs are evolving. Manifest versions are prepared versions, not proof of availability on crates.io. Platform and architecture validation varies; see the [build guide](docs/BUILD.md) for tested configurations and remaining host, packaging and device work.
+> **Alpha.** APIs are evolving. See the [build guide](docs/BUILD.md) for platform requirements, SDK setup, and application packaging.
 
 ## Features
 
@@ -31,7 +31,7 @@ The [build guide](docs/BUILD.md) covers Windows, macOS, Linux, Android, iOS and 
 
 ## Minimal application
 
-After the prepared versions are published, a Windows application can use:
+Windows application dependencies:
 
 ```toml
 [dependencies]
@@ -46,7 +46,7 @@ fn main() {
 }
 ```
 
-This builder configuration does not require UI procedural macros. Until publication, run the workspace examples rather than copying private path/git/patch overrides into applications.
+This builder configuration does not require UI procedural macros.
 
 ## Choose a library
 
@@ -61,19 +61,18 @@ This builder configuration does not require UI procedural macros. Until publicat
 | [jadix_document](crates/jadix_document/README.md) | Document snapshots and indexing |
 | [jadix_tasks](crates/jadix_tasks/README.md), [jadix_net](crates/jadix_net/README.md), [jadix_tokio](crates/jadix_tokio/README.md) | Task contracts, network contracts, and the optional Tokio adapter |
 
-The `vendor/` tree contains explicitly named Jadix maintenance forks. Preserve their licenses and use the versions selected by the graph; similarly named upstream packages are not interchangeable.
+The maintained window, GPU, text, and layout forks live under `crates/` as `jadix_winit`, `jadix_wgpu`, `jadix_cosmic_text`, `jadix_glyphon`, and `jadix_taffy`. Preserve upstream licenses and use the versions selected by the graph; similarly named upstream packages are not interchangeable. The `vendor/` directories contain only the patched GPUI comparison dependencies.
 
-## Documentation and contributions
+## Documentation
 
 - [Documentation index](docs/README.md): maintained project instructions; most detailed guides are currently in Chinese.
 - [Building and packaging](docs/BUILD.md) ([简体中文](docs/BUILD.zh.md)): platform prerequisites, architectures, commands, verification and known limitations.
+- [Crate inventory](docs/CRATES.md) ([简体中文](docs/CRATES.zh.md)): package responsibilities, dependencies, and maintained implementations.
 - [Features](docs/FEATURES.md), [state](docs/state-management.md), [async integration](docs/async-architecture.md), [remote assets](docs/remote-assets.md).
 - [Components](docs/component-authoring.md), [windows](docs/desktop-windows.md), [icons](docs/application-icons.md), [WebView](docs/webview.md), [DevTools](docs/devtools.md).
-- [Migration](docs/migration.md), [testing](docs/testing.md), and [release process](docs/releasing.md).
+- [API migration](docs/migration.md): package imports, feature selection, and resources.
 
 `docs/` contains authoritative project documentation; executable examples and configuration live in `examples/`.
-Keep large private tests with their owning Rust modules, public contracts in crate `tests/`, and Python contracts in `scripts/tests/`.
-Development audit records and raw evidence are maintained separately and are not build inputs.
 When contributing, preserve test discovery and update both README languages. Include OS, backend, toolchain, and a minimal reproduction in bug reports.
 
 ## License

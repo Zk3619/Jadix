@@ -75,16 +75,3 @@ hdc install ./examples/gallery_mobile/dist/ohos-phone-arm64/jadix-gallery-ohos-p
 
 `-SkipBuild` 仅用于原生库已由对应配置编译完成后的重新打包，不会检查或改变库的 features。先备份已完成产物，再切换另一配置。重新签名已备份的手机或桌面库时，通过 `-SkipBuild -NativeLibrary <对应的备份.so>` 明确选择原生库，避免共享 target 目录中的另一配置被误装入包中。
 
-## richerfu 的图标与托盘方案
-
-检索日期：2026-10-30。原始依据：
-
-- richerfu 的 [GitHub 项目](https://github.com/richerfu)与 [ohos-rs/gpui-template](https://github.com/ohos-rs/gpui-template)：NativeAbility、插件工厂和 module/AppScope 资源图标。
-- [harmony-contrib/openharmony-ability](https://github.com/harmony-contrib/openharmony-ability)，本次核对的 main commit 为 `7c91dfa975045ee9cfb46f774883df00fcd299d2`。仓库的 [statusbar Rust facade](https://github.com/harmony-contrib/openharmony-ability/tree/7c91dfa975045ee9cfb46f774883df00fcd299d2/crates/plugin-statusbar) 和 [ArkTS 插件](https://github.com/harmony-contrib/openharmony-ability/tree/7c91dfa975045ee9cfb46f774883df00fcd299d2/plugins/statusbar) 是成对桥接；OHPM 发布 `@ohos-rs/ability-plugin-statusbar@1.0.0-beta.3`，元数据作者为 richerfu。main 的 Rust manifest 已为 beta.4，使用时应匹配版本与会话契约。
-- [WindowIcon.ets](https://github.com/harmony-contrib/openharmony-ability/blob/7c91dfa975045ee9cfb46f774883df00fcd299d2/plugins/window/src/main/ets/WindowIcon.ets) 对 API 22+ 的 pc/2in1 使用 `setMissionWindowIcon`；应用/启动图标由资源和 manifest 管理。当前 Jadix 的 winit-ohos 已调用 window 插件的 `set_window_icon`，无需为此改用 Linux 图标接口。
-- 本机 DevEco API 22 的 `@kit.StatusBarExtensionKit` 导出 `statusBarManager`、`StatusBarViewExtensionAbility`；能力为 `SystemCapability.PCService.StatusBarManager`，支持添加、移除、更新图标/菜单和提示。旧命名 `DeskTopExtensionKit` 仍在 SDK 中。手机不能假定具备此能力。
-- richerfu/tauri 的 tray 模块仍依赖 `tray-icon`；它不能证明通用 Linux tray 后端适用于 OHOS。
-
-当前桌面宿主直接使用 SDK statusBarManager，并在运行时检查 syscap，管理自身状态栏项生命周期。它提供真正的桌面图标、恢复菜单和状态弹窗；框架通用 `jadix::app::tray_icon` 的 OHOS 适配仍需单独对接上述成对插件，不能把 Linux `ksni` 当作 OHOS 实现。Linux 使用 ksni，OHOS 在 Cargo 与原生托盘 cfg 中明确排除。
-
-编译、包内结构与签名验证不能替代真机启动和托盘交互验证。

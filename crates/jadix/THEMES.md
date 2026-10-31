@@ -15,13 +15,13 @@
 
 Windows 的 GPU alpha 与原生透明窗口属性分开管理：`follow_theme(true)` 预留支持 alpha 的合成 surface，切换预设时复用同一个 HWND 和 surface；只有显式请求桌面穿透时才设置 winit 的原生透明属性。Gallery 默认启用 WebView，使用独立的 DirectComposition 内容树，Fluent 的系统 Mica 仍需通过 `DwmExtendFrameIntoClientArea` 扩展到客户区，不能因 swapchain 支持 alpha 而跳过。未启用 WebView 时，DX12 玻璃窗口使用自定义 DComp 背景与内容视觉树，不再叠加系统材质或 AccentPolicy。自定义配方不可用时按当前明暗模式的 `colors.background` token 回退。
 
-本地 DWMBlurGlass 参考实现有两条不同路径：`Section/DwmAPIEffect.cpp` 设置系统 `DWMWA_SYSTEMBACKDROP_TYPE`；`Backdrops/BackdropFactory.cpp` 的自定义配方则由注入 DWM 的视觉树承载。Jadix 在应用进程中合成，复用了配方思路，并不注入 DWM，也不需要创建额外的透明顶层窗口。原生回归：构建 Gallery 后运行 `python scripts/acceptance/window-material-check.py`，检查 Fluent 的实际合成像素、明暗切换、resize、重新进入预设及 HWND 数量；PNG、日志和 JSON 写入 `.tmp/window-material/`。
+本地 DWMBlurGlass 参考实现有两条不同路径：`Section/DwmAPIEffect.cpp` 设置系统 `DWMWA_SYSTEMBACKDROP_TYPE`；`Backdrops/BackdropFactory.cpp` 的自定义配方则由注入 DWM 的视觉树承载。Jadix 在应用进程中合成，复用了配方思路，并不注入 DWM，也不需要创建额外的透明顶层窗口。
 
 WinUI 3 是 Fluent 的 Windows 落地组件库，不再作为第五种设计语言。旧配置名仍可读取，重新序列化统一写为 `fluent`；`ThemePreset::WinUi3` 保留为弃用的源码兼容常量。统一预设不依赖 WinUI 或 windows-reactor 运行时，也不把跨平台阴影与模糊称为系统 Acrylic / Mica。Tooltip 使用 4px 圆角，内容 Card 使用 4px，常规浮层使用 8px；操作标签沿用 Fluent Semibold，正文保持 Regular。
 
 Material 3 明确采用 baseline 子集，而非完整 Expressive：胶囊按钮、14/20/500 操作标签、16/24/400 输入正文、4px 输入与菜单、12px 卡片和 28px 对话框。Hover/press 使用 on-color 8%/10% 的状态层；禁用填充容器和文字分别采用 on-surface 12%/38%，不对整个按钮乘 0.5。40px 是按钮视觉高度，不代表所有控件的移动端触摸命中区。调用方仍可覆盖这些尺度与状态。
 
-Liquid Glass 使用实时背景采样、曲面法线与 Snell 折射、RGB 分波长偏移、Schlick Fresnel 与屏幕空间环境反射，再叠加镜面、边缘高光和近似聚光。它不是 Apple 专有渲染器，也不是物理光线追踪；遮挡物外的环境信息不可得。Gallery 的“验收光学浮层”和“验收模态面板”使用真实 Portal 浮层，可检验材质、可读性与关闭行为。
+Liquid Glass 使用实时背景采样、曲面法线与 Snell 折射、RGB 分波长偏移、Schlick Fresnel 与屏幕空间环境反射，再叠加镜面、边缘高光和近似聚光。它不是 Apple 专有渲染器，也不是物理光线追踪；遮挡物外的环境信息不可得。Gallery 的光学浮层和模态面板使用真实 Portal 浮层，可检验材质、可读性与关闭行为。
 
 ```rust
 use jadix::prelude::*;

@@ -14,5 +14,4 @@ Flex/Grid 对齐由布局系统处理。`start` / `end` 按逻辑方向，`flex-
 
 焦点环、边框和变换后前景需保留正确的裁剪、失效与命中范围，不能用整图容差掩盖布局错误。
 参见 [Feature](FEATURES.md)、[组件作者接口](component-authoring.md)及[主题手册](../crates/jadix/THEMES.md)。
-公开对齐合同位于 `crates/jadix/tests/css_alignment.rs`，原生验证执行条件见[测试规范](testing.md)。
 完整 CSS 属性研究、历史修复台账和上游快照属于开发审计资料，不作为已支持 API 的完整列表。

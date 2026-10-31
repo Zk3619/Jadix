@@ -25,12 +25,3 @@ Reference: GPUI Kit TitleBar/WindowBorder at
 Jadix's facade uses these facts to suppress duplicate/server decorations,
 unsupported controls and resizing attached edges. Pure frame geometry excludes
 the shadow's extension lines; it does not itself set xdg window geometry.
-
-Validation: Linux target compile (default Wayland+X11); configure projection unit
-test is runnable with `cargo test -p winit-wayland --lib projects_real_configure`
-on Linux. A real compositor/device session is still required for input serials,
-tiled restore, CSD/SSD transitions and system-menu visual acceptance. Xdg client
-inset geometry, layer-shell and global menus are not added by this patch.
-
-On refresh, preserve this small delta, update the shared upstream revision and
-rerun scripts/checks/check-window-deps.ps1; do not update only one core/DPI dependency.

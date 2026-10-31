@@ -48,10 +48,6 @@ TTL 控制后续 fetch 的命中资格，**不自动刷新已经加载的纹理�
 底层操作的中断由后端负责；它没有实现最后订阅者离开即取消的完整资源 registry。
 高并发调用应使用有界后台执行器。既有 Image 便利加载路径仍使用原有 worker 桥接。
 
-## 验证与选型依据
+## 缓存实现
 
-选择 Moka 复用已有同键初始化合并、TTL、字节权重与并发淘汰，避免在资源层再实现一套缓存算法。
-该 feature 不会把 Tokio 或 Moka 放进默认 Jadix 依赖图。
-
-`cargo test -p jadix --lib --features remote-asset-cache` 覆盖并发去重/Arc 共享、
-清空与加载竞态、TTL、错误重试、单资源超限、字节淘汰及 Image/Avatar 共用下载。
+选择 Moka 复用同键初始化合并、TTL、字节权重与并发淘汰。该 feature 不会把 Tokio 或 Moka 放进默认 Jadix 依赖图。

@@ -11,10 +11,11 @@ fn aligned_buffer(
     let mut fonts =
         glyphon::FontSystem::new_with_locale_and_db("en-US".into(), fontdb::Database::new());
     fonts.db_mut().load_font_data(
-        include_bytes!("../../../../../vendor/cosmic-text/fonts/FiraMono-Medium.ttf").to_vec(),
+        include_bytes!("../../../../../crates/jadix_cosmic_text/fonts/FiraMono-Medium.ttf")
+            .to_vec(),
     );
     fonts.db_mut().load_font_data(
-        include_bytes!("../../../../../vendor/cosmic-text/fonts/NotoSansHebrew.ttf").to_vec(),
+        include_bytes!("../../../../../crates/jadix_cosmic_text/fonts/NotoSansHebrew.ttf").to_vec(),
     );
     let mut buffer = glyphon::Buffer::new(&mut fonts, glyphon::Metrics::new(16.0, 22.0));
     buffer.set_text(

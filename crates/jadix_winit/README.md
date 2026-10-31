@@ -4,18 +4,18 @@
 
 Jadix's Winit facade fork with a unified OpenHarmony backend.
 
-Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; version `0.31.0-beta.3-jadix.1`.** Local archives and manifests do not prove registry availability.
+Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; version `0.31.0-beta.3-jadix.1`.**
 
 ## Installation
 
-Use the version available in the target registry:
+Add the package to your application:
 
 ```toml
 [dependencies]
 jadix_winit = "=0.31.0-beta.3-jadix.1"
 ```
 
-Before publication, use the source workspace. Consumers use one registry graph without copying private path/git/patch overrides. Platform-specific packages require the corresponding SDK.
+Platform-specific packages require the corresponding SDK.
 
 ## Features and scope
 
@@ -25,9 +25,9 @@ Default features: `x11`, `wayland`, `wayland-dlopen`, `wayland-csd-adwaita`. See
 
 The existing [package guide](GUIDE.md) retains additional API, platform and source details; it may use another language.
 
-## Documentation and contributions
+## Documentation
 
-[Project documentation](https://github.com/Zk3619/Jadix/tree/main/docs) covers usage, migration, testing and releases. Preserve test discovery and keep private module tests separate from public integration contracts. Update both README languages when changing package setup.
+[Project documentation](https://github.com/Zk3619/Jadix/tree/main/docs) covers application setup, platform integration, configuration, and API usage.
 
 ## License
 

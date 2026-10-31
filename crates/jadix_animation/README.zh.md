@@ -4,18 +4,18 @@
 
 无框架依赖的动画时钟、缓动、弹簧／惯性、标量播放器、时间线和可选路径运算；绘制由适配层处理。
 
-本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.0`。** 本地归档和清单不代表 registry 已可安装。
+本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.0`。**
 
 ## 安装
 
-使用目标 registry 中可用的对应版本：
+在应用中添加依赖：
 
 ```toml
 [dependencies]
 jadix_animation = "=0.1.0"
 ```
 
-发布前使用源码工作区。普通应用从同一 registry 解析依赖图，不复制本仓私有 path／git／patch；平台专用包仍需对应 SDK。
+平台专用功能需要对应平台的 SDK。
 
 ## Feature 与边界
 
@@ -25,9 +25,9 @@ jadix_animation = "=0.1.0"
 
 原有[包使用指南](GUIDE.md)保留 API、平台及来源细节，可能使用其他语言。
 
-## 文档与贡献
+## 文档
 
-[项目文档](https://github.com/Zk3619/Jadix/tree/main/docs)说明用法、迁移、测试和发布。保留测试发现入口，私有模块测试与公开契约分层；包配置变化同步两种 README。
+[项目文档](https://github.com/Zk3619/Jadix/tree/main/docs)介绍应用配置、平台接入、功能选择与 API 用法。
 
 ## 许可证
 

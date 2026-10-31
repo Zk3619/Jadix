@@ -217,16 +217,8 @@ jadix = { version = "0.1", default-features = false, features = [
 Cargo 同次构建会合并同一个包的 feature，因此精简依赖检查要使用 `-p jadix` 或独立应用，
 不能拿 Gallery/整个工作区的依赖图代表最小配置。实际窗口仍需选择平台支持的 GPU 后端。
 
-源码仓的 `scripts/checks/check-features.ps1 -InventoryOnly` 校验本清单覆盖所有已声明开关；
-测试配置与执行条件见[测试规范](testing.md)。
+## Lucide 图标产品
 
-## 框架与产品的验证配置
-
-`cargo check -p jadix --no-default-features --all-targets` 检查排除内置组件、静态 Lucide 和高层 DnD 的框架。`--features drag` 增加外部拖动产品的宿主桥；产品能力由 `jadix_components`、`jadix_dnd`、`jadix_lucide` 独立依赖选择。示例显式声明产品依赖，不能用整个 workspace 的 feature 合并证明框架单用。
-
-GPU 集成测试需要选择当前平台支持的后端；完全不启用后端的配置验证 CPU／协议能力，不代表执行过 GPU 绘制。Gallery 仍位于 `examples/gallery`，可用 `cargo build -p gallery` 验证产品组合。
-
-### Lucide 图标产品
 
 `jadix_lucide` 是一个包，包含静态目录、字体、SVG 路径、UI 适配及动画配方；不需额外数据 crate。
 默认 `ui,paths` 提供可直接安装的静态图标产品，不启用 UI 宏；调用 `jadix_lucide::install()` 注册目录与字体。

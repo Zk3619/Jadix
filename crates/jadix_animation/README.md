@@ -4,18 +4,18 @@
 
 Animation timing, spring, inertia, scalar players and timelines.
 
-Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; version `0.1.0`.** Local archives and manifests do not prove registry availability.
+Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; version `0.1.0`.**
 
 ## Installation
 
-Use the version available in the target registry:
+Add the package to your application:
 
 ```toml
 [dependencies]
 jadix_animation = "=0.1.0"
 ```
 
-Before publication, use the source workspace. Consumers use one registry graph without copying private path/git/patch overrides. Platform-specific packages require the corresponding SDK.
+Platform-specific packages require the corresponding SDK.
 
 ## Features and scope
 
@@ -25,9 +25,9 @@ Default features: `animation-base`. See [Cargo.toml](Cargo.toml) for the complet
 
 The existing [package guide](GUIDE.md) retains additional API, platform and source details; it may use another language.
 
-## Documentation and contributions
+## Documentation
 
-[Project documentation](https://github.com/Zk3619/Jadix/tree/main/docs) covers usage, migration, testing and releases. Preserve test discovery and keep private module tests separate from public integration contracts. Update both README languages when changing package setup.
+[Project documentation](https://github.com/Zk3619/Jadix/tree/main/docs) covers application setup, platform integration, configuration, and API usage.
 
 ## License
 

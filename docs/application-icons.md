@@ -117,4 +117,4 @@ iOS 输出无 alpha 的 RGB PNG；不要预先裁成圆角。`Info-icons.plist` 
 ## 参考与验证边界
 
 参考官方材料：Tailwind CSS Responsive design / Spacing、Android Adaptive icons、Apple UIApplication.setAlternateIconName 与 App icon asset catalog。
-生成资源可用本地测试验证尺寸、透明度与配置内容；Android/iOS 最终打包和系统启动器展示仍需对应 SDK、签名工程及真机验收。
+生成资源可用本地测试验证尺寸、透明度与配置内容；Android/iOS 最终打包和系统启动器展示仍需对应 SDK、签名工程及目标设备环境。

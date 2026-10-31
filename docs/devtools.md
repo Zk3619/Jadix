@@ -31,7 +31,7 @@ Styles 的 `element.style` 初始列表展示当前节点与框架基线不同�
 
 对齐属性的编辑框使用 CSS 值（如 `center`、`flex-start`、`space-between`、`safe center`），不会显示 `AlignContent { keyword: ..., safety: ... }` 等 Rust 调试结构。支持 `justify-content`、`align-content`、`align-items`、`align-self`、`justify-items`、`justify-self`；其中 `align-self` 和 `justify-self` 可用 `auto` 恢复父容器决定的对齐。单行对号与声明文本的 Apply CSS 使用同一解析和提交路径；不支持的对齐值会在 Styles 区域及 Changes 提示，拒绝本次提交并保留编辑草稿；改为受支持的值后再次提交，提示会清除。
 
-当前布局后端未提供物理方向 `left` / `right` 对齐关键字；要沿当前轴靠起点或终点排列，请用 `flex-start` / `flex-end`。`justify-content` 控制容器内子项的主轴分布，`align-items` 控制交叉轴对齐；它们不会移动容器自身。内容恰好填满容器时，对齐变化可能没有可见位移：验收时选有空余空间的容器，或先增大其 `width` / `height`。
+当前布局后端未提供物理方向 `left` / `right` 对齐关键字；要沿当前轴靠起点或终点排列，请用 `flex-start` / `flex-end`。`justify-content` 控制容器内子项的主轴分布，`align-items` 控制交叉轴对齐；它们不会移动容器自身。内容恰好填满容器时，对齐变化可能没有可见位移：调整对齐时选择有空余空间的容器，或先增大其 `width` / `height`。
 
 元素树中的 `<text>` 是含文字的底层 Element 的显示名称，不代表单独公开的 Text 组件，也不保证它是叶节点。`<Label>` 是带 14px / 500 字重及 foreground 颜色等默认值的产品组件；这些本地默认值可能覆盖父级对应的文字属性。未显式指定的文字属性从父级继承；组件内嵌文字也可能由组件直接设置字号、颜色等，因此不能仅凭 `<text>` 标签判断样式来源。布局、背景、边框等属性不因为容器嵌套而自动继承。
 

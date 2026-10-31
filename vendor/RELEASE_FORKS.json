@@ -4,39 +4,39 @@
   "forks": [
     {
       "package": "jadix_cosmic_text",
-      "version": "0.19.0",
+      "version": "0.1.0",
       "upstream_package": "cosmic-text",
       "upstream_version": "0.19.0",
       "upstream_source": "registry cosmic-text 0.19.0; git c24886c2471e5606587c46090cd25dbbf209186b",
       "upstream_manifest_sha256": "da18f50fdb123874469241e32d6ff4014638984ca995b724e90769ceaed1d560",
-      "directory": "vendor/cosmic-text"
+      "directory": "crates/jadix_cosmic_text"
     },
     {
       "package": "jadix_glyphon",
-      "version": "0.12.0",
+      "version": "0.1.0",
       "upstream_package": "glyphon",
       "upstream_version": "0.12.0",
       "upstream_source": "repository-maintained-vendor",
       "upstream_manifest_sha256": "22905428dadb9e46c1cebb4e97a42f5adaae9a0eb791e2caf37e7a24722ede97",
-      "directory": "vendor/glyphon"
+      "directory": "crates/jadix_glyphon"
     },
     {
       "package": "jadix_taffy",
-      "version": "0.15.0",
+      "version": "0.1.0",
       "upstream_package": "taffy",
       "upstream_version": "0.15.0",
       "upstream_source": "repository-maintained-vendor",
       "upstream_manifest_sha256": "88d0ff10e7a1903ab09d81c3d738265e446a8485c57d8aa5196499d51fe2dec0",
-      "directory": "vendor/taffy"
+      "directory": "crates/jadix_taffy"
     },
     {
       "package": "jadix_wgpu",
-      "version": "30.0.0",
+      "version": "0.1.0",
       "upstream_package": "wgpu",
       "upstream_version": "30.0.0",
       "upstream_source": "registry+https://github.com/rust-lang/crates.io-index",
       "upstream_manifest_sha256": "a414351422b45d5d453ec8502da7d6e3e7b976594b942cd5da1f64b23540d3cb",
-      "directory": "vendor/wgpu"
+      "directory": "crates/jadix_wgpu"
     }
   ],
   "dpi": "All window backends use published dpi =0.1.2; platform conversion and compilation must pass before acceptance.",
@@ -46,18 +46,18 @@
       "upstream_version": "30.0.0",
       "upstream_source": "repository-maintained-vendor",
       "upstream_manifest_sha256": "bebaa398cf92fd7c649a05834e1d3678615b8065d1406be5cee1bc794f45431e",
-      "directory": "vendor/wgpu/src/__naga",
+      "directory": "crates/jadix_wgpu/src/__naga",
       "bundled_in": "jadix_wgpu",
-      "notices": "vendor/wgpu/upstream/naga"
+      "notices": "crates/jadix_wgpu/upstream/naga"
     },
     {
       "upstream_package": "wgpu-core",
       "upstream_version": "30.0.0",
       "upstream_source": "repository-maintained-vendor",
       "upstream_manifest_sha256": "2f789c81e309b9ffcaa5e1c4bb09006d717b6839e0a363a1f0a01ce11c924b0a",
-      "directory": "vendor/wgpu/src/__core",
+      "directory": "crates/jadix_wgpu/src/__core",
       "bundled_in": "jadix_wgpu",
-      "notices": "vendor/wgpu/upstream/wgpu-core"
+      "notices": "crates/jadix_wgpu/upstream/wgpu-core"
     },
     {
       "upstream_package": "wgpu-core-deps-apple",
@@ -66,7 +66,7 @@
       "upstream_manifest_sha256": "d9fe46082ea7d8646f8a3135bf6a7f4daffa3fc57d70e3618ca72ebc04b00125",
       "directory": null,
       "bundled_in": "jadix_wgpu",
-      "notices": "vendor/wgpu/upstream/wgpu-core-deps-apple"
+      "notices": "crates/jadix_wgpu/upstream/wgpu-core-deps-apple"
     },
     {
       "upstream_package": "wgpu-core-deps-emscripten",
@@ -75,7 +75,7 @@
       "upstream_manifest_sha256": "c75ba889ff844a79f616b0ab2def6deeb4a98b7c015002e7511a6938ea9a12f6",
       "directory": null,
       "bundled_in": "jadix_wgpu",
-      "notices": "vendor/wgpu/upstream/wgpu-core-deps-emscripten"
+      "notices": "crates/jadix_wgpu/upstream/wgpu-core-deps-emscripten"
     },
     {
       "upstream_package": "wgpu-core-deps-wasm",
@@ -84,7 +84,7 @@
       "upstream_manifest_sha256": "c86cde66d31f2d55be05eff2687f9fd82cafe168785fc04fc31dec4ab63cd98d",
       "directory": null,
       "bundled_in": "jadix_wgpu",
-      "notices": "vendor/wgpu/upstream/wgpu-core-deps-wasm"
+      "notices": "crates/jadix_wgpu/upstream/wgpu-core-deps-wasm"
     },
     {
       "upstream_package": "wgpu-core-deps-windows-linux-android",
@@ -93,34 +93,34 @@
       "upstream_manifest_sha256": "2065031082ee0e8667d9e1e43407be99b596d936a7cdda9acb49e9bc986563a5",
       "directory": null,
       "bundled_in": "jadix_wgpu",
-      "notices": "vendor/wgpu/upstream/wgpu-core-deps-windows-linux-android"
+      "notices": "crates/jadix_wgpu/upstream/wgpu-core-deps-windows-linux-android"
     },
     {
       "upstream_package": "wgpu-hal",
       "upstream_version": "30.0.0",
       "upstream_source": "repository-maintained-vendor",
       "upstream_manifest_sha256": "6252dbc7462ec8896240ab46da43c4c81f20b1f190f3e6fe448c9daa58d537fc",
-      "directory": "vendor/wgpu/src/__hal",
+      "directory": "crates/jadix_wgpu/src/__hal",
       "bundled_in": "jadix_wgpu",
-      "notices": "vendor/wgpu/upstream/wgpu-hal"
+      "notices": "crates/jadix_wgpu/upstream/wgpu-hal"
     },
     {
       "upstream_package": "wgpu-naga-bridge",
       "upstream_version": "30.0.0",
       "upstream_source": "registry+https://github.com/rust-lang/crates.io-index",
       "upstream_manifest_sha256": "6aba1a253f4b553b20db8d997b3e9ad945eb71ad781c38de1a3bc9adf6fa3a30",
-      "directory": "vendor/wgpu/src/__bridge",
+      "directory": "crates/jadix_wgpu/src/__bridge",
       "bundled_in": "jadix_wgpu",
-      "notices": "vendor/wgpu/upstream/wgpu-naga-bridge"
+      "notices": "crates/jadix_wgpu/upstream/wgpu-naga-bridge"
     },
     {
       "upstream_package": "wgpu-types",
       "upstream_version": "30.0.0",
       "upstream_source": "repository-maintained-vendor",
       "upstream_manifest_sha256": "1787f0e57923f4b2f61a4ae8d05275fc5455f534c52398d46d9f16f776afd6ea",
-      "directory": "vendor/wgpu/src/__types",
+      "directory": "crates/jadix_wgpu/src/__types",
       "bundled_in": "jadix_wgpu",
-      "notices": "vendor/wgpu/upstream/wgpu-types"
+      "notices": "crates/jadix_wgpu/upstream/wgpu-types"
     },
     {
       "upstream_package": "winit-android",

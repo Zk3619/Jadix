@@ -2,19 +2,19 @@
 
 [English](BUILD.md) | [简体中文](BUILD.zh.md) | [文档索引](README.md)
 
-本文说明工作区与完整 Gallery 的 SDK 准备、编译、应用打包、设备验证和常见问题。除非另有说明，命令均在仓库根目录执行。命令以仓库当前脚本为准；验证状态记录截至 2026 年 10 月 30 日实际运行过的配置，不代表所有设备和架构均已验证。
+本指南介绍 SDK 配置、工作区与 Gallery 编译、应用打包和安装。除另有说明外，命令均在仓库根目录执行。
 
 ## 平台与架构
 
-| 平台 | Rust target | 构建宿主与成品 | 验证状态与待完成工作 |
-| --- | --- | --- | --- |
-| Windows | `x86_64-pc-windows-msvc`、`aarch64-pc-windows-msvc` | Windows + MSVC/Windows SDK；可执行文件及资源 | 已运行 x86_64/DX12；ARM64 仍需检查原生依赖和设备运行 |
-| macOS | `aarch64-apple-darwin`、`x86_64-apple-darwin` | macOS + Xcode；可执行文件，随后组装应用包 | 命令需在 macOS 验证；应用包、签名和分发配置仍需产品侧完成 |
-| Linux | `x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu` | Linux 或 WSL + 目标系统库；可执行文件与资源压缩包 | 已运行 Ubuntu 24.04 x86_64/WSLg/X11；ARM64 需匹配 sysroot 并验证运行 |
-| Android | `aarch64-linux-android`、`x86_64-linux-android` | 当前打包脚本使用 Windows + Android SDK/NDK/JDK；APK | 已运行 x86_64 模拟器；ARM64 APK 也通过模拟器转译运行，尚无 ARM64 真机验证 |
-| iOS | `aarch64-apple-ios`、`aarch64-apple-ios-sim`、`x86_64-apple-ios` | macOS + Xcode + iOS 应用宿主；对应的 `.app`/IPA | 尚需实现 Gallery 的 iOS 宿主和打包流程；没有已验证的 Gallery IPA |
-| OHOS 手机/平板 | `aarch64-unknown-linux-ohos`、`x86_64-unknown-linux-ohos` | 当前打包脚本使用 Windows + DevEco SDK；HAP | 已运行 x86_64 手机模拟器；ARM64 包已构建，尚无真机安装验证 |
-| OHOS 桌面/2in1 | 同上两个 OHOS target | 独立的桌面 feature 与应用配置；HAP | 已运行 x86_64 桌面模拟器；ARM64 包已构建，尚无真机安装验证 |
+| 平台 | Rust target | 构建宿主与成品 |
+| --- | --- | --- |
+| Windows | `x86_64-pc-windows-msvc`、`aarch64-pc-windows-msvc` | Windows + MSVC/Windows SDK；可执行文件及资源 |
+| macOS | `aarch64-apple-darwin`、`x86_64-apple-darwin` | macOS + Xcode；可执行文件，随后组装应用包 |
+| Linux | `x86_64-unknown-linux-gnu`、`aarch64-unknown-linux-gnu` | Linux 或 WSL + 目标系统库；可执行文件与资源压缩包 |
+| Android | `aarch64-linux-android`、`x86_64-linux-android` | 当前打包脚本使用 Windows + Android SDK/NDK/JDK；APK |
+| iOS | `aarch64-apple-ios`、`aarch64-apple-ios-sim`、`x86_64-apple-ios` | macOS + Xcode + iOS 应用宿主；对应的 `.app`/IPA |
+| OHOS 手机/平板 | `aarch64-unknown-linux-ohos`、`x86_64-unknown-linux-ohos` | 当前打包脚本使用 Windows + DevEco SDK；HAP |
+| OHOS 桌面/2in1 | 同上两个 OHOS target | 独立的桌面 feature 与应用配置；HAP |
 
 x86_64 包用于匹配的模拟器，不能代替 ARM64 真机包。OHOS 手机和桌面即使使用相同 CPU 架构，应用配置和原生 feature 也不同。
 
@@ -256,13 +256,10 @@ Rust 构建因磁盘空间不足失败时：
 2. 在受影响的 Cargo 工作区执行 `cargo clean`，再重试失败的平台/架构。不要在其他构建仍使用同一 target 目录时清理。
 3. 若空间仍不足，分别检查 SDK/模拟器、临时目录与 Zig 缓存；可按需将 `TEMP`/`TMP`、`ZIG_GLOBAL_CACHE_DIR` 迁移到空间充足的磁盘。`cargo clean` 不会清理这些缓存或生成的 ArkTS 工程，避免删除无关 SDK 或签名密钥。
 
-每次发布记录提交、target/ABI、feature、Rust/Zig/SDK 版本、后端、签名模式和最终产物 SHA-256，避免泄露签名秘密。验证全新安装/更新、实际 UI、输入、侧边栏导航、滚动、文档/媒体/3D 以及适用平台的后台恢复；日志和截图保留在 `target/` 之外。编译成功、打包成功、SDK 签名校验和设备真实启动是不同检查环节。
 
 ## 参考资料
 
-- 仓库内的 [feature 选择](FEATURES.md)、[测试规范](testing.md)、[发布流程](releasing.md)、[移动宿主与脚本](../examples/gallery_mobile/README.md)。
+- 仓库内的 [feature 选择](FEATURES.md)与[移动宿主和脚本](../examples/gallery_mobile/README.md)。
 - [Rust target 支持](https://doc.rust-lang.org/rustc/platform-support.html)、[Apple iOS target](https://doc.rust-lang.org/rustc/platform-support/apple-ios.html)、[OpenHarmony target](https://doc.rust-lang.org/rustc/platform-support/openharmony.html)。
 - [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild)、[Android NDK 集成](https://developer.android.com/ndk/guides/other_build_systems)、[Android 16 KB 页面](https://developer.android.com/guide/practices/page-sizes)。
 - [Xcode 应用分发](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases)。
-
-

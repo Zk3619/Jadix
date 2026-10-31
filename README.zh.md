@@ -5,7 +5,7 @@
 Rust 原生 UI 框架，提供响应式状态、GPU 绘制与可选声明式宏。
 使用普通 Rust Builder 构建应用，按需加入独立产品库，通过 Cargo feature 选择能力。
 
-> **Alpha · 尚未发布。** API 仍在演进。清单版本是待发布版本，不代表 crates.io 已可安装。各平台、架构的验证程度不同，已验证配置及待完成的宿主、打包和设备工作见[构建指南](docs/BUILD.zh.md)。
+> **Alpha。** API 仍在演进。平台要求、SDK 配置与应用打包方式见[构建指南](docs/BUILD.zh.md)。
 
 ## 核心能力
 
@@ -31,7 +31,7 @@ cargo run -p gallery
 
 ## 最小应用
 
-待相关版本实际发布后，Windows 应用可采用：
+Windows 应用的依赖配置：
 
 ```toml
 [dependencies]
@@ -46,7 +46,7 @@ fn main() {
 }
 ```
 
-该 Builder 配置不需要 UI 过程宏。发布前使用工作区示例，不将本仓私有 path／git／patch 复制进普通应用。
+该 Builder 配置不需要 UI 过程宏。
 
 ## 按职责选择依赖
 
@@ -61,19 +61,19 @@ fn main() {
 | [jadix_document](crates/jadix_document/README.zh.md) | 文档快照与索引 |
 | [jadix_tasks](crates/jadix_tasks/README.zh.md)、[jadix_net](crates/jadix_net/README.zh.md)、[jadix_tokio](crates/jadix_tokio/README.zh.md) | 任务、网络契约与可选 Tokio 适配 |
 
-`vendor/` 中的维护叉采用明确的 Jadix 包名。保留其许可并使用依赖图中的版本，不能直接用相似名称的上游包替换。
+窗口、GPU、文本与布局维护分叉统一位于 `crates/`，包名分别为 `jadix_winit`、`jadix_wgpu`、`jadix_cosmic_text`、`jadix_glyphon`、`jadix_taffy`。保留上游许可并使用依赖图中的版本，不能直接用相似名称的上游包替换。`vendor/` 目录只保留对照基准使用的 GPUI 补丁依赖。
 
-## 文档与贡献
+## 文档
 
 - [项目文档索引](docs/README.md)：维护中的权威使用说明。
+- [Crate 清单](docs/CRATES.zh.md)（[English](docs/CRATES.md)）：各包职责、依赖关系与维护实现。
 - [编译与打包](docs/BUILD.zh.md)（[English](docs/BUILD.md)）：平台前置条件、架构、构建命令、验证与已知限制。
 - [Feature](docs/FEATURES.md)、[状态管理](docs/state-management.md)、[异步集成](docs/async-architecture.md)、[远程资源](docs/remote-assets.md)。
 - [组件作者接口](docs/component-authoring.md)、[桌面窗口](docs/desktop-windows.md)、[应用图标](docs/application-icons.md)、[WebView](docs/webview.md)、[DevTools](docs/devtools.md)。
-- [迁移说明](docs/migration.md)、[测试规范](docs/testing.md)、[发布流程](docs/releasing.md)。
+- [API 迁移](docs/migration.md)：导入路径、feature 选择与资源配置。
 
 `docs/` 仅放项目权威说明，可执行示例和配置放在 `examples/`。
-大型私有测试归属对应 Rust 模块，公开契约放在 crate 的 `tests/`，Python 契约放在 `scripts/tests/`。
-开发审计与原始证据单独维护，不作为构建输入。贡献时保留测试发现入口并同步两种 README；问题反馈附系统、后端、工具链和最小复现。
+问题反馈请附系统、后端、工具链和最小复现。
 
 ## 许可证
 

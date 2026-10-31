@@ -63,10 +63,7 @@ TitleBar (GPUI WindowControlArea and macOS double-click preference), Linux
 WindowBorder (configure/tiled edges, shadow geometry) and fixed-size checks #3525.
 Kit consumes GPUI native backends; it does not have a separate OS event loop.
 
-
 ## Integration and updates
-
-Run `cargo test -p jadix_winit --lib` and the consuming application's window/proxy contracts. GPU/native window tests need separate interactive processes. Compile OHOS with its SDK, then verify focus, IME, surface recreation and teardown on a device.
 
 Keep the bundled core and backends on a compatible upstream revision. Reapply documented native patches and update source provenance together. A consumer resolves versioned packages without copying repository patches. Check Cargo metadata for one maintained Winit core and one registry DPI identity across all targets, then validate each supported platform.
 

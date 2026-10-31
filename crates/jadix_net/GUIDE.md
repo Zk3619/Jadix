@@ -114,14 +114,3 @@ owner 销毁时关闭事件入口并尽力派发 `Shutdown`，即使仍持有 co
 
 `remote-asset` / `RemoteAssetFetcher` 保持原有注入方式，不会因启用 `net` 自动联网或安装全局 fetcher。浏览器适配器自行处理 CORS、受限 header 和浏览器取消机制；这里不承诺已提供 WASM transport。WebSocket、SSE、无限流、大文件落盘、请求缓存和声明式 query 不在本次 HTTP 有限响应契约中。
 
-## 验证
-
-```text
-cargo test -p jadix_net --no-default-features
-cargo test -p jadix_net --all-features
-cargo test -p jadix --features net-json --test net
-cargo test -p jadix --features net-json --lib net::tests
-cargo tree -p jadix_net --no-default-features -e normal
-```
-
-所有测试均使用本地命令/事件 fixture，不访问外网；最后一条默认仅输出 `jadix_net` 与本地 std-only `jadix_tasks`，不包含第三方网络或运行时依赖。

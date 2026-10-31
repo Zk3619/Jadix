@@ -2,19 +2,19 @@
 
 [English](BUILD.md) | [简体中文](BUILD.zh.md) | [Documentation index](README.md)
 
-This guide describes building the workspace and the full Gallery, preparing SDKs, producing application packages, and checking them on devices. Run commands from the repository root unless another directory is specified. Commands are based on the scripts currently in the repository; the validation notes describe the configurations exercised on October 30, 2026, rather than guaranteeing every device or architecture.
+This guide covers SDK preparation, building the workspace and Gallery, application packaging, and installation. Run commands from the repository root unless another directory is specified.
 
 ## Platforms and architectures
 
-| Platform | Rust targets | Build host and deliverable | Validation and remaining work |
-| --- | --- | --- | --- |
-| Windows | `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc` | Windows with MSVC/Windows SDK; executable plus resources | x86_64/DX12 exercised; ARM64 needs native dependency and device checks |
-| macOS | `aarch64-apple-darwin`, `x86_64-apple-darwin` | macOS with Xcode; executable, then an application bundle | Commands require macOS verification; bundle, signing and distribution setup remain product work |
-| Linux | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | Linux or WSL with target system libraries; executable/resource archive | Ubuntu 24.04 x86_64 under WSLg/X11 exercised; ARM64 needs a matching sysroot and runtime checks |
-| Android | `aarch64-linux-android`, `x86_64-linux-android` | Current packaging script runs on Windows with Android SDK/NDK/JDK; APK | x86_64 emulator exercised; ARM64 APK also exercised through emulator translation, without physical ARM64 device validation |
-| iOS | `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios` | macOS with Xcode and an iOS application host; `.app`/IPA as appropriate | An iOS Gallery host and packaging workflow still need implementation; no verified Gallery IPA is provided |
-| OHOS phone/tablet | `aarch64-unknown-linux-ohos`, `x86_64-unknown-linux-ohos` | Current packaging script runs on Windows with DevEco SDK; HAP | x86_64 phone emulator exercised; ARM64 packages built, physical device installation remains unverified |
-| OHOS desktop/2in1 | Same OHOS targets | Separate desktop feature/configuration; HAP | x86_64 desktop emulator exercised; ARM64 packages built, physical device installation remains unverified |
+| Platform | Rust targets | Build host and deliverable |
+| --- | --- | --- |
+| Windows | `x86_64-pc-windows-msvc`, `aarch64-pc-windows-msvc` | Windows with MSVC/Windows SDK; executable plus resources |
+| macOS | `aarch64-apple-darwin`, `x86_64-apple-darwin` | macOS with Xcode; executable, then an application bundle |
+| Linux | `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu` | Linux or WSL with target system libraries; executable/resource archive |
+| Android | `aarch64-linux-android`, `x86_64-linux-android` | Current packaging script runs on Windows with Android SDK/NDK/JDK; APK |
+| iOS | `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios` | macOS with Xcode and an iOS application host; `.app`/IPA as appropriate |
+| OHOS phone/tablet | `aarch64-unknown-linux-ohos`, `x86_64-unknown-linux-ohos` | Current packaging script runs on Windows with DevEco SDK; HAP |
+| OHOS desktop/2in1 | Same OHOS targets | Separate desktop feature/configuration; HAP |
 
 An x86_64 package is useful for a matching emulator; it is not a substitute for an ARM64 device package. OHOS phone and desktop builds have different application configuration and native features even when their CPU architecture matches.
 
@@ -256,13 +256,10 @@ If a Rust build runs out of disk space:
 2. Run `cargo clean` in the affected Cargo workspace, then retry the failed platform/architecture. Do not clean while another build is using the same target directory.
 3. If space is still insufficient, inspect SDK/emulator, temporary and Zig caches separately. Relocate `TEMP`/`TMP` and `ZIG_GLOBAL_CACHE_DIR` to a disk with room where appropriate. `cargo clean` does not remove those caches or generated ArkTS projects. Avoid deleting unrelated SDKs or signing keys.
 
-For every release, record the commit, target/ABI, features, Rust/Zig/SDK versions, backend, signing mode and SHA-256 of final artifacts without exposing signing secrets. Verify a clean install/update, actual rendered UI, input, sidebar navigation, scrolling, documents/media/3D, and background/resume where applicable. Preserve startup logs and screenshots outside `target/`. A successful compile, packaging step, SDK signature check and actual device launch are distinct checks.
 
 ## References
 
-- [Repository feature selection](FEATURES.md), [testing](testing.md), [release process](releasing.md), [mobile host and scripts](../examples/gallery_mobile/README.md).
+- [Repository feature selection](FEATURES.md) and [mobile host and scripts](../examples/gallery_mobile/README.md).
 - [Rust target support](https://doc.rust-lang.org/rustc/platform-support.html), [Apple iOS targets](https://doc.rust-lang.org/rustc/platform-support/apple-ios.html), [OpenHarmony targets](https://doc.rust-lang.org/rustc/platform-support/openharmony.html).
 - [cargo-zigbuild](https://github.com/rust-cross/cargo-zigbuild), [Android NDK integration](https://developer.android.com/ndk/guides/other_build_systems), [Android 16 KB page sizes](https://developer.android.com/guide/practices/page-sizes).
 - [Xcode application distribution](https://developer.apple.com/documentation/xcode/distributing-your-app-for-beta-testing-and-releases).
-
-

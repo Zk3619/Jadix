@@ -12,7 +12,3 @@ jadix_lucide = "0.1"
 `animation-path` 显式启用路径插值与 MorphIcon 协作（包含 SVG 和框架增强动画）；仅启用 `svg` 不会隐式启用路径动画。
 `macros` 可选，不强制依赖 UI 解析包；动画 RSX 使用 `jadix_lucide::ui!`。
 纯数据工具可关闭默认 feature，按需开启 `paths,font`，不会依赖 Jadix/GPU。
-
-推荐安装 crate。源码定制复制本包 src/assets/LICENSE/NOTICE 并保留实际 Cargo 依赖与 feature。
-框架仅通过通用 IconProvider/字体/播放契约使用目录，不反向依赖本包。
-验证入口：`scripts/checks/check-product-distributions.ps1 -Offline`。

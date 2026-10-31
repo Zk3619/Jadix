@@ -161,7 +161,7 @@ fn start(
 - HTTP 4xx/5xx 仍是 Completed，不与传输失败混淆；JSON、text 解码、error_for_status 保持显式。
 - TLS、证书、代理、cookie、redirect、鉴权、连接池、自动重试仍由外部库/应用决定；不得默认重试有副作用的请求。
 
-第一阶段只承诺有限 buffered HTTP + 上传/下载进度。文件落盘下载需要后端受控路径与流量/磁盘策略；不得为了“统一 API”先把大文件完整载入内存。SSE/WebSocket 属于持续源，不在当前 HttpResponse 契约中。
+HTTP 响应契约支持有限 buffered body 与上传/下载进度。文件落盘下载需要后端受控路径与流量/磁盘策略；不得为了“统一 API”先把大文件完整载入内存。SSE/WebSocket 属于持续源，不在当前 HttpResponse 契约中。
 
 ## 8. 定时器、平台与关停
 

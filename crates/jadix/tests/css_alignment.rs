@@ -96,7 +96,7 @@ fn text_baseline_alignment_uses_glyph_metrics_and_box_insets() {
     let mut fonts =
         FontSystem::new_with_locale_and_db("en-US".into(), glyphon::fontdb::Database::new());
     fonts.db_mut().load_font_data(
-        include_bytes!("../../../vendor/cosmic-text/fonts/FiraMono-Medium.ttf").to_vec(),
+        include_bytes!("../../../crates/jadix_cosmic_text/fonts/FiraMono-Medium.ttf").to_vec(),
     );
     let mut first = Buffer::new(&mut fonts, Metrics::new(16.0, 30.0));
     first.set_text(
@@ -503,10 +503,10 @@ fn shape(
     use glyphon::cosmic_text::{fontdb, Attrs, Buffer, FontSystem, Metrics, Shaping, Wrap};
     let mut fonts = FontSystem::new_with_locale_and_db("en-US".into(), fontdb::Database::new());
     fonts.db_mut().load_font_data(
-        include_bytes!("../../../vendor/cosmic-text/fonts/FiraMono-Medium.ttf").to_vec(),
+        include_bytes!("../../../crates/jadix_cosmic_text/fonts/FiraMono-Medium.ttf").to_vec(),
     );
     fonts.db_mut().load_font_data(
-        include_bytes!("../../../vendor/cosmic-text/fonts/NotoSansHebrew.ttf").to_vec(),
+        include_bytes!("../../../crates/jadix_cosmic_text/fonts/NotoSansHebrew.ttf").to_vec(),
     );
     let mut buffer = Buffer::new(&mut fonts, Metrics::new(16.0, 22.0));
     buffer.set_size(Some(width), None);

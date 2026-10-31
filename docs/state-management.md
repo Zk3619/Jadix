@@ -71,7 +71,6 @@ Store 表达式只求值一次。嵌套命名字段受支持。动态路径仍�
 ## 列表与异步数据
 
 列表项使用稳定业务 ID 作为 keyed UI 的身份。排序和插入不要让位置索引充当身份。
-服务端整批快照可先通过 Store::set/update 应用；本轮不引入通用 reconcile 或另一套 query 状态。
+服务端整批快照可先通过 Store::set/update 应用；Store 不提供通用 reconcile 或另一套 query 状态。
 现有 Resource 继续管理 Loading/Ready/Err、请求代次和过期完成屏蔽；缓存保存共享数据值。
 
-验证：`cargo test -p jadix_core`。

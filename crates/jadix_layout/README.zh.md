@@ -4,26 +4,26 @@
 
 CSS 尺寸、逻辑单位及可复用 Grid 轨道算法，不提供应用运行时。
 
-本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.0`。** 本地归档和清单不代表 registry 已可安装。
+本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.0`。**
 
 ## 安装
 
-使用目标 registry 中可用的对应版本：
+在应用中添加依赖：
 
 ```toml
 [dependencies]
 jadix_layout = "=0.1.0"
 ```
 
-发布前使用源码工作区。普通应用从同一 registry 解析依赖图，不复制本仓私有 path／git／patch；平台专用包仍需对应 SDK。
+平台专用功能需要对应平台的 SDK。
 
 ## Feature 与边界
 
 默认开关：无。完整 feature 与依赖关系以 [Cargo.toml](Cargo.toml) 为准；存在开关不代表平台行为已完成验证。普通应用通过门面选择内部 GPU／窗口后端，不直接依赖平台内部实现。
 
-## 文档与贡献
+## 文档
 
-[项目文档](https://github.com/Zk3619/Jadix/tree/main/docs)说明用法、迁移、测试和发布。保留测试发现入口，私有模块测试与公开契约分层；包配置变化同步两种 README。
+[项目文档](https://github.com/Zk3619/Jadix/tree/main/docs)介绍应用配置、平台接入、功能选择与 API 用法。
 
 ## 许可证
 

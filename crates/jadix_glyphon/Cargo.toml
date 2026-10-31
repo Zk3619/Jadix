@@ -1,0 +1,29 @@
+
+["package"]
+"name" = "jadix_glyphon"
+"description" = "Fast, simple 2D text rendering for wgpu"
+"version" = "0.1.0"
+"edition" = "2021"
+repository = "https://github.com/Zk3619/Jadix"
+"license" = "MIT OR Apache-2.0 OR Zlib"
+"exclude" = ["Cargo.toml.orig", ".cargo_vcs_info.json"]
+
+readme = "README.md"
+["dependencies"]
+"etagere" = "0.3.0"
+"cosmic-text" = { "package" = "jadix_cosmic_text", "version" = "=0.1.0", "path" = "../jadix_cosmic_text" }
+"rustc-hash" = "2.1.1"
+
+["dependencies"."wgpu"]
+"package" = "jadix_wgpu"
+"version" = "=0.1.0"
+"path" = "../jadix_wgpu"
+"default-features" = false
+"features" = ["wgsl"]
+
+["dependencies"."lru"]
+"version" = "0.16.2"
+"default-features" = false
+
+[lib]
+name = "glyphon"

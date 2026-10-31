@@ -87,7 +87,8 @@ fn text_baselines_skip_zero_metrics() {
 fn plain_text_skips_unused_baseline_shaping_and_alignment_changes_remeasure() {
     crate::text::measure::with_layout_font_system(|fonts| {
         fonts.db_mut().load_font_data(
-            include_bytes!("../../../../../vendor/cosmic-text/fonts/FiraMono-Medium.ttf").to_vec(),
+            include_bytes!("../../../../../crates/jadix_cosmic_text/fonts/FiraMono-Medium.ttf")
+                .to_vec(),
         );
     });
     let mut root = Element::new()

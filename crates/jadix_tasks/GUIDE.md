@@ -67,10 +67,3 @@ scope.spawn(&executor, factory, on_ui)?;
 
 应用必须维持 runtime 的寿命、IO/timer driver 和匹配后端的运行环境。句柄不拥有 runtime；runtime 停止后接纳的 Future 可能被直接 drop，GUI 会把未完成任务标记为 `Abandoned`，不会伪称成功。这里不提供隐藏的 `block_on`。
 
-## 验证
-
-```text
-cargo test -p jadix_tasks
-cargo tree -p jadix_tasks -e normal
-cargo test -p jadix --features net-json --lib app::tasks::tests
-```

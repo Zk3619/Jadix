@@ -1,6 +1,6 @@
 [workspace]
 members = ["crates/*", "examples/*"]
-exclude = ["examples/config", "vendor/glyphon", "vendor/taffy", "vendor/gpui-pre-windows-0.3.9", "vendor/gpui-fast-windows-0.1.9", "vendor/wgpu"]
+exclude = ["examples/config", "vendor/gpui-pre-windows-0.3.9", "vendor/gpui-fast-windows-0.1.9"]
 resolver = "2"
 
 [workspace.package]
@@ -55,16 +55,16 @@ accesskit = "0.24.1"
 # wgpu 30 gates native backends behind features (unlike 22, which force-linked
 # Vulkan+GLES on Windows). Backends are selected by each consumer; jadix enables DX12 for the
 # Windows frame path. Vulkan stays opt-in.
-# glyphon 0.12 pins wgpu 30 + cosmic-text 0.19; swash/ttf-parser follow that stack.
-wgpu = { "package" = "jadix_wgpu", "version" = "=30.0.0", "path" = "vendor/wgpu", "default-features" = false, "features" = ["std", "parking_lot", "wgsl"] }
+# Upstream baselines: glyphon 0.12, wgpu 30, cosmic-text 0.19; Jadix forks use independent versions.
+wgpu = { "package" = "jadix_wgpu", "version" = "=0.1.0", "path" = "crates/jadix_wgpu", "default-features" = false, "features" = ["std", "parking_lot", "wgsl"] }
 
 # --- layout / text ---
-taffy = { "package" = "jadix_taffy", "version" = "=0.15.0", "path" = "vendor/taffy" }
+taffy = { "package" = "jadix_taffy", "version" = "=0.1.0", "path" = "crates/jadix_taffy" }
 bytemuck = { version = "1.25", default-features = false, features = ["derive"] }
 # Upstream glyphon 0.12 (Coverage only). CSS transform text uses Bake/Msdf offscreen path.
-glyphon = { "package" = "jadix_glyphon", "version" = "=0.12.0", "path" = "vendor/glyphon", "default-features" = false }
+glyphon = { "package" = "jadix_glyphon", "version" = "=0.1.0", "path" = "crates/jadix_glyphon", "default-features" = false }
 # Stack pin (not a direct dep). glyphon re-exports `glyphon::cosmic_text`.
-cosmic-text = { package = "jadix_cosmic_text", version = "=0.19.0", path = "vendor/cosmic-text" }
+cosmic-text = { package = "jadix_cosmic_text", version = "=0.1.0", path = "crates/jadix_cosmic_text" }
 swash = "0.2.6"
 ttf-parser = "0.25"
 unicode-segmentation = "1.11.0"
