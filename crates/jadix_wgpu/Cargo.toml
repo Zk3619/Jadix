@@ -5,7 +5,6 @@
 "version" = "0.1.0"
 "authors" = ["gfx-rs developers"]
 "build" = "build.rs"
-"exclude" = ["Cargo.lock", "Cargo.toml.orig", ".cargo_vcs_info.json"]
 "autolib" = false
 "autobins" = false
 "autoexamples" = false
