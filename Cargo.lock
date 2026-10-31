@@ -2330,6 +2330,7 @@ checksum = "c03d949a14aa089bbb282f7dd76a498a7f684428e4257202efc119ec010376f9"
 dependencies = [
  "bitflags 2.11.0",
  "bytemuck",
+ "core_maths",
  "read-fonts 0.41.0",
  "smallvec",
 ]
@@ -3160,7 +3161,7 @@ dependencies = [
  "cosmic_undo_2",
  "criterion",
  "fontdb 0.23.0",
- "harfrust 0.5.2",
+ "harfrust 0.12.0",
  "hashbrown 0.17.1",
  "libm",
  "linebender_resource_handle",
@@ -3169,7 +3170,7 @@ dependencies = [
  "rangemap",
  "rustc-hash 2.1.1",
  "self_cell",
- "skrifa 0.40.0",
+ "skrifa 0.44.0",
  "smol_str",
  "swash",
  "syntect",
@@ -6275,7 +6276,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7fbdfe3d2475fbd7ddd1f3e5cf8288a30eb3e5f95832829570cd88115a7434ac"
 dependencies = [
  "bytemuck",
- "core_maths",
  "read-fonts 0.37.0",
 ]
 
