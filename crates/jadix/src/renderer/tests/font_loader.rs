@@ -1,6 +1,31 @@
 use super::*;
 
 #[test]
+fn registered_only_database_has_all_generic_defaults() {
+    let mut db = Database::new();
+    db.load_font_data(
+        include_bytes!("../../../../jadix_cosmic_text/fonts/InterVariable.ttf").to_vec(),
+    );
+    apply_default_families(&mut db);
+    let mut fs = FontSystem::new_with_locale_and_db("en-US".into(), db);
+    for family in [
+        glyphon::Family::SansSerif,
+        glyphon::Family::Serif,
+        glyphon::Family::Monospace,
+    ] {
+        let mut buffer = glyphon::Buffer::new(&mut fs, glyphon::Metrics::new(16.0, 20.0));
+        buffer.set_text(
+            "Registered font",
+            &glyphon::Attrs::new().family(family),
+            glyphon::Shaping::Advanced,
+            None,
+        );
+        buffer.shape_until_scroll(&mut fs, false);
+        assert!(buffer.layout_runs().next().is_some());
+    }
+}
+
+#[test]
 fn warm_coverage_does_not_wait_for_another_threads_font_load() {
     use std::sync::mpsc;
     use std::time::{Duration, Instant};

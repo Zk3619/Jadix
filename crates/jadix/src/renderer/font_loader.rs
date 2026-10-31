@@ -390,6 +390,19 @@ pub fn apply_default_families(db: &mut Database) {
         db.set_monospace_family(mono);
         log::debug!("default monospace family: {mono}");
     }
+    let fallback = db
+        .faces()
+        .flat_map(|face| &face.families)
+        .find(|(name, _)| !name.eq_ignore_ascii_case("lucide"))
+        .map(|(name, _)| name.clone());
+    if let Some(fallback) = fallback {
+        if !family_present(db, serif) {
+            db.set_serif_family(&fallback);
+        }
+        if !family_present(db, mono) {
+            db.set_monospace_family(&fallback);
+        }
+    }
 }
 
 /// Detect which lazy font buckets a string needs (EUI-style codepoint scan).
@@ -532,6 +545,7 @@ fn load_lazy_cjk(db: &mut Database, state: &mut LazyFontState) {
 }
 
 fn load_lazy_emoji(db: &mut Database, state: &mut LazyFontState) {
+    crate::utils::font::load_registered_emoji_fonts(db);
     #[cfg(feature = "bundled-emoji")]
     {
         load_static_bytes(
@@ -636,7 +650,7 @@ fn load_lazy_devanagari(db: &mut Database, state: &mut LazyFontState) {
 
 /// Open fonts required by `needs` that have not been attempted yet.
 pub fn ensure_scripts(font_system: &mut FontSystem, needs: ScriptNeeds) {
-    if needs.is_empty() {
+    if needs.is_empty() || cfg!(target_arch = "wasm32") {
         return;
     }
 
@@ -838,14 +852,13 @@ fn load_eager_bundled_fonts(db: &mut Database, state: &mut LazyFontState) {
         );
         state.attempted.emoji = true;
     }
-
-    apply_default_families(db);
 }
 
 /// Kept for debug binaries / callers that already hold a `Database`.
 pub fn load_bundled_fonts(db: &mut Database) {
     with_lazy_state(|state| {
         load_eager_bundled_fonts(db, state);
+        apply_default_families(db);
     })
 }
 
@@ -888,6 +901,7 @@ pub fn create_font_system() -> FontSystem {
 
         load_eager_bundled_fonts(&mut db, state);
         crate::utils::font::load_registered_fonts(&mut db);
+        apply_default_families(&mut db);
 
         let face_count = db.len();
         log::info!(

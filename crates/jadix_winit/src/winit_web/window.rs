@@ -16,10 +16,10 @@ use dpi::{
 };
 use web_sys::HtmlCanvasElement;
 
-use crate::winit_web::r#async::Dispatcher;
 use crate::winit_web::event_loop::ActiveEventLoop;
 use crate::winit_web::main_thread::MainThreadMarker;
 use crate::winit_web::monitor::MonitorHandler;
+use crate::winit_web::r#async::Dispatcher;
 use crate::winit_web::{backend, lock};
 
 pub struct Window {
@@ -324,14 +324,15 @@ impl RootWindow for Window {
     }
 
     fn ime_capabilities(&self) -> Option<crate::winit_core::window::ImeCapabilities> {
-        None
+        self.inner.queue(|inner| inner.canvas.ime.capabilities())
     }
 
     fn request_ime_update(
         &self,
-        _: crate::winit_core::window::ImeRequest,
+        request: crate::winit_core::window::ImeRequest,
     ) -> Result<(), ImeRequestError> {
-        Err(ImeRequestError::NotSupported)
+        self.inner
+            .queue(move |inner| inner.canvas.ime.request(request, inner.canvas.raw()))
     }
 
     fn focus_window(&self) {

@@ -2107,6 +2107,9 @@ pub(crate) fn load_font_fallback_raster(
 ) -> Option<super::text::EmojiRaster> {
     let mut engines = emoji_fallback_engines();
     let (font_system, swash_cache) = &mut *engines;
+    if font_system.db().is_empty() {
+        return None;
+    }
     let emoji_family = crate::utils::font::resolve_family(
         font_system.db(),
         "Segoe UI Emoji, Apple Color Emoji, Noto Color Emoji, emoji, sans-serif",

@@ -1961,6 +1961,8 @@ impl AppState {
             .copied()
             .find(|f| f.is_srgb())
             .unwrap_or(surface_caps.formats[0]);
+        #[cfg(target_arch = "wasm32")]
+        let surface_format = surface_format.add_srgb_suffix();
 
         // Prefer vsync'd modes so continuous redraw (scroll/hover anim) tracks the display
         // refresh instead of uncapped Mailbox (~150+ fps on some GL adapters).
@@ -2010,7 +2012,7 @@ impl AppState {
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
-        surface.configure(&device, &config);
+        crate::renderer::wgpu_compat::configure_surface(&surface, &device, &config);
         #[cfg(all(windows, feature = "webview"))]
         {
             webviews.configure(&device, config.format);
@@ -5663,7 +5665,7 @@ impl AppState {
         // Only reconfigure when the backing size changes. Calling `configure` on every occlusion
         // / redraw causes visible flicker; use `recover_surface` after a Lost acquire instead.
         if dims_changed {
-            self.surface.configure(&self.device, &self.config);
+            crate::renderer::wgpu_compat::configure_surface(&self.surface, &self.device, &self.config);
             if !self.pending_window_chrome {
                 super::window_chrome::apply_created_window(
                     self.window.as_ref(),
@@ -5689,7 +5691,7 @@ impl AppState {
     /// Recreate the swapchain for the current `config` (same dimensions). Used after `Lost` /
     /// `Outdated` without a size change.
     pub(super) fn recover_surface(&mut self) {
-        self.surface.configure(&self.device, &self.config);
+        crate::renderer::wgpu_compat::configure_surface(&self.surface, &self.device, &self.config);
         if !self.pending_window_chrome {
             super::window_chrome::apply_created_window(
                 self.window.as_ref(),
@@ -8350,7 +8352,10 @@ impl AppState {
         let acquire_done = Instant::now();
         let view = output
             .texture
-            .create_view(&wgpu::TextureViewDescriptor::default());
+            .create_view(&wgpu::TextureViewDescriptor {
+                format: Some(self.config.format),
+                ..Default::default()
+            });
 
         let mut encoder = self
             .device

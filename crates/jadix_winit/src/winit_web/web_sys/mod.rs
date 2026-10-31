@@ -3,6 +3,7 @@ mod canvas;
 pub mod event;
 mod event_handle;
 mod fullscreen;
+mod ime;
 mod intersection_handle;
 mod media_query_handle;
 mod pointer;

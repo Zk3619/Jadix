@@ -62,8 +62,7 @@ def main():
                     image = rendered_image(page)
                     image.save(args.output / f"{section}-desktop.png")
                     page.wait_for_timeout(700)
-                    errors = [entry["text"] for entry in logs if entry["type"] == "error"]
-                    results["errors"].extend(errors)
+                    errors = []
                     row = {"section": section, "canvas": page.locator("canvas").evaluate("canvas => [canvas.width, canvas.height]"), "errors": errors}
                     assert row["canvas"] == [1440, 1000], row
                     if section == "scene":
@@ -105,6 +104,10 @@ def main():
                     results["pages"].append(row)
                     print(json.dumps(row), flush=True)
                 finally:
+                    errors = [entry["text"] for entry in logs if entry["type"] == "error"]
+                    results["errors"].extend(errors)
+                    if results["pages"] and results["pages"][-1]["section"] == section:
+                        results["pages"][-1]["errors"] = errors
                     (args.output / f"{section}-console.json").write_text(json.dumps(logs, ensure_ascii=False, indent=2), encoding="utf-8")
                     context.close()
             mobile_browser = playwright.chromium.launch(**launch, args=["--force-device-scale-factor=2"])

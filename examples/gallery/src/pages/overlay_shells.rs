@@ -449,6 +449,7 @@ pub(crate) fn ViewportModalShowcase() -> Element {
                 </Button>
                 { jadix::utils::viewport_modal::viewport_modal("gal-vm-sheet-b")
                         .open(open)
+                        .overlay_color("#1d4ed8")
                         .overlay_opacity(0.3)
                         .motion(jadix::utils::viewport_modal::ModalSurfaceMotion::SlideFromRight)
                         .child(move || {
@@ -486,7 +487,7 @@ pub(crate) fn ViewportModalShowcase() -> Element {
                 </Label>
                 <Label font_weight="600" text_size="0.875rem">"DialogFade · RSX"</Label>
                 <HStack gap="0.5rem" items="center" wrap="wrap">
-                    <ViewportModal id="gal-vm-dlg-rsx" openSignal={dlg_open} overlayOpacity={0.28}>
+                    <ViewportModal id="gal-vm-dlg-rsx" openSignal={dlg_open} overlayColor="#000000" overlayOpacity={0.55}>
                         <Button
                             variant="default"
                             size="sm"

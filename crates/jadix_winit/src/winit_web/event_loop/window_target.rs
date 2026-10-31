@@ -75,6 +75,13 @@ impl ActiveEventLoop {
         let canvas_clone = canvas.clone();
 
         canvas.on_touch_start();
+        let runner = self.runner.clone();
+        canvas.ime.on_event(move |event| {
+            runner.send_event(Event::WindowEvent {
+                window_id,
+                event: WindowEvent::Ime(event),
+            });
+        });
 
         let runner = self.runner.clone();
         let has_focus = canvas.has_focus.clone();

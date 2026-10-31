@@ -13,8 +13,8 @@ use crate::winit_core::monitor::Fullscreen;
 use crate::winit_core::window::{WindowAttributes, WindowId};
 use dpi::{LogicalPosition, PhysicalPosition, PhysicalSize};
 use smol_str::SmolStr;
-use wasm_bindgen::JsCast;
 use wasm_bindgen::closure::Closure;
+use wasm_bindgen::JsCast;
 use web_sys::{
     CssStyleDeclaration, Document, Event, FocusEvent, HtmlCanvasElement, KeyboardEvent, Navigator,
     PointerEvent, WheelEvent,
@@ -28,7 +28,7 @@ use super::event_handle::EventListenerHandle;
 use super::intersection_handle::IntersectionObserverHandle;
 use super::media_query_handle::MediaQueryListHandle;
 use super::pointer::PointerHandler;
-use super::{ResizeScaleHandle, event, fullscreen};
+use super::{event, fullscreen, ResizeScaleHandle};
 use crate::winit_web::WindowAttributesWeb;
 
 #[allow(dead_code)]
@@ -40,16 +40,17 @@ pub struct Canvas {
     pub prevent_default: Rc<Cell<bool>>,
     pub is_intersecting: Cell<Option<bool>>,
     pub cursor: CursorHandler,
+    pub ime: super::ime::ImeInput,
     handlers: RefCell<Handlers>,
 }
 
 struct Handlers {
     animation_frame_handler: AnimationFrameHandler,
     on_touch_start: Option<EventListenerHandle<dyn FnMut(Event)>>,
-    on_focus: Option<EventListenerHandle<dyn FnMut(FocusEvent)>>,
-    on_blur: Option<EventListenerHandle<dyn FnMut(FocusEvent)>>,
-    on_keyboard_release: Option<EventListenerHandle<dyn FnMut(KeyboardEvent)>>,
-    on_keyboard_press: Option<EventListenerHandle<dyn FnMut(KeyboardEvent)>>,
+    on_focus: Vec<EventListenerHandle<dyn FnMut(FocusEvent)>>,
+    on_blur: Vec<EventListenerHandle<dyn FnMut(FocusEvent)>>,
+    on_keyboard_release: Vec<EventListenerHandle<dyn FnMut(KeyboardEvent)>>,
+    on_keyboard_press: Vec<EventListenerHandle<dyn FnMut(KeyboardEvent)>>,
     on_mouse_wheel: Option<EventListenerHandle<dyn FnMut(WheelEvent)>>,
     on_dark_mode: Option<MediaQueryListHandle>,
     pointer_handler: PointerHandler,
@@ -124,6 +125,8 @@ impl Canvas {
         let style = Style::new(&window, &canvas);
 
         let cursor = CursorHandler::new(main_thread, canvas.clone(), style.clone());
+        let ime = super::ime::ImeInput::new(&document)
+            .map_err(|_| os_error!("Failed to create IME input"))?;
 
         let common = Common {
             window: window.clone(),
@@ -171,13 +174,14 @@ impl Canvas {
             prevent_default: Rc::new(Cell::new(web_attributes.prevent_default)),
             is_intersecting: Cell::new(None),
             cursor,
+            ime,
             handlers: RefCell::new(Handlers {
                 animation_frame_handler: AnimationFrameHandler::new(window),
                 on_touch_start: None,
-                on_blur: None,
-                on_focus: None,
-                on_keyboard_release: None,
-                on_keyboard_press: None,
+                on_blur: Vec::new(),
+                on_focus: Vec::new(),
+                on_keyboard_release: Vec::new(),
+                on_keyboard_press: Vec::new(),
                 on_mouse_wheel: None,
                 on_dark_mode: None,
                 pointer_handler: PointerHandler::new(),
@@ -268,72 +272,149 @@ impl Canvas {
             }));
     }
 
-    pub fn on_blur<F>(&self, mut handler: F)
+    pub fn on_blur<F>(&self, handler: F)
     where
-        F: 'static + FnMut(),
+        F: 'static + Fn(),
     {
-        self.handlers.borrow_mut().on_blur =
-            Some(self.common.add_event("blur", move |_: FocusEvent| {
-                handler();
-            }));
+        let handler = Rc::new(handler);
+        self.handlers.borrow_mut().on_blur = self
+            .keyboard_targets()
+            .into_iter()
+            .map(|target| {
+                let handler = handler.clone();
+                let canvas = self
+                    .common
+                    .raw()
+                    .clone()
+                    .unchecked_into::<web_sys::EventTarget>();
+                let input = self
+                    .ime
+                    .input
+                    .clone()
+                    .unchecked_into::<web_sys::EventTarget>();
+                EventListenerHandle::new(
+                    target,
+                    "blur",
+                    Closure::new(move |event: FocusEvent| {
+                        if event
+                            .related_target()
+                            .is_some_and(|target| target == canvas || target == input)
+                        {
+                            return;
+                        }
+                        handler();
+                    }),
+                )
+            })
+            .collect();
     }
 
-    pub fn on_focus<F>(&self, mut handler: F)
+    pub fn on_focus<F>(&self, handler: F)
     where
-        F: 'static + FnMut(),
+        F: 'static + Fn(),
     {
-        self.handlers.borrow_mut().on_focus =
-            Some(self.common.add_event("focus", move |_: FocusEvent| {
-                handler();
-            }));
+        let handler = Rc::new(handler);
+        self.handlers.borrow_mut().on_focus = self
+            .keyboard_targets()
+            .into_iter()
+            .map(|target| {
+                let handler = handler.clone();
+                EventListenerHandle::new(
+                    target,
+                    "focus",
+                    Closure::new(move |_: FocusEvent| {
+                        handler();
+                    }),
+                )
+            })
+            .collect();
     }
 
-    pub fn on_keyboard_release<F>(&self, mut handler: F)
+    pub fn on_keyboard_release<F>(&self, handler: F)
     where
         F: 'static + FnMut(PhysicalKey, Key, Option<SmolStr>, KeyLocation, bool, ModifiersState),
     {
-        let prevent_default = Rc::clone(&self.prevent_default);
-        self.handlers.borrow_mut().on_keyboard_release =
-            Some(self.common.add_event("keyup", move |event: KeyboardEvent| {
-                if prevent_default.get() {
-                    event.prevent_default();
-                }
-                let key = event::key(&event);
-                let modifiers = event::keyboard_modifiers(&event);
-                handler(
-                    event::key_code(&event),
-                    key,
-                    event::key_text(&event),
-                    event::key_location(&event),
-                    event.repeat(),
-                    modifiers,
-                );
-            }));
+        let handler = Rc::new(RefCell::new(handler));
+        self.handlers.borrow_mut().on_keyboard_release = self
+            .keyboard_targets()
+            .into_iter()
+            .map(|target| {
+                let handler = handler.clone();
+                let prevent_default = self.prevent_default.clone();
+                let composing = self.ime.composing.clone();
+                EventListenerHandle::new(
+                    target,
+                    "keyup",
+                    Closure::new(move |event: KeyboardEvent| {
+                        if composing.get() || event.is_composing() || event.key_code() == 229 {
+                            return;
+                        }
+                        if prevent_default.get() {
+                            event.prevent_default();
+                        }
+                        let key = event::key(&event);
+                        let modifiers = event::keyboard_modifiers(&event);
+                        (handler.borrow_mut())(
+                            event::key_code(&event),
+                            key,
+                            event::key_text(&event),
+                            event::key_location(&event),
+                            event.repeat(),
+                            modifiers,
+                        );
+                    }),
+                )
+            })
+            .collect();
     }
 
-    pub fn on_keyboard_press<F>(&self, mut handler: F)
+    pub fn on_keyboard_press<F>(&self, handler: F)
     where
         F: 'static + FnMut(PhysicalKey, Key, Option<SmolStr>, KeyLocation, bool, ModifiersState),
     {
-        let prevent_default = Rc::clone(&self.prevent_default);
-        self.handlers.borrow_mut().on_keyboard_press = Some(self.common.add_event(
-            "keydown",
-            move |event: KeyboardEvent| {
-                if prevent_default.get() {
-                    event.prevent_default();
-                }
-                let key = event::key(&event);
-                let modifiers = event::keyboard_modifiers(&event);
-                handler(
-                    event::key_code(&event),
-                    key,
-                    event::key_text(&event),
-                    event::key_location(&event),
-                    event.repeat(),
-                    modifiers,
-                );
-            },
-        ));
+        let handler = Rc::new(RefCell::new(handler));
+        self.handlers.borrow_mut().on_keyboard_press = self
+            .keyboard_targets()
+            .into_iter()
+            .map(|target| {
+                let handler = handler.clone();
+                let prevent_default = self.prevent_default.clone();
+                let composing = self.ime.composing.clone();
+                EventListenerHandle::new(
+                    target,
+                    "keydown",
+                    Closure::new(move |event: KeyboardEvent| {
+                        if composing.get()
+                            || event.is_composing()
+                            || event.key_code() == 229
+                            || event.key() == "Process"
+                        {
+                            return;
+                        }
+                        if prevent_default.get() {
+                            event.prevent_default();
+                        }
+                        let key = event::key(&event);
+                        let modifiers = event::keyboard_modifiers(&event);
+                        (handler.borrow_mut())(
+                            event::key_code(&event),
+                            key,
+                            event::key_text(&event),
+                            event::key_location(&event),
+                            event.repeat(),
+                            modifiers,
+                        );
+                    }),
+                )
+            })
+            .collect();
+    }
+
+    fn keyboard_targets(&self) -> [web_sys::EventTarget; 2] {
+        [
+            self.common.raw().clone().unchecked_into(),
+            self.ime.input.clone().unchecked_into(),
+        ]
     }
 
     pub fn on_pointer_leave<F>(&self, handler: F)
@@ -553,10 +634,10 @@ impl Canvas {
     pub fn remove_listeners(&self) {
         let mut handlers = self.handlers.borrow_mut();
         handlers.on_touch_start.take();
-        handlers.on_focus.take();
-        handlers.on_blur.take();
-        handlers.on_keyboard_release.take();
-        handlers.on_keyboard_press.take();
+        handlers.on_focus.clear();
+        handlers.on_blur.clear();
+        handlers.on_keyboard_release.clear();
+        handlers.on_keyboard_press.clear();
         handlers.on_mouse_wheel.take();
         handlers.on_dark_mode.take();
         handlers.pointer_handler.remove_listeners();
@@ -565,6 +646,7 @@ impl Canvas {
         handlers.animation_frame_handler.cancel();
         handlers.on_touch_end = None;
         handlers.on_context_menu = None;
+        self.ime.detach();
     }
 }
 

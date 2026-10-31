@@ -326,7 +326,7 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
                 <DialogTrigger>
                     <Button variant="outline" size="sm">Dialog</Button>
                 </DialogTrigger>
-                <DialogContent>
+                <DialogContent overlay_color="#000000" overlay_opacity={0.55}>
                     <DialogHeader>
                         <DialogTitle>Gallery Dialog</DialogTitle>
                         <DialogDescription>

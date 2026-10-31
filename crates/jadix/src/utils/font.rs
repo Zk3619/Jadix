@@ -23,6 +23,7 @@ static REGISTERED_FONT_DATA: Mutex<Vec<std::sync::Arc<Vec<u8>>>> = Mutex::new(Ve
 
 /// Register font bytes before creating UI windows. Each subsequently created
 /// font system loads the same assets; existing systems retain their own database.
+/// Color fonts are routed to the isolated emoji rasterizer, not UI text slots.
 /// Returns the declared family names and rejects data without a readable face.
 pub fn register_font_data(bytes: Vec<u8>) -> Result<Vec<String>, String> {
     let bytes = std::sync::Arc::new(bytes);
@@ -50,12 +51,38 @@ pub fn register_font_data(bytes: Vec<u8>) -> Result<Vec<String>, String> {
 }
 
 pub(crate) fn load_registered_fonts(database: &mut Database) {
+    load_registered_font_kind(database, false);
+}
+
+pub(crate) fn load_registered_emoji_fonts(database: &mut Database) {
+    load_registered_font_kind(database, true);
+}
+
+fn load_registered_font_kind(database: &mut Database, emoji: bool) {
     let fonts = REGISTERED_FONT_DATA
         .lock()
         .map(|fonts| fonts.clone())
         .unwrap_or_default();
     for bytes in fonts {
-        database.load_font_source(glyphon::fontdb::Source::Binary(bytes));
+        let mut source = Database::new();
+        source.load_font_source(glyphon::fontdb::Source::Binary(bytes));
+        for face in source.faces() {
+            let color = source
+                .with_face_data(face.id, |data, index| {
+                    let Ok(font) = ttf_parser::Face::parse(data, index) else {
+                        return false;
+                    };
+                    [b"CBDT", b"COLR", b"sbix", b"SVG "].iter().any(|tag| {
+                        font.raw_face()
+                            .table(ttf_parser::Tag::from_bytes(tag))
+                            .is_some()
+                    })
+                })
+                .unwrap_or(false);
+            if color == emoji {
+                database.push_face_info(face.clone());
+            }
+        }
     }
 }
 
@@ -508,6 +535,7 @@ pub fn resolved_default_mono_family(db: &Database) -> &'static str {
             "Menlo",
             "Monaco",
             "Courier New",
+            "Fira Mono",
         ],
     )
     .unwrap_or("Consolas")

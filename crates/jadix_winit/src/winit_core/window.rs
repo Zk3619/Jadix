@@ -1305,7 +1305,8 @@ pub trait Window: Any + Send + Sync + fmt::Debug {
     ///
     /// ## Platform-specific
     ///
-    /// - **iOS / Android / Web / Orbital:** Unsupported.
+    /// - **iOS / Android / Orbital:** Unsupported.
+    /// - **Web:** Positions the transparent DOM input relative to the canvas.
     ///
     /// [chinese]: https://support.apple.com/guide/chinese-input-method/use-the-candidate-window-cim12992/104/mac/12.0
     /// [japanese]: https://support.apple.com/guide/japanese-input-method/use-the-candidate-window-jpim10262/6.3/mac/12.0
@@ -1339,7 +1340,8 @@ pub trait Window: Any + Send + Sync + fmt::Debug {
     /// - **macOS:** IME must be enabled to receive text-input where dead-key sequences are
     ///   combined.
     /// - **iOS / Android:** This will show / hide the soft keyboard.
-    /// - **Web / Orbital:** Unsupported.
+    /// - **Web:** Focuses a transparent DOM input to receive composition events.
+    /// - **Orbital:** Unsupported.
     /// - **X11**: Enabling IME will disable dead keys reporting during compose.
     ///
     /// [`Ime`]: crate::event::WindowEvent::Ime
@@ -1372,7 +1374,8 @@ pub trait Window: Any + Send + Sync + fmt::Debug {
     ///
     /// ## Platform-specific
     ///
-    /// - **iOS / Android / Web / Windows / X11 / macOS / Orbital:** Unsupported.
+    /// - **Web:** Maps number, PIN, phone, email and URL purposes to `inputmode`.
+    /// - **iOS / Android / Windows / X11 / macOS / Orbital:** Unsupported.
     #[deprecated = "use Window::request_ime_update instead"]
     fn set_ime_purpose(&self, purpose: ImePurpose) {
         if self
@@ -1831,7 +1834,9 @@ pub enum WindowLevel {
 ///
 /// ## Platform-specific
 ///
-/// - **iOS / Android / Web / Windows / X11 / macOS / Orbital:** Unsupported.
+/// - **Web:** Maps number, PIN, phone, email and URL purposes to `inputmode`.
+///   Other purposes use text mode; platform-specific hints are not implemented.
+/// - **iOS / Android / Windows / X11 / macOS / Orbital:** Unsupported.
 #[non_exhaustive]
 #[derive(Debug, PartialEq, Eq, Clone, Copy, Hash, Default)]
 #[cfg_attr(feature = "serde", derive(Serialize, Deserialize))]
