@@ -47,7 +47,7 @@ See [BUILD.md](BUILD.md) for platform setup and packaging, and [FEATURES.md](FEA
 
 | Package / version | Source and package guide | Responsibility and maintenance boundary |
 | --- | --- | --- |
-| `jadix_winit` · `0.31.0-beta.3-jadix.1` | [crates/jadix_winit](../crates/jadix_winit/README.md) | Maintained window/event-loop implementation. Core types, common support, and platform backends are modules in this single package, selected by features and target configuration. |
+| `jadix_winit` · `0.1.0` | [crates/jadix_winit](../crates/jadix_winit/README.md) | Maintained window/event-loop implementation. Core types, common support, and platform backends are modules in this single package, selected by features and target configuration. |
 | `jadix_wgpu` · `0.1.0` | [crates/jadix_wgpu](../crates/jadix_wgpu/README.md) | Maintained GPU implementation including Jadix backend/shader changes. GPU core, HAL, types, bridge support, and modified Naga are bundled modules. Rust library name: `wgpu`, with `wgpu::hal`, `wgpu::wgc`, `wgpu::wgt`, and `wgpu::naga` entry points. |
 | `jadix_cosmic_text` · `0.1.0` | [crates/jadix_cosmic_text](../crates/jadix_cosmic_text/README.md) | Multiline text shaping/layout fork with Jadix alignment and paragraph-direction changes, normally consumed through the framework text stack. |
 | `jadix_glyphon` · `0.1.0` | [crates/jadix_glyphon](../crates/jadix_glyphon/README.md) | GPU text rendering fork with CPU atlas mirroring, batched dirty uploads, glyph-residency tracking, and backend/shader adaptations. Uses the compatible cosmic-text and wgpu forks. |

@@ -4,7 +4,7 @@
 
 Jadix 窗口门面与统一平台后端依赖图，包含 OpenHarmony；内部后端通常由门面传递选择。
 
-本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.31.0-beta.3-jadix.1`。**
+本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.0`。**
 
 ## 安装
 
@@ -12,7 +12,7 @@ Jadix 窗口门面与统一平台后端依赖图，包含 OpenHarmony；内部�
 
 ```toml
 [dependencies]
-jadix_winit = "=0.31.0-beta.3-jadix.1"
+jadix_winit = "=0.1.0"
 ```
 
 平台专用功能需要对应平台的 SDK。
@@ -33,6 +33,8 @@ jadix_winit = "=0.31.0-beta.3-jadix.1"
 
 Apache-2.0。保留 [LICENSE](LICENSE) 及依赖的来源声明。
 
-## 发布边界
+## 包边界
+
+Jadix 包使用独立版本 `0.1.0`。上游源码基线为 Winit `0.31.0-beta.3` 及其后续变更，具体提交见[来源指南](GUIDE.md#source-provenance-2026-10-16)。
 
 核心类型和各平台后端以内部模块随本包一起发布，不再独立发布 `jadix_winit_*` 后端包。原始来源、许可证和平台补丁记录保留在 `upstream/`。

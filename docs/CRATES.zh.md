@@ -47,7 +47,7 @@ Jadix 在 `crates/` 下提供 **27 个库 crate**。下表说明各包职责及�
 
 | 包与版本 | 源码与包内说明 | 职责与维护边界 |
 | --- | --- | --- |
-| `jadix_winit` · `0.31.0-beta.3-jadix.1` | [crates/jadix_winit](../crates/jadix_winit/README.md) | 维护后的窗口与事件循环实现。核心类型、公共支撑与各系统后端均作为本包模块提供，通过 feature 和 target 配置选择。 |
+| `jadix_winit` · `0.1.0` | [crates/jadix_winit](../crates/jadix_winit/README.md) | 维护后的窗口与事件循环实现。核心类型、公共支撑与各系统后端均作为本包模块提供，通过 feature 和 target 配置选择。 |
 | `jadix_wgpu` · `0.1.0` | [crates/jadix_wgpu](../crates/jadix_wgpu/README.md) | 包含 Jadix 后端与着色器修改的 GPU 实现，内部整合 core、HAL、types、bridge 和修改后的 Naga。Rust 库名为 `wgpu`，提供 `wgpu::hal`、`wgpu::wgc`、`wgpu::wgt`、`wgpu::naga` 入口。 |
 | `jadix_cosmic_text` · `0.1.0` | [crates/jadix_cosmic_text](../crates/jadix_cosmic_text/README.md) | 多行文本整形与布局分叉，包含 Jadix 的对齐、段落方向相关修改，通常通过框架文本栈使用。 |
 | `jadix_glyphon` · `0.1.0` | [crates/jadix_glyphon](../crates/jadix_glyphon/README.md) | GPU 文本渲染分叉，包含 CPU 图集镜像、脏区批量上传、字形驻留追踪及后端/着色器适配，与配套的 cosmic-text、wgpu 分叉协同。 |

@@ -4,7 +4,7 @@
 
 Jadix's Winit facade fork with a unified OpenHarmony backend.
 
-Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; version `0.31.0-beta.3-jadix.1`.**
+Part of [Jadix](https://github.com/Zk3619/Jadix). **Alpha; version `0.1.0`.**
 
 ## Installation
 
@@ -12,7 +12,7 @@ Add the package to your application:
 
 ```toml
 [dependencies]
-jadix_winit = "=0.31.0-beta.3-jadix.1"
+jadix_winit = "=0.1.0"
 ```
 
 Platform-specific packages require the corresponding SDK.
@@ -34,5 +34,7 @@ The existing [package guide](GUIDE.md) retains additional API, platform and sour
 Apache-2.0. Preserve [LICENSE](LICENSE) and dependency notices.
 
 ## Distribution
+
+The Jadix package uses its own version `0.1.0`. Its upstream source baseline is Winit `0.31.0-beta.3` plus subsequent changes at the revision recorded in [the source guide](GUIDE.md#source-provenance-2026-10-16).
 
 Core types and all platform implementations ship as modules in this one package. There are no separately released `jadix_winit_*` backend packages. Original source identities, licenses and native patch notes are included under `upstream/`.

@@ -1,19 +1,18 @@
 # jadix_winit
 
 Jadix-owned source fork of the Winit **facade**, with small Win32 and Wayland
-backend patches. Backend, common and core sources are modules inside this single `jadix_winit` package at `0.31.0-beta.3-jadix.1`. They have no separate Cargo packages or release versions. Consumers need no root patch or Git dependency. Every backend and window helper shares
+backend patches. Backend, common and core sources are modules inside this single `jadix_winit` package at `0.1.0`. They have no separate Cargo packages or release versions. Consumers need no root patch or Git dependency. Every backend and window helper shares
 registry `dpi = 0.1.2`. Workspace members retain the dependency alias `winit`.
 
-This package is prepared for publication; this does not mean they have been
-uploaded or the registry names are owned. Source identities are recorded in
+The Jadix package version is independent of the upstream source version. Source identities are recorded in
 `vendor/RELEASE_FORKS.json`, the bundled records under `upstream/`, and the original native patch notes. Provenance identifies the imported source, not platform runtime validation.
 
 ## Source provenance (2026-10-16)
 
 - Facade and the base of both local backend patches, plus all unchanged backends: [rust-windowing/winit
   `758a50e35a928dbf72bf05ae91f12fee7a540a83`](https://github.com/rust-windowing/winit/commit/758a50e35a928dbf72bf05ae91f12fee7a540a83).
-  This was official `master` HEAD when imported; the version still says
-  `0.31.0-beta.3`, but contains changes after that release.
+  This was official `master` HEAD when imported. The upstream manifest declared
+  `0.31.0-beta.3`, but the source contains changes after that release.
 - OHOS backend: [ohos-rs/winit-ohos
   `af4063b4e75b62b152a315d2606d799ca65bda84`](https://github.com/ohos-rs/winit-ohos/commit/af4063b4e75b62b152a315d2606d799ca65bda84).
 - OHOS facade wiring adapted from [richerfu/winit
