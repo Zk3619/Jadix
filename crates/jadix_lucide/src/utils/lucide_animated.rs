@@ -41,9 +41,9 @@ fn play_store() -> std::rc::Rc<Mutex<HashMap<u64, Playback>>> {
 }
 
 fn now_secs() -> f32 {
-    static START: OnceLock<std::time::Instant> = OnceLock::new();
+    static START: OnceLock<web_time::Instant> = OnceLock::new();
     START
-        .get_or_init(std::time::Instant::now)
+        .get_or_init(web_time::Instant::now)
         .elapsed()
         .as_secs_f32()
 }

@@ -163,6 +163,7 @@ text-undo = []
 # text-undo-rope = ["text-undo", "dep:ropey"]
 
 [dependencies]
+web-time.workspace = true
 jadix_document.workspace = true
 jadix_core.workspace = true
 jadix_layout.workspace = true
@@ -230,6 +231,7 @@ web-sys = { workspace = true, features = [
     "Window",
 ] }
 wasm-bindgen = { workspace = true }
+wasm-bindgen-futures.workspace = true
 wgpu = { workspace = true, "features" = ["webgpu", "webgl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]

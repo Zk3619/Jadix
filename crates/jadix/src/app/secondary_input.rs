@@ -73,7 +73,7 @@ impl super::App {
             };
             let ui_scale = scale.max(1.0);
             if let Some(rest) = self.input_drag_rest.clone() {
-                let now = std::time::Instant::now();
+                let now = web_time::Instant::now();
                 let dt = now
                     .duration_since(self.last_frame_time)
                     .as_secs_f32()
@@ -306,7 +306,7 @@ impl super::App {
         match button {
             MouseButton::Left => {
                 if element_state == ElementState::Pressed {
-                    let now = std::time::Instant::now();
+                    let now = web_time::Instant::now();
                     const DBL_MS: u128 = 400;
                     const DBL_PX: f32 = 6.0;
                     let px = self.cursor_pos.x as f32;

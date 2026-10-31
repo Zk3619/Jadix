@@ -27,7 +27,18 @@ cd Jadix
 cargo run -p gallery
 ```
 
-The [build guide](docs/BUILD.md) covers Windows, macOS, Linux, Android, iOS and OHOS: architectures, SDK setup, release builds, packaging, signing, device/emulator checks and troubleshooting. Android and OHOS provide separate ARM64/x86_64 builds, with distinct OHOS phone and desktop configurations; iOS still requires a Gallery application host.
+The [build guide](docs/BUILD.md) covers Windows, macOS, Linux, Android, iOS, OHOS and WebAssembly: architectures, SDK setup, release builds, packaging, signing, device/emulator checks and troubleshooting. Android and OHOS provide separate ARM64/x86_64 builds, with distinct OHOS phone and desktop configurations; iOS still requires a Gallery application host.
+
+### Run in a browser
+
+The [Web Gallery](examples/gallery_web/) shares the native Gallery's pages and renders them into a GPU canvas. Install Python 3.11+, the Rust target and the matching `wasm-bindgen` CLI described in the [Web build guide](docs/BUILD.md#web--webassembly), then run:
+
+```sh
+rustup target add wasm32-unknown-unknown
+python examples/gallery_web/build.py --serve --port 8765
+```
+
+Open `http://127.0.0.1:8765/` in a WebGPU-capable browser. The output is a static JavaScript/Wasm bundle; desktop OS services are not automatically available on the Web. See the build guide for font coverage, HTTPS, GPU requirements and manual build commands.
 
 ## Minimal application
 

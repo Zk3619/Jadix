@@ -3,7 +3,7 @@
 //! Requires the `performance` feature. Call `Sampler::sample` on a background thread.
 //! Frame and presentation timing APIs are in [`crate::app::frame_stats`].
 #[cfg(windows)]
-use std::time::Instant;
+use web_time::Instant;
 
 /// Measured process resource use. CPU percentages use one logical core as 100%.
 /// Unsupported or unavailable OS counters are `None`; GPU and memory are process-wide.

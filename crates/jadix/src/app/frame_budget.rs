@@ -5,7 +5,7 @@ pub use enabled::*;
 mod enabled {
     use std::cell::RefCell;
     use std::collections::{HashMap, VecDeque};
-    use std::time::Instant;
+    use web_time::Instant;
     use winit::event::WindowEvent;
     use winit::window::WindowId;
 

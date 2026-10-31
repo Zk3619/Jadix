@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::time::Instant;
+use web_time::Instant;
 
 #[cfg(feature = "a11y")]
 use crate::a11y::winit_adapter::Adapter;
@@ -450,7 +450,7 @@ impl super::App {
     pub(super) fn begin_long_press(&mut self, window_id: WindowId, pos: [f32; 2]) {
         self.long_press = Some(super::LongPressTrack {
             window_id,
-            start: std::time::Instant::now(),
+            start: web_time::Instant::now(),
             pos,
             fired: false,
         });
@@ -509,6 +509,17 @@ impl super::App {
         event: super::JadixUserEvent,
     ) {
         match event {
+            #[cfg(target_arch = "wasm32")]
+            super::JadixUserEvent::WebReady => {
+                let window = self
+                    .state
+                    .borrow()
+                    .as_ref()
+                    .expect("Web GPU initialized")
+                    .window
+                    .clone();
+                self.mount_primary(window, event_loop);
+            }
             #[cfg(all(debug_assertions, feature = "hot-reload"))]
             super::JadixUserEvent::HotReloadWake => {
                 if let Some(state) = (*self.state.borrow_mut()).as_mut() {
@@ -753,9 +764,11 @@ impl super::App {
     }
 
     fn create_primary_if_needed(&mut self, event_loop: &dyn ActiveEventLoop) {
-        if self.state.borrow().is_none() && self.detached_gpu.is_none() {
+        if self.state.borrow().is_none()
+            && self.detached_gpu.is_none()
+            && (!cfg!(target_arch = "wasm32") || self.window_registry.primary_id().is_none())
+        {
             super::window_chrome::update_system_theme(event_loop.system_theme());
-            let startup = std::time::Instant::now();
             let attrs = super::window_lifecycle::prepare_attributes(
                 self.window_options.to_window_attributes(),
                 self.window_options.persistence_label(true),
@@ -782,87 +795,114 @@ impl super::App {
             );
             let window: Arc<dyn Window> = Arc::from(window);
 
-            let state = crate::utils::block_on::block_on(super::state::AppState::new_bootstrap(
-                window.clone(),
-                self.window_options.clone(),
-            ));
-            *self.state.borrow_mut() = Some(state);
             self.window_registry.insert_primary(window.clone());
-            super::runtime::register_window(&window, true);
-            if let Some(handle) = super::runtime::window_handle(window.id()) {
-                if let Err(e) = handle.set_resize_border(self.window_options.resize_border) {
-                    log::warn!("resize_border: {e}");
-                }
-            }
-            super::entry::seed_window_config(window.id(), &self.window_options);
-
-            let state_ref = self.state.clone();
-            crate::app::runtime::set_app_runtime(crate::app::runtime::AppRuntime::new(
-                std::rc::Rc::downgrade(&state_ref),
-                std::rc::Rc::downgrade(&self.secondaries),
-            ));
-            crate::app::reactive::reset_registered_anchors();
-
-            log::debug!("lifecycle: before root create_effect");
-            #[cfg(all(debug_assertions, feature = "devtools"))]
-            if self.window_options.devtools {
-                crate::app::devtools::DevToolsState::enable_for_window();
-            }
-            let builder_ref = self.app_builder.clone();
-            let (owner, _) = crate::core::reactivity::create_root(|| {
-                crate::core::reactivity::mark_next_effect_as_ui_root();
-                crate::core::reactivity::create_effect(move || {
-                    if state_ref.borrow().is_none() {
-                        return;
-                    }
-                    super::invalidation::register_root(
-                        crate::core::reactivity::current_effect_id().unwrap(),
-                    );
-                    log::debug!("root_effect: before app_builder");
-                    crate::style::track_style_changes();
-                    let new_root = super::prepare_primary_ui((builder_ref.borrow_mut())());
-                    log::debug!(
-                        "root_effect: after app_builder children={}",
-                        new_root.children.len()
-                    );
-                    if let Some(st) = (*state_ref.borrow_mut()).as_mut() {
-                        log::debug!("root_effect: before rebuild_ui");
-                        st.rebuild_ui(new_root);
-                        log::debug!("root_effect: after rebuild_ui");
-                        if !super::invalidation::in_prepass() {
-                            st.window.request_redraw();
-                        }
-                    }
-                    log::debug!("root_effect: body done (flush_deferred next)");
+            #[cfg(target_arch = "wasm32")]
+            {
+                super::window_chrome::apply_created_window(
+                    window.as_ref(),
+                    &self.window_options,
+                    false,
+                );
+                let options = self.window_options.clone();
+                let state_ref = self.state.clone();
+                wasm_bindgen_futures::spawn_local(async move {
+                    let state = super::state::AppState::new_bootstrap(window, options).await;
+                    *state_ref.borrow_mut() = Some(state);
+                    let _ = super::ui_bridge::send_user_event(super::JadixUserEvent::WebReady);
                 });
-            });
-            self.primary_owner = Some(owner);
-            log::debug!("lifecycle: after root create_effect");
-            log::info!(
-                "startup primary_ui_mounted_ms={:.1}",
-                startup.elapsed().as_secs_f64() * 1000.0
-            );
-
-            // Prime the real UI while hidden so ShowWindow never exposes the
-            // unpainted native client area. Some surfaces require a visible
-            // window: the normal redraw below remains their retry path.
-            #[cfg(target_os = "windows")]
-            self.handle_redraw_requested(window.id(), event_loop);
-            window.set_visible(true);
-            window.focus_window();
-            window.request_redraw();
-            crate::platform::glass_on_shown(window.as_ref());
-            let composition = self
-                .state
-                .borrow()
-                .as_ref()
-                .is_some_and(|s| s.composition_swapchain);
-            super::window_chrome::apply_created_window(
-                window.as_ref(),
-                &self.window_options,
-                composition,
-            );
+            }
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                let state =
+                    crate::utils::block_on::block_on(super::state::AppState::new_bootstrap(
+                        window.clone(),
+                        self.window_options.clone(),
+                    ));
+                *self.state.borrow_mut() = Some(state);
+                self.mount_primary(window, event_loop);
+            }
         }
+    }
+
+    fn mount_primary(&mut self, window: Arc<dyn Window>, event_loop: &dyn ActiveEventLoop) {
+        let _scope = super::window_scope::enter_primary();
+        #[cfg(not(target_os = "windows"))]
+        let _ = event_loop;
+        let startup = web_time::Instant::now();
+        super::runtime::register_window(&window, true);
+        if let Some(handle) = super::runtime::window_handle(window.id()) {
+            if let Err(e) = handle.set_resize_border(self.window_options.resize_border) {
+                log::warn!("resize_border: {e}");
+            }
+        }
+        super::entry::seed_window_config(window.id(), &self.window_options);
+
+        let state_ref = self.state.clone();
+        crate::app::runtime::set_app_runtime(crate::app::runtime::AppRuntime::new(
+            std::rc::Rc::downgrade(&state_ref),
+            std::rc::Rc::downgrade(&self.secondaries),
+        ));
+        crate::app::reactive::reset_registered_anchors();
+
+        log::debug!("lifecycle: before root create_effect");
+        #[cfg(all(debug_assertions, feature = "devtools"))]
+        if self.window_options.devtools {
+            crate::app::devtools::DevToolsState::enable_for_window();
+        }
+        let builder_ref = self.app_builder.clone();
+        let (owner, _) = crate::core::reactivity::create_root(|| {
+            crate::core::reactivity::mark_next_effect_as_ui_root();
+            crate::core::reactivity::create_effect(move || {
+                if state_ref.borrow().is_none() {
+                    return;
+                }
+                super::invalidation::register_root(
+                    crate::core::reactivity::current_effect_id().unwrap(),
+                );
+                log::debug!("root_effect: before app_builder");
+                crate::style::track_style_changes();
+                let new_root = super::prepare_primary_ui((builder_ref.borrow_mut())());
+                log::debug!(
+                    "root_effect: after app_builder children={}",
+                    new_root.children.len()
+                );
+                if let Some(st) = (*state_ref.borrow_mut()).as_mut() {
+                    log::debug!("root_effect: before rebuild_ui");
+                    st.rebuild_ui(new_root);
+                    log::debug!("root_effect: after rebuild_ui");
+                    if !super::invalidation::in_prepass() {
+                        st.window.request_redraw();
+                    }
+                }
+                log::debug!("root_effect: body done (flush_deferred next)");
+            });
+        });
+        self.primary_owner = Some(owner);
+        log::debug!("lifecycle: after root create_effect");
+        log::info!(
+            "startup primary_ui_mounted_ms={:.1}",
+            startup.elapsed().as_secs_f64() * 1000.0
+        );
+
+        // Prime the real UI while hidden so ShowWindow never exposes the
+        // unpainted native client area. Some surfaces require a visible
+        // window: the normal redraw below remains their retry path.
+        #[cfg(target_os = "windows")]
+        self.handle_redraw_requested(window.id(), event_loop);
+        window.set_visible(true);
+        window.focus_window();
+        window.request_redraw();
+        crate::platform::glass_on_shown(window.as_ref());
+        let composition = self
+            .state
+            .borrow()
+            .as_ref()
+            .is_some_and(|s| s.composition_swapchain);
+        super::window_chrome::apply_created_window(
+            window.as_ref(),
+            &self.window_options,
+            composition,
+        );
     }
 }
 
@@ -937,8 +977,8 @@ impl ApplicationHandler for super::App {
             }
         }
 
-        let now = std::time::Instant::now();
-        let mut next_wake: Option<std::time::Instant> = None;
+        let now = web_time::Instant::now();
+        let mut next_wake: Option<web_time::Instant> = None;
         #[cfg(all(debug_assertions, feature = "devtools"))]
         if let Some(deadline) = super::devtools::DevToolsState::pick_highlight_deadline() {
             if deadline <= now {
@@ -1502,9 +1542,7 @@ impl ApplicationHandler for super::App {
                 if focused {
                     super::native_menu::focus_window(id);
                 }
-                let is_primary = (*self.state.borrow())
-                    .as_ref()
-                    .is_some_and(|state| state.window.id() == id);
+                let is_primary = self.window_registry.primary_id() == Some(id);
                 if !is_primary {
                     if focused {
                         self.bind_pointer_window(id);
@@ -1519,7 +1557,7 @@ impl ApplicationHandler for super::App {
                         crate::platform::glass_on_focus(sec.window.as_ref(), false);
                         // Same TIP-candidate soft-blur as primary: do not drop IME immediately.
                         sec.os_focused = false;
-                        let at = std::time::Instant::now() + std::time::Duration::from_millis(200);
+                        let at = web_time::Instant::now() + std::time::Duration::from_millis(200);
                         sec.ime_os_blur_at = Some(at);
                         event_loop.set_control_flow(ControlFlow::WaitUntil(at));
                     }
@@ -1537,7 +1575,7 @@ impl ApplicationHandler for super::App {
                         crate::platform::glass_on_focus(state.window.as_ref(), false);
                     }
                     self.ime_os_blur_at =
-                        Some(std::time::Instant::now() + std::time::Duration::from_millis(200));
+                        Some(web_time::Instant::now() + std::time::Duration::from_millis(200));
                     event_loop
                         .set_control_flow(ControlFlow::WaitUntil(self.ime_os_blur_at.unwrap()));
                 }
@@ -1723,7 +1761,7 @@ pub(super) fn create_app(
         cursor_pos: winit::dpi::PhysicalPosition::new(0.0, 0.0),
         cursor_move_pending: false,
         cursor_inside_window: false,
-        last_frame_time: std::time::Instant::now(),
+        last_frame_time: web_time::Instant::now(),
         modifiers: ModifiersState::default(),
         left_button_down: false,
         mouse_buttons: 0,

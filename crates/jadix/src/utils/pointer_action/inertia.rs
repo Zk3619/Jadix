@@ -5,7 +5,7 @@
 //! and a flung viewport feel like one product. interact defaults:
 //! `resistance=10`, `minSpeed=100`, `endSpeed=10`, `smoothEndDuration=300ms`.
 
-use std::time::Instant;
+use web_time::Instant;
 
 /// interact `defaults.perAction.inertia`.
 #[derive(Clone, Copy, Debug, PartialEq)]

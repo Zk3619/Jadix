@@ -778,8 +778,8 @@ fn paint_rect(in: VertexOutput) -> vec4<f32> {
     var aa = 1.0;
     if (!simple_fill) {
         d = sd_shaped_box(in.p, b, in.radii, shape_type, shape_param);
-        aa = shape_aa(in.p, b, in.radii, d, shape_type);
     }
+    aa = shape_aa(in.p, b, in.radii, d, shape_type);
     // World overflow / clip-path (rotated descendants, restrict shells).
     if ((flags & 1u) != 0u && !clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) {
         discard;
@@ -976,8 +976,8 @@ fn fs_solid(in: VertexOutput) -> @location(0) vec4<f32> {
     var aa = 1.0;
     if ((flags & 2u) == 0u) {
         d = sd_shaped_box(in.p, in.rect_size * 0.5, in.radii, 0.0, 0.0);
-        aa = shape_aa(in.p, in.rect_size * 0.5, in.radii, d, 0.0);
     }
+    aa = shape_aa(in.p, in.rect_size * 0.5, in.radii, d, 0.0);
     if ((flags & 1u) != 0u && !clip_poly_contains(in.frag_px, u32(in.extra_and_id.y + 0.5))) {
         discard;
     }

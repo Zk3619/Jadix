@@ -1,6 +1,6 @@
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use crate::app::portal_overlay::ScrollFreeze;
 use crate::core::tree::Element;
@@ -505,7 +505,7 @@ pub(super) struct ContentScrollDrag {
     pub(super) origin_y: f32,
     pub(super) last_x: f32,
     pub(super) last_y: f32,
-    pub(super) last_t: std::time::Instant,
+    pub(super) last_t: web_time::Instant,
     /// Offset-space velocity (px/s): positive increases scroll offset.
     pub(super) vel: [f32; 2],
     /// True once movement exceeds the arm threshold (avoids fighting taps).

@@ -5,7 +5,7 @@
 //! from [`crate::app::lifecycle`] and [`crate::app::window_events`].
 
 use std::cell::RefCell;
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::core::geometry::{Axis, Rect};
 use crate::core::reactivity::use_signal;

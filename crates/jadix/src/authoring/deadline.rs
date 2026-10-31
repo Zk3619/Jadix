@@ -3,7 +3,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::app::window_scope::{self, WindowScope};
 use crate::core::reactivity::{current_owner, on_cleanup, with_owner, OwnerId};

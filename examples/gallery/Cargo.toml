@@ -19,7 +19,7 @@ find-msvc-tools = { workspace = true }
 
 [dependencies]
 # Gallery is the integration consumer: keep every local runtime crate in the dependency graph.
-jadix = { workspace = true, features = ["images", "native-clipboard", "macros", "backend-dx12", "backend-gles", "backend-metal", "theme-shadcn",
+jadix = { workspace = true, features = ["images", "macros", "backend-dx12", "backend-gles", "backend-metal", "theme-shadcn",
     "svg",
     "text-undo",
     "themes", "animation-path", "code", "scale-preview", "windows-dcomp", "document-editing", "document-diff", "document-math", "document-science", "file-dialog",
@@ -29,6 +29,7 @@ jadix_lucide = { workspace = true, features = ["animated", "animation-path", "ma
 jadix_dnd = { workspace = true, features = ["macros"] }
 jadix_animation = { workspace = true, features = ["animation"] }
 jadix_core = { workspace = true }
+web-time.workspace = true
 jadix_document = { workspace = true, features = ["markdown", "document-editing", "document-math", "science", "diff", "syntax"] }
 jadix_hot_reload = { workspace = true, features = ["syntax"] }
 jadix_layout = { workspace = true }
@@ -41,12 +42,18 @@ jadix_tasks = { workspace = true }
 jadix_theme = { workspace = true, features = ["themes"] }
 jadix_tokio = { workspace = true }
 jadix_window_materials = { workspace = true, features = ["windows-dcomp"] }
-jadix_clipboard = { workspace = true }
 jadix_macros = { workspace = true }
 log = { workspace = true }
 winit = { workspace = true }
 
-[target.'cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos")))'.dependencies]
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+jadix_clipboard = { workspace = true }
+jadix = { workspace = true, features = ["native-clipboard"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { workspace = true, features = ["Window", "Location"] }
+
+[target.'cfg(not(any(target_os = "android", target_os = "ios", target_env = "ohos", target_arch = "wasm32")))'.dependencies]
 jadix_window_state = { workspace = true, features = ["jadix"] }
 
 [target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]

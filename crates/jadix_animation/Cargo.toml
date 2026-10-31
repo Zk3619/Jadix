@@ -16,4 +16,5 @@ animation = ["animation-base", "animation-ex"]
 test-hooks = []
 
 [dependencies]
+web-time.workspace = true
 jadix_core.workspace = true

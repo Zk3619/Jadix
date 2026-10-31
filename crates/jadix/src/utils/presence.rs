@@ -14,7 +14,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use crate::app::reactive::reactive_view;
 use crate::core::reactivity::Signal;

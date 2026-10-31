@@ -6,7 +6,7 @@
 //! drop caret, leaves the caret at the end of the moved range, and clears the selection.
 
 use std::cell::RefCell;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use crate::style::CursorKind;
 

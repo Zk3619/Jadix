@@ -40,6 +40,7 @@ fn desktop_result(result: Result<(), String>, success: &str) {
     };
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 fn launch_instance(mode: &str) {
     let result = (|| -> Result<(), String> {
         let executable = std::env::current_exe().map_err(|error| error.to_string())?;
@@ -124,6 +125,7 @@ pub(crate) fn FullscreenShowcase() -> Element {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 #[component]
 pub(crate) fn InstanceShowcase() -> Element {
     let launches = instance_launches();
@@ -147,6 +149,16 @@ pub(crate) fn InstanceShowcase() -> Element {
                     "观察新进程窗口中的 PID、重复启动次数、参数与工作目录。主窗关闭后，单例仍可激活存活的独立次窗。"
                 </Label>
             </VStack>
+        </MyCard>
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[component]
+pub(crate) fn InstanceShowcase() -> Element {
+    ui! {
+        <MyCard title="Native processes">
+            <Label>"Process instances are available in the native Gallery, not in a browser tab."</Label>
         </MyCard>
     }
 }

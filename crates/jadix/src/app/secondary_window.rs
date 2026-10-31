@@ -71,16 +71,16 @@ pub(super) struct SecondaryWindowState {
     pub(super) last_render_scroll_metrics: Vec<(String, [f32; 4], [f32; 2], [f32; 2])>,
     pub(super) scroll_metrics_cache: HashMap<String, ([f32; 4], [f32; 2], [f32; 2])>,
     scrollbar_base_style: HashMap<String, super::state::ScrollbarBaseStyle>,
-    scrollbar_activity: HashMap<String, ([f32; 2], [std::time::Instant; 2])>,
+    scrollbar_activity: HashMap<String, ([f32; 2], [web_time::Instant; 2])>,
     scroll_motion: HashMap<String, [super::scroll_support::SmoothScrollAxis; 2]>,
-    last_frame_at: std::time::Instant,
+    last_frame_at: web_time::Instant,
     #[allow(dead_code)]
     pub(super) damage_rect: Option<[f32; 4]>,
     pub(super) ime_allowed_latched: bool,
     /// Latest `WindowEvent::Focused` for this secondary (IME HWND drive / soft-blur).
     pub(super) os_focused: bool,
     /// Soft-blur deadline so TIP candidate chrome can briefly steal winit focus.
-    pub(super) ime_os_blur_at: Option<std::time::Instant>,
+    pub(super) ime_os_blur_at: Option<web_time::Instant>,
     /// Last layout `text_nodes` (IME painted caret bounds).
     pub(super) text_nodes: Vec<crate::core::tree::TextLayoutInfo>,
     /// Last frame painted an Input/Textarea caret — drives blink wake in [`super::window_events`].
@@ -252,7 +252,7 @@ impl SecondaryWindowState {
             scrollbar_base_style: HashMap::new(),
             scrollbar_activity: HashMap::new(),
             scroll_motion: HashMap::new(),
-            last_frame_at: std::time::Instant::now(),
+            last_frame_at: web_time::Instant::now(),
             damage_rect: None,
             ime_allowed_latched: false,
             os_focused: false,
@@ -359,7 +359,7 @@ impl SecondaryWindowState {
             scrollbar_base_style: HashMap::new(),
             scrollbar_activity: HashMap::new(),
             scroll_motion: HashMap::new(),
-            last_frame_at: std::time::Instant::now(),
+            last_frame_at: web_time::Instant::now(),
             damage_rect: None,
             ime_allowed_latched: false,
             os_focused: false,
@@ -447,7 +447,7 @@ impl SecondaryWindowState {
         mouse_pos: [f32; 2],
     ) -> Result<(), crate::renderer::wgpu_compat::SurfaceAcquireError> {
         #[cfg(feature = "performance")]
-        let render_begin = std::time::Instant::now();
+        let render_begin = web_time::Instant::now();
         self.layout_tree.begin_presentation_frame();
         super::frame_stats::begin_scene_uploads();
         super::frame_stats::begin_scene_batches();
@@ -463,7 +463,7 @@ impl SecondaryWindowState {
         let logical_w = self.config.width as f32 / scale.max(1.0);
         let logical_h = self.config.height as f32 / scale.max(1.0);
 
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         let frame_dt = now
             .duration_since(self.last_frame_at)
             .as_secs_f32()
@@ -634,7 +634,7 @@ impl SecondaryWindowState {
             .set_collect_skip_allowed(!use_full && !geometry_changed && !text_settle);
 
         #[cfg(feature = "performance")]
-        let layout_begin = std::time::Instant::now();
+        let layout_begin = web_time::Instant::now();
         let mut render_result = if use_full {
             self.layout_tree.build_and_layout(
                 &mut self.root_element,
@@ -794,7 +794,7 @@ impl SecondaryWindowState {
         self.upload_pending_textures(&scaled_tex);
 
         #[cfg(feature = "performance")]
-        let text_begin = std::time::Instant::now();
+        let text_begin = web_time::Instant::now();
         let empty_keys = std::collections::HashSet::new();
         let empty_rects = std::collections::HashMap::new();
         let overlay_text_start = render_result
@@ -860,7 +860,7 @@ impl SecondaryWindowState {
         }
 
         #[cfg(feature = "performance")]
-        let text_done = std::time::Instant::now();
+        let text_done = web_time::Instant::now();
         self.text_renderer.trim_glyph_atlas();
         self.overlay_text_renderer.trim_glyph_atlas();
         for tr in &mut self.overlay_band_text_renderers {
@@ -1448,12 +1448,12 @@ fn sync_secondary_scroll_metrics(
 fn sync_secondary_scrollbars(
     metrics: &[(String, [f32; 4], [f32; 2], [f32; 2])],
     mouse_pos: [f32; 2],
-    activity: &mut HashMap<String, ([f32; 2], [std::time::Instant; 2])>,
+    activity: &mut HashMap<String, ([f32; 2], [web_time::Instant; 2])>,
 ) {
     use crate::core::reactivity::use_signal;
     use crate::core::scroll_viewport::ScrollViewportSignalKeys;
 
-    let now = std::time::Instant::now();
+    let now = web_time::Instant::now();
     for (rest, bounds, maximum, _) in metrics {
         let keys = ScrollViewportSignalKeys::new(rest);
         let inside = mouse_pos[0] >= bounds[0]

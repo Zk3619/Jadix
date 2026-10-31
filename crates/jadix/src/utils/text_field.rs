@@ -9,7 +9,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::core::reactivity::{use_signal, Signal};
 

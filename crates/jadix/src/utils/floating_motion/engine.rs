@@ -9,7 +9,7 @@
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::core::reactivity::Signal;

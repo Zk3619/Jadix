@@ -174,7 +174,7 @@ struct UndoGroup {
     state_before: EditPoint,
     state_after: EditPoint,
     kind: EditKind,
-    at: std::time::Instant,
+    at: web_time::Instant,
 }
 
 #[cfg(feature = "text-undo")]
@@ -362,7 +362,7 @@ mod stack {
     use std::cell::RefCell;
     use std::collections::VecDeque;
     use std::rc::Rc;
-    use std::time::Instant;
+    use web_time::Instant;
 
     use crate::core::reactivity::{remove_named_signal, use_signal};
     use crate::utils::text_field::{

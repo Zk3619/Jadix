@@ -8,6 +8,8 @@ use secondary_window::SecondaryUiBuilder;
 /// Wakes the event loop for hot reload (debug) and background tasks, and delivers
 /// AccessKit messages when feature `a11y` is enabled.
 pub(super) enum JadixUserEvent {
+    #[cfg(target_arch = "wasm32")]
+    WebReady,
     #[cfg(all(debug_assertions, feature = "hot-reload"))]
     HotReloadWake,
     /// Create and show a secondary window (see [`multi_window::open_secondary_window`]).
@@ -29,6 +31,8 @@ pub(super) enum JadixUserEvent {
 impl std::fmt::Debug for JadixUserEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            #[cfg(target_arch = "wasm32")]
+            Self::WebReady => f.write_str("WebReady"),
             #[cfg(all(debug_assertions, feature = "hot-reload"))]
             Self::HotReloadWake => f.write_str("HotReloadWake"),
             Self::OpenWindow { options, .. } => f
@@ -202,7 +206,7 @@ struct TextareaResizeDrag {
 /// Primary-pointer long-press tracker (500ms / 8px slop → synthesize right-click).
 struct LongPressTrack {
     window_id: winit::window::WindowId,
-    start: std::time::Instant,
+    start: web_time::Instant,
     /// Physical cursor position at press.
     pos: [f32; 2],
     fired: bool,
@@ -235,7 +239,7 @@ struct App {
     /// False after `CursorLeft` until the next `CursorMoved` / enter.
     /// Render then samples class-variant `:hover` at an offscreen point so leave clears.
     cursor_inside_window: bool,
-    last_frame_time: std::time::Instant,
+    last_frame_time: web_time::Instant,
     modifiers: ModifiersState,
     left_button_down: bool,
     /// DOM `MouseEvent.buttons` bitmask while buttons are held.
@@ -251,7 +255,7 @@ struct App {
     /// mouseup dismiss so nested Select inside DatePicker closes one layer per click.
     outside_dismiss_on_down: bool,
     /// Last primary-button click for double-click detection.
-    last_click_at: Option<std::time::Instant>,
+    last_click_at: Option<web_time::Instant>,
     last_click_pos: [f32; 2],
     click_count: u8,
     scrollbar_drag: Option<ScrollbarDragState>,
@@ -307,7 +311,7 @@ struct App {
     /// Scrollbar axis under the pointer (independent H/V show-hide).
     hover_scroll_axis: Option<(String, scroll_support::ScrollAxis)>,
     /// Overlay scrollbar auto-hide: visible-until deadline (scroll/hover/drag extends it).
-    scrollbar_visible_until: std::collections::HashMap<String, std::time::Instant>,
+    scrollbar_visible_until: std::collections::HashMap<String, web_time::Instant>,
     /// Prune in `about_to_wait` must Poll until a real `RedrawRequested`. Windows often
     /// delivers a second `about_to_wait` before paint; a local one-shot then `Wait`s and
     /// coalesces the fade-start frame (bar stuck at cubic 1).
@@ -317,11 +321,11 @@ struct App {
     scroll_velocity: std::collections::HashMap<String, [f32; 2]>,
     /// `scroll_behavior="smooth"`: keep animating/redrawing at least until this instant after wheel input,
     /// so consecutive ticks do not stutter.
-    smooth_active_until: std::collections::HashMap<String, std::time::Instant>,
+    smooth_active_until: std::collections::HashMap<String, web_time::Instant>,
     /// Continuous chase state and clock, separate from content-pan fling velocity.
     smooth_scroll_motion: std::collections::HashMap<
         String,
-        ([scroll_support::SmoothScrollAxis; 2], std::time::Instant),
+        ([scroll_support::SmoothScrollAxis; 2], web_time::Instant),
     >,
     /// Low-passed max scroll `[max_x, max_y]` to damp layout-metric jitter that makes targets bounce mid-range.
     scroll_max_lowpass: std::collections::HashMap<String, [f32; 2]>,
@@ -332,9 +336,9 @@ struct App {
     /// Stable signal key strings per scroll viewport id (avoids per-frame `format!` in nested scroll).
     scroll_signal_key_cache: std::collections::HashMap<String, ScrollViewportSignalKeys>,
     /// Throttle for optional scrollbar diagnostics (`JADIX_SCROLLBAR_DIAG`).
-    scroll_diag_last_log: std::collections::HashMap<String, std::time::Instant>,
+    scroll_diag_last_log: std::collections::HashMap<String, web_time::Instant>,
     /// Wake the event loop for caret blink without continuous `request_redraw`.
-    caret_wake_at: Option<std::time::Instant>,
+    caret_wake_at: Option<web_time::Instant>,
     /// Last IME enablement sent via `Window::request_ime_update` (avoid per-frame ImmAssociateContextEx).
     ime_allowed_latched: bool,
     /// Latest `WindowEvent::Focused` for the primary window. Used to stop IME HWND
@@ -342,7 +346,7 @@ struct App {
     os_window_focused: bool,
     /// Soft-blur: wait before cancelling IME so clicking the candidate chrome
     /// (which can briefly steal winit focus) does not abort composition.
-    ime_os_blur_at: Option<std::time::Instant>,
+    ime_os_blur_at: Option<web_time::Instant>,
     /// AccessKit adapters clone this; unused when feature `a11y` is off.
     #[cfg_attr(not(feature = "a11y"), allow(dead_code))]
     event_loop_proxy: EventLoopProxy,

@@ -1,5 +1,5 @@
 use std::cell::{Cell, RefCell};
-use std::time::Instant;
+use web_time::Instant;
 
 thread_local! {
     static PREFERS_REDUCED_MOTION: Cell<Option<bool>> = const { Cell::new(None) };

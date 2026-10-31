@@ -170,7 +170,7 @@ pub struct WindowPresentationStats {
 #[cfg(feature = "performance")]
 #[derive(Clone, Copy)]
 struct Presentation {
-    at: std::time::Instant,
+    at: web_time::Instant,
     content: bool,
 }
 
@@ -178,7 +178,7 @@ struct Presentation {
 #[derive(Default)]
 struct WindowPresentationClock {
     frames: u64,
-    started: Option<std::time::Instant>,
+    started: Option<web_time::Instant>,
     continuous: bool,
     overlay_update_pending: bool,
     presents: std::collections::VecDeque<Presentation>,
@@ -188,7 +188,7 @@ struct WindowPresentationClock {
 impl WindowPresentationClock {
     const SAMPLE_WINDOW: std::time::Duration = std::time::Duration::from_secs(1);
 
-    fn note(&mut self, now: std::time::Instant) {
+    fn note(&mut self, now: web_time::Instant) {
         self.frames += 1;
         self.started.get_or_insert(now);
         self.presents.push_back(Presentation {
@@ -205,7 +205,7 @@ impl WindowPresentationClock {
         }
     }
 
-    fn sample(&self, now: std::time::Instant) -> WindowPresentationStats {
+    fn sample(&self, now: web_time::Instant) -> WindowPresentationStats {
         let elapsed = self
             .started
             .map(|start| now.saturating_duration_since(start))
@@ -254,7 +254,7 @@ pub fn window_presentation_stats(window: winit::window::WindowId) -> WindowPrese
         counts
             .borrow()
             .get(&window)
-            .map(|clock| clock.sample(std::time::Instant::now()))
+            .map(|clock| clock.sample(web_time::Instant::now()))
             .unwrap_or_default()
     })
 }
@@ -315,7 +315,7 @@ pub(crate) fn note_presented_frame(_window: winit::window::WindowId) {
                 .borrow_mut()
                 .entry(window)
                 .or_default()
-                .note(std::time::Instant::now())
+                .note(web_time::Instant::now())
         });
         super::frame_budget::note_presented();
         PRESENTED_FRAMES.fetch_add(1, Ordering::Relaxed);

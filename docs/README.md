@@ -4,7 +4,7 @@
 
 | 文档 | 内容 |
 | --- | --- |
-| [编译与打包](BUILD.zh.md) / [English](BUILD.md) | 六平台架构、SDK、release 构建、签名安装与问题排查 |
+| [编译与打包](BUILD.zh.md) / [English](BUILD.md) | 桌面、移动与 WebAssembly 架构、SDK、release 构建、部署与问题排查 |
 | [Crate 清单](CRATES.zh.md) / [English](CRATES.md) | 27 个库 crate 的职责、版本、依赖关系与维护实现 |
 | [Feature](FEATURES.md) | 默认值、可选能力与后端 |
 | [状态管理](state-management.md) | Signal、Store 与 Owner |

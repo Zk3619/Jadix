@@ -748,6 +748,7 @@ pub(crate) fn SidebarShowcase() -> Element {
     }
 
     let builder_shell: Element = sidebar("gal-sidebar-demo-b")
+        .provider(true)
         .w("14rem")
         .header(Element::from(
             vstack().w("100%").p("0.75rem").gap("0.25rem").child(
@@ -774,6 +775,7 @@ pub(crate) fn SidebarShowcase() -> Element {
 
     let tree_shell: Element = {
         sidebar("gal-sidebar-demo-c")
+            .provider(true)
             .w("14rem")
             .header(Element::from(
                 vstack().w("100%").p("0.75rem").gap("0.25rem").child(
@@ -823,6 +825,7 @@ pub(crate) fn SidebarShowcase() -> Element {
                 <Box w="100%" max_w="36rem" h="14rem" rounded="0.5rem" bg="border" p="1px">
                     <Box w="100%" h="100%" overflow="hidden" rounded="0.4375rem">
                         <HStack w="100%" h="100%" gap="0">
+                            <SidebarProvider id="gal-sidebar-demo-a-provider">
                             <Sidebar id="gal-sidebar-demo-a" rail_w="14rem">
                                 <SidebarHeader>
                                     <Label font_weight="600" text_size="0.875rem">"Projects"</Label>
@@ -859,6 +862,7 @@ pub(crate) fn SidebarShowcase() -> Element {
                                     <SidebarInput id="gal-sidebar-demo-a-search" placeholder="Search…" />
                                 </SidebarContent>
                             </Sidebar>
+                            </SidebarProvider>
                             <Box w="100%" h="100%" bg="background" p="0.75rem" grow="1">
                                 <Label color="foreground">{ format!("Picked: {}", picked_r.get()) }</Label>
                             </Box>
@@ -880,6 +884,7 @@ pub(crate) fn SidebarShowcase() -> Element {
                 <Box w="100%" max_w="36rem" h="16rem" rounded="0.5rem" bg="border" p="1px">
                     <Box w="100%" h="100%" overflow="hidden" rounded="0.4375rem">
                         <HStack w="100%" h="100%" gap="0">
+                            <SidebarProvider id="gal-sidebar-demo-tree-a-provider">
                             <Sidebar id="gal-sidebar-demo-tree-a" rail_w="14rem">
                                 <SidebarHeader>
                                     <Label font_weight="600" text_size="0.875rem">"Workspace"</Label>
@@ -900,6 +905,7 @@ pub(crate) fn SidebarShowcase() -> Element {
                                     </TreeView>
                                 </SidebarContent>
                             </Sidebar>
+                            </SidebarProvider>
                             <Box w="100%" h="100%" bg="background" p="0.75rem" grow="1">
                                 <Label color="foreground">{ format!("Picked: {}", picked_r.get()) }</Label>
                             </Box>

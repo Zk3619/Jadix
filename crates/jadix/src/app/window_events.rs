@@ -317,7 +317,7 @@ impl super::App {
             self.ime_os_blur_at = None;
             return;
         }
-        if std::time::Instant::now() < at {
+        if web_time::Instant::now() < at {
             return;
         }
         self.ime_os_blur_at = None;
@@ -412,7 +412,7 @@ impl super::App {
             }
             // Continuous wrap=off edge auto-scroll while text drag-select is held still.
             let scale = sec.window.scale_factor() as f32;
-            let scroll_dt = std::time::Instant::now()
+            let scroll_dt = web_time::Instant::now()
                 .duration_since(self.last_frame_time)
                 .as_secs_f32()
                 .clamp(1.0 / 240.0, 0.05);
@@ -476,7 +476,7 @@ impl super::App {
                 if let Some(at) = sec.ime_os_blur_at {
                     if sec.os_focused {
                         sec.ime_os_blur_at = None;
-                    } else if std::time::Instant::now() >= at {
+                    } else if web_time::Instant::now() >= at {
                         sec.ime_os_blur_at = None;
                         if owner_slot.is_none() || *owner_slot == Some(id) {
                             log::warn!("JADIX_IME_DIAG os blur hard-release (secondary)");
@@ -983,7 +983,7 @@ impl super::App {
         &mut self,
         rest: &str,
         axis: super::scroll_support::ScrollAxis,
-        now: std::time::Instant,
+        now: web_time::Instant,
     ) {
         let until = now + std::time::Duration::from_millis(1500);
         self.scrollbar_visible_until
@@ -992,7 +992,7 @@ impl super::App {
 
     /// Remove auto-hide deadlines that have already passed.
     /// Returns true if any expired (caller must request **one** redraw to start fade-out).
-    pub(super) fn prune_expired_scrollbar_visibility(&mut self, now: std::time::Instant) -> bool {
+    pub(super) fn prune_expired_scrollbar_visibility(&mut self, now: web_time::Instant) -> bool {
         super::scroll_support::retain_future_instants(&mut self.scrollbar_visible_until, now)
     }
 
@@ -1001,7 +1001,7 @@ impl super::App {
     /// Post-present `fade.set` used to start the hide tween after pixels were already
     /// submitted; static pages then slept (`any_ui_animation_active` gated on
     /// `force_redraw_count`) and the bar stayed at cubic 1.
-    fn apply_overlay_scrollbar_fade_targets(&mut self, now: std::time::Instant) {
+    fn apply_overlay_scrollbar_fade_targets(&mut self, now: web_time::Instant) {
         let rests: Vec<(String, f32, f32)> = self
             .state
             .borrow()
@@ -1024,7 +1024,7 @@ impl super::App {
     fn retarget_overlay_scrollbar_cubics(
         &mut self,
         rest: &str,
-        now: std::time::Instant,
+        now: web_time::Instant,
         raw_max_x: f32,
         raw_max_y: f32,
     ) {
@@ -1140,7 +1140,7 @@ impl super::App {
         }
     }
 
-    pub(super) fn bump_smooth_active_until(&mut self, rest: &str, now: std::time::Instant) {
+    pub(super) fn bump_smooth_active_until(&mut self, rest: &str, now: web_time::Instant) {
         // Small window to bridge discrete wheel ticks (prevents "move-stop-move").
         let until = now + std::time::Duration::from_millis(200);
         self.smooth_active_until.insert(rest.to_string(), until);
@@ -1149,7 +1149,7 @@ impl super::App {
     /// Advance content pan / sample fling velocity while primary pointer is down.
     fn tick_content_scroll_drag(&mut self, x: f32, y: f32) {
         const ARM_PX: f32 = 4.0;
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         let Some((rest, dx, dy, just_armed)) = (|| {
             let drag = self.content_scroll_drag.as_mut()?;
             let dt = now.duration_since(drag.last_t).as_secs_f32().max(1e-4);
@@ -1217,7 +1217,7 @@ impl super::App {
         if !drag.armed {
             return;
         }
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         let [vx, vy] = drag.vel;
         // Drop tiny flicks (likely tap jitter).
         if vx.hypot(vy) < 80.0 {
@@ -1509,7 +1509,7 @@ impl super::App {
         let drag_sel_update: Option<(String, usize, usize, usize)> =
             if self.left_button_down && self.scrollbar_drag.is_none() {
                 if self.input_drag_rest.is_some() {
-                    let now = std::time::Instant::now();
+                    let now = web_time::Instant::now();
                     let dt = now
                         .duration_since(self.last_frame_time)
                         .as_secs_f32()
@@ -1678,7 +1678,7 @@ impl super::App {
             crate::utils::drag_reorder::set_drag_hover(&list_id, Some(idx));
         }
         if let Some(scroll_rest) = text_drag_scrollbar_bump {
-            let now = std::time::Instant::now();
+            let now = web_time::Instant::now();
             self.bump_scrollbar_visible_until_axis(
                 &scroll_rest,
                 super::scroll_support::ScrollAxis::X,
@@ -1815,7 +1815,7 @@ impl super::App {
         }
 
         if let Some((rest, axis, new_offset)) = scrollbar_drag_update {
-            self.bump_scrollbar_visible_until_axis(&rest, axis, std::time::Instant::now());
+            self.bump_scrollbar_visible_until_axis(&rest, axis, web_time::Instant::now());
             match axis {
                 super::scroll_support::ScrollAxis::X => {
                     super::scroll_support::set_scroll_offset_with_behavior(
@@ -2360,7 +2360,7 @@ impl super::App {
                     &overlay_rests,
                 );
                 if let Some(rest) = chain.first() {
-                    let now = std::time::Instant::now();
+                    let now = web_time::Instant::now();
                     self.content_scroll_drag = Some(super::scroll_support::ContentScrollDrag {
                         rest: rest.clone(),
                         origin_x: x,
@@ -2606,7 +2606,7 @@ impl super::App {
                 }
                 if is_textarea_drag {
                     let scroll_rest = crate::utils::text_field::textarea_scroll_rest(&rest);
-                    let now = std::time::Instant::now();
+                    let now = web_time::Instant::now();
                     self.bump_scrollbar_visible_until_axis(
                         &scroll_rest,
                         super::scroll_support::ScrollAxis::X,
@@ -2810,7 +2810,7 @@ impl super::App {
                 crate::renderer::restart_caret_blink();
             }
         }
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         if dx.abs() > 0.1 {
             self.bump_scrollbar_visible_until_axis(
                 &rest,
@@ -2902,7 +2902,7 @@ impl super::App {
 
     pub(super) fn handle_mouse_wheel(&mut self, id: WindowId, delta: MouseScrollDelta) {
         #[cfg(debug_assertions)]
-        let wheel_start = std::time::Instant::now();
+        let wheel_start = web_time::Instant::now();
 
         let mut state_borrow = self.state.borrow_mut();
         let state = match (*state_borrow).as_mut() {
@@ -3274,7 +3274,7 @@ impl super::App {
         let window = state.window.clone();
         drop(state_borrow);
         if let Some((rest, resolved, max_x, max_y)) = captured {
-            let now = std::time::Instant::now();
+            let now = web_time::Instant::now();
             match resolved {
                 ScrollAction::Delta(dx, dy) => {
                     if dx.abs() > 0.1 {
@@ -3543,7 +3543,7 @@ impl super::App {
             return;
         }
 
-        let now = std::time::Instant::now();
+        let now = web_time::Instant::now();
         let dt = now.duration_since(self.last_frame_time).as_secs_f32();
         self.last_frame_time = now;
         self.smooth_active_until.retain(|_, until| *until > now);
@@ -4403,7 +4403,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                         let diag = diag.trim();
                         if !diag.is_empty() && (diag == "1" || rest.contains(diag)) {
                             let key = rest.clone();
-                            let now_log = std::time::Instant::now();
+                            let now_log = web_time::Instant::now();
                             let should_log = self
                                 .scroll_diag_last_log
                                 .get(&key)
@@ -5009,7 +5009,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     let y = pos.y as f32;
                     const DBL_MS: u128 = 400;
                     const DBL_PX: f32 = 6.0;
-                    let now = std::time::Instant::now();
+                    let now = web_time::Instant::now();
                     let is_double = self.last_click_at.is_some_and(|t| {
                         now.duration_since(t).as_millis() <= DBL_MS
                             && (x - self.last_click_pos[0]).abs() <= DBL_PX

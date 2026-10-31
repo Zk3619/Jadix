@@ -5,9 +5,9 @@ use crate::style::try_parse_color;
 
 /// Wall-clock seconds for SMIL `repeatCount="indefinite"` loops.
 pub fn smil_time_secs() -> f32 {
-    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+    static START: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
     START
-        .get_or_init(std::time::Instant::now)
+        .get_or_init(web_time::Instant::now)
         .elapsed()
         .as_secs_f32()
 }

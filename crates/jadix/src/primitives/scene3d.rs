@@ -258,7 +258,7 @@ thread_local! {
 }
 
 #[cfg(feature = "scene3d")]
-static SCENE3D_EPOCH: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+static SCENE3D_EPOCH: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
 
 /// 布局期：有 `jadix_scene3d` 则排队 GPU 立方并返回贴图键。无 feature / 无标记 → `None`。
 #[cfg(not(feature = "scene3d"))]
@@ -291,7 +291,7 @@ pub fn scene3d_tex_from_element_attrs(
     if w.saturating_mul(h) > 1024 * 1024 {
         return None;
     }
-    let t0 = *SCENE3D_EPOCH.get_or_init(std::time::Instant::now);
+    let t0 = *SCENE3D_EPOCH.get_or_init(web_time::Instant::now);
     let t = t0.elapsed().as_secs_f32();
     use std::hash::{Hash, Hasher};
     let mut identity = std::collections::hash_map::DefaultHasher::new();

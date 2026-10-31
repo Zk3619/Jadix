@@ -23,6 +23,7 @@ animation-path = ["svg", "jadix/animation-path"]
 bundled-lucide = ["paths", "font"]
 
 [dependencies]
+web-time.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 jadix = { workspace = true, optional = true }

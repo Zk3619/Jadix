@@ -384,6 +384,7 @@ pub(crate) fn preedit_without_syllable_separators(preedit: &str) -> String {
 /// and clear the underline. Windows often dismisses the candidate window on that
 /// toggle without a winit `Commit`/`Preedit("")`/`Disabled`, leaving a zombie
 /// composition underline on the last syllable.
+#[cfg(any(target_os = "windows", test))]
 pub(crate) fn on_ime_alphanumeric_toggle(focus_id: &str) {
     let Some(rest) = text_edit_rest(focus_id) else {
         return;
@@ -539,11 +540,11 @@ pub(crate) fn apply_ime_cursor_area(
         use std::cell::Cell;
         thread_local! {
             static LAST_Y: Cell<i32> = const { Cell::new(i32::MIN) };
-            static LAST_LOG: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+            static LAST_LOG: Cell<Option<web_time::Instant>> = const { Cell::new(None) };
         }
         let prev = LAST_Y.get();
         if prev == i32::MIN || (py - prev).abs() >= 2 {
-            let now = std::time::Instant::now();
+            let now = web_time::Instant::now();
             let allow = LAST_LOG
                 .get()
                 .is_none_or(|t| now.duration_since(t).as_millis() >= 80);

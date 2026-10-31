@@ -8,7 +8,7 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
 
 use wgpu::{Device, Queue, SurfaceConfiguration};
@@ -2475,7 +2475,7 @@ pub fn prepare_text_frame_at(
     let mut preshape_miss_count = 0usize;
     let mut preshape_warmup: Vec<(usize, f32, f32, f32, f32)> = Vec::new();
 
-    let _t0 = std::time::Instant::now();
+    let _t0 = web_time::Instant::now();
     let mut _shape_misses = 0usize;
     let mut _emoji_misses = 0usize;
     // Reuse family selection until on-demand coverage changes the database.
@@ -3744,7 +3744,7 @@ pub fn prepare_text_frame_at(
         }));
     }
 
-    let _t1 = std::time::Instant::now();
+    let _t1 = web_time::Instant::now();
 
     let mut underline_instances: Vec<InstanceInput> = Vec::new();
     let caret_instances: Vec<InstanceInput> = Vec::new();
@@ -4216,7 +4216,7 @@ pub fn prepare_text_frame_at(
         text_renderer.pending_warmup.drain(..batch_end);
     }
 
-    let _t2 = std::time::Instant::now();
+    let _t2 = web_time::Instant::now();
     // Keep viewport in sync on resize even when every node is culled.
     text_renderer
         .viewport
@@ -4292,7 +4292,7 @@ pub fn prepare_text_frame_at(
     emoji_metrics_log_tick(text_renderer.emoji_cache.stats);
     text_renderer.text_area_capacity_hint = text_area_count;
 
-    let _t3 = std::time::Instant::now();
+    let _t3 = web_time::Instant::now();
     let _total_ms = (_t3 - _t0).as_secs_f64() * 1000.0;
     if _total_ms > 4.0 || (cfg!(test) && std::env::var_os("JADIX_PERF_TEXT_DETAIL").is_some()) {
         log::warn!(

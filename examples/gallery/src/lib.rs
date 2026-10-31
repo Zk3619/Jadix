@@ -108,7 +108,12 @@ pub fn run_gallery() {
     }
 
     #[cfg(any(
-        not(any(target_os = "android", target_os = "ios", target_env = "ohos")),
+        not(any(
+            target_os = "android",
+            target_os = "ios",
+            target_env = "ohos",
+            target_arch = "wasm32"
+        )),
         all(target_env = "ohos", feature = "ohos-desktop")
     ))]
     if !benchmarking && instance_demo.is_none() {
@@ -148,6 +153,28 @@ pub fn run_gallery() {
     } else {
         jadix::app::run_with(options, build_startup_scene);
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+pub fn run_gallery_web() {
+    jadix::set_chrome_locale("zh-CN");
+    jadix_lucide::install().expect("install Lucide assets");
+    let theme = jadix::prelude::parse_theme_overrides_str(include_str!("../theme.toml"))
+        .expect("bundled Gallery theme");
+    jadix::prelude::install_theme_overrides(theme).expect("install Gallery theme");
+    let styles = jadix::style::parse_stylesheet(include_str!("../styles.toml"))
+        .expect("bundled Gallery styles");
+    jadix::style::register_stylesheet(styles).expect("install Gallery styles");
+    let (rgba, width, height) = checker_rgba_texture();
+    jadix::queue_image_rgba8("demo-checker", width, height, rgba);
+    jadix::run_with(
+        jadix::WindowOptions::new()
+            .title("Jadix Gallery")
+            .canvas_target("jadix-canvas")
+            .decorations(false)
+            .default_font("Inter Variable, Jadix Gallery Sans"),
+        build_startup_scene,
+    );
 }
 
 #[cfg(test)]

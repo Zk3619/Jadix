@@ -16,7 +16,11 @@ backend-dx11-native = ["wgpu/dx11"]
 test-hooks = []
 
 [dependencies]
+web-time.workspace = true
 unicode-segmentation.workspace = true
 wgpu.workspace = true
 bytemuck = { workspace = true, default-features = true }
 log.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen-futures.workspace = true

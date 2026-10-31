@@ -27,7 +27,18 @@ cd Jadix
 cargo run -p gallery
 ```
 
-[构建指南](docs/BUILD.zh.md) 覆盖 Windows、macOS、Linux、Android、iOS 和 OHOS，说明架构选择、SDK 准备、release 构建、打包签名、设备/模拟器验证及常见问题。Android/OHOS 提供独立的 ARM64/x86_64 构建，OHOS 进一步区分手机与桌面配置；iOS 尚需实现 Gallery 应用宿主。
+[构建指南](docs/BUILD.zh.md) 覆盖 Windows、macOS、Linux、Android、iOS、OHOS 和 WebAssembly，说明架构选择、SDK 准备、release 构建、打包签名、设备/模拟器验证及常见问题。Android/OHOS 提供独立的 ARM64/x86_64 构建，OHOS 进一步区分手机与桌面配置；iOS 尚需实现 Gallery 应用宿主。
+
+### 在浏览器中运行
+
+[Web Gallery](examples/gallery_web/) 复用原生 Gallery 页面，在 GPU Canvas 中绘制。准备 Python 3.11+、Rust target，以及[Web 构建指南](docs/BUILD.zh.md#web--webassembly)所述的匹配版本 `wasm-bindgen` CLI 后执行：
+
+```sh
+rustup target add wasm32-unknown-unknown
+python examples/gallery_web/build.py --serve --port 8765
+```
+
+使用支持 WebGPU 的浏览器打开 `http://127.0.0.1:8765/`。产物为可静态部署的 JavaScript/Wasm；桌面系统服务不会自动变成浏览器能力。字体覆盖、HTTPS、GPU 前置条件及手动构建命令见构建指南。
 
 ## 最小应用
 

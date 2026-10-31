@@ -19,8 +19,10 @@ pub(crate) use clipboard::{clipboard_get_text, clipboard_set_text, edit_shortcut
 #[cfg(any(debug_assertions, test))]
 pub(crate) use console::{enable_ansi_stderr, local_hms};
 #[cfg_attr(any(target_os = "windows", target_os = "macos"), allow(unused_imports))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use font_paths::{eager_ui_font_files, lazy_script_font_files, system_font_dirs};
 #[cfg_attr(target_os = "macos", allow(unused_imports))]
+#[cfg(not(target_arch = "wasm32"))]
 pub(crate) use gpu::gpu_backend_order;
 pub(crate) use gpu::with_requested_backend_front;
 #[cfg_attr(target_os = "windows", allow(unused_imports))]

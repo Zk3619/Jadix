@@ -77,6 +77,7 @@ pub fn acquire_surface(
 }
 
 /// Poll a wgpu validation error scope to completion (shader / pipeline compile).
+#[cfg(not(target_arch = "wasm32"))]
 pub fn wait_error_scope(
     device: &wgpu::Device,
     scope: wgpu::ErrorScopeGuard,
@@ -106,7 +107,24 @@ pub fn wait_error_scope(
     }
 }
 
-/// Create a WGSL module without panicking on validation failure.
+/// Browser error scopes resolve asynchronously. Report deferred errors without
+/// blocking the event loop; synchronous CPU fallback is native-only.
+#[cfg(target_arch = "wasm32")]
+pub fn wait_error_scope(
+    _device: &wgpu::Device,
+    scope: wgpu::ErrorScopeGuard,
+) -> Option<wgpu::Error> {
+    let pending = scope.pop();
+    wasm_bindgen_futures::spawn_local(async move {
+        if let Some(error) = pending.await {
+            log::error!("wgpu deferred validation error: {error}");
+        }
+    });
+    None
+}
+
+/// Create a WGSL module, returning validation failures synchronously on native.
+/// Browser validation is reported asynchronously to the console.
 pub fn try_shader_module(
     device: &wgpu::Device,
     label: &'static str,
@@ -131,7 +149,8 @@ pub fn try_shader_module(
     Some(module)
 }
 
-/// Create a compute pipeline without panicking on validation failure.
+/// Create a compute pipeline, returning validation failures synchronously on native.
+/// Browser validation is reported asynchronously to the console.
 #[cfg_attr(not(feature = "compute"), allow(dead_code))]
 pub fn try_compute_pipeline(
     device: &wgpu::Device,
@@ -165,6 +184,7 @@ pub fn install_device_error_handlers(device: &wgpu::Device) {
 
 /// Isolate bundled / optional GPU init. Returns `None` if the closure panics or the
 /// validation scope captures an error (`error_handling.md` E2).
+/// Browser validation is deferred and cannot select a synchronous fallback.
 pub fn try_gpu_init<T>(device: &wgpu::Device, warn: &str, f: impl FnOnce() -> T) -> Option<T> {
     let scope = device.push_error_scope(wgpu::ErrorFilter::Validation);
     let built = std::panic::catch_unwind(std::panic::AssertUnwindSafe(f));

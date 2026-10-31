@@ -6,7 +6,7 @@ use std::cell::RefCell;
 use std::collections::hash_map::{DefaultHasher, Entry};
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::time::Instant;
+use web_time::Instant;
 
 use taffy::prelude::*;
 use taffy::util::ResolveOrZero;

@@ -147,7 +147,7 @@ pub fn civil_from_unix_days(z: i64) -> (i32, u32, u32) {
 }
 
 pub fn today_ymd() -> (i32, u32, u32) {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use web_time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs() as i64)

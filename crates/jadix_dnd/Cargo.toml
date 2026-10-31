@@ -15,6 +15,7 @@ default = []
 macros = ["jadix/macros"]
 
 [dependencies]
+web-time.workspace = true
 jadix = { workspace = true, features = ["drag"] }
 taffy.workspace = true
 winit.workspace = true

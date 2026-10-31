@@ -45,6 +45,8 @@ gtk = "0.18"
 jni = "0.21.1"
 web-sys = "0.3"
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+web-time = "1.1"
 # HarmonyOS Ability (gpui-template / ohos-rs). Only used on `target_env = "ohos"`.
 openharmony-ability = "=1.0.0-beta.3"
 openharmony-ability-derive = "=1.0.0-beta.3"

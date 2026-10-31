@@ -23,7 +23,7 @@ pub fn any_page_css_needs_frame() -> bool {
 // ─── CSS Transition engine ───────────────────────────────────────────────
 //
 // CSS-like model: progress = (timeline_now − start) / duration.
-// Timeline source is a **monotonic** clock (`std::time::Instant`), never
+// Timeline source is a **monotonic** clock (`web_time::Instant`), never
 // `SystemTime` / wall clock (NTP jumps must not seek animations).
 // Each frame *samples* the timeline; it does not invent time by summing clamped `dt`.
 // After `Wait`, Instant can jump past `duration` — duration tweens cap that delta
@@ -40,7 +40,7 @@ use super::generator::{Spring, SpringPhysics};
 use std::cell::Cell;
 use std::collections::HashMap;
 #[cfg(test)]
-use std::time::Instant;
+use web_time::Instant;
 
 pub(crate) use jadix_animation::clock::css_timeline_now_ms;
 use jadix_animation::clock::css_transition_max_step_ms;

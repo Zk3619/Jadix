@@ -47,7 +47,7 @@ use std::collections::hash_map::Entry;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
-use std::time::Instant;
+use web_time::Instant;
 use taffy::prelude::Dimension;
 
 /// Promote a host without swapping the just-culled host into the eviction tail.

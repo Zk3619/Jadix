@@ -54,7 +54,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::OnceLock;
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::{release_pointer_capture, runtime::request_redraw, set_pointer_capture};

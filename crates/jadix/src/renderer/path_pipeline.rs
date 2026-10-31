@@ -430,7 +430,7 @@ impl PathGpu {
             return false;
         }
         #[cfg(test)]
-        let profile = std::env::var_os("JADIX_PATH_GPU_PROFILE").map(|_| std::time::Instant::now());
+        let profile = std::env::var_os("JADIX_PATH_GPU_PROFILE").map(|_| web_time::Instant::now());
         let ops = job.ops.into_ops();
         #[cfg(test)]
         let geometry_ms = profile.map(|t| t.elapsed().as_secs_f64() * 1000.0);

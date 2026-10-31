@@ -2011,12 +2011,18 @@ impl Element {
         }
     }
 
-    pub fn hot_reload_node_type(mut self, name: &str) -> Self {
+    pub fn hot_reload_node_type(self, name: &str) -> Self {
         #[cfg(debug_assertions)]
-        self.set_attr("jadix_ui_node_type", name);
+        {
+            let mut element = self;
+            element.set_attr("jadix_ui_node_type", name);
+            element
+        }
         #[cfg(not(debug_assertions))]
-        let _ = name;
-        self
+        {
+            let _ = name;
+            self
+        }
     }
 
     pub fn hot_reload_description(self, description: TemplateDescription) -> Self {

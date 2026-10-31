@@ -23,7 +23,7 @@ pub use resize::{hit_edges, resize_box, Edges, Invert, ResizeAxis, ResizeOpts, R
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::core::geometry::Axis;
 use crate::core::reactivity::Signal;

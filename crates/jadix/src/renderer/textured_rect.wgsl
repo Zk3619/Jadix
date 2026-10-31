@@ -152,6 +152,11 @@ fn rounded_clip_coverage(p: vec2<f32>, rect: vec4<f32>, radii: vec4<f32>) -> f32
 
 @fragment
 fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
+    let round_coverage = rounded_clip_coverage(in.world_px, in.round_rect, in.round_radii);
+    let round_coverage2 = rounded_clip_coverage(in.world_px, in.round_rect2, in.round_radii2);
+    let sample = textureSample(tex, tex_sampler, in.uv);
+    let sd = median3(sample.r, sample.g, sample.b);
+    let grad = vec2<f32>(dpdx(sd), dpdy(sd));
     if (in.clip_size.x >= 0.0 && in.clip_size.y >= 0.0) {
         let c1 = in.clip_pos + in.clip_size;
         if (in.frag_px.x < in.clip_pos.x || in.frag_px.x >= c1.x
@@ -161,16 +166,13 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     var clip_coverage = 1.0;
     if (in.round_rect.z > 0.5 && in.round_rect.w > 0.5) {
-        clip_coverage *= rounded_clip_coverage(in.world_px, in.round_rect, in.round_radii);
+        clip_coverage *= round_coverage;
     }
     if (in.round_rect2.z > 0.5 && in.round_rect2.w > 0.5) {
-        clip_coverage *= rounded_clip_coverage(in.world_px, in.round_rect2, in.round_radii2);
+        clip_coverage *= round_coverage2;
     }
-    let sample = textureSample(tex, tex_sampler, in.uv);
     var c: vec4<f32>;
     if (flags_msdf(in.flags)) {
-        let sd = median3(sample.r, sample.g, sample.b);
-        let grad = vec2<f32>(dpdx(sd), dpdy(sd));
         let w = max(length(grad), 1e-5);
         let edge = (sd - 0.5) / w;
         let coverage = smoothstep(-0.6, 0.6, edge);

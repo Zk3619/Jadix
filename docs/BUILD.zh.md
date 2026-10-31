@@ -15,6 +15,7 @@
 | iOS | `aarch64-apple-ios`、`aarch64-apple-ios-sim`、`x86_64-apple-ios` | macOS + Xcode + iOS 应用宿主；对应的 `.app`/IPA |
 | OHOS 手机/平板 | `aarch64-unknown-linux-ohos`、`x86_64-unknown-linux-ohos` | 当前打包脚本使用 Windows + DevEco SDK；HAP |
 | OHOS 桌面/2in1 | 同上两个 OHOS target | 独立的桌面 feature 与应用配置；HAP |
+| Web | `wasm32-unknown-unknown` | 支持 Rust 的构建宿主；JavaScript + Wasm + 静态 HTTP(S) 服务 |
 
 x86_64 包用于匹配的模拟器，不能代替 ARM64 真机包。OHOS 手机和桌面即使使用相同 CPU 架构，应用配置和原生 feature 也不同。
 
@@ -256,6 +257,32 @@ Rust 构建因磁盘空间不足失败时：
 2. 在受影响的 Cargo 工作区执行 `cargo clean`，再重试失败的平台/架构。不要在其他构建仍使用同一 target 目录时清理。
 3. 若空间仍不足，分别检查 SDK/模拟器、临时目录与 Zig 缓存；可按需将 `TEMP`/`TMP`、`ZIG_GLOBAL_CACHE_DIR` 迁移到空间充足的磁盘。`cargo clean` 不会清理这些缓存或生成的 ArkTS 工程，避免删除无关 SDK 或签名密钥。
 
+
+## Web / WebAssembly
+
+[浏览器入口](../examples/gallery_web/) 复用 Gallery 页面及 Builder / `ui!` 混用示例，启用 3D 与图像流，使用 Canvas 绘制而非 DOM 控件树。浏览器配置不启用原生 WebView、系统托盘、文件监听、窗口状态持久化及线程式性能采样器；桌面 `full` 不适合作为 Web 部署配置。不编译原生剪贴板依赖，浏览器剪贴板适配尚未实现。
+
+准备 Rust target、Python 3.11+，以及与 `Cargo.lock` 中 `wasm-bindgen` **完全相同版本的 wasm-bindgen CLI**，当前为 `0.2.114`。CLI 是构建工具，不是应用库依赖。可从官方 [wasm-bindgen Releases](https://github.com/wasm-bindgen/wasm-bindgen/releases/tag/0.2.114) 下载匹配宿主的预编译工具，解压后将目录加入 `PATH`；不需要 Node.js 打包器或移动端 SDK，但宿主 Rust 工具链仍需正常链接器和编译过程宏所用的构建工具。
+
+```sh
+rustup target add wasm32-unknown-unknown
+wasm-bindgen --version
+python examples/gallery_web/build.py --serve --port 8765
+```
+
+打开 `http://127.0.0.1:8765/`。脚本构建 release 库，使用 `--target web` 生成 JavaScript 绑定，并提供 `target/gallery-web/` 的静态服务；指定 `CARGO_TARGET_DIR` 时输出随之移动。前台服务使用 Ctrl+C 停止。已有产物可直接启动：
+
+```sh
+python examples/gallery_web/build.py --no-build --serve --port 8765
+```
+
+将生成目录整体部署到静态服务，保留 `index.html` 与 `pkg/` 的相对位置；`.wasm` 的 MIME 应为 `application/wasm`，除 localhost 外使用 HTTPS。不要以 `file://` 直接打开页面。模块引用为相对 URL，可部署到站点子目录。URL hash 可指定初始页面，如 `/#forms`、`/#scene`、`/#documents`、`/#code`；Gallery 内部切页仍使用自身响应式导航。
+
+脚本自动设置锁定 WebGPU 绑定所需的 `--cfg web_sys_unstable_apis`。手动构建时，设置环境变量 `CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="--cfg web_sys_unstable_apis"`，执行 `cargo build --release --locked -p gallery_web --target wasm32-unknown-unknown`，随后执行 `wasm-bindgen --target web --out-dir target/gallery-web/pkg target/wasm32-unknown-unknown/release/gallery_web.wasm`，并将示例的 `index.html` 放在 `pkg/` 旁。已有 `RUSTFLAGS` 时也要保留该 cfg。CLI/schema 不匹配时应按锁文件调整 CLI，不应修改生成的 JavaScript。
+
+浏览器需要启用 WebGPU 且能够取得可工作的 GPU adapter。WebGL 是后备尝试，不保证与 WebGPU 具有相同的着色器、纹理和设备限制支持。缺少 GPU、非安全来源、驱动及校验错误应检查浏览器开发者工具；HTML 宿主也会显示启动异常。仅成功下载 Wasm 或返回 HTTP 200 不代表绘制成功。
+
+浏览器启动异步等待 GPU，不阻塞主线程；动画与交互时钟使用 `web-time`。WebGPU 校验作用域异步完成并向控制台报告延迟错误，不支持原生路径那样的同步管线回退。系统窗口、进程启动、文件对话框及运行时适配仍有宿主边界，API 编译通过不代表浏览器提供对应服务。Web 宿主内置 Inter 和 OFL 许可的 Gallery 中文子集，因为无法扫描系统字体；要输入超出该子集的文本，应在启动前调用 `jadix::utils::font::register_font_data` 注册额外字体。字体与许可证位于示例目录。
 
 ## 参考资料
 

@@ -88,7 +88,7 @@ use queue::{max_displace_fades, non_displace_budget_full, MAX_CONCURRENT_EXITING
 use swipe::{clamp_swipe_offset, should_dismiss, ToastSwipeDirs};
 
 use std::cell::{Cell, RefCell};
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 // ---------------------------------------------------------------------------
 // Data

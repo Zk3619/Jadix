@@ -15,6 +15,7 @@ This guide covers SDK preparation, building the workspace and Gallery, applicati
 | iOS | `aarch64-apple-ios`, `aarch64-apple-ios-sim`, `x86_64-apple-ios` | macOS with Xcode and an iOS application host; `.app`/IPA as appropriate |
 | OHOS phone/tablet | `aarch64-unknown-linux-ohos`, `x86_64-unknown-linux-ohos` | Current packaging script runs on Windows with DevEco SDK; HAP |
 | OHOS desktop/2in1 | Same OHOS targets | Separate desktop feature/configuration; HAP |
+| Web | `wasm32-unknown-unknown` | Any Rust build host; JavaScript + Wasm + static HTTP(S) hosting |
 
 An x86_64 package is useful for a matching emulator; it is not a substitute for an ARM64 device package. OHOS phone and desktop builds have different application configuration and native features even when their CPU architecture matches.
 
@@ -256,6 +257,32 @@ If a Rust build runs out of disk space:
 2. Run `cargo clean` in the affected Cargo workspace, then retry the failed platform/architecture. Do not clean while another build is using the same target directory.
 3. If space is still insufficient, inspect SDK/emulator, temporary and Zig caches separately. Relocate `TEMP`/`TMP` and `ZIG_GLOBAL_CACHE_DIR` to a disk with room where appropriate. `cargo clean` does not remove those caches or generated ArkTS projects. Avoid deleting unrelated SDKs or signing keys.
 
+
+## Web / WebAssembly
+
+The [browser entry](../examples/gallery_web/) reuses the Gallery's pages and Builder / `ui!` examples, with 3D and image streams enabled. It renders into a canvas, not a DOM widget tree. Its feature selection deliberately omits native WebViews, system trays, filesystem watching, window-state persistence and the threaded performance sampler. Desktop `full` is not a browser deployment profile. Native clipboard integration is not compiled; browser clipboard integration is not yet implemented.
+
+Install the Rust target, Python 3.11+ and the **wasm-bindgen CLI version matching `wasm-bindgen` in `Cargo.lock`** (currently `0.2.114`). The CLI is a build tool, not an application dependency. Download the matching executable from the official [wasm-bindgen releases](https://github.com/wasm-bindgen/wasm-bindgen/releases/tag/0.2.114), extract it, and put its directory on `PATH`. No Node.js bundler or mobile SDK is required; the host Rust toolchain still needs its normal linker and build tools for procedural macros.
+
+```sh
+rustup target add wasm32-unknown-unknown
+wasm-bindgen --version
+python examples/gallery_web/build.py --serve --port 8765
+```
+
+Open `http://127.0.0.1:8765/`. The script builds the release library, generates JavaScript bindings with `--target web`, and serves `target/gallery-web/` (or the equivalent under `CARGO_TARGET_DIR`). Stop the foreground server with Ctrl+C. To serve an existing bundle without rebuilding:
+
+```sh
+python examples/gallery_web/build.py --no-build --serve --port 8765
+```
+
+The generated directory is deployable as static files. Keep `index.html` and the `pkg/` directory together, serve `.wasm` as `application/wasm`, and use HTTPS except on localhost. Do not open `index.html` as `file://`. A relative module URL permits hosting under a subdirectory. A hash selects the initial Gallery page, for example `/#forms`, `/#scene`, `/#documents` or `/#code`; page changes inside the Gallery use its own reactive navigation.
+
+The script supplies `--cfg web_sys_unstable_apis`, required by the locked WebGPU bindings. For a manual build, set `CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="--cfg web_sys_unstable_apis"`, run `cargo build --release --locked -p gallery_web --target wasm32-unknown-unknown`, then run `wasm-bindgen --target web --out-dir target/gallery-web/pkg target/wasm32-unknown-unknown/release/gallery_web.wasm` and copy the example's `index.html` alongside `pkg/`. Existing `RUSTFLAGS` must retain that cfg. A CLI/schema mismatch requires updating the CLI to the lockfile version, not editing generated JavaScript.
+
+Use a browser with WebGPU enabled and a working graphics adapter. WebGL is a fallback attempt, not a guarantee of equivalent shader, texture or device-limit support. Missing GPU support, insecure origins, driver failures and validation errors appear in browser developer tools; the HTML host also reports startup exceptions. A downloaded Wasm module or an HTTP 200 response alone does not establish successful rendering.
+
+Browser startup awaits GPU initialization without blocking the main thread. Animation and interaction clocks use `web-time`; WebGPU validation scopes resolve asynchronously and report deferred errors to the console, so synchronous native pipeline fallback is not available there. Native OS windows, process launches, filesystem dialogs and runtime adapters still need host-specific implementations; compiling their API surface does not make those services work in the browser. The Web host includes Inter and an OFL-licensed Gallery CJK subset because it cannot enumerate system fonts. Register additional font bytes with `jadix::utils::font::register_font_data` before startup for text outside that subset. The font asset and its license stay with the example.
 
 ## References
 

@@ -377,7 +377,7 @@ pub fn push_frame_region_paint(key: u64, bounds: [f32; 4]) {
     push_paint_dirty(key, bounds, PaintDirtyKind::Region);
 }
 
-#[cfg(feature = "devtools")]
+#[cfg(all(debug_assertions, feature = "devtools"))]
 pub(crate) fn push_frame_region_damage(bounds: [f32; 4]) {
     push_frame_region_paint(bounds_key(bounds), bounds);
 }

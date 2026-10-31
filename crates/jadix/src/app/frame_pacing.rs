@@ -1,6 +1,6 @@
 use std::cell::Cell;
 use std::num::NonZeroU32;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 thread_local! {
     static FRAME_RATE_LIMIT: Cell<Option<NonZeroU32>> = const { Cell::new(NonZeroU32::new(120)) };

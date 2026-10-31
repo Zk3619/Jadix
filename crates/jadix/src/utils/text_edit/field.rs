@@ -6,7 +6,7 @@ use crate::utils::icon_provider::glyph_for_name as lucide_glyph;
 use crate::utils::text_field::*;
 use crate::utils::text_node::build_lucide_icon_text_node;
 use std::cell::RefCell;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 use winit::event::MouseButton;
 
 /// 长按步进：首次按下后延迟再开始连发。

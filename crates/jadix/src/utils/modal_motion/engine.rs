@@ -16,7 +16,7 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use crate::app::portal_overlay::modal_stack_metrics;
 use crate::core::reactivity::{use_signal, Signal};

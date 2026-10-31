@@ -216,7 +216,7 @@ impl EffectPassGpu {
                 continue;
             }
             #[cfg(test)]
-            let cap_begin = std::time::Instant::now();
+            let cap_begin = web_time::Instant::now();
             self.ensure_target(device, textured, images, &cap.key, w, h);
             // Text prepares reuse a glyphon vertex buffer and therefore still
             // submit before the next prepare. Image-only captures can share an

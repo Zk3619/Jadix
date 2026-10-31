@@ -797,12 +797,24 @@ pub(crate) fn build_gallery_app() -> Element {
 }
 
 fn build_gallery_home() -> Element {
-    let gallery_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    jadix::style::watch_stylesheets([
-        gallery_dir.join("theme.toml"),
-        gallery_dir.join("styles.toml"),
-    ]);
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let gallery_dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        jadix::style::watch_stylesheets([
+            gallery_dir.join("theme.toml"),
+            gallery_dir.join("styles.toml"),
+        ]);
+    }
     let section = use_signal("gal_nav_section", || {
+        #[cfg(target_arch = "wasm32")]
+        {
+            web_sys::window()
+                .and_then(|window| window.location().hash().ok())
+                .map(|hash| hash.trim_start_matches('#').to_string())
+                .filter(|key| GALLERY_SECTIONS.iter().any(|entry| entry.key == key))
+                .unwrap_or_else(|| "basics".to_string())
+        }
+        #[cfg(not(target_arch = "wasm32"))]
         std::env::var("JADIX_GALLERY_SECTION").unwrap_or_else(|_| "basics".to_string())
     });
 

@@ -743,8 +743,8 @@ fn synthetic_i420_frame(phase: u32) -> (Vec<u8>, Vec<u8>, Vec<u8>) {
 }
 
 fn stream_phase() -> u32 {
-    static START: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
-    let start = START.get_or_init(std::time::Instant::now);
+    static START: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
+    let start = START.get_or_init(web_time::Instant::now);
     (start.elapsed().as_millis() / 16) as u32
 }
 
@@ -773,7 +773,7 @@ pub(crate) fn ImageStreamShowcase() -> Element {
     let mut stream = ui! {
         <Image texture={IMAGE_STREAM_KEY} w="20rem" h="11.25rem" rounded="0.5rem" />
     };
-    let next_frame = std::cell::Cell::new(std::time::Instant::now());
+    let next_frame = std::cell::Cell::new(web_time::Instant::now());
     jadix::authoring::deadline::attach(
         &mut stream,
         jadix::authoring::deadline::Visibility::Visible,

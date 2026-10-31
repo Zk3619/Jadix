@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Jadix Web Gallery</title>
+  <link rel="icon" href="data:,">
+  <style>
+    html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #101014; color: #fafafa; font-family: sans-serif; }
+    #jadix-canvas { display: block; width: 100%; height: 100%; outline: none; touch-action: none; }
+    #status { position: fixed; inset: 24px auto auto 24px; max-width: min(600px, calc(100% - 48px)); white-space: pre-wrap; }
+    #status[hidden] { display: none; }
+  </style>
+</head>
+<body>
+  <canvas id="jadix-canvas" aria-label="Jadix Web Gallery"></canvas>
+  <div id="status" role="status">Loading Jadix...</div>
+  <script type="module">
+    const status = document.querySelector('#status');
+    const fail = (error) => {
+      status.hidden = false;
+      status.textContent = `Jadix could not start.\n${error?.stack || error}`;
+      document.body.dataset.state = 'error';
+    };
+    window.addEventListener('error', (event) => fail(event.error || event.message));
+    window.addEventListener('unhandledrejection', (event) => fail(event.reason));
+    try {
+      const { default: init } = await import('./pkg/gallery_web.js');
+      await init();
+      status.hidden = true;
+      document.body.dataset.state = 'started';
+    } catch (error) {
+      fail(error);
+    }
+  </script>
+</body>
+</html>

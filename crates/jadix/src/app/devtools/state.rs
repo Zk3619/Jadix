@@ -22,7 +22,7 @@ thread_local! {
     static SEL_SIZE: Cell<(f32, f32)> = const { Cell::new((0.0, 0.0)) };
     /// Tree / pick hover drives the page overlay (child-index path; may drift after rebuilds).
     static HOVER_PATH: RefCell<String> = const { RefCell::new(String::new()) };
-    static HIGHLIGHT_UNTIL: Cell<Option<std::time::Instant>> = const { Cell::new(None) };
+    static HIGHLIGHT_UNTIL: Cell<Option<web_time::Instant>> = const { Cell::new(None) };
     /// Stable identity for the hover anchor (`template_id`, else `focus_id`).
     static HOVER_IDENTITY: RefCell<String> = const { RefCell::new(String::new()) };
     /// Child indices from the identity anchor down to the hovered node (empty = anchor itself).
@@ -404,7 +404,7 @@ impl DevToolsState {
         }
     }
 
-    pub(crate) fn expire_pick_highlight(now: std::time::Instant) -> bool {
+    pub(crate) fn expire_pick_highlight(now: web_time::Instant) -> bool {
         if HIGHLIGHT_UNTIL.get().is_some_and(|until| now >= until) {
             Self::clear_hover_highlight();
             true
@@ -413,13 +413,13 @@ impl DevToolsState {
         }
     }
 
-    pub(crate) fn pick_highlight_deadline() -> Option<std::time::Instant> {
+    pub(crate) fn pick_highlight_deadline() -> Option<web_time::Instant> {
         HIGHLIGHT_UNTIL.get()
     }
 
     pub(super) fn defer_pick_highlight_clear() {
         HIGHLIGHT_UNTIL.set(Some(
-            std::time::Instant::now() + std::time::Duration::from_millis(1200),
+            web_time::Instant::now() + std::time::Duration::from_millis(1200),
         ));
     }
 

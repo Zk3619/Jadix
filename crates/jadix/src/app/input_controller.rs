@@ -1533,7 +1533,7 @@ impl super::App {
                                                 if smooth {
                                                     self.bump_smooth_active_until(
                                                         &ta_rest,
-                                                        std::time::Instant::now(),
+                                                        web_time::Instant::now(),
                                                     );
                                                 }
                                             }

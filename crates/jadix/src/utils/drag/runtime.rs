@@ -8,7 +8,7 @@
 use crate::core::tree::Element;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct RuntimeState {

@@ -1944,6 +1944,8 @@ dependencies = [
  "jadix_window_state",
  "jadix_winit",
  "log",
+ "web-sys",
+ "web-time",
 ]
 
 [[package]]
@@ -1959,6 +1961,17 @@ dependencies = [
  "napi-ohos",
  "openharmony-ability",
  "openharmony-ability-derive",
+]
+
+[[package]]
+name = "gallery_web"
+version = "0.1.0"
+dependencies = [
+ "gallery",
+ "jadix",
+ "log",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
@@ -3073,7 +3086,9 @@ dependencies = [
  "unicode-linebreak",
  "unicode-segmentation",
  "wasm-bindgen",
+ "wasm-bindgen-futures",
  "web-sys",
+ "web-time",
  "webview2-com",
  "windows",
  "windows-collections",
@@ -3111,6 +3126,7 @@ name = "jadix_animation"
 version = "0.1.0"
 dependencies = [
  "jadix_core",
+ "web-time",
 ]
 
 [[package]]
@@ -3142,6 +3158,7 @@ dependencies = [
  "serde",
  "serde_json",
  "unicode-segmentation",
+ "web-time",
 ]
 
 [[package]]
@@ -3189,6 +3206,7 @@ dependencies = [
  "jadix",
  "jadix_taffy",
  "jadix_winit",
+ "web-time",
 ]
 
 [[package]]
@@ -3258,6 +3276,7 @@ dependencies = [
  "jadix",
  "serde",
  "serde_json",
+ "web-time",
 ]
 
 [[package]]
@@ -3302,6 +3321,8 @@ dependencies = [
  "jadix_wgpu",
  "log",
  "unicode-segmentation",
+ "wasm-bindgen-futures",
+ "web-time",
 ]
 
 [[package]]

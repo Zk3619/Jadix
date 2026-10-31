@@ -42,7 +42,7 @@ fn local_timestamp() -> String {
 }
 
 fn utc_fallback() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use web_time::{SystemTime, UNIX_EPOCH};
     let secs = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|d| d.as_secs())

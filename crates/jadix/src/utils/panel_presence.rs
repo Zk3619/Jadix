@@ -7,7 +7,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::ops::{Deref, DerefMut};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use crate::core::reactivity::{current_owner, on_cleanup, use_signal, Signal};
 use crate::utils::presence::{ExitGate, PresencePhase};

@@ -4,7 +4,7 @@
 //! 离屏（本帧未 paint）时不 Advance：父级滚动把轮播滚出视口后时钟停在画面上，
 //! 滚入时重排 deadline，避免把积压的翻页一次性补火（整页滚动条闪顶/底）。
 
-use std::time::Instant;
+use web_time::Instant;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AutoplayAction {

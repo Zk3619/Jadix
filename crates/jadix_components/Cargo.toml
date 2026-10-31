@@ -46,6 +46,7 @@ theme-material3 = ["jadix/theme-material3"]
 theme-liquid-glass = ["jadix/theme-liquid-glass"]
 
 [dependencies]
+web-time.workspace = true
 jadix = { workspace = true, features = ["drag"] }
 jadix_dnd = { workspace = true, optional = true }
 taffy.workspace = true

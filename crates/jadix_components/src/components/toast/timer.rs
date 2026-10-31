@@ -4,7 +4,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 /// 冻结时剩余时长的下限。正好在到期瞬间悬停，`saturating_sub` 会把剩余削到 0；
 /// 收起后该卡会在指针刚移开时原地蒸发。留一点余量，让「收起→接续→退场」看得见。

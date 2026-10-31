@@ -45,7 +45,7 @@
 "serde" = ["arrayvec/serde", "bitflags/serde", "dep:macro_rules_attribute", "dep:serde", "hashbrown/serde", "naga-types/deserialize", "naga-types/serialize", "serde/alloc", "serde/default", "serde/derive", "smallvec/serde"]
 "spirv" = ["codespan-reporting/termcolor", "dep:arrayvec", "dep:bit-set", "dep:codespan-reporting", "dep:half", "dep:indexmap", "dep:libm", "dep:num-traits", "dep:once_cell", "dep:petgraph", "dep:rustc-hash", "dep:spirv", "dep:thiserror", "petgraph/graphmap"]
 "static-dxc" = ["dep:mach-dxcompiler-rs"]
-"std" = ["js-sys/std", "naga-types/std", "raw-window-handle/std", "wasm-bindgen-futures/std", "wasm-bindgen/std", "web-sys/std"]
+"std" = ["js-sys/std", "naga-types/std", "once_cell?/std", "raw-window-handle/std", "wasm-bindgen-futures/std", "wasm-bindgen/std", "web-sys/std"]
 "strict_asserts" = []
 "trace" = ["arrayvec/serde", "bitflags/serde", "dep:macro_rules_attribute", "dep:ron", "dep:serde", "half/serde", "hashbrown/serde", "js-sys/std", "naga-types/deserialize", "naga-types/serialize", "naga-types/std", "serde/alloc", "serde/default", "serde/derive", "serde/std", "smallvec/serde", "web-sys/std"]
 "vulkan" = ["dep:android_system_properties", "dep:arrayvec", "dep:ash", "dep:bytemuck", "dep:gpu-allocator", "dep:libc", "dep:libloading", "dep:ordered-float", "dep:parking_lot", "dep:profiling", "dep:raw-window-metal", "dep:smallvec", "dep:spirv", "dep:windows", "gpu-allocator/hashbrown", "gpu-allocator/vulkan", "smallvec/union", "windows/Win32", "windows/Win32_Devices_Display", "windows/Win32_Foundation", "windows/Win32_Graphics_Dxgi", "windows/Win32_Graphics_Dxgi_Common", "windows/Win32_Graphics_Gdi"]

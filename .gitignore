@@ -83,6 +83,7 @@ development-docs/
 !docs/*.md
 !docs/component-authoring.md
 scripts/**/__pycache__/
+examples/**/__pycache__/
 scripts/**/target/
 
 !assets/

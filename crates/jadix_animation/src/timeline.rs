@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::rc::{Rc, Weak};
-use std::time::Instant;
+use web_time::Instant;
 
 use super::animation::{cubic_bezier_y_at_x, CubicTween};
 use super::generator::cycle_duration_clock;

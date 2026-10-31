@@ -7,7 +7,7 @@ use std::any::Any;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
-use std::time::Instant;
+use web_time::Instant;
 
 use crate::core::reactivity::{batch, Signal};
 use crate::core::tree::Element;

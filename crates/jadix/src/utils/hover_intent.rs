@@ -5,7 +5,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use crate::app::runtime::request_redraw;
 use crate::core::reactivity::{create_effect, on_cleanup, untrack, Signal};

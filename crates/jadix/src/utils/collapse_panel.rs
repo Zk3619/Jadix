@@ -9,7 +9,7 @@
 
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use taffy::style::{Dimension, Display, Overflow};
 

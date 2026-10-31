@@ -41,7 +41,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::OnceLock;
-use std::time::{Duration, Instant};
+use web_time::{Duration, Instant};
 
 use winit::event::KeyEvent;
 use winit::keyboard::{Key, NamedKey};
