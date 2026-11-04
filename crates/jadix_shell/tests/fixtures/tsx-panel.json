@@ -1,0 +1,52 @@
+{
+  "protocol": 1,
+  "session": "1",
+  "command": {
+    "type": "mount",
+    "root": "2",
+    "tree": {
+      "component": "Box",
+      "props": {},
+      "style": {
+        "width": 320,
+        "gap": 8
+      },
+      "events": {},
+      "children": [
+        {
+          "component": "Text",
+          "props": {
+            "text": "Portable Jadix"
+          },
+          "style": {},
+          "events": {},
+          "children": []
+        },
+        {
+          "component": "Button",
+          "props": {
+            "label": "Continue"
+          },
+          "style": {},
+          "events": {
+            "activate": {
+              "session": "1",
+              "sequence": "2"
+            }
+          },
+          "children": []
+        },
+        {
+          "component": "Input",
+          "props": {
+            "value": "",
+            "placeholder": "Name"
+          },
+          "style": {},
+          "events": {},
+          "children": []
+        }
+      ]
+    }
+  }
+}

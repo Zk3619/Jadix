@@ -1,91 +1,135 @@
+#![allow(clippy::type_complexity, clippy::too_many_arguments)]
+
+#[cfg(feature = "live2d")]
+pub use jadix_live2d as live2d;
+
+#[cfg(all(feature = "autostart", any(target_os = "windows", target_os = "macos", all(target_os = "linux", not(target_env = "ohos")))))]
+#[path = "app/autostart.rs"]
+pub mod autostart;
+
 // Structural: callback/handler signatures and renderer/layout collectors are
 // intentionally dense; refactoring them into newtypes is tracked separately.
-#![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
 #[cfg(any(target_os = "android", target_env = "ohos", test))]
 #[cfg_attr(any(target_os = "android", target_env = "ohos"), macro_use)]
+#[cfg(feature = "gpu")]
 mod thread_local;
 
 #[cfg(all(test, feature = "product-tests"))]
 #[allow(unexpected_cfgs)]
 #[path = "../../jadix_lucide/src/catalog.rs"]
+#[cfg(feature = "gpu")]
 pub mod catalog;
 #[cfg(all(test, feature = "gallery-tests"))]
 #[path = "../../jadix_lucide/src/recipes.rs"]
+#[cfg(feature = "gpu")]
 pub mod recipes;
 #[cfg(all(test, feature = "gallery-tests"))]
+#[cfg(feature = "gpu")]
 pub use utils::lucide_animated::animated_icon;
 
+#[cfg(feature = "gpu")]
 pub mod core;
+#[cfg(feature = "gpu")]
+pub use jadix_core::presentation;
+#[cfg(feature = "gpu")]
 pub mod layout;
+#[cfg(feature = "gpu")]
 pub mod media;
+#[cfg(feature = "gpu")]
 pub mod motion;
 #[cfg(feature = "net")]
+#[cfg(feature = "gpu")]
 pub mod net;
+#[cfg(feature = "gpu")]
 pub mod renderer;
+#[cfg(feature = "gpu")]
 pub mod style;
 
 /// 兼容旧路径 `crate::render::*`。
+#[cfg(feature = "gpu")]
 pub use renderer as render;
 
 #[cfg(feature = "a11y")]
+#[cfg(feature = "gpu")]
 pub mod a11y;
+#[cfg(feature = "gpu")]
 pub mod app;
+#[cfg(feature = "gpu")]
 pub mod authoring;
 #[cfg(all(test, feature = "product-tests"))]
 #[allow(unexpected_cfgs)]
 #[path = "../../jadix_components/src/components/mod.rs"]
+#[cfg(feature = "gpu")]
 pub mod components;
 #[cfg(feature = "i18n")]
 /// Locale overlays, ICU-lite format, TOML catalogs. Off by default; see [`tr_default`].
+#[cfg(feature = "gpu")]
 pub mod i18n;
 /// 可选运行时日志（`--features runtime-logging`）：控制台 + `JADIX_LOG_FILE`。
+#[cfg(feature = "gpu")]
 pub mod logging;
 /// Optional frame timing and OS resource sampling capability.
 #[cfg(feature = "performance")]
+#[cfg(feature = "gpu")]
 pub mod performance;
 /// OS hooks + winit event-loop host (Windows / macOS / iOS / Android / Web;
 /// HarmonyOS via [`platform::set_external_host`]).
 /// 架构见 `docs/engine/platform.md`。
+#[cfg(feature = "gpu")]
 pub mod platform;
 /// 默认应用入口：`use jadix::prelude::*;`
 ///
 /// 程序启动：[`prelude::launch`] + [`components::App`]，或 [`app::app`]`.mount`。
 /// 组件双书写面见 `docs/COMPONENT_LIBRARY.md` §3 / ADR-9；属性分层见同文档 §1。
 /// 兼容 [`run`] / [`run_with`] 在 crate 根保留。
+#[cfg(feature = "gpu")]
 pub mod prelude;
+#[cfg(feature = "gpu")]
 pub mod primitives;
 /// Text measure (`prepare`/`layout`) + render bridge (`JadixTextRenderer`).
+#[cfg(feature = "gpu")]
 pub mod text;
+#[cfg(feature = "gpu")]
 pub mod tokens;
+#[cfg(feature = "gpu")]
 pub mod utils;
 
 /// Crate-local scenario tests (`pub(crate)` access) in `src/crate_tests/`.
 #[cfg(test)]
+#[cfg(feature = "gpu")]
 mod crate_tests;
 
 // ui! expansions in crate-local tests use the public crate name.
 #[cfg(test)]
+#[cfg(feature = "gpu")]
 extern crate self as jadix;
 #[cfg(all(test, feature = "gallery-tests"))]
+#[cfg(feature = "gpu")]
 extern crate self as jadix_components;
 #[cfg(all(test, feature = "gallery-tests"))]
+#[cfg(feature = "gpu")]
 extern crate self as jadix_dnd;
 #[cfg(all(test, feature = "gallery-tests"))]
+#[cfg(feature = "gpu")]
 extern crate self as jadix_lucide;
 // Native drag regressions mount the Gallery source, including every provider.
 #[cfg(all(test, feature = "gallery-tests"))]
 #[path = "../../../examples/gallery/src/imports.rs"]
+#[cfg(feature = "gpu")]
 mod imports;
 #[cfg(all(test, feature = "gallery-tests"))]
 #[allow(dead_code, non_snake_case)]
 #[path = "../../../examples/gallery/src/pages/mod.rs"]
+#[cfg(feature = "gpu")]
 mod pages;
 #[cfg(all(test, feature = "gallery-tests"))]
 #[allow(dead_code, non_snake_case)]
 #[path = "../../../examples/gallery/src/shared.rs"]
+#[cfg(feature = "gpu")]
 mod shared;
 #[cfg(all(test, feature = "gallery-tests"))]
+#[cfg(feature = "gpu")]
 pub(crate) fn gallery_icon() -> crate::app::AppIcon {
     crate::app::AppIcon::from_bytes(include_bytes!(
         "../../../examples/gallery/assets/app-icon.png"
@@ -93,40 +137,50 @@ pub(crate) fn gallery_icon() -> crate::app::AppIcon {
     .expect("bundled Gallery icon")
 }
 #[cfg(all(test, feature = "gallery-tests"))]
+#[cfg(feature = "gpu")]
 pub(crate) mod gallery_drag {
     pub(crate) use super::pages::drag::*;
 }
 #[cfg(all(test, feature = "gallery-tests"))]
 #[allow(dead_code, non_snake_case)]
 #[path = "../../../examples/gallery/src/app.rs"]
+#[cfg(feature = "gpu")]
 mod gallery_app;
 #[cfg(all(test, feature = "gallery-tests"))]
 #[allow(dead_code)]
 #[path = "../../../examples/gallery/src/styles.rs"]
+#[cfg(feature = "gpu")]
 mod styles;
 
 /// Backward-compatible path for macro-generated code.
+#[cfg(feature = "gpu")]
 pub mod tree {
     pub use crate::core::tree::*;
 }
 
 /// Backward-compatible path for existing user code.
+#[cfg(feature = "gpu")]
 pub mod reactivity {
     pub use crate::core::reactivity::*;
     pub use crate::core::resource::{Resource, ResourceState};
 }
 
+#[cfg(feature = "gpu")]
 pub use core::tree::{opacity_groups_enabled, set_opacity_groups_enabled};
+#[cfg(feature = "gpu")]
 pub use core::tree::{CursorKind, CursorValue, PathHitPolicy, PointerEvents};
 #[cfg(feature = "macros")]
 #[doc(hidden)]
+#[cfg(feature = "gpu")]
 pub use jadix_macros::ui_with_runtime as __ui_with_runtime;
 #[cfg(feature = "macros")]
+#[cfg(feature = "gpu")]
 pub use jadix_macros::{component, main};
 
 /// Build an RSX tree using this runtime, including when the dependency is renamed.
 #[cfg(feature = "macros")]
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! ui {
     ($($tokens:tt)*) => {
         $crate::__ui_with_runtime!($crate; $($tokens)*)
@@ -134,11 +188,13 @@ macro_rules! ui {
 }
 
 /// `true` when `src/i18n` (catalogs / locale overlay) is compiled in.
+#[cfg(feature = "gpu")]
 pub const fn i18n_enabled() -> bool {
     cfg!(feature = "i18n")
 }
 
 /// `{name}` substitution for [`tr_with_default`] when feature `i18n` is off.
+#[cfg(feature = "gpu")]
 pub(crate) fn i18n_interpolate(template: &str, args: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(template.len());
     let mut rest = template;
@@ -170,6 +226,7 @@ pub(crate) fn i18n_interpolate(template: &str, args: &[(&str, &str)]) -> String 
 /// With `--features i18n` this registers **en-US** then translates. Without the
 /// feature it returns `en_us`. Jadix widgets that ship Chinese use [`tr_default_zh`].
 /// Optional third locale at the call site: [`tr_default!`].
+#[cfg(feature = "gpu")]
 pub fn tr_default(key: &str, en_us: &str) -> String {
     #[cfg(feature = "i18n")]
     {
@@ -183,6 +240,7 @@ pub fn tr_default(key: &str, en_us: &str) -> String {
 }
 
 /// Jadix component chrome: register **en-US** and **zh-CN**, then look up.
+#[cfg(feature = "gpu")]
 pub fn tr_default_zh(key: &str, en_us: &str, zh_cn: &str) -> String {
     #[cfg(feature = "i18n")]
     {
@@ -200,6 +258,7 @@ pub fn tr_default_zh(key: &str, en_us: &str, zh_cn: &str) -> String {
 }
 
 /// [`tr_default`] with named `{placeholder}` args.
+#[cfg(feature = "gpu")]
 pub fn tr_with_default(key: &str, en_us: &str, args: &[(&str, &str)]) -> String {
     #[cfg(feature = "i18n")]
     {
@@ -213,6 +272,7 @@ pub fn tr_with_default(key: &str, en_us: &str, args: &[(&str, &str)]) -> String 
 }
 
 /// [`tr_default_zh`] with named `{placeholder}` args.
+#[cfg(feature = "gpu")]
 pub fn tr_with_default_zh(key: &str, en_us: &str, zh_cn: &str, args: &[(&str, &str)]) -> String {
     #[cfg(feature = "i18n")]
     {
@@ -232,6 +292,7 @@ pub fn tr_with_default_zh(key: &str, en_us: &str, zh_cn: &str, args: &[(&str, &s
     }
 }
 
+#[cfg(feature = "gpu")]
 thread_local! {
     static CHROME_LOCALE: std::cell::RefCell<String> = std::cell::RefCell::new(
         std::env::var("JADIX_LOCALE").unwrap_or_else(|_| "en-US".into()).to_ascii_lowercase()
@@ -239,6 +300,7 @@ thread_local! {
 }
 
 /// Lightweight component language, available without the full i18n feature.
+#[cfg(feature = "gpu")]
 pub fn chrome_locale() -> String {
     #[cfg(feature = "i18n")]
     {
@@ -251,6 +313,7 @@ pub fn chrome_locale() -> String {
 }
 
 /// Sets component language; with i18n enabled this also selects the catalog locale.
+#[cfg(feature = "gpu")]
 pub fn set_chrome_locale(tag: &str) {
     CHROME_LOCALE.with(|locale| *locale.borrow_mut() = tag.to_ascii_lowercase());
     #[cfg(feature = "i18n")]
@@ -259,6 +322,7 @@ pub fn set_chrome_locale(tag: &str) {
 }
 
 /// First weekday: 0 = Sunday. With `i18n`, follows CLDR / ICU for the active locale.
+#[cfg(feature = "gpu")]
 pub fn first_weekday() -> u32 {
     #[cfg(feature = "i18n")]
     {
@@ -271,6 +335,7 @@ pub fn first_weekday() -> u32 {
 }
 
 /// `true` when the active locale is RTL (Arabic, Hebrew, …).
+#[cfg(feature = "gpu")]
 pub fn chrome_rtl() -> bool {
     #[cfg(feature = "i18n")]
     {
@@ -283,6 +348,7 @@ pub fn chrome_rtl() -> bool {
 }
 
 /// Chevron name for previous/next chrome (flips in RTL).
+#[cfg(feature = "gpu")]
 pub(crate) fn chrome_nav_chevron(previous: bool) -> &'static str {
     match (chrome_rtl(), previous) {
         (false, true) | (true, false) => "chevron-left",
@@ -291,6 +357,7 @@ pub(crate) fn chrome_nav_chevron(previous: bool) -> &'static str {
 }
 
 #[cfg(not(feature = "i18n"))]
+#[cfg(feature = "gpu")]
 const ENGLISH_MONTHS: [&str; 12] = [
     "January",
     "February",
@@ -307,11 +374,13 @@ const ENGLISH_MONTHS: [&str; 12] = [
 ];
 
 #[cfg(not(feature = "i18n"))]
+#[cfg(feature = "gpu")]
 fn english_month(month: u32) -> &'static str {
     ENGLISH_MONTHS[month.saturating_sub(1).min(11) as usize]
 }
 
 /// Long date in the active locale (`August 14, 2026` / `2026年8月14日`).
+#[cfg(feature = "gpu")]
 pub fn format_date_long(year: i32, month: u32, day: u32) -> String {
     #[cfg(feature = "i18n")]
     {
@@ -324,6 +393,7 @@ pub fn format_date_long(year: i32, month: u32, day: u32) -> String {
 }
 
 /// Year-month caption in the active locale (`August 2026` / `2026年8月`).
+#[cfg(feature = "gpu")]
 pub fn format_year_month(year: i32, month: u32) -> String {
     #[cfg(feature = "i18n")]
     {
@@ -336,6 +406,7 @@ pub fn format_year_month(year: i32, month: u32) -> String {
 }
 
 /// Date + time in the active locale (no timezone conversion).
+#[cfg(feature = "gpu")]
 pub fn format_datetime(
     year: i32,
     month: u32,
@@ -359,6 +430,7 @@ pub fn format_datetime(
 
 /// `tr_default!("key", "English")` or `tr_default!("key", "English", "中文")`.
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! tr_default {
     ($key:expr, $en:expr $(,)?) => {
         $crate::tr_default($key, $en)
@@ -370,6 +442,7 @@ macro_rules! tr_default {
 
 /// `tr_with_default!("key", "Hello {name}", args)` or with a zh-CN template before `args`.
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! tr_with_default {
     ($key:expr, $en:expr, $args:expr $(,)?) => {
         $crate::tr_with_default($key, $en, $args)
@@ -384,6 +457,7 @@ macro_rules! tr_with_default {
 /// Requires `--features i18n` for overlay lookup. Without the feature, returns
 /// the key (or interpolates `{name}` in the key string).
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! t {
     ($key:expr) => {{
         #[cfg(feature = "i18n")]
@@ -416,6 +490,7 @@ macro_rules! t {
 }
 
 #[doc(hidden)]
+#[cfg(feature = "gpu")]
 pub fn __t_arg(v: impl ToString) -> String {
     v.to_string()
 }
@@ -423,6 +498,7 @@ pub fn __t_arg(v: impl ToString) -> String {
 /// Default stable anchor id for [`app::reactive::reactive_anchor`] / [`app::reactive::reactive_placeholder`]
 /// (file + line + column). Prefer explicit ids when you need hot-reload or multi-instance keys.
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! reactive_anchor_id {
     () => {
         concat!(file!(), ":", line!(), ":", column!())
@@ -435,6 +511,7 @@ macro_rules! reactive_anchor_id {
 /// - `reactive!(id, closure)` — stable explicit id (hot reload / multi-instance friendly).
 /// - `reactive!(closure)` — default id `file:line:column` at the call site (via [`crate::reactive_anchor_id!`]).
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! reactive {
     ($id:expr, $closure:expr) => {{
         $crate::app::reactive::reactive_view($id, $closure)
@@ -456,6 +533,7 @@ macro_rules! reactive {
 /// class={classes!("flex gap-2", extra, ("animate-spin", busy))}
 /// ```
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! classes {
     () => {
         ::std::string::String::new()
@@ -473,6 +551,7 @@ macro_rules! classes {
 ///
 /// `for_keyed!(scope_id, items_expr, key_of, render)`
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! for_keyed {
     ($scope_id:expr, $items:expr, $key_of:expr, $render:expr) => {{
         let __jadix_items = $items;
@@ -485,6 +564,7 @@ macro_rules! for_keyed {
 /// - `bind_text!(id, || expr)` — stable explicit id
 /// - `bind_text!(|| expr)` — default id `file:line:column`
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! bind_text {
     ($id:expr, $closure:expr) => {{
         $crate::app::reactive::bind_text($id, $closure)
@@ -499,6 +579,7 @@ macro_rules! bind_text {
 
 /// Sugar over [`crate::app::reactive::bind_attr`] / [`bind_prop`](crate::app::reactive::bind_prop).
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! bind_attr {
     ($el:expr, $id:expr, $compute:expr, $apply:expr) => {{
         $crate::app::reactive::bind_attr($el, $id, $compute, $apply)
@@ -510,6 +591,7 @@ macro_rules! bind_attr {
 /// - `bind_style!(el, id, || StylePatch { … })`
 /// - `bind_style!(el, || StylePatch { … })` — id = `file:line:column`
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! bind_style {
     ($el:expr, $id:expr, $closure:expr) => {{
         $crate::app::reactive::bind_style($el, $id, $closure)
@@ -528,6 +610,7 @@ macro_rules! bind_style {
 /// let props = merge_props!(defaults, incoming, overrides);
 /// ```
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! merge_props {
     ($first:expr $(,)?) => {
         $first
@@ -546,6 +629,7 @@ macro_rules! merge_props {
 /// let ((id, class), rest) = split_props!(props, id, class);
 /// ```
 #[macro_export]
+#[cfg(feature = "gpu")]
 macro_rules! split_props {
     ($props:expr, $($field:ident),+ $(,)?) => {{
         let mut __jadix_rest = $props;
@@ -554,9 +638,11 @@ macro_rules! split_props {
     }};
 }
 
+#[cfg(feature = "gpu")]
 pub fn init() {}
 
 /// 将 RGBA8 贴图排队上传到 GPU，供 [`components::Image`](crate::components::Image) 等通过 `texture` 引用。
+#[cfg(feature = "gpu")]
 pub fn queue_image_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: Vec<u8>) {
     crate::app::pending_images::queue_image_rgba8(id, width, height, rgba);
 }
@@ -566,59 +652,71 @@ pub fn queue_image_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: V
 /// RGBA8 always. YUV (`Nv12` / `I420` / `P010`) requires `--features image-stream`.
 /// Not a decoder or player — see [`media::queue_media_frame`](crate::media::queue_media_frame)
 /// and `docs/engine/media.md`.
+#[cfg(feature = "gpu")]
 pub fn queue_media_frame(id: impl Into<String>, frame: crate::media::MediaFrame<'_>) {
     crate::media::queue_media_frame(id, frame);
 }
 
 /// 解码图像字节并排队（全格式光栅 + 可选 SVG；见 `svg` feature）。
+#[cfg(feature = "gpu")]
 pub fn queue_image_from_bytes(id: impl Into<String>, bytes: &[u8]) -> bool {
     crate::app::pending_images::queue_image_from_bytes(id, bytes)
 }
 
 /// 从本地路径 / `data:` URL 解码并排队。默认禁止 `http(s)`；
 /// `features = ["remote-asset"]` 时对远程 URL 调用已安装的 [`RemoteAssetFetcher`]。
+#[cfg(feature = "gpu")]
 pub fn queue_image_from_src(id: impl Into<String>, src: impl AsRef<str>) -> bool {
     crate::app::pending_images::queue_image_from_src(id, src.as_ref())
 }
 
+#[cfg(feature = "gpu")]
 pub fn queue_image_from_path(id: impl Into<String>, path: impl AsRef<str>) -> bool {
     crate::app::pending_images::queue_image_from_path(id, path)
 }
 
 /// 解码图像为 RGBA8（不上传 GPU）。
+#[cfg(feature = "gpu")]
 pub fn decode_image_bytes(bytes: &[u8]) -> Option<crate::media::DecodedImage> {
     crate::media::decode_bytes(bytes, crate::media::DecodeOptions::image())
 }
 
 /// 从路径或 `data:` URL 解码为 RGBA8（同步；不含 `http(s)`）。
+#[cfg(feature = "gpu")]
 pub fn decode_image_src(src: impl AsRef<str>) -> Option<crate::media::DecodedImage> {
     crate::media::load_src(src.as_ref(), crate::media::DecodeOptions::image())
 }
 
+#[cfg(feature = "gpu")]
 pub use crate::media::{
     clear_remote_asset_fetcher, fetch_remote_bytes, fetch_remote_bytes_shared, is_remote_src,
     remote_asset_enabled, remote_asset_fetcher_installed, set_remote_asset_fetcher, MediaFrame,
     MediaPlanes, PixelLayout, RemoteAssetFetcher, TextureColorSpace,
 };
 #[cfg(feature = "remote-asset-cache")]
+#[cfg(feature = "gpu")]
 pub use media::CachedRemoteAssetFetcher;
 
 /// 注册自定义图标名（覆盖 Lucide / [`set_icon_provider`]）。路径、`data:` URL 或内联 SVG。
+#[cfg(feature = "gpu")]
 pub fn register_icon(name: impl Into<String>, source: impl Into<crate::utils::IconSource>) {
     crate::utils::register_icon(name, source)
 }
 
 /// 替换自定义 [`IconProvider`](crate::utils::IconProvider)（[`register_icon`] 优先，Lucide 由产品显式安装）。
+#[cfg(feature = "gpu")]
 pub fn set_icon_provider(provider: std::sync::Arc<dyn crate::utils::IconProvider>) {
     crate::utils::set_icon_provider(provider)
 }
 
+#[cfg(feature = "gpu")]
 pub use crate::utils::{
     clear_icon_provider, clear_registered_icons, icon_named, icon_src, unregister_icon,
     IconProvider, IconSource,
 };
 
 /// 图像处理（resize / blur / encode 等），基于 [`image`](https://github.com/image-rs/image)。
+#[cfg(feature = "gpu")]
 pub mod image_ops {
     pub use crate::media::{
         blur, brighten, contrast, crop, encode_jpeg, encode_png, encode_webp, flip_horizontal,
@@ -628,37 +726,49 @@ pub mod image_ops {
 }
 
 /// 注册自定义光标 RGBA（`cursor: url(#id)` / `url(cursor:id)`）。
+#[cfg(feature = "gpu")]
 pub fn register_cursor_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: Vec<u8>) {
     crate::style::register_cursor_rgba8(id, width, height, rgba);
 }
 
+#[cfg(feature = "gpu")]
 pub use crate::layout::dimension::{css_root_font_size_px, em, px, rem};
+#[cfg(feature = "gpu")]
 pub use crate::utils::font::{
     default_ui_mono_family_list, default_ui_sans_family_list, default_ui_serif_family_list,
     root_font_size_px, set_root_font_size, set_text_defaults, text_defaults, TextDefaults,
 };
+#[cfg(feature = "gpu")]
 pub use app::damage::{
     arm_policy_snapshot, full_clear_frame_count, partial_load_frame_count,
     reset_frame_policy_counters, suppress_policy_counts, take_policy_snapshot, PolicySnapshot,
 };
+#[cfg(feature = "gpu")]
 pub use app::frame_stats::{
     last_patched_dl, last_scene_batches, last_scene_uploads, last_skipped_siblings,
     patched_dl_count, reset_collect_skip_counters, skipped_siblings_count, SceneBatches,
     SceneUploads,
 };
+#[cfg(feature = "gpu")]
 pub use app::pointer_events::{EventPhase, MouseEvent, PointerEvent};
+#[cfg(feature = "gpu")]
 pub use app::props::{
     children, merge_props, resolve_children, Children, ChildrenAccessor, MergeProps,
 };
 #[cfg(target_os = "android")]
+#[cfg(feature = "gpu")]
 pub use app::run_android;
 #[cfg(target_env = "ohos")]
+#[cfg(feature = "gpu")]
 pub use app::run_ohos;
+#[cfg(feature = "gpu")]
 pub use app::{
     launch, mouse_content_pan_enabled, page_scroll_locked, parse_scroll_freeze, run, run_with,
-    set_frame_rate_limit, set_mouse_content_pan_enabled, set_page_scroll_locked, set_scroll_freeze,
-    with_ui_build_stack, ScrollFreeze, WindowBackdrop, WindowOptions,
+    run_with_startup, set_frame_rate_limit, set_mouse_content_pan_enabled, set_page_scroll_locked,
+    set_scroll_freeze, with_ui_build_stack, ScrollFreeze, StartupHandle, StartupHost,
+    WindowBackdrop, WindowOptions,
 };
+#[cfg(feature = "gpu")]
 pub use utils::{
     activate_focus_trap, deactivate_focus_trap, item_height_for_text, sync_focus_trap,
     visible_item_range, FOCUS_TRAP_OWNER_KEY, FOCUS_TRAP_RING_KEY,
@@ -666,8 +776,10 @@ pub use utils::{
 
 #[cfg(test)]
 #[path = "tests/tr_default_shim.rs"]
+#[cfg(feature = "gpu")]
 mod tr_default_shim_tests;
 
+#[cfg(feature = "gpu")]
 pub(crate) static DEFAULT_ICON_PROVIDER: std::sync::LazyLock<
     Option<std::sync::Arc<dyn utils::icon_provider::IconProvider>>,
 > = std::sync::LazyLock::new(|| {
@@ -680,3 +792,8 @@ pub(crate) static DEFAULT_ICON_PROVIDER: std::sync::LazyLock<
         None
     }
 });
+
+#[cfg(not(feature = "gpu"))]
+mod portable;
+#[cfg(not(feature = "gpu"))]
+pub use portable::*;

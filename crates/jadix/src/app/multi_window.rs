@@ -17,6 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 
 use winit::chrome::WindowExtJadix;
+pub use winit::window::{InputRegionRect, PointerPassthrough};
 use winit::window::{Window, WindowAttributes, WindowId};
 
 use crate::core::tree::Element;
@@ -58,6 +59,56 @@ impl WindowHandle {
 
     pub fn is_alive(&self) -> bool {
         self.window.strong_count() > 0
+    }
+
+    /// Query the current OS pointer location in desktop physical coordinates.
+    /// Wayland and other unsupported backends return an error.
+    pub fn global_cursor_position(&self) -> Result<winit::dpi::PhysicalPosition<i32>, String> {
+        self.upgrade()?
+            .global_cursor_position()
+            .map_err(|error| error.to_string())
+    }
+
+    /// Enable pass-through for the entire OS window. Unsupported platforms return an error.
+    pub fn set_click_through(&self, enabled: bool) -> Result<(), String> {
+        self.upgrade()?
+            .set_cursor_hittest(!enabled)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Restrict input to a union of client-relative physical rectangles.
+    /// None restores the default; an empty slice passes all input through.
+    /// Windows also clips rendering. Reapply after layout or scale changes.
+    pub fn set_input_region(&self, region: Option<&[winit::window::InputRegionRect]>) -> Result<(), String> {
+        self.upgrade()?.set_input_region(region).map_err(|error| error.to_string())
+    }
+
+    /// Set a mask of OS pointer events. Partial masks fail without changing window state
+    /// when the window system only supports whole-window hit testing.
+    pub fn set_pointer_passthrough(&self, events: PointerPassthrough) -> Result<(), String> {
+        self.upgrade()?
+            .set_pointer_passthrough(events)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Whole-window OS opacity; distinct from background/per-pixel transparency.
+    pub fn set_opacity(&self, opacity: f32) -> Result<(), String> {
+        self.upgrade()?
+            .set_opacity(opacity)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Snapshot all monitors using the live window backend, including hotplug changes.
+    pub fn available_monitors(&self) -> Result<Vec<winit::monitor::MonitorHandle>, String> {
+        Ok(self.upgrade()?.available_monitors().collect())
+    }
+
+    pub fn current_monitor(&self) -> Result<Option<winit::monitor::MonitorHandle>, String> {
+        Ok(self.upgrade()?.current_monitor())
+    }
+
+    pub fn primary_monitor(&self) -> Result<Option<winit::monitor::MonitorHandle>, String> {
+        Ok(self.upgrade()?.primary_monitor())
     }
 
     pub(crate) fn upgrade(&self) -> Result<Arc<dyn Window>, String> {
@@ -308,6 +359,13 @@ impl WindowHandle {
 /// Handle for the UI tree currently being built or handling an event.
 pub fn current_window() -> Option<WindowHandle> {
     super::runtime::current_window_handle()
+}
+
+/// Query the global pointer location using the current window's platform backend.
+pub fn current_global_cursor_position() -> Result<winit::dpi::PhysicalPosition<i32>, String> {
+    current_window()
+        .ok_or_else(|| "there is no current window".to_string())?
+        .global_cursor_position()
 }
 
 /// Snapshot of live windows. Call on the UI thread; handles can then be sent to workers.

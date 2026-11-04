@@ -99,7 +99,7 @@ fn cached_src_load_state(key: &str) -> Option<SrcLoadState> {
     src_load_map().as_ref().and_then(|m| m.get(key).copied())
 }
 
-fn mark_src_needed(key: impl Into<String>) {
+pub(crate) fn mark_src_needed(key: impl Into<String>) {
     let key = key.into();
     SRC_NEEDED
         .lock()
@@ -390,10 +390,21 @@ pub(crate) fn dynamic_texture_epoch() -> u64 {
 /// 排队上传一张 RGBA8 贴图（`width * height * 4` 字节）。同一 `id` 重复排队时仅保留最后一次。
 pub fn queue_image_rgba8(id: impl Into<String>, width: u32, height: u32, rgba: Vec<u8>) {
     let id = id.into();
-    let mut g = PENDING.lock().unwrap();
-    g.retain(|(k, _, _, _)| k != &id);
-    g.push((id, rgba, width, height));
+    let needs_wake = {
+        let mut pending = PENDING.lock().unwrap();
+        let was_empty = pending.is_empty();
+        pending.retain(|(key, _, _, _)| key != &id);
+        pending.push((id, rgba, width, height));
+        was_empty
+    };
     bump_dynamic_texture_epoch();
+    if needs_wake {
+        super::ui_bridge::wake();
+    }
+}
+
+pub(crate) fn has_pending() -> bool {
+    !PENDING.lock().unwrap().is_empty()
 }
 
 #[cfg(all(debug_assertions, any(feature = "hot-reload", test)))]
@@ -507,20 +518,33 @@ pub fn queue_image_from_src(id: impl Into<String>, src: &str) -> bool {
 
 /// Advance all active GIF texture frames; returns `true` when there is a frame switch (redraw on request).
 pub fn tick_gif_textures(dt: f32) -> bool {
-    if dt <= 0.0 {
-        return false;
-    }
-    let mut play = GIF_PLAY.lock().unwrap();
-    let play = play.get_or_insert_with(HashMap::new);
-    if play.is_empty() {
+    let active = GIF_PLAY
+        .lock()
+        .unwrap()
+        .as_ref()
+        .map(|playback| playback.keys().cloned().collect())
+        .unwrap_or_default();
+    tick_active_gif_textures(dt, &active)
+}
+
+pub(crate) fn tick_active_gif_textures(dt: f32, active: &HashSet<String>) -> bool {
+    if !dt.is_finite() || dt <= 0.0 || !any_active_gif_playing(active) {
         return false;
     }
     let decoded = DECODED_SRC.lock().unwrap();
     let Some(map) = decoded.as_ref() else {
         return false;
     };
+    let mut play = GIF_PLAY.lock().unwrap();
+    let play = play.get_or_insert_with(HashMap::new);
+    if play.is_empty() {
+        return false;
+    }
     let mut any = false;
     for (key, state) in play.iter_mut() {
+        if !active.contains(key) {
+            continue;
+        }
         let Some(cached) = map.get(key) else {
             continue;
         };
@@ -546,11 +570,23 @@ pub fn tick_gif_textures(dt: f32) -> bool {
 
 /// Is there a GIF playing (for frame pumping).
 pub fn any_gif_playing() -> bool {
-    GIF_PLAY
-        .lock()
-        .unwrap()
-        .as_ref()
-        .is_some_and(|m| !m.is_empty())
+    !crate::style::prefers_reduced_motion()
+        && GIF_PLAY
+            .lock()
+            .unwrap()
+            .as_ref()
+            .is_some_and(|playback| !playback.is_empty())
+}
+
+pub(crate) fn any_active_gif_playing(active: &HashSet<String>) -> bool {
+    !active.is_empty() && !crate::style::prefers_reduced_motion()
+}
+
+pub(crate) fn active_gif_textures<'a>(keys: impl Iterator<Item = &'a str>) -> HashSet<String> {
+    let playback = GIF_PLAY.lock().unwrap();
+    keys.filter(|key| playback.as_ref().is_some_and(|map| map.contains_key(*key)))
+        .map(str::to_owned)
+        .collect()
 }
 
 /// Re-queue decoded `src` images missing from the GPU pool.

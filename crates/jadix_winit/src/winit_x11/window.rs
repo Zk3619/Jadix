@@ -299,6 +299,48 @@ impl CoreWindow for Window {
         self.0.set_cursor_hittest(hittest)
     }
 
+    fn global_cursor_position(&self) -> Result<PhysicalPosition<i32>, RequestError> {
+        self.0.global_cursor_position()
+    }
+
+    fn set_input_region(&self, region: Option<&[crate::winit_core::window::InputRegionRect]>) -> Result<(), RequestError> {
+        self.0.set_input_region(region)
+    }
+
+    fn set_opacity(&self, opacity: f32) -> Result<(), RequestError> {
+        use x11rb::wrapper::ConnectionExt as _;
+        crate::winit_core::window::validate_opacity(opacity)?;
+        let connection = self.0.xconn.xcb_connection();
+        let atom = connection
+            .intern_atom(false, b"_NET_WM_WINDOW_OPACITY")
+            .map_err(|error| os_error!(error))?
+            .reply()
+            .map_err(|error| os_error!(error))?
+            .atom;
+        if opacity == 1.0 {
+            connection
+                .delete_property(self.0.xwindow, atom)
+                .map_err(|error| os_error!(error))?
+                .check()
+                .map_err(|error| os_error!(error))?;
+        } else {
+            let alpha = (opacity as f64 * u32::MAX as f64).round() as u32;
+            connection
+                .change_property32(
+                    xproto::PropMode::REPLACE,
+                    self.0.xwindow,
+                    atom,
+                    xproto::AtomEnum::CARDINAL,
+                    &[alpha],
+                )
+                .map_err(|error| os_error!(error))?
+                .check()
+                .map_err(|error| os_error!(error))?;
+        }
+        connection.flush().map_err(|error| os_error!(error))?;
+        Ok(())
+    }
+
     fn current_monitor(&self) -> Option<CoreMonitorHandle> {
         self.0
             .current_monitor()
@@ -2129,6 +2171,38 @@ impl UnownedWindow {
             })?;
         self.shared_state_lock().cursor_hittest = Some(hittest);
         Ok(())
+    }
+
+    pub fn set_input_region(&self, region: Option<&[crate::winit_core::window::InputRegionRect]>) -> Result<(), RequestError> {
+        let connection = self.xconn.xcb_connection();
+        match region {
+            None => connection.shape_mask(SO::SET, SK::INPUT, self.xwindow, 0, 0, x11rb::NONE)
+                .map_err(|error| os_error!(error))?.check().map_err(|error| os_error!(error))?,
+            Some(rectangles) => {
+                let rectangles = rectangles.iter().filter(|rect| rect.size.width > 0 && rect.size.height > 0).map(|rect| {
+                    let invalid = |_| RequestError::NotSupported(NotSupportedError::new("input rectangle exceeds X11 coordinate range"));
+                    Ok(Rectangle {
+                        x: i16::try_from(rect.position.x).map_err(invalid)?,
+                        y: i16::try_from(rect.position.y).map_err(invalid)?,
+                        width: u16::try_from(rect.size.width).map_err(invalid)?,
+                        height: u16::try_from(rect.size.height).map_err(invalid)?,
+                    })
+                }).collect::<Result<Vec<_>, RequestError>>()?;
+                connection.shape_rectangles(SO::SET, SK::INPUT, ClipOrdering::UNSORTED, self.xwindow, 0, 0, &rectangles)
+                    .map_err(|error| os_error!(error))?.check().map_err(|error| os_error!(error))?;
+            }
+        }
+        self.shared_state_lock().cursor_hittest = None;
+        connection.flush().map_err(|error| os_error!(error))?;
+        Ok(())
+    }
+
+    pub fn global_cursor_position(&self) -> Result<PhysicalPosition<i32>, RequestError> {
+        let pointer = self
+            .xconn
+            .query_pointer(self.xwindow, util::VIRTUAL_CORE_POINTER)
+            .map_err(|error| os_error!(error))?;
+        Ok(PhysicalPosition::new(pointer.root_x, pointer.root_y))
     }
 
     /// Moves the window while it is being dragged.

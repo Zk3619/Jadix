@@ -18,6 +18,7 @@ icon = [
 find-msvc-tools = { workspace = true }
 
 [dependencies]
+jadix_splash = { workspace = true, features = ["components", "macros"] }
 # Gallery is the integration consumer: keep every local runtime crate in the dependency graph.
 jadix = { workspace = true, features = ["images", "macros", "backend-dx12", "backend-gles", "backend-metal", "theme-shadcn",
     "svg",
@@ -65,7 +66,8 @@ jadix_window_state = { workspace = true, features = ["jadix"], optional = true }
 [features]
 default = ["full"]
 ohos-desktop = ["dep:jadix_window_state"]
-full = ["webview", "performance", "devtools", "hot-reload", "runtime-logging", "system-tray", "remote-asset", "scene3d", "image-stream", "compute", "glass", "i18n", "a11y", "all-images", "tokio", "net", "net-json"]
+full = ["webview", "performance", "devtools", "hot-reload", "runtime-logging", "system-tray", "remote-asset", "scene3d", "image-stream", "compute", "glass", "i18n", "a11y", "all-images", "tokio", "net", "net-json", "startup-system"]
+startup-system = ["jadix_splash/system"]
 # Gallery owns sampling policy and the HUD; the framework supplies telemetry.
 performance = ["jadix/performance"]
 webview = ["jadix/webview", "jadix_components/webview"]

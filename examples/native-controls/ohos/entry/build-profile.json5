@@ -1,0 +1,6 @@
+{
+  "apiType": "stageMode",
+  "buildOption": {"arkOptions": {"runtimeOnly": {"packages": ["libjadix_native_controls.so"]}}},
+  "buildOptionSet": [{"name": "release", "arkOptions": {"obfuscation": {"ruleOptions": {"enable": false}}}}],
+  "targets": [{"name": "default"}]
+}

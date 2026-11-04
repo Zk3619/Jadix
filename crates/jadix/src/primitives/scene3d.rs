@@ -1,7 +1,7 @@
 //! # 公开 `<scene3d>` 叶（WP-3.13）
 //!
-//! 实验 feature **`scene3d`**：同一 wgpu device 上的透视立方。默认 **关闭**（体积 / ADR-3）。
-//! 无 feature 时本模块仍编译：叶是占位盒，不挂 GPU pass。禁止 glTF 全家桶 / three.js。
+//! scene3d provides the lightweight cube; scene3d-models adds glTF/VRM scenes.
+//! Both features are disabled by default.
 
 use crate::core::tree::{Element, IntoCssDim, IntoElementList};
 use crate::style::parse_color;
@@ -17,6 +17,92 @@ pub const ATTR_SCENE3D_LIGHT: &str = "jadix_scene3d_light";
 pub const ATTR_SCENE3D_MATERIAL: &str = "jadix_scene3d_material";
 /// Optional SDF/Bake text label drawn as a perspective billboard in the scene3d RT.
 pub const ATTR_SCENE3D_LABEL: &str = "jadix_scene3d_label";
+
+#[cfg(feature = "scene3d-models")]
+pub use jadix_3d;
+
+#[cfg(feature = "scene3d-models")]
+const ATTR_MODEL: &str = "jadix_scene3d_model";
+
+#[cfg(feature = "scene3d-models")]
+thread_local! {
+    static MODELS: std::cell::RefCell<std::collections::HashMap<u64, std::rc::Weak<ModelState>>> = Default::default();
+}
+
+/// Keep this handle in application state for as long as the viewport is mounted.
+#[cfg(feature = "scene3d-models")]
+#[derive(Clone, Debug)]
+pub struct SceneView(std::rc::Rc<ModelState>);
+
+#[cfg(feature = "scene3d-models")]
+#[derive(Debug)]
+struct ModelState {
+    id: u64,
+    scene: std::sync::Arc<jadix_3d::Scene>,
+    animation: std::cell::Cell<Option<usize>>,
+    camera: std::cell::Cell<Option<usize>>,
+    started: web_time::Instant,
+}
+
+#[cfg(feature = "scene3d-models")]
+impl Drop for ModelState {
+    fn drop(&mut self) {
+        let _ = MODELS.try_with(|models| {
+            if let Ok(mut models) = models.try_borrow_mut() {
+                models.remove(&self.id);
+            }
+        });
+    }
+}
+
+#[cfg(feature = "scene3d-models")]
+impl SceneView {
+    pub fn new(scene: jadix_3d::Scene) -> Self {
+        static NEXT_ID: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+        let state = std::rc::Rc::new(ModelState {
+            id: NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+            scene: std::sync::Arc::new(scene),
+            animation: std::cell::Cell::new(None),
+            camera: std::cell::Cell::new(None),
+            started: web_time::Instant::now(),
+        });
+        MODELS.with(|models| {
+            models
+                .borrow_mut()
+                .insert(state.id, std::rc::Rc::downgrade(&state));
+        });
+        Self(state)
+    }
+
+    /// Select a looping clip, or None for the bind pose. Time uses the view's clock.
+    pub fn set_animation(&self, clip: Option<usize>) -> jadix_3d::Result<()> {
+        self.0.scene.pose(clip, 0.0, true)?;
+        self.0.animation.set(clip);
+        Ok(())
+    }
+
+    pub fn scene(&self) -> &std::sync::Arc<jadix_3d::Scene> {
+        &self.0.scene
+    }
+
+    /// Select an imported glTF camera, or None to use the builder's orbit camera.
+    pub fn set_camera_node(&self, node: Option<usize>) -> jadix_3d::Result<()> {
+        if let Some(index) = node {
+            let pose = self.0.scene.pose(None, 0.0, false)?;
+            jadix_3d::Camera::from_node(&self.0.scene, &pose, index, 1.0)?;
+        }
+        self.0.camera.set(node);
+        Ok(())
+    }
+}
+
+#[cfg(feature = "scene3d-models")]
+#[derive(Clone, Debug)]
+pub struct ModelFrame {
+    pub scene: std::sync::Arc<jadix_3d::Scene>,
+    pub pose: jadix_3d::Pose,
+    pub camera_node: Option<usize>,
+}
 
 /// Formal scene camera (perspective MVP inputs).
 #[derive(Clone, Copy, Debug)]
@@ -85,6 +171,12 @@ pub fn scene3d() -> Scene3dBuilder {
 }
 
 impl Scene3dBuilder {
+    #[cfg(feature = "scene3d-models")]
+    pub fn model(mut self, view: &SceneView) -> Self {
+        self.el.set_attr(ATTR_MODEL, view.0.id.to_string());
+        self
+    }
+
     pub fn w(mut self, w: impl IntoCssDim) -> Self {
         self.has_w = true;
         self.el = self.el.w(w);
@@ -201,6 +293,8 @@ impl IntoElementList for Scene3dBuilder {
 #[cfg(feature = "scene3d")]
 #[derive(Clone, Debug)]
 pub struct Scene3dJob {
+    #[cfg(feature = "scene3d-models")]
+    pub model: Option<ModelFrame>,
     pub key: String,
     pub width: u32,
     pub height: u32,
@@ -293,8 +387,34 @@ pub fn scene3d_tex_from_element_attrs(
     }
     let t0 = *SCENE3D_EPOCH.get_or_init(web_time::Instant::now);
     let t = t0.elapsed().as_secs_f32();
+    #[cfg(feature = "scene3d-models")]
+    let model = if let Some(id) = attrs.get(ATTR_MODEL) {
+        let id = id.parse::<u64>().ok()?;
+        let view =
+            MODELS.with(|models| models.borrow().get(&id).and_then(std::rc::Weak::upgrade))?;
+        let pose = match view.scene.pose(
+            view.animation.get(),
+            view.started.elapsed().as_secs_f32(),
+            true,
+        ) {
+            Ok(pose) => pose,
+            Err(error) => {
+                log::error!("scene3d animation: {error}");
+                return None;
+            }
+        };
+        Some(ModelFrame {
+            scene: view.scene.clone(),
+            pose,
+            camera_node: view.camera.get(),
+        })
+    } else {
+        None
+    };
     use std::hash::{Hash, Hasher};
     let mut identity = std::collections::hash_map::DefaultHasher::new();
+    #[cfg(feature = "scene3d-models")]
+    attrs.get(ATTR_MODEL).hash(&mut identity);
     for attr in [
         ATTR_SCENE3D_FOV_DEG,
         ATTR_SCENE3D_YAW_SPEED,
@@ -346,6 +466,8 @@ pub fn scene3d_tex_from_element_attrs(
     });
     JOBS.with(|j| {
         j.borrow_mut().push(Scene3dJob {
+            #[cfg(feature = "scene3d-models")]
+            model,
             key: key.clone(),
             width: w,
             height: h,

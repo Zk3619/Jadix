@@ -1,0 +1,14 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "strict": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "jsxImportSource": "@jadix/shell",
+    "skipLibCheck": false,
+    "types": []
+  },
+  "include": ["src/*.d.mts", "tests/*.tsx"]
+}

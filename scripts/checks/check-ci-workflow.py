@@ -75,12 +75,13 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--output", type=Path, default=Path("target/governance/ci-workflow.json"))
     parser.add_argument("--tracked-only", action="store_true")
+    parser.add_argument("--workflow", type=Path, default=Path(".github/workflows/ci.yml"))
     arguments = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     tracked = None
     if arguments.tracked_only:
         tracked = set(subprocess.check_output(["git", "ls-files", "-z"], cwd=root).decode("utf-8").split("\0"))
-    report = inspect_workflow(root, root / ".github/workflows/ci.yml", tracked)
+    report = inspect_workflow(root, root / arguments.workflow, tracked)
     arguments.output.parent.mkdir(parents=True, exist_ok=True)
     arguments.output.write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report))

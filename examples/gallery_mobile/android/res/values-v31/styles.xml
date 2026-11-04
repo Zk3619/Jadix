@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="JadixLaunchTheme" parent="android:style/Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/jadix_launch_background</item>
+        <item name="android:windowSplashScreenBackground">@color/jadix_launch_background</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/app_icon</item>
+        <item name="android:windowSplashScreenIconBackgroundColor">@android:color/transparent</item>
+        <item name="android:colorAccent">#4F8CFF</item>
+        <item name="android:windowActionModeOverlay">true</item>
+    </style>
+</resources>

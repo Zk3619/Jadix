@@ -1805,6 +1805,12 @@ impl WindowDelegate {
         self.window().setIgnoresMouseEvents(!hittest);
     }
 
+    pub fn global_cursor_position(&self) -> Result<PhysicalPosition<i32>, RequestError> {
+        let point = objc2_app_kit::NSEvent::mouseLocation();
+        let point = flip_window_screen_coordinates(NSRect::new(point, NSSize::new(0.0, 0.0)));
+        Ok(LogicalPosition::new(point.x, point.y).to_physical(self.scale_factor()))
+    }
+
     pub(crate) fn is_zoomed(&self) -> bool {
         // because `isZoomed` doesn't work if the window's borderless,
         // we make it resizable temporarily.

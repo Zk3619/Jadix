@@ -1,6 +1,21 @@
 # Gallery 原生移动端与 OHOS 桌面宿主
 
-`gallery` 提供完整展示内容和启动配置；此 crate 仅提供 Android NativeActivity 与 OHOS Ability 的 `cdylib` 入口。两端在启动前把内嵌主题、样式和示例资源安装到应用数据目录，使用同一份页面、Builder / `ui!` 和 full features。
+`gallery` 提供完整展示内容和启动配置；此 crate 提供 Android NativeActivity、OHOS Ability 的动态库入口，以及 iOS 的静态库入口。启动前把内嵌主题、样式和示例资源安装到应用数据目录，使用同一份页面、Builder / `ui!` 和 full features。
+
+Android／OHOS 构建脚本接受 `-SplashMode system|component|off`，默认 `component`，将所选模式编进原生库；运行日志记录实际 mode、enabled 和 epoch。`off` 保留准备与首帧交接，不能禁止移动 OS 启动资源。切换模式必须重编原生库，不能用 `-SkipBuild` 改变已编译模式。接口与边界见[启动与开屏](../../docs/startup.md)。
+
+## iOS／iPadOS
+
+在安装 Xcode 的 macOS 上执行：
+
+```sh
+JADIX_SPLASH_MODE=component ./examples/gallery_mobile/build-ios.sh aarch64-apple-ios-sim
+JADIX_SPLASH_MODE=system JADIX_APPLE_TEAM=<team-id> ./examples/gallery_mobile/build-ios.sh aarch64-apple-ios
+```
+
+脚本构建 `gallery_mobile` 静态库，把共用图标复制到 asset catalog，并用 Xcode 编译 LaunchScreen storyboard 与应用资源。模拟器默认关闭签名；设备包需要开发团队身份。输出在被忽略的 `dist/ios-<target>/Gallery.app`。`x86_64-apple-ios` 可用于 Intel 模拟器。
+
+宿主采用当前 winit UIKit 的 UIApplication 生命周期；尚未接入独立 UIWindowScene／iPad 多 scene 启动状态。Windows 上的 XML／plist 检查不能代签 Xcode 编译、设备首帧、VoiceOver 或多 scene 验收。
 
 ## Android arm64 / x86_64
 

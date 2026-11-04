@@ -52,6 +52,8 @@ impl CubeVert {
 }
 
 pub struct Scene3dGpu {
+    #[cfg(feature = "scene3d-models")]
+    models: jadix_3d::Renderer,
     pipeline: wgpu::RenderPipeline,
     target_format: wgpu::TextureFormat,
     uniform_buf: wgpu::Buffer,
@@ -162,6 +164,8 @@ impl Scene3dGpu {
         });
 
         Self {
+            #[cfg(feature = "scene3d-models")]
+            models: jadix_3d::Renderer::new(device, format),
             pipeline,
             target_format: format,
             uniform_buf,
@@ -246,6 +250,50 @@ impl Scene3dGpu {
                 ._texture
                 .create_view(&wgpu::TextureViewDescriptor::default())
         };
+        #[cfg(feature = "scene3d-models")]
+        if let Some(model) = &job.model {
+            let position = jadix_3d::Vec3::new(
+                0.0,
+                job.camera_z * job.pitch.sin(),
+                job.camera_z * job.pitch.cos(),
+            );
+            let camera = if let Some(index) = model.camera_node {
+                match jadix_3d::Camera::from_node(
+                    &model.scene,
+                    &model.pose,
+                    index,
+                    w as f32 / h as f32,
+                ) {
+                    Ok(camera) => camera,
+                    Err(error) => {
+                        log::error!("scene3d camera: {error}");
+                        return;
+                    }
+                }
+            } else {
+                jadix_3d::Camera::perspective(
+                    position,
+                    jadix_3d::Vec3::ZERO,
+                    job.fov_deg.to_radians(),
+                    w as f32 / h as f32,
+                    0.01,
+                    10_000.0,
+                )
+            };
+            if let Err(error) = self.models.render(
+                device,
+                queue,
+                &color_view,
+                [w, h],
+                &model.scene,
+                &model.pose,
+                camera,
+                job.bg.map(f64::from),
+            ) {
+                log::error!("scene3d render: {error}");
+            }
+            return;
+        }
         self.ensure_depth(device, w, h);
         let Some((_, _, depth_tex)) = self.depth.as_ref() else {
             return;

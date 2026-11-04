@@ -2,7 +2,7 @@
 
 [English](CRATES.md) | [简体中文](CRATES.zh.md)
 
-Jadix contains **27 library crates** under `crates/`. The tables describe package responsibilities and application usage. Examples, Gallery applications, and bundled implementation modules are separate from these libraries.
+Jadix contains **30 library crates** under `crates/`. The tables describe package responsibilities and application usage. Examples, Gallery applications, and bundled implementation modules are separate from these libraries. Versions are local manifest versions; the source additions `jadix_splash`, `jadix_native`, and `jadix_shell` do not establish registry availability.
 
 See [BUILD.md](BUILD.md) for platform setup and packaging, and [FEATURES.md](FEATURES.md) for feature selection.
 
@@ -11,9 +11,17 @@ See [BUILD.md](BUILD.md) for platform setup and packaging, and [FEATURES.md](FEA
 | Package / version | Source and package guide | Responsibility and usage |
 | --- | --- | --- |
 | `jadix` · `0.1.0` | [crates/jadix](../crates/jadix/README.md) | Application facade: elements, reactive UI, layout, text, rendering, windows, and optional documents, media, accessibility, and development tools. Builder APIs work without procedural macros; `macros` enables `ui!` and component authoring. Select graphics backends for the target platform. |
-| `jadix_components` · `0.1.0` | [crates/jadix_components](../crates/jadix_components/README.md) | Native controls, forms, navigation, overlays, and data presentation, with optional document/code controls. Depends on Jadix; related features forward framework capabilities. Default features are empty; `macros` is optional. |
+| `jadix_components` · `0.1.0` | [crates/jadix_components](../crates/jadix_components/README.md) | Controls, forms, navigation, overlays, and data presentation. Defaults to `gpu`; `macros` is optional. Disabling default features selects the registered portable container/text/Button/Input subset, without system widget adapters. |
 | `jadix_lucide` · `0.1.0` | [crates/jadix_lucide](../crates/jadix_lucide/README.md) | Lucide icon data, UI integration, and opt-in animation/morphing. Defaults to `ui` and `paths`; `animated`, `svg`, and `animation-path` enable additional support. |
 | `jadix_dnd` · `0.1.0` | [crates/jadix_dnd](../crates/jadix_dnd/README.md) | High-level drag-and-drop UI: drag sources, targets, and coordinated interactions. Builder use does not require the optional `macros` feature. |
+
+## Startup and experimental presentation — 3 packages
+
+| Package / version | Source and package guide | Responsibility and usage |
+| --- | --- | --- |
+| `jadix_splash` · `0.1.0` | [crates/jadix_splash](../crates/jadix_splash/README.md) | Startup coordination, optional desktop system presentation, and runtime splash components. Mobile system launch resources remain in the platform host. |
+| `jadix_native` · `0.1.0` | [crates/jadix_native](../crates/jadix_native/README.md) | Experimental headless commits, retained reconciliation, Taffy layout with versioned host measurement, focus and event contracts. Does not yet render Android, DOM or UIKit controls. |
+| `jadix_shell` · `0.1.0` | [crates/jadix_shell](../crates/jadix_shell/README.md) | Experimental sessions, grants, bounded handles/requests, JSON/TSX SDK and signed resource verification. Optional native VM budget probe; live script panels and update activation still need host integration. |
 
 ## Core, documents, and development — 9 packages
 

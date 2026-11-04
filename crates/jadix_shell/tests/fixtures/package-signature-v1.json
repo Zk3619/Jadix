@@ -1,0 +1,7 @@
+{
+  "canonical_manifest": "{\"format\":1,\"package\":\"example.counter\",\"version\":\"1.0.0\",\"publisher\":\"first-party\",\"key_id\":\"test-key\",\"target\":\"native\",\"release\":\"7\",\"protocol\":1,\"sdk\":\"0.1.0\",\"minimum_host\":\"0.1.0\",\"component_schema\":\"c62105fa2f09cf0582d0a3ed7033bbc60397529c0297f62fbb91fda184d08171\",\"capabilities\":[],\"entry\":\"main.mjs\",\"resources\":{\"main.mjs\":{\"sha256\":\"b8cf3f1f7a3e159d13eff01ecfcc408bf5306bf76867a9ada8271a174cf8c055\",\"bytes\":52}},\"permissions\":{\"counter.save\":\"Save counter\"},\"storage_namespace\":\"example.counter\",\"storage_version\":1,\"migration_from\":[]}",
+  "input_sha256": "8f7c7d0200ee271c367c86285d000ba1caef7e0c8c1f51b7d1e554a42dc96cb2",
+  "public_key": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+  "signature": "fa0bedf14befc89a06df8a2243b04169510edb46d3e3373eba28fdb83900279e309c54713c713f2c006cbac4707c58db499cffb6aaacb6e83f61deb5782c5407",
+  "generator": "Python cryptography Ed25519; fixed test seed [7; 32], no production key"
+}

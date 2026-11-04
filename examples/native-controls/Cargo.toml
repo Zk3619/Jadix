@@ -1,0 +1,118 @@
+[package]
+name = "jadix_native_controls"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[features]
+uikit = ["jadix_native/uikit"]
+windows = ["jadix_native/windows", "dep:windows-sys", "dep:windows"]
+native-gpu = ["windows", "jadix_native/windows-gpu"]
+native-code = ["windows", "jadix_native/code"]
+native-shell = ["windows", "dep:jadix_shell", "jadix_shell/native-host", "jadix_shell/native-vm", "jadix_shell/native-store"]
+ohos = ["jadix_native/ohos"]
+extended = []
+selection = []
+popover = []
+large-list = []
+notes = []
+gpu = ["jadix_components/gpu"]
+
+[[bin]]
+name = "native-windows"
+path = "src/windows.rs"
+required-features = ["windows"]
+
+[[bin]]
+name = "native-workbench"
+path = "src/workbench_windows.rs"
+required-features = ["windows"]
+
+[[bin]]
+name = "native-inspector"
+path = "src/inspector_windows.rs"
+required-features = ["windows"]
+
+[[bin]]
+name = "native-table"
+path = "src/table_windows.rs"
+required-features = ["windows"]
+
+[[bin]]
+name = "native-tree"
+path = "src/tree_windows.rs"
+required-features = ["windows"]
+
+[[bin]]
+name = "native-gpu-chart"
+path = "src/gpu_windows.rs"
+required-features = ["native-gpu"]
+
+
+[[bin]]
+name = "native-images"
+path = "src/images_windows.rs"
+required-features = ["windows"]
+
+[[bin]]
+name = "native-dock"
+path = "src/dock_windows.rs"
+required-features = ["windows"]
+
+[[bin]]
+name = "native-code"
+path = "src/code_windows.rs"
+required-features = ["native-code"]
+
+[[bin]]
+name = "native-tabs"
+path = "src/tabs_windows.rs"
+required-features = ["windows"]
+
+[[bin]]
+name = "native-radio"
+path = "src/radio_windows.rs"
+required-features = ["windows"]
+
+[[bin]]
+name = "native-collapsible"
+path = "src/collapsible_windows.rs"
+required-features = ["windows"]
+
+[[bin]]
+name = "native-tsx"
+path = "src/shell_windows.rs"
+required-features = ["native-shell"]
+
+[lib]
+crate-type = ["cdylib", "staticlib", "rlib"]
+
+[dependencies]
+jadix_components = { path = "../../crates/jadix_components", default-features = false, features = ["macros", "theme-shadcn"] }
+jadix_native.workspace = true
+jadix_core.workspace = true
+jadix_shell = { path = "../../crates/jadix_shell", optional = true }
+serde_json.workspace = true
+serde.workspace = true
+base64 = "=0.22.1"
+
+[target.'cfg(target_env = "ohos")'.dependencies]
+napi-ohos.workspace = true
+napi-derive-ohos.workspace = true
+
+[build-dependencies]
+napi-build-ohos.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_UI_WindowsAndMessaging", "Win32_UI_Input_KeyboardAndMouse", "Win32_Networking_WinHttp", "Win32_System_Time"] }
+
+windows = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Accessibility"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jadix_native = { workspace = true, features = ["android"] }
+jni.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+jadix_native = { workspace = true, features = ["dom"] }
+wasm-bindgen.workspace = true
+web-sys = { workspace = true, features = ["Window", "Document", "Element", "Event", "EventTarget", "FontFaceSet"] }

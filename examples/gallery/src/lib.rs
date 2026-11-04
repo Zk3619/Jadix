@@ -66,6 +66,36 @@ pub(crate) fn gallery_icon() -> jadix::app::AppIcon {
         .expect("bundled Gallery icon")
 }
 
+fn gallery_startup(mode: &str) -> jadix_splash::StartupConfig {
+    use jadix_splash::{StartupConfig, StartupController, StartupSnapshot};
+    use jadix::app::WindowOptions;
+    let view = |snapshot: StartupSnapshot, controller: StartupController| {
+        use jadix_splash::prelude::*;
+        let status: Element = splash().title("Jadix Gallery")
+            .description("Native UI · Components · Graphics")
+            .state(snapshot.clone()).controller(controller).into();
+        if matches!(snapshot.phase, StartupPhase::Preparing) {
+            ui! { <VStack width="100%" height="100%">{status}</VStack> }
+        } else { status }
+    };
+    let config = match mode {
+        "system" => StartupConfig::system(),
+        "window" => StartupConfig::window(
+            WindowOptions::new().title("Jadix Gallery Startup")
+                .size(480.0, 320.0).resizable(false).icon(gallery_icon()),
+            view,
+        ),
+        _ => StartupConfig::component(view),
+    };
+    config.prepare(|controller| {
+        controller.stage("Preparing Gallery");
+        jadix::app::ui_bridge::run_on_ui_thread(move || {
+            controller.progress(1, 1);
+            controller.ready();
+        });
+    })
+}
+
 pub fn run_gallery() {
     jadix::set_chrome_locale(&std::env::var("JADIX_LOCALE").unwrap_or_else(|_| "zh-CN".into()));
     let instance_demo = pages::instance_demo_mode(std::env::args_os().skip(1));
@@ -151,7 +181,9 @@ pub fn run_gallery() {
     if instance_demo.is_some() {
         jadix::app::run_with(options, pages::gallery_instance_demo_root);
     } else {
-        jadix::app::run_with(options, build_startup_scene);
+        let mode = std::env::var("JADIX_SPLASH").unwrap_or_else(|_| option_env!("JADIX_SPLASH_MODE").unwrap_or("component").into());
+        assert!(matches!(mode.as_str(), "system" | "component" | "window" | "off"), "JADIX_SPLASH must be system, component, window or off");
+        jadix::app::run_with_startup(options, gallery_startup(&mode).enabled(mode != "off"), build_startup_scene);
     }
 }
 
@@ -167,12 +199,16 @@ pub fn run_gallery_web() {
     jadix::style::register_stylesheet(styles).expect("install Gallery styles");
     let (rgba, width, height) = checker_rgba_texture();
     jadix::queue_image_rgba8("demo-checker", width, height, rgba);
-    jadix::run_with(
+    let query = web_sys::window().and_then(|window| window.location().search().ok()).unwrap_or_default();
+    let mode = query.trim_start_matches('?').split('&').find_map(|part| part.strip_prefix("splash=")).unwrap_or("component");
+    assert!(matches!(mode, "system" | "component" | "off"), "splash must be system, component or off");
+    jadix::app::run_with_startup(
         jadix::WindowOptions::new()
             .title("Jadix Gallery")
             .canvas_target("jadix-canvas")
             .decorations(false)
             .default_font("Inter Variable, Jadix Gallery Sans"),
+        gallery_startup(mode).enabled(mode != "off"),
         build_startup_scene,
     );
 }

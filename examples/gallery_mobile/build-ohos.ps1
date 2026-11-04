@@ -1,6 +1,7 @@
 param(
     [ValidateSet('phone', 'desktop')][string]$Device = 'phone',
     [ValidateSet('arm64', 'x86_64')][string]$Architecture = 'arm64',
+    [ValidateSet('system', 'component', 'off')][string]$SplashMode = 'component',
     [string]$OutputDirectory,
     [string]$ProjectDirectory,
     [switch]$SkipBuild,
@@ -11,6 +12,10 @@ param(
     [string]$SigningConfigName = 'default'
 )
 $ErrorActionPreference = 'Stop'
+if ($SkipBuild -and $PSBoundParameters.ContainsKey('SplashMode')) {
+    throw '-SplashMode requires a native rebuild; omit -SkipBuild.'
+}
+$env:JADIX_SPLASH_MODE = $SplashMode
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $target = if ($Architecture -eq 'arm64') { 'aarch64-unknown-linux-ohos' } else { 'x86_64-unknown-linux-ohos' }
 $sdkTarget = if ($Architecture -eq 'arm64') { 'aarch64-linux-ohos' } else { 'x86_64-linux-ohos' }

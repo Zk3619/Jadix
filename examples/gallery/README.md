@@ -12,6 +12,8 @@ cargo run -p gallery --no-default-features
 
 默认 `full` 启用 WebView、Inspector、热重载、性能面板、托盘、远程资源、3D、图像流、GPU compute、窗口材质、国际化、无障碍、图像格式、Tokio 与网络。文档编辑、Diff、科学文档、语法高亮、动画、主题、SVG、拖放、原生剪贴板和文件对话框由基础依赖启用。`--no-default-features` 关闭 Gallery 的可选集成，仍保留这些基础依赖。
 
+原生入口通过 `JADIX_SPLASH=system|component|window|off` 选择启动呈现，默认 Component；桌面 `window` 显式使用独立开屏次窗口，准备已完成时可跳过；`off` 保留业务准备与首帧门。Web 使用 `?splash=system|component|off`，移动构建脚本提供 `-SplashMode`。反馈页展示 Splash 的准备、失败、取消和就绪状态，实际入口展示 Builder 与 `ui!` 混用。用法与平台边界见[启动与开屏](../../docs/startup.md)。
+
 `src/lib.rs` 提供共享展示与启动逻辑，桌面 `main.rs` 调用它；Android/OHOS 由 `../gallery_mobile` 提供真实应用入口和资源安装。移动端不编译 `jadix_window_state`；OHOS 桌面单独通过 `ohos-desktop` 启用。APK、手机 HAP、桌面 HAP 的构建与图标/托盘方案见 [移动宿主说明](../gallery_mobile/README.md)。
 
 Linux full 构建需要 GTK 3 与 WebKitGTK 4.1 开发包，在 Linux 或 WSL 中运行 `bash examples/gallery/build-linux.sh`。脚本保留系统 pkg-config 库路径供 Zig 查找，并将资源与可执行文件一起打包。默认以 Ubuntu 24.04 的 glibc 2.39 为基线；第一个参数可指定带 glibc 版本的 Zig 目标，但 sysroot 中 GTK/WebKit 的 glibc 要求必须与之匹配，不能混用新系统库与旧 libc。

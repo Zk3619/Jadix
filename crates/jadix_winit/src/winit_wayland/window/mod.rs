@@ -528,6 +528,12 @@ impl CoreWindow for Window {
         self.common.current_monitor()
     }
 
+    fn set_input_region(&self, region: Option<&[crate::winit_core::window::InputRegionRect]>) -> Result<(), RequestError> {
+        self.common.set_input_region(region)?;
+        self.request_redraw();
+        Ok(())
+    }
+
     fn available_monitors(&self) -> Box<dyn Iterator<Item = CoreMonitorHandle>> {
         self.common.available_monitors()
     }

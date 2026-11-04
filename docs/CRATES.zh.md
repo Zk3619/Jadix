@@ -2,7 +2,7 @@
 
 [English](CRATES.md) | [简体中文](CRATES.zh.md)
 
-Jadix 在 `crates/` 下提供 **27 个库 crate**。下表说明各包职责及应用中的使用方式；示例、Gallery 应用和内置实现模块不计入这些库。
+Jadix 在 `crates/` 下提供 **30 个源码库 crate**。下表说明各包职责及应用中的使用方式；示例、Gallery 应用和内置实现模块不计入这些库。版本取自本地清单；`jadix_splash`、`jadix_native`、`jadix_shell` 属于源码增量，不表示已经发布到 registry。
 
 平台配置与打包见[构建指南](BUILD.zh.md)，能力选择见 [Feature 清单](FEATURES.md)。
 
@@ -11,9 +11,17 @@ Jadix 在 `crates/` 下提供 **27 个库 crate**。下表说明各包职责及�
 | 包与版本 | 源码与包内说明 | 职责与使用边界 |
 | --- | --- | --- |
 | `jadix` · `0.1.0` | [crates/jadix](../crates/jadix/README.md) | 应用主门面，整合元素、响应式 UI、布局、文本、渲染、窗口，以及可选的文档、媒体、无障碍和开发能力。普通应用从这里接入；Builder 不要求过程宏，`macros` 启用 `ui!` 等声明式写法。图形后端须按目标平台选择。 |
-| `jadix_components` · `0.1.0` | [crates/jadix_components](../crates/jadix_components/README.md) | 原生基础控件、表单、导航、浮层、数据展示及可选的文档/代码控件，基于 Jadix 并通过 feature 转发相应能力。默认 feature 为空，`macros` 可选。 |
+| `jadix_components` · `0.1.0` | [crates/jadix_components](../crates/jadix_components/README.md) | 控件、表单、导航、浮层与数据展示；默认 `gpu`，`macros` 可选。关闭默认 features 后选择容器／纯文本／Button／Input 便携子集，不包含系统控件适配器。 |
 | `jadix_lucide` · `0.1.0` | [crates/jadix_lucide](../crates/jadix_lucide/README.md) | Lucide 图标数据、UI 接入及按需启用的动画播放、路径变形。默认启用 `ui`、`paths`；动画、SVG 和路径动画分别通过 `animated`、`svg`、`animation-path` 选择。 |
 | `jadix_dnd` · `0.1.0` | [crates/jadix_dnd](../crates/jadix_dnd/README.md) | 面向应用的高级拖放产品库，组织拖动源、接收目标及拖放交互。Builder 写法不依赖可选的 `macros`。 |
+
+## 启动与实验呈现：3 个
+
+| 包与版本 | 源码与包内说明 | 职责与使用边界 |
+| --- | --- | --- |
+| `jadix_splash` · `0.1.0` | [crates/jadix_splash](../crates/jadix_splash/README.md) | 启动协调、可选桌面系统开屏与运行期开屏组件；移动系统启动资源由平台宿主提供。 |
+| `jadix_native` · `0.1.0` | [crates/jadix_native](../crates/jadix_native/README.md) | 实验性无窗口提交、保留树差分、Taffy + 版本化宿主测量、焦点与事件契约；尚不渲染 Android、DOM 或 UIKit 控件。 |
+| `jadix_shell` · `0.1.0` | [crates/jadix_shell](../crates/jadix_shell/README.md) | 实验性会话／授权、有界句柄与请求、JSON／TSX SDK、签名资源校验和可选原生 VM 预算探针；真实脚本面板与更新激活仍需宿主接线。 |
 
 ## 核心、文档与开发工具：9 个
 

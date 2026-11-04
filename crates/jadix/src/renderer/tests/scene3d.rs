@@ -43,6 +43,8 @@ fn scene_billboards_match_bgra_and_rgba_render_targets() {
                 &textured,
                 &mut images,
                 Scene3dJob {
+                    #[cfg(feature = "scene3d-models")]
+                    model: None,
                     key: "scene".into(),
                     width: size,
                     height: size,

@@ -6,7 +6,7 @@ license.workspace = true
 publish = false
 
 [lib]
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "staticlib"]
 
 [features]
 default = ["full"]
@@ -42,7 +42,7 @@ target_sdk_version = 35
 
 [package.metadata.android.application]
 label = "Jadix Gallery"
-theme = "@android:style/Theme.Material.NoActionBar"
+theme = "@style/JadixLaunchTheme"
 
 [package.metadata.android.application.activity]
 config_changes = "orientation|keyboardHidden|screenSize|screenLayout|uiMode|density"

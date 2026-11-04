@@ -112,6 +112,9 @@ pub struct MouseEvent {
     pub screen_x: f32,
     /// [`MouseEvent.screenY`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/screenY) (physical px).
     pub screen_y: f32,
+    /// Desktop position captured from this event's client coordinates and window origin.
+    /// None when the host does not expose an absolute window position (e.g. Wayland).
+    pub desktop_position: Option<[f64; 2]>,
     /// [`MouseEvent.pageX`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/pageX) — same as client in a single window.
     pub page_x: f32,
     /// [`MouseEvent.pageY`](https://developer.mozilla.org/zh-CN/docs/Web/API/MouseEvent/pageY)
@@ -148,6 +151,7 @@ impl MouseEvent {
             movement_y: 0.0,
             screen_x: x,
             screen_y: y,
+            desktop_position: None,
             page_x: x,
             page_y: y,
             region: None,

@@ -1258,6 +1258,7 @@ fn clone_static_node_shallow(src: &Element) -> Element {
     dst.text = src.text.clone();
     dst.text_spans = src.text_spans.clone();
     dst.text_shape_suffix = src.text_shape_suffix.clone();
+    crate::authoring::native::copy_semantics(src, &mut dst);
     dst.focus_id = src.focus_id.clone();
     dst.focusable = src.focusable;
     dst.cursor = src.cursor.clone();
@@ -1388,50 +1389,10 @@ impl Element {
 }
 
 /// A wrapper for event handlers to allow them to be passed as props in functional components.
-pub struct Handler<T = ()>(pub Box<dyn FnMut(T)>);
-
-impl<T> Handler<T> {
-    pub fn new(f: impl FnMut(T) + 'static) -> Self {
-        Self(Box::new(f))
-    }
-    pub fn call(&mut self, arg: T) {
-        (self.0)(arg);
-    }
-}
+pub use jadix_core::event::{Handler, ZeroArgFn};
 
 pub trait IntoHandler<T> {
     fn into_handler(self) -> Handler<T>;
-}
-
-impl<T, F> From<F> for Handler<T>
-where
-    F: FnMut(T) + 'static,
-{
-    fn from(f: F) -> Self {
-        Self::new(f)
-    }
-}
-
-pub struct ZeroArgFn<F>(pub F);
-impl<F> From<ZeroArgFn<F>> for Handler<()>
-where
-    F: FnMut() + 'static,
-{
-    fn from(mut f: ZeroArgFn<F>) -> Self {
-        Handler::new(move |_| (f.0)())
-    }
-}
-
-impl Default for Handler<()> {
-    fn default() -> Self {
-        Self(Box::new(|_| {}))
-    }
-}
-
-impl From<Box<dyn FnMut()>> for Handler<()> {
-    fn from(mut f: Box<dyn FnMut()>) -> Self {
-        Self(Box::new(move |_| f()))
-    }
 }
 
 /// A wrapper for key event handlers.

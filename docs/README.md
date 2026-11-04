@@ -5,7 +5,7 @@
 | 文档 | 内容 |
 | --- | --- |
 | [编译与打包](BUILD.zh.md) / [English](BUILD.md) | 桌面、移动与 WebAssembly 架构、SDK、release 构建、部署与问题排查 |
-| [Crate 清单](CRATES.zh.md) / [English](CRATES.md) | 27 个库 crate 的职责、版本、依赖关系与维护实现 |
+| [Crate 清单](CRATES.zh.md) / [English](CRATES.md) | 30 个源码库 crate 的职责、版本、依赖关系与维护实现；包含未发布增量 |
 | [Feature](FEATURES.md) | 默认值、可选能力与后端 |
 | [状态管理](state-management.md) | Signal、Store 与 Owner |
 | [异步与网络](async-architecture.md) | 执行器、取消、背压及运行时适配 |
@@ -15,6 +15,7 @@
 | [桌面窗口](desktop-windows.md) | 全屏、实例与生命周期 |
 | [DevTools](devtools.md) | Inspector、Sources 与 Debug 热更 |
 | [应用图标](application-icons.md) | 生成与平台接入；[配置示例](../examples/config/app-icons.toml) |
+| [启动与开屏](startup.md) | System／Component／桌面 Window、准备任务、取消重试、首帧交接与移动宿主 |
 | [WebView](webview.md) | 系统 WebView 接入与限制 |
 | [迁移说明](migration.md) | 产品拆分、feature、宏路径与维护叉 |
 

@@ -1360,6 +1360,7 @@ pub mod input;
 pub mod keys;
 /// Framework mounting, hit geometry and retained-paint operations for product authors.
 pub mod mount;
+pub mod native;
 pub mod state;
 pub mod window;
 

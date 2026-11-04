@@ -14,7 +14,7 @@ pub use positioner::{WindowAnchor, WindowConstraintAdjustment, WindowGravity};
 use serde::{Deserialize, Serialize};
 
 use crate::winit_core::cursor::Cursor;
-use crate::winit_core::error::RequestError;
+use crate::winit_core::error::{NotSupportedError, RequestError};
 use crate::winit_core::icon::Icon;
 use crate::winit_core::monitor::{Fullscreen, MonitorHandle};
 
@@ -26,6 +26,59 @@ use crate::winit_core::monitor::{Fullscreen, MonitorHandle};
 /// can then compare to the ids of your windows.
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct WindowId(usize);
+
+/// A client-relative rectangle in physical pixels, with exclusive right and bottom edges.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct InputRegionRect {
+    pub position: PhysicalPosition<i32>,
+    pub size: PhysicalSize<u32>,
+}
+
+impl InputRegionRect {
+    pub const fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
+        Self { position: PhysicalPosition::new(x, y), size: PhysicalSize::new(width, height) }
+    }
+
+    pub fn contains(&self, point: PhysicalPosition<i32>) -> bool {
+        let horizontal = i64::from(point.x) - i64::from(self.position.x);
+        let vertical = i64::from(point.y) - i64::from(self.position.y);
+        horizontal >= 0 && vertical >= 0
+            && horizontal < i64::from(self.size.width)
+            && vertical < i64::from(self.size.height)
+    }
+}
+
+bitflags! {
+    /// OS pointer events to pass to windows beneath this window.
+    #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+    pub struct PointerPassthrough: u16 {
+        const LEFT = 1 << 0;
+        const RIGHT = 1 << 1;
+        const MIDDLE = 1 << 2;
+        const BACK = 1 << 3;
+        const FORWARD = 1 << 4;
+        const WHEEL = 1 << 5;
+        const MOTION = 1 << 6;
+        const OTHER_BUTTONS = 1 << 7;
+        const ALL = 0xff;
+    }
+}
+
+pub(crate) fn validate_opacity(opacity: f32) -> Result<(), RequestError> {
+    if opacity.is_finite() && (0.0..=1.0).contains(&opacity) {
+        Ok(())
+    } else {
+        Err(crate::winit_core::error::OsError::new(
+            line!(),
+            file!(),
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "opacity must be finite and in 0..=1",
+            ),
+        )
+        .into())
+    }
+}
 
 impl WindowId {
     /// Convert the `WindowId` into the underlying integer.
@@ -1626,6 +1679,43 @@ pub trait Window: Any + Send + Sync + fmt::Debug {
     ///
     /// - **iOS / Android / Web / Orbital:** Always returns an [`RequestError::NotSupported`].
     fn set_cursor_hittest(&self, hittest: bool) -> Result<(), RequestError>;
+
+    /// Restrict OS input to the union of client-relative physical rectangles.
+    /// None restores the default region; an empty slice passes all input through.
+    /// Reapply after layout or scale changes. Windows also clips window rendering
+    /// to this region. Wayland rounds outward to surface coordinates and applies
+    /// the region on the next surface commit. Other backends return NotSupported.
+    /// This affects every pointer button, rather than selecting individual buttons.
+    fn set_input_region(&self, _region: Option<&[InputRegionRect]>) -> Result<(), RequestError> {
+        Err(NotSupportedError::new("OS input regions are unsupported by this backend").into())
+    }
+
+    /// Returns the pointer position in desktop physical coordinates.
+    ///
+    /// Platforms that restrict global pointer queries return `NotSupported`.
+    fn global_cursor_position(&self) -> Result<PhysicalPosition<i32>, RequestError> {
+        Err(NotSupportedError::new("global cursor position is unavailable on this platform").into())
+    }
+
+    /// Set OS pointer pass-through. Empty restores input; ALL disables hit testing.
+    /// Partial masks require backend support and otherwise return NotSupported without changes.
+    fn set_pointer_passthrough(&self, events: PointerPassthrough) -> Result<(), RequestError> {
+        if events.is_empty() || events == PointerPassthrough::ALL {
+            self.set_cursor_hittest(events.is_empty())
+        } else {
+            Err(
+                NotSupportedError::new("per-button OS pass-through is unsupported by this backend")
+                    .into(),
+            )
+        }
+    }
+
+    /// Set whole-window opacity, including decorations, in the range 0..=1.
+    /// Unsupported backends return an error. Per-pixel surface transparency is separate.
+    fn set_opacity(&self, opacity: f32) -> Result<(), RequestError> {
+        validate_opacity(opacity)?;
+        Err(NotSupportedError::new("whole-window opacity is unsupported by this backend").into())
+    }
 
     /// Returns the monitor on which the window currently resides.
     ///

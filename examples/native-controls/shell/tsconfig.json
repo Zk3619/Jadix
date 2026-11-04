@@ -1,0 +1,12 @@
+{
+  "compilerOptions": {
+    "target": "ES2020", "module": "NodeNext", "moduleResolution": "NodeNext",
+    "strict": true, "noEmit": true, "jsx": "react-jsx", "jsxImportSource": "@jadix/shell",
+    "types": [],
+    "paths": {
+      "@jadix/shell": ["../../../crates/jadix_shell/sdk/src/index.d.mts"],
+      "@jadix/shell/jsx-runtime": ["../../../crates/jadix_shell/sdk/src/jsx-runtime.d.mts"]
+    }
+  },
+  "include": ["panel.tsx"]
+}

@@ -180,6 +180,7 @@ impl TreeSnapshot {
 #[cfg(windows)]
 struct ResettingActivation<Handler> {
     handler: Handler,
+    window_id: WindowId,
     reset: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
@@ -187,7 +188,14 @@ struct ResettingActivation<Handler> {
 impl<Handler: ActivationHandler> ActivationHandler for ResettingActivation<Handler> {
     fn request_initial_tree(&mut self) -> Option<TreeUpdate> {
         self.reset.store(true, std::sync::atomic::Ordering::Release);
-        self.handler.request_initial_tree()
+        let initial = self.handler.request_initial_tree();
+        let _ =
+            crate::app::ui_bridge::send_user_event(crate::app::JadixUserEvent::AccessKit(Event {
+                window_id: self.window_id,
+                window_event: AdapterWindowEvent::InitialTreeRequested,
+                active: None,
+            }));
+        initial
     }
 }
 
@@ -207,6 +215,7 @@ impl Adapter {
         #[cfg(windows)]
         let activation = ResettingActivation {
             handler: activation,
+            window_id: window.id(),
             reset: reset_snapshot.clone(),
         };
         Self {

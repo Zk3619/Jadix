@@ -645,3 +645,47 @@ fn bare_dialog_gets_a_synthetic_title() {
     assert_eq!(title.role(), Role::Heading);
     assert_eq!(title.label(), Some("Discard changes"));
 }
+
+#[test]
+fn progress_indicator_exposes_a_named_read_only_numeric_range() {
+    let mut progress = Element::new();
+    for (name, value) in [
+        ("accesskit_role", "progressbar"),
+        ("aria-label", "Startup progress"),
+        ("aria-valuemin", "0"),
+        ("aria-valuemax", "100"),
+        ("aria-valuenow", "25"),
+    ] {
+        progress.set_attr(name, value);
+    }
+    let update = tree_update_from_elements(&Element::new().child(progress), None);
+    let node = &update
+        .nodes
+        .iter()
+        .find(|(_, node)| node.role() == Role::ProgressIndicator)
+        .unwrap()
+        .1;
+    assert_eq!(node.label(), Some("Startup progress"));
+    assert_eq!(node.numeric_value(), Some(25.0));
+    assert_eq!(node.min_numeric_value(), Some(0.0));
+    assert_eq!(node.max_numeric_value(), Some(100.0));
+    assert!(!node.supports_action(Action::Click));
+    assert!(!node.supports_action(Action::Focus));
+}
+
+#[test]
+fn progress_indicator_ignores_nonfinite_numeric_values() {
+    for value in ["NaN", "inf", "-inf"] {
+        let mut progress = Element::new();
+        progress.set_attr("accesskit_role", "progressindicator");
+        progress.set_attr("aria-valuenow", value);
+        let update = tree_update_from_elements(&Element::new().child(progress), None);
+        let node = &update
+            .nodes
+            .iter()
+            .find(|(_, node)| node.role() == Role::ProgressIndicator)
+            .unwrap()
+            .1;
+        assert_eq!(node.numeric_value(), None);
+    }
+}

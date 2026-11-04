@@ -1,0 +1,100 @@
+{
+  "schema": 1,
+  "development_only": true,
+  "public_key": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+  "broken_source": "throw new Error('rejected development update');",
+  "releases": {
+    "1": {
+      "manifest": {
+        "format": 1,
+        "package": "examples.native.tsx",
+        "version": "1.0.1",
+        "publisher": "jadix-development",
+        "key_id": "development-key",
+        "target": "native",
+        "release": "1",
+        "protocol": 1,
+        "sdk": "0.1.0",
+        "minimum_host": "0.1.0",
+        "component_schema": "ecb12da69216279cd4ba96e0585e8f74ef9f7b7ab4e38120efe6350d96d58dea",
+        "capabilities": [],
+        "entry": "panel.bundle.js",
+        "resources": {
+          "panel.bundle.js": {
+            "sha256": "c296f51b11392f7169c656e3e9e3b7daca3b670f5f7cb5ddc53a2034c326e897",
+            "bytes": 21613
+          }
+        },
+        "permissions": {
+          "panel.read": "Read the panel host state"
+        },
+        "storage_namespace": "examples.native.tsx",
+        "storage_version": 1,
+        "migration_from": []
+      },
+      "signature": "b8b138c18cb5431ff726b0a85b77fcd938e9daef3b3dbd9ae5f1c1b6e51657244725a3f7af7aa3613252af120ff53025cbfea43e18c85624b9aef83e6c078206"
+    },
+    "2": {
+      "manifest": {
+        "format": 1,
+        "package": "examples.native.tsx",
+        "version": "1.0.2",
+        "publisher": "jadix-development",
+        "key_id": "development-key",
+        "target": "native",
+        "release": "2",
+        "protocol": 1,
+        "sdk": "0.1.0",
+        "minimum_host": "0.1.0",
+        "component_schema": "ecb12da69216279cd4ba96e0585e8f74ef9f7b7ab4e38120efe6350d96d58dea",
+        "capabilities": [],
+        "entry": "panel.bundle.js",
+        "resources": {
+          "panel.bundle.js": {
+            "sha256": "c296f51b11392f7169c656e3e9e3b7daca3b670f5f7cb5ddc53a2034c326e897",
+            "bytes": 21613
+          }
+        },
+        "permissions": {
+          "panel.read": "Read the panel host state"
+        },
+        "storage_namespace": "examples.native.tsx",
+        "storage_version": 2,
+        "migration_from": [
+          1
+        ]
+      },
+      "signature": "c91731da3d40f7dac5834c05841de177454b43362c90574c78885c25f07540cfca1a613adf14ae87318e17000fc66df0dfbeae18a1ff39578e4c7d6c01ccbd02"
+    },
+    "3": {
+      "manifest": {
+        "format": 1,
+        "package": "examples.native.tsx",
+        "version": "1.0.3",
+        "publisher": "jadix-development",
+        "key_id": "development-key",
+        "target": "native",
+        "release": "3",
+        "protocol": 1,
+        "sdk": "0.1.0",
+        "minimum_host": "0.1.0",
+        "component_schema": "ecb12da69216279cd4ba96e0585e8f74ef9f7b7ab4e38120efe6350d96d58dea",
+        "capabilities": [],
+        "entry": "panel.bundle.js",
+        "resources": {
+          "panel.bundle.js": {
+            "sha256": "f6c4b1a658cca8e6337955cf63c7eeae40a312a904fb1bddcba3914079ee4307",
+            "bytes": 47
+          }
+        },
+        "permissions": {
+          "panel.read": "Read the panel host state"
+        },
+        "storage_namespace": "examples.native.tsx",
+        "storage_version": 1,
+        "migration_from": []
+      },
+      "signature": "fda6868c6c8527138372e8cb83fefab640b33d5555da7c54d5773e8727b94da9f410b4bbaae7ce1747c04b20ae6db83421e9812dcdfe84a04a4fff4039cd610f"
+    }
+  }
+}

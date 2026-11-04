@@ -302,6 +302,17 @@
 pub use dpi;
 pub use rwh_06 as raw_window_handle;
 
+/// Native tray icons and menus; construct on the platform UI thread and retain the handle.
+#[cfg(all(
+    feature = "system-tray",
+    any(
+        windows,
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
+))]
+pub use tray_icon as tray;
+
 #[cfg(any(doc, doctest, test))]
 pub mod changelog;
 pub mod chrome;

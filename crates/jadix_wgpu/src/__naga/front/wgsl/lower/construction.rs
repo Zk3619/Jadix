@@ -131,7 +131,7 @@ impl<'source> Lowerer<'source, '_> {
                 let components = ast_components
                     .iter()
                     .map(|&expr| self.expression_for_abstract(expr, ctx))
-                    .collect::<Result<_>>()?;
+                    .collect::<Result<Vec<_>>>()?;
                 let spans = ast_components
                     .iter()
                     .map(|&expr| ctx.ast_expressions.get_span(expr))

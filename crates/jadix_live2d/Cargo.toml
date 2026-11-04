@@ -1,0 +1,26 @@
+[package]
+name = "jadix_live2d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Optional Live2D model playback and Jadix wgpu rendering"
+
+[dependencies]
+mocari = { version = "=0.4.0", default-features = false }
+wgpu = { workspace = true, optional = true }
+thiserror = "2"
+serde_json.workspace = true
+
+[dev-dependencies]
+pollster = "0.4"
+
+[features]
+default = ["wgpu"]
+wgpu = ["dep:wgpu"]
+gpu-tests = ["native-backends"]
+native-backends = ["wgpu", "wgpu/dx12", "wgpu/vulkan", "wgpu/metal"]
+
+[[example]]
+name = "render_model"
+required-features = ["native-backends"]

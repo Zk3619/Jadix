@@ -983,6 +983,7 @@ impl From<ButtonBuilder> for Element {
             el.set_attr("disabled", "true");
         }
         let mut el = chrome.apply(el);
+        crate::authoring::native::mark_button(&mut el);
         if let Some(off) = caption_underline_offset {
             el.text_style.underline_offset = Some(off);
         }

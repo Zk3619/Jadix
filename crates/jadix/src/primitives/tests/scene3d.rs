@@ -1,6 +1,37 @@
 use super::*;
 use crate::layout::layout_tree::LayoutTree;
 
+#[cfg(feature = "scene3d-models")]
+#[test]
+fn model_views_have_distinct_jobs_and_release_their_registry_entries() {
+    let scene = || {
+        jadix_3d::Scene::from_slice(
+            br#"{"asset":{"version":"2.0"},"nodes":[{}],"scenes":[{"nodes":[0]}]}"#,
+        )
+        .unwrap()
+    };
+    let first = SceneView::new(scene());
+    let second = SceneView::new(scene());
+    let first_id = first.0.id;
+    let first_element: Element = scene3d().model(&first).into();
+    let second_element: Element = scene3d().model(&second).into();
+    take_scene3d_jobs();
+    let first_key = scene3d_tex_from_element_attrs(&first_element.attrs, 80.0, 60.0)
+        .unwrap()
+        .0;
+    let second_key = scene3d_tex_from_element_attrs(&second_element.attrs, 80.0, 60.0)
+        .unwrap()
+        .0;
+    assert_ne!(first_key, second_key);
+    let jobs = take_scene3d_jobs();
+    assert!(jobs.iter().all(|job| job.model.is_some()));
+    assert!(first.set_animation(Some(0)).is_err());
+    assert!(first.set_camera_node(Some(0)).is_err());
+    drop(first);
+    assert!(MODELS.with(|models| !models.borrow().contains_key(&first_id)));
+    assert!(scene3d_tex_from_element_attrs(&first_element.attrs, 80.0, 60.0).is_none());
+}
+
 #[test]
 fn scene3d_leaf_layout_bounds() {
     let leaf: Element = scene3d().w(120.0).h(90.0).into();

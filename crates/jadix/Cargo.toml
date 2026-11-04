@@ -14,104 +14,107 @@ include = ["/Cargo.toml", "/LICENSE", "/NOTICE", "/MOTION.md", "/SCALE_PREVIEW.m
 
 [features]
 # Capability inventory and core/optional boundaries: docs/FEATURES.md.
-default = ["macros", "backend-dx12", "backend-gles", "backend-metal", "window-materials", "theme-shadcn", "animation-base", "native-clipboard", "images", "file-persistence"]
+default = ["gpu", "macros", "backend-dx12", "backend-gles", "backend-metal", "window-materials", "theme-shadcn", "animation-base", "native-clipboard", "images", "file-persistence"]
+gpu = ["dep:jadix_document", "dep:jadix_renderer", "dep:jadix_window_materials", "dep:jadix_media", "dep:winit", "dep:wgpu", "dep:glyphon", "dep:swash", "dep:ttf-parser", "dep:image", "dep:windows-sys", "dep:openharmony-ability", "dep:web-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:libc"]
 macros = ["dep:jadix_macros"]
-file-persistence = []
-native-clipboard = ["dep:jadix_clipboard"]
-product-tests = ["drag", "macros"]
-drag = []
+file-persistence = ["gpu"]
+native-clipboard = ["gpu", "dep:jadix_clipboard"]
+product-tests = ["gpu", "drag", "macros"]
+drag = ["gpu"]
 theme-shadcn = ["jadix_theme/theme-shadcn"]
 theme-fluent = ["jadix_theme/theme-fluent"]
 theme-material3 = ["jadix_theme/theme-material3"]
 theme-liquid-glass = ["jadix_theme/theme-liquid-glass"]
 themes = ["theme-shadcn", "theme-fluent", "theme-material3", "theme-liquid-glass"]
-animation-base = ["jadix_animation/animation-base"]
-animation-ex = ["animation-base", "jadix_animation/animation-ex"]
-animation = ["animation-base", "animation-ex"]
-animation-path = ["animation-ex", "svg", "jadix_animation/animation-path"]
-code = []
-code-lsp = ["dep:jadix_lsp"]
-markdown = ["jadix_document/markdown"]
-document = ["markdown"]
-document-editing = ["document", "jadix_document/document-editing"]
-document-diff = ["jadix_document/diff"]
-document-science = ["document", "jadix_document/science"]
-file-dialog = ["dep:rfd"]
-gallery-tests = ["product-tests", "text-undo", "svg", "themes", "animation-path", "code", "scale-preview", "windows-dcomp", "document-editing", "document-diff", "document-science", "file-dialog"]
-window-materials = ["jadix_window_materials/windows-dcomp", "windows-dwm", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit"]
-windows-dwm = ["windows-sys/Win32_Graphics_Dwm", "windows-sys/Win32_UI_Controls"]
-windows-composition = ["backend-dx12", "dep:windows", "dep:windows-core", "dep:windows-numerics", "dep:windows-collections"]
-windows-dcomp = ["window-materials", "windows-composition"]
-native-materials = ["window-materials"]
-scale-preview = []
+animation-base = ["gpu", "jadix_animation/animation-base"]
+animation-ex = ["gpu", "animation-base", "jadix_animation/animation-ex"]
+animation = ["gpu", "animation-base", "animation-ex"]
+animation-path = ["gpu", "animation-ex", "svg", "jadix_animation/animation-path"]
+code = ["gpu"]
+code-lsp = ["gpu", "dep:jadix_lsp"]
+markdown = ["gpu", "jadix_document/markdown"]
+document = ["gpu", "markdown"]
+document-editing = ["gpu", "document", "jadix_document/document-editing"]
+document-diff = ["gpu", "jadix_document/diff"]
+document-science = ["gpu", "document", "jadix_document/science"]
+file-dialog = ["gpu", "dep:rfd"]
+gallery-tests = ["gpu", "product-tests", "text-undo", "svg", "themes", "animation-path", "code", "scale-preview", "windows-dcomp", "document-editing", "document-diff", "document-science", "file-dialog"]
+window-materials = ["gpu", "jadix_window_materials/windows-dcomp", "windows-dwm", "dep:objc2", "dep:objc2-foundation", "dep:objc2-app-kit"]
+windows-dwm = ["gpu", "windows-sys/Win32_Graphics_Dwm", "windows-sys/Win32_UI_Controls"]
+windows-composition = ["gpu", "backend-dx12", "dep:windows", "dep:windows-core", "dep:windows-numerics", "dep:windows-collections"]
+windows-dcomp = ["gpu", "window-materials", "windows-composition"]
+native-materials = ["gpu", "window-materials"]
+scale-preview = ["gpu"]
 # Framework performance sampling capability (enabled by Gallery for its diagnostics UI).
 # Applications that do not need performance telemetry leave this feature disabled.
-performance = []
+performance = ["gpu"]
 # Entire `src/i18n` module (catalogs, locale overlay, ICU4X format). Off by default.
 # Component chrome uses `tr_default` / `tr_with_default`, which return the source
 # string when this feature is off. Enable: cargo test -p jadix --lib --features i18n
-i18n = ["dep:icu", "dep:icu_provider_blob", "dep:writeable"]
+i18n = ["gpu", "dep:icu", "dep:icu_provider_blob", "dep:writeable"]
 # AccessKit tree + local 0.31 winit hook. Off by default.
 # Element `accesskit_*` attrs still compile; the bridge is feature-gated.
 # Enable: cargo test -p jadix --lib --features a11y
 # `accesskit_winit` still tracks winit 0.30. The OS hook is in-tree
 # (`a11y::winit_adapter`) with a Windows subclass and OHOS native ArkUI provider.
-a11y = ["dep:accesskit", "dep:accesskit_windows", "dep:jadix_accesskit_ohos"]
+a11y = ["gpu", "dep:accesskit", "dep:accesskit_windows", "dep:jadix_accesskit_ohos"]
 # Dev-time TCP hot reload (`jadix_hot_reload`). Requires debug build.
-hot-reload = []
+hot-reload = ["gpu"]
 # Optional runtime logger: console (stderr) + optional file via JADIX_LOG_FILE (env_logger).
-runtime-logging = ["dep:env_logger"]
+runtime-logging = ["gpu", "dep:env_logger"]
 # Optional structured spans on hot paths (layout / reconcile). Off by default.
-tracing = ["dep:tracing"]
+tracing = ["gpu", "dep:tracing"]
 # Native system tray via tray-icon + muda. Off by default (see docs/ops/tray.md).
-system-tray = ["dep:tray-icon"]
+system-tray = ["gpu", "dep:tray-icon"]
+# Per-user startup registration through auto-launch.
+autostart = ["dep:auto-launch"]
 # OS menu bars on Windows/macOS. Linux winit windows are not GTK windows.
-native-menu = ["dep:muda"]
-webview = ["windows-composition", "dep:webview2-com", "dep:wry", "dep:gtk", "dep:jni", "dep:objc2", "dep:objc2-foundation", "dep:html5ever", "dep:base64"]
+native-menu = ["gpu", "dep:muda"]
+webview = ["gpu", "windows-composition", "dep:webview2-com", "dep:wry", "dep:gtk", "dep:jni", "dep:objc2", "dep:objc2-foundation", "dep:html5ever", "dep:base64"]
 # Windows defaults to D3D12 for predictable presentation and 4K frame throughput.
 # GL remains the fallback; lean consumers can disable default features.
 # This adds native backend code and driver memory (ADR-3, 2026-10-16 update).
-backend-dx12 = ["jadix_renderer/backend-dx12", "wgpu/dx12"]
+backend-dx12 = ["gpu", "jadix_renderer/backend-dx12", "wgpu/dx12"]
 # Optional Vulkan backend (kept off by default to avoid multi-backend bloat on Windows).
-backend-vulkan = ["wgpu/vulkan"]
-backend-gles = ["wgpu/gles"]
-backend-metal = ["wgpu/metal"]
+backend-vulkan = ["gpu", "wgpu/vulkan"]
+backend-gles = ["gpu", "wgpu/gles"]
+backend-metal = ["gpu", "wgpu/metal"]
 # Translated D3D11: WGSL -> GLSL -> ANGLE -> hardware D3D11.
 # Native graphics HAL and ANGLE are independently selectable.
 # Experimental: native-window color and sustained presentation are not accepted yet.
 
 # Experimental native SM5 graphics subset; see crates/jadix_wgpu/upstream/wgpu-hal/JADIX_DX11_PATCH.md.
-backend-dx11-native = ["jadix_renderer/backend-dx11-native", "wgpu/dx11"]
-backend-dx11-angle = ["jadix_renderer/backend-dx11-angle", "backend-gles", "wgpu/gles-angle"]
-backend-dx11 = ["backend-dx11-native"]
+backend-dx11-native = ["gpu", "jadix_renderer/backend-dx11-native", "wgpu/dx11"]
+backend-dx11-angle = ["gpu", "jadix_renderer/backend-dx11-angle", "backend-gles", "wgpu/gles-angle"]
+backend-dx11 = ["gpu", "backend-dx11-native"]
 # Embed large fonts into the binary (single-file distro; dramatically increases size).
-bundled-cjk = []
-bundled-cjk-serif = []
-bundled-emoji = []
-bundled-symbols = []
-bundled-fonts = ["bundled-cjk", "bundled-cjk-serif", "bundled-emoji", "bundled-symbols"]
+bundled-cjk = ["gpu"]
+bundled-cjk-serif = ["gpu"]
+bundled-emoji = ["gpu"]
+bundled-symbols = ["gpu"]
+bundled-fonts = ["gpu", "bundled-cjk", "bundled-cjk-serif", "bundled-emoji", "bundled-symbols"]
 # Load optional fonts from disk at runtime (JADIX_FONT_DIR / assets/), without embedding.
-fonts-cjk = []
-fonts-cjk-serif = []
-fonts-emoji = []
+fonts-cjk = ["gpu"]
+fonts-cjk-serif = ["gpu"]
+fonts-emoji = ["gpu"]
 # Public `<svg>` / SMIL / resvg raster (Image · CSS cursor · AnimatedIcon frames) + MorphIcon.
 # Not in default. Path kernel (Chart, ProgressCircle) stays without this feature.
-svg = ["dep:resvg"]
-document-math = ["document", "svg", "jadix_document/document-math"]
-syntax-highlighting = ["jadix_document/syntax"]
+svg = ["gpu", "dep:resvg"]
+document-math = ["gpu", "document", "svg", "jadix_document/document-math"]
+syntax-highlighting = ["gpu", "jadix_document/syntax"]
 # Twemoji SVG via the same resvg (PNG fallback remains without it).
-emoji-svg = ["svg"]
+emoji-svg = ["gpu", "svg"]
 # Extra raster codecs (off by default; PNG remains in the core set).
-image-bmp = ["image/bmp"]
-image-tiff = ["image/tiff"]
-image-avif = ["image/avif"]
-image-exr = ["image/exr"]
-image-hdr = ["image/hdr"]
-image-pnm = ["image/pnm"]
-image-qoi = ["image/qoi"]
-image-tga = ["image/tga"]
-image-ff = ["image/ff"]
-image-full = [
+image-bmp = ["gpu", "image/bmp"]
+image-tiff = ["gpu", "image/tiff"]
+image-avif = ["gpu", "image/avif"]
+image-exr = ["gpu", "image/exr"]
+image-hdr = ["gpu", "image/hdr"]
+image-pnm = ["gpu", "image/pnm"]
+image-qoi = ["gpu", "image/qoi"]
+image-tga = ["gpu", "image/tga"]
+image-ff = ["gpu", "image/ff"]
+image-full = ["gpu",
     "images",
     "image-bmp",
     "image-tiff",
@@ -123,66 +126,71 @@ image-full = [
     "image-tga",
     "image-ff",
 ]
-image-jpeg = ["image/jpeg"]
-image-gif = ["image/gif"]
-image-webp = ["image/webp"]
-image-ico = ["image/ico"]
-jpeg = ["image-jpeg"]
-gif = ["image-gif"]
-webp = ["image-webp"]
-images = ["image-jpeg", "image-gif", "image-webp", "image-ico"]
-cursor-images = []
+image-jpeg = ["gpu", "image/jpeg"]
+image-gif = ["gpu", "image/gif"]
+image-webp = ["gpu", "image/webp"]
+image-ico = ["gpu", "image/ico"]
+jpeg = ["gpu", "image-jpeg"]
+gif = ["gpu", "image-gif"]
+webp = ["gpu", "image-webp"]
+images = ["gpu", "image-jpeg", "image-gif", "image-webp", "image-ico"]
+cursor-images = ["gpu"]
 # WP-3.13 experimental <scene3d> rotating cube. Off by default (volume / ADR-3).
-scene3d = []
+scene3d = ["gpu"]
+scene3d-models = ["scene3d", "dep:jadix_3d"]
+live2d = ["gpu", "dep:jadix_live2d"]
 # Optional wgpu compute (blur / histogram / particles / backdrop-filter).
 # Off by default so GLES / gallery / calculator stay fragment-only.
 # Still adapter-gated: GLES reports compute: no even with this feature.
 #   cargo run -p gallery --features compute
 #   cargo test -p jadix --lib --features compute
 # Workspace unification: do not enable from calculator / gpu_probe.
-compute = []
+compute = ["gpu"]
 # WP-M.3: YUV (NV12 / I420 / P010) → BT.709 RGBA for ImageStream. Off by default.
 # Zero decoder crates — applications inject demux.
-image-stream = []
+image-stream = ["gpu"]
 # B1 runtime Inspector: Elements pick/highlight + Reactivity graph + style live edit.
 # Opt-in; not in default release surface (see docs/ops/devtools.md).
-devtools = ["scale-preview", "taffy/parse"]
+devtools = ["gpu", "scale-preview", "taffy/parse"]
 # Allow `<Image src="https://…">` / Avatar / Icon to call an app-installed
 # [`RemoteAssetFetcher`] (no HTTP crate). See docs/ops/remote_asset.md.
-remote-asset = []
-remote-asset-cache = ["remote-asset", "dep:moka"]
-runtime-tokio = ["dep:jadix_tokio"]
-net = ["dep:jadix_net"]
-net-json = ["net", "jadix_net/json"]
+remote-asset = ["gpu"]
+remote-asset-cache = ["gpu", "remote-asset", "dep:moka"]
+runtime-tokio = ["gpu", "dep:jadix_tokio"]
+net = ["gpu", "dep:jadix_net"]
+net-json = ["gpu", "net", "jadix_net/json"]
 # Input/Textarea undo+redo history. Off by default (lean crate). Gallery enables it.
 # See docs/plans/text_undo_redo.md. Workspace feature unification: do not enable
 # from calculator / gpu_probe; package-specific `cargo test -p jadix --lib` stays off.
-text-undo = []
+text-undo = ["gpu"]
 # P3 measured String vs ropey (ignored test `text_buffer_mid_insert` + text_undo_redo.md §9.3).
 # Not enabled: L1/L2 stay on StringBuffer. Do not uncomment without new L3 numbers.
 # text-undo-rope = ["text-undo", "dep:ropey"]
 
 [dependencies]
+jadix_3d = { workspace = true, optional = true }
+jadix_live2d = { workspace = true, optional = true, default-features = false, features = ["wgpu"] }
+
 web-time.workspace = true
-jadix_document.workspace = true
+jadix_document = { workspace = true, optional = true }
 jadix_core.workspace = true
 jadix_layout.workspace = true
 jadix_animation.workspace = true
 jadix_theme.workspace = true
-jadix_renderer.workspace = true
-jadix_window_materials.workspace = true
+jadix_renderer = { workspace = true, optional = true }
+jadix_window_materials = { workspace = true, optional = true }
 jadix_hot_reload.workspace = true
 jadix_lsp = { workspace = true, optional = true }
-jadix_media.workspace = true
+jadix_media = { workspace = true, optional = true }
 jadix_tasks.workspace = true
 jadix_tokio = { workspace = true, optional = true }
 moka = { workspace = true, optional = true, features = ["sync"] }
 jadix_net = { workspace = true, optional = true }
-winit = { workspace = true }
-wgpu = { workspace = true }
+winit = { workspace = true, optional = true }
+wgpu = { workspace = true, optional = true }
 taffy = { workspace = true, features = ["parse"] }
 bytemuck = { workspace = true, default-features = true }
-glyphon = { workspace = true }
+glyphon = { workspace = true, optional = true }
 env_logger = { workspace = true, optional = true }
 log = { workspace = true }
 tracing = { workspace = true, default-features = true, optional = true }
@@ -202,27 +210,27 @@ jadix_style_tokens = { workspace = true }
 stacker = { workspace = true }
 jadix_clipboard = { workspace = true, optional = true }
 accesskit = { workspace = true, optional = true }
-swash = { workspace = true }
-ttf-parser = { workspace = true }
+swash = { workspace = true, optional = true }
+ttf-parser = { workspace = true, optional = true }
 unicode-segmentation = { workspace = true }
 unicode-linebreak = { workspace = true }
 html5ever = { version = "0.39", optional = true }
 base64 = { version = "0.22", optional = true }
 latex-rust = { workspace = true, optional = true }
-image = { workspace = true }
+image = { workspace = true, optional = true }
 resvg = { workspace = true, optional = true }
 
 
 [target.'cfg(target_env = "ohos")'.dependencies]
-openharmony-ability = { workspace = true }
+openharmony-ability = { workspace = true, optional = true }
 jadix_accesskit_ohos = { path = "../jadix_accesskit_ohos", version = "0.1.0", optional = true }
 
 [target.'cfg(target_os = "android")'.dependencies]
 jni = { workspace = true, optional = true }
-winit = { workspace = true, features = ["android-native-activity"] }
+winit = { workspace = true, optional = true, features = ["android-native-activity"] }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-web-sys = { workspace = true, features = [
+web-sys = { workspace = true, optional = true, features = [
     "Document",
     "Element",
     "HtmlCanvasElement",
@@ -230,12 +238,12 @@ web-sys = { workspace = true, features = [
     "Node",
     "Window",
 ] }
-wasm-bindgen = { workspace = true }
-wasm-bindgen-futures.workspace = true
-wgpu = { workspace = true, "features" = ["webgpu", "webgl"] }
+wasm-bindgen = { workspace = true, optional = true }
+wasm-bindgen-futures = { workspace = true, optional = true }
+wgpu = { workspace = true, optional = true, "features" = ["webgpu", "webgl"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-libc = { workspace = true }
+libc = { workspace = true, optional = true }
 objc2-app-kit = { workspace = true, optional = true, default-features = false, features = ["std", "NSView", "NSWindow", "NSResponder", "NSGraphics"] }
 
 [target.'cfg(any(windows, target_os = "macos"))'.dependencies]
@@ -245,7 +253,7 @@ tray-icon = { workspace = true, optional = true }
 [target.'cfg(windows)'.dependencies]
 webview2-com = { version = "0.39.1", optional = true }
 accesskit_windows = { version = "0.34.0", optional = true }
-windows-sys = { workspace = true, features = [
+windows-sys = { workspace = true, optional = true, features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
     "Win32_Security_Cryptography",
@@ -308,6 +316,7 @@ objc2-foundation = { workspace = true, default-features = true, optional = true,
 
 
 [target.'cfg(any(target_os = "windows", target_os = "macos", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
+auto-launch = { version = "0.6.0", optional = true }
 rfd = { workspace = true, optional = true }
 
 [[test]]
@@ -330,3 +339,7 @@ required-features = ["macros"]
 [[test]]
 name = "viewport_modal_rsx"
 required-features = ["macros"]
+
+[[example]]
+name = "model_scene"
+required-features = ["scene3d-models"]

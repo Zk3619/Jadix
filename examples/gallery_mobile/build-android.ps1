@@ -1,9 +1,14 @@
 param(
     [ValidateSet('arm64', 'x86_64')][string]$Architecture = 'arm64',
+    [ValidateSet('system', 'component', 'off')][string]$SplashMode = 'component',
     [string]$OutputDirectory,
     [switch]$SkipBuild
 )
 $ErrorActionPreference = 'Stop'
+if ($SkipBuild -and $PSBoundParameters.ContainsKey('SplashMode')) {
+    throw '-SplashMode requires a native rebuild; omit -SkipBuild.'
+}
+$env:JADIX_SPLASH_MODE = $SplashMode
 $workspace = (Resolve-Path (Join-Path $PSScriptRoot '../..')).Path
 $target = if ($Architecture -eq 'arm64') { 'aarch64-linux-android' } else { 'x86_64-linux-android' }
 $abi = if ($Architecture -eq 'arm64') { 'arm64-v8a' } else { 'x86_64' }
@@ -55,6 +60,7 @@ $platform = Join-Path $platformDirectory.FullName 'android.jar'
 $aapt = Join-Path $buildTools.FullName 'aapt2.exe'
 $resources = Join-Path $staging 'res/drawable'
 New-Item -ItemType Directory -Force $resources | Out-Null
+Copy-Item -Path (Join-Path $PSScriptRoot 'android/res/*') -Destination (Join-Path $staging 'res') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $workspace 'assets/icons/desktop/window.png') -Destination (Join-Path $resources 'app_icon.png') -Force
 & $aapt compile --dir (Join-Path $staging 'res') -o (Join-Path $staging 'resources.zip')
 if ($LASTEXITCODE -ne 0) { throw 'Android resource compilation failed.' }

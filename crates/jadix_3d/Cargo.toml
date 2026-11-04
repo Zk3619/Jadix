@@ -1,0 +1,23 @@
+[package]
+name = "jadix_3d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "glTF/GLB/VRM scenes, skeletal animation and wgpu rendering for Jadix"
+
+[dependencies]
+glam = "0.30"
+gltf = { version = "1.4.1", features = ["extensions", "KHR_lights_punctual", "KHR_materials_unlit"] }
+serde_json.workspace = true
+bytemuck.workspace = true
+wgpu.workspace = true
+
+[dev-dependencies]
+pollster = "0.4"
+
+[features]
+gpu-tests = ["wgpu/dx12", "wgpu/vulkan", "wgpu/metal"]
+
+[[example]]
+name = "inspect"

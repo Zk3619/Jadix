@@ -86,6 +86,57 @@ pub(crate) fn scroll_settle_must_pump(was_live: bool, live: bool) -> bool {
 }
 
 impl super::App {
+    fn poll_bootstrap(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if !self.surfaces_available || self.is_suspended {
+            return;
+        }
+        struct BootstrapWake(winit::event_loop::EventLoopProxy);
+        impl std::task::Wake for BootstrapWake {
+            fn wake(self: Arc<Self>) {
+                self.0.wake_up();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.wake_up();
+            }
+        }
+        let Some(future) = self.bootstrap.as_mut() else {
+            return;
+        };
+        let waker = std::task::Waker::from(Arc::new(BootstrapWake(self.event_loop_proxy.clone())));
+        let mut context = std::task::Context::from_waker(&waker);
+        let started = Instant::now();
+        let result = future.as_mut().poll(&mut context);
+        log::debug!(
+            "startup bootstrap_poll_ms={:.1}",
+            started.elapsed().as_secs_f64() * 1000.0
+        );
+        if let std::task::Poll::Ready(result) = result {
+            self.bootstrap = None;
+            match result {
+                Ok(state) => {
+                    self.startup_presentation = None;
+                    let window = state.window.clone();
+                    *self.state.borrow_mut() = Some(state);
+                    self.mount_primary(window, event_loop);
+                }
+                Err(error) => {
+                    log::error!("startup renderer failed: {error}");
+                    if let Some(startup) = &self.startup {
+                        startup.borrow().renderer_failed(error.clone());
+                    }
+                    let window = self
+                        .window_registry
+                        .primary_id()
+                        .and_then(|id| self.window_registry.get(id));
+                    if let Some(startup) = &self.startup {
+                        startup
+                            .borrow()
+                            .presentation_failed(window.map(|slot| slot.window.as_ref()), &error);
+                    }
+                }
+            }
+        }
+    }
     /// Drop GPU resources while the window / event loop are still valid.
     ///
     /// The root `create_effect` captures `Rc<RefCell<Option<AppState>>>`. If we leave
@@ -109,14 +160,20 @@ impl super::App {
                 return Some(st.window.clone());
             }
         }
-        self.secondaries.borrow().get(&id).map(|s| s.window.clone())
+        self.window_registry.get(id).map(|slot| slot.window.clone())
     }
 
     pub(super) fn shutdown_renderer(&mut self) {
+        self.bootstrap = None;
+        self.startup_presentation = None;
+        if let Some(startup) = &self.startup {
+            startup.borrow().cancel();
+        }
         // Idempotent: CloseRequested / Destroyed / exiting / post-run_app may all call us.
         if self.state.borrow().is_none()
             && self.secondaries.borrow().is_empty()
             && self.detached_gpu.is_none()
+            && self.window_registry.is_empty()
         {
             return;
         }
@@ -152,6 +209,9 @@ impl super::App {
         self.ime_owner_window = None;
         // 2) Drop registry Arcs so OS windows are destroyed (not only SecondaryWindowState).
         drop(self.window_registry.drain_secondaries());
+        if let Some(id) = self.window_registry.primary_id() {
+            super::runtime::unregister_window(id);
+        }
         super::window_session::drain_tasks();
         self.window_registry = Default::default();
 
@@ -182,6 +242,10 @@ impl super::App {
     }
 
     fn drop_secondary(&mut self, id: WindowId) {
+        if self.startup_window == Some(id) {
+            self.startup_window = None;
+            self.startup_window_presented = false;
+        }
         super::frame_budget::forget_window(id);
         super::native_menu::remove_window(id);
         self.frame_pacers.remove(&id);
@@ -224,6 +288,7 @@ impl super::App {
     }
 
     fn close_targets(&self, id: Option<WindowId>) -> Vec<WindowId> {
+        let id = id.filter(|id| self.startup_window != Some(*id));
         let primary = self.window_registry.primary_id();
         if id.is_none() || id == primary {
             super::windows()
@@ -325,6 +390,223 @@ impl super::App {
             }
         }
         self.finish_close(event_loop, closing);
+    }
+
+    fn open_secondary_window(
+        &mut self,
+        event_loop: &dyn ActiveEventLoop,
+        options: super::WindowOptions,
+        builder: super::SecondaryUiBuilder,
+    ) -> Option<WindowId> {
+        if !crate::platform::host_capabilities().multi_window {
+            log::warn!(
+                "multi-window: secondary windows are not supported on {}",
+                crate::platform::host_kind()
+            );
+            return None;
+        }
+        let wants_glass = options.compositor_alpha();
+        let mut composition = options.wants_dcomp_swapchain();
+        let Ok(created) = event_loop.create_window(super::window_lifecycle::prepare_attributes(
+            options.window_attributes(composition),
+            options.persistence_label(false),
+        )) else {
+            log::warn!("multi-window: create_window failed");
+            return None;
+        };
+        let mut window: Arc<dyn Window> = Arc::from(created);
+        #[cfg(feature = "a11y")]
+        let mut accesskit = Some(create_accesskit_adapter(
+            event_loop,
+            window.as_ref(),
+            self.event_loop_proxy.clone(),
+        ));
+        super::window_chrome::apply_created_window(window.as_ref(), &options, composition);
+        super::window_lifecycle::emit_created(window.as_ref(), options.persistence_label(false));
+        let placeholder = crate::core::tree::Element::new().w("100%").h("100%");
+
+        let secondary = if wants_glass {
+            if let Some(gpu) = super::glass_gpu::try_acquire(&window, &options) {
+                super::secondary_window::SecondaryWindowState::from_compositor(
+                    window.clone(),
+                    gpu,
+                    placeholder,
+                    options.clone(),
+                    composition,
+                )
+            } else {
+                if composition {
+                    log::warn!(
+                        "dcomp glass: DX12 composition GPU failed; recreating with AccentPolicy fallback"
+                    );
+                    composition = false;
+                    #[cfg(feature = "a11y")]
+                    {
+                        drop(accesskit.take());
+                    }
+                    drop(window);
+                    let Ok(created) =
+                        event_loop.create_window(super::window_lifecycle::prepare_attributes(
+                            options.window_attributes(false),
+                            options.persistence_label(false),
+                        ))
+                    else {
+                        log::warn!("multi-window: create_window failed");
+                        return None;
+                    };
+                    window = Arc::from(created);
+                    #[cfg(feature = "a11y")]
+                    {
+                        accesskit = Some(create_accesskit_adapter(
+                            event_loop,
+                            window.as_ref(),
+                            self.event_loop_proxy.clone(),
+                        ));
+                    }
+                    super::window_chrome::apply_created_window(window.as_ref(), &options, false);
+                    super::window_lifecycle::emit_created(
+                        window.as_ref(),
+                        options.persistence_label(false),
+                    );
+                }
+                match self.create_secondary_state(window.clone(), placeholder, options.clone()) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        log::warn!("multi-window: secondary init failed: {e}");
+                        return None;
+                    }
+                }
+            }
+        } else {
+            match self.create_secondary_state(window.clone(), placeholder, options.clone()) {
+                Ok(s) => s,
+                Err(e) => {
+                    log::warn!("multi-window: secondary init failed: {e}");
+                    return None;
+                }
+            }
+        };
+
+        let id = window.id();
+        self.window_registry.insert_secondary_slot(window.clone());
+        super::runtime::register_window(&window, false);
+        if let Some(handle) = super::runtime::window_handle(window.id()) {
+            if let Err(e) = handle.set_resize_border(options.resize_border) {
+                log::warn!("resize_border: {e}");
+            }
+        }
+        super::entry::seed_window_config(id, &options);
+        self.secondaries.borrow_mut().insert(id, secondary);
+
+        let builder_rc = std::rc::Rc::new(std::cell::RefCell::new(builder.0));
+        let secondaries = self.secondaries.clone();
+        let token = super::window_scope::token_for_secondary(id);
+        let (owner, _) = crate::core::reactivity::create_root(move || {
+            // Stamp the owner tree so nested Dialog/Select effects keep Secondary
+            // scope on re-run (without this, portal_sync / reconcile hit the primary).
+            crate::core::reactivity::bind_current_owner_window_key_scope(token);
+            let builder_rc = builder_rc.clone();
+            let secondaries = secondaries.clone();
+            crate::core::reactivity::create_effect(move || {
+                let _scope = super::window_scope::enter_secondary_id(id);
+                super::invalidation::register_root(
+                    crate::core::reactivity::current_effect_id().unwrap(),
+                );
+                crate::style::track_style_changes();
+                let new_root = (builder_rc.borrow_mut())();
+                let new_root = crate::style::apply_stylesheet_rules_tree(new_root);
+                if let Some(sec) = secondaries.borrow_mut().get_mut(&id) {
+                    sec.replace_root(new_root);
+                    if !super::invalidation::in_prepass() {
+                        sec.window.request_redraw();
+                    }
+                }
+            });
+        });
+        if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
+            sec.attach_owner(owner);
+        }
+
+        #[cfg(feature = "a11y")]
+        if let Some(adapter) = accesskit.take() {
+            self.secondary_accesskit.insert(id, adapter);
+        }
+
+        window.set_visible(true);
+        crate::platform::glass_on_shown(window.as_ref());
+        super::window_chrome::apply_created_window(window.as_ref(), &options, composition);
+        window.request_redraw();
+        Some(id)
+    }
+    fn mount_startup_window(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.startup_window.is_some() {
+            return;
+        }
+        let Some(startup) = self.startup.clone() else {
+            return;
+        };
+        let Some(mut options) = startup.borrow().window_options() else {
+            return;
+        };
+        options.window_label = None;
+        options.close_with_primary = true;
+        let builder = super::SecondaryUiBuilder(Box::new(move || startup.borrow_mut().view()));
+        self.startup_window = self.open_secondary_window(event_loop, options, builder);
+        self.startup_window_presented = false;
+        if let Some(id) = self.startup_window {
+            log::info!("startup window_opened id={id:?}");
+            if let Some(secondary) = self.secondaries.borrow().get(&id) {
+                log::info!(
+                    "startup window_surface alpha_mode={:?}",
+                    secondary.alpha_mode()
+                );
+            }
+        } else {
+            log::warn!("startup window creation failed; using same-host component");
+            if let Some(startup) = &self.startup {
+                startup.borrow_mut().window_failed();
+            }
+            let _scope = super::window_scope::enter_primary();
+            super::invalidation::rebuild_all();
+        }
+    }
+
+    fn refresh_startup_windows(&mut self, event_loop: &dyn ActiveEventLoop) {
+        {
+            let _scope = super::window_scope::enter_primary();
+            super::invalidation::rebuild_all();
+        }
+        if let Some(id) = self.startup_window {
+            let _scope = super::window_scope::enter_secondary_id(id);
+            super::invalidation::rebuild_all();
+        }
+        let window = self
+            .state
+            .borrow()
+            .as_ref()
+            .map(|state| state.window.clone());
+        if let Some(window) = window {
+            if self.startup_window.is_some_and(|id| {
+                self.secondaries.borrow().get(&id).is_some_and(|secondary| {
+                    secondary.os_focused && secondary.window.is_minimized() != Some(true)
+                })
+            }) && self
+                .startup
+                .as_ref()
+                .is_some_and(|startup| startup.borrow().content_ready())
+                && window.is_visible() == Some(false)
+            {
+                #[cfg(target_os = "windows")]
+                self.handle_redraw_requested(window.id(), event_loop);
+                window.set_visible(true);
+                if let Some(state) = self.state.borrow_mut().as_mut() {
+                    state.force_present = true;
+                }
+                crate::platform::glass_on_shown(window.as_ref());
+            }
+            window.request_redraw();
+        }
+        let _ = event_loop;
     }
 
     fn create_secondary_state(
@@ -509,16 +791,64 @@ impl super::App {
         event: super::JadixUserEvent,
     ) {
         match event {
-            #[cfg(target_arch = "wasm32")]
-            super::JadixUserEvent::WebReady => {
-                let window = self
-                    .state
-                    .borrow()
+            super::JadixUserEvent::StartupChanged => {
+                if let Some(startup) = &self.startup {
+                    startup.borrow().acknowledge_update();
+                }
+                self.refresh_startup_windows(event_loop);
+            }
+            super::JadixUserEvent::StartupRetry { epoch } => {
+                let retried = self
+                    .startup
                     .as_ref()
-                    .expect("Web GPU initialized")
-                    .window
-                    .clone();
-                self.mount_primary(window, event_loop);
+                    .is_some_and(|startup| startup.borrow_mut().retry(epoch));
+                if retried {
+                    self.startup_window_presented = false;
+                    if let Some(startup) = &self.startup {
+                        startup.borrow_mut().start();
+                    }
+                    if self.state.borrow().is_none() && self.bootstrap.is_none() {
+                        if let Some(window) = self
+                            .window_registry
+                            .primary_id()
+                            .and_then(|id| self.window_registry.get(id))
+                            .map(|slot| slot.window.clone())
+                        {
+                            window.set_title(&self.window_options.title);
+                            if let Some(startup) = &self.startup {
+                                startup.borrow_mut().attach();
+                            }
+                            self.bootstrap =
+                                Some(Box::pin(super::state::AppState::try_new_bootstrap(
+                                    window,
+                                    self.window_options.clone(),
+                                )));
+                            self.poll_bootstrap(event_loop);
+                        }
+                    }
+                    self.refresh_startup_windows(event_loop);
+                }
+            }
+            super::JadixUserEvent::StartupWindowHandoff { epoch } => {
+                if self.startup.as_ref().is_some_and(|startup| {
+                    let startup = startup.borrow();
+                    startup.epoch() == epoch && startup.content_presented()
+                }) {
+                    if let Some(id) = self.startup_window.take() {
+                        let focused = self
+                            .secondaries
+                            .borrow()
+                            .get(&id)
+                            .is_some_and(|secondary| secondary.os_focused);
+                        self.finish_close(event_loop, vec![id]);
+                        log::info!("startup window_closed epoch={epoch} reason=content_presented");
+                        if focused {
+                            if let Some(state) = self.state.borrow().as_ref() {
+                                state.window.focus_window();
+                            }
+                        }
+                    }
+                }
             }
             #[cfg(all(debug_assertions, feature = "hot-reload"))]
             super::JadixUserEvent::HotReloadWake => {
@@ -528,159 +858,7 @@ impl super::App {
                 }
             }
             super::JadixUserEvent::OpenWindow { options, builder } => {
-                let options = *options;
-                if !crate::platform::host_capabilities().multi_window {
-                    log::warn!(
-                        "multi-window: secondary windows are not supported on {}",
-                        crate::platform::host_kind()
-                    );
-                    return;
-                }
-                let wants_glass = options.compositor_alpha();
-                let mut composition = options.wants_dcomp_swapchain();
-                let Ok(created) =
-                    event_loop.create_window(super::window_lifecycle::prepare_attributes(
-                        options.window_attributes(composition),
-                        options.persistence_label(false),
-                    ))
-                else {
-                    log::warn!("multi-window: create_window failed");
-                    return;
-                };
-                let mut window: Arc<dyn Window> = Arc::from(created);
-                #[cfg(feature = "a11y")]
-                let mut accesskit = Some(create_accesskit_adapter(
-                    event_loop,
-                    window.as_ref(),
-                    self.event_loop_proxy.clone(),
-                ));
-                super::window_chrome::apply_created_window(window.as_ref(), &options, composition);
-                super::window_lifecycle::emit_created(
-                    window.as_ref(),
-                    options.persistence_label(false),
-                );
-                let placeholder = crate::core::tree::Element::new().w("100%").h("100%");
-
-                let secondary = if wants_glass {
-                    if let Some(gpu) = super::glass_gpu::try_acquire(&window, &options) {
-                        super::secondary_window::SecondaryWindowState::from_compositor(
-                            window.clone(),
-                            gpu,
-                            placeholder,
-                            options.clone(),
-                            composition,
-                        )
-                    } else {
-                        if composition {
-                            log::warn!(
-                                "dcomp glass: DX12 composition GPU failed; recreating with AccentPolicy fallback"
-                            );
-                            composition = false;
-                            #[cfg(feature = "a11y")]
-                            {
-                                drop(accesskit.take());
-                            }
-                            drop(window);
-                            let Ok(created) = event_loop.create_window(
-                                super::window_lifecycle::prepare_attributes(
-                                    options.window_attributes(false),
-                                    options.persistence_label(false),
-                                ),
-                            ) else {
-                                log::warn!("multi-window: create_window failed");
-                                return;
-                            };
-                            window = Arc::from(created);
-                            #[cfg(feature = "a11y")]
-                            {
-                                accesskit = Some(create_accesskit_adapter(
-                                    event_loop,
-                                    window.as_ref(),
-                                    self.event_loop_proxy.clone(),
-                                ));
-                            }
-                            super::window_chrome::apply_created_window(
-                                window.as_ref(),
-                                &options,
-                                false,
-                            );
-                            super::window_lifecycle::emit_created(
-                                window.as_ref(),
-                                options.persistence_label(false),
-                            );
-                        }
-                        match self.create_secondary_state(
-                            window.clone(),
-                            placeholder,
-                            options.clone(),
-                        ) {
-                            Ok(s) => s,
-                            Err(e) => {
-                                log::warn!("multi-window: secondary init failed: {e}");
-                                return;
-                            }
-                        }
-                    }
-                } else {
-                    match self.create_secondary_state(window.clone(), placeholder, options.clone())
-                    {
-                        Ok(s) => s,
-                        Err(e) => {
-                            log::warn!("multi-window: secondary init failed: {e}");
-                            return;
-                        }
-                    }
-                };
-
-                let id = window.id();
-                self.window_registry.insert_secondary_slot(window.clone());
-                super::runtime::register_window(&window, false);
-                if let Some(handle) = super::runtime::window_handle(window.id()) {
-                    if let Err(e) = handle.set_resize_border(options.resize_border) {
-                        log::warn!("resize_border: {e}");
-                    }
-                }
-                super::entry::seed_window_config(id, &options);
-                self.secondaries.borrow_mut().insert(id, secondary);
-
-                let builder_rc = std::rc::Rc::new(std::cell::RefCell::new(builder.0));
-                let secondaries = self.secondaries.clone();
-                let token = super::window_scope::token_for_secondary(id);
-                let (owner, _) = crate::core::reactivity::create_root(move || {
-                    // Stamp the owner tree so nested Dialog/Select effects keep Secondary
-                    // scope on re-run (without this, portal_sync / reconcile hit the primary).
-                    crate::core::reactivity::bind_current_owner_window_key_scope(token);
-                    let builder_rc = builder_rc.clone();
-                    let secondaries = secondaries.clone();
-                    crate::core::reactivity::create_effect(move || {
-                        let _scope = super::window_scope::enter_secondary_id(id);
-                        super::invalidation::register_root(
-                            crate::core::reactivity::current_effect_id().unwrap(),
-                        );
-                        crate::style::track_style_changes();
-                        let new_root = (builder_rc.borrow_mut())();
-                        let new_root = crate::style::apply_stylesheet_rules_tree(new_root);
-                        if let Some(sec) = secondaries.borrow_mut().get_mut(&id) {
-                            sec.replace_root(new_root);
-                            if !super::invalidation::in_prepass() {
-                                sec.window.request_redraw();
-                            }
-                        }
-                    });
-                });
-                if let Some(sec) = self.secondaries.borrow_mut().get_mut(&id) {
-                    sec.attach_owner(owner);
-                }
-
-                #[cfg(feature = "a11y")]
-                if let Some(adapter) = accesskit.take() {
-                    self.secondary_accesskit.insert(id, adapter);
-                }
-
-                window.set_visible(true);
-                crate::platform::glass_on_shown(window.as_ref());
-                super::window_chrome::apply_created_window(window.as_ref(), &options, composition);
-                window.request_redraw();
+                let _ = self.open_secondary_window(event_loop, *options, builder);
             }
             super::JadixUserEvent::CloseWindow { id } => {
                 self.request_close(event_loop, Some(id));
@@ -689,7 +867,15 @@ impl super::App {
                 self.request_close(event_loop, None);
             }
             super::JadixUserEvent::SecondInstance(launch) => {
-                if let Some(window) = super::windows().first() {
+                let windows = super::windows();
+                let window = windows
+                    .iter()
+                    .filter(|window| {
+                        self.lifecycle_window(window.id())
+                            .is_some_and(|native| native.is_visible() == Some(true))
+                    })
+                    .min_by_key(|window| self.startup_window != Some(window.id()));
+                if let Some(window) = window {
                     let _scope = if self.window_registry.primary_id() == Some(window.id()) {
                         super::window_scope::enter_primary()
                     } else {
@@ -765,12 +951,19 @@ impl super::App {
 
     fn create_primary_if_needed(&mut self, event_loop: &dyn ActiveEventLoop) {
         if self.state.borrow().is_none()
+            && self.bootstrap.is_none()
             && self.detached_gpu.is_none()
-            && (!cfg!(target_arch = "wasm32") || self.window_registry.primary_id().is_none())
+            && self.window_registry.primary_id().is_none()
         {
             super::window_chrome::update_system_theme(event_loop.system_theme());
             let attrs = super::window_lifecycle::prepare_attributes(
-                self.window_options.to_window_attributes(),
+                self.window_options.window_attributes(
+                    self.window_options.wants_dcomp_swapchain()
+                        && !self
+                            .startup
+                            .as_ref()
+                            .is_some_and(|startup| startup.borrow().system_presentation()),
+                ),
                 self.window_options.persistence_label(true),
             );
             let window = event_loop.create_window(attrs).expect("create window");
@@ -787,7 +980,11 @@ impl super::App {
             super::window_chrome::apply_created_window(
                 window.as_ref(),
                 &self.window_options,
-                self.window_options.wants_dcomp_swapchain(),
+                self.window_options.wants_dcomp_swapchain()
+                    && !self
+                        .startup
+                        .as_ref()
+                        .is_some_and(|startup| startup.borrow().system_presentation()),
             );
             super::window_lifecycle::emit_created(
                 window.as_ref(),
@@ -796,31 +993,27 @@ impl super::App {
             let window: Arc<dyn Window> = Arc::from(window);
 
             self.window_registry.insert_primary(window.clone());
-            #[cfg(target_arch = "wasm32")]
-            {
-                super::window_chrome::apply_created_window(
-                    window.as_ref(),
-                    &self.window_options,
-                    false,
-                );
-                let options = self.window_options.clone();
-                let state_ref = self.state.clone();
-                wasm_bindgen_futures::spawn_local(async move {
-                    let state = super::state::AppState::new_bootstrap(window, options).await;
-                    *state_ref.borrow_mut() = Some(state);
-                    let _ = super::ui_bridge::send_user_event(super::JadixUserEvent::WebReady);
-                });
+            super::runtime::register_window(&window, true);
+            if let Some(startup) = &self.startup {
+                startup.borrow_mut().attach();
+                if startup.borrow().system_presentation() {
+                    match startup
+                        .borrow()
+                        .present_system(window.clone(), self.window_options.icon.as_ref())
+                    {
+                        Ok(presentation) => self.startup_presentation = presentation,
+                        Err(error) => log::warn!(
+                            "startup System Unsupported: {error}; using neutral runtime wait"
+                        ),
+                    }
+                }
+                startup.borrow_mut().start();
             }
-            #[cfg(not(target_arch = "wasm32"))]
-            {
-                let state =
-                    crate::utils::block_on::block_on(super::state::AppState::new_bootstrap(
-                        window.clone(),
-                        self.window_options.clone(),
-                    ));
-                *self.state.borrow_mut() = Some(state);
-                self.mount_primary(window, event_loop);
-            }
+            let options = self.window_options.clone();
+            self.bootstrap = Some(Box::pin(super::state::AppState::try_new_bootstrap(
+                window, options,
+            )));
+            self.poll_bootstrap(event_loop);
         }
     }
 
@@ -850,6 +1043,7 @@ impl super::App {
             crate::app::devtools::DevToolsState::enable_for_window();
         }
         let builder_ref = self.app_builder.clone();
+        let startup_ref = self.startup.clone();
         let (owner, _) = crate::core::reactivity::create_root(|| {
             crate::core::reactivity::mark_next_effect_as_ui_root();
             crate::core::reactivity::create_effect(move || {
@@ -861,7 +1055,9 @@ impl super::App {
                 );
                 log::debug!("root_effect: before app_builder");
                 crate::style::track_style_changes();
-                let new_root = super::prepare_primary_ui((builder_ref.borrow_mut())());
+                let new_root = super::startup::build_root(startup_ref.as_deref(), || {
+                    (builder_ref.borrow_mut())()
+                });
                 log::debug!(
                     "root_effect: after app_builder children={}",
                     new_root.children.len()
@@ -887,10 +1083,26 @@ impl super::App {
         // Prime the real UI while hidden so ShowWindow never exposes the
         // unpainted native client area. Some surfaces require a visible
         // window: the normal redraw below remains their retry path.
+        self.mount_startup_window(event_loop);
+        let independent = self.startup_window.is_some();
         #[cfg(target_os = "windows")]
         self.handle_redraw_requested(window.id(), event_loop);
-        window.set_visible(true);
-        window.focus_window();
+        window.set_visible(!independent);
+        #[cfg(target_os = "windows")]
+        if let Some(state) = self.state.borrow_mut().as_mut() {
+            state.force_present = true;
+        }
+        if !independent
+            && !self.is_suspended
+            && window.is_minimized() != Some(true)
+            && !cfg!(any(
+                target_os = "android",
+                target_os = "ios",
+                target_env = "ohos"
+            ))
+        {
+            window.focus_window();
+        }
         window.request_redraw();
         crate::platform::glass_on_shown(window.as_ref());
         let composition = self
@@ -908,6 +1120,7 @@ impl super::App {
 
 impl ApplicationHandler for super::App {
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.poll_bootstrap(event_loop);
         let _work = super::frame_budget::begin_work(super::frame_budget::WorkKind::Shared);
         // A producer must not keep us in try_recv forever, starving OS input.
         const EVENT_BATCH: usize = 64;
@@ -922,7 +1135,7 @@ impl ApplicationHandler for super::App {
                 return;
             }
         }
-        if super::ui_bridge::drain_ui_tasks() != 0 {
+        if super::ui_bridge::drain_ui_tasks() != 0 || super::pending_images::has_pending() {
             crate::app::runtime::request_redraw_all();
         }
         // wake_up may coalesce. Re-arm even if exactly EVENT_BATCH were queued;
@@ -934,6 +1147,7 @@ impl ApplicationHandler for super::App {
     }
 
     fn can_create_surfaces(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.surfaces_available = true;
         self.create_primary_if_needed(event_loop);
         #[cfg(all(feature = "a11y", target_env = "ohos"))]
         if self.accesskit_adapter.is_none() {
@@ -958,13 +1172,50 @@ impl ApplicationHandler for super::App {
         }
     }
 
-    #[cfg(all(feature = "a11y", target_env = "ohos"))]
     fn destroy_surfaces(&mut self, _event_loop: &dyn ActiveEventLoop) {
-        self.accesskit_adapter = None;
-        self.secondary_accesskit.clear();
+        self.surfaces_available = false;
+        self.bootstrap = None;
+        self.startup_presentation = None;
+        if let Some(startup) = &self.startup {
+            startup.borrow_mut().detach();
+        }
+        #[cfg(feature = "a11y")]
+        {
+            self.accesskit_adapter = None;
+            self.secondary_accesskit.clear();
+        }
+        {
+            let secondary_ids: Vec<_> = self.secondaries.borrow().keys().copied().collect();
+            for id in secondary_ids {
+                self.drop_secondary(id);
+            }
+            drop(self.window_registry.drain_secondaries());
+            let _scope = super::window_scope::enter_primary();
+            let state = self.state.borrow_mut().take();
+            let window = state.as_ref().map(|state| state.window.clone());
+            self.primary_owner.take();
+            crate::text::clear_shared_font_system();
+            crate::text::shutdown_layout_text();
+            if let Some(id) = self.window_registry.primary_id() {
+                super::runtime::unregister_window(id);
+                self.window_registry.remove_primary();
+                super::invalidation::forget(super::window_scope::WindowScope::Primary);
+            }
+            drop(state);
+            super::portal_overlay::drop_overlay_stack(super::window_scope::WindowScope::Primary);
+            if let Some(window) = window {
+                crate::platform::glass_detach(window.as_ref());
+            }
+            self.frame_pacers.clear();
+            self.window_modifiers.clear();
+            self.cancel_pointer_session();
+            self.pointer_window = None;
+            self.ime_owner_window = None;
+        }
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        self.poll_bootstrap(event_loop);
         let _window = super::window_scope::enter_primary();
         let _work = super::frame_budget::begin_work(super::frame_budget::WorkKind::Shared);
         if crate::style::take_system_theme_refresh() {
@@ -1338,6 +1589,7 @@ impl ApplicationHandler for super::App {
             state.window.request_redraw();
         }
         self.is_suspended = false;
+        self.event_loop_proxy.wake_up();
     }
 
     fn suspended(&mut self, _event_loop: &dyn ActiveEventLoop) {
@@ -1347,6 +1599,27 @@ impl ApplicationHandler for super::App {
     fn window_event(&mut self, event_loop: &dyn ActiveEventLoop, id: WindowId, event: WindowEvent) {
         if !self.window_registry.contains(id) {
             return;
+        }
+        if (!self.surfaces_available || self.is_suspended)
+            && matches!(event, WindowEvent::RedrawRequested)
+        {
+            return;
+        }
+        if self.state.borrow().is_none()
+            && Some(id) == self.window_registry.primary_id()
+            && matches!(
+                event,
+                WindowEvent::RedrawRequested
+                    | WindowEvent::SurfaceResized(_)
+                    | WindowEvent::ScaleFactorChanged { .. }
+            )
+        {
+            if let Some(presentation) = &mut self.startup_presentation {
+                if let Err(error) = presentation.redraw() {
+                    log::warn!("startup early redraw failed: {error}");
+                    self.startup_presentation = None;
+                }
+            }
         }
         if crate::style::take_system_theme_refresh() {
             super::window_chrome::update_system_theme(event_loop.system_theme());
@@ -1388,6 +1661,26 @@ impl ApplicationHandler for super::App {
             ..
         } = &event
         {
+            if self.state.borrow().is_none()
+                && self.bootstrap.is_none()
+                && Some(id) == self.window_registry.primary_id()
+                && event.state.is_pressed()
+                && !event.repeat
+                && event.logical_key
+                    == winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter)
+            {
+                let epoch = self
+                    .startup
+                    .as_ref()
+                    .map(|startup| startup.borrow().epoch());
+                if let Some(epoch) = epoch {
+                    self.handle_user_event(
+                        event_loop,
+                        super::JadixUserEvent::StartupRetry { epoch },
+                    );
+                    return;
+                }
+            }
             if self.handle_fullscreen_shortcut(id, event) {
                 return;
             }
@@ -1541,6 +1834,11 @@ impl ApplicationHandler for super::App {
                 }
                 if focused {
                     super::native_menu::focus_window(id);
+                    if self.startup_window == Some(id) {
+                        let _ = super::ui_bridge::send_user_event(
+                            super::JadixUserEvent::StartupChanged,
+                        );
+                    }
                 }
                 let is_primary = self.window_registry.primary_id() == Some(id);
                 if !is_primary {
@@ -1686,6 +1984,14 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
     window_options: super::WindowOptions,
     app_builder: F,
 ) {
+    run_startup(window_options, None, app_builder);
+}
+
+pub(super) fn run_startup<F: FnMut() -> Element + 'static>(
+    window_options: super::WindowOptions,
+    startup: Option<super::StartupHandle>,
+    app_builder: F,
+) {
     crate::logging::init();
 
     let (user_tx, user_rx) = std::sync::mpsc::channel();
@@ -1732,6 +2038,7 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
         user_rx,
     );
     app.instance_guard = instance_guard;
+    app.startup = startup;
     event_loop_proxy.wake_up();
     #[cfg(not(target_arch = "wasm32"))]
     crate::platform::run_winit_app(event_loop, app);
@@ -1747,6 +2054,12 @@ pub(super) fn create_app(
 ) -> super::App {
     crate::authoring::window::activate(super::window_scope::WindowScope::Primary);
     super::App {
+        startup_presentation: None,
+        surfaces_available: false,
+        startup: None,
+        startup_window: None,
+        startup_window_presented: false,
+        bootstrap: None,
         detached_gpu: None,
         primary_owner: None,
         instance_guard: None,

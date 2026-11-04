@@ -11,7 +11,7 @@ use crate::winit_core::window::{
     WindowAttributes, WindowButtons, WindowId, WindowLevel, WindowPositioner, WindowType,
 };
 use dispatch2::MainThreadBound;
-use dpi::{Position, Size};
+use dpi::{PhysicalPosition, Position, Size};
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::{MainThreadMarker, Message, define_class};
 use objc2_app_kit::{NSPanel, NSResponder, NSWindow};
@@ -331,6 +331,16 @@ impl CoreWindow for Window {
 
     fn set_cursor_hittest(&self, hittest: bool) -> Result<(), RequestError> {
         self.maybe_wait_on_main(|delegate| delegate.set_cursor_hittest(hittest));
+        Ok(())
+    }
+
+    fn global_cursor_position(&self) -> Result<PhysicalPosition<i32>, RequestError> {
+        self.maybe_wait_on_main(|delegate| delegate.global_cursor_position())
+    }
+
+    fn set_opacity(&self, opacity: f32) -> Result<(), RequestError> {
+        crate::winit_core::window::validate_opacity(opacity)?;
+        self.maybe_wait_on_main(move |delegate| delegate.window().setAlphaValue(opacity as f64));
         Ok(())
     }
 

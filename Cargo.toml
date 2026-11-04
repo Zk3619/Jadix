@@ -1,5 +1,49 @@
 [workspace]
 members = ["crates/*", "examples/*"]
+default-members = [
+    "crates/jadix",
+    "crates/jadix_accesskit_ohos",
+    "crates/jadix_animation",
+    "crates/jadix_clipboard",
+    "crates/jadix_components",
+    "crates/jadix_core",
+    "crates/jadix_cosmic_text",
+    "crates/jadix_dnd",
+    "crates/jadix_document",
+    "crates/jadix_glyphon",
+    "crates/jadix_hot_reload",
+    "crates/jadix_layout",
+    "crates/jadix_lsp",
+    "crates/jadix_lucide",
+    "crates/jadix_macros",
+    "crates/jadix_media",
+    "crates/jadix_native",
+    "crates/jadix_net",
+    "crates/jadix_renderer",
+    "crates/jadix_shell",
+    "crates/jadix_splash",
+    "crates/jadix_style_tokens",
+    "crates/jadix_taffy",
+    "crates/jadix_tasks",
+    "crates/jadix_theme",
+    "crates/jadix_tokio",
+    "crates/jadix_wgpu",
+    "crates/jadix_window_materials",
+    "crates/jadix_window_state",
+    "crates/jadix_winit",
+    "examples/calculator",
+    "examples/d3d11_probe",
+    "examples/frame_compare",
+    "examples/gallery",
+    "examples/gallery_mobile",
+    "examples/gallery_web",
+    "examples/gpu_probe",
+    "examples/harmonyos",
+    "examples/jadix_ide",
+    "examples/jadix_md",
+    "examples/native-controls",
+    "examples/portable-contract",
+]
 exclude = ["examples/config", "vendor/gpui-pre-windows-0.3.9", "vendor/gpui-fast-windows-0.1.9"]
 resolver = "2"
 
@@ -12,15 +56,20 @@ repository = "https://github.com/Zk3619/Jadix"
 # Single source of truth for versions. Member crates use `{ workspace = true }`
 # plus crate-local features / optional. Package features and optionality remain local.
 [workspace.dependencies]
+jadix_3d = { path = "crates/jadix_3d", version = "0.1.0" }
+jadix_live2d = { path = "crates/jadix_live2d", version = "0.1.0", default-features = false }
 jadix_window_materials = { path = "crates/jadix_window_materials", version = "0.1.0", default-features = false }
 jadix_renderer = { path = "crates/jadix_renderer", version = "0.1.0", default-features = false }
 jadix_theme = { path = "crates/jadix_theme", version = "0.1.0", default-features = false }
 jadix_animation = { path = "crates/jadix_animation", version = "0.1.0", default-features = false }
 jadix_layout = { path = "crates/jadix_layout", version = "0.1.0", default-features = false }
 jadix_core = { path = "crates/jadix_core", version = "0.1.0", default-features = false }
+jadix_native = { path = "crates/jadix_native", version = "0.1.0", default-features = false }
+jadix_shell = { path = "crates/jadix_shell", version = "0.1.0", default-features = false }
 # --- path crates (version required so they are not `*` wildcards for cargo-deny / publish) ---
-jadix = { path = "crates/jadix", version = "0.1.0", default-features = false }
-jadix_components = { path = "crates/jadix_components", version = "0.1.0", default-features = false }
+jadix = { path = "crates/jadix", version = "0.1.0", default-features = false, features = ["gpu"] }
+jadix_splash = { path = "crates/jadix_splash", version = "0.1.0", default-features = false }
+jadix_components = { path = "crates/jadix_components", version = "0.1.0", default-features = false, features = ["gpu"] }
 jadix_dnd = { path = "crates/jadix_dnd", version = "0.1.0", default-features = false }
 jadix_macros = { path = "crates/jadix_macros", version = "0.1.0" }
 jadix_style_tokens = { path = "crates/jadix_style_tokens", version = "0.1.0" }

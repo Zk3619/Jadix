@@ -78,6 +78,7 @@ fn parse_accesskit_role(raw: &str) -> Option<Role> {
         "radio" | "radiobutton" | "radio_button" => Some(Role::RadioButton),
         "radiogroup" | "radio_group" => Some(Role::RadioGroup),
         "slider" => Some(Role::Slider),
+        "progressbar" | "progressindicator" | "progress_indicator" => Some(Role::ProgressIndicator),
         "textinput" | "text_input" | "textfield" => Some(Role::TextInput),
         "label" => Some(Role::Label),
         "group" => Some(Role::Group),
@@ -591,7 +592,7 @@ fn build_node(el: &Element, for_map: &HashMap<String, String>) -> Node {
             _ => {}
         }
     }
-    if role == Role::Slider {
+    if matches!(role, Role::Slider | Role::ProgressIndicator) {
         let number = |name: &str| {
             el.attrs
                 .get(name)

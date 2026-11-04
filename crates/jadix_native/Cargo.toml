@@ -1,0 +1,48 @@
+[package]
+name = "jadix_native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Portable native presentation, platform hosts and layout for Jadix"
+readme = "README.md"
+
+[dependencies]
+jadix_core.workspace = true
+taffy.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64 = "=0.22.1"
+sha2 = "=0.10.9"
+jadix_animation = { workspace = true, optional = true, features = ["animation-base"] }
+jadix_document = { workspace = true, optional = true, features = ["syntax"] }
+
+[dev-dependencies]
+
+[features]
+default = []
+motion = ["dep:jadix_animation"]
+code = ["dep:jadix_document"]
+android = ["dep:jni"]
+dom = ["dep:wasm-bindgen", "dep:web-sys", "dep:js-sys"]
+uikit = []
+windows = ["dep:windows-sys", "dep:windows", "dep:windows-core", "dep:ttf-parser"]
+windows-gpu = ["windows", "dep:wgpu", "dep:rwh_06", "dep:pollster"]
+ohos = []
+
+[target.'cfg(windows)'.dependencies]
+windows-core = { workspace = true, optional = true }
+ttf-parser = { workspace = true, optional = true }
+wgpu = { workspace = true, optional = true, features = ["dx12"] }
+rwh_06 = { workspace = true, optional = true }
+pollster = { version = "0.4", optional = true }
+windows = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com", "Win32_System_Ole", "Win32_System_Variant", "Win32_UI_Accessibility"] }
+windows-sys = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_Graphics_Gdi", "Win32_Networking_WinHttp", "Win32_System_LibraryLoader", "Win32_System_Threading", "Win32_System_Time", "Win32_UI_Accessibility", "Win32_UI_Controls", "Win32_UI_HiDpi", "Win32_UI_Input_Ime", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(target_os = "android")'.dependencies]
+jni = { workspace = true, optional = true }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = { workspace = true, optional = true }
+js-sys = { version = "0.3", optional = true }
+web-sys = { workspace = true, optional = true, features = ["Window", "Document", "Element", "Node", "NodeList", "HtmlElement", "HtmlImageElement", "HtmlDialogElement", "MouseEvent", "HtmlCollection", "HtmlInputElement", "HtmlSelectElement", "HtmlOptionElement", "HtmlTextAreaElement", "HtmlButtonElement", "CssStyleDeclaration", "DomRect", "Event", "EventTarget", "InputEvent", "CompositionEvent", "FocusEvent", "FocusOptions", "ScrollIntoViewOptions", "ScrollLogicalPosition", "KeyboardEvent", "FontFaceSet"] }

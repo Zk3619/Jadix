@@ -1,0 +1,42 @@
+[package]
+name = "jadix_splash"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Startup coordination, native splash presentation and optional splash components for Jadix"
+readme = "README.md"
+
+[features]
+default = []
+components = ["dep:jadix_components"]
+macros = ["jadix/macros", "jadix_components?/macros"]
+system = ["dep:softbuffer"]
+
+[dependencies]
+jadix.workspace = true
+jadix_components = { workspace = true, optional = true }
+jadix_tasks.workspace = true
+log.workspace = true
+winit.workspace = true
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+web-sys = { workspace = true, features = ["Document", "Element", "HtmlElement", "Window"] }
+
+[target.'cfg(any(target_os = "windows", target_os = "macos", all(target_os = "linux", not(target_env = "ohos"))))'.dependencies]
+softbuffer = { version = "0.4.8", optional = true, default-features = false, features = ["x11", "x11-dlopen", "wayland", "wayland-dlopen"] }
+
+[[test]]
+name = "splash"
+required-features = ["components", "macros"]
+
+[[example]]
+name = "startup"
+required-features = ["components", "macros"]
+
+[[example]]
+name = "startup_media"
+required-features = ["components", "macros"]
+
+[[example]]
+name = "startup_core"

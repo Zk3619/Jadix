@@ -9,6 +9,8 @@
 `remote-asset-cache` 启用 remote-asset 与 Moka 字节缓存，需要显式安装 CachedRemoteAssetFetcher。
 详见[异步架构](async-architecture.md)、[共享远程资源缓存](remote-assets.md)与[状态管理](state-management.md)。
 
+启动协调 API 位于独立的 `jadix_splash`；其 `system` feature 默认关闭，仅为 Windows、macOS、Linux X11／Wayland 引入 softbuffer CPU 早期绘制。移动系统启动资源由宿主打包，运行期开屏可选择自定义 Element 或 `jadix_splash::Splash`，桌面可额外选择 `StartupConfig::window` 在独立次窗口呈现；后两种方式均依赖渲染运行时。详见[启动与开屏](startup.md)。
+
 ## 包与能力边界
 
 本页以当前 Cargo 清单为准，区分核心、默认能力、可选 feature 和兼容别名。独立包不等于可选依赖；安装和产品拆分见[迁移说明](migration.md)。
@@ -40,9 +42,14 @@
 | 开发与诊断 | `devtools`、`hot-reload`、`performance`、`runtime-logging`、`tracing`、`gallery-tests` | 默认关闭；示例可自行启用 | 响应式运行时及正常呈现流程 |
 
 “默认启用但可关闭”不是“始终属于不可裁剪核心”。例如默认窗口材质与 Shadcn 预设
-已经 feature 化，而基础文本编辑和内部 GPU 效果尚未 feature 化。
+已经 feature 化；完整 GPU 作者运行时、基础文本编辑与内部 GPU 效果由 `gpu` 一起控制。
 
-## 始终保留的框架核心（不受 feature 裁剪）
+## GPU 产品核心与便携子集
+
+以下表格描述 `gpu` 开启时的完整产品核心。`gpu` 默认开启；关闭默认 features 后，
+仅选择宏与主题可构建无 GPU 的便携子集：共享 presentation／schema、Signal／Owner、
+容器、纯文本、Button 和 Input。它不包含窗口、字体光栅器、完整 CSS／产品库或原生系统控件。
+便携样例见 [portable-contract](../examples/portable-contract/README.md)。
 
 | 能力 | 默认状态 | 保留范围／原因 | 不包含的可选能力 |
 | --- | --- | --- | --- |
@@ -56,19 +63,21 @@
 | 基础图片 | 始终保留 | PNG 解码、RGBA 图片原语与光标图片机制 | JPEG/GIF/WebP/ICO 及额外图片格式、SVG/resvg、网络下载实现 |
 | 媒体与文件工具契约 | 始终保留 | 后端无关媒体播放接口、文本文件/资源工具、自动保存配置 | 内置音视频解码器或播放器后端（当前没有强制引入）、原生文件选择器 |
 
-关闭所有 feature **不是无依赖或无 GPU 的 crate**：上述核心仍存在。后续拆 crate 时，
-先拆模型、算法与系统桥接，再通过门面转发，避免以空开关冒充已经移出的核心能力。
+关闭默认 features 并仅选择宏／主题会排除 GPU／窗口依赖；其他 GPU 相关 feature 会重新启用
+`gpu`。Cargo feature 会合并，应检查最终应用依赖，不能仅凭某个依赖写了
+`default-features = false` 判断整个产品没有 GPU。便携 Native 布局由 `jadix_native` 提供。
 
 ## 默认配置与主题
 
 | Feature | 默认开启 | 内容／依赖关系 | 关闭后的行为 |
 | --- | --- | --- | --- |
+| `gpu` | 是 | 完整 GPU 作者面、renderer、window、字体／图片及平台宿主；GPU 相关可选能力会启用此项 | 保留登记的便携作者子集、共享响应式／协议与可选宏／主题；不创建平台控件 |
 | `product-tests` | 否 | 同源宿主测试桥，启用 drag 与宏以保留历史回归身份 | 不参与生产产品分发 |
-| `file-persistence` | 否 | 窗口状态及编辑器等落盘能力 | 不写入持久化文件；内存状态仍保留 |
+| `file-persistence` | 是 | 窗口状态及编辑器等落盘能力；启用 `gpu` | 不写入持久化文件；内存状态仍保留 |
 | `native-clipboard` | 是 | 可选 `jadix_clipboard` 及系统文本读写；快捷键和输入协议不随之裁剪 | 读取返回 None，写入不访问系统剪贴板；不维护隐式替代剪贴板 |
 | `macros` | 是（兼容现有默认作者面） | 可选 `jadix_macros`、`ui!`、`#[component]`、`#[main]` 及原语的宏专用 Props | 纯框架关闭默认 features 后可用普通函数／Builder；独立产品通过各自的 `macros` feature 显式选择宏作者入口 |
 | `drag` | 是（由组件间接开启） | 基础指针会话及 routing/runtime 宿主桥；不包含高层 DnD 实现 | 关闭后指针会话／注册不启动；选择与原生窗口拖动仍由核心输入处理 |
-| `default` | 是 | `macros`、`backend-dx12`、`backend-gles`、`backend-metal`、`window-materials`、`theme-shadcn`、`animation-base`、`native-clipboard`、`images` | `default-features = false` 后由应用自行选择后端、剪贴板及图片格式 |
+| `default` | 是 | `gpu`、`macros`、`backend-dx12`、`backend-gles`、`backend-metal`、`window-materials`、`theme-shadcn`、`animation-base`、`native-clipboard`、`images`、`file-persistence` | `default-features = false` 后由应用选择 GPU 产品或便携子集 |
 | `theme-shadcn` | 是 | 将 Shadcn 加入可选预设列表 | 基础令牌仍在核心；不再加入预设列表 |
 | `theme-fluent` | 否 | Fluent 调色板、字体、尺寸与滚动条配置 | 不编译提供者，不允许选择该预设 |
 | `theme-material3` | 否 | Material 3 调色板、字体、尺寸与焦点环配置 | 同上 |
@@ -136,6 +145,7 @@ LSP 从 IDE 示例提取为可选传输模块；调用方提供消息回调，�
 | `webview` | 否 | `windows-composition` + 平台 WebView 依赖 + HTML/资源桥接 | 不编译嵌入式 WebView；不是普通文档视图的前置条件 |
 | `native-menu` | 否 | muda，Windows/macOS 原生菜单 | 不安装原生菜单桥接 |
 | `system-tray` | 否 | tray-icon + 菜单依赖 | 不加入系统托盘 |
+| `autostart` | 否 | auto-launch；Windows 当前用户 Run key、macOS LaunchAgent、Linux XDG Autostart | 不注册登录启动项 |
 | `file-dialog` | 否 | 桌面 rfd | 保留路径信号，选择函数返回空结果并记录警告 |
 | `a11y` | 否 | AccessKit 与平台无障碍桥接 | 基础语义属性仍可声明，不安装平台桥接 |
 | `i18n` | 否 | ICU4X、目录与 locale overlay | 基础文案回退仍在核心，不加入 ICU4X |
@@ -182,6 +192,7 @@ AccessKit 的 Windows 依赖由 `a11y` 接管，不再把隐式依赖名 `access
 | `cursor-images` | 否，兼容空开关 | 无额外能力 | 光标图片核心始终保留；不是裁剪开关 |
 | `compute` | 否 | 可选 wgpu compute 效果，还需设备能力 | 使用已有非 compute 路径 |
 | `scene3d` | 否 | 实验性 scene3d | 不编译该扩展 |
+| `scene3d-models` | 否 | jadix_3d 的 glTF/GLB/VRM 场景与骨骼动画；参见 [能力说明](desktop-capabilities.md) | 不编译 glTF 模型依赖 |
 | `image-stream` | 否 | YUV→RGBA 帧流接口，无解码器依赖 | 不加入该帧流扩展 |
 | `remote-asset` | 否 | 应用注入 RemoteAssetFetcher，框架不强制引入 HTTP 客户端 | 不启用远程图片加载桥接 |
 | `remote-asset-cache` | 否 | `remote-asset` + Moka sync；显式安装 CachedRemoteAssetFetcher 后共享编码字节、合并同 URL 下载 | 不编译该缓存，也不安装 fetcher |

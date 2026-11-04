@@ -4,6 +4,10 @@
 
 无 UI 依赖的 Owner 作用域、Signal、Store 与响应式调度，不安装窗口或绘制器。
 
+实验性的 `presentation` 模块提供共享节点／提交、事件、测量与矩形混合几何协议。
+GPU 门面以 `jadix::presentation` 重导出同一模块；无窗口消费者可以直接使用本包，
+无需引入渲染依赖。
+
 本包属于 [Jadix](https://github.com/Zk3619/Jadix)。**Alpha；版本 `0.1.0`。**
 
 ## 安装

@@ -390,6 +390,7 @@ fn apply_i18n_file(path: &str) {
 pub struct AppBuilder {
     config: AppConfig,
     children: Vec<Element>,
+    startup: Option<super::StartupHandle>,
 }
 
 /// Start an [`AppBuilder`]. Equivalent RSX tag is [`crate::components::App`].
@@ -405,6 +406,10 @@ pub fn launch<F: FnMut() -> Element + 'static>(root: F) {
 }
 
 impl AppBuilder {
+    pub fn startup(mut self, startup: impl Into<super::StartupHandle>) -> Self {
+        self.startup = Some(startup.into());
+        self
+    }
     pub fn new() -> Self {
         Self::default()
     }
@@ -669,14 +674,14 @@ impl AppBuilder {
         if let Some(enabled) = self.config.opacity_groups {
             crate::core::tree::set_opacity_groups_enabled(enabled);
         }
-        super::run_with(self.config.into_window_options(), ui);
+        super::lifecycle::run_startup(self.config.into_window_options(), self.startup, ui);
     }
 
     /// **Builder 程序入口**：本 builder 的配置作为文档壳，每帧把 `body` 当作其子节点重建。
     pub fn mount<F: FnMut() -> Element + 'static>(self, mut body: F) {
         let config = self.config;
         let opts = config.clone().into_window_options();
-        super::run_with(opts, move || {
+        super::lifecycle::run_startup(opts, self.startup, move || {
             materialize_app_shell(config.clone(), take_packed(body()))
         });
     }

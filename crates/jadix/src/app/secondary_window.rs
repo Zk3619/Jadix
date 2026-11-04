@@ -3,7 +3,7 @@
 //! Shares the primary [`super::state::AppState`]'s `Device` / `Queue` / `Instance`,
 //! and hosts an independent surface, layout tree, and root element.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use wgpu::util::DeviceExt;
@@ -74,6 +74,7 @@ pub(super) struct SecondaryWindowState {
     scrollbar_activity: HashMap<String, ([f32; 2], [web_time::Instant; 2])>,
     scroll_motion: HashMap<String, [super::scroll_support::SmoothScrollAxis; 2]>,
     last_frame_at: web_time::Instant,
+    gif_textures: HashSet<String>,
     #[allow(dead_code)]
     pub(super) damage_rect: Option<[f32; 4]>,
     pub(super) ime_allowed_latched: bool,
@@ -97,6 +98,10 @@ pub(super) struct SecondaryWindowState {
 }
 
 impl SecondaryWindowState {
+    pub(super) fn alpha_mode(&self) -> wgpu::CompositeAlphaMode {
+        self.config.alpha_mode
+    }
+
     pub(super) fn scroll_animation_active(&self) -> bool {
         !self.scroll_motion.is_empty()
     }
@@ -253,6 +258,7 @@ impl SecondaryWindowState {
             scrollbar_activity: HashMap::new(),
             scroll_motion: HashMap::new(),
             last_frame_at: web_time::Instant::now(),
+            gif_textures: HashSet::new(),
             damage_rect: None,
             ime_allowed_latched: false,
             os_focused: false,
@@ -360,6 +366,7 @@ impl SecondaryWindowState {
             scrollbar_activity: HashMap::new(),
             scroll_motion: HashMap::new(),
             last_frame_at: web_time::Instant::now(),
+            gif_textures: HashSet::new(),
             damage_rect: None,
             ime_allowed_latched: false,
             os_focused: false,
@@ -490,6 +497,7 @@ impl SecondaryWindowState {
             self.window.request_redraw();
         }
         crate::style::tick_animations(frame_dt);
+        super::pending_images::tick_active_gif_textures(frame_dt, &self.gif_textures);
         self.last_frame_at = now;
         crate::utils::icon_provider::sync_icon_hover(&mut self.root_element);
         if crate::authoring::icon::tick_tree(&mut self.root_element, frame_dt) {
@@ -753,6 +761,12 @@ impl SecondaryWindowState {
             .chrome_start
             .min(scaled_input_chrome.len());
         let scaled_tex = scale_textured_draws(&render_result.textured_draws, scale);
+        self.gif_textures = super::pending_images::active_gif_textures(
+            render_result
+                .textured_draws
+                .iter()
+                .map(|draw| draw.texture_key.as_str()),
+        );
         let overlay_tex_start = render_result
             .overlay_split
             .textured_start
@@ -1167,6 +1181,9 @@ impl SecondaryWindowState {
             self.window.request_redraw();
         }
         self.text_nodes = render_result.text_nodes;
+        if super::pending_images::any_active_gif_playing(&self.gif_textures) {
+            self.window.request_redraw();
+        }
         Ok(())
     }
 
@@ -1192,6 +1209,9 @@ impl SecondaryWindowState {
         self.image_textures.begin_frame();
         for draw in scaled_tex {
             self.image_textures.touch(&draw.texture_key);
+            if self.image_textures.get(&draw.texture_key).is_none() {
+                super::pending_images::mark_src_needed(&draw.texture_key);
+            }
         }
         let _ = crate::style::flush_gradient_textures(|key| self.image_textures.get(key).is_some());
         let _ = crate::utils::icon_texture::flush_icon_textures(|key| {

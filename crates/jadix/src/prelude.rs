@@ -123,6 +123,7 @@ pub use crate::app::{
     ResourceState, ScrollFreeze, WindowBackdrop, WindowClosed, WindowHandle, WindowOptions,
     WindowSession,
 };
+pub use crate::app::{run_with_startup, StartupHandle, StartupHost};
 pub use crate::core::reactivity::{
     batch, component_root, create_context, create_memo, create_signal, isolate_reads,
     provide_context, untrack, use_context, use_scoped_signal, use_signal, with_child_owner, Signal,

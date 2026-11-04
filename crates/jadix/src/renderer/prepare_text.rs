@@ -8,8 +8,8 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard, OnceLock};
-use web_time::{Duration, Instant};
 use unicode_segmentation::UnicodeSegmentation;
+use web_time::{Duration, Instant};
 
 use wgpu::{Device, Queue, SurfaceConfiguration};
 

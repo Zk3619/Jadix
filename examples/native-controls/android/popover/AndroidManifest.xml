@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="dev.jadix.popover">
+    <uses-sdk android:minSdkVersion="28" android:targetSdkVersion="35" />
+    <instrumentation android:name="dev.jadix.nativeui.PopoverChecks" android:targetPackage="dev.jadix.popover" android:label="Jadix Popover checks" />
+    <application android:label="Jadix Popover" android:theme="@android:style/Theme.Material.Light.NoActionBar" android:debuggable="true" android:extractNativeLibs="true" android:allowBackup="false">
+        <activity android:name="dev.jadix.nativeui.MainActivity" android:exported="true" android:windowSoftInputMode="adjustResize">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

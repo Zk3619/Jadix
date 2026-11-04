@@ -8,8 +8,13 @@ use secondary_window::SecondaryUiBuilder;
 /// Wakes the event loop for hot reload (debug) and background tasks, and delivers
 /// AccessKit messages when feature `a11y` is enabled.
 pub(super) enum JadixUserEvent {
-    #[cfg(target_arch = "wasm32")]
-    WebReady,
+    StartupChanged,
+    StartupRetry {
+        epoch: u64,
+    },
+    StartupWindowHandoff {
+        epoch: u64,
+    },
     #[cfg(all(debug_assertions, feature = "hot-reload"))]
     HotReloadWake,
     /// Create and show a secondary window (see [`multi_window::open_secondary_window`]).
@@ -31,8 +36,11 @@ pub(super) enum JadixUserEvent {
 impl std::fmt::Debug for JadixUserEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            #[cfg(target_arch = "wasm32")]
-            Self::WebReady => f.write_str("WebReady"),
+            Self::StartupChanged => f.write_str("StartupChanged"),
+            Self::StartupRetry { epoch } => f.debug_tuple("StartupRetry").field(epoch).finish(),
+            Self::StartupWindowHandoff { epoch } => {
+                f.debug_tuple("StartupWindowHandoff").field(epoch).finish()
+            }
             #[cfg(all(debug_assertions, feature = "hot-reload"))]
             Self::HotReloadWake => f.write_str("HotReloadWake"),
             Self::OpenWindow { options, .. } => f
@@ -56,6 +64,8 @@ impl From<crate::a11y::winit_adapter::Event> for JadixUserEvent {
     }
 }
 
+#[cfg(all(feature = "autostart", any(target_os = "windows", target_os = "macos", all(target_os = "linux", not(target_env = "ohos")))))]
+pub use crate::autostart;
 pub mod damage;
 pub(crate) mod draw_cull;
 pub(crate) mod frame_budget;
@@ -138,7 +148,9 @@ mod native_acceptance_tests;
 #[cfg(all(test, windows))]
 #[path = "app/tests/native_cost_tests.rs"]
 mod native_cost_tests;
+pub mod startup;
 pub mod tasks;
+pub use startup::{StartupHandle, StartupHost};
 #[cfg(test)]
 #[path = "app/tests/support.rs"]
 pub(crate) mod test_support;
@@ -157,8 +169,9 @@ pub use frame_pacing::set_frame_rate_limit;
 pub use icons::AppIcon;
 pub use instance::{set_second_instance_handler, InstanceLaunch, InstancePolicy};
 pub use multi_window::{
-    current_window, open_secondary_window, open_secondary_window_title_only,
-    open_secondary_window_with, shared_slot, windows, WindowHandle,
+    current_global_cursor_position, current_window, open_secondary_window,
+    open_secondary_window_title_only, open_secondary_window_with, shared_slot, windows,
+    InputRegionRect, PointerPassthrough, WindowHandle,
 };
 pub use portal_overlay::{
     page_scroll_locked, parse_scroll_freeze, set_page_scroll_locked, set_scroll_freeze,
@@ -213,6 +226,13 @@ struct LongPressTrack {
 }
 
 struct App {
+    surfaces_available: bool,
+    startup_presentation: Option<Box<dyn startup::StartupPresentation>>,
+    startup: Option<StartupHandle>,
+    startup_window: Option<WindowId>,
+    startup_window_presented: bool,
+    bootstrap:
+        Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<AppState, String>>>>>,
     detached_gpu: Option<lifecycle::DetachedGpu>,
     primary_owner: Option<crate::core::reactivity::OwnerHandle>,
     instance_guard: Option<instance::InstanceGuard>,
@@ -375,6 +395,14 @@ pub fn run<F: FnMut() -> Element + 'static>(app_builder: F) {
 /// 兼容：带创建期窗口选项启动。新代码请用 [`launch`] / [`app()`]`.mount`。
 pub fn run_with<F: FnMut() -> Element + 'static>(options: WindowOptions, app_builder: F) {
     lifecycle::run(options, app_builder);
+}
+
+pub fn run_with_startup<F: FnMut() -> Element + 'static>(
+    options: WindowOptions,
+    startup: impl Into<StartupHandle>,
+    app_builder: F,
+) {
+    lifecycle::run_startup(options, Some(startup.into()), app_builder);
 }
 
 /// HarmonyOS / OpenHarmony entry (gpui-template `openharmony_app`).

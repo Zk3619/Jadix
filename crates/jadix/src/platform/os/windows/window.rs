@@ -15,8 +15,9 @@ pub(crate) fn decorate_window_attributes(
     let mut win = WindowAttributesWindows::default();
     if !options.decorations {
         win = win
-            .with_undecorated_shadow(true)
-            .with_corner_preference(CornerPreference::Round);
+            .with_undecorated_shadow(false)
+            .with_border_color(None)
+            .with_corner_preference(CornerPreference::DoNotRound);
     }
     #[cfg(feature = "windows-dwm")]
     if options.windows_extends_dwm_frame() {
@@ -58,6 +59,20 @@ pub(crate) fn apply_created_window(
     let Some(hwnd) = hwnd(window) else {
         return;
     };
+    if !options.decorations {
+        use windows_sys::Win32::Graphics::Dwm::{
+            DwmSetWindowAttribute, DWMNCRP_DISABLED, DWMWA_NCRENDERING_POLICY,
+        };
+        let policy = DWMNCRP_DISABLED;
+        unsafe {
+            let _ = DwmSetWindowAttribute(
+                hwnd,
+                DWMWA_NCRENDERING_POLICY as u32,
+                &policy as *const _ as _,
+                std::mem::size_of_val(&policy) as u32,
+            );
+        }
+    }
     if composition_swapchain || super::glass::has_host(hwnd) {
         let system_backdrop =
             options.uses_system_backdrop() && super::glass::system_backdrop_available();

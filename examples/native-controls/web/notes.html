@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jadix Notes</title>
+<style>body{margin:0}#app{width:100vw;height:100dvh;min-height:480px}</style>
+<div id="app"></div>
+<script type="module">
+import init, {mount, resize, state, restore, storage_result, unmount, take_error} from './pkg/jadix_native_controls.js';
+await init();
+const key = 'jadix.notes.v1';
+let observed = null;
+let persisted = null;
+let blocked = false;
+mount('app');
+try {
+    observed = localStorage.getItem(key);
+    if (observed !== null) restore(observed);
+} catch (error) {
+    blocked = true;
+    storage_result(String(error));
+}
+persisted = JSON.stringify(JSON.parse(state()).archive);
+const persist = () => {
+    if (state() === undefined) return;
+    const current = JSON.parse(state());
+    const archive = JSON.stringify(current.archive);
+    if (archive === persisted && !current.storage_pending) return;
+    try {
+        if (blocked && !current.replacement_confirmed) throw new Error('Stored notebook is unavailable. Export a backup; confirm Import to replace it.');
+        const actual = localStorage.getItem(key);
+        if (actual !== observed && !current.replacement_confirmed) throw new Error('Notebook changed in another tab. Export then reload, or confirm Import.');
+        localStorage.setItem(key, archive);
+        observed = archive;
+        persisted = archive;
+        blocked = false;
+        storage_result(undefined);
+    } catch (error) {
+        storage_result(String(error));
+    }
+};
+const schedule = () => queueMicrotask(persist);
+addEventListener('click', schedule);
+addEventListener('input', schedule);
+addEventListener('beforeunload', event => {
+    const current = state();
+    if (current && (JSON.parse(current).dirty || JSON.parse(current).storage_pending)) {event.preventDefault(); event.returnValue = ''; }
+});
+let environment = 1;
+const update = () => { if (state() !== undefined) resize(innerWidth, innerHeight, ++environment); };
+addEventListener('resize', update);
+document.fonts.addEventListener('loadingdone', update);
+await document.fonts.ready;
+update();
+window.jadixNotes = {state, unmount, take_error};
+</script>
+</html>

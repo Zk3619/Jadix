@@ -47,8 +47,8 @@ use std::collections::hash_map::Entry;
 #[cfg(debug_assertions)]
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
-use web_time::Instant;
 use taffy::prelude::Dimension;
+use web_time::Instant;
 
 /// Promote a host without swapping the just-culled host into the eviction tail.
 fn promote_page_stack_text_cache_slot<T>(
@@ -218,6 +218,7 @@ pub(super) struct AppState {
     local_backdrop_text_renderers: Vec<Option<JadixTextRenderer>>,
     page_stack_band_text_keys: Vec<u64>,
     pub(super) root_element: Element,
+    pub(super) gif_textures: std::collections::HashSet<String>,
     /// `template_id` -> child-index path from [`Self::root_element`]. Validated on each use instead
     /// of invalidated on reconcile, so a stale entry only costs one failed walk before the DFS.
     template_paths: HashMap<String, Vec<usize>>,
@@ -1715,13 +1716,16 @@ impl AppState {
         force_software: bool,
         compositor_alpha: bool,
         composition_visual: Option<*mut std::ffi::c_void>,
-    ) -> (
-        wgpu::Instance,
-        wgpu::Surface<'static>,
-        wgpu::Adapter,
-        wgpu::Device,
-        wgpu::Queue,
-    ) {
+    ) -> Result<
+        (
+            wgpu::Instance,
+            wgpu::Surface<'static>,
+            wgpu::Adapter,
+            wgpu::Device,
+            wgpu::Queue,
+        ),
+        String,
+    > {
         async fn try_backend(
             window: &Arc<dyn Window>,
             backends: wgpu::Backends,
@@ -1835,7 +1839,7 @@ impl AppState {
                     // force_fallback_adapter=false still permits llvmpipe. Try
                     // the remaining backends before accepting CPU rendering.
                     if gpu.2.get_info().device_type != wgpu::DeviceType::Cpu {
-                        return gpu;
+                        return Ok(gpu);
                     }
                     if software.is_none() {
                         software = Some(gpu);
@@ -1844,11 +1848,14 @@ impl AppState {
             }
         }
         if candidates.iter().any(|(_, name)| *name == "dx11-angle") {
-            panic!("requested ANGLE hardware D3D11 renderer is unavailable; fallback is disabled");
+            return Err(
+                "requested ANGLE hardware D3D11 renderer is unavailable; fallback is disabled"
+                    .into(),
+            );
         }
         if let Some(gpu) = software {
             log::warn!("no hardware adapter found; using software rendering");
-            return gpu;
+            return Ok(gpu);
         }
 
         // WARP / llvmpipe last: only DX12 and Vulkan expose a fallback adapter.
@@ -1857,11 +1864,11 @@ impl AppState {
             (wgpu::Backends::VULKAN, "vulkan-software"),
         ] {
             if let Some(gpu) = try_backend(window, backends, name, true, composition_visual).await {
-                return gpu;
+                return Ok(gpu);
             }
         }
 
-        panic!("no compatible GPU or software adapter found");
+        Err("no compatible GPU or software adapter found".into())
     }
 
     /// Initialize renderer/window state with an internal empty root.
@@ -1878,10 +1885,26 @@ impl AppState {
         el.get_attr(Self::BOOTSTRAP_ROOT_ATTR).map(|s| s.as_str()) == Some("1")
     }
 
+    #[cfg(test)]
     pub(super) async fn new_bootstrap(
         window: Arc<dyn Window>,
         chrome: super::window_chrome::WindowOptions,
     ) -> Self {
+        Self::try_new_bootstrap(window, chrome)
+            .await
+            .expect("initialize test renderer")
+    }
+
+    pub(super) async fn try_new_bootstrap(
+        window: Arc<dyn Window>,
+        chrome: super::window_chrome::WindowOptions,
+    ) -> Result<Self, String> {
+        if wgpu::Instance::enabled_backend_features().is_empty() {
+            return Err(
+                "No GPU backend is enabled for this platform; enable a jadix/backend-* feature"
+                    .into(),
+            );
+        }
         let startup = Instant::now();
         let mut previous_stage = startup;
         let mut startup_stage = |stage: &str| {
@@ -1895,8 +1918,9 @@ impl AppState {
         };
         let compositor_alpha = chrome.compositor_alpha() || cfg!(all(windows, feature = "webview"));
         #[cfg(all(windows, feature = "webview"))]
-        let mut webviews = crate::platform::webview::native::NativeWebViews::new(window.as_ref())
-            .expect("initialize WebView DirectComposition host");
+        let mut webviews =
+            crate::platform::webview::native::NativeWebViews::new(window.as_ref())
+                .map_err(|error| format!("initialize WebView DirectComposition host: {error}"))?;
         #[cfg(all(not(windows), feature = "webview"))]
         let webviews = crate::platform::webview::native::NativeWebViews::new(window.as_ref());
         let mut root_element = Element::new().w("100%").h("100%");
@@ -1913,7 +1937,8 @@ impl AppState {
         #[cfg(all(windows, feature = "webview"))]
         let (instance, surface, adapter, device, queue) = {
             let (instance, surface, adapter, device, queue) =
-                Self::acquire_gpu(&window, force_software, true, Some(webviews.visual_ptr())).await;
+                Self::acquire_gpu(&window, force_software, true, Some(webviews.visual_ptr()))
+                    .await?;
             (
                 instance,
                 surface,
@@ -1934,12 +1959,12 @@ impl AppState {
                 )
             } else {
                 let (i, s, a, d, q) =
-                    Self::acquire_gpu(&window, force_software, compositor_alpha, None).await;
+                    Self::acquire_gpu(&window, force_software, compositor_alpha, None).await?;
                 (i, s, a, Arc::new(d), Arc::new(q))
             }
         } else {
             let (i, s, a, d, q) =
-                Self::acquire_gpu(&window, force_software, compositor_alpha, None).await;
+                Self::acquire_gpu(&window, force_software, compositor_alpha, None).await?;
             (i, s, a, Arc::new(d), Arc::new(q))
         };
         crate::renderer::wgpu_compat::install_device_error_handlers(&device);
@@ -2021,17 +2046,22 @@ impl AppState {
         super::window_lifecycle::emit_gpu_ready(window.as_ref(), &adapter, &config);
         super::window_chrome::apply_created_window(window.as_ref(), &chrome, composition_swapchain);
         startup_stage("surface");
+        super::startup::yield_bootstrap().await;
 
         let mut pipeline = JadixPipeline::new(&device, &config);
         startup_stage("sdf_pipeline");
+        super::startup::yield_bootstrap().await;
         let textured_pipeline = TexturedQuadPipeline::new(&device, &config);
         startup_stage("textured_pipeline");
+        super::startup::yield_bootstrap().await;
         let backdrop_blur = BackdropBlurPipeline::new(&device, config.format);
         startup_stage("backdrop_pipeline");
+        super::startup::yield_bootstrap().await;
         let effect_pass = crate::renderer::EffectPassGpu::new(&device, config.format);
         startup_stage("effect_pipeline");
         let css_filter_pass = crate::renderer::CssFilterPassGpu::new(&device, config.format);
         startup_stage("css_filter_pipelines");
+        super::startup::yield_bootstrap().await;
         // Compile fixed path programs with the other window pipelines. Doing
         // this on the first visible path stalls a scroll frame in the driver.
         let path2d = if crate::renderer::gpu2d_enabled() {
@@ -2045,11 +2075,13 @@ impl AppState {
             None
         };
         startup_stage("path_pipeline");
+        super::startup::yield_bootstrap().await;
         let theme_transition =
             crate::renderer::theme_transition::ThemeTransition::new_for_surface(&device, &config);
         let mut present_retain = PresentRetainPipeline::new_for_surface(&device, &config);
         let _ = present_retain.ensure_size(&device, config.width, config.height);
         startup_stage("present_pipelines");
+        super::startup::yield_bootstrap().await;
         let textured_instance_buffer = crate::renderer::buffer_upload::RetainedBuffer::new(
             &device,
             "Textured instance buffer",
@@ -2093,6 +2125,7 @@ impl AppState {
 
         let mut text_renderer = JadixTextRenderer::new(&device, &queue, &config);
         startup_stage("fonts_and_text_renderer");
+        super::startup::yield_bootstrap().await;
         // Layout measure and glyph shaping share one FontSystem (fontdb / coverage).
         crate::text::install_shared_font_system(text_renderer.font_system_mut());
         let capture_text_renderer =
@@ -2104,7 +2137,7 @@ impl AppState {
         log::debug!("new_bootstrap: after text_renderer");
         startup_stage("shared_text_renderers");
 
-        Self {
+        Ok(Self {
             #[cfg(feature = "webview")]
             webviews,
             window,
@@ -2153,6 +2186,7 @@ impl AppState {
             local_backdrop_layers: Vec::new(),
             page_stack_band_text_keys: Vec::new(),
             root_element,
+            gif_textures: std::collections::HashSet::new(),
             template_paths: HashMap::new(),
             pending_layout_dirty: Vec::new(),
             num_instances,
@@ -2235,7 +2269,7 @@ impl AppState {
             local_backdrop_capture_count: 0,
             #[cfg(test)]
             last_frame_partial: false,
-        }
+        })
     }
 
     fn scroll_offsets_map(root: &mut Element, ui_scale: f32) -> HashMap<String, [u32; 2]> {
@@ -5665,7 +5699,11 @@ impl AppState {
         // Only reconfigure when the backing size changes. Calling `configure` on every occlusion
         // / redraw causes visible flicker; use `recover_surface` after a Lost acquire instead.
         if dims_changed {
-            crate::renderer::wgpu_compat::configure_surface(&self.surface, &self.device, &self.config);
+            crate::renderer::wgpu_compat::configure_surface(
+                &self.surface,
+                &self.device,
+                &self.config,
+            );
             if !self.pending_window_chrome {
                 super::window_chrome::apply_created_window(
                     self.window.as_ref(),
@@ -6776,6 +6814,12 @@ impl AppState {
         self.image_textures.begin_frame();
 
         // Pin every texture referenced by this frame's draw list before uploads/eviction.
+        self.gif_textures = super::pending_images::active_gif_textures(
+            render_result
+                .textured_draws
+                .iter()
+                .map(|draw| draw.texture_key.as_str()),
+        );
         for draw in &render_result.textured_draws {
             self.image_textures.touch(&draw.texture_key);
         }
@@ -8350,12 +8394,10 @@ impl AppState {
         self.last_scroll_offsets = cur_offsets;
         self.gpu_presented_this_frame = true;
         let acquire_done = Instant::now();
-        let view = output
-            .texture
-            .create_view(&wgpu::TextureViewDescriptor {
-                format: Some(self.config.format),
-                ..Default::default()
-            });
+        let view = output.texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(self.config.format),
+            ..Default::default()
+        });
 
         let mut encoder = self
             .device

@@ -6,3 +6,5 @@
 /ohos/entry/libs/
 /ohos/local.properties
 /dist/
+/ios/Assets.xcassets/LaunchLogo.imageset/logo.png
+/ios/build/

@@ -1,0 +1,19 @@
+{
+  "name": "@jadix/shell",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": { "types": "./src/index.d.mts", "default": "./src/index.mjs" },
+    "./jsx-runtime": { "types": "./src/jsx-runtime.d.mts", "default": "./src/jsx-runtime.mjs" }
+  },
+  "scripts": {
+    "generate": "node scripts/generate.mjs",
+    "check:generated": "node scripts/generate.mjs --check",
+    "test": "node --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit",
+    "build:fixture": "node scripts/build.mjs"
+  },
+  "devDependencies": { "typescript": "6.0.3", "esbuild": "0.28.2" },
+  "engines": { "node": ">=22.0.0" }
+}

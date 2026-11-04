@@ -1,3 +1,11 @@
+#[cfg(target_os = "ios")]
+#[no_mangle]
+pub extern "C" fn jadix_gallery_ios_main() {
+    let directory = std::env::temp_dir().join("jadix-gallery");
+    gallery::prepare_resources(&directory).expect("install Gallery resources");
+    gallery::run_gallery();
+}
+
 #[cfg(target_os = "android")]
 #[no_mangle]
 pub fn android_main(app: winit::platform::android::activity::AndroidApp) {

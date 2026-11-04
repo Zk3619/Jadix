@@ -508,6 +508,12 @@ impl super::App {
             }
             (has_caret, render_ok)
         };
+        if render_ok && self.startup_window == Some(id) && !self.startup_window_presented {
+            self.startup_window_presented = true;
+            if let Some(startup) = &self.startup {
+                log::info!("startup window_frame epoch={}", startup.borrow().epoch());
+            }
+        }
 
         crate::app::reactive::drain_deferred_view_remounts();
 
@@ -1309,6 +1315,19 @@ impl super::App {
         ev.movement_y = my;
         ev.screen_x = self.cursor_pos.x as f32;
         ev.screen_y = self.cursor_pos.y as f32;
+        ev.desktop_position = super::runtime::current_window_handle().and_then(|handle| {
+            let window = handle.upgrade().ok()?;
+            let origin = window.outer_position().ok()?;
+            let surface = window.surface_position();
+            Some([
+                origin.x as f64 + surface.x as f64 + x as f64 * window.scale_factor(),
+                origin.y as f64 + surface.y as f64 + y as f64 * window.scale_factor(),
+            ])
+        });
+        if let Some([screen_x, screen_y]) = ev.desktop_position {
+            ev.screen_x = screen_x as f32;
+            ev.screen_y = screen_y as f32;
+        }
         ev.page_x = x;
         ev.page_y = y;
         ev.related_target = related_target;
@@ -3329,6 +3348,32 @@ impl super::App {
         id: WindowId,
         event_loop: &dyn ActiveEventLoop,
     ) {
+        if self
+            .state
+            .borrow()
+            .as_ref()
+            .is_some_and(|state| state.window.is_minimized() == Some(true))
+            || self.startup_window.is_some_and(|startup_id| {
+                self.startup
+                    .as_ref()
+                    .is_some_and(|startup| !startup.borrow().content_ready())
+                    || (self
+                        .state
+                        .borrow()
+                        .as_ref()
+                        .is_some_and(|state| state.window.is_visible() == Some(false))
+                        && self
+                            .secondaries
+                            .borrow()
+                            .get(&startup_id)
+                            .is_some_and(|secondary| {
+                                !secondary.os_focused
+                                    || secondary.window.is_minimized() == Some(true)
+                            }))
+            })
+        {
+            return;
+        }
         self.flush_pending_cursor_moved(id, event_loop);
         let _scope = super::window_scope::enter_primary();
         crate::style::flush_style_rebuild();
@@ -3406,8 +3451,7 @@ impl super::App {
                     if !transaction.stylesheets.is_empty() {
                         let paths: Vec<_> = transaction.stylesheets.iter().map(std::path::PathBuf::from).collect();
                         crate::style::apply_style_file_batch(&paths).map_err(|reason| reason.to_string())?;
-                        let new_root = super::with_ui_build_stack(|| (self.app_builder.borrow_mut())());
-                        let new_root = super::prepare_primary_ui(new_root);
+                        let new_root = super::with_ui_build_stack(|| super::startup::build_root(self.startup.as_deref(), || (self.app_builder.borrow_mut())()));
                         state.rebuild_ui(new_root);
                         applied = true;
                     }
@@ -3480,8 +3524,11 @@ impl super::App {
                 }
 
                 if hot_reload.force_reload || stylesheet_applied {
-                    let new_root = super::with_ui_build_stack(|| (self.app_builder.borrow_mut())());
-                    let new_root = super::prepare_primary_ui(new_root);
+                    let new_root = super::with_ui_build_stack(|| {
+                        super::startup::build_root(self.startup.as_deref(), || {
+                            (self.app_builder.borrow_mut())()
+                        })
+                    });
                     state.rebuild_ui(new_root);
                     requested_redraw = true;
                     if hot_reload.force_reload {
@@ -3525,8 +3572,11 @@ impl super::App {
         #[cfg(not(feature = "i18n"))]
         let locale_rebuild = false;
         if locale_rebuild {
-            let new_root = super::with_ui_build_stack(|| (self.app_builder.borrow_mut())());
-            let new_root = super::prepare_primary_ui(new_root);
+            let new_root = super::with_ui_build_stack(|| {
+                super::startup::build_root(self.startup.as_deref(), || {
+                    (self.app_builder.borrow_mut())()
+                })
+            });
             state.rebuild_ui(new_root);
             state.window.request_redraw();
             self.force_redraw_count = self.force_redraw_count.max(2);
@@ -3596,7 +3646,8 @@ impl super::App {
                 animated
             }
         };
-        let gif_tick = crate::app::pending_images::tick_gif_textures(anim_dt);
+        let gif_tick =
+            crate::app::pending_images::tick_active_gif_textures(anim_dt, &state.gif_textures);
         let overlay_scroll_rests = if matches!(
             super::portal_overlay::active_scroll_freeze(),
             super::portal_overlay::ScrollFreeze::Page
@@ -4050,6 +4101,10 @@ impl super::App {
         self.prev_scroll_paint_only = scroll_paint_only;
 
         let active_drag_rest = self.scrollbar_drag.as_ref().map(|d| d.rest.as_str());
+        let startup_frame = self
+            .startup
+            .as_ref()
+            .and_then(|startup| startup.borrow().frame(&state.root_element));
         match state.render(
             [hx, hy],
             scrollbar_pass,
@@ -4278,6 +4333,24 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 };
                 let theme_anim_active = state.theme_transition.needs_frame();
                 let gpu_presented = state.gpu_presented_this_frame;
+                if gpu_presented
+                    && state.window.is_visible() != Some(false)
+                    && state.window.is_minimized() != Some(true)
+                {
+                    if let (Some(startup), Some((stamp, content))) = (&self.startup, startup_frame)
+                    {
+                        if startup.borrow_mut().presented(stamp, content) {
+                            startup.borrow().handoff(content);
+                            if content && self.startup_window.is_some() {
+                                let _ = super::ui_bridge::send_user_event(
+                                    super::JadixUserEvent::StartupWindowHandoff {
+                                        epoch: startup.borrow().epoch(),
+                                    },
+                                );
+                            }
+                        }
+                    }
+                }
                 let painted_caret_matches_focus =
                     super::ime_support::painted_caret_matches_focus(&state.text_nodes, &fid);
 
@@ -4689,6 +4762,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 // Taking the flag *before* render drops the pulse and the clock freezes
                 // until the next pointer move.
                 let canvas_after_paint = crate::primitives::canvas::take_canvas_wants_redraw();
+                let gif_active = self.state.borrow().as_ref().is_some_and(|state| {
+                    crate::app::pending_images::any_active_gif_playing(&state.gif_textures)
+                });
                 if super::state::render_profile_log_enabled() {
                     static SAMPLES: std::sync::atomic::AtomicUsize =
                         std::sync::atomic::AtomicUsize::new(0);
@@ -4698,7 +4774,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     {
                         log::warn!(
                             "frame pumps: scroll={smooth_scroll_animating} bar={scrollbar_fade_animating} svg={svg_smil_active} icon={anim_icon_active} gif={} canvas={canvas_after_paint} modal={modal_css_active} css={page_css_active} ui={ui_anim_active} theme={theme_anim_active}",
-                            crate::app::pending_images::any_gif_playing()
+                            gif_active
                         );
                     }
                 }
@@ -4709,7 +4785,7 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                     || scrollbar_fade_animating
                     || svg_smil_active
                     || anim_icon_active
-                    || crate::app::pending_images::any_gif_playing()
+                    || gif_active
                     || canvas_after_paint
                     || super::scroll_support::has_pending_scroll_item_align()
                     || modal_css_active
@@ -4962,6 +5038,9 @@ scrollbar track length can become incorrect. Please make each ScrollArea id uniq
                 }
             }
             Err(SurfaceAcquireError::Lost | SurfaceAcquireError::Outdated) => {
+                if let Some(startup) = &self.startup {
+                    startup.borrow_mut().attach();
+                }
                 let mut rb = self.state.borrow_mut();
                 if let Some(state) = rb.as_mut() {
                     let inner = state.window.surface_size();

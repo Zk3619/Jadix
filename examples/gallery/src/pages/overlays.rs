@@ -3,6 +3,42 @@
 use crate::imports::*;
 use crate::pages::navigation::gallery_secondary_shell_root;
 use crate::shared::*;
+use jadix_splash::{Splash, SplashProps};
+
+#[component]
+fn GallerySplashPreview() -> Element {
+    let phase = use_signal("gallery_splash_phase", || {
+        jadix_splash::StartupPhase::Preparing
+    });
+    ui! {
+        <MyCard title="Splash · 启动视图">
+            <VStack width="100%" gap="1rem">
+                <Text>"准备、失败、取消和就绪状态共享同一个开屏组件。"</Text>
+                <HStack gap="0.5rem" wrap="wrap">
+                    <Button variant="outline" on_click={move || phase.set(jadix_splash::StartupPhase::Preparing)}>"准备中"</Button>
+                    <Button variant="outline" on_click={move || phase.set(jadix_splash::StartupPhase::Failed("本地数据暂时不可用".into()))}>"失败"</Button>
+                    <Button variant="outline" on_click={move || phase.set(jadix_splash::StartupPhase::Cancelled)}>"取消"</Button>
+                    <Button variant="outline" on_click={move || phase.set(jadix_splash::StartupPhase::Ready)}>"就绪"</Button>
+                </HStack>
+                <Reactive id="gallery-splash-preview">
+                    <Box width="100%" height="22rem" rounded="0.75rem" border_width="1" border_color="border">
+                        <Splash title="Jadix Gallery" description="Native UI · Components · Graphics"
+                            state={jadix_splash::StartupSnapshot {
+                                epoch: 0, phase: phase.get(), stage: "准备本地资源".into(),
+                                progress: match phase.get() {
+                                    jadix_splash::StartupPhase::Preparing => Some((2, 5)),
+                                    jadix_splash::StartupPhase::Ready => Some((5, 5)),
+                                    _ => None,
+                                },
+                            }}>
+                            <Text>"同一宿主 · 连续交接"</Text>
+                        </Splash>
+                    </Box>
+                </Reactive>
+            </VStack>
+        </MyCard>
+    }
+}
 
 #[component]
 pub(crate) fn PrimitivesShowcase() -> jadix::core::tree::Element {
@@ -1262,7 +1298,7 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
             </MyCard>
         }
     }
-    gal_overlay_card(
+    let overlays = gal_overlay_card(
         open_cmd,
         open_cmd_dlg,
         dialog_el,
@@ -1280,5 +1316,6 @@ pub(crate) fn OverlayFeedbackShowcase() -> Element {
         cmd_el,
         cmd_dlg_el,
         sheet_sides_el,
-    )
+    );
+    ui! { <VStack width="100%" gap="1rem">{overlays}<GallerySplashPreview /></VStack> }
 }

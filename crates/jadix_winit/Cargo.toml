@@ -11,6 +11,7 @@
 "workspace" = true
 
 ["features"]
+"system-tray" = ["dep:tray-icon"]
 "default" = ["x11", "wayland", "wayland-dlopen", "wayland-csd-adwaita"]
 "android-game-activity" = ["android-activity/game-activity"]
 "android-native-activity" = ["android-activity/native-activity"]
@@ -32,6 +33,12 @@
 
 ["build-dependencies"]
 "cfg_aliases" = "0.2.2"
+
+[target.'cfg(any(windows, target_os = "macos"))'.dependencies]
+tray-icon = { workspace = true, optional = true }
+
+[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
+tray-icon = { workspace = true, optional = true, features = ["ksni"] }
 
 ["dependencies"."bitflags"]
 "workspace" = true

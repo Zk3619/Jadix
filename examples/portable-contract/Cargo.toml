@@ -1,0 +1,10 @@
+[package]
+name = "jadix_portable_contract"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+jadix_components = { path = "../../crates/jadix_components", version = "0.1.0", default-features = false, features = ["macros", "theme-shadcn"] }
+jadix_native.workspace = true
+jadix_shell.workspace = true

@@ -1,6 +1,68 @@
 use super::*;
 
 #[test]
+fn cached_image_rehydrates_for_a_window_created_after_the_first_upload() {
+    let key = "jadix-test-startup-late-window-image";
+    let image = DecodedImage {
+        width: 1,
+        height: 1,
+        rgba: vec![48, 91, 217, 255],
+        intrinsic_hotspot: None,
+        animation: None,
+    };
+    cache_decoded(key.into(), &image);
+    queue_decoded(key, &image);
+    assert_eq!(take_pending_key(key).unwrap().0, image.rgba);
+    mark_src_needed(key);
+    flush_src_textures(|_| true);
+    assert!(take_pending_key(key).is_none());
+    mark_src_needed(key);
+    flush_src_textures(|_| false);
+    let (rgba, width, height) = take_pending_key(key).unwrap();
+    assert_eq!((width, height), (1, 1));
+    assert_eq!(rgba, image.rgba);
+}
+
+#[test]
+fn gif_frame_pump_only_tracks_textures_in_the_current_draw_list() {
+    let _legacy_tick: fn(f32) -> bool = tick_gif_textures;
+    let _legacy_active: fn() -> bool = any_gif_playing;
+    let key = "jadix-test-startup-gif-active";
+    let animation = DecodedAnimation {
+        width: 1,
+        height: 1,
+        frames: vec![
+            crate::media::DecodedFrame {
+                rgba: vec![255, 0, 0, 255],
+                delay_cs: 1,
+            },
+            crate::media::DecodedFrame {
+                rgba: vec![0, 255, 0, 255],
+                delay_cs: 1,
+            },
+        ],
+    };
+    cache_decoded(
+        key.into(),
+        &DecodedImage {
+            width: 1,
+            height: 1,
+            rgba: animation.frames[0].rgba.clone(),
+            intrinsic_hotspot: None,
+            animation: Some(animation),
+        },
+    );
+    let visible = active_gif_textures([key, "static-image"].into_iter());
+    assert_eq!(visible, HashSet::from([key.to_owned()]));
+    assert!(!tick_active_gif_textures(f32::NAN, &visible));
+    let removed = active_gif_textures(["business-content"].into_iter());
+    assert!(removed.is_empty());
+    assert!(!any_active_gif_playing(&removed));
+    assert!(!tick_active_gif_textures(1.0, &removed));
+    assert!(take_pending_key(key).is_none());
+}
+
+#[test]
 #[cfg(feature = "images")]
 fn hot_reload_image_replacement_keeps_cached_pixels_on_decode_failure() {
     let path = std::env::temp_dir().join(format!("jadix-hr-image-{}.png", std::process::id()));

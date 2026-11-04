@@ -9,7 +9,7 @@ use std::{io, panic, ptr};
 
 use crate::winit_common::positioner::place_window;
 use crate::winit_core::cursor::Cursor;
-use crate::winit_core::error::{CreateWindowError, InvalidInput, RequestError};
+use crate::winit_core::error::{CreateWindowError, InvalidInput, OsError, RequestError};
 use crate::winit_core::icon::{Icon, RgbaIcon};
 use crate::winit_core::monitor::{
     Fullscreen, MonitorHandle as CoreMonitorHandle, MonitorHandleProvider,
@@ -848,6 +848,19 @@ impl CoreWindow for Window {
     }
 
     fn set_cursor_hittest(&self, hittest: bool) -> Result<(), RequestError> {
+        if !hittest
+            && self
+                .window_state
+                .lock()
+                .unwrap()
+                .window_flags()
+                .contains(WindowFlags::NO_BACK_BUFFER)
+        {
+            return Err(crate::winit_core::error::NotSupportedError::new(
+                "layered pass-through is incompatible with a no-redirection window",
+            )
+            .into());
+        }
         let window = self.window;
         let window_state = Arc::clone(&self.window_state);
         self.thread_executor.execute_in_thread(move || {
@@ -857,6 +870,100 @@ impl CoreWindow for Window {
         });
 
         Ok(())
+    }
+
+    fn global_cursor_position(&self) -> Result<PhysicalPosition<i32>, RequestError> {
+        let point = util::get_cursor_position()
+            .map_err(|error| RequestError::Os(OsError::new(line!(), file!(), error)))?;
+        Ok(PhysicalPosition::new(point.x, point.y))
+    }
+
+    fn set_input_region(&self, region: Option<&[crate::winit_core::window::InputRegionRect]>) -> Result<(), RequestError> {
+        let region = region.map(<[_]>::to_vec);
+        let window = self.window;
+        let (sender, receiver) = channel();
+        self.thread_executor.execute_in_thread(move || {
+            let result = (|| -> io::Result<()> {
+                use windows_sys::Win32::Graphics::Gdi::{CombineRgn, RGN_OR, SetWindowRgn};
+                let Some(rectangles) = region.as_ref() else {
+                    return util::win_to_err(unsafe { SetWindowRgn(window.hwnd(), ptr::null_mut(), 1) });
+                };
+                let mut origin = POINT { x: 0, y: 0 };
+                let mut bounds = RECT::default();
+                util::win_to_err(unsafe { ClientToScreen(window.hwnd(), &mut origin) })?;
+                util::win_to_err(unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(window.hwnd(), &mut bounds) })?;
+                let offset_x = i64::from(origin.x) - i64::from(bounds.left);
+                let offset_y = i64::from(origin.y) - i64::from(bounds.top);
+                let coordinates = rectangles.iter().filter(|rect| rect.size.width > 0 && rect.size.height > 0).map(|rect| {
+                    let left = offset_x + i64::from(rect.position.x);
+                    let top = offset_y + i64::from(rect.position.y);
+                    let coordinate = |value: i64| {
+                        if !(-(1_i64 << 26)..(1_i64 << 26)).contains(&value) {
+                            return Err(io::Error::new(io::ErrorKind::InvalidInput, "window region coordinate exceeds signed 27-bit GDI range"));
+                        }
+                        Ok(value as i32)
+                    };
+                    Ok((coordinate(left)?, coordinate(top)?,
+                        coordinate(left + i64::from(rect.size.width))?,
+                        coordinate(top + i64::from(rect.size.height))?))
+                }).collect::<io::Result<Vec<_>>>()?;
+                let combined = unsafe { CreateRectRgn(0, 0, 0, 0) };
+                if combined.is_null() { return Err(io::Error::last_os_error()); }
+                for (left, top, right, bottom) in coordinates {
+                    let part = unsafe { CreateRectRgn(left, top, right, bottom) };
+                    if part.is_null() {
+                        unsafe { DeleteObject(combined); }
+                        return Err(io::Error::last_os_error());
+                    }
+                    let result = unsafe { CombineRgn(combined, combined, part, RGN_OR) };
+                    unsafe { DeleteObject(part); }
+                    if result == 0 {
+                        unsafe { DeleteObject(combined); }
+                        return Err(io::Error::last_os_error());
+                    }
+                }
+                if unsafe { SetWindowRgn(window.hwnd(), combined, 1) } == 0 {
+                    let error = io::Error::last_os_error();
+                    unsafe { DeleteObject(combined); }
+                    return Err(error);
+                }
+                Ok(())
+            })().map_err(|error| RequestError::Os(OsError::new(line!(), file!(), error)));
+            let _ = sender.send(result);
+        });
+        receiver.recv().map_err(|error| RequestError::Os(OsError::new(line!(), file!(), error)))?
+    }
+
+    fn set_opacity(&self, opacity: f32) -> Result<(), RequestError> {
+        crate::winit_core::window::validate_opacity(opacity)?;
+        let window = self.window;
+        let state = Arc::clone(&self.window_state);
+        let (sender, receiver) = channel();
+        self.thread_executor.execute_in_thread(move || {
+            let old_flags = state.lock().unwrap().window_flags();
+            if old_flags.contains(WindowFlags::NO_BACK_BUFFER) {
+                let _ = sender.send(Err(RequestError::NotSupported(
+                    crate::winit_core::error::NotSupportedError::new("layered opacity requires a redirected window; DirectComposition no-redirection windows are unsupported"))));
+                return;
+            }
+            WindowState::set_window_flags(state.lock().unwrap(), window.hwnd(), |flags| {
+                flags.insert(WindowFlags::WINDOW_OPACITY);
+            });
+            let result = util::win_to_err(unsafe {
+                windows_sys::Win32::UI::WindowsAndMessaging::SetLayeredWindowAttributes(
+                    window.hwnd(), 0, (opacity * 255.0).round() as u8,
+                    windows_sys::Win32::UI::WindowsAndMessaging::LWA_ALPHA)
+            }).map_err(|error| RequestError::Os(OsError::new(line!(), file!(), error)));
+            if result.is_err() || opacity == 1.0 {
+                WindowState::set_window_flags(state.lock().unwrap(), window.hwnd(), |flags| {
+                    flags.set(WindowFlags::WINDOW_OPACITY, result.is_err() && old_flags.contains(WindowFlags::WINDOW_OPACITY));
+                });
+            }
+            let _ = sender.send(result);
+        });
+        receiver
+            .recv()
+            .map_err(|error| RequestError::Os(OsError::new(line!(), file!(), error)))?
     }
 
     fn id(&self) -> WindowId {

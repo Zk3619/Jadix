@@ -500,7 +500,13 @@ impl From<InputBuilder> for Element {
         };
 
         let chrome = builder.chrome;
-        chrome.apply(build_text_edit_element(TextEditBuildParams {
+        let native_field = field_id.clone();
+        let native_external = builder.value;
+        let native_store = crate::core::reactivity::use_signal(
+            &crate::utils::text_field::input_value_signal_key(&field_id),
+            String::new,
+        );
+        let mut element = chrome.apply(build_text_edit_element(TextEditBuildParams {
             field_id,
             placeholder: builder.placeholder,
             disabled: builder.disabled,
@@ -538,7 +544,14 @@ impl From<InputBuilder> for Element {
                     crate::utils::text_edit_history::TextUndoConfig::input_default()
                 }
             },
-        }))
+        }));
+        crate::authoring::native::mark_input(
+            &mut element,
+            native_field,
+            native_store,
+            native_external,
+        );
+        element
     }
 }
 

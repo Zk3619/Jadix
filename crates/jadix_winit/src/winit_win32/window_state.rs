@@ -163,6 +163,7 @@ bitflags! {
         /// a `WindowType::Window` can be `ANCHORED` too. Used to pick the coordinate frame in
         /// `translate_outer_position`/`translate_outer_position_to_parent`.
         const ANCHORED = 1 << 23;
+        const WINDOW_OPACITY = 1 << 24;
 
         const EXCLUSIVE_FULLSCREEN_OR_MASK = WindowFlags::ALWAYS_ON_TOP.bits();
     }
@@ -359,6 +360,9 @@ impl WindowFlags {
         }
         if self.contains(WindowFlags::IGNORE_CURSOR_EVENT) {
             style_ex |= WS_EX_TRANSPARENT | WS_EX_LAYERED;
+        }
+        if self.contains(WindowFlags::WINDOW_OPACITY) {
+            style_ex |= WS_EX_LAYERED;
         }
         if self.contains(WindowFlags::CLIP_CHILDREN) {
             style |= WS_CLIPCHILDREN;

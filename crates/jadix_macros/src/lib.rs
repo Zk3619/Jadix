@@ -2596,9 +2596,14 @@ fn expand_node_inner(
                     } else {
                         quote! { None }
                     };
-                    return quote! {
-                        __jadix_components::popover_scope(#id_ts, #open_ts, || #child_el)
-                    };
+                    let native_unsupported = el.attributes.iter().any(|(name, _)| {
+                        !matches!(name.to_string().as_str(), "id" | "open" | "openSignal")
+                    });
+                    return quote! {{
+                        let mut __jadix_popover = __jadix_components::popover_scope(#id_ts, #open_ts, || #child_el);
+                        if #native_unsupported { __jadix_popover.set_attr("jadix_native_unsupported", "Popover root options"); }
+                        __jadix_popover
+                    }};
                 }
 
                 if name_str == "AnchoredOverlay" {
@@ -3527,9 +3532,22 @@ fn expand_node_inner(
                     } else {
                         quote! { String::new() }
                     };
+                    let native_unsupported = el.attributes.iter().any(|(name, _)| {
+                        !matches!(
+                            name.to_string().as_str(),
+                            "id" | "open"
+                                | "value"
+                                | "placeholder"
+                                | "class"
+                                | "content_class"
+                                | "contentClass"
+                                | "scroll_selected"
+                                | "scrollSelected"
+                        )
+                    });
                     return quote! {{
                         let __jadix_sel_class: Option<String> = #class_ts;
-                        jadix::authoring::SlotChrome::from_opts(__jadix_sel_class, None).apply(
+                        let mut __jadix_select = jadix::authoring::SlotChrome::from_opts(__jadix_sel_class, None).apply(
                             __jadix_components::select_scope(
                                 #id_ts,
                                 #open_ts,
@@ -3540,7 +3558,11 @@ fn expand_node_inner(
                                 #scroll_selected_ts,
                                 || #child_el,
                             )
-                        )
+                        );
+                        if #native_unsupported {
+                            __jadix_select.set_attr("jadix_native_unsupported", "Select root options");
+                        }
+                        __jadix_select
                     }};
                 }
 
@@ -4875,8 +4897,26 @@ fn expand_node_inner(
                         }
                     };
                     let panel = quote_slot_chrome(&class);
-                    return quote! {
-                        __jadix_components::popover_content(
+                    let native_unsupported = el.attributes.iter().any(|(name, _)| {
+                        !matches!(
+                            name.to_string().as_str(),
+                            "side"
+                                | "placement"
+                                | "align"
+                                | "side_offset"
+                                | "sideOffset"
+                                | "class"
+                                | "strategy"
+                                | "width"
+                                | "w"
+                                | "lock_page_scroll"
+                                | "lockPageScroll"
+                                | "scroll_freeze"
+                                | "scrollFreeze"
+                        )
+                    });
+                    return quote! {{
+                        let mut __jadix_popover = __jadix_components::popover_content(
                             __jadix_components::PopoverContentOpts {
                                 side: #side,
                                 align: #align,
@@ -4888,8 +4928,10 @@ fn expand_node_inner(
                                 scroll_freeze: #scroll_freeze,
                             },
                             move || #child_el,
-                        )
-                    };
+                        );
+                        if #native_unsupported { __jadix_popover.set_attr("jadix_native_unsupported", "Popover content options"); }
+                        __jadix_popover
+                    }};
                 }
 
                 if name_str == "AnchoredOverlayContent" {
@@ -5733,8 +5775,29 @@ fn expand_node_inner(
                         }
                     };
                     let panel = quote_slot_chrome(&class);
-                    return quote! {
-                        __jadix_components::select_content(
+                    let native_unsupported = el.attributes.iter().any(|(name, _)| {
+                        !matches!(
+                            name.to_string().as_str(),
+                            "class"
+                                | "match_trigger"
+                                | "matchTrigger"
+                                | "menu_width"
+                                | "menuWidth"
+                                | "menu_height"
+                                | "menuHeight"
+                                | "min_height"
+                                | "minHeight"
+                                | "min_h"
+                                | "max_height"
+                                | "maxHeight"
+                                | "max_h"
+                                | "placement"
+                                | "scroll_selected"
+                                | "scrollSelected"
+                        )
+                    });
+                    return quote! {{
+                        let mut __jadix_select_content = __jadix_components::select_content(
                             __jadix_components::SelectContentOpts {
                                 panel: #panel,
                                 match_trigger: #match_trigger,
@@ -5746,8 +5809,12 @@ fn expand_node_inner(
                                 scroll_selected: #scroll_selected,
                             },
                             move || #child_el,
-                        )
-                    };
+                        );
+                        if #native_unsupported {
+                            __jadix_select_content.set_attr("jadix_native_unsupported", "Select content options");
+                        }
+                        __jadix_select_content
+                    }};
                 }
 
                 if combobox_is_compound {

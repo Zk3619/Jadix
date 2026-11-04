@@ -11,34 +11,35 @@ readme = "README.md"
 test = false
 
 [features]
-default = []
-markdown = ["jadix/markdown"]
-svg = ["jadix/svg"]
+default = ["gpu"]
+gpu = ["jadix/gpu", "jadix/drag", "dep:winit", "jadix_lucide/ui", "jadix_lucide/svg"]
+markdown = ["gpu", "jadix/markdown"]
+svg = ["gpu", "jadix/svg"]
 macros = ["jadix/macros"]
-dnd = ["dep:jadix_dnd"]
-code = ["jadix/code"]
-code-lsp = ["jadix/code-lsp"]
-document = ["jadix/document", "dep:image", "dep:glyphon"]
-document-editing = ["jadix/document-editing", "document"]
-document-diff = ["jadix/document-diff"]
-document-science = ["jadix/document-science", "document"]
-document-math = ["jadix/document-math", "document", "svg"]
-syntax-highlighting = ["jadix/syntax-highlighting"]
-scale-preview = ["jadix/scale-preview"]
-webview = ["jadix/webview"]
-i18n = ["jadix/i18n"]
-a11y = ["jadix/a11y"]
-file-dialog = ["jadix/file-dialog"]
-file-persistence = ["jadix/file-persistence"]
-animation-base = ["jadix/animation-base"]
-animation-ex = ["jadix/animation-ex", "animation-base"]
-animation-path = ["jadix/animation-path", "animation-ex"]
-animation = ["jadix/animation", "animation-base", "animation-ex"]
-image-stream = ["jadix/image-stream"]
-image-gif = ["jadix/image-gif"]
-image-webp = ["jadix/image-webp"]
-remote-asset = ["jadix/remote-asset"]
-text-undo = ["jadix/text-undo"]
+dnd = ["gpu", "dep:jadix_dnd"]
+code = ["gpu", "jadix/code"]
+code-lsp = ["gpu", "jadix/code-lsp"]
+document = ["gpu", "jadix/document", "dep:image", "dep:glyphon"]
+document-editing = ["gpu", "jadix/document-editing", "document"]
+document-diff = ["gpu", "jadix/document-diff"]
+document-science = ["gpu", "jadix/document-science", "document"]
+document-math = ["gpu", "jadix/document-math", "document", "svg"]
+syntax-highlighting = ["gpu", "jadix/syntax-highlighting"]
+scale-preview = ["gpu", "jadix/scale-preview"]
+webview = ["gpu", "jadix/webview"]
+i18n = ["gpu", "jadix/i18n"]
+a11y = ["gpu", "jadix/a11y"]
+file-dialog = ["gpu", "jadix/file-dialog"]
+file-persistence = ["gpu", "jadix/file-persistence"]
+animation-base = ["gpu", "jadix/animation-base"]
+animation-ex = ["gpu", "jadix/animation-ex", "animation-base"]
+animation-path = ["gpu", "jadix/animation-path", "animation-ex"]
+animation = ["gpu", "jadix/animation", "animation-base", "animation-ex"]
+image-stream = ["gpu", "jadix/image-stream"]
+image-gif = ["gpu", "jadix/image-gif"]
+image-webp = ["gpu", "jadix/image-webp"]
+remote-asset = ["gpu", "jadix/remote-asset"]
+text-undo = ["gpu", "jadix/text-undo"]
 themes = ["jadix/themes", "theme-shadcn", "theme-fluent", "theme-material3", "theme-liquid-glass"]
 theme-shadcn = ["jadix/theme-shadcn"]
 theme-fluent = ["jadix/theme-fluent"]
@@ -47,10 +48,10 @@ theme-liquid-glass = ["jadix/theme-liquid-glass"]
 
 [dependencies]
 web-time.workspace = true
-jadix = { workspace = true, features = ["drag"] }
+jadix = { path = "../jadix", version = "0.1.0", default-features = false }
 jadix_dnd = { workspace = true, optional = true }
 taffy.workspace = true
-winit.workspace = true
+winit = { workspace = true, optional = true }
 log.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -62,102 +63,116 @@ glyphon = { workspace = true, "optional" = true }
 
 [[test]]
 name = "app_shell"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "authoring_contracts"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "authoring_runtime_contracts"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "fragment_macro"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "geometry_contracts"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "img_alias"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "input_adornment_rsx"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "macro_lowering"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "media_customization"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "media_player"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "media_presentation_layout"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "prelude_dual_surface"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "rsx_class"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "scroll_components"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "text_document_views"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "textarea_rsx_wrap"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "document_editing"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "document_extensions"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "scale_preview"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[test]]
 name = "feature_contracts"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
+
+[[test]]
+name = "input_fidelity"
+required-features = ["gpu"]
+
+[[test]]
+name = "native_projection"
+required-features = ["gpu"]
+
+[[test]]
+name = "portable_source"
+required-features = ["gpu", "macros"]
 
 [[example]]
 name = "document_editor"
-required-features = ["macros", "document-editing"]
+required-features = ["gpu", "macros", "document-editing"]
 
 [[example]]
 name = "text_documents"
-required-features = ["macros", "document-diff"]
+required-features = ["gpu", "macros", "document-diff"]
 
 [[example]]
 name = "application_icons"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [[example]]
 name = "desktop_shell"
-required-features = ["macros"]
+required-features = ["gpu", "macros"]
 
 [dev-dependencies]
-jadix_lucide = { workspace = true, features = ["ui", "svg"] }
+jadix_native.workspace = true
+jadix_shell.workspace = true
+jadix_lucide.workspace = true
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(feature, values("product-tests"))'] }
