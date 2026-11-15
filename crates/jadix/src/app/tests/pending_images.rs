@@ -215,6 +215,49 @@ fn ensure_src_loaded_remote_fails_without_fetcher() {
 
 #[cfg(feature = "remote-asset")]
 #[test]
+fn cancelling_remote_src_load_suppresses_late_completion() {
+    use crate::app::ui_bridge::{drain_ui_tasks, UI_QUEUE_TEST_LOCK};
+    use crate::media::remote::with_remote_fetcher;
+    use std::sync::{mpsc, Arc, Mutex};
+
+    let (started_tx, started_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let release_rx = Arc::new(Mutex::new(release_rx));
+    let (finished_tx, finished_rx) = mpsc::channel();
+    let url = "https://jadix.test/cancel-remote.png";
+    let key = texture_key_for_src(url);
+
+    with_remote_fetcher(
+        {
+            let release_rx = release_rx.clone();
+            move |_: &str| {
+                started_tx.send(()).unwrap();
+                release_rx.lock().unwrap().recv().unwrap();
+                finished_tx.send(()).unwrap();
+                Ok(Vec::new())
+            }
+        },
+        || {
+            let _ui = UI_QUEUE_TEST_LOCK
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            assert_eq!(ensure_src_loaded(&key, url), SrcLoadState::Pending);
+            started_rx.recv().unwrap();
+            assert!(cancel_remote_src_load(&key));
+            release_tx.send(()).unwrap();
+            finished_rx.recv().unwrap();
+            for _ in 0..20 {
+                drain_ui_tasks();
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            assert_eq!(src_load_state_for_key(&key), SrcLoadState::Unknown);
+            assert!(!cancel_remote_src_load(&key));
+        },
+    );
+}
+
+#[cfg(feature = "remote-asset")]
+#[test]
 fn ensure_avatar_src_loaded_remote_uses_installed_fetcher() {
     use crate::app::ui_bridge::{drain_ui_tasks, UI_QUEUE_TEST_LOCK};
     use crate::media::encode_png;

@@ -2,7 +2,7 @@
 
 use super::{Context, Phase};
 use crate::app::window_scope::{self, WindowScope};
-use crate::core::reactivity::{current_owner, on_cleanup, with_owner, OwnerId};
+use crate::core::reactivity::{OwnerId, current_owner, on_cleanup, with_owner};
 use crate::core::tree::{Element, LayoutStatus};
 use crate::layout::LayoutTree;
 use std::cell::RefCell;

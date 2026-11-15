@@ -34,7 +34,10 @@ ignored = ["cfg_aliases"]
 [lib]
 
 [features]
+# Safe public compute creation entry points; retained in defaults for upstream compatibility.
+compute = []
 default = [
+    "compute",
     "std",
     "parking_lot",
     "dx12",

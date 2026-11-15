@@ -7,10 +7,74 @@ use crate::layout::layout_tree::{
 
 #[test]
 fn command_action_holds_label() {
-    let a = CommandAction::new("ping", "Ping host", || {}).shortcut("⌘P");
+    let a = CommandAction::new("ping", "Ping host", || {})
+        .keywords(["server", "remote"])
+        .shortcut("⌘P");
     assert_eq!(a.id, "ping");
     assert_eq!(a.label, "Ping host");
+    assert_eq!(a.keywords, ["server", "remote"]);
     assert_eq!(a.shortcut.as_deref(), Some("⌘P"));
+}
+
+#[test]
+fn command_search_matches_keywords_case_insensitively() {
+    assert!(command_item_matches_query(
+        "Open settings",
+        "settings",
+        &["preferences".into(), "configuration".into()],
+        "PREFER"
+    ));
+    assert!(command_item_matches_query(
+        "Open settings",
+        "settings",
+        &["preferences".into()],
+        "setting"
+    ));
+    assert!(!command_item_matches_query(
+        "Open settings",
+        "settings",
+        &["preferences".into()],
+        "unrelated"
+    ));
+}
+
+#[test]
+fn command_item_keywords_keep_matching_item_visible() {
+    let (_owner, root) = create_root(|| {
+        let id = "cmd-keyword";
+        use_signal(
+            input_value_signal_key(&format!("{id}__filter")).as_str(),
+            String::new,
+        )
+        .set("PREFER".into());
+
+        command_paint(
+            id.into(),
+            Signal::new(true),
+            "Search".into(),
+            CommandSurface::Inline,
+            Rc::new(|| {
+                CommandItem(CommandItemProps {
+                    value: Some("settings".into()),
+                    disabled: None,
+                    checked: None,
+                    keywords: Some(vec!["preferences".into()]),
+                    on_click: None,
+                    children: Some(Element::new().text("Settings")),
+                    base: None,
+                })
+            }),
+        )
+    });
+
+    let mut visible = false;
+    walk_cmd(&root, &mut |el| {
+        visible |= el.attrs.get("data-slot").map(String::as_str) == Some("command-item");
+    });
+    assert!(
+        visible,
+        "keyword-matched CommandItem should remain rendered"
+    );
 }
 
 #[test]
@@ -309,6 +373,7 @@ fn gallery_overlay_body() -> Rc<dyn Fn() -> Element> {
                 value: Some(value.into()),
                 disabled: None,
                 checked: None,
+                keywords: None,
                 on_click: None,
                 children: Some(Element::new().text(label)),
                 base: None,
@@ -684,6 +749,7 @@ fn three_item_command_body() -> Rc<dyn Fn() -> Element> {
                 value: Some(value.into()),
                 disabled: None,
                 checked: None,
+                keywords: None,
                 on_click: None,
                 children: Some(Element::new().text(label)),
                 base: None,
@@ -909,6 +975,7 @@ fn command_dialog_list_scroll_caps_height() {
             value: Some(label.into()),
             disabled: None,
             checked: None,
+            keywords: None,
             on_click: None,
             children: Some(Element::new().text(label)),
             base: None,
@@ -976,6 +1043,7 @@ fn gallery_like_command_body() -> Rc<dyn Fn() -> Element> {
                 value: Some(value.into()),
                 disabled: None,
                 checked: None,
+                keywords: None,
                 on_click: None,
                 children: Some(Element::new().text(label)),
                 base: None,
@@ -1050,6 +1118,7 @@ fn gallery_command_dialog_body() -> Rc<dyn Fn() -> Element> {
                 value: Some(value.into()),
                 disabled: None,
                 checked: None,
+                keywords: None,
                 on_click: None,
                 children: Some(Element::new().text(label)),
                 base: None,
@@ -1062,6 +1131,7 @@ fn gallery_command_dialog_body() -> Rc<dyn Fn() -> Element> {
                 value: Some(value.into()),
                 disabled: None,
                 checked: None,
+                keywords: None,
                 on_click: None,
                 children: Some(kids.children(vec![
                     Element::new().text(label),
@@ -1508,6 +1578,7 @@ fn command_dialog_item_click_runs_on_click_then_closes() {
                         value: Some("calendar".into()),
                         disabled: None,
                         checked: None,
+                        keywords: None,
                         on_click: Some(Handler::new(move |_| ran.set(true))),
                         children: Some(Element::new().text("Calendar")),
                         base: None,
@@ -1566,6 +1637,7 @@ fn command_palette_matches_shadcn_chrome() {
                     value: Some("home".into()),
                     disabled: None,
                     checked: None,
+                    keywords: None,
                     on_click: None,
                     children: Some(item_kids.children(vec![
                         Element::new().text("Home"),
@@ -1653,6 +1725,7 @@ fn command_item_hover_paint_moves_without_rebuild() {
                     value: Some("a".into()),
                     disabled: None,
                     checked: None,
+                    keywords: None,
                     on_click: None,
                     children: Some(Element::new().text("Alpha")),
                     base: None,
@@ -1661,6 +1734,7 @@ fn command_item_hover_paint_moves_without_rebuild() {
                     value: Some("b".into()),
                     disabled: None,
                     checked: None,
+                    keywords: None,
                     on_click: None,
                     children: Some(Element::new().text("Beta")),
                     base: None,

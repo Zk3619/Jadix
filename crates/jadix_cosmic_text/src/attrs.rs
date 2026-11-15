@@ -296,6 +296,7 @@ pub struct Attrs<'a> {
     /// Letter spacing (tracking) in EM
     pub letter_spacing_opt: Option<LetterSpacing>,
     pub font_features: FontFeatures,
+    pub font_variations: crate::FontVariations,
     pub text_decoration: TextDecoration,
 }
 
@@ -315,6 +316,7 @@ impl<'a> Attrs<'a> {
             metrics_opt: None,
             letter_spacing_opt: None,
             font_features: FontFeatures::new(),
+            font_variations: crate::FontVariations::empty(),
             text_decoration: TextDecoration::new(),
         }
     }
@@ -379,6 +381,12 @@ impl<'a> Attrs<'a> {
         self
     }
 
+    /// Set user-space font axes for shaping, metrics and rendering.
+    pub const fn font_variations(mut self, variations: crate::FontVariations) -> Self {
+        self.font_variations = variations;
+        self
+    }
+
     pub const fn underline(mut self, style: UnderlineStyle) -> Self {
         self.text_decoration.underline = style;
         self
@@ -415,6 +423,8 @@ impl<'a> Attrs<'a> {
             && self.stretch == other.stretch
             && self.style == other.style
             && self.weight == other.weight
+            && self.font_features == other.font_features
+            && self.font_variations == other.font_variations
     }
 }
 
@@ -453,6 +463,7 @@ pub struct AttrsOwned {
     /// Letter spacing (tracking) in EM
     pub letter_spacing_opt: Option<LetterSpacing>,
     pub font_features: FontFeatures,
+    pub font_variations: crate::FontVariations,
     pub text_decoration: TextDecoration,
 }
 
@@ -469,6 +480,7 @@ impl AttrsOwned {
             metrics_opt: attrs.metrics_opt,
             letter_spacing_opt: attrs.letter_spacing_opt,
             font_features: attrs.font_features.clone(),
+            font_variations: attrs.font_variations,
             text_decoration: attrs.text_decoration,
         }
     }
@@ -485,6 +497,7 @@ impl AttrsOwned {
             metrics_opt: self.metrics_opt,
             letter_spacing_opt: self.letter_spacing_opt,
             font_features: self.font_features.clone(),
+            font_variations: self.font_variations,
             text_decoration: self.text_decoration,
         }
     }

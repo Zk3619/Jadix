@@ -379,10 +379,14 @@ impl WindowCommon {
         self.state.upgrade()?.lock().unwrap().current_monitor()
     }
 
-    pub(crate) fn set_input_region(&self, region: Option<&[crate::winit_core::window::InputRegionRect]>) -> Result<(), RequestError> {
+    pub(crate) fn set_input_region(
+        &self,
+        region: Option<&[crate::winit_core::window::InputRegionRect]>,
+    ) -> Result<(), RequestError> {
         let state = self.state.upgrade().ok_or(os_error!(ResolveStateError))?;
         let state = state.lock().unwrap();
-        self.handles.set_input_region(state.window.wl_surface(), region, state.scale_factor())
+        self.handles
+            .set_input_region(state.window.wl_surface(), region, state.scale_factor())
     }
 
     pub(crate) fn available_monitors(&self) -> Box<dyn Iterator<Item = CoreMonitorHandle>> {

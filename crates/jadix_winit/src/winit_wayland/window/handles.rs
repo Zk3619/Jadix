@@ -118,16 +118,31 @@ impl Handles {
             return Ok(());
         };
         let region = Region::new(&*self.compositor).map_err(|error| os_error!(error))?;
-        for rect in rectangles.iter().filter(|rect| rect.size.width > 0 && rect.size.height > 0) {
+        for rect in rectangles
+            .iter()
+            .filter(|rect| rect.size.width > 0 && rect.size.height > 0)
+        {
             let left = (f64::from(rect.position.x) / scale).floor();
             let top = (f64::from(rect.position.y) / scale).floor();
             let right = ((f64::from(rect.position.x) + f64::from(rect.size.width)) / scale).ceil();
-            let bottom = ((f64::from(rect.position.y) + f64::from(rect.size.height)) / scale).ceil();
-            if ![left, top, right, bottom].iter().all(|value| value.is_finite() && *value >= f64::from(i32::MIN) && *value <= f64::from(i32::MAX))
-                || right - left > f64::from(i32::MAX) || bottom - top > f64::from(i32::MAX) {
-                return Err(crate::winit_core::error::NotSupportedError::new("input rectangle exceeds Wayland coordinate range").into());
+            let bottom =
+                ((f64::from(rect.position.y) + f64::from(rect.size.height)) / scale).ceil();
+            if ![left, top, right, bottom].iter().all(|value| {
+                value.is_finite() && *value >= f64::from(i32::MIN) && *value <= f64::from(i32::MAX)
+            }) || right - left > f64::from(i32::MAX)
+                || bottom - top > f64::from(i32::MAX)
+            {
+                return Err(crate::winit_core::error::NotSupportedError::new(
+                    "input rectangle exceeds Wayland coordinate range",
+                )
+                .into());
             }
-            region.add(left as i32, top as i32, (right - left) as i32, (bottom - top) as i32);
+            region.add(
+                left as i32,
+                top as i32,
+                (right - left) as i32,
+                (bottom - top) as i32,
+            );
         }
         surface.set_input_region(Some(region.wl_region()));
         Ok(())

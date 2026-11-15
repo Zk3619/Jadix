@@ -2,7 +2,6 @@
 
 use jadix::{authoring::native::ElementProjection, presentation::*};
 use jadix_components::prelude::*;
-use jadix_native::HeadlessRoot;
 
 fn radios(node: &PresentationNode) -> Vec<&PresentationNode> {
     let mut result = Vec::new();
@@ -31,8 +30,7 @@ fn compound_radio_navigation_wraps_skips_disabled_and_retains_native_identity() 
         };
         (element, selected)
     });
-    let model = HeadlessRoot::new();
-    let projection = ElementProjection::with_lifetime(model.lifetime());
+    let projection = ElementProjection::new(RootId::new());
     let first = projection.snapshot(&mut element).unwrap();
     assert_eq!(
         first.descriptor.accessible_role,
@@ -94,18 +92,33 @@ fn compound_radio_navigation_wraps_skips_disabled_and_retains_native_identity() 
             1
         );
     }
-    assert!(
-        projection
-            .dispatch(
-                &mut element,
-                &PlatformEvent {
-                    node: identities[1],
-                    payload: EventPayload::Activate,
-                },
-            )
-            .is_err()
-    );
+    assert!(projection
+        .dispatch(
+            &mut element,
+            &PlatformEvent {
+                node: identities[1],
+                payload: EventPayload::Activate,
+            },
+        )
+        .is_err());
     assert_eq!(selected.get(), "b");
+}
+
+#[test]
+fn radio_group_accessibility_label_reaches_shared_descriptor() {
+    let (_owner, mut element) = create_root(|| {
+        radio_group("billing")
+            .accessibility_label("Billing cycle")
+            .options([("monthly", "Monthly"), ("yearly", "Yearly")])
+            .into()
+    });
+    let projection = ElementProjection::new(RootId::new());
+    let group = projection.snapshot(&mut element).unwrap();
+    assert_eq!(
+        group.descriptor.accessible_name.as_deref(),
+        Some("Billing cycle")
+    );
+    assert_eq!(radios(&group).len(), 2);
 }
 
 #[test]
@@ -121,16 +134,13 @@ fn unselected_controlled_radio_keeps_external_state_until_activation() {
             .into();
         (element, selected)
     });
-    let model = HeadlessRoot::new();
-    let projection = ElementProjection::with_lifetime(model.lifetime());
+    let projection = ElementProjection::new(RootId::new());
     let first = projection.snapshot(&mut element).unwrap();
     assert_eq!(selected.get(), "");
     let entries = radios(&first);
-    assert!(
-        entries
-            .iter()
-            .all(|entry| entry.descriptor.accessible_selected == Some(false))
-    );
+    assert!(entries
+        .iter()
+        .all(|entry| entry.descriptor.accessible_selected == Some(false)));
     assert_eq!(
         entries[1].descriptor.accessible_role,
         Some(AccessibleRole::RadioItem { tab_stop: true })
@@ -154,7 +164,6 @@ fn duplicate_radio_values_fail_projection_instead_of_aliasing_identity() {
             .options([("same", "First"), ("same", "Second")])
             .into()
     });
-    let model = HeadlessRoot::new();
-    let projection = ElementProjection::with_lifetime(model.lifetime());
+    let projection = ElementProjection::new(RootId::new());
     assert!(projection.snapshot(&mut element).is_err());
 }

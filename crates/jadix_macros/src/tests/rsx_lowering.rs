@@ -595,6 +595,19 @@ fn hover_card_delay_casts_unsuffixed_int_to_u64() {
 }
 
 #[test]
+fn hover_card_and_tooltip_root_delays_are_forwarded_to_scope() {
+    let hover = expand(r#"<HoverCard openDelay={65} closeDelay=120></HoverCard>"#);
+    assert!(hover.contains("hover_card_scope_with_delays"), "{hover}");
+    assert!(hover.contains("Some ((65) as u64)"), "{hover}");
+    assert!(hover.contains("Some ((120) as u64)"), "{hover}");
+
+    let tooltip = expand(r#"<Tooltip delay=65 closeDelay={120}></Tooltip>"#);
+    assert!(tooltip.contains("tooltip_scope_with_delays"), "{tooltip}");
+    assert!(tooltip.contains("Some ((65) as u64)"), "{tooltip}");
+    assert!(tooltip.contains("Some ((120) as u64)"), "{tooltip}");
+}
+
+#[test]
 fn hover_card_side_offset_uses_into_f32() {
     let s = expand(r#"<HoverCardContent sideOffset={4}></HoverCardContent>"#);
     assert!(s.contains("IntoF32"), "{s}");
@@ -698,6 +711,25 @@ fn on_hover_maps_to_element() {
         hover.contains("on_hover"),
         "onHover must map to Element::on_hover: {hover}"
     );
+}
+
+#[test]
+fn component_host_events_use_the_shared_base_builder() {
+    let s = expand(
+        r#"<Button onHover={on_hover} onMouseMove={on_move} onMouseUp={on_up} onMouseEnter={on_enter} onMouseLeave={on_leave} onContextMenu={on_context}></Button>"#,
+    );
+    assert!(s.contains("b = b . on_hover (on_hover)"), "{s}");
+    assert!(s.contains("b = b . on_mousemove (on_move)"), "{s}");
+    assert!(s.contains("b = b . on_mouseup (on_up)"), "{s}");
+    assert!(s.contains("b = b . on_mouseenter (on_enter)"), "{s}");
+    assert!(s.contains("b = b . on_mouseleave (on_leave)"), "{s}");
+    assert!(s.contains("b = b . on_context_menu (on_context)"), "{s}");
+}
+
+#[test]
+fn context_menu_maps_to_builtin_element() {
+    let s = expand(r#"<Box onContextMenu={on_context}></Box>"#);
+    assert!(s.contains("on_context_menu"), "{s}");
 }
 
 #[test]

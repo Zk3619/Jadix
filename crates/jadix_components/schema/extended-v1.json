@@ -5,19 +5,57 @@
     "properties": {
       "type": "object",
       "fields": {
-        "anchor": { "schema": { "type": "string", "max_bytes": 256 }, "required": true },
-        "open": { "schema": { "type": "bool" }, "required": true },
-        "placement": { "schema": { "type": "string", "max_bytes": 16 }, "required": false },
-        "gap": { "schema": { "type": "number" }, "required": false },
-        "close_on_outside_click": { "schema": { "type": "bool" }, "required": false }
+        "anchor": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 256
+          },
+          "required": true
+        },
+        "open": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": true
+        },
+        "placement": {
+          "schema": {
+            "type": "string",
+            "max_bytes": 16
+          },
+          "required": false
+        },
+        "gap": {
+          "schema": {
+            "type": "number"
+          },
+          "required": false
+        },
+        "close_on_outside_click": {
+          "schema": {
+            "type": "bool"
+          },
+          "required": false
+        }
       }
     },
     "events": {
       "dismiss": {
         "type": "object",
         "fields": {
-          "backdrop": { "schema": { "type": "bool" }, "required": true },
-          "revision": { "schema": { "type": "string", "max_bytes": 20 }, "required": true }
+          "backdrop": {
+            "schema": {
+              "type": "bool"
+            },
+            "required": true
+          },
+          "revision": {
+            "schema": {
+              "type": "string",
+              "max_bytes": 20
+            },
+            "required": true
+          }
         }
       }
     },
@@ -46,6 +84,12 @@
         "disabled": {
           "schema": {
             "type": "bool"
+          },
+          "required": false
+        },
+        "maxLength": {
+          "schema": {
+            "type": "number"
           },
           "required": false
         }

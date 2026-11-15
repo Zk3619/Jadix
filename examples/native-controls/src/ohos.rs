@@ -3,10 +3,13 @@ use std::cell::RefCell;
 use jadix_native::ohos::OhosHost;
 use napi_derive_ohos::napi;
 use napi_ohos::{
-    Env, Error, JsValue, Result,
     bindgen_prelude::{Function, Unknown},
+    Env, Error, JsValue, Result,
 };
 
+#[cfg(feature = "field-workflow")]
+use crate::field::FieldApp as NativeApp;
+#[cfg(not(feature = "field-workflow"))]
 use crate::NativeApp;
 
 thread_local! {
@@ -88,6 +91,16 @@ pub fn native_inspect(identity: String, include_text: bool) -> Result<String> {
         snapshot["native_host"] = app.root.host().inspection()?;
         Ok(snapshot.to_string())
     })
+}
+
+#[napi]
+pub fn native_state(identity: String) -> Result<String> {
+    with_app(&identity, |app| Ok(app.state()))
+}
+
+#[napi]
+pub fn native_restore(identity: String, source: String) -> Result<()> {
+    with_app(&identity, |app| app.restore(&source))
 }
 
 #[napi]

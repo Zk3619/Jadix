@@ -1006,6 +1006,7 @@ pub struct TableBuilder {
     row_height: Option<f32>,
     height: f32,
     density: TableDensity,
+    scrollbar_visibility: String,
     selected: Option<Signal<Option<usize>>>,
     sort: Option<Signal<TableSortState>>,
     sortable: bool,
@@ -1025,6 +1026,7 @@ pub fn table(id: impl Into<String>) -> TableBuilder {
         row_height: None,
         height: 240.0,
         density: TableDensity::Default,
+        scrollbar_visibility: "auto".to_string(),
         selected: None,
         sort: None,
         sortable: true,
@@ -1087,6 +1089,12 @@ impl TableBuilder {
 
     pub fn density(mut self, d: impl Into<TableDensity>) -> Self {
         self.density = d.into();
+        self
+    }
+
+    /// Configure both table body scrollbars (`auto` / `always` / `scroll` / …).
+    pub fn scrollbar_visibility(mut self, mode: impl Into<String>) -> Self {
+        self.scrollbar_visibility = mode.into();
         self
     }
 
@@ -1208,6 +1216,7 @@ impl From<TableBuilder> for Element {
             row_height,
             height,
             density,
+            scrollbar_visibility,
             selected,
             sort,
             sortable,
@@ -1337,6 +1346,7 @@ impl From<TableBuilder> for Element {
                 .item_count(row_count_vis)
                 .item_height(row_h)
                 .height(height)
+                .scrollbar_visibility(scrollbar_visibility.clone())
                 .render_item(move |vis_i| {
                     let row = order.get(vis_i).copied().unwrap_or(vis_i);
                     let is_sel = sel.peek() == Some(row);
@@ -1541,6 +1551,7 @@ identity [] id: String,
 default [] row_count: usize,
 plain [] height: Option<f32>,
 plain [] density: Option<String>,
+plain [] scrollbar_visibility: Option<String>,
 default [] sortable: bool,
 plain [] caption: Option<String>,
 plain [] children: Option<Element>,
@@ -1552,6 +1563,9 @@ plain [] children: Option<Element>,
     }
     if let Some(d) = density {
         b = b.density(d.as_str());
+    }
+    if let Some(mode) = scrollbar_visibility {
+        b = b.scrollbar_visibility(mode);
     }
     if let Some(c) = caption {
         b = b.caption(c);

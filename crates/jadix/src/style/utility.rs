@@ -5,7 +5,8 @@
 //! classes against the same catalog.
 
 use jadix_style_tokens::{
-    classify_utility, parse_class_list, KnownUtility, ParsedClassList, TwLength, VariantSelector,
+    classify_utility, parse_class_list, KnownUtility, LineHeightToken, ParsedClassList, TwLength,
+    VariantSelector,
 };
 
 use std::borrow::Cow;
@@ -234,9 +235,18 @@ impl VariantContext<'_> {
     }
 
     fn matches_selector(&self, sel: &VariantSelector) -> bool {
+        self.matches_selector_with_focus_within(sel, false)
+    }
+
+    fn matches_selector_with_focus_within(
+        &self,
+        sel: &VariantSelector,
+        focus_within: bool,
+    ) -> bool {
         match sel {
             VariantSelector::Hover => self.hovered,
             VariantSelector::Focus | VariantSelector::FocusVisible => self.focused,
+            VariantSelector::FocusWithin => focus_within,
             VariantSelector::Active => self.active,
             VariantSelector::Disabled => self.disabled,
             VariantSelector::Dark => self.dark,
@@ -787,6 +797,14 @@ pub fn reapply_class_color_overrides(el: &mut Element) -> LayoutStatus {
 
 /// Restore base snapshot and apply currently-matching variant utilities.
 pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> LayoutStatus {
+    resolve_class_variants_with_focus_within(el, ctx, false)
+}
+
+fn resolve_class_variants_with_focus_within(
+    el: &mut Element,
+    ctx: &VariantContext<'_>,
+    focus_within: bool,
+) -> LayoutStatus {
     // ButtonGroup / joined ToggleGroup rewrite inner corners after build. The class
     // snapshot is often taken *before* that join, so restore would flash full
     // `rounded-md` on shared edges (then chrome repairs next frame). Keep the live
@@ -849,7 +867,10 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
     let mut apply: Vec<String> = Vec::new();
     if let Some(cs) = el.class_set.as_ref() {
         for (sels, util) in &cs.variants {
-            if sels.iter().all(|s| ctx.matches_selector(s)) {
+            if sels
+                .iter()
+                .all(|s| ctx.matches_selector_with_focus_within(s, focus_within))
+            {
                 apply.push(util.clone());
             }
         }
@@ -903,13 +924,20 @@ pub fn resolve_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> Lay
 /// snapshot would write rest `scale` over a mid-tween used value and kill the
 /// in-flight transition. Overlay writes the *specified* hover target; tick then
 /// retargets from the last used value (`PropertyTween::written`).
-fn apply_matching_color_class_variants(el: &mut Element, ctx: &VariantContext<'_>) -> LayoutStatus {
+fn apply_matching_color_class_variants(
+    el: &mut Element,
+    ctx: &VariantContext<'_>,
+    focus_within: bool,
+) -> LayoutStatus {
     let before = el.style.clone();
     let before_text = el.text_style.clone();
     let mut apply: Vec<String> = Vec::new();
     if let Some(cs) = el.class_set.as_ref() {
         for (sels, util) in &cs.variants {
-            if !sels.iter().all(|s| ctx.matches_selector(s)) {
+            if !sels
+                .iter()
+                .all(|s| ctx.matches_selector_with_focus_within(s, focus_within))
+            {
                 continue;
             }
             if is_hover_paint_utility(util)
@@ -978,6 +1006,7 @@ fn str_fp(s: &str) -> u64 {
 fn variant_ctx_fingerprint(
     hovered: bool,
     focused: bool,
+    focused_within: bool,
     disabled: bool,
     dark: bool,
     viewport_w: f32,
@@ -988,6 +1017,7 @@ fn variant_ctx_fingerprint(
     let mut h = 0xcbf2_9ce4_8422_2325_u64;
     mix_fp(&mut h, hovered as u64);
     mix_fp(&mut h, focused as u64 + 2);
+    mix_fp(&mut h, focused_within as u64 + 3);
     mix_fp(&mut h, disabled as u64 + 4);
     mix_fp(&mut h, dark as u64 + 8);
     mix_fp(&mut h, crate::style::prefers_reduced_motion() as u64 + 16);
@@ -1030,12 +1060,14 @@ pub fn sync_class_variants_subtree(
     impact: &mut LayoutStatus,
 ) {
     super::animation::begin_page_css_frame();
+    let focus_within_nodes = focus_within_node_set(el, focused_id);
     let hit_nodes =
         crate::app::pointer_events::pointer_hit_node_set(el, mouse_pos[0], mouse_pos[1]);
     sync_class_variants_subtree_inner(
         el,
         mouse_pos,
         focused_id,
+        &focus_within_nodes,
         dark,
         viewport_w,
         viewport_h,
@@ -1047,6 +1079,49 @@ pub fn sync_class_variants_subtree(
         layout_tree,
         impact,
     );
+}
+
+fn focus_within_node_set(root: &Element, focused_id: &str) -> HashSet<*const Element> {
+    struct Frame {
+        node: *const Element,
+        next_child: usize,
+        contains_focus: bool,
+    }
+
+    if focused_id.is_empty() {
+        return HashSet::new();
+    }
+
+    let mut stack = vec![Frame {
+        node: root,
+        next_child: 0,
+        contains_focus: false,
+    }];
+    let mut focused_nodes = HashSet::new();
+    while let Some(frame) = stack.last_mut() {
+        // SAFETY: this read-only walk does not mutate or reallocate the element tree.
+        let node = unsafe { &*frame.node };
+        if frame.next_child == 0 {
+            frame.contains_focus = node.focus_id.as_deref().is_some_and(|id| id == focused_id);
+        }
+        if let Some(child) = node.children.get(frame.next_child) {
+            frame.next_child += 1;
+            stack.push(Frame {
+                node: child,
+                next_child: 0,
+                contains_focus: false,
+            });
+        } else {
+            let completed = stack.pop().expect("focus traversal frame");
+            if completed.contains_focus {
+                focused_nodes.insert(completed.node);
+                if let Some(parent) = stack.last_mut() {
+                    parent.contains_focus = true;
+                }
+            }
+        }
+    }
+    focused_nodes
 }
 
 fn scroller_timeline_progress(el: &Element) -> Option<f32> {
@@ -1813,7 +1888,8 @@ fn resolve_scroll_hover_enter(
         peer_hovered: &[],
         attrs: Some(&attrs_snapshot),
     };
-    let local = apply_matching_color_class_variants(el, &ctx);
+    let focus_within = focus_within_node_set(el, focused_id).contains(&(el as *const Element));
+    let local = apply_matching_color_class_variants(el, &ctx, focus_within);
     if let Some(cs) = el.class_set.as_mut() {
         cs.last_pointer_hover = Some(true);
         // Full sync after scroll must still re-fingerprint remaining variants.
@@ -1974,6 +2050,7 @@ fn sync_class_variants_subtree_inner(
     el: &mut Element,
     mouse_pos: [f32; 2],
     focused_id: &str,
+    focus_within_nodes: &HashSet<*const Element>,
     dark: bool,
     viewport_w: f32,
     viewport_h: f32,
@@ -2146,11 +2223,13 @@ fn sync_class_variants_subtree_inner(
                     .focus_id
                     .as_deref()
                     .is_some_and(|id| !id.is_empty() && id == focused_id);
+                let focused_within = focus_within_nodes.contains(&(el as *const Element));
                 let disabled = el.attrs.get("disabled").is_some_and(|v| v != "false")
                     || el.attrs.get("aria-disabled").is_some_and(|v| v == "true");
                 let ctx_fp = variant_ctx_fingerprint(
                     hovered,
                     focused,
+                    focused_within,
                     disabled,
                     dark,
                     frame.responsive_width,
@@ -2190,12 +2269,14 @@ fn sync_class_variants_subtree_inner(
                     let before = el.style.clone();
                     let before_text = el.text_style.clone();
                     if !el.transition_snapshot.has_any_tweens() {
+                        let rest_attrs_snapshot = el.attrs.clone();
                         let rest = VariantContext {
                             hovered: false,
                             focused: false,
                             active: false,
                             group_hovered: &[],
                             peer_hovered: &[],
+                            attrs: Some(&rest_attrs_snapshot),
                             ..ctx.clone()
                         };
                         let initial: Vec<String> = el
@@ -2206,9 +2287,9 @@ fn sync_class_variants_subtree_inner(
                                     .variants
                                     .iter()
                                     .filter(|(selectors, _)| {
-                                        selectors
-                                            .iter()
-                                            .all(|selector| rest.matches_selector(selector))
+                                        selectors.iter().all(|selector| {
+                                            rest.matches_selector_with_focus_within(selector, false)
+                                        })
                                     })
                                     .map(|(_, utility)| utility.clone())
                                     .collect()
@@ -2226,7 +2307,7 @@ fn sync_class_variants_subtree_inner(
                             );
                         }
                     }
-                    let local = resolve_class_variants(el, &ctx);
+                    let local = resolve_class_variants_with_focus_within(el, &ctx, focused_within);
                     let spun = tick_animate_spin(el);
                     let defer_shell_css = crate::utils::modal_motion::modal_shell_defer_css_tick(
                         el.template_id.as_deref(),
@@ -2711,6 +2792,48 @@ fn tw_dim(len: TwLength) -> crate::layout::dimension::CssDim {
     }
 }
 
+fn apply_text_size(el: &mut Element, len: TwLength) -> LayoutStatus {
+    let px = tw_px(len);
+    let mut changed = el.text_style.size != Some(px);
+    el.text_style.size = Some(px);
+    if let Some(sync) = el.input_paint_sync.as_mut() {
+        if (sync.text_size_px - px).abs() > f32::EPSILON {
+            sync.text_size_px = px;
+            changed = true;
+        }
+    }
+    if changed {
+        LayoutStatus::LayoutChanged
+    } else {
+        LayoutStatus::Clean
+    }
+}
+
+fn apply_line_height(
+    el: &mut Element,
+    height: LineHeightToken,
+    mark_overrides: bool,
+) -> LayoutStatus {
+    if mark_overrides {
+        mark_variant_style_override(el, VariantStyleField::Leading);
+    }
+    let (px, scale) = match height {
+        LineHeightToken::Length(length) => (Some(tw_px(length)), None),
+        LineHeightToken::Scale(scale) => (None, Some(scale.max(0.01))),
+    };
+    if el.text_style.line_height_px == px
+        && el.text_style.line_height_scale == scale
+        && el.text_style.line_height_specified
+    {
+        LayoutStatus::Clean
+    } else {
+        el.text_style.line_height_px = px;
+        el.text_style.line_height_scale = scale;
+        el.text_style.line_height_specified = true;
+        LayoutStatus::LayoutChanged
+    }
+}
+
 fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -> LayoutStatus {
     let Some(known) = classify_utility(token) else {
         return LayoutStatus::Clean;
@@ -2930,23 +3053,10 @@ fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -
                 LayoutStatus::Clean
             }
         }
-        KnownUtility::TextSize(len) => {
-            let px = tw_px(len);
-            let mut changed = el.text_style.size != Some(px);
-            if changed {
-                el.text_style.size = Some(px);
-            }
-            if let Some(sync) = el.input_paint_sync.as_mut() {
-                if (sync.text_size_px - px).abs() > f32::EPSILON {
-                    sync.text_size_px = px;
-                    changed = true;
-                }
-            }
-            if changed {
-                LayoutStatus::LayoutChanged
-            } else {
-                LayoutStatus::Clean
-            }
+        KnownUtility::TextSize(len) => apply_text_size(el, len),
+        KnownUtility::TextSizeWithLeading(size, leading) => {
+            let size_impact = apply_text_size(el, size);
+            size_impact.merge(apply_line_height(el, leading, mark_overrides))
         }
         KnownUtility::FontWeight(w) => {
             let w = w.weight_u16();
@@ -2996,36 +3106,16 @@ fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -
             el.style.set_shadows_from_parsed(&shadows);
             LayoutStatus::StyleChanged
         }
-        KnownUtility::LeadingPx(height) => {
-            if mark_overrides {
-                mark_variant_style_override(el, VariantStyleField::Leading);
-            }
-            if el.text_style.line_height_px == Some(height)
-                && el.text_style.line_height_scale.is_none()
-            {
-                LayoutStatus::Clean
-            } else {
-                el.text_style.line_height_px = Some(height);
-                el.text_style.line_height_scale = None;
-                el.text_style.line_height_specified = true;
-                LayoutStatus::LayoutChanged
-            }
+        KnownUtility::LeadingPx(px) => apply_line_height(
+            el,
+            LineHeightToken::Length(TwLength::Px(px)),
+            mark_overrides,
+        ),
+        KnownUtility::LeadingLength(length) => {
+            apply_line_height(el, LineHeightToken::Length(length), mark_overrides)
         }
         KnownUtility::Leading(scale) => {
-            if mark_overrides {
-                mark_variant_style_override(el, VariantStyleField::Leading);
-            }
-            let next = scale.max(0.01);
-            if el.text_style.line_height_scale == Some(next)
-                && el.text_style.line_height_px.is_none()
-            {
-                LayoutStatus::Clean
-            } else {
-                el.text_style.line_height_px = None;
-                el.text_style.line_height_scale = Some(next);
-                el.text_style.line_height_specified = true;
-                LayoutStatus::LayoutChanged
-            }
+            apply_line_height(el, LineHeightToken::Scale(scale), mark_overrides)
         }
         KnownUtility::AlignSelf(kw) => {
             let keyword = match kw {
@@ -3270,6 +3360,17 @@ fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -
             el.style.transform_origin = super::transform::parse_transform_origin(kw);
             LayoutStatus::StyleChanged
         }
+        KnownUtility::BgGradient(value) => {
+            let Some(gradient) = crate::style::parse_gradient(value.replace('_', " ")) else {
+                return LayoutStatus::Clean;
+            };
+            if el.style.bg_gradient.as_ref() == Some(&gradient) {
+                LayoutStatus::Clean
+            } else {
+                el.style.bg_gradient = Some(gradient);
+                LayoutStatus::StyleChanged
+            }
+        }
         KnownUtility::BgGradientTo(angle) => {
             let g = el.style.bg_gradient.get_or_insert_with(Default::default);
             g.as_linear_mut().angle_deg = angle;
@@ -3278,19 +3379,34 @@ fn apply_known_utility_ex(el: &mut Element, token: &str, mark_overrides: bool) -
         KnownUtility::GradientFrom(name) => {
             let color = parse_color(name);
             let g = el.style.bg_gradient.get_or_insert_with(Default::default);
-            g.as_linear_mut().set_from(color);
+            let linear = g.as_linear_mut();
+            linear.set_from(color);
+            let index = 0;
+            let name = name.trim_start_matches('[').trim_end_matches(']');
+            linear.stops[index].current_color =
+                name == "current" || name.eq_ignore_ascii_case("currentcolor");
             LayoutStatus::StyleChanged
         }
         KnownUtility::GradientVia(name) => {
             let color = parse_color(name);
             let g = el.style.bg_gradient.get_or_insert_with(Default::default);
-            g.as_linear_mut().set_via(color);
+            let linear = g.as_linear_mut();
+            linear.set_via(color);
+            let index = linear.stops.len() / 2;
+            let name = name.trim_start_matches('[').trim_end_matches(']');
+            linear.stops[index].current_color =
+                name == "current" || name.eq_ignore_ascii_case("currentcolor");
             LayoutStatus::StyleChanged
         }
         KnownUtility::GradientTo(name) => {
             let color = parse_color(name);
             let g = el.style.bg_gradient.get_or_insert_with(Default::default);
-            g.as_linear_mut().set_to(color);
+            let linear = g.as_linear_mut();
+            linear.set_to(color);
+            let index = linear.stops.len() - 1;
+            let name = name.trim_start_matches('[').trim_end_matches(']');
+            linear.stops[index].current_color =
+                name == "current" || name.eq_ignore_ascii_case("currentcolor");
             LayoutStatus::StyleChanged
         }
         KnownUtility::LetterSpacing(len) => {

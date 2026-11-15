@@ -18,14 +18,20 @@ pub fn visible_item_range(
     total: usize,
     overscan: usize,
 ) -> (usize, usize) {
-    if total == 0 || item_h <= 0.0 {
+    if total == 0
+        || !item_h.is_finite()
+        || item_h <= 0.0
+        || !scroll_y.is_finite()
+        || !viewport_h.is_finite()
+        || viewport_h <= 0.0
+    {
         return (0, 0);
     }
-    let first = ((scroll_y / item_h).floor() as isize).max(0) as usize;
-    let vis = (viewport_h / item_h).ceil() as usize;
+    let offset = f64::from(scroll_y.max(0.0));
+    let extent = f64::from(item_h);
+    let first = (offset / extent).floor() as usize;
     let start = first.saturating_sub(overscan).min(total);
-    let end = first
-        .saturating_add(vis)
+    let end = (((offset + f64::from(viewport_h)) / extent).ceil() as usize)
         .saturating_add(overscan)
         .min(total);
     (start, end.max(start))

@@ -66,11 +66,7 @@ pub fn roving_move_skipping(
             }
         }
     }
-    if disabled(idx) {
-        None
-    } else {
-        Some(idx)
-    }
+    if disabled(idx) { None } else { Some(idx) }
 }
 
 /// Move keyboard focus ring to `focus_id` (`focus-visible` on).
@@ -93,6 +89,38 @@ pub fn focus_id_only(focus_id: impl Into<String>) {
         return;
     }
     use_signal("__jadix_button_focus_id", String::new).set(id);
+}
+
+/// Return focus on close only while it still belongs to the closing subtree.
+/// Capture before removing the panel: application callbacks, outside presses,
+/// and Tab may already have moved focus elsewhere by the time close is rendered.
+#[derive(Clone, PartialEq)]
+pub(crate) struct PanelFocusReturn {
+    target: String,
+    members: Vec<String>,
+}
+
+impl PanelFocusReturn {
+    pub(crate) fn capture(panel: &Element, target: String) -> Self {
+        let mut members = Vec::new();
+        collect_focusable_ids(panel, &mut members);
+        Self { target, members }
+    }
+
+    pub(crate) fn refresh(&mut self, panel: &Element) {
+        self.members.clear();
+        collect_focusable_ids(panel, &mut self.members);
+    }
+
+    pub(crate) fn restore(self) {
+        if self.target.is_empty() {
+            return;
+        }
+        let focus = use_signal("__jadix_button_focus_id", String::new);
+        if self.members.contains(&focus.peek()) {
+            focus.set(self.target);
+        }
+    }
 }
 
 /// Axis for [`attach_focus_roving`] / [`focus_roving_key`].

@@ -180,6 +180,82 @@ fn active_index_follows_zero_padded_value() {
 }
 
 #[test]
+fn combobox_navigation_survives_repaint_and_filtering() {
+    use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+    use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+    use std::{cell::RefCell, rc::Rc};
+    use winit::event::{ElementState, KeyEvent};
+    use winit::keyboard::{KeyCode, KeyLocation, PhysicalKey};
+
+    for all_disabled in [false, true] {
+        reset_registered_anchors();
+        let live = Rc::new(RefCell::new(Element::new()));
+        install_test_reconcile_root(live.clone());
+        let (owner, (open, value, active)) = create_root(|| {
+            let open = use_signal("cb-nav__combo_open", || false);
+            let value = use_signal("cb-nav__combo_value", || "a".to_string());
+            let active = use_signal("cb-nav__combo_active", || 0usize);
+            let live = live.clone();
+            crate::core::reactivity::create_effect(move || {
+                *live.borrow_mut() = combobox("cb-nav")
+                    .value_signal(value)
+                    .item(ComboboxItemData::new("a", "Alpha").disabled(all_disabled))
+                    .item(ComboboxItemData::new("b", "Beta").disabled(true))
+                    .item(ComboboxItemData::new("c", "Charlie").disabled(true))
+                    .item(ComboboxItemData::new("d", "Delta").disabled(all_disabled))
+                    .into();
+            });
+            (open, value, active)
+        });
+        let press = |key: NamedKey| {
+            let handler = crate::core::tree::find_in_tree(&live.borrow(), |el| {
+                el.focus_id.as_deref() == Some("input:cb-nav")
+            }).unwrap().on_key_down.clone().unwrap();
+            assert!((handler.borrow_mut())(KeyEvent {
+                physical_key: PhysicalKey::Code(KeyCode::Enter),
+                logical_key: Key::Named(key),
+                text: None,
+                location: KeyLocation::Standard,
+                state: ElementState::Pressed,
+                repeat: false,
+                text_with_all_modifiers: None,
+                key_without_modifiers: Key::Named(key),
+            }));
+            drain_deferred_view_remounts();
+        };
+        press(NamedKey::ArrowDown);
+        assert!(open.peek());
+        if all_disabled {
+            assert_eq!(active.peek(), usize::MAX);
+            press(NamedKey::ArrowDown);
+            press(NamedKey::Enter);
+            assert_eq!(value.peek(), "a");
+            assert!(open.peek());
+        } else {
+            for (key, expected) in [
+                (NamedKey::ArrowDown, 3), (NamedKey::ArrowDown, 0),
+                (NamedKey::ArrowUp, 3), (NamedKey::Home, 0), (NamedKey::End, 3),
+            ] {
+                press(key);
+                assert_eq!(active.peek(), expected);
+            }
+            commit_value("cb-nav", "Del".into());
+            drain_deferred_view_remounts();
+            assert_eq!(use_signal(input_value_signal_key("cb-nav").as_str(), String::new).peek(), "Del");
+            assert!(open.peek(), "typing keeps the menu open");
+            assert_eq!(active.peek(), 0, "retain Delta by value after filtering");
+            press(NamedKey::Enter);
+            assert_eq!(value.peek(), "d");
+            assert!(!open.peek());
+        }
+        clear_test_reconcile_root();
+        drop(live);
+        drop(owner);
+        reset_registered_anchors();
+    }
+}
+
+#[test]
 fn combobox_input_is_not_a_structure_island() {
     let (_owner, el) = create_root(|| {
         combobox("cb_n4")

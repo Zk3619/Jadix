@@ -41,7 +41,9 @@ fn node(id: NodeId, content: NodeContent, width: f32, height: f32) -> Presentati
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessible_description: None,
             accessible_name: None,
+            accessibility_relations: Default::default(),
             style: style::NodeStyle {
                 width: Some(width),
                 height: Some(height),

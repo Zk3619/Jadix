@@ -23,7 +23,7 @@ use crate::core::tree::Element;
 use crate::utils::font::{set_text_defaults, text_defaults};
 use crate::utils::take_packed;
 
-use super::window_chrome::{WindowBackdrop, WindowOptions};
+use super::window_chrome::{ScreenOrientations, WindowBackdrop, WindowOptions};
 
 thread_local! {
     // Apply RSX window patches only when their requested values change, so a
@@ -56,6 +56,7 @@ pub(crate) fn seed_window_config(id: winit::window::WindowId, options: &WindowOp
                 maximized: Some(options.maximized),
                 fullscreen: Some(options.fullscreen),
                 fullscreen_shortcuts: Some(options.fullscreen_shortcuts),
+                screen_orientations: Some(options.screen_orientations),
                 close_with_primary: Some(options.close_with_primary),
                 always_on_top: Some(options.always_on_top),
                 ..Default::default()
@@ -80,6 +81,8 @@ pub struct AppConfig {
     pub maximized: Option<bool>,
     pub fullscreen: Option<bool>,
     pub fullscreen_shortcuts: Option<bool>,
+    /// Startup-only orientation policy for platforms that support it.
+    pub screen_orientations: Option<ScreenOrientations>,
     pub close_with_primary: Option<bool>,
     /// Startup-only; set on the builder before mount/run.
     pub instance_policy: Option<super::InstancePolicy>,
@@ -139,6 +142,9 @@ impl AppConfig {
         }
         if let Some(v) = self.fullscreen_shortcuts {
             o.fullscreen_shortcuts = v;
+        }
+        if let Some(v) = self.screen_orientations {
+            o.screen_orientations = v;
         }
         if let Some(v) = self.close_with_primary {
             o.close_with_primary = v;
@@ -391,6 +397,7 @@ pub struct AppBuilder {
     config: AppConfig,
     children: Vec<Element>,
     startup: Option<super::StartupHandle>,
+    app_quit_handlers: Vec<crate::core::reactivity::AppQuitHandler>,
 }
 
 /// Start an [`AppBuilder`]. Equivalent RSX tag is [`crate::components::App`].
@@ -406,6 +413,17 @@ pub fn launch<F: FnMut() -> Element + 'static>(root: F) {
 }
 
 impl AppBuilder {
+    /// Register asynchronous cleanup run when the final application window quits.
+    pub fn on_app_quit<F, Fut>(mut self, mut handler: F) -> Self
+    where
+        F: FnMut() -> Fut + 'static,
+        Fut: std::future::Future<Output = ()> + 'static,
+    {
+        self.app_quit_handlers
+            .push(Box::new(move || Box::pin(handler())));
+        self
+    }
+
     pub fn startup(mut self, startup: impl Into<super::StartupHandle>) -> Self {
         self.startup = Some(startup.into());
         self
@@ -478,6 +496,11 @@ impl AppBuilder {
 
     pub fn fullscreen_shortcuts(mut self, enabled: bool) -> Self {
         self.config.fullscreen_shortcuts = Some(enabled);
+        self
+    }
+
+    pub fn screen_orientations(mut self, orientations: ScreenOrientations) -> Self {
+        self.config.screen_orientations = Some(orientations);
         self
     }
 
@@ -674,14 +697,19 @@ impl AppBuilder {
         if let Some(enabled) = self.config.opacity_groups {
             crate::core::tree::set_opacity_groups_enabled(enabled);
         }
-        super::lifecycle::run_startup(self.config.into_window_options(), self.startup, ui);
+        super::lifecycle::run_startup(
+            self.config.into_window_options(),
+            self.startup,
+            self.app_quit_handlers,
+            ui,
+        );
     }
 
     /// **Builder 程序入口**：本 builder 的配置作为文档壳，每帧把 `body` 当作其子节点重建。
     pub fn mount<F: FnMut() -> Element + 'static>(self, mut body: F) {
         let config = self.config;
         let opts = config.clone().into_window_options();
-        super::lifecycle::run_startup(opts, self.startup, move || {
+        super::lifecycle::run_startup(opts, self.startup, self.app_quit_handlers, move || {
             materialize_app_shell(config.clone(), take_packed(body()))
         });
     }

@@ -112,6 +112,9 @@ pub struct InputBuilder {
     line_height_px: Option<f32>,
     leading_scale: Option<f32>,
     value: Option<Signal<String>>,
+    max_length: Option<usize>,
+    on_submit: Option<crate::core::tree::Handler>,
+    on_composition_change: Option<crate::core::tree::Handler<Option<String>>>,
     /// CSS `text-align` (default `start`).
     text_align: crate::style::TextAlign,
     /// CSS `caret-color`. `None` → theme token `caret`.
@@ -143,6 +146,9 @@ default [] number_steppers: bool,
 plain [] input_type: Option<String>,
 plain [] step: Option<f32>,
 plain [] value: Option<Signal<String>>,
+plain [] max_length: Option<usize>,
+plain [] on_submit: Option<crate::core::tree::Handler>,
+plain [] on_composition_change: Option<crate::core::tree::Handler<Option<String>>>,
 default [] truncate: bool,
 plain [] text_overflow: Option<String>,
 plain [] selection_on_blur: Option<String>,
@@ -162,6 +168,12 @@ plain [] children: Option<Element>,
         .password_toggle(password_toggle)
         .number_steppers(number_steppers);
     let _ = (truncate, text_overflow);
+    if let Some(mut handler) = on_submit {
+        builder = builder.on_submit(move || (handler.0)(()));
+    }
+    if let Some(mut handler) = on_composition_change {
+        builder = builder.on_composition_change(move |value| (handler.0)(value));
+    }
     if let Some(policy) = selection_on_blur {
         builder = builder.selection_on_blur(policy);
     }
@@ -172,6 +184,9 @@ plain [] children: Option<Element>,
         builder = builder.step(s);
     }
 
+    if let Some(limit) = max_length {
+        builder = builder.max_length(limit);
+    }
     if let Some(sig) = value {
         builder = builder.value_signal(sig);
     }
@@ -255,6 +270,9 @@ pub fn input(id: &str) -> InputBuilder {
         line_height_px: None,
         leading_scale: None,
         value: None,
+        max_length: None,
+        on_submit: None,
+        on_composition_change: None,
         text_align: crate::style::TextAlign::Start,
         caret_color: None,
         selection_background: None,
@@ -269,6 +287,24 @@ pub fn input(id: &str) -> InputBuilder {
 
 impl InputBuilder {
     crate::impl_slot_chrome_methods!();
+
+    /// Submit on Return (including Shift+Return), outside IME composition.
+    pub fn on_submit(mut self, mut callback: impl FnMut() + 'static) -> Self {
+        self.on_submit = Some(crate::core::tree::Handler(Box::new(move |()| callback())));
+        self
+    }
+
+    /// Observe IME preedit text (`Some`) and composition end (`None`) separately
+    /// from the controlled value and `on_change`.
+    pub fn on_composition_change(
+        mut self,
+        mut callback: impl FnMut(Option<String>) + 'static,
+    ) -> Self {
+        self.on_composition_change = Some(crate::core::tree::Handler(Box::new(move |value| {
+            callback(value)
+        })));
+        self
+    }
 
     pub fn placeholder(mut self, s: impl Into<String>) -> Self {
         self.placeholder = s.into();
@@ -367,6 +403,13 @@ impl InputBuilder {
     }
     /// Controlled value: paint peek + [`crate::utils::text_field::bind_controlled_value`].
     /// While focused or IME composing, an external `set` does not steal caret (N.7).
+    /// Maximum user-edit length in UTF-16 units; inserted graphemes stay whole.
+    pub fn max_length(mut self, limit: usize) -> Self {
+        assert!(limit <= jadix::presentation::input::MAX_INPUT_LENGTH);
+        self.max_length = Some(limit);
+        self
+    }
+
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
         self
@@ -521,6 +564,7 @@ impl From<InputBuilder> for Element {
             line_height_px: builder.line_height_px,
             leading_scale: builder.leading_scale,
             value: builder.value,
+            max_length: builder.max_length,
             text_align: builder.text_align,
             caret_color: builder.caret_color,
             selection_bg: builder.selection_background,
@@ -545,6 +589,16 @@ impl From<InputBuilder> for Element {
                 }
             },
         }));
+        if !builder.disabled {
+            if let Some(mut handler) = builder.on_submit {
+                crate::authoring::text::on_submit(&mut element, false, move || (handler.0)(()));
+            }
+        }
+        if let Some(mut handler) = builder.on_composition_change {
+            crate::authoring::text::on_composition_change(&mut element, move |value| {
+                (handler.0)(value)
+            });
+        }
         crate::authoring::native::mark_input(
             &mut element,
             native_field,

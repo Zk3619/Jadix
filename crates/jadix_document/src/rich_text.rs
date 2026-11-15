@@ -87,6 +87,7 @@ impl Document {
             format: DocumentFormat::RichText,
             blocks: result,
             references: false,
+            raw_html: true,
         }));
         replace_rich(&base, base.source().clone(), 0..0, "")
     }
@@ -182,6 +183,7 @@ impl Document {
             format: self.format(),
             blocks,
             references: false,
+            raw_html: self.0.raw_html,
         })))
     }
 
@@ -201,6 +203,7 @@ impl Document {
             format: self.format(),
             blocks,
             references: false,
+            raw_html: self.0.raw_html,
         }))
     }
 }
@@ -331,6 +334,7 @@ pub(super) fn replace_rich(
         format: DocumentFormat::RichText,
         blocks: result,
         references: false,
+        raw_html: true,
     }))
 }
 

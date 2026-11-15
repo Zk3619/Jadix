@@ -26,11 +26,14 @@
 //! ```
 
 use std::sync::OnceLock;
+use winit::event::ElementState;
+use winit::keyboard::{Key, NamedKey};
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::components::label::label;
 use crate::core::reactivity::{
-    create_context, provide_context, use_context, use_signal, with_child_owner, Context, Signal,
+    create_context, create_effect, on_cleanup, provide_context, use_context, use_signal,
+    with_child_owner, Context, Signal,
 };
 use crate::core::tree::Element;
 use crate::impl_simple_slot_builder;
@@ -45,7 +48,9 @@ use crate::utils::anchored_overlay::{
 };
 use crate::utils::floating_motion::FloatingMotionKind;
 use crate::utils::hover_intent::{
-    bind_hover_intent_effect, chain_region_hover, set_hovered, HoverIntent,
+    bind_hover_intent_effect, chain_region_hover, clear_pointer_tooltip, end_pointer_tooltip_grace,
+    pointer_tooltip_enter, pointer_tooltip_leave, set_hovered, HoverIntent,
+    DEFAULT_HOVER_OPEN_DELAY_MS, NEVER_HOVER_DELAY_MS,
 };
 use crate::utils::popup::{PopupPlacement, FLOATING_TRIGGER_GAP};
 
@@ -62,8 +67,22 @@ pub struct TooltipCtx {
     pub trigger_fid: Signal<String>,
     trigger_hovered: Signal<bool>,
     content_hovered: Signal<bool>,
-    open_delay_ms: Signal<u64>,
-    close_delay_ms: Signal<u64>,
+    dismissed: Signal<bool>,
+    /// Delay before pointer hover opens the tooltip, in milliseconds.
+    pub open_delay_ms: Signal<u64>,
+    /// Delay before pointer leave closes the tooltip, in milliseconds.
+    pub close_delay_ms: Signal<u64>,
+}
+
+impl TooltipCtx {
+    fn dismiss(&self) {
+        self.dismissed.set(true);
+        set_hovered(self.content_hovered, false);
+        self.open.set(false);
+        crate::utils::hover_intent::clear(&self.id);
+        clear_pointer_tooltip(&self.id);
+        end_pointer_tooltip_grace();
+    }
 }
 
 fn tooltip_context() -> Context<TooltipCtx> {
@@ -88,6 +107,17 @@ pub fn tooltip_scope(
     open: Option<Signal<bool>>,
     body: impl FnOnce() -> Element,
 ) -> Element {
+    tooltip_scope_with_delays(id, open, None, None, body)
+}
+
+/// Provide Tooltip context with root-level pointer delays before building its children.
+pub fn tooltip_scope_with_delays(
+    id: impl Into<String>,
+    open: Option<Signal<bool>>,
+    open_delay: Option<u64>,
+    close_delay: Option<u64>,
+    body: impl FnOnce() -> Element,
+) -> Element {
     let id = crate::utils::resolve_instance_id(id, "tooltip");
     let open = open.unwrap_or_else(|| use_signal(format!("{id}__tooltip_open").as_str(), || false));
     let trigger_fid = use_signal(format!("{id}__tooltip_trigger_fid").as_str(), || {
@@ -95,8 +125,17 @@ pub fn tooltip_scope(
     });
     let trigger_hovered = use_signal(format!("{id}__tooltip_th").as_str(), || false);
     let content_hovered = use_signal(format!("{id}__tooltip_ch").as_str(), || false);
-    let open_delay_ms = use_signal(format!("{id}__tooltip_od").as_str(), || 0_u64);
+    let dismissed = use_signal(format!("{id}__tooltip_dismissed").as_str(), || false);
+    let open_delay_ms = use_signal(format!("{id}__tooltip_od").as_str(), || {
+        DEFAULT_HOVER_OPEN_DELAY_MS
+    });
     let close_delay_ms = use_signal(format!("{id}__tooltip_cd").as_str(), || 0_u64);
+    if let Some(ms) = open_delay {
+        open_delay_ms.set(ms);
+    }
+    if let Some(ms) = close_delay {
+        close_delay_ms.set(ms);
+    }
     let mut root = with_child_owner(|| {
         provide_anchored_overlay_context(open, id.clone(), trigger_fid);
         provide_context(
@@ -107,6 +146,7 @@ pub fn tooltip_scope(
                 trigger_fid,
                 trigger_hovered,
                 content_hovered,
+                dismissed,
                 open_delay_ms,
                 close_delay_ms,
             },
@@ -121,6 +161,8 @@ pub fn tooltip_scope(
                 close_delay_ms,
             },
         );
+        let cleanup_id = id.clone();
+        on_cleanup(move || clear_pointer_tooltip(&cleanup_id));
         body()
     });
     if root.template_id.is_none() {
@@ -167,6 +209,94 @@ fn chain_hover(
     chain_region_hover(el, on_enter, on_leave)
 }
 
+fn chain_trigger_hover(el: Element, ctx: TooltipCtx, focus_id: String) -> Element {
+    let focused_id = use_signal("__jadix_button_focus_id", String::new);
+    let focus_visible = use_signal("__jadix_focus_visible", || false);
+    let pointer_hovered = use_signal(
+        format!("{focus_id}__tooltip_pointer_hovered").as_str(),
+        || false,
+    );
+    let keyboard_focused = use_signal(
+        format!("{focus_id}__tooltip_keyboard_focused").as_str(),
+        || false,
+    );
+    let dismissed = ctx.dismissed;
+    let trigger_hovered = ctx.trigger_hovered;
+    let open = ctx.open;
+    create_effect(move || {
+        let is_keyboard_focused = focus_visible.get() && focused_id.get() == focus_id;
+        let was_keyboard_focused = keyboard_focused.peek();
+        set_hovered(keyboard_focused, is_keyboard_focused);
+        if is_keyboard_focused && !was_keyboard_focused {
+            dismissed.set(false);
+        }
+        let is_dismissed = dismissed.get();
+        set_hovered(
+            trigger_hovered,
+            (pointer_hovered.get() || is_keyboard_focused) && !is_dismissed,
+        );
+        if is_keyboard_focused && !is_dismissed {
+            open.set(true);
+        }
+    });
+    let enter_id = ctx.id.clone();
+    let leave_id = ctx.id.clone();
+    let open_delay_ms = ctx.open_delay_ms;
+    let mut el = chain_hover(
+        el,
+        move || {
+            // Repeated hover notifications after a press are not a new entry.
+            if pointer_hovered.peek() {
+                return;
+            }
+            dismissed.set(false);
+            let skip_delay = open_delay_ms.peek() != NEVER_HOVER_DELAY_MS
+                && pointer_tooltip_enter(&enter_id, open);
+            pointer_hovered.set(true);
+            if skip_delay {
+                open.set(true);
+            }
+        },
+        move || {
+            pointer_tooltip_leave(&leave_id);
+            pointer_hovered.set(false);
+        },
+    );
+    let click_ctx = ctx.clone();
+    let mut click = el.on_click.clone();
+    el = el.on_click(move || {
+        click_ctx.dismiss();
+        if let Some(ref mut handler) = click {
+            handler.borrow_mut()();
+        }
+    });
+    let press_ctx = ctx.clone();
+    let mut pointer_down = el.on_mousedown.clone();
+    el = el.on_pointer_down(move |event| {
+        press_ctx.dismiss();
+        if let Some(ref mut handler) = pointer_down {
+            handler.borrow_mut()(event);
+        }
+    });
+    crate::authoring::keys::attach(&mut el, move |event| {
+        if event.state == ElementState::Pressed
+            && matches!(event.key, Key::Named(NamedKey::Escape))
+            && (ctx.open.peek() || ctx.trigger_hovered.peek() || ctx.content_hovered.peek())
+        {
+            ctx.dismiss();
+            return true;
+        }
+        false
+    });
+    let mut key_down = el.on_key_down.clone();
+    el.on_key_down(move |event| {
+        end_pointer_tooltip_grace();
+        key_down
+            .as_mut()
+            .is_some_and(|handler| handler.borrow_mut()(event))
+    })
+}
+
 /// solid-ui / shadcn `side` → [`PopupPlacement`]（`bottom`/`top` 为水平居中，空间不足时贴边）。
 pub fn tooltip_side_to_placement(side: &str) -> PopupPlacement {
     match side.trim().to_ascii_lowercase().as_str() {
@@ -201,14 +331,6 @@ plain [] children: Option<Element>,
     if let Some(ms) = close_delay {
         ctx.close_delay_ms.set(ms);
     }
-    let enter = {
-        let h = ctx.trigger_hovered;
-        move || set_hovered(h, true)
-    };
-    let leave = {
-        let h = ctx.trigger_hovered;
-        move || set_hovered(h, false)
-    };
     let trigger_id = if id.is_empty() {
         format!("{}__tooltip_trigger", ctx.id)
     } else {
@@ -218,7 +340,6 @@ plain [] children: Option<Element>,
 
     match children {
         None => {
-            let h = ctx.trigger_hovered;
             let mut el: Element = interactive(
                 label(trigger_id.as_str())
                     .text(crate::tr_default_zh("jadix.tooltip.hover", "Hover", "悬停"))
@@ -227,12 +348,7 @@ plain [] children: Option<Element>,
             .focus_id(trigger_id.as_str())
             .focusable(true)
             .into();
-            el = chain_hover(
-                el,
-                move || set_hovered(h, true),
-                move || set_hovered(h, false),
-            );
-            el
+            chain_trigger_hover(el, ctx, trigger_id)
         }
         Some(c) if is_text_leaf(&c) => {
             let t = c.text.clone().unwrap_or_default();
@@ -240,8 +356,7 @@ plain [] children: Option<Element>,
                 .focus_id(trigger_id.as_str())
                 .focusable(true)
                 .into();
-            el = chain_hover(el, enter, leave);
-            el
+            chain_trigger_hover(el, ctx, trigger_id)
         }
         Some(mut c) => {
             if c.focus_id.is_none() {
@@ -249,7 +364,8 @@ plain [] children: Option<Element>,
             }
             let fid = c.focus_id.clone().unwrap_or(trigger_id);
             ctx.trigger_fid.set(fid);
-            chain_hover(c, enter, leave)
+            let fid = ctx.trigger_fid.peek();
+            chain_trigger_hover(c, ctx, fid)
         }
     }
 }
@@ -282,6 +398,7 @@ impl TooltipContentOpts {
 pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 'static) -> Element {
     let ctx = require_tooltip("TooltipContent");
     let content_hovered = ctx.content_hovered;
+    let dismissed = ctx.dismissed;
     let chrome = opts.panel;
     let placement = tooltip_side_to_placement(&opts.side);
     let ao_opts = AnchoredOverlayContentOpts {
@@ -302,7 +419,7 @@ pub fn tooltip_content(opts: TooltipContentOpts, body: impl Fn() -> Element + 's
         let ch = content_hovered;
         chain_hover(
             panel,
-            move || set_hovered(ch, true),
+            move || set_hovered(ch, !dismissed.peek()),
             move || set_hovered(ch, false),
         )
     })
@@ -358,6 +475,8 @@ pub struct TooltipBuilder {
     content: String,
     open: Option<Signal<bool>>,
     placement: PopupPlacement,
+    open_delay_ms: Option<u64>,
+    close_delay_ms: Option<u64>,
 }
 
 pub fn tooltip(id: impl Into<String>, content: impl Into<String>) -> TooltipBuilder {
@@ -366,6 +485,8 @@ pub fn tooltip(id: impl Into<String>, content: impl Into<String>) -> TooltipBuil
         content: content.into(),
         open: None,
         placement: PopupPlacement::BottomCenter,
+        open_delay_ms: None,
+        close_delay_ms: None,
     }
 }
 
@@ -380,20 +501,48 @@ impl TooltipBuilder {
         self
     }
 
+    /// Pointer-hover delay before opening, in milliseconds. Defaults to 300; 0 opens immediately.
+    /// `u64::MAX` disables hover opening; explicit state changes remain available.
+    pub fn open_delay(mut self, delay: u64) -> Self {
+        self.open_delay_ms = Some(delay);
+        self
+    }
+
+    /// Delay after pointer leave, in milliseconds. Defaults to 0.
+    /// `u64::MAX` disables hover closing.
+    pub fn close_delay(mut self, delay: u64) -> Self {
+        self.close_delay_ms = Some(delay);
+        self
+    }
+
+    /// Compatibility alias for [`Self::open_delay`].
+    #[doc(hidden)]
+    pub fn open_delay_ms(self, delay: u64) -> Self {
+        self.open_delay(delay)
+    }
+
+    /// Compatibility alias for [`Self::close_delay`].
+    #[doc(hidden)]
+    pub fn close_delay_ms(self, delay: u64) -> Self {
+        self.close_delay(delay)
+    }
+
     /// 旧 API：`trigger(|open| …)`；内部接到 [`tooltip_scope`] + Content。
     pub fn trigger(self, build: impl FnOnce(Signal<bool>) -> Element) -> Element {
         let id = self.id.clone();
         let content = self.content.clone();
         let open = self.open;
         let side = self.placement.as_attr().to_string();
+        let open_delay_ms = self.open_delay_ms;
+        let close_delay_ms = self.close_delay_ms;
         tooltip_scope(id, open, || {
             let ctx = use_tooltip().expect("tooltip_scope");
             let open_sig = ctx.open;
             let trigger = build(open_sig);
             let trigger = TooltipTrigger(TooltipTriggerProps {
                 id: String::new(),
-                open_delay: None,
-                close_delay: None,
+                open_delay: open_delay_ms,
+                close_delay: close_delay_ms,
                 children: Some(trigger),
                 base: None,
             });

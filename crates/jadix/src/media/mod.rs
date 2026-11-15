@@ -31,9 +31,9 @@ pub use image::{
 };
 pub use playback::*;
 pub use remote::{
-    clear_remote_asset_fetcher, fetch_remote_bytes, fetch_remote_bytes_shared, is_remote_src,
-    remote_asset_enabled, remote_asset_fetcher_installed, set_remote_asset_fetcher,
-    RemoteAssetFetcher,
+    clear_remote_asset_fetcher, fetch_remote_bytes, fetch_remote_bytes_shared,
+    fetch_remote_bytes_shared_cancellable, is_remote_src, remote_asset_enabled,
+    remote_asset_fetcher_installed, set_remote_asset_fetcher, RemoteAssetFetcher,
 };
 #[cfg(feature = "remote-asset-cache")]
 pub use remote_cache::CachedRemoteAssetFetcher;

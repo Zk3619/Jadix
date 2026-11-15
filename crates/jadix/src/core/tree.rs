@@ -22,16 +22,16 @@ pub fn opacity_groups_enabled() -> bool {
 }
 
 pub use crate::layout::dimension::{
-    css_root_font_size_px, dim_kind, dim_length_px, dimension_to_lp, dimension_to_lpa, em, lp_kind,
-    lp_length_px, lpa_kind, lpa_length_px, px, rem, CssDim, CssRectPair, DimKind, IntoBorderWidths,
-    IntoCssDim, IntoCssRectPair, IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage,
-    IntoOpacity, PercentAxis, UnitCtx, CSS_ROOT_FONT_SIZE_PX,
+    CSS_ROOT_FONT_SIZE_PX, CssDim, CssRectPair, DimKind, IntoBorderWidths, IntoCssDim,
+    IntoCssRectPair, IntoDimension, IntoF32, IntoF32Raw, IntoLengthPercentage, IntoOpacity,
+    PercentAxis, UnitCtx, css_root_font_size_px, dim_kind, dim_length_px, dimension_to_lp,
+    dimension_to_lpa, em, lp_kind, lp_length_px, lpa_kind, lpa_length_px, px, rem,
 };
 pub use crate::layout::layout_tree::{LayoutProfileMs, LayoutTree, RenderResult, TextLayoutInfo};
 pub use crate::style::{
-    parse_color, parse_text_color, CursorKind, CursorValue, IntoAlignItems, IntoCursor,
-    IntoFlexWrap, IntoJustifyContent, IntoOverflow, IntoPaintColor, IntoTextColor, LineStyle,
-    TextAlignDeclaration, TextDecorationStyle, TextOverflow, TextStyle,
+    CursorKind, CursorValue, IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent,
+    IntoOverflow, IntoPaintColor, IntoTextColor, LineStyle, TextAlignDeclaration,
+    TextDecorationStyle, TextOverflow, TextStyle, parse_color, parse_text_color,
 };
 pub use crate::style::{Style, UnitSlot};
 
@@ -88,6 +88,55 @@ pub enum PointerEvents {
 }
 
 pub const ATTR_POINTER_EVENTS: &str = "jadix_pointer_events";
+pub const ATTR_HIT_SLOP: &str = "jadix_hit_slop";
+
+/// Expands an element's border-box pointer target without changing layout or paint.
+/// Edge order is top, right, bottom, left, matching NSH's `EdgeInsets`.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HitSlop {
+    pub top: f32,
+    pub right: f32,
+    pub bottom: f32,
+    pub left: f32,
+}
+
+impl HitSlop {
+    pub fn all(value: f32) -> Self {
+        Self::from(value)
+    }
+
+    pub fn new(top: f32, right: f32, bottom: f32, left: f32) -> Self {
+        Self::from([top, right, bottom, left])
+    }
+
+    pub(crate) fn edges(self) -> [f32; 4] {
+        [self.top, self.right, self.bottom, self.left]
+    }
+}
+
+impl From<f32> for HitSlop {
+    fn from(value: f32) -> Self {
+        Self::new(value, value, value, value)
+    }
+}
+
+impl From<[f32; 4]> for HitSlop {
+    fn from([top, right, bottom, left]: [f32; 4]) -> Self {
+        let clean = |value: f32| {
+            if value.is_finite() {
+                value.max(0.0)
+            } else {
+                0.0
+            }
+        };
+        Self {
+            top: clean(top),
+            right: clean(right),
+            bottom: clean(bottom),
+            left: clean(left),
+        }
+    }
+}
 
 impl PointerEvents {
     pub fn parse(raw: &str) -> Self {
@@ -392,9 +441,9 @@ fn ensure_animation_slots(list: &mut Vec<crate::style::AnimationEntry>, n: usize
 /// Parse one or more CSS `animation` shorthand declarations (comma-separated).
 pub fn parse_animation_shorthand(value: &str) -> Vec<crate::style::AnimationEntry> {
     use crate::style::{
-        split_comma_list, split_ws_tokens, AnimationComposition, AnimationDirection,
-        AnimationEntry, AnimationFillMode, AnimationIterationCount, AnimationPlayState,
-        AnimationTimeline, TimingFunction,
+        AnimationComposition, AnimationDirection, AnimationEntry, AnimationFillMode,
+        AnimationIterationCount, AnimationPlayState, AnimationTimeline, TimingFunction,
+        split_comma_list, split_ws_tokens,
     };
     let mut out = Vec::new();
     for segment in split_comma_list(value) {
@@ -983,6 +1032,11 @@ pub struct ElementInner {
     pub(crate) collect_extent_valid: bool,
     /// Bottom-up paint fingerprint for collect skip ([`crate::layout::collect_cache`]).
     pub(crate) collect_paint_hash: u64,
+    /// Order-sensitive child aggregate and local stamp for addressed leaf updates.
+    pub(crate) collect_child_hash: u64,
+    pub(crate) collect_self_hash: u64,
+    /// Refreshed with paint stamps; shared offscreen admission summary.
+    pub(crate) subtree_offscreen_unsupported: bool,
     /// Some descendant (or self) must recollect every frame (spin / shimmer / caret).
     /// Portal side-channels do **not** set this — see [`Self::collect_skip_side_channel`].
     pub(crate) collect_skip_live: bool,
@@ -1043,6 +1097,7 @@ pub struct ElementInner {
     /// Layout-pass used sizes for `max-height: auto` → content px keyframes.
     pub used_layout: crate::style::UsedLayout,
     pub on_click: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut()>>>,
+    pub on_accessibility_value: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(f64) -> bool>>>,
     pub on_wheel: Option<crate::app::pointer_events::WheelHandler>,
     pub on_hover: Option<std::rc::Rc<std::cell::RefCell<dyn FnMut(bool)>>>,
     /// DOM [`mousedown`](https://developer.mozilla.org/zh-CN/docs/Web/API/Element/mousedown_event).
@@ -1072,6 +1127,14 @@ pub struct ElementInner {
     >,
     /// DOM `mouseout` (bubbles; [`crate::app::pointer_events::MouseEvent::related_target`] is the node being entered).
     pub on_mouseout: Option<
+        std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
+    >,
+    /// DOM `mouseenter` (does not bubble).
+    pub on_mouseenter: Option<
+        std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
+    >,
+    /// DOM `mouseleave` (does not bubble).
+    pub on_mouseleave: Option<
         std::rc::Rc<std::cell::RefCell<dyn FnMut(&crate::app::pointer_events::PointerEvent)>>,
     >,
     /// Keyboard on focused node. Return `true` if the event is consumed.
@@ -1172,6 +1235,9 @@ fn blank_inner() -> ElementInner {
         collect_extent: [0.0, 0.0],
         collect_extent_valid: false,
         collect_paint_hash: 0,
+        collect_child_hash: 0,
+        collect_self_hash: 0,
+        subtree_offscreen_unsupported: false,
         collect_skip_live: false,
         css_scroll_active: false,
         css_hover_armed: false,
@@ -1202,6 +1268,7 @@ fn blank_inner() -> ElementInner {
         specified_present: Default::default(),
         used_layout: Default::default(),
         on_click: None,
+        on_accessibility_value: None,
         on_wheel: None,
         on_hover: None,
         on_mousedown: None,
@@ -1211,6 +1278,8 @@ fn blank_inner() -> ElementInner {
         on_mousemove: None,
         on_mouseover: None,
         on_mouseout: None,
+        on_mouseenter: None,
+        on_mouseleave: None,
         on_key_down: None,
         on_unmount: None,
         tree_presentation_sync: Vec::new(),
@@ -2050,6 +2119,13 @@ impl Element {
         self
     }
 
+    /// Handle a finite numeric value requested by assistive technology.
+    /// Return whether the control accepted it; clamp and step in the control's value domain.
+    pub fn on_accessibility_value(mut self, handler: impl FnMut(f64) -> bool + 'static) -> Self {
+        self.on_accessibility_value = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
     pub fn on_wheel(mut self, handler: impl FnMut([f32; 2]) -> bool + 'static) -> Self {
         self.on_wheel = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
         self
@@ -2140,6 +2216,24 @@ impl Element {
         self
     }
 
+    /// DOM `mouseenter`. Unlike `mouseover`, it does not bubble.
+    pub fn on_mouseenter(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.on_mouseenter = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
+    /// DOM `mouseleave`. Unlike `mouseout`, it does not bubble.
+    pub fn on_mouseleave(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.on_mouseleave = Some(std::rc::Rc::new(std::cell::RefCell::new(handler)));
+        self
+    }
+
     /// 节点从 UI 树移除且钩子 `Rc` 归零时调用一次。
     pub fn on_unmount(mut self, f: impl FnOnce() + 'static) -> Self {
         self.on_unmount = Some(UnmountHook::new(f));
@@ -2173,6 +2267,31 @@ impl Element {
         // Always persist（含 `auto`），以便 Svg 叶区分「显式 auto」与「未设置 → 默认 bounding-box」。
         self.set_attr(ATTR_POINTER_EVENTS, parsed.as_str());
         self
+    }
+
+    /// Expand this element's border-box pointer target by a uniform or per-edge inset.
+    ///
+    /// Values are in Jadix logical pixels and ordered `[top, right, bottom, left]`.
+    /// The expanded area remains subject to ancestor overflow and this element's `clip-path`.
+    pub fn hit_slop(mut self, slop: impl Into<HitSlop>) -> Self {
+        let [top, right, bottom, left] = slop.into().edges();
+        self.set_attr(ATTR_HIT_SLOP, format!("{top} {right} {bottom} {left}"));
+        self
+    }
+
+    pub fn hit_slop_edges(&self) -> HitSlop {
+        let Some(value) = self.attrs.get(ATTR_HIT_SLOP) else {
+            return HitSlop::default();
+        };
+        let mut values = value
+            .split_ascii_whitespace()
+            .filter_map(|part| part.parse::<f32>().ok());
+        HitSlop::from([
+            values.next().unwrap_or(0.0),
+            values.next().unwrap_or(0.0),
+            values.next().unwrap_or(0.0),
+            values.next().unwrap_or(0.0),
+        ])
     }
 
     /// [`PointerEvents::None`] — 整树不命中。
@@ -2615,6 +2734,16 @@ impl Element {
     }
     pub fn text_overflow(mut self, overflow: impl Into<TextOverflow>) -> Self {
         self.apply_text_overflow_mode(overflow.into());
+        self
+    }
+    /// Limit static text's visible lines without discarding its source. A budget
+    /// above one enables wrapping; the caller controls the layout box height.
+    pub fn text_max_lines(mut self, lines: u16) -> Self {
+        self.text_style.max_lines = Some(lines.max(1));
+        if lines > 1 {
+            self.text_style.white_space = crate::style::WhiteSpace::Normal;
+            self.attrs.insert("white_space".into(), "normal".into());
+        }
         self
     }
     pub fn text_overflow_ellipsis(self) -> Self {
@@ -3111,7 +3240,7 @@ impl Element {
     /// Multiple entries separated by commas.
     pub fn transition(mut self, value: impl AsRef<str>) -> Self {
         use crate::style::{
-            split_comma_list, split_ws_tokens, TimingFunction, TransitionEntry, TransitionProperty,
+            TimingFunction, TransitionEntry, TransitionProperty, split_comma_list, split_ws_tokens,
         };
         self.style.transition.clear();
         for segment in split_comma_list(value.as_ref()) {
@@ -4601,14 +4730,6 @@ pub(crate) fn pointer_in_paint_border_box(
     ancestor_linear: crate::style::Mat2d,
     ancestor_scale: [f32; 2],
 ) -> bool {
-    let vis = visual_paint_aabb_with_ancestor(el, scroll_acc, ancestor_linear, ancestor_scale);
-    if !(world[0] >= vis[0]
-        && world[1] >= vis[1]
-        && world[0] <= vis[0] + vis[2]
-        && world[1] <= vis[1] + vis[3])
-    {
-        return false;
-    }
     let local = pointer_to_layout_local(el, world, scroll_acc, ancestor_linear, ancestor_scale);
     // `pointer_to_layout_local` is origin'd on the paint-vis box (overflow-visible
     // emoji ink is inflated past the leading-none strut). Testing against the
@@ -4621,8 +4742,20 @@ pub(crate) fn pointer_in_paint_border_box(
         el.style.overflow.x == taffy::style::Overflow::Visible,
         el.style.overflow.y == taffy::style::Overflow::Visible,
     );
-    if !(local[0] >= -0.5 && local[1] >= -0.5 && local[0] <= b[2] + 0.5 && local[1] <= b[3] + 0.5) {
+    let slop = el.hit_slop_edges().edges();
+    let left = slop[3];
+    let top = slop[0];
+    let right = b[2] + slop[1];
+    let bottom = b[3] + slop[2];
+    if !(local[0] >= -left - 0.5
+        && local[1] >= -top - 0.5
+        && local[0] <= right + 0.5
+        && local[1] <= bottom + 0.5)
+    {
         return false;
+    }
+    if local[0] < 0.0 || local[1] < 0.0 || local[0] > b[2] || local[1] > b[3] {
+        return true;
     }
     // Pointer hit must follow the painted border box. An AABB-only hit enters
     // rounded Fluent buttons/sidebar items through their transparent corners,
@@ -4683,11 +4816,7 @@ pub(crate) fn overflow_clip_axes_from(
     // CSS `overflow: auto` is stored as Taffy `Scroll`.
     let scrollport =
         is_scroll_viewport || matches!(overflow_x, Scroll) || matches!(overflow_y, Scroll);
-    if scrollport {
-        (true, true)
-    } else {
-        (ox, oy)
-    }
+    if scrollport { (true, true) } else { (ox, oy) }
 }
 
 /// Overflow / `scroll:` viewports clip hit-testing and class `:hover` to the layout border box.

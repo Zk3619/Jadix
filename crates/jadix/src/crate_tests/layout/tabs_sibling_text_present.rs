@@ -57,6 +57,7 @@ fn tabs_and_sibling(value: Signal<String>, tall_list: bool) -> Element {
                 value: None,
                 default_value: None,
                 options: None,
+                accessibility_label: None,
                 children: Some(frag(vec![
                     TabsTrigger(TabsTriggerProps {
                         value: Some("list".into()),

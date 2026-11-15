@@ -8,6 +8,13 @@ fn hover_bg() {
 }
 
 #[test]
+fn focus_within_bg() {
+    let t = parse_class_token("focus-within:bg-accent");
+    assert_eq!(t.variants, vec![VariantSelector::FocusWithin]);
+    assert_eq!(t.utility, "bg-accent");
+}
+
+#[test]
 fn stacked_dark_hover() {
     let t = parse_class_token("dark:hover:bg-primary");
     assert_eq!(

@@ -34,6 +34,7 @@ fn node(root: RootId, content: NodeContent) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessible_description: None,
             accessible_name: None,
             style: Default::default(),
         },

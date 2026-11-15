@@ -397,6 +397,102 @@ fn mousedown_and_mouseover_dispatch() {
 }
 
 #[test]
+fn mouseenter_leave_follow_changed_path_without_bubbling() {
+    let parent_enters = Rc::new(Cell::new(0u8));
+    let parent_leaves = Rc::new(Cell::new(0u8));
+    let left_enters = Rc::new(Cell::new(0u8));
+    let left_leaves = Rc::new(Cell::new(0u8));
+    let right_enters = Rc::new(Cell::new(0u8));
+    let right_leaves = Rc::new(Cell::new(0u8));
+
+    let mut left = Element::new();
+    left.layout_bounds = [0.0, 0.0, 20.0, 20.0];
+    left.focus_id = Some("left".into());
+    left = left
+        .on_mouseenter({
+            let count = left_enters.clone();
+            move |event| {
+                assert_eq!(event.event_type, "mouseenter");
+                assert_eq!(event.related_target.as_deref(), Some("right"));
+                count.set(count.get() + 1);
+            }
+        })
+        .on_mouseleave({
+            let count = left_leaves.clone();
+            move |event| {
+                assert_eq!(event.event_type, "mouseleave");
+                assert_eq!(event.related_target.as_deref(), Some("right"));
+                count.set(count.get() + 1);
+            }
+        });
+
+    let mut right = Element::new();
+    right.layout_bounds = [20.0, 0.0, 20.0, 20.0];
+    right.focus_id = Some("right".into());
+    right = right
+        .on_mouseenter({
+            let count = right_enters.clone();
+            move |event| {
+                assert_eq!(event.event_type, "mouseenter");
+                assert_eq!(event.related_target.as_deref(), Some("left"));
+                count.set(count.get() + 1);
+            }
+        })
+        .on_mouseleave({
+            let count = right_leaves.clone();
+            move |event| {
+                assert_eq!(event.event_type, "mouseleave");
+                assert_eq!(event.related_target.as_deref(), Some("left"));
+                count.set(count.get() + 1);
+            }
+        });
+
+    let mut parent = Element::new();
+    parent.layout_bounds = [0.0, 0.0, 40.0, 20.0];
+    parent.focus_id = Some("parent".into());
+    parent = parent
+        .on_mouseenter({
+            let count = parent_enters.clone();
+            move |_| count.set(count.get() + 1)
+        })
+        .on_mouseleave({
+            let count = parent_leaves.clone();
+            move |_| count.set(count.get() + 1)
+        });
+    parent.children.extend([left, right]);
+
+    let mut root = Element::new();
+    root.layout_bounds = [0.0, 0.0, 80.0, 40.0];
+    root.focus_id = Some("root".into());
+    root.children.push(parent);
+
+    let left_path = hit_path(&root, 5.0, 5.0);
+    let right_path = hit_path(&root, 25.0, 5.0);
+    let common = common_hit_path_prefix(&left_path, &right_path);
+    assert_eq!(left_path[common - 1].focus_id.as_deref(), Some("parent"));
+
+    let mut leave = MouseEvent::new(25.0, 5.0, MouseButton::Left, 0);
+    leave.event_type = "mouseleave";
+    leave.related_target = right_path.last().and_then(HitPathEntry::target_key);
+    for entry in left_path.iter().skip(common).rev() {
+        dispatch_pointer(std::slice::from_ref(entry), &mut leave, PointerKind::Leave);
+    }
+    let mut enter = MouseEvent::new(25.0, 5.0, MouseButton::Left, 0);
+    enter.event_type = "mouseenter";
+    enter.related_target = left_path.last().and_then(HitPathEntry::target_key);
+    for entry in right_path.iter().skip(common) {
+        dispatch_pointer(std::slice::from_ref(entry), &mut enter, PointerKind::Enter);
+    }
+
+    assert_eq!(left_leaves.get(), 1);
+    assert_eq!(right_enters.get(), 1);
+    assert_eq!(left_enters.get(), 0);
+    assert_eq!(right_leaves.get(), 0);
+    assert_eq!(parent_enters.get(), 0);
+    assert_eq!(parent_leaves.get(), 0);
+}
+
+#[test]
 fn mousedown_is_alias_of_pointer_down_single_fire() {
     let n = Rc::new(Cell::new(0u8));
     let a = n.clone();

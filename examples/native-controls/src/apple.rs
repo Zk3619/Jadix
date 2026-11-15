@@ -117,14 +117,20 @@ pub unsafe extern "C" fn jadix_native_storage_result(id: u64, error: *const c_ch
             Err(error) => return reply(Err(error.to_string())),
         }
     };
-    #[cfg(all(feature = "notes", not(feature = "gpu")))]
+    #[cfg(all(
+        any(feature = "notes", feature = "field-workflow"),
+        not(feature = "gpu")
+    ))]
     {
         with_app(id, |app| {
             app.storage_result(error)?;
             Ok(app.state())
         })
     }
-    #[cfg(not(all(feature = "notes", not(feature = "gpu"))))]
+    #[cfg(not(all(
+        any(feature = "notes", feature = "field-workflow"),
+        not(feature = "gpu")
+    )))]
     {
         let _ = (id, error);
         reply(Err("storage callbacks require the notes application".into()))

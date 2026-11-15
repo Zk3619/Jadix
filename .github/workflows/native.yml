@@ -1,0 +1,391 @@
+name: Native controls
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  field-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: python scripts/native.py validate --suite field --suite uikit-field --output target/native/field-validation.json
+      - run: cargo test --locked -p jadix_native --no-default-features --test checkpoint
+      - run: cargo test --locked -p jadix_components --no-default-features --features macros --test portable_navigation
+      - run: python scripts/native.py build --bin native-field --features windows,field-workflow --output target/native/field-build.json
+      - run: python scripts/native.py run --artifact target/native/field-build.json --output target/native/field-run.json
+      - run: python scripts/native.py package --artifact target/native/field-build.json --output target/native/field-package.json
+      - run: python scripts/native.py verify --package target/native/field-package-files/native-windows.zip --output target/native/field-package-verify.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-field-windows
+          path: target/native/field-*
+  field-browser:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install wasm-bindgen-cli --version 0.2.114 --locked
+      - run: python -m pip install playwright==1.64.1
+      - run: python -m playwright install --with-deps chromium
+      - run: python examples/native-controls/build-web.py --field --release --output target/native/field-web
+      - run: python scripts/acceptance/native-field-dom-check.py --site target/native/field-web --channel chromium --output target/native/field-dom
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-field-browser
+          path: |
+            target/native/field-web/build.json
+            target/native/field-dom
+  windows-native:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci --prefix crates/jadix_shell/sdk
+      - run: npm test --prefix crates/jadix_shell/sdk
+      - run: npm run typecheck --prefix crates/jadix_shell/sdk
+      - run: npm run check:generated --prefix crates/jadix_shell/sdk
+      - run: node crates/jadix_shell/sdk/node_modules/typescript/bin/tsc -p examples/native-controls/shell/tsconfig.json
+      - run: node examples/native-controls/shell/build.mjs --check
+      - run: npm test --prefix crates/jadix_shell/sdk
+      - run: npm run typecheck --prefix crates/jadix_shell/sdk
+      - run: cargo test --locked -p jadix_shell --features native-host --lib --tests
+      - run: cargo test --locked -p jadix_native --features windows --lib --tests
+      - run: cargo test --locked -p jadix_native --features windows,motion --test motion --test windows_motion
+      - run: cargo test --locked -p jadix_native --features code --test syntax
+      - run: cargo test --locked -p jadix_components --no-default-features --features macros --test portable_tabs
+      - run: cargo test --locked -p jadix_portable_contract
+      - run: cargo test --locked -p jadix_components --no-default-features --features macros --test portable_tabs
+      - run: cargo test --locked -p jadix_portable_contract
+      - run: cargo test --locked -p jadix_shell --features native-host,native-vm,native-store --lib --tests
+      - run: cargo check --locked -p jadix_native_controls --features native-gpu --bin native-gpu-chart
+      - run: cargo test --locked -p jadix_core --test virtualization --test tree --test dock
+      - run: cargo test --locked -p jadix_native_controls --features windows,extended --test windows_extended --test virtual_editing --test windows_tree --test dock_product
+      - run: python -m unittest discover -s scripts/tests -p test_native_toolchain.py -v
+      - run: python -m unittest discover -s scripts/tests -p test_native_ohos_build.py -v
+      - run: python -m unittest discover -s scripts/tests -p test_native_workflow.py -v
+      - shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/native/windows | Out-Null
+          $nativeNonce = [guid]::NewGuid().ToString('N')
+          cargo run --locked -p jadix_native_controls --features windows --bin native-windows -- --probe $nativeNonce target/native/windows/controls.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nativeNonce = [guid]::NewGuid().ToString('N')
+          cargo run --locked -p jadix_native_controls --features windows --bin native-workbench -- --probe $nativeNonce target/native/windows/workbench.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nativeNonce = [guid]::NewGuid().ToString('N')
+          cargo run --locked -p jadix_native_controls --features windows --bin native-table -- --probe $nativeNonce target/native/windows/table.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nativeNonce = [guid]::NewGuid().ToString('N')
+          cargo run --locked -p jadix_native_controls --features windows --bin native-tree -- --probe $nativeNonce target/native/windows/tree.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nativeNonce = [guid]::NewGuid().ToString('N')
+          cargo run --locked -p jadix_native_controls --features native-shell --bin native-tsx -- --probe $nativeNonce target/native/windows/tsx.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nativeNonce = [guid]::NewGuid().ToString('N')
+          cargo run --locked -p jadix_native_controls --features windows --bin native-images -- --probe $nativeNonce target/native/windows/images.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nativeNonce = [guid]::NewGuid().ToString('N')
+          cargo run --locked -p jadix_native_controls --features windows --bin native-dock -- --probe $nativeNonce target/native/windows/dock.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nativeNonce = [guid]::NewGuid().ToString('N')
+          cargo run --locked -p jadix_native_controls --features native-code --bin native-code -- --probe $nativeNonce target/native/windows/code.json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $nativeNonce = [guid]::NewGuid().ToString('N')
+          cargo run --locked -p jadix_native_controls --features windows --bin native-tabs -- --probe $nativeNonce target/native/windows/tabs.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-native-controls
+          path: target/native/windows
+  contracts:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p jadix_core -p jadix_native -p jadix_native_controls --features jadix_native_controls/uikit,jadix_native_controls/extended --lib --tests
+      - run: cargo test --locked -p jadix_portable_contract
+      - run: cargo clippy --locked -p jadix_components --no-default-features --features macros,theme-shadcn --all-targets --no-deps -- -D warnings
+      - run: cargo test --locked -p jadix_components --no-default-features --features macros,theme-shadcn --all-targets
+      - run: cargo check --locked -p jadix_components --features macros --test portable_source
+      - run: cargo test --locked -p jadix_native_controls --features selection --lib
+      - run: cargo clippy --locked -p jadix_native_controls --features selection --target wasm32-unknown-unknown --no-deps -- -D warnings
+      - run: cargo clippy --locked -p jadix_native_controls --features popover --target wasm32-unknown-unknown --no-deps -- -D warnings
+      - run: python scripts/checks/check-native-shell.py --controls-features selection --output target/native/select-dependencies.json
+      - run: python scripts/checks/check-native-shell.py --controls-features popover --output target/native/popover-dependencies.json
+      - run: python -m unittest discover -s scripts/tests -p test_native_popover_dom.py -v
+      - run: python -m unittest discover -s scripts/tests -p test_native_popover_android.py -v
+      - run: python -m unittest discover -s scripts/tests -p test_native_android_comparison.py -v
+      - run: python -m unittest discover -s scripts/tests -p test_native_android_check.py -v
+      - run: python -m unittest discover -s scripts/tests -p test_native_select_android.py -v
+      - run: python -m unittest discover -s scripts/tests -p test_native_android_performance.py -v
+      - run: python -m unittest discover -s scripts/tests -p test_native_browser.py -v
+      - run: python -m unittest discover -s scripts/tests -p test_native_dom_resources.py -v
+      - run: python -m unittest discover -s scripts/tests -p test_native_notes_android_scale.py -v
+      - run: cargo check --locked -p jadix_native_controls --target wasm32-unknown-unknown
+      - run: python scripts/checks/check-native-shell.py --include-component-dev --output target/native/dependencies.json
+  android:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force target/native/android | Out-Null
+          Invoke-WebRequest https://repo.maven.apache.org/maven2/org/json/json/20260814/json-20260814.jar -OutFile target/native/android/json-20260814.jar
+          python scripts/acceptance/native-android-batch-check.py --json-jar target/native/android/json-20260814.jar --output target/native/android/batch-jvm.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - shell: pwsh
+        run: |
+          sdkmanager "platforms;android-36" "build-tools;36.1.0" "ndk;29.0.14206865"
+          $env:NDK_HOME = Join-Path $env:ANDROID_HOME 'ndk/29.0.14206865'
+          python examples/native-controls/build-android.py --extended --release --output target/native/android
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-native-controls
+          path: target/native/android/native-controls.apk
+  browser:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        rows: [100, 1000]
+        browser: [chromium, firefox, webkit]
+    env:
+      JADIX_LIST_FLAGS: ${{ matrix.rows == 1000 && '--large-list' || '' }}
+      JADIX_BROWSER_CHANNEL: ${{ matrix.browser == 'chromium' && '--channel chromium' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install wasm-bindgen-cli --version 0.2.114 --locked
+      - run: python -m pip install playwright==1.64.1
+      - run: python -m playwright install --with-deps ${{ matrix.browser }}
+      - run: python examples/native-controls/build-web.py --extended --release $JADIX_LIST_FLAGS --output target/native/web
+      - run: python scripts/acceptance/native-dom-check.py --extended $JADIX_LIST_FLAGS --browser ${{ matrix.browser }} $JADIX_BROWSER_CHANNEL --site target/native/web --output target/native/dom
+      - if: matrix.browser == 'chromium'
+        run: python scripts/acceptance/native-dom-resources.py --channel chromium --site target/native/web --output target/native/dom-resources
+      - if: matrix.rows == 100
+        run: python examples/native-controls/build-web.py --selection --release --output target/native/select-web
+      - if: matrix.rows == 100
+        run: python scripts/acceptance/native-select-dom-check.py --browser ${{ matrix.browser }} $JADIX_BROWSER_CHANNEL --site target/native/select-web --output target/native/select-dom
+      - if: matrix.rows == 100
+        run: python examples/native-controls/build-web.py --popover --release --output target/native/popover-web
+      - if: matrix.rows == 100
+        run: python scripts/acceptance/native-popover-dom-check.py --browser ${{ matrix.browser }} $JADIX_BROWSER_CHANNEL --site target/native/popover-web --output target/native/popover-dom
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: browser-native-controls-${{ matrix.browser }}-${{ matrix.rows }}
+          path: |
+            target/native/dom
+            target/native/dom-resources
+            target/native/web/build.json
+            target/native/select-dom
+            target/native/select-web/build.json
+            target/native/popover-dom
+            target/native/popover-web/build.json
+  android-runtime:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        rows: [100, 1000]
+        api: [28, 36]
+    env:
+      JADIX_LIST_FLAGS: ${{ matrix.rows == 1000 && '--large-list' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          sdkmanager "platforms;android-36" "build-tools;36.1.0" "ndk;29.0.14206865"
+          export NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+          python examples/native-controls/build-android.py --extended --release $JADIX_LIST_FLAGS --target x86_64-linux-android --output target/native/android
+          if [ "${{ matrix.rows }}" = "100" ]; then
+            python examples/native-controls/build-android.py --selection --release --target x86_64-linux-android --keystore target/native/android/debug.keystore --output target/native/select-android
+            python examples/native-controls/build-android.py --popover --release --target x86_64-linux-android --keystore target/native/android/debug.keystore --output target/native/popover-android
+          fi
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: ${{ matrix.api == 28 && 'default' || 'google_apis' }}
+          profile: pixel_7
+          disable-animations: true
+          script: |
+            python scripts/acceptance/native-android-check.py --extended $JADIX_LIST_FLAGS --process-recovery --keep-installed --apk target/native/android/native-controls.apk --serial emulator-5554 --output target/native/android-checks
+            python scripts/acceptance/native-android-performance.py --serial emulator-5554 --apk target/native/android/native-controls.apk --output target/native/performance
+            if [ "${{ matrix.rows }}" = "100" ]; then
+              python scripts/acceptance/native-select-android-check.py --serial emulator-5554 --apk target/native/select-android/native-controls.apk --output target/native/select-android-checks
+              python scripts/acceptance/native-popover-android-check.py --serial emulator-5554 --apk target/native/popover-android/native-controls.apk --output target/native/popover-android-checks
+            fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: android-native-runtime-api${{ matrix.api }}-${{ matrix.rows }}
+          path: |
+            target/native/android-checks
+            target/native/performance
+            target/native/android/build.json
+            target/native/select-android/build.json
+            target/native/select-android-checks
+            target/native/popover-android/build.json
+            target/native/popover-android-checks
+  notebook-browser:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        browser: [chromium, firefox, webkit]
+    env:
+      JADIX_BROWSER_CHANNEL: ${{ matrix.browser == 'chromium' && '--channel chromium' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p jadix_native_controls --no-default-features --features notes --lib
+      - run: cargo install wasm-bindgen-cli --version 0.2.114 --locked
+      - run: python -m pip install playwright==1.64.1
+      - run: python -m playwright install --with-deps ${{ matrix.browser }}
+      - run: python examples/native-controls/build-web.py --notes --release --output target/native/notebook-web
+      - run: python scripts/acceptance/native-notes-check.py --browser ${{ matrix.browser }} $JADIX_BROWSER_CHANNEL --site target/native/notebook-web --output target/native/notebook-dom
+      - run: python scripts/acceptance/native-notes-scale.py --browser ${{ matrix.browser }} $JADIX_BROWSER_CHANNEL --site target/native/notebook-web --output target/native/notebook-scale
+      - if: matrix.browser == 'chromium'
+        run: python scripts/acceptance/native-dom-resources.py --application notes --channel chromium --site target/native/notebook-web --output target/native/notebook-resources
+      - run: python scripts/checks/check-native-shell.py --controls-features notes --output target/native/notebook-dependencies.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: notebook-browser-${{ matrix.browser }}
+          path: |
+            target/native/notebook-dom
+            target/native/notebook-scale
+            target/native/notebook-resources
+            target/native/notebook-web/build.json
+            target/native/notebook-dependencies.json
+  notebook-android:
+    runs-on: ubuntu-24.04
+    strategy:
+      matrix:
+        api: [28, 36]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@v3
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-linux-android,aarch64-linux-android
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          sdkmanager "platforms;android-36" "build-tools;36.1.0" "ndk;29.0.14206865"
+          export NDK_HOME="$ANDROID_HOME/ndk/29.0.14206865"
+          python examples/native-controls/build-android.py --notes --release --target x86_64-linux-android --output target/native/notebook-android
+          python examples/native-controls/build-android.py --notes --release --target aarch64-linux-android --output target/native/notebook-arm64
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          arch: x86_64
+          target: ${{ matrix.api == 28 && 'default' || 'google_apis' }}
+          profile: pixel_7
+          disable-animations: true
+          script: |
+            python scripts/acceptance/native-notes-android-check.py --serial emulator-5554 --apk target/native/notebook-android/native-controls.apk --output target/native/notebook-android-checks
+            python scripts/acceptance/native-notes-android-scale.py --serial emulator-5554 --apk target/native/notebook-android/native-controls.apk --output target/native/notebook-android-scale
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: notebook-android-api${{ matrix.api }}
+          path: |
+            target/native/notebook-android-checks
+            target/native/notebook-android-scale
+            target/native/notebook-android/build.json
+            target/native/notebook-arm64
+  uikit:
+    runs-on: macos-15
+    strategy:
+      fail-fast: false
+      matrix:
+        application: [controls, notes, selection, popover]
+    env:
+      JADIX_APP_FLAGS: ${{ matrix.application == 'popover' && '--popover' || matrix.application == 'selection' && '--selection' || matrix.application == 'notes' && '--notes' || '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-ios-sim
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --locked -p jadix_native_controls --no-default-features --features uikit,extended --lib
+      - run: cargo test --locked -p jadix_native_controls --no-default-features --features uikit,notes --lib
+      - run: cargo test --locked -p jadix_native_controls --no-default-features --features uikit,selection --lib
+      - run: cargo test --locked -p jadix_native_controls --no-default-features --features uikit,popover --lib
+      - run: python3 -m unittest scripts/tests/test_native_ios_build.py scripts/tests/test_native_ios_runtime.py
+      - run: bash examples/native-controls/build-ios.sh aarch64-apple-ios-sim "$PWD/target/native/ios" $JADIX_APP_FLAGS --checks
+      - run: python3 scripts/acceptance/native-ios-check.py --build target/native/ios --output target/native/ios-runtime
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ios-simulator-native-${{ matrix.application }}
+          path: |
+            target/native/ios
+            target/native/ios-runtime

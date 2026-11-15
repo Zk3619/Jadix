@@ -64,7 +64,9 @@ pub(super) struct SecondaryWindowState {
     overlay_band_text_renderers: Vec<JadixTextRenderer>,
     pub(super) root_element: Element,
     pub(super) layout_status: LayoutStatus,
-    pub(super) template_paths: HashMap<String, Vec<usize>>,
+    template_paths: HashMap<String, usize>,
+    template_path_nodes: Vec<TemplatePathNode>,
+    template_paths_valid: bool,
     pub(super) pending_layout_dirty: Vec<taffy::prelude::NodeId>,
     #[allow(dead_code)]
     pub(super) last_hover_cursor: Option<crate::core::tree::CursorValue>,
@@ -97,6 +99,12 @@ pub(super) struct SecondaryWindowState {
     owner: Option<OwnerHandle>,
 }
 
+#[derive(Clone, Copy)]
+struct TemplatePathNode {
+    parent: Option<usize>,
+    child_index: usize,
+}
+
 impl SecondaryWindowState {
     pub(super) fn alpha_mode(&self) -> wgpu::CompositeAlphaMode {
         self.config.alpha_mode
@@ -126,7 +134,7 @@ impl SecondaryWindowState {
     /// clear large CPU-side caches and vectors before GPU/owner teardown.
     pub(super) fn trim_before_drop(&mut self) {
         self.root_element.children.clear();
-        self.template_paths.clear();
+        self.clear_template_paths();
         self.pending_layout_dirty.clear();
         self.last_render_scroll_metrics.clear();
         self.scroll_metrics_cache.clear();
@@ -250,6 +258,8 @@ impl SecondaryWindowState {
             root_element,
             layout_status: LayoutStatus::StructureChanged,
             template_paths: HashMap::new(),
+            template_path_nodes: Vec::new(),
+            template_paths_valid: false,
             pending_layout_dirty: Vec::new(),
             last_hover_cursor: None,
             last_render_scroll_metrics: Vec::new(),
@@ -358,6 +368,8 @@ impl SecondaryWindowState {
             root_element,
             layout_status: LayoutStatus::StructureChanged,
             template_paths: HashMap::new(),
+            template_path_nodes: Vec::new(),
+            template_paths_valid: false,
             pending_layout_dirty: Vec::new(),
             last_hover_cursor: None,
             last_render_scroll_metrics: Vec::new(),
@@ -1301,7 +1313,7 @@ impl SecondaryWindowState {
             &mut self.layout_tree,
         );
         self.layout_status = LayoutStatus::StructureChanged;
-        self.template_paths.clear();
+        self.clear_template_paths();
         self.window.request_redraw();
     }
 
@@ -1316,7 +1328,7 @@ impl SecondaryWindowState {
         self.root_element = root;
         super::state::hoist_portal_subtrees_refreshing_scroll_flags(&mut self.root_element);
         self.layout_status = self.layout_status.merge(status);
-        self.template_paths.clear();
+        self.clear_template_paths();
     }
 
     pub(super) fn reconcile_subtree(
@@ -1326,8 +1338,15 @@ impl SecondaryWindowState {
     ) -> Option<LayoutStatus> {
         #[cfg(debug_assertions)]
         super::hot_reload::replay_committed(&mut new_fragment);
-        let want = anchor_id.replace('\\', "/").to_ascii_lowercase();
-        let old = find_template_mut(&mut self.root_element, &want)?;
+        let want = crate::core::tree::normalize_template_id(anchor_id);
+        let path = resolve_template_path(
+            &self.root_element,
+            &mut self.template_paths,
+            &mut self.template_path_nodes,
+            &mut self.template_paths_valid,
+            &want,
+        )?;
+        let old = element_at_path_mut(&mut self.root_element, &path)?;
         let needs_portal_hoist = element_contains_jadix_portal(&new_fragment);
         let mut status = super::state::AppState::reconcile_elements(
             &mut new_fragment,
@@ -1344,6 +1363,11 @@ impl SecondaryWindowState {
             }
         }
         self.layout_status = self.layout_status.merge(status);
+        if status == LayoutStatus::StructureChanged
+            || !template_path_matches(&self.root_element, &path, &want)
+        {
+            self.clear_template_paths();
+        }
         Some(status)
     }
 
@@ -1355,19 +1379,41 @@ impl SecondaryWindowState {
     where
         F: FnOnce(&mut Element) -> LayoutStatus,
     {
-        let want = template_id.replace('\\', "/").to_ascii_lowercase();
-        let Some(status) = find_template_mut(&mut self.root_element, &want).map(patch) else {
+        let want = crate::core::tree::normalize_template_id(template_id);
+        let Some(path) = resolve_template_path(
+            &self.root_element,
+            &mut self.template_paths,
+            &mut self.template_path_nodes,
+            &mut self.template_paths_valid,
+            &want,
+        ) else {
             crate::app::reactive::note_bind_miss(template_id);
             return LayoutStatus::Clean;
         };
+        let Some(target) = element_at_path_mut(&mut self.root_element, &path) else {
+            self.clear_template_paths();
+            crate::app::reactive::note_bind_miss(template_id);
+            return LayoutStatus::Clean;
+        };
+        let status = patch(target);
+        let target_kept_id = template_path_matches(&self.root_element, &path, &want);
         self.layout_status = self.layout_status.merge(status);
+        if status == LayoutStatus::StructureChanged || !target_kept_id {
+            self.clear_template_paths();
+        }
         if status != LayoutStatus::Clean {
-            crate::layout::collect_cache::invalidate_collect_paint_hash_for_template(
+            crate::layout::collect_cache::invalidate_collect_paint_hash_path(
                 &mut self.root_element,
-                &want,
+                &path,
             );
         }
         status
+    }
+
+    fn clear_template_paths(&mut self) {
+        self.template_paths.clear();
+        self.template_path_nodes.clear();
+        self.template_paths_valid = false;
     }
 }
 
@@ -1417,6 +1463,7 @@ fn advance_secondary_scroll(
         }
         active |= moving;
     }
+    crate::core::scroll_viewport::flush_scroll_observers();
     active
 }
 
@@ -1543,8 +1590,107 @@ fn init_secondary_textured(
     (pipeline, buffer)
 }
 
-fn find_template_mut<'a>(el: &'a mut Element, want_normalized: &str) -> Option<&'a mut Element> {
-    crate::core::tree::find_by_template_id_mut(el, want_normalized)
+fn resolve_template_path(
+    root: &Element,
+    template_paths: &mut HashMap<String, usize>,
+    template_path_nodes: &mut Vec<TemplatePathNode>,
+    template_paths_valid: &mut bool,
+    template_id: &str,
+) -> Option<Vec<usize>> {
+    if !*template_paths_valid {
+        rebuild_template_paths(root, template_paths, template_path_nodes);
+        *template_paths_valid = true;
+    }
+    if let Some(handle) = template_paths.get(template_id).copied() {
+        let path = template_path_from_handle(template_path_nodes, handle);
+        if template_path_matches(root, &path, template_id) {
+            return Some(path);
+        }
+    } else {
+        return None;
+    }
+
+    rebuild_template_paths(root, template_paths, template_path_nodes);
+    template_paths.get(template_id).copied().and_then(|handle| {
+        let path = template_path_from_handle(template_path_nodes, handle);
+        template_path_matches(root, &path, template_id).then_some(path)
+    })
+}
+
+fn rebuild_template_paths(
+    root: &Element,
+    template_paths: &mut HashMap<String, usize>,
+    template_path_nodes: &mut Vec<TemplatePathNode>,
+) {
+    template_paths.clear();
+    template_path_nodes.clear();
+    template_path_nodes.push(TemplatePathNode {
+        parent: None,
+        child_index: 0,
+    });
+    let mut stack = vec![(root, 0usize, 0usize)];
+
+    while !stack.is_empty() {
+        let frame = stack.len() - 1;
+        let element = stack[frame].0;
+        let handle = stack[frame].1;
+        let next_child = stack[frame].2;
+        if next_child == 0 {
+            if let Some(id) = element.template_id.as_deref() {
+                template_paths
+                    .entry(crate::core::tree::normalize_template_id(id))
+                    .or_insert(handle);
+            }
+        }
+
+        if next_child < element.children.len() {
+            stack[frame].2 += 1;
+            let child_handle = template_path_nodes.len();
+            template_path_nodes.push(TemplatePathNode {
+                parent: Some(handle),
+                child_index: next_child,
+            });
+            stack.push((&element.children[next_child], child_handle, 0));
+        } else {
+            stack.pop();
+        }
+    }
+}
+
+fn template_path_from_handle(nodes: &[TemplatePathNode], mut handle: usize) -> Vec<usize> {
+    let mut path = Vec::new();
+    while let Some(node) = nodes.get(handle) {
+        let Some(parent) = node.parent else {
+            break;
+        };
+        path.push(node.child_index);
+        handle = parent;
+    }
+    path.reverse();
+    path
+}
+
+fn template_path_matches(root: &Element, path: &[usize], template_id: &str) -> bool {
+    element_at_path(root, path)
+        .and_then(|element| element.template_id.as_deref())
+        .is_some_and(|id| crate::core::tree::normalize_template_id(id) == template_id)
+}
+
+fn element_at_path<'a>(mut element: &'a Element, path: &[usize]) -> Option<&'a Element> {
+    for &index in path {
+        element = element.children.get(index)?;
+    }
+    Some(element)
+}
+
+fn element_at_path_mut<'a>(
+    mut element: &'a mut Element,
+    path: &[usize],
+) -> Option<&'a mut Element> {
+    for &index in path {
+        element = element.children.get_mut(index)?;
+    }
+    Some(element)
 }
 
 fn element_contains_jadix_portal(el: &Element) -> bool {
@@ -1554,3 +1700,52 @@ fn element_contains_jadix_portal(el: &Element) -> bool {
 #[cfg(test)]
 #[path = "tests/scroll.rs"]
 mod scroll_tests;
+
+#[cfg(test)]
+mod template_path_tests {
+    use super::*;
+
+    #[test]
+    fn secondary_template_path_cache_recovers_after_sibling_reorder() {
+        let mut root = Element::new().children([
+            Element::new().template_id("before"),
+            Element::new().children([Element::new().template_id(r"Panel\Target")]),
+        ]);
+        let mut paths = HashMap::new();
+        let mut path_nodes = Vec::new();
+        let mut valid = false;
+        let first = resolve_template_path(
+            &root,
+            &mut paths,
+            &mut path_nodes,
+            &mut valid,
+            "panel/target",
+        )
+        .unwrap();
+        assert_eq!(first, [1, 0]);
+        assert!(valid);
+        assert_eq!(paths.len(), 2);
+        assert_eq!(path_nodes.len(), 4);
+        assert_eq!(template_path_from_handle(&path_nodes, paths["before"]), [0]);
+
+        root.children.swap(0, 1);
+        let moved = resolve_template_path(
+            &root,
+            &mut paths,
+            &mut path_nodes,
+            &mut valid,
+            "panel/target",
+        )
+        .unwrap();
+        assert_eq!(moved, [0, 0]);
+
+        assert!(template_path_matches(&root, &moved, "panel/target"));
+        assert_eq!(
+            element_at_path(&root, &moved)
+                .unwrap()
+                .template_id
+                .as_deref(),
+            Some(r"Panel\Target")
+        );
+    }
+}

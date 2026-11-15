@@ -12,6 +12,8 @@ fn descriptor(content: NodeContent) -> NodeDescriptor {
         accessible_role: None,
         accessible_selected: None,
         accessible_expanded: None,
+        accessibility_relations: Default::default(),
+        accessible_description: None,
         accessible_name: None,
         style: Default::default(),
     }
@@ -233,6 +235,7 @@ fn edit_revisions_and_utf16_surrogate_boundaries_are_checked() {
             None,
             0,
             NodeContent::Input {
+                max_length: None,
                 value: String::new(),
                 placeholder: String::new(),
                 enabled: true,
@@ -266,6 +269,7 @@ fn edit_revisions_and_utf16_surrogate_boundaries_are_checked() {
             vec![Operation::Update {
                 node,
                 descriptor: descriptor(NodeContent::Input {
+                    max_length: None,
                     value: "old".into(),
                     placeholder: String::new(),
                     enabled: true,

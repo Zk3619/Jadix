@@ -44,6 +44,16 @@ fn scope_exposes_template() {
 }
 
 #[test]
+fn hover_card_builder_configures_open_delay() {
+    let (_owner, _) = create_root(|| {
+        hover_card("hc-delay").open_delay(725).child(|| {
+            assert_eq!(use_hover_card().unwrap().open_delay_ms.peek(), 725);
+            Element::new()
+        })
+    });
+}
+
+#[test]
 fn surface_default_has_no_fixed_width() {
     let el = hover_card_surface(Element::new().text("hi"), None);
     assert!(
@@ -72,7 +82,7 @@ fn class_width_seeds_floating_w_attr() {
 
 #[test]
 fn zero_delay_open_closes_via_intent() {
-    use crate::utils::hover_intent::{arm_close, arm_open, HoverIntent};
+    use crate::utils::hover_intent::{HoverIntent, arm_close, arm_open};
     let (_owner, _) = create_root(|| {
         let open = use_signal("hc-zd-open", || false);
         let th = use_signal("hc-zd-th", || false);

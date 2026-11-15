@@ -4,6 +4,43 @@ use std::cell::Cell;
 use std::rc::Rc;
 
 #[test]
+fn window_exit_clears_edge_and_overflow_hover_without_jitter_grace() {
+    clear_hover_tracking();
+    let events = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = events.clone();
+    let mut root: Element = interactive(Element::new().cursor_kind(CursorKind::Pointer))
+        .focus_id("window-exit-overflow")
+        .on_hover(move |hovered| observed.borrow_mut().push(hovered))
+        .into();
+    root.layout_bounds = [-10.0, -10.0, 110.0, 110.0];
+
+    apply_pointer_hover_reconcile(&root, 0.0, 0.0, false);
+    assert_eq!(&*events.borrow(), &[true]);
+    let mut callbacks = Vec::new();
+    assert_eq!(
+        reconcile_pointer_hovers_and_cursor(
+            &root,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
+            [0.0, 0.0],
+            &mut callbacks,
+            false,
+        ),
+        None
+    );
+    for (cb, hovered) in callbacks {
+        (*cb.borrow_mut())(hovered);
+    }
+    assert_eq!(&*events.borrow(), &[true, false], "leave is immediate");
+    // A keyboard-triggered redraw while outside cannot re-hit the last edge.
+    apply_pointer_hover_reconcile(&root, f32::NEG_INFINITY, f32::NEG_INFINITY, false);
+    assert_eq!(&*events.borrow(), &[true, false]);
+    apply_pointer_hover_reconcile(&root, 0.0, 0.0, false);
+    assert_eq!(&*events.borrow(), &[true, false, true]);
+    clear_hover_tracking();
+}
+
+#[test]
 fn combined_hover_cursor_matches_cursor_walk_with_occlusion_and_transforms() {
     let mut below = Element::new()
         .cursor_kind(CursorKind::Pointer)
@@ -347,6 +384,32 @@ fn update_hovers_is_diff_based_not_broadcast() {
 }
 
 #[test]
+fn removed_hover_target_is_cleared_without_leave_callback() {
+    clear_hover_tracking();
+    let events = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let entered = events.clone();
+    let mut target: Element = interactive(Element::new().w(40.0).h(40.0))
+        .on_hover(move |hovered| entered.borrow_mut().push(hovered))
+        .into();
+    target.focus_id = Some("removed-hover-target".into());
+    target.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+    let mut root = Element::new().child(target);
+    root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+
+    apply_pointer_hover_reconcile(&root, 20.0, 20.0, true);
+    assert_eq!(*events.borrow(), [true]);
+
+    root.children.clear();
+    apply_pointer_hover_reconcile(&root, 20.0, 20.0, true);
+    assert_eq!(
+        *events.borrow(),
+        [true],
+        "removed targets must be forgotten without invoking stale handlers"
+    );
+    clear_hover_tracking();
+}
+
+#[test]
 fn hover_region_keeps_child_hover_and_respects_occlusion_after_rebuild() {
     clear_hover_tracking();
     let events = Rc::new(RefCell::new(Vec::new()));
@@ -603,6 +666,57 @@ fn hover_miss_uses_one_frame_hysteresis() {
         (*cb.borrow_mut())(is_hover);
     }
     assert_eq!(leaves.get(), 1);
+}
+
+#[test]
+fn removed_hover_target_does_not_receive_leave() {
+    clear_hover_tracking();
+    let old_enters = Rc::new(Cell::new(0u32));
+    let old_leaves = Rc::new(Cell::new(0u32));
+    let old_enters_cb = old_enters.clone();
+    let old_leaves_cb = old_leaves.clone();
+    let mut old: Element = interactive(Element::new().w(40.0).h(40.0))
+        .focus_id("removed-hover")
+        .on_hover(move |hovered| {
+            if hovered {
+                old_enters_cb.set(old_enters_cb.get() + 1);
+            } else {
+                old_leaves_cb.set(old_leaves_cb.get() + 1);
+            }
+        })
+        .into();
+    old.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+    let mut root = Element::new().child(old);
+    root.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+
+    let mut to_run = Vec::new();
+    update_hovers(&root, 20.0, 20.0, [0.0, 0.0], &mut to_run);
+    for (cb, hovered) in to_run.drain(..) {
+        (*cb.borrow_mut())(hovered);
+    }
+    assert_eq!(old_enters.get(), 1);
+
+    let new_enters = Rc::new(Cell::new(0u32));
+    let new_enters_cb = new_enters.clone();
+    let mut replacement: Element = interactive(Element::new().w(40.0).h(40.0))
+        .focus_id("replacement-hover")
+        .on_hover(move |hovered| {
+            if hovered {
+                new_enters_cb.set(new_enters_cb.get() + 1);
+            }
+        })
+        .into();
+    replacement.layout_bounds = [0.0, 0.0, 40.0, 40.0];
+    root.children[0] = replacement;
+
+    update_hovers(&root, 20.0, 20.0, [0.0, 0.0], &mut to_run);
+    assert_eq!(to_run.len(), 1);
+    assert!(to_run[0].1, "the replacement receives its enter");
+    for (cb, hovered) in to_run.drain(..) {
+        (*cb.borrow_mut())(hovered);
+    }
+    assert_eq!(old_leaves.get(), 0, "a removed view receives no leave");
+    assert_eq!(new_enters.get(), 1);
 }
 
 #[test]

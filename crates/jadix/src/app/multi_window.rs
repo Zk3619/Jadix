@@ -79,8 +79,28 @@ impl WindowHandle {
     /// Restrict input to a union of client-relative physical rectangles.
     /// None restores the default; an empty slice passes all input through.
     /// Windows also clips rendering. Reapply after layout or scale changes.
-    pub fn set_input_region(&self, region: Option<&[winit::window::InputRegionRect]>) -> Result<(), String> {
-        self.upgrade()?.set_input_region(region).map_err(|error| error.to_string())
+    pub fn set_input_region(
+        &self,
+        region: Option<&[winit::window::InputRegionRect]>,
+    ) -> Result<(), String> {
+        self.upgrade()?
+            .set_input_region(region)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Clip window rendering and input to client-relative physical rectangles.
+    /// None restores the default shape; an empty slice hides the entire window.
+    /// Currently Windows only. Does not resize the surface or its GPU allocation.
+    /// Reapply after layout or scale changes; other backends return an error.
+    pub fn set_window_shape(&self, region: Option<&[InputRegionRect]>) -> Result<(), String> {
+        self.upgrade()?
+            .set_window_shape(region)
+            .map_err(|error| error.to_string())
+    }
+
+    /// Physical client size, for mapping canvas pixels to OS window regions.
+    pub fn surface_size(&self) -> Result<winit::dpi::PhysicalSize<u32>, String> {
+        Ok(self.upgrade()?.surface_size())
     }
 
     /// Set a mask of OS pointer events. Partial masks fail without changing window state
@@ -204,6 +224,25 @@ impl WindowHandle {
     /// Native move; invoke directly from a left-button press on a title drag region.
     pub fn start_drag(&self) -> Result<(), String> {
         self.upgrade()?.drag_window().map_err(|e| e.to_string())
+    }
+
+    /// Physical pointer distance before a custom title region starts moving.
+    /// Zero on hosts that require moving directly from the button press (Wayland).
+    pub fn titlebar_drag_threshold(&self) -> [f32; 2] {
+        #[cfg(windows)]
+        {
+            use windows_sys::Win32::UI::WindowsAndMessaging::{
+                GetSystemMetrics, SM_CXDRAG, SM_CYDRAG,
+            };
+            unsafe {
+                [
+                    GetSystemMetrics(SM_CXDRAG).max(1) as f32,
+                    GetSystemMetrics(SM_CYDRAG).max(1) as f32,
+                ]
+            }
+        }
+        #[cfg(not(windows))]
+        [0.0; 2]
     }
 
     pub fn set_minimized(&self, minimized: bool) -> Result<(), String> {

@@ -230,11 +230,9 @@ fn table_navigation_reveals_by_business_key_after_sort_filter_and_measured_froze
     table.measure_row(0, 64.0).unwrap();
     table.measure_column(0, 220.0).unwrap();
     assert!(table.focus_cell(0, 0).unwrap());
-    assert!(
-        table
-            .navigate_cell((0, 0), NavigationKey::End, false, true)
-            .unwrap()
-    );
+    assert!(table
+        .navigate_cell((0, 0), NavigationKey::End, false, true)
+        .unwrap());
     let last = table.cell(99_999, 999).unwrap();
     assert_eq!(table.root.model().focused(), Some(last));
     assert!(table.state()["mounted_cells"].as_u64().unwrap() <= 256);
@@ -245,46 +243,34 @@ fn table_navigation_reveals_by_business_key_after_sort_filter_and_measured_froze
         .unwrap();
     table.set_columns((0..1000).rev().collect()).unwrap();
     assert!(table.focus_cell(99_998, 999).unwrap());
-    assert!(
-        table
-            .navigate_cell((99_998, 999), NavigationKey::Tab, false, false)
-            .unwrap()
-    );
+    assert!(table
+        .navigate_cell((99_998, 999), NavigationKey::Tab, false, false)
+        .unwrap());
     assert_eq!(table.root.model().focused(), table.cell(99_998, 998));
-    assert!(
-        table
-            .navigate_cell((99_998, 998), NavigationKey::Enter, false, false)
-            .unwrap()
-    );
+    assert!(table
+        .navigate_cell((99_998, 998), NavigationKey::Enter, false, false)
+        .unwrap());
     assert_eq!(table.root.model().focused(), table.cell(99_996, 998));
-    assert!(
-        table
-            .navigate_cell((99_996, 998), NavigationKey::PageDown, false, false)
-            .unwrap()
-    );
+    assert!(table
+        .navigate_cell((99_996, 998), NavigationKey::PageDown, false, false)
+        .unwrap());
     let paged = table.state()["pinned"][0].as_u64().unwrap();
     assert!(paged < 99_994);
-    assert!(
-        table
-            .navigate_cell((paged, 998), NavigationKey::Home, false, true)
-            .unwrap()
-    );
+    assert!(table
+        .navigate_cell((paged, 998), NavigationKey::Home, false, true)
+        .unwrap());
     assert_eq!(table.root.model().focused(), table.cell(99_998, 999));
-    assert!(
-        table
-            .navigate_cell((99_998, 999), NavigationKey::Tab, true, false)
-            .unwrap()
-    );
+    assert!(table
+        .navigate_cell((99_998, 999), NavigationKey::Tab, true, false)
+        .unwrap());
     let focus = table.root.model().focused().unwrap();
     assert!(matches!(
         table.root.model().node(focus).unwrap().descriptor.content,
         NodeContent::Button { .. }
     ));
-    assert!(
-        !table
-            .navigate_cell((99_998, 999), NavigationKey::Right, false, false)
-            .unwrap()
-    );
+    assert!(!table
+        .navigate_cell((99_998, 999), NavigationKey::Right, false, false)
+        .unwrap());
 }
 
 #[test]
@@ -307,11 +293,9 @@ fn table_navigation_preserves_live_state_on_measurement_failure_and_during_preed
         .push(edit(input, "未完成😀", 1, true));
     table.poll_events().unwrap();
     let composing = table.state();
-    assert!(
-        !table
-            .navigate_cell((0, 0), NavigationKey::End, false, true)
-            .unwrap()
-    );
+    assert!(!table
+        .navigate_cell((0, 0), NavigationKey::End, false, true)
+        .unwrap());
     assert!(!table.focus_cell(99_999, 999).unwrap());
     assert_eq!(table.state(), composing);
     assert_eq!(table.root.model().focused(), Some(input));

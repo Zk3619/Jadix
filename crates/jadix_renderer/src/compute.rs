@@ -1,12 +1,14 @@
 //! Optional wgpu compute pipelines (S7). Off unless `--features compute`.
-//! GLES never constructs these even with the feature (adapter probe).
+//! WebGL stays fragment-only; native GL/WebGPU require actual compute limits/flags.
 //!
 //! Consumers: separable Gaussian (`effect_wrap("blur")`, CSS `filter: blur`,
 //! `backdrop-filter`), luminance histogram + large-image downsample, particle fx.
 //! Missing feature, adapter compute, or compile failure → fragment / CPU path.
 //! User `shader()` leaves stay fragment.
 
+#![cfg_attr(not(feature = "compute"), allow(dead_code))]
 use bytemuck::{Pod, Zeroable};
+#[cfg(feature = "compute")]
 use wgpu::util::DeviceExt;
 
 use super::gpu_caps::GpuCaps;
@@ -94,11 +96,11 @@ impl ComputePipelines {
         {
             let _ = device;
             caps.compute = false;
-            return Self {
+            Self {
                 blur: None,
                 histogram: None,
                 particles: None,
-            };
+            }
         }
         #[cfg(feature = "compute")]
         {
@@ -134,10 +136,13 @@ impl ComputeBlur {
         #[cfg(not(feature = "compute"))]
         {
             let _ = device;
-            return None;
+            None
         }
         #[cfg(feature = "compute")]
         {
+            if !super::gpu_caps::compute_limits(&device.limits()) {
+                return None;
+            }
             let module = try_shader_module(device, "jadix-blur-cs", BLUR_WGSL)?;
             let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("jadix-blur-cs-bgl"),
@@ -193,51 +198,24 @@ impl ComputeBlur {
         h: u32,
         sigma: f32,
     ) -> bool {
-        let w = w.max(1);
-        let h = h.max(1);
-        let sigma = sigma.clamp(0.5, 32.0);
-        self.ensure_scratch(device, w, h);
-        let texel = [1.0 / w as f32, 1.0 / h as f32];
-        let Some(a) = self.scratch_a.as_ref() else {
-            return false;
-        };
-        let Some(b) = self.scratch_b.as_ref() else {
-            return false;
-        };
-        dispatch_blur(
-            device,
-            queue,
-            encoder,
-            &self.pipeline,
-            &self.bgl,
-            &self.sampler,
-            &self.uniform_buf,
-            src,
-            &a.view,
-            w,
-            h,
-            texel,
-            [1.0, 0.0],
-            sigma,
-        );
-        dispatch_blur(
-            device,
-            queue,
-            encoder,
-            &self.pipeline,
-            &self.bgl,
-            &self.sampler,
-            &self.uniform_buf,
-            &a.view,
-            &b.view,
-            w,
-            h,
-            texel,
-            [0.0, 1.0],
-            sigma,
-        );
-        if sigma > 4.0 {
-            let s2 = sigma * 0.55;
+        #[cfg(not(feature = "compute"))]
+        {
+            let _ = (self, device, queue, encoder, src, w, h, sigma);
+            false
+        }
+        #[cfg(feature = "compute")]
+        {
+            let w = w.max(1);
+            let h = h.max(1);
+            let sigma = sigma.clamp(0.5, 32.0);
+            self.ensure_scratch(device, w, h);
+            let texel = [1.0 / w as f32, 1.0 / h as f32];
+            let Some(a) = self.scratch_a.as_ref() else {
+                return false;
+            };
+            let Some(b) = self.scratch_b.as_ref() else {
+                return false;
+            };
             dispatch_blur(
                 device,
                 queue,
@@ -246,13 +224,13 @@ impl ComputeBlur {
                 &self.bgl,
                 &self.sampler,
                 &self.uniform_buf,
-                &b.view,
+                src,
                 &a.view,
                 w,
                 h,
                 texel,
                 [1.0, 0.0],
-                s2,
+                sigma,
             );
             dispatch_blur(
                 device,
@@ -268,10 +246,45 @@ impl ComputeBlur {
                 h,
                 texel,
                 [0.0, 1.0],
-                s2,
+                sigma,
             );
+            if sigma > 4.0 {
+                let s2 = sigma * 0.55;
+                dispatch_blur(
+                    device,
+                    queue,
+                    encoder,
+                    &self.pipeline,
+                    &self.bgl,
+                    &self.sampler,
+                    &self.uniform_buf,
+                    &b.view,
+                    &a.view,
+                    w,
+                    h,
+                    texel,
+                    [1.0, 0.0],
+                    s2,
+                );
+                dispatch_blur(
+                    device,
+                    queue,
+                    encoder,
+                    &self.pipeline,
+                    &self.bgl,
+                    &self.sampler,
+                    &self.uniform_buf,
+                    &a.view,
+                    &b.view,
+                    w,
+                    h,
+                    texel,
+                    [0.0, 1.0],
+                    s2,
+                );
+            }
+            true
         }
-        true
     }
 
     /// Two-pass separable Gaussian. Result is [`Self::result_view`] (Rgba8Unorm).
@@ -313,10 +326,13 @@ impl ComputeHistogram {
         #[cfg(not(feature = "compute"))]
         {
             let _ = device;
-            return None;
+            None
         }
         #[cfg(feature = "compute")]
         {
+            if !super::gpu_caps::compute_limits(&device.limits()) {
+                return None;
+            }
             let hist_mod = try_shader_module(device, "jadix-hist-cs", HIST_WGSL)?;
             let down_mod = try_shader_module(device, "jadix-down-cs", DOWN_WGSL)?;
             let hist_bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -374,7 +390,9 @@ impl ComputeHistogram {
             let bins = device.create_buffer(&wgpu::BufferDescriptor {
                 label: Some("jadix-hist-bins"),
                 size: HIST_BYTES,
-                usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                usage: wgpu::BufferUsages::STORAGE
+                    | wgpu::BufferUsages::COPY_DST
+                    | wgpu::BufferUsages::COPY_SRC,
                 mapped_at_creation: false,
             });
             Some(Self {
@@ -402,37 +420,45 @@ impl ComputeHistogram {
         w: u32,
         h: u32,
     ) -> bool {
-        let w = w.max(1);
-        let h = h.max(1);
-        queue.write_buffer(&self.bins, 0, &[0u8; HIST_BYTES as usize]);
-        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("jadix-hist-cs-bg"),
-            layout: &self.hist_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(src),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: self.bins.as_entire_binding(),
-                },
-            ],
-        });
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("jadix-hist-cs-enc"),
-        });
+        #[cfg(not(feature = "compute"))]
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("jadix-hist-cs"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.hist_pipeline);
-            pass.set_bind_group(0, &bg, &[]);
-            pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+            let _ = (self, device, queue, src, w, h);
+            false
         }
-        queue.submit(Some(encoder.finish()));
-        true
+        #[cfg(feature = "compute")]
+        {
+            let w = w.max(1);
+            let h = h.max(1);
+            queue.write_buffer(&self.bins, 0, &[0u8; HIST_BYTES as usize]);
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("jadix-hist-cs-bg"),
+                layout: &self.hist_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(src),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: self.bins.as_entire_binding(),
+                    },
+                ],
+            });
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("jadix-hist-cs-enc"),
+            });
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("jadix-hist-cs"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.hist_pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+            }
+            queue.submit(Some(encoder.finish()));
+            true
+        }
     }
 
     /// Average-resample `src` into a storage texture of `w`×`h`. Result is [`Self::result_view`].
@@ -445,43 +471,51 @@ impl ComputeHistogram {
         w: u32,
         h: u32,
     ) -> bool {
-        let _ = queue;
-        let w = w.max(1);
-        let h = h.max(1);
-        if !self.scratch.as_ref().is_some_and(|s| s.w == w && s.h == h) {
-            self.scratch = Some(make_scratch(device, w, h, "jadix-down-cs"));
-        }
-        let Some(dst) = self.scratch.as_ref() else {
-            return false;
-        };
-        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("jadix-down-cs-bg"),
-            layout: &self.down_bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(src),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::TextureView(&dst.view),
-                },
-            ],
-        });
+        #[cfg(not(feature = "compute"))]
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("jadix-down-cs"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.down_pipeline);
-            pass.set_bind_group(0, &bg, &[]);
-            pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+            let _ = (self, device, queue, encoder, src, w, h);
+            false
         }
-        true
+        #[cfg(feature = "compute")]
+        {
+            let _ = queue;
+            let w = w.max(1);
+            let h = h.max(1);
+            if !self.scratch.as_ref().is_some_and(|s| s.w == w && s.h == h) {
+                self.scratch = Some(make_scratch(device, w, h, "jadix-down-cs"));
+            }
+            let Some(dst) = self.scratch.as_ref() else {
+                return false;
+            };
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("jadix-down-cs-bg"),
+                layout: &self.down_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(src),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&dst.view),
+                    },
+                ],
+            });
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("jadix-down-cs"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.down_pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+            }
+            true
+        }
     }
 
     pub fn result_view(&self) -> Option<&wgpu::TextureView> {
@@ -494,10 +528,13 @@ impl ComputeParticles {
         #[cfg(not(feature = "compute"))]
         {
             let _ = device;
-            return None;
+            None
         }
         #[cfg(feature = "compute")]
         {
+            if !super::gpu_caps::compute_limits(&device.limits()) {
+                return None;
+            }
             let module = try_shader_module(device, "jadix-particle-cs", PARTICLE_WGSL)?;
             let bgl = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 label: Some("jadix-particle-cs-bgl"),
@@ -569,58 +606,66 @@ impl ComputeParticles {
         time: f32,
         strength: f32,
     ) -> Option<&wgpu::TextureView> {
-        let w = w.max(1);
-        let h = h.max(1);
-        if !self.scratch.as_ref().is_some_and(|s| s.w == w && s.h == h) {
-            self.scratch = Some(make_scratch(device, w, h, "jadix-particle-cs"));
-        }
-        let dst = self.scratch.as_ref()?;
-        let params = ParticleParams {
-            time,
-            strength,
-            resolution: [w as f32, h as f32],
-        };
-        queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&params));
-        let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("jadix-particle-cs-bg"),
-            layout: &self.bgl,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: self.uniform_buf.as_entire_binding(),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::TextureView(src),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 2,
-                    resource: wgpu::BindingResource::Sampler(&self.sampler),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 3,
-                    resource: wgpu::BindingResource::TextureView(&dst.view),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 4,
-                    resource: bins.unwrap_or(&self.empty_bins).as_entire_binding(),
-                },
-            ],
-        });
-        let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("jadix-particle-cs-enc"),
-        });
+        #[cfg(not(feature = "compute"))]
         {
-            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
-                label: Some("jadix-particle-cs"),
-                timestamp_writes: None,
-            });
-            pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &bg, &[]);
-            pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+            let _ = (self, device, queue, src, bins, w, h, time, strength);
+            None
         }
-        queue.submit(Some(encoder.finish()));
-        self.scratch.as_ref().map(|s| &s.view)
+        #[cfg(feature = "compute")]
+        {
+            let w = w.max(1);
+            let h = h.max(1);
+            if !self.scratch.as_ref().is_some_and(|s| s.w == w && s.h == h) {
+                self.scratch = Some(make_scratch(device, w, h, "jadix-particle-cs"));
+            }
+            let dst = self.scratch.as_ref()?;
+            let params = ParticleParams {
+                time,
+                strength,
+                resolution: [w as f32, h as f32],
+            };
+            queue.write_buffer(&self.uniform_buf, 0, bytemuck::bytes_of(&params));
+            let bg = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("jadix-particle-cs-bg"),
+                layout: &self.bgl,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: self.uniform_buf.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(src),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 3,
+                        resource: wgpu::BindingResource::TextureView(&dst.view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 4,
+                        resource: bins.unwrap_or(&self.empty_bins).as_entire_binding(),
+                    },
+                ],
+            });
+            let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("jadix-particle-cs-enc"),
+            });
+            {
+                let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                    label: Some("jadix-particle-cs"),
+                    timestamp_writes: None,
+                });
+                pass.set_pipeline(&self.pipeline);
+                pass.set_bind_group(0, &bg, &[]);
+                pass.dispatch_workgroups(w.div_ceil(8), h.div_ceil(8), 1);
+            }
+            queue.submit(Some(encoder.finish()));
+            self.scratch.as_ref().map(|s| &s.view)
+        }
     }
 }
 
@@ -704,6 +749,7 @@ fn make_linear_sampler(device: &wgpu::Device, label: &str) -> wgpu::Sampler {
     clippy::too_many_arguments,
     reason = "GPU passes receive explicit device, resources, geometry and encoding state without intermediate allocations"
 )]
+#[cfg(feature = "compute")]
 fn dispatch_blur(
     device: &wgpu::Device,
     _queue: &wgpu::Queue,

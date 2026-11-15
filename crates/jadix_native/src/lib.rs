@@ -1,10 +1,11 @@
 use std::collections::BTreeMap;
 
+pub use jadix_core::environment;
 pub use jadix_core::presentation;
 use presentation::capabilities::{BackendCapabilities, NodeKind};
 use presentation::{
-    CommitBatch, DragPhase, EventPayload, NodeContent, NodeDescriptor, NodeId, Operation,
-    PlatformEvent, RootId, RootLifetime, valid_utf16_range,
+    valid_utf16_range, CommitBatch, DragPhase, EventPayload, NodeContent, NodeDescriptor, NodeId,
+    Operation, PlatformEvent, RootId, RootLifetime,
 };
 
 #[cfg(all(feature = "android", target_os = "android"))]
@@ -13,13 +14,18 @@ pub mod android;
 pub mod dom;
 mod grid;
 pub mod host;
+#[cfg(feature = "consistent-ui")]
+pub use jadix_core::presentation::theme::ConsistentTheme;
 pub mod images;
 mod inspection;
 pub mod layout;
+pub mod miniprogram;
 #[cfg(feature = "motion")]
 pub mod motion;
 #[cfg(all(feature = "ohos", target_env = "ohos"))]
 pub mod ohos;
+#[cfg(feature = "ohos")]
+pub mod ohos_environment;
 mod popover;
 mod reconcile;
 mod resources;
@@ -67,6 +73,7 @@ pub struct Node {
     pub parent: Option<NodeId>,
     pub children: Vec<NodeId>,
     edit_revision: u64,
+    composing: bool,
 }
 
 #[derive(Clone)]
@@ -78,6 +85,8 @@ pub struct HeadlessRoot {
     roots: Vec<NodeId>,
     retired: retired::RetiredIds,
     focus: Option<NodeId>,
+    focus_visible: Option<NodeId>,
+    visible_modal: std::cell::OnceCell<Option<NodeId>>,
     limits: ResourceLimits,
     usage: ResourceUsage,
 }
@@ -113,6 +122,8 @@ impl HeadlessRoot {
             roots: Vec::new(),
             retired: retired::RetiredIds::default(),
             focus: None,
+            focus_visible: None,
+            visible_modal: std::cell::OnceCell::new(),
             limits: ResourceLimits::default(),
             usage: ResourceUsage::default(),
         }
@@ -165,7 +176,20 @@ impl HeadlessRoot {
         }
     }
 
+    /// Returns the node whose keyboard-driven focus should show a visible cue.
+    pub fn focus_visible(&self) -> Option<NodeId> {
+        if self.lifetime.is_disposed() {
+            None
+        } else {
+            self.focus_visible
+        }
+    }
+
     pub fn commit(&mut self, batch: CommitBatch) -> Result<bool, BackendError> {
+        self.validate_batch_revision(&batch)?;
+        if !batch.operations.is_empty() && self.commit_text_updates(&batch)? {
+            return Ok(true);
+        }
         if let Some(candidate) = self.prepare_commit(batch)? {
             *self = candidate;
             Ok(true)
@@ -174,7 +198,7 @@ impl HeadlessRoot {
         }
     }
 
-    pub(crate) fn prepare_commit(&self, batch: CommitBatch) -> Result<Option<Self>, BackendError> {
+    fn validate_batch_revision(&self, batch: &CommitBatch) -> Result<(), BackendError> {
         if self.lifetime.is_disposed() {
             return Err(BackendError::Disposed);
         }
@@ -186,6 +210,73 @@ impl HeadlessRoot {
         {
             return Err(BackendError::Revision);
         }
+        Ok(())
+    }
+
+    // Text/label replacements preserve topology, capability kind, focus eligibility,
+    // popover anchors and grid metadata. Validate the complete batch and final text
+    // budget before touching live nodes; all other operations use the full path.
+    fn commit_text_updates(&mut self, batch: &CommitBatch) -> Result<bool, BackendError> {
+        let mut updates = BTreeMap::new();
+        for operation in &batch.operations {
+            let Operation::Update { node, descriptor } = operation else {
+                return Ok(false);
+            };
+            let Some(current) = self.nodes.get(node) else {
+                return Ok(false);
+            };
+            let same_kind = match (&current.descriptor.content, &descriptor.content) {
+                (NodeContent::Text(_), NodeContent::Text(_)) => true,
+                (
+                    NodeContent::Button { enabled: old, .. },
+                    NodeContent::Button { enabled: new, .. },
+                ) => old == new,
+                _ => false,
+            };
+            if !same_kind
+                || !current.children.is_empty()
+                || current.descriptor.frame != descriptor.frame
+                || current.descriptor.style != descriptor.style
+                || current.descriptor.accessible_name != descriptor.accessible_name
+                || current.descriptor.accessible_description != descriptor.accessible_description
+                || current.descriptor.accessible_role != descriptor.accessible_role
+                || current.descriptor.accessible_selected != descriptor.accessible_selected
+                || current.descriptor.accessible_expanded != descriptor.accessible_expanded
+            {
+                return Ok(false);
+            }
+            updates.insert(*node, descriptor);
+        }
+        fn text_bytes(descriptor: &NodeDescriptor) -> usize {
+            match &descriptor.content {
+                NodeContent::Text(text) | NodeContent::Button { label: text, .. } => text.len(),
+                _ => unreachable!("validated text replacement"),
+            }
+        }
+        let removed: usize = updates
+            .keys()
+            .map(|id| text_bytes(&self.nodes[id].descriptor))
+            .sum();
+        let mut text = self.usage.text_bytes - removed;
+        for descriptor in updates.values() {
+            text = text
+                .checked_add(text_bytes(descriptor))
+                .filter(|bytes| *bytes <= self.limits.text_bytes)
+                .ok_or(BackendError::ResourceLimit(ResourceKind::TextBytes))?;
+        }
+        for (node, descriptor) in updates {
+            self.nodes
+                .get_mut(&node)
+                .expect("validated node")
+                .descriptor = descriptor.clone();
+        }
+        self.usage.text_bytes = text;
+        self.revision = batch.revision;
+        Ok(true)
+    }
+
+    pub(crate) fn prepare_commit(&self, batch: CommitBatch) -> Result<Option<Self>, BackendError> {
+        self.validate_batch_revision(&batch)?;
         if batch.operations.is_empty() {
             return Ok(None);
         }
@@ -197,6 +288,8 @@ impl HeadlessRoot {
             roots: self.roots.clone(),
             retired: self.retired.clone(),
             focus: self.focus,
+            focus_visible: self.focus_visible,
+            visible_modal: self.visible_modal.clone(),
             limits: self.limits,
             usage: self.usage,
         };
@@ -227,8 +320,11 @@ impl HeadlessRoot {
             usage.add(&node.descriptor, candidate.limits)?;
         }
         candidate.usage = usage;
+        // Compute once on the accepted structural candidate, outside event turns.
+        candidate.visible_modal();
         if candidate.focus.is_some_and(|id| !candidate.can_focus(id)) {
             candidate.focus = None;
+            candidate.focus_visible = None;
         }
         candidate.revision = batch.revision;
         Ok(Some(candidate))
@@ -251,6 +347,7 @@ impl HeadlessRoot {
     }
 
     fn apply(&mut self, operation: Operation) -> Result<(), BackendError> {
+        self.visible_modal.take();
         match operation {
             Operation::Create {
                 node,
@@ -298,6 +395,7 @@ impl HeadlessRoot {
                         parent,
                         children: Vec::new(),
                         edit_revision,
+                        composing: false,
                     },
                 );
             }
@@ -336,6 +434,9 @@ impl HeadlessRoot {
                 {
                     if revision < current.edit_revision {
                         return Err(BackendError::Revision);
+                    }
+                    if revision > current.edit_revision {
+                        current.composing = false;
                     }
                     current.edit_revision = revision;
                 }
@@ -387,6 +488,7 @@ impl HeadlessRoot {
                     self.retired.insert(id);
                     if self.focus == Some(id) {
                         self.focus = None;
+                        self.focus_visible = None;
                     }
                 }
             }
@@ -398,6 +500,7 @@ impl HeadlessRoot {
                     return Err(BackendError::InvalidEvent);
                 }
                 self.focus = node;
+                self.focus_visible = None;
             }
         }
         Ok(())
@@ -434,12 +537,17 @@ impl HeadlessRoot {
                 EventPayload::Drag {
                     phase: DragPhase::Cancelled,
                     ..
-                }
+                } | EventPayload::Blur
             )
         {
             return Err(BackendError::InvalidEvent);
         }
-        if !self.capabilities.focus && matches!(event.payload, EventPayload::Focus) {
+        if !self.capabilities.focus
+            && matches!(
+                event.payload,
+                EventPayload::FocusVisible | EventPayload::Focus | EventPayload::Blur
+            )
+        {
             return Err(BackendError::UnsupportedFocus);
         }
         let node = self
@@ -447,6 +555,20 @@ impl HeadlessRoot {
             .get_mut(&event.node)
             .ok_or(BackendError::UnknownNode(event.node))?;
         match (&node.descriptor.content, &event.payload) {
+            (
+                NodeContent::Button { .. }
+                | NodeContent::Input { .. }
+                | NodeContent::Textarea { .. }
+                | NodeContent::Checkbox { .. }
+                | NodeContent::Switch { .. }
+                | NodeContent::Select { .. },
+                EventPayload::Blur,
+            ) => {
+                if self.focus == Some(event.node) {
+                    self.focus = None;
+                    self.focus_visible = None;
+                }
+            }
             (NodeContent::Button { enabled: true, .. }, EventPayload::Expansion { .. })
                 if node.descriptor.accessible_role.is_none()
                     && node.descriptor.accessible_expanded.is_some() => {}
@@ -495,18 +617,31 @@ impl HeadlessRoot {
             }
             (NodeContent::Button { enabled: true, .. }, EventPayload::Activate) => {}
             (
+                NodeContent::Input { enabled: true, .. }
+                | NodeContent::Textarea { enabled: true, .. },
+                EventPayload::Submit { revision },
+            ) if *revision > node.edit_revision && !node.composing => {
+                node.edit_revision = *revision;
+            }
+            (
                 NodeContent::Button { enabled: true, .. }
                 | NodeContent::Input { enabled: true, .. }
                 | NodeContent::Textarea { enabled: true, .. }
                 | NodeContent::Checkbox { enabled: true, .. }
                 | NodeContent::Switch { enabled: true, .. }
                 | NodeContent::Select { enabled: true, .. },
-                EventPayload::Focus,
+                EventPayload::FocusVisible | EventPayload::Focus,
             ) => {
                 self.focus = Some(event.node);
+                self.focus_visible =
+                    matches!(event.payload, EventPayload::FocusVisible).then_some(event.node);
             }
             (NodeContent::Scroll, EventPayload::Scroll { x, y })
                 if x.is_finite() && y.is_finite() => {}
+            (NodeContent::Scroll, EventPayload::Wheel { delta_x, delta_y })
+                if [delta_x, delta_y]
+                    .iter()
+                    .all(|delta| delta.is_finite() && delta.abs() <= 1_000_000.0) => {}
             (
                 NodeContent::Input { enabled: true, .. }
                 | NodeContent::Textarea { enabled: true, .. },
@@ -521,6 +656,7 @@ impl HeadlessRoot {
                 && composing_utf16.is_none_or(|range| valid_utf16_range(value, range)) =>
             {
                 node.edit_revision = *revision;
+                node.composing = composing_utf16.is_some();
             }
             (
                 NodeContent::Checkbox { enabled: true, .. }
@@ -554,22 +690,31 @@ impl HeadlessRoot {
         self.roots.clear();
         self.retired.clear();
         self.focus = None;
+        self.focus_visible = None;
+        self.visible_modal.take();
         self.usage = ResourceUsage::default();
     }
 
-    fn event_visible(&self, target: NodeId) -> bool {
-        let mut pending: Vec<_> = self.roots.iter().rev().copied().collect();
-        let mut modal = None;
-        while let Some(id) = pending.pop() {
-            let node = &self.nodes[&id];
-            match node.descriptor.content {
-                NodeContent::Dialog { open: false, .. }
-                | NodeContent::Popover { open: false, .. } => continue,
-                NodeContent::Dialog { open: true, .. } => modal = Some(id),
-                _ => {}
+    fn visible_modal(&self) -> Option<NodeId> {
+        *self.visible_modal.get_or_init(|| {
+            let mut pending: Vec<_> = self.roots.iter().rev().copied().collect();
+            let mut modal = None;
+            while let Some(id) = pending.pop() {
+                let node = &self.nodes[&id];
+                match node.descriptor.content {
+                    NodeContent::Dialog { open: false, .. }
+                    | NodeContent::Popover { open: false, .. } => continue,
+                    NodeContent::Dialog { open: true, .. } => modal = Some(id),
+                    _ => {}
+                }
+                pending.extend(node.children.iter().rev().copied());
             }
-            pending.extend(node.children.iter().rev().copied());
-        }
+            modal
+        })
+    }
+
+    fn event_visible(&self, target: NodeId) -> bool {
+        let modal = self.visible_modal();
         let mut current = Some(target);
         let mut in_modal = modal.is_none();
         while let Some(id) = current {
@@ -588,3 +733,4 @@ impl HeadlessRoot {
         in_modal
     }
 }
+pub mod checkpoint;

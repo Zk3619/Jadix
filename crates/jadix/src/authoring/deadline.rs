@@ -6,7 +6,7 @@ use std::rc::{Rc, Weak};
 use web_time::Instant;
 
 use crate::app::window_scope::{self, WindowScope};
-use crate::core::reactivity::{current_owner, on_cleanup, with_owner, OwnerId};
+use crate::core::reactivity::{OwnerId, current_owner, on_cleanup, with_owner};
 use crate::core::tree::{Element, LayoutStatus};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

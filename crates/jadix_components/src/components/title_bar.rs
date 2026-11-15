@@ -6,36 +6,37 @@ use super::base::SlotChrome;
 use crate::app::current_window;
 use crate::core::tree::{Element, IntoElementList};
 
+#[path = "title_bar_drag.rs"]
+mod drag;
+
 /// Apply drag/double-click/system-menu behavior to a non-interactive title region.
 /// Captures the owning weak window handle, so later calls target the right window.
 pub fn window_drag_region(child: Element) -> Element {
     let drag = current_window();
     let menu = drag.clone();
-    child
-        .on_mousedown(move |event| {
-            if event.button_index() == 0 {
-                if let Some(window) = &drag {
-                    event.stop_propagation();
-                    // Native move loops can swallow mouse-up. Act on the second
-                    // press, rather than depending on a later synthetic dblclick.
-                    if event.detail.is_multiple_of(2) {
-                        let _ = window.titlebar_double_click();
-                    } else {
-                        let _ = window.start_drag();
-                    }
-                }
+    let threshold = drag
+        .as_ref()
+        .map_or([0.0; 2], |w| w.titlebar_drag_threshold());
+    let mover = drag.clone();
+    let child = drag::drag_region_handlers(child, threshold, move |double_click| {
+        if let Some(window) = &mover {
+            if double_click {
+                let _ = window.titlebar_double_click();
+            } else {
+                let _ = window.start_drag();
             }
-        })
-        .on_context_menu(move |event| {
-            if let Some(window) = &menu {
-                if window
-                    .show_system_menu(event.x as f64, event.y as f64)
-                    .is_ok()
-                {
-                    event.stop_propagation();
-                }
+        }
+    });
+    child.on_context_menu(move |event| {
+        if let Some(window) = &menu {
+            if window
+                .show_system_menu(event.x as f64, event.y as f64)
+                .is_ok()
+            {
+                event.stop_propagation();
             }
-        })
+        }
+    })
 }
 
 crate::__component_contract! {

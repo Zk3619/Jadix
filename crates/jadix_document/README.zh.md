@@ -25,6 +25,8 @@ jadix_document = "=0.1.0"
 
 原有[包使用指南](GUIDE.md)保留 API、平台及来源细节，可能使用其他语言。
 
+可选 `checkpoint` feature 提供无 GUI 的 `checkpoint::{Checkpoint, CheckpointStore}`，支持大小限制、校验和、代次冲突检测与同目录替换；`jadix_native` 和 `jadix_tui` 共用同一实现，不引入渲染器或语法引擎。锁与代次冲突显式失败，不承诺断电可靠。
+
 ## 文档
 
 [项目文档](https://github.com/Zk3619/Jadix/tree/main/docs)介绍应用配置、平台接入、功能选择与 API 用法。

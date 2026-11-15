@@ -1,4 +1,4 @@
-use crate::{Element, Signal};
+use jadix::portable::{Element, Signal};
 use jadix::{
     core::reactivity::{component_root, create_context, provide_context, use_context, Context},
     presentation::{NavigationKey, NodeContent},
@@ -64,7 +64,7 @@ pub fn accordion_scope(
     let id = id.into();
     component_root(|| {
         let value = value.unwrap_or_else(|| {
-            crate::use_scoped_signal(&format!("{id}__accordion"), || default_value)
+            jadix::portable::use_scoped_signal(&format!("{id}__accordion"), || default_value)
         });
         let context = AccordionCtx {
             id: id.clone(),
@@ -239,11 +239,13 @@ impl From<AccordionTriggerBuilder> for Element {
     }
 }
 
-impl crate::core::tree::IntoElementList for AccordionTriggerBuilder {
+impl jadix::portable::core::tree::IntoElementList for AccordionTriggerBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }
 }
+
+type AccordionBuilderItem = (String, String, bool, Box<dyn Fn() -> Element>);
 
 pub struct AccordionBuilder {
     id: String,
@@ -251,7 +253,7 @@ pub struct AccordionBuilder {
     default_value: Vec<String>,
     multiple: bool,
     disabled: bool,
-    items: Vec<(String, String, bool, Box<dyn Fn() -> Element>)>,
+    items: Vec<AccordionBuilderItem>,
     body: Option<Box<dyn FnOnce() -> Element>>,
 }
 
@@ -336,7 +338,7 @@ impl From<AccordionBuilder> for Element {
     }
 }
 
-impl crate::core::tree::IntoElementList for AccordionBuilder {
+impl jadix::portable::core::tree::IntoElementList for AccordionBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }

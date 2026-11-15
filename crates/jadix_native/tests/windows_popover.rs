@@ -18,6 +18,8 @@ fn node(root: RootId, content: NodeContent, size: [f32; 2]) -> PresentationNode 
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: style::NodeStyle {
                 width: Some(size[0]),
@@ -65,6 +67,7 @@ fn native_popover_escapes_scroll_clip_tracks_anchor_and_restores_focus_after_esc
     panel.children.push(node(
         identifier,
         NodeContent::Input {
+            max_length: None,
             value: "draft".into(),
             placeholder: String::new(),
             enabled: true,

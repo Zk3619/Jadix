@@ -3,7 +3,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     rc::Rc,
 };
-use wasm_bindgen::{JsCast, JsValue, closure::Closure};
+use wasm_bindgen::{closure::Closure, JsCast, JsValue};
 use web_sys::{
     Document, Event, FocusOptions, HtmlDialogElement, HtmlElement, HtmlInputElement,
     HtmlOptionElement, HtmlSelectElement, HtmlTextAreaElement, ScrollIntoViewOptions,
@@ -70,6 +70,10 @@ pub struct DomHost {
 
 fn error(error: JsValue) -> String {
     format!("DOM: {error:?}")
+}
+
+pub(super) fn node_html_id(id: NodeId) -> String {
+    format!("jadix-node-{}-{}", id.root.token(), id.token())
 }
 
 fn focus_snapshot(document: &Document, subtree: &HtmlElement) -> Option<FocusSnapshot> {
@@ -203,6 +207,14 @@ fn style(element: &HtmlElement, descriptor: &NodeDescriptor) -> Result<(), Strin
         ("font-family", node.font_family.clone()),
         ("font-size", format!("{}px", node.font_size)),
         ("font-weight", node.font_weight.to_string()),
+        (
+            "direction",
+            match node.direction {
+                Some(jadix_core::environment::LayoutDirection::RightToLeft) => "rtl",
+                Some(jadix_core::environment::LayoutDirection::LeftToRight) | None => "ltr",
+            }
+            .into(),
+        ),
         ("color", rgba(node.foreground)),
         ("background-color", rgba(node.background)),
         ("white-space", String::from("pre-wrap")),
@@ -212,6 +224,14 @@ fn style(element: &HtmlElement, descriptor: &NodeDescriptor) -> Result<(), Strin
     match &descriptor.accessible_name {
         Some(name) => element.set_attribute("aria-label", name).map_err(error)?,
         None => element.remove_attribute("aria-label").map_err(error)?,
+    }
+    match &descriptor.accessible_description {
+        Some(description) => element
+            .set_attribute("aria-description", description)
+            .map_err(error)?,
+        None => element
+            .remove_attribute("aria-description")
+            .map_err(error)?,
     }
     let role = match descriptor.accessible_role {
         Some(AccessibleRole::RadioGroup) => Some("radiogroup"),
@@ -340,6 +360,12 @@ fn style(element: &HtmlElement, descriptor: &NodeDescriptor) -> Result<(), Strin
             ..
         } => {
             let input = checkbox_input(element);
+            match &descriptor.accessible_description {
+                Some(description) => input
+                    .set_attribute("aria-description", description)
+                    .map_err(error)?,
+                None => input.remove_attribute("aria-description").map_err(error)?,
+            }
             input.set_checked(*checked);
             input.set_disabled(!enabled);
             input
@@ -453,6 +479,14 @@ fn style(element: &HtmlElement, descriptor: &NodeDescriptor) -> Result<(), Strin
             }
         }
         NodeContent::Image { source, alt } => {
+            match &descriptor.accessible_description {
+                Some(description) => element
+                    .set_attribute("data-jadix-image-description", description)
+                    .map_err(error)?,
+                None => element
+                    .remove_attribute("data-jadix-image-description")
+                    .map_err(error)?,
+            }
             let image = element.unchecked_ref::<web_sys::HtmlImageElement>();
             let [width, height] = descriptor
                 .content
@@ -465,15 +499,17 @@ fn style(element: &HtmlElement, descriptor: &NodeDescriptor) -> Result<(), Strin
                 element
                     .set_attribute("data-jadix-image-state", "loading")
                     .map_err(error)?;
-                element
-                    .remove_attribute("aria-description")
-                    .map_err(error)?;
                 image.set_src(source);
             }
             if element.get_attribute("data-jadix-image-state").as_deref() == Some("error") {
                 style
                     .set_property("background-color", "#eee")
                     .map_err(error)?;
+                if descriptor.accessible_description.is_none() {
+                    element
+                        .set_attribute("aria-description", "Image unavailable")
+                        .map_err(error)?;
+                }
             }
             style.set_property("object-fit", "contain").map_err(error)?;
         }
@@ -593,6 +629,7 @@ impl DomHost {
         element
             .set_attribute("data-jadix-node", &node.id.token())
             .map_err(error)?;
+        element.set_id(&node_html_id(node.id));
         let revision = Rc::new(Cell::new(0u64));
         let content = Rc::new(RefCell::new(node.descriptor.content.clone()));
         let composing = Rc::new(Cell::new(None::<usize>));
@@ -612,6 +649,11 @@ impl DomHost {
                     );
                     if failed {
                         let _ = target.style().set_property("background-color", "#eee");
+                    }
+                    if let Some(description) = target.get_attribute("data-jadix-image-description")
+                    {
+                        let _ = target.set_attribute("aria-description", &description);
+                    } else if failed {
                         let _ = target.set_attribute("aria-description", "Image unavailable");
                     } else {
                         let _ = target.remove_attribute("aria-description");
@@ -629,12 +671,14 @@ impl DomHost {
             }
         }
         let events: &[&'static str] = match node.descriptor.content {
-            NodeContent::Button { .. } => &["click", "focus"],
+            NodeContent::Button { .. } => &["click", "focus", "blur"],
             NodeContent::Input { .. } => &[
                 "input",
+                "keydown",
                 "compositionstart",
                 "compositionend",
                 "focus",
+                "blur",
                 "select",
             ],
             NodeContent::Textarea { .. } => &[
@@ -642,10 +686,13 @@ impl DomHost {
                 "compositionstart",
                 "compositionend",
                 "focus",
+                "blur",
                 "select",
             ],
-            NodeContent::Checkbox { .. } | NodeContent::Switch { .. } => &["change", "focusin"],
-            NodeContent::Select { .. } => &["change", "focus"],
+            NodeContent::Checkbox { .. } | NodeContent::Switch { .. } => {
+                &["change", "focusin", "focusout"]
+            }
+            NodeContent::Select { .. } => &["change", "focus", "blur"],
             NodeContent::Scroll => &["scroll"],
             NodeContent::Dialog { .. } => &["cancel", "click", "keydown"],
             NodeContent::Popover { .. } => &["beforetoggle", "toggle"],
@@ -667,8 +714,9 @@ impl DomHost {
                 if !live.get() || publishing.get() {
                     return;
                 }
+                let cleanup = matches!(name, "blur" | "focusout");
                 let enclosing = target.closest("dialog").ok().flatten();
-                if let Some(active) = active_modal.get() {
+                if let Some(active) = active_modal.get().filter(|_| !cleanup) {
                     if enclosing
                         .as_ref()
                         .and_then(|element| element.get_attribute("data-jadix-node"))
@@ -676,7 +724,7 @@ impl DomHost {
                     {
                         return;
                     }
-                } else if enclosing.is_some() {
+                } else if !cleanup && enclosing.is_some() {
                     return;
                 }
                 if is_popover {
@@ -698,11 +746,12 @@ impl DomHost {
                     }
                     return;
                 }
-                if target
-                    .closest("[popover]")
-                    .ok()
-                    .flatten()
-                    .is_some_and(|panel| !panel.matches(":popover-open").unwrap_or(false))
+                if !cleanup
+                    && target
+                        .closest("[popover]")
+                        .ok()
+                        .flatten()
+                        .is_some_and(|panel| !panel.matches(":popover-open").unwrap_or(false))
                 {
                     return;
                 }
@@ -718,7 +767,7 @@ impl DomHost {
                             return;
                         }
                         event.stop_propagation();
-                        let Ok(candidates) = target.query_selector_all("button:not([disabled]),input:not([disabled]),textarea:not([disabled]),[tabindex='0']") else { return; };
+                        let Ok(candidates) = target.query_selector_all("button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex='0']") else { return; };
                         let controls: Vec<_> = (0..candidates.length())
                             .filter_map(|index| candidates.item(index))
                             .filter_map(|node| node.dyn_into::<HtmlElement>().ok())
@@ -786,6 +835,35 @@ impl DomHost {
                     return;
                 }
                 let payload = match name {
+                    "blur" | "focusout" => serde_json::json!({"kind": "blur"}),
+                    "keydown" => {
+                        let Some(key) = event.dyn_ref::<web_sys::KeyboardEvent>() else {
+                            return;
+                        };
+                        if key.key() != "Enter"
+                            || key.ctrl_key()
+                            || key.alt_key()
+                            || key.meta_key()
+                            || key.repeat()
+                            || key.is_composing()
+                            || key.key_code() == 229
+                            || composing.get().is_some()
+                            || !matches!(
+                                *content.borrow(),
+                                NodeContent::Input { enabled: true, .. }
+                            )
+                        {
+                            return;
+                        }
+                        event.prevent_default();
+                        event.stop_propagation();
+                        let Some(next) = revision.get().checked_add(1) else {
+                            live.set(false);
+                            return;
+                        };
+                        revision.set(next);
+                        serde_json::json!({"kind": "submit", "revision": next.to_string()})
+                    }
                     "click" => {
                         let _ = target.focus();
                         serde_json::json!({"kind": "activate"})
@@ -795,7 +873,16 @@ impl DomHost {
                         options.set_block(ScrollLogicalPosition::Nearest);
                         options.set_inline(ScrollLogicalPosition::Nearest);
                         target.scroll_into_view_with_scroll_into_view_options(&options);
-                        serde_json::json!({"kind": "focus"})
+                        let focus_target = event
+                            .target()
+                            .and_then(|target| target.dyn_into::<web_sys::Element>().ok())
+                            .unwrap_or_else(|| target.clone().unchecked_into());
+                        let kind = if focus_target.matches(":focus-visible").unwrap_or(false) {
+                            "focusVisible"
+                        } else {
+                            "focus"
+                        };
+                        serde_json::json!({"kind": kind})
                     }
                     "change" => {
                         let Some(next) = revision.get().checked_add(1) else {
@@ -873,6 +960,51 @@ impl DomHost {
             revision,
             _listeners: listeners,
         })
+    }
+
+    fn sync_accessibility_relations(&self, roots: &[PresentationNode]) -> Result<(), String> {
+        for view in self.views.values() {
+            view.element
+                .remove_attribute("aria-activedescendant")
+                .map_err(error)?;
+            view.element
+                .remove_attribute("aria-controls")
+                .map_err(error)?;
+        }
+        let mut pending: Vec<_> = roots.iter().rev().collect();
+        while let Some(node) = pending.pop() {
+            let Some(view) = self.views.get(&node.id) else {
+                continue;
+            };
+            let relations = &node.descriptor.accessibility_relations;
+            if let Some(target) = relations
+                .active_descendant
+                .filter(|target| target.root == node.id.root && self.views.contains_key(target))
+            {
+                view.element
+                    .set_attribute("aria-activedescendant", &node_html_id(target))
+                    .map_err(error)?;
+            }
+            let mut controls = BTreeSet::new();
+            for target in &relations.controls {
+                if target.root == node.id.root && self.views.contains_key(target) {
+                    controls.insert(node_html_id(*target));
+                }
+            }
+            if let Some(popovers) = view.element.get_attribute("data-jadix-popover-controls") {
+                controls.extend(popovers.split_ascii_whitespace().map(str::to_owned));
+            }
+            if !controls.is_empty() {
+                view.element
+                    .set_attribute(
+                        "aria-controls",
+                        &controls.into_iter().collect::<Vec<_>>().join(" "),
+                    )
+                    .map_err(error)?;
+            }
+            pending.extend(node.children.iter().rev());
+        }
+        Ok(())
     }
 
     fn publish_nodes(
@@ -1120,6 +1252,7 @@ impl PlatformHost for DomHost {
             }
             self.modal_order = opened;
             self.sync_popovers(roots)?;
+            self.sync_accessibility_relations(roots)?;
             if let Some(focus) = retained_popup_focus {
                 if focus
                     .element

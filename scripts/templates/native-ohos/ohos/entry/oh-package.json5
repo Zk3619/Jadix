@@ -1,0 +1,4 @@
+{
+  "name": "entry", "version": "0.1.0", "description": "Jadix ArkUI native controls",
+  "dependencies": {"libjadix_native_controls.so": "file:./src/main/cpp/types/jadix_native_controls"}
+}

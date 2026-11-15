@@ -42,7 +42,7 @@ pub mod shader_leaf;
 #[cfg(feature = "image-stream")]
 pub mod yuv_convert;
 
-pub use backdrop_blur::BackdropBlurPipeline;
+pub use backdrop_blur::{BackdropBlurPipeline, ProgressiveBlur};
 pub use compute::{ComputeBlur, ComputeHistogram, ComputeParticles, ComputePipelines};
 pub use css_filter::{
     enrich_filter_graph, queue_css_filter_wrap, take_filter_jobs, CssFilterPassGpu, FilterJob,

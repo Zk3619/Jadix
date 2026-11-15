@@ -27,3 +27,6 @@ pub use semantic_document::{
     Document, DocumentAlignment, DocumentBlock, DocumentBlockKind, DocumentFormat, DocumentInline,
     DocumentInlineKind, DocumentInlineStyle,
 };
+
+#[cfg(feature = "checkpoint")]
+pub mod checkpoint;

@@ -23,10 +23,146 @@
 //! [`SCROLL_BEHAVIOR_JUMP`]。
 
 use std::collections::hash_map::Entry;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use super::reactivity::use_signal;
 use super::tree::Element;
+
+type ScrollCallback = std::rc::Rc<dyn Fn([f32; 2])>;
+struct ScrollObserver {
+    scope: crate::app::window_scope::WindowScope,
+    offsets: [super::reactivity::Signal<f32>; 2],
+    previous: [f32; 2],
+    callback: ScrollCallback,
+    _silent_subscriptions: [super::reactivity::SilentSignalSubscription; 2],
+}
+thread_local! {
+    static SCROLL_OBSERVERS: std::cell::RefCell<HashMap<u64, ScrollObserver>> = std::cell::RefCell::new(HashMap::new());
+    static DIRTY_SCROLL_OBSERVERS: std::cell::RefCell<HashMap<crate::app::window_scope::WindowScope, HashSet<u64>>> = std::cell::RefCell::new(HashMap::new());
+    static NEXT_SCROLL_OBSERVER: std::cell::Cell<u64> = const { std::cell::Cell::new(1) };
+}
+
+/// UI-thread subscription to actual scroll offsets, including silent renderer writes.
+/// Drop unregisters it; callbacks run once per changed frame in their window scope.
+pub struct ScrollOffsetSubscription {
+    id: u64,
+    _ui_thread: std::marker::PhantomData<std::rc::Rc<()>>,
+}
+impl Drop for ScrollOffsetSubscription {
+    fn drop(&mut self) {
+        unregister_scroll_observer(self.id);
+    }
+}
+/// Observe a registered viewport without turning paint-only scrolling into a
+/// global reactive notification. Silent signal writes queue only observers of
+/// the changed offset.
+pub fn observe_scroll_offset(
+    id: &str,
+    callback: impl Fn([f32; 2]) + 'static,
+) -> ScrollOffsetSubscription {
+    let offsets = [
+        use_signal(&scroll_offset_x_signal_key(id), || 0.0),
+        use_signal(&scroll_offset_y_signal_key(id), || 0.0),
+    ];
+    let previous = offsets.map(|offset| offset.peek());
+    let id = NEXT_SCROLL_OBSERVER.with(|next| {
+        let id = next.get();
+        next.set(
+            id.checked_add(1)
+                .expect("scroll observer identity exhausted"),
+        );
+        id
+    });
+    let scope = crate::app::window_scope::active();
+    let dirty_x = {
+        let observer = id;
+        offsets[0]
+            .observe_silent(move || mark_scroll_observer_dirty(observer, scope))
+            .expect("live scroll offset signal")
+    };
+    let dirty_y = {
+        let observer = id;
+        offsets[1]
+            .observe_silent(move || mark_scroll_observer_dirty(observer, scope))
+            .expect("live scroll offset signal")
+    };
+    SCROLL_OBSERVERS.with(|observers| {
+        observers.borrow_mut().insert(
+            id,
+            ScrollObserver {
+                scope,
+                offsets,
+                previous,
+                callback: std::rc::Rc::new(callback),
+                _silent_subscriptions: [dirty_x, dirty_y],
+            },
+        );
+    });
+    ScrollOffsetSubscription {
+        id,
+        _ui_thread: std::marker::PhantomData,
+    }
+}
+fn unregister_scroll_observer(id: u64) {
+    let removed = SCROLL_OBSERVERS
+        .try_with(|observers| observers.borrow_mut().remove(&id))
+        .ok()
+        .flatten();
+    let Some(observer) = removed else {
+        return;
+    };
+    let _ = DIRTY_SCROLL_OBSERVERS.try_with(|dirty| {
+        let mut dirty = dirty.borrow_mut();
+        if let Some(ids) = dirty.get_mut(&observer.scope) {
+            ids.remove(&id);
+            if ids.is_empty() {
+                dirty.remove(&observer.scope);
+            }
+        }
+    });
+}
+
+fn mark_scroll_observer_dirty(id: u64, scope: crate::app::window_scope::WindowScope) {
+    DIRTY_SCROLL_OBSERVERS.with(|dirty| {
+        dirty.borrow_mut().entry(scope).or_default().insert(id);
+    });
+}
+
+/// Flush dirty viewport observers after the owning renderer applies silent writes,
+/// outside its state borrow. Returns the number of queued observers examined.
+pub fn flush_scroll_observers() -> usize {
+    let scope = crate::app::window_scope::active();
+    let ids =
+        DIRTY_SCROLL_OBSERVERS.with(|dirty| dirty.borrow_mut().remove(&scope).unwrap_or_default());
+    let candidates = ids.len();
+    let (callbacks, dead) = SCROLL_OBSERVERS.with(|observers| {
+        let mut observers = observers.borrow_mut();
+        let mut callbacks = Vec::new();
+        let mut dead = Vec::new();
+        for id in ids {
+            let Some(observer) = observers.get_mut(&id) else {
+                continue;
+            };
+            let [Some(x), Some(y)] = observer.offsets.map(|offset| offset.try_peek()) else {
+                dead.push(id);
+                continue;
+            };
+            let offset = [x, y];
+            if offset != observer.previous {
+                observer.previous = offset;
+                callbacks.push((observer.callback.clone(), offset));
+            }
+        }
+        (callbacks, dead)
+    });
+    for id in dead {
+        unregister_scroll_observer(id);
+    }
+    for (callback, offset) in callbacks {
+        callback(offset);
+    }
+    candidates
+}
 
 /// Focus-id 前缀：引擎用此前缀识别可滚动视口（与组件名无关）。
 pub const SCROLL_VIEWPORT_FOCUS_PREFIX: &str = "scroll:";

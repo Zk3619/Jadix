@@ -6,7 +6,7 @@
 
 | API | 约定 |
 | --- | --- |
-| `CancellationToken` | clone 共享取消状态；`checkpoint()` 支持合作式取消 |
+| `CancellationToken` | clone 共享取消状态；`checkpoint()` 支持合作式取消，`run_until_cancelled(future)` 会在取消时唤醒任务并 drop 未完成 Future |
 | `CancellationToken::on_cancel` | 对接后端原生 abort；取消前后注册都执行一次，回调不持锁 |
 | `CancellationToken::link_handle` | 将外部任务句柄绑定到逻辑取消，避免同一 token 自捕获 |
 | `TaskHandle` | clone 共享取消控制，不是 join handle；drop 某个 clone 不取消 |
@@ -19,6 +19,8 @@
 ## 取消与错误
 
 取消首先是逻辑状态，不保证杀死 OS 线程、终止数据库事务或回滚外部副作用。阻塞任务在安全检查点退出；具备原生 abort 的后端用 `TaskHandle::with_abort` 绑定原生句柄。abort 与取消回调必须非阻塞、不可 panic、可从任意取消线程调用。
+
+`run_until_cancelled` 适用于可取消的异步工作：它与外部 runtime 共用其 poll/wake 驱动，取消时唤醒等待任务并释放原 Future；Future 持有的 timer、IO 等资源会随 Future drop 交还给各自后端。它不安装定时器或 runtime，也不能强停同步阻塞代码。
 
 ```rust
 use jadix_tasks::{CancellationToken, TaskHandle};

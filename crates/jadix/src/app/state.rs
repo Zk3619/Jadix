@@ -1,4 +1,13 @@
 use std::borrow::Cow;
+
+/// Share the production reconciler with windowless scenes without exposing AppState.
+pub(crate) fn reconcile_scene_tree(
+    next: &mut crate::core::tree::Element,
+    previous: &mut crate::core::tree::Element,
+    dirty: &mut Vec<taffy::prelude::NodeId>,
+) -> crate::core::tree::LayoutStatus {
+    AppState::reconcile_elements(next, previous, dirty)
+}
 #[cfg(all(test, target_os = "windows"))]
 #[path = "tests/state_hybrid_tests.rs"]
 mod hybrid_tests;
@@ -488,7 +497,7 @@ fn captured_text_decoration_bounds(
 /// Draw CSS `text-shadow` bitmaps. Must run **after** the band's opaque fills and
 /// **before** glyphon glyphs — otherwise page-stack card backgrounds cover the quads
 /// (gallery「Text-shadow」vanishes whenever `page_stack_bands` is non-empty).
-fn draw_shadow_tex_draws<'pass>(
+pub(crate) fn draw_shadow_tex_draws<'pass>(
     pass: &mut wgpu::RenderPass<'pass>,
     draws: &[crate::renderer::prepare_text::ShadowTexDraw],
     shadow_tex_cache: &'pass HashMap<u64, super::image_registry::GpuImageTexture>,
@@ -762,7 +771,7 @@ fn draw_uploaded_sdf_with_clip<'a>(
     }
 }
 
-fn draw_cpu_sdf_instances<'a>(
+pub(crate) fn draw_cpu_sdf_instances<'a>(
     pass: &mut wgpu::RenderPass<'a>,
     pipeline: &'a JadixPipeline,
     device: &wgpu::Device,
@@ -950,7 +959,7 @@ fn text_shadow_draw_slot(has_page_stack_bands: bool) -> TextShadowDrawSlot {
     }
 }
 
-fn draw_paint_ops<'pass>(
+pub(crate) fn draw_paint_ops<'pass>(
     pass: &mut wgpu::RenderPass<'pass>,
     ops: &[crate::layout::layout_tree::PaintOp],
     lo: usize,
@@ -5141,11 +5150,12 @@ impl AppState {
             // outline/background pixels as well as the glyphs.
             super::damage::push_frame_paint_key(key, bounds);
         }
-        let (status, frame_status) = {
+        let (status, frame_status, leaf_stamp) = {
             let mut cursor = &mut self.root_element;
             for &index in &path {
                 cursor = &mut cursor.children[index];
             }
+            let leaf_stamp = crate::layout::collect_cache::leaf_paint_stamp(cursor);
             let status = patch(cursor);
             // Bind writes the specified target into `style`. Commit the standing
             // CSS tween before dest-reset / collect so the used pose (and dirty
@@ -5190,15 +5200,16 @@ impl AppState {
                     self.page_geom_dirty = true;
                 }
             }
-            (status, frame_status)
+            (status, frame_status, leaf_stamp)
         };
         self.layout_status = Self::merge_layout_status(self.layout_status, frame_status);
         if frame_status != crate::core::tree::LayoutStatus::Clean {
             // ViewportsOnly `reuse_idle` would skip-replay idle ancestors (gallery
             // Item variant bind while the clicked button is still hovered).
-            crate::layout::collect_cache::invalidate_collect_paint_hash_path(
+            crate::layout::collect_cache::refresh_leaf_paint_path(
                 &mut self.root_element,
                 &path,
+                leaf_stamp,
             );
         }
         self.template_paths.insert(template_id.to_string(), path);

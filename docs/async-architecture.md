@@ -28,7 +28,7 @@ jadix_tasks ←─────────────────────�
 
 | 对象 | 实现与约束 |
 | --- | --- |
-| `CancellationToken` | 共享逻辑取消；检查点与原生 abort hook；取消回调在锁外执行 |
+| `CancellationToken` | 共享逻辑取消；检查点、`run_until_cancelled` Future race 与原生 abort hook；取消回调及等待任务唤醒在锁外执行 |
 | `TaskHandle` | clone 共享取消；drop 不隐式取消；不代表 OS 任务已经终止 |
 | `BlockingExecutor` | 接纳闭包到外部池；满载/关闭立即拒绝，不等待队列空位 |
 | `FutureSpawner` | 接纳 Send Future 到外部 runtime；由该 runtime 负责唤醒与 IO |
@@ -37,7 +37,7 @@ jadix_tasks ←─────────────────────�
 
 `spawn_blocking_on` 与 `spawn` 的返回值只表示执行器接纳；`on_ui(Result<T, TaskError>)` 表示执行结果。拒绝只通过返回值报告，不再调用 `on_ui`。任务开始前检查取消；取消后不调用结果回调，界面需要即时取消状态时应在自己的取消处理器中更新。
 
-`spawn` 接收 `FnOnce(CancellationToken) -> Future` 工厂，而非强迫 UI 提前构造依赖运行时的 Future。任务/结果/回调要求 `Send + 'static`；UI 只能在回投回调里访问 Signal。回调捕获 Signal ID 不代表可以在 worker 上读取 Signal：状态存储仍属于 UI 线程。
+`spawn` 接收 `FnOnce(CancellationToken) -> Future` 工厂，而非强迫 UI 提前构造依赖运行时的 Future。任务等待由注入的 runtime poll；scope/handle 取消会唤醒并 drop 未完成 Future，让其持有的 timer 和 IO 资源按后端 drop 语义清理，即便 spawner 没有原生 abort hook。任务/结果/回调要求 `Send + 'static`；UI 只能在回投回调里访问 Signal。回调捕获 Signal ID 不代表可以在 worker 上读取 Signal：状态存储仍属于 UI 线程。
 
 偶发阻塞工作可用 `TaskScope::spawn_blocking`，每次一个命名原生线程；它不是有界线程池。需要并发上限、优先级、CPU/IO 隔离时注入外部 `BlockingExecutor`。已有自由函数 `app::spawn_blocking` / `run_on_ui_thread` 保持兼容，是低层、不绑定 owner 的接口；新业务优先使用 `TaskScope`。全局 UI 回投队列仍不是有界消息系统：高并发一次性任务须在外部执行器限制接纳量，高频事件用有界订阅，不能把“单订阅有界”误解成全应用内存自动有界。
 

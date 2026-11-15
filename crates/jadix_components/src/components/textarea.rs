@@ -44,6 +44,9 @@ pub fn textarea(id: &str) -> TextareaBuilder {
         disabled: false,
         invalid: bool::default(),
         value: None,
+        max_length: None,
+        on_submit: None,
+        on_composition_change: None,
         resizable: true,
         resize_max_h: None,
         wrap_mode: TextareaWrapMode::Word,
@@ -67,6 +70,9 @@ pub struct TextareaBuilder {
     disabled: bool,
     invalid: bool,
     value: Option<Signal<String>>,
+    max_length: Option<usize>,
+    on_submit: Option<crate::core::tree::Handler>,
+    on_composition_change: Option<crate::core::tree::Handler<Option<String>>>,
     resizable: bool,
     resize_max_h: Option<f32>,
     wrap_mode: TextareaWrapMode,
@@ -84,6 +90,24 @@ pub struct TextareaBuilder {
 
 impl TextareaBuilder {
     crate::impl_slot_chrome_methods!();
+
+    /// Submit on Return. Shift/Alt+Return inserts a newline; the default has no submit action.
+    pub fn on_submit(mut self, mut callback: impl FnMut() + 'static) -> Self {
+        self.on_submit = Some(crate::core::tree::Handler(Box::new(move |()| callback())));
+        self
+    }
+
+    /// Observe IME preedit text (`Some`) and composition end (`None`) separately
+    /// from the controlled value and `on_change`.
+    pub fn on_composition_change(
+        mut self,
+        mut callback: impl FnMut(Option<String>) + 'static,
+    ) -> Self {
+        self.on_composition_change = Some(crate::core::tree::Handler(Box::new(move |value| {
+            callback(value)
+        })));
+        self
+    }
 
     pub fn placeholder(mut self, s: impl Into<String>) -> Self {
         self.placeholder = s.into();
@@ -123,6 +147,13 @@ impl TextareaBuilder {
     }
 
     /// Controlled value: see [`crate::utils::text_field::bind_controlled_value`].
+    /// Maximum user-edit length in UTF-16 units; inserted graphemes stay whole.
+    pub fn max_length(mut self, limit: usize) -> Self {
+        assert!(limit <= jadix::presentation::input::MAX_INPUT_LENGTH);
+        self.max_length = Some(limit);
+        self
+    }
+
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.value = Some(s);
         self
@@ -207,6 +238,9 @@ impl From<TextareaBuilder> for Element {
             disabled,
             invalid,
             value,
+            max_length,
+            on_submit,
+            on_composition_change,
             resizable,
             resize_max_h,
             wrap_mode,
@@ -249,6 +283,7 @@ impl From<TextareaBuilder> for Element {
             line_height_px: None,
             leading_scale: None,
             value,
+            max_length,
             text_align: crate::style::TextAlign::Start,
             single_line_container: None,
             multiline: true,
@@ -273,6 +308,14 @@ impl From<TextareaBuilder> for Element {
                 }
             },
         }));
+        if !disabled {
+            if let Some(mut handler) = on_submit {
+                crate::authoring::text::on_submit(&mut el, true, move || (handler.0)(()));
+            }
+        }
+        if let Some(mut handler) = on_composition_change {
+            crate::authoring::text::on_composition_change(&mut el, move |value| (handler.0)(value));
+        }
         if let Some(w) = ring_width {
             el.style.focus_ring_width = Some(w);
         }
@@ -297,6 +340,9 @@ plain [] resize_max_h: Option<f32>,
 plain [] wrap: Option<String>,
 plain [] selection_on_blur: Option<String>,
 plain [] value: Option<Signal<String>>,
+plain [] max_length: Option<usize>,
+plain [] on_submit: Option<crate::core::tree::Handler>,
+plain [] on_composition_change: Option<crate::core::tree::Handler<Option<String>>>,
 plain [] undo_enabled: Option<bool>,
 plain [] max_undo_entries: Option<u32>,
 plain [] max_undo_memory: Option<u32>,
@@ -308,6 +354,12 @@ plain [] children: Option<Element>,
         .placeholder(placeholder)
         .disabled(disabled)
         .invalid(invalid);
+    if let Some(mut handler) = on_submit {
+        b = b.on_submit(move || (handler.0)(()));
+    }
+    if let Some(mut handler) = on_composition_change {
+        b = b.on_composition_change(move |value| (handler.0)(value));
+    }
     if let Some(r) = rows {
         b = b.rows(r.max(1) as u32);
     }
@@ -322,6 +374,9 @@ plain [] children: Option<Element>,
     }
     if let Some(policy) = selection_on_blur {
         b = b.selection_on_blur(policy);
+    }
+    if let Some(limit) = max_length {
+        b = b.max_length(limit);
     }
     if let Some(sig) = value {
         b = b.value_signal(sig);

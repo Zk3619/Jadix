@@ -1,5 +1,20 @@
 # jadix_net
 
+## Native HTTPS transport
+
+The optional `native-https` feature provides `native_https::HttpsClient`. The host
+selects an installed curl executable and runs `get` on its own worker. TLS uses
+that transport's trust store, requires TLS 1.2 or newer, ignores curlrc, verifies
+the hostname, and forbids redirects and non-HTTPS protocols. An explicit
+`with_ca_bundle` supports private PKI without changing system trust.
+
+Requests carry a deadline, cancellation token and decoded-body budget (at most
+32 MiB); headers have a separate 64 KiB ceiling. Read chunks are bounded and the
+owned curl process is killed on cancellation, timeout or oversized output. This
+adapter accepts GET only and does not install curl or an executor. Feature-free
+networking contracts remain available independently. `examples/https_get.rs`
+exercises the same adapter against a host-selected HTTPS URL.
+
 [English](README.md) | [简体中文](README.zh.md)
 
 Backend-neutral networking contracts for Jadix and external adapters.

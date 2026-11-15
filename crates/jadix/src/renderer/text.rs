@@ -18,6 +18,8 @@ pub(crate) struct ShapedTextEntry {
     /// Content/style identity without leaf width/height (iced `Difference::Shape` key).
     /// Same `shape_hash` + different bounds → cheap `set_size` reflow only.
     pub shape_hash: u64,
+    /// Paint-only rich span identity; color changes can refresh cached glyphs without reshaping.
+    pub paint_hash: u64,
     pub buffer: glyphon::Buffer,
     pub measured_text_w: f32,
     /// Cached from last Miss/reshape so Exact scroll frames skip `text_contains_emoji`.
@@ -28,6 +30,9 @@ pub(crate) struct ShapedTextEntry {
 pub(crate) struct EmojiCacheKey {
     /// Content/style identity (`shape_hash`) — avoids cloning full emoji strings every scroll frame.
     pub sequence_hash: u64,
+    /// Exact text shape/bounds identity. Raster content can be reused across
+    /// layouts, but cached custom-glyph positions cannot.
+    pub layout_hash: u64,
     pub pixel_size: u16,
     pub scale_bits: u32,
     pub color_mode: u8,
@@ -126,12 +131,10 @@ impl EmojiGlyphCache {
         self.entries.insert(key, entry);
     }
 
-    /// Resolve glyphs for paint: exact wrap key, else any wrap-width sibling (same text/size).
+    /// Resolve paint geometry only for this exact layout. Content siblings are
+    /// valid raster sources, never placement sources.
     pub(crate) fn glyphs_for(&self, key: &EmojiCacheKey) -> &[glyphon::CustomGlyph] {
-        self.entries
-            .get(key)
-            .or_else(|| self.find_wrap_sibling(key))
-            .map_or(&[], |e| e.glyphs.as_slice())
+        self.entries.get(key).map_or(&[], |e| e.glyphs.as_slice())
     }
 
     /// Reuse custom-glyph ids/rasters from any wrap-width sibling of `key` (same text/size).
@@ -141,7 +144,7 @@ impl EmojiGlyphCache {
                 && k.pixel_size == key.pixel_size
                 && k.scale_bits == key.scale_bits
                 && k.color_mode == key.color_mode
-                && k.wrap_width_q != key.wrap_width_q)
+                && (k.wrap_width_q != key.wrap_width_q || k.layout_hash != key.layout_hash))
                 .then_some(entry)
         })
     }

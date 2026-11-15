@@ -227,7 +227,7 @@ impl DomHost {
                 .map_err(error)?;
             panel
                 .anchor
-                .remove_attribute("aria-controls")
+                .remove_attribute("data-jadix-popover-controls")
                 .map_err(error)?;
             panel
                 .anchor
@@ -239,7 +239,11 @@ impl DomHost {
 
     pub(super) fn sync_popovers(&mut self, roots: &[PresentationNode]) -> Result<(), String> {
         for anchor in self.popover_anchors.drain(..) {
-            for name in ["aria-haspopup", "aria-controls", "aria-expanded"] {
+            for name in [
+                "aria-haspopup",
+                "aria-expanded",
+                "data-jadix-popover-controls",
+            ] {
                 anchor.remove_attribute(name).map_err(error)?;
             }
         }
@@ -270,7 +274,7 @@ impl DomHost {
             };
             let view = &self.views[&id];
             let anchor_element = self.views[&anchor].element.clone();
-            let html_id = format!("jadix-popover-{}-{}", id.root.token(), id.token());
+            let html_id = super::node_html_id(id);
             view.element.set_id(&html_id);
             let shown =
                 open && visible.contains(&id) && eligible(&view.element, self.active_modal.get());
@@ -318,7 +322,7 @@ impl DomHost {
                 .set_attribute("aria-haspopup", "dialog")
                 .map_err(error)?;
             anchor
-                .set_attribute("aria-controls", &controls.join(" "))
+                .set_attribute("data-jadix-popover-controls", &controls.join(" "))
                 .map_err(error)?;
             anchor
                 .set_attribute("aria-expanded", if open { "true" } else { "false" })
@@ -347,7 +351,11 @@ impl DomHost {
         }
         self.popovers.borrow_mut().clear();
         for anchor in self.popover_anchors.drain(..) {
-            for name in ["aria-haspopup", "aria-controls", "aria-expanded"] {
+            for name in [
+                "aria-haspopup",
+                "aria-expanded",
+                "data-jadix-popover-controls",
+            ] {
                 let _ = anchor.remove_attribute(name);
             }
         }

@@ -113,14 +113,14 @@ fn mount_checks_event_contract_root_and_session_ownership() {
         session: session.token(),
         command: Command::Mount {
             root: root.id().token(),
-            tree: ElementSpec {
+            tree: Box::new(ElementSpec {
                 component: "Button".into(),
                 key: None,
                 props: Value::Object([("label".into(), Value::String("Continue".into()))].into()),
                 style: Default::default(),
                 events: [("activate".into(), event)].into(),
                 children: vec![],
-            },
+            }),
         },
     };
     session.validate_mount(&envelope, &registry).unwrap();

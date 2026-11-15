@@ -44,6 +44,7 @@ mod application {
                 accessible_role: None,
                 accessible_selected: None,
                 accessible_expanded: None,
+                accessible_description: None,
                 accessible_name: None,
                 style: style::NodeStyle {
                     width: Some(size[0]),
@@ -109,6 +110,7 @@ mod application {
             let mut input = node(
                 self.input,
                 NodeContent::Input {
+                    max_length: None,
                     value: self.preview.clone().unwrap_or_else(|| self.value.clone()),
                     placeholder: "Amplitude 0..1".into(),
                     enabled: true,
@@ -224,7 +226,7 @@ mod application {
             _ => {
                 return Err(String::from(
                     "Usage: native-gpu-chart [--probe NONCE NEW_REPORT_JSON]",
-                ))
+                ));
             }
         };
         if probe.is_some_and(|(_, output)| output.exists()) {
@@ -278,7 +280,9 @@ mod application {
             if after_idle["frames"] != before_idle["frames"]
                 || after_idle["frames"].as_u64().unwrap_or(0) < 3
             {
-                return Err(format!("GPU chart did not present or submitted idle frames: {before_idle} / {after_idle}"));
+                return Err(format!(
+                    "GPU chart did not present or submitted idle frames: {before_idle} / {after_idle}"
+                ));
             }
             let native = app.root.host().diagnostics();
             let inspection = app.root.inspection(false);

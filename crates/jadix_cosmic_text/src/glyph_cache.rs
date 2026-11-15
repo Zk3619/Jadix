@@ -29,6 +29,7 @@ pub struct CacheKey {
     pub y_bin: SubpixelBin,
     /// Font weight
     pub font_weight: fontdb::Weight,
+    pub font_variations: crate::FontVariations,
     /// [`CacheKeyFlags`]
     pub flags: CacheKeyFlags,
 }
@@ -53,6 +54,7 @@ impl CacheKey {
                 y_bin,
                 flags,
                 font_weight: weight,
+                font_variations: crate::FontVariations::empty(),
             },
             x,
             y,

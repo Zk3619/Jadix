@@ -1,4 +1,4 @@
-use super::{HybridCoordinator, HybridGeometry, Presentation, Rect, RootLifetime, policy::*};
+use super::{policy::*, HybridCoordinator, HybridGeometry, Presentation, Rect, RootLifetime};
 
 pub trait NativeAdapter {
     fn capabilities(&self) -> EmbeddingCapabilities;

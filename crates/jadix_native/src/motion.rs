@@ -282,6 +282,21 @@ pub enum MotionPolicy {
     Paused,
 }
 
+impl MotionPolicy {
+    /// Background/inactive roots stop advancing their animation clock. An
+    /// unavailable reduced-motion preference retains the normal policy.
+    pub fn from_environment(environment: &crate::environment::EnvironmentSnapshot) -> Self {
+        use crate::environment::Lifecycle;
+        if environment.lifecycle != Lifecycle::Active {
+            Self::Paused
+        } else if environment.reduced_motion == Some(true) {
+            Self::Reduced
+        } else {
+            Self::Full
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 struct LayoutTrack {
     parent: Option<NodeId>,

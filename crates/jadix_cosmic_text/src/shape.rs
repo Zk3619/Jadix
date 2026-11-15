@@ -234,6 +234,7 @@ fn shape_fallback(
             font_monospace_em_width: font.monospace_em_width(),
             font_id: font.id(),
             font_weight: attrs.weight,
+            font_variations: attrs.font_variations,
             glyph_id: info.glyph_id.try_into().expect("failed to cast glyph ID"),
             //TODO: color should not be related to shaping
             color_opt: attrs.color_opt,
@@ -314,7 +315,8 @@ fn shape_run(
         &scripts,
         &line[start_run..end_run],
         attrs.weight,
-    );
+    )
+    .with_variations(attrs.font_variations);
 
     let font = font_iter.next().expect("no default font found");
 
@@ -496,7 +498,8 @@ fn shape_skip(
         &[],
         "",
         attrs.weight,
-    );
+    )
+    .with_variations(attrs.font_variations);
 
     let font = font_iter.next().expect("no default font found");
     let glyph_start = glyphs.len();
@@ -525,13 +528,16 @@ fn shape_skip(
         let fb_fonts = font_system.get_font_matches(&fb_attrs);
         let fb_families = [&fb_family];
         let mut fb_iter =
-            FontFallbackIter::new(font_system, &fb_fonts, &fb_families, &[], "", attrs.weight);
+            FontFallbackIter::new(font_system, &fb_fonts, &fb_families, &[], "", attrs.weight)
+                .with_variations(attrs.font_variations);
 
         if let Some(fb_font) = fb_iter.next() {
             let fb_swash = fb_font.as_swash();
             let fb_charmap = fb_swash.charmap();
-            let fb_metrics = fb_swash.metrics(&[]);
-            let fb_glyph_metrics = fb_swash.glyph_metrics(&[]).scale(1.0);
+            let fb_metrics = fb_swash.metrics(fb_font.normalized_coords());
+            let fb_glyph_metrics = fb_swash
+                .glyph_metrics(fb_font.normalized_coords())
+                .scale(1.0);
             let fb_scale = f32::from(fb_metrics.units_per_em);
 
             for glyph in glyphs[glyph_start..].iter_mut() {
@@ -576,8 +582,10 @@ fn shape_skip_glyphs(
     let swash_font = font.as_swash();
 
     let charmap = swash_font.charmap();
-    let metrics = swash_font.metrics(&[]);
-    let glyph_metrics = swash_font.glyph_metrics(&[]).scale(1.0);
+    let metrics = swash_font.metrics(font.normalized_coords());
+    let glyph_metrics = swash_font
+        .glyph_metrics(font.normalized_coords())
+        .scale(1.0);
 
     let ascent = metrics.ascent / f32::from(metrics.units_per_em);
     let descent = metrics.descent / f32::from(metrics.units_per_em);
@@ -606,6 +614,7 @@ fn shape_skip_glyphs(
                     font_monospace_em_width,
                     font_id,
                     font_weight: attrs.weight,
+                    font_variations: attrs.font_variations,
                     glyph_id,
                     color_opt: attrs.color_opt,
                     metadata: attrs.metadata,
@@ -642,6 +651,7 @@ pub struct ShapeGlyph {
     pub font_monospace_em_width: Option<f32>,
     pub font_id: fontdb::ID,
     pub font_weight: fontdb::Weight,
+    pub font_variations: crate::FontVariations,
     pub glyph_id: u16,
     pub color_opt: Option<Color>,
     pub metadata: usize,
@@ -666,6 +676,7 @@ impl ShapeGlyph {
             line_height_opt,
             font_id: self.font_id,
             font_weight: self.font_weight,
+            font_variations: self.font_variations,
             glyph_id: self.glyph_id,
             x,
             y,
@@ -1121,7 +1132,11 @@ impl ShapeSpan {
                 .next()
                 .and_then(|glyph| {
                     font_system
-                        .get_font(glyph.font_id, glyph.font_weight)
+                        .get_font_with_variations(
+                            glyph.font_id,
+                            glyph.font_weight,
+                            glyph.font_variations,
+                        )
                         .map(|font| decoration_metrics(&font))
                 });
 
@@ -2910,8 +2925,12 @@ impl ShapeLine {
                     // emitted in byte order, giving amortized O(1) lookup.
                     let mut deco_cursor: usize = 0;
                     // If ending_glyph is not 0 we need to include glyphs from the ending_word
-                    for i in r.start.word..r.end.word + usize::from(r.end.glyph != 0) {
-                        let word = &span_words[i];
+                    for (offset, word) in span_words
+                        [r.start.word..r.end.word + usize::from(r.end.glyph != 0)]
+                        .iter()
+                        .enumerate()
+                    {
+                        let i = r.start.word + offset;
                         let included_glyphs = match (i == r.start.word, i == r.end.word) {
                             (false, false) => &word.glyphs[..],
                             (true, false) => &word.glyphs[r.start.glyph..],

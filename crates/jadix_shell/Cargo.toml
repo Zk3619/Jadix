@@ -9,12 +9,24 @@ readme = "README.md"
 
 [features]
 default = []
-native-vm = ["dep:rquickjs"]
+native-vm = ["dep:rquickjs", "dep:stacker"]
 native-host = ["dep:jadix_native"]
-native-store = []
+native-store = ["dep:jadix_net"]
+native-https = ["native-store", "jadix_net/native-https"]
+gpu-host = ["native-vm", "dep:base64", "dep:jadix_components", "dep:jadix", "jadix/gpu", "dep:winit", "dep:wgpu"]
+text-undo = ["gpu-host", "jadix/text-undo"]
+backend-dx12 = ["gpu-host", "jadix/backend-dx12"]
+backend-vulkan = ["gpu-host", "jadix/backend-vulkan"]
+backend-metal = ["gpu-host", "jadix/backend-metal"]
 
 [dependencies]
 jadix_core.workspace = true
+jadix_components = { workspace = true, optional = true, default-features = false, features = ["gpu"] }
+base64 = { version = "=0.22.1", optional = true }
+winit = { workspace = true, optional = true }
+wgpu = { workspace = true, optional = true }
+jadix_net = { workspace = true, optional = true }
+jadix = { workspace = true, optional = true, default-features = false }
 jadix_native = { workspace = true, optional = true }
 serde.workspace = true
 serde_json.workspace = true
@@ -23,6 +35,15 @@ ed25519-dalek = { version = "=2.2.0", default-features = false, features = ["std
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 rquickjs = { version = "=0.14.0", optional = true, default-features = false, features = ["std"] }
+stacker = { workspace = true, optional = true }
 
 [dev-dependencies]
 jadix_native.workspace = true
+
+[[example]]
+name = "window_app"
+required-features = ["gpu-host"]
+
+[[example]]
+name = "publish_release"
+required-features = ["native-store"]

@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex, Weak};
 
+use windows::core::{implement, Error, IUnknown, IUnknownImpl, Interface, Result, HRESULT};
 use windows::Win32::{
     Foundation::HWND,
     System::{
@@ -9,7 +10,6 @@ use windows::Win32::{
     },
     UI::Accessibility::*,
 };
-use windows::core::{Error, HRESULT, IUnknown, IUnknownImpl, Interface, Result, implement};
 use windows_sys::Win32::{
     Foundation::{HWND as SYS_HWND, LPARAM, LRESULT, WPARAM},
     UI::{
@@ -30,6 +30,7 @@ struct State {
     window: usize,
     live: bool,
     name: String,
+    description: String,
     role: AccessibleRole,
     parent: Option<Arc<Mutex<State>>>,
     items: Vec<Weak<Mutex<State>>>,
@@ -151,6 +152,8 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
             })
         } else if propertyid == UIA_NamePropertyId {
             VARIANT::from(state.name.as_str())
+        } else if propertyid == UIA_FullDescriptionPropertyId {
+            VARIANT::from(state.description.as_str())
         } else if propertyid == UIA_IsControlElementPropertyId
             || propertyid == UIA_IsContentElementPropertyId
         {
@@ -304,6 +307,10 @@ impl GridAccessibility {
             live: true,
             role: descriptor.accessible_role.ok_or("missing grid role")?,
             name: descriptor.accessible_name.clone().unwrap_or_default(),
+            description: descriptor
+                .accessible_description
+                .clone()
+                .unwrap_or_default(),
             parent: None,
             items: Vec::new(),
         }));
@@ -331,11 +338,16 @@ impl GridAccessibility {
     pub(in super::super) fn update(&self, descriptor: &NodeDescriptor) {
         let role = descriptor.accessible_role.unwrap();
         let name = descriptor.accessible_name.clone().unwrap_or_default();
-        let (previous, previous_name) = {
+        let description = descriptor
+            .accessible_description
+            .clone()
+            .unwrap_or_default();
+        let (previous, previous_name, previous_description) = {
             let mut state = self.binding.state.lock().unwrap();
-            let previous = (state.role, state.name.clone());
+            let previous = (state.role, state.name.clone(), state.description.clone());
             state.role = role;
             state.name = name.clone();
+            state.description = description.clone();
             if matches!(role, AccessibleRole::Grid { .. }) {
                 state.parent = None;
             }
@@ -383,6 +395,16 @@ impl GridAccessibility {
                     UIA_NamePropertyId,
                     &VARIANT::from(previous_name.as_str()),
                     &VARIANT::from(name.as_str()),
+                );
+            }
+        }
+        if previous_description != description {
+            unsafe {
+                let _ = UiaRaiseAutomationPropertyChangedEvent(
+                    &self.binding.provider,
+                    UIA_FullDescriptionPropertyId,
+                    &VARIANT::from(previous_description.as_str()),
+                    &VARIANT::from(description.as_str()),
                 );
             }
         }
@@ -472,6 +494,7 @@ mod tests {
             window: 0,
             live: true,
             name: String::new(),
+            description: String::new(),
             role,
             parent: None,
             items: Vec::new(),

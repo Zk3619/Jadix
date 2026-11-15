@@ -9,6 +9,8 @@ fn node(root: RootId, content: NodeContent, children: Vec<PresentationNode>) -> 
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: Default::default(),
         },
@@ -148,6 +150,135 @@ fn top_modal_alone_receives_events_and_closed_ancestors_hide_nested_modals() {
                 revision: 2
             }
         }),
+        Err(BackendError::InvalidEvent)
+    );
+}
+
+#[test]
+fn cached_modal_order_survives_text_updates_moves_rejection_and_removal() {
+    let mut root = HeadlessRoot::new();
+    let button = |root| {
+        node(
+            root,
+            NodeContent::Button {
+                label: "action".into(),
+                enabled: true,
+            },
+            vec![],
+        )
+    };
+    let background = button(root.id());
+    let a_child = button(root.id());
+    let b_child = button(root.id());
+    let dialog = |child: PresentationNode| {
+        node(
+            root.id(),
+            NodeContent::Dialog {
+                open: true,
+                close_on_overlay_click: true,
+                revision: 1,
+            },
+            vec![child],
+        )
+    };
+    let a = dialog(a_child.clone());
+    let b = dialog(b_child.clone());
+    root.reconcile(&[background.clone(), a.clone(), b.clone()])
+        .unwrap();
+    let activate = |root: &mut HeadlessRoot, id| {
+        root.accept_event(&PlatformEvent {
+            node: id,
+            payload: EventPayload::Activate,
+        })
+    };
+    assert_eq!(
+        activate(&mut root, a_child.id),
+        Err(BackendError::InvalidEvent)
+    );
+    activate(&mut root, b_child.id).unwrap();
+    let commit = |root: &mut HeadlessRoot, operations| {
+        root.commit(CommitBatch {
+            root: root.id(),
+            previous: root.revision(),
+            revision: root.revision() + 1,
+            operations,
+        })
+    };
+    commit(
+        &mut root,
+        vec![Operation::Move {
+            node: a.id,
+            parent: None,
+            index: 2,
+        }],
+    )
+    .unwrap();
+    activate(&mut root, a_child.id).unwrap();
+    assert_eq!(
+        activate(&mut root, b_child.id),
+        Err(BackendError::InvalidEvent)
+    );
+    let mut label = a_child.descriptor.clone();
+    label.content = NodeContent::Button {
+        label: "changed".into(),
+        enabled: true,
+    };
+    commit(
+        &mut root,
+        vec![Operation::Update {
+            node: a_child.id,
+            descriptor: label,
+        }],
+    )
+    .unwrap();
+    assert_eq!(
+        activate(&mut root, b_child.id),
+        Err(BackendError::InvalidEvent)
+    );
+    let mut closed = a.descriptor.clone();
+    closed.content = NodeContent::Dialog {
+        open: false,
+        close_on_overlay_click: true,
+        revision: 2,
+    };
+    let missing = NodeId::new(root.id());
+    let revision = root.revision();
+    assert_eq!(
+        commit(
+            &mut root,
+            vec![
+                Operation::Update {
+                    node: a.id,
+                    descriptor: closed.clone()
+                },
+                Operation::Remove { node: missing }
+            ]
+        ),
+        Err(BackendError::UnknownNode(missing))
+    );
+    assert_eq!(root.revision(), revision);
+    activate(&mut root, a_child.id).unwrap();
+    assert_eq!(
+        activate(&mut root, b_child.id),
+        Err(BackendError::InvalidEvent)
+    );
+    commit(&mut root, vec![Operation::Remove { node: a.id }]).unwrap();
+    activate(&mut root, b_child.id).unwrap();
+    assert_eq!(
+        activate(&mut root, background.id),
+        Err(BackendError::InvalidEvent)
+    );
+    commit(
+        &mut root,
+        vec![Operation::Update {
+            node: b.id,
+            descriptor: closed,
+        }],
+    )
+    .unwrap();
+    activate(&mut root, background.id).unwrap();
+    assert_eq!(
+        activate(&mut root, b_child.id),
         Err(BackendError::InvalidEvent)
     );
 }

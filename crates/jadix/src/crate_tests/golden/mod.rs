@@ -160,6 +160,7 @@ fn golden_component_tabs_two() {
                 value: None,
                 default_value: None,
                 options: None,
+                accessibility_label: None,
                 children: Some({
                     let mut frag = Element::new();
                     frag.set_attr("jadix_fragment", "1");

@@ -81,6 +81,28 @@ use crate::winit_win32::{
     monitor, util,
 };
 
+fn apply_transparency(hwnd: HWND, transparent: bool) {
+    // Empty blur region allows per-pixel desktop alpha without a background material.
+    let region = unsafe { CreateRectRgn(0, 0, -1, -1) };
+    if region.is_null() {
+        warn!(
+            "creating transparent window region failed: {}",
+            io::Error::last_os_error()
+        );
+        return;
+    }
+    let bb = DWM_BLURBEHIND {
+        dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
+        fEnable: transparent.into(),
+        hRgnBlur: region,
+        fTransitionOnMaximized: false.into(),
+    };
+    let hr = unsafe { DwmEnableBlurBehindWindow(hwnd, &bb) };
+    unsafe { DeleteObject(region) };
+    if hr < 0 {
+        warn!("setting transparent window failed. HRESULT: 0x{hr:X}");
+    }
+}
 #[derive(Clone, Copy, Debug)]
 #[repr(transparent)]
 /// We need to pass the window handle to the event loop thread, which means it needs to be
@@ -539,6 +561,16 @@ impl CoreWindow for Window {
             WindowState::set_window_flags(window_state.lock().unwrap(), window.hwnd(), |f| {
                 f.set(WindowFlags::TRANSPARENT, transparent)
             });
+            // Surface creation can reset DWM's alpha region. Repeating true must
+            // refresh native transparency even when the window flags did not change.
+            if !window_state
+                .lock()
+                .unwrap()
+                .window_flags()
+                .contains(WindowFlags::NO_BACK_BUFFER)
+            {
+                apply_transparency(window.hwnd(), transparent);
+            }
         });
     }
 
@@ -878,7 +910,18 @@ impl CoreWindow for Window {
         Ok(PhysicalPosition::new(point.x, point.y))
     }
 
-    fn set_input_region(&self, region: Option<&[crate::winit_core::window::InputRegionRect]>) -> Result<(), RequestError> {
+    fn set_input_region(
+        &self,
+        region: Option<&[crate::winit_core::window::InputRegionRect]>,
+    ) -> Result<(), RequestError> {
+        // Preserve the existing Windows input-region contract, including visual clipping.
+        self.set_window_shape(region)
+    }
+
+    fn set_window_shape(
+        &self,
+        region: Option<&[crate::winit_core::window::InputRegionRect]>,
+    ) -> Result<(), RequestError> {
         let region = region.map(<[_]>::to_vec);
         let window = self.window;
         let (sender, receiver) = channel();
@@ -886,52 +929,82 @@ impl CoreWindow for Window {
             let result = (|| -> io::Result<()> {
                 use windows_sys::Win32::Graphics::Gdi::{CombineRgn, RGN_OR, SetWindowRgn};
                 let Some(rectangles) = region.as_ref() else {
-                    return util::win_to_err(unsafe { SetWindowRgn(window.hwnd(), ptr::null_mut(), 1) });
+                    return util::win_to_err(unsafe {
+                        SetWindowRgn(window.hwnd(), ptr::null_mut(), 1)
+                    });
                 };
                 let mut origin = POINT { x: 0, y: 0 };
                 let mut bounds = RECT::default();
                 util::win_to_err(unsafe { ClientToScreen(window.hwnd(), &mut origin) })?;
-                util::win_to_err(unsafe { windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(window.hwnd(), &mut bounds) })?;
+                util::win_to_err(unsafe {
+                    windows_sys::Win32::UI::WindowsAndMessaging::GetWindowRect(
+                        window.hwnd(),
+                        &mut bounds,
+                    )
+                })?;
                 let offset_x = i64::from(origin.x) - i64::from(bounds.left);
                 let offset_y = i64::from(origin.y) - i64::from(bounds.top);
-                let coordinates = rectangles.iter().filter(|rect| rect.size.width > 0 && rect.size.height > 0).map(|rect| {
-                    let left = offset_x + i64::from(rect.position.x);
-                    let top = offset_y + i64::from(rect.position.y);
-                    let coordinate = |value: i64| {
-                        if !(-(1_i64 << 26)..(1_i64 << 26)).contains(&value) {
-                            return Err(io::Error::new(io::ErrorKind::InvalidInput, "window region coordinate exceeds signed 27-bit GDI range"));
-                        }
-                        Ok(value as i32)
-                    };
-                    Ok((coordinate(left)?, coordinate(top)?,
-                        coordinate(left + i64::from(rect.size.width))?,
-                        coordinate(top + i64::from(rect.size.height))?))
-                }).collect::<io::Result<Vec<_>>>()?;
+                let coordinates = rectangles
+                    .iter()
+                    .filter(|rect| rect.size.width > 0 && rect.size.height > 0)
+                    .map(|rect| {
+                        let left = offset_x + i64::from(rect.position.x);
+                        let top = offset_y + i64::from(rect.position.y);
+                        let coordinate = |value: i64| {
+                            if !(-(1_i64 << 26)..(1_i64 << 26)).contains(&value) {
+                                return Err(io::Error::new(
+                                    io::ErrorKind::InvalidInput,
+                                    "window region coordinate exceeds signed 27-bit GDI range",
+                                ));
+                            }
+                            Ok(value as i32)
+                        };
+                        Ok((
+                            coordinate(left)?,
+                            coordinate(top)?,
+                            coordinate(left + i64::from(rect.size.width))?,
+                            coordinate(top + i64::from(rect.size.height))?,
+                        ))
+                    })
+                    .collect::<io::Result<Vec<_>>>()?;
                 let combined = unsafe { CreateRectRgn(0, 0, 0, 0) };
-                if combined.is_null() { return Err(io::Error::last_os_error()); }
+                if combined.is_null() {
+                    return Err(io::Error::last_os_error());
+                }
                 for (left, top, right, bottom) in coordinates {
                     let part = unsafe { CreateRectRgn(left, top, right, bottom) };
                     if part.is_null() {
-                        unsafe { DeleteObject(combined); }
+                        unsafe {
+                            DeleteObject(combined);
+                        }
                         return Err(io::Error::last_os_error());
                     }
                     let result = unsafe { CombineRgn(combined, combined, part, RGN_OR) };
-                    unsafe { DeleteObject(part); }
+                    unsafe {
+                        DeleteObject(part);
+                    }
                     if result == 0 {
-                        unsafe { DeleteObject(combined); }
+                        unsafe {
+                            DeleteObject(combined);
+                        }
                         return Err(io::Error::last_os_error());
                     }
                 }
                 if unsafe { SetWindowRgn(window.hwnd(), combined, 1) } == 0 {
                     let error = io::Error::last_os_error();
-                    unsafe { DeleteObject(combined); }
+                    unsafe {
+                        DeleteObject(combined);
+                    }
                     return Err(error);
                 }
                 Ok(())
-            })().map_err(|error| RequestError::Os(OsError::new(line!(), file!(), error)));
+            })()
+            .map_err(|error| RequestError::Os(OsError::new(line!(), file!(), error)));
             let _ = sender.send(result);
         });
-        receiver.recv().map_err(|error| RequestError::Os(OsError::new(line!(), file!(), error)))?
+        receiver
+            .recv()
+            .map_err(|error| RequestError::Os(OsError::new(line!(), file!(), error)))?
     }
 
     fn set_opacity(&self, opacity: f32) -> Result<(), RequestError> {
@@ -1695,23 +1768,7 @@ impl InitData<'_> {
 
         // making the window transparent
         if self.attributes.transparent && !self.win_attributes.no_redirection_bitmap {
-            // Empty region for the blur effect, so the window is fully transparent
-            let region = unsafe { CreateRectRgn(0, 0, -1, -1) };
-
-            let bb = DWM_BLURBEHIND {
-                dwFlags: DWM_BB_ENABLE | DWM_BB_BLURREGION,
-                fEnable: true.into(),
-                hRgnBlur: region,
-                fTransitionOnMaximized: false.into(),
-            };
-            let hr = unsafe { DwmEnableBlurBehindWindow(win.hwnd(), &bb) };
-            if hr < 0 {
-                warn!(
-                    "Setting transparent window is failed. HRESULT Code: 0x{:X}",
-                    hr
-                );
-            }
-            unsafe { DeleteObject(region) };
+            apply_transparency(win.hwnd(), true);
         }
 
         win.set_skip_taskbar(self.win_attributes.skip_taskbar);

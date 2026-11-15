@@ -11,26 +11,26 @@ use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_placeholder_sized, retained_reactive_anchor};
 use crate::utils::floating_motion::{
-    apply_floating_panel_motion, floating_portal_phase, use_floating_presence,
-    FloatingPresenceHandle,
+    FloatingPresenceHandle, apply_floating_panel_motion, floating_portal_phase,
+    use_floating_presence,
 };
 
 use crate::core::reactivity::{
-    create_context, isolate_reads, provide_context, use_context, use_signal, with_child_owner,
-    Context, Signal,
+    Context, Signal, create_context, isolate_reads, provide_context, use_context, use_signal,
+    with_child_owner,
 };
 use crate::core::tree::Element;
 #[cfg(test)]
 use crate::utils::floating_motion::floating_mounted_signal;
 use crate::utils::popup::{
-    apply_stored_floating_place, flow_hidden_portal_host, mark_floating_at_point,
-    mark_floating_with_gap, mount_anchored_overlay, PopupPlacement, ATTR_FLOATING,
-    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_POINT,
-    ATTR_FLOATING_STRATEGY, ATTR_FLOATING_TRIGGER, ATTR_FLOATING_W, FLOATING_TRIGGER_GAP,
+    ATTR_FLOATING, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_W,
+    ATTR_FLOATING_POINT, ATTR_FLOATING_STRATEGY, ATTR_FLOATING_TRIGGER, ATTR_FLOATING_W,
+    FLOATING_TRIGGER_GAP, PopupPlacement, apply_stored_floating_place, flow_hidden_portal_host,
+    mark_floating_at_point, mark_floating_with_gap, mount_anchored_overlay,
 };
 
 pub use crate::app::portal_overlay::{
-    page_scroll_locked, set_page_scroll_locked, set_scroll_freeze, ScrollFreeze,
+    ScrollFreeze, page_scroll_locked, set_page_scroll_locked, set_scroll_freeze,
 };
 pub use crate::utils::floating_kind::FloatingMotionKind;
 
@@ -591,6 +591,73 @@ impl AnchoredOverlayContentOpts {
 // Content
 // ---------------------------------------------------------------------------
 
+fn sync_panel_focus_return(
+    id: &str,
+    open: bool,
+    opts: &AnchoredOverlayContentOpts,
+    panel: Option<&Element>,
+    trigger: &str,
+) {
+    use crate::utils::roving::PanelFocusReturn;
+    let state = use_signal(&format!("{id}__focus_return"), || None::<PanelFocusReturn>);
+    if !open {
+        let previous = state.peek();
+        state.set(None);
+        if let Some(mut previous) = previous {
+            // Content islands can mount focusable descendants after the body
+            // was built. Inspect the window's live panel before it is removed;
+            // keep the build snapshot if the tree is temporarily borrowed.
+            let _ = crate::app::runtime::try_update_element_by_template_id(
+                &format!("{id}__floating_panel"),
+                |panel| {
+                    previous.refresh(panel);
+                    crate::core::tree::LayoutStatus::Clean
+                },
+            );
+            previous.restore();
+        }
+    } else if opts.mode == OverlayMode::Stacked && opts.kind != OverlayKind::Tooltip {
+        if let (Some(panel), Placement::Trigger { focus_id, .. }) = (panel, opts.resolve(id)) {
+            let target = if focus_id.trim().is_empty() {
+                trigger.to_string()
+            } else {
+                focus_id
+            };
+            state.set(Some(PanelFocusReturn::capture(panel, target)));
+        }
+    }
+}
+
+/// Present an already-built panel through the shared anchored overlay engine.
+/// Avoids re-evaluating application mount callbacks in a reactive panel island.
+pub fn retained_anchored_panel(
+    id: &str,
+    open: Signal<bool>,
+    opts: &AnchoredOverlayContentOpts,
+    panel: Element,
+) -> Element {
+    sync_panel_focus_return(
+        id,
+        open.try_peek().unwrap_or(false),
+        opts,
+        Some(&panel),
+        &opts.focus_id,
+    );
+    let presence = use_floating_presence(id, opts.motion);
+    let Some((phase, oz)) = floating_portal_phase(
+        id,
+        open,
+        &presence,
+        opts.kind,
+        opts.mode,
+        opts.resolved_scroll_freeze(),
+    ) else {
+        return flow_hidden_portal_host(Element::new());
+    };
+    let trigger = use_signal(&format!("{id}__retained_trigger"), || opts.focus_id.clone());
+    assemble_mounted_panel(id, open, trigger, &presence, opts, panel, phase, oz)
+}
+
 pub fn anchored_overlay_content(
     opts: AnchoredOverlayContentOpts,
     body: impl Fn() -> Element + 'static,
@@ -603,6 +670,10 @@ pub fn anchored_overlay_content(
     let view_id = format!("{id}__view");
     let presence = use_floating_presence(&id, opts.motion);
     let render = move || {
+        let want_open = open.try_peek().unwrap_or(false);
+        if !want_open {
+            sync_panel_focus_return(&id, false, &opts, None, "");
+        }
         if open.try_peek().is_none() {
             let _ = floating_portal_phase(
                 &id,
@@ -624,16 +695,11 @@ pub fn anchored_overlay_content(
         ) else {
             return flow_hidden_portal_host(Element::new());
         };
-        assemble_mounted_panel(
-            &id,
-            open,
-            trigger_fid,
-            &presence,
-            &opts,
-            isolate_reads(&body),
-            phase,
-            oz,
-        )
+        let panel = isolate_reads(&body);
+        if want_open {
+            sync_panel_focus_return(&id, true, &opts, Some(&panel), &trigger_fid.peek());
+        }
+        assemble_mounted_panel(&id, open, trigger_fid, &presence, &opts, panel, phase, oz)
     };
     if retained {
         retained_reactive_anchor(view_id.clone(), render);

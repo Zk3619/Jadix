@@ -17,6 +17,8 @@ fn node(root: RootId) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: Default::default(),
         },
@@ -164,6 +166,7 @@ fn inspector_tracks_dirty_measurement_and_lifetime_without_exporting_passwords()
     let mut root = NativeRoot::new(host);
     let mut roots = vec![node(root.model().id()), node(root.model().id())];
     roots[1].descriptor.content = NodeContent::Input {
+        max_length: None,
         value: "secret-do-not-export".into(),
         placeholder: "password".into(),
         enabled: true,

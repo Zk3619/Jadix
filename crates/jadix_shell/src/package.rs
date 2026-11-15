@@ -163,6 +163,21 @@ impl SignedManifest {
         policy: &PackagePolicy,
         resources: &BTreeMap<String, Vec<u8>>,
     ) -> Result<(), PackageError> {
+        self.verify_manifest(policy)?;
+        if resources.len() != self.manifest.resources.len() {
+            return Err(PackageError::Integrity);
+        }
+        for (path, expected) in &self.manifest.resources {
+            let bytes = resources.get(path).ok_or(PackageError::Integrity)?;
+            if bytes.len() as u64 != expected.bytes || sha256(bytes) != expected.sha256 {
+                return Err(PackageError::Integrity);
+            }
+        }
+        Ok(())
+    }
+
+    /// Authenticate metadata and declared budgets before starting resource IO.
+    pub fn verify_manifest(&self, policy: &PackagePolicy) -> Result<(), PackageError> {
         let input = self.manifest.signature_input()?;
         if policy.revoked_keys.contains(&self.manifest.key_id) {
             return Err(PackageError::RevokedKey);
@@ -197,15 +212,6 @@ impl SignedManifest {
             .any(|permission| !policy.permissions.contains(permission))
         {
             return Err(PackageError::Permission);
-        }
-        if resources.len() != self.manifest.resources.len() {
-            return Err(PackageError::Integrity);
-        }
-        for (path, expected) in &self.manifest.resources {
-            let bytes = resources.get(path).ok_or(PackageError::Integrity)?;
-            if bytes.len() as u64 != expected.bytes || sha256(bytes) != expected.sha256 {
-                return Err(PackageError::Integrity);
-            }
         }
         Ok(())
     }

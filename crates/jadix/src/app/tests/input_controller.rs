@@ -335,3 +335,121 @@ fn focus_move_arm_is_a_one_shot_poll_latch() {
         "about_to_wait consumes the latch once"
     );
 }
+
+#[cfg(target_os = "windows")]
+#[test]
+#[ignore = "native event loop; run in a separate process"]
+fn max_length_keyboard_ime_and_overwrite_preserve_selection_and_suffix() {
+    use crate::core::reactivity::{create_root, use_signal};
+    use crate::utils::text_field::*;
+    use winit::platform::windows::EventLoopBuilderExtWindows;
+    let mut builder = winit::event_loop::EventLoop::builder();
+    builder.with_any_thread(true);
+    let event_loop = builder.build().unwrap();
+    let (_sender, receiver) = std::sync::mpsc::channel();
+    let mut app = crate::app::lifecycle::create_app(
+        crate::app::WindowOptions::new(),
+        crate::core::tree::Element::new,
+        event_loop.create_proxy(),
+        receiver,
+    );
+    let (_owner, ()) = create_root(|| {
+        let rest = "max-length-controller";
+        let value = use_signal(&input_value_signal_key(rest), String::new);
+        let caret = use_signal(&input_caret_signal_key(rest), || None::<usize>);
+        let selection = use_signal(&input_selection_signal_key(rest), || None::<(usize, usize)>);
+        let limit = use_signal(&input_max_length_signal_key(rest), || None::<usize>);
+        let external = use_signal("max-length-external", String::new);
+        bind_controlled_value(rest, external);
+        use_signal("__jadix_button_focus_id", String::new).set(input_focus_id(rest));
+        let mut type_text = |text: &str| {
+            let key = Key::Character(text.into());
+            app.handle_keyboard_text_signals(KeyEvent {
+                physical_key: winit::keyboard::PhysicalKey::Code(winit::keyboard::KeyCode::KeyA),
+                logical_key: key.clone(),
+                text: Some(text.into()),
+                location: winit::keyboard::KeyLocation::Standard,
+                state: ElementState::Pressed,
+                repeat: false,
+                text_with_all_modifiers: Some(text.into()),
+                key_without_modifiers: key,
+            });
+        };
+        value.set("ab".into());
+        caret.set(Some(1));
+        limit.set(Some(5));
+        type_text("中🦀x");
+        assert_eq!(value.peek(), "a中🦀b");
+        assert_eq!(external.peek(), value.peek());
+        limit.set(Some(2));
+        selection.set(Some((0, value.peek().len())));
+        let selected = selection.peek();
+        type_text("👩‍💻");
+        assert_eq!(value.peek(), "a中🦀b");
+        assert_eq!(selection.peek(), selected);
+        type_text("🦀x");
+        assert_eq!(value.peek(), "🦀");
+        type_text("x");
+        assert_eq!(value.peek(), "🦀");
+        value.set("ab".into());
+        caret.set(Some(0));
+        selection.set(None);
+        use_signal(&input_overwrite_signal_key(rest), || false).set(true);
+        type_text("🦀");
+        assert_eq!(value.peek(), "ab");
+        type_text("中");
+        assert_eq!(value.peek(), "中b");
+        use_signal(&input_overwrite_signal_key(rest), || false).set(false);
+        value.set("ab".into());
+        caret.set(Some(1));
+        limit.set(Some(5));
+        let window = WindowId::from_raw(10);
+        app.handle_ime_event(Ime::Enabled, window);
+        app.handle_ime_event(Ime::Preedit("组".into(), Some((3, 3))), window);
+        app.handle_ime_event(Ime::Commit("中🦀x".into()), window);
+        assert_eq!(value.peek(), "a中🦀b");
+        assert_eq!(external.peek(), value.peek());
+        app.handle_ime_event(Ime::Disabled, window);
+        value.set("ab".into());
+        caret.set(Some(1));
+        use_signal(&input_ime_anchor_signal_key(rest), || None::<usize>).set(Some(1));
+        use_signal(&input_preedit_signal_key(rest), String::new).set("中🦀x".into());
+        ime_support::finish_composition_preserve_text(&input_focus_id(rest));
+        assert_eq!(value.peek(), "a中🦀b");
+        assert!(use_signal(&input_preedit_signal_key(rest), String::new)
+            .peek()
+            .is_empty());
+    });
+}
+
+#[test]
+fn max_length_multi_cursor_rejection_does_not_publish_or_move_cursors() {
+    use crate::core::reactivity::{create_root, use_signal};
+    use crate::utils::text_field::*;
+    let (_owner, ()) = create_root(|| {
+        let rest = "max-length-multi";
+        use_signal(&input_max_length_signal_key(rest), || Some(2usize));
+        let value = use_signal(&input_value_signal_key(rest), || "ab".to_string());
+        let cursors = load_text_cursors(rest, "ab");
+        assert!(!commit_multi_edit(
+            rest,
+            value,
+            "axb".into(),
+            cursors.clone(),
+            crate::utils::text_edit_history::EditKind::Insert
+        ));
+        assert_eq!(value.peek(), "ab");
+        assert_eq!(load_text_cursors(rest, "ab"), cursors);
+        value.set("external over-limit".into());
+        assert!(accepts_input_edit(
+            rest,
+            &value.peek(),
+            "external over-limi"
+        ));
+        assert!(!accepts_input_edit(
+            rest,
+            &value.peek(),
+            "external over-limit!"
+        ));
+    });
+}

@@ -1,11 +1,14 @@
+pub mod input;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::{cell::Cell, rc::Rc};
 
 pub mod capabilities;
 mod popover;
+pub mod theme;
 pub use popover::PopoverPlacement;
 pub mod component;
 pub mod hybrid;
+pub mod retired;
 pub mod style;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -76,6 +79,11 @@ pub struct NodeId {
 }
 
 impl NodeId {
+    pub fn from_token(root: RootId, token: &str) -> Option<Self> {
+        let generation = token.parse::<u64>().ok()?;
+        (generation != 0 && generation.to_string() == token).then_some(Self { root, generation })
+    }
+
     pub fn generation(self) -> u64 {
         self.generation
     }
@@ -160,12 +168,15 @@ pub enum NodeContent {
         placeholder: String,
         enabled: bool,
         password: bool,
+        /// UTF-16 insertion limit; controlled values/history are preserved.
+        max_length: Option<usize>,
         revision: u64,
     },
     Textarea {
         value: String,
         placeholder: String,
         enabled: bool,
+        max_length: Option<usize>,
         revision: u64,
     },
     Checkbox {
@@ -208,6 +219,12 @@ pub enum NodeContent {
 }
 
 impl NodeContent {
+    pub fn input_max_length(&self) -> Option<usize> {
+        match self {
+            Self::Input { max_length, .. } | Self::Textarea { max_length, .. } => *max_length,
+            _ => None,
+        }
+    }
     pub fn image_dimensions(&self) -> Option<[u32; 2]> {
         use base64::Engine;
         let Self::Image { source, alt } = self else {
@@ -239,6 +256,9 @@ impl NodeContent {
 
     pub fn is_valid(&self) -> bool {
         match self {
+            Self::Input { max_length, .. } | Self::Textarea { max_length, .. } => {
+                max_length.is_none_or(|n| n <= input::MAX_INPUT_LENGTH)
+            }
             Self::Image { .. } => self.image_dimensions().is_some(),
             Self::Select {
                 options,
@@ -273,11 +293,31 @@ impl NodeContent {
 pub struct NodeDescriptor {
     pub content: NodeContent,
     pub frame: Rect,
+    /// Additional nonvisual help, separate from the accessible name.
+    pub accessible_description: Option<String>,
     pub accessible_name: Option<String>,
     pub accessible_role: Option<AccessibleRole>,
     pub accessible_selected: Option<bool>,
     pub accessible_expanded: Option<bool>,
+    pub accessibility_relations: AccessibilityRelations,
     pub style: style::NodeStyle,
+}
+
+/// Cross-node accessibility relationships, expressed in portable presentation IDs.
+/// Targets may be absent from the current snapshot and resolve when they are published.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct AccessibilityRelations {
+    pub active_descendant: Option<NodeId>,
+    pub controls: Vec<NodeId>,
+}
+
+impl AccessibilityRelations {
+    pub fn is_valid_for(&self, root: RootId) -> bool {
+        self.active_descendant
+            .is_none_or(|target| target.root == root)
+            && self.controls.len() <= 64
+            && self.controls.iter().all(|target| target.root == root)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -313,6 +353,23 @@ pub struct CommitBatch {
     pub operations: Vec<Operation>,
 }
 
+/// Acknowledges application of protocol operations, not terminal scanout.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ApplyReceipt {
+    pub root: RootId,
+    pub previous: u64,
+    pub revision: u64,
+}
+impl ApplyReceipt {
+    pub fn for_batch(batch: &CommitBatch) -> Self {
+        Self {
+            root: batch.root,
+            previous: batch.previous,
+            revision: batch.revision,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum NavigationKey {
     Up,
@@ -330,6 +387,11 @@ pub enum NavigationKey {
 #[derive(Clone, Debug, PartialEq)]
 pub enum EventPayload {
     Activate,
+    /// Native keyboard confirmation after committed edits. Uses a fresh input
+    /// revision so replayed confirmations are rejected by the shared model.
+    Submit {
+        revision: u64,
+    },
     Expansion {
         expanded: bool,
     },
@@ -363,10 +425,19 @@ pub enum EventPayload {
         selection_utf16: [usize; 2],
         composing_utf16: Option<[usize; 2]>,
     },
+    /// Keyboard-driven focus; adapters may render the shared focus-visible cue.
+    FocusVisible,
     Focus,
+    /// Release this node's focus; a delayed blur must not clear another node.
+    Blur,
     Scroll {
         x: f64,
         y: f64,
+    },
+    /// Pointer-wheel movement over a scroll container, in Jadix logical pixels.
+    Wheel {
+        delta_x: f64,
+        delta_y: f64,
     },
 }
 

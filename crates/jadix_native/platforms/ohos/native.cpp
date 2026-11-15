@@ -3,6 +3,8 @@
 #include <arkui/native_node.h>
 #include <arkui/native_node_napi.h>
 #include <arkui/native_key_event.h>
+#include <arkui/native_interface_accessibility.h>
+#include <ace/xcomponent/native_interface_xcomponent.h>
 #include <native_drawing/drawing_font_collection.h>
 #include <native_drawing/drawing_text_typography.h>
 #include <algorithm>
@@ -10,11 +12,407 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <mutex>
+#include <atomic>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 extern "C" void jadix_ohos_receive(void*, int32_t, const char*, const char*, int32_t, int32_t, int32_t, float, float);
+
+struct JadixAccessibilityElement {
+    int64_t id;
+    int64_t parent_id;
+    const int64_t* child_ids;
+    size_t child_count;
+    const char* component_type;
+    const char* text;
+    const char* description;
+    int32_t left, top, right, bottom;
+    uint32_t flags;
+    void* target;
+};
+
+enum JadixAccessibilityFlags : uint32_t {
+    JADIX_A11Y_ENABLED = 1u << 0, JADIX_A11Y_SELECTED = 1u << 1,
+    JADIX_A11Y_EXPANDED = 1u << 2, JADIX_A11Y_CHECKABLE = 1u << 3,
+    JADIX_A11Y_CHECKED = 1u << 4, JADIX_A11Y_FOCUSABLE = 1u << 5,
+    JADIX_A11Y_CLICKABLE = 1u << 6, JADIX_A11Y_SCROLLABLE = 1u << 7,
+    JADIX_A11Y_EDITABLE = 1u << 8, JADIX_A11Y_PASSWORD = 1u << 9,
+};
+
+struct JadixAccessibilityNode {
+    int64_t id = 0, parent_id = 0;
+    std::vector<int64_t> children;
+    std::string component, text, description;
+    ArkUI_AccessibleRect rect{};
+    uint32_t flags = 0;
+    void* target = nullptr;
+};
+
+struct JadixAccessibilityProvider {
+    ArkUI_AccessibilityProvider* provider = nullptr;
+    std::string instance_id;
+    std::mutex mutex;
+    std::unordered_map<int64_t, JadixAccessibilityNode> nodes;
+    int64_t accessibility_focus = 0;
+};
+
+static std::mutex jadix_a11y_registry_mutex;
+static std::unordered_map<std::string, std::shared_ptr<JadixAccessibilityProvider>> jadix_a11y_registry;
+static std::atomic<uint64_t> jadix_a11y_next_instance{1};
+
+static std::shared_ptr<JadixAccessibilityProvider> jadix_a11y_find(const char* instance) {
+    if (!instance) return {};
+    std::lock_guard<std::mutex> lock(jadix_a11y_registry_mutex);
+    auto found = jadix_a11y_registry.find(instance);
+    return found == jadix_a11y_registry.end() ? nullptr : found->second;
+}
+
+static int32_t jadix_a11y_fill(ArkUI_AccessibilityElementInfo* info, JadixAccessibilityNode& node,
+    int64_t accessibility_focus = 0) {
+    if (!info) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+    auto set = [](int32_t result) { return result; };
+    if (set(OH_ArkUI_AccessibilityElementInfoSetElementId(info, static_cast<int32_t>(node.id))) != 0 ||
+        set(OH_ArkUI_AccessibilityElementInfoSetParentId(info, static_cast<int32_t>(node.parent_id))) != 0 ||
+        set(OH_ArkUI_AccessibilityElementInfoSetComponentType(info, node.component.c_str())) != 0 ||
+        set(OH_ArkUI_AccessibilityElementInfoSetContents(info, node.text.c_str())) != 0 ||
+        set(OH_ArkUI_AccessibilityElementInfoSetAccessibilityText(info, node.text.c_str())) != 0 ||
+        set(OH_ArkUI_AccessibilityElementInfoSetAccessibilityDescription(info, node.description.c_str())) != 0) return -1;
+    auto children = node.children;
+    if (OH_ArkUI_AccessibilityElementInfoSetChildNodeIds(info, static_cast<int32_t>(children.size()), children.data()) != 0) return -1;
+    ArkUI_AccessibleAction actions[2]{};
+    int32_t action_count = 0;
+    if (node.flags & JADIX_A11Y_CLICKABLE) {
+        actions[action_count++] = {ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_CLICK, "Activate"};
+    }
+    if (node.flags & JADIX_A11Y_FOCUSABLE) {
+        actions[action_count++] = {ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_GAIN_ACCESSIBILITY_FOCUS, "Focus"};
+    }
+    if (OH_ArkUI_AccessibilityElementInfoSetOperationActions(info, action_count, actions) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetScreenRect(info, &node.rect) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetCheckable(info, (node.flags & JADIX_A11Y_CHECKABLE) != 0) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetChecked(info, (node.flags & JADIX_A11Y_CHECKED) != 0) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetFocusable(info, (node.flags & JADIX_A11Y_FOCUSABLE) != 0) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetFocused(info, false) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetVisible(info, true) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetAccessibilityFocused(info, node.id == accessibility_focus) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetSelected(info, (node.flags & JADIX_A11Y_SELECTED) != 0) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetClickable(info, (node.flags & JADIX_A11Y_CLICKABLE) != 0) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetEnabled(info, (node.flags & JADIX_A11Y_ENABLED) != 0) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetIsPassword(info, (node.flags & JADIX_A11Y_PASSWORD) != 0) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetScrollable(info, (node.flags & JADIX_A11Y_SCROLLABLE) != 0) != 0 ||
+        OH_ArkUI_AccessibilityElementInfoSetEditable(info, (node.flags & JADIX_A11Y_EDITABLE) != 0) != 0) return -1;
+    return 0;
+}
+
+static int32_t jadix_a11y_find_by_id(const char* instance, int64_t id, ArkUI_AccessibilitySearchMode mode,
+    int32_t, ArkUI_AccessibilityElementInfoList* list) {
+    auto state = jadix_a11y_find(instance);
+    if (!state || !list) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    auto root = state->nodes.find(id);
+    if (root == state->nodes.end()) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    std::vector<int64_t> selected{id};
+    if ((mode & ARKUI_ACCESSIBILITY_NATIVE_SEARCH_MODE_PREFETCH_RECURSIVE_CHILDREN) != 0) {
+        std::unordered_map<int64_t, bool> visited{{id, true}};
+        for (size_t index = 0; index < selected.size(); ++index) {
+            auto item = state->nodes.find(selected[index]);
+            if (item == state->nodes.end()) continue;
+            for (auto child : item->second.children) {
+                if (visited.emplace(child, true).second) selected.push_back(child);
+            }
+        }
+    } else if ((mode & ARKUI_ACCESSIBILITY_NATIVE_SEARCH_MODE_PREFETCH_CHILDREN) != 0) {
+        selected.insert(selected.end(), root->second.children.begin(), root->second.children.end());
+    }
+    for (auto selected_id : selected) {
+        auto item = state->nodes.find(selected_id);
+        if (item == state->nodes.end()) continue;
+        auto* info = OH_ArkUI_AddAndGetAccessibilityElementInfo(list);
+        if (jadix_a11y_fill(info, item->second, state->accessibility_focus) != 0) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    }
+    return ARKUI_ACCESSIBILITY_NATIVE_RESULT_SUCCESSFUL;
+}
+
+static int32_t jadix_a11y_find_by_text(const char* instance, int64_t id, const char* query, int32_t,
+    ArkUI_AccessibilityElementInfoList* list) {
+    auto state = jadix_a11y_find(instance);
+    if (!state || !query || !list) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    auto root = state->nodes.find(id);
+    if (root == state->nodes.end()) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    std::vector<int64_t> pending(root->second.children.begin(), root->second.children.end());
+    while (!pending.empty()) {
+        auto child = pending.back(); pending.pop_back();
+        auto item = state->nodes.find(child);
+        if (item == state->nodes.end()) continue;
+        pending.insert(pending.end(), item->second.children.begin(), item->second.children.end());
+        if (item->second.text.find(query) == std::string::npos && item->second.description.find(query) == std::string::npos) continue;
+        auto* info = OH_ArkUI_AddAndGetAccessibilityElementInfo(list);
+        if (jadix_a11y_fill(info, item->second, state->accessibility_focus) != 0) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    }
+    return ARKUI_ACCESSIBILITY_NATIVE_RESULT_SUCCESSFUL;
+}
+
+static int32_t jadix_a11y_focused(const char* instance, int64_t id, ArkUI_AccessibilityFocusType focus_type, int32_t,
+    ArkUI_AccessibilityElementInfo* info) {
+    auto state = jadix_a11y_find(instance);
+    if (!state || !info) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+    if (focus_type != ARKUI_ACCESSIBILITY_NATIVE_FOCUS_TYPE_ACCESSIBILITY)
+        return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    if (!state->accessibility_focus) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    auto focused = state->nodes.find(state->accessibility_focus);
+    if (focused == state->nodes.end()) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    if (id != 0) {
+        auto ancestor_id = focused->first;
+        while (ancestor_id != id) {
+            auto ancestor = state->nodes.find(ancestor_id);
+            if (ancestor == state->nodes.end() || ancestor->second.parent_id == ancestor_id)
+                return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+            ancestor_id = ancestor->second.parent_id;
+        }
+    }
+    return jadix_a11y_fill(info, focused->second, state->accessibility_focus) == 0
+        ? ARKUI_ACCESSIBILITY_NATIVE_RESULT_SUCCESSFUL : ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+}
+static int32_t jadix_a11y_next_focus(const char* instance, int64_t id, ArkUI_AccessibilityFocusMoveDirection direction, int32_t,
+    ArkUI_AccessibilityElementInfo* info) {
+    auto state = jadix_a11y_find(instance);
+    if (!state || !info) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+    std::lock_guard<std::mutex> lock(state->mutex);
+    auto origin = state->nodes.find(id);
+    if (origin == state->nodes.end()) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    std::vector<JadixAccessibilityNode*> candidates;
+    candidates.reserve(state->nodes.size());
+    for (auto& entry : state->nodes) {
+        auto& node = entry.second;
+        if ((node.flags & (JADIX_A11Y_ENABLED | JADIX_A11Y_FOCUSABLE)) ==
+            (JADIX_A11Y_ENABLED | JADIX_A11Y_FOCUSABLE)) candidates.push_back(&node);
+    }
+    if (direction == ARKUI_ACCESSIBILITY_NATIVE_DIRECTION_FORWARD || direction == ARKUI_ACCESSIBILITY_NATIVE_DIRECTION_BACKWARD) {
+        std::sort(candidates.begin(), candidates.end(), [](const auto* left, const auto* right) {
+            if (left->rect.leftTopY != right->rect.leftTopY) return left->rect.leftTopY < right->rect.leftTopY;
+            if (left->rect.leftTopX != right->rect.leftTopX) return left->rect.leftTopX < right->rect.leftTopX;
+            return left->id < right->id;
+        });
+        auto current = std::find_if(candidates.begin(), candidates.end(), [id](const auto* node) { return node->id == id; });
+        if (current != candidates.end()) {
+            if (direction == ARKUI_ACCESSIBILITY_NATIVE_DIRECTION_FORWARD && ++current != candidates.end())
+                return jadix_a11y_fill(info, **current, state->accessibility_focus) == 0
+                    ? ARKUI_ACCESSIBILITY_NATIVE_RESULT_SUCCESSFUL : ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+            if (direction == ARKUI_ACCESSIBILITY_NATIVE_DIRECTION_BACKWARD && current != candidates.begin())
+                return jadix_a11y_fill(info, **--current, state->accessibility_focus) == 0
+                    ? ARKUI_ACCESSIBILITY_NATIVE_RESULT_SUCCESSFUL : ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+        }
+        return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    }
+    const double origin_x = (origin->second.rect.leftTopX + origin->second.rect.rightBottomX) / 2.0;
+    const double origin_y = (origin->second.rect.leftTopY + origin->second.rect.rightBottomY) / 2.0;
+    JadixAccessibilityNode* best = nullptr;
+    double best_primary = 0, best_secondary = 0;
+    for (auto* candidate : candidates) {
+        const double x = (candidate->rect.leftTopX + candidate->rect.rightBottomX) / 2.0;
+        const double y = (candidate->rect.leftTopY + candidate->rect.rightBottomY) / 2.0;
+        const double dx = x - origin_x, dy = y - origin_y;
+        const bool horizontal = direction == ARKUI_ACCESSIBILITY_NATIVE_DIRECTION_LEFT ||
+            direction == ARKUI_ACCESSIBILITY_NATIVE_DIRECTION_RIGHT;
+        const bool in_direction = direction == ARKUI_ACCESSIBILITY_NATIVE_DIRECTION_LEFT ? dx < 0 :
+            direction == ARKUI_ACCESSIBILITY_NATIVE_DIRECTION_RIGHT ? dx > 0 :
+            direction == ARKUI_ACCESSIBILITY_NATIVE_DIRECTION_UP ? dy < 0 :
+            direction == ARKUI_ACCESSIBILITY_NATIVE_DIRECTION_DOWN ? dy > 0 : false;
+        if (!in_direction) continue;
+        const double primary = std::abs(horizontal ? dx : dy);
+        const double secondary = std::abs(horizontal ? dy : dx);
+        if (!best || primary < best_primary || (primary == best_primary && secondary < best_secondary) ||
+            (primary == best_primary && secondary == best_secondary && candidate->id < best->id)) {
+            best = candidate;
+            best_primary = primary;
+            best_secondary = secondary;
+        }
+    }
+    return best && jadix_a11y_fill(info, *best, state->accessibility_focus) == 0
+        ? ARKUI_ACCESSIBILITY_NATIVE_RESULT_SUCCESSFUL : ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+}
+static int32_t jadix_a11y_clear_focus(const char* instance) {
+    auto state = jadix_a11y_find(instance);
+    if (!state) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+    int64_t previous = 0;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        previous = state->accessibility_focus;
+        state->accessibility_focus = 0;
+    }
+    if (!previous) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_SUCCESSFUL;
+    auto* event = OH_ArkUI_CreateAccessibilityEventInfo();
+    if (!event) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    auto result = OH_ArkUI_AccessibilityEventSetEventType(event,
+        ARKUI_ACCESSIBILITY_NATIVE_EVENT_TYPE_ACCESSIBILITY_FOCUS_CLEARED);
+    if (result == 0) result = OH_ArkUI_AccessibilityEventSetRequestFocusId(event, static_cast<int32_t>(previous));
+    if (result != 0) {
+        OH_ArkUI_DestoryAccessibilityEventInfo(event);
+        return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    }
+    OH_ArkUI_SendAccessibilityAsyncEvent(state->provider, event, [](int32_t) {});
+    OH_ArkUI_DestoryAccessibilityEventInfo(event);
+    return ARKUI_ACCESSIBILITY_NATIVE_RESULT_SUCCESSFUL;
+}
+static int32_t jadix_a11y_cursor(const char*, int64_t, int32_t, int32_t*) { return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED; }
+
+static int32_t jadix_a11y_action(const char* instance, int64_t id, ArkUI_Accessibility_ActionType action,
+    ArkUI_AccessibilityActionArguments*, int32_t) {
+    auto state = jadix_a11y_find(instance);
+    if (!state) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+    void* target = nullptr;
+    bool focus_changed = false;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        auto node = state->nodes.find(id);
+        if (node == state->nodes.end() || !(node->second.flags & JADIX_A11Y_ENABLED)) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+        if (action == ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_GAIN_ACCESSIBILITY_FOCUS) {
+            if (!(node->second.flags & JADIX_A11Y_FOCUSABLE)) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+            state->accessibility_focus = id;
+            focus_changed = true;
+        } else if (action == ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_CLEAR_ACCESSIBILITY_FOCUS) {
+            if (state->accessibility_focus != id) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+            state->accessibility_focus = 0;
+            focus_changed = true;
+        } else {
+            target = node->second.target;
+            if (action != ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_CLICK || !(node->second.flags & JADIX_A11Y_CLICKABLE) || !target)
+                return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+        }
+    }
+    if (focus_changed) {
+        auto* event = OH_ArkUI_CreateAccessibilityEventInfo();
+        if (!event) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+        const auto type = action == ARKUI_ACCESSIBILITY_NATIVE_ACTION_TYPE_GAIN_ACCESSIBILITY_FOCUS
+            ? ARKUI_ACCESSIBILITY_NATIVE_EVENT_TYPE_ACCESSIBILITY_FOCUSED
+            : ARKUI_ACCESSIBILITY_NATIVE_EVENT_TYPE_ACCESSIBILITY_FOCUS_CLEARED;
+        auto result = OH_ArkUI_AccessibilityEventSetEventType(event, type);
+        if (result == 0) result = OH_ArkUI_AccessibilityEventSetRequestFocusId(event, static_cast<int32_t>(id));
+        if (result != 0) {
+            OH_ArkUI_DestoryAccessibilityEventInfo(event);
+            return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+        }
+        OH_ArkUI_SendAccessibilityAsyncEvent(state->provider, event, [](int32_t) {});
+        OH_ArkUI_DestoryAccessibilityEventInfo(event);
+        return ARKUI_ACCESSIBILITY_NATIVE_RESULT_SUCCESSFUL;
+    }
+    jadix_ohos_receive(target, 0, nullptr, nullptr, 0, 0, 0, 0, 0);
+    return ARKUI_ACCESSIBILITY_NATIVE_RESULT_SUCCESSFUL;
+}
+
+static ArkUI_AccessibilityProviderCallbacksWithInstance jadix_a11y_callbacks = {
+    jadix_a11y_find_by_id, jadix_a11y_find_by_text, jadix_a11y_focused, jadix_a11y_next_focus,
+    jadix_a11y_action, jadix_a11y_clear_focus, jadix_a11y_cursor
+};
+
+extern "C" void* jadix_ohos_accessibility_create(void* environment, void* xcomponent) {
+    if (!environment || !xcomponent) return nullptr;
+    ArkUI_NodeHandle node = nullptr;
+    if (OH_ArkUI_GetNodeHandleFromNapiValue(static_cast<napi_env>(environment),
+        static_cast<napi_value>(xcomponent), &node) != 0 || !node) return nullptr;
+    auto provider = OH_ArkUI_AccessibilityProvider_Create(node);
+    if (!provider) return nullptr;
+    auto state = std::make_shared<JadixAccessibilityProvider>();
+    state->provider = provider;
+    state->instance_id = "jadix-" + std::to_string(jadix_a11y_next_instance.fetch_add(1));
+    if (OH_ArkUI_AccessibilityProviderRegisterCallbackWithInstance(state->instance_id.c_str(), provider, &jadix_a11y_callbacks) != 0) {
+        OH_ArkUI_AccessibilityProvider_Dispose(provider);
+        return nullptr;
+    }
+    {
+        std::lock_guard<std::mutex> lock(jadix_a11y_registry_mutex);
+        jadix_a11y_registry.emplace(state->instance_id, state);
+    }
+    return state.get();
+}
+
+extern "C" int32_t jadix_ohos_accessibility_replace(void* handle, const JadixAccessibilityElement* elements, size_t count) {
+    auto* raw = static_cast<JadixAccessibilityProvider*>(handle);
+    if (!raw || (count && !elements) || count > 100000) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+    auto state = jadix_a11y_find(raw->instance_id.c_str());
+    if (!state || state.get() != raw) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+    std::unordered_map<int64_t, JadixAccessibilityNode> replacement;
+    replacement.reserve(count + 1);
+    JadixAccessibilityNode root;
+    root.id = 0; root.parent_id = 0; root.component = "group"; root.flags = JADIX_A11Y_ENABLED;
+    for (size_t index = 0; index < count; ++index) {
+        const auto& source = elements[index];
+        if (source.id <= 0 || source.id > INT32_MAX || source.parent_id < 0 || source.parent_id > INT32_MAX ||
+            source.child_count > 100000 || (source.child_count && !source.child_ids) ||
+            !source.component_type || !source.text || !source.description) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+        JadixAccessibilityNode node;
+        node.id = source.id; node.parent_id = source.parent_id;
+        node.children.assign(source.child_ids, source.child_ids + source.child_count);
+        node.component = source.component_type; node.text = source.text; node.description = source.description;
+        node.rect = {source.left, source.top, source.right, source.bottom}; node.flags = source.flags; node.target = source.target;
+        if (!replacement.emplace(node.id, std::move(node)).second) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+        if (source.parent_id == 0) root.children.push_back(source.id);
+    }
+    replacement.emplace(0, std::move(root));
+    for (const auto& entry : replacement) {
+        if (entry.first == 0) continue;
+        if (replacement.find(entry.second.parent_id) == replacement.end()) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+        for (auto child : entry.second.children) {
+            auto found = replacement.find(child);
+            if (found == replacement.end() || found->second.parent_id != entry.first) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_BAD_PARAMETER;
+        }
+    }
+    int64_t cleared_focus = 0;
+    {
+        std::lock_guard<std::mutex> lock(state->mutex);
+        state->nodes.swap(replacement);
+        if (state->accessibility_focus && state->nodes.find(state->accessibility_focus) == state->nodes.end()) {
+            cleared_focus = state->accessibility_focus;
+            state->accessibility_focus = 0;
+        }
+    }
+    if (cleared_focus) {
+        auto* focus_event = OH_ArkUI_CreateAccessibilityEventInfo();
+        if (!focus_event) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+        auto focus_result = OH_ArkUI_AccessibilityEventSetEventType(focus_event,
+            ARKUI_ACCESSIBILITY_NATIVE_EVENT_TYPE_ACCESSIBILITY_FOCUS_CLEARED);
+        if (focus_result == 0) focus_result = OH_ArkUI_AccessibilityEventSetRequestFocusId(focus_event,
+            static_cast<int32_t>(cleared_focus));
+        if (focus_result != 0) {
+            OH_ArkUI_DestoryAccessibilityEventInfo(focus_event);
+            return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+        }
+        OH_ArkUI_SendAccessibilityAsyncEvent(state->provider, focus_event, [](int32_t) {});
+        OH_ArkUI_DestoryAccessibilityEventInfo(focus_event);
+    }
+    auto* event = OH_ArkUI_CreateAccessibilityEventInfo();
+    if (!event) return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    const auto event_result = OH_ArkUI_AccessibilityEventSetEventType(event,
+        ARKUI_ACCESSIBILITY_NATIVE_EVENT_TYPE_PAGE_CONTENT_UPDATE);
+    if (event_result != 0) {
+        OH_ArkUI_DestoryAccessibilityEventInfo(event);
+        return ARKUI_ACCESSIBILITY_NATIVE_RESULT_FAILED;
+    }
+    OH_ArkUI_SendAccessibilityAsyncEvent(state->provider, event, [](int32_t) {});
+    OH_ArkUI_DestoryAccessibilityEventInfo(event);
+    return ARKUI_ACCESSIBILITY_NATIVE_RESULT_SUCCESSFUL;
+}
+
+extern "C" void jadix_ohos_accessibility_dispose(void* handle) {
+    auto* raw = static_cast<JadixAccessibilityProvider*>(handle);
+    if (!raw) return;
+    std::shared_ptr<JadixAccessibilityProvider> state;
+    {
+        std::lock_guard<std::mutex> lock(jadix_a11y_registry_mutex);
+        auto found = jadix_a11y_registry.find(raw->instance_id);
+        if (found == jadix_a11y_registry.end() || found->second.get() != raw) return;
+        state = std::move(found->second);
+        jadix_a11y_registry.erase(found);
+    }
+    std::lock_guard<std::mutex> lock(state->mutex);
+    state->nodes.clear();
+    OH_ArkUI_AccessibilityProvider_Dispose(state->provider);
+    state->provider = nullptr;
+}
 
 static ArkUI_NativeNodeAPI_1* node_api() {
     static ArkUI_NativeNodeAPI_1* api = nullptr;
@@ -297,6 +695,7 @@ static void receive_select(ArkUI_NodeEvent* event) {
     if (type == NODE_ON_CLICK) select_failure(parts, open_select(parts));
     else if (type == NODE_ON_KEY_EVENT) key_select(parts, event);
     else if (type == NODE_ON_FOCUS && parts.target && parts.enabled) jadix_ohos_receive(parts.target, 1, nullptr, nullptr, 0, 0, 0, 0, 0);
+    else if (type == NODE_ON_BLUR && parts.target) jadix_ohos_receive(parts.target, 8, nullptr, nullptr, 0, 0, 0, 0, 0);
 }
 
 extern "C" int32_t jadix_ohos_select(void* handle, const char* const* values, const char* const* labels, const bool* enabled, size_t count, int32_t selected, bool interactive) {
@@ -357,8 +756,42 @@ static void receive(ArkUI_NodeEvent* event) {
     auto node = OH_ArkUI_NodeEvent_GetNodeHandle(event);
     if (type == NODE_ON_CLICK) {
         jadix_ohos_receive(target, 0, nullptr, nullptr, 0, 0, 0, 0, 0);
+    } else if (type == NODE_ON_KEY_EVENT) {
+        auto* input = OH_ArkUI_NodeEvent_GetInputEvent(event);
+        if (!input || OH_ArkUI_UIInputEvent_GetType(input) != ARKUI_UIINPUTEVENT_TYPE_KEY) return;
+        int32_t pressed[16];
+        int32_t count = 16;
+        if (OH_ArkUI_UIInputEvent_GetPressedKeys(input, pressed, &count) || count < 0 || count > 16) return;
+        for (int32_t index = 0; index < count; ++index) {
+            auto key = pressed[index];
+            if (key == ARKUI_KEYCODE_SHIFT_LEFT || key == ARKUI_KEYCODE_SHIFT_RIGHT || key == ARKUI_KEYCODE_CTRL_LEFT || key == ARKUI_KEYCODE_CTRL_RIGHT ||
+                key == ARKUI_KEYCODE_ALT_LEFT || key == ARKUI_KEYCODE_ALT_RIGHT || key == ARKUI_KEYCODE_META_LEFT || key == ARKUI_KEYCODE_META_RIGHT) return;
+        }
+        int32_t key;
+        switch (OH_ArkUI_KeyEvent_GetKeyCode(input)) {
+            case ARKUI_KEYCODE_DPAD_UP: key = 0; break;
+            case ARKUI_KEYCODE_DPAD_DOWN: key = 1; break;
+            case ARKUI_KEYCODE_DPAD_LEFT: key = 2; break;
+            case ARKUI_KEYCODE_DPAD_RIGHT: key = 3; break;
+            case ARKUI_KEYCODE_MOVE_HOME: key = 4; break;
+            case ARKUI_KEYCODE_MOVE_END: key = 5; break;
+            default: return;
+        }
+        auto action = OH_ArkUI_KeyEvent_GetType(input);
+        if (action != ARKUI_KEY_EVENT_DOWN && action != ARKUI_KEY_EVENT_UP) return;
+        OH_ArkUI_KeyEvent_SetConsumed(input, true);
+        OH_ArkUI_KeyEvent_StopPropagation(input, true);
+        if (action == ARKUI_KEY_EVENT_DOWN) jadix_ohos_receive(target, 7, nullptr, nullptr, key, 0, 0, 0, 0);
+    } else if (type == NODE_TEXT_INPUT_ON_SUBMIT) {
+        jadix_ohos_receive(target, 9, nullptr, nullptr, 0, 0, 0, 0, 0);
+    } else if (type == NODE_RADIO_EVENT_ON_CHANGE) {
+        auto* value = OH_ArkUI_NodeEvent_GetNodeComponentEvent(event);
+        // Rust owns mutual exclusion. Native deselection is not another activation.
+        if (value && value->data[0].i32 == 1) jadix_ohos_receive(target, 0, nullptr, nullptr, 0, 0, 0, 0, 0);
     } else if (type == NODE_ON_FOCUS) {
         jadix_ohos_receive(target, 1, nullptr, nullptr, 0, 0, 0, 0, 0);
+    } else if (type == NODE_ON_BLUR) {
+        jadix_ohos_receive(target, 8, nullptr, nullptr, 0, 0, 0, 0, 0);
     } else if (type == NODE_CHECKBOX_EVENT_ON_CHANGE || type == NODE_TOGGLE_ON_CHANGE) {
         auto* value = OH_ArkUI_NodeEvent_GetNodeComponentEvent(event);
         if (value) jadix_ohos_receive(target, 2, nullptr, nullptr, value->data[0].i32, 0, 0, 0, 0);
@@ -393,7 +826,7 @@ extern "C" void* jadix_ohos_create(int32_t kind, void* target) {
         case 3: type = ARKUI_NODE_TEXT_INPUT; break;
         case 4: type = ARKUI_NODE_TEXT_AREA; break;
         case 5: type = ARKUI_NODE_SCROLL; break;
-        case 6: case 7: type = ARKUI_NODE_ROW; break;
+        case 6: case 7: case 12: type = ARKUI_NODE_ROW; break;
         case 8: type = ARKUI_NODE_IMAGE; break;
         default: return nullptr;
     }
@@ -409,6 +842,7 @@ extern "C" void* jadix_ohos_create(int32_t kind, void* target) {
         result = result ? result : node_api()->addNodeEventReceiver(node, receive_select);
         result = result ? result : node_api()->registerNodeEvent(node, NODE_ON_CLICK, 0, target);
         result = result ? result : node_api()->registerNodeEvent(node, NODE_ON_FOCUS, 0, target);
+        result = result ? result : node_api()->registerNodeEvent(node, NODE_ON_BLUR, 0, target);
         result = result ? result : node_api()->registerNodeEvent(node, NODE_ON_KEY_EVENT, 0, target);
         if (result) { selects.erase(node); node_api()->disposeNode(node); return nullptr; }
     }
@@ -434,8 +868,8 @@ extern "C" void* jadix_ohos_create(int32_t kind, void* target) {
     }
     auto control = node;
     ArkUI_NodeHandle label = nullptr;
-    if (kind == 6 || kind == 7) {
-        control = node_api()->createNode(kind == 6 ? ARKUI_NODE_CHECKBOX : ARKUI_NODE_TOGGLE);
+    if (kind == 6 || kind == 7 || kind == 12) {
+        control = node_api()->createNode(kind == 12 ? ARKUI_NODE_RADIO : kind == 6 ? ARKUI_NODE_CHECKBOX : ARKUI_NODE_TOGGLE);
         label = node_api()->createNode(ARKUI_NODE_TEXT);
         if (!control || !label) {
             if (control) node_api()->disposeNode(control);
@@ -446,7 +880,7 @@ extern "C" void* jadix_ohos_create(int32_t kind, void* target) {
         result = result ? result : node_api()->setLengthMetricUnit(control, ARKUI_LENGTH_METRIC_UNIT_VP);
         result = result ? result : node_api()->setLengthMetricUnit(label, ARKUI_LENGTH_METRIC_UNIT_VP);
         result = result ? result : integer(node, NODE_ROW_ALIGN_ITEMS, ARKUI_VERTICAL_ALIGNMENT_CENTER);
-        result = result ? result : number(control, NODE_WIDTH, kind == 6 ? 24.0f : 44.0f);
+        result = result ? result : number(control, NODE_WIDTH, kind == 7 ? 44.0f : 24.0f);
         result = result ? result : number(control, NODE_HEIGHT, 28);
         result = result ? result : number(label, NODE_LAYOUT_WEIGHT, 1);
         result = result ? result : number(label, NODE_MARGIN, 8);
@@ -457,20 +891,31 @@ extern "C" void* jadix_ohos_create(int32_t kind, void* target) {
         result = node_api()->addNodeEventReceiver(control, receive);
         if (kind == 2) result = result ? result : node_api()->registerNodeEvent(node, NODE_ON_CLICK, 0, target);
         if (kind >= 2 && kind <= 4) result = result ? result : node_api()->registerNodeEvent(node, NODE_ON_FOCUS, 0, target);
+        if (kind >= 2 && kind <= 4) result = result ? result : node_api()->registerNodeEvent(node, NODE_ON_BLUR, 0, target);
         if (kind == 3) result = result ? result : node_api()->registerNodeEvent(node, NODE_TEXT_INPUT_ON_CHANGE_WITH_PREVIEW_TEXT, 0, target);
+        if (kind == 3) result = result ? result : node_api()->registerNodeEvent(node, NODE_TEXT_INPUT_ON_SUBMIT, 0, target);
         if (kind == 4) result = result ? result : node_api()->registerNodeEvent(node, NODE_TEXT_AREA_ON_CHANGE_WITH_PREVIEW_TEXT, 0, target);
         if (kind == 5) result = result ? result : node_api()->registerNodeEvent(node, NODE_SCROLL_EVENT_ON_SCROLL, 0, target);
-        if (kind == 6 || kind == 7) {
+        if (kind == 6 || kind == 7 || kind == 12) {
             result = result ? result : node_api()->registerNodeEvent(control, NODE_ON_FOCUS, 0, target);
-            result = result ? result : node_api()->registerNodeEvent(control, kind == 6 ? NODE_CHECKBOX_EVENT_ON_CHANGE : NODE_TOGGLE_ON_CHANGE, 0, target);
+            result = result ? result : node_api()->registerNodeEvent(control, NODE_ON_BLUR, 0, target);
+            result = result ? result : node_api()->registerNodeEvent(control, kind == 12 ? NODE_RADIO_EVENT_ON_CHANGE : kind == 6 ? NODE_CHECKBOX_EVENT_ON_CHANGE : NODE_TOGGLE_ON_CHANGE, 0, target);
         }
     }
+    if (kind == 12 && target && !result) result = result ? result : node_api()->registerNodeEvent(control, NODE_ON_KEY_EVENT, 0, target);
     if (kind == 5 && !result) result = integer(node, NODE_SCROLL_SCROLL_DIRECTION, ARKUI_SCROLL_DIRECTION_FREE);
     if (result) {
-        if (kind == 6 || kind == 7) { node_api()->disposeNode(control); node_api()->disposeNode(label); }
+        if (kind == 6 || kind == 7 || kind == 12) {
+            for (auto event : {NODE_ON_FOCUS, NODE_ON_BLUR, NODE_CHECKBOX_EVENT_ON_CHANGE, NODE_TOGGLE_ON_CHANGE, NODE_RADIO_EVENT_ON_CHANGE, NODE_ON_KEY_EVENT})
+                node_api()->unregisterNodeEvent(control, event);
+            node_api()->removeChild(node, control);
+            node_api()->removeChild(node, label);
+            node_api()->disposeNode(control);
+            node_api()->disposeNode(label);
+        }
         node_api()->disposeNode(node); return nullptr;
     }
-    if (kind == 6 || kind == 7) toggles.emplace(node, ToggleParts{control, label});
+    if (kind == 6 || kind == 7 || kind == 12) toggles.emplace(node, ToggleParts{control, label});
     return node;
 }
 
@@ -480,6 +925,7 @@ extern "C" void jadix_ohos_dispose(void* handle) {
         if (selects.find(node) != selects.end()) {
             node_api()->unregisterNodeEvent(node, NODE_ON_CLICK);
             node_api()->unregisterNodeEvent(node, NODE_ON_FOCUS);
+            node_api()->unregisterNodeEvent(node, NODE_ON_BLUR);
             node_api()->unregisterNodeEvent(node, NODE_ON_KEY_EVENT);
             selects.erase(node);
         }
@@ -497,10 +943,18 @@ extern "C" void jadix_ohos_dispose(void* handle) {
         }
         auto parts = toggles.find(node);
         if (parts != toggles.end()) {
+            for (auto type : {NODE_ON_FOCUS, NODE_ON_BLUR, NODE_CHECKBOX_EVENT_ON_CHANGE, NODE_TOGGLE_ON_CHANGE, NODE_RADIO_EVENT_ON_CHANGE, NODE_ON_KEY_EVENT})
+                node_api()->unregisterNodeEvent(parts->second.control, type);
+            node_api()->removeChild(node, parts->second.control);
+            node_api()->removeChild(node, parts->second.label);
             node_api()->disposeNode(parts->second.control);
             node_api()->disposeNode(parts->second.label);
             toggles.erase(parts);
         }
+        for (auto type : {NODE_ON_CLICK, NODE_ON_FOCUS, NODE_ON_BLUR, NODE_ON_KEY_EVENT,
+                NODE_TEXT_INPUT_ON_CHANGE_WITH_PREVIEW_TEXT, NODE_TEXT_INPUT_ON_SUBMIT, NODE_TEXT_AREA_ON_CHANGE_WITH_PREVIEW_TEXT,
+                NODE_SCROLL_EVENT_ON_SCROLL})
+            node_api()->unregisterNodeEvent(node, type);
         node_api()->disposeNode(node);
     }
 }
@@ -525,17 +979,12 @@ extern "C" int32_t jadix_ohos_geometry(void* handle, float left, float top, floa
     return result ? result : number(node, NODE_HEIGHT, height);
 }
 
-extern "C" int32_t jadix_ohos_update(void* handle, int32_t kind, const char* value, const char* placeholder, bool enabled, bool password, bool checked, float size, uint32_t weight, const char* family, uint32_t foreground, uint32_t background, const char* accessible, int32_t accessible_role, int32_t accessible_selected, int32_t accessible_expanded) {
+extern "C" int32_t jadix_ohos_update(void* handle, int32_t kind, const char* value, const char* placeholder, bool enabled, bool password, bool checked, float size, uint32_t weight, const char* family, uint32_t foreground, uint32_t background, int32_t direction, const char* accessible, const char* description, int32_t accessible_role, int32_t accessible_selected, int32_t accessible_expanded) {
     auto node = static_cast<ArkUI_NodeHandle>(handle);
     int32_t result = integer(node, NODE_ENABLED, enabled);
     result = result ? result : integer(node, NODE_BACKGROUND_COLOR, static_cast<int32_t>(background));
-    if (accessible_role == 1 || accessible_role == 2) {
-        ArkUI_NumberValue role[] = {{.u32 = static_cast<uint32_t>(accessible_role == 1 ? ARKUI_NODE_LIST : ARKUI_NODE_LIST_ITEM)}};
-        ArkUI_AttributeItem item = {role, 1, nullptr, nullptr};
-        result = result ? result : node_api()->setAttribute(node, NODE_ACCESSIBILITY_ROLE, &item);
-    } else {
-        result = result ? result : node_api()->resetAttribute(node, NODE_ACCESSIBILITY_ROLE);
-    }
+    result = result ? result : integer(node, NODE_DIRECTION, direction);
+    result = result ? result : node_api()->resetAttribute(node, NODE_ACCESSIBILITY_ROLE);
     if (accessible_selected >= 0) {
         auto* state = OH_ArkUI_AccessibilityState_Create();
         if (!state) return -1;
@@ -547,21 +996,51 @@ extern "C" int32_t jadix_ohos_update(void* handle, int32_t kind, const char* val
     } else {
         result = result ? result : node_api()->resetAttribute(node, NODE_ACCESSIBILITY_STATE);
     }
+    std::string description_text = description ? description : "";
     if (accessible_expanded >= 0) {
-        result = result ? result : string(node, NODE_ACCESSIBILITY_DESCRIPTION, accessible_expanded ? "Expanded" : "Collapsed");
+        if (!description_text.empty()) description_text += ", ";
+        description_text += accessible_expanded ? "Expanded" : "Collapsed";
+    }
+    if (!description_text.empty()) {
+        result = result ? result : string(node, NODE_ACCESSIBILITY_DESCRIPTION, description_text.c_str());
     } else {
         result = result ? result : node_api()->resetAttribute(node, NODE_ACCESSIBILITY_DESCRIPTION);
     }
     if (kind == 8 && (!accessible || !accessible[0])) accessible = placeholder;
     if (accessible && accessible[0]) result = result ? result : string(node, NODE_ACCESSIBILITY_TEXT, accessible);
     else result = result ? result : node_api()->resetAttribute(node, NODE_ACCESSIBILITY_TEXT);
-    if (kind == 6 || kind == 7) {
+    if (kind == 6 || kind == 7 || kind == 12) {
         auto parts = toggles.find(node);
         if (parts == toggles.end()) return -1;
         auto control = parts->second.control;
         result = result ? result : integer(control, NODE_ENABLED, enabled);
+        result = result ? result : integer(control, NODE_DIRECTION, direction);
+        if (kind == 12 && (accessible_role == 4 || accessible_role == 5)) {
+            ArkUI_NumberValue role[] = {{.u32 = static_cast<uint32_t>(ARKUI_NODE_RADIO)}};
+            ArkUI_AttributeItem item = {role, 1, nullptr, nullptr};
+            result = result ? result : node_api()->setAttribute(control, NODE_ACCESSIBILITY_ROLE, &item);
+        } else {
+            result = result ? result : node_api()->resetAttribute(control, NODE_ACCESSIBILITY_ROLE);
+        }
+        auto* control_state = OH_ArkUI_AccessibilityState_Create();
+        if (!control_state) return -1;
+        OH_ArkUI_AccessibilityState_SetDisabled(control_state, !enabled);
+        OH_ArkUI_AccessibilityState_SetSelected(control_state, accessible_selected > 0);
+        OH_ArkUI_AccessibilityState_SetCheckedState(
+            control_state, checked ? ARKUI_ACCESSIBILITY_CHECKED : ARKUI_ACCESSIBILITY_UNCHECKED);
+        ArkUI_AttributeItem control_state_item = {nullptr, 0, nullptr, control_state};
+        result = result ? result : node_api()->setAttribute(control, NODE_ACCESSIBILITY_STATE, &control_state_item);
+        OH_ArkUI_AccessibilityState_Dispose(control_state);
+        result = result ? result : integer(parts->second.label, NODE_DIRECTION, direction);
         result = result ? result : string(control, NODE_ACCESSIBILITY_TEXT, accessible && accessible[0] ? accessible : value);
-        auto attribute = kind == 6 ? NODE_CHECKBOX_SELECT : NODE_TOGGLE_VALUE;
+        if (!description_text.empty()) result = result ? result : string(control, NODE_ACCESSIBILITY_DESCRIPTION, description_text.c_str());
+        else result = result ? result : node_api()->resetAttribute(control, NODE_ACCESSIBILITY_DESCRIPTION);
+        if (kind == 12) {
+            result = result ? result : integer(node, NODE_ACCESSIBILITY_MODE, ARKUI_ACCESSIBILITY_MODE_DISABLED);
+            result = result ? result : integer(control, NODE_TAB_STOP, enabled && accessible_role == 5);
+            result = result ? result : integer(parts->second.label, NODE_ACCESSIBILITY_MODE, ARKUI_ACCESSIBILITY_MODE_DISABLED);
+        }
+        auto attribute = kind == 12 ? NODE_RADIO_CHECKED : kind == 6 ? NODE_CHECKBOX_SELECT : NODE_TOGGLE_VALUE;
         auto* current = node_api()->getAttribute(control, attribute);
         if (!current || current->size < 1 || current->value[0].i32 != static_cast<int32_t>(checked)) {
             result = result ? result : integer(control, attribute, checked);
@@ -579,8 +1058,8 @@ extern "C" int32_t jadix_ohos_update(void* handle, int32_t kind, const char* val
         }
         result = result ? result : integer(node, NODE_IMAGE_OBJECT_FIT, ARKUI_OBJECT_FIT_CONTAIN);
     }
-    if ((kind >= 1 && kind <= 4) || kind == 6 || kind == 7 || kind == 11) {
-        auto attribute = (kind == 1 || kind == 6 || kind == 7) ? NODE_TEXT_CONTENT : (kind == 2 || kind == 11) ? NODE_BUTTON_LABEL : kind == 3 ? NODE_TEXT_INPUT_TEXT : NODE_TEXT_AREA_TEXT;
+    if ((kind >= 1 && kind <= 4) || kind == 6 || kind == 7 || kind == 12 || kind == 11) {
+        auto attribute = (kind == 1 || kind == 6 || kind == 7 || kind == 12) ? NODE_TEXT_CONTENT : (kind == 2 || kind == 11) ? NODE_BUTTON_LABEL : kind == 3 ? NODE_TEXT_INPUT_TEXT : NODE_TEXT_AREA_TEXT;
         auto* current = node_api()->getAttribute(node, attribute);
         if (!current || !current->string || std::strcmp(current->string, value)) result = result ? result : string(node, attribute, value);
         result = result ? result : number(node, NODE_FONT_SIZE, size);
@@ -609,6 +1088,22 @@ extern "C" int32_t jadix_ohos_focus(void* handle, bool focused) {
     auto node = static_cast<ArkUI_NodeHandle>(handle);
     auto parts = toggles.find(node);
     return integer(parts == toggles.end() ? node : parts->second.control, NODE_FOCUS_STATUS, focused);
+}
+
+extern "C" int32_t jadix_ohos_radio_group(void* handle, const char* group) {
+    if (!handle || !group) return -1;
+    auto found = toggles.find(static_cast<ArkUI_NodeHandle>(handle));
+    if (found == toggles.end()) return -1;
+    auto control = found->second.control;
+    return group[0] ? string(control, NODE_RADIO_GROUP, group)
+                    : node_api()->resetAttribute(control, NODE_RADIO_GROUP);
+}
+
+extern "C" int32_t jadix_ohos_max_length(void* handle, bool multiline, int32_t limit) {
+    if (!handle || limit < -1) return -1;
+    auto node = static_cast<ArkUI_NodeHandle>(handle);
+    auto attribute = multiline ? NODE_TEXT_AREA_MAX_LENGTH : NODE_TEXT_INPUT_MAX_LENGTH;
+    return limit < 0 ? node_api()->resetAttribute(node, attribute) : integer(node, attribute, limit);
 }
 
 extern "C" int32_t jadix_ohos_scroll(void* handle, float horizontal, float vertical) {

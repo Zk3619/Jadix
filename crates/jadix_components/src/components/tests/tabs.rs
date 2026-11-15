@@ -16,6 +16,7 @@ fn tabs_scope_wires_trigger_for_and_selected() {
                 value: None,
                 default_value: None,
                 options: None,
+                accessibility_label: Some("Settings sections".into()),
                 children: Some({
                     let mut frag = Element::new();
                     frag.set_attr("jadix_fragment", "1");
@@ -52,6 +53,10 @@ fn tabs_scope_wires_trigger_for_and_selected() {
         .iter()
         .filter(|c| is_tabs_trigger(c))
         .collect();
+    assert_eq!(
+        list.attrs.get("aria-label").map(String::as_str),
+        Some("Settings sections")
+    );
     assert_eq!(triggers.len(), 2);
     assert_eq!(triggers[0].focus_id.as_deref(), Some("settings:account"));
     assert_eq!(
@@ -92,6 +97,7 @@ fn tabs_trigger_hover_uses_shadcn_foreground() {
                 value: None,
                 default_value: None,
                 options: None,
+                accessibility_label: None,
                 children: Some({
                     let mut frag = Element::new();
                     frag.set_attr("jadix_fragment", "1");
@@ -233,6 +239,7 @@ fn tabs_trigger_text_paints_in_content_box_centered() {
                 value: None,
                 default_value: None,
                 options: None,
+                accessibility_label: None,
                 children: Some({
                     let mut frag = Element::new();
                     frag.set_attr("jadix_fragment", "1");
@@ -363,6 +370,7 @@ fn tabs_content_hidden_slot_is_display_none_zero_shell() {
                 value: None,
                 default_value: None,
                 options: None,
+                accessibility_label: None,
                 children: Some({
                     let mut frag = Element::new();
                     frag.set_attr("jadix_fragment", "1");
@@ -436,6 +444,7 @@ fn tabs_chips_prefer_intrinsic_content_width_in_narrow_parent() {
                 value: None,
                 default_value: None,
                 options: None,
+                accessibility_label: None,
                 children: Some({
                     let mut frag = Element::new();
                     frag.set_attr("jadix_fragment", "1");
@@ -579,6 +588,7 @@ fn radio_sync_must_not_nest_indicator_under_tabs_trigger() {
                 value: None,
                 default_value: None,
                 options: None,
+                accessibility_label: None,
                 children: Some({
                     let mut frag = Element::new();
                     frag.set_attr("jadix_fragment", "1");

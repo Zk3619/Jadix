@@ -249,7 +249,7 @@ impl super::App {
         }
     }
 
-    /// Force primary-tree hover leave (`x/y` outside any element). Safe when `state` is free.
+    /// Force primary-tree hover leave. Safe when `state` is free.
     fn clear_primary_hovers_out_of_window(&mut self) {
         let Ok(mut borrow) = self.state.try_borrow_mut() else {
             // Caller holds `state`; primary redraw will clear via pointer_window check.
@@ -266,8 +266,8 @@ impl super::App {
         let mut hover_to_run = Vec::new();
         super::tree_hit::update_hovers(
             &state.root_element,
-            -1.0,
-            -1.0,
+            f32::NEG_INFINITY,
+            f32::NEG_INFINITY,
             [0.0, 0.0],
             &mut hover_to_run,
         );
@@ -449,7 +449,7 @@ impl super::App {
                     self.cursor_pos.y as f32 / scale.max(1.0),
                 ]
             } else {
-                [-1.0, -1.0]
+                [f32::NEG_INFINITY, f32::NEG_INFINITY]
             };
             let render_ok = match sec.render(mouse_pos) {
                 Ok(()) => true,
@@ -953,11 +953,9 @@ impl super::App {
     ) -> [f32; 2] {
         if source == "painted" {
             if let Some(n) = super::ime_support::painted_text_edit_node(text_nodes, fid) {
+                let caret_y = super::ime_support::painted_text_edit_candidate_y(n, line_h);
                 return super::ime_support::paint_space_ime_origin(
-                    [
-                        n.x + compose_x_in_field * n.paint_scale,
-                        n.y + (n.height - line_h).max(0.0) * 0.5 * n.paint_scale,
-                    ],
+                    [n.x + compose_x_in_field * n.paint_scale, caret_y],
                     &n.paint_transform,
                     n.paint_origin,
                 );
@@ -1357,6 +1355,35 @@ impl super::App {
         path: &[super::pointer_events::HitPathEntry],
         button: MouseButton,
     ) {
+        let old_path = self.last_mouse_path.clone().unwrap_or_default();
+        let common = super::pointer_events::common_hit_path_prefix(&old_path, path);
+        let old_related = path.last().and_then(|entry| entry.target_key());
+        for entry in old_path.iter().skip(common).rev() {
+            let _ = self.dispatch_mouse_path(
+                std::slice::from_ref(entry),
+                x,
+                y,
+                button,
+                0,
+                "mouseleave",
+                super::pointer_events::PointerKind::Leave,
+                old_related.clone(),
+            );
+        }
+        let new_related = old_path.last().and_then(|entry| entry.target_key());
+        for entry in path.iter().skip(common) {
+            let _ = self.dispatch_mouse_path(
+                std::slice::from_ref(entry),
+                x,
+                y,
+                button,
+                0,
+                "mouseenter",
+                super::pointer_events::PointerKind::Enter,
+                new_related.clone(),
+            );
+        }
+
         let new_key = path.last().and_then(|e| e.target_key());
         if self.last_mouse_target.as_deref() != new_key.as_deref() {
             if let Some(old_path) = self.last_mouse_path.take() {
@@ -1968,6 +1995,7 @@ impl super::App {
 
         self.cursor_inside_window = false;
         self.cursor_move_pending = false;
+        self.clear_primary_hovers_out_of_window();
 
         #[cfg(all(debug_assertions, feature = "devtools"))]
         if crate::app::devtools::DevToolsState::is_pick() {
@@ -2040,7 +2068,7 @@ impl super::App {
         }
 
         let mut input_drag: Option<(String, usize, String, Option<(usize, usize)>)> = None;
-        let mut label_drag: Option<(String, usize)> = None;
+        let mut label_drag: Option<(String, usize, Option<(usize, usize)>)> = None;
         if element_state == ElementState::Pressed {
             if let Some((rest, bounds, display_el, style, leaf_scroll, focus_id)) =
                 super::tree_hit::find_input_text_at(&state.root_element, None, x, y, [0.0, 0.0])
@@ -2144,7 +2172,12 @@ impl super::App {
                     &style,
                     ui_scale,
                 );
-                label_drag = Some((key, ix));
+                let paragraph = (self.click_count >= 3)
+                    .then(|| {
+                        crate::utils::text_selection::selectable_paragraph_range(&display_el, ix)
+                    })
+                    .flatten();
+                label_drag = Some((key, ix, paragraph));
             }
         }
 
@@ -2657,11 +2690,11 @@ impl super::App {
                 // FALLBACK — Poll if dropping WaitUntil is not enough (chrome still frozen).
                 // super::input_controller::arm_text_edit_force_immediate();
                 // self.force_redraw_count = self.force_redraw_count.max(2);
-            } else if let Some((key, caret_ix)) = label_drag {
+            } else if let Some((key, caret_ix, paragraph)) = label_drag {
                 let sk = crate::utils::text_selection::label_selection_signal_key(&key);
                 crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>)
-                    .set(Some((caret_ix, caret_ix)));
-                self.label_drag_key = Some(key);
+                    .set(paragraph.or(Some((caret_ix, caret_ix))));
+                self.label_drag_key = paragraph.is_none().then_some(key);
                 self.label_drag_anchor = caret_ix;
                 self.input_drag_rest = None;
                 self.input_drag_multi = false;
@@ -4018,6 +4051,7 @@ impl super::App {
             sx.set_silent(new_sx);
             sy.set_silent(new_sy);
         }
+        crate::core::scroll_viewport::flush_scroll_observers();
         // Bridge discrete wheel ticks + settle frame: keep paint-only / text-fast for 200ms after
         // any offset move so Input chrome + nowrap prepare do not hitch on every notch.
         for rest in &rests_offset_moved {
@@ -4048,7 +4082,7 @@ impl super::App {
                 self.cursor_pos.y as f32 / state.window.scale_factor() as f32,
             )
         } else {
-            (-1.0, -1.0)
+            (f32::NEG_INFINITY, f32::NEG_INFINITY)
         };
 
         // Idle frames use ViewportsOnly so `update_scrollbar_elements` only syncs `scroll:` offsets

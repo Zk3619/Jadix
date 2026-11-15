@@ -1,5 +1,69 @@
 use super::*;
-use crate::primitives::path::polyline;
+use crate::primitives::path::{polygon, polyline};
+
+#[test]
+fn canvas_linear_readback_survives_software_continuation() {
+    let runs = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = runs.clone();
+    let el: Element = canvas()
+        .w(8.0)
+        .h(8.0)
+        .paint(move |ctx, _| {
+            observed.set(observed.get() + 1);
+            ctx.clear("#0000ff");
+            ctx.set_fill("#ff000080");
+            ctx.fill_rect(0.0, 0.0, 8.0, 8.0);
+            let before = ctx.get_image_data(2, 2, 1, 1).unwrap();
+            assert!(before
+                .iter()
+                .zip([188u8, 0, 187, 255])
+                .all(|(a, b)| a.abs_diff(b) <= 1));
+            ctx.put_image_data(0, 0, 1, 1, &[255; 4]);
+            assert_eq!(ctx.get_image_data(2, 2, 1, 1).unwrap(), before);
+            LayoutStatus::Clean
+        })
+        .into();
+    canvas_raster_from_element_attrs(&el.attrs, 8.0, 8.0).expect("paint");
+    canvas_raster_from_element_attrs(&el.attrs, 8.0, 8.0).expect("cached");
+    assert_eq!(runs.get(), 1);
+}
+
+#[test]
+fn bitmap_software_continuation_calls_paint_once() {
+    let count = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = count.clone();
+    let el: Element = canvas()
+        .w(16.0)
+        .h(16.0)
+        .paint(move |ctx, _| {
+            observed.set(observed.get() + 1);
+            ctx.set_fill("#0000ff");
+            ctx.fill_rect(0.0, 0.0, 16.0, 16.0);
+            ctx.draw_image(
+                &CanvasImageSource::Rgba {
+                    width: 1,
+                    height: 1,
+                    rgba: &[255, 0, 0, 255],
+                },
+                0.0,
+                0.0,
+                4.0,
+                4.0,
+            );
+            // Bitmap and layer stay on GPU; pixel writes exercise continuation replay.
+            ctx.push_layer(0.5, BlendMode::Normal);
+            ctx.set_fill("#00ff00");
+            ctx.fill_rect(8.0, 8.0, 4.0, 4.0);
+            ctx.pop_layer();
+            ctx.put_image_data(15, 15, 1, 1, &[255, 255, 255, 255]);
+            LayoutStatus::Clean
+        })
+        .into();
+    assert!(canvas_raster_from_element_attrs(&el.attrs, 16.0, 16.0).is_some());
+    assert_eq!(count.get(), 1);
+    assert!(canvas_raster_from_element_attrs(&el.attrs, 16.0, 16.0).is_some());
+    assert_eq!(count.get(), 1, "clean paint remains cached");
+}
 
 fn sample_px(buf: &[f32], w: u32, x: u32, y: u32) -> [f32; 4] {
     let i = (y as usize * w as usize + x as usize) * 4;
@@ -211,7 +275,8 @@ fn canvas_gpu_queues_path_job_not_cpu_mesh() {
         .iter()
         .map(|op| match op {
             PathGpuOp::Mesh(m) => m.tris.len(),
-            PathGpuOp::Fill(_) => 0,
+            PathGpuOp::Fill(f) => f.stencil.len(),
+            _ => 0,
         })
         .sum::<usize>();
     assert!(mesh_n >= 2, "stroke must tessellate, got {mesh_n}");

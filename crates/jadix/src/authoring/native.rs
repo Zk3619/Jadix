@@ -1,5 +1,102 @@
+use std::{cell::RefCell, collections::HashMap};
+
 use crate::core::{reactivity::Signal, tree::Element};
 use crate::presentation::{hybrid::*, *};
+
+#[cfg(test)]
+mod description_tests {
+    use super::*;
+
+    #[test]
+    fn native_description_precedence_and_clear_preserve_name_content_and_identity() {
+        let mut element = Element::new().text("Visible");
+        element.set_attr("aria-label", "Name");
+        element.set_attr("aria-description", "ARIA help 中文");
+        element.set_attr("accesskit_description", "Explicit help 😀");
+        let projection = ElementProjection::new(RootId::new());
+        let first = projection.snapshot(&mut element).unwrap();
+        assert_eq!(
+            first.descriptor.accessible_description.as_deref(),
+            Some("Explicit help 😀")
+        );
+        element.attrs.remove("accesskit_description");
+        let fallback = projection.snapshot(&mut element).unwrap();
+        assert_eq!(
+            fallback.descriptor.accessible_description.as_deref(),
+            Some("ARIA help 中文")
+        );
+        element.attrs.remove("aria-description");
+        let cleared = projection.snapshot(&mut element).unwrap();
+        assert_eq!(cleared.descriptor.accessible_description, None);
+        for node in [fallback, cleared] {
+            assert_eq!(node.id, first.id);
+            assert_eq!(node.descriptor.accessible_name.as_deref(), Some("Name"));
+            assert_eq!(node.descriptor.content, NodeContent::Text("Visible".into()));
+        }
+    }
+
+    #[test]
+    fn accessibility_relations_resolve_late_targets_and_clear_removed_or_ambiguous_ids() {
+        let mut element = Element::new();
+        element.set_attr("aria-activedescendant", "choice");
+        element.set_attr("aria-controls", "panel missing");
+        let projection = ElementProjection::new(RootId::new());
+
+        let unresolved = projection.snapshot(&mut element).unwrap();
+        assert_eq!(
+            unresolved
+                .descriptor
+                .accessibility_relations
+                .active_descendant,
+            None
+        );
+        assert!(
+            unresolved
+                .descriptor
+                .accessibility_relations
+                .controls
+                .is_empty()
+        );
+
+        let mut choice = Element::new();
+        choice.set_attr("id", "choice");
+        let mut panel = Element::new();
+        panel.set_attr("id", "panel");
+        element.children = vec![choice, panel];
+        let resolved = projection.snapshot(&mut element).unwrap();
+        assert_eq!(
+            resolved
+                .descriptor
+                .accessibility_relations
+                .active_descendant,
+            Some(resolved.children[0].id)
+        );
+        assert_eq!(
+            resolved.descriptor.accessibility_relations.controls,
+            vec![resolved.children[1].id]
+        );
+
+        element.children.remove(0);
+        let removed = projection.snapshot(&mut element).unwrap();
+        assert_eq!(
+            removed.descriptor.accessibility_relations.active_descendant,
+            None
+        );
+        assert_eq!(
+            removed.descriptor.accessibility_relations.controls,
+            vec![removed.children[0].id]
+        );
+
+        let mut duplicate_panel = Element::new();
+        duplicate_panel.set_attr("id", "panel");
+        element.children.push(duplicate_panel);
+        let duplicate = projection.snapshot(&mut element).unwrap();
+        assert_eq!(
+            duplicate.descriptor.accessibility_relations.controls,
+            Vec::<NodeId>::new()
+        );
+    }
+}
 
 #[derive(Clone, Copy)]
 enum Control {
@@ -56,6 +153,9 @@ pub(crate) fn copy_semantics(source: &Element, target: &mut Element) {
 
 pub struct ElementProjection {
     lifetime: RootLifetime,
+    /// Paths recorded by the last successful snapshot. Dispatch then walks only
+    /// the target path instead of scanning every element in the authoring tree.
+    dispatch_paths: RefCell<HashMap<NodeId, Vec<usize>>>,
 }
 
 impl ElementProjection {
@@ -64,7 +164,10 @@ impl ElementProjection {
     }
 
     pub fn with_lifetime(lifetime: RootLifetime) -> Self {
-        Self { lifetime }
+        Self {
+            lifetime,
+            dispatch_paths: RefCell::new(HashMap::new()),
+        }
     }
 
     pub fn dispose(&self) {
@@ -75,7 +178,21 @@ impl ElementProjection {
         if self.lifetime.is_disposed() {
             return Err(ProjectionError::Disposed);
         }
-        snapshot(element, self.lifetime.id(), 0)
+        let mut targets = HashMap::new();
+        collect_accessibility_targets(element, self.lifetime.id(), 0, &mut targets)?;
+        let mut paths = HashMap::new();
+        let result = snapshot(
+            element,
+            self.lifetime.id(),
+            0,
+            &targets,
+            &mut Vec::new(),
+            &mut paths,
+        );
+        if result.is_ok() {
+            *self.dispatch_paths.borrow_mut() = paths;
+        }
+        result
     }
 
     pub fn geometry(
@@ -121,6 +238,17 @@ impl ElementProjection {
         }
         if event.node.root != self.lifetime.id() {
             return Err(ProjectionError::StaleNode);
+        }
+        if let Some(path) = self.dispatch_paths.borrow().get(&event.node).cloned() {
+            if let Some(node) = element_at_path_mut(element, &path) {
+                if node
+                    .authoring_state
+                    .get::<Identity>()
+                    .is_some_and(|identity| identity.node == event.node)
+                {
+                    return dispatch(node, event);
+                }
+            }
         }
         let mut pending = vec![element];
         while let Some(node) = pending.pop() {
@@ -235,6 +363,7 @@ fn content(element: &Element) -> Result<NodeContent, ProjectionError> {
                 .or_else(|| binding.store.try_peek())
                 .ok_or(ProjectionError::StaleNode)?;
             Ok(NodeContent::Input {
+                max_length: crate::utils::text_field::input_max_length(&sync.base_id),
                 value,
                 placeholder: sync.placeholder.clone(),
                 enabled: enabled && !sync.disabled,
@@ -260,6 +389,8 @@ fn content(element: &Element) -> Result<NodeContent, ProjectionError> {
                 || element.on_mousemove.is_some()
                 || element.on_mouseover.is_some()
                 || element.on_mouseout.is_some()
+                || element.on_mouseenter.is_some()
+                || element.on_mouseleave.is_some()
                 || element.on_key_down.is_some()
                 || !element.window_key_handlers.is_empty()
                 || element.text_edit_key_handler.is_some()
@@ -295,6 +426,9 @@ fn snapshot(
     element: &mut Element,
     root: RootId,
     depth: usize,
+    targets: &HashMap<String, Option<NodeId>>,
+    path: &mut Vec<usize>,
+    paths: &mut HashMap<NodeId, Vec<usize>>,
 ) -> Result<PresentationNode, ProjectionError> {
     if depth >= 256 {
         return Err(ProjectionError::Unsupported("tree depth"));
@@ -314,17 +448,21 @@ fn snapshot(
         },
     };
     element.authoring_state.set(identity.clone());
+    paths.insert(identity.node, path.clone());
     let content = content(element)?;
     let mut children = Vec::new();
     if content.accepts_children() {
-        for child in &mut element.children {
+        for (index, child) in element.children.iter_mut().enumerate() {
             if child.template_id.as_deref() == Some(crate::layout::layout_tree::PORTAL_LAYER_ID) {
                 if !child.children.is_empty() {
                     return Err(ProjectionError::Unsupported("portal composition"));
                 }
                 continue;
             }
-            children.push(snapshot(child, root, depth + 1)?);
+            path.push(index);
+            let child_snapshot = snapshot(child, root, depth + 1, targets, path, paths);
+            path.pop();
+            children.push(child_snapshot?);
         }
     }
     Ok(PresentationNode {
@@ -335,6 +473,24 @@ fn snapshot(
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: AccessibilityRelations {
+                active_descendant: element
+                    .get_attr("aria-activedescendant")
+                    .and_then(|id| targets.get(id))
+                    .copied()
+                    .flatten(),
+                controls: element
+                    .get_attr("aria-controls")
+                    .into_iter()
+                    .flat_map(|ids| ids.split_ascii_whitespace())
+                    .filter_map(|id| targets.get(id).copied().flatten())
+                    .take(64)
+                    .collect(),
+            },
+            accessible_description: element
+                .get_attr("accesskit_description")
+                .or_else(|| element.get_attr("aria-description"))
+                .map(String::from),
             accessible_name: element.get_attr("aria-label").map(String::from),
             style: jadix_core::presentation::style::NodeStyle {
                 width: Some(frame.width as f32),
@@ -358,6 +514,55 @@ fn snapshot(
     })
 }
 
+fn collect_accessibility_targets(
+    element: &mut Element,
+    root: RootId,
+    depth: usize,
+    targets: &mut HashMap<String, Option<NodeId>>,
+) -> Result<(), ProjectionError> {
+    if depth >= 256 {
+        return Err(ProjectionError::Unsupported("tree depth"));
+    }
+    let identity = match element.authoring_state.get::<Identity>() {
+        Some(identity) if identity.node.root == root => identity.clone(),
+        Some(_) => {
+            return Err(ProjectionError::Unsupported(
+                "element already belongs to another root",
+            ));
+        }
+        None => Identity {
+            node: NodeId::new(root),
+            edit_revision: 0,
+            draft: None,
+        },
+    };
+    element.authoring_state.set(identity.clone());
+    if let Some(id) = element.get_attr("id") {
+        targets
+            .entry(id.clone())
+            .and_modify(|target| *target = None)
+            .or_insert(Some(identity.node));
+    }
+    if content(element)?.accepts_children() {
+        for child in &mut element.children {
+            if child.template_id.as_deref() != Some(crate::layout::layout_tree::PORTAL_LAYER_ID) {
+                collect_accessibility_targets(child, root, depth + 1, targets)?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn element_at_path_mut<'a>(
+    mut element: &'a mut Element,
+    path: &[usize],
+) -> Option<&'a mut Element> {
+    for &index in path {
+        element = element.children.get_mut(index)?;
+    }
+    Some(element)
+}
+
 fn dispatch(element: &mut Element, event: &PlatformEvent) -> Result<(), ProjectionError> {
     validate_geometry(element)?;
     match (content(element)?, &event.payload) {
@@ -369,6 +574,27 @@ fn dispatch(element: &mut Element, event: &PlatformEvent) -> Result<(), Projecti
                 .try_borrow_mut()
                 .map_err(|_| ProjectionError::InvalidEvent)?;
             callback();
+        }
+        (NodeContent::Input { enabled: true, .. }, EventPayload::Submit { revision }) => {
+            let identity = element.authoring_state.get::<Identity>().unwrap();
+            if *revision <= identity.edit_revision || identity.draft.is_some() {
+                return Err(ProjectionError::InvalidEvent);
+            }
+            let handler = element
+                .authoring_state
+                .get::<crate::authoring::text::SubmitHandler>()
+                .cloned();
+            let mut callback = handler
+                .as_ref()
+                .map(|handler| handler.0.try_borrow_mut())
+                .transpose()
+                .map_err(|_| ProjectionError::InvalidEvent)?;
+            let mut identity = identity.clone();
+            identity.edit_revision = *revision;
+            element.authoring_state.set(identity);
+            if let Some(callback) = callback.as_mut() {
+                callback();
+            }
         }
         (
             NodeContent::Input { enabled: true, .. },
@@ -394,6 +620,16 @@ fn dispatch(element: &mut Element, event: &PlatformEvent) -> Result<(), Projecti
             if binding.store.try_peek().is_none() {
                 return Err(ProjectionError::StaleNode);
             }
+            let composition_handler = element
+                .authoring_state
+                .get::<crate::authoring::text::CompositionHandler>()
+                .map(|handler| handler.0.clone());
+            let mut composition_callback = composition_handler
+                .as_ref()
+                .map(|handler| handler.try_borrow_mut())
+                .transpose()
+                .map_err(|_| ProjectionError::InvalidEvent)?;
+            let composition_changed = composing_utf16.is_some() || identity.draft.is_some();
             let mut identity = identity.clone();
             identity.edit_revision = *revision;
             identity.draft = composing_utf16.map(|_| value.clone());
@@ -404,6 +640,11 @@ fn dispatch(element: &mut Element, event: &PlatformEvent) -> Result<(), Projecti
                     binding.store,
                     value.clone(),
                 );
+            }
+            if composition_changed {
+                if let Some(callback) = composition_callback.as_mut() {
+                    callback(composing_utf16.map(|_| value.clone()));
+                }
             }
         }
         _ => return Err(ProjectionError::InvalidEvent),

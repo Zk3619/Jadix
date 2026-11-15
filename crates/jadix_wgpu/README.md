@@ -46,3 +46,18 @@ MIT OR Apache-2.0. Preserve [LICENSE.APACHE](LICENSE.APACHE), [LICENSE.MIT](LICE
 Core, HAL, shared types, the Naga bridge and the modified Naga implementation ship as modules in this one package. Platform feature helpers are folded into the package manifest and build configuration. Use `wgpu::hal` and `wgpu::naga` for the supported low level integrations. Original licenses and patch notes are included under `upstream/`.
 
 When building WebGPU/WebGL with the workspace's locked `web-sys 0.3.91`, set `RUSTFLAGS="--cfg web_sys_unstable_apis"` to expose its `VideoFrame` bindings. Later `web-sys` releases may expose these bindings without that flag.
+
+
+### Jadix compute feature
+
+Safe `Device::create_compute_pipeline` and `CommandEncoder::begin_compute_pass`
+require the Cargo `compute` feature. It is included in this package's defaults
+for upstream compatibility. Render-only consumers using `default-features=false`
+can omit it. `COMPUTE_FEATURE_ENABLED` reports the compiled API surface; it does
+not claim adapter/device support. Compute handle/descriptor types and internal
+backend implementations remain compiled where needed by dispatch/interop.
+
+The framework forwards `jadix/compute` to `jadix_2d`, `jadix_renderer` and this
+package. Selecting DX12 alone no longer enables compute. Native GL and browser
+WebGPU require actual compute flags and limits; WebGL and the DX11 backend use
+fragment/CPU paths. Cargo feature unification still applies across consumers.

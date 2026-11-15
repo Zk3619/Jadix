@@ -82,7 +82,7 @@ fn first_weekday_table(locale: &Locale) -> u32 {
             "US" | "CA" | "JP" | "KR" | "IL" | "BR" | "MX" | "TW" | "HK" | "MO" | "PH" | "TH"
             | "ZA" | "AU" => return 0,
             "AE" | "SA" | "EG" | "IQ" | "JO" | "KW" | "QA" | "IR" | "DZ" | "MA" | "TN" | "LY" => {
-                return 6
+                return 6;
             }
             _ => {}
         }

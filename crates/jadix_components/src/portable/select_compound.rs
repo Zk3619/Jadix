@@ -1,5 +1,5 @@
 use super::{select, Base, Element, NodeContent, Signal};
-use crate::authoring::SlotChrome;
+use jadix::portable::authoring::SlotChrome;
 use jadix::presentation::SelectOption;
 
 const SLOT: &str = "jadix_native_select_slot";

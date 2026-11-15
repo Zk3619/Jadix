@@ -84,7 +84,7 @@ impl From<OverlayBuilder> for Element {
                     if crate::app::portal_overlay::try_dismiss_outside_press() {
                         return;
                     }
-                    open.set(false);
+                    crate::app::portal_overlay::close_from_outside(open);
                 })
                 .into()
         } else {

@@ -1,7 +1,7 @@
 //! Dedicated GPU for windows that need compositor alpha.
 //!
 //! wgpu 30 GL still reports only `Opaque`. Vulkan exposes `PreMultiplied`.
-//! DX12 (opt-in `backend-dx12`) maps compositor alpha on HWND swapchains.
+//! DX12 (opt-in `backend-dx12`) uses wgpu's composition visual for compositor alpha.
 //!
 //! Custom DComp recipes **must** present DX12 into a
 //! `SurfaceTargetUnsafe::SurfaceHandle` (CreateSwapChainForCompositionSurfaceHandle).
@@ -97,7 +97,8 @@ async fn try_acquire_named(
     name: &str,
     composition_handle: Option<*mut std::ffi::c_void>,
 ) -> Option<CompositorGpu> {
-    let instance = crate::renderer::wgpu_compat::instance(backends);
+    let instance =
+        crate::renderer::wgpu_compat::instance_for_surface(backends, composition_handle.is_none());
     let surface = if let Some(handle) = composition_handle {
         #[cfg(all(windows, feature = "windows-dcomp"))]
         {

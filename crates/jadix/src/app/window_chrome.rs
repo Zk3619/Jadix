@@ -18,6 +18,16 @@ pub use jadix_window_materials::WindowBackdrop;
 /// Persistence identity for the primary window when [`Self::window_label`] is unset.
 pub const PRIMARY_WINDOW_LABEL: &str = "main";
 
+/// Screen orientations accepted by a native window. Platform policy may still
+/// restrict the orientations the device can use.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub enum ScreenOrientations {
+    #[default]
+    LandscapeAndPortrait,
+    Landscape,
+    Portrait,
+}
+
 /// Creation-time window attributes (title, size, decorations, compositor alpha).
 ///
 /// 产品面通过 [`crate::prelude`] 中的 `launch` / `app().mount` / `<App>` 配置；
@@ -46,6 +56,8 @@ pub struct WindowOptions {
     pub fullscreen: bool,
     /// Enable desktop fullscreen shortcuts for this window.
     pub fullscreen_shortcuts: bool,
+    /// Allowed device orientations on platforms that support per-window control.
+    pub screen_orientations: ScreenOrientations,
     pub always_on_top: bool,
     /// Secondary windows close with the primary unless explicitly detached.
     pub close_with_primary: bool,
@@ -113,6 +125,7 @@ impl Default for WindowOptions {
             maximized: false,
             fullscreen: false,
             fullscreen_shortcuts: true,
+            screen_orientations: ScreenOrientations::LandscapeAndPortrait,
             always_on_top: false,
             close_with_primary: true,
             instance_policy: Default::default(),
@@ -230,6 +243,12 @@ impl WindowOptions {
 
     pub fn fullscreen_shortcuts(mut self, enabled: bool) -> Self {
         self.fullscreen_shortcuts = enabled;
+        self
+    }
+
+    /// Select allowed screen orientations on supported mobile platforms.
+    pub fn screen_orientations(mut self, orientations: ScreenOrientations) -> Self {
+        self.screen_orientations = orientations;
         self
     }
 

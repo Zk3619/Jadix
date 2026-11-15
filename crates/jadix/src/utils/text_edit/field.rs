@@ -260,7 +260,7 @@ pub fn step_number_value(field_id: &str, delta: f64) {
     let current = raw.trim().parse::<f64>().unwrap_or(0.0);
     let next = current + delta;
     let text = format_number_step_result(next, delta.abs());
-    if text == raw {
+    if text == raw || !crate::utils::text_field::accepts_input_edit(field_id, &raw, &text) {
         return;
     }
     #[cfg(feature = "text-undo")]

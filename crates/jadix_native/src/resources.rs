@@ -1,5 +1,5 @@
-use crate::BackendError;
 use crate::presentation::{NodeContent, NodeDescriptor, PresentationNode};
+use crate::BackendError;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ResourceKind {
@@ -66,6 +66,9 @@ impl ResourceUsage {
             .ok_or(BackendError::ResourceLimit(ResourceKind::Nodes))?;
         if let Some(name) = &descriptor.accessible_name {
             self.add_text(name, limits)?;
+        }
+        if let Some(description) = &descriptor.accessible_description {
+            self.add_text(description, limits)?;
         }
         match &descriptor.content {
             NodeContent::Text(text)

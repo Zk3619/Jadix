@@ -1,6 +1,6 @@
 //! Focus policies that custom controls opt into independently of component names.
 
-use crate::core::tree::{find_in_tree, Element};
+use crate::core::tree::{Element, find_in_tree};
 
 /// Blur the focused control when a primary pointer press lands outside its tree or paint box.
 pub const ATTR_BLUR_ON_OUTSIDE_PRESS: &str = "jadix_blur_on_outside_press";

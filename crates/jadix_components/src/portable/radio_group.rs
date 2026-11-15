@@ -1,6 +1,6 @@
-use crate::{Element, Signal};
+use jadix::portable::{Element, Signal};
 use jadix::{
-    core::reactivity::{Context, component_root, create_context, provide_context, use_context},
+    core::reactivity::{component_root, create_context, provide_context, use_context, Context},
     presentation::{AccessibleRole, NavigationKey, NodeContent},
 };
 use std::{cell::RefCell, rc::Rc};
@@ -38,11 +38,23 @@ pub fn radio_group_scope(
     disabled: bool,
     body: impl FnOnce() -> Element,
 ) -> Element {
+    radio_group_scope_named(id, value, default_value, disabled, None, body)
+}
+
+fn radio_group_scope_named(
+    id: impl Into<String>,
+    value: Option<Signal<String>>,
+    default_value: impl Into<String>,
+    disabled: bool,
+    accessibility_label: Option<String>,
+    body: impl FnOnce() -> Element,
+) -> Element {
     let id = id.into();
     let default_value = default_value.into();
     component_root(|| {
-        let value = value
-            .unwrap_or_else(|| crate::use_scoped_signal(&format!("{id}__radio"), || default_value));
+        let value = value.unwrap_or_else(|| {
+            jadix::portable::use_scoped_signal(&format!("{id}__radio"), || default_value)
+        });
         let entries = Rc::new(RefCell::new(Vec::new()));
         provide_context(
             context(),
@@ -55,6 +67,9 @@ pub fn radio_group_scope(
         );
         let mut root = Element::new().id(id).flex_col().gap(8.0);
         root.descriptor.accessible_role = Some(AccessibleRole::RadioGroup);
+        if let Some(label) = accessibility_label.filter(|label| !label.trim().is_empty()) {
+            root.descriptor.accessible_name = Some(label);
+        }
         root.children.push(body());
         let entries = entries.borrow();
         let unique: std::collections::BTreeSet<_> =
@@ -195,7 +210,7 @@ impl From<RadioGroupItemBuilder> for Element {
     }
 }
 
-impl crate::core::tree::IntoElementList for RadioGroupItemBuilder {
+impl jadix::portable::core::tree::IntoElementList for RadioGroupItemBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }
@@ -233,6 +248,7 @@ pub struct RadioGroupBuilder {
     value: Option<Signal<String>>,
     default_value: String,
     disabled: bool,
+    accessibility_label: Option<String>,
     options: Vec<RadioOption>,
     children: Vec<Element>,
 }
@@ -243,6 +259,7 @@ pub fn radio_group(id: impl Into<String>) -> RadioGroupBuilder {
         value: None,
         default_value: String::new(),
         disabled: false,
+        accessibility_label: None,
         options: vec![],
         children: vec![],
     }
@@ -264,6 +281,10 @@ impl RadioGroupBuilder {
         self.disabled = disabled;
         self
     }
+    pub fn accessibility_label(mut self, label: impl Into<String>) -> Self {
+        self.accessibility_label = Some(label.into());
+        self
+    }
     pub fn options(mut self, options: impl IntoIterator<Item = impl Into<RadioOption>>) -> Self {
         self.options = options.into_iter().map(Into::into).collect();
         self
@@ -276,11 +297,12 @@ impl RadioGroupBuilder {
 
 impl From<RadioGroupBuilder> for Element {
     fn from(builder: RadioGroupBuilder) -> Self {
-        radio_group_scope(
+        radio_group_scope_named(
             builder.id,
             builder.value,
             builder.default_value,
             builder.disabled,
+            builder.accessibility_label,
             || {
                 let mut children: Vec<Element> = builder
                     .options
@@ -299,7 +321,7 @@ impl From<RadioGroupBuilder> for Element {
     }
 }
 
-impl crate::core::tree::IntoElementList for RadioGroupBuilder {
+impl jadix::portable::core::tree::IntoElementList for RadioGroupBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }
@@ -313,6 +335,7 @@ pub struct RadioGroupProps {
     pub default_value: Option<String>,
     pub options: Option<Vec<(String, String)>>,
     pub disabled: Option<bool>,
+    pub accessibility_label: Option<String>,
     pub children: Option<Element>,
     pub base: Base,
 }
@@ -322,6 +345,9 @@ pub fn RadioGroup(props: RadioGroupProps) -> Element {
     let mut builder = radio_group(props.id)
         .default_value(props.default_value.unwrap_or_default())
         .disabled(props.disabled.unwrap_or(false));
+    if let Some(label) = props.accessibility_label {
+        builder = builder.accessibility_label(label);
+    }
     builder.value = props.value.or(props.selected);
     if let Some(options) = props.options {
         builder = builder.options(options);

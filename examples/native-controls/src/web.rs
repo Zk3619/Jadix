@@ -71,7 +71,7 @@ pub fn take_error() -> Option<String> {
     LAST_ERROR.with(|error| error.borrow_mut().take())
 }
 
-#[cfg(feature = "notes")]
+#[cfg(any(feature = "notes", feature = "field-workflow"))]
 #[wasm_bindgen]
 pub fn restore(json: &str) -> Result<(), JsValue> {
     APP.with(|app| {
@@ -83,7 +83,7 @@ pub fn restore(json: &str) -> Result<(), JsValue> {
     })
 }
 
-#[cfg(feature = "notes")]
+#[cfg(any(feature = "notes", feature = "field-workflow"))]
 #[wasm_bindgen]
 pub fn storage_result(error: Option<String>) -> Result<(), JsValue> {
     APP.with(|app| {

@@ -221,6 +221,7 @@ fn string_bool_props_mount_adornments_like_rsx() {
 
     let id = "diag-str-bool-adorn";
     let el = Input(InputProps {
+        max_length: None,
         id: id.into(),
         placeholder: None,
         disabled: None,
@@ -240,6 +241,8 @@ fn string_bool_props_mount_adornments_like_rsx() {
         typing_merge_timeout_ms: None,
         on_click: None,
         on_key_down: None,
+        on_submit: None,
+        on_composition_change: None,
         children: None,
         base: None,
     });

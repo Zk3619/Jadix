@@ -1,5 +1,6 @@
 use std::sync::{Arc, Mutex, Weak};
 
+use windows::core::{implement, Error, IUnknown, IUnknownImpl, Interface, Result, BOOL, HRESULT};
 use windows::Win32::{
     Foundation::HWND,
     System::{
@@ -9,14 +10,13 @@ use windows::Win32::{
     },
     UI::Accessibility::*,
 };
-use windows::core::{BOOL, Error, HRESULT, IUnknown, IUnknownImpl, Interface, Result, implement};
 use windows_sys::Win32::{
     Foundation::{HWND as SYS_HWND, LPARAM, LRESULT, WPARAM},
     UI::{
         Input::KeyboardAndMouse::IsWindowEnabled,
         Shell::{DefSubclassProc, RemoveWindowSubclass, SetWindowSubclass},
         WindowsAndMessaging::{
-            IsWindowVisible, SMTO_ABORTIFHUNG, SendMessageTimeoutW, WM_APP, WM_GETOBJECT,
+            IsWindowVisible, SendMessageTimeoutW, SMTO_ABORTIFHUNG, WM_APP, WM_GETOBJECT,
             WM_NCDESTROY,
         },
     },
@@ -44,6 +44,7 @@ struct State {
     container: usize,
     live: bool,
     name: String,
+    description: String,
     tree_item: bool,
     tab_item: bool,
     tab_list: bool,
@@ -154,6 +155,8 @@ impl IRawElementProviderSimple_Impl for Provider_Impl {
             })
         } else if propertyid == UIA_NamePropertyId {
             VARIANT::from(state.name.as_str())
+        } else if propertyid == UIA_FullDescriptionPropertyId {
+            VARIANT::from(state.description.as_str())
         } else if propertyid == UIA_IsControlElementPropertyId
             || propertyid == UIA_IsContentElementPropertyId
         {
@@ -303,6 +306,10 @@ impl TreeAccessibility {
             container,
             live: true,
             name: name(descriptor),
+            description: descriptor
+                .accessible_description
+                .clone()
+                .unwrap_or_default(),
             tree_item: descriptor.accessible_role == Some(AccessibleRole::TreeItem),
             tab_item: descriptor.accessible_role == Some(AccessibleRole::TabItem),
             tab_list: descriptor.accessible_role == Some(AccessibleRole::TabList),
@@ -376,12 +383,17 @@ impl TreeAccessibility {
         parent: Option<Container>,
     ) {
         self.link(parent);
-        let (selected, expanded) = {
+        let description = descriptor
+            .accessible_description
+            .clone()
+            .unwrap_or_default();
+        let (selected, expanded, previous_description) = {
             let mut state = self.binding.state.lock().unwrap();
-            let previous = (state.selected, state.expanded);
+            let previous = (state.selected, state.expanded, state.description.clone());
             state.selected = descriptor.accessible_selected;
             state.expanded = descriptor.accessible_expanded;
             state.name = name(descriptor);
+            state.description = description.clone();
             state.tree_item = descriptor.accessible_role == Some(AccessibleRole::TreeItem);
             state.tab_item = descriptor.accessible_role == Some(AccessibleRole::TabItem);
             state.tab_list = descriptor.accessible_role == Some(AccessibleRole::TabList);
@@ -395,6 +407,16 @@ impl TreeAccessibility {
                     UIA_SelectionItemIsSelectedPropertyId,
                     &VARIANT::from(selected.unwrap_or(false)),
                     &VARIANT::from(descriptor.accessible_selected.unwrap_or(false)),
+                );
+            }
+        }
+        if previous_description != description {
+            unsafe {
+                let _ = UiaRaiseAutomationPropertyChangedEvent(
+                    &self.binding.provider,
+                    UIA_FullDescriptionPropertyId,
+                    &VARIANT::from(previous_description.as_str()),
+                    &VARIANT::from(description.as_str()),
                 );
             }
         }

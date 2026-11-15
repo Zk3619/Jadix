@@ -71,6 +71,7 @@ mod application {
                 accessible_role: None,
                 accessible_selected: None,
                 accessible_expanded: None,
+                accessible_description: None,
                 accessible_name: None,
                 style: style::NodeStyle {
                     width,
@@ -182,6 +183,7 @@ mod application {
             toolbar.children.push(node(
                 self.ids[SEARCH],
                 NodeContent::Input {
+                    max_length: None,
                     value: self.search.clone(),
                     placeholder: "Find source text".into(),
                     enabled: true,
@@ -217,6 +219,7 @@ mod application {
             let mut editor = node(
                 self.ids[EDITOR],
                 NodeContent::Textarea {
+                    max_length: None,
                     value: self.display.clone(),
                     placeholder: "Rust source".into(),
                     enabled: true,
@@ -545,7 +548,7 @@ mod application {
             _ => {
                 return Err(
                     "Usage: native-code [--workspace DIR | --probe NONCE NEW_REPORT]".into(),
-                )
+                );
             }
         };
         let mut app = App::new(directory.clone())?;

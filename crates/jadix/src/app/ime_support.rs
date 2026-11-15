@@ -97,6 +97,45 @@ pub fn painted_text_edit_node<'a>(
     fallback
 }
 
+/// Visual row used by the painted caret, including soft wraps.
+pub(crate) fn painted_text_edit_caret_line(node: &crate::core::tree::TextLayoutInfo) -> usize {
+    let Some(caret) = node.style.input_caret.as_ref() else {
+        return 0;
+    };
+    let text = node.text.as_str();
+    let caret = text.floor_char_boundary(caret.caret_byte_index.min(text.len()));
+    let size = node.style.size_resolved();
+    let weight = node.style.weight_resolved();
+    let line_height = node
+        .style
+        .line_height_px
+        .unwrap_or_else(|| size * crate::style::tailwind_default_leading_scale(size))
+        .max(1.0);
+    let pans = node.style.overflow.allows_caret_scroll();
+    let soft_wrap = node.style.white_space == crate::style::WhiteSpace::Normal && !pans;
+    if soft_wrap {
+        let ranges = crate::text::soft_visual_line_byte_ranges(
+            text,
+            size,
+            weight,
+            line_height,
+            node.width.max(1.0),
+            node.style.wrap_mode.to_line_break_source(),
+        );
+        crate::text::caret_visual_line_index(&ranges, caret)
+    } else {
+        crate::utils::text_field::caret_line_and_local(text, caret).0
+    }
+}
+
+/// Y coordinate for the IME candidate window in the painted text node's space.
+pub(crate) fn painted_text_edit_candidate_y(
+    node: &crate::core::tree::TextLayoutInfo,
+    line_height: f32,
+) -> f32 {
+    node.y + painted_text_edit_caret_line(node) as f32 * line_height * node.paint_scale
+}
+
 /// 本帧已绘制的文本叶视觉盒（`TextLayoutInfo.x/y` 已扣祖先滚动，与 caret 同空间）。
 pub fn painted_text_edit_visual_bounds(
     text_nodes: &[crate::core::tree::TextLayoutInfo],
@@ -417,6 +456,11 @@ pub(crate) fn drain_pending_ime_shift_compose_finish(focus_id: &str) {
 /// OS `CPS_CANCEL` may echo Commit/Backspace; those are ignored until `Ime::Disabled`
 /// via [`ime_end_drain_active`].
 pub(crate) fn finish_composition_preserve_text(focus_id: &str) {
+    // Publish committed text, carets and composition teardown as one settled edit.
+    crate::core::reactivity::batch(|| finish_composition_preserve_text_inner(focus_id));
+}
+
+fn finish_composition_preserve_text_inner(focus_id: &str) {
     let Some(rest) = text_edit_rest(focus_id) else {
         return;
     };
@@ -428,48 +472,55 @@ pub(crate) fn finish_composition_preserve_text(focus_id: &str) {
     let insert = preedit_without_syllable_separators(&pre);
     if !insert.is_empty() {
         let val_sig = crate::core::reactivity::use_signal(&vk, String::new);
-        let mut v = val_sig.peek();
-        let cs = crate::utils::text_field::load_text_cursors(rest, &v);
+        let old = val_sig.peek();
+        let cs = crate::utils::text_field::load_text_cursors(rest, &old);
         if cs.len() > 1 {
-            let old_cs = cs.clone();
-            let old_latest = crate::utils::text_field::latest_caret_signal(rest).peek();
-            let cs = crate::utils::text_multi_cursor::insert_at_cursors(&mut v, cs, &insert);
-            #[cfg(feature = "text-undo")]
-            crate::utils::text_edit_history::will_user_edit_field(
-                rest,
-                crate::utils::text_edit_history::EditKind::Replace,
-            );
-            crate::utils::text_field::commit_value_sig(rest, val_sig, v);
-            crate::utils::text_field::store_text_cursors(rest, &cs);
-            if let Some(l) = old_latest {
-                crate::utils::text_field::latest_caret_signal(rest).set(Some(
-                    crate::utils::text_multi_cursor::follow_latest(&old_cs, &cs, l),
-                ));
+            let mut value = old.clone();
+            let new_cs =
+                crate::utils::text_multi_cursor::insert_at_cursors(&mut value, cs.clone(), &insert);
+            if crate::utils::text_field::accepts_input_edit(rest, &old, &value) {
+                let latest = crate::utils::text_field::latest_caret_signal(rest).peek();
+                #[cfg(feature = "text-undo")]
+                crate::utils::text_edit_history::will_user_edit_field(
+                    rest,
+                    crate::utils::text_edit_history::EditKind::Replace,
+                );
+                crate::utils::text_field::commit_value_sig(rest, val_sig, value);
+                crate::utils::text_field::store_text_cursors(rest, &new_cs);
+                if let Some(latest) = latest {
+                    crate::utils::text_field::latest_caret_signal(rest).set(Some(
+                        crate::utils::text_multi_cursor::follow_latest(&cs, &new_cs, latest),
+                    ));
+                }
+                #[cfg(feature = "text-undo")]
+                crate::utils::text_edit_history::note_field_after_edit(rest);
+                record_ime_commit(rest, &insert);
             }
-            #[cfg(feature = "text-undo")]
-            crate::utils::text_edit_history::note_field_after_edit(rest);
         } else {
-            let mut anchor = crate::core::reactivity::use_signal(&ak, || None::<usize>)
+            let anchor = crate::core::reactivity::use_signal(&ak, || None::<usize>)
                 .peek()
                 .unwrap_or_else(|| {
                     crate::core::reactivity::use_signal(&ck, || None::<usize>)
                         .peek()
-                        .unwrap_or(v.len())
+                        .unwrap_or(old.len())
                 });
-            anchor = anchor.min(v.len());
-            anchor = v.floor_char_boundary(anchor);
-            let (new, new_caret) = apply_ime_commit(&v, anchor, &insert);
-            #[cfg(feature = "text-undo")]
-            crate::utils::text_edit_history::will_user_edit_field(
-                rest,
-                crate::utils::text_edit_history::EditKind::Replace,
-            );
-            crate::utils::text_field::commit_value_sig(rest, val_sig, new);
-            crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(new_caret));
-            #[cfg(feature = "text-undo")]
-            crate::utils::text_edit_history::note_field_after_edit(rest);
+            let anchor = old.floor_char_boundary(anchor.min(old.len()));
+            let insert =
+                crate::utils::text_field::limited_input_insert(rest, &old, anchor..anchor, &insert);
+            if !insert.is_empty() {
+                let (new, new_caret) = apply_ime_commit(&old, anchor, insert);
+                #[cfg(feature = "text-undo")]
+                crate::utils::text_edit_history::will_user_edit_field(
+                    rest,
+                    crate::utils::text_edit_history::EditKind::Replace,
+                );
+                crate::utils::text_field::commit_value_sig(rest, val_sig, new);
+                crate::core::reactivity::use_signal(&ck, || None::<usize>).set(Some(new_caret));
+                #[cfg(feature = "text-undo")]
+                crate::utils::text_edit_history::note_field_after_edit(rest);
+                record_ime_commit(rest, insert);
+            }
         }
-        record_ime_commit(rest, &insert);
     }
     clear_text_edit_compose_state(focus_id);
     cancel_os_ime_composition();
@@ -485,15 +536,28 @@ pub(crate) fn clear_text_edit_compose_state(focus_id: &str) {
     let sk = crate::utils::text_field::input_preedit_sel_signal_key(rest);
     let ak = crate::utils::text_field::input_ime_anchor_signal_key(rest);
     let mk = crate::utils::text_field::input_preedit_marks_signal_key(rest);
-    crate::core::reactivity::use_signal(&pk, String::new).set(String::new());
-    crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(None);
-    crate::core::reactivity::use_signal(&ak, || None::<usize>).set(None);
-    crate::core::reactivity::use_signal(&mk, Vec::<(usize, usize, u8)>::new).set(Vec::new());
-    crate::core::reactivity::use_signal(crate::utils::text_edit::field::IME_ACTIVE_SIGNAL, || {
-        false
-    })
-    .set(false);
-    on_ime_composition_ended();
+    let had_composition = !crate::core::reactivity::use_signal(&pk, String::new)
+        .peek()
+        .is_empty()
+        || crate::core::reactivity::use_signal(&ak, || None::<usize>)
+            .peek()
+            .is_some();
+    crate::core::reactivity::batch(|| {
+        crate::core::reactivity::use_signal(&pk, String::new).set(String::new());
+        crate::core::reactivity::use_signal(&sk, || None::<(usize, usize)>).set(None);
+        crate::core::reactivity::use_signal(&ak, || None::<usize>).set(None);
+        crate::core::reactivity::use_signal(&mk, Vec::<(usize, usize, u8)>::new).set(Vec::new());
+        crate::core::reactivity::use_signal(
+            crate::utils::text_edit::field::IME_ACTIVE_SIGNAL,
+            || false,
+        )
+        .set(false);
+        on_ime_composition_ended();
+        // Callbacks can synchronously finish again; consume composition before notifying.
+        if had_composition {
+            crate::authoring::text::notify_composition_change(focus_id, None);
+        }
+    });
 }
 
 /// Cancel in-flight OS composition (candidate / preedit). Safe from UI click handlers.

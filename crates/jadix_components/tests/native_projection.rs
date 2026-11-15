@@ -207,11 +207,14 @@ fn populated_framework_portal_layer_requires_explicit_composition_support() {
 
 #[test]
 fn input_composition_uses_existing_controlled_signal_and_monotonic_revisions() {
+    let submitted = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = submitted.clone();
     let (_owner, (mut element, value)) = create_root(|| {
         let value = create_signal("initial".to_string());
         let element: Element = input("native-input")
             .value_signal(value)
             .placeholder("Name")
+            .on_submit(move || observed.borrow_mut().push(value.get()))
             .into();
         (element, value)
     });
@@ -230,6 +233,15 @@ fn input_composition_uses_existing_controlled_signal_and_monotonic_revisions() {
     };
     projection.dispatch(&mut element, &draft).unwrap();
     assert_eq!(value.get(), "initial");
+    let mut submit = PlatformEvent {
+        node: snapshot.id,
+        payload: EventPayload::Submit { revision: 2 },
+    };
+    assert_eq!(
+        projection.dispatch(&mut element, &submit),
+        Err(ProjectionError::InvalidEvent)
+    );
+    assert!(submitted.borrow().is_empty());
     value.set("external during composition".into());
     assert!(
         matches!(projection.snapshot(&mut element).unwrap().descriptor.content, NodeContent::Input { value, revision: 1, .. } if value == "ni")
@@ -260,6 +272,68 @@ fn input_composition_uses_existing_controlled_signal_and_monotonic_revisions() {
         projection.dispatch(&mut element, &invalid),
         Err(ProjectionError::InvalidEvent)
     );
+    submit.payload = EventPayload::Submit { revision: 3 };
+    projection.dispatch(&mut element, &submit).unwrap();
+    assert_eq!(&*submitted.borrow(), &["\u{4f60}\u{1f600}".to_string()]);
+    assert_eq!(
+        projection.dispatch(&mut element, &submit),
+        Err(ProjectionError::InvalidEvent)
+    );
+    projection.dispose();
+    submit.payload = EventPayload::Submit { revision: 4 };
+    assert_eq!(
+        projection.dispatch(&mut element, &submit),
+        Err(ProjectionError::Disposed)
+    );
+    assert_eq!(submitted.borrow().len(), 1);
+}
+
+#[test]
+fn input_composition_callback_observes_preedit_and_end_separately() {
+    let changes = Rc::new(std::cell::RefCell::new(Vec::new()));
+    let observed = changes.clone();
+    let (_owner, (mut element, value)) = create_root(|| {
+        let value = create_signal("seed".to_string());
+        let element: Element = input("native-compose")
+            .value_signal(value)
+            .on_composition_change(move |value| observed.borrow_mut().push(value))
+            .into();
+        (element, value)
+    });
+    let projection = ElementProjection::new(RootId::new());
+    let node = projection.snapshot(&mut element).unwrap().id;
+    projection
+        .dispatch(
+            &mut element,
+            &PlatformEvent {
+                node,
+                payload: EventPayload::Edit {
+                    value: "seed拼".into(),
+                    revision: 1,
+                    selection_utf16: [5, 5],
+                    composing_utf16: Some([4, 5]),
+                },
+            },
+        )
+        .unwrap();
+    assert_eq!(value.get(), "seed");
+    assert_eq!(*changes.borrow(), [Some("seed拼".into())]);
+    projection
+        .dispatch(
+            &mut element,
+            &PlatformEvent {
+                node,
+                payload: EventPayload::Edit {
+                    value: "seed拼音".into(),
+                    revision: 2,
+                    selection_utf16: [6, 6],
+                    composing_utf16: None,
+                },
+            },
+        )
+        .unwrap();
+    assert_eq!(value.get(), "seed拼音");
+    assert_eq!(*changes.borrow(), [Some("seed拼".into()), None]);
 }
 
 #[test]

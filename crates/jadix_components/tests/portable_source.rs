@@ -20,9 +20,18 @@ fn password_builders_and_rsx_publish_explicit_native_semantics() {
     let projection = ElementProjection::new(RootId::new());
     for element in [&mut builder, &mut rsx] {
         let node = projection.snapshot(element).unwrap();
-        assert!(matches!(node.descriptor.content, NodeContent::Input { password: true, .. }));
+        assert!(matches!(
+            node.descriptor.content,
+            NodeContent::Input { password: true, .. }
+        ));
     }
-    assert!(matches!(projection.snapshot(&mut plain).unwrap().descriptor.content, NodeContent::Input { password: false, .. }));
+    assert!(matches!(
+        projection.snapshot(&mut plain).unwrap().descriptor.content,
+        NodeContent::Input {
+            password: false,
+            ..
+        }
+    ));
     drop(owner);
 }
 

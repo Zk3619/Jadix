@@ -16,10 +16,10 @@ use dpi::{
 };
 use web_sys::HtmlCanvasElement;
 
+use crate::winit_web::r#async::Dispatcher;
 use crate::winit_web::event_loop::ActiveEventLoop;
 use crate::winit_web::main_thread::MainThreadMarker;
 use crate::winit_web::monitor::MonitorHandler;
-use crate::winit_web::r#async::Dispatcher;
 use crate::winit_web::{backend, lock};
 
 pub struct Window {
@@ -239,8 +239,10 @@ impl RootWindow for Window {
     }
 
     fn set_title(&self, title: &str) {
-        self.inner
-            .queue(|inner| inner.canvas.set_attribute("alt", title))
+        self.inner.queue(|inner| {
+            inner.canvas.document().set_title(title);
+            inner.canvas.set_attribute("alt", title)
+        })
     }
 
     fn set_transparent(&self, _: bool) {}

@@ -17,7 +17,10 @@ def main():
     parser.add_argument("--notes", action="store_true", help="Build the persistent notebook application")
     parser.add_argument("--release", action="store_true")
     parser.add_argument("--large-list", action="store_true", help="Build the retained 1000-row sample instead of 100 rows")
+    parser.add_argument("--field", action="store_true", help="Build the shared form and navigation workflow")
     arguments = parser.parse_args()
+    if arguments.field and any([arguments.notes, arguments.extended, arguments.selection, arguments.popover, arguments.large_list]):
+        parser.error("--field requires its own application")
     if arguments.popover and (arguments.notes or arguments.extended or arguments.large_list or arguments.selection):
         parser.error("--popover requires its own sample without other application modes")
     if arguments.notes and (arguments.extended or arguments.large_list or arguments.selection):
@@ -38,6 +41,8 @@ def main():
     if observed != f"wasm-bindgen {version}":
         parser.error(f"wasm-bindgen-cli must match Cargo.lock ({version}); observed {observed}")
     command = ["cargo", "build", "--locked", "-p", "jadix_native_controls", "--target", "wasm32-unknown-unknown"]
+    if arguments.field:
+        command += ["--features", "field-workflow"]
     if arguments.extended:
         command += ["--features", "extended"]
     if arguments.selection:
@@ -55,13 +60,13 @@ def main():
     profile = "release" if arguments.release else "debug"
     library = Path(metadata["target_directory"]) / "wasm32-unknown-unknown" / profile / "jadix_native_controls.wasm"
     subprocess.run([executable, "--target", "web", "--out-dir", str(output / "pkg"), str(library)], cwd=root, check=True)
-    shutil.copyfile(root / ("examples/native-controls/web/notes.html" if arguments.notes else "examples/native-controls/web/index.html"), output / "index.html")
+    shutil.copyfile(root / ("examples/native-controls/web/field.html" if arguments.field else "examples/native-controls/web/notes.html" if arguments.notes else "examples/native-controls/web/index.html"), output / "index.html")
     report = {"target": "wasm32-unknown-unknown", "rust_profile": profile, "extended": arguments.extended,
               "selection": arguments.selection,
               "popover": arguments.popover,
               "selection_authoring": "compound-primary-options-disabled" if arguments.selection else None,
-              "application": "notes" if arguments.notes else "controls",
-              "retained_rows": 0 if arguments.notes or arguments.selection or arguments.popover else 1000 if arguments.large_list else 100,
+              "application": "field" if arguments.field else "notes" if arguments.notes else "controls",
+              "retained_rows": 0 if arguments.field or arguments.notes or arguments.selection or arguments.popover else 1000 if arguments.large_list else 100,
               "wasm_bindgen": observed, "cargo_lock_sha256": hashlib.sha256((root / "Cargo.lock").read_bytes()).hexdigest(),
               "library_bytes": library.stat().st_size, "library_sha256": hashlib.sha256(library.read_bytes()).hexdigest(),
               "files": [{"path": str(path.relative_to(output)), "bytes": path.stat().st_size,

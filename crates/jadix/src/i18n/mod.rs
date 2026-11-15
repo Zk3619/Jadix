@@ -236,7 +236,11 @@ pub fn generation() -> u64 {
 }
 
 pub(crate) fn take_locale_rebuild() -> bool {
-    runtime::take_locale_rebuild()
+    let changed = runtime::take_locale_rebuild();
+    if changed {
+        crate::app::native_menu::refresh_locale();
+    }
+    changed
 }
 
 /// Format a number in the active locale.

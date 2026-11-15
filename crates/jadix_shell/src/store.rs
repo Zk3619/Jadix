@@ -1,4 +1,4 @@
-use crate::package::{PackageError, PackagePolicy, SignedManifest, decode_hex, sha256};
+use crate::package::{decode_hex, sha256, PackageError, PackagePolicy, SignedManifest};
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
@@ -65,6 +65,8 @@ struct State {
     current: Option<String>,
     previous: Option<String>,
     pending: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    queued: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -100,6 +102,7 @@ pub struct PackageStore {
     owner: u64,
     recovered_pending: bool,
     recovered_business: bool,
+    rejected_queued: bool,
 }
 
 fn identity(value: &str) -> bool {
@@ -111,7 +114,7 @@ fn unique() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-fn regular_read(path: &Path, limit: u64) -> Result<Vec<u8>, StoreError> {
+pub(crate) fn regular_read(path: &Path, limit: u64) -> Result<Vec<u8>, StoreError> {
     let metadata = fs::symlink_metadata(path)?;
     if !metadata.file_type().is_file() || metadata.len() > limit {
         return Err(StoreError::Format);
@@ -124,21 +127,21 @@ fn regular_read(path: &Path, limit: u64) -> Result<Vec<u8>, StoreError> {
     Ok(bytes)
 }
 
-fn write_new(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
+pub(crate) fn write_new(path: &Path, bytes: &[u8]) -> Result<(), StoreError> {
     let mut file = OpenOptions::new().write(true).create_new(true).open(path)?;
     file.write_all(bytes)?;
     file.sync_all()?;
     Ok(())
 }
 
-fn sync_directory(directory: &Path) -> Result<(), StoreError> {
+pub(crate) fn sync_directory(directory: &Path) -> Result<(), StoreError> {
     #[cfg(unix)]
     File::open(directory)?.sync_all()?;
     let _ = directory;
     Ok(())
 }
 
-fn replace_file(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), StoreError> {
+pub(crate) fn replace_file(directory: &Path, name: &str, bytes: &[u8]) -> Result<(), StoreError> {
     let temporary = directory.join(format!(
         "checkpoint-{}-{}.tmp",
         std::process::id(),
@@ -200,6 +203,7 @@ impl PackageStore {
                 current: None,
                 previous: None,
                 pending: None,
+                queued: None,
             }
         };
         if state.schema != 1
@@ -209,6 +213,7 @@ impl PackageStore {
                 .iter()
                 .chain(&state.previous)
                 .chain(&state.pending)
+                .chain(&state.queued)
                 .chain(&state.highest_identity)
                 .any(|value| !identity(value))
             || (state.highest_release == 0) != state.highest_identity.is_none()
@@ -225,6 +230,7 @@ impl PackageStore {
             owner: unique(),
             recovered_pending,
             recovered_business: false,
+            rejected_queued: false,
         };
         if let Some(current) = &store.state.current {
             let current = store.read_package(current, policy)?;
@@ -255,6 +261,22 @@ impl PackageStore {
             }
         }
         store.recover_business(policy)?;
+        if let Some(queued) = &store.state.queued {
+            let valid = store.read_package(queued, policy).is_ok_and(|package| {
+                package
+                    .signed
+                    .manifest
+                    .release
+                    .parse::<u64>()
+                    .is_ok_and(|release| release > store.state.highest_release)
+            });
+            if !valid {
+                let mut candidate = store.state.clone();
+                candidate.queued = None;
+                store.persist(candidate)?;
+                store.rejected_queued = true;
+            }
+        }
         if recovered_pending {
             let mut candidate = store.state.clone();
             candidate.pending = None;
@@ -265,6 +287,9 @@ impl PackageStore {
 
     pub fn recovered_pending(&self) -> bool {
         self.recovered_pending
+    }
+    pub fn rejected_queued(&self) -> bool {
+        self.rejected_queued
     }
 
     pub fn recovered_business(&self) -> bool {
@@ -281,6 +306,69 @@ impl PackageStore {
 
     pub fn highest_release(&self) -> u64 {
         self.state.highest_release
+    }
+
+    /// Downloaded/verified package, durable across a clean restart before trial.
+    pub fn schedule(
+        &mut self,
+        signed: &SignedManifest,
+        resources: &BTreeMap<String, Vec<u8>>,
+        policy: &PackagePolicy,
+    ) -> Result<(), StoreError> {
+        if signed
+            .manifest
+            .release
+            .parse::<u64>()
+            .map_err(|_| StoreError::Format)?
+            <= self.state.highest_release
+        {
+            return Err(StoreError::Package(PackageError::Rollback));
+        }
+        let activation = self.stage(signed, resources, policy)?;
+        let mut candidate = self.state.clone();
+        candidate.queued = Some(activation.identity);
+        candidate.pending = None;
+        self.persist(candidate)
+    }
+    pub fn queued(&self, policy: &PackagePolicy) -> Result<Option<StoredPackage>, StoreError> {
+        self.state
+            .queued
+            .as_deref()
+            .map(|identity| self.read_package(identity, policy))
+            .transpose()
+    }
+    /// Persist the trial marker *before* executing candidate code. A process
+    /// exit before acceptance is recovered by open(), retaining the good app.
+    pub fn begin_trial(
+        &mut self,
+        policy: &PackagePolicy,
+    ) -> Result<Option<Activation>, StoreError> {
+        if self.state.pending.is_some() {
+            return Err(StoreError::Pending);
+        }
+        let Some(identity) = self.state.queued.clone() else {
+            return Ok(None);
+        };
+        let package = self.read_package(&identity, policy)?;
+        if package
+            .signed
+            .manifest
+            .release
+            .parse::<u64>()
+            .map_err(|_| StoreError::Format)?
+            <= self.state.highest_release
+        {
+            return Err(StoreError::Package(PackageError::Rollback));
+        }
+        let mut candidate = self.state.clone();
+        candidate.queued = None;
+        candidate.pending = Some(identity.clone());
+        self.persist(candidate)?;
+        Ok(Some(Activation {
+            owner: self.owner,
+            revision: self.state.revision,
+            identity,
+        }))
     }
 
     pub fn previous(&self, policy: &PackagePolicy) -> Result<Option<StoredPackage>, StoreError> {
@@ -367,7 +455,7 @@ impl PackageStore {
         resources: &BTreeMap<String, Vec<u8>>,
         policy: &PackagePolicy,
     ) -> Result<Activation, StoreError> {
-        if self.state.pending.is_some() {
+        if self.state.pending.is_some() || self.state.queued.is_some() {
             return Err(StoreError::Pending);
         }
         if self.state.package != policy.package {
@@ -464,6 +552,7 @@ impl PackageStore {
             .iter()
             .chain(&self.state.previous)
             .chain(&self.state.pending)
+            .chain(&self.state.queued)
             .chain(&self.state.highest_identity)
             .cloned()
             .collect();

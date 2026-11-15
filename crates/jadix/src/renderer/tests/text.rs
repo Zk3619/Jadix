@@ -139,11 +139,12 @@ fn sample_raster(w: u16, h: u16) -> EmojiRaster {
 }
 
 #[test]
-fn glyphs_for_falls_back_to_wrap_sibling() {
+fn raster_siblings_never_supply_another_layouts_glyph_positions() {
     std::env::set_var("JADIX_EMOJI_NODE_CACHE_MAX", "8");
     let mut cache = EmojiGlyphCache::default();
     let key_a = EmojiCacheKey {
         sequence_hash: 0xE111,
+        layout_hash: 1,
         pixel_size: 16,
         scale_bits: 1.0f32.to_bits(),
         color_mode: 1,
@@ -169,6 +170,7 @@ fn glyphs_for_falls_back_to_wrap_sibling() {
     );
     let key_b = EmojiCacheKey {
         sequence_hash: 0xE111,
+        layout_hash: 1,
         pixel_size: 16,
         scale_bits: 1.0f32.to_bits(),
         color_mode: 1,
@@ -178,10 +180,25 @@ fn glyphs_for_falls_back_to_wrap_sibling() {
         !cache.entries.contains_key(&key_b),
         "exact wrap miss expected"
     );
-    assert_eq!(
-        cache.glyphs_for(&key_b).len(),
-        1,
-        "paint must reuse wrap sibling glyphs (else emoji blanks on soft-width jitter)"
+    assert!(
+        cache.find_wrap_sibling(&key_b).is_some(),
+        "raster reuse remains available"
+    );
+    assert!(
+        cache.glyphs_for(&key_b).is_empty(),
+        "another wrap must not supply positions"
+    );
+    let key_c = EmojiCacheKey {
+        layout_hash: 2,
+        ..key_a.clone()
+    };
+    assert!(
+        cache.find_wrap_sibling(&key_c).is_some(),
+        "same-width style changes can reuse raster content"
+    );
+    assert!(
+        cache.glyphs_for(&key_c).is_empty(),
+        "another style must not supply positions"
     );
 }
 
@@ -190,6 +207,7 @@ fn rasterize_survives_node_lru_eviction() {
     let mut cache = EmojiGlyphCache::default();
     let key_a = EmojiCacheKey {
         sequence_hash: 0xA,
+        layout_hash: 1,
         pixel_size: 16,
         scale_bits: 1.0f32.to_bits(),
         color_mode: 1,
@@ -230,6 +248,7 @@ fn rasterize_resizes_when_request_size_differs_from_cache() {
     rgba[(8 * 16 + 8) * 4 + 3] = 255;
     let key = EmojiCacheKey {
         sequence_hash: 0xE1,
+        layout_hash: 1,
         pixel_size: 16,
         scale_bits: 1.0f32.to_bits(),
         color_mode: 1,

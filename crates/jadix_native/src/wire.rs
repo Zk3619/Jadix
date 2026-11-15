@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::{json, Value};
+use unicode_segmentation::UnicodeSegmentation;
 
 use crate::layout::{MeasureMode, MeasureRequest};
 use crate::presentation::{
@@ -26,25 +27,27 @@ pub fn descriptor(descriptor: &NodeDescriptor) -> Value {
             json!({"kind": "button", "text": label, "enabled": enabled})
         }
         NodeContent::Input {
+            max_length,
             value,
             placeholder,
             enabled,
             password,
             revision,
         } => {
-            json!({"kind": "input", "text": value, "placeholder": placeholder, "enabled": enabled, "password": password, "editRevision": revision.to_string()})
+            json!({"kind": "input", "text": value, "placeholder": placeholder, "enabled": enabled, "password": password, "maxLength": max_length, "editRevision": revision.to_string()})
         }
         NodeContent::Scroll => json!({"kind": "scroll"}),
         NodeContent::Image { source, alt } => {
             json!({"kind": "image", "source": source, "alt": alt})
         }
         NodeContent::Textarea {
+            max_length,
             value,
             placeholder,
             enabled,
             revision,
         } => {
-            json!({"kind": "textarea", "text": value, "placeholder": placeholder, "enabled": enabled, "editRevision": revision.to_string()})
+            json!({"kind": "textarea", "text": value, "placeholder": placeholder, "enabled": enabled, "maxLength": max_length, "editRevision": revision.to_string()})
         }
         NodeContent::Switch {
             label,
@@ -85,6 +88,7 @@ pub fn descriptor(descriptor: &NodeDescriptor) -> Value {
     result["frame"] = json!([frame.x, frame.y, frame.width, frame.height]);
     result["style"] = serde_json::to_value(&descriptor.style).expect("validated node style");
     result["name"] = json!(descriptor.accessible_name);
+    result["description"] = json!(descriptor.accessible_description);
     result["role"] = json!(match descriptor.accessible_role {
         Some(AccessibleRole::RadioGroup) => Some("radiogroup"),
         Some(AccessibleRole::RadioItem { .. }) => Some("radio"),
@@ -116,6 +120,12 @@ pub fn descriptor(descriptor: &NodeDescriptor) -> Value {
         _ => serde_json::Value::Null,
     };
     result["expanded"] = json!(descriptor.accessible_expanded);
+    result["accessibilityRelations"] = json!({
+        "activeDescendant": descriptor.accessibility_relations.active_descendant
+            .map(|target| json!({"root": target.root.token(), "id": target.token()})),
+        "controls": descriptor.accessibility_relations.controls.iter()
+            .map(|target| json!({"root": target.root.token(), "id": target.token()})).collect::<Vec<_>>(),
+    });
     result
 }
 
@@ -127,8 +137,27 @@ pub fn measurement(request: MeasureRequest, node: &NodeDescriptor) -> String {
             MeasureMode::MaxContent => "max",
         }
     }
-    json!({"node": descriptor(node), "maxWidth": request.key.max_width, "maxHeight": request.key.max_height,
-        "widthMode": mode(request.width_mode), "heightMode": mode(request.height_mode)}).to_string()
+    let mut result = json!({"node": descriptor(node), "maxWidth": request.key.max_width, "maxHeight": request.key.max_height,
+        "widthMode": mode(request.width_mode), "heightMode": mode(request.height_mode)});
+    let wrapping_text = match &node.content {
+        NodeContent::Text(text)
+            if node.style.text_overflow == crate::presentation::style::TextOverflow::Wrap =>
+        {
+            Some(text)
+        }
+        NodeContent::Textarea {
+            value, placeholder, ..
+        } => Some(if value.is_empty() { placeholder } else { value }),
+        _ => None,
+    };
+    if let Some(text) = wrapping_text {
+        let paragraphs: Vec<Vec<&str>> = text
+            .split('\n')
+            .map(|paragraph| paragraph.graphemes(true).collect())
+            .collect();
+        result["wrapParagraphs"] = json!(paragraphs);
+    }
+    result.to_string()
 }
 
 pub fn batch(batch: &CommitBatch) -> String {
@@ -170,6 +199,9 @@ pub struct WireEvent {
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
 pub enum WirePayload {
     Activate,
+    Submit {
+        revision: String,
+    },
     Expansion {
         expanded: bool,
     },
@@ -186,9 +218,17 @@ pub enum WirePayload {
         revision: String,
     },
     Focus,
+    FocusVisible,
+    Blur,
     Scroll {
         x: f64,
         y: f64,
+    },
+    Wheel {
+        #[serde(rename = "deltaX")]
+        delta_x: f64,
+        #[serde(rename = "deltaY")]
+        delta_y: f64,
     },
     Edit {
         value: String,
@@ -206,19 +246,19 @@ impl WireEvent {
         if self.root != model.id().token() {
             return Err(BackendError::WrongRoot);
         }
-        let mut pending = model.roots().to_vec();
-        let mut found = None;
-        while let Some(id) = pending.pop() {
-            if id.token() == self.node {
-                found = Some(id);
-                break;
-            }
-            if let Some(node) = model.node(id) {
-                pending.extend(&node.children);
-            }
-        }
-        let node = found.ok_or(BackendError::InvalidEvent)?;
+        let node = NodeId::from_token(model.id(), &self.node)
+            .filter(|node| model.node(*node).is_some())
+            .ok_or(BackendError::InvalidEvent)?;
         let payload = match self.payload {
+            WirePayload::Submit { revision } => {
+                let parsed = revision
+                    .parse::<u64>()
+                    .map_err(|_| BackendError::InvalidEvent)?;
+                if parsed.to_string() != revision {
+                    return Err(BackendError::InvalidEvent);
+                }
+                EventPayload::Submit { revision: parsed }
+            }
             WirePayload::Select { value, revision } => {
                 let parsed = revision
                     .parse::<u64>()
@@ -258,7 +298,10 @@ impl WireEvent {
                 }
             }
             WirePayload::Focus => EventPayload::Focus,
+            WirePayload::FocusVisible => EventPayload::FocusVisible,
+            WirePayload::Blur => EventPayload::Blur,
             WirePayload::Scroll { x, y } => EventPayload::Scroll { x, y },
+            WirePayload::Wheel { delta_x, delta_y } => EventPayload::Wheel { delta_x, delta_y },
             WirePayload::Edit {
                 value,
                 revision,

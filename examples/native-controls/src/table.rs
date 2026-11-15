@@ -69,7 +69,9 @@ fn node(identifier: NodeId, content: NodeContent, width: f64, height: f64) -> Pr
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessible_description: None,
             accessible_name: None,
+            accessibility_relations: Default::default(),
             style: style::NodeStyle {
                 width: Some(width as f32),
                 height: Some(height as f32),
@@ -552,6 +554,7 @@ impl<Host: PlatformHost> DataTable<Host> {
                 let mut input = node(
                     cell.input,
                     NodeContent::Input {
+                        max_length: None,
                         value: draft.display().into(),
                         placeholder: String::new(),
                         enabled: true,

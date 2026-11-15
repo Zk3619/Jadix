@@ -1,0 +1,18 @@
+# Set JADIX_OTA_DOMAIN to a public DNS name and JADIX_OTA_ROOT to the
+# publication directory. TLS/ACME is managed by the operator's Caddy service.
+{$JADIX_OTA_DOMAIN} {
+    root * {$JADIX_OTA_ROOT}
+    @private path_regexp private (^|/)\.
+    respond @private 404
+    @unsupported not method GET HEAD
+    respond @unsupported 405
+    @not_public not path /channel.json /releases/*
+    respond @not_public 404
+    @channel path /channel.json
+    header @channel Cache-Control "no-store"
+    @immutable path /releases/*
+    header @immutable Cache-Control "public, max-age=31536000, immutable"
+    file_server {
+        hide .publication.lock .staging-* checkpoint-*.tmp
+    }
+}

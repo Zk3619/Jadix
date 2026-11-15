@@ -1,6 +1,6 @@
 use jni::{
-    JNIEnv, JavaVM,
     objects::{GlobalRef, JFloatArray, JObject, JString, JValue},
+    JNIEnv, JavaVM,
 };
 
 use crate::host::{ApplyReceipt, PlatformHost};

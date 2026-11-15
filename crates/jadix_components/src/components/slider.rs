@@ -22,7 +22,7 @@
 //!
 //! ## Notes
 //! - 默认值域 `0..=1`；可用 `min` / `max` / `step` 扩展。
-//! - 点击 / 拖拽按指针 x **连续**设值（不按 `step` 吸附）；键盘 ←/→（或 ↑/↓）按 `step`（默认 0.05）调节。
+//! - 点击 / 拖拽按指针 x **连续**设值（不按 `step` 吸附）；键盘及辅助技术数值写入按 `step`（默认 0.05）调节。
 //! - 悬停 / 拖拽时拇指阴影加深（瞬时切换，避免 cubic tween 连帧 StyleChanged
 //!   在 inline ColorPicker 双轨上卡顿），静止为紧凑接触阴影。
 //! - 根四边留 `THUMB_SHADOW_PAD`（交叉轴加高/加宽），轨道内缩到 content box，避免光晕被裁切或被轨道盖住。
@@ -30,11 +30,11 @@
 
 use crate::app::pointer_events::{EventPhase, PointerEvent};
 use crate::components::base::{SlotChrome, SlotMap};
-use crate::core::reactivity::{use_signal, Signal};
-use crate::core::tree::{parse_color, Element, LayoutStatus};
+use crate::core::reactivity::{Signal, use_signal};
+use crate::core::tree::{Element, LayoutStatus, parse_color};
+use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::interactive::{interactive, mark_hover_paint_dirty};
-use crate::primitives::r#box::{hstack, r#box, vstack};
-use crate::style::{is_variant_style_overridden, VariantStyleField};
+use crate::style::{VariantStyleField, is_variant_style_overridden};
 use crate::tokens;
 use crate::utils::controlled::resolve_f32_signal;
 use std::cell::{Cell, RefCell};
@@ -703,6 +703,12 @@ impl From<SliderBuilder> for Element {
                 .into()
         };
         root.set_attr(ATTR_ORIENTATION, builder.orientation.as_str());
+        root.set_attr("aria-valuemin", min.to_string());
+        root.set_attr("aria-valuemax", max.to_string());
+        root.set_attr("aria-valuenow", v0.to_string());
+        if disabled {
+            root.set_attr("disabled", "true");
+        }
 
         let val_k = val;
         let focus_id = id.clone();
@@ -800,6 +806,17 @@ impl From<SliderBuilder> for Element {
             el = el.cursor_kind(crate::core::tree::CursorKind::EwResize);
         }
 
+        if !disabled {
+            el = el.on_accessibility_value(move |value| {
+                // Clamp before narrowing so even extreme finite AT values are safe.
+                let next = quantize(value.clamp(min as f64, max as f64) as f32, min, max, step);
+                if val.peek() != next {
+                    val.set(next);
+                }
+                true
+            });
+        }
+
         let sync_value = val;
         let sync_min = min;
         let sync_max = max;
@@ -828,6 +845,11 @@ impl From<SliderBuilder> for Element {
             let want_frac = t.clamp(0.0, 1.0);
             let mut layout_changed = false;
             let mut paint_changed = false;
+            let value_text = value.to_string();
+            if root.attrs.get("aria-valuenow") != Some(&value_text) {
+                root.set_attr("aria-valuenow", value_text);
+                paint_changed = true;
+            }
 
             if let Some(tf) = &track_texture_fn {
                 let key = tf();

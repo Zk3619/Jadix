@@ -27,6 +27,8 @@ fn setup() -> (
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
         },
         children: vec![],

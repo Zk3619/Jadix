@@ -41,6 +41,8 @@ fn native_drag_capture_orders_coalesced_moves_with_clicks_and_releases_on_escape
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: style::NodeStyle {
                 width: Some(160.0),
@@ -59,6 +61,8 @@ fn native_drag_capture_orders_coalesced_moves_with_clicks_and_releases_on_escape
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: style::NodeStyle {
                 width: Some(400.0),

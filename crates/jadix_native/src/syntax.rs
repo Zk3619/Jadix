@@ -1,8 +1,8 @@
 use crate::{
-    HeadlessRoot,
     presentation::{NodeContent, NodeId, RootLifetime},
+    HeadlessRoot,
 };
-pub use jadix_document::{TextDocument, syntax::HighlightSpan};
+pub use jadix_document::{syntax::HighlightSpan, TextDocument};
 use std::sync::{Arc, Condvar, Mutex};
 
 const MAX_SOURCE: usize = 128 * 1024;
@@ -84,62 +84,60 @@ impl SyntaxWorker {
         let worker = shared.clone();
         std::thread::Builder::new()
             .name("jadix-native-syntax".into())
-            .spawn(move || {
-                loop {
-                    let job = {
-                        let Ok(mut state) = worker.state.lock() else {
-                            return;
-                        };
-                        while state.pending.is_none() && !state.stopped {
-                            let Ok(next) = worker.changed.wait(state) else {
-                                return;
-                            };
-                            state = next;
-                        }
-                        if state.stopped {
-                            return;
-                        }
-                        state.pending.take().unwrap()
-                    };
-                    let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                        jadix_document::syntax::highlight_code(
-                            job.document.text(),
-                            &job.language,
-                            job.dark,
-                        )
-                    }));
+            .spawn(move || loop {
+                let job = {
                     let Ok(mut state) = worker.state.lock() else {
                         return;
                     };
+                    while state.pending.is_none() && !state.stopped {
+                        let Ok(next) = worker.changed.wait(state) else {
+                            return;
+                        };
+                        state = next;
+                    }
                     if state.stopped {
                         return;
                     }
-                    if state.latest != job.request {
-                        continue;
-                    }
-                    let Ok(mut spans) = parsed else {
-                        state.failed = true;
-                        drop(state);
-                        wake();
-                        continue;
-                    };
-                    let plain_fallback = spans.len() > MAX_SPANS;
-                    if plain_fallback {
-                        spans = vec![HighlightSpan {
-                            text: job.document.text().into(),
-                            color: None,
-                        }];
-                    }
-                    state.ready = Some(SyntaxResult {
-                        node,
-                        request: job.request,
-                        document_revision: job.document.revision(),
-                        spans,
-                        plain_fallback,
-                    });
+                    state.pending.take().unwrap()
+                };
+                let parsed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    jadix_document::syntax::highlight_code(
+                        job.document.text(),
+                        &job.language,
+                        job.dark,
+                    )
+                }));
+                let Ok(mut state) = worker.state.lock() else {
+                    return;
+                };
+                if state.stopped {
+                    return;
+                }
+                if state.latest != job.request {
+                    continue;
+                }
+                let Ok(mut spans) = parsed else {
+                    state.failed = true;
                     drop(state);
                     wake();
+                    continue;
+                };
+                let plain_fallback = spans.len() > MAX_SPANS;
+                if plain_fallback {
+                    spans = vec![HighlightSpan {
+                        text: job.document.text().into(),
+                        color: None,
+                    }];
                 }
+                state.ready = Some(SyntaxResult {
+                    node,
+                    request: job.request,
+                    document_revision: job.document.revision(),
+                    spans,
+                    plain_fallback,
+                });
+                drop(state);
+                wake();
             })
             .map_err(|_| SyntaxError::Worker)?;
         Ok(Self {

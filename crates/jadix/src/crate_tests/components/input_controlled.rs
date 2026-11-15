@@ -88,3 +88,62 @@ fn composing_blocks_external_pull_before_paint() {
         );
     });
 }
+
+#[test]
+fn editor_foreground_survives_paint_edit_placeholder_and_disabled_states() {
+    fn glyph<'a>(el: &'a Element, id: &str) -> &'a Element {
+        fn find<'a>(el: &'a Element, tid: &str) -> Option<&'a Element> {
+            if el.template_id.as_deref() == Some(tid) {
+                return Some(el);
+            }
+            el.children.iter().find_map(|child| find(child, tid))
+        }
+        find(el, &crate::utils::text_field::input_text_template_id(id)).unwrap()
+    }
+    let (_owner, ()) = create_root(|| {
+        for multiline in [false, true] {
+            for disabled in [false, true] {
+                let id = format!("foreground-{multiline}-{disabled}");
+                use_signal(&input_value_signal_key(&id), String::new).set("draft".into());
+                let el: Element = if multiline {
+                    crate::components::textarea::textarea(&id)
+                        .placeholder("hint")
+                        .disabled(disabled)
+                        .into()
+                } else {
+                    input(&id).placeholder("hint").disabled(disabled).into()
+                };
+                let mut el = el.text_color([21, 73, 169, 200]);
+                let mut tree = LayoutTree::new();
+                let mut impact = LayoutStatus::Clean;
+                let alpha = if disabled { 100 } else { 200 };
+                sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+                assert_eq!(glyph(&el, &id).text_style.color, Some([21, 73, 169, alpha]));
+
+                // A live class changes the root color through the same path as
+                // reactive style bindings; subsequent edits must preserve it.
+                el = el.class("text-red-500");
+                let color = el.text_style.color.unwrap();
+                use_signal(&input_value_signal_key(&id), String::new).set("updated".into());
+                sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+                let mut expected = color;
+                if disabled {
+                    expected[3] = (expected[3] as f32 * 0.5) as u8;
+                }
+                assert_eq!(glyph(&el, &id).text_style.color, Some(expected));
+
+                use_signal(&input_value_signal_key(&id), String::new).set(String::new());
+                sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+                let mut muted = crate::style::parse_text_color("muted-foreground");
+                if disabled {
+                    muted[3] = (muted[3] as f32 * 0.5) as u8;
+                }
+                assert_eq!(glyph(&el, &id).text_style.color, Some(muted));
+                assert_eq!(glyph(&el, &id).text.as_deref(), Some("hint"));
+                use_signal(&input_value_signal_key(&id), String::new).set("restored".into());
+                sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+                assert_eq!(glyph(&el, &id).text_style.color, Some(expected));
+            }
+        }
+    });
+}

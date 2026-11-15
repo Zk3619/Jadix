@@ -137,6 +137,53 @@ impl super::App {
             }
         }
     }
+
+    fn begin_app_quit(&mut self) -> bool {
+        let mut futures = crate::core::reactivity::take_app_quit_futures();
+        futures.extend(
+            self.app_quit_handlers
+                .drain(..)
+                .map(|mut handler| handler()),
+        );
+        if futures.is_empty() {
+            return false;
+        }
+        self.app_quit_futures = futures;
+        self.app_quit_deadline = Some(Instant::now() + std::time::Duration::from_millis(200));
+        true
+    }
+
+    fn poll_app_quit(&mut self, event_loop: &dyn ActiveEventLoop) -> bool {
+        let Some(deadline) = self.app_quit_deadline else {
+            return false;
+        };
+        struct QuitWake(winit::event_loop::EventLoopProxy);
+        impl std::task::Wake for QuitWake {
+            fn wake(self: Arc<Self>) {
+                self.0.wake_up();
+            }
+            fn wake_by_ref(self: &Arc<Self>) {
+                self.0.wake_up();
+            }
+        }
+        let waker = std::task::Waker::from(Arc::new(QuitWake(self.event_loop_proxy.clone())));
+        let mut context = std::task::Context::from_waker(&waker);
+        self.app_quit_futures
+            .retain_mut(|future| future.as_mut().poll(&mut context).is_pending());
+        let complete = self.app_quit_futures.is_empty();
+        if complete || Instant::now() >= deadline {
+            if !complete {
+                log::warn!("app quit cleanup exceeded 200 ms; continuing shutdown");
+            }
+            self.app_quit_futures.clear();
+            self.app_quit_deadline = None;
+            self.shutdown_renderer();
+            event_loop.exit();
+        } else {
+            event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+        }
+        true
+    }
     /// Drop GPU resources while the window / event loop are still valid.
     ///
     /// The root `create_effect` captures `Rc<RefCell<Option<AppState>>>`. If we leave
@@ -312,6 +359,12 @@ impl super::App {
             }
         }
         if closing.len() == self.window_registry.len() {
+            if self.begin_app_quit() {
+                if let Some(deadline) = self.app_quit_deadline {
+                    event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+                }
+                return;
+            }
             self.shutdown_renderer();
             event_loop.exit();
             return;
@@ -371,6 +424,9 @@ impl super::App {
     }
 
     fn request_close(&mut self, event_loop: &dyn ActiveEventLoop, id: Option<WindowId>) {
+        if self.app_quit_deadline.is_some() {
+            return;
+        }
         if id.is_some_and(|id| !self.window_registry.contains(id)) {
             return;
         }
@@ -1120,6 +1176,9 @@ impl super::App {
 
 impl ApplicationHandler for super::App {
     fn proxy_wake_up(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.poll_app_quit(event_loop) {
+            return;
+        }
         self.poll_bootstrap(event_loop);
         let _work = super::frame_budget::begin_work(super::frame_budget::WorkKind::Shared);
         // A producer must not keep us in try_recv forever, starving OS input.
@@ -1215,6 +1274,9 @@ impl ApplicationHandler for super::App {
     }
 
     fn about_to_wait(&mut self, event_loop: &dyn ActiveEventLoop) {
+        if self.poll_app_quit(event_loop) {
+            return;
+        }
         self.poll_bootstrap(event_loop);
         let _window = super::window_scope::enter_primary();
         let _work = super::frame_budget::begin_work(super::frame_budget::WorkKind::Shared);
@@ -1230,6 +1292,10 @@ impl ApplicationHandler for super::App {
 
         let now = web_time::Instant::now();
         let mut next_wake: Option<web_time::Instant> = None;
+        #[cfg(feature = "webview")]
+        if crate::platform::webview::pump_evaluations() {
+            next_wake = Some(now + std::time::Duration::from_millis(16));
+        }
         #[cfg(all(debug_assertions, feature = "devtools"))]
         if let Some(deadline) = super::devtools::DevToolsState::pick_highlight_deadline() {
             if deadline <= now {
@@ -1984,12 +2050,13 @@ pub(super) fn run<F: FnMut() -> Element + 'static>(
     window_options: super::WindowOptions,
     app_builder: F,
 ) {
-    run_startup(window_options, None, app_builder);
+    run_startup(window_options, None, Vec::new(), app_builder);
 }
 
 pub(super) fn run_startup<F: FnMut() -> Element + 'static>(
     window_options: super::WindowOptions,
     startup: Option<super::StartupHandle>,
+    app_quit_handlers: Vec<crate::core::reactivity::AppQuitHandler>,
     app_builder: F,
 ) {
     crate::logging::init();
@@ -2039,6 +2106,7 @@ pub(super) fn run_startup<F: FnMut() -> Element + 'static>(
     );
     app.instance_guard = instance_guard;
     app.startup = startup;
+    app.app_quit_handlers = app_quit_handlers;
     event_loop_proxy.wake_up();
     #[cfg(not(target_arch = "wasm32"))]
     crate::platform::run_winit_app(event_loop, app);
@@ -2057,6 +2125,9 @@ pub(super) fn create_app(
         startup_presentation: None,
         surfaces_available: false,
         startup: None,
+        app_quit_handlers: Vec::new(),
+        app_quit_futures: Vec::new(),
+        app_quit_deadline: None,
         startup_window: None,
         startup_window_presented: false,
         bootstrap: None,

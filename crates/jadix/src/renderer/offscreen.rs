@@ -5,6 +5,10 @@
 //!
 //! Enable with env `JADIX_FORCE_SOFTWARE=1` for WARP/llvmpipe when available.
 
+#[path = "offscreen_scene.rs"]
+mod scene;
+pub use scene::{SceneFrameStats, SceneRenderer};
+
 /// RGBA8 image buffer from an offscreen render.
 #[derive(Clone, Debug)]
 pub struct RgbaImage {
@@ -174,7 +178,7 @@ pub(crate) fn readback_texture(
     texture: &wgpu::Texture,
     width: u32,
     height: u32,
-    mut encoder: wgpu::CommandEncoder,
+    encoder: wgpu::CommandEncoder,
 ) -> Option<RgbaImage> {
     let bytes_per_row = (width * 4).div_ceil(256) * 256;
     let buffer_size = bytes_per_row as u64 * height as u64;
@@ -184,6 +188,28 @@ pub(crate) fn readback_texture(
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
+    readback_texture_with_buffer(
+        device,
+        queue,
+        texture,
+        width,
+        height,
+        encoder,
+        &output_buffer,
+    )
+}
+
+/// Shared row-unpadding/readback path; retained hosts keep the staging buffer.
+pub(crate) fn readback_texture_with_buffer(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    texture: &wgpu::Texture,
+    width: u32,
+    height: u32,
+    mut encoder: wgpu::CommandEncoder,
+    output_buffer: &wgpu::Buffer,
+) -> Option<RgbaImage> {
+    let bytes_per_row = (width * 4).div_ceil(256) * 256;
     encoder.copy_texture_to_buffer(
         wgpu::TexelCopyTextureInfo {
             texture,
@@ -192,7 +218,7 @@ pub(crate) fn readback_texture(
             aspect: wgpu::TextureAspect::All,
         },
         wgpu::TexelCopyBufferInfo {
-            buffer: &output_buffer,
+            buffer: output_buffer,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
                 bytes_per_row: Some(bytes_per_row),
@@ -207,7 +233,7 @@ pub(crate) fn readback_texture(
     );
     queue.submit(Some(encoder.finish()));
 
-    let slice = output_buffer.slice(..);
+    let slice = output_buffer.slice(..u64::from(bytes_per_row) * u64::from(height));
     let (tx, rx) = std::sync::mpsc::channel();
     slice.map_async(wgpu::MapMode::Read, move |r| {
         let _ = tx.send(r);

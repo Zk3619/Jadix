@@ -4,22 +4,7 @@ use crate::presentation::{
 };
 use crate::{BackendError, HeadlessRoot, ResourceLimits};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ApplyReceipt {
-    pub root: RootId,
-    pub previous: u64,
-    pub revision: u64,
-}
-
-impl ApplyReceipt {
-    pub fn for_batch(batch: &CommitBatch) -> Self {
-        Self {
-            root: batch.root,
-            previous: batch.previous,
-            revision: batch.revision,
-        }
-    }
-}
+pub use jadix_core::presentation::ApplyReceipt;
 
 pub trait PlatformHost {
     fn is_alive(&self) -> bool {
@@ -105,6 +90,7 @@ pub struct NativeRoot<Host: PlatformHost> {
     last_layout: LayoutStats,
     last_dirty: Vec<crate::presentation::NodeId>,
     last_operations: [usize; 5],
+    environment: Option<(u64, u64)>,
 }
 
 impl<Host: PlatformHost> NativeRoot<Host> {
@@ -138,6 +124,7 @@ impl<Host: PlatformHost> NativeRoot<Host> {
             last_layout: LayoutStats::default(),
             last_dirty: Vec::new(),
             last_operations: [0; 5],
+            environment: None,
         }
     }
 
@@ -159,6 +146,9 @@ impl<Host: PlatformHost> NativeRoot<Host> {
         result["last_commit"] = serde_json::json!({"creates": self.last_operations[0], "updates": self.last_operations[1],
             "moves": self.last_operations[2], "removes": self.last_operations[3], "focus": self.last_operations[4],
             "dirty_nodes": self.last_dirty.iter().map(|node| node.token()).collect::<Vec<_>>()});
+        if let Some((identity, revision)) = self.environment {
+            result["environment"] = serde_json::json!({"identity":identity.to_string(),"revision":revision.to_string()});
+        }
         result
     }
 
@@ -194,8 +184,111 @@ impl<Host: PlatformHost> NativeRoot<Host> {
         viewport: [f32; 2],
         environment: u64,
     ) -> Result<LayoutStats, HostError> {
+        if self.environment.take().is_some() {
+            self.layout.invalidate_measurements();
+        }
         let stats = self.prepare_layout(roots, viewport, environment)?;
         self.publish_layout(roots, stats)
+    }
+
+    #[cfg(feature = "consistent-ui")]
+    pub fn present_consistent(
+        &mut self,
+        roots: &[PresentationNode],
+        viewport: [f32; 2],
+        environment: &crate::environment::Environment,
+        theme: &crate::ConsistentTheme,
+    ) -> Result<LayoutStats, HostError> {
+        if !environment.is_alive() {
+            return Err(HostError::Platform("environment owner disposed".into()));
+        }
+        self.model
+            .check_resources(roots)
+            .map_err(HostError::Backend)?;
+        let mut projected = theme
+            .project(roots, &environment.snapshot())
+            .map_err(|error| HostError::Platform(error.into()))?;
+        self.present_environment(&mut projected, viewport, environment)
+    }
+
+    /// Bind a validated root-local environment to measurement invalidation.
+    /// Applications map preferences to content/style; this does not fabricate
+    /// missing platform mappings or reset node/edit identities.
+    pub fn present_environment(
+        &mut self,
+        roots: &mut [PresentationNode],
+        viewport: [f32; 2],
+        environment: &crate::environment::Environment,
+    ) -> Result<LayoutStats, HostError> {
+        if !environment.is_alive() {
+            return Err(HostError::Platform("environment owner disposed".into()));
+        }
+        let key = (environment.identity(), environment.revision());
+        if self.environment != Some(key) {
+            self.layout.invalidate_measurements();
+        }
+        let stats = self.prepare_layout(roots, viewport, key.1)?;
+        let result = self.publish_layout(roots, stats)?;
+        self.environment = Some(key);
+        Ok(result)
+    }
+
+    #[cfg(feature = "motion")]
+    pub fn present_environment_with_motion(
+        &mut self,
+        roots: &mut [PresentationNode],
+        viewport: [f32; 2],
+        environment: &crate::environment::Environment,
+        motion: &mut crate::motion::LayoutMotion,
+        now: std::time::Duration,
+    ) -> Result<LayoutStats, HostError> {
+        let result = (|| {
+            if !environment.is_alive() {
+                return Err(HostError::Platform("environment owner disposed".into()));
+            }
+            let key = (environment.identity(), environment.revision());
+            if self.environment != Some(key) {
+                self.layout.invalidate_measurements();
+            }
+            let stats = self.prepare_layout(roots, viewport, key.1)?;
+            motion
+                .apply(
+                    &self.model.lifetime(),
+                    roots,
+                    now,
+                    crate::motion::MotionPolicy::from_environment(&environment.snapshot()),
+                )
+                .map_err(HostError::Motion)?;
+            let result = self.publish_layout(roots, stats)?;
+            self.environment = Some(key);
+            Ok(result)
+        })();
+        if self.model.lifetime().is_disposed() {
+            motion.dispose();
+        }
+        result
+    }
+
+    #[cfg(all(feature = "motion", feature = "consistent-ui"))]
+    pub fn present_consistent_with_motion(
+        &mut self,
+        roots: &[PresentationNode],
+        viewport: [f32; 2],
+        environment: &crate::environment::Environment,
+        theme: &crate::ConsistentTheme,
+        motion: &mut crate::motion::LayoutMotion,
+        now: std::time::Duration,
+    ) -> Result<LayoutStats, HostError> {
+        if !environment.is_alive() {
+            return Err(HostError::Platform("environment owner disposed".into()));
+        }
+        self.model
+            .check_resources(roots)
+            .map_err(HostError::Backend)?;
+        let mut projected = theme
+            .project(roots, &environment.snapshot())
+            .map_err(|error| HostError::Platform(error.into()))?;
+        self.present_environment_with_motion(&mut projected, viewport, environment, motion, now)
     }
 
     #[cfg(feature = "motion")]
@@ -209,6 +302,9 @@ impl<Host: PlatformHost> NativeRoot<Host> {
         policy: crate::motion::MotionPolicy,
     ) -> Result<LayoutStats, HostError> {
         let result = (|| {
+            if self.environment.take().is_some() {
+                self.layout.invalidate_measurements();
+            }
             let stats = self.prepare_layout(roots, viewport, environment)?;
             motion
                 .apply(&self.model.lifetime(), roots, now, policy)

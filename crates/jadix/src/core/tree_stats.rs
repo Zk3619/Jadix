@@ -85,6 +85,7 @@ pub fn count_element_tree(root: &Element) -> ElementTreeStats {
 #[inline]
 fn element_has_handlers(el: &Element) -> bool {
     el.on_click.is_some()
+        || el.on_accessibility_value.is_some()
         || el.on_hover.is_some()
         || el.on_mousedown.is_some()
         || el.on_mouseup.is_some()
@@ -93,6 +94,8 @@ fn element_has_handlers(el: &Element) -> bool {
         || el.on_mousemove.is_some()
         || el.on_mouseover.is_some()
         || el.on_mouseout.is_some()
+        || el.on_mouseenter.is_some()
+        || el.on_mouseleave.is_some()
         || el.on_key_down.is_some()
         || el.on_unmount.is_some()
         || el.reactive_sync.is_some()

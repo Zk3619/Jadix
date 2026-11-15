@@ -319,7 +319,7 @@ impl<Host: PlatformHost> NotesApp<Host> {
     fn apply(&mut self, action: Action) -> Result<(), String> {
         match action {
             Action::New | Action::Open(_) if self.dirty() => {
-                return Err("Save or revert changes before opening another note".into())
+                return Err("Save or revert changes before opening another note".into());
             }
             Action::New => {
                 self.select(None);

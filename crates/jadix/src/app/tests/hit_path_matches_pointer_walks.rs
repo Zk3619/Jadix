@@ -25,3 +25,29 @@ fn exclusive_hit_path_matches_focus_and_cursor_walks() {
         pick_cursor(&root, 50.0, 50.0, [0.0, 0.0])
     );
 }
+
+#[test]
+fn hit_path_reaches_last_row_at_maximum_scroll_offset() {
+    let mut last_row = Element::new();
+    last_row.layout_bounds = [0.0, 180.0, 100.0, 20.0];
+    last_row.focus_id = Some("last-row".into());
+    last_row.style.bg_color = [0.2, 0.3, 0.4, 1.0];
+
+    let mut viewport = Element::new();
+    viewport.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+    viewport.focus_id = Some("scroll:feed".into());
+    viewport.style.overflow.y = taffy::style::Overflow::Scroll;
+    viewport.scroll_offset = [0.0, 100.0];
+    viewport.children.push(last_row);
+    crate::core::reactivity::use_signal(
+        &crate::core::scroll_viewport::scroll_offset_y_signal_key("feed"),
+        || 0.0_f32,
+    )
+    .set_silent(100.0);
+
+    let mut root = Element::new().child(viewport);
+    root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+
+    let path = hit_path(&root, 50.0, 90.0);
+    assert_eq!(path_deepest_focus_id(&path).as_deref(), Some("last-row"));
+}

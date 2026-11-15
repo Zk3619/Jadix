@@ -3,14 +3,14 @@ use std::{
     ffi::c_void,
     ptr::{null, null_mut},
     sync::{
-        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, RecvTimeoutError, SyncSender, sync_channel},
+        mpsc::{sync_channel, Receiver, RecvTimeoutError, SyncSender},
+        Arc, Mutex,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use windows_sys::Win32::{
-    Foundation::{FILETIME, GetLastError, SYSTEMTIME},
+    Foundation::{GetLastError, FILETIME, SYSTEMTIME},
     Networking::WinHttp::*,
     System::Time::SystemTimeToFileTime,
 };

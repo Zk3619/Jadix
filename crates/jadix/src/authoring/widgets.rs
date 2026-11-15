@@ -2,7 +2,7 @@
 
 pub mod hit {
     pub use crate::app::tree_hit::{
-        find_paint_aabb_by_focus_id, invalidate_hover_handlers, ATTR_HOVER_REGION,
+        ATTR_HOVER_REGION, find_paint_aabb_by_focus_id, invalidate_hover_handlers,
     };
 }
 pub mod classes {
@@ -18,9 +18,9 @@ pub mod collect {
 }
 pub mod scroll {
     pub use crate::app::scroll_support::{
-        request_scroll_descendant_into_view_when, request_scroll_item_into_view,
-        request_scroll_item_into_view_when, reset_scroll_item_into_view, ScrollAlignWhen,
-        ScrollItemAlign,
+        ScrollAlignWhen, ScrollItemAlign, request_scroll_descendant_into_view_when,
+        request_scroll_item_into_view, request_scroll_item_into_view_when,
+        reset_scroll_item_into_view,
     };
 }
 pub mod shadows {
@@ -28,7 +28,7 @@ pub mod shadows {
 }
 pub mod text_edit {
     pub use crate::utils::text_edit::field;
-    pub use crate::utils::text_edit::{build_text_edit_element, TextEditBuildParams};
+    pub use crate::utils::text_edit::{TextEditBuildParams, build_text_edit_element};
 }
 
 pub fn caret_blink_visible() -> bool {

@@ -11,10 +11,102 @@ fn node(root: RootId, content: NodeContent) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
         },
         children: vec![],
     }
+}
+
+#[test]
+fn delayed_blur_does_not_release_the_new_focus_owner() {
+    let mut root = HeadlessRoot::new();
+    let first = node(
+        root.id(),
+        NodeContent::Button {
+            label: "First".into(),
+            enabled: true,
+        },
+    );
+    let second = node(
+        root.id(),
+        NodeContent::Button {
+            label: "Second".into(),
+            enabled: true,
+        },
+    );
+    let text = node(root.id(), NodeContent::Text("Not focusable".into()));
+    root.reconcile(&[first.clone(), second.clone(), text.clone()])
+        .unwrap();
+    let event = |node, payload| PlatformEvent { node, payload };
+    root.accept_event(&event(first.id, EventPayload::Focus))
+        .unwrap();
+    root.accept_event(&event(second.id, EventPayload::Focus))
+        .unwrap();
+    root.accept_event(&event(first.id, EventPayload::Blur))
+        .unwrap();
+    assert_eq!(root.focused(), Some(second.id));
+    assert_eq!(
+        root.accept_event(&event(text.id, EventPayload::Blur)),
+        Err(BackendError::InvalidEvent)
+    );
+    let json = serde_json::json!({"root": root.id().token(), "node": second.id.token(), "payload": {"kind": "blur"}}).to_string();
+    let blur = jadix_native::wire::decode_event(&json, &root).unwrap();
+    root.accept_event(&blur).unwrap();
+    assert_eq!(root.focused(), None);
+}
+
+#[test]
+fn keyboard_focus_visibility_tracks_the_focus_owner_and_wire_event() {
+    let mut root = HeadlessRoot::new();
+    let first = node(
+        root.id(),
+        NodeContent::Input {
+            value: String::new(),
+            placeholder: String::new(),
+            enabled: true,
+            password: false,
+            max_length: None,
+            revision: 0,
+        },
+    );
+    let second = node(
+        root.id(),
+        NodeContent::Button {
+            label: "Second".into(),
+            enabled: true,
+        },
+    );
+    root.reconcile(&[first.clone(), second.clone()]).unwrap();
+
+    let json = serde_json::json!({
+        "root": root.id().token(),
+        "node": first.id.token(),
+        "payload": {"kind": "focusVisible"}
+    });
+    let visible = jadix_native::wire::decode_event(&json.to_string(), &root).unwrap();
+    root.accept_event(&visible).unwrap();
+    assert_eq!(root.focused(), Some(first.id));
+    assert_eq!(root.focus_visible(), Some(first.id));
+
+    root.accept_event(&PlatformEvent {
+        node: second.id,
+        payload: EventPayload::Focus,
+    })
+    .unwrap();
+    assert_eq!(root.focused(), Some(second.id));
+    assert_eq!(root.focus_visible(), None);
+
+    root.accept_event(&PlatformEvent {
+        node: first.id,
+        payload: EventPayload::Blur,
+    })
+    .unwrap();
+    assert_eq!(root.focused(), Some(second.id));
+    assert_eq!(root.focus_visible(), None);
+    root.dispose();
+    assert_eq!(root.focus_visible(), None);
 }
 
 #[test]
@@ -23,6 +115,7 @@ fn multiline_edits_keep_revision_and_utf16_rules() {
     let node = node(
         root.id(),
         NodeContent::Textarea {
+            max_length: None,
             value: String::new(),
             placeholder: "Note".into(),
             enabled: true,
@@ -61,6 +154,7 @@ fn textarea_internal_scroll_is_not_an_outer_scroll_event() {
     let editor = node(
         root.id(),
         NodeContent::Textarea {
+            max_length: None,
             value: "中😀\n第二行".into(),
             placeholder: String::new(),
             enabled: true,
@@ -81,6 +175,58 @@ fn textarea_internal_scroll_is_not_an_outer_scroll_event() {
     assert_eq!(root.node(editor.id), Some(&before));
     root.accept_event(&event(scroll.id)).unwrap();
     assert_eq!(root.node(editor.id), Some(&before));
+}
+
+#[test]
+fn wheel_events_are_bounded_and_only_target_scroll_nodes() {
+    let mut root = HeadlessRoot::new();
+    let button = node(
+        root.id(),
+        NodeContent::Button {
+            label: "Wheel target".into(),
+            enabled: true,
+        },
+    );
+    let scroll = node(root.id(), NodeContent::Scroll);
+    root.reconcile(&[button.clone(), scroll.clone()]).unwrap();
+    let event = |node, delta_x, delta_y| PlatformEvent {
+        node,
+        payload: EventPayload::Wheel { delta_x, delta_y },
+    };
+    assert_eq!(
+        root.accept_event(&event(button.id, 0.0, 12.0)),
+        Err(BackendError::InvalidEvent)
+    );
+    assert_eq!(
+        root.accept_event(&event(scroll.id, f64::NAN, 12.0)),
+        Err(BackendError::InvalidEvent)
+    );
+    assert_eq!(
+        root.accept_event(&event(scroll.id, 0.0, 1_000_001.0)),
+        Err(BackendError::InvalidEvent)
+    );
+    root.accept_event(&event(scroll.id, -2.5, 120.0)).unwrap();
+}
+
+#[test]
+fn wheel_wire_payload_uses_camel_case_deltas() {
+    let mut root = HeadlessRoot::new();
+    let scroll = node(root.id(), NodeContent::Scroll);
+    root.reconcile(std::slice::from_ref(&scroll)).unwrap();
+    let json = serde_json::json!({
+        "root": root.id().token(),
+        "node": scroll.id.token(),
+        "payload": {"kind": "wheel", "deltaX": -3.5, "deltaY": 48.0}
+    });
+    let decoded = jadix_native::wire::decode_event(&json.to_string(), &root).unwrap();
+    assert_eq!(
+        decoded.payload,
+        EventPayload::Wheel {
+            delta_x: -3.5,
+            delta_y: 48.0
+        }
+    );
+    root.accept_event(&decoded).unwrap();
 }
 
 #[test]

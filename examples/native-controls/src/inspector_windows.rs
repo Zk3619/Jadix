@@ -57,6 +57,7 @@ mod application {
             descriptor: NodeDescriptor {
                 content,
                 frame: Rect::default(),
+                accessible_description: None,
                 accessible_name: None,
                 accessible_role: None,
                 accessible_selected: None,

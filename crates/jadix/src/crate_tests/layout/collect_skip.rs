@@ -1040,6 +1040,66 @@ fn collect_skip_must_not_replay_extra_shadow_color() {
 }
 
 #[test]
+fn collect_skip_refreshes_inherited_gradient_current_color() {
+    for family in [
+        "linear-gradient",
+        "radial-gradient",
+        "conic-gradient",
+        "utility",
+    ] {
+        let mut root = Element::new()
+            .class("w-[80px] h-[40px]")
+            .text_color([255, 0, 0, 128]);
+        let gradient = if family == "utility" {
+            Element::new()
+                .class("bg-gradient-to-r from-current via-current to-transparent")
+                .style
+                .bg_gradient
+                .clone()
+                .unwrap()
+        } else {
+            crate::style::parse_gradient(format!("{family}(currentColor, transparent)")).unwrap()
+        };
+        for color in [None, Some([0, 255, 0, 255])] {
+            let mut child = Element::new().class("w-[30px] h-[20px] shrink-0");
+            child.style.bg_gradient = Some(gradient.clone());
+            if let Some(color) = color {
+                child = child.text_color(color);
+            }
+            root.children.push(child);
+        }
+        let mut tree = LayoutTree::new();
+        tree.build_and_layout(&mut root, 80.0, 40.0, [-1.0; 2]);
+        tree.set_collect_skip_allowed(true);
+        let keys = |frame: crate::layout::layout_tree::RenderResult| {
+            frame
+                .textured_draws
+                .into_iter()
+                .map(|d| d.texture_key)
+                .collect::<Vec<_>>()
+        };
+        let before =
+            keys(tree.build_and_layout_fast(&mut root, 80.0, 40.0, [-1.0; 2], false, false));
+        root = root.text_color([0, 0, 255, 255]);
+        let after =
+            keys(tree.build_and_layout_fast(&mut root, 80.0, 40.0, [-1.0; 2], false, false));
+        assert_eq!(before.len(), 2, "{family}");
+        assert_eq!(after.len(), 2, "{family}");
+        assert_ne!(before[0], after[0], "inherited color must refresh {family}");
+        assert_eq!(
+            before[1], after[1],
+            "local color must remain stable for {family}"
+        );
+        let expected = gradient.resolve_current_color([0.0, 0.0, 1.0, 1.0]);
+        let (w, h) = crate::style::gradient_texture_size(30.0, 20.0);
+        assert_eq!(
+            after[0],
+            jadix_2d::gradient::gradient_texture_key(&expected, w, h, [0.0; 4])
+        );
+    }
+}
+
+#[test]
 fn collect_skip_must_not_replay_gradient_stops() {
     use crate::style::{Gradient, LinearGradient};
     reset_collect_skip_counters();

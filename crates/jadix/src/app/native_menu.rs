@@ -6,66 +6,11 @@
 //! window's reactive/input scope. Replacing/closing a menu discards stale events.
 
 use super::multi_window::WindowHandle;
+#[cfg(all(feature = "native-menu", any(windows, target_os = "macos")))]
 use std::rc::Rc;
 use winit::window::WindowId;
 
-/// A command, nested submenu, or separator in an OS menu.
-#[derive(Clone)]
-pub enum NativeMenuItem {
-    Command {
-        id: String,
-        label: String,
-        enabled: bool,
-        /// Muda syntax, e.g. `CmdOrCtrl+Shift+S`.
-        accelerator: Option<String>,
-        on_select: Rc<dyn Fn()>,
-    },
-    Submenu {
-        label: String,
-        enabled: bool,
-        items: Vec<NativeMenuItem>,
-    },
-    Separator,
-}
-
-impl NativeMenuItem {
-    pub fn command(
-        id: impl Into<String>,
-        label: impl Into<String>,
-        on_select: impl Fn() + 'static,
-    ) -> Self {
-        Self::Command {
-            id: id.into(),
-            label: label.into(),
-            enabled: true,
-            accelerator: None,
-            on_select: Rc::new(on_select),
-        }
-    }
-
-    pub fn submenu(label: impl Into<String>, items: Vec<Self>) -> Self {
-        Self::Submenu {
-            label: label.into(),
-            enabled: true,
-            items,
-        }
-    }
-
-    pub fn enabled(mut self, value: bool) -> Self {
-        match &mut self {
-            Self::Command { enabled, .. } | Self::Submenu { enabled, .. } => *enabled = value,
-            Self::Separator => {}
-        }
-        self
-    }
-
-    pub fn accelerator(mut self, value: impl Into<String>) -> Self {
-        if let Self::Command { accelerator, .. } = &mut self {
-            *accelerator = Some(value.into());
-        }
-        self
-    }
-}
+pub use jadix_core::menu::MenuItem as NativeMenuItem;
 
 /// Whether OS menu bars are compiled for this host. Does not imply runtime validation.
 pub const fn native_menu_supported() -> bool {
@@ -78,6 +23,7 @@ pub const fn native_menu_supported() -> bool {
 /// Replace a window's menu. Invalid IDs/accelerators leave its old menu intact.
 /// Top-level entries must be submenus (required by the macOS application menu).
 pub fn set_window_menu(window: &WindowHandle, items: Vec<NativeMenuItem>) -> Result<(), String> {
+    jadix_core::menu::validate(&items)?;
     #[cfg(all(feature = "native-menu", any(windows, target_os = "macos")))]
     {
         native::install(window, items)
@@ -112,6 +58,12 @@ pub(crate) fn dispose_all() {
     native::dispose_all();
 }
 
+#[cfg(feature = "i18n")]
+pub(crate) fn refresh_locale() {
+    #[cfg(all(feature = "native-menu", any(windows, target_os = "macos")))]
+    native::refresh_locale();
+}
+
 #[cfg(any(
     feature = "system-tray",
     all(feature = "native-menu", any(windows, target_os = "macos"))
@@ -140,6 +92,7 @@ mod native {
         menu: muda::Menu,
         window: WindowHandle,
         callbacks: HashMap<String, Rc<dyn Fn()>>,
+        labels: Vec<(jadix_core::menu::MenuRole, muda::PredefinedMenuItem)>,
     }
 
     thread_local! {
@@ -154,6 +107,7 @@ mod native {
         ids: &mut HashSet<String>,
         callbacks: &mut HashMap<String, Rc<dyn Fn()>>,
         parent_enabled: bool,
+        labels: &mut Vec<(jadix_core::menu::MenuRole, muda::PredefinedMenuItem)>,
     ) -> Result<Vec<Box<dyn muda::IsMenuItem>>, String> {
         items
             .into_iter()
@@ -165,6 +119,7 @@ mod native {
                         enabled,
                         accelerator,
                         on_select,
+                        state,
                     } => {
                         if id.trim().is_empty() || !ids.insert(id.clone()) {
                             return Err(format!(
@@ -179,7 +134,55 @@ mod native {
                             .transpose()?;
                         let native_id = format!("jadix-menu-{generation}-{id}");
                         if enabled && parent_enabled {
-                            callbacks.insert(native_id.clone(), on_select);
+                            callbacks.insert(native_id.clone(), on_select.clone());
+                        }
+                        use jadix_core::menu::{MenuRole, MenuState};
+                        if let MenuState::Role(role) | MenuState::LocalizedRole(role) = state {
+                            if !enabled || !parent_enabled {
+                                return Err(
+                                    "disabled native roles must be removed from the menu".into()
+                                );
+                            }
+                            let item = match role {
+                                MenuRole::Copy => muda::PredefinedMenuItem::copy(Some(&label)),
+                                MenuRole::Cut => muda::PredefinedMenuItem::cut(Some(&label)),
+                                MenuRole::Paste => muda::PredefinedMenuItem::paste(Some(&label)),
+                                MenuRole::Undo => muda::PredefinedMenuItem::undo(Some(&label)),
+                                MenuRole::Redo => muda::PredefinedMenuItem::redo(Some(&label)),
+                                MenuRole::SelectAll => {
+                                    muda::PredefinedMenuItem::select_all(Some(&label))
+                                }
+                                MenuRole::Quit => muda::PredefinedMenuItem::quit(Some(&label)),
+                            };
+                            if matches!(state, MenuState::LocalizedRole(_)) {
+                                labels.push((role, item.clone()));
+                            }
+                            return Ok(Box::new(item));
+                        }
+                        let checked = match state {
+                            MenuState::Checked(v) => Some(v),
+                            MenuState::Radio { selected, .. } => Some(selected),
+                            _ => None,
+                        };
+                        if let Some(checked) = checked {
+                            let item = muda::CheckMenuItem::with_id(
+                                native_id.clone(),
+                                label,
+                                enabled,
+                                checked,
+                                accelerator,
+                            );
+                            if enabled && parent_enabled {
+                                let reset = item.clone();
+                                callbacks.insert(
+                                    native_id,
+                                    Rc::new(move || {
+                                        reset.set_checked(checked);
+                                        on_select();
+                                    }),
+                                );
+                            }
+                            return Ok(Box::new(item));
                         }
                         Ok(Box::new(muda::MenuItem::with_id(
                             native_id,
@@ -200,6 +203,7 @@ mod native {
                             ids,
                             callbacks,
                             parent_enabled && enabled,
+                            labels,
                         )?;
                         for child in children {
                             submenu.append(child.as_ref()).map_err(|e| e.to_string())?;
@@ -214,9 +218,14 @@ mod native {
             .collect()
     }
 
-    fn build(
-        items: Vec<NativeMenuItem>,
-    ) -> Result<(muda::Menu, HashMap<String, Rc<dyn Fn()>>), String> {
+    struct BuiltMenu {
+        menu: muda::Menu,
+        callbacks: HashMap<String, Rc<dyn Fn()>>,
+        labels: Vec<(jadix_core::menu::MenuRole, muda::PredefinedMenuItem)>,
+    }
+
+    fn build(mut items: Vec<NativeMenuItem>) -> Result<BuiltMenu, String> {
+        jadix_core::menu::localize(&mut items, &menu_locale())?;
         if items
             .iter()
             .any(|i| !matches!(i, NativeMenuItem::Submenu { .. }))
@@ -226,12 +235,64 @@ mod native {
         static NEXT: AtomicU64 = AtomicU64::new(1);
         let generation = NEXT.fetch_add(1, Ordering::Relaxed);
         let mut callbacks = HashMap::new();
-        let children = append_items(items, generation, &mut HashSet::new(), &mut callbacks, true)?;
+        let mut labels = Vec::new();
+        let children = append_items(
+            items,
+            generation,
+            &mut HashSet::new(),
+            &mut callbacks,
+            true,
+            &mut labels,
+        )?;
         let menu = muda::Menu::new();
         for child in children {
             menu.append(child.as_ref()).map_err(|e| e.to_string())?;
         }
-        Ok((menu, callbacks))
+        Ok(BuiltMenu {
+            menu,
+            callbacks,
+            labels,
+        })
+    }
+
+    fn menu_locale() -> String {
+        #[cfg(feature = "i18n")]
+        {
+            crate::i18n::locale().to_string()
+        }
+        #[cfg(not(feature = "i18n"))]
+        {
+            "en".into()
+        }
+    }
+
+    fn window_scope(id: WindowId) -> super::super::window_scope::WindowScopeGuard {
+        let primary = super::super::runtime::window_handles()
+            .first()
+            .map(WindowHandle::id);
+        if Some(id) == primary {
+            super::super::window_scope::enter_primary()
+        } else {
+            super::super::window_scope::enter_secondary_id(id)
+        }
+    }
+
+    #[cfg(feature = "i18n")]
+    pub(super) fn refresh_locale() {
+        let menus = MENUS.with(|menus| {
+            menus
+                .borrow()
+                .iter()
+                .map(|(id, menu)| (*id, menu.labels.clone()))
+                .collect::<Vec<_>>()
+        });
+        for (id, labels) in menus {
+            let _scope = window_scope(id);
+            let locale = menu_locale();
+            for (role, item) in labels {
+                item.set_text(role.label(&locale));
+            }
+        }
     }
 
     #[cfg(windows)]
@@ -251,7 +312,12 @@ mod native {
             return Err("native menu: install on the window's UI thread".into());
         }
         let live = window.upgrade()?;
-        let (menu, callbacks) = build(items)?;
+        let _scope = window_scope(window.id());
+        let BuiltMenu {
+            menu,
+            callbacks,
+            labels,
+        } = build(items)?;
         super::super::menu_events::install();
         #[cfg(windows)]
         {
@@ -264,6 +330,7 @@ mod native {
         let installed = Installed {
             menu,
             callbacks,
+            labels,
             window: window.clone(),
         };
         MENUS.with(|m| m.borrow_mut().insert(window.id(), installed));

@@ -78,6 +78,15 @@ impl Browser {
                 NewWindowResponse::Deny
             })
             .with_on_page_load_handler(move |event, _| {
+                let _scope = crate::app::window_scope::enter(scope);
+                if matches!(event, PageLoadEvent::Started) {
+                    super::super::document_changed(scope, &id);
+                }
+                super::super::evaluation_ready(
+                    scope,
+                    &id,
+                    matches!(event, PageLoadEvent::Finished),
+                );
                 webview_status(&id).try_set(match event {
                     PageLoadEvent::Started => WebViewStatus::Loading,
                     PageLoadEvent::Finished => WebViewStatus::Ready,
@@ -153,6 +162,15 @@ impl Browser {
         #[cfg(any(target_os = "macos", target_os = "ios"))]
         self.clip.visible(visible);
         let _ = self.view.set_visible(visible);
+    }
+    pub fn evaluate(
+        &self,
+        script: &str,
+        reply: jadix_core::web_evaluation::EvaluationReply,
+    ) -> Result<(), String> {
+        self.view
+            .evaluate_script_with_callback(script, move |raw| reply.complete(Ok(raw)))
+            .map_err(|error| error.to_string())
     }
     pub fn poll(&self) -> Option<WebViewStatus> {
         let url = self.pending_navigation.lock().unwrap().take()?;

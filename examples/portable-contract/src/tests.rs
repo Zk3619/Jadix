@@ -7,21 +7,34 @@ use std::collections::BTreeSet;
 fn password_authoring_and_wire_keep_masking_separate_from_edit_values() {
     let (owner, (mut builder, mut rsx)) = create_root(|| {
         let value = create_signal(String::from("test-only"));
-        let builder: Element = input("secret-builder").password(true).value_signal(value).into();
+        let builder: Element = input("secret-builder")
+            .password(true)
+            .value_signal(value)
+            .into();
         let rsx = ui! { <Input id="secret-rsx" password=true value={value} /> };
         (builder, rsx)
     });
     let projection = ElementProjection::new(RootId::new());
     for element in [&mut builder, &mut rsx] {
         let node = projection.snapshot(element).unwrap();
-        assert!(matches!(node.descriptor.content, NodeContent::Input { password: true, .. }));
+        assert!(matches!(
+            node.descriptor.content,
+            NodeContent::Input { password: true, .. }
+        ));
         let wire = jadix_native::wire::descriptor(&node.descriptor);
         assert_eq!(wire["password"], true);
         assert_eq!(wire["text"], "test-only");
-        assert_eq!(node.descriptor.content, NodeContent::Input {
-            value: "test-only".into(), placeholder: String::new(), enabled: true,
-            password: true, revision: 1,
-        });
+        assert_eq!(
+            node.descriptor.content,
+            NodeContent::Input {
+                max_length: None,
+                value: "test-only".into(),
+                placeholder: String::new(),
+                enabled: true,
+                password: true,
+                revision: 1,
+            }
+        );
     }
     drop(owner);
 }

@@ -6,9 +6,9 @@
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-use crate::core::reactivity::{use_signal, Signal};
+use crate::core::reactivity::{Signal, use_signal};
 use crate::primitives::interactive::mark_hover_paint_dirty;
-use crate::utils::roving::roving_edge;
+use crate::utils::activate_registry;
 
 thread_local! {
     static SUB_SEQ: RefCell<HashMap<String, usize>> = RefCell::new(HashMap::new());
@@ -63,13 +63,9 @@ pub fn next_sub_seq(parent_id: &str) -> usize {
 }
 
 /// `active_slot` is in the form of `"dd_active"` / `"ctx_active"` → signal key `{sid}__{active_slot}`.
-pub fn focus_submenu_first_item(sid: &str, active_slot: &str, activate_count: usize) {
+pub fn focus_submenu_first_item(sid: &str, active_slot: &str) {
     let active = use_signal(format!("{sid}__{active_slot}").as_str(), || usize::MAX);
-    let next = if activate_count == 0 {
-        0
-    } else {
-        roving_edge(activate_count, false).unwrap_or_default()
-    };
+    let next = activate_registry::enabled_edge(sid, false).unwrap_or(usize::MAX);
     set_menu_active(active, next);
 }
 

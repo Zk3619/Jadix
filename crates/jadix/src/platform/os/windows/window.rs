@@ -94,8 +94,10 @@ pub(crate) fn apply_created_window(
         }
         super::glass::apply_accent(hwnd, options);
     } else if options.windows_punch_through_desktop() && !composition_swapchain {
-        set_use_host_backdrop_brush(hwnd, true);
-        window.set_system_backdrop(winit::platform::windows::BackdropType::Auto);
+        // Auto/Mica fills alpha-0 with an opaque sheet. A clear window only
+        // needs the empty blur region, the same trick as winit's transparent flag.
+        set_use_host_backdrop_brush(hwnd, false);
+        window.set_system_backdrop(winit::platform::windows::BackdropType::None);
         extend_dwm_frame(hwnd, false);
         enable_dwm_punch_through(hwnd);
     } else {
@@ -108,10 +110,15 @@ pub(crate) fn apply_created_window(
 
 #[cfg(not(feature = "windows-dwm"))]
 pub(crate) fn apply_created_window(
-    _window: &dyn Window,
-    _options: &WindowOptions,
-    _composition_swapchain: bool,
+    window: &dyn Window,
+    options: &WindowOptions,
+    composition_swapchain: bool,
 ) {
+    // Refresh winit's native alpha region after surface configure/resize. Basic
+    // transparency must not depend on the optional Windows material feature.
+    if options.transparent && !composition_swapchain {
+        window.set_transparent(true);
+    }
 }
 
 pub(crate) fn hwnd(window: &dyn Window) -> Option<windows_sys::Win32::Foundation::HWND> {

@@ -36,13 +36,17 @@ pub struct InputRegionRect {
 
 impl InputRegionRect {
     pub const fn new(x: i32, y: i32, width: u32, height: u32) -> Self {
-        Self { position: PhysicalPosition::new(x, y), size: PhysicalSize::new(width, height) }
+        Self {
+            position: PhysicalPosition::new(x, y),
+            size: PhysicalSize::new(width, height),
+        }
     }
 
     pub fn contains(&self, point: PhysicalPosition<i32>) -> bool {
         let horizontal = i64::from(point.x) - i64::from(self.position.x);
         let vertical = i64::from(point.y) - i64::from(self.position.y);
-        horizontal >= 0 && vertical >= 0
+        horizontal >= 0
+            && vertical >= 0
             && horizontal < i64::from(self.size.width)
             && vertical < i64::from(self.size.height)
     }
@@ -1688,6 +1692,15 @@ pub trait Window: Any + Send + Sync + fmt::Debug {
     /// This affects every pointer button, rather than selecting individual buttons.
     fn set_input_region(&self, _region: Option<&[InputRegionRect]>) -> Result<(), RequestError> {
         Err(NotSupportedError::new("OS input regions are unsupported by this backend").into())
+    }
+
+    /// Clip the visible window and its input to client-relative physical rectangles.
+    /// None restores the default shape; an empty slice hides the entire window.
+    /// This does not resize the surface or reduce its GPU allocation. Reapply after
+    /// layout or scale changes. Currently supported on Windows only; other backends
+    /// return NotSupported without changing the input region or visible content.
+    fn set_window_shape(&self, _region: Option<&[InputRegionRect]>) -> Result<(), RequestError> {
+        Err(NotSupportedError::new("window shapes are unsupported by this backend").into())
     }
 
     /// Returns the pointer position in desktop physical coordinates.

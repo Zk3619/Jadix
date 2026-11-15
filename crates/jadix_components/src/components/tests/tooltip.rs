@@ -1,8 +1,67 @@
 use super::*;
 
 #[test]
+fn never_hover_delay_resists_tooltip_handoff_but_keeps_keyboard_focus() {
+    use crate::core::reactivity::create_root;
+    use crate::utils::hover_intent::NEVER_HOVER_DELAY_MS;
+
+    let (_owner, _) = create_root(|| {
+        let focused = use_signal("__jadix_button_focus_id", String::new);
+        let visible = use_signal("__jadix_focus_visible", || false);
+        let first = use_signal("tip-never-first", || true);
+        pointer_tooltip_enter("tip-never-first", first);
+        tooltip_scope_with_delays("tip-never", None, Some(NEVER_HOVER_DELAY_MS), None, || {
+            let ctx = use_tooltip().unwrap();
+            let trigger = chain_trigger_hover(
+                Element::new().focus_id("tip-never-trigger"),
+                ctx.clone(),
+                "tip-never-trigger".into(),
+            );
+            let hover = trigger.on_hover.as_ref().unwrap();
+            hover.borrow_mut()(true);
+            assert!(
+                !ctx.open.peek(),
+                "an open sibling cannot bypass never-hover"
+            );
+            hover.borrow_mut()(false);
+            pointer_tooltip_leave("tip-never-first");
+            hover.borrow_mut()(true);
+            assert!(!ctx.open.peek(), "handoff grace cannot bypass never-hover");
+            hover.borrow_mut()(false);
+            focused.set("tip-never-trigger".into());
+            visible.set(true);
+            assert!(ctx.open.peek(), "keyboard focus remains accessible");
+            focused.set(String::new());
+            assert!(!ctx.open.peek());
+            end_pointer_tooltip_grace();
+            trigger
+        })
+    });
+}
+
+#[test]
 fn tooltip_builds_tree() {
     let _el: Element = tooltip("tip1", "Hello").into();
+}
+
+#[test]
+fn tooltip_hover_open_delay_defaults_to_300ms_and_is_configurable() {
+    use crate::core::reactivity::create_root;
+    use crate::utils::hover_intent::DEFAULT_HOVER_OPEN_DELAY_MS;
+
+    let (_owner, _) = create_root(|| {
+        tooltip_scope("tip-default-delay", None, || {
+            assert_eq!(
+                use_tooltip().unwrap().open_delay_ms.peek(),
+                DEFAULT_HOVER_OPEN_DELAY_MS
+            );
+            Element::new()
+        });
+        tooltip_scope_with_delays("tip-custom-delay", None, Some(725), None, || {
+            assert_eq!(use_tooltip().unwrap().open_delay_ms.peek(), 725);
+            Element::new()
+        })
+    });
 }
 
 #[test]

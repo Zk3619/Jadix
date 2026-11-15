@@ -11,7 +11,10 @@ use crate::core::reactivity::Signal;
 use crate::platform::webview::webview_snapshot;
 #[cfg(all(test, feature = "product-tests"))]
 use crate::platform::webview::{collect_specs, deliver_message};
-pub use crate::platform::webview::{webview_status, webview_supported, WebViewStatus};
+pub use crate::platform::webview::{
+    webview_evaluate, webview_status, webview_supported, WebEvaluation, WebEvaluationError,
+    WebViewStatus,
+};
 
 pub(crate) fn webview_html_with_messages(
     id: String,

@@ -12,3 +12,4 @@ default = []
 
 [dependencies]
 taffy.workspace = true
+jadix_core.workspace = true

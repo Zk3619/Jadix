@@ -9,24 +9,27 @@ readme = "README.md"
 
 [dependencies]
 jadix_core.workspace = true
+jadix_layout.workspace = true
 taffy.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+unicode-segmentation.workspace = true
 base64 = "=0.22.1"
 sha2 = "=0.10.9"
 jadix_animation = { workspace = true, optional = true, features = ["animation-base"] }
-jadix_document = { workspace = true, optional = true, features = ["syntax"] }
+jadix_document = { workspace = true, features = ["checkpoint"] }
 
 [dev-dependencies]
 
 [features]
 default = []
+consistent-ui = []
 motion = ["dep:jadix_animation"]
-code = ["dep:jadix_document"]
+code = ["jadix_document/syntax"]
 android = ["dep:jni"]
 dom = ["dep:wasm-bindgen", "dep:web-sys", "dep:js-sys"]
 uikit = []
-windows = ["dep:windows-sys", "dep:windows", "dep:windows-core", "dep:ttf-parser"]
+windows = ["dep:windows-sys", "dep:windows", "dep:windows-core", "dep:ttf-parser", "jadix_core/system-environment"]
 windows-gpu = ["windows", "dep:wgpu", "dep:rwh_06", "dep:pollster"]
 ohos = []
 

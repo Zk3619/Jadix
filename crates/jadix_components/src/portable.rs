@@ -1,4 +1,4 @@
-use crate::{authoring::BaseComponentBuilder, core::tree::Handler, Element, Signal};
+use jadix::portable::{authoring::BaseComponentBuilder, core::tree::Handler, Element, Signal};
 use jadix::presentation::NodeContent;
 
 type Base = Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>;
@@ -30,6 +30,10 @@ pub use accordion::*;
 #[path = "portable/radio_group.rs"]
 mod radio_group;
 pub use radio_group::*;
+
+#[path = "portable/navigation.rs"]
+mod navigation;
+pub use navigation::*;
 
 pub struct ButtonBuilder {
     element: Element,
@@ -70,7 +74,7 @@ impl From<ButtonBuilder> for Element {
         builder.element
     }
 }
-impl crate::core::tree::IntoElementList for ButtonBuilder {
+impl jadix::portable::core::tree::IntoElementList for ButtonBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }
@@ -106,9 +110,10 @@ pub struct InputBuilder {
 }
 
 pub fn input(id: &str) -> InputBuilder {
-    let value = crate::use_scoped_signal(&format!("{id}_value"), String::new);
+    let value = jadix::portable::use_scoped_signal(&format!("{id}_value"), String::new);
     let mut element = Element::new().id(id);
     element.descriptor.content = NodeContent::Input {
+        max_length: None,
         value: value.get(),
         placeholder: String::new(),
         enabled: true,
@@ -120,6 +125,28 @@ pub fn input(id: &str) -> InputBuilder {
 }
 
 impl InputBuilder {
+    /// Handle the platform keyboard's explicit confirmation action.
+    pub fn on_submit(mut self, callback: impl FnMut() + 'static) -> Self {
+        self.element.on_submit = Some(std::rc::Rc::new(std::cell::RefCell::new(Box::new(
+            callback,
+        ))));
+        self
+    }
+    pub fn on_composition_change(mut self, callback: impl FnMut(Option<String>) + 'static) -> Self {
+        self.element.on_composition_change = Some(std::rc::Rc::new(std::cell::RefCell::new(
+            Box::new(callback),
+        )));
+        self
+    }
+    /// Terminal/portable host insertion constraint, in UTF-16 code units.
+    pub fn max_length(mut self, value: usize) -> Self {
+        if let NodeContent::Input { max_length, .. } | NodeContent::Textarea { max_length, .. } =
+            &mut self.element.descriptor.content
+        {
+            *max_length = Some(value);
+        }
+        self
+    }
     pub fn placeholder(mut self, placeholder: impl ToString) -> Self {
         if let NodeContent::Input {
             placeholder: current,
@@ -162,7 +189,7 @@ impl From<InputBuilder> for Element {
         builder.element
     }
 }
-impl crate::core::tree::IntoElementList for InputBuilder {
+impl jadix::portable::core::tree::IntoElementList for InputBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }
@@ -174,7 +201,10 @@ pub struct InputProps {
     pub placeholder: Option<String>,
     pub disabled: Option<bool>,
     pub password: Option<bool>,
+    pub max_length: Option<usize>,
     pub value: Option<Signal<String>>,
+    pub on_submit: Option<Handler>,
+    pub on_composition_change: Option<Handler<Option<String>>>,
     pub children: Option<Element>,
     pub base: Base,
 }
@@ -188,6 +218,15 @@ pub fn Input(props: InputProps) -> Element {
     if let Some(value) = props.value {
         builder = builder.value_signal(value);
     }
+    if let Some(limit) = props.max_length {
+        builder = builder.max_length(limit);
+    }
+    if let Some(mut callback) = props.on_submit {
+        builder = builder.on_submit(move || callback.call(()));
+    }
+    if let Some(mut callback) = props.on_composition_change {
+        builder = builder.on_composition_change(move |value| callback.call(value));
+    }
     let element = builder.into();
     match props.base {
         Some(base) => base(element),
@@ -195,7 +234,7 @@ pub fn Input(props: InputProps) -> Element {
     }
 }
 pub fn scroll_area(id: &str) -> Element {
-    jadix::primitives::scroll().id(id)
+    jadix::portable::primitives::scroll().id(id)
 }
 
 pub fn textarea(id: &str) -> InputBuilder {
@@ -205,10 +244,12 @@ pub fn textarea(id: &str) -> InputBuilder {
         placeholder,
         enabled,
         revision,
+        max_length,
         ..
     } = builder.element.descriptor.content
     {
         builder.element.descriptor.content = NodeContent::Textarea {
+            max_length,
             value,
             placeholder,
             enabled,
@@ -224,7 +265,7 @@ pub struct CheckboxBuilder {
 
 pub fn checkbox(id: impl Into<String>) -> CheckboxBuilder {
     let id = id.into();
-    let value = crate::use_scoped_signal(&format!("{id}__checkbox"), || false);
+    let value = jadix::portable::use_scoped_signal(&format!("{id}__checkbox"), || false);
     let mut element = Element::new().id(id);
     element.descriptor.content = NodeContent::Checkbox {
         label: String::new(),
@@ -259,7 +300,7 @@ impl From<CheckboxBuilder> for Element {
         builder.element
     }
 }
-impl crate::core::tree::IntoElementList for CheckboxBuilder {
+impl jadix::portable::core::tree::IntoElementList for CheckboxBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }
@@ -300,7 +341,7 @@ pub type SwitchProps = CheckboxProps;
 
 pub fn switch(id: impl Into<String>) -> SwitchBuilder {
     let id = id.into();
-    let value = crate::use_scoped_signal(&format!("{id}__switch"), || false);
+    let value = jadix::portable::use_scoped_signal(&format!("{id}__switch"), || false);
     let mut element = Element::new().id(id);
     element.descriptor.content = NodeContent::Switch {
         label: String::new(),
@@ -358,7 +399,7 @@ impl From<ImageBuilder> for Element {
         builder.element
     }
 }
-impl crate::core::tree::IntoElementList for ImageBuilder {
+impl jadix::portable::core::tree::IntoElementList for ImageBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }

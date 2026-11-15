@@ -1284,34 +1284,19 @@ pub(super) fn build_color_picker_view(
     );
     if !disabled {
         let open_t = open;
-        let trig = trigger_focus_id(&id);
         trigger = trigger
-            .on_click({
-                let trig = trig.clone();
-                move || {
-                    if open_t.peek() {
-                        close_picker(open_t, trig.clone());
-                    } else {
-                        open_t.set(true);
-                    }
-                }
+            .on_click(move || {
+                open_t.set(!open_t.peek());
             })
             .on_key_down({
                 let open_k = open;
-                let trig = trig.clone();
                 move |ev| match &ev.logical_key {
                     Key::Named(NamedKey::Escape) => {
                         open_k.set(false);
-                        focus_by_id(trig.clone());
                         true
                     }
                     k if crate::utils::keyboard::is_enter_or_space(k) => {
-                        if open_k.peek() {
-                            open_k.set(false);
-                            focus_by_id(trig.clone());
-                        } else {
-                            open_k.set(true);
-                        }
+                        open_k.set(!open_k.peek());
                         true
                     }
                     _ => false,

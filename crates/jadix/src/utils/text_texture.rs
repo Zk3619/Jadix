@@ -468,6 +468,7 @@ pub fn ensure_text_xform_texture_spans(
         span.italic.hash(&mut hasher);
         span.monospace.hash(&mut hasher);
         span.underline.hash(&mut hasher);
+        span.strikethrough.hash(&mut hasher);
     }
     size_key.hash(&mut hasher);
     font_weight.hash(&mut hasher);
@@ -486,7 +487,7 @@ pub fn ensure_text_xform_texture_spans(
     let as_sdf = as_sdf && !wants_emoji_color;
     as_sdf.hash(&mut hasher);
     wants_emoji_color.hash(&mut hasher);
-    11u8.hash(&mut hasher); // rich-span + oversample stem + Coverage line-height
+    12u8.hash(&mut hasher); // rich-span chrome + oversample stem + Coverage line-height
     let prefix = if as_sdf {
         TEXT_MSDF_TEX_PREFIX
     } else {
@@ -1193,7 +1194,7 @@ fn composite_twemoji_into_bake(
 }
 
 /// Fill chip/mention pill backgrounds into `rgba` before glyph blits (metadata = span_index+1).
-fn paint_span_backgrounds(
+fn paint_span_chrome(
     rgba: &mut [u8],
     tw: u32,
     th: u32,
@@ -1202,8 +1203,13 @@ fn paint_span_backgrounds(
     dpr: f32,
     origin_x: i32,
     origin_y: i32,
+    default_color: [u8; 4],
+    font_size: f32,
 ) {
-    if !spans.iter().any(|s| s.background.is_some()) {
+    if !spans
+        .iter()
+        .any(|s| s.background.is_some() || s.underline || s.strikethrough)
+    {
         return;
     }
     for run in buffer.layout_runs() {
@@ -1216,20 +1222,46 @@ fn paint_span_backgrounds(
             let Some(span) = spans.get(meta.saturating_sub(1)) else {
                 return;
             };
-            let Some(bg) = span.background else {
-                return;
-            };
             if max_x <= min_x {
                 return;
             }
-            let pad = span.padding_x * dpr;
-            let bx = ((min_x - pad) * dpr).round() as i32 + origin_x;
-            let by = (line_top * dpr).round() as i32 + origin_y;
-            let bw = ((max_x - min_x) + 2.0 * pad) * dpr;
-            let bh = line_height.max(1.0) * dpr;
-            let rw = bw.round().max(1.0) as i32;
-            let rh = bh.round().max(1.0) as i32;
-            fill_rect_rgba(rgba, tw, th, bx, by, rw, rh, bg);
+            // Buffer metrics and glyph positions are already in physical pixels.
+            // Only authored padding/span sizes still need the DPR conversion.
+            let x = min_x.round() as i32 + origin_x;
+            let width = (max_x - min_x).round().max(1.0) as i32;
+            if let Some(bg) = span.background {
+                let pad = span.padding_x * dpr;
+                fill_rect_rgba(
+                    rgba,
+                    tw,
+                    th,
+                    (min_x - pad).round() as i32 + origin_x,
+                    line_top.round() as i32 + origin_y,
+                    (max_x - min_x + 2.0 * pad).round().max(1.0) as i32,
+                    line_height.round().max(1.0) as i32,
+                    bg,
+                );
+            }
+            let size = span.size.map(|s| s * dpr).unwrap_or(font_size);
+            let thickness = (size / 14.0).round().max(1.0) as i32;
+            let color = span.color.unwrap_or(default_color);
+            for (enabled, y) in [
+                (span.underline, run.line_y + size * 0.08),
+                (span.strikethrough, run.line_y - size * 0.3),
+            ] {
+                if enabled {
+                    fill_rect_rgba(
+                        rgba,
+                        tw,
+                        th,
+                        x,
+                        y.round() as i32 + origin_y,
+                        width,
+                        thickness,
+                        color,
+                    );
+                }
+            }
         };
         for g in run.glyphs.iter() {
             let meta = g.metadata;
@@ -1366,6 +1398,8 @@ fn rasterize_rich_text_rgba(
                 a = a.family(glyphon::Family::Monospace);
             }
             if span.background.is_some()
+                || span.underline
+                || span.strikethrough
                 || matches!(span.kind, TextSpanKind::Chip | TextSpanKind::Mention)
             {
                 a = a.metadata(si + 1);
@@ -1381,7 +1415,18 @@ fn rasterize_rich_text_rgba(
         buffer.shape_until_scroll(fs, false);
 
         let mut rgba = vec![0u8; (tw as usize) * (th as usize) * 4];
-        paint_span_backgrounds(&mut rgba, tw, th, &buffer, spans, dpr, origin_x, origin_y);
+        paint_span_chrome(
+            &mut rgba,
+            tw,
+            th,
+            &buffer,
+            spans,
+            dpr,
+            origin_x,
+            origin_y,
+            default_color,
+            size,
+        );
 
         let mut swash = glyphon::SwashCache::new();
         for run in buffer.layout_runs() {

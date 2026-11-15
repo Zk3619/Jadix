@@ -329,6 +329,12 @@ where
                 #[cfg(feature = "grid")]
                 (Display::Grid, true) => compute_grid_layout(tree, node_id, inputs),
                 (_, false) => {
+                    // A container can become a leaf after its last child is
+                    // removed. Cached out-of-flow rounding IDs must not survive
+                    // that transition; intrinsic-only passes keep final data.
+                    if inputs.run_mode == RunMode::PerformLayout {
+                        tree.clear_hoisted_children(node_id);
+                    }
                     let node_key = node_id.into();
                     let style = &tree.taffy.nodes[node_key].style;
                     let has_context = tree.taffy.nodes[node_key].has_context;
@@ -1121,6 +1127,42 @@ mod tests {
         assert!(taffy.children.capacity() >= CAPACITY);
         assert!(taffy.parents.capacity() >= CAPACITY);
         assert!(taffy.nodes.capacity() >= CAPACITY);
+    }
+
+    #[cfg(feature = "flexbox")]
+    #[test]
+    fn removing_last_absolute_child_clears_hoisted_rounding_ids() {
+        let mut tree: TaffyTree<()> = TaffyTree::new();
+        let child = tree
+            .new_leaf(Style {
+                position: crate::Position::Absolute,
+                size: Size {
+                    width: Dimension::length(10.0),
+                    height: Dimension::length(10.0),
+                },
+                ..Style::default()
+            })
+            .unwrap();
+        let root = tree
+            .new_with_children(
+                Style {
+                    size: Size {
+                        width: Dimension::length(100.0),
+                        height: Dimension::length(100.0),
+                    },
+                    ..Style::default()
+                },
+                &[child],
+            )
+            .unwrap();
+        tree.compute_layout(root, Size::MAX_CONTENT).unwrap();
+        assert_eq!(tree.hoisted_children(root).unwrap(), &[child]);
+        tree.set_children(root, &[]).unwrap();
+        tree.remove(child).unwrap();
+        tree.compute_layout(root, Size::MAX_CONTENT).unwrap();
+        assert!(tree.hoisted_children(root).unwrap().is_empty());
+        tree.compute_layout(root, Size::MAX_CONTENT).unwrap();
+        assert_eq!(tree.layout(root).unwrap().size.width, 100.0);
     }
 
     #[test]

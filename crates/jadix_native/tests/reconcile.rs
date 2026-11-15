@@ -32,6 +32,7 @@ fn capability_admission_preserves_lifecycle_and_focus_contracts() {
     for content in [
         NodeContent::Scroll,
         NodeContent::Input {
+            max_length: None,
             value: String::new(),
             placeholder: String::new(),
             enabled: true,
@@ -66,6 +67,8 @@ fn node(id: NodeId, content: NodeContent, children: Vec<PresentationNode>) -> Pr
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: Default::default(),
         },
@@ -185,6 +188,7 @@ fn duplicate_foreign_or_unsupported_snapshots_do_not_change_the_tree() {
         root.reconcile(&[node(
             NodeId::new(root.id()),
             NodeContent::Input {
+                max_length: None,
                 value: String::new(),
                 placeholder: String::new(),
                 enabled: true,

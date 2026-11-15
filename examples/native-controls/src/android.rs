@@ -76,7 +76,7 @@ fn with_app(
     output(env, result)
 }
 
-#[cfg(feature = "notes")]
+#[cfg(any(feature = "notes", feature = "field-workflow"))]
 #[no_mangle]
 pub extern "system" fn Java_dev_jadix_nativeui_NotesActivity_nativeStorageResult(
     mut env: JNIEnv<'_>,
@@ -96,6 +96,17 @@ pub extern "system" fn Java_dev_jadix_nativeui_NotesActivity_nativeStorageResult
         app.storage_result(error)?;
         Ok(app.state())
     })
+}
+
+#[cfg(feature = "field-workflow")]
+#[no_mangle]
+pub extern "system" fn Java_dev_jadix_nativeui_FieldActivity_nativeStorageResult(
+    env: JNIEnv<'_>,
+    class: JClass<'_>,
+    token: JString<'_>,
+    error: JString<'_>,
+) -> jstring {
+    Java_dev_jadix_nativeui_NotesActivity_nativeStorageResult(env, class, token, error)
 }
 
 #[no_mangle]

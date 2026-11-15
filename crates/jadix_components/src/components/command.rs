@@ -168,8 +168,15 @@ fn extract_text_leaf(el: &Element) -> String {
 }
 
 fn label_matches_query(label: &str, query: &str) -> bool {
-    let q = query.to_ascii_lowercase();
-    q.is_empty() || label.to_ascii_lowercase().contains(&q)
+    query.is_empty() || label.to_lowercase().contains(&query.to_lowercase())
+}
+
+fn command_item_matches_query(label: &str, value: &str, keywords: &[String], query: &str) -> bool {
+    label_matches_query(label, query)
+        || label_matches_query(value, query)
+        || keywords
+            .iter()
+            .any(|keyword| label_matches_query(keyword, query))
 }
 
 fn has_shortcut_slot(el: &Element) -> bool {
@@ -620,6 +627,7 @@ fn command_overlay_panel(inner: Element, overlay_id: &str) -> Element {
 pub struct CommandAction {
     pub id: String,
     pub label: String,
+    pub keywords: Vec<String>,
     pub shortcut: Option<String>,
     pub disabled: bool,
     pub run: Rc<dyn Fn()>,
@@ -630,6 +638,7 @@ impl CommandAction {
         Self {
             id: id.into(),
             label: label.into(),
+            keywords: Vec::new(),
             shortcut: None,
             disabled: false,
             run: Rc::new(run),
@@ -638,6 +647,16 @@ impl CommandAction {
 
     pub fn shortcut(mut self, s: impl Into<String>) -> Self {
         self.shortcut = Some(s.into());
+        self
+    }
+
+    /// Additional terms that should match this command in the search field.
+    pub fn keywords<I, S>(mut self, keywords: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.keywords.extend(keywords.into_iter().map(Into::into));
         self
     }
 
@@ -810,6 +829,7 @@ fn builder_item(a: CommandAction) -> Element {
         value: Some(a.id),
         disabled: Some(a.disabled),
         checked: None,
+        keywords: Some(a.keywords),
         on_click: Some(Handler::new(move |_| (run)())),
         children: Some(frag.children(kids)),
         base: None,
@@ -1208,6 +1228,7 @@ pub fn CommandItem(
 default [] value: String,
 default [] disabled: bool,
 default [] checked: bool,
+plain [] keywords: Option<Vec<String>>,
 default [mut] on_click: Handler,
 plain [] children: Option<Element>,
 ) -> Element {
@@ -1225,8 +1246,9 @@ plain [] children: Option<Element>,
     } else {
         value
     };
+    let keywords = keywords.unwrap_or_default();
     let query = query_of(&ctx);
-    if !label_matches_query(&label_text, &query) && !label_matches_query(&value, &query) {
+    if !command_item_matches_query(&label_text, &value, &keywords, &query) {
         let mut hidden = Element::new().w(0.0).h(0.0);
         hidden.set_attr("jadix_command_hidden", "1");
         return hidden;
@@ -1578,6 +1600,7 @@ pub struct CommandItemBuilder {
     value: String,
     disabled: bool,
     checked: bool,
+    keywords: Vec<String>,
     children: Vec<Element>,
     chrome: SlotChrome,
 }
@@ -1587,6 +1610,7 @@ pub fn command_item(value: impl Into<String>) -> CommandItemBuilder {
         value: value.into(),
         disabled: false,
         checked: false,
+        keywords: Vec::new(),
         children: Vec::new(),
         chrome: SlotChrome::default(),
     }
@@ -1601,6 +1625,14 @@ impl CommandItemBuilder {
     }
     pub fn checked(mut self, v: bool) -> Self {
         self.checked = v;
+        self
+    }
+    pub fn keywords<I, S>(mut self, keywords: I) -> Self
+    where
+        I: IntoIterator<Item = S>,
+        S: Into<String>,
+    {
+        self.keywords.extend(keywords.into_iter().map(Into::into));
         self
     }
     pub fn child(mut self, child: impl Into<Element>) -> Self {
@@ -1620,6 +1652,7 @@ impl From<CommandItemBuilder> for Element {
             value: Some(builder.value),
             disabled: Some(builder.disabled),
             checked: Some(builder.checked),
+            keywords: Some(builder.keywords),
             on_click: Default::default(),
             children: crate::components::base::packed_children(builder.children),
             base: None,

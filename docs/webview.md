@@ -12,9 +12,21 @@ All backends use the same logical document bounds and a separate visible clip. S
 | Android | android.webkit.WebView in a clipped Activity child | Java source integration below; aarch64 Rust check and Java compile verified, device run remains required |
 | Linux Wayland / OpenHarmony | Host bridge required | Report an explicit failure/unsupported status; embedding is not implemented |
 
+## Evaluating JavaScript
+
+With the `webview` feature enabled, `webview_evaluate(id, script)` returns a `WebEvaluation` future that resolves to a JSON value, including values produced by JavaScript Promises:
+
+```rust
+use jadix::webview_evaluate;
+
+let result = webview_evaluate("preview", "Promise.resolve({ title: document.title })").await?;
+```
+
+Call it on the Jadix UI thread after `webview_status(id)` reports `WebViewStatus::Ready`, and keep the normal event loop running while awaiting the result. The native callbacks complete evaluations through a separate channel from page messages. A 30-second deadline bounds each request; navigation, view teardown, or dropping the future aborts it. Scripts and serialized results are limited to 1 MiB, with JSON nesting limited to 64 levels. JavaScript exceptions and non-JSON results are returned as errors. Apple/Wry, Android, and Windows hosts have native callback integration; Linux WebKitGTK and actual device/runtime execution still need platform validation.
+
 ## Android application integration
 
-Copy `crates/jadix_components/src/components/webview/android/JadixWebViewHost.java` into the application Java source set (`org/jadix/webview/JadixWebViewHost.java`). The helper works with the existing NativeActivity/GameActivity and dispatches view changes on the Activity UI thread. It does not require replacing the Activity. Keep this class and its static methods when enabling minification:
+Copy `crates/jadix/src/platform/webview/android/JadixWebViewHost.java` into the application Java source set (`org/jadix/webview/JadixWebViewHost.java`). The helper works with the existing NativeActivity/GameActivity and dispatches view changes on the Activity UI thread. It does not require replacing the Activity. Keep this class and its static methods when enabling minification:
 
 ```proguard
 -keep class org.jadix.webview.JadixWebViewHost { *; }

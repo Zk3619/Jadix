@@ -4,6 +4,35 @@ use std::sync::atomic::{AtomicU64, Ordering};
 const MAX_FONTS: usize = 8;
 const MAX_BYTES: usize = 8 * 1024 * 1024;
 
+pub(super) fn resolve_family(requested: &str) -> String {
+    if requested != "system-ui" {
+        return requested.into();
+    }
+    let mut metrics = NONCLIENTMETRICSW::default();
+    metrics.cbSize = std::mem::size_of::<NONCLIENTMETRICSW>() as u32;
+    if unsafe {
+        SystemParametersInfoW(
+            SPI_GETNONCLIENTMETRICS,
+            metrics.cbSize,
+            std::ptr::addr_of_mut!(metrics).cast(),
+            0,
+        )
+    } != 0
+    {
+        let name = metrics.lfMessageFont.lfFaceName;
+        let length = name
+            .iter()
+            .position(|character| *character == 0)
+            .unwrap_or(name.len());
+        if let Ok(family) = String::from_utf16(&name[..length]) {
+            if !family.is_empty() {
+                return family;
+            }
+        }
+    }
+    "Segoe UI".into()
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct FontId(u64);
 
@@ -147,14 +176,11 @@ impl WindowsHost {
             .get(&id)
             .ok_or("unknown native font lease")?;
         if self.controls.values().any(|control| {
-            font.registration.families.iter().any(|family| {
-                let requested = if control.descriptor.style.font_family == "system-ui" {
-                    "Segoe UI"
-                } else {
-                    &control.descriptor.style.font_family
-                };
-                family.to_lowercase() == requested.to_lowercase()
-            })
+            let requested = resolve_family(&control.descriptor.style.font_family);
+            font.registration
+                .families
+                .iter()
+                .any(|family| family.to_lowercase() == requested.to_lowercase())
         }) {
             return Err("native font is still referenced by mounted controls".into());
         }

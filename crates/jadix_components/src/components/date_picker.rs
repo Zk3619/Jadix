@@ -29,47 +29,37 @@
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
 use crate::app::reactive::{reactive_anchor, reactive_component_live, reactive_placeholder_sized};
-use crate::components::base::{paint_slot, SlotChrome, SlotMap};
+use crate::components::base::{SlotChrome, SlotMap, paint_slot};
 use crate::components::button::button;
 use crate::components::calendar::{
-    calendar, calendar_month_select, calendar_year_select, days_in_month, format_long_date,
-    format_month_year, parse_ymd, weekday, CalendarCaption, CALENDAR_W,
+    CALENDAR_W, CalendarCaption, calendar, calendar_month_select, calendar_year_select,
+    days_in_month, format_long_date, format_month_year, parse_ymd, weekday,
 };
-use crate::components::combobox::{combobox, ComboboxItemData};
+use crate::components::combobox::{ComboboxItemData, combobox};
 use crate::components::separator::separator;
-use crate::core::reactivity::{isolate_reads, use_signal, with_child_owner, Signal};
-use crate::core::tree::{parse_text_color, Element};
+use crate::core::reactivity::{Signal, isolate_reads, use_signal, with_child_owner};
+use crate::core::tree::{Element, parse_text_color};
 use crate::primitives::r#box::{hstack, vstack};
 use crate::tokens;
 use crate::utils::anchored_overlay::{
-    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
-    FloatingMotionKind, FloatingStrategy, Placement,
+    AnchoredOverlayContentOpts, FloatingMotionKind, FloatingStrategy, Placement,
+    anchored_overlay_content, provide_anchored_overlay_context,
 };
 use crate::utils::controlled::{resolve_open_signal, resolve_string_signal};
 use crate::utils::lucide_glyph;
 use crate::utils::popup::{
-    flow_hidden_portal_host, PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W,
-    FLOATING_TRIGGER_GAP,
+    ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MIN_W, FLOATING_TRIGGER_GAP, PopupPlacement,
+    flow_hidden_portal_host,
 };
-use crate::utils::roving::{focus_by_id, focus_id_only};
+use crate::utils::roving::focus_id_only;
 use crate::utils::text_field::{commit_value_sig, input_value_signal_key};
-use crate::utils::text_node::{build_icon_text_node, build_text_node, TextNodeConfig};
+use crate::utils::text_node::{TextNodeConfig, build_icon_text_node, build_text_node};
 use winit::keyboard::{Key, NamedKey};
 
 const SLOT_CONTENT: &str = "date-picker-content";
 
 fn trigger_focus_id(id: &str) -> String {
     format!("{id}:trigger")
-}
-
-fn close_picker(open: Signal<bool>, trigger_fid: impl Into<String>) {
-    open.set(false);
-    focus_id_only(trigger_fid.into());
-}
-
-fn close_picker_keyboard(open: Signal<bool>, trigger_fid: impl Into<String>) {
-    open.set(false);
-    focus_by_id(trigger_fid.into());
 }
 
 fn chevron_down_icon() -> Element {
@@ -600,7 +590,6 @@ fn build_date_picker_view(
                 return trigger;
             }
             let open_focus = picker_open_focus_id(&id, kind);
-            let trig = trigger_focus_id(&id);
             trigger
                 .on_click({
                     let open_t = open;
@@ -608,7 +597,6 @@ fn build_date_picker_view(
                     let month_t = month;
                     let val_peek = val;
                     let open_focus = open_focus.clone();
-                    let trig = trig.clone();
                     move || {
                         if !open_t.peek() {
                             if let Some((yy, mm, _)) = parse_ymd(&val_peek.peek()) {
@@ -618,7 +606,7 @@ fn build_date_picker_view(
                             open_t.set(true);
                             focus_id_only(open_focus.clone());
                         } else {
-                            close_picker(open_t, trig.clone());
+                            open_t.set(false);
                         }
                     }
                 })
@@ -628,15 +616,14 @@ fn build_date_picker_view(
                     let month_k = month;
                     let val_k = val;
                     let open_focus = open_focus.clone();
-                    let trig = trig.clone();
                     move |ev| match &ev.logical_key {
                         Key::Named(NamedKey::Escape) => {
-                            close_picker_keyboard(open_k, trig.clone());
+                            open_k.set(false);
                             true
                         }
                         k if crate::utils::keyboard::is_enter_or_space(k) => {
                             if open_k.peek() {
-                                close_picker_keyboard(open_k, trig.clone());
+                                open_k.set(false);
                             } else {
                                 if let Some((yy, mm, _)) = parse_ymd(&val_k.peek()) {
                                     year_k.set(yy);
@@ -761,7 +748,6 @@ fn build_date_picker_panel_content(
             let v_sig = val;
             let o_sig = open;
             let kind_c = kind;
-            let trig = trigger_focus_id(id);
             let h_sig = hour;
             let mi_sig = minute;
             let s_sig = second;
@@ -776,7 +762,7 @@ fn build_date_picker_panel_content(
                             format_hms_parts(&h_sig.peek(), &mi_sig.peek(), &s_sig.peek())
                         ));
                     } else {
-                        close_picker(o_sig, trig.clone());
+                        o_sig.set(false);
                     }
                 })
                 .into();
@@ -802,8 +788,6 @@ fn build_date_picker_panel_content(
             // Select → year/month：独立订阅，避免重建 caption Select。
             let sync_id = format!("{id}__dp_month_sync");
             {
-                let id = id.to_string();
-
                 reactive_anchor(sync_id.clone(), move || {
                     let ys = y_sel.get();
                     let ms = m_sel.get();
@@ -818,7 +802,7 @@ fn build_date_picker_panel_content(
                         if (1..=12).contains(&mm) && mm != m_now {
                             month.set(mm);
                             val.set(format!("{:04}-{:02}", year.peek(), mm));
-                            close_picker(open, trigger_focus_id(&id));
+                            open.set(false);
                         }
                     }
                     let y_now = year.peek();
@@ -891,7 +875,6 @@ fn build_date_picker_panel_content(
                 let y_c = y;
                 let m_c = m;
                 let day = d;
-                let trig = trigger_focus_id(id);
                 let bid = format!("{id}:w{week_idx}");
                 let label = format!("W{week_idx} · {y_c:04}-{m_c:02}-{day:02}");
                 let row: Element = button(&bid)
@@ -900,7 +883,7 @@ fn build_date_picker_panel_content(
                     .w("100%")
                     .on_click(move || {
                         v_sig.set(format!("{y_c:04}-{m_c:02}-{day:02}"));
-                        close_picker(o_sig, trig.clone());
+                        o_sig.set(false);
                     })
                     .text(label)
                     .into();

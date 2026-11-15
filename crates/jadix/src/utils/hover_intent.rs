@@ -27,6 +27,74 @@ struct PendingTimer {
 
 thread_local! {
     static TIMERS: RefCell<HashMap<String, PendingTimer>> = RefCell::new(HashMap::new());
+    static POINTER_TOOLTIPS: RefCell<HashMap<String, Signal<bool>>> = RefCell::new(HashMap::new());
+    static POINTER_TOOLTIP_GRACE_UNTIL: RefCell<Option<Instant>> = const { RefCell::new(None) };
+}
+
+/// Default delay before a pointer hover opens a tooltip, hover card, or similar surface.
+pub const DEFAULT_HOVER_OPEN_DELAY_MS: u64 = 300;
+
+/// Disable the corresponding hover transition without scheduling a wakeup.
+/// Explicit open state changes and keyboard focus remain available.
+pub const NEVER_HOVER_DELAY_MS: u64 = u64::MAX;
+
+const POINTER_TOOLTIP_GRACE: Duration = Duration::from_millis(DEFAULT_HOVER_OPEN_DELAY_MS);
+
+fn pointer_tooltip_grace_active(until: Option<Instant>, now: Instant) -> bool {
+    until.is_some_and(|deadline| deadline > now)
+}
+
+/// Track pointer-originated tooltip handoffs. Returns true when this tooltip
+/// should bypass its configured open delay.
+pub fn pointer_tooltip_enter(id: &str, open: Signal<bool>) -> bool {
+    let now = Instant::now();
+    let in_grace = POINTER_TOOLTIP_GRACE_UNTIL.with(|grace| {
+        let mut grace = grace.borrow_mut();
+        if !pointer_tooltip_grace_active(*grace, now) {
+            *grace = None;
+        }
+        pointer_tooltip_grace_active(*grace, now)
+    });
+    let another_open = POINTER_TOOLTIPS.with(|tooltips| {
+        tooltips
+            .borrow()
+            .iter()
+            .any(|(other_id, other_open)| other_id != id && other_open.peek())
+    });
+    POINTER_TOOLTIPS.with(|tooltips| {
+        tooltips.borrow_mut().insert(id.to_string(), open);
+    });
+    in_grace || another_open
+}
+
+/// End pointer ownership for one tooltip and begin the short handoff grace
+/// period when the pointer leaves an open tooltip with no successor.
+pub fn pointer_tooltip_leave(id: &str) {
+    let was_open = POINTER_TOOLTIPS.with(|tooltips| {
+        tooltips
+            .borrow_mut()
+            .remove(id)
+            .is_some_and(|open| open.peek())
+    });
+    let another_open =
+        POINTER_TOOLTIPS.with(|tooltips| tooltips.borrow().values().any(|open| open.peek()));
+    if was_open && !another_open {
+        POINTER_TOOLTIP_GRACE_UNTIL.with(|grace| {
+            *grace.borrow_mut() = Some(Instant::now() + POINTER_TOOLTIP_GRACE);
+        });
+    }
+}
+
+/// Remove pointer state when a tooltip owner is disposed.
+pub fn clear_pointer_tooltip(id: &str) {
+    POINTER_TOOLTIPS.with(|tooltips| {
+        tooltips.borrow_mut().remove(id);
+    });
+}
+
+/// Stop a pending hover handoff when an explicit user action takes over.
+pub fn end_pointer_tooltip_grace() {
+    POINTER_TOOLTIP_GRACE_UNTIL.with(|grace| *grace.borrow_mut() = None);
 }
 
 /// Dual-region hover + delayed open/close signals for one overlay instance.
@@ -69,6 +137,10 @@ fn settle_close(open: Signal<bool>, trigger_hovered: Signal<bool>, content_hover
 }
 
 fn arm(id: &str, delay_ms: u64, kind: TimerKind, intent: HoverIntent) {
+    if delay_ms == NEVER_HOVER_DELAY_MS {
+        clear(id);
+        return;
+    }
     if delay_ms == 0 {
         match kind {
             TimerKind::Open => {
@@ -81,7 +153,10 @@ fn arm(id: &str, delay_ms: u64, kind: TimerKind, intent: HoverIntent) {
         clear(id);
         return;
     }
-    let at = Instant::now() + Duration::from_millis(delay_ms);
+    let Some(at) = Instant::now().checked_add(Duration::from_millis(delay_ms)) else {
+        clear(id);
+        return;
+    };
     TIMERS.with(|m| {
         m.borrow_mut().insert(
             id.to_string(),
@@ -97,12 +172,12 @@ fn arm(id: &str, delay_ms: u64, kind: TimerKind, intent: HoverIntent) {
     request_redraw();
 }
 
-/// Schedule open after `open_delay_ms` (0 = immediate when still hovered).
+/// Schedule open after `open_delay_ms` (0 = immediate; [`NEVER_HOVER_DELAY_MS`] = never).
 pub fn arm_open(id: &str, intent: HoverIntent) {
     arm(id, intent.open_delay_ms.peek(), TimerKind::Open, intent);
 }
 
-/// Schedule close after `close_delay_ms` (0 = immediate when neither region hovered).
+/// Schedule close after `close_delay_ms` (0 = immediate; [`NEVER_HOVER_DELAY_MS`] = never).
 pub fn arm_close(id: &str, intent: HoverIntent) {
     arm(id, intent.close_delay_ms.peek(), TimerKind::Close, intent);
 }
@@ -133,6 +208,11 @@ pub fn bind_hover_intent_effect(id: &str, intent: HoverIntent) {
 /// Settle expired timers; called from lifecycle. Returns whether `open` changed.
 pub fn tick_hover_intent() -> bool {
     let now = Instant::now();
+    POINTER_TOOLTIP_GRACE_UNTIL.with(|grace| {
+        if !pointer_tooltip_grace_active(*grace.borrow(), now) {
+            *grace.borrow_mut() = None;
+        }
+    });
     let due: Vec<(String, PendingTimer)> = TIMERS.with(|m| {
         let mut map = m.borrow_mut();
         let keys: Vec<String> = map
@@ -166,7 +246,9 @@ pub fn tick_hover_intent() -> bool {
 
 /// Next Instant when the event loop should wake.
 pub fn hover_intent_next_wake_at() -> Option<Instant> {
-    TIMERS.with(|m| m.borrow().values().map(|t| t.at).min())
+    let timer_wake = TIMERS.with(|m| m.borrow().values().map(|t| t.at).min());
+    let grace_wake = POINTER_TOOLTIP_GRACE_UNTIL.with(|grace| *grace.borrow());
+    timer_wake.into_iter().chain(grace_wake).min()
 }
 
 pub fn set_hovered(sig: Signal<bool>, v: bool) {

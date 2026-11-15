@@ -1,5 +1,8 @@
+pub mod commands;
 pub mod dock;
+pub mod environment;
 pub mod event;
+pub mod menu;
 pub mod path;
 pub mod presentation;
 pub mod reactivity;
@@ -7,5 +10,6 @@ pub mod schema;
 pub mod store;
 pub mod tree;
 pub mod virtualization;
+pub mod web_evaluation;
 pub use reactivity::*;
 pub use store::*;

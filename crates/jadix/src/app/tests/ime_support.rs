@@ -318,6 +318,90 @@ fn finish_composition_inserts_at_extra_carets() {
 }
 
 #[test]
+fn finish_composition_publishes_settled_controlled_edit_before_reentrant_callback() {
+    use crate::core::reactivity::{create_effect, create_signal, use_signal};
+    use crate::utils::text_field::*;
+    use std::cell::{Cell, RefCell};
+    use std::rc::Rc;
+
+    let (_owner, ()) = crate::core::reactivity::create_root(|| {
+        let rest = "ime-finish-atomic";
+        let fid = format!("input:{rest}");
+        let value = use_signal(&input_value_signal_key(rest), String::new);
+        let external = create_signal("a字".to_string());
+        value.set(external.peek());
+        bind_controlled_value(rest, external);
+        let preedit = use_signal(&input_preedit_signal_key(rest), String::new);
+        let anchor = use_signal(&input_ime_anchor_signal_key(rest), || None::<usize>);
+        let caret = use_signal(&input_caret_signal_key(rest), || None::<usize>);
+        preedit.set("shi'jie".into());
+        anchor.set(Some(1));
+        caret.set(Some(1));
+        let snapshots = Rc::new(RefCell::new(Vec::new()));
+        let output = snapshots.clone();
+        create_effect(move || {
+            output.borrow_mut().push((
+                value.get(),
+                external.get(),
+                preedit.get(),
+                anchor.get(),
+                caret.get(),
+            ));
+        });
+        let changes = Rc::new(Cell::new(0));
+        let changed = changes.clone();
+        create_effect(move || {
+            external.get();
+            changed.set(changed.get() + 1);
+        });
+        let ended = Rc::new(Cell::new(0));
+        let count = ended.clone();
+        let callback_fid = fid.clone();
+        let mut element = crate::core::tree::Element::new();
+        element.focus_id = Some(fid.clone());
+        crate::authoring::text::on_composition_change(&mut element, move |composition| {
+            assert!(composition.is_none());
+            assert_eq!(value.peek(), "ashijie字");
+            assert_eq!(external.peek(), value.peek());
+            assert!(preedit.peek().is_empty());
+            assert_eq!(anchor.peek(), None);
+            assert_eq!(caret.peek(), Some(7));
+            count.set(count.get() + 1);
+            finish_composition_preserve_text(&callback_fid);
+        });
+        finish_composition_preserve_text(&fid);
+        assert_eq!(
+            snapshots.borrow().len(),
+            2,
+            "publish only the settled composition edit"
+        );
+        assert_eq!(
+            snapshots.borrow()[1],
+            (
+                "ashijie字".into(),
+                "ashijie字".into(),
+                String::new(),
+                None,
+                Some(7)
+            )
+        );
+        finish_composition_preserve_text(&fid);
+        assert_eq!(value.peek(), "ashijie字");
+        assert_eq!(
+            changes.get(),
+            2,
+            "one controlled value change after initial observation"
+        );
+        assert_eq!(
+            ended.get(),
+            1,
+            "consume composition before callbacks can reenter"
+        );
+        clear_ime_end_drain();
+    });
+}
+
+#[test]
 fn field_to_field_focus_must_clear_end_drain() {
     // Mirrors `sync_ime_focus_owner`: after finish_* starts drain, landing on another
     // Input/Textarea (DevTools CSSOM ↔ app form) must clear it — IME stays allowed so
@@ -480,6 +564,36 @@ fn test_text_node(
         paint_origin: [x + w * 0.5, y + h * 0.5],
         glyph_raster: crate::renderer::GlyphRasterMode::Coverage,
     }
+}
+
+#[test]
+fn painted_ime_caret_line_tracks_hard_and_soft_wrapped_rows() {
+    let mut hard = test_text_node("first\nsecond\nthird", 0.0, 0.0, 160.0, 60.0, None, true);
+    let mut hard_first_line = hard.clone();
+    hard_first_line.y = 8.0;
+    hard_first_line
+        .style
+        .input_caret
+        .as_mut()
+        .unwrap()
+        .caret_byte_index = 0;
+    assert_eq!(painted_text_edit_candidate_y(&hard_first_line, 12.0), 8.0);
+    hard.style.input_caret.as_mut().unwrap().caret_byte_index = 13;
+    assert_eq!(painted_text_edit_caret_line(&hard), 2);
+    assert_eq!(painted_text_edit_candidate_y(&hard, 12.0), 24.0);
+
+    let mut soft = test_text_node("one two three four five", 0.0, 0.0, 32.0, 120.0, None, true);
+    soft.style.size = Some(16.0);
+    soft.style.input_caret.as_mut().unwrap().caret_byte_index = soft.text.len();
+    let soft_line = painted_text_edit_caret_line(&soft);
+    assert!(soft_line > 0);
+    assert_eq!(
+        painted_text_edit_candidate_y(&soft, 20.0),
+        soft_line as f32 * 20.0
+    );
+
+    let single_line = test_text_node("input", 0.0, 10.0, 160.0, 40.0, None, true);
+    assert_eq!(painted_text_edit_candidate_y(&single_line, 12.0), 10.0);
 }
 
 #[test]

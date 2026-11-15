@@ -23,6 +23,10 @@ jadix_components = "=0.1.0"
 
 ## 文档
 
+Tooltip 与 HoverCard Builder 使用 `.open_delay(300)` 和 `.close_delay(0)`，
+数值默认以毫秒为单位。共享打开延迟默认为 300ms，零值立即打开；
+RSX 根节点或 Trigger 使用 `openDelay` 与 `closeDelay`。
+
 便携 Tabs 支持 `tabs` Builder、`TabsList`／`TabsTrigger`／`TabsContent` 组合 RSX，
 共用受控值、惰性面板、水平／垂直方向键、Home／End、禁用项跳过与原生焦点请求。
 非活动面板卸载原生控件，保留 Element 与业务信号，重新激活时用新原生身份恢复文本。

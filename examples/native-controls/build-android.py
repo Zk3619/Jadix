@@ -66,7 +66,10 @@ def main():
     parser.add_argument("--sdk", type=Path, default=Path(os.environ["ANDROID_HOME"]) if os.environ.get("ANDROID_HOME") else None)
     parser.add_argument("--ndk", type=Path, default=Path(os.environ["NDK_HOME"]) if os.environ.get("NDK_HOME") else None)
     parser.add_argument("--java-home", type=Path, default=Path(os.environ["JAVA_HOME"]) if os.environ.get("JAVA_HOME") else None)
+    parser.add_argument("--field", action="store_true", help="Build the independent field workflow")
     args = parser.parse_args()
+    if args.field and any([args.notes, args.selection, args.popover, args.extended, args.large_list, args.project]):
+        parser.error("--field requires its own application without --project")
     if args.popover and (args.notes or args.selection or args.extended or args.large_list):
         parser.error("--popover cannot be combined with other sample features")
     if args.notes and (args.extended or args.large_list or args.selection):
@@ -129,6 +132,8 @@ def main():
         command += ["--features", "selection"]
     if args.popover:
         command += ["--features", "popover"]
+    if args.field:
+        command += ["--features", "field-workflow"]
     if args.notes:
         command += ["--features", "notes"]
     if args.large_list:
@@ -159,7 +164,7 @@ def main():
                 archive.write(source, source.relative_to(classes).as_posix())
     run([tools / ("d8" + command_suffix), "--min-api", "28", "--lib", platform, "--output", output, jar])
     apk = output / "native-controls-unsigned.apk"
-    manifest = project / "android/AndroidManifest.xml" if config else root / ("examples/native-controls/android/popover/AndroidManifest.xml" if args.popover else "examples/native-controls/android/notes/AndroidManifest.xml" if args.notes else "examples/native-controls/android/selection/AndroidManifest.xml" if args.selection else "examples/native-controls/android/AndroidManifest.xml")
+    manifest = project / "android/AndroidManifest.xml" if config else root / ("examples/native-controls/android/field/AndroidManifest.xml" if args.field else "examples/native-controls/android/popover/AndroidManifest.xml" if args.popover else "examples/native-controls/android/notes/AndroidManifest.xml" if args.notes else "examples/native-controls/android/selection/AndroidManifest.xml" if args.selection else "examples/native-controls/android/AndroidManifest.xml")
     run([tools / ("aapt2" + executable_suffix), "link", "-I", platform, "--manifest", manifest, "-o", apk])
     with zipfile.ZipFile(apk, "a", compression=zipfile.ZIP_DEFLATED) as archive:
         archive.write(output / "classes.dex", "classes.dex")
@@ -179,11 +184,11 @@ def main():
             native.file_identity(Path(path)) != identity for path, identity in toolchain["files"].items()):
         raise RuntimeError("Android native library or toolchain changed during packaging")
     report = {"schema": 1, "target": args.target, "abi": abi, "rust_profile": profile, "extended": args.extended,
-              "selection": args.selection, "popover": args.popover, "package_name": config["application_id"] if config else "dev.jadix.popover" if args.popover else "dev.jadix.selection" if args.selection else "dev.jadix.notebook" if args.notes else "dev.jadix.nativeui",
+              "selection": args.selection, "popover": args.popover, "package_name": config["application_id"] if config else "dev.jadix.field" if args.field else "dev.jadix.popover" if args.popover else "dev.jadix.selection" if args.selection else "dev.jadix.notebook" if args.notes else "dev.jadix.nativeui",
               "selection_authoring": "compound-primary-options-disabled" if args.selection else None,
-              "application": "project" if config else "notes" if args.notes else "controls",
+              "application": "project" if config else "field" if args.field else "notes" if args.notes else "controls",
               "project": str(project) if config else None,
-              "retained_rows": 0 if config or args.notes or args.selection or args.popover else 1000 if args.large_list else 100,
+              "retained_rows": 0 if config or args.field or args.notes or args.selection or args.popover else 1000 if args.large_list else 100,
               "debuggable": True, "signing": "development keystore; not a product release signature",
               "build_inputs": inputs, "toolchain": toolchain, "source_unchanged": True, "signed": True,
               "authenticity_verified": False, "runtime_acceptance": False,

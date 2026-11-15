@@ -1039,7 +1039,66 @@ pub fn parse_color(s: &str) -> [f32; 4] {
 }
 
 pub fn try_parse_text_color(s: &str) -> Option<[u8; 4]> {
-    try_parse_color(s).map(f32_to_u8)
+    let s = s.trim();
+    // Functional CSS alpha stays inside the function; utility alpha follows
+    // the complete color. Reject malformed modifiers before color-mix parsing.
+    let mut depth = 0_u32;
+    let modifier = s.char_indices().find_map(|(index, ch)| match ch {
+        '(' | '[' => {
+            depth += 1;
+            None
+        }
+        ')' | ']' => {
+            depth = depth.saturating_sub(1);
+            None
+        }
+        '/' if depth == 0 => Some(index),
+        _ => None,
+    });
+    let (base, opacity) = if let Some(index) = modifier {
+        let tail = s[index + 1..].trim();
+        let arbitrary = tail.strip_prefix('[').and_then(|s| s.strip_suffix(']'));
+        let value = arbitrary.unwrap_or(tail).trim();
+        let percent = value.strip_suffix('%');
+        let alpha = percent.unwrap_or(value).parse::<f32>().ok()?;
+        if !alpha.is_finite() {
+            return None;
+        }
+        let alpha = if arbitrary.is_some() && percent.is_none() {
+            alpha
+        } else {
+            alpha / 100.0
+        };
+        (&s[..index], Some(alpha.clamp(0.0, 1.0)))
+    } else {
+        (s, None)
+    };
+    let base = base
+        .strip_prefix('[')
+        .and_then(|s| s.strip_suffix(']'))
+        .unwrap_or(base);
+    let base = base.strip_prefix("color:").unwrap_or(base);
+    let base = base
+        .strip_prefix("(color:--")
+        .or_else(|| base.strip_prefix("(--"))
+        .and_then(|s| s.strip_suffix(')'))
+        .unwrap_or(base);
+    let decoded;
+    let base = if base.contains('_') {
+        decoded = base.replace('_', " ");
+        decoded.as_str()
+    } else {
+        base
+    };
+    // Do not pass an invalid modifier back into background color mixing.
+    if base.contains('/') && !base.contains('(') {
+        return None;
+    }
+    let mut color = try_parse_color(base)?;
+    if let Some(alpha) = opacity {
+        color[3] *= alpha;
+    }
+    Some(color.map(|channel| (channel.clamp(0.0, 1.0) * 255.0).round() as u8))
 }
 
 pub fn parse_text_color(s: &str) -> [u8; 4] {

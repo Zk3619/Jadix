@@ -1,5 +1,68 @@
 # jadix_shell
 
+This is the optional script/session/distribution layer. It consumes `jadix` for GPU UI and `jadix_native` for system views, sharing the existing presentation contracts. General UI capabilities must remain usable from Rust without this VM.
+
+## GPU SDK host and HTTPS updates
+
+`gpu-host` mounts the existing SDK and QuickJS `ScriptApplication` into the
+ordinary Jadix App. All twelve presentation variants now have GPU mappings:
+Container, Text, Button, Input, Textarea, Scroll, Checkbox, Switch, Image, Select,
+Dialog and Popover. Editors use the shared text/IME engine; Scroll and overlays
+use the shared engine state; Select uses the existing component implementation.
+Scroll offsets, selections, toggles and dismissal origin return through the same
+session event handles. Removing a host unregisters its overlay state.
+
+Animated portal opacity/backdrop composition uses the ordinary window compositor.
+The offscreen `JadixScene` seam currently rejects that pass with `Unsupported`;
+its static GPU pixels are validated separately from window overlay interaction.
+Dialog backdrop dismissal is opt-in (`close_on_overlay_click: true`), matching
+the shared presentation protocol.
+
+Text supports the shared single-line clip/ellipsis policy and TextSpan foreground,
+background, weight, italic and underline. Multi-line clamping and inline
+strikethrough and rich-span ellipsis return explicit host errors. Image accepts the bounded PNG data URL
+contract. `window_app --bundle PATH --width 640 --height 480` loads a development
+bundle; production hosts load an authenticated package through `from_package`.
+
+Feature `native-https` adds `ota::download_https_release`, composing the explicit
+installed-curl transport with existing signature, resource digest, release floor,
+durable trial, health and rollback checks. Configure trusted release keys and the
+HTTPS origin in the host. Private TLS acceptance uses development keys and a
+private CA; it does not provision a production signing service or OS installer.
+
+`application::ScriptApplication` runs SDK bundles in the existing budgeted QuickJS
+VM (`native-vm`), sharing Session authorization, event handles and keyed Mount
+with native and terminal hosts. Build the real TSX fixtures with
+`node sdk/scripts/build-application.mjs` from this crate. `from_package` verifies
+the signed package before executing its entry resource; `development`
+is for explicitly trusted development code. No browser/process/network globals
+are installed automatically.
+
+`gpu::GpuApplication` (`gpu-host` plus a renderer backend) maps Container, Text,
+Button, Checkbox, Switch, Input and Textarea into the ordinary Jadix window App.
+Editors reuse the existing text/IME engine. Unsupported component mappings fail
+explicitly. Try `cargo run -p jadix_shell --features backend-dx12 --example window_app`
+on Windows. `jadix_tui::ShellApplication` provides the character host using the
+same VM and SDK; it requires the TUI `shell` feature.
+
+`publish` delivers complete snapshots. `publish_commits` generates keyed
+Create/Update/Move/Remove operations and accepts bindings only after host success.
+The two publisher modes cannot be mixed. Full mounts still use a whole-tree
+keyed diff. Validated Text/Button leaf packets instead emit only addressed
+updates, and idle publication does not clone the retained snapshot. A rejected
+packet restores only touched contents and keeps its place in the queue; accepted
+no-ops do not consume a host revision. Host layout/output costs remain separate,
+so this is not end-to-end O(k).
+
+With `native-store`, `ota::DownloadSource`, `Trial` and `Launch` add authenticated
+download, durable next-launch trial, first-frame/ten-second health acceptance,
+clean-quit acceptance and fallback to the previous healthy signed bundle. The
+host supplies the existing jadix_net transport and must enforce TLS, allocation
+bounds and cancellation there. Tests use an explicit private loopback HTTP
+fixture; this is not an OS whole-application installer.
+
+See the current validation and limitations.
+
 Optional `native-store` adds a filesystem package store on native targets. It
 keeps signed manifests and resources in immutable content-addressed directories,
 verifies signatures, hashes, permissions, target and version policy again on
@@ -138,3 +201,103 @@ Development-signed packages exercise failed-update preservation, replacement
 and explicit rollback with versioned business checkpoints. Publisher credential
 management, timers/downloads, GPU panels and Android/OHOS script products remain open. This crate targets trusted
 first-party scripts and does not provide an OS security sandbox.
+
+With `native-vm,native-host`, `native::NativeApplication` connects the same
+budgeted `ScriptApplication` and bundled SDK to an existing `PlatformHost`.
+Call `publish(viewport, environment)`, poll validated native events with `poll`,
+then publish again; Drop revokes the shared lifetime and disposes the host.
+Native layout still processes snapshots; native batch publication retains keyed
+identities. This adapter's headless tests do not establish device acceptance.
+
+`ScriptApplication::publish_commits` skips empty host batches while accepting
+their event bindings. Its return value counts accepted SDK mounts, including
+noops; resize handling must track actual host calls separately. Publication
+failures retain queued mounts for ordered retry, provided the rejecting host
+leaves its live tree unchanged. Disposed roots reject further publication.
+
+GPU editor undo/redo is available with `text-undo`, forwarding to the existing
+Jadix history engine. `GpuApplication::dispose` and Drop revoke script callbacks
+before releasing overlays and scroll resources. Hosts must also remove their
+old Element tree from painting/input; retained action callbacks become inert
+after application disposal or destruction of their host signal owner.
+
+For windowless GPU rebuilding, use
+`renderer.replace_root(&mut root, application.element()?)` before rendering.
+This reuses the ordinary window App's keyed reconciler. After rendering,
+`renderer.last_frame_stats()` provides resident layout counts and CPU
+layout/collect/render/readback timings; failed frames return None. Full trees
+are still visited. These metrics are not GPU timestamps or an O(k) guarantee.
+
+For repeated windowless SDK updates, use
+`application.update_root(&mut renderer, &mut root)?`. Its first call indexes a
+full projection. Later plain Text/Button leaf changes stage replacements and
+reconcile only those leaves; unchanged updates project zero SDK nodes. It also
+requests the renderer's retained layout and fingerprint/geometry-validated
+display-list replay. Structure, container/control changes, invalid paths and
+mixing in a fresh `element()` fall back to full projection. Failed frames,
+viewport/scale changes and subsequent replacements cancel replay. Keep the root,
+renderer and signal owner together; remove the tree when the host is disposed.
+
+`ProjectionStats` counts source SDK nodes visited/projected, not all generated
+Elements. Full SDK mounts, inherited-style/geometry and parent fingerprint
+combination still have tree costs; this is not end-to-end O(k). `collect_replayed`
+counts cached subtrees, not eliminated output bytes. The window App's `run`
+builder still uses `element()`; these timings apply to `update_root` consumers.
+
+For sparse text/button updates, send `app.patch([{path:[1],props:{text:'Next'}}])`
+from the SDK instead of reconstructing and mounting the whole tree. Paths are
+child indices in the currently ordered SDK mount, excluding the GPU wrapper.
+Packets replace all props of existing Text/Button leaves; they cannot change
+structure, styles, keys or events. A packet accepts at most 1024 distinct paths
+of depth at most 32. Invalid/stale paths, wrong properties and released handles
+are rejected before host publication. A rejecting host restores changed leaf
+contents and leaves the packet queued for ordered retry. Full mount remains the
+route for structural/control changes. Do not catch a rejected patch and assume
+it applied; publication still needs host acceptance.
+
+The GPU host consumes the accepted path journal without rescanning the source
+tree. `SceneRenderer::replace_leaf` invalidates those paint-hash ancestor paths,
+allowing unchanged static subtrees to reuse fingerprints. Indexed event lookup
+also avoids rebuilding a node map for each event. Ordered maps still have
+logarithmic lookup costs, and flat parent hash combination/geometry/output still
+scale with N. Packet byte counts and CPU stages are exposed by `work()` and the
+renderer statistics; renderer submission/readback is separate from SDK work.
+
+`GpuApplication::retained_window_element(Rc<RefCell<_>>, observer)` provides the
+ordinary window App with the same sparse packets through its existing in-place
+binding runtime. Borrow conflicts retry at idle. Container/Text/Button and
+Checkbox/Switch trees select this path; editors, Select and overlays use the ordinary full root builder
+before constructing editor effects, preserving its deferred feedback order.
+The `window_app --retained` example exposes it;
+`--benchmark-rows N --sparse --bundle .../scaling.js` enables the explicit test
+budget used by the same-output benchmark. These flags are development tools.
+
+Fields, controls and scrolls enqueue dirty NodeIds through their existing signals;
+the pump enumerates those candidates rather than all registered state. Normal scroll
+signal writes notify directly; silent renderer writes use the existing frame-end
+scroll subscription. `last_pump_stats()` counts candidates, not runtime notifications,
+ordered-map lookups, the shared scroll subscription poll, layout, collect or render.
+Those costs remain separate and this API does not promise end-to-end O(k).
+
+Native QuickJS execution keeps the caller/UI thread and uses the already-used
+`stacker` mechanism for a temporary segment only when the configured VM budget
+plus 256 KiB of host headroom will not fit. The non-parallel rquickjs build does
+not refresh its stack top automatically, so the host refreshes it under the
+context lock after entering each eval/job segment. The segment is released on
+return/unwind; no global Windows `/STACK:8388608` or worker VM is introduced.
+Callbacks must remain bounded and must not re-enter the VM. Borrow checks and
+resource release remain necessary; they do not replace physical-stack limits.
+
+
+Application startup and interaction have separate host-owned deadlines.
+`ResourceLimits::load_milliseconds` bounds the first source evaluation (default
+1000 ms, configurable from 1 to 10000 ms); `turn_milliseconds` still bounds each
+interaction and microtask drain (default 20 ms, configurable from 1 to 1000 ms).
+Initial queued jobs retain the turn deadline and `jobs_per_turn` limit. A timed
+out startup faults the session before publication; the package signature and
+authorization path are unchanged. This is an explicit startup admission policy,
+not a speedup: source parsing, full SDK mounts and layout still have N costs.
+Native VM memory remains 32 MiB and its interpreter stack remains 512 KiB by
+default. Explicit full `ResourceLimits` literals must now include the load field;
+use `..Default::default()` when retaining host defaults. The SDK counts each
+string's UTF-8 bytes once and shares scalar/surrogate checks with JSX keys.

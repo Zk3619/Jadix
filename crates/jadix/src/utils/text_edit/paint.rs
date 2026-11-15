@@ -210,7 +210,9 @@ fn sync_one_text_edit_paint(
     let mut text_color = if show_placeholder {
         parse_text_color("muted-foreground")
     } else {
-        parse_text_color("foreground")
+        // Read the owner style every frame, including live classes/bindings.
+        // A separate cached override would miss those updates or theme changes.
+        el.text_style.color_resolved()
     };
     if desc.disabled {
         text_color[3] = (text_color[3] as f32 * 0.5) as u8;

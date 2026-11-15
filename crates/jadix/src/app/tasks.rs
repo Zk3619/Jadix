@@ -196,10 +196,14 @@ impl TaskScope {
         let cancel = handle.cancellation();
         let mut completion = self.completion(id, cancel.clone(), on_ui);
         let accepted = spawner.spawn(Box::pin(async move {
-            let result = match cancel.checkpoint() {
-                Ok(()) => factory(cancel.clone()).await,
-                Err(error) => Err(error),
-            };
+            let task_cancel = cancel.clone();
+            let result = cancel
+                .run_until_cancelled(async move {
+                    task_cancel.checkpoint()?;
+                    factory(task_cancel.clone()).await
+                })
+                .await
+                .unwrap_or_else(Err);
             completion.deliver(result);
         }));
         Self::attach(handle, accepted)

@@ -1,0 +1,3 @@
+<canvas canvas-id="jadix-measure" style="position:fixed;left:-10000px;width:1px;height:1px;" />
+<jadix-node wx:for="{{roots}}" wx:key="id" node="{{item}}" bind:jadixevent="onJadixEvent" />
+<view wx:if="{{error}}">{{error}}</view>

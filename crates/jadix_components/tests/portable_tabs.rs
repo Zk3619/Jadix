@@ -166,6 +166,30 @@ fn rust_and_rsx_tabs_select_lazily_skip_disabled_items_and_return_keyboard_focus
 }
 
 #[test]
+fn portable_tabs_list_projects_accessibility_label() {
+    let (_owner, mut element) = create_root(|| {
+        tabs("labelled").child(|| {
+            Element::new().child(TabsList(TabsListProps {
+                accessibility_label: Some("Settings sections".into()),
+                ..Default::default()
+            }))
+        })
+    });
+    let projection = ElementProjection::new(RootId::new());
+    let snapshot = projection.snapshot(&mut element).unwrap();
+    let mut nodes = vec![];
+    descendants(&snapshot, &mut nodes);
+    let list = nodes
+        .into_iter()
+        .find(|node| node.descriptor.accessible_role == Some(AccessibleRole::TabList))
+        .expect("tab list");
+    assert_eq!(
+        list.descriptor.accessible_name.as_deref(),
+        Some("Settings sections")
+    );
+}
+
+#[test]
 fn panels_build_once_on_first_selection_and_sibling_tabs_contexts_stay_isolated() {
     let builds = Rc::new(Cell::new(0));
     let observed = builds.clone();

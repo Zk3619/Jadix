@@ -1,5 +1,5 @@
 use super::*;
-use crate::app::pointer_events::{dispatch_pointer, hit_path, PointerKind};
+use crate::app::pointer_events::{PointerKind, dispatch_pointer, hit_path};
 use crate::app::test_support::sync_reactive_elements_subtree;
 use crate::core::tree::LayoutTree;
 

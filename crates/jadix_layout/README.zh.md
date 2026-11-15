@@ -28,3 +28,7 @@ jadix_layout = "=0.1.0"
 ## 许可证
 
 Apache-2.0。保留 [LICENSE](LICENSE) 及依赖的来源声明。
+
+共享 CPU 呈现布局位于 `presentation::PresentationLayout`：NodeStyle 弹性尺寸、宿主提供并缓存的叶节点测量、浮层几何。native 保留 NativeLayout 别名，TUI 提供 grapheme 字符格测量；不引入 OS 视图、GPU 或窗口 App 运行时。
+
+PresentationLayout 跨快照保留 Taffy 身份、子列表和计算缓存；样式、内容与结构变化仅使相关节点失效，环境 revision 变化清理布局与测量缓存。测量和几何全部成功后才发布 frames。LayoutStats 新增引擎节点创建、复用、移除、更新及子列表替换计量。release_layout_cache() 只释放 Taffy 存储，保留有界宿主测量与调用方状态。输入验证、同步和 frame 收集仍扫描全树。

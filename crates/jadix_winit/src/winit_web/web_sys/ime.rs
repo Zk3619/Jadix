@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use wasm_bindgen::{closure::Closure, JsCast};
+use wasm_bindgen::{JsCast, closure::Closure};
 use web_sys::{
     CompositionEvent, Document, Event, HtmlCanvasElement, HtmlTextAreaElement, InputEvent,
     KeyboardEvent, KeyboardEventInit,

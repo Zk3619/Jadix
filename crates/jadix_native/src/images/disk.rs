@@ -5,8 +5,8 @@ use std::{
     io::{Read, Write},
     path::PathBuf,
     sync::{
-        Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        Arc,
     },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };

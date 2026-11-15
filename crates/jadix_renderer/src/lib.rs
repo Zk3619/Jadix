@@ -9,4 +9,4 @@ pub mod gpu_caps;
 pub mod pipeline;
 pub mod twemoji_name;
 pub mod wgpu_compat;
-pub use backdrop_blur::BackdropBlurPipeline;
+pub use backdrop_blur::{BackdropBlurPipeline, ProgressiveBlur};

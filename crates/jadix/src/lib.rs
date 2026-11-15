@@ -1,9 +1,13 @@
 #![allow(clippy::type_complexity, clippy::too_many_arguments)]
 
-#[cfg(feature = "live2d")]
-pub use jadix_live2d as live2d;
-
-#[cfg(all(feature = "autostart", any(target_os = "windows", target_os = "macos", all(target_os = "linux", not(target_env = "ohos")))))]
+#[cfg(all(
+    feature = "autostart",
+    any(
+        target_os = "windows",
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
+))]
 #[path = "app/autostart.rs"]
 pub mod autostart;
 
@@ -30,6 +34,7 @@ pub use utils::lucide_animated::animated_icon;
 
 #[cfg(feature = "gpu")]
 pub mod core;
+pub use jadix_core::environment;
 #[cfg(feature = "gpu")]
 pub use jadix_core::presentation;
 #[cfg(feature = "gpu")]
@@ -66,7 +71,7 @@ pub mod components;
 /// Locale overlays, ICU-lite format, TOML catalogs. Off by default; see [`tr_default`].
 #[cfg(feature = "gpu")]
 pub mod i18n;
-/// 可选运行时日志（`--features runtime-logging`）：控制台 + `JADIX_LOG_FILE`。
+/// 可选运行时日志（`--features runtime-logging`）：控制台 + 应用数据目录日志文件，支持 `JADIX_LOG_FILE` / `JADIX_LOG_DIR` 覆盖。
 #[cfg(feature = "gpu")]
 pub mod logging;
 /// Optional frame timing and OS resource sampling capability.
@@ -168,7 +173,7 @@ pub mod reactivity {
 #[cfg(feature = "gpu")]
 pub use core::tree::{opacity_groups_enabled, set_opacity_groups_enabled};
 #[cfg(feature = "gpu")]
-pub use core::tree::{CursorKind, CursorValue, PathHitPolicy, PointerEvents};
+pub use core::tree::{CursorKind, CursorValue, HitSlop, PathHitPolicy, PointerEvents};
 #[cfg(feature = "macros")]
 #[doc(hidden)]
 #[cfg(feature = "gpu")]
@@ -793,7 +798,20 @@ pub(crate) static DEFAULT_ICON_PROVIDER: std::sync::LazyLock<
     }
 });
 
-#[cfg(not(feature = "gpu"))]
-mod portable;
+/// Shared keyed virtualization for GPU, native and character hosts.
+/// Available without default features or a script runtime.
+///
+/// ```
+/// use jadix::virtualization::VirtualAxis;
+/// let mut rows = VirtualAxis::new(0..100, 24.0).unwrap();
+/// rows.measure(&7, 41.0).unwrap();
+/// rows.append([(100, 24.0), (101, 24.0)]).unwrap();
+/// assert_eq!(rows.extent(&7), Some(41.0));
+/// assert_eq!(rows.window(2417.0, 48.0, 0.0, &[], 2).unwrap().visible, 100..102);
+/// ```
+pub use jadix_core::virtualization;
+
+/// CPU authoring remains available when a consumer also enables GPU rendering.
+pub mod portable;
 #[cfg(not(feature = "gpu"))]
 pub use portable::*;

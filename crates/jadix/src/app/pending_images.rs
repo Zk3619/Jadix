@@ -23,6 +23,8 @@ static DECODED_SRC: Mutex<Option<HashMap<String, CachedSrcImage>>> = Mutex::new(
 static SRC_NEEDED: Mutex<Option<HashSet<String>>> = Mutex::new(None);
 /// Per-贴图键解码结果（Avatar 失败回退 / 避免重复解码）。
 static SRC_LOAD_STATE: Mutex<Option<HashMap<String, SrcLoadState>>> = Mutex::new(None);
+/// Active remote decodes can be cancelled by their owning texture key.
+static REMOTE_LOADS: Mutex<Option<HashMap<String, jadix_tasks::TaskHandle>>> = Mutex::new(None);
 // Signal ids live in the current runtime. A process-global list would `set`
 // handles from other test threads / disposed roots.
 thread_local! {
@@ -171,34 +173,75 @@ fn begin_remote_src_load(key: &str, src: &str, mask: Option<AvatarImageMask>) ->
         publish_src_load_state(key, SrcLoadState::Pending);
         let key_owned = key.to_string();
         let src_owned = src.to_string();
-        super::ui_bridge::spawn_blocking(
-            move || fetch_decode_remote(&src_owned, mask),
-            move |result| match result {
-                Ok(img) => {
-                    cache_decoded(key_owned.clone(), &img);
-                    mark_src_needed(&key_owned);
-                    queue_decoded(&key_owned, &img);
-                    publish_src_load_state(&key_owned, SrcLoadState::Ready);
-                }
-                Err(err) => {
-                    log::warn!("jadix: remote-asset failed for {key_owned}: {err}");
-                    publish_src_load_state(&key_owned, SrcLoadState::Failed);
+        let callback_key = key_owned.clone();
+        let handle = super::ui_bridge::spawn_blocking_cancellable(
+            move |cancellation| fetch_decode_remote(&src_owned, mask, &cancellation),
+            move |result| {
+                REMOTE_LOADS
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner())
+                    .as_mut()
+                    .and_then(|loads| loads.remove(&callback_key));
+                match result {
+                    Ok(img) => {
+                        cache_decoded(key_owned.clone(), &img);
+                        mark_src_needed(&key_owned);
+                        queue_decoded(&key_owned, &img);
+                        publish_src_load_state(&key_owned, SrcLoadState::Ready);
+                    }
+                    Err(err) => {
+                        log::warn!("jadix: remote-asset failed for {key_owned}: {err}");
+                        publish_src_load_state(&key_owned, SrcLoadState::Failed);
+                    }
                 }
             },
         );
+        REMOTE_LOADS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .get_or_insert_with(HashMap::new)
+            .insert(key.to_string(), handle);
         SrcLoadState::Pending
     }
 }
 
 #[cfg(feature = "remote-asset")]
-fn fetch_decode_remote(src: &str, mask: Option<AvatarImageMask>) -> Result<DecodedImage, String> {
-    let bytes = crate::media::fetch_remote_bytes_shared(src)?;
+fn fetch_decode_remote(
+    src: &str,
+    mask: Option<AvatarImageMask>,
+    cancellation: &jadix_tasks::CancellationToken,
+) -> Result<DecodedImage, String> {
+    let bytes = crate::media::fetch_remote_bytes_shared_cancellable(src, cancellation)?;
+    cancellation
+        .checkpoint()
+        .map_err(|error| error.to_string())?;
     let mut img = decode_bytes(&bytes, DecodeOptions::image())
         .ok_or_else(|| "unsupported or corrupt image".to_string())?;
     if let Some(mask) = mask {
         apply_shape_alpha_mask(&mut img.rgba, img.width, img.height, mask);
     }
+    cancellation
+        .checkpoint()
+        .map_err(|error| error.to_string())?;
     Ok(img)
+}
+
+/// Cancel an in-flight remote image load by its texture key. The worker's fetcher can
+/// interrupt transport work by implementing [`crate::media::RemoteAssetFetcher::fetch_shared_cancellable`].
+pub fn cancel_remote_src_load(key: &str) -> bool {
+    let handle = REMOTE_LOADS
+        .lock()
+        .unwrap_or_else(|error| error.into_inner())
+        .as_mut()
+        .and_then(|loads| loads.remove(key));
+    let Some(handle) = handle else {
+        return false;
+    };
+    let cancelled = handle.cancel();
+    if cancelled {
+        publish_src_load_state(key, SrcLoadState::Unknown);
+    }
+    cancelled
 }
 
 fn decode_and_queue_src(key: &str, src: &str) -> bool {
@@ -635,7 +678,6 @@ pub(crate) fn take_pending() -> Vec<(String, Vec<u8>, u32, u32)> {
     std::mem::take(&mut *g)
 }
 
-#[cfg(test)]
 pub(crate) fn take_pending_key(id: &str) -> Option<(Vec<u8>, u32, u32)> {
     let mut g = PENDING.lock().unwrap();
     let pos = g.iter().position(|(k, ..)| k == id)?;

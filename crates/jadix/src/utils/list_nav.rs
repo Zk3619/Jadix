@@ -5,7 +5,7 @@
 
 use winit::keyboard::{Key, NamedKey};
 
-use crate::utils::roving::{roving_edge, roving_move};
+use crate::utils::roving::{roving_edge, roving_move, roving_move_skipping};
 
 /// ↑↓ / Home / End：返回新的高亮下标；其它键 `None`。
 pub fn list_nav_move(key: &Key, count: usize, active: usize) -> Option<usize> {
@@ -14,6 +14,24 @@ pub fn list_nav_move(key: &Key, count: usize, active: usize) -> Option<usize> {
         Key::Named(NamedKey::ArrowUp) => roving_move(count, active, -1),
         Key::Named(NamedKey::Home) => roving_edge(count, false),
         Key::Named(NamedKey::End) => roving_edge(count, true),
+        _ => None,
+    }
+}
+
+/// ↑↓ / Home / End that skip disabled rows. `disabled(i) == true` means the
+/// row cannot receive the active highlight. Returns `None` when every row is
+/// disabled (or the list is empty).
+pub fn list_nav_move_skipping(
+    key: &Key,
+    count: usize,
+    active: usize,
+    disabled: impl Fn(usize) -> bool,
+) -> Option<usize> {
+    match key {
+        Key::Named(NamedKey::ArrowDown) => roving_move_skipping(count, active, 1, disabled),
+        Key::Named(NamedKey::ArrowUp) => roving_move_skipping(count, active, -1, disabled),
+        Key::Named(NamedKey::Home) => (0..count).find(|&i| !disabled(i)),
+        Key::Named(NamedKey::End) => (0..count).rev().find(|&i| !disabled(i)),
         _ => None,
     }
 }

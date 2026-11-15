@@ -1,4 +1,4 @@
-use jadix_native::{BackendError, host::*, layout::*, presentation::*, wire};
+use jadix_native::{host::*, layout::*, presentation::*, wire, BackendError};
 
 #[test]
 fn grid_ownership_coordinates_and_duplicate_cells_fail_before_host_publication() {
@@ -228,6 +228,7 @@ fn nodes(root: RootId) -> Vec<PresentationNode> {
         id: NodeId::new(root),
         descriptor: NodeDescriptor {
             content: NodeContent::Input {
+                max_length: None,
                 value: String::new(),
                 placeholder: String::new(),
                 enabled: true,
@@ -238,6 +239,8 @@ fn nodes(root: RootId) -> Vec<PresentationNode> {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: Default::default(),
         },
@@ -317,6 +320,99 @@ fn external_revocation_cleans_platform_views_before_rejecting_the_next_commit() 
         Err(HostError::Backend(BackendError::Disposed))
     ));
     assert_eq!(disposals.get(), 1);
+}
+
+#[test]
+fn typed_environments_invalidate_measurement_without_recreating_edit_identity() {
+    use jadix_native::environment::*;
+    let (owner, (preferences, other)) = jadix_core::create_root(|| {
+        (
+            EnvironmentHost::new(EnvironmentSnapshot::default()).unwrap(),
+            EnvironmentHost::new(EnvironmentSnapshot::default()).unwrap(),
+        )
+    });
+    let environment = preferences.environment();
+    let mut root = NativeRoot::new(host(false));
+    let mut nodes = nodes(root.model().id());
+    let id = nodes[0].id;
+    let first = root
+        .present_environment(&mut nodes, [320.0, 480.0], &environment)
+        .unwrap();
+    assert!(first.measurements > 0);
+    root.event(&PlatformEvent {
+        node: id,
+        payload: EventPayload::Focus,
+    })
+    .unwrap();
+    let edit = PlatformEvent {
+        node: id,
+        payload: EventPayload::Edit {
+            value: "中😀".into(),
+            revision: 1,
+            selection_utf16: [3, 3],
+            composing_utf16: None,
+        },
+    };
+    root.event(&edit).unwrap();
+    assert_eq!(
+        root.present_environment(&mut nodes, [320.0, 480.0], &environment)
+            .unwrap()
+            .measurements,
+        0
+    );
+    let publications = root.host().publishes.get();
+    let mut next = environment.snapshot();
+    next.locale.hour_cycle = Some(HourCycle::H23);
+    next.font_scale = 1.25;
+    preferences.apply(1, next).unwrap();
+    assert!(
+        root.present_environment(&mut nodes, [320.0, 480.0], &environment)
+            .unwrap()
+            .measurements
+            > 0
+    );
+    assert_eq!(nodes[0].id, id);
+    assert_eq!(root.model().focused(), Some(id));
+    assert_eq!(
+        root.event(&edit),
+        Err(BackendError::InvalidEvent),
+        "edit revision survives environment change"
+    );
+    assert_eq!(
+        root.host().publishes.get(),
+        publications,
+        "same geometry causes no extra platform publication"
+    );
+    assert_eq!(root.inspection(false)["environment"]["revision"], "2");
+    let other_env = other.environment();
+    let mut other_value = other_env.snapshot();
+    other_value.color_scheme = Some(ColorScheme::Dark);
+    other.apply(1, other_value).unwrap();
+    assert!(
+        root.present_environment(&mut nodes, [320.0, 480.0], &other_env)
+            .unwrap()
+            .measurements
+            > 0,
+        "equal local revision belongs to another root"
+    );
+    assert_eq!(
+        root.present_environment(&mut nodes, [320.0, 480.0], &other_env)
+            .unwrap()
+            .measurements,
+        0
+    );
+    assert!(
+        root.present(&mut nodes, [320.0, 480.0], 2)
+            .unwrap()
+            .measurements
+            > 0,
+        "legacy revision switches invalidate typed cache"
+    );
+    owner.dispose();
+    assert!(root
+        .present_environment(&mut nodes, [320.0, 480.0], &environment)
+        .is_err());
+    assert_eq!(root.model().focused(), Some(id));
 }
 
 #[test]

@@ -1,5 +1,5 @@
 use super::{content_scroll_paint_only, retarget_scrollbar_fade};
-use crate::style::{tick_animations, CubicTween};
+use crate::style::{CubicTween, tick_animations};
 
 #[test]
 #[cfg(feature = "animation-base")]

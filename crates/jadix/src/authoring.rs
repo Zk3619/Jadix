@@ -38,9 +38,9 @@ use std::rc::Rc;
 
 use crate::core::tree::{Element, IntoBorderWidths, IntoCssDim, IntoF32};
 use crate::style::{
-    is_variant_style_overridden, mark_variant_style_override, overflow_as_str, with_class_list,
     IntoAlignItems, IntoCursor, IntoFlexWrap, IntoJustifyContent, IntoOverflow, IntoPaintColor,
-    IntoTextColor, VariantStyleField,
+    IntoTextColor, VariantStyleField, is_variant_style_overridden, mark_variant_style_override,
+    overflow_as_str, with_class_list,
 };
 
 /// Same layout/paint surface as RSX `base` props (`w` / `h` / `text_size` / …).
@@ -480,9 +480,9 @@ macro_rules! impl_overlay_content_slot {
         pub fn content_style(
             self,
             f: impl Fn(
-                    $crate::authoring::BaseComponentBuilder,
-                ) -> $crate::authoring::BaseComponentBuilder
-                + 'static,
+                $crate::authoring::BaseComponentBuilder,
+            ) -> $crate::authoring::BaseComponentBuilder
+            + 'static,
         ) -> Self {
             self.slot($slot, |c| c.style(f))
         }
@@ -523,9 +523,9 @@ macro_rules! impl_slot_chrome_methods {
         pub fn style(
             mut self,
             f: impl Fn(
-                    $crate::authoring::BaseComponentBuilder,
-                ) -> $crate::authoring::BaseComponentBuilder
-                + 'static,
+                $crate::authoring::BaseComponentBuilder,
+            ) -> $crate::authoring::BaseComponentBuilder
+            + 'static,
         ) -> Self {
             self.chrome.style = Some(::std::rc::Rc::new(f));
             self
@@ -550,9 +550,9 @@ macro_rules! impl_content_opts_chrome {
         pub fn style(
             mut self,
             f: impl Fn(
-                    $crate::authoring::BaseComponentBuilder,
-                ) -> $crate::authoring::BaseComponentBuilder
-                + 'static,
+                $crate::authoring::BaseComponentBuilder,
+            ) -> $crate::authoring::BaseComponentBuilder
+            + 'static,
         ) -> Self {
             self.$field.style = Some(::std::rc::Rc::new(f));
             self
@@ -1376,10 +1376,166 @@ mod layer_tests;
 pub mod widgets;
 
 pub mod text {
+    /// Primary editor observation from the same store/composition derivation
+    /// used for GPU paint. Ranges use UTF-16 for shell/DOM interoperability.
+    #[derive(Clone, Debug, PartialEq, Eq)]
+    pub struct EditObservation {
+        pub value: String,
+        pub selection: [usize; 2],
+        pub composing: Option<[usize; 2]>,
+    }
+    pub fn observe_edit(field_id: &str) -> EditObservation {
+        use crate::{core::reactivity::use_signal, utils::text_field::*};
+        let committed = use_signal(&input_value_signal_key(field_id), String::new).get();
+        let preedit = use_signal(&input_preedit_signal_key(field_id), String::new).get();
+        let preedit_sel = use_signal(&input_preedit_sel_signal_key(field_id), || {
+            None::<(usize, usize)>
+        })
+        .get();
+        let caret = use_signal(&input_caret_signal_key(field_id), || None::<usize>).get();
+        let selection = use_signal(&input_selection_signal_key(field_id), || {
+            None::<(usize, usize)>
+        })
+        .get();
+        let ime_anchor = use_signal(&input_ime_anchor_signal_key(field_id), || None::<usize>).get();
+        let strings = crate::utils::text_edit::strings::compose_text_edit_strings(
+            crate::utils::text_edit::strings::TextEditStringsInput {
+                committed: &committed,
+                preedit: &preedit,
+                preedit_sel,
+                preedit_marks: &[],
+                ime_anchor,
+                extras: &[],
+                committed_caret: caret,
+                placeholder: "",
+                show_placeholder: false,
+                mask: false,
+                is_focused: true,
+                caret_override: caret,
+            },
+        );
+        let value = strings.real_display;
+        let units = |byte: usize| {
+            value[..value.floor_char_boundary(byte.min(value.len()))]
+                .encode_utf16()
+                .count()
+        };
+        let composing = strings.preedit_underline.map(|(a, b)| [units(a), units(b)]);
+        let selection = if let Some([a, b]) = composing {
+            let start = preedit_sel.map_or(preedit.len(), |s| s.0);
+            let end = preedit_sel.map_or(preedit.len(), |s| s.1);
+            let offset = |byte: usize| {
+                preedit[..preedit.floor_char_boundary(byte.min(preedit.len()))]
+                    .encode_utf16()
+                    .count()
+            };
+            [(a + offset(start)).min(b), (a + offset(end)).min(b)]
+        } else {
+            let (a, b) = selection.unwrap_or((caret.unwrap_or(0), caret.unwrap_or(0)));
+            [units(a), units(b)]
+        };
+        EditObservation {
+            value,
+            selection,
+            composing,
+        }
+    }
     /// Runs before the shared editor handles a key and only outside IME composition.
     /// The focused node owns this handler, including its captured product state.
     pub type KeyHandler =
         std::rc::Rc<dyn Fn(&winit::event::KeyEvent, winit::keyboard::ModifiersState) -> bool>;
+
+    #[derive(Clone)]
+    pub(crate) struct SubmitHandler(pub std::rc::Rc<std::cell::RefCell<Box<dyn FnMut()>>>);
+
+    #[derive(Clone)]
+    pub(crate) struct CompositionHandler(
+        pub std::rc::Rc<std::cell::RefCell<Box<dyn FnMut(Option<String>)>>>,
+    );
+
+    impl PartialEq for CompositionHandler {
+        fn eq(&self, other: &Self) -> bool {
+            std::rc::Rc::ptr_eq(&self.0, &other.0)
+        }
+    }
+
+    impl Eq for CompositionHandler {}
+
+    /// Report IME preedit text separately from the committed editor value.
+    pub fn on_composition_change(
+        element: &mut crate::core::tree::Element,
+        callback: impl FnMut(Option<String>) + 'static,
+    ) {
+        let field = element
+            .focus_id
+            .as_deref()
+            .and_then(crate::utils::text_field::text_edit_rest)
+            .expect("composition callback requires a text edit element");
+        let callback: std::rc::Rc<std::cell::RefCell<Box<dyn FnMut(Option<String>)>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(Box::new(callback)));
+        let key = crate::utils::text_field::input_composition_handler_signal_key(field);
+        crate::core::reactivity::use_signal(&key, || None::<CompositionHandler>)
+            .set(Some(CompositionHandler(callback.clone())));
+        element.authoring_state.set(CompositionHandler(callback));
+    }
+
+    pub(crate) fn notify_composition_change(focus_id: &str, value: Option<String>) {
+        let Some(field) = crate::utils::text_field::text_edit_rest(focus_id) else {
+            return;
+        };
+        let key = crate::utils::text_field::input_composition_handler_signal_key(field);
+        let Some(handler) =
+            crate::core::reactivity::use_signal(&key, || None::<CompositionHandler>).get()
+        else {
+            return;
+        };
+        if let Ok(mut callback) = handler.0.try_borrow_mut() {
+            callback(value);
+        };
+    }
+
+    /// Opt a field into Return-to-submit. Multiline Shift/Alt+Return stays a newline;
+    /// Control/Command combinations remain available to application shortcuts.
+    /// The editor invokes this only outside IME composition.
+    pub fn on_submit(
+        element: &mut crate::core::tree::Element,
+        multiline: bool,
+        callback: impl FnMut() + 'static,
+    ) {
+        let previous = element.text_edit_key_handler.take();
+        let callback: std::rc::Rc<std::cell::RefCell<Box<dyn FnMut()>>> =
+            std::rc::Rc::new(std::cell::RefCell::new(Box::new(callback)));
+        element.authoring_state.set(SubmitHandler(callback.clone()));
+        element.text_edit_key_handler = Some(std::rc::Rc::new(move |event, modifiers| {
+            if previous
+                .as_ref()
+                .is_some_and(|handler| handler(event, modifiers))
+            {
+                return true;
+            }
+            if event.state != winit::event::ElementState::Pressed
+                || !matches!(
+                    event.logical_key,
+                    winit::keyboard::Key::Named(winit::keyboard::NamedKey::Enter)
+                )
+                || modifiers.intersects(
+                    winit::keyboard::ModifiersState::CONTROL
+                        | winit::keyboard::ModifiersState::META,
+                )
+                || (multiline
+                    && modifiers.intersects(
+                        winit::keyboard::ModifiersState::SHIFT
+                            | winit::keyboard::ModifiersState::ALT,
+                    ))
+            {
+                return false;
+            }
+            if !event.repeat {
+                callback.borrow_mut()();
+            }
+            true
+        }));
+    }
 
     /// Resolve a node-owned handler without retaining a borrow of the host tree.
     pub fn key_handler(root: &crate::core::tree::Element, focused: &str) -> Option<KeyHandler> {
@@ -1388,11 +1544,58 @@ pub mod text {
     }
 
     pub use crate::utils::text_edit::field::{
-        caret_index_from_display_hit, filter_email_insert, filter_insert_for_type,
-        filter_number_insert, filter_password_insert, filter_tel_insert, filter_url_insert,
-        format_number_step_result, map_masked_byte_index_to_real, step_number_value,
-        strip_control_insert, InputType, IME_ACTIVE_SIGNAL, INPUT_LINE_SHAPE_SUFFIX,
+        IME_ACTIVE_SIGNAL, INPUT_LINE_SHAPE_SUFFIX, InputType, caret_index_from_display_hit,
+        filter_email_insert, filter_insert_for_type, filter_number_insert, filter_password_insert,
+        filter_tel_insert, filter_url_insert, format_number_step_result,
+        map_masked_byte_index_to_real, step_number_value, strip_control_insert,
     };
+}
+
+impl BaseComponentBuilder {
+    pub fn on_hover(mut self, handler: impl FnMut(bool) + 'static) -> Self {
+        self.el = self.el.on_hover(handler);
+        self
+    }
+
+    pub fn on_mouseup(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_mouseup(handler);
+        self
+    }
+
+    pub fn on_mousemove(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_mousemove(handler);
+        self
+    }
+
+    pub fn on_mouseenter(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_mouseenter(handler);
+        self
+    }
+
+    pub fn on_mouseleave(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_mouseleave(handler);
+        self
+    }
+
+    pub fn on_context_menu(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::PointerEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_context_menu(handler);
+        self
+    }
 }
 
 #[doc(hidden)]

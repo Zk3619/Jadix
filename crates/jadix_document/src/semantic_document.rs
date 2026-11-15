@@ -95,6 +95,7 @@ pub struct DocumentBlock {
     pub alignments: Arc<[DocumentAlignment]>,
     pub payload: Option<Arc<str>>,
     pub(super) independent: bool,
+    source_positions: Arc<[Arc<[(usize, usize)]>]>,
 }
 
 impl DocumentBlock {
@@ -118,10 +119,21 @@ impl DocumentBlock {
     }
 
     pub fn source_position(&self, inline: usize, display_byte: usize) -> Option<usize> {
+        let inline_index = inline;
         let inline = self.inlines.get(inline)?;
         let local = inline
             .text
             .floor_char_boundary(display_byte.min(inline.text.len()));
+        if let Some(positions) = self.source_positions.get(inline_index) {
+            if let Some((display_offset, source_offset)) =
+                positions.iter().rev().find(|(offset, _)| *offset <= local)
+            {
+                return Some(self.source.start + source_offset + local - display_offset);
+            }
+            if !positions.is_empty() {
+                return Some(self.source.start + inline.source.start + local);
+            }
+        }
         let offset = if inline.text.len() == inline.source.len() {
             local
         } else if local == inline.text.len() {
@@ -139,6 +151,7 @@ pub(super) struct DocumentSnapshot {
     pub(super) format: DocumentFormat,
     pub(super) blocks: Vec<DocumentBlock>,
     pub(super) references: bool,
+    pub(super) raw_html: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -170,13 +183,24 @@ impl Document {
     pub fn markdown(source: impl Into<TextDocument>) -> Self {
         Self::new(source.into(), DocumentFormat::Markdown)
     }
+
+    /// Keep raw HTML tags and blocks as literal text when `enabled` is false.
+    /// Markdown outside HTML blocks, including autolinks, remains semantic.
+    /// HTML block contents remain literal; this is not an HTML sanitizer.
+    pub fn markdown_with_raw_html(source: impl Into<TextDocument>, enabled: bool) -> Self {
+        Self::new_with_raw_html(source.into(), DocumentFormat::Markdown, enabled)
+    }
     pub fn plain_text(source: impl Into<TextDocument>) -> Self {
         Self::new(source.into(), DocumentFormat::PlainText)
     }
 
     pub fn new(source: TextDocument, format: DocumentFormat) -> Self {
+        Self::new_with_raw_html(source, format, true)
+    }
+
+    fn new_with_raw_html(source: TextDocument, format: DocumentFormat, raw_html: bool) -> Self {
         let blocks = match format {
-            DocumentFormat::Markdown => parse_blocks(&source),
+            DocumentFormat::Markdown => parse_blocks(&source, raw_html),
             DocumentFormat::PlainText | DocumentFormat::RichText => (0..source.line_count())
                 .map(|line| plain_line(&source, line))
                 .collect(),
@@ -187,6 +211,7 @@ impl Document {
             format,
             blocks,
             references,
+            raw_html,
         }))
     }
 
@@ -195,6 +220,9 @@ impl Document {
     }
     pub fn format(&self) -> DocumentFormat {
         self.0.format
+    }
+    pub fn raw_html_enabled(&self) -> bool {
+        self.0.raw_html
     }
     pub fn revision(&self) -> u64 {
         self.source().revision()
@@ -270,6 +298,7 @@ impl Document {
                     format: self.format(),
                     blocks,
                     references: self.0.references,
+                    raw_html: self.0.raw_html,
                 })));
             }
             let local_edit = block.independent
@@ -288,7 +317,11 @@ impl Document {
                 let delta = insert.len() as isize - range.len() as isize;
                 let end = block.source.end.saturating_add_signed(delta);
                 let fragment = &source.text()[block.source.start..end];
-                let parsed = Self::new(TextDocument::new(fragment), self.format());
+                let parsed = Self::new_with_raw_html(
+                    TextDocument::new(fragment),
+                    self.format(),
+                    self.0.raw_html,
+                );
                 let candidates: Vec<_> = parsed
                     .blocks()
                     .iter()
@@ -312,11 +345,16 @@ impl Document {
                         format: self.format(),
                         blocks,
                         references: false,
+                        raw_html: self.0.raw_html,
                     })));
                 }
             }
         }
-        Ok(Self::new(source, self.format()))
+        Ok(Self::new_with_raw_html(
+            source,
+            self.format(),
+            self.0.raw_html,
+        ))
     }
 }
 
@@ -331,6 +369,7 @@ pub(super) fn block(kind: DocumentBlockKind, source: Range<usize>) -> DocumentBl
         alignments: Arc::from([]),
         payload: None,
         independent: false,
+        source_positions: Arc::from([]),
     }
 }
 
@@ -370,7 +409,7 @@ fn markdown_options() -> Options {
         | Options::ENABLE_MATH
 }
 
-fn parse_blocks(source: &TextDocument) -> Vec<DocumentBlock> {
+fn parse_blocks(source: &TextDocument, raw_html: bool) -> Vec<DocumentBlock> {
     let options = markdown_options();
     let mut stack = vec![Parsed {
         tag: None,
@@ -404,7 +443,10 @@ fn parse_blocks(source: &TextDocument) -> Vec<DocumentBlock> {
     lower(
         &stack[0].children,
         source,
-        &Context::default(),
+        &Context {
+            text_only_html: !raw_html,
+            ..Context::default()
+        },
         &mut blocks,
         0,
     );
@@ -448,6 +490,7 @@ fn gap_line(source: &TextDocument, line: usize) -> DocumentBlock {
 
 #[derive(Clone, Default)]
 struct Context {
+    text_only_html: bool,
     quote: usize,
     list_depth: usize,
     marker: Option<String>,
@@ -507,7 +550,8 @@ fn lower(
         return;
     }
     for node in nodes {
-        if contains_inline_html(node)
+        if !context.text_only_html
+            && contains_inline_html(node)
             && matches!(
                 node.tag,
                 Some(Tag::Paragraph | Tag::Heading { .. } | Tag::List(_) | Tag::Table(_))
@@ -526,19 +570,34 @@ fn lower(
             };
             let mut result = block(kind, node.source.clone());
             let mut inlines = Vec::new();
+            let mut source_positions = Vec::new();
             collect_inline(
                 node,
                 &DocumentInlineStyle::default(),
                 source,
                 &mut inlines,
+                &mut source_positions,
                 0,
             );
-            inlines.retain(|inline| !inline.text.starts_with('<'));
-            for inline in &mut inlines {
+            let mut retained_inlines = Vec::new();
+            let mut retained_positions = Vec::new();
+            for (mut inline, mut positions) in inlines.into_iter().zip(source_positions) {
+                if inline.text.starts_with('<') {
+                    continue;
+                }
                 inline.source = inline.source.start.saturating_sub(result.source.start)
                     ..inline.source.end.saturating_sub(result.source.start);
+                Arc::make_mut(&mut positions)
+                    .iter_mut()
+                    .for_each(|position| {
+                        position.1 = position.1.saturating_sub(result.source.start);
+                    });
+                retained_inlines.push(inline);
+                retained_positions.push(positions);
             }
-            result.inlines = inlines.into();
+            normalize_inline_boundaries(&mut retained_inlines, &mut retained_positions);
+            result.inlines = retained_inlines.into();
+            result.source_positions = retained_positions.into();
             result.edit_range = Some(node.source.clone());
             result.payload = Some(html.into());
             out.push(result);
@@ -719,11 +778,13 @@ fn lower(
                     .iter()
                     .map(|cell| {
                         let mut inlines = Vec::new();
+                        let mut source_positions = Vec::new();
                         collect_inline(
                             cell,
                             &DocumentInlineStyle::default(),
                             source,
                             &mut inlines,
+                            &mut source_positions,
                             0,
                         );
                         for inline in &mut inlines {
@@ -739,6 +800,20 @@ fn lower(
                 out.push(result);
             }
             Some(Tag::HtmlBlock) => {
+                if context.text_only_html {
+                    let first = source.line_at_byte(node.source.start).unwrap_or(0);
+                    let last = source
+                        .line_at_byte(node.source.end.saturating_sub(1).max(node.source.start))
+                        .unwrap_or(first);
+                    for line in first..=last {
+                        let mut result = plain_line(source, line);
+                        result.kind = ordinary_kind(context);
+                        // HTML block boundaries can change when any contained line changes.
+                        result.edit_range = Some(node.source.clone());
+                        out.push(result);
+                    }
+                    continue;
+                }
                 let mut result = block(DocumentBlockKind::Html, node.source.clone());
                 result.payload = Some(source.text()[node.source.clone()].into());
                 result.edit_range = Some(node.source.clone());
@@ -800,6 +875,7 @@ fn collect_inline(
     inherited: &DocumentInlineStyle,
     source: &TextDocument,
     out: &mut Vec<DocumentInline>,
+    source_positions: &mut Vec<Arc<[(usize, usize)]>>,
     depth: usize,
 ) {
     if depth > 128 {
@@ -827,42 +903,149 @@ fn collect_inline(
                     title: title.to_string(),
                 },
             });
+            source_positions.push(Arc::from([]));
             return;
         }
         _ => {}
     }
     let value = match node.event.as_ref() {
-        Some(
-            Event::Text(value)
-            | Event::Html(value)
-            | Event::InlineHtml(value)
-            | Event::FootnoteReference(value),
-        ) => Some((value.to_string(), DocumentInlineKind::Text)),
+        Some(Event::Text(value)) => Some((value.to_string(), DocumentInlineKind::Text, true)),
+        Some(Event::Html(value) | Event::InlineHtml(value) | Event::FootnoteReference(value)) => {
+            Some((value.to_string(), DocumentInlineKind::Text, false))
+        }
         Some(Event::Code(value)) => {
             style.code = true;
-            Some((value.to_string(), DocumentInlineKind::Text))
+            Some((value.to_string(), DocumentInlineKind::Text, false))
+        }
+        Some(Event::SoftBreak | Event::HardBreak) => {
+            Some(("\n".into(), DocumentInlineKind::Text, false))
         }
         Some(Event::InlineMath(value) | Event::DisplayMath(value)) => {
-            Some((value.to_string(), DocumentInlineKind::Math))
+            Some((value.to_string(), DocumentInlineKind::Math, false))
         }
         _ => None,
     };
-    if let Some((text, kind)) = value {
+    if let Some((text, kind, fold_whitespace)) = value {
         let raw = &source.text()[node.source.clone()];
-        let range = raw
-            .find(&text)
+        let matched_start = raw.find(&text);
+        let range = matched_start
             .map(|start| node.source.start + start..node.source.start + start + text.len())
             .unwrap_or_else(|| node.source.clone());
+        let (text, positions) = if fold_whitespace {
+            fold_markdown_whitespace(&text, range.start, matched_start.is_some())
+        } else {
+            (text, Vec::new())
+        };
         out.push(DocumentInline {
             text,
-            source: range,
+            source: if matches!(node.event, Some(Event::SoftBreak | Event::HardBreak)) {
+                node.source.clone()
+            } else {
+                range
+            },
             kind,
             style,
         });
+        if matches!(node.event, Some(Event::SoftBreak | Event::HardBreak)) {
+            source_positions.push(Arc::from([(1, node.source.end)]));
+        } else {
+            source_positions.push(positions.into());
+        }
         return;
     }
     for child in &node.children {
-        collect_inline(child, &style, source, out, depth + 1);
+        collect_inline(child, &style, source, out, source_positions, depth + 1);
+    }
+}
+
+fn fold_markdown_whitespace(
+    text: &str,
+    source_start: usize,
+    source_is_exact: bool,
+) -> (String, Vec<(usize, usize)>) {
+    let mut folded = String::with_capacity(text.len());
+    let mut positions = Vec::new();
+    let mut whitespace_end = None;
+    for (offset, ch) in text.char_indices() {
+        let end = offset + ch.len_utf8();
+        if matches!(ch, ' ' | '\t' | '\r' | '\n') {
+            if whitespace_end.is_none() {
+                folded.push(' ');
+            } else if source_is_exact {
+                let source_end = source_start + end;
+                if positions
+                    .last()
+                    .is_some_and(|(display_offset, _)| *display_offset == folded.len())
+                {
+                    positions.last_mut().unwrap().1 = source_end;
+                } else {
+                    positions.push((folded.len(), source_end));
+                }
+            }
+            whitespace_end = Some(end);
+            continue;
+        }
+        whitespace_end = None;
+        folded.push(ch);
+    }
+    (folded, positions)
+}
+
+fn normalize_inline_boundaries(
+    inlines: &mut [DocumentInline],
+    source_positions: &mut [Arc<[(usize, usize)]>],
+) {
+    let mut at_line_start = true;
+    let mut previous_whitespace = false;
+    for (inline, positions) in inlines.iter_mut().zip(source_positions) {
+        if matches!(inline.kind, DocumentInlineKind::Image { .. }) {
+            at_line_start = false;
+            previous_whitespace = false;
+            continue;
+        }
+        if inline.style.code {
+            at_line_start = false;
+            previous_whitespace = inline.text.ends_with([' ', '\t']);
+            continue;
+        }
+        if inline.text == "\n" && !inline.style.code {
+            at_line_start = true;
+            previous_whitespace = false;
+            continue;
+        }
+        let leading = inline.text.len() - inline.text.trim_start_matches([' ', '\t']).len();
+        if leading > 0 && (at_line_start || previous_whitespace) {
+            let source_start = if positions.is_empty() {
+                if inline.text.len() == inline.source.len() {
+                    inline.source.start + leading
+                } else if leading == inline.text.len() {
+                    inline.source.end
+                } else {
+                    inline.source.start
+                }
+            } else {
+                let source_offset = positions
+                    .iter()
+                    .rev()
+                    .find(|(offset, _)| *offset <= leading)
+                    .map(|(offset, source_offset)| *source_offset + leading - offset)
+                    .unwrap_or(inline.source.start + leading);
+                source_offset
+            };
+            inline.text.drain(..leading);
+            let shifted: Vec<_> = positions
+                .iter()
+                .filter(|(offset, _)| *offset > leading)
+                .map(|(offset, source_offset)| (offset - leading, *source_offset))
+                .collect();
+            *positions = shifted.into();
+            inline.source.start = source_start;
+        }
+        if inline.text.is_empty() {
+            continue;
+        }
+        at_line_start = false;
+        previous_whitespace = inline.text.ends_with([' ', '\t']);
     }
 }
 
@@ -883,23 +1066,34 @@ fn push_inline_lines(
     out: &mut Vec<DocumentBlock>,
 ) {
     let mut inlines = Vec::new();
+    let mut source_positions = Vec::new();
     for node in nodes {
         collect_inline(
             node,
             &DocumentInlineStyle::default(),
             source,
             &mut inlines,
+            &mut source_positions,
             0,
         );
     }
+    normalize_inline_boundaries(&mut inlines, &mut source_positions);
     let first = source.line_at_byte(range.start).unwrap_or(0);
     let last = source
         .line_at_byte(range.end.saturating_sub(1).max(range.start))
         .unwrap_or(first);
     let mut by_line: BTreeMap<usize, Vec<DocumentInline>> = BTreeMap::new();
-    for inline in inlines {
+    let mut positions_by_line: BTreeMap<usize, Vec<Arc<[(usize, usize)]>>> = BTreeMap::new();
+    for (inline, mut positions) in inlines.into_iter().zip(source_positions) {
         let line = source.line_at_byte(inline.source.start).unwrap_or(first);
         by_line.entry(line).or_default().push(inline);
+        let line_start = source.line_full_range(line).unwrap().start;
+        Arc::make_mut(&mut positions)
+            .iter_mut()
+            .for_each(|position| {
+                position.1 = position.1.saturating_sub(line_start);
+            });
+        positions_by_line.entry(line).or_default().push(positions);
     }
     for line in first..=last {
         let mut result = block(kind.clone(), source.line_full_range(line).unwrap());
@@ -918,6 +1112,7 @@ fn push_inline_lines(
                 ..inline.source.end.saturating_sub(result.source.start);
         }
         result.inlines = inlines.into();
+        result.source_positions = positions_by_line.remove(&line).unwrap_or_default().into();
         result.independent = first == last;
         out.push(result);
     }

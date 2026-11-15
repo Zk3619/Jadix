@@ -168,12 +168,13 @@ fn filter_active(open: bool, query: &str, selected: &str, selected_label: &str) 
 
 /// 打开时把 `active` 指到当前 value（TimePicker `"09"` → index 9），避免高亮停在 `00`。
 fn active_index_for_value(visible: &[ComboboxVisibleItem], value: &str) -> usize {
-    if let Some(i) = visible.iter().position(|it| it.value == value) {
+    if let Some(i) = visible.iter().position(|it| !it.disabled && it.value == value) {
         return i;
     }
     match value.parse::<usize>() {
-        Ok(i) if visible.is_empty() || i < visible.len() => i,
-        _ => 0,
+        Ok(i) if visible.is_empty() => i,
+        Ok(i) if visible.get(i).is_some_and(|item| !item.disabled) => i,
+        _ => visible.iter().position(|item| !item.disabled).unwrap_or(usize::MAX),
     }
 }
 
@@ -479,9 +480,12 @@ plain [] children: Option<Element>,
                 | Key::Named(NamedKey::End)
                     if o_focus.peek() =>
                 {
-                    if let Some(next) =
-                        crate::utils::list_nav::list_nav_move(&ev.logical_key, n, a_sig.peek())
-                    {
+                    if let Some(next) = crate::utils::list_nav::list_nav_move_skipping(
+                        &ev.logical_key,
+                        n,
+                        a_sig.peek(),
+                        |i| list[i].disabled,
+                    ) {
                         a_sig.set(next);
                     }
                     return true;
@@ -496,7 +500,7 @@ plain [] children: Option<Element>,
                 }
                 Key::Named(NamedKey::Enter) => {
                     if !o_focus.peek() {
-                        a_sig.set(0);
+                        a_sig.set(active_index_for_value(&list, &val_sig.peek()));
                         disarm_underlay_close();
                         o_focus.set(true);
                         return true;
@@ -509,6 +513,7 @@ plain [] children: Option<Element>,
                         }
                         return true;
                     }
+                    return true;
                 }
                 Key::Named(NamedKey::Escape) => {
                     o_focus.set(false);
@@ -615,13 +620,15 @@ pub fn combobox_content(
         let _ = value.get();
 
         let cur = value.peek();
-        let ix0 = active_index_for_value(&visible.peek(), &cur);
-        if active.peek() != ix0 {
-            active.set_silent(ix0);
-        }
+        // Preserve the active value across rebuilds/filtering. A keyboard move
+        // must not snap back to the selected value when the rows repaint.
+        let active_value = visible.peek().get(active.peek()).map(|item| item.value.clone());
         visible.set(Vec::new());
         let mut rows = untrack(&body);
-        let ix = active_index_for_value(&visible.peek(), &cur);
+        let list = visible.peek();
+        let ix = active_value
+            .and_then(|value| list.iter().position(|item| !item.disabled && item.value == value))
+            .unwrap_or_else(|| active_index_for_value(&list, &cur));
         if active.peek() != ix {
             active.set_silent(ix);
             visible.set(Vec::new());
@@ -631,7 +638,7 @@ pub fn combobox_content(
         let n = visible.peek().len().max(1);
         if !open.peek() {
             crate::authoring::widgets::scroll::reset_scroll_item_into_view(&scroll_id);
-        } else if scroll_mode != SelectScrollSelected::None && n > 1 {
+        } else if scroll_mode != SelectScrollSelected::None && n > 1 && ix < n {
             let align = match scroll_mode {
                 SelectScrollSelected::Center => {
                     crate::authoring::widgets::scroll::ScrollItemAlign::Center
@@ -827,7 +834,7 @@ plain [] children: Option<Element>,
     let open = ctx.open;
     let val_sig = ctx.value;
     let active = ctx.active;
-    let highlighted = active.peek() == ix;
+    let highlighted = !disabled && active.peek() == ix;
     let is_selected = selected == value;
     let bid = format!("{}:opt:{}", ctx.id, value);
     let ov = value.clone();

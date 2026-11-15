@@ -1,5 +1,14 @@
 # jadix_native
 
+Opt into `consistent-ui` and call `NativeRoot::present_consistent(&source, viewport, &environment, &theme)` to project shared `ConsistentTheme` colors, typography, spacing and minimum control sizes before the same native layout. Authoring snapshots remain unchanged, so repeated font scaling does not accumulate. Explicit nondefault style values are retained; values equal to defaults receive theme tokens, including separate enabled and disabled control/text colors. On iOS, the native-controls build also accepts `--consistent-ui` to opt into a localized system Done keyboard accessory for native text inputs and text areas. Use `present` to retain the original native styling. This is a shared appearance policy over real OS controls, not a claim of identical platform pixels or a custom renderer. Projection clones the tree and costs O(N). Native focus, IME, selection, undo, accessibility, high contrast and system control chrome remain owned by the host.
+
+With `ohos`, `ohos_environment::OhosConfiguration::from_json(bytes, lifecycle)` converts actual ArkUI Configuration callbacks into validated shared environment snapshots. The companion [observer](platforms/ohos/environment.ets) registers application environment callbacks, publishes the initial context configuration and returns an idempotent unsubscriber. Feed snapshots into a root-local EnvironmentHost, then republish the same source with present_consistent. Keep the lifecycle supplied by the UIAbility/page; configuration does not infer foreground state. Unknown color modes remain None; malformed locale/font scaling is rejected. The observer is an explicit integration helper, not automatic OHOS system_snapshot sampling.
+
+The miniprogram module adapts the shared NativeRoot, Taffy layout and revisioned protocol 2 to WXWebAssembly and native WeChat components. The [Rust sample and build instructions](../../examples/miniprogram/README.md) cover twelve node kinds, controlled Unicode events, themes, lifecycle, dialogs and popovers. Full visual, device, IME and advanced style coverage has separate limits.
+
+
+This package adapts shared Jadix presentation contracts to system views. The primary UI entry is `jadix`; optional `jadix_shell` consumes this adapter for script applications. Shared contracts live in `jadix_core` / `jadix_layout`, without a GPU or VM dependency.
+
 Optional `code` exposes `syntax::SyntaxWorker`, reusing `jadix_document` immutable
 snapshots and its syntect parser. One worker owns one native Input/Textarea and
 keeps one running parse, one replaceable pending job and one replaceable result.
@@ -197,8 +206,8 @@ default build uses `jadix_core` without GPU, window or VM dependencies. Optional
 `android` and `dom` features enable JNI and browser controls; `uikit` exposes the
 C callback host used by the accompanying Swift implementation.
 
-`HeadlessRoot::commit` validates ordered operations against a candidate tree before
-publishing a revision. Empty commits do not advance the revision or request work.
+`HeadlessRoot::commit` validates the complete ordered batch before publishing
+a revision; structure-changing batches use a complete candidate tree. Empty commits do not advance the revision or request work.
 `reconcile` accepts retained `PresentationNode` snapshots, computes creates,
 updates, moves and removals, and suppresses unchanged snapshots. Surviving children
 move out before an obsolete parent is removed. Backend capabilities reject
@@ -322,13 +331,29 @@ background reach retained option buttons; large fonts increase row height withou
 replacing an open dialog. Up/Down skip disabled options and wrap; Home/End focus
 the first/last enabled option, with scroll-to-focus, and Escape closes without
 changing the controlled value. Modified shortcuts remain with the platform.
-Six host scenarios compile the production C++ against installed SDK headers and
-execute registered callbacks through a mocked ArkUI API, including disposal and
-failure cleanup. On Windows, reproduce them with:
+Native checkbox, switch and radio nodes also receive ArkUI's checked accessibility
+state. The SDK20 production C++ contract covers both checked and unchecked
+updates. The built-in NativeNode bridge has no arbitrary IDREF relation property.
+`OhosHost::from_napi_with_accessibility` is an opt-in alternative that takes a
+caller-owned XComponent FrameNode as the ArkUI provider root and publishes the
+committed Jadix accessibility tree as virtual elements. Stable element IDs,
+parent/child links, component role, labels, descriptions, selected/checked,
+enabled/clickable flags and density-scaled bounds are refreshed with each
+published tree; supported click actions return through the normal Jadix event
+queue. The XComponent must belong to the same live N-API environment and
+outlive the host. The existing `from_napi` path remains provider-free. This
+provider does not yet synchronize accessibility focus, expose expanded/collapsed
+state, notify platform content changes independently of a presentation commit,
+or route scroll/text-edit actions. The caller must also ensure the supplied
+XComponent represents the same visible surface as the host's NodeContent tree.
+Those runtime relationships and screen-reader behavior still need device
+validation.
+Twenty-one host scenarios compile the production C++ against installed SDK
+headers and execute registered callbacks through a mocked ArkUI API, including
+disposal, failure cleanup and the XComponent accessibility provider lifecycle.
+On Windows, reproduce them with:
 
-```powershell
-powershell -File scripts/checks/native-ohos-select-cpp.ps1 -Sdk <OpenHarmony-SDK> -Output <new-receipt.json>
-```
+
 
 The receipt and log are retained separately from disposable target files. API20
 C++ checks and the isolated API22 x86_64 Selection HAP build pass. Actual popup
@@ -355,9 +380,15 @@ Android and DOM exercise this behavior; UIKit still requires Apple validation.
 Remote fetching and virtual lists are not yet exposed. A retained scrolling list is available through
 `jadix_components::scroll_area` without the GPU feature.
 
-The headless validator clones its reference tree for each nonempty batch and
-retains retired node identities until disposal. It is a correctness model;
-large-tree commit cost remains proportional to the retained tree. Default
+The headless validator stages Text/Button label-only updates using addressed
+records and final aggregate text accounting. Geometry, style, semantics and
+button eligibility must be unchanged; other batches retain the complete
+candidate validation path. Duplicate updates use the final descriptor for
+resource accounting, and any failure preserves the complete live state. The
+visible modal is computed on structural candidates and reused by event admission;
+structural changes invalidate it. Ordered node lookup still costs log N. This
+does not optimize NativeRoot snapshot layout/publication or terminal output.
+Retired identities remain bounded until disposal. Default
 `ResourceLimits` bound each root to 4096 live nodes, 65536 retired identities,
 8 MiB of UTF-8 text (including labels, placeholders and accessible names),
 8 MiB of image source URIs and 16777216 declared image pixels. Hidden Dialog
@@ -546,3 +577,22 @@ editing and activation share the bounded ordered native queue. Capture loss,
 Escape, disabling, unbinding and disposal release capture. Cancelled phases may
 finish a still-mounted disabled/hidden node; they cannot activate it. This is a
 mouse drag binding, not multi-touch, long-press or scroll arbitration support.
+
+
+## Shared host preferences
+
+`jadix_native::environment` re-exports `jadix_core::environment`. `NativeRoot::present_environment` keys measurement invalidation by both environment identity and revision; switching to another root with the same revision, or back to the legacy numeric `present` API, cannot reuse stale metrics. It keeps presentation IDs, host controls and editing state. Applications still map preferences to NodeStyle and content explicitly; the new entry point does not infer native theme/RTL support. Inspection exposes the bound identity/revision only when this typed entry is used.
+
+The `windows` feature enables the core's optional read-only system adapter. Real Win32 EDIT regression verifies that environment/font updates preserve the HWND, Unicode text and UTF-16 selection and leave subsequent native undo usable. Other platforms and automatic system-change notifications require separate adapters/validation.
+
+With `motion`, `present_environment_with_motion` uses the same environment cache
+identity and derives animation policy from its snapshot. Inactive/background roots
+pause the animation clock; returning to active resumes without catching up the
+elapsed background time. Active roots with `reduced_motion: Some(true)` snap to
+the target; an unavailable preference uses full motion. Frame scheduling remains
+the caller's responsibility through `LayoutMotion::next_frame_delay()`.
+
+With both `consistent-ui` and `motion`, `present_consistent_with_motion` applies
+the selected theme and font scale before layout and animation, preserving authored
+styles. Both entry points reject disposed environments before publication, and a
+failed platform publication disposes the root and its animation tracks.

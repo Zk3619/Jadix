@@ -21,6 +21,8 @@ jadix_clipboard = "=0.1.1"
 
 默认开关：无。完整 feature 与依赖关系以 [Cargo.toml](Cargo.toml) 为准；存在开关不代表平台行为已完成验证。普通应用通过门面选择内部 GPU／窗口后端，不直接依赖平台内部实现。
 
+HarmonyOS 目标（`target_env = "ohos"`）不会选择 Linux X11 剪贴板后端。ArkUI 剪贴板桥接实现前，剪贴板 API 使用移动平台的显式 unsupported stub。
+
 ## 文档
 
 [项目文档](https://github.com/Zk3619/Jadix/tree/main/docs)介绍应用配置、平台接入、功能选择与 API 用法。

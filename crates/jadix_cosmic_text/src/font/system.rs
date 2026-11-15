@@ -137,7 +137,7 @@ pub struct FontSystem {
     db: fontdb::Database,
 
     /// Cache for loaded fonts from the database.
-    font_cache: HashMap<(fontdb::ID, fontdb::Weight), Option<Arc<Font>>>,
+    font_cache: HashMap<(fontdb::ID, fontdb::Weight, crate::FontVariations), Option<Arc<Font>>>,
 
     /// Sorted unique ID's of all Monospace fonts in DB
     monospace_font_ids: Vec<fontdb::ID>,
@@ -300,14 +300,23 @@ impl FontSystem {
 
     /// Get a font by its ID and weight.
     pub fn get_font(&mut self, id: fontdb::ID, weight: fontdb::Weight) -> Option<Arc<Font>> {
+        self.get_font_with_variations(id, weight, crate::FontVariations::empty())
+    }
+
+    pub fn get_font_with_variations(
+        &mut self,
+        id: fontdb::ID,
+        weight: fontdb::Weight,
+        variations: crate::FontVariations,
+    ) -> Option<Arc<Font>> {
         self.font_cache
-            .entry((id, weight))
+            .entry((id, weight, variations))
             .or_insert_with(|| {
                 #[cfg(feature = "std")]
                 unsafe {
                     self.db.make_shared_face_data(id);
                 }
-                if let Some(font) = Font::new(&self.db, id, weight) {
+                if let Some(font) = Font::new_with_variations(&self.db, id, weight, variations) {
                     Some(Arc::new(font))
                 } else {
                     log::warn!(

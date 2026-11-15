@@ -1,4 +1,4 @@
-//! Android clipboard stub. JNI / `android.content.ClipboardManager` comes later.
+//! Mobile clipboard stub. Platform clipboard bridges are not implemented yet.
 
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::Duration;
@@ -8,7 +8,7 @@ use crate::common::Result;
 use crate::common::RustImageData;
 use crate::{Clipboard, ClipboardContent, ClipboardHandler, ClipboardWatcher, ContentFormat};
 
-const UNSUPPORTED: &str = "android clipboard is not implemented yet";
+const UNSUPPORTED: &str = "clipboard is not implemented on this platform yet";
 
 pub struct ClipboardContext;
 

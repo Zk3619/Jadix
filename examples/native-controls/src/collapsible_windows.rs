@@ -344,7 +344,10 @@ mod application {
             render(&mut root, &projection, &mut element)?;
             if root.model().focused() != Some(privacy)
                 || root.host().control_identity(privacy)
-                    != Some(unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus() } as usize)
+                    != Some(
+                        unsafe { windows_sys::Win32::UI::Input::KeyboardAndMouse::GetFocus() }
+                            as usize,
+                    )
             {
                 return Err("programmatic Accordion close did not restore OS focus".into());
             }

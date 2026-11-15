@@ -56,18 +56,12 @@ use crate::utils::anchored_overlay::{
 };
 use crate::utils::controlled::{resolve_open_signal, resolve_string_signal};
 use crate::utils::popup::{PopupPlacement, ATTR_FLOATING_MATCH_TRIGGER};
-use crate::utils::roving::{focus_by_id, focus_id_only};
 use crate::utils::text_node::{build_text_node, TextNodeConfig};
 use taffy::prelude::LengthPercentageAuto;
 use winit::keyboard::{Key, NamedKey};
 
 fn trigger_focus_id(id: &str) -> String {
     format!("{id}:trigger")
-}
-
-fn close_picker(open: Signal<bool>, trigger_fid: impl Into<String>) {
-    open.set(false);
-    focus_id_only(trigger_fid.into());
 }
 
 mod drag;

@@ -25,6 +25,10 @@ Default features: none. See [Cargo.toml](Cargo.toml) for the complete feature/de
 
 The existing [package guide](GUIDE.md) retains additional API, platform and source details; it may use another language.
 
+The optional `checkpoint` feature exposes CPU-only `checkpoint::{Checkpoint, CheckpointStore}` for checksummed, bounded, generation-checked application storage. Both `jadix_native` and `jadix_tui` consume the same implementation; it adds no GUI, renderer or syntax engine. Existing locks and generation conflicts fail explicitly; it does not claim power-loss durability.
+
+With `markdown`, `Document::markdown_with_raw_html(source, false)` displays raw HTML tags and blocks as literal text while preserving Markdown and autolinks outside HTML blocks. The policy survives edits and is shared by document views and editors. HTML block contents remain literal; this option is not an HTML sanitizer.
+
 ## Documentation
 
 [Project documentation](https://github.com/Zk3619/Jadix/tree/main/docs) covers application setup, platform integration, configuration, and API usage.

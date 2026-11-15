@@ -404,10 +404,10 @@ pub use form::{
     form_field, form_provider, form_validate, set_field_error, use_form, FormState,
 };
 pub use hover_card::{
-    hover_card, hover_card_content, hover_card_content_slot, hover_card_scope, hover_card_surface,
-    hover_card_trigger, use_hover_card, HoverCardBuilder, HoverCardContentOpts,
-    HoverCardContentSlotBuilder, HoverCardCtx, HoverCardTrigger, HoverCardTriggerBuilder,
-    HoverCardTriggerProps,
+    hover_card, hover_card_content, hover_card_content_slot, hover_card_scope,
+    hover_card_scope_with_delays, hover_card_surface, hover_card_trigger, use_hover_card,
+    HoverCardBuilder, HoverCardContentOpts, HoverCardContentSlotBuilder, HoverCardCtx,
+    HoverCardTrigger, HoverCardTriggerBuilder, HoverCardTriggerProps,
 };
 pub use image::{image, ui_image, Image, ImageBuilder, ImageProps, Img, ImgProps};
 pub use input::{
@@ -696,9 +696,9 @@ pub use toggle_group::{
 };
 pub use tooltip::{
     tooltip, tooltip_bubble, tooltip_content, tooltip_content_slot, tooltip_scope,
-    tooltip_side_to_placement, tooltip_trigger, use_tooltip, TooltipBuilder, TooltipContentOpts,
-    TooltipContentSlotBuilder, TooltipCtx, TooltipTrigger, TooltipTriggerBuilder,
-    TooltipTriggerProps,
+    tooltip_scope_with_delays, tooltip_side_to_placement, tooltip_trigger, use_tooltip,
+    TooltipBuilder, TooltipContentOpts, TooltipContentSlotBuilder, TooltipCtx, TooltipTrigger,
+    TooltipTriggerBuilder, TooltipTriggerProps,
 };
 pub use tree_view::{
     tree_node, tree_view, tree_view_item_scope, tree_view_scope, use_tree_view, use_tree_view_item,

@@ -22,6 +22,7 @@ pub struct LayoutGlyph {
     pub font_size: f32,
     /// Font weight of the glyph
     pub font_weight: fontdb::Weight,
+    pub font_variations: crate::FontVariations,
     /// Line height of the glyph, will override buffer setting
     pub line_height_opt: Option<f32>,
     /// Font id of the glyph
@@ -90,7 +91,7 @@ impl LayoutGlyph {
         let x_offset = self.font_size * self.x_offset;
         let y_offset = self.font_size * self.y_offset;
 
-        let (cache_key, x, y) = CacheKey::new(
+        let (mut cache_key, x, y) = CacheKey::new(
             self.font_id,
             self.glyph_id,
             self.font_size * scale,
@@ -102,6 +103,7 @@ impl LayoutGlyph {
             self.cache_key_flags,
         );
 
+        cache_key.font_variations = self.font_variations;
         PhysicalGlyph { cache_key, x, y }
     }
 }

@@ -476,7 +476,7 @@ fn node_shape_identity_hash(
     shaping: glyphon::Shaping,
     letter_spacing: f32,
     direction: TextDirection,
-    color: [u8; 4],
+    _color: [u8; 4],
     requested_weight: u16,
     synthetic_bold: bool,
 ) -> u64 {
@@ -501,7 +501,6 @@ fn node_shape_identity_hash(
         TextDirection::Rtl => 2u8,
     })
     .hash(&mut h);
-    color.hash(&mut h);
     h.finish()
 }
 
@@ -519,8 +518,7 @@ fn node_shape_hash(
     shaping: glyphon::Shaping,
     letter_spacing: f32,
     direction: TextDirection,
-    // Baked into glyphon Attrs on shape — must invalidate when opacity/color flips
-    // (e.g. Input adornments hidden with opacity 0 then shown).
+    // Paint colors refresh cached glyphs without changing the shape identity.
     color: [u8; 4],
     force_fast_mode: bool,
 ) -> u64 {
@@ -550,15 +548,65 @@ fn rich_shape_identity_hash(base: u64, spans: Option<&[crate::style::TextSpan]>)
     spans.len().hash(&mut hash);
     for span in spans {
         span.text.len().hash(&mut hash);
-        span.color.hash(&mut hash);
         span.weight.hash(&mut hash);
         span.size.map(f32::to_bits).hash(&mut hash);
         span.italic.hash(&mut hash);
         span.monospace.hash(&mut hash);
+        span.underline.hash(&mut hash);
+        span.strikethrough.hash(&mut hash);
         span.background.hash(&mut hash);
         std::mem::discriminant(&span.kind).hash(&mut hash);
     }
     hash.finish()
+}
+
+fn rich_paint_identity_hash(
+    base: u64,
+    color: [u8; 4],
+    spans: Option<&[crate::style::TextSpan]>,
+) -> u64 {
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    base.hash(&mut hash);
+    color.hash(&mut hash);
+    if let Some(spans) = spans {
+        for span in spans {
+            span.color.hash(&mut hash);
+        }
+    }
+    hash.finish()
+}
+
+fn rich_paint_color_ranges(
+    spans: Option<&[crate::style::TextSpan]>,
+    letter_spacing: f32,
+    size: f32,
+    direction: TextDirection,
+    default_color: [u8; 4],
+) -> Vec<(std::ops::Range<usize>, glyphon::Color)> {
+    let Some(spans) = spans.filter(|spans| !spans.is_empty()) else {
+        return Vec::new();
+    };
+    let mut ranges = Vec::with_capacity(spans.len());
+    let mut offset = 0;
+    for (index, span) in spans.iter().enumerate() {
+        let mut text = apply_letter_spacing_approx(&span.text, letter_spacing, size).into_owned();
+        if index == 0 {
+            let mark = direction_mark(direction);
+            if !mark.is_empty() {
+                text = format!("{mark}{text}");
+            }
+        }
+        let end = offset + text.len();
+        if offset < end {
+            let color = span.color.unwrap_or(default_color);
+            ranges.push((
+                offset..end,
+                glyphon::Color::rgba(color[0], color[1], color[2], color[3]),
+            ));
+        }
+        offset = end;
+    }
+    ranges
 }
 
 /// Bounds half of the Exact key — avoids re-hashing full text when identity is known.
@@ -583,6 +631,7 @@ fn make_dummy_cache_entry(font_system: &mut glyphon::FontSystem) -> super::text:
     super::text::ShapedTextEntry {
         key_hash: 0,
         shape_hash: 0,
+        paint_hash: 0,
         buffer,
         measured_text_w: 0.0,
         has_emoji: false,
@@ -1370,6 +1419,86 @@ fn emoji_sequence_content_hash(text: &str) -> u64 {
 /// Match `EmojiCacheKey` docs: coarse wrap buckets so 1px soft-width jitter does not miss.
 fn emoji_wrap_width_q(buffer_soft_w: f32) -> u16 {
     (buffer_soft_w / 8.0).floor().clamp(0.0, u16::MAX as f32) as u16
+}
+
+/// Truncate the actual rich shaping input, retaining attributes and metadata.
+/// Called only on a shaped-cache miss. Width probes use the same font system,
+/// metrics and shaping as the final buffer; cuts are whole graphemes.
+fn clamp_rich_text<'a>(
+    buffer: &mut glyphon::Buffer,
+    font_system: &mut glyphon::FontSystem,
+    spans: &mut Vec<(String, glyphon::Attrs<'a>)>,
+    attrs: &glyphon::Attrs<'a>,
+    shaping: glyphon::Shaping,
+    width: f32,
+    line_limit: usize,
+    ellipsis: bool,
+) {
+    let fits = |buffer: &mut glyphon::Buffer,
+                spans: &[(String, glyphon::Attrs<'a>)],
+                font_system: &mut glyphon::FontSystem| {
+        set_document_rich_text(buffer, spans, attrs, shaping);
+        buffer.shape_until_scroll(font_system, false);
+        let mut count = 0;
+        buffer.layout_runs().all(|run| {
+            count += 1;
+            count <= line_limit && (!ellipsis || run.line_w <= width + 0.01)
+        })
+    };
+    let text: String = spans.iter().map(|(s, _)| s.as_str()).collect();
+    let line_end = if line_limit == 1 {
+        text.find(['\r', '\n']).unwrap_or(text.len())
+    } else {
+        text.len()
+    };
+    if line_end == text.len() && fits(buffer, spans, font_system) {
+        return;
+    }
+    let original = std::mem::take(spans);
+    let prefix = |end: usize| {
+        let mut result = Vec::new();
+        let mut remaining = end;
+        let mut last = original
+            .first()
+            .map(|(_, a)| a.clone())
+            .unwrap_or_else(|| attrs.clone());
+        for (body, style) in &original {
+            let keep = remaining.min(body.len());
+            if keep > 0 {
+                result.push((body[..keep].to_owned(), style.clone()));
+                last = style.clone();
+                remaining -= keep;
+            }
+            if remaining == 0 {
+                break;
+            }
+        }
+        if ellipsis {
+            result.push(("…".to_owned(), last));
+        }
+        result
+    };
+    let ends: Vec<usize> = std::iter::once(0)
+        .chain(
+            text[..line_end]
+                .grapheme_indices(true)
+                .map(|(at, g)| at + g.len()),
+        )
+        .collect();
+    let mut low = 0;
+    let mut high = ends.len();
+    if !fits(buffer, &prefix(0), font_system) {
+        return;
+    }
+    while low + 1 < high {
+        let mid = (low + high) / 2;
+        if fits(buffer, &prefix(ends[mid]), font_system) {
+            low = mid;
+        } else {
+            high = mid;
+        }
+    }
+    *spans = prefix(ends[low]);
 }
 
 fn set_document_rich_text(
@@ -2748,7 +2877,10 @@ pub fn prepare_text_frame_at(
         } else {
             resolve_text_align(st.align_resolved(), st.direction)
         };
-        let display_text: Cow<'_, str> = if st.overflow == TextOverflow::Ellipsis {
+        let display_text: Cow<'_, str> = if st.overflow == TextOverflow::Ellipsis
+            && st.max_lines.is_none()
+            && info.spans.as_ref().is_none_or(|spans| spans.is_empty())
+        {
             Cow::Owned(truncate_with_ellipsis(
                 unsafe { &mut *text_renderer.font_system },
                 info.text.as_str(),
@@ -2805,6 +2937,19 @@ pub fn prepare_text_frame_at(
         {
             let mut hash = std::collections::hash_map::DefaultHasher::new();
             shape_hash.hash(&mut hash);
+            // Rich ellipsis truncates on cache miss; switching clip/ellipsis
+            // must not reuse the untruncated rich buffer with identical text.
+            std::mem::discriminant(&st.overflow).hash(&mut hash);
+            st.max_lines.hash(&mut hash);
+            std::mem::discriminant(&st.white_space).hash(&mut hash);
+            if st.max_lines.is_some()
+                || (st.overflow == TextOverflow::Ellipsis
+                    && info.spans.as_ref().is_some_and(|s| !s.is_empty()))
+            {
+                // Truncation changes the source kept inside the buffer. A
+                // bounds-only reflow cannot recover its discarded suffix.
+                scaled_w.to_bits().hash(&mut hash);
+            }
             st.align_last_resolved().hash(&mut hash);
             st.align_resolved().as_str().hash(&mut hash);
             shape_hash = hash.finish();
@@ -2816,9 +2961,14 @@ pub fn prepare_text_frame_at(
                 let mut h = std::collections::hash_map::DefaultHasher::new();
                 shape_hash.hash(&mut h);
                 ranges.hash(&mut h);
+                // Selection foreground is baked into separate spans. Preserve
+                // it when the surrounding input color changes.
+                st.color_resolved().hash(&mut h);
                 shape_hash = h.finish();
             }
         }
+        let paint_hash =
+            rich_paint_identity_hash(shape_hash, st.color_resolved(), info.spans.as_deref());
         // Derive Exact key from identity — do not re-hash the full string (scroll frames
         // visit every visible label; browsers keep glyphs and only translate).
         let key_hash = node_shape_key_from_identity(shape_hash, scaled_w, scaled_h, false);
@@ -3099,6 +3249,7 @@ pub fn prepare_text_frame_at(
                 // BiDi/WJ prewrap is width-dependent → re-Miss when wrap target moves OR
                 // when the buffer still has raw text from a fast WordOrGlyph Miss.
                 let logical_prewrap = !nowrap
+                    && st.max_lines.is_none()
                     && !is_input_text
                     && crate::text::needs_logical_prewrap(info.text.as_str());
                 let cur_wrap = entry.buffer.size().0.unwrap_or(soft_w_target);
@@ -3244,6 +3395,7 @@ pub fn prepare_text_frame_at(
                     glyphon::Metrics::new(scaled_size.max(1.0), line_height.max(1.0)),
                 );
                 let logical_prewrap = !nowrap
+                    && st.max_lines.is_none()
                     && !is_input_text
                     && crate::text::needs_logical_prewrap(info.text.as_str());
                 // UAX#14 prewrap from FIT_CACHE. Use 8px width buckets so resize fast and
@@ -3278,6 +3430,11 @@ pub fn prepare_text_frame_at(
                 if nowrap {
                     buffer.set_wrap(glyphon::Wrap::None);
                 }
+                if st.max_lines.is_some() && !nowrap {
+                    // Line-budget probes and final paint must wrap at the same
+                    // exact width, independent of the soft-wrap cache bucket.
+                    buffer_soft_w = scaled_w.max(1.0);
+                }
                 buffer.set_size(Some(buffer_soft_w), buffer_height_opt);
                 let attrs = glyphon::Attrs::new()
                     .family(family)
@@ -3288,9 +3445,13 @@ pub fn prepare_text_frame_at(
                         st.color_resolved()[2],
                         st.color_resolved()[3],
                     ));
-                if let Some(spans) = info.spans.as_ref().filter(|s| !s.is_empty()) {
-                    let mut owned: Vec<(String, glyphon::Attrs)> = Vec::with_capacity(spans.len());
-                    for (si, span) in spans.iter().enumerate() {
+                let rich_spans = info.spans.as_ref().filter(|s| !s.is_empty());
+                if rich_spans.is_some() || st.max_lines.is_some() {
+                    let mut owned: Vec<(String, glyphon::Attrs)> = Vec::new();
+                    if rich_spans.is_none() {
+                        owned.push((shape_text.to_string(), attrs.clone()));
+                    }
+                    for (si, span) in rich_spans.into_iter().flatten().enumerate() {
                         let mut body =
                             apply_letter_spacing_approx(&span.text, st.letter_spacing, scaled_size)
                                 .into_owned();
@@ -3321,11 +3482,25 @@ pub fn prepare_text_frame_at(
                             a = a.family(glyphon::Family::Monospace);
                         }
                         if span.background.is_some()
+                            || span.underline
+                            || span.strikethrough
                             || matches!(span.kind, TextSpanKind::Chip | TextSpanKind::Mention)
                         {
                             a = a.metadata(si + 1);
                         }
                         owned.push((body, a));
+                    }
+                    if st.overflow == TextOverflow::Ellipsis || st.max_lines.is_some() {
+                        clamp_rich_text(
+                            &mut buffer,
+                            unsafe { &mut *text_renderer.font_system },
+                            &mut owned,
+                            &attrs,
+                            shaping,
+                            scaled_w.max(0.0),
+                            usize::from(st.max_lines.unwrap_or(1).max(1)),
+                            st.overflow == TextOverflow::Ellipsis,
+                        );
                     }
                     set_document_rich_text(&mut buffer, &owned, &attrs, shaping);
                 } else {
@@ -3402,16 +3577,37 @@ pub fn prepare_text_frame_at(
                     .fold(0.0_f32, f32::max);
                 entry.key_hash = key_hash;
                 entry.shape_hash = shape_hash;
+                entry.paint_hash = paint_hash;
                 entry.buffer = buffer;
                 entry.measured_text_w = measured;
                 (measured, false, buffer_soft_w)
             }
         };
+        if cache_hit && text_renderer.shaped_cache[i].paint_hash != paint_hash {
+            let mut ranges = rich_paint_color_ranges(
+                info.spans.as_deref(),
+                st.letter_spacing,
+                scaled_size,
+                st.direction,
+                st.color_resolved(),
+            );
+            if info.spans.as_ref().is_none_or(|spans| spans.is_empty()) {
+                let color = st.color_resolved();
+                ranges.push((
+                    0..usize::MAX,
+                    glyphon::Color::rgba(color[0], color[1], color[2], color[3]),
+                ));
+            }
+            let entry = &mut text_renderer.shaped_cache[i];
+            entry.buffer.update_layout_colors(&ranges);
+            entry.paint_hash = paint_hash;
+        }
         let emoji_cache_key = if emoji_custom_glyph_enabled() && has_emoji {
             Some(super::text::EmojiCacheKey {
                 // Content-only hash (not full shape_hash): stable across color/weight so
                 // scroll Exact frames keep hitting the same Twemoji glyph entry.
                 sequence_hash: emoji_sequence_content_hash(shape_text.as_ref()),
+                layout_hash: key_hash,
                 pixel_size: emoji_paint_pixel_size(scaled_size),
                 scale_bits: ui_scale.to_bits(),
                 color_mode: 1,
@@ -3445,7 +3641,10 @@ pub fn prepare_text_frame_at(
                     let segs = emoji_segments_from_slotted_layout(shape_text.as_ref(), &slotted);
                     (slotted, segs)
                 } else {
-                    plan_emoji_layout(shape_text.as_ref())
+                    // Rich text / line clamping may have removed an emoji
+                    // entirely. Planning from the original source resurrects
+                    // it at the fallback position when no buffer glyph exists.
+                    plan_emoji_layout(&slotted)
                 };
                 let mut glyphs = Vec::new();
                 let mut rasters = std::collections::HashMap::new();
@@ -3757,7 +3956,10 @@ pub fn prepare_text_frame_at(
         let Some(spans) = info.spans.as_ref().filter(|s| !s.is_empty()) else {
             continue;
         };
-        if !spans.iter().any(|s| s.background.is_some()) {
+        if !spans
+            .iter()
+            .any(|s| s.background.is_some() || s.underline || s.strikethrough)
+        {
             continue;
         }
         let Some(tb) = frame_meta.get(i).and_then(|x| x.as_ref()) else {
@@ -3775,53 +3977,75 @@ pub fn prepare_text_frame_at(
                     let Some(span) = spans.get(meta.saturating_sub(1)) else {
                         return;
                     };
-                    let Some(bg) = span.background else {
-                        return;
-                    };
                     if max_x <= min_x {
                         return;
                     }
-                    let pad = span.padding_x * ui_scale;
                     let ps = if tb.paint_scale.is_finite() && tb.paint_scale > 0.0 {
                         tb.paint_scale
                     } else {
                         1.0
                     };
-                    let bx = tb.x + (min_x - pad) * ps;
-                    let by = tb.y + line_top * ps;
-                    let bw = ((max_x - min_x) + 2.0 * pad) * ps;
-                    let bh = line_height.max(1.0) * ps;
-                    let radius = (bh * 0.25).min(6.0 * ui_scale * ps);
-                    let Some([cx, cy, cw, ch]) =
-                        clip_rect_to_bounds([bx, by, bw, bh], tb.clip_bounds)
-                    else {
-                        return;
+                    let mut push_rect = |rect: [f32; 4], color: [u8; 4], radius: f32| {
+                        let Some([cx, cy, cw, ch]) = clip_rect_to_bounds(rect, tb.clip_bounds)
+                        else {
+                            return;
+                        };
+                        instances.push(InstanceInput {
+                            rect_pos: [cx, cy],
+                            rect_size: [cw, ch],
+                            color: color.map(|channel| channel as f32 / 255.0),
+                            border_color: [0.0, 0.0, 0.0, 0.0],
+                            radii: [radius, radius, radius, radius],
+                            border_width: 0.0,
+                            shadow_color: [0.0, 0.0, 0.0, 0.0],
+                            shadow_offset: [0.0, 0.0],
+                            shadow_blur: 0.0,
+                            shadow_spread: 0.0,
+                            shadow_inset: 0.0,
+                            backdrop_fade: 0.0,
+                            transform: crate::style::transform::MAT2D_IDENTITY,
+                            clip_pos: [0.0, 0.0],
+                            clip_size: InstanceInput::NO_CLIP_SIZE,
+                            border_extra: 0.0,
+                            backdrop_blur: 0.0,
+                            glass: [0.0; 4],
+                        });
                     };
-                    instances.push(InstanceInput {
-                        rect_pos: [cx, cy],
-                        rect_size: [cw, ch],
-                        color: [
-                            bg[0] as f32 / 255.0,
-                            bg[1] as f32 / 255.0,
-                            bg[2] as f32 / 255.0,
-                            bg[3] as f32 / 255.0,
-                        ],
-                        border_color: [0.0, 0.0, 0.0, 0.0],
-                        radii: [radius, radius, radius, radius],
-                        border_width: 0.0,
-                        shadow_color: [0.0, 0.0, 0.0, 0.0],
-                        shadow_offset: [0.0, 0.0],
-                        shadow_blur: 0.0,
-                        shadow_spread: 0.0,
-                        shadow_inset: 0.0,
-                        backdrop_fade: 0.0,
-                        transform: crate::style::transform::MAT2D_IDENTITY,
-                        clip_pos: [0.0, 0.0],
-                        clip_size: InstanceInput::NO_CLIP_SIZE,
-                        border_extra: 0.0,
-                        backdrop_blur: 0.0,
-                        glass: [0.0; 4],
-                    });
+                    if let Some(bg) = span.background {
+                        let pad = span.padding_x * ui_scale;
+                        let bh = line_height.max(1.0) * ps;
+                        let radius = (bh * 0.25).min(6.0 * ui_scale * ps);
+                        push_rect(
+                            [
+                                tb.x + (min_x - pad) * ps,
+                                tb.y + line_top * ps,
+                                (max_x - min_x + 2.0 * pad) * ps,
+                                bh,
+                            ],
+                            bg,
+                            radius,
+                        );
+                    }
+                    let size = span.size.map(|s| s * ui_scale).unwrap_or(tb.text_size);
+                    let thickness = (size / 14.0).max(1.0) * ps;
+                    let color = span.color.unwrap_or(tb.color);
+                    for (enabled, y) in [
+                        (span.underline, run.line_y + size * 0.08),
+                        (span.strikethrough, run.line_y - size * 0.3),
+                    ] {
+                        if enabled {
+                            push_rect(
+                                [
+                                    tb.x + min_x * ps,
+                                    tb.y + y * ps,
+                                    (max_x - min_x) * ps,
+                                    thickness,
+                                ],
+                                color,
+                                0.0,
+                            );
+                        }
+                    }
                 };
             for g in run.glyphs.iter() {
                 let meta = g.metadata;

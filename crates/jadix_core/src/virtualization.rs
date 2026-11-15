@@ -17,6 +17,14 @@ pub struct ScrollAnchor<Key> {
     pub within: f64,
 }
 
+/// The first row intersecting the viewport and its depth in that row, in
+/// logical coordinates. This excludes overscan and pinned rows.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ListScrollPosition {
+    pub index: usize,
+    pub offset: f64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct VirtualWindow {
     pub visible: Range<usize>,
@@ -136,6 +144,55 @@ impl<Key: Clone + Ord> VirtualAxis<Key> {
         Ok(true)
     }
 
+    /// Append keyed extents without rebuilding the existing prefix index.
+    ///
+    /// Validation is atomic: duplicate keys, invalid extents and capacity errors
+    /// leave the axis unchanged. Work is amortized O(k log(n + k)) for k new
+    /// rows, including ordered-key lookups; Vec growth can copy existing storage.
+    pub fn append(
+        &mut self,
+        items: impl IntoIterator<Item = (Key, f64)>,
+    ) -> Result<usize, VirtualError> {
+        let mut pending = Vec::new();
+        let mut seen = BTreeSet::new();
+        let mut total = self.total;
+        for (key, extent) in items {
+            if pending.len() >= 1_000_000 - self.len() {
+                return Err(VirtualError::Capacity);
+            }
+            if !extent.is_finite() || extent <= 0.0 || !(total + extent).is_finite() {
+                return Err(VirtualError::InvalidExtent);
+            }
+            if self.indices.contains_key(&key) || !seen.insert(key.clone()) {
+                return Err(VirtualError::DuplicateKey);
+            }
+            total += extent;
+            pending.push((key, extent));
+        }
+        let count = pending.len();
+        self.keys.reserve(count);
+        self.extents.reserve(count);
+        self.sums.reserve(count);
+        for (key, extent) in pending {
+            let index = self.len();
+            let cursor = index + 1;
+            let start = cursor - (cursor & cursor.wrapping_neg());
+            // A new Fenwick node may span old rows (especially at powers of two).
+            let mut sum = extent;
+            let mut previous = index;
+            while previous > start {
+                sum += self.sums[previous];
+                previous -= previous & previous.wrapping_neg();
+            }
+            self.indices.insert(key.clone(), index);
+            self.keys.push(key);
+            self.extents.push(extent);
+            self.sums.push(sum);
+        }
+        self.total = total;
+        Ok(count)
+    }
+
     pub fn replace(
         &mut self,
         keys: impl IntoIterator<Item = Key>,
@@ -204,26 +261,73 @@ impl<Key: Clone + Ord> VirtualAxis<Key> {
     ) -> Result<f64, VirtualError> {
         Self::viewport(anchor.within, viewport)?;
         let index = self.index(&anchor.key).ok_or(VirtualError::UnknownKey)?;
-        Ok(
-            (self.position(index).unwrap() + anchor.within.min(self.extents[index]))
-                .min((self.total - viewport).max(0.0)),
-        )
+        let start = self.position(index).unwrap();
+        // Rows are half-open: clamping to the end would anchor the next key
+        // when this row shrinks past the saved within-row offset.
+        let end = self.position(index + 1).unwrap();
+        Ok((start + anchor.within)
+            .min(end.next_down().max(start))
+            .min((self.total - viewport).max(0.0)))
     }
 
+    /// Query the actual viewport rather than the mounted (overscanned) window.
+    /// Empty lists and zero-sized viewports have no scroll position.
+    pub fn scroll_position(
+        &self,
+        offset: f64,
+        viewport: f64,
+    ) -> Result<Option<ListScrollPosition>, VirtualError> {
+        Self::viewport(offset, viewport)?;
+        if self.is_empty() || viewport == 0.0 {
+            return Ok(None);
+        }
+        let offset = offset.min((self.total - viewport).max(0.0));
+        let index = self.at(offset).min(self.len() - 1);
+        Ok(Some(ListScrollPosition {
+            index,
+            offset: offset - self.position(index).unwrap(),
+        }))
+    }
+
+    /// Measure one row and return the adjusted offset for the same keyed row
+    /// at the viewport's start. Both growth and shrinkage above it are handled.
+    /// `follow_end` explicitly keeps an end-anchored viewport at the new end;
+    /// callers turn it off when the user scrolls away. Invalid inputs leave
+    /// the index unchanged. The adapter must apply the returned offset.
+    pub fn measure_preserving_scroll(
+        &mut self,
+        key: &Key,
+        extent: f64,
+        offset: f64,
+        viewport: f64,
+        follow_end: bool,
+    ) -> Result<f64, VirtualError> {
+        Self::viewport(offset, viewport)?;
+        let offset = offset.min((self.total - viewport).max(0.0));
+        let at_end = follow_end && offset == (self.total - viewport).max(0.0);
+        let anchor = self.anchor(offset)?;
+        self.measure(key, extent)?;
+        if at_end {
+            return Ok((self.total - viewport).max(0.0));
+        }
+        match anchor {
+            Some(anchor) => self.restore_anchor(&anchor, viewport),
+            None => Ok(0.0),
+        }
+    }
+
+    /// Reveal a focused row with minimal movement. A partially visible row
+    /// larger than the viewport retains the offset; a hidden large row aligns
+    /// its start. Empty viewports do not trigger a focus scroll.
     pub fn reveal(&self, key: &Key, offset: f64, viewport: f64) -> Result<f64, VirtualError> {
         Self::viewport(offset, viewport)?;
         let index = self.index(key).ok_or(VirtualError::UnknownKey)?;
         let start = self.position(index).unwrap();
         let end = start + self.extents[index];
         let offset = offset.min((self.total - viewport).max(0.0));
-        Ok(if start < offset {
-            start
-        } else if end > offset + viewport {
-            (end - viewport).max(0.0)
-        } else {
-            offset
-        }
-        .min((self.total - viewport).max(0.0)))
+        let delta =
+            crate::presentation::input::focus_reveal_delta(start - offset, end - offset, viewport);
+        Ok((offset + delta).clamp(0.0, (self.total - viewport).max(0.0)))
     }
 
     pub fn window(
@@ -268,6 +372,30 @@ impl<Key: Clone + Ord> VirtualAxis<Key> {
             offset,
             total: self.total,
         })
+    }
+
+    /// Build a window that keeps the focused row and its adjacent rows mounted.
+    /// This lets sequential keyboard navigation reach rows beyond the viewport;
+    /// `reveal` can then scroll each newly focused row into view.
+    pub fn window_with_focus(
+        &self,
+        offset: f64,
+        viewport: f64,
+        overscan: f64,
+        pinned: &[Key],
+        focused: Option<&Key>,
+        capacity: usize,
+    ) -> Result<VirtualWindow, VirtualError> {
+        let Some(focused) = focused else {
+            return self.window(offset, viewport, overscan, pinned, capacity);
+        };
+        let index = self.index(focused).ok_or(VirtualError::UnknownKey)?;
+        let start = index.saturating_sub(1);
+        let end = (index + 2).min(self.len());
+        let mut mounted_keys = Vec::with_capacity(pinned.len() + end - start);
+        mounted_keys.extend_from_slice(pinned);
+        mounted_keys.extend(self.keys[start..end].iter().cloned());
+        self.window(offset, viewport, overscan, &mounted_keys, capacity)
     }
 }
 

@@ -23,15 +23,58 @@
 use std::any::{Any, TypeId};
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::future::Future;
+use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
 thread_local! {
     static RUNTIME: RefCell<Rc<Runtime>> = RefCell::new(Runtime::new());
+    static APP_QUIT_HANDLERS: RefCell<HashMap<usize, Rc<RefCell<AppQuitHandler>>>> = RefCell::new(HashMap::new());
     /// Non-zero while a secondary window is the active input/render scope.
     /// Remaps a small set of process-global `__jadix_*` keys so focus / IME stay per-window.
     static SIGNAL_KEY_SCOPE: Cell<u64> = const { Cell::new(0) };
+}
+
+pub type AppQuitFuture = Pin<Box<dyn Future<Output = ()> + 'static>>;
+pub type AppQuitHandler = Box<dyn FnMut() -> AppQuitFuture + 'static>;
+
+static NEXT_APP_QUIT_HANDLER_ID: AtomicUsize = AtomicUsize::new(1);
+
+/// Run asynchronous cleanup when the final application window quits.
+///
+/// Registrations made under an owner are removed with that owner. Pending cleanup is polled by
+/// the application event loop for up to 200 ms before renderer teardown continues.
+pub fn on_app_quit<F, Fut>(mut handler: F)
+where
+    F: FnMut() -> Fut + 'static,
+    Fut: Future<Output = ()> + 'static,
+{
+    let id = NEXT_APP_QUIT_HANDLER_ID.fetch_add(1, Ordering::Relaxed);
+    let handler: Rc<RefCell<AppQuitHandler>> =
+        Rc::new(RefCell::new(Box::new(move || Box::pin(handler()))));
+    APP_QUIT_HANDLERS.with(|handlers| {
+        handlers.borrow_mut().insert(id, handler);
+    });
+    if current_owner().is_some() {
+        on_cleanup(move || {
+            APP_QUIT_HANDLERS.with(|handlers| {
+                handlers.borrow_mut().remove(&id);
+            });
+        });
+    }
+}
+
+/// Take registered app-quit callbacks and create their cleanup futures.
+pub fn take_app_quit_futures() -> Vec<AppQuitFuture> {
+    APP_QUIT_HANDLERS.with(|handlers| {
+        let handlers = std::mem::take(&mut *handlers.borrow_mut());
+        handlers
+            .into_values()
+            .map(|handler| (handler.borrow_mut())())
+            .collect()
+    })
 }
 
 /// Keys that must not be shared between the primary window and secondaries.
@@ -132,10 +175,14 @@ pub struct MemoId(usize);
 pub struct ContextId(usize);
 
 static NEXT_SIGNAL_ID: AtomicUsize = AtomicUsize::new(1);
+static NEXT_SILENT_SIGNAL_SUBSCRIPTION_ID: AtomicUsize = AtomicUsize::new(1);
 static NEXT_EFFECT_ID: AtomicUsize = AtomicUsize::new(1);
 static NEXT_OWNER_ID: AtomicUsize = AtomicUsize::new(1);
 static NEXT_MEMO_ID: AtomicUsize = AtomicUsize::new(1);
 static NEXT_CONTEXT_ID: AtomicUsize = AtomicUsize::new(1);
+
+type SilentSignalCallback = Rc<dyn Fn()>;
+type SilentSignalSubscribers = HashMap<SignalId, HashMap<usize, SilentSignalCallback>>;
 
 struct OwnerNode {
     parent: Option<OwnerId>,
@@ -193,6 +240,7 @@ pub struct Runtime {
     root_owner: RefCell<Option<OwnerId>>,
     owners: RefCell<HashMap<OwnerId, OwnerNode>>,
     pub signals: RefCell<HashMap<SignalId, Rc<RefCell<dyn Any>>>>,
+    silent_signal_subscribers: RefCell<SilentSignalSubscribers>,
     /// Signals created with [`Self::create_unowned_signal`] (not listed on any owner).
     unowned_signals: RefCell<HashSet<SignalId>>,
     pub named_signals: RefCell<HashMap<String, SignalId>>,
@@ -250,6 +298,7 @@ impl Runtime {
             root_owner: RefCell::new(None),
             owners: RefCell::new(HashMap::new()),
             signals: RefCell::new(HashMap::new()),
+            silent_signal_subscribers: RefCell::new(HashMap::new()),
             unowned_signals: RefCell::new(HashSet::new()),
             named_signals: RefCell::new(HashMap::new()),
             named_signal_types: RefCell::new(HashMap::new()),
@@ -458,14 +507,11 @@ fn dispose_owner(rt: &Runtime, id: OwnerId) {
 
         for signal_id in std::mem::take(&mut node.signals) {
             rt.signals.borrow_mut().remove(&signal_id);
+            rt.silent_signal_subscribers.borrow_mut().remove(&signal_id);
             rt.signal_subscribers.borrow_mut().remove(&signal_id);
             rt.signal_memo_subscribers.borrow_mut().remove(&signal_id);
-            rt.named_signals
-                .borrow_mut()
-                .retain(|_, id| *id != signal_id);
-            rt.named_signal_types
-                .borrow_mut()
-                .retain(|k, _| rt.named_signals.borrow().contains_key(k));
+            // Named slots are allocated independently by use_signal, never in
+            // OwnerNode::signals. Do not scan both global indexes per owned signal.
         }
 
         let clear_current = *rt.current_owner.borrow() == Some(id);
@@ -480,11 +526,15 @@ fn dispose_owner(rt: &Runtime, id: OwnerId) {
 }
 
 fn dispose_owner_children(rt: &Runtime, id: OwnerId) {
+    // Cleanup writes must observe the whole retired sibling set, not one child
+    // at a time. Detaching once also avoids repeatedly scanning the sibling list.
+    *rt.batch_depth.borrow_mut() += 1;
+    let _guard = BatchGuard;
     let children = rt
         .owners
-        .borrow()
-        .get(&id)
-        .map(|n| n.children.clone())
+        .borrow_mut()
+        .get_mut(&id)
+        .map(|n| std::mem::take(&mut n.children))
         .unwrap_or_default();
     for child in children {
         dispose_owner(rt, child);
@@ -528,6 +578,9 @@ fn dispose_memo_inner(rt: &Runtime, id: MemoId) {
     rt.pending_memos.borrow_mut().retain(|queued| *queued != id);
     rt.pending_memo_set.borrow_mut().remove(&id);
     rt.signals.borrow_mut().remove(&state.signal);
+    rt.silent_signal_subscribers
+        .borrow_mut()
+        .remove(&state.signal);
     rt.signal_subscribers.borrow_mut().remove(&state.signal);
 }
 
@@ -1056,6 +1109,52 @@ impl<T> Signal<T> {
     pub fn id(self) -> SignalId {
         self.id
     }
+
+    /// Observe changed [`Self::set_silent`] writes without subscribing a reactive effect.
+    pub fn observe_silent(
+        &self,
+        callback: impl Fn() + 'static,
+    ) -> Option<SilentSignalSubscription> {
+        let id = NEXT_SILENT_SIGNAL_SUBSCRIPTION_ID.fetch_add(1, Ordering::Relaxed);
+        RUNTIME.with(|rt_rc| {
+            let rt = rt_rc.borrow();
+            if !rt.signals.borrow().contains_key(&self.id) {
+                return None;
+            }
+            rt.silent_signal_subscribers
+                .borrow_mut()
+                .entry(self.id)
+                .or_default()
+                .insert(id, Rc::new(callback));
+            Some(SilentSignalSubscription {
+                signal: self.id,
+                id,
+                _ui_thread: std::marker::PhantomData,
+            })
+        })
+    }
+}
+
+/// Removes a silent-change callback when dropped.
+pub struct SilentSignalSubscription {
+    signal: SignalId,
+    id: usize,
+    _ui_thread: std::marker::PhantomData<Rc<()>>,
+}
+
+impl Drop for SilentSignalSubscription {
+    fn drop(&mut self) {
+        let _ = RUNTIME.try_with(|rt_rc| {
+            let rt = rt_rc.borrow();
+            let mut subscribers = rt.silent_signal_subscribers.borrow_mut();
+            if let Some(ids) = subscribers.get_mut(&self.signal) {
+                ids.remove(&self.id);
+                if ids.is_empty() {
+                    subscribers.remove(&self.signal);
+                }
+            }
+        });
+    }
 }
 
 impl<T: Clone + 'static> Signal<T> {
@@ -1155,18 +1254,36 @@ impl<T: Clone + PartialEq + 'static> Signal<T> {
 
     /// Like [`Self::set_silent`], but returns `false` if the signal was already disposed.
     pub fn try_set_silent(&self, new_value: T) -> bool {
-        RUNTIME.with(|rt_rc| {
+        let (updated, callbacks) = RUNTIME.with(|rt_rc| {
             let rt = rt_rc.borrow();
             let Some(any_val_rc) = rt.signals.borrow().get(&self.id).cloned() else {
-                return false;
+                return (false, Vec::new());
             };
-            let mut any_val = any_val_rc.borrow_mut();
-            let typed_val = any_val.downcast_mut::<T>().expect("Signal type mismatch");
-            if *typed_val != new_value {
-                *typed_val = new_value;
-            }
-            true
-        })
+            let changed = {
+                let mut any_val = any_val_rc.borrow_mut();
+                let typed_val = any_val.downcast_mut::<T>().expect("Signal type mismatch");
+                if *typed_val == new_value {
+                    false
+                } else {
+                    *typed_val = new_value;
+                    true
+                }
+            };
+            let callbacks = if changed {
+                rt.silent_signal_subscribers
+                    .borrow()
+                    .get(&self.id)
+                    .map(|subscribers| subscribers.values().cloned().collect())
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            (true, callbacks)
+        });
+        for callback in callbacks {
+            callback();
+        }
+        updated
     }
 
     pub fn set(&self, new_value: T) {
@@ -1466,6 +1583,7 @@ pub fn remove_named_signal(id_str: &str) {
         };
         rt.named_signal_types.borrow_mut().remove(id_str);
         rt.signals.borrow_mut().remove(&signal_id);
+        rt.silent_signal_subscribers.borrow_mut().remove(&signal_id);
         rt.signal_subscribers.borrow_mut().remove(&signal_id);
         rt.signal_memo_subscribers.borrow_mut().remove(&signal_id);
     });
@@ -1904,13 +2022,19 @@ impl Drop for OwnerRestore {
 
 /// Allocate shared resources under their source owner rather than a transient reader.
 pub fn with_owner<R>(owner: OwnerId, f: impl FnOnce() -> R) -> R {
+    try_with_owner(owner, f).expect("owner disposed")
+}
+
+/// Run deferred work under its original owner, or skip it after that owner is disposed.
+/// Owner IDs are never reused, so a stale callback cannot attach to a later scope.
+pub fn try_with_owner<R>(owner: OwnerId, f: impl FnOnce() -> R) -> Option<R> {
     let prev = RUNTIME.with(|rt_rc| {
         let rt = rt_rc.borrow();
-        assert!(rt.owners.borrow().contains_key(&owner), "owner disposed");
-        rt.current_owner.replace(Some(owner))
-    });
+        let alive = rt.owners.borrow().contains_key(&owner);
+        alive.then(|| rt.current_owner.replace(Some(owner)))
+    })?;
     let _restore = OwnerRestore(prev);
-    f()
+    Some(f())
 }
 
 /// Run `f` as a **component-instance root** (Solid-style owner), then restore the previous owner.

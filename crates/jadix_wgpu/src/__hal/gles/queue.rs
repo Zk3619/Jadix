@@ -1163,6 +1163,12 @@ impl super::Queue {
                 ref dst,
                 ref size,
             } => {
+                // Attachment resolves cover the complete attachment, independent
+                // of the last draw's scissor. GL framebuffer blits otherwise
+                // leave pixels outside that scissor undefined in a fresh target.
+                // begin_render_pass always installs and enables a scissor; keep
+                // its rectangle while temporarily disabling it for the resolve.
+                unsafe { gl.disable(glow::SCISSOR_TEST) };
                 unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, Some(self.draw_fbo)) };
                 unsafe { gl.read_buffer(attachment) };
                 unsafe { gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(self.copy_fbo)) };
@@ -1192,6 +1198,7 @@ impl super::Queue {
                 };
                 unsafe { gl.bind_framebuffer(glow::READ_FRAMEBUFFER, None) };
                 unsafe { gl.bind_framebuffer(glow::DRAW_FRAMEBUFFER, Some(self.draw_fbo)) };
+                unsafe { gl.enable(glow::SCISSOR_TEST) };
             }
             C::InvalidateAttachments(ref list) => {
                 if self

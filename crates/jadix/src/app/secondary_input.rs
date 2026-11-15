@@ -241,6 +241,20 @@ impl super::App {
         self.bind_pointer_window(id);
         super::window_scope::force_secondary_id(id);
         self.cursor_inside_window = false;
+        self.cursor_move_pending = false;
+        let mut hover_cbs = Vec::new();
+        if let Some(sec) = self.secondaries.borrow().get(&id) {
+            super::tree_hit::update_hovers(
+                &sec.root_element,
+                f32::NEG_INFINITY,
+                f32::NEG_INFINITY,
+                [0.0, 0.0],
+                &mut hover_cbs,
+            );
+        }
+        for (cb, hovered) in hover_cbs {
+            (*cb.borrow_mut())(hovered);
+        }
         if let Some(old_path) = self.last_mouse_path.take() {
             let [x, y] = self.last_client_pos.unwrap_or([0.0, 0.0]);
             let _ = self.dispatch_mouse_path(
@@ -450,7 +464,14 @@ impl super::App {
                                         &style,
                                         ui_scale,
                                     );
-                                    (key, ix)
+                                    let paragraph = (click_count >= 3)
+                                        .then(|| {
+                                            crate::utils::text_selection::selectable_paragraph_range(
+                                                &display_el, ix,
+                                            )
+                                        })
+                                        .flatten();
+                                    (key, ix, paragraph)
                                 },
                             )
                         } else {
@@ -634,10 +655,11 @@ impl super::App {
                         }
                         self.label_drag_key = None;
                         self.left_button_down = true;
-                    } else if let Some((key, caret_ix)) = label_drag {
+                    } else if let Some((key, caret_ix, paragraph)) = label_drag {
                         let sk = crate::utils::text_selection::label_selection_signal_key(&key);
-                        use_signal(&sk, || None::<(usize, usize)>).set(Some((caret_ix, caret_ix)));
-                        self.label_drag_key = Some(key);
+                        use_signal(&sk, || None::<(usize, usize)>)
+                            .set(paragraph.or(Some((caret_ix, caret_ix))));
+                        self.label_drag_key = paragraph.is_none().then_some(key);
                         self.label_drag_anchor = caret_ix;
                         self.input_drag_rest = None;
                         self.input_drag_multi = false;
@@ -1007,6 +1029,13 @@ impl super::App {
             return;
         }
 
+        if self.dispatch_window_shortcuts(&event) {
+            if let Some(sec) = self.secondaries.borrow().get(&id) {
+                sec.window.request_redraw();
+            }
+            return;
+        }
+
         if matches!(event.logical_key, Key::Named(NamedKey::Escape))
             && super::portal_overlay::try_close_top()
         {
@@ -1072,7 +1101,7 @@ impl super::App {
             let handled = if editing {
                 super::tree_hit::run_focused_keydown_only(&handlers, &event)
             } else {
-                super::tree_hit::run_focused_key_handlers(&handlers, &event)
+                super::tree_hit::run_focused_key_handlers(&handlers, &event, self.modifiers)
             };
             if handled {
                 if let Some(sec) = self.secondaries.borrow().get(&id) {

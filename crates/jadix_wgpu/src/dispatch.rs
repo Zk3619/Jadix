@@ -172,6 +172,7 @@ pub trait DeviceInterface: CommonTraits {
         &self,
         desc: &crate::MeshPipelineDescriptor<'_>,
     ) -> DispatchRenderPipeline;
+    #[cfg_attr(not(feature = "compute"), allow(dead_code))]
     fn create_compute_pipeline(
         &self,
         desc: &crate::ComputePipelineDescriptor<'_>,
@@ -345,6 +346,7 @@ pub trait CommandEncoderInterface: CommonTraits {
         copy_size: crate::Extent3d,
     );
 
+    #[cfg_attr(not(feature = "compute"), allow(dead_code))]
     fn begin_compute_pass(&self, desc: &crate::ComputePassDescriptor<'_>) -> DispatchComputePass;
     fn begin_render_pass(&self, desc: &crate::RenderPassDescriptor<'_>) -> DispatchRenderPass;
     fn finish(&mut self) -> DispatchCommandBuffer;

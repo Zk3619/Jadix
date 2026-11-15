@@ -11,7 +11,7 @@ use std::cell::RefCell;
 use std::collections::HashSet;
 use std::rc::Rc;
 
-use winit::event::MouseButton;
+pub use winit::event::MouseButton;
 
 use crate::core::tree::{pointer_events_targets_children, Element};
 
@@ -249,6 +249,8 @@ pub struct HitPathEntry {
     pub on_mousemove: Option<PointerHandler>,
     pub on_mouseover: Option<PointerHandler>,
     pub on_mouseout: Option<PointerHandler>,
+    pub on_mouseenter: Option<PointerHandler>,
+    pub on_mouseleave: Option<PointerHandler>,
     /// Element was marked `jadix_hoisted_portal` (Solid body overlay surface).
     pub hoisted_portal: bool,
     /// `jadix_portal_key` when present (stable portal identity after hoist).
@@ -298,6 +300,8 @@ impl HitPathEntry {
             on_mousemove: el.on_mousemove.clone(),
             on_mouseover: el.on_mouseover.clone(),
             on_mouseout: el.on_mouseout.clone(),
+            on_mouseenter: el.on_mouseenter.clone(),
+            on_mouseleave: el.on_mouseleave.clone(),
             hoisted_portal: el
                 .attrs
                 .get(crate::layout::layout_tree::ATTR_HOISTED_PORTAL)
@@ -366,12 +370,32 @@ pub fn same_hit_node(a: &HitPathEntry, b: &HitPathEntry) -> bool {
             return true;
         }
     }
+    if let (Some(ha), Some(hb)) = (&a.on_mouseenter, &b.on_mouseenter) {
+        if Rc::ptr_eq(ha, hb) {
+            return true;
+        }
+    }
+    if let (Some(ha), Some(hb)) = (&a.on_mouseleave, &b.on_mouseleave) {
+        if Rc::ptr_eq(ha, hb) {
+            return true;
+        }
+    }
     bounds_close(a.bounds, b.bounds)
         && a.label_for == b.label_for
         && a.region == b.region
         && a.hoisted_portal == b.hoisted_portal
         && a.on_click.is_none() == b.on_click.is_none()
         && a.on_mousedown.is_none() == b.on_mousedown.is_none()
+        && a.on_mouseenter.is_none() == b.on_mouseenter.is_none()
+        && a.on_mouseleave.is_none() == b.on_mouseleave.is_none()
+}
+
+/// Number of shared root-to-leaf nodes between two pointer paths.
+pub fn common_hit_path_prefix(a: &[HitPathEntry], b: &[HitPathEntry]) -> usize {
+    a.iter()
+        .zip(b)
+        .take_while(|(old, new)| same_hit_node(old, new))
+        .count()
 }
 
 /// Same widget chain (empty padding, sliding inside one box). Used to skip the
@@ -735,6 +759,8 @@ pub enum PointerKind {
     Move,
     Over,
     Out,
+    Enter,
+    Leave,
 }
 
 fn fire_mouse(handler: &Option<PointerHandler>, event: &PointerEvent) {
@@ -769,6 +795,12 @@ fn fire_handler(entry: &HitPathEntry, event: &PointerEvent, kind: PointerKind) {
         }
         PointerKind::Out => {
             fire_mouse(&entry.on_mouseout, event);
+        }
+        PointerKind::Enter => {
+            fire_mouse(&entry.on_mouseenter, event);
+        }
+        PointerKind::Leave => {
+            fire_mouse(&entry.on_mouseleave, event);
         }
         PointerKind::DoubleClick => {
             fire_mouse(&entry.on_double_click, event);

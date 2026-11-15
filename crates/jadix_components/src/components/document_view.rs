@@ -234,7 +234,10 @@ fn render_inlines(
                         glyphon::Family::Monospace,
                     );
                     let width = crate::text::intrinsic_width(&prepared).ceil() + 4.0;
-                    leaf = leaf.whitespace_nowrap().w(width).min_w(width);
+                    // Reserve a short code span's complete width beside inline objects,
+                    // but let the shared text layout wrap an oversized span at the
+                    // container width. Keep one span so padding is not added per glyph.
+                    leaf = leaf.w(width).min_w(0.0).max_w("100%");
                 }
                 if inline.style.strike {
                     leaf = leaf.text_decoration("line-through");

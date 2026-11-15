@@ -14,6 +14,7 @@ use std::rc::{Rc, Weak};
 
 #[cfg(test)]
 std::thread_local! {
+    static STAMP_CHILDREN: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
     static STAMP_HASHED: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
@@ -888,30 +889,102 @@ fn zero_collect_paint_hash_descendants(el: &mut Element) {
     }
 }
 
-/// Zero hashes on the DFS path to `template_id` (secondary windows have no child-index cache).
-pub(crate) fn invalidate_collect_paint_hash_for_template(
+// Position mixing keeps child order significant while allowing one old/new term
+// to be removed/inserted without scanning siblings. These are paint fingerprints,
+// never integrity digests. Count and local paint participate independently.
+fn child_paint_term(index: usize, hash: u64) -> u64 {
+    let mut h = PaintHasher::new();
+    index.hash(&mut h);
+    hash.hash(&mut h);
+    let mut x = h.finish();
+    x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+    x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^ (x >> 31)
+}
+fn combined_paint_hash(local: u64, children: u64, count: usize) -> u64 {
+    let mut h = PaintHasher::new();
+    local.hash(&mut h);
+    children.hash(&mut h);
+    count.hash(&mut h);
+    h.finish().max(1) // zero is the invalid-stamp sentinel
+}
+fn paint_summaries(el: &Element) -> [bool; 16] {
+    [
+        el.collect_skip_live,
+        el.collect_skip_side_channel,
+        el.collect_skip_scroll_pin,
+        el.collect_skip_has_scroll,
+        el.collect_skip_has_canvas,
+        el.css_scroll_active,
+        el.css_hover_armed,
+        el.subtree_paint_sync,
+        el.subtree_reactive_sync,
+        el.subtree_presentation_sync,
+        el.subtree_layout_motion,
+        el.subtree_collapse_work,
+        el.subtree_floating_panel,
+        el.subtree_hover_cursor,
+        node_collect_is_live(el),
+        el.subtree_offscreen_unsupported,
+    ]
+}
+#[derive(Clone, Copy)]
+pub(crate) struct LeafPaintStamp {
+    hash: u64,
+    summaries: [bool; 16],
+}
+pub(crate) fn leaf_paint_stamp(el: &Element) -> Option<LeafPaintStamp> {
+    (el.children.is_empty() && el.collect_paint_hash != 0).then(|| LeafPaintStamp {
+        hash: el.collect_paint_hash,
+        summaries: paint_summaries(el),
+    })
+}
+/// Refresh a previously stamped leaf and its ancestors without enumerating siblings.
+/// The caller owns the exclusive tree update and must change only this leaf.
+/// Changed presence summaries, unknown stamps or structure use normal invalidation.
+/// Work is O(depth + leaf payload); collection/layout/output have separate costs.
+pub(crate) fn refresh_leaf_paint_path(
     root: &mut Element,
-    template_id: &str,
+    path: &[usize],
+    previous: Option<LeafPaintStamp>,
 ) -> bool {
-    fn rec(el: &mut Element, want: &str) -> bool {
-        let hit = el
-            .template_id
-            .as_deref()
-            .is_some_and(|id| id.replace('\\', "/").eq_ignore_ascii_case(want));
-        if hit {
-            el.collect_paint_hash = 0;
-            zero_collect_paint_hash_descendants(el);
-            return true;
-        }
-        for child in &mut el.children {
-            if rec(child, want) {
-                el.collect_paint_hash = 0;
-                return true;
+    fn rec(el: &mut Element, path: &[usize], old: LeafPaintStamp) -> bool {
+        if path.is_empty() {
+            if !el.children.is_empty() {
+                return false;
             }
+            stamp_subtree_paint_hashes(el, false);
+            return paint_summaries(el) == old.summaries;
         }
-        false
+        if el.collect_paint_hash == 0 {
+            return false;
+        }
+        let index = path[0];
+        let Some(child) = el.children.get_mut(index) else {
+            return false;
+        };
+        let before = if path.len() == 1 {
+            old.hash
+        } else {
+            child.collect_paint_hash
+        };
+        if before == 0 || !rec(child, &path[1..], old) {
+            return false;
+        }
+        let after = child.collect_paint_hash;
+        el.collect_child_hash ^= child_paint_term(index, before) ^ child_paint_term(index, after);
+        el.collect_paint_hash = combined_paint_hash(
+            el.collect_self_hash,
+            el.collect_child_hash,
+            el.children.len(),
+        );
+        true
     }
-    rec(root, template_id)
+    if previous.is_some_and(|old| rec(root, path, old)) {
+        return true;
+    }
+    invalidate_collect_paint_hash_path(root, path);
+    false
 }
 
 /// Bottom-up paint hash so a dirty leaf invalidates ancestors but not siblings.
@@ -963,6 +1036,11 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
         // not join `collect_skip_live`, or a leaf StyleChanged that zeros the shared
         // parent force-restamps every neighbor that merely hosts a Select portal
         // (inline ColorPicker SV + swatches next to format Select).
+        let local_hash = h.finish();
+        let mut children_hash = 0;
+        let mut offscreen_unsupported = el.style.glass.is_some()
+            || el.style.filter.is_some()
+            || el.attrs.contains_key(crate::renderer::ATTR_EFFECT);
         let mut live = node_live;
         let mut side = node_has_collect_side_channel(el);
         let mut scroll_pin = el.style.position_sticky
@@ -996,8 +1074,11 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
             || el.attrs.contains_key("jadix_collapse_damage");
         let mut floating_panel = el.attrs.contains_key(crate::utils::popup::ATTR_FLOATING)
             || el.attrs.contains_key("jadix_select_menu");
-        for child in &mut el.children {
-            rec(child, reuse_idle, self_live).hash(&mut h);
+        for (index, child) in el.children.iter_mut().enumerate() {
+            #[cfg(test)]
+            STAMP_CHILDREN.with(|c| c.set(c.get().saturating_add(1)));
+            children_hash ^= child_paint_term(index, rec(child, reuse_idle, self_live));
+            offscreen_unsupported |= child.subtree_offscreen_unsupported;
             live |= child.collect_skip_live;
             side |= child.collect_skip_side_channel;
             scroll_pin |= child.collect_skip_scroll_pin;
@@ -1013,7 +1094,10 @@ pub(crate) fn stamp_subtree_paint_hashes(root: &mut Element, reuse_idle: bool) {
             floating_panel |= child.subtree_floating_panel;
             hover_cursor |= child.subtree_hover_cursor;
         }
-        let hash = h.finish();
+        let hash = combined_paint_hash(local_hash, children_hash, el.children.len());
+        el.subtree_offscreen_unsupported = offscreen_unsupported;
+        el.collect_self_hash = local_hash;
+        el.collect_child_hash = children_hash;
         el.collect_paint_hash = hash;
         el.collect_skip_live = live || ancestor_live;
         el.collect_skip_side_channel = side;
@@ -1290,6 +1374,24 @@ fn hash_paint_self(el: &Element, h: &mut impl Hasher) {
     std::mem::discriminant(&el.text_style.white_space).hash(h);
     std::mem::discriminant(&el.text_style.wrap_mode).hash(h);
     std::mem::discriminant(&el.text_style.overflow).hash(h);
+    el.text_style.max_lines.hash(h);
+    if let Some(spans) = &el.text_spans {
+        spans.len().hash(h);
+        for span in spans {
+            span.text.len().hash(h); // the concatenated text is hashed above
+            span.color.hash(h);
+            span.weight.hash(h);
+            span.size.map(f32::to_bits).hash(h);
+            std::mem::discriminant(&span.kind).hash(h);
+            span.background.hash(h);
+            span.padding_x.to_bits().hash(h);
+            span.italic.hash(h);
+            span.monospace.hash(h);
+            span.underline.hash(h);
+            span.strikethrough.hash(h);
+        }
+    }
+
     std::mem::discriminant(&el.text_style.direction).hash(h);
     el.text_style.line_height_px.map(|v| v.to_bits()).hash(h);
     el.text_style.line_height_scale.map(|v| v.to_bits()).hash(h);
@@ -1516,6 +1618,7 @@ fn hash_box_shadow(h: &mut impl Hasher, sh: &BoxShadow) {
 }
 
 fn hash_color_stop(h: &mut impl Hasher, s: &ColorStop) {
+    s.current_color.hash(h);
     hash_f32s(h, &s.color);
     hash_opt_f32(h, &s.position);
     hash_opt_f32(h, &s.position_end);

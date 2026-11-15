@@ -121,6 +121,33 @@ impl LayoutMotion {
         std::array::from_fn(|index| state.channels[index].velocity())
     }
 
+    /// Rebase a retained layout position when its parent's coordinate origin moves.
+    /// Shift the current and target positions while preserving an active motion.
+    pub fn rebase_position(&self, delta: [f32; 2]) {
+        if !delta.iter().all(|value| value.is_finite()) {
+            return;
+        }
+        let mut state = self.0.borrow_mut();
+        let Some(mut target) = state.target else {
+            return;
+        };
+        let mode = state.mode;
+        let driver = state.driver.clone();
+        for axis in 0..2 {
+            let channel = &state.channels[axis];
+            let from = channel.peek() + delta[axis];
+            let to = target[axis] + delta[axis];
+            if mode.animates(axis) && channel.is_active() {
+                channel.restart_from(from, to, channel.velocity(), driver.clone());
+            } else {
+                channel.jump(from);
+            }
+            target[axis] = to;
+        }
+        state.target = Some(target);
+        state.last_sample = None;
+    }
+
     pub(crate) fn update(&self, bounds: [f32; 4]) {
         if !bounds.iter().all(|value| value.is_finite()) {
             return;
@@ -271,6 +298,10 @@ impl Element {
                         .map_or(LayoutStatus::Clean, LayoutMotion::sync),
                 )
         })
+    }
+
+    pub fn layout_motion_handle(&self) -> Option<LayoutMotion> {
+        self.layout_motion.clone()
     }
 }
 

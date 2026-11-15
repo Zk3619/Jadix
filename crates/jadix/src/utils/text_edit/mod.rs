@@ -1,7 +1,7 @@
 mod build;
 pub mod field;
 mod paint;
-mod strings;
+pub(crate) mod strings;
 
 pub use build::{build_text_edit_element, TextEditBuildParams};
 pub(crate) use paint::push_focused_text_edit_caret_damage;

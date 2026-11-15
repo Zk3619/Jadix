@@ -50,7 +50,8 @@ pub use diff::{DiffDocument, DiffLineKind, DiffMode, DiffRow};
 pub use document::{DocumentEditError, TextDocument};
 #[cfg(feature = "document-editing")]
 pub use document_editor::{
-    DocumentEditMode, DocumentEditorSnapshot, DocumentEditorState, DocumentMark, DocumentSelection,
+    DocumentEditMode, DocumentEditorSnapshot, DocumentEditorState, DocumentListKind, DocumentMark,
+    DocumentSelection,
 };
 #[cfg(feature = "document")]
 pub use document_layout::{DocumentHeightIndex, DocumentScrollAnchor};

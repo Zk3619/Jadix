@@ -256,6 +256,10 @@ pub use crate::__types as wgt;
 //
 //
 
+/// Whether safe public compute pipeline/pass creation is compiled in. Backend
+/// compute limits and device requests are still required.
+pub const COMPUTE_FEATURE_ENABLED: bool = cfg!(feature = "compute");
+
 mod api;
 mod backend;
 mod cmp;

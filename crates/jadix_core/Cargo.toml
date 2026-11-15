@@ -9,6 +9,7 @@ readme = "README.md"
 
 [features]
 default = []
+system-environment = ["dep:windows-sys", "dep:libc"]
 
 [dependencies]
 log.workspace = true
@@ -16,4 +17,11 @@ stacker.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 base64 = "=0.22.1"
+unicode-segmentation.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, optional = true, features = ["Win32_Foundation", "Win32_Globalization", "Win32_System_Time", "Win32_System_Registry", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi", "Win32_UI_Accessibility", "Win32_UI_WindowsAndMessaging"] }
+
+[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
+libc = { workspace = true, optional = true }
 

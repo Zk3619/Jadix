@@ -32,3 +32,15 @@ product in `examples/native-controls/shell` builds with `node build.mjs`; use
 Reactive effects, automatic JavaScript callback registration and GPU/DOM renderers
 remain separate work. Host validation remains authoritative for style, resource
 and permission limits. Only trusted first-party code is in scope.
+
+
+`createApplication().patch(...)` replaces props on existing Text, Button, Input,
+or Textarea leaves, preserving structure, styles and event handles. Editor props
+use the same controlled revision and composition-preview rules as a complete
+mount. Supply the complete props for that leaf; omitted optional properties take
+their default values. Failed host publication leaves the packet queued for retry.
+The character host stages only addressed editors and their budget deltas. Shared
+layout reuses geometry only when every retained measurement remains equivalent;
+changed intrinsic measurements still require layout/frame publication. Stateful
+GPU editor updates currently take the existing complete projection fallback.
+This API does not promise O(k) drawing, structure changes or GPU frame output.

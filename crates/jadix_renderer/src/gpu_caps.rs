@@ -1,6 +1,6 @@
 //! Adapter probe + device limit bands for optional wgpu compute (S7).
 //!
-//! GLES / WebGL stay fragment/CPU. Vulkan / DX12 / Metal may enable compute when
+//! WebGL and DX11 stay fragment/CPU. Native GL and WebGPU may enable compute when
 //! adapter limits clear the floor. Never request more than the adapter reports.
 //! Does not change ADR-3 backend order.
 
@@ -32,7 +32,20 @@ pub fn native_compute_backend(backend: wgpu::Backend) -> bool {
 }
 
 pub fn probe(adapter: &wgpu::Adapter) -> GpuCaps {
-    probe_from(adapter.get_info().backend, &adapter.limits())
+    let mut caps = probe_from(adapter.get_info().backend, &adapter.limits());
+    caps.compute &= adapter
+        .get_downlevel_capabilities()
+        .flags
+        .contains(wgpu::DownlevelFlags::COMPUTE_SHADERS);
+    caps
+}
+
+/// Backends with a compute execution path. GL requires native compute limits;
+/// WebGL is rejected even if a caller supplies synthetic nonzero limits.
+pub fn compute_backend(backend: wgpu::Backend) -> bool {
+    native_compute_backend(backend)
+        || backend == wgpu::Backend::BrowserWebGpu
+        || (!cfg!(target_arch = "wasm32") && backend == wgpu::Backend::Gl)
 }
 
 pub fn probe_from(backend: wgpu::Backend, l: &wgpu::Limits) -> GpuCaps {
@@ -42,14 +55,23 @@ pub fn probe_from(backend: wgpu::Backend, l: &wgpu::Limits) -> GpuCaps {
             compute: false,
         };
     }
-    let compute = native_compute_backend(backend)
-        && l.max_compute_workgroup_size_x >= 8
+    GpuCaps {
+        backend,
+        compute: compute_backend(backend) && compute_limits(l),
+    }
+}
+
+/// Minimum requested-device limits shared by the built-in 8x8 kernels.
+pub(crate) fn compute_limits(l: &wgpu::Limits) -> bool {
+    l.max_compute_workgroup_size_x >= 8
         && l.max_compute_workgroup_size_y >= 8
+        && l.max_compute_workgroup_size_z >= 1
         && l.max_compute_invocations_per_workgroup >= 64
-        && l.max_compute_workgroups_per_dimension >= 65535
-        && l.max_storage_buffers_per_shader_stage >= 4
-        && l.max_storage_textures_per_shader_stage >= 2;
-    GpuCaps { backend, compute }
+        && l.max_compute_workgroups_per_dimension >= l.max_texture_dimension_2d.div_ceil(8)
+        && l.max_storage_buffers_per_shader_stage >= 1
+        && l.max_storage_buffer_binding_size >= 1024
+        && l.max_uniform_buffer_binding_size >= 32
+        && l.max_storage_textures_per_shader_stage >= 1
 }
 
 pub fn limits_for(adapter: &wgpu::Adapter) -> wgpu::Limits {
@@ -76,7 +98,7 @@ pub fn limits_for_backend(backend: wgpu::Backend, adapter: &wgpu::Limits) -> wgp
         l.max_compute_invocations_per_workgroup = 0;
         l.max_compute_workgroups_per_dimension = 0;
     }
-    if feature_enabled() && native_compute_backend(backend) {
+    if feature_enabled() && compute_backend(backend) {
         l.max_compute_workgroup_size_x = adapter.max_compute_workgroup_size_x;
         l.max_compute_workgroup_size_y = adapter.max_compute_workgroup_size_y;
         l.max_compute_workgroup_size_z = adapter.max_compute_workgroup_size_z;

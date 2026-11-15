@@ -32,3 +32,34 @@ fn namespaces_do_not_collide() {
     assert_eq!(count("dd:menu"), 1);
     assert_eq!(count("ctx:menu"), 0);
 }
+
+#[test]
+fn enabled_navigation_preserves_indices_and_excludes_disabled_activation() {
+    let id = "enabled-menu";
+    reset(id);
+    for enabled in [false, true, false, true, false] {
+        push_enabled(id, Rc::new(|| {}), enabled);
+    }
+    assert_eq!(count(id), 5);
+    assert_eq!(enabled_edge(id, false), Some(1));
+    assert_eq!(enabled_edge(id, true), Some(3));
+    for (current, delta, expected) in [
+        (usize::MAX, 1, 1),
+        (usize::MAX, -1, 3),
+        (1, 1, 3),
+        (3, 1, 1),
+        (1, -1, 3),
+        (2, -1, 1),
+    ] {
+        assert_eq!(move_enabled(id, current, delta), Some(expected));
+    }
+    assert!(take(id, 0).is_none());
+    assert!(take(id, 1).is_some());
+    reset(id);
+    push_enabled(id, Rc::new(|| {}), false);
+    assert_eq!(enabled_edge(id, false), None);
+    assert_eq!(move_enabled(id, 0, 1), None);
+    assert!(take(id, 0).is_none());
+    reset(id);
+    assert_eq!(move_enabled(id, usize::MAX, -1), None);
+}

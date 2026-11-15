@@ -143,6 +143,8 @@ fn tree(owner: RootId) -> Vec<PresentationNode> {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: style::NodeStyle {
                 width: Some(width),
@@ -283,6 +285,118 @@ fn paused_clock_does_not_catch_up_and_reduced_motion_snaps_to_the_target() {
     .unwrap();
     assert_eq!(root.model().node(panel).unwrap().descriptor.frame.x, 80.0);
     assert!(!motion.is_active());
+}
+
+#[test]
+fn environment_motion_preserves_clock_and_rejects_disposed_preferences() {
+    use jadix_native::environment::*;
+    let (owner, preferences) =
+        jadix_core::create_root(|| EnvironmentHost::new(EnvironmentSnapshot::default()).unwrap());
+    let environment = preferences.environment();
+    let mut root = NativeRoot::new(Host::default());
+    let mut motion = LayoutMotion::new(root.model().lifetime());
+    let mut nodes = tree(root.model().id());
+    let panel = nodes[0].children[0].id;
+    motion.transition(panel, Some(linear())).unwrap();
+    let render = |root: &mut NativeRoot<Host>,
+                  nodes: &mut [PresentationNode],
+                  motion: &mut LayoutMotion,
+                  ms| {
+        root.present_environment_with_motion(nodes, [400.0, 300.0], &environment, motion, time(ms))
+    };
+    render(&mut root, &mut nodes, &mut motion, 0).unwrap();
+    nodes[0].descriptor.style.padding = [40.0; 4];
+    render(&mut root, &mut nodes, &mut motion, 10).unwrap();
+    for lifecycle in [Lifecycle::Inactive, Lifecycle::Background] {
+        let mut next = environment.snapshot();
+        next.lifecycle = lifecycle;
+        preferences.apply(environment.revision(), next).unwrap();
+        render(
+            &mut root,
+            &mut nodes,
+            &mut motion,
+            1000 * environment.revision(),
+        )
+        .unwrap();
+        assert!(!motion.is_active());
+        assert_eq!(root.model().node(panel).unwrap().descriptor.frame.x, 0.0);
+    }
+    let mut next = environment.snapshot();
+    next.lifecycle = Lifecycle::Active;
+    preferences.apply(environment.revision(), next).unwrap();
+    render(&mut root, &mut nodes, &mut motion, 10_000).unwrap();
+    render(&mut root, &mut nodes, &mut motion, 10_100).unwrap();
+    assert_eq!(root.model().node(panel).unwrap().descriptor.frame.x, 20.0);
+    let mut next = environment.snapshot();
+    next.reduced_motion = Some(true);
+    preferences.apply(environment.revision(), next).unwrap();
+    render(&mut root, &mut nodes, &mut motion, 10_101).unwrap();
+    assert_eq!(root.model().node(panel).unwrap().descriptor.frame.x, 40.0);
+    assert!(!motion.is_active());
+    assert_eq!(root.inspection(false)["environment"]["revision"], "5");
+    let publishes = root.host().publishes;
+    let tracks = motion.tracked_nodes();
+    owner.dispose();
+    assert!(render(&mut root, &mut nodes, &mut motion, 10_102).is_err());
+    assert_eq!(root.host().publishes, publishes);
+    assert_eq!(motion.tracked_nodes(), tracks);
+}
+
+#[cfg(feature = "consistent-ui")]
+#[test]
+fn consistent_motion_projects_preferences_without_mutating_authored_styles() {
+    use jadix_native::environment::*;
+    let (_owner, preferences) = jadix_core::create_root(|| {
+        EnvironmentHost::new(EnvironmentSnapshot {
+            font_scale: 1.5,
+            reduced_motion: Some(true),
+            ..Default::default()
+        })
+        .unwrap()
+    });
+    let environment = preferences.environment();
+    let mut root = NativeRoot::new(Host::default());
+    let mut motion = LayoutMotion::new(root.model().lifetime());
+    let nodes = tree(root.model().id());
+    let authored = nodes.clone();
+    let panel = nodes[0].children[0].id;
+    let button = nodes[0].children[0].children[0].id;
+    motion.transition(panel, Some(linear())).unwrap();
+    root.present_consistent_with_motion(
+        &nodes,
+        [400.0, 300.0],
+        &environment,
+        &jadix_native::ConsistentTheme::default(),
+        &mut motion,
+        time(0),
+    )
+    .unwrap();
+    assert_eq!(nodes, authored);
+    assert_eq!(
+        root.model()
+            .node(button)
+            .unwrap()
+            .descriptor
+            .style
+            .font_size,
+        24.0
+    );
+    assert!(!motion.is_active());
+    root.host_mut().fail = true;
+    let mut changed = nodes.clone();
+    changed[0].descriptor.style.padding = [40.0; 4];
+    assert!(root
+        .present_consistent_with_motion(
+            &changed,
+            [400.0, 300.0],
+            &environment,
+            &jadix_native::ConsistentTheme::default(),
+            &mut motion,
+            time(1)
+        )
+        .is_err());
+    assert!(root.host().disposed);
+    assert_eq!(motion.tracked_nodes(), 0);
 }
 
 #[test]

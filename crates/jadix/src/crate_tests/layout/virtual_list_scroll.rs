@@ -41,6 +41,83 @@ fn find_vlist_body_mut<'a>(el: &'a mut Element) -> Option<&'a mut Element> {
 }
 
 #[test]
+fn underfilled_lists_settle_without_remounting_or_repeated_notifications() {
+    use std::cell::Cell;
+    use std::rc::Rc;
+
+    let (_handle, _) = create_root(|| {
+        for measured in [false, true] {
+            for count in [0, 3, 5] {
+                let id = format!("underfilled-{measured}-{count}");
+                let rows = Rc::new(Cell::new(count));
+                let renders = Rc::new(Cell::new(0));
+                let notifications = Rc::new(Cell::new(0));
+                let builder = virtual_list(&id)
+                    .item_count_fn({
+                        let rows = rows.clone();
+                        move || rows.get()
+                    })
+                    .item_height(20.0)
+                    .height(100.0)
+                    .render_item({
+                        let renders = renders.clone();
+                        move |index| {
+                            renders.set(renders.get() + 1);
+                            Element::new().text(format!("r{index}"))
+                        }
+                    })
+                    .on_scroll_position({
+                        let notifications = notifications.clone();
+                        move |_| notifications.set(notifications.get() + 1)
+                    });
+                let mut root = Element::from(if measured {
+                    builder.measure_rows()
+                } else {
+                    builder
+                });
+                let scroll = use_signal(&scroll_offset_y_signal_key(&id), || 0.0_f32);
+                let target = use_signal(
+                    &crate::core::scroll_viewport::scroll_target_y_signal_key(&id),
+                    || 0.0_f32,
+                );
+                let mut layout = LayoutTree::new();
+                // A stale scroll offset can remain after replacing a larger data set.
+                scroll.set_silent(800.0);
+                target.set_silent(800.0);
+                let mut impact = LayoutStatus::Clean;
+                sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
+                assert_eq!(scroll.peek(), 0.0, "{id}");
+                assert_eq!(target.peek(), 0.0, "{id}");
+
+                let settled_renders = renders.get();
+                let settled_notifications = notifications.get();
+                for _ in 0..3 {
+                    let mut impact = LayoutStatus::Clean;
+                    sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
+                    assert_eq!(impact, LayoutStatus::Clean, "{id}");
+                }
+                assert_eq!(renders.get(), settled_renders, "{id}");
+                assert_eq!(notifications.get(), settled_notifications, "{id}");
+
+                rows.set(0);
+                sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
+                let mut texts = Vec::new();
+                collect_texts(&root, &mut texts);
+                assert!(
+                    texts.is_empty(),
+                    "stale rows after clearing {id}: {texts:?}"
+                );
+                let cleared_notifications = notifications.get();
+                let mut impact = LayoutStatus::Clean;
+                sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
+                assert_eq!(impact, LayoutStatus::Clean, "{id}");
+                assert_eq!(notifications.get(), cleared_notifications, "{id}");
+            }
+        }
+    });
+}
+
+#[test]
 fn spacer_column_keeps_total_scroll_height() {
     use crate::components::scroll_area::scroll_area;
     use crate::primitives::r#box::{r#box, vstack};
@@ -169,6 +246,52 @@ fn silent_scroll_remounts_visible_rows_via_reactive_sync() {
             let mut impact2 = LayoutStatus::Clean;
             sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact2);
             assert_eq!(impact2, LayoutStatus::Clean);
+        });
+    });
+}
+
+#[test]
+fn focused_index_remounts_and_reveals_offscreen_row_via_reactive_sync() {
+    let (_handle, _) = create_root(|| {
+        create_effect(|| {
+            let id = "diag-vlist-focus";
+            let focus = use_signal("diag-vlist-focus-index", || Some(0usize));
+            let mut root = Element::from(
+                virtual_list(id)
+                    .item_count(100)
+                    .item_height(20.0)
+                    .height(100.0)
+                    .overscan(1)
+                    .focused_index_fn(move || focus.peek())
+                    .render_item(|i| Element::new().text(format!("r{i:03}"))),
+            );
+
+            let mut texts = Vec::new();
+            collect_texts(&root, &mut texts);
+            assert!(texts.iter().any(|t| t == "r000"));
+
+            focus.set_silent(Some(70));
+            let mut layout = LayoutTree::new();
+            let mut impact = LayoutStatus::Clean;
+            sync_reactive_elements_subtree(&mut root, &mut layout, &mut impact);
+
+            texts.clear();
+            collect_texts(&root, &mut texts);
+            assert!(
+                texts.iter().any(|t| t == "r070"),
+                "focused offscreen row must be mounted, got {texts:?}"
+            );
+            assert!(
+                !texts.iter().any(|t| t == "r000"),
+                "rows outside the focused window must unmount, got {texts:?}"
+            );
+            assert!(
+                matches!(
+                    impact,
+                    LayoutStatus::StructureChanged | LayoutStatus::LayoutChanged
+                ),
+                "focus window change must dirty layout, got {impact:?}"
+            );
         });
     });
 }

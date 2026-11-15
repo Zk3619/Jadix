@@ -34,15 +34,15 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use crate::app::portal_overlay::{OverlayKind, OverlayMode};
-use crate::app::reactive::{bind_style, bind_text, StylePatch};
-use crate::components::base::{author_class, paint_slot, SlotMap, SlotStyleFn};
+use crate::app::reactive::{StylePatch, bind_style, bind_text};
+use crate::components::base::{SlotMap, SlotStyleFn, author_class, paint_slot};
 use crate::components::button::button;
 use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
 use crate::core::reactivity::{
-    create_context, provide_context, untrack, use_context, use_signal, with_child_owner, Context,
-    Signal,
+    Context, Signal, create_context, provide_context, untrack, use_context, use_signal,
+    with_child_owner,
 };
 use crate::core::tree::Element;
 use crate::impl_simple_slot_builder;
@@ -50,14 +50,14 @@ use crate::primitives::r#box::{hstack, vstack};
 use crate::style::{parse_color, parse_text_color, with_class_list};
 use crate::tokens;
 use crate::utils::anchored_overlay::{
-    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
-    FloatingMotionKind, FloatingStrategy, Placement,
+    AnchoredOverlayContentOpts, FloatingMotionKind, FloatingStrategy, Placement,
+    anchored_overlay_content, provide_anchored_overlay_context,
 };
 use crate::utils::lucide_glyph;
 use crate::utils::popup::{
-    disarm_underlay_close, PopupPlacement, ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER,
-    ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H, ATTR_FLOATING_MIN_W, ATTR_FLOATING_W,
-    FLOATING_TRIGGER_GAP,
+    ATTR_FLOATING_H, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_MAX_H, ATTR_FLOATING_MIN_H,
+    ATTR_FLOATING_MIN_W, ATTR_FLOATING_W, FLOATING_TRIGGER_GAP, PopupPlacement,
+    disarm_underlay_close,
 };
 use crate::utils::take_packed;
 use crate::utils::text_node::build_icon_text_node;
@@ -410,6 +410,14 @@ impl SelectContentOpts {
 
 /// ShadCN `SelectContent`：Portal 浮层 + 可滚动视口；仅在 open 时构建。
 pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'static) -> Element {
+    select_content_impl(opts, body, false)
+}
+
+fn select_content_impl(
+    opts: SelectContentOpts,
+    body: impl Fn() -> Element + 'static,
+    retained: bool,
+) -> Element {
     let ctx = require_select("SelectContent");
     let value = ctx.value;
     let id = ctx.id.clone();
@@ -434,7 +442,7 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
     let id_for_effect = id.clone();
     let ao_opts = AnchoredOverlayContentOpts {
         placement: Some(Placement::trigger(
-            String::new(),
+            ctx.trigger_fid.peek(),
             placement,
             FLOATING_TRIGGER_GAP,
             FloatingStrategy::Auto,
@@ -450,11 +458,26 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
         width: menu_width.clone(),
         ..Default::default()
     };
-    anchored_overlay_content(ao_opts, move || {
+    let content = move || {
         // untrack：Item/ScrollArea 构建期不可订到 hover/scroll 信号，否则菜单一开就整树重建。
-        let rows = untrack(&body);
+        let mut rows = untrack(&body);
         let scroll_id = format!("{id_for_effect}:menu_scroll");
         let open_now = ctx.open.try_peek().unwrap_or(false);
+        crate::utils::roving::attach_focus_roving(
+            &mut rows,
+            crate::utils::roving::FocusRovingAxis::Vertical,
+        );
+        if open_now {
+            let focus = use_signal("__jadix_button_focus_id", String::new);
+            if focus.peek() == ctx.trigger_fid.peek() {
+                let mut ids = Vec::new();
+                crate::utils::input_hit::collect_focusable_ids(&rows, &mut ids);
+                let selected = format!("{id_for_effect}:opt:{}", value.peek());
+                if let Some(target) = ids.iter().find(|id| **id == selected).or(ids.first()) {
+                    crate::utils::roving::focus_id_only(target.clone());
+                }
+            }
+        }
         if !open_now {
             crate::authoring::widgets::scroll::reset_scroll_item_into_view(&scroll_id);
         } else if scroll_mode != SelectScrollSelected::None {
@@ -547,7 +570,13 @@ pub fn select_content(opts: SelectContentOpts, body: impl Fn() -> Element + 'sta
             menu = paint_slot(menu, SLOT_CONTENT, &panel);
         }
         menu
-    })
+    };
+    if retained {
+        let panel = untrack(&content);
+        crate::utils::anchored_overlay::retained_anchored_panel(&ctx.id, ctx.open, &ao_opts, panel)
+    } else {
+        anchored_overlay_content(ao_opts, content)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -623,7 +652,6 @@ plain [] children: Option<Element>,
     register_label(ctx.labels, &value, &label_text);
 
     let open = ctx.open;
-    let trigger_fid = ctx.trigger_fid;
     let val_sig = ctx.value;
     let selected = val_sig.peek() == value;
     let align = SelectItemAlign::parse(align.as_deref().unwrap_or("start"));
@@ -636,10 +664,6 @@ plain [] children: Option<Element>,
         }
         open.set(false);
         val_sig.set(ov.clone());
-        // The menu is a hoisted portal. Restore the trigger as the active
-        // focus target before its exit frame is reconciled so a hovered
-        // trigger is painted exactly once after the menu disappears.
-        crate::utils::roving::focus_id_only(trigger_fid.peek());
     });
     row.set_attr("jadix_select_item", value.as_str());
     row.accesskit_role("option")
@@ -878,9 +902,9 @@ impl SelectContentSlotBuilder {
     pub fn style(
         mut self,
         f: impl Fn(
-                crate::components::base::BaseComponentBuilder,
-            ) -> crate::components::base::BaseComponentBuilder
-            + 'static,
+            crate::components::base::BaseComponentBuilder,
+        ) -> crate::components::base::BaseComponentBuilder
+        + 'static,
     ) -> Self {
         self.opts = self.opts.style(f);
         self
@@ -911,6 +935,7 @@ pub struct SelectBuilder {
     trigger_style: Option<SlotStyleFn>,
     slots: SlotMap,
     scroll_selected: SelectScrollSelected,
+    retained: bool,
 }
 
 /// 便捷入口：一个 Builder 即完整 Select（内含 Trigger / Content / Items）。
@@ -932,10 +957,18 @@ pub fn select(id: impl Into<String>) -> SelectBuilder {
         trigger_style: None,
         slots: SlotMap::default(),
         scroll_selected: SelectScrollSelected::None,
+        retained: false,
     }
 }
 
 impl SelectBuilder {
+    /// Rebuild content in the caller's retained/offscreen host instead of a
+    /// window reactive-anchor island. Uses the same menu rows and geometry.
+    pub fn retained(mut self, retained: bool) -> Self {
+        self.retained = retained;
+        self
+    }
+
     crate::impl_slot_map_methods!();
     crate::impl_overlay_content_slot!(SLOT_CONTENT);
 
@@ -1009,9 +1042,9 @@ impl SelectBuilder {
     pub fn style(
         mut self,
         f: impl Fn(
-                crate::components::base::BaseComponentBuilder,
-            ) -> crate::components::base::BaseComponentBuilder
-            + 'static,
+            crate::components::base::BaseComponentBuilder,
+        ) -> crate::components::base::BaseComponentBuilder
+        + 'static,
     ) -> Self {
         self.trigger_style = Some(std::rc::Rc::new(f));
         self
@@ -1042,6 +1075,7 @@ impl From<SelectBuilder> for Element {
             trigger_style,
             slots,
             scroll_selected,
+            retained,
         } = builder;
         let id = crate::utils::resolve_instance_id(id, "select");
 
@@ -1114,7 +1148,7 @@ impl From<SelectBuilder> for Element {
             let entries_body = entries;
             let id_for_menu = id.clone();
             let content_chrome = slots.get(SLOT_CONTENT);
-            let content = select_content(
+            let content = select_content_impl(
                 SelectContentOpts {
                     panel: content_chrome,
                     match_trigger: Some(match_trigger),
@@ -1126,6 +1160,7 @@ impl From<SelectBuilder> for Element {
                     scroll_selected: None,
                 },
                 move || build_entries_element(&id_for_menu, &entries_body, val, open, labels),
+                retained,
             );
 
             Element::from(
@@ -1202,7 +1237,6 @@ fn build_data_item_row(
     let ov = item.value.clone();
     let bid = format!("{select_id}:opt:{}", item.value);
     let disabled = item.disabled;
-    let trigger_fid = use_select().map(|ctx| ctx.trigger_fid);
 
     let mut row = select_item_row(
         &bid,
@@ -1216,9 +1250,6 @@ fn build_data_item_row(
             }
             open.set(false);
             val.set(ov.clone());
-            if let Some(trigger_fid) = trigger_fid {
-                crate::utils::roving::focus_id_only(trigger_fid.peek());
-            }
         },
     );
     row.set_attr("jadix_select_item", item.value.as_str());

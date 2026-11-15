@@ -1,5 +1,5 @@
 //! GPU regression for the modal's blur + blit in a single command encoder.
-use jadix::renderer::{offscreen::OffscreenGpu, BackdropBlurPipeline};
+use jadix::renderer::{offscreen::OffscreenGpu, BackdropBlurPipeline, ProgressiveBlur};
 
 fn blur_then_blit_preserves_pass_uniforms() {
     let gpu = OffscreenGpu::with_backends(wgpu::Backends::GL).expect("GL adapter");
@@ -66,14 +66,21 @@ fn blur_then_blit_preserves_pass_uniforms() {
         pass.draw(0..3, 0..1);
     }
     queue.submit([encoder.finish()]);
-    let render = |blur: &mut BackdropBlurPipeline, split: bool, radius, region| {
+    let render = |blur: &mut BackdropBlurPipeline, split: bool, radius, region, progressive| {
         let mut encoder = device.create_command_encoder(&Default::default());
         blur.blur_with_region(device, queue, &mut encoder, radius, None, region);
         if split {
             queue.submit([encoder.finish()]);
             encoder = device.create_command_encoder(&Default::default());
         }
-        blur.blit_to(queue, &mut encoder, &view, 0.5, wgpu::Color::BLACK);
+        blur.blit_to_progressive(
+            queue,
+            &mut encoder,
+            &view,
+            0.5,
+            wgpu::Color::BLACK,
+            progressive,
+        );
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: 128 * 512,
@@ -103,8 +110,8 @@ fn blur_then_blit_preserves_pass_uniforms() {
         buffer.unmap();
         pixels
     };
-    let separate = render(&mut blur, true, 12.0, None);
-    let combined = render(&mut blur, false, 12.0, None);
+    let separate = render(&mut blur, true, 12.0, None, None);
+    let combined = render(&mut blur, false, 12.0, None, None);
     let changed = separate
         .iter()
         .zip(&combined)
@@ -120,8 +127,8 @@ fn blur_then_blit_preserves_pass_uniforms() {
     );
     // Gallery's local scrim uses a small radius. A cropped capture must keep
     // the same pixels inside its host as a full-window blur, including alpha.
-    let full = render(&mut blur, false, 3.0, None);
-    let cropped = render(&mut blur, false, 3.0, Some((16, 16, 96, 96)));
+    let full = render(&mut blur, false, 3.0, None, None);
+    let cropped = render(&mut blur, false, 3.0, Some((16, 16, 96, 96)), None);
     for y in 48..80 {
         for x in 48..80 {
             for channel in 0..4 {
@@ -133,7 +140,28 @@ fn blur_then_blit_preserves_pass_uniforms() {
             }
         }
     }
-    println!("blur + blit: identical pixels in combined/separate submissions");
+    let uniform = render(&mut blur, false, 12.0, None, None);
+    let progressive = render(
+        &mut blur,
+        false,
+        12.0,
+        None,
+        Some(ProgressiveBlur {
+            start: 0.0,
+            end: 0.5,
+            min_mix: 0.0,
+        }),
+    );
+    let progressive_delta = uniform
+        .iter()
+        .zip(&progressive)
+        .filter(|(a, b)| a.abs_diff(**b) > 2)
+        .count();
+    assert!(
+        progressive_delta > 128,
+        "progressive blit must change the composite"
+    );
+    println!("blur + blit: progressive edge composite changed {progressive_delta} bytes");
     for alpha in [0.0, 0.35, 1.0] {
         let mut encoder = device.create_command_encoder(&Default::default());
         {
@@ -156,7 +184,7 @@ fn blur_then_blit_preserves_pass_uniforms() {
             });
         }
         queue.submit([encoder.finish()]);
-        let pixels = render(&mut blur, false, 20.0, None);
+        let pixels = render(&mut blur, false, 20.0, None, None);
         let actual = pixels[(64 * 128 + 64) * 4 + 3];
         let expected = (alpha * 255.0).round() as u8;
         assert!(

@@ -91,6 +91,9 @@ extern crate alloc;
 #[cfg(not(any(feature = "std", feature = "no_std")))]
 compile_error!("Either the `std` or `no_std` feature must be enabled");
 
+pub use self::variations::*;
+mod variations;
+
 pub use self::attrs::*;
 mod attrs;
 

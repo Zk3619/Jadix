@@ -300,6 +300,66 @@ impl BufferLine {
         self.layout_opt.get()
     }
 
+    /// Update cached glyph colors without invalidating shaping or layout.
+    pub fn update_layout_colors(&mut self, colors: &[(core::ops::Range<usize>, crate::Color)]) {
+        // Keep source attributes and shaped glyphs in sync so a later reflow or
+        // newly visible line cannot resurrect the old paint color.
+        for (range, color) in colors.iter().rev() {
+            let mut start = range.start.min(self.text.len());
+            let end = range.end.min(self.text.len());
+            let mut updates = Vec::new();
+            while start < end {
+                let next = self
+                    .attrs_list
+                    .spans_iter()
+                    .flat_map(|(range, _)| [range.start, range.end])
+                    .filter(|boundary| *boundary > start)
+                    .min()
+                    .unwrap_or(end)
+                    .min(end);
+                let attrs = crate::AttrsOwned::new(&self.attrs_list.get_span(start).color(*color));
+                updates.push((start..next, attrs));
+                start = next;
+            }
+            for (range, attrs) in updates {
+                self.attrs_list.add_span(range, &attrs.as_attrs());
+            }
+        }
+        if let Some(shape) = self.shape_opt.get_mut() {
+            for glyph in shape
+                .spans
+                .iter_mut()
+                .flat_map(|span| &mut span.words)
+                .flat_map(|word| &mut word.glyphs)
+            {
+                if let Some((_, color)) = colors
+                    .iter()
+                    .find(|(range, _)| range.contains(&glyph.start))
+                {
+                    glyph.color_opt = Some(*color);
+                }
+            }
+        }
+        let Some(layout) = self.layout_opt.get_mut() else {
+            return;
+        };
+        for line in layout {
+            for glyph in &mut line.glyphs {
+                if let Some((_, color)) = colors
+                    .iter()
+                    .find(|(range, _)| range.contains(&glyph.start))
+                {
+                    glyph.color_opt = Some(*color);
+                }
+            }
+            for decoration in &mut line.decorations {
+                if let Some(glyph) = line.glyphs.get(decoration.glyph_range.start) {
+                    decoration.color_opt = glyph.color_opt;
+                }
+            }
+        }
+    }
+
     /// Get the visible layout runs for rendering and other tasks
     pub fn layout_runs(&self, height_opt: Option<f32>, line_height: f32) -> LayoutRunIter<'_> {
         LayoutRunIter::from_lines(core::slice::from_ref(self), height_opt, line_height, 0.0, 0)

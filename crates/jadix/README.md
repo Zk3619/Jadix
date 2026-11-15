@@ -1,5 +1,9 @@
 # jadix
 
+The shared environment contract is available through jadix::environment with or without GPU features. Its optional platform field separates the runtime name from the physical operating system; older JSON without that field remains accepted. Enable system-environment for supported desktop OS sampling. The [WeChat Rust sample](../../examples/miniprogram/README.md) uses the same core environment, layout and controlled events through the native adapter.
+
+The primary Rust UI facade owns shared UI behavior; `jadix_native` is a system-view adapter and `jadix_shell` is an optional script/distribution layer.
+
 [English](README.md) | [简体中文](README.zh.md)
 
 Pure-Rust native UI framework with fine-grained reactivity and optional static UI macros.
@@ -38,3 +42,10 @@ The existing [package guide](GUIDE.md) retains additional API, platform and sour
 ## License
 
 Apache-2.0. Preserve [LICENSE](LICENSE), [NOTICE](NOTICE) and dependency notices.
+
+Shared keyed virtualization is available as `jadix::virtualization` with or without
+GPU/default features. `VirtualAxis::append` preserves existing keys and measured
+heights, validating each new batch before publication. It uses the same
+`jadix_core` implementation for Rust GPU, native and character consumers; no
+shell VM is required. Its amortized O(k log(N+k)) update cost does not imply that
+SDK publication, layout, GPU collection or host output is O(k).

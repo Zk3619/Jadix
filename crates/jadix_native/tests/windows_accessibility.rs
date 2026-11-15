@@ -1,14 +1,14 @@
 #![cfg(all(windows, feature = "windows"))]
 
 use jadix_native::{host::NativeRoot, presentation::*, windows::WindowsHost};
+use windows::core::Interface;
 use windows::Win32::{
     Foundation::HWND,
-    System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
+    System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER},
     UI::Accessibility::*,
 };
-use windows::core::Interface;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    GWL_STYLE, GetWindowLongPtrW, STATE_SYSTEM_COLLAPSED, STATE_SYSTEM_EXPANDED, WS_TABSTOP,
+    GetWindowLongPtrW, GWL_STYLE, STATE_SYSTEM_COLLAPSED, STATE_SYSTEM_EXPANDED, WS_TABSTOP,
 };
 
 fn node(root: RootId, content: NodeContent, name: &str) -> PresentationNode {
@@ -20,6 +20,8 @@ fn node(root: RootId, content: NodeContent, name: &str) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: Some(name.into()),
             style: style::NodeStyle {
                 width: Some(160.0),
@@ -29,6 +31,79 @@ fn node(root: RootId, content: NodeContent, name: &str) -> PresentationNode {
         },
         children: vec![],
     }
+}
+
+#[test]
+fn descriptions_update_and_clear_in_msaa_and_custom_tree_grid_providers() {
+    use windows::Win32::System::Variant::VARIANT;
+    let mut root = NativeRoot::new(WindowsHost::new("Jadix descriptions", [640, 480]).unwrap());
+    let button = || NodeContent::Button {
+        label: "Visible".into(),
+        enabled: true,
+    };
+    let mut roots = vec![
+        node(root.model().id(), button(), "Button name"),
+        node(root.model().id(), button(), "Tree name"),
+        node(root.model().id(), NodeContent::Container, "Grid name"),
+    ];
+    roots[1].descriptor.accessible_role = Some(AccessibleRole::TreeItem);
+    roots[1].descriptor.accessible_expanded = Some(false);
+    roots[2].descriptor.accessible_role = Some(AccessibleRole::Grid {
+        rows: 1,
+        columns: 1,
+    });
+    root.present(&mut roots, [640.0, 480.0], 0).unwrap();
+    root.host().show();
+    let identities: Vec<_> = roots
+        .iter()
+        .map(|node| root.host().control_identity(node.id).unwrap())
+        .collect();
+    let automation: IUIAutomation =
+        unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.unwrap();
+    for description in [Some("Help 中文 😀"), Some("Changed"), None] {
+        for node in &mut roots {
+            node.descriptor.accessible_description = description.map(String::from);
+        }
+        root.present(&mut roots, [640.0, 480.0], 1).unwrap();
+        let mut accessible: Option<IAccessible> = None;
+        unsafe {
+            AccessibleObjectFromWindow(
+                HWND(identities[0] as _),
+                0xfffffffcu32,
+                &IAccessible::IID,
+                &mut accessible as *mut _ as *mut _,
+            )
+        }
+        .unwrap();
+        let actual = unsafe { accessible.unwrap().get_accDescription(&VARIANT::from(0)) };
+        assert_eq!(
+            actual.map(|value| value.to_string()).unwrap_or_default(),
+            description.unwrap_or("")
+        );
+        for (index, node) in roots.iter().enumerate().skip(1) {
+            assert_eq!(
+                root.host().control_identity(node.id).unwrap(),
+                identities[index]
+            );
+            let element =
+                unsafe { automation.ElementFromHandle(HWND(identities[index] as _)) }.unwrap();
+            assert_eq!(
+                unsafe { element.CurrentName() }.unwrap().to_string(),
+                node.descriptor.accessible_name.as_deref().unwrap()
+            );
+            let value =
+                unsafe { element.GetCurrentPropertyValue(UIA_FullDescriptionPropertyId) }.unwrap();
+            let actual = unsafe {
+                assert_eq!(
+                    value.Anonymous.Anonymous.vt,
+                    windows::Win32::System::Variant::VT_BSTR
+                );
+                value.Anonymous.Anonymous.Anonymous.bstrVal.to_string()
+            };
+            assert_eq!(actual, description.unwrap_or(""));
+        }
+    }
+    root.dispose();
 }
 
 #[test]

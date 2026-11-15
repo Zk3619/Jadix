@@ -52,6 +52,17 @@ fn non_selectable_label_does_not_participate_in_selection() {
     let mut el3 = Element::new().text("hello").selectable(true);
     enable_label_selection(&mut el3, "focus-me");
     assert_eq!(selectable_text_key(&el3).as_deref(), Some("focus-me"));
+    assert_eq!(el3.cursor, Some(crate::core::tree::CursorKind::Text.into()));
+
+    let mut explicit = Element::new()
+        .text("link")
+        .cursor_kind(crate::core::tree::CursorKind::Pointer);
+    enable_label_selection(&mut explicit, "selectable-link");
+    assert_eq!(
+        explicit.cursor,
+        Some(crate::core::tree::CursorKind::Pointer.into()),
+        "enabling selection must preserve the authored cursor"
+    );
 }
 
 #[test]

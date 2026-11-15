@@ -51,6 +51,23 @@ fn desktop_policies_are_explicit_and_default_to_compatible_lifetimes() {
 }
 
 #[test]
+fn screen_orientation_policy_is_opt_in_and_reaches_window_options() {
+    let defaults = app().into_window_options();
+    assert_eq!(
+        defaults.screen_orientations,
+        super::super::ScreenOrientations::LandscapeAndPortrait
+    );
+
+    let portrait = app()
+        .screen_orientations(super::super::ScreenOrientations::Portrait)
+        .into_window_options();
+    assert_eq!(
+        portrait.screen_orientations,
+        super::super::ScreenOrientations::Portrait
+    );
+}
+
+#[test]
 fn app_builder_maps_title_size_font_and_frameless() {
     let o = app()
         .title("Hello")

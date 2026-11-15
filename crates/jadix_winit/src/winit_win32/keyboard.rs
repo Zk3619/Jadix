@@ -21,8 +21,8 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
     VK_CONTROL, VK_DECIMAL, VK_DELETE, VK_DIVIDE, VK_DOWN, VK_END, VK_F4, VK_HOME, VK_INSERT,
     VK_LCONTROL, VK_LEFT, VK_LMENU, VK_LSHIFT, VK_LWIN, VK_MENU, VK_MULTIPLY, VK_NEXT, VK_NUMLOCK,
     VK_NUMPAD0, VK_NUMPAD1, VK_NUMPAD2, VK_NUMPAD3, VK_NUMPAD4, VK_NUMPAD5, VK_NUMPAD6, VK_NUMPAD7,
-    VK_NUMPAD8, VK_NUMPAD9, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU, VK_RSHIFT,
-    VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SUBTRACT, VK_UP,
+    VK_NUMPAD8, VK_NUMPAD9, VK_PACKET, VK_PRIOR, VK_RCONTROL, VK_RETURN, VK_RIGHT, VK_RMENU,
+    VK_RSHIFT, VK_RWIN, VK_SCROLL, VK_SHIFT, VK_SUBTRACT, VK_UP,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     MSG, PM_NOREMOVE, PeekMessageW, WM_CHAR, WM_DEADCHAR, WM_KEYDOWN, WM_KEYFIRST, WM_KEYLAST,
@@ -62,17 +62,47 @@ pub struct MessageAsKeyEvent {
 /// text input. The "sequence" only consists of one WM_KEYUP / WM_SYSKEYUP event.
 pub struct KeyEventBuilder {
     event_info: Mutex<Option<PartialKeyEventInfo>>,
+    packet_high_surrogate: Mutex<Option<u16>>,
     pending: PendingEventQueue<MessageAsKeyEvent>,
 }
 impl Default for KeyEventBuilder {
     fn default() -> Self {
         KeyEventBuilder {
             event_info: Mutex::new(None),
+            packet_high_surrogate: Mutex::new(None),
             pending: Default::default(),
         }
     }
 }
 impl KeyEventBuilder {
+    /// SendInput Unicode packets may deliver a surrogate pair as two keypresses.
+    /// Keep at most one high surrogate, scoped to this window's packet stream.
+    fn finalize_char_event(&self, mut event_info: PartialKeyEventInfo) -> KeyEvent {
+        let mut high = self.packet_high_surrogate.lock().unwrap();
+        if event_info.vkey == VK_PACKET {
+            if let [unit] = event_info.utf16parts.as_slice() {
+                if (0xd800..=0xdbff).contains(unit) {
+                    *high = Some(*unit);
+                } else if (0xdc00..=0xdfff).contains(unit) {
+                    if let Some(first) = high.take() {
+                        event_info.utf16parts.insert(0, first);
+                        if let PartialText::System(wide) = &mut event_info.text {
+                            *wide = event_info.utf16parts.clone();
+                        }
+                    }
+                } else {
+                    *high = None;
+                }
+            } else {
+                *high = None;
+            }
+        } else {
+            *high = None;
+        }
+        drop(high);
+        event_info.finalize()
+    }
+
     /// Call this function for every window message.
     /// Returns Some() if this window message completes a KeyEvent.
     /// Returns None otherwise.
@@ -93,18 +123,23 @@ impl KeyEventBuilder {
         let mut matcher = || -> MatchResult {
             match msg_kind {
                 WM_SETFOCUS => {
+                    *self.packet_high_surrogate.lock().unwrap() = None;
                     // synthesize keydown events
                     let kbd_state = get_async_kbd_state();
                     let key_events = Self::synthesize_kbd_state(ElementState::Pressed, &kbd_state);
                     MatchResult::MessagesToDispatch(self.pending.complete_multi(key_events))
                 }
                 WM_KILLFOCUS => {
+                    *self.packet_high_surrogate.lock().unwrap() = None;
                     // synthesize keyup events
                     let kbd_state = get_kbd_state();
                     let key_events = Self::synthesize_kbd_state(ElementState::Released, &kbd_state);
                     MatchResult::MessagesToDispatch(self.pending.complete_multi(key_events))
                 }
                 WM_KEYDOWN | WM_SYSKEYDOWN => {
+                    if wparam as VIRTUAL_KEY != VK_PACKET {
+                        *self.packet_high_surrogate.lock().unwrap() = None;
+                    }
                     if msg_kind == WM_SYSKEYDOWN && wparam as VIRTUAL_KEY == VK_F4 {
                         // Don't dispatch Alt+F4 to the application.
                         // This is handled in `event_loop.rs`
@@ -258,7 +293,7 @@ impl KeyEventBuilder {
                             let key = layout.get_key(mod_no_ctrl, num_lock_on, vkey, physical_key);
                             event_info.text = PartialText::Text(key.to_text().map(SmolStr::new));
                         }
-                        let ev = event_info.finalize();
+                        let ev = self.finalize_char_event(event_info);
                         MatchResult::MessagesToDispatch(self.pending.complete_pending(
                             pending_token,
                             MessageAsKeyEvent {
@@ -1305,4 +1340,77 @@ pub fn scancode_to_physicalkey(scancode: u32) -> PhysicalKey {
 
         _ => return PhysicalKey::Unidentified(NativeKeyCode::Windows(scancode as u16)),
     })
+}
+
+#[cfg(test)]
+mod packet_tests {
+    use super::*;
+    fn packet(parts: &[u16]) -> PartialKeyEventInfo {
+        PartialKeyEventInfo {
+            vkey: VK_PACKET,
+            key_state: ElementState::Pressed,
+            is_repeat: false,
+            physical_key: PhysicalKey::Unidentified(NativeKeyCode::Windows(0)),
+            location: KeyLocation::Standard,
+            logical_key: PartialLogicalKey::TextOr(Key::Unidentified(NativeKey::Windows(
+                VK_PACKET,
+            ))),
+            key_without_modifiers: Key::Unidentified(NativeKey::Windows(VK_PACKET)),
+            utf16parts: parts.to_vec(),
+            text: PartialText::System(parts.to_vec()),
+        }
+    }
+    #[test]
+    fn unicode_packet_surrogates_across_key_events_emit_one_scalar() {
+        let builder = KeyEventBuilder::default();
+        assert!(
+            builder
+                .finalize_char_event(packet(&[0xd83e]))
+                .text
+                .is_none()
+        );
+        let low = builder.finalize_char_event(packet(&[0xdd80]));
+        assert_eq!(low.text.as_deref(), Some("🦀"));
+        assert_eq!(low.text_with_all_modifiers.as_deref(), Some("🦀"));
+    }
+    #[test]
+    fn unicode_packet_state_is_bounded_and_isolated_between_windows_and_plain_text() {
+        let first = KeyEventBuilder::default();
+        let second = KeyEventBuilder::default();
+        first.finalize_char_event(packet(&[0xd83e]));
+        assert!(second.finalize_char_event(packet(&[0xdd80])).text.is_none());
+        assert_eq!(
+            first.finalize_char_event(packet(&[0xdd80])).text.as_deref(),
+            Some("🦀")
+        );
+        first.finalize_char_event(packet(&[0xd83e]));
+        assert_eq!(
+            first
+                .finalize_char_event(packet(&[b'x' as u16]))
+                .text
+                .as_deref(),
+            Some("x")
+        );
+        assert!(first.finalize_char_event(packet(&[0xdd80])).text.is_none());
+        first.finalize_char_event(packet(&[0xd83e]));
+        assert_eq!(
+            first
+                .finalize_char_event(packet(&[0xd83e, 0xdd80]))
+                .text
+                .as_deref(),
+            Some("🦀")
+        );
+        assert!(first.finalize_char_event(packet(&[0xdd80])).text.is_none());
+        first.finalize_char_event(packet(&[0xd800]));
+        first.finalize_char_event(packet(&[0xd83e]));
+        assert_eq!(
+            first.finalize_char_event(packet(&[0xdd80])).text.as_deref(),
+            Some("🦀")
+        );
+        first.finalize_char_event(packet(&[0xd83e]));
+        let mut ordinary = packet(&[b'a' as u16]);
+        ordinary.vkey = 65;
+        first.finalize_char_event(ordinary);
+        assert!(first.finalize_char_event(packet(&[0xdd80])).text.is_none());
+    }
 }

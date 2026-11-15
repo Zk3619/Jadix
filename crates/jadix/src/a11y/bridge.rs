@@ -3,14 +3,15 @@
 //! Part of [`crate::a11y`]; Adapter lifecycle remains in `app`.
 
 use accesskit::{
-    Action, ActionRequest, Live, Node, NodeId, Rect, Role, Toggled, Tree, TreeId, TreeUpdate,
+    Action, ActionData, ActionRequest, Invalid, Live, Node, NodeId, Rect, Role, Toggled, Tree,
+    TreeId, TreeUpdate,
 };
 use std::hash::{Hash, Hasher};
 
 use crate::core::reactivity::use_signal;
 use crate::core::tree::Element;
 use crate::utils::roving::TABSTRIP_FOCUS_PREFIX;
-use crate::utils::text_field::{input_value_signal_key, INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX};
+use crate::utils::text_field::{INPUT_FOCUS_PREFIX, TEXTAREA_FOCUS_PREFIX, input_value_signal_key};
 use crate::utils::text_selection::ATTR_LABEL_FOR;
 use std::collections::HashMap;
 
@@ -31,6 +32,7 @@ const A11Y_NAME_DESC_LIVE_ATTRS: &[&str] = &[
     "aria-labelledby",
     "aria-describedby",
     "aria-live",
+    "aria-invalid",
     "accesskit_name",
     "accesskit_description",
     "accesskit_live",
@@ -146,6 +148,7 @@ fn should_be_accesskit_node(el: &Element) -> bool {
     // Empty `focus_id` is not an identity (see `docs/element_identity.md` I-1); ignore it here.
     el.focus_id.as_deref().is_some_and(|s| !s.is_empty())
         || el.on_click.is_some()
+        || el.on_accessibility_value.is_some()
         || el.text.is_some()
         || el.attrs.contains_key("accesskit_role")
         || structural_role(el).is_some()
@@ -454,11 +457,7 @@ fn collect_label_caption(el: &Element) -> Option<String> {
     let mut parts = Vec::new();
     collect_label_caption_into(el, &mut parts, true);
     let s = parts.join(" ");
-    if s.is_empty() {
-        None
-    } else {
-        Some(s)
-    }
+    if s.is_empty() { None } else { Some(s) }
 }
 
 fn collect_label_caption_into(el: &Element, parts: &mut Vec<String>, is_root: bool) {
@@ -585,6 +584,14 @@ fn build_node(el: &Element, for_map: &HashMap<String, String>) -> Node {
     if el.attrs.get("disabled").map(String::as_str) == Some("true") {
         node.set_disabled();
     }
+    if let Some(invalid) = el.attrs.get("aria-invalid").map(String::as_str) {
+        match invalid {
+            "true" => node.set_invalid(Invalid::True),
+            "grammar" => node.set_invalid(Invalid::Grammar),
+            "spelling" => node.set_invalid(Invalid::Spelling),
+            _ => {}
+        }
+    }
     if let Some(pressed) = el.attrs.get("aria-pressed").map(String::as_str) {
         match pressed {
             "true" => node.set_toggled(Toggled::True),
@@ -616,6 +623,12 @@ fn build_node(el: &Element, for_map: &HashMap<String, String>) -> Node {
     if el.on_click.is_some() {
         node.add_action(Action::Click);
     }
+    if el.on_accessibility_value.is_some()
+        && el.attrs.get("disabled").map(String::as_str) != Some("true")
+        && el.attrs.get("aria-disabled").map(String::as_str) != Some("true")
+    {
+        node.add_action(Action::SetValue);
+    }
     if el.focusable {
         node.add_action(Action::Focus);
     }
@@ -627,7 +640,9 @@ fn build_node(el: &Element, for_map: &HashMap<String, String>) -> Node {
             Toggled::False
         });
     } else if let Some(s) = el.checkbox_sync {
-        node.set_toggled(if s.get() {
+        node.set_toggled(if el.attrs.get("aria-checked").map(String::as_str) == Some("mixed") {
+            Toggled::Mixed
+        } else if s.get() {
             Toggled::True
         } else {
             Toggled::False
@@ -846,6 +861,8 @@ fn walk_subtree(
     used: &mut std::collections::HashSet<u64>,
     under_name_from_contents: bool,
     for_map: &HashMap<String, String>,
+    ids: &mut HashMap<String, Vec<NodeId>>,
+    pending_relations: &mut Vec<(NodeId, Option<String>, Vec<String>)>,
 ) {
     struct Frame<'a> {
         el: &'a Element,
@@ -932,6 +949,7 @@ fn walk_subtree(
                 }
             }
             node.set_children(child_ids);
+            collect_accessibility_relations(frame.el, id, ids, pending_relations);
             nodes.push((id, node));
             if let Some(parent) = stack.last_mut() {
                 parent.child_ids.push(id);
@@ -942,6 +960,67 @@ fn walk_subtree(
             parent.child_ids.extend(frame.child_ids);
         } else {
             parent_child_ids.extend(frame.child_ids);
+        }
+    }
+}
+
+fn collect_accessibility_relations(
+    el: &Element,
+    node_id: NodeId,
+    ids: &mut HashMap<String, Vec<NodeId>>,
+    pending: &mut Vec<(NodeId, Option<String>, Vec<String>)>,
+) {
+    if let Some(id) = el
+        .attrs
+        .get("id")
+        .map(|value| value.trim())
+        .filter(|id| !id.is_empty())
+    {
+        ids.entry(id.to_string()).or_default().push(node_id);
+    }
+    let active_descendant = el
+        .attrs
+        .get("aria-activedescendant")
+        .map(|value| value.trim())
+        .filter(|id| !id.is_empty())
+        .map(str::to_string);
+    let controls: Vec<String> = el
+        .attrs
+        .get("aria-controls")
+        .map(|value| value.split_ascii_whitespace().map(str::to_string).collect())
+        .unwrap_or_default();
+    if active_descendant.is_some() || !controls.is_empty() {
+        pending.push((node_id, active_descendant, controls));
+    }
+}
+
+fn apply_accessibility_relations(
+    nodes: &mut [(NodeId, Node)],
+    ids: HashMap<String, Vec<NodeId>>,
+    pending: Vec<(NodeId, Option<String>, Vec<String>)>,
+) {
+    let unique_ids: HashMap<String, NodeId> = ids
+        .into_iter()
+        .filter_map(|(id, node_ids)| (node_ids.len() == 1).then(|| (id, node_ids[0])))
+        .collect();
+    for (node_id, active_descendant, controls) in pending {
+        let Some((_, node)) = nodes.iter_mut().find(|(id, _)| *id == node_id) else {
+            continue;
+        };
+        if let Some(target) = active_descendant
+            .as_deref()
+            .and_then(|id| unique_ids.get(id))
+            .copied()
+        {
+            node.set_active_descendant(target);
+        }
+        let controls: Vec<NodeId> = controls
+            .iter()
+            .filter_map(|id| unique_ids.get(id).copied())
+            .take(64)
+            .collect();
+        if !controls.is_empty() {
+            node.set_controls(controls);
         }
     }
 }
@@ -979,6 +1058,8 @@ pub fn tree_update_from_elements(root: &Element, focused_fid: Option<&str>) -> T
     let mut nodes: Vec<(NodeId, Node)> = Vec::new();
     let mut content_children: Vec<NodeId> = Vec::new();
     let mut used = std::collections::HashSet::new();
+    let mut ids = HashMap::new();
+    let mut pending_relations = Vec::new();
     let doc_id = document_node_id();
     used.insert(ROOT_ID.0);
     used.insert(doc_id.0);
@@ -992,6 +1073,8 @@ pub fn tree_update_from_elements(root: &Element, focused_fid: Option<&str>) -> T
             &mut used,
             false,
             &for_map,
+            &mut ids,
+            &mut pending_relations,
         );
     }
 
@@ -1000,6 +1083,7 @@ pub fn tree_update_from_elements(root: &Element, focused_fid: Option<&str>) -> T
         let preferred = stable_node_key(root, "root");
         let (_key, id) = alloc_unique_node_id(&preferred, "root", &mut used);
         let mut node = build_node(root, &for_map);
+        collect_accessibility_relations(root, id, &mut ids, &mut pending_relations);
         node.set_children(content_children);
         nodes.push((id, node));
         content_children = vec![id];
@@ -1020,6 +1104,8 @@ pub fn tree_update_from_elements(root: &Element, focused_fid: Option<&str>) -> T
     }
     root_node.set_children(vec![doc_id]);
     nodes.push((ROOT_ID, root_node));
+
+    apply_accessibility_relations(&mut nodes, ids, pending_relations);
 
     let focus = resolve_tree_focus(&nodes, focused_fid, doc_id);
 
@@ -1134,6 +1220,20 @@ fn find_element_by_node_id<'a>(
 
 fn apply_accesskit_action(el: &Element, request: &ActionRequest) -> bool {
     match request.action {
+        Action::SetValue => {
+            if el.attrs.get("disabled").map(String::as_str) == Some("true")
+                || el.attrs.get("aria-disabled").map(String::as_str) == Some("true")
+            {
+                return false;
+            }
+            if let (Some(callback), Some(ActionData::NumericValue(value))) =
+                (&el.on_accessibility_value, &request.data)
+            {
+                if value.is_finite() {
+                    return callback.borrow_mut()(*value);
+                }
+            }
+        }
         Action::Click => {
             if let Some(cb) = &el.on_click {
                 cb.borrow_mut()();

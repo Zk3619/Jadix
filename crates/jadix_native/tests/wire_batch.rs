@@ -12,6 +12,8 @@ fn delta_wire_preserves_full_decimal_identity_revision_and_native_operations() {
         accessible_role: Some(AccessibleRole::TreeItem),
         accessible_selected: Some(true),
         accessible_expanded: Some(false),
+        accessibility_relations: Default::default(),
+        accessible_description: Some("Supplemental 中文 help".into()),
         accessible_name: Some("caption".into()),
     };
     let batch = CommitBatch {
@@ -27,7 +29,10 @@ fn delta_wire_preserves_full_decimal_identity_revision_and_native_operations() {
             },
             Operation::Update {
                 node: child,
-                descriptor,
+                descriptor: NodeDescriptor {
+                    accessible_description: None,
+                    ..descriptor
+                },
             },
             Operation::Move {
                 node: child,
@@ -52,6 +57,12 @@ fn delta_wire_preserves_full_decimal_identity_revision_and_native_operations() {
     assert_eq!(operations[0]["descriptor"]["role"], "treeitem");
     assert_eq!(operations[0]["descriptor"]["selected"], true);
     assert_eq!(operations[0]["descriptor"]["expanded"], false);
+    assert_eq!(operations[0]["descriptor"]["name"], "caption");
+    assert_eq!(
+        operations[0]["descriptor"]["description"],
+        "Supplemental 中文 help"
+    );
+    assert!(operations[1]["descriptor"]["description"].is_null());
     assert_eq!(operations[2]["op"], "move");
     assert!(operations[2]["parent"].is_null());
     assert!(operations[4]["id"].is_null());

@@ -12,6 +12,13 @@ pub enum SurfaceAcquireError {
 }
 
 pub fn instance(backends: wgpu::Backends) -> wgpu::Instance {
+    instance_for_surface(backends, false)
+}
+
+/// DX12 HWND swapchains are opaque. Use wgpu's own composition visual for
+/// per-pixel alpha, independently of Jadix's optional Windows material host.
+pub fn instance_for_surface(backends: wgpu::Backends, compositor_alpha: bool) -> wgpu::Instance {
+    let _ = compositor_alpha;
     #[cfg(all(windows, feature = "backend-dx11-native"))]
     if backends == wgpu::Backends::DX11 {
         return unsafe {
@@ -42,6 +49,10 @@ pub fn instance(backends: wgpu::Backends) -> wgpu::Instance {
         // Use the Windows compiler by default; an explicit wgpu override wins.
         descriptor.backend_options.dx12.shader_compiler =
             wgpu::Dx12Compiler::from_env().unwrap_or(wgpu::Dx12Compiler::Fxc);
+        if compositor_alpha {
+            descriptor.backend_options.dx12.presentation_system =
+                wgpu::Dx12SwapchainKind::DxgiFromVisual.with_env();
+        }
     }
     wgpu::Instance::new(descriptor)
 }
@@ -151,7 +162,7 @@ pub fn try_shader_module(
 
 /// Create a compute pipeline, returning validation failures synchronously on native.
 /// Browser validation is reported asynchronously to the console.
-#[cfg_attr(not(feature = "compute"), allow(dead_code))]
+#[cfg(feature = "compute")]
 pub fn try_compute_pipeline(
     device: &wgpu::Device,
     desc: &wgpu::ComputePipelineDescriptor<'_>,

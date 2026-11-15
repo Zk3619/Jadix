@@ -1,5 +1,7 @@
 # Jadix
 
+`jadix` 是 Rust UI 主入口；`jadix_native` 将共享 presentation 契约适配到系统视图；可选 `jadix_shell` 提供 JS/TSX、会话与分发，再调用 GPU／native 宿主。共享能力优先进入 Jadix 及既有核心库。
+
 [English](README.md) | [简体中文](README.zh.md)
 
 Rust 原生 UI 框架，提供响应式状态、GPU 绘制与可选声明式宏。

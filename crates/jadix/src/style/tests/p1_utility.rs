@@ -1,6 +1,140 @@
 use super::*;
 
 #[test]
+fn text_color_opacity_preserves_rgb_and_updates_only_paint() {
+    for (class, expected) in [
+        ("text-[#ff0000]/50", [255, 0, 0, 128]),
+        ("text-[color:#ff0000]/[0.5]", [255, 0, 0, 128]),
+        ("text-[rgb(0_0_255)]/25", [0, 0, 255, 64]),
+        ("text-[color:rgb(0_0_255)]", [0, 0, 255, 255]),
+        ("text-[rgb(0_0_255_/_50%)]", [0, 0, 255, 128]),
+        ("text-[rgb(0_0_255_/_50%)]/[50%]", [0, 0, 255, 64]),
+        ("text-[#ff000080]/50", [255, 0, 0, 64]),
+        ("text-[#ff0000]/1", [255, 0, 0, 3]),
+        ("text-[#ff0000]/[1]", [255, 0, 0, 255]),
+    ] {
+        let mut el = Element::new().text("unchanged");
+        let impact = apply_class_list(&mut el, class);
+        assert_eq!(el.text_style.color, Some(expected), "{class}");
+        assert_eq!(impact, LayoutStatus::StyleChanged, "{class}");
+        assert_eq!(apply_class_list(&mut el, class), LayoutStatus::Clean);
+    }
+    let solid = crate::style::parse_text_color("primary");
+    let mut half = solid;
+    half[3] = (f32::from(solid[3]) * 0.5).round() as u8;
+    for class in [
+        "text-primary/50",
+        "text-(--primary)/50",
+        "text-(color:--primary)/50",
+    ] {
+        let mut el = Element::new();
+        apply_class_list(&mut el, class);
+        assert_eq!(el.text_style.color, Some(half), "{class}");
+    }
+    for color in [
+        "rgb(0 0 255)/NaN",
+        "[rgb(0_0_255)]/[inf]",
+        "#ff0000/invalid",
+    ] {
+        assert_eq!(crate::style::try_parse_text_color(color), None, "{color}");
+    }
+}
+
+#[test]
+fn arbitrary_gradient_hints_use_the_shared_paint_path() {
+    for value in [
+        "linear-gradient(#000,#fff)",
+        "linear-gradient(45deg,#f00,#00f)",
+        "linear-gradient(to_right,#ff0000,#0000ff_60%)",
+        "radial-gradient(circle_at_center,#ff0000,#0000ff)",
+        "conic-gradient(from_45deg,#ff0000,#0000ff)",
+        "repeating-linear-gradient(45deg,#000_0,#fff_10px)",
+        "repeating-radial-gradient(circle,#000_0,#fff_10px)",
+        "repeating-conic-gradient(#000_0deg,#fff_90deg)",
+    ] {
+        let mut plain = Element::new();
+        let mut hinted = Element::new();
+        apply_class_list(&mut plain, &format!("bg-[{value}]"));
+        assert_eq!(
+            apply_class_list(&mut hinted, &format!("bg-[image:{value}]")),
+            LayoutStatus::StyleChanged,
+            "{value}"
+        );
+        let gradient = hinted.style.bg_gradient.as_ref().expect(value);
+        assert_eq!(plain.style.bg_gradient.as_ref(), Some(gradient), "{value}");
+        let pixels = crate::style::rasterize_gradient(gradient, 16, 16);
+        assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] > 0), "{value}");
+        assert!(
+            pixels.chunks_exact(4).any(|pixel| pixel != &pixels[..4]),
+            "{value}"
+        );
+        assert_eq!(
+            apply_class_list(&mut hinted, &format!("bg-[image:{value}]")),
+            LayoutStatus::Clean,
+            "{value}"
+        );
+    }
+    let mut el = Element::new();
+    apply_class_list(
+        &mut el,
+        "bg-[#336699] hover:bg-[image:linear-gradient(#000,#fff)]",
+    );
+    let background = el.style.bg_color;
+    let _ = resolve_class_variants(
+        &mut el,
+        &VariantContext {
+            hovered: true,
+            ..Default::default()
+        },
+    );
+    assert!(el.style.bg_gradient.is_some());
+    assert_eq!(el.style.bg_color, background);
+    let _ = resolve_class_variants(&mut el, &VariantContext::default());
+    assert!(el.style.bg_gradient.is_none());
+    for value in ["#ff0000", "url(a.png)", "linear-gradient(nonsense)", ""] {
+        assert_eq!(
+            apply_class_list(&mut el, &format!("bg-[image:{value}]")),
+            LayoutStatus::Clean
+        );
+        assert_eq!(el.style.bg_color, background);
+        assert!(el.style.bg_gradient.is_none());
+    }
+}
+
+#[test]
+fn gradient_stop_utilities_keep_current_color_dynamic_across_variants() {
+    for token in ["current", "[currentColor]"] {
+        let mut el = Element::new();
+        apply_class_list(
+            &mut el,
+            &format!("bg-gradient-to-r from-{token} via-{token} to-{token} hover:via-white"),
+        );
+        let authored = el.style.bg_gradient.clone().unwrap();
+        assert!(authored.stops().iter().all(|stop| stop.current_color));
+        let red = authored.resolve_current_color([1.0, 0.0, 0.0, 0.5]);
+        let blue = authored.resolve_current_color([0.0, 0.0, 1.0, 1.0]);
+        assert_ne!(
+            crate::style::rasterize_gradient(&red, 8, 8),
+            crate::style::rasterize_gradient(&blue, 8, 8),
+        );
+        resolve_class_variants(
+            &mut el,
+            &VariantContext {
+                hovered: true,
+                ..Default::default()
+            },
+        );
+        let hovered = el.style.bg_gradient.as_ref().unwrap();
+        assert!(hovered.stops()[0].current_color);
+        assert!(!hovered.stops()[1].current_color);
+        assert_eq!(hovered.stops()[1].color, [1.0; 4]);
+        assert!(hovered.stops()[2].current_color);
+        resolve_class_variants(&mut el, &VariantContext::default());
+        assert_eq!(el.style.bg_gradient.as_ref(), Some(&authored));
+    }
+}
+
+#[test]
 fn apply_aspect_ratio_utility() {
     let mut el = Element::new();
     let impact = apply_class_list(&mut el, "aspect-square");
@@ -13,6 +147,54 @@ fn apply_aspect_ratio_utility() {
 }
 
 #[test]
+fn text_size_slash_sets_line_height_without_recoloring() {
+    for (class, size, px, scale) in [
+        ("text-[14px]/6", 14.0, Some(24.0), None),
+        ("text-lg/7", 18.0, Some(28.0), None),
+        ("text-[length:14px]/[1.5]", 14.0, None, Some(1.5)),
+        ("text-[14px]/[150%]", 14.0, None, Some(1.5)),
+        ("text-[14px]/[1.25em]", 14.0, None, Some(1.25)),
+        ("text-[14px]/[1.5rem]", 14.0, Some(24.0), None),
+        ("text-[14px]/[21px]", 14.0, Some(21.0), None),
+    ] {
+        let mut el = Element::new().text("keep content");
+        apply_class_list(&mut el, "text-[#336699]");
+        let color = el.text_style.color;
+        assert_eq!(
+            apply_class_list(&mut el, class),
+            LayoutStatus::LayoutChanged,
+            "{class}"
+        );
+        assert_eq!(el.text_style.size, Some(size), "{class}");
+        assert_eq!(el.text_style.line_height_px, px, "{class}");
+        assert_eq!(el.text_style.line_height_scale, scale, "{class}");
+        assert!(el.text_style.line_height_specified);
+        assert_eq!(el.text_style.color, color, "{class}");
+        assert_eq!(
+            apply_class_list(&mut el, class),
+            LayoutStatus::Clean,
+            "{class}"
+        );
+    }
+    let mut el = Element::new();
+    apply_class_list(&mut el, "text-sm/5 hover:text-lg/[150%]");
+    let _ = resolve_class_variants(
+        &mut el,
+        &VariantContext {
+            hovered: true,
+            ..Default::default()
+        },
+    );
+    assert_eq!(el.text_style.size, Some(18.0));
+    assert_eq!(el.text_style.line_height_px, None);
+    assert_eq!(el.text_style.line_height_scale, Some(1.5));
+    let _ = resolve_class_variants(&mut el, &VariantContext::default());
+    assert_eq!(el.text_style.size, Some(14.0));
+    assert_eq!(el.text_style.line_height_px, Some(20.0));
+    assert_eq!(el.text_style.line_height_scale, None);
+}
+
+#[test]
 fn apply_fixed_and_rtl() {
     let mut el = Element::new();
     apply_class_list(&mut el, "fixed");
@@ -22,6 +204,73 @@ fn apply_fixed_and_rtl() {
     let mut el = Element::new().text("x");
     apply_class_list(&mut el, "rtl");
     assert_eq!(el.text_style.direction, crate::style::TextDirection::Rtl);
+}
+
+#[test]
+fn focus_within_variant_applies_to_ancestors_and_resets_when_focus_leaves() {
+    let mut root = Element::new();
+    apply_class_list(&mut root, "focus-within:opacity-50");
+
+    let mut parent = Element::new();
+    apply_class_list(&mut parent, "focus-within:opacity-50");
+    let focused = Element::new().focus_id("field");
+    parent.children.push(focused);
+    root.children.push(parent);
+    root.children.push(Element::new());
+
+    let mut tree = crate::layout::layout_tree::LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+    sync_class_variants_subtree(
+        &mut root,
+        [-1.0, -1.0],
+        "field",
+        false,
+        800.0,
+        600.0,
+        &mut tree,
+        &mut impact,
+    );
+
+    assert_eq!(root.style.opacity, 0.5);
+    assert_eq!(root.children[0].style.opacity, 0.5);
+    assert_eq!(root.children[1].style.opacity, 1.0);
+
+    impact = LayoutStatus::Clean;
+    sync_class_variants_subtree(
+        &mut root,
+        [-1.0, -1.0],
+        "",
+        false,
+        800.0,
+        600.0,
+        &mut tree,
+        &mut impact,
+    );
+    assert_eq!(root.style.opacity, 1.0);
+    assert_eq!(root.children[0].style.opacity, 1.0);
+}
+
+#[test]
+fn focus_within_variant_ignores_same_named_author_attribute() {
+    let mut el = Element::new();
+    el.attrs
+        .insert("__jadix_focus_within".into(), "true".into());
+    apply_class_list(&mut el, "focus-within:opacity-50");
+    let mut tree = crate::layout::layout_tree::LayoutTree::new();
+    let mut impact = LayoutStatus::Clean;
+
+    sync_class_variants_subtree(
+        &mut el,
+        [-1.0, -1.0],
+        "",
+        false,
+        800.0,
+        600.0,
+        &mut tree,
+        &mut impact,
+    );
+
+    assert_eq!(el.style.opacity, 1.0);
 }
 
 #[test]
@@ -269,6 +518,7 @@ fn hover_scale_outside_scroll_clip_does_not_match() {
         &mut tile,
         [40.0, 100.0],
         "",
+        &std::collections::HashSet::new(),
         false,
         1024.0,
         800.0,
@@ -1080,10 +1330,10 @@ fn scroll_paint_freeze_still_advances_active_tween() {
         &mut impact,
     );
     assert!(
-            tile.style.scale[0] > scale_after_enter + 0.01,
-            "active tween must keep advancing during scroll freeze, before={scale_after_enter} after={}",
-            tile.style.scale[0]
-        );
+        tile.style.scale[0] > scale_after_enter + 0.01,
+        "active tween must keep advancing during scroll freeze, before={scale_after_enter} after={}",
+        tile.style.scale[0]
+    );
     crate::style::set_css_transition_virtual_timeline(false);
 }
 
@@ -1783,9 +2033,9 @@ fn class_variant_hover_needs_frame_ignores_non_pointer_variants() {
     apply_class_list(&mut page, "md:flex dark:bg-accent");
     page.layout_bounds = [0.0, 0.0, 400.0, 400.0];
     assert!(
-            !class_variant_hover_needs_frame(&page, [40.0, 40.0]),
-            "sm/md/dark/data variants must not request_redraw when the pointer enters a box — that storms Marker spin while sliding the page"
-        );
+        !class_variant_hover_needs_frame(&page, [40.0, 40.0]),
+        "sm/md/dark/data variants must not request_redraw when the pointer enters a box — that storms Marker spin while sliding the page"
+    );
     let mut tree = crate::layout::layout_tree::LayoutTree::new();
     let mut impact = LayoutStatus::Clean;
     sync_class_variants_subtree(

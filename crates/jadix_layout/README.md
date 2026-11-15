@@ -28,3 +28,7 @@ Default features: none. See [Cargo.toml](Cargo.toml) for the complete feature/de
 ## License
 
 Apache-2.0. Preserve [LICENSE](LICENSE) and dependency notices.
+
+CPU-only shared presentation layout now lives in `presentation::PresentationLayout`: NodeStyle flex sizing, cached host-provided leaf measurements and overlay geometry. Native hosts re-export it as NativeLayout; terminal hosts supply grapheme cell measurement. This does not import OS views, GPUs or a windowed application runtime.
+
+PresentationLayout retains Taffy identity, child links and computation caches across snapshots. Style/content/structure changes invalidate affected nodes; environment revision changes clear layout and measurement caches. Frames publish only after successful measurement and geometry validation. `LayoutStats` exposes actual engine creation/reuse/removal/update and child-list changes. `release_layout_cache()` frees Taffy storage while retaining bounded host measurements and caller state. Validation, synchronization and frame collection still scan the full input tree.

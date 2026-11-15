@@ -13,8 +13,8 @@ use crate::winit_core::monitor::Fullscreen;
 use crate::winit_core::window::{WindowAttributes, WindowId};
 use dpi::{LogicalPosition, PhysicalPosition, PhysicalSize};
 use smol_str::SmolStr;
-use wasm_bindgen::closure::Closure;
 use wasm_bindgen::JsCast;
+use wasm_bindgen::closure::Closure;
 use web_sys::{
     CssStyleDeclaration, Document, Event, FocusEvent, HtmlCanvasElement, KeyboardEvent, Navigator,
     PointerEvent, WheelEvent,
@@ -28,7 +28,7 @@ use super::event_handle::EventListenerHandle;
 use super::intersection_handle::IntersectionObserverHandle;
 use super::media_query_handle::MediaQueryListHandle;
 use super::pointer::PointerHandler;
-use super::{event, fullscreen, ResizeScaleHandle};
+use super::{ResizeScaleHandle, event, fullscreen};
 use crate::winit_web::WindowAttributesWeb;
 
 #[allow(dead_code)]

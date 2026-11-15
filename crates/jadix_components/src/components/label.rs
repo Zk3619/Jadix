@@ -393,7 +393,6 @@ impl LabelBuilder {
             let sel_id = crate::utils::resolve_instance_id(self.id.clone(), "label");
             self.id = sel_id.clone();
             enable_label_selection(&mut self.inner.el, &sel_id);
-            self.inner.el = self.inner.el.cursor_text();
         }
         self
     }
@@ -452,7 +451,9 @@ pub fn enable_label_selection(el: &mut Element, focus_id: impl Into<String>) {
     let id = crate::utils::resolve_instance_id(focus_id, "label");
     el.focus_id = Some(id.clone());
     el.text_style.selectable = true;
-    el.cursor = Some(crate::core::tree::CursorKind::Text.into());
+    if el.cursor.is_none() {
+        el.cursor = Some(crate::core::tree::CursorKind::Text.into());
+    }
     el.attrs
         .insert("text_selectable".to_string(), "1".to_string());
     el.attrs

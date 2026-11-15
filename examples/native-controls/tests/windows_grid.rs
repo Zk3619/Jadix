@@ -2,12 +2,12 @@
 
 use jadix_native::windows::WindowsHost;
 use jadix_native_controls::table::DataTable;
+use windows::core::Interface;
 use windows::Win32::{
     Foundation::HWND,
-    System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
+    System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER},
     UI::Accessibility::*,
 };
-use windows::core::Interface;
 
 fn element(automation: &IUIAutomation, window: usize) -> IUIAutomationElement {
     unsafe { automation.ElementFromHandle(HWND(window as _)) }.unwrap()
@@ -101,11 +101,11 @@ fn actual_grid_coordinates_follow_frozen_panes_sorting_filtering_and_provider_li
             .unwrap();
     let cell_headers = unsafe { table_item.GetCurrentColumnHeaderItems() }.unwrap();
     assert_eq!(unsafe { cell_headers.Length() }.unwrap(), 1);
-    assert!(
-        unsafe { automation.CompareElements(&cell_headers.GetElement(0).unwrap(), &first_header) }
-            .unwrap()
-            .as_bool()
-    );
+    assert!(unsafe {
+        automation.CompareElements(&cell_headers.GetElement(0).unwrap(), &first_header)
+    }
+    .unwrap()
+    .as_bool());
     assert_eq!(
         unsafe { first.CurrentControlType() }.unwrap(),
         UIA_DataItemControlTypeId
@@ -116,11 +116,9 @@ fn actual_grid_coordinates_follow_frozen_panes_sorting_filtering_and_provider_li
     assert_eq!(unsafe { first_pattern.CurrentRowSpan() }.unwrap(), 1);
     assert_eq!(unsafe { first_pattern.CurrentColumnSpan() }.unwrap(), 1);
     let owner = unsafe { first_pattern.CurrentContainingGrid() }.unwrap();
-    assert!(
-        unsafe { automation.CompareElements(&owner, &grid_element) }
-            .unwrap()
-            .as_bool()
-    );
+    assert!(unsafe { automation.CompareElements(&owner, &grid_element) }
+        .unwrap()
+        .as_bool());
     let editor = table.cell(0, 0).unwrap();
     let editor_window = table.root.host().control_identity(editor).unwrap();
     table.root.focus(Some(editor)).unwrap();
@@ -136,12 +134,10 @@ fn actual_grid_coordinates_follow_frozen_panes_sorting_filtering_and_provider_li
         .unwrap()
         .cast()
         .unwrap();
-    assert!(
-        unsafe { value.CurrentValue() }
-            .unwrap()
-            .to_string()
-            .starts_with("语义编辑😀 ")
-    );
+    assert!(unsafe { value.CurrentValue() }
+        .unwrap()
+        .to_string()
+        .starts_with("语义编辑😀 "));
     table.set_frozen(1, 1).unwrap();
     table.scroll_to([80_160.0, 1_600_032.0]).unwrap();
     headers_align_with_cells(&table, &[(0, 0), (50_002, 502)]);
@@ -186,19 +182,15 @@ fn actual_grid_coordinates_follow_frozen_panes_sorting_filtering_and_provider_li
     assert_eq!(unsafe { distant_pattern.CurrentRow() }.unwrap(), 24_998);
     assert_eq!(unsafe { distant_pattern.CurrentColumn() }.unwrap(), 497);
     let reordered_header = unsafe { distant_table_item.GetCurrentColumnHeaderItems() }.unwrap();
-    assert!(
-        unsafe {
-            automation.CompareElements(&reordered_header.GetElement(0).unwrap(), &distant_header)
-        }
-        .unwrap()
-        .as_bool()
-    );
+    assert!(unsafe {
+        automation.CompareElements(&reordered_header.GetElement(0).unwrap(), &distant_header)
+    }
+    .unwrap()
+    .as_bool());
     let relocated = unsafe { grid.GetItem(24_998, 497) }.unwrap();
-    assert!(
-        unsafe { automation.CompareElements(&relocated, &distant) }
-            .unwrap()
-            .as_bool()
-    );
+    assert!(unsafe { automation.CompareElements(&relocated, &distant) }
+        .unwrap()
+        .as_bool());
     assert_eq!(unsafe { first_pattern.CurrentRow() }.unwrap(), 49_999);
     assert_eq!(unsafe { first_pattern.CurrentColumn() }.unwrap(), 999);
     assert_eq!(
@@ -207,14 +199,12 @@ fn actual_grid_coordinates_follow_frozen_panes_sorting_filtering_and_provider_li
     );
     assert!(table.root.host().undo(editor).unwrap());
     table.poll_events().unwrap();
-    assert!(
-        table
-            .root
-            .host()
-            .text(editor)
-            .unwrap()
-            .starts_with("R000000")
-    );
+    assert!(table
+        .root
+        .host()
+        .text(editor)
+        .unwrap()
+        .starts_with("R000000"));
     table.root.focus(None).unwrap();
     table.poll_events().unwrap();
     table.set_rows(vec![0, 2, 4]).unwrap();

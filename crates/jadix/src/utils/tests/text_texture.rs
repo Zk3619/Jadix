@@ -166,24 +166,24 @@ fn reaction_chip_hover_scale_twemoji_bake_is_not_clipped_in_rt() {
         || hover_ink[0] + hover_ink[2] >= hw
         || hover_ink[1] + hover_ink[3] >= hh;
     assert!(
-            !rest_touch,
-            "rest reaction Bake already clips Twemoji (square crop, then hover:scale enlarges the cut); rest_rt={rw}x{rh} rest_ink={rest_ink:?}"
-        );
+        !rest_touch,
+        "rest reaction Bake already clips Twemoji (square crop, then hover:scale enlarges the cut); rest_rt={rw}x{rh} rest_ink={rest_ink:?}"
+    );
     assert!(
-            !hover_touch,
-            "scaled reaction Bake must keep Twemoji inside the RT; rest_rt={rw}x{rh} rest_ink={rest_ink:?} hover_rt={hw}x{hh} hover_ink={hover_ink:?}"
-        );
+        !hover_touch,
+        "scaled reaction Bake must keep Twemoji inside the RT; rest_rt={rw}x{rh} rest_ink={rest_ink:?} hover_rt={hw}x{hh} hover_ink={hover_ink:?}"
+    );
     let ink_ratio_h = hover_ink[3] as f32 / rest_ink[3] as f32;
     assert!(
-            ink_ratio_h > 1.17 * 0.88,
-            "hover Twemoji ink must grow with scale (crop to rest strut keeps ink flat); rest_ink={rest_ink:?} hover_ink={hover_ink:?} ratio_h={ink_ratio_h}"
-        );
+        ink_ratio_h > 1.17 * 0.88,
+        "hover Twemoji ink must grow with scale (crop to rest strut keeps ink flat); rest_ink={rest_ink:?} hover_ink={hover_ink:?} ratio_h={ink_ratio_h}"
+    );
     let rest_frac_w = rest_ink[2] as f32 / rw as f32;
     let hover_frac_w = hover_ink[2] as f32 / hw as f32;
     assert!(
-            (hover_frac_w - rest_frac_w).abs() < 0.08,
-            "ink/RT fraction must stay similar under near-identity scale (crop shrinks pad); rest={rest_frac_w} hover={hover_frac_w} rest_ink={rest_ink:?} hover_ink={hover_ink:?}"
-        );
+        (hover_frac_w - rest_frac_w).abs() < 0.08,
+        "ink/RT fraction must stay similar under near-identity scale (crop shrinks pad); rest={rest_frac_w} hover={hover_frac_w} rest_ink={rest_ink:?} hover_ink={hover_ink:?}"
+    );
 }
 
 #[test]
@@ -610,9 +610,9 @@ fn bake_synthetic_bold_stays_sharp_at_oversample() {
     let r1 = bake_fringe_ratio(&rgba1);
     let r3 = bake_fringe_ratio(&rgba3);
     assert!(
-            r3 <= r1 + 0.06,
-            "3× Bake synth must stay a sharp duplicate like Coverage, not a soft glow (fringe dpr1={r1:.3} dpr3={r3:.3})"
-        );
+        r3 <= r1 + 0.06,
+        "3× Bake synth must stay a sharp duplicate like Coverage, not a soft glow (fringe dpr1={r1:.3} dpr3={r3:.3})"
+    );
 }
 
 fn box_downscale(rgba: &[u8], w: u32, h: u32, factor: u32) -> (u32, u32, Vec<u8>) {
@@ -666,8 +666,96 @@ fn bake_oversample_minified_keeps_label_weight() {
     let m1 = ink(&r1);
     let md = ink(&down);
     assert!(
-            md >= m1 * 0.95 && md <= m1 * 1.08,
-            "3× Bake minified must match 1× (Coverage-like) weight: 1x={m1:.0} down={md:.0} ratio={:.3}",
-            md / m1.max(1.0)
-        );
+        md >= m1 * 0.95 && md <= m1 * 1.08,
+        "3× Bake minified must match 1× (Coverage-like) weight: 1x={m1:.0} down={md:.0} ratio={:.3}",
+        md / m1.max(1.0)
+    );
+}
+
+#[test]
+fn rich_span_decoration_raster_pixels_match_the_span_and_dpr() {
+    use crate::style::TextSpan;
+    for dpr in [1.0, 2.0] {
+        let raster = |spans: &[TextSpan]| {
+            rasterize_rich_text_rgba(
+                spans,
+                20.0,
+                400,
+                [255; 4],
+                220.0,
+                50.0,
+                220.0,
+                50.0,
+                0.0,
+                glyphon::cosmic_text::Align::Left,
+                dpr,
+                0.0,
+                25.0,
+            )
+            .unwrap()
+        };
+        let plain = vec![TextSpan::new("AAAA"), TextSpan::new("     BBBB")];
+        let (w, _, before) = raster(&plain);
+        for strike in [false, true] {
+            let mut spans = plain.clone();
+            if strike {
+                spans[0].strikethrough = true;
+            } else {
+                spans[0].underline = true;
+            }
+            let (_, _, after) = raster(&spans);
+            let changed: Vec<_> = before
+                .chunks_exact(4)
+                .zip(after.chunks_exact(4))
+                .enumerate()
+                .filter_map(|(i, (a, b))| (a != b).then_some((i % w as usize, i / w as usize)))
+                .collect();
+            assert!(
+                changed.len() > 10,
+                "decoration must produce visible raster pixels"
+            );
+            assert!(changed
+                .iter()
+                .all(|(x, y)| (*x as f32) < 90.0 * dpr && (*y as f32) < 30.0 * dpr));
+            assert!(raster(&plain).2 == before);
+        }
+    }
+}
+
+#[test]
+fn rich_span_background_is_scaled_once_with_its_glyphs() {
+    use crate::style::TextSpan;
+    let mut right_edges = Vec::new();
+    for dpr in [1.0, 2.0] {
+        let (w, _, pixels) = rasterize_rich_text_rgba(
+            &[
+                TextSpan::new("AAAA").background([30, 90, 200, 255]),
+                TextSpan::new("     BBBB"),
+            ],
+            20.0,
+            400,
+            [255; 4],
+            220.0,
+            50.0,
+            220.0,
+            50.0,
+            0.0,
+            glyphon::cosmic_text::Align::Left,
+            dpr,
+            0.0,
+            25.0,
+        )
+        .unwrap();
+        let edge = pixels
+            .chunks_exact(4)
+            .enumerate()
+            .filter_map(|(i, p)| (p == [30, 90, 200, 255]).then_some(i % w as usize))
+            .max()
+            .unwrap();
+        right_edges.push(edge as f32 / dpr);
+    }
+    assert!(
+        (right_edges[0] - right_edges[1]).abs() <= 1.5,
+        "background must follow one DPR scale, got {right_edges:?}"
+    );
 }

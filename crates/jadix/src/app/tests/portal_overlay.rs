@@ -936,3 +936,91 @@ fn dropping_secondary_overlay_stack_does_not_clear_primary() {
     assert!(primary.peek());
     clear();
 }
+
+#[test]
+fn outside_policy_and_escape_have_distinct_observations_and_unmount_drops_presence() {
+    clear();
+    let (owner, ()) = crate::core::reactivity::create_root(|| {
+        let open = Signal::new(true);
+        let mounted = Signal::new(true);
+        let reason = Signal::new(None);
+        portal_sync_presence(
+            "retained",
+            open,
+            mounted,
+            OverlayKind::Popover,
+            OverlayMode::Stacked,
+        );
+        observe_dismissal("retained", reason);
+        set_outside_dismiss("retained", false);
+        crate::utils::popup::arm_underlay_close();
+        assert!(try_dismiss_outside_press());
+        assert!(open.peek());
+        assert_eq!(reason.peek(), None);
+        assert!(try_close_top());
+        assert!(!open.peek());
+        assert_eq!(reason.peek(), Some(false));
+        open.set(true);
+        reason.set(None);
+        portal_sync_presence(
+            "retained",
+            open,
+            mounted,
+            OverlayKind::Popover,
+            OverlayMode::Stacked,
+        );
+        observe_dismissal("retained", reason);
+        crate::utils::popup::arm_underlay_close();
+        assert!(try_dismiss_outside_press());
+        assert_eq!(reason.peek(), Some(true));
+        remove_overlay("retained");
+        assert_eq!(depth(), 0);
+    });
+    owner.dispose();
+    clear();
+}
+
+#[test]
+fn app_controlled_popup_can_reopen_and_close_with_escape_repeatedly() {
+    clear();
+    let (owner, ()) = crate::core::reactivity::create_root(|| {
+        let open = Signal::new(false);
+        assert!(portal_sync(
+            "app-controlled",
+            open,
+            OverlayKind::Popover,
+            OverlayMode::Stacked
+        )
+        .is_none());
+        assert_eq!(depth(), 0);
+
+        open.set(true);
+        assert!(portal_sync(
+            "app-controlled",
+            open,
+            OverlayKind::Popover,
+            OverlayMode::Stacked
+        )
+        .is_some());
+        assert_eq!(depth(), 1);
+        assert!(try_close_top());
+        assert!(!open.peek());
+        assert_eq!(depth(), 0);
+
+        open.set(true);
+        assert!(portal_sync(
+            "app-controlled",
+            open,
+            OverlayKind::Popover,
+            OverlayMode::Stacked
+        )
+        .is_some());
+        assert_eq!(depth(), 1);
+        assert!(try_close_top());
+        assert!(!open.peek());
+        assert_eq!(depth(), 0);
+        assert!(!try_close_top());
+    });
+    owner.dispose();
+    clear();
+}

@@ -40,3 +40,27 @@ fn installed_closure_is_the_client() {
     );
     assert!(!remote_asset_fetcher_installed());
 }
+
+#[test]
+fn cancelled_remote_fetch_is_rejected_before_calling_legacy_fetcher() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let called = Arc::new(AtomicBool::new(false));
+    let called_fetcher = called.clone();
+    let cancellation = jadix_tasks::CancellationToken::new();
+    cancellation.cancel();
+    with_remote_fetcher(
+        move |_: &str| {
+            called_fetcher.store(true, Ordering::SeqCst);
+            Ok(b"PNG".to_vec())
+        },
+        || {
+            assert!(fetch_remote_bytes_shared_cancellable(
+                "https://cdn.example/a.png",
+                &cancellation
+            )
+            .is_err());
+        },
+    );
+    assert!(!called.load(Ordering::SeqCst));
+}

@@ -9,6 +9,7 @@ readme = "README.md"
 
 [features]
 default = []
+checkpoint = ["dep:serde", "dep:serde_json", "dep:sha2"]
 markdown = ["dep:pulldown-cmark", "dep:serde", "dep:serde_json"]
 document-editing = ["markdown"]
 document-math = ["markdown", "dep:latex-rust"]
@@ -17,6 +18,7 @@ diff = ["dep:similar"]
 syntax = ["dep:syntect"]
 
 [dependencies]
+sha2 = { version = "=0.10.9", optional = true }
 pulldown-cmark = { workspace = true, optional = true, features = ["html"] }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }

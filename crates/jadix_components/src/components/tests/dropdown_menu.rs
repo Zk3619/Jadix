@@ -122,8 +122,13 @@ fn rsx_dropdown_keeps_content_height_placement_and_shadow_through_expansion() {
                         crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX,
                     )
                     .expect("menu scrollbar track during collapse");
-                    assert!(track.layout_bounds[3] < 0.5,
-                            "collapse must not expose a scrollbar hit slab, frame={frame}, h={h}, track={:?}, attrs={:?}, animations={:?}", track.layout_bounds, track.attrs, panel.style.animations);
+                    assert!(
+                        track.layout_bounds[3] < 0.5,
+                        "collapse must not expose a scrollbar hit slab, frame={frame}, h={h}, track={:?}, attrs={:?}, animations={:?}",
+                        track.layout_bounds,
+                        track.attrs,
+                        panel.style.animations
+                    );
                 }
             });
             drop(root);
@@ -157,8 +162,10 @@ fn rsx_dropdown_keeps_content_height_placement_and_shadow_through_expansion() {
                         let h = crate::layout::dim_length_px(panel.style.max_size.height)
                             .unwrap_or(panel.layout_bounds[3])
                             .min(panel.layout_bounds[3]);
-                        assert!(h <= expected_h + 0.5 && h + 0.5 >= previous_h,
-                            "height reveal must grow smoothly to the rows, y={y}, frame={frame}, h={h}, previous={previous_h}");
+                        assert!(
+                            h <= expected_h + 0.5 && h + 0.5 >= previous_h,
+                            "height reveal must grow smoothly to the rows, y={y}, frame={frame}, h={h}, previous={previous_h}"
+                        );
                         previous_h = h;
                         let track = find_bar(
                             panel,
@@ -166,8 +173,11 @@ fn rsx_dropdown_keeps_content_height_placement_and_shadow_through_expansion() {
                         )
                         .expect("menu scrollbar track");
                         if h < expected_h - 0.5 {
-                            assert!(track.layout_bounds[3] < 0.5,
-                                    "animation clipping must not expose a scrollbar hit slab, frame={frame}, h={h}, track={:?}", track.layout_bounds);
+                            assert!(
+                                track.layout_bounds[3] < 0.5,
+                                "animation clipping must not expose a scrollbar hit slab, frame={frame}, h={h}, track={:?}",
+                                track.layout_bounds
+                            );
                         }
                         let seam = if above {
                             panel.layout_bounds[1] + h
@@ -175,13 +185,21 @@ fn rsx_dropdown_keeps_content_height_placement_and_shadow_through_expansion() {
                             panel.layout_bounds[1]
                         };
                         let expected_seam = if above { y - 4.0 } else { y + 44.0 };
-                        assert!((seam - expected_seam).abs() < 0.5,
-                            "expansion must stay attached to the trigger, y={y}, frame={frame}: {:?} clip={h}", panel.layout_bounds);
+                        assert!(
+                            (seam - expected_seam).abs() < 0.5,
+                            "expansion must stay attached to the trigger, y={y}, frame={frame}: {:?} clip={h}",
+                            panel.layout_bounds
+                        );
                     }
                     if frame >= 20 {
-                        assert!((panel.layout_bounds[3] - expected_h).abs() < 0.5,
+                        assert!(
+                            (panel.layout_bounds[3] - expected_h).abs() < 0.5,
                             "dropdown must hug its rows after expansion, frame={frame}: {:?} content={:?}",
-                            panel.layout_bounds, panel.attrs.get(crate::utils::popup::ATTR_FLOATING_CONTENT_H));
+                            panel.layout_bounds,
+                            panel
+                                .attrs
+                                .get(crate::utils::popup::ATTR_FLOATING_CONTENT_H)
+                        );
                         let track = find_bar(
                             panel,
                             crate::components::scrollbar::SCROLLBAR_TRACK_FOCUS_PREFIX,
@@ -389,6 +407,11 @@ fn keyboard_enter_sub_focuses_first_item_then_escape_clears_sub_active() {
                             base: None,
                         });
                         let sc = dropdown_menu_sub_content(Default::default(), || {
+                            let _disabled = DropdownMenuItem(DropdownMenuItemProps {
+                                disabled: Some(true),
+                                children: Some(Element::new().text("Unavailable")),
+                                ..Default::default()
+                            });
                             DropdownMenuItem(DropdownMenuItemProps {
                                 disabled: Some(false),
                                 inset: Some(false),
@@ -433,7 +456,7 @@ fn keyboard_enter_sub_focuses_first_item_then_escape_clears_sub_active() {
         Some("dd_kb_sub__sub0")
     );
     let sub_active = use_signal("dd_kb_sub__sub0__dd_active", || ACTIVE_NONE).peek();
-    assert_eq!(sub_active, 0, "Enter must highlight the submenu first item");
+    assert_eq!(sub_active, 1, "Enter must highlight the first enabled item");
     assert_eq!(
         parent_active.peek(),
         1,

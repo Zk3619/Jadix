@@ -12,6 +12,8 @@ fn node(root: RootId, content: NodeContent) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: Default::default(),
         },
@@ -80,6 +82,75 @@ fn commit(root: &mut HeadlessRoot, operations: Vec<Operation>) -> Result<bool, B
 }
 
 #[test]
+fn descriptions_are_budgeted_atomically_and_inspection_respects_privacy() {
+    let mut root = HeadlessRoot::with_limits(ResourceLimits {
+        text_bytes: 12,
+        ..Default::default()
+    });
+    let mut item = node(root.id(), NodeContent::Text("x".into()));
+    item.descriptor.accessible_name = Some("Name".into());
+    item.descriptor.accessible_description = Some("中文".into());
+    root.reconcile(std::slice::from_ref(&item)).unwrap();
+    let usage = root.resource_usage();
+    let revision = root.revision();
+    assert_eq!(usage.text_bytes, 11);
+    assert_eq!(
+        root.inspection(true)["nodes"][0]["descriptor"]["description"],
+        "中文"
+    );
+    for field in ["name", "description", "text"] {
+        assert!(root.inspection(false)["nodes"][0]["descriptor"][field].is_null());
+    }
+    item.descriptor.accessible_description = Some("overflow".into());
+    assert_eq!(
+        commit(
+            &mut root,
+            vec![Operation::Update {
+                node: item.id,
+                descriptor: item.descriptor.clone(),
+            }]
+        ),
+        Err(BackendError::ResourceLimit(ResourceKind::TextBytes))
+    );
+    assert_eq!(root.revision(), revision);
+    assert_eq!(root.resource_usage(), usage);
+    assert_eq!(
+        root.node(item.id)
+            .unwrap()
+            .descriptor
+            .accessible_description
+            .as_deref(),
+        Some("中文")
+    );
+    item.descriptor.accessible_description = None;
+    commit(
+        &mut root,
+        vec![Operation::Update {
+            node: item.id,
+            descriptor: item.descriptor.clone(),
+        }],
+    )
+    .unwrap();
+    assert_eq!(root.resource_usage().text_bytes, 5);
+    assert!(root.inspection(true)["nodes"][0]["descriptor"]["description"].is_null());
+
+    item.id = NodeId::new(root.id());
+    item.descriptor.content = NodeContent::Input {
+        value: "secret".into(),
+        placeholder: String::new(),
+        enabled: true,
+        password: true,
+        max_length: None,
+        revision: 0,
+    };
+    item.descriptor.accessible_description = Some("h".into());
+    root.reconcile(&[item]).unwrap();
+    for field in ["name", "description", "text"] {
+        assert!(root.inspection(true)["nodes"][0]["descriptor"][field].is_null());
+    }
+}
+
+#[test]
 fn failed_direct_commit_preserves_tree_focus_usage_and_revision() {
     let mut root = HeadlessRoot::with_limits(ResourceLimits {
         text_bytes: 12,
@@ -88,6 +159,7 @@ fn failed_direct_commit_preserves_tree_focus_usage_and_revision() {
     let mut input = node(
         root.id(),
         NodeContent::Input {
+            max_length: None,
             value: "中😀".into(),
             placeholder: "Name".into(),
             enabled: true,
@@ -188,7 +260,7 @@ fn long_lived_virtual_root_compresses_retirement_and_rejects_old_identities() {
     assert!(root.resource_usage().retired_ranges < 1000);
     let revision = root.revision();
     assert_eq!(
-        root.reconcile(&[original.clone()]),
+        root.reconcile(std::slice::from_ref(&original)),
         Err(BackendError::ReusedNode(original.id))
     );
     assert_eq!(root.revision(), revision);
@@ -300,4 +372,127 @@ fn host_rejects_over_budget_trees_before_measurement_and_keeps_serving() {
     roots[0].descriptor.content = NodeContent::Text("recovery".into());
     root.present(&mut roots, [320.0, 480.0], 3).unwrap();
     assert_eq!(publications.get(), 2);
+}
+
+#[test]
+fn text_update_transactions_match_full_validation_with_duplicates_and_final_budget() {
+    let mut fast = HeadlessRoot::with_limits(ResourceLimits {
+        text_bytes: 12,
+        ..Default::default()
+    });
+    let mut a = node(fast.id(), NodeContent::Text("aaaa".into()));
+    a.descriptor.accessible_name = Some("name".into());
+    let b = node(
+        fast.id(),
+        NodeContent::Button {
+            label: "bbbb".into(),
+            enabled: true,
+        },
+    );
+    fast.reconcile(&[a.clone(), b.clone()]).unwrap();
+    let mut full = fast.clone();
+    for (first, second) in [("123456", "ab"), ("", "12345678"), ("12345", "overflow")] {
+        let mut da = a.descriptor.clone();
+        da.content = NodeContent::Text(first.into());
+        let mut db = b.descriptor.clone();
+        db.content = NodeContent::Button {
+            label: second.into(),
+            enabled: true,
+        };
+        // An intermediate oversized label is legal if overwritten before final
+        // resource accounting, matching the original whole-candidate transaction.
+        let mut intermediate = db.clone();
+        intermediate.content = NodeContent::Button {
+            label: "x".repeat(64),
+            enabled: true,
+        };
+        let operations = vec![
+            Operation::Update {
+                node: b.id,
+                descriptor: intermediate,
+            },
+            Operation::Update {
+                node: a.id,
+                descriptor: da,
+            },
+            Operation::Update {
+                node: b.id,
+                descriptor: db,
+            },
+        ];
+        let mut full_ops = operations.clone();
+        full_ops.push(Operation::Focus { node: None });
+        let old = fast.clone();
+        let actual = commit(&mut fast, operations);
+        assert_eq!(actual, commit(&mut full, full_ops));
+        assert_eq!(fast.node(a.id), full.node(a.id));
+        assert_eq!(fast.node(b.id), full.node(b.id));
+        assert_eq!(fast.resource_usage(), full.resource_usage());
+        assert_eq!(fast.revision(), full.revision());
+        if actual.is_err() {
+            assert_eq!(fast.node(a.id), old.node(a.id));
+            assert_eq!(fast.node(b.id), old.node(b.id));
+            assert_eq!(fast.resource_usage(), old.resource_usage());
+            assert_eq!(fast.revision(), old.revision());
+        }
+    }
+}
+
+#[test]
+fn text_updates_reject_a_later_unknown_node_and_fall_back_for_focus_changes() {
+    let mut root = HeadlessRoot::new();
+    let a = node(
+        root.id(),
+        NodeContent::Button {
+            label: "old".into(),
+            enabled: true,
+        },
+    );
+    root.reconcile(std::slice::from_ref(&a)).unwrap();
+    root.accept_event(&PlatformEvent {
+        node: a.id,
+        payload: EventPayload::Focus,
+    })
+    .unwrap();
+    let mut changed = a.descriptor.clone();
+    changed.content = NodeContent::Button {
+        label: "new".into(),
+        enabled: true,
+    };
+    let usage = root.resource_usage();
+    let revision = root.revision();
+    let missing = NodeId::new(root.id());
+    assert_eq!(
+        commit(
+            &mut root,
+            vec![
+                Operation::Update {
+                    node: a.id,
+                    descriptor: changed.clone()
+                },
+                Operation::Update {
+                    node: missing,
+                    descriptor: changed.clone()
+                }
+            ]
+        ),
+        Err(BackendError::UnknownNode(missing))
+    );
+    assert_eq!(root.node(a.id).unwrap().descriptor, a.descriptor);
+    assert_eq!(root.resource_usage(), usage);
+    assert_eq!(root.revision(), revision);
+    assert_eq!(root.focused(), Some(a.id));
+    changed.content = NodeContent::Button {
+        label: "new".into(),
+        enabled: false,
+    };
+    commit(
+        &mut root,
+        vec![Operation::Update {
+            node: a.id,
+            descriptor: changed,
+        }],
+    )
+    .unwrap();
+    assert_eq!(root.focused(), None);
 }

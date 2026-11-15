@@ -15,8 +15,10 @@ include = ["/Cargo.toml", "/LICENSE", "/NOTICE", "/MOTION.md", "/SCALE_PREVIEW.m
 [features]
 # Capability inventory and core/optional boundaries: docs/FEATURES.md.
 default = ["gpu", "macros", "backend-dx12", "backend-gles", "backend-metal", "window-materials", "theme-shadcn", "animation-base", "native-clipboard", "images", "file-persistence"]
-gpu = ["dep:jadix_document", "dep:jadix_renderer", "dep:jadix_window_materials", "dep:jadix_media", "dep:winit", "dep:wgpu", "dep:glyphon", "dep:swash", "dep:ttf-parser", "dep:image", "dep:windows-sys", "dep:openharmony-ability", "dep:web-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:libc"]
+icc = ["jadix_2d/icc"]
+gpu = ["jadix_2d/gpu", "jadix_2d/text-layout", "dep:jadix_document", "dep:jadix_renderer", "dep:jadix_window_materials", "dep:jadix_media", "dep:winit", "dep:wgpu", "dep:glyphon", "dep:swash", "dep:ttf-parser", "dep:image", "dep:windows-sys", "dep:openharmony-ability", "dep:web-sys", "dep:wasm-bindgen", "dep:wasm-bindgen-futures", "dep:libc"]
 macros = ["dep:jadix_macros"]
+system-environment = ["jadix_core/system-environment"]
 file-persistence = ["gpu"]
 native-clipboard = ["gpu", "dep:jadix_clipboard"]
 product-tests = ["gpu", "drag", "macros"]
@@ -60,7 +62,7 @@ i18n = ["gpu", "dep:icu", "dep:icu_provider_blob", "dep:writeable"]
 a11y = ["gpu", "dep:accesskit", "dep:accesskit_windows", "dep:jadix_accesskit_ohos"]
 # Dev-time TCP hot reload (`jadix_hot_reload`). Requires debug build.
 hot-reload = ["gpu"]
-# Optional runtime logger: console (stderr) + optional file via JADIX_LOG_FILE (env_logger).
+# Optional runtime logger: stderr + rolling per-app log; JADIX_LOG_FILE / JADIX_LOG_DIR override the path.
 runtime-logging = ["gpu", "dep:env_logger"]
 # Optional structured spans on hot paths (layout / reconcile). Off by default.
 tracing = ["gpu", "dep:tracing"]
@@ -99,7 +101,7 @@ fonts-cjk-serif = ["gpu"]
 fonts-emoji = ["gpu"]
 # Public `<svg>` / SMIL / resvg raster (Image · CSS cursor · AnimatedIcon frames) + MorphIcon.
 # Not in default. Path kernel (Chart, ProgressCircle) stays without this feature.
-svg = ["gpu", "dep:resvg"]
+svg = ["gpu", "dep:resvg", "jadix_2d/svg-fonts"]
 document-math = ["gpu", "document", "svg", "jadix_document/document-math"]
 syntax-highlighting = ["gpu", "jadix_document/syntax"]
 # Twemoji SVG via the same resvg (PNG fallback remains without it).
@@ -138,14 +140,13 @@ cursor-images = ["gpu"]
 # WP-3.13 experimental <scene3d> rotating cube. Off by default (volume / ADR-3).
 scene3d = ["gpu"]
 scene3d-models = ["scene3d", "dep:jadix_3d"]
-live2d = ["gpu", "dep:jadix_live2d"]
 # Optional wgpu compute (blur / histogram / particles / backdrop-filter).
 # Off by default so GLES / gallery / calculator stay fragment-only.
 # Still adapter-gated: GLES reports compute: no even with this feature.
 #   cargo run -p gallery --features compute
 #   cargo test -p jadix --lib --features compute
 # Workspace unification: do not enable from calculator / gpu_probe.
-compute = ["gpu"]
+compute = ["gpu", "wgpu/compute", "jadix_renderer/compute", "jadix_2d/compute"]
 # WP-M.3: YUV (NV12 / I420 / P010) → BT.709 RGBA for ImageStream. Off by default.
 # Zero decoder crates — applications inject demux.
 image-stream = ["gpu"]
@@ -169,7 +170,7 @@ text-undo = ["gpu"]
 
 [dependencies]
 jadix_3d = { workspace = true, optional = true }
-jadix_live2d = { workspace = true, optional = true, default-features = false, features = ["wgpu"] }
+jadix_2d.workspace = true
 
 web-time.workspace = true
 jadix_document = { workspace = true, optional = true }
@@ -291,6 +292,7 @@ windows-numerics = { workspace = true, optional = true }
 windows-collections = { workspace = true, optional = true }
 
 [dev-dependencies]
+jadix_2d = { workspace = true, features = ["test-hooks"] }
 jadix_hot_reload = { workspace = true, features = ["syntax"] }
 tokio = { workspace = true, features = ["rt", "time", "sync"] }
 # Used by ignored `text_buffer_mid_insert` (P3 String vs ropey). Not a product dependency.

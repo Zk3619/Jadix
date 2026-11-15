@@ -70,26 +70,25 @@ use crate::components::label::label;
 use crate::components::scroll_area::scroll_area;
 use crate::components::separator::separator;
 use crate::core::reactivity::{
-    create_context, isolate_reads, provide_context, untrack, use_context, use_signal,
-    with_child_owner, Context, Signal,
+    Context, Signal, create_context, isolate_reads, provide_context, untrack, use_context,
+    use_signal, with_child_owner,
 };
 use crate::core::tree::{CursorKind, Element, Handler, LayoutStatus};
 use crate::impl_simple_slot_builder;
 use crate::layout::layout_tree::LayoutTree;
+use crate::primitives::r#box::{r#box, hstack, vstack};
 use crate::primitives::interactive::interactive;
-use crate::primitives::r#box::{hstack, r#box, vstack};
 use crate::primitives::text::text;
 use crate::style::parse_text_color;
 use crate::tokens;
 use crate::utils::activate_registry;
 use crate::utils::anchored_overlay::{
-    anchored_overlay_content, provide_anchored_overlay_context, AnchoredOverlayContentOpts,
-    FloatingMotionKind, FloatingStrategy, Placement,
+    AnchoredOverlayContentOpts, FloatingMotionKind, FloatingStrategy, Placement,
+    anchored_overlay_content, provide_anchored_overlay_context,
 };
 use crate::utils::lucide_glyph;
-use crate::utils::popup::{disarm_underlay_close, PopupPlacement, FLOATING_TRIGGER_GAP};
+use crate::utils::popup::{FLOATING_TRIGGER_GAP, PopupPlacement, disarm_underlay_close};
 use crate::utils::resolve_instance_id;
-use crate::utils::roving::{roving_edge, roving_move};
 use crate::utils::take_packed;
 use crate::utils::text_node::build_icon_text_node;
 use crate::utils::toggle_state::write_bool_toggle;
@@ -148,8 +147,8 @@ fn reset_activates(id: &str) {
     });
 }
 
-fn push_activate(id: &str, f: Rc<dyn Fn()>) {
-    activate_registry::push(id, f);
+fn push_activate(id: &str, f: Rc<dyn Fn()>, enabled: bool) {
+    activate_registry::push_enabled(id, f, enabled);
 }
 
 fn activate_count(id: &str) -> usize {
@@ -188,7 +187,7 @@ pub(crate) fn dropdown_menu_active_is_sub_trigger(parent_id: &str, ix: usize) ->
 }
 
 fn focus_submenu_first_item(sid: &str) {
-    subtree::focus_submenu_first_item(sid, "dd_active", activate_count(sid));
+    subtree::focus_submenu_first_item(sid, "dd_active");
 }
 
 fn close_open_submenu_keep_parent_highlight(sid: &str) {
@@ -350,11 +349,7 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
                         return true;
                     }
                     let cur = sub_active.peek();
-                    let next = if cur == ACTIVE_NONE || cur >= n {
-                        0
-                    } else if let Some(i) = roving_move(n, cur, 1) {
-                        i
-                    } else {
+                    let Some(next) = activate_registry::move_enabled(&sid, cur, 1) else {
                         return true;
                     };
                     set_dd_active(sub_active, next);
@@ -365,24 +360,20 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
                         return true;
                     }
                     let cur = sub_active.peek();
-                    let next = if cur == ACTIVE_NONE || cur >= n {
-                        n - 1
-                    } else if let Some(i) = roving_move(n, cur, -1) {
-                        i
-                    } else {
+                    let Some(next) = activate_registry::move_enabled(&sid, cur, -1) else {
                         return true;
                     };
                     set_dd_active(sub_active, next);
                     true
                 }
                 Key::Named(NamedKey::Home) => {
-                    if let Some(i) = roving_edge(n, false) {
+                    if let Some(i) = activate_registry::enabled_edge(&sid, false) {
                         set_dd_active(sub_active, i);
                     }
                     true
                 }
                 Key::Named(NamedKey::End) => {
-                    if let Some(i) = roving_edge(n, true) {
+                    if let Some(i) = activate_registry::enabled_edge(&sid, true) {
                         set_dd_active(sub_active, i);
                     }
                     true
@@ -413,11 +404,7 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
         match &ev.logical_key {
             Key::Named(NamedKey::ArrowDown) => {
                 let cur = active_keys.peek();
-                let next = if cur == ACTIVE_NONE || cur >= n {
-                    0
-                } else if let Some(i) = roving_move(n, cur, 1) {
-                    i
-                } else {
+                let Some(next) = activate_registry::move_enabled(&menu_id, cur, 1) else {
                     return false;
                 };
                 close_open_subs(&menu_id);
@@ -426,11 +413,7 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
             }
             Key::Named(NamedKey::ArrowUp) => {
                 let cur = active_keys.peek();
-                let next = if cur == ACTIVE_NONE || cur >= n {
-                    n - 1
-                } else if let Some(i) = roving_move(n, cur, -1) {
-                    i
-                } else {
+                let Some(next) = activate_registry::move_enabled(&menu_id, cur, -1) else {
                     return false;
                 };
                 close_open_subs(&menu_id);
@@ -438,14 +421,14 @@ pub(crate) fn attach_dropdown_menu_trigger_keys(
                 true
             }
             Key::Named(NamedKey::Home) => {
-                if let Some(i) = roving_edge(n, false) {
+                if let Some(i) = activate_registry::enabled_edge(&menu_id, false) {
                     close_open_subs(&menu_id);
                     set_dd_active(active_keys, i);
                 }
                 true
             }
             Key::Named(NamedKey::End) => {
-                if let Some(i) = roving_edge(n, true) {
+                if let Some(i) = activate_registry::enabled_edge(&menu_id, true) {
                     close_open_subs(&menu_id);
                     set_dd_active(active_keys, i);
                 }
@@ -716,7 +699,7 @@ plain [] children: Option<Element>,
     };
     let activate_click = activate.clone();
     let ix = activate_count(&ctx.id);
-    push_activate(&ctx.id, activate);
+    push_activate(&ctx.id, activate, !disabled);
 
     let mut kids = children
         .map(take_packed)
@@ -834,7 +817,7 @@ plain [] children: Option<Element>,
         }) as Rc<dyn Fn()>
     };
     let activate_click = activate.clone();
-    push_activate(&ctx.id, activate);
+    push_activate(&ctx.id, activate, !disabled);
 
     let mut kids = children
         .map(take_packed)
@@ -1008,7 +991,7 @@ plain [] children: Option<Element>,
     };
     let activate_click = activate.clone();
     let ix = activate_count(&ctx.id);
-    push_activate(&ctx.id, activate);
+    push_activate(&ctx.id, activate, !disabled);
 
     let mut kids = children
         .map(take_packed)
@@ -1173,8 +1156,10 @@ plain [] children: Option<Element>,
         }) as Rc<dyn Fn()>
     };
     let ix = activate_count(&parent.id);
-    push_activate(&parent.id, activate);
-    register_sub_at_ix(&parent.id, ix, &sub_id);
+    push_activate(&parent.id, activate, !disabled);
+    if !disabled {
+        register_sub_at_ix(&parent.id, ix, &sub_id);
+    }
 
     let mut kids = children
         .map(take_packed)
@@ -1537,9 +1522,9 @@ impl DropdownMenuContentSlotBuilder {
     pub fn style(
         mut self,
         f: impl Fn(
-                crate::components::base::BaseComponentBuilder,
-            ) -> crate::components::base::BaseComponentBuilder
-            + 'static,
+            crate::components::base::BaseComponentBuilder,
+        ) -> crate::components::base::BaseComponentBuilder
+        + 'static,
     ) -> Self {
         self.opts = self.opts.style(f);
         self
@@ -1620,9 +1605,9 @@ impl DropdownMenuBuilder {
     pub fn style(
         self,
         f: impl Fn(
-                crate::components::base::BaseComponentBuilder,
-            ) -> crate::components::base::BaseComponentBuilder
-            + 'static,
+            crate::components::base::BaseComponentBuilder,
+        ) -> crate::components::base::BaseComponentBuilder
+        + 'static,
     ) -> Self {
         self.content_style(f)
     }

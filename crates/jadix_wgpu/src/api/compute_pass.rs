@@ -5,7 +5,7 @@ use crate::{
 
 /// In-progress recording of a compute pass.
 ///
-/// It can be created with [`CommandEncoder::begin_compute_pass`].
+/// It can be created with `CommandEncoder::begin_compute_pass` (feature `compute`).
 ///
 /// Corresponds to [WebGPU `GPUComputePassEncoder`](
 /// https://gpuweb.github.io/gpuweb/#compute-pass-encoder).
@@ -228,7 +228,7 @@ static_assertions::assert_impl_all!(ComputePassTimestampWrites<'_>: Send, Sync);
 
 /// Describes the attachments of a compute pass.
 ///
-/// For use with [`CommandEncoder::begin_compute_pass`].
+/// For use with `CommandEncoder::begin_compute_pass` (feature `compute`).
 ///
 /// Corresponds to [WebGPU `GPUComputePassDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpucomputepassdescriptor).

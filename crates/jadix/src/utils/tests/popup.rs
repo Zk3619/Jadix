@@ -160,6 +160,57 @@ fn submenu_viewport_shift_does_not_become_vertical_flip() {
 }
 
 #[test]
+fn submenu_first_content_row_aligns_with_trigger_after_panel_insets() {
+    crate::core::reactivity::create_root(|| {
+        for strategy in ["auto", "fixed"] {
+            let trigger = Element::new()
+                .absolute()
+                .left(200.0)
+                .top(200.0)
+                .w(192.0)
+                .h(32.0)
+                .focus_id("submenu-content-trigger");
+            let first_row = Element::new()
+                .w(160.0)
+                .h(32.0)
+                .focus_id("submenu-content-row");
+            let mut panel = Element::new()
+                .absolute()
+                .w(192.0)
+                .h("auto")
+                .p(4.0)
+                .border_width(1.0)
+                .child(first_row);
+            mark_floating_with_gap(
+                &mut panel,
+                "submenu-content-align",
+                "submenu-content-trigger",
+                PopupPlacement::RightStart,
+                2.0,
+            );
+            panel.set_attr(ATTR_FLOATING_W, "192px");
+            panel.set_attr(ATTR_FLOATING_STRATEGY, strategy);
+            apply_stored_floating_place(&mut panel, "submenu-content-align");
+            let mut root = Element::new()
+                .w(800.0)
+                .h(600.0)
+                .child(trigger)
+                .child(mount_anchored_overlay(panel, 1000));
+            let mut tree = crate::layout::layout_tree::LayoutTree::new();
+            tree.build_and_layout(&mut root, 800.0, 600.0, [0.0, 0.0]);
+
+            visit_floating_panels(&root, |panel| {
+                let row = panel.children[0].layout_bounds;
+                assert!(
+                    (row[1] - 200.0).abs() < 0.5,
+                    "submenu content must align with trigger for {strategy} strategy despite panel padding and border: {row:?}"
+                );
+            });
+        }
+    });
+}
+
+#[test]
 #[cfg(feature = "product-tests")]
 fn nested_submenu_first_frame_keeps_parent_height_and_live_trigger() {
     crate::core::reactivity::create_root(|| {
@@ -2321,4 +2372,54 @@ fn fixed_cover_top_glues_bottom_when_height_grows() {
             .map(String::as_str),
         Some("228")
     );
+}
+
+#[test]
+fn all_twelve_popup_placements_keep_side_alignment_and_roundtrip() {
+    let cases = [
+        (PopupPlacement::TopStart, 200., 156.),
+        (PopupPlacement::TopCenter, 190., 156.),
+        (PopupPlacement::TopEnd, 180., 156.),
+        (PopupPlacement::BottomStart, 200., 224.),
+        (PopupPlacement::BottomCenter, 190., 224.),
+        (PopupPlacement::BottomEnd, 180., 224.),
+        (PopupPlacement::LeftStart, 136., 200.),
+        (PopupPlacement::LeftCenter, 136., 190.),
+        (PopupPlacement::LeftEnd, 136., 180.),
+        (PopupPlacement::RightStart, 244., 200.),
+        (PopupPlacement::RightCenter, 244., 190.),
+        (PopupPlacement::RightEnd, 244., 180.),
+    ];
+    for (placement, x, y) in cases {
+        assert_eq!(PopupPlacement::from_attr(placement.as_attr()), placement);
+        let (ax, ay, _, _) = compute_anchored_placement(
+            [200., 200., 40., 20.],
+            [800., 600.],
+            60.,
+            40.,
+            placement,
+            4.,
+        );
+        assert_eq!([ax, ay], [x, y], "{placement:?}");
+        assert_eq!(
+            compute_fixed_anchor(
+                [200., 200., 40., 20.],
+                [800., 600.],
+                60.,
+                40.,
+                placement,
+                4.
+            ),
+            (x, y)
+        );
+    }
+    let (_, _, _, flipped) = compute_anchored_placement(
+        [740., 200., 40., 20.],
+        [800., 600.],
+        120.,
+        40.,
+        PopupPlacement::RightEnd,
+        4.,
+    );
+    assert!(flipped);
 }

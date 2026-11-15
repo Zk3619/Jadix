@@ -7,8 +7,9 @@ use std::{
     pin::Pin,
     sync::{
         atomic::{AtomicBool, Ordering},
-        Arc, Mutex,
+        Arc, Mutex, Weak,
     },
+    task::{Context, Poll, Waker},
 };
 
 type CancelAction = Box<dyn FnOnce() + Send + 'static>;
@@ -17,6 +18,76 @@ type CancelAction = Box<dyn FnOnce() + Send + 'static>;
 struct CancellationState {
     cancelled: AtomicBool,
     actions: Mutex<Vec<CancelAction>>,
+    waiters: Mutex<Vec<Weak<CancelWaiter>>>,
+}
+
+#[derive(Default)]
+struct CancelWaiter {
+    waker: Mutex<Option<Waker>>,
+}
+
+struct Cancelled {
+    token: CancellationToken,
+    waiter: Arc<CancelWaiter>,
+}
+
+impl Future for Cancelled {
+    type Output = ();
+
+    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
+        let old_waker = {
+            let mut waiters = self
+                .token
+                .0
+                .waiters
+                .lock()
+                .unwrap_or_else(|error| error.into_inner());
+            waiters.retain(|waiter| waiter.strong_count() > 0);
+            if self.token.is_cancelled() {
+                return Poll::Ready(());
+            }
+            let old_waker = {
+                let mut waker = self
+                    .waiter
+                    .waker
+                    .lock()
+                    .unwrap_or_else(|error| error.into_inner());
+                match waker.as_mut() {
+                    Some(current) if current.will_wake(cx.waker()) => None,
+                    Some(current) => Some(std::mem::replace(current, cx.waker().clone())),
+                    None => {
+                        *waker = Some(cx.waker().clone());
+                        None
+                    }
+                }
+            };
+            if !waiters.iter().any(|waiter| {
+                waiter
+                    .upgrade()
+                    .is_some_and(|waiter| Arc::ptr_eq(&waiter, &self.waiter))
+            }) {
+                waiters.push(Arc::downgrade(&self.waiter));
+            }
+            old_waker
+        };
+        drop(old_waker);
+        Poll::Pending
+    }
+}
+
+impl Drop for Cancelled {
+    fn drop(&mut self) {
+        self.token
+            .0
+            .waiters
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .retain(|waiter| {
+                waiter
+                    .upgrade()
+                    .is_some_and(|waiter| !Arc::ptr_eq(&waiter, &self.waiter))
+            });
+    }
 }
 
 /// Shared logical cancellation. Callbacks bridge to a backend's native abort mechanism.
@@ -45,10 +116,57 @@ impl CancellationToken {
                 .lock()
                 .unwrap_or_else(|error| error.into_inner()),
         );
+        let waiters = std::mem::take(
+            &mut *self
+                .0
+                .waiters
+                .lock()
+                .unwrap_or_else(|error| error.into_inner()),
+        );
         for action in actions {
             action();
         }
+        for waiter in waiters.into_iter().filter_map(|waiter| waiter.upgrade()) {
+            let waker = waiter
+                .waker
+                .lock()
+                .unwrap_or_else(|error| error.into_inner())
+                .take();
+            if let Some(waker) = waker {
+                waker.wake();
+            }
+        }
         true
+    }
+
+    /// Runs a future until it completes or this token is cancelled.
+    /// Cancellation wakes the task and drops the future, releasing timers and other resources.
+    pub async fn run_until_cancelled<F>(&self, future: F) -> Result<F::Output, TaskError>
+    where
+        F: Future,
+    {
+        let mut future = Box::pin(future);
+        let mut cancelled = Cancelled {
+            token: self.clone(),
+            waiter: Arc::new(CancelWaiter::default()),
+        };
+        std::future::poll_fn(|cx| {
+            if std::pin::Pin::new(&mut cancelled).poll(cx).is_ready() {
+                return Poll::Ready(Err(TaskError::new(
+                    TaskErrorKind::Cancelled,
+                    "task cancelled",
+                )));
+            }
+            match future.as_mut().poll(cx) {
+                Poll::Ready(_) if self.is_cancelled() => Poll::Ready(Err(TaskError::new(
+                    TaskErrorKind::Cancelled,
+                    "task cancelled",
+                ))),
+                Poll::Ready(output) => Poll::Ready(Ok(output)),
+                Poll::Pending => Poll::Pending,
+            }
+        })
+        .await
     }
 
     /// Registers before or after cancellation without losing the cancellation race.

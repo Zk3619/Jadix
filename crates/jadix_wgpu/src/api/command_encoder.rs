@@ -95,6 +95,7 @@ impl CommandEncoder {
     /// but it is possible to opt out of it by calling [`ComputePass::forget_lifetime`].
     /// This can be useful for runtime handling of the encoder->pass
     /// dependency e.g. when pass and encoder are stored in the same data structure.
+    #[cfg(feature = "compute")]
     pub fn begin_compute_pass<'encoder>(
         &'encoder mut self,
         desc: &ComputePassDescriptor<'_>,

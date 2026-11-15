@@ -3,7 +3,16 @@ export type Json = null | boolean | number | string | Json[] | { [key: string]: 
 export interface Handle { session: string; sequence: string }
 export interface EventHandle<Payload> extends Handle { readonly __payload?: Payload }
 export interface StateHandle<Value> extends Handle { readonly __state?: Value }
+/** UTF-8 byte ranges, sorted/nonoverlapping; at most 64 per Text node. */
+export interface InlineStyle {
+  range: [number, number];
+  foreground?: [number, number, number, number]; background?: [number, number, number, number];
+  bold?: boolean; italic?: boolean; underline?: boolean; strikethrough?: boolean;
+}
 export interface NodeStyle {
+  text_overflow?: "wrap" | "clip" | "ellipsis";
+  max_lines?: number;
+  inline_styles?: InlineStyle[];
   width?: number; height?: number; min_width?: number; min_height?: number;
   max_width?: number; max_height?: number; axis?: 'row' | 'column'; gap?: number;
   padding?: [number, number, number, number]; grow?: number; shrink?: number;
@@ -35,3 +44,11 @@ export interface Client {
   call<Result = Json>(method: string, args: Json): { request: string; result: Promise<Result>; cancel(): Promise<unknown> };
 }
 export declare function createClient(transport: (envelope: Envelope) => unknown | Promise<unknown>, session: string): Client;
+export interface ScriptApplication {
+  readonly session: string; readonly root: string;
+  event<Name extends keyof ComponentEvents, Event extends keyof ComponentEvents[Name]>(component: Name, event: Event, callback: (payload: NonNullable<ComponentEvents[Name][Event]> extends EventHandle<infer P> ? P : never) => void): NonNullable<ComponentEvents[Name][Event]> & { release(): void };
+  mount(tree: ElementSpec): void;
+  /** Replace props on mounted Text/Button/Input/Textarea/Checkbox/Switch/Select leaves, in ordered publication. No structure/style/event changes. */
+  patch(patches: { path: number[]; props: ComponentProperties['Text'] | ComponentProperties['Button'] | ComponentProperties['Input'] | ComponentProperties['Textarea'] | ComponentProperties['Checkbox'] | ComponentProperties['Switch'] | ComponentProperties['Select'] }[]): void;
+}
+export declare function createApplication(): ScriptApplication;

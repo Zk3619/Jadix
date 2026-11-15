@@ -23,6 +23,7 @@ fn descriptor(value: &str) -> NodeDescriptor {
         accessible_role: None,
         accessible_selected: None,
         accessible_expanded: None,
+        accessible_description: None,
         accessible_name: None,
         style: Default::default(),
     }
@@ -68,7 +69,7 @@ fn native_selection_keeps_identity_and_rejects_stale_disabled_unknown_and_wrong_
     let mut root = HeadlessRoot::new();
     let projection = ElementProjection::new(root.id());
     let node = projection.snapshot(&mut element).unwrap();
-    root.reconcile(&[node.clone()]).unwrap();
+    root.reconcile(std::slice::from_ref(&node)).unwrap();
     for payload in [
         EventPayload::Select {
             value: "blocked".into(),
@@ -185,7 +186,7 @@ fn disabled_capability_and_aggregate_label_budget_are_enforced() {
         descriptor: data.clone(),
         children: vec![],
     };
-    root.reconcile(&[node.clone()]).unwrap();
+    root.reconcile(std::slice::from_ref(&node)).unwrap();
     for payload in [
         EventPayload::Focus,
         EventPayload::Select {
@@ -237,7 +238,7 @@ fn select_wire_uses_canonical_string_revisions_and_cannot_be_a_toggle() {
         descriptor: descriptor(""),
         children: vec![],
     };
-    root.reconcile(&[node.clone()]).unwrap();
+    root.reconcile(std::slice::from_ref(&node)).unwrap();
     for revision in ["01", "-1", "18446744073709551616"] {
         let event = format!(
             r#"{{"root":"{}","node":"{}","payload":{{"kind":"select","value":"apple","revision":"{}"}}}}"#,

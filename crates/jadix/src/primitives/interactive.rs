@@ -78,6 +78,22 @@ impl InteractiveBuilder {
         self
     }
 
+    pub fn on_mouseenter(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::MouseEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_mouseenter(handler);
+        self
+    }
+
+    pub fn on_mouseleave(
+        mut self,
+        handler: impl FnMut(&crate::app::pointer_events::MouseEvent) + 'static,
+    ) -> Self {
+        self.el = self.el.on_mouseleave(handler);
+        self
+    }
+
     pub fn on_dblclick(
         mut self,
         handler: impl FnMut(&crate::app::pointer_events::MouseEvent) + 'static,

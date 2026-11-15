@@ -64,7 +64,14 @@ impl From<crate::a11y::winit_adapter::Event> for JadixUserEvent {
     }
 }
 
-#[cfg(all(feature = "autostart", any(target_os = "windows", target_os = "macos", all(target_os = "linux", not(target_env = "ohos")))))]
+#[cfg(all(
+    feature = "autostart",
+    any(
+        target_os = "windows",
+        target_os = "macos",
+        all(target_os = "linux", not(target_env = "ohos"))
+    )
+))]
 pub use crate::autostart;
 pub mod damage;
 pub(crate) mod draw_cull;
@@ -123,7 +130,7 @@ pub mod runtime;
 pub(crate) mod scroll_support;
 mod secondary_input;
 mod secondary_window;
-mod state;
+pub(crate) mod state;
 #[cfg(test)]
 pub(crate) use state::{
     hoist_portal_subtrees_refreshing_scroll_flags, recompute_scroll_viewport_flags,
@@ -187,7 +194,8 @@ pub use ui_bridge::{request_exit, run_on_ui_thread, spawn_blocking};
 pub use window_chrome::{
     close_window, set_window_fullscreen, set_window_maximized, set_window_minimized,
     start_window_drag, toggle_window_fullscreen, toggle_window_maximized, window_is_fullscreen,
-    window_is_maximized, window_is_resizable, WindowBackdrop, WindowOptions, PRIMARY_WINDOW_LABEL,
+    window_is_maximized, window_is_resizable, ScreenOrientations, WindowBackdrop, WindowOptions,
+    PRIMARY_WINDOW_LABEL,
 };
 pub use window_lifecycle::{set_window_lifecycle_hook, WindowLifecycleHook};
 
@@ -231,6 +239,9 @@ struct App {
     startup: Option<StartupHandle>,
     startup_window: Option<WindowId>,
     startup_window_presented: bool,
+    app_quit_handlers: Vec<crate::core::reactivity::AppQuitHandler>,
+    app_quit_futures: Vec<crate::core::reactivity::AppQuitFuture>,
+    app_quit_deadline: Option<web_time::Instant>,
     bootstrap:
         Option<std::pin::Pin<Box<dyn std::future::Future<Output = Result<AppState, String>>>>>,
     detached_gpu: Option<lifecycle::DetachedGpu>,
@@ -402,7 +413,7 @@ pub fn run_with_startup<F: FnMut() -> Element + 'static>(
     startup: impl Into<StartupHandle>,
     app_builder: F,
 ) {
-    lifecycle::run_startup(options, Some(startup.into()), app_builder);
+    lifecycle::run_startup(options, Some(startup.into()), Vec::new(), app_builder);
 }
 
 /// HarmonyOS / OpenHarmony entry (gpui-template `openharmony_app`).

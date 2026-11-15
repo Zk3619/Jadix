@@ -192,7 +192,7 @@ fn unsupported_popup_styles_and_root_flags_are_explicit_errors() {
 }
 
 #[test]
-fn duplicate_values_keep_the_shared_backend_validation_boundary() {
+fn duplicate_values_are_rejected_before_publication() {
     let (_owner, mut element) = create_root(|| {
         ui! {
             <Select id="duplicate-values"><SelectTrigger /><SelectContent>
@@ -200,10 +200,12 @@ fn duplicate_values_keep_the_shared_backend_validation_boundary() {
             </SelectContent></Select>
         }
     });
-    let mut root = HeadlessRoot::new();
+    let root = HeadlessRoot::new();
     let projection = ElementProjection::new(root.id());
-    let node = projection.snapshot(&mut element).unwrap();
-    assert!(root.reconcile(&[node]).is_err());
+    assert_eq!(
+        projection.snapshot(&mut element),
+        Err(ProjectionError::InvalidEvent)
+    );
 }
 
 #[test]

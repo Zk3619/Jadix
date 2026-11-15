@@ -120,6 +120,7 @@ final class NativeSelect: UIButton {
         let label = selected?["label"] as? String ?? placeholder
         setTitle(label, for: .normal)
         accessibilityLabel = node["name"] as? String ?? placeholder
+        accessibilityHint = node["description"] as? String
         accessibilityValue = value.isEmpty ? nil : label
         isEnabled = enabled
         showsMenuAsPrimaryAction = true
@@ -170,7 +171,7 @@ private final class NativeModal: UIView {
         return nil
     }
 
-    func show(in host: UIView, frame: CGRect, name: String) throws {
+    func show(in host: UIView, frame: CGRect, name: String, description: String?) throws {
         if modalWindow == nil {
             guard let source = host.window else { throw NativeError.invalid("dialog requires an attached native window") }
             let window: UIWindow
@@ -192,6 +193,7 @@ private final class NativeModal: UIView {
         window.rootViewController?.loadViewIfNeeded()
         content.frame = host.convert(frame, to: window)
         content.accessibilityLabel = name
+        content.accessibilityHint = description
     }
 
     func hide() {
@@ -358,13 +360,20 @@ public final class JadixNativeView: UIView, UITextFieldDelegate, UITextViewDeleg
         case "input":
             let view = UITextField()
             view.borderStyle = .roundedRect
+            view.returnKeyType = .done
             view.delegate = self
+#if JADIX_NATIVE_CONSISTENT_UI
+            view.inputAccessoryView = keyboardAccessoryView()
+#endif
             view.addTarget(self, action: #selector(edited(_:)), for: .editingChanged)
             view.addTarget(self, action: #selector(focused(_:)), for: .editingDidBegin)
             return view
         case "textarea":
             let view = NativeTextView(frame: .zero, textContainer: nil)
             view.delegate = self
+#if JADIX_NATIVE_CONSISTENT_UI
+            view.inputAccessoryView = keyboardAccessoryView()
+#endif
             return view
         case "checkbox", "switch":
             let view = NativeCheckbox(frame: .zero)
@@ -373,6 +382,20 @@ public final class JadixNativeView: UIView, UITextFieldDelegate, UITextViewDeleg
         default: throw NativeError.invalid("unsupported UIKit node")
         }
     }
+
+#if JADIX_NATIVE_CONSISTENT_UI
+    private func keyboardAccessoryView() -> UIToolbar {
+        let toolbar = UIToolbar()
+        toolbar.sizeToFit()
+        toolbar.items = [
+            UIBarButtonItem(systemItem: .flexibleSpace),
+            UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(dismissKeyboard))
+        ]
+        return toolbar
+    }
+
+    @objc private func dismissKeyboard() { endEditing(true) }
+#endif
 
     private func color(_ value: Any?) -> UIColor {
         guard let channels = value as? [Double], channels.count == 4 else { return .clear }
@@ -424,6 +447,7 @@ public final class JadixNativeView: UIView, UITextFieldDelegate, UITextViewDeleg
         guard let style = node["style"] as? [String: Any] else { throw NativeError.invalid("invalid native style") }
         view.backgroundColor = color(style["background"])
         view.accessibilityLabel = node["name"] as? String
+        view.accessibilityHint = node["description"] as? String
         if let imageView = view as? UIImageView {
             guard let source = node["source"] as? String,
                   source.hasPrefix("data:image/png;base64,"),
@@ -477,6 +501,7 @@ public final class JadixNativeView: UIView, UITextFieldDelegate, UITextViewDeleg
             checkbox.toggle.isOn = node["checked"] as? Bool ?? false
             checkbox.toggle.isEnabled = node["enabled"] as? Bool ?? false
             checkbox.toggle.accessibilityLabel = node["name"] as? String ?? node["text"] as? String
+            checkbox.toggle.accessibilityHint = node["description"] as? String
             checkbox.caption.text = node["text"] as? String
             checkbox.caption.textColor = color(style["foreground"])
         }
@@ -608,7 +633,8 @@ public final class JadixNativeView: UIView, UITextFieldDelegate, UITextViewDeleg
         for id in opened {
             guard let modal = views[id] as? NativeModal, let frame = descriptors[id]?["frame"] as? [Double] else { continue }
             try modal.show(in: self, frame: CGRect(x: frame[0], y: frame[1], width: frame[2], height: frame[3]),
-                           name: descriptors[id]?["name"] as? String ?? "Dialog")
+                           name: descriptors[id]?["name"] as? String ?? "Dialog",
+                           description: descriptors[id]?["description"] as? String)
         }
         let visiblePopovers = nodes.compactMap { node -> String? in
             guard node["kind"] as? String == "popover", node["open"] as? Bool == true,
@@ -675,7 +701,8 @@ public final class JadixNativeView: UIView, UITextFieldDelegate, UITextViewDeleg
     }
 
     private func emit(_ view: UIView, _ payload: [String: Any]) {
-        guard !publishing, root != 0, let id = identities[ObjectIdentifier(view)], eventVisible(id) else { return }
+        guard !publishing, root != 0, let id = identities[ObjectIdentifier(view)],
+              payload["kind"] as? String == "blur" || eventVisible(id) else { return }
         do {
             let data = try JSONSerialization.data(withJSONObject: ["root": String(root), "node": id, "payload": payload])
             let json = String(decoding: data, as: UTF8.self)
@@ -704,7 +731,8 @@ public final class JadixNativeView: UIView, UITextFieldDelegate, UITextViewDeleg
     }
     @objc private func edited(_ input: UITextField) {
         guard !publishing, let id = identities[ObjectIdentifier(input)], let selection = input.selectedTextRange else { return }
-        let revision = revisions[id, default: 0] + 1
+        let (revision, overflow) = revisions[id, default: 0].addingReportingOverflow(1)
+        guard !overflow else { return }
         revisions[id] = revision
         let start = input.offset(from: input.beginningOfDocument, to: selection.start)
         let end = input.offset(from: input.beginningOfDocument, to: selection.end)
@@ -715,11 +743,30 @@ public final class JadixNativeView: UIView, UITextFieldDelegate, UITextViewDeleg
         emit(input, payload)
     }
     public func textFieldDidChangeSelection(_ textField: UITextField) { edited(textField) }
+    public func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        guard !publishing, root != 0, textField.isEnabled, textField.markedTextRange == nil,
+              let id = identities[ObjectIdentifier(textField)], views[id] === textField, eventVisible(id) else { return false }
+        let expectedRoot = root
+        edited(textField)
+        guard root == expectedRoot, views[id] === textField, textField.isEnabled,
+              textField.markedTextRange == nil else { return false }
+        let (revision, overflow) = revisions[id, default: 0].addingReportingOverflow(1)
+        guard !overflow else { return false }
+        revisions[id] = revision
+        emit(textField, ["kind": "submit", "revision": String(revision)])
+        return false
+    }
+    public func textFieldDidEndEditing(_ textField: UITextField) {
+        emit(textField, ["kind": "blur"])
+    }
     public func textViewDidBeginEditing(_ textView: UITextView) {
         emit(textView, ["kind": "focus"])
         revealFocusedControl()
     }
     public func textViewDidChange(_ textView: UITextView) { multilineEdited(textView) }
+    public func textViewDidEndEditing(_ textView: UITextView) {
+        emit(textView, ["kind": "blur"])
+    }
     public func textViewDidChangeSelection(_ textView: UITextView) { multilineEdited(textView) }
     private func multilineEdited(_ input: UITextView) {
         guard !publishing, let id = identities[ObjectIdentifier(input)] else { return }

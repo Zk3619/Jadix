@@ -124,7 +124,13 @@ impl From<TextEditorBuilder> for Element {
         }
         let mut undo = TextUndoConfig::textarea_default();
         undo.enabled = builder.undo;
+        let rows = if builder.auto_height.is_some() {
+            1
+        } else {
+            builder.rows
+        };
         let mut element = build_text_edit_element(TextEditBuildParams {
+            max_length: None,
             field_id: builder.id.clone(),
             placeholder: String::new(),
             disabled: builder.disabled,
@@ -142,7 +148,7 @@ impl From<TextEditorBuilder> for Element {
             text_align: crate::style::TextAlign::Start,
             single_line_container: None,
             multiline: true,
-            rows: builder.rows,
+            rows,
             resizable: false,
             resize_max_h: 4096.0,
             wrap_mode: builder.wrap,

@@ -6,9 +6,9 @@ use std::sync::Arc;
 use webview2_com::{
     AcceleratorKeyPressedEventHandler, CapturePreviewCompletedHandler,
     CreateCoreWebView2CompositionControllerCompletedHandler,
-    CreateCoreWebView2EnvironmentCompletedHandler, Microsoft::Web::WebView2::Win32::*,
-    NavigationCompletedEventHandler, NavigationStartingEventHandler,
-    NewWindowRequestedEventHandler, WebMessageReceivedEventHandler,
+    CreateCoreWebView2EnvironmentCompletedHandler, ExecuteScriptCompletedHandler,
+    Microsoft::Web::WebView2::Win32::*, NavigationCompletedEventHandler,
+    NavigationStartingEventHandler, NewWindowRequestedEventHandler, WebMessageReceivedEventHandler,
 };
 use windows::core::{Interface, PCWSTR, PWSTR};
 use windows::Win32::Foundation::{HWND, POINT, RECT};
@@ -42,6 +42,7 @@ impl Drop for Browser {
 }
 
 struct Entry {
+    evaluation: RefCell<Option<super::EvaluationHost>>,
     browser: RefCell<Option<Browser>>,
     source: RefCell<(String, Option<String>)>,
     spec: RefCell<WebViewSpec>,
@@ -201,6 +202,7 @@ impl NativeWebViews {
         for spec in specs {
             if !self.entries.contains_key(&spec.id) && spec.visible {
                 let entry = Rc::new(Entry {
+                    evaluation: RefCell::new(None),
                     browser: RefCell::new(None),
                     source: RefCell::new((spec.url.clone(), spec.html.clone())),
                     spec: RefCell::new(spec.clone()),
@@ -210,6 +212,29 @@ impl NativeWebViews {
                     ready: Cell::new(false),
                     snapshot: super::webview_snapshot(&spec.id),
                 });
+                let weak = Rc::downgrade(&entry);
+                *entry.evaluation.borrow_mut() = Some(super::EvaluationHost::new(
+                    &spec.id,
+                    move |script, reply| {
+                        let entry = weak.upgrade().ok_or("WebView was destroyed")?;
+                        let browser = entry.browser.borrow();
+                        let browser = browser.as_ref().ok_or("WebView is not ready")?;
+                        let handler = ExecuteScriptCompletedHandler::create(Box::new(
+                            move |error, result| {
+                                reply.complete(
+                                    error.map(|()| result).map_err(|error| error.to_string()),
+                                );
+                                Ok(())
+                            },
+                        ));
+                        unsafe {
+                            browser
+                                .webview
+                                .ExecuteScript(PCWSTR(wide(script).as_ptr()), &handler)
+                        }
+                        .map_err(|error| error.to_string())
+                    },
+                ));
                 self.entries.insert(spec.id.clone(), entry.clone());
                 if let Err(error) = self.create_browser(window, &entry) {
                     webview_status(&spec.id).try_set(WebViewStatus::Failed(error.to_string()));
@@ -318,6 +343,7 @@ impl NativeWebViews {
                         webview.add_NavigationStarting(&NavigationStartingEventHandler::create(Box::new(move |_, _| {
                             if let Some(entry) = loading_entry.upgrade() {
                                 entry.ready.set(false);
+                                super::document_changed(scope, &entry.spec.borrow().id);
                                 let _scope = crate::app::window_scope::enter(scope);
                                 webview_status(&entry.spec.borrow().id).try_set(WebViewStatus::Loading);
                                 loading_window.request_redraw();
@@ -329,7 +355,10 @@ impl NativeWebViews {
                         webview.add_NavigationCompleted(&NavigationCompletedEventHandler::create(Box::new(move |_, args| {
                             let mut success = windows::core::BOOL(0);
                             if let Some(args) = args { args.IsSuccess(&mut success)?; }
-                            if let Some(entry) = ready_entry.upgrade() { entry.ready.set(success.as_bool()); }
+                            if let Some(entry) = ready_entry.upgrade() {
+                                entry.ready.set(success.as_bool());
+                                super::evaluation_ready(scope, &entry.spec.borrow().id, success.as_bool());
+                            }
                             let _scope = crate::app::window_scope::enter(scope);
                             status.try_set(if success.as_bool() { WebViewStatus::Ready } else { WebViewStatus::Failed("Website navigation failed".into()) });
                             ready_window.request_redraw();
@@ -395,6 +424,7 @@ impl NativeWebViews {
             let source = (spec.url.clone(), spec.html.clone());
             if *entry.source.borrow() != source {
                 entry.ready.set(false);
+                super::document_changed(crate::app::window_scope::active(), &spec.id);
                 if let Some(html) = &spec.html {
                     browser
                         .webview

@@ -99,10 +99,32 @@ where
     F: FnOnce() -> T + Send + 'static,
     C: FnOnce(T) + Send + 'static,
 {
+    let _ = spawn_blocking_cancellable(move |_| work(), on_ui);
+}
+
+/// Spawn cooperative blocking work and return a handle that suppresses its UI callback when
+/// cancelled. Work can stop early by checking the supplied token between blocking operations.
+pub fn spawn_blocking_cancellable<T, F, C>(work: F, on_ui: C) -> jadix_tasks::TaskHandle
+where
+    T: Send + 'static,
+    F: FnOnce(jadix_tasks::CancellationToken) -> T + Send + 'static,
+    C: FnOnce(T) + Send + 'static,
+{
+    let cancellation = jadix_tasks::CancellationToken::new();
+    let worker_cancellation = cancellation.clone();
+    let callback_cancellation = cancellation.clone();
     std::thread::spawn(move || {
-        let result = work();
-        run_on_ui_thread(move || on_ui(result));
+        let result = work(worker_cancellation.clone());
+        if worker_cancellation.is_cancelled() {
+            return;
+        }
+        run_on_ui_thread(move || {
+            if !callback_cancellation.is_cancelled() {
+                on_ui(result);
+            }
+        });
     });
+    jadix_tasks::TaskHandle::cooperative(cancellation)
 }
 
 #[cfg(test)]

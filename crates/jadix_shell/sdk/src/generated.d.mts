@@ -2,10 +2,10 @@ export interface ComponentProperties {
   Box: {  };
   Text: { "text": string };
   Button: { "label": string; "disabled"?: boolean };
-  Input: { "value": string; "placeholder"?: string; "disabled"?: boolean };
+  Input: { "value": string; "placeholder"?: string; "disabled"?: boolean; "maxLength"?: number };
   Scroll: {  };
   PopoverContent: { "anchor": string; "open": boolean; "placement"?: string; "gap"?: number; "close_on_outside_click"?: boolean };
-  Textarea: { "value": string; "placeholder"?: string; "disabled"?: boolean };
+  Textarea: { "value": string; "placeholder"?: string; "disabled"?: boolean; "maxLength"?: number };
   Checkbox: { "label": string; "checked": boolean; "disabled"?: boolean };
   Switch: { "label": string; "checked": boolean; "disabled"?: boolean };
   Image: { "src": string; "alt"?: string };
@@ -17,7 +17,7 @@ export interface ComponentEvents {
   Text: {  };
   Button: { "activate"?: EventHandle<null> };
   Input: { "edit"?: EventHandle<{ "value": string; "revision": string; "selection": ReadonlyArray<number>; "composing"?: ReadonlyArray<number> }> };
-  Scroll: { "scroll"?: EventHandle<{ "x": number; "y": number }> };
+  Scroll: { "scroll"?: EventHandle<{ "x": number; "y": number }>; "wheel"?: EventHandle<{ "deltaX": number; "deltaY": number }> };
   PopoverContent: { "dismiss"?: EventHandle<{ "backdrop": boolean; "revision": string }> };
   Textarea: { "edit"?: EventHandle<{ "value": string; "revision": string; "selection": ReadonlyArray<number>; "composing"?: ReadonlyArray<number> }> };
   Checkbox: { "toggle"?: EventHandle<{ "checked": boolean; "revision": string }> };

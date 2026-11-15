@@ -1,0 +1,16 @@
+[package]
+name = "jadix_miniprogram"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+default = []
+consistent-ui = ["jadix_native/consistent-ui"]
+
+[dependencies]
+jadix_native.workspace = true
+serde_json.workspace = true

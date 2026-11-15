@@ -23,7 +23,7 @@ fn probe_region(window: &dyn jadix_winit::window::Window) {
     let query = unsafe { CreateRectRgn(0, 0, 0, 0) };
     assert!(!query.is_null());
     window
-        .set_input_region(Some(&[
+        .set_window_shape(Some(&[
             InputRegionRect::new(0, 0, 30, 30),
             InputRegionRect::new(50, 50, 20, 20),
         ]))
@@ -43,12 +43,12 @@ fn probe_region(window: &dyn jadix_winit::window::Window) {
     );
     assert!(
         window
-            .set_input_region(Some(&[InputRegionRect::new(i32::MAX, 0, 10, 10)]))
+            .set_window_shape(Some(&[InputRegionRect::new(i32::MAX, 0, 10, 10)]))
             .is_err()
     );
     assert!(
         window
-            .set_input_region(Some(&[InputRegionRect::new(1 << 26, 0, 10, 10)]))
+            .set_window_shape(Some(&[InputRegionRect::new(1 << 26, 0, 10, 10)]))
             .is_err()
     );
     assert_ne!(unsafe { GetWindowRgn(hwnd, query) }, 0);
@@ -56,10 +56,14 @@ fn probe_region(window: &dyn jadix_winit::window::Window) {
         unsafe { PtInRegion(query, offset.0 + 10, offset.1 + 10) },
         0
     );
+    window.set_window_shape(Some(&[])).unwrap();
+    assert_eq!(unsafe { GetWindowRgn(hwnd, query) }, NULLREGION);
+    window.set_window_shape(None).unwrap();
+    assert_eq!(unsafe { GetWindowRgn(hwnd, query) }, 0);
+    // The legacy input-region entry point keeps its documented Windows side effect.
     window.set_input_region(Some(&[])).unwrap();
     assert_eq!(unsafe { GetWindowRgn(hwnd, query) }, NULLREGION);
     window.set_input_region(None).unwrap();
-    assert_eq!(unsafe { GetWindowRgn(hwnd, query) }, 0);
     unsafe {
         DeleteObject(query);
     }

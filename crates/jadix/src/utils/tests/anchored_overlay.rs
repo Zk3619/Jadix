@@ -16,6 +16,110 @@ fn find_attr<'a>(el: &'a Element, key: &str) -> Option<&'a str> {
         .or_else(|| el.children.iter().find_map(|c| find_attr(c, key)))
 }
 
+fn focus_return_panel() -> Element {
+    let mut item = Element::new();
+    item.focusable = true;
+    item.focus_id = Some("focus-return-item".into());
+    Element::new().child(item)
+}
+
+#[test]
+fn anchored_close_returns_panel_focus_and_preserves_application_focus() {
+    use crate::app::reactive::{drain_deferred_view_remounts, reset_registered_anchors};
+    use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
+    use crate::utils::roving::focus_id_only;
+    use std::{cell::RefCell, rc::Rc};
+    reset_registered_anchors();
+    clear_overlay_stack();
+    let live = Rc::new(RefCell::new(Element::new()));
+    install_test_reconcile_root(Rc::clone(&live));
+    let (_owner, ()) = create_root(|| {
+        let open = Signal::new(true);
+        let focus = use_signal("__jadix_button_focus_id", String::new);
+        // A render effect exercises the actual content island, including closure
+        // before an exit panel exists when animation-base is disabled.
+        let live_effect = Rc::clone(&live);
+        create_render_effect(move || {
+            *live_effect.borrow_mut() = anchored_overlay("focus-return-reactive")
+                .open(open)
+                .placement(Placement::trigger(
+                    "focus-return-trigger",
+                    PopupPlacement::BottomStart,
+                    4.0,
+                    FloatingStrategy::Auto,
+                ))
+                .child(focus_return_panel);
+        });
+        drain_deferred_view_remounts();
+        // Model a descendant mounted independently after the panel snapshot.
+        let mut found = false;
+        crate::app::runtime::try_update_element_by_template_id(
+            "focus-return-reactive__floating_panel",
+            |panel| {
+                let mut late = Element::new();
+                late.focusable = true;
+                late.focus_id = Some("late-calendar-day".into());
+                panel.children.push(late);
+                found = true;
+                crate::core::tree::LayoutStatus::Clean
+            },
+        );
+        assert!(found, "the content island must remain mounted");
+        focus_id_only("late-calendar-day");
+        open.set(false);
+        assert_eq!(focus.peek(), "focus-return-trigger");
+        open.set(true);
+        drain_deferred_view_remounts();
+        focus_id_only("focus-return-item");
+        open.set(false);
+        assert_eq!(focus.peek(), "focus-return-trigger");
+        open.set(true);
+        focus_id_only("application-editor");
+        open.set(false);
+        assert_eq!(focus.peek(), "application-editor");
+    });
+    clear_test_reconcile_root();
+    reset_registered_anchors();
+    clear_overlay_stack();
+}
+
+#[test]
+fn retained_close_uses_last_open_panel_once_even_if_closed_body_is_empty() {
+    use crate::utils::roving::focus_id_only;
+    clear_overlay_stack();
+    create_root(|| {
+        let open = Signal::new(false);
+        let focus = use_signal("__jadix_button_focus_id", String::new);
+        let opts = AnchoredOverlayContentOpts {
+            focus_id: "focus-return-trigger".into(),
+            ..Default::default()
+        };
+        // An initially closed surface must not claim unrelated existing focus.
+        focus_id_only("focus-return-item");
+        let _ = retained_anchored_panel("focus-return-retained", open, &opts, focus_return_panel());
+        assert_eq!(focus.peek(), "focus-return-item");
+        open.set(true);
+        let _ = retained_anchored_panel("focus-return-retained", open, &opts, focus_return_panel());
+        open.set(false);
+        let _ = retained_anchored_panel("focus-return-retained", open, &opts, Element::new());
+        assert_eq!(focus.peek(), "focus-return-trigger");
+        focus_id_only("focus-return-item");
+        let _ = retained_anchored_panel("focus-return-retained", open, &opts, focus_return_panel());
+        assert_eq!(
+            focus.peek(),
+            "focus-return-item",
+            "restore is consumed once"
+        );
+        open.set(true);
+        let _ = retained_anchored_panel("focus-return-retained", open, &opts, focus_return_panel());
+        focus_id_only("application-editor");
+        open.set(false);
+        let _ = retained_anchored_panel("focus-return-retained", open, &opts, Element::new());
+        assert_eq!(focus.peek(), "application-editor");
+    });
+    clear_overlay_stack();
+}
+
 #[test]
 fn retained_builder_registers_from_untracked_tree_construction() {
     use crate::app::reactive::{registered_anchor_count, reset_registered_anchors};
@@ -570,7 +674,7 @@ fn point_drag_tick_queues_overlay_damage_before_render() {
 
 #[test]
 fn point_drag_collect_keeps_full_panel_box() {
-    use crate::layout::layout_tree::{hoist_portal_subtrees, hoisted_portal_stamps, LayoutTree};
+    use crate::layout::layout_tree::{LayoutTree, hoist_portal_subtrees, hoisted_portal_stamps};
     use crate::utils::popup::mark_portal;
 
     let (_o, mut root) = create_root(|| {
@@ -785,13 +889,13 @@ fn wave2_canary_close_keeps_portal_while_exiting() {
 /// portal origin (0,0) for one frame before trigger placement lands.
 #[test]
 fn trigger_first_open_must_not_flash_visible_panel_at_portal_origin() {
-    use crate::app::portal_overlay::{clear_overlay_stack, OverlayKind, OverlayMode};
-    use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree, ATTR_HOISTED_PORTAL};
+    use crate::app::portal_overlay::{OverlayKind, OverlayMode, clear_overlay_stack};
+    use crate::layout::layout_tree::{ATTR_HOISTED_PORTAL, LayoutTree, hoist_portal_subtrees};
     use crate::utils::floating_motion::{
         floating_motion_needs_relayout, flush_floating_motion_subtree,
         mark_floating_panels_layout_dirty, tick_hoisted_floating_css,
     };
-    use crate::utils::popup::{PopupPlacement, FLOATING_TRIGGER_GAP};
+    use crate::utils::popup::{FLOATING_TRIGGER_GAP, PopupPlacement};
 
     clear_overlay_stack();
     let (_owner, mut root) = create_root(|| {
@@ -865,11 +969,11 @@ fn trigger_first_open_must_not_flash_visible_panel_at_portal_origin() {
         trigger.layout_bounds
     );
     assert!(
-            left.is_some_and(|x| x > 100.0) && top.is_some_and(|y| y > 100.0),
-            "sync inside build_and_layout must write trigger-relative insets before collect; left={left:?} top={top:?} bounds={:?} trigger={:?}",
-            panel_after_layout.layout_bounds,
-            trigger.layout_bounds
-        );
+        left.is_some_and(|x| x > 100.0) && top.is_some_and(|y| y > 100.0),
+        "sync inside build_and_layout must write trigger-relative insets before collect; left={left:?} top={top:?} bounds={:?} trigger={:?}",
+        panel_after_layout.layout_bounds,
+        trigger.layout_bounds
+    );
 
     // App present: flush motion then optional follow / animation collect.
     let _ = flush_floating_motion_subtree(&mut root);
@@ -908,22 +1012,22 @@ fn trigger_first_open_must_not_flash_visible_panel_at_portal_origin() {
             && i.rect_pos[1] < 40.0
     });
     assert!(
-            !visible_at_origin,
-            "must not collect a visible panel silhouette at portal origin; opacity={} bounds={b:?} instances={:?}",
-            panel.style.opacity,
-            out.instances
-                .iter()
-                .filter(|i| i.color[3] > 0.05 && i.rect_size[0] > 20.0)
-                .map(|i| (i.rect_pos, i.rect_size, i.color[3]))
-                .collect::<Vec<_>>()
-        );
+        !visible_at_origin,
+        "must not collect a visible panel silhouette at portal origin; opacity={} bounds={b:?} instances={:?}",
+        panel.style.opacity,
+        out.instances
+            .iter()
+            .filter(|i| i.color[3] > 0.05 && i.rect_size[0] > 20.0)
+            .map(|i| (i.rect_pos, i.rect_size, i.color[3]))
+            .collect::<Vec<_>>()
+    );
     clear_overlay_stack();
 }
 
 #[test]
 fn wave2_canary_first_open_layouts_portal_panel() {
     use crate::layout::layout_tree::{
-        hoist_portal_subtrees, LayoutTree, ATTR_HOISTED_PORTAL, PORTAL_LAYER_ID,
+        ATTR_HOISTED_PORTAL, LayoutTree, PORTAL_LAYER_ID, hoist_portal_subtrees,
     };
 
     clear_overlay_stack();
@@ -991,12 +1095,12 @@ fn wave2_canary_first_open_layouts_portal_panel() {
 #[test]
 fn fade_popover_join_stamp_matches_band_above_leftover_datepicker() {
     use crate::app::damage::{
-        overlay_band_encode_flags, overlay_membership_paint_stamps, push_frame_paint_element,
-        take_frame_paint_nodes, PaintDirtyKind,
+        PaintDirtyKind, overlay_band_encode_flags, overlay_membership_paint_stamps,
+        push_frame_paint_element, take_frame_paint_nodes,
     };
     use crate::layout::layout_tree::{
-        hoist_portal_subtrees, overlay_portal_stamp_key, LayoutTree, ATTR_HOISTED_PORTAL,
-        PORTAL_LAYER_ID,
+        ATTR_HOISTED_PORTAL, LayoutTree, PORTAL_LAYER_ID, hoist_portal_subtrees,
+        overlay_portal_stamp_key,
     };
     use crate::utils::floating_motion::{flush_floating_motion_subtree, tick_hoisted_floating_css};
     use crate::utils::popup::sync_floating_placement;
@@ -1108,9 +1212,9 @@ fn fade_popover_join_stamp_matches_band_above_leftover_datepicker() {
         .map(|b| b.stamp_key)
         .collect();
     assert!(
-            band_keys.contains(&panel_key),
-            "portal-layer band stamp must be overlay_portal_stamp_key of the Fade panel; panel_key={panel_key} bands={band_keys:?}"
-        );
+        band_keys.contains(&panel_key),
+        "portal-layer band stamp must be overlay_portal_stamp_key of the Fade panel; panel_key={panel_key} bands={band_keys:?}"
+    );
 
     let _ = take_frame_paint_nodes();
     push_frame_paint_element(cp, [0.0, 0.0]);
@@ -1160,7 +1264,7 @@ fn tab_unmount_plays_configured_floating_exit() {
     use crate::app::runtime::{clear_test_reconcile_root, install_test_reconcile_root};
     use crate::components::tabs::{tabs_content, tabs_scope};
     use crate::core::reactivity::{component_root, create_effect, create_root, use_signal};
-    use crate::layout::layout_tree::{hoist_portal_subtrees, LayoutTree};
+    use crate::layout::layout_tree::{LayoutTree, hoist_portal_subtrees};
     use crate::utils::floating_motion::{
         drain_pending_floating_unmounts, flush_floating_motion_subtree,
         mark_floating_panels_layout_dirty, tick_floating_presence, tick_hoisted_floating_css,

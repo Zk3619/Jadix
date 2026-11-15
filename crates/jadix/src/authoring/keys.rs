@@ -1,7 +1,7 @@
 //! Node-owned window shortcuts, dispatched after releasing host tree borrows.
 
 use crate::app::window_scope::{self, WindowScope};
-use crate::core::reactivity::{current_owner, on_cleanup, with_owner, OwnerId};
+use crate::core::reactivity::{OwnerId, current_owner, on_cleanup, with_owner};
 use crate::core::tree::Element;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -38,7 +38,8 @@ impl Handler {
 }
 
 /// Append a shortcut to this subtree's root. Window dispatch visits nodes in tree order
-/// and callbacks in attachment order, before focused-widget commands.
+/// and callbacks in attachment order, before focused-widget commands. A focused
+/// pressable control owns Return/Space without Control, Alt or Command modifiers.
 pub fn attach(element: &mut Element, callback: impl Fn(Context<'_>) -> bool + 'static) {
     let callback = Rc::new(RefCell::new(Some(Rc::new(callback) as Callback)));
     let owner = current_owner();

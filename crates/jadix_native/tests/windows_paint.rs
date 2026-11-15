@@ -47,6 +47,8 @@ fn native_edit_palette_inherits_background_retains_handles_and_respects_high_con
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: style::NodeStyle {
                 background: [10, 20, 30, 255],
@@ -61,6 +63,7 @@ fn native_edit_palette_inherits_background_retains_handles_and_respects_high_con
         id: NodeId::new(identifier),
         descriptor: NodeDescriptor {
             content: NodeContent::Input {
+                max_length: None,
                 value: "retained".into(),
                 placeholder: String::new(),
                 enabled: true,
@@ -71,6 +74,8 @@ fn native_edit_palette_inherits_background_retains_handles_and_respects_high_con
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: style::NodeStyle {
                 foreground: [230, 231, 232, 255],

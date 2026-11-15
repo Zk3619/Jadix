@@ -1054,3 +1054,99 @@ fn paint_hash_includes_overflow_clip_mode() {
         "jadix_escape_overflow_clip must bust paint-hash skip"
     );
 }
+
+#[test]
+fn addressed_leaf_stamps_match_full_oracle_without_visiting_siblings() {
+    // The child-visit counter catches a hidden O(N) loop even when local hashes
+    // themselves were cached. First mount is deliberately full O(N).
+    for count in [32, 3072, 20000] {
+        let mut root = Element::new().child(
+            Element::new().children((0..count).map(|i| Element::new().text(format!("row {i}")))),
+        );
+        stamp_subtree_paint_hashes(&mut root, false);
+        for index in [count - 1, 0, count / 2, count - 1] {
+            let old = leaf_paint_stamp(&root.children[0].children[index]);
+            root.children[0].children[index].text = Some(format!("changed {index}"));
+            STAMP_HASHED.with(|c| c.set(0));
+            STAMP_CHILDREN.with(|c| c.set(0));
+            assert!(refresh_leaf_paint_path(&mut root, &[0, index], old));
+            // The subsequent reuse stamp must also skip the whole unchanged root.
+            stamp_subtree_paint_hashes(&mut root, true);
+            assert_eq!(STAMP_HASHED.with(|c| c.get()), 1);
+            assert_eq!(STAMP_CHILDREN.with(|c| c.get()), 0);
+            let sparse = root.collect_paint_hash;
+            stamp_subtree_paint_hashes(&mut root, false);
+            assert_eq!(
+                sparse, root.collect_paint_hash,
+                "full oracle at {count}/{index}"
+            );
+        }
+        let before = root.collect_paint_hash;
+        root.children[0].children.swap(0, count - 1);
+        stamp_subtree_paint_hashes(&mut root, false);
+        assert_ne!(before, root.collect_paint_hash, "child order participates");
+    }
+}
+
+#[test]
+fn addressed_leaf_summary_and_structure_changes_invalidate_before_reuse() {
+    let mut root = Element::new().child(Element::new().text("static"));
+    stamp_subtree_paint_hashes(&mut root, false);
+    let old = leaf_paint_stamp(&root.children[0]);
+    root.children[0].text_style.input_caret = Some(Default::default());
+    assert!(!refresh_leaf_paint_path(&mut root, &[0], old));
+    assert_eq!(root.collect_paint_hash, 0);
+    stamp_subtree_paint_hashes(&mut root, true);
+    assert!(root.collect_skip_live);
+    let sparse = root.collect_paint_hash;
+    stamp_subtree_paint_hashes(&mut root, false);
+    assert_eq!(sparse, root.collect_paint_hash);
+    let old = leaf_paint_stamp(&root.children[0]);
+    root.children[0]
+        .children
+        .push(Element::new().text("new child"));
+    assert!(!refresh_leaf_paint_path(&mut root, &[0], old));
+    stamp_subtree_paint_hashes(&mut root, true);
+    let sparse = root.collect_paint_hash;
+    stamp_subtree_paint_hashes(&mut root, false);
+    assert_eq!(sparse, root.collect_paint_hash);
+    assert!(!refresh_leaf_paint_path(&mut root, &[99], None));
+    assert_eq!(root.collect_paint_hash, 0);
+}
+
+#[test]
+fn offscreen_admission_summary_tracks_rejected_and_removed_effects() {
+    let mut root = Element::new().child(Element::new().text("plain"));
+    stamp_subtree_paint_hashes(&mut root, false);
+    assert!(!root.subtree_offscreen_unsupported);
+    let old = leaf_paint_stamp(&root.children[0]);
+    root.children[0]
+        .attrs
+        .insert(crate::renderer::ATTR_EFFECT.into(), "test".into());
+    assert!(!refresh_leaf_paint_path(&mut root, &[0], old));
+    stamp_subtree_paint_hashes(&mut root, true);
+    assert!(root.subtree_offscreen_unsupported);
+    let old = leaf_paint_stamp(&root.children[0]);
+    root.children[0].attrs.remove(crate::renderer::ATTR_EFFECT);
+    assert!(!refresh_leaf_paint_path(&mut root, &[0], old));
+    stamp_subtree_paint_hashes(&mut root, true);
+    assert!(!root.subtree_offscreen_unsupported);
+}
+
+#[test]
+fn paint_hash_includes_static_line_budget_and_inline_decoration() {
+    let mut el = Element::new().text_spans(vec![crate::style::TextSpan::new("AAAA")]);
+    let plain = self_paint_hash(&el);
+    el.text_style.max_lines = Some(2);
+    assert_ne!(self_paint_hash(&el), plain);
+    el.text_style.max_lines = None;
+    assert_eq!(self_paint_hash(&el), plain);
+    el.text_spans.as_mut().unwrap()[0].underline = true;
+    let underline = self_paint_hash(&el);
+    assert_ne!(underline, plain);
+    el.text_spans.as_mut().unwrap()[0].strikethrough = true;
+    assert_ne!(self_paint_hash(&el), underline);
+    el.text_spans.as_mut().unwrap()[0].underline = false;
+    el.text_spans.as_mut().unwrap()[0].strikethrough = false;
+    assert_eq!(self_paint_hash(&el), plain);
+}

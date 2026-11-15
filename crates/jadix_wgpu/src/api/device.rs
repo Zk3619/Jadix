@@ -267,6 +267,7 @@ impl Device {
 
     /// Creates a [`ComputePipeline`].
     #[must_use]
+    #[cfg(feature = "compute")]
     pub fn create_compute_pipeline(&self, desc: &ComputePipelineDescriptor<'_>) -> ComputePipeline {
         let pipeline = self.inner.create_compute_pipeline(desc);
         ComputePipeline { inner: pipeline }
@@ -687,7 +688,7 @@ impl Device {
 
     /// Create a [`PipelineCache`] with initial data
     ///
-    /// This can be passed to [`Device::create_compute_pipeline`]
+    /// This can be passed to `Device::create_compute_pipeline` (feature `compute`)
     /// and [`Device::create_render_pipeline`] to either accelerate these
     /// or add the cache results from those.
     ///

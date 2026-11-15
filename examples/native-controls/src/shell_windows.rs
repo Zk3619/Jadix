@@ -16,7 +16,6 @@ fn main() {
 mod application {
     use jadix_native::{presentation::*, windows::WindowsHost};
     use jadix_shell::{
-        HostRegistry, PackageManifest, Session, ShellError,
         handles::Handle,
         native::NativeMount,
         package::{PackagePolicy, SignedManifest, Target},
@@ -24,6 +23,7 @@ mod application {
         schema::Value,
         store::{PackageStore, StoredPackage},
         wire::{ComponentRegistry, Envelope},
+        HostRegistry, PackageManifest, Session, ShellError,
     };
     use std::{
         cell::{Cell, RefCell},
@@ -482,22 +482,18 @@ mod application {
             }
             assert_eq!(autosave.wait_ms(Duration::from_millis(1999), false), 1);
             let mut written = serde_json::Value::Null;
-            assert!(
-                autosave
-                    .save_due(Duration::from_secs(2), false, |value| {
-                        written = value.clone();
-                        Ok(())
-                    })
-                    .unwrap()
-            );
+            assert!(autosave
+                .save_due(Duration::from_secs(2), false, |value| {
+                    written = value.clone();
+                    Ok(())
+                })
+                .unwrap());
             assert_eq!(written, serde_json::json!(20));
             assert_eq!(autosave.wait_ms(Duration::from_secs(3), false), u32::MAX);
             autosave.observe(written, Duration::from_secs(4));
-            assert!(
-                !autosave
-                    .save_due(Duration::from_secs(5), false, |_| panic!("idle write"))
-                    .unwrap()
-            );
+            assert!(!autosave
+                .save_due(Duration::from_secs(5), false, |_| panic!("idle write"))
+                .unwrap());
         }
 
         #[test]
@@ -505,53 +501,41 @@ mod application {
             let mut autosave = WorkspaceAutosave::new(serde_json::json!("old"));
             autosave.observe(serde_json::json!("committed"), Duration::ZERO);
             assert_eq!(autosave.wait_ms(Duration::from_secs(1), true), u32::MAX);
-            assert!(
-                !autosave
-                    .save_due(Duration::from_secs(1), true, |_| panic!(
-                        "composition write"
-                    ))
-                    .unwrap()
-            );
-            assert!(
-                autosave
-                    .save_due(Duration::from_secs(1), false, |_| Err(
-                        "disk unavailable".into()
-                    ))
-                    .is_err()
-            );
+            assert!(!autosave
+                .save_due(Duration::from_secs(1), true, |_| panic!(
+                    "composition write"
+                ))
+                .unwrap());
+            assert!(autosave
+                .save_due(Duration::from_secs(1), false, |_| Err(
+                    "disk unavailable".into()
+                ))
+                .is_err());
             autosave.observe(serde_json::json!("最新😀"), Duration::from_secs(2));
             assert_eq!(autosave.wait_ms(Duration::from_secs(2), false), 4000);
-            assert!(
-                !autosave
-                    .save_due(Duration::from_secs(3), false, |_| panic!("early retry"))
-                    .unwrap()
-            );
-            assert!(
-                autosave
-                    .save_due(Duration::from_secs(6), false, |value| {
-                        assert_eq!(value, "最新😀");
-                        Ok(())
-                    })
-                    .unwrap()
-            );
+            assert!(!autosave
+                .save_due(Duration::from_secs(3), false, |_| panic!("early retry"))
+                .unwrap());
+            assert!(autosave
+                .save_due(Duration::from_secs(6), false, |value| {
+                    assert_eq!(value, "最新😀");
+                    Ok(())
+                })
+                .unwrap());
         }
 
         #[test]
         fn autosave_undo_to_saved_state_cancels_pending_retry() {
             let mut autosave = WorkspaceAutosave::new(serde_json::json!({"count":0}));
             autosave.observe(serde_json::json!({"count":1}), Duration::ZERO);
-            assert!(
-                autosave
-                    .save_due(Duration::from_secs(1), false, |_| Err("failure".into()))
-                    .is_err()
-            );
+            assert!(autosave
+                .save_due(Duration::from_secs(1), false, |_| Err("failure".into()))
+                .is_err());
             autosave.observe(serde_json::json!({"count":0}), Duration::from_secs(2));
             assert_eq!(autosave.wait_ms(Duration::from_secs(6), false), u32::MAX);
-            assert!(
-                !autosave
-                    .save_due(Duration::from_secs(6), false, |_| panic!("reverted write"))
-                    .unwrap()
-            );
+            assert!(!autosave
+                .save_due(Duration::from_secs(6), false, |_| panic!("reverted write"))
+                .unwrap());
         }
     }
 

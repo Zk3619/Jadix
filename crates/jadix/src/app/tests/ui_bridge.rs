@@ -42,3 +42,33 @@ fn ui_tasks_are_bounded_fifo_and_nested_posts_wait_for_next_turn() {
     assert_eq!(drain_ui_tasks(), 1);
     assert_eq!(seen.lock().unwrap().last(), Some(&total));
 }
+
+#[test]
+fn cancelled_blocking_work_does_not_post_its_result_to_the_ui_thread() {
+    let _guard = UI_QUEUE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    while drain_ui_tasks() != 0 {}
+
+    let (started_tx, started_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
+    let (finished_tx, finished_rx) = std::sync::mpsc::channel();
+    let callback_ran = Arc::new(Mutex::new(false));
+    let callback_ran2 = callback_ran.clone();
+
+    let handle = spawn_blocking_cancellable(
+        move |cancellation| {
+            started_tx.send(()).unwrap();
+            release_rx.recv().unwrap();
+            let cancelled = cancellation.is_cancelled();
+            finished_tx.send(()).unwrap();
+            cancelled
+        },
+        move |_| *callback_ran2.lock().unwrap() = true,
+    );
+
+    started_rx.recv().unwrap();
+    assert!(handle.cancel());
+    release_tx.send(()).unwrap();
+    finished_rx.recv().unwrap();
+    assert_eq!(drain_ui_tasks(), 0);
+    assert!(!*callback_ran.lock().unwrap());
+}

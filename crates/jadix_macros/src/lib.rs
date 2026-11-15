@@ -2726,6 +2726,8 @@ fn expand_node_inner(
                     // Provide context *before* Trigger/Content (eager props order).
                     let id_expr = get_attr("id");
                     let open_expr = get_attr("open").or_else(|| get_attr("openSignal"));
+                    let open_delay_expr = get_attr("openDelay").or_else(|| get_attr("delay"));
+                    let close_delay_expr = get_attr("closeDelay");
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -2760,8 +2762,16 @@ fn expand_node_inner(
                     } else {
                         quote! { None }
                     };
+                    let open_delay_ts = open_delay_expr
+                        .map(|delay| quote! { Some((#delay) as u64) })
+                        .unwrap_or_else(|| quote! { None });
+                    let close_delay_ts = close_delay_expr
+                        .map(|delay| quote! { Some((#delay) as u64) })
+                        .unwrap_or_else(|| quote! { None });
                     return quote! {
-                        __jadix_components::hover_card_scope(#id_ts, #open_ts, || #child_el)
+                        __jadix_components::hover_card_scope_with_delays(
+                            #id_ts, #open_ts, #open_delay_ts, #close_delay_ts, || #child_el
+                        )
                     };
                 }
 
@@ -3100,6 +3110,8 @@ fn expand_node_inner(
                     // Provide context *before* Trigger/Content (eager props order).
                     let id_expr = get_attr("id");
                     let open_expr = get_attr("open");
+                    let open_delay_expr = get_attr("openDelay").or_else(|| get_attr("delay"));
+                    let close_delay_expr = get_attr("closeDelay");
                     let idx = *node_counter;
                     *node_counter += 1;
                     let mut expanded_children = Vec::new();
@@ -3133,8 +3145,16 @@ fn expand_node_inner(
                     } else {
                         quote! { None }
                     };
+                    let open_delay_ts = open_delay_expr
+                        .map(|delay| quote! { Some((#delay) as u64) })
+                        .unwrap_or_else(|| quote! { None });
+                    let close_delay_ts = close_delay_expr
+                        .map(|delay| quote! { Some((#delay) as u64) })
+                        .unwrap_or_else(|| quote! { None });
                     return quote! {
-                        __jadix_components::tooltip_scope(#id_ts, #open_ts, || #child_el)
+                        __jadix_components::tooltip_scope_with_delays(
+                            #id_ts, #open_ts, #open_delay_ts, #close_delay_ts, || #child_el
+                        )
                     };
                 }
 
@@ -6582,8 +6602,19 @@ fn expand_node_inner(
                         continue;
                     }
 
-                    // Element-root hover — not a component prop.
-                    if matches!(attr_name, "on_hover" | "onHover") {
+                    // Event handlers belong to the component's host element, not its public props.
+                    let host_event = match attr_name {
+                        "on_hover" | "onHover" => Some("on_hover"),
+                        "on_mouseup" | "onMouseUp" => Some("on_mouseup"),
+                        "on_mousemove" | "onMouseMove" => Some("on_mousemove"),
+                        "on_mouseenter" | "onMouseEnter" => Some("on_mouseenter"),
+                        "on_mouseleave" | "onMouseLeave" => Some("on_mouseleave"),
+                        "on_context_menu" | "onContextMenu" => Some("on_context_menu"),
+                        _ => None,
+                    };
+                    if let Some(method) = host_event {
+                        let method = syn::Ident::new(method, attr.span());
+                        base_calls.push(quote! { b = b.#method(#value); });
                         continue;
                     }
 
@@ -7814,6 +7845,9 @@ fn expand_node_inner(
                             match attr_str.as_str() {
                                 "onClick" => syn::Ident::new("on_click", attr.span()),
                                 "onChange" => syn::Ident::new("on_change", attr.span()),
+                                "onCompositionChange" => {
+                                    syn::Ident::new("on_composition_change", attr.span())
+                                }
                                 // ShadCN / HTML 别名
                                 "defaultChecked" => syn::Ident::new("default_checked", attr.span()),
                                 "defaultValue" => syn::Ident::new("default_value", attr.span()),
@@ -7898,7 +7932,9 @@ fn expand_node_inner(
                         } else if matches!(
                             attr_name,
                             "on_click" | "onClick" | "on_change" | "onChange" | "onCheckedChange"
-                        ) {
+                        ) || (matches!(name_str.as_str(), "Input" | "Textarea")
+                            && matches!(attr_name, "on_submit" | "onSubmit"))
+                        {
                             quote! { Some(jadix::core::tree::Handler::from(jadix::core::tree::ZeroArgFn(#value))) }
                         } else if is_boolish_attr(attr_name)
                             || matches!(
@@ -9801,6 +9837,15 @@ fn expand_node_inner(
                     }
                     "on_mouseout" | "onMouseOut" => {
                         element = quote! { #element.on_mouseout(#value) }
+                    }
+                    "on_mouseenter" | "onMouseEnter" => {
+                        element = quote! { #element.on_mouseenter(#value) }
+                    }
+                    "on_mouseleave" | "onMouseLeave" => {
+                        element = quote! { #element.on_mouseleave(#value) }
+                    }
+                    "on_context_menu" | "onContextMenu" => {
+                        element = quote! { #element.on_context_menu(#value) }
                     }
                     "on_dblclick" | "onDblClick" | "on_double_click" | "onDoubleClick" => {
                         element = quote! { #element.on_dblclick(#value) }

@@ -632,12 +632,16 @@ default [] variant: String,
 plain [] value: Option<Signal<String>>,
 default [] default_value: String,
 plain [] options: Option<Vec<(String, String)>>,
+plain [] accessibility_label: Option<String>,
 plain [] children: Option<Element>,
 ) -> Element {
     if let Some(opts) = options {
         let mut b = tabs_list(if id.is_empty() { "tabs" } else { id.as_str() })
             .default_value(default_value)
             .options(opts);
+        if let Some(label) = accessibility_label {
+            b = b.accessibility_label(label);
+        }
         if let Some(sig) = value {
             b = b.value_signal(sig);
         }
@@ -717,6 +721,9 @@ plain [] children: Option<Element>,
     list.attrs.insert(ATTR_VARIANT.to_string(), variant.clone());
     list.set_attr("jadix_tabs_list", "1");
     list = list.accesskit_role("tablist");
+    if let Some(label) = accessibility_label.filter(|label| !label.trim().is_empty()) {
+        list.set_attr("aria-label", label.trim());
+    }
     if let Some(ctx) = ctx.as_ref() {
         list.template_id = Some(format!("{}:list", ctx.id));
         let axis = if vertical {
@@ -996,6 +1003,7 @@ pub struct TabsListBuilder {
     options: Vec<(String, String)>,
     value: Option<Signal<String>>,
     default_value: String,
+    accessibility_label: Option<String>,
     chrome: SlotChrome,
 }
 
@@ -1005,6 +1013,7 @@ pub fn tabs_list(id: impl Into<String>) -> TabsListBuilder {
         options: Vec::new(),
         value: None,
         default_value: String::new(),
+        accessibility_label: None,
         chrome: SlotChrome::default(),
     }
 }
@@ -1024,6 +1033,10 @@ impl TabsListBuilder {
         self.default_value = v.into();
         self
     }
+    pub fn accessibility_label(mut self, label: impl Into<String>) -> Self {
+        self.accessibility_label = Some(label.into());
+        self
+    }
 }
 
 impl From<TabsListBuilder> for Element {
@@ -1033,6 +1046,7 @@ impl From<TabsListBuilder> for Element {
             options,
             value,
             default_value,
+            accessibility_label,
             chrome,
         } = builder;
         let default_value = if default_value.is_empty() {
@@ -1052,6 +1066,9 @@ impl From<TabsListBuilder> for Element {
         }
         let mut el: Element = b.into();
         el.set_attr("jadix_tabs_list", "1");
+        if let Some(label) = accessibility_label.filter(|label| !label.trim().is_empty()) {
+            el.set_attr("aria-label", label.trim());
+        }
         chrome.apply(el)
     }
 }

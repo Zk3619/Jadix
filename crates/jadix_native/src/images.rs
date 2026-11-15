@@ -1,6 +1,6 @@
 use crate::{
-    HeadlessRoot,
     presentation::{NodeContent, NodeId, RootLifetime},
+    HeadlessRoot,
 };
 use base64::Engine;
 use std::{
@@ -8,9 +8,9 @@ use std::{
     io::Read,
     path::PathBuf,
     sync::{
-        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc::{Receiver, SyncSender, sync_channel},
+        mpsc::{sync_channel, Receiver, SyncSender},
+        Arc,
     },
     time::{Duration, Instant},
 };

@@ -23,6 +23,10 @@ Default feature: `gpu`, preserving the complete component product. RSX remains o
 
 ## Documentation
 
+Tooltip and HoverCard builders expose `.open_delay(300)` and `.close_delay(0)`;
+numeric values are milliseconds. The shared opening default is 300ms and zero
+opens immediately. RSX uses `openDelay` and `closeDelay` on the root or trigger.
+
 Portable Tabs support Builder and compound RSX through `tabs`, `TabsList`,
 `TabsTrigger` and `TabsContent`. Controlled values, lazy panels, horizontal/vertical
 arrow navigation, Home/End, disabled-item skipping and native focus requests share

@@ -1,0 +1,13 @@
+[package]
+name = "@NAME@"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+jadix_components = { path = "@ROOT@/crates/jadix_components", default-features = false, features = ["macros", "theme-shadcn"] }
+jadix_core = { path = "@ROOT@/crates/jadix_core" }
+jadix_native = { path = "@ROOT@/crates/jadix_native", features = ["windows"] }
+serde_json = "1"

@@ -460,6 +460,7 @@ fn resolve_style(
         stroke_linecap: linecap,
         stroke_linejoin: linejoin,
         fill_rule,
+        stroke_options: Default::default(),
     })
 }
 

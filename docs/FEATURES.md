@@ -154,6 +154,15 @@ DX11 两种实现可以单独或同时启用，统一名称不改变其实验性
 `jadix-frame-compare` 同时支持新名称与旧 `dx11`/`dx11-angle` 别名。
 窗口材质选项数据仍可传递；关闭平台实现时不发出原生模糊请求。原生系统 API 也可能由 winit 等
 传递依赖内部使用，不能把本框架开关解读成整个依赖图绝不出现 DWM。
+
+Windows 普通透明窗口不要求 `windows-dwm`：winit 负责原生透明初始化及重新应用，
+DX12 透明 surface 使用 wgpu 内置的 `DxgiFromVisual`，普通不透明窗口仍使用 HWND 路径。
+这仍然使用系统 DirectComposition，但不启用 Jadix 的 `windows-dcomp` 材质宿主。
+`WGPU_DX12_PRESENTATION_SYSTEM=Hwnd` 可显式覆盖，代价是该 DX12 surface 不支持逐像素透明。
+
+`WindowHandle::set_window_shape` 显式裁剪可见窗口及输入区域，目前仅 Windows 支持；
+矩形使用客户区物理像素。`None` 恢复默认形状，空切片裁空窗口，不缩小 surface 或 GPU 分配。
+`set_input_region` 在 X11/Wayland 仅限制输入；Windows 保留兼容行为，会同时裁剪画面。
 **迁移注意**：默认系统窗口材质保留，但自定义 DComp 不再随 DX12 默认启用；需要原有自定义配方的应用加上 `windows-dcomp`。
 AccessKit 的 Windows 依赖由 `a11y` 接管，不再把隐式依赖名 `accesskit_windows` 暴露为公共 feature。
 

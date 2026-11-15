@@ -451,8 +451,9 @@ pub fn retained_viewport_modal_layer(
 ) -> Element {
     let presence = use_modal_presence(id);
     bind_modal_open(&presence, open);
-    let portal = sync_viewport_modal_portal(id, open, &presence)
-        .expect("retained modal content is mounted only while open");
+    let Some(portal) = sync_viewport_modal_portal(id, open, &presence) else {
+        return flow_hidden_portal_host(Element::new());
+    };
     finish_viewport_modal_layer(id, open, overlay, opts, &presence, portal, panel)
 }
 

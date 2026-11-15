@@ -1,6 +1,7 @@
 [workspace]
 members = ["crates/*", "examples/*"]
 default-members = [
+    "crates/jadix_2d",
     "crates/jadix",
     "crates/jadix_accesskit_ohos",
     "crates/jadix_animation",
@@ -27,6 +28,7 @@ default-members = [
     "crates/jadix_tasks",
     "crates/jadix_theme",
     "crates/jadix_tokio",
+    "crates/jadix_tui",
     "crates/jadix_wgpu",
     "crates/jadix_window_materials",
     "crates/jadix_window_state",
@@ -39,6 +41,7 @@ default-members = [
     "examples/gallery_web",
     "examples/gpu_probe",
     "examples/harmonyos",
+    "examples/miniprogram",
     "examples/jadix_ide",
     "examples/jadix_md",
     "examples/native-controls",
@@ -57,7 +60,7 @@ repository = "https://github.com/Zk3619/Jadix"
 # plus crate-local features / optional. Package features and optionality remain local.
 [workspace.dependencies]
 jadix_3d = { path = "crates/jadix_3d", version = "0.1.0" }
-jadix_live2d = { path = "crates/jadix_live2d", version = "0.1.0", default-features = false }
+jadix_2d = { path = "crates/jadix_2d", version = "0.1.0" }
 jadix_window_materials = { path = "crates/jadix_window_materials", version = "0.1.0", default-features = false }
 jadix_renderer = { path = "crates/jadix_renderer", version = "0.1.0", default-features = false }
 jadix_theme = { path = "crates/jadix_theme", version = "0.1.0", default-features = false }
@@ -83,6 +86,7 @@ jadix_hot_reload = { path = "crates/jadix_hot_reload", version = "0.1.1", defaul
 jadix_net = { path = "crates/jadix_net", version = "0.1.0", default-features = false }
 jadix_tasks = { path = "crates/jadix_tasks", version = "0.1.0" }
 jadix_tokio = { path = "crates/jadix_tokio", version = "0.1.0" }
+jadix_tui = { path = "crates/jadix_tui", version = "0.1.0", default-features = false }
 tokio = { version = "1.53.3", default-features = false }
 moka = { version = "0.12.16", default-features = false }
 
@@ -194,6 +198,14 @@ debug = false
 split-debuginfo = "off"
 strip = "symbols"
 panic = "abort"
+
+[profile.miniprogram]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+panic = "abort"
+strip = true
 
 # Fast local iteration: light optimization keeps tests responsive without the
 # compile-time cost of many per-package optimization overrides.

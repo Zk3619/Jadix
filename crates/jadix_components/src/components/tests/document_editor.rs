@@ -161,6 +161,51 @@ fn native_keys_cross_source_lines_preserve_crlf_and_stop_on_escape() {
         );
     });
 }
+
+#[test]
+fn enter_in_task_item_starts_an_unchecked_item_and_preserves_the_split_text() {
+    let (_owner, ()) = crate::core::reactivity::create_root(|| {
+        for (id, source, expected) in [
+            (
+                "checked-task-enter",
+                "- [x] before after\n",
+                "- [x] before af\n- [ ] ter\n",
+            ),
+            (
+                "unchecked-task-enter",
+                "  * [ ] before after\n",
+                "  * [ ] before af\n  * [ ] ter\n",
+            ),
+        ] {
+            let state = DocumentEditorState::new(source);
+            state
+                .set_selection(DocumentSelection::caret(source.find("after").unwrap() + 2))
+                .unwrap();
+            let mut bridge = EditorBridge {
+                state: state.clone(),
+                field: id.into(),
+                value: Signal::new(String::new()),
+                active: None,
+                next_mount: 0,
+            };
+            bridge.sync();
+            assert!(bridge.key(&named_key(NamedKey::Enter), ModifiersState::empty()));
+            assert_eq!(state.document().source().text(), expected);
+            let tasks: Vec<_> = state
+                .document()
+                .blocks()
+                .iter()
+                .filter_map(|block| match block.kind {
+                    DocumentBlockKind::ListItem { checked, .. } => Some(checked),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(tasks, [Some(true), Some(false)]);
+        }
+        Element::new()
+    });
+}
+
 #[test]
 fn reveal_uses_complete_table_and_code_blocks() {
     for source in [

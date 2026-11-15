@@ -6,7 +6,7 @@ use std::ops::Range;
 use std::rc::Rc;
 
 use crate::components::scroll_area::scroll_area;
-use crate::core::reactivity::use_signal;
+use crate::core::reactivity::{current_owner, try_with_owner, use_signal};
 use crate::core::scroll_viewport::{
     scroll_offset_y_signal_key, scroll_target_y_signal_key, scroll_viewport_h_signal_key,
     scroll_viewport_w_signal_key,
@@ -187,6 +187,16 @@ pub(crate) fn document_viewport(
     render: BlockRenderer,
     before_sync: Option<Rc<dyn Fn()>>,
 ) -> Element {
+    // Later virtual windows may mount during layout under another component's
+    // owner. Custom block views must retain their document's provider context.
+    let owner = current_owner();
+    let render: BlockRenderer = Rc::new(move |surface, index, width, active| {
+        let build = || render(surface, index, width, active);
+        match owner {
+            Some(owner) => try_with_owner(owner, build).unwrap_or_default(),
+            None => build(),
+        }
+    });
     let offset = use_signal(&scroll_offset_y_signal_key(id), || 0.0_f32);
     let target = use_signal(&scroll_target_y_signal_key(id), || 0.0_f32);
     let viewport = use_signal(&scroll_viewport_h_signal_key(id), || viewport_h);

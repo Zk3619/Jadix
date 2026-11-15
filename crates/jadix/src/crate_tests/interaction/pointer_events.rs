@@ -238,3 +238,43 @@ fn css_spin_bounding_box_hits_layout_box_not_circumcircle_corner() {
         "AABB empty corner must miss so hover does not flicker with spin"
     );
 }
+
+#[test]
+fn hit_slop_expands_border_box_without_changing_layout_or_clipping() {
+    let mut button = Element::new()
+        .w(20.0)
+        .h(20.0)
+        .hit_slop([8.0, 12.0, 4.0, 6.0])
+        .on_click(|| {});
+    button.layout_bounds = [10.0, 10.0, 20.0, 20.0];
+
+    assert!(find_click(&button, 5.0, 15.0, [0.0, 0.0]).is_some());
+    assert!(find_click(&button, 39.0, 15.0, [0.0, 0.0]).is_some());
+    assert!(find_click(&button, 43.0, 15.0, [0.0, 0.0]).is_none());
+    assert_eq!(button.layout_bounds, [10.0, 10.0, 20.0, 20.0]);
+
+    let clipped = Element::new()
+        .w(20.0)
+        .h(20.0)
+        .overflow("hidden")
+        .child(button);
+    let mut root = Element::new().w(100.0).h(100.0).child(clipped);
+    root.layout_bounds = [0.0, 0.0, 100.0, 100.0];
+    root.children[0].layout_bounds = [10.0, 10.0, 20.0, 20.0];
+    root.children[0].children[0].layout_bounds = [10.0, 10.0, 20.0, 20.0];
+    assert!(find_click(&root, 5.0, 15.0, [0.0, 0.0]).is_none());
+}
+
+#[test]
+fn hit_slop_bounds_explicit_bounding_box_pointer_events() {
+    let mut button = Element::new()
+        .w(20.0)
+        .h(20.0)
+        .pointer_events(PointerEvents::BoundingBox)
+        .hit_slop(6.0)
+        .on_click(|| {});
+    button.layout_bounds = [10.0, 10.0, 20.0, 20.0];
+
+    assert!(find_click(&button, 5.0, 15.0, [0.0, 0.0]).is_some());
+    assert!(find_click(&button, 43.0, 15.0, [0.0, 0.0]).is_none());
+}

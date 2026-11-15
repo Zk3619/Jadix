@@ -324,6 +324,17 @@ pub fn radio_group_scope(
     disabled: bool,
     body: impl FnOnce() -> Element,
 ) -> Element {
+    radio_group_scope_named(id, value, default_value, disabled, None, body)
+}
+
+fn radio_group_scope_named(
+    id: impl Into<String>,
+    value: Option<Signal<String>>,
+    default_value: impl Into<String>,
+    disabled: bool,
+    accessibility_label: Option<String>,
+    body: impl FnOnce() -> Element,
+) -> Element {
     let id = crate::utils::resolve_instance_id(id, "radio");
     let default_value = default_value.into();
     let value = resolve_string_signal(value, &id, "radio", default_value);
@@ -344,6 +355,9 @@ pub fn radio_group_scope(
             .children(kids)
             .into();
         root = root.accesskit_role("radiogroup");
+        if let Some(label) = accessibility_label.filter(|label| !label.trim().is_empty()) {
+            root = root.aria_label(label);
+        }
         root.attrs.insert("accesskit_id".to_string(), id.clone());
         root.template_id = Some(id);
         attach_focus_roving(&mut root, FocusRovingAxis::Vertical);
@@ -464,6 +478,7 @@ pub struct RadioGroupBuilder {
     default_value: String,
     options: Vec<RadioOption>,
     disabled: bool,
+    accessibility_label: Option<String>,
     children: Vec<Element>,
     chrome: SlotChrome,
 }
@@ -479,6 +494,7 @@ plain [] selected: Option<Signal<String>>,
 default [] default_value: String,
 plain [] options: Option<Vec<(String, String)>>,
 default [] disabled: bool,
+plain [] accessibility_label: Option<String>,
 plain [] children: Option<Element>,
 ) -> Element {
     let sig = value.or(selected);
@@ -490,13 +506,16 @@ plain [] children: Option<Element>,
         if let Some(s) = sig {
             b = b.value_signal(s);
         }
+        if let Some(label) = accessibility_label.clone() {
+            b = b.accessibility_label(label);
+        }
         if let Some(c) = children {
             b = b.child(c);
         }
         return b.into();
     }
     // 无 options：若宏未走 scope（纯 Props），仍包一层 scope 以支持 children 内 Item。
-    radio_group_scope(&id, sig, default_value, disabled, || {
+    radio_group_scope_named(&id, sig, default_value, disabled, accessibility_label, || {
         children.unwrap_or_default()
     })
 }
@@ -509,6 +528,7 @@ pub fn radio_group(group_id: impl Into<String>) -> RadioGroupBuilder {
         default_value: String::new(),
         options: Vec::new(),
         disabled: false,
+        accessibility_label: None,
         children: Vec::new(),
         chrome: SlotChrome::default(),
     }
@@ -516,6 +536,11 @@ pub fn radio_group(group_id: impl Into<String>) -> RadioGroupBuilder {
 
 impl RadioGroupBuilder {
     crate::impl_slot_chrome_methods!();
+
+    pub fn accessibility_label(mut self, label: impl Into<String>) -> Self {
+        self.accessibility_label = Some(label.into());
+        self
+    }
 
     pub fn value_signal(mut self, s: Signal<String>) -> Self {
         self.selected = Some(s);
@@ -561,6 +586,7 @@ impl From<RadioGroupBuilder> for Element {
         let id = crate::utils::resolve_instance_id(builder.group_id, "radio");
         let default_value = builder.default_value;
         let disabled = builder.disabled;
+        let accessibility_label = builder.accessibility_label;
         let options = builder.options;
         let extra = builder.children;
         let selected = resolve_string_signal(builder.selected, &id, "radio", default_value.clone());
@@ -590,6 +616,9 @@ impl From<RadioGroupBuilder> for Element {
                 .children(items)
                 .into();
             root = root.accesskit_role("radiogroup");
+            if let Some(label) = accessibility_label.filter(|label| !label.trim().is_empty()) {
+                root = root.aria_label(label);
+            }
             root.attrs.insert("accesskit_id".to_string(), id.clone());
             root.template_id = Some(id);
             attach_focus_roving(&mut root, FocusRovingAxis::Vertical);

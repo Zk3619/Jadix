@@ -1,14 +1,14 @@
 use std::collections::BTreeMap;
 use std::sync::{
-    Arc,
     atomic::{AtomicBool, Ordering},
-    mpsc::{Receiver, SyncSender, TrySendError, sync_channel},
+    mpsc::{sync_channel, Receiver, SyncSender, TrySendError},
+    Arc,
 };
 
 use base64::Engine;
 use windows::Win32::Graphics::Imaging::*;
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED,
 };
 use windows_sys::Win32::{
     Foundation::HWND, Graphics::Gdi::*, UI::WindowsAndMessaging::PostMessageW,

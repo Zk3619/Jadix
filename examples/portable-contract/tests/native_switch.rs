@@ -37,7 +37,7 @@ fn switch_toggle_updates_one_signal_and_rejects_stale_revisions() {
     let mut root = HeadlessRoot::new();
     let projection = ElementProjection::new(root.id());
     let first = projection.snapshot(&mut element).unwrap();
-    root.reconcile(&[first.clone()]).unwrap();
+    root.reconcile(std::slice::from_ref(&first)).unwrap();
     let event = PlatformEvent {
         node: first.id,
         payload: EventPayload::Toggle {
@@ -86,7 +86,7 @@ fn disabled_switch_rejects_toggle_and_focus() {
     let mut root = HeadlessRoot::new();
     let projection = ElementProjection::new(root.id());
     let node = projection.snapshot(&mut element).unwrap();
-    root.reconcile(&[node.clone()]).unwrap();
+    root.reconcile(std::slice::from_ref(&node)).unwrap();
     for payload in [
         EventPayload::Focus,
         EventPayload::Toggle {
@@ -144,6 +144,7 @@ fn switch_capability_and_label_budget_are_explicit() {
         accessible_role: None,
         accessible_selected: None,
         accessible_expanded: None,
+        accessible_description: None,
         accessible_name: None,
         style: Default::default(),
     };
@@ -153,7 +154,7 @@ fn switch_capability_and_label_budget_are_explicit() {
         children: vec![],
     };
     assert_eq!(
-        limited.reconcile(&[node.clone()]),
+        limited.reconcile(std::slice::from_ref(&node)),
         Err(BackendError::ResourceLimit(ResourceKind::TextBytes))
     );
     if let NodeContent::Switch { label, .. } = &mut descriptor.content {

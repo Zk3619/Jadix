@@ -5,6 +5,11 @@ use crate::core::reactivity::{use_signal, Signal};
 use crate::core::tree::Element;
 use std::{cell::RefCell, collections::HashMap, rc::Rc};
 
+mod evaluation;
+pub use evaluation::webview_evaluate;
+pub(crate) use evaluation::{document_changed, evaluation_ready, pump_evaluations, EvaluationHost};
+pub use jadix_core::web_evaluation::{WebEvaluation, WebEvaluationError};
+
 thread_local! {
     static MESSAGES: RefCell<HashMap<(crate::app::window_scope::WindowScope, String), Rc<dyn Fn(String)>>> = RefCell::new(HashMap::new());
 }

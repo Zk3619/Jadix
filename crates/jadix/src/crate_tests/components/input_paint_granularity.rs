@@ -149,9 +149,11 @@ fn focused_end_caret_input_prepares_once_per_paint() {
 
     let id = "hold-key-end-caret";
     use_signal("__jadix_button_focus_id", String::new).set(focus_id_for_input(id));
-    use_signal(&input_value_signal_key(id), String::new).set("hello".into());
+    let value = use_signal(&input_value_signal_key(id), String::new);
+    value.set("hello".into());
     // Caret at end (hold-repeat insert / backspace-from-end).
-    use_signal(&input_caret_signal_key(id), || None::<usize>).set(Some(5));
+    let caret = use_signal(&input_caret_signal_key(id), || None::<usize>);
+    caret.set(Some(5));
 
     let mut el: Element = input(id).placeholder("…").into();
     let mut tree = LayoutTree::new();
@@ -164,6 +166,40 @@ fn focused_end_caret_input_prepares_once_per_paint() {
         take_input_scroll_prepare_calls(),
         1,
         "end-caret Input must shape the live string once, not full+prefix"
+    );
+
+    // A paste-sized update must use the new text without rebuilding the tree.
+    let long = "hello 汉字 mixed text ".repeat(80);
+    value.set(long.clone());
+    caret.set(Some(long.len()));
+    sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+    assert_eq!(take_input_scroll_prepare_calls(), 1);
+    let leaf = find_tid(&el, &input_text_template_id(id)).unwrap();
+    assert_eq!(leaf.text.as_deref(), Some(long.as_str()));
+    assert_eq!(
+        leaf.text_style.input_caret.as_ref().unwrap().caret_byte_index,
+        long.len()
+    );
+    let scroll = leaf.text_style.scroll_x;
+    assert!(scroll > 240.0, "long update must reveal the end caret");
+    sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+    assert_eq!(
+        find_tid(&el, &input_text_template_id(id))
+            .unwrap()
+            .text_style
+            .scroll_x,
+        scroll,
+        "a settled caret must not drift on the next paint"
+    );
+    caret.set(Some(0));
+    sync_text_edit_paint_subtree(&mut el, &mut tree, &mut impact);
+    assert_eq!(
+        find_tid(&el, &input_text_template_id(id))
+            .unwrap()
+            .text_style
+            .scroll_x,
+        0.0,
+        "moving to the start must reset the same live tree's pan"
     );
 }
 

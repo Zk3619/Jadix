@@ -65,6 +65,8 @@ struct OverlayLayer {
     /// Wheel / pan / fling freeze while this layer is open. Default for Menu/Modal is
     /// [`ScrollFreeze::Page`] (page locked, overlay ScrollAreas still move).
     scroll_freeze: ScrollFreeze,
+    outside_dismiss: bool,
+    dismiss_observation: Option<Signal<Option<bool>>>,
 }
 
 fn layer_live(s: Signal<bool>) -> bool {
@@ -497,6 +499,8 @@ fn portal_sync_inner(
                             keep_alive,
                             kind,
                             scroll_freeze,
+                            outside_dismiss: true,
+                            dismiss_observation: None,
                         });
                         (Some(z_for_index(stack.len() - 1)), to_close)
                     }
@@ -597,7 +601,7 @@ pub fn overlay_blocks_wheel(path: &[super::pointer_events::HitPathEntry]) -> boo
 pub fn try_close_top() -> bool {
     let (to_close_top, pruned) = with_stack_mut(|stack| {
         let pruned = prune_closed(stack);
-        let top = stack.pop().map(|top| top.open);
+        let top = stack.pop().map(|top| (top.open, top.dismiss_observation));
         (top, pruned)
     });
     let mut closed = false;
@@ -607,10 +611,13 @@ pub fn try_close_top() -> bool {
             closed = true;
         }
     }
-    let Some(open) = to_close_top else {
+    let Some((open, observation)) = to_close_top else {
         return closed;
     };
     if layer_live(open) {
+        if let Some(observation) = observation {
+            observation.try_set(Some(false));
+        }
         // Prefer try_set: stack may briefly hold a disposed handle across teardown.
         open.try_set(false);
         true
@@ -629,7 +636,7 @@ pub fn try_close_top() -> bool {
 /// "nothing to dismiss" and close the modal (pointer-down already started exit).
 fn dismiss_exclusive_from_top(
     stack: &mut Vec<OverlayLayer>,
-    to_close: &mut Vec<Signal<bool>>,
+    to_close: &mut Vec<(Signal<bool>, Option<Signal<Option<bool>>>)>,
 ) -> bool {
     let Some(top) = stack.last() else {
         return false;
@@ -641,12 +648,15 @@ fn dismiss_exclusive_from_top(
     if !layer_live(top.open) {
         return layer_is_active(top);
     }
+    if !top.outside_dismiss {
+        return true;
+    }
     let close_menus_below = matches!(top.kind, OverlayKind::Menu);
     let mut i = stack.len() - 1;
     loop {
         let keep = stack[i].keep_alive.is_some_and(layer_live);
         if layer_live(stack[i].open) {
-            to_close.push(stack[i].open);
+            to_close.push((stack[i].open, stack[i].dismiss_observation));
         }
         if keep {
             if i == 0 || !close_menus_below {
@@ -668,6 +678,53 @@ fn dismiss_exclusive_from_top(
         }
     }
     true
+}
+
+/// Keep Escape dismissal while independently disabling outside presses.
+/// Applied after syncing the layer; policy belongs to this window/root's id.
+pub fn set_outside_dismiss(id: &str, enabled: bool) {
+    with_stack_mut(|stack| {
+        if let Some(layer) = stack.iter_mut().find(|layer| layer.id == id) {
+            layer.outside_dismiss = enabled;
+        }
+    });
+}
+
+/// Observe user dismissal: `true` for an outside press, `false` for Escape.
+/// The observer is window/layer scoped and is notified before the open signal.
+pub fn observe_dismissal(id: &str, observation: Signal<Option<bool>>) {
+    with_stack_mut(|stack| {
+        if let Some(layer) = stack.iter_mut().find(|layer| layer.id == id) {
+            layer.dismiss_observation = Some(observation);
+        }
+    });
+}
+
+/// Shared modal underlay path. Signal writes occur outside the stack borrow.
+pub fn close_from_outside(open: Signal<bool>) {
+    let observation = with_stack_mut(|stack| {
+        stack
+            .iter()
+            .find(|l| l.open.id() == open.id())
+            .and_then(|l| l.dismiss_observation)
+    });
+    if let Some(observation) = observation {
+        observation.try_set(Some(true));
+    }
+    open.try_set(false);
+}
+
+/// Immediately unregister an unmounted host, including its exit keep-alive.
+pub fn remove_overlay(id: &str) {
+    let mut close = Vec::new();
+    with_stack_mut(|stack| {
+        if let Some(pos) = stack.iter().position(|l| l.id == id) {
+            drain_layer_and_nested_children(stack, pos, &mut close);
+        }
+    });
+    for open in close {
+        open.try_set(false);
+    }
 }
 
 /// Solid/Radix non-modal dismiss: close the top Stacked Popover/Menu/Tooltip when the
@@ -699,8 +756,11 @@ pub fn try_dismiss_outside_press() -> bool {
         other.try_set(false);
     }
     let mut any = consumed;
-    for open in to_close {
+    for (open, observation) in to_close {
         if layer_live(open) {
+            if let Some(observation) = observation {
+                observation.try_set(Some(true));
+            }
             open.try_set(false);
             any = true;
         }

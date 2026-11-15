@@ -9,8 +9,8 @@ readme = "README.md"
 
 [features]
 default = []
-compute = []
-backend-dx12 = ["wgpu/dx12", "compute"]
+compute = ["wgpu/compute"]
+backend-dx12 = ["wgpu/dx12"]
 backend-dx11-angle = ["wgpu/gles"]
 backend-dx11-native = ["wgpu/dx11"]
 test-hooks = []

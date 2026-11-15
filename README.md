@@ -1,5 +1,7 @@
 # Jadix
 
+`jadix` is the primary Rust UI entry. `jadix_native` adapts shared presentation contracts to system views; optional `jadix_shell` adds JS/TSX, sessions and distribution on top of GPU/native hosts. Shared capabilities belong to Jadix and its existing core libraries.
+
 [English](README.md) | [简体中文](README.zh.md)
 
 A Rust-native UI framework with reactive state, GPU rendering, and optional declarative macros.

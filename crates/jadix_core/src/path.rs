@@ -108,6 +108,17 @@ pub fn decode_path_d(d: &str) -> Vec<PathCommand> {
 
 /// Flatten curves to `MoveTo` / `LineTo` / `Close` for raster, tessellate, and hit-testing.
 pub fn flatten_path(cmds: &[PathCommand]) -> Vec<PathCommand> {
+    flatten_path_with_tolerance(cmds, FLATTEN_FLATNESS)
+}
+
+/// Flatten with a user-space chord tolerance. Invalid values use the default.
+/// Subdivision is bounded (16 Bezier levels, 65536 arc segments).
+pub fn flatten_path_with_tolerance(cmds: &[PathCommand], tolerance: f32) -> Vec<PathCommand> {
+    let tolerance = if tolerance.is_finite() && tolerance > 0.0 {
+        tolerance.max(1e-6)
+    } else {
+        FLATTEN_FLATNESS
+    };
     let mut out = Vec::with_capacity(cmds.len());
     let mut cur = (0.0f32, 0.0f32);
     let mut subpath_start = cur;
@@ -123,11 +134,11 @@ pub fn flatten_path(cmds: &[PathCommand]) -> Vec<PathCommand> {
                 cur = p;
             }
             PathCommand::QuadTo { ctrl, to } => {
-                flatten_quad(cur, ctrl, to, &mut out);
+                flatten_quad(cur, ctrl, to, tolerance, &mut out);
                 cur = to;
             }
             PathCommand::CubicTo { c1, c2, to } => {
-                flatten_cubic(cur, c1, c2, to, &mut out);
+                flatten_cubic(cur, c1, c2, to, tolerance, &mut out);
                 cur = to;
             }
             PathCommand::Arc {
@@ -145,6 +156,7 @@ pub fn flatten_path(cmds: &[PathCommand]) -> Vec<PathCommand> {
                     large,
                     sweep,
                     to,
+                    tolerance,
                     &mut out,
                 );
                 cur = to;
@@ -497,10 +509,17 @@ fn mid_pt(a: Point2, b: Point2) -> Point2 {
 
 /// Maximum chord error in raster pixels (coordinates already include display DPI).
 pub const FLATTEN_FLATNESS: f32 = 0.125;
-const FLATTEN_MAX_DEPTH: u8 = 10;
+const FLATTEN_MAX_DEPTH: u8 = 16;
 
-fn flatten_cubic(p0: Point2, p1: Point2, p2: Point2, p3: Point2, out: &mut Vec<PathCommand>) {
-    flatten_cubic_rec(p0, p1, p2, p3, 0, out);
+fn flatten_cubic(
+    p0: Point2,
+    p1: Point2,
+    p2: Point2,
+    p3: Point2,
+    tolerance: f32,
+    out: &mut Vec<PathCommand>,
+) {
+    flatten_cubic_rec(p0, p1, p2, p3, 0, tolerance, out);
 }
 
 fn flatten_cubic_rec(
@@ -509,10 +528,11 @@ fn flatten_cubic_rec(
     p2: Point2,
     p3: Point2,
     depth: u8,
+    tolerance: f32,
     out: &mut Vec<PathCommand>,
 ) {
     let err = dist_to_segment(p1, p0, p3).max(dist_to_segment(p2, p0, p3));
-    if depth >= FLATTEN_MAX_DEPTH || err <= FLATTEN_FLATNESS {
+    if depth >= FLATTEN_MAX_DEPTH || err <= tolerance {
         out.push(PathCommand::LineTo(p3));
         return;
     }
@@ -522,24 +542,31 @@ fn flatten_cubic_rec(
     let m012 = mid_pt(m01, m12);
     let m123 = mid_pt(m12, m23);
     let m = mid_pt(m012, m123);
-    flatten_cubic_rec(p0, m01, m012, m, depth.saturating_add(1), out);
-    flatten_cubic_rec(m, m123, m23, p3, depth.saturating_add(1), out);
+    flatten_cubic_rec(p0, m01, m012, m, depth.saturating_add(1), tolerance, out);
+    flatten_cubic_rec(m, m123, m23, p3, depth.saturating_add(1), tolerance, out);
 }
 
-fn flatten_quad(p0: Point2, p1: Point2, p2: Point2, out: &mut Vec<PathCommand>) {
-    flatten_quad_rec(p0, p1, p2, 0, out);
+fn flatten_quad(p0: Point2, p1: Point2, p2: Point2, tolerance: f32, out: &mut Vec<PathCommand>) {
+    flatten_quad_rec(p0, p1, p2, 0, tolerance, out);
 }
 
-fn flatten_quad_rec(p0: Point2, p1: Point2, p2: Point2, depth: u8, out: &mut Vec<PathCommand>) {
-    if depth >= FLATTEN_MAX_DEPTH || dist_to_segment(p1, p0, p2) <= FLATTEN_FLATNESS {
+fn flatten_quad_rec(
+    p0: Point2,
+    p1: Point2,
+    p2: Point2,
+    depth: u8,
+    tolerance: f32,
+    out: &mut Vec<PathCommand>,
+) {
+    if depth >= FLATTEN_MAX_DEPTH || dist_to_segment(p1, p0, p2) <= tolerance {
         out.push(PathCommand::LineTo(p2));
         return;
     }
     let m01 = mid_pt(p0, p1);
     let m12 = mid_pt(p1, p2);
     let m = mid_pt(m01, m12);
-    flatten_quad_rec(p0, m01, m, depth.saturating_add(1), out);
-    flatten_quad_rec(m, m12, p2, depth.saturating_add(1), out);
+    flatten_quad_rec(p0, m01, m, depth.saturating_add(1), tolerance, out);
+    flatten_quad_rec(m, m12, p2, depth.saturating_add(1), tolerance, out);
 }
 
 /// SVG elliptical arc → polyline (W3C endpoint-to-center parameterization).
@@ -555,6 +582,7 @@ fn flatten_arc(
     large_arc: bool,
     sweep: bool,
     p1: Point2,
+    tolerance: f32,
     out: &mut Vec<PathCommand>,
 ) {
     if (p0.0 - p1.0).abs() < 1e-6 && (p0.1 - p1.1).abs() < 1e-6 {
@@ -617,7 +645,7 @@ fn flatten_arc(
         dtheta += std::f32::consts::TAU;
     }
 
-    let segments = arc_segments(rx.max(ry), dtheta);
+    let segments = arc_segments_with_tolerance(rx.max(ry), dtheta, tolerance);
     for i in 1..=segments {
         let t = i as f32 / segments as f32;
         let theta = theta1 + dtheta * t;
@@ -645,9 +673,14 @@ pub fn dist_to_segment(p: Point2, a: Point2, b: Point2) -> f32 {
 }
 
 pub fn arc_segments(radius: f32, angle: f32) -> usize {
-    let step = (2.0 * (1.0 - FLATTEN_FLATNESS / radius.max(0.5)).acos())
-        .clamp(0.001, std::f32::consts::PI / 6.0);
-    (angle.abs() / step).ceil().clamp(1.0, 4096.0) as usize
+    arc_segments_with_tolerance(radius, angle, FLATTEN_FLATNESS)
+}
+
+fn arc_segments_with_tolerance(radius: f32, angle: f32, tolerance: f32) -> usize {
+    let r = f64::from(radius.max(0.5));
+    let step = (2.0 * (1.0 - f64::from(tolerance) / r).clamp(-1.0, 1.0).acos())
+        .clamp(1e-6, std::f64::consts::PI / 6.0);
+    (f64::from(angle.abs()) / step).ceil().clamp(1.0, 65536.0) as usize
 }
 
 #[cfg(test)]

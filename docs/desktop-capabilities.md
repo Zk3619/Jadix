@@ -168,7 +168,6 @@ VRM avatar 的基础网格、骨架和已有 glTF 动画可用，不能宣称完
 ```powershell
 cargo run -p jadix --features scene3d-models --example model_scene -- path/to/avatar.vrm
 cargo run -p jadix_3d --example inspect -- path/to/model.glb
-cargo test -p jadix_3d --features gpu-tests -- --nocapture
 ```
 
 gpu-tests 显式启用原生后端并要求可用适配器。测试构造真实 GLB，验证层级、蒙皮、morph、
@@ -176,32 +175,12 @@ gpu-tests 显式启用原生后端并要求可用适配器。测试构造真实 
 并通过 GPU 像素读回验证骨骼运动、RGBA/BGRA、贴图、PBR maps、颜色空间及深度遮挡。
 如果禁用 Jadix 默认特性，运行模型视口时须另选 backend-dx12、backend-vulkan、backend-metal 或 backend-gles。
 
-## Live2D（可选，实验性兼容）
+## 2D 绘制与 Live2D 迁移
 
-独立 jadix_live2d crate 不依赖 jadix_native；通过 jadix/live2d 可重导出为 jadix::live2d。
-两个模型 crate 均不在 workspace default-members 中，jadix 默认特性也不引入它们；
-显式 --workspace 或启用相应特性才会构建。Cargo.lock 中的资源解析不代表默认编译。
+通用 2D 绘制已提取到 `jadix_2d`：独立 Canvas、路径 CPU 光栅、渐变、命中检测、
+GPU 网格及 stencil/MSAA 渲染。Jadix 保留 Element、布局、贴图池和上传调度适配。
+见 [jadix_2d](../crates/jadix_2d/README.md) 和 [Vello 可行性分析](vello-feasibility.md)。
 
-Player 加载 model3/moc3、纹理、motions、expressions、pose3、physics3，提供动作播放、
-表情、视线、眨眼、呼吸、宿主提供的口型幅度及参数覆盖。update 使用有限步长驱动运行时。
-View::fit 负责等比适配和物理指针到模型坐标转换，可配合 runtime.hit_test 使用。
-GpuModel 持有 GPU 资源，更新变形顶点，编码普通/加法/乘法混合、正向/反向裁剪遮罩，
-使用宿主同一个 jadix_wgpu device、目标纹理和提交队列。
-直接依赖时 default-features = false 可只使用 CPU；native-backends 显式启用原生 GPU 后端。
-
-**这不是完整官方 Cubism 支持。** 当前复用实验性纯 Rust Mocari 0.4.0，未接入官方 Core，
-未验证所有 moc3 版本、新版 Cubism 特性、复杂遮罩模型或 SDK 动作优先级/事件行为。
-没有捆绑专有二进制及模型，宿主必须取得模型/SDK 授权，并自行负责音频采集与播放。
-合成网格 GPU 测试不能替代真实授权模型验收。
-
-~~~powershell
-cargo test -p jadix_live2d --features gpu-tests -- --nocapture
-cargo run -p jadix_live2d --example inspect -- path/to/avatar.model3.json
-cargo run -p jadix_live2d --features native-backends --example render_model -- path/to/avatar.model3.json avatar.ppm 2 Idle 0
-$env:JADIX_LIVE2D_MODEL = 'path/to/avatar.model3.json'
-cargo test -p jadix_live2d --test real_model -- --ignored --nocapture
-~~~
-
-render_model 输出带深灰背景的离屏 PPM；时间、动作组与索引可省略。
-真实模型测试默认明确 ignored；没有授权资产时不将其计入已通过的兼容性验证。
-更多 API 见 crates/jadix_live2d/README.md。
+Live2D 已迁出本 workspace，位于
+`D:/Projects/Rust/Animet/crates/animet-render-live2d`。`jadix/live2d` 与 `jadix::live2d` 已移除。
+模型能力、示例和测试随 crate 保留；请在 Animet workspace 中运行。

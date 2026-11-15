@@ -123,9 +123,9 @@ phase={:<8}  stop={}  prevent={}",
         "definite-width padded coords must stay paint-only"
     );
     assert!(
-            metric_ms < 5.0,
-            "pointer path must not cosmic-prepare every mousemove (median {metric_ms:.2}ms / 80 ticks; batches={metric_samples:?})"
-        );
+        metric_ms < 5.0,
+        "pointer path must not cosmic-prepare every mousemove (median {metric_ms:.2}ms / 80 ticks; batches={metric_samples:?})"
+    );
     let mut node = label("").w("100%");
     node.text_style.size = Some(12.0);
     node.text_style.line_height_scale = Some(1.5);
@@ -312,7 +312,7 @@ fn element_text_signal_and_closure_bind() {
 
 #[test]
 fn reactive_anchor_registers_independently_per_window_scope() {
-    use crate::app::window_scope::{enter, WindowScope};
+    use crate::app::window_scope::{WindowScope, enter};
     use crate::core::reactivity::{
         bind_current_owner_window_key_scope, create_effect, create_root, create_signal,
     };

@@ -24,6 +24,8 @@ fn native_layout_animation_retains_edit_selection_undo_and_finishes_without_idle
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: style::NodeStyle {
                 width: Some(400.0),
@@ -35,6 +37,7 @@ fn native_layout_animation_retains_edit_selection_undo_and_finishes_without_idle
             id: editor,
             descriptor: NodeDescriptor {
                 content: NodeContent::Textarea {
+                    max_length: None,
                     value: String::from("文档 😀"),
                     placeholder: String::new(),
                     enabled: true,
@@ -44,6 +47,8 @@ fn native_layout_animation_retains_edit_selection_undo_and_finishes_without_idle
                 accessible_role: None,
                 accessible_selected: None,
                 accessible_expanded: None,
+                accessibility_relations: Default::default(),
+                accessible_description: None,
                 accessible_name: Some(String::from("Animated native editor")),
                 style: style::NodeStyle {
                     width: Some(220.0),
@@ -95,6 +100,7 @@ fn native_layout_animation_retains_edit_selection_undo_and_finishes_without_idle
         })
         .unwrap();
     nodes[0].children[0].descriptor.content = NodeContent::Textarea {
+        max_length: None,
         value: value.clone(),
         placeholder: String::new(),
         enabled: true,

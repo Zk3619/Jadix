@@ -36,7 +36,12 @@ pub mod svg;
 pub mod svg_smil;
 pub mod text;
 
-pub use canvas::{canvas, Canvas2D, CanvasBuilder, CanvasSize, ATTR_CANVAS_PAINT};
+pub use canvas::{
+    canvas, BlendMode, Brush2D, Canvas2D, CanvasBuilder, CanvasImageSource, CanvasPath2D,
+    CanvasSize, CompositeMode, ExtendMode, Font2D, FontError, FontMetrics2D, GlyphRun,
+    GradientAlpha, GradientError, GradientStops, Image2D, ImageSampling, LayerFilter, LayerOptions,
+    LineCap, LineJoin, Morphology, PositionedGlyph, VectorGradient, ATTR_CANVAS_PAINT,
+};
 pub use div::{boxed, div, gstack, hstack, r#box, vstack, BoxBuilder};
 pub use effect_wrap::{effect_wrap, EffectWrapBuilder};
 pub use interactive::{apply_disabled, interactive, InteractiveBuilder};
@@ -52,9 +57,9 @@ pub use path::{
     filled_ellipse, flatten_path, path_gpu_from_element_attrs, path_pointer_hit,
     path_quads_from_element_attrs, path_raster_from_element_attrs, path_target_leaf_size, pie_ring,
     pie_sector, polygon, polyline, rasterize_layers_rgba, rasterize_path_rgba, tessellate_path,
-    tessellate_path_mesh, PathCommand, PathQuad, PathStyle, PathTri, Point2, ATTR_PATH_D,
-    ATTR_PATH_FILL, ATTR_PATH_FIT_LEAF, ATTR_PATH_KIND, ATTR_PATH_MARKERS, ATTR_PATH_POINTS,
-    ATTR_PATH_STROKE, ATTR_PATH_STROKE_WIDTH, ATTR_PATH_VIEWBOX,
+    tessellate_path_mesh, PathCommand, PathQuad, PathStyle, PathTri, Point2, StrokeOptions,
+    ATTR_PATH_D, ATTR_PATH_FILL, ATTR_PATH_FIT_LEAF, ATTR_PATH_KIND, ATTR_PATH_MARKERS,
+    ATTR_PATH_POINTS, ATTR_PATH_STROKE, ATTR_PATH_STROKE_WIDTH, ATTR_PATH_VIEWBOX,
 };
 pub use portal::{portal, PortalBuilder};
 #[cfg(feature = "macros")]
@@ -112,3 +117,49 @@ pub fn subtree_has_svg_smil(el: &crate::core::tree::Element) -> bool {
 }
 
 pub use text::{icon, text, TextBuilder};
+
+pub use jadix_2d::{AtlasError, AtlasLimits, AtlasRegion, ImageAtlas};
+#[cfg(feature = "gpu")]
+pub use jadix_2d::{PreparedText2D, TextLayoutError, TextPrepareOptions, TextRenderMode};
+
+pub use jadix_2d::{
+    MipmapError, MipmapLimits, SampledScene2D, Scene2D, SceneError, SceneLimits, SceneOptions,
+    SceneSampling, SceneStats,
+};
+
+pub use jadix_2d::{ColorGlyphError, ColorGlyphOptions, ColorGlyphRun, GradientSpace};
+
+pub use jadix_2d::{Convolution, FilterColorSpace, FilterEdge, FilterError, TransferFunction};
+
+pub use jadix_2d::HueDirection;
+#[cfg(feature = "gpu")]
+pub use jadix_2d::{FontVariations, VariationError};
+
+#[cfg(feature = "icc")]
+pub use jadix_2d::IccTransform;
+pub use jadix_2d::{
+    AtlasCache, AtlasCacheStats, AtlasEntry, Color2D, ColorSpaceTag, GamutMapping, RegionImage,
+    SceneRegion,
+};
+#[cfg(feature = "gpu")]
+pub use jadix_2d::{GlyphAtlasCache, PreparedSceneGpu};
+
+#[cfg(feature = "gpu")]
+pub use jadix_2d::gpu::{GpuMesh, MeshColorSpace, MeshInstance, MeshUploadStats};
+
+#[cfg(feature = "gpu")]
+pub use jadix_2d::gpu::{GpuImageAlpha, GpuImageColor, GpuImageError};
+pub use jadix_2d::{FontEmbolden, GlyphRunOptions};
+
+pub use jadix_2d::{ColorContext2D, CssColorError};
+
+#[cfg(feature = "gpu")]
+pub use jadix_2d::gpu::AaQuality;
+
+pub use jadix_2d::{PathBooleanError, PathBooleanOp, PathBooleanOptions, PathGeometry2D};
+
+#[cfg(feature = "gpu")]
+pub use jadix_2d::gpu::PreparedSampledSceneGpu;
+
+#[cfg(feature = "gpu")]
+pub use jadix_2d::gpu::{RendererOptions, SceneMemoryEstimate, SceneRenderer2D};

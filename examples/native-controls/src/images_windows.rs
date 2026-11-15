@@ -63,6 +63,7 @@ mod application {
                 accessible_role: None,
                 accessible_selected: None,
                 accessible_expanded: None,
+                accessible_description: None,
                 accessible_name: None,
                 style: style::NodeStyle {
                     width: size[0],
@@ -163,6 +164,7 @@ mod application {
                 node(
                     self.ids[2],
                     NodeContent::Input {
+                        max_length: None,
                         value: self.preview.clone().unwrap_or_else(|| self.source.clone()),
                         placeholder: "Absolute file path or HTTP(S) URL".into(),
                         enabled: true,

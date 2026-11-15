@@ -115,12 +115,12 @@ fn month_picker_panel_keeps_caption_select_layout() {
     let month = find_tid(&panel, "t-mp:dp_m__select").expect("month select");
     let year = find_tid(&panel, "t-mp:dp_y__select").expect("year select");
     assert!(
-            month.layout_bounds[2] > 40.0 && year.layout_bounds[2] > 40.0,
-            "Month picker selects must not collapse (flex-basis 0 needs a definite panel width); month={:?} year={:?} panel={:?}",
-            month.layout_bounds,
-            year.layout_bounds,
-            panel.layout_bounds
-        );
+        month.layout_bounds[2] > 40.0 && year.layout_bounds[2] > 40.0,
+        "Month picker selects must not collapse (flex-basis 0 needs a definite panel width); month={:?} year={:?} panel={:?}",
+        month.layout_bounds,
+        year.layout_bounds,
+        panel.layout_bounds
+    );
     assert!(
         panel.layout_bounds[2] > 200.0,
         "Month picker panel must keep calendar width, got {:?}",
@@ -129,11 +129,11 @@ fn month_picker_panel_keeps_caption_select_layout() {
     let pad = crate::layout::dimension::css_root_font_size_px() * 0.75;
     let top = month.layout_bounds[1] - panel.layout_bounds[1];
     assert!(
-            top > pad - 2.0 && top < pad + 6.0,
-            "month row must sit at panel padding (not padding+gap); top={top} pad={pad} panel={:?} month={:?}",
-            panel.layout_bounds,
-            month.layout_bounds
-        );
+        top > pad - 2.0 && top < pad + 6.0,
+        "month row must sit at panel padding (not padding+gap); top={top} pad={pad} panel={:?} month={:?}",
+        panel.layout_bounds,
+        month.layout_bounds
+    );
 }
 
 #[test]
@@ -186,11 +186,11 @@ fn datetime_time_row_sits_near_separator() {
     let gap = hour.layout_bounds[1] - (sep.layout_bounds[1] + sep.layout_bounds[3]);
     let pad = crate::layout::dimension::css_root_font_size_px() * 0.75;
     assert!(
-            gap > pad - 2.0 && gap < pad + 6.0,
-            "time row must sit one padding below the hairline (not wrapper pt+gap+row py); gap={gap} pad={pad} sep={:?} hour={:?}",
-            sep.layout_bounds,
-            hour.layout_bounds
-        );
+        gap > pad - 2.0 && gap < pad + 6.0,
+        "time row must sit one padding below the hairline (not wrapper pt+gap+row py); gap={gap} pad={pad} sep={:?} hour={:?}",
+        sep.layout_bounds,
+        hour.layout_bounds
+    );
 }
 
 #[test]

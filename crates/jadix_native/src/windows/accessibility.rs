@@ -1,13 +1,14 @@
+use windows::core::{GUID, PCWSTR};
 use windows::Win32::Foundation::{HWND, RPC_E_CHANGED_MODE};
 use windows::Win32::System::Com::{
-    CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-    CoUninitialize,
+    CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_INPROC_SERVER,
+    COINIT_APARTMENTTHREADED,
 };
 use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::UI::Accessibility::{
-    CAccPropServices, IAccPropServices, PROPID_ACC_NAME, PROPID_ACC_ROLE, PROPID_ACC_STATE,
+    CAccPropServices, IAccPropServices, PROPID_ACC_DESCRIPTION, PROPID_ACC_NAME, PROPID_ACC_ROLE,
+    PROPID_ACC_STATE,
 };
-use windows::core::PCWSTR;
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     CHILDID_SELF, OBJID_CLIENT, STATE_SYSTEM_COLLAPSED, STATE_SYSTEM_EXPANDED,
     STATE_SYSTEM_SELECTABLE, STATE_SYSTEM_SELECTED,
@@ -116,20 +117,38 @@ impl Accessibility {
         window: windows_sys::Win32::Foundation::HWND,
         name: Option<&str>,
     ) -> Result<(), String> {
+        self.text_property(window, PROPID_ACC_NAME, "name", name)
+    }
+
+    pub(super) fn description(
+        &self,
+        window: windows_sys::Win32::Foundation::HWND,
+        description: Option<&str>,
+    ) -> Result<(), String> {
+        self.text_property(window, PROPID_ACC_DESCRIPTION, "description", description)
+    }
+
+    fn text_property(
+        &self,
+        window: windows_sys::Win32::Foundation::HWND,
+        property: GUID,
+        label: &str,
+        value: Option<&str>,
+    ) -> Result<(), String> {
         let properties = self.properties.as_ref().ok_or("accessibility is closed")?;
         let window = HWND(window);
         unsafe {
-            match name {
+            match value {
                 Some(name) => {
                     if name.contains('\0') {
-                        return Err(String::from("accessible name cannot contain NUL"));
+                        return Err(format!("accessible {label} cannot contain NUL"));
                     }
                     let name = super::wide(name);
                     properties.SetHwndPropStr(
                         window,
                         OBJID_CLIENT as u32,
                         CHILDID_SELF,
-                        PROPID_ACC_NAME,
+                        property,
                         PCWSTR(name.as_ptr()),
                     )
                 }
@@ -137,11 +156,11 @@ impl Accessibility {
                     window,
                     OBJID_CLIENT as u32,
                     CHILDID_SELF,
-                    &[PROPID_ACC_NAME],
+                    &[property],
                 ),
             }
         }
-        .map_err(|error| format!("set native accessible name: {error}"))
+        .map_err(|error| format!("set native accessible {label}: {error}"))
     }
 }
 

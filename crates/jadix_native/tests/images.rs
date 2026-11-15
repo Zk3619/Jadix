@@ -1,8 +1,8 @@
 use base64::Engine;
-use jadix_native::{HeadlessRoot, images::*, presentation::*};
+use jadix_native::{images::*, presentation::*, HeadlessRoot};
 use std::{
     path::PathBuf,
-    sync::mpsc::{Receiver, channel},
+    sync::mpsc::{channel, Receiver},
     time::Duration,
 };
 
@@ -30,6 +30,8 @@ fn setup(
                 accessible_role: None,
                 accessible_selected: None,
                 accessible_expanded: None,
+                accessibility_relations: Default::default(),
+                accessible_description: None,
                 accessible_name: None,
             },
             children: vec![],
@@ -153,13 +155,11 @@ fn disk_images_reopen_offline_report_corruption_and_invalidate_failed_refresh() 
         .filter(|path| path.extension().is_some_and(|extension| extension == "jic"))
         .collect();
     assert_eq!(records.len(), 1);
-    assert!(
-        !records[0]
-            .file_name()
-            .unwrap()
-            .to_string_lossy()
-            .contains("private-source")
-    );
+    assert!(!records[0]
+        .file_name()
+        .unwrap()
+        .to_string_lossy()
+        .contains("private-source"));
     let mut corrupt = std::fs::read(&records[0]).unwrap();
     *corrupt.last_mut().unwrap() ^= 1;
     std::fs::write(&records[0], corrupt).unwrap();

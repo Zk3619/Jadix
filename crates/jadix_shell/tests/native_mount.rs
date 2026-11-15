@@ -21,6 +21,51 @@ struct Host {
     popovers: bool,
 }
 
+#[cfg(feature = "native-vm")]
+#[test]
+fn shared_sdk_native_application_moves_keyed_nodes_and_relays_events() {
+    use jadix_shell::{application::ScriptApplication, native::NativeApplication};
+    let (_, registry, _) = setup();
+    let script = ScriptApplication::development(
+        "tests.native.application",
+        include_str!("fixtures/structural.js"),
+        registry,
+        Default::default(),
+    )
+    .unwrap();
+    let lifetime = script.lifetime();
+    let mut app = NativeApplication::new(script, Host::default(), Default::default());
+    assert_eq!(app.publish([400., 300.], 0).unwrap(), 1);
+    let button = app.application().node_at(&[0]).unwrap();
+    let a = app.application().node_at(&[1]).unwrap();
+    let b = app.application().node_at(&[2]).unwrap();
+    for phase in 1..=10 {
+        app.root_mut().host_mut().events.push(PlatformEvent {
+            node: button,
+            payload: EventPayload::Activate,
+        });
+        app.poll().unwrap();
+        assert_eq!(app.publish([400., 300.], 0).unwrap(), 1);
+        assert_eq!(
+            app.application().node_at(&[1]),
+            Some(if phase % 2 == 1 { b } else { a })
+        );
+        let batch = app.root().host().batches.last().unwrap();
+        assert!(!batch
+            .operations
+            .iter()
+            .any(|op| matches!(op, Operation::Remove {node} if *node == a || *node == b)));
+        assert!(batch
+            .operations
+            .iter()
+            .any(|op| matches!(op, Operation::Move { .. })));
+    }
+    assert_eq!(app.publish([240., 200.], 1).unwrap(), 0);
+    assert_eq!(app.application().node_at(&[2]), Some(b));
+    drop(app);
+    assert!(lifetime.is_disposed());
+}
+
 impl PlatformHost for Host {
     fn capabilities(&self) -> capabilities::BackendCapabilities {
         let mut capabilities = capabilities::BackendCapabilities::headless();
@@ -101,6 +146,47 @@ fn envelope(
 ) -> Envelope {
     let value = serde_json::json!({"protocol":1,"session":session.token(),"command":{"type":"mount","root":mount.root().model().id().token(),"tree":tree}});
     Envelope::decode(&serde_json::to_vec(&value).unwrap(), registry).unwrap()
+}
+
+#[test]
+fn wheel_events_reach_registered_scroll_callbacks_with_logical_deltas() {
+    let (mut session, registry, mut mount) = setup();
+    let seen = Rc::new(std::cell::RefCell::new(None));
+    let observed = seen.clone();
+    let handle = session
+        .export_event(
+            mount.root().model().id(),
+            registry.get("Scroll").unwrap().events["wheel"].clone(),
+            move |value| *observed.borrow_mut() = Some(value),
+        )
+        .unwrap();
+    let tree = serde_json::json!({
+        "component":"Scroll",
+        "key":"scroll",
+        "props":{},
+        "events":{"wheel":handle}
+    });
+    let message = envelope(&session, &mount, &registry, tree);
+    mount
+        .present(&session, &registry, &message, [320.0, 240.0], 0)
+        .unwrap();
+    let node = mount.node_at(&[]).unwrap();
+    mount.root_mut().host_mut().events.push(PlatformEvent {
+        node,
+        payload: EventPayload::Wheel {
+            delta_x: -2.5,
+            delta_y: 48.0,
+        },
+    });
+    mount
+        .poll(&session)
+        .unwrap()
+        .pop()
+        .unwrap()
+        .dispatch()
+        .unwrap();
+    let observed = serde_json::to_value(seen.borrow().as_ref().unwrap()).unwrap();
+    assert_eq!(observed, serde_json::json!({"deltaX":-2.5,"deltaY":48.0}));
 }
 
 fn input(key: &str, value: &str) -> serde_json::Value {
@@ -452,4 +538,27 @@ fn extended_controls_reconcile_revisioned_business_values_and_container_type_cha
     assert_ne!(mount.node_at(&[0]), Some(checkbox));
     assert!(mount.root().model().node(checkbox).is_none());
     session.dispose();
+}
+
+#[test]
+fn max_length_admission_is_bounded_and_rejected_updates_do_not_publish() {
+    let (session, registry, mut mount) = popover_setup();
+    for component in ["Input", "Textarea"] {
+        let valid = serde_json::json!({"component":component,"key":"field",
+            "props":{"value":"external over-limit", "maxLength":0}});
+        let message = envelope(&session, &mount, &registry, valid.clone());
+        mount
+            .present(&session, &registry, &message, [500., 400.], 0)
+            .unwrap();
+        let commits = mount.root().host().batches.len();
+        for limit in [-1.0, 0.5, 1048577.0] {
+            let mut invalid = valid.clone();
+            invalid["props"]["maxLength"] = limit.into();
+            let message = envelope(&session, &mount, &registry, invalid);
+            assert!(mount
+                .present(&session, &registry, &message, [500., 400.], 0)
+                .is_err());
+            assert_eq!(mount.root().host().batches.len(), commits);
+        }
+    }
 }

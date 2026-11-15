@@ -76,6 +76,7 @@ mod application {
                     accessible_role: None,
                     accessible_selected: None,
                     accessible_expanded: None,
+                    accessible_description: None,
                     accessible_name: None,
                     style: Default::default(),
                 },
@@ -153,7 +154,7 @@ mod application {
 
         fn verify_tab_stop(&self) -> Result<(), String> {
             use windows_sys::Win32::UI::WindowsAndMessaging::{
-                GWL_STYLE, GetNextDlgTabItem, GetParent, GetWindowLongPtrW, WS_TABSTOP,
+                GetNextDlgTabItem, GetParent, GetWindowLongPtrW, GWL_STYLE, WS_TABSTOP,
             };
             let mut selected_window = std::ptr::null_mut();
             for (label, value) in [

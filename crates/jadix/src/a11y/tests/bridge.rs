@@ -1,6 +1,74 @@
 use super::*;
 use crate::core::tree::Element;
 
+#[test]
+fn numeric_value_actions_require_a_live_enabled_handler_and_finite_payload() {
+    use std::{cell::Cell, rc::Rc};
+    let calls = Rc::new(Cell::new(0));
+    let observed = calls.clone();
+    let control = Element::new()
+        .focus_id("numeric-control")
+        .on_accessibility_value(move |value| {
+            assert_eq!(value, 73.0);
+            observed.set(observed.get() + 1);
+            true
+        });
+    let mut root = Element::new().child(control);
+    let update = tree_update_from_elements(&root, None);
+    let target = node_id_for_key("numeric-control");
+    assert!(
+        update
+            .nodes
+            .iter()
+            .find(|(id, _)| *id == target)
+            .unwrap()
+            .1
+            .supports_action(Action::SetValue)
+    );
+    let request = |data| ActionRequest {
+        action: Action::SetValue,
+        target_tree: TreeId::ROOT,
+        target_node: target,
+        data,
+    };
+    assert!(dispatch_accesskit_action(
+        &root,
+        &request(Some(ActionData::NumericValue(73.0)))
+    ));
+    for data in [
+        None,
+        Some(ActionData::Value("73".into())),
+        Some(ActionData::NumericValue(f64::NAN)),
+        Some(ActionData::NumericValue(f64::INFINITY)),
+    ] {
+        assert!(!dispatch_accesskit_action(&root, &request(data)));
+    }
+    for disabled in ["disabled", "aria-disabled"] {
+        root.children[0].set_attr(disabled, "true");
+        assert!(!dispatch_accesskit_action(
+            &root,
+            &request(Some(ActionData::NumericValue(73.0)))
+        ));
+        let update = tree_update_from_elements(&root, None);
+        assert!(
+            !update
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == target)
+                .unwrap()
+                .1
+                .supports_action(Action::SetValue)
+        );
+        root.children[0].attrs.remove(disabled);
+    }
+    root.children.clear();
+    assert!(!dispatch_accesskit_action(
+        &root,
+        &request(Some(ActionData::NumericValue(73.0)))
+    ));
+    assert_eq!(calls.get(), 1);
+}
+
 fn child_ids_of(nodes: &[(NodeId, Node)], id: NodeId) -> Vec<NodeId> {
     nodes
         .iter()
@@ -205,6 +273,46 @@ fn aria_label_and_description_override_text() {
 }
 
 #[test]
+fn aria_invalid_forces_node_and_maps_invalid_states() {
+    for (value, expected) in [
+        ("true", Invalid::True),
+        ("grammar", Invalid::Grammar),
+        ("spelling", Invalid::Spelling),
+    ] {
+        let mut field = Element::new();
+        field
+            .attrs
+            .insert("aria-invalid".to_string(), value.to_string());
+        let update = tree_update_from_elements(&Element::new().child(field), None);
+        let id = node_id_for_key("jadix:path:0");
+        let node = update
+            .nodes
+            .iter()
+            .find(|(node_id, _)| *node_id == id)
+            .map(|(_, node)| node)
+            .expect("aria-invalid forces an accessibility node");
+        assert_eq!(node.invalid(), Some(expected));
+    }
+}
+
+#[test]
+fn aria_invalid_false_does_not_mark_node_invalid() {
+    let mut field = Element::new();
+    field
+        .attrs
+        .insert("aria-invalid".to_string(), "false".to_string());
+    let update = tree_update_from_elements(&Element::new().child(field), None);
+    let id = node_id_for_key("jadix:path:0");
+    let node = update
+        .nodes
+        .iter()
+        .find(|(node_id, _)| *node_id == id)
+        .map(|(_, node)| node);
+    assert!(node.is_some(), "aria-invalid false still carries semantics");
+    assert_eq!(node.unwrap().invalid(), None);
+}
+
+#[test]
 fn accesskit_name_description_preferred_over_aria() {
     let mut el = Element::new().text("fallback");
     el.attrs
@@ -287,6 +395,84 @@ fn parses_menu_listbox_and_menubar_roles() {
         .map(|(_, n)| n)
         .expect("menu node");
     assert_eq!(node.role(), Role::Menu);
+}
+
+#[test]
+fn accessibility_relations_resolve_to_unique_accesskit_nodes() {
+    let mut control = Element::new().focus_id("relation-control");
+    control.attrs.insert("id".into(), "combo".into());
+    control
+        .attrs
+        .insert("aria-activedescendant".into(), "option-b".into());
+    control
+        .attrs
+        .insert("aria-controls".into(), "popup missing".into());
+    control
+        .attrs
+        .insert("accesskit_role".into(), "combobox".into());
+
+    let mut option_a = Element::new().focus_id("relation-option-a");
+    option_a.attrs.insert("id".into(), "option-a".into());
+    option_a
+        .attrs
+        .insert("accesskit_role".into(), "listboxoption".into());
+    let mut option_b = Element::new().focus_id("relation-option-b");
+    option_b.attrs.insert("id".into(), "option-b".into());
+    option_b
+        .attrs
+        .insert("accesskit_role".into(), "listboxoption".into());
+    let mut popup = Element::new().focus_id("relation-popup");
+    popup.attrs.insert("id".into(), "popup".into());
+    popup
+        .attrs
+        .insert("accesskit_role".into(), "listbox".into());
+
+    let root = Element::new()
+        .child(control)
+        .child(option_a)
+        .child(option_b)
+        .child(popup);
+    let update = tree_update_from_elements(&root, None);
+    let control_id = node_id_for_key("relation-control");
+    let option_b_id = node_id_for_key("relation-option-b");
+    let popup_id = node_id_for_key("relation-popup");
+    let control_node = update
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == control_id)
+        .map(|(_, node)| node)
+        .expect("control node");
+
+    assert_eq!(control_node.active_descendant(), Some(option_b_id));
+    assert_eq!(control_node.controls(), &[popup_id]);
+}
+
+#[test]
+fn accessibility_relations_ignore_missing_and_ambiguous_ids() {
+    let mut control = Element::new().focus_id("ambiguous-control");
+    control
+        .attrs
+        .insert("aria-activedescendant".into(), "duplicate".into());
+    control
+        .attrs
+        .insert("aria-controls".into(), "duplicate absent".into());
+    let mut first = Element::new();
+    first.attrs.insert("id".into(), "duplicate".into());
+    first.attrs.insert("accesskit_role".into(), "group".into());
+    let mut second = Element::new();
+    second.attrs.insert("id".into(), "duplicate".into());
+    second.attrs.insert("accesskit_role".into(), "group".into());
+    let root = Element::new().child(control).child(first).child(second);
+    let update = tree_update_from_elements(&root, None);
+    let control = update
+        .nodes
+        .iter()
+        .find(|(id, _)| *id == node_id_for_key("ambiguous-control"))
+        .map(|(_, node)| node)
+        .expect("control node");
+
+    assert_eq!(control.active_descendant(), None);
+    assert!(control.controls().is_empty());
 }
 
 #[test]

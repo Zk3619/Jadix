@@ -5,14 +5,23 @@ pub use jadix_core::presentation;
 use jadix_core::{create_root, OwnerHandle};
 use presentation::{RootId, RootLifetime};
 
+#[cfg(all(feature = "native-vm", not(target_arch = "wasm32")))]
+pub mod application;
+#[cfg(all(feature = "gpu-host", not(target_arch = "wasm32")))]
+pub mod gpu;
 pub mod handles;
+pub mod mount;
 #[cfg(feature = "native-host")]
 pub mod native;
+#[cfg(all(feature = "native-store", not(target_arch = "wasm32")))]
+pub mod ota;
 pub mod package;
 #[cfg(all(feature = "native-store", not(target_arch = "wasm32")))]
-pub mod store;
+pub mod publication;
 pub mod runtime;
 pub mod schema;
+#[cfg(all(feature = "native-store", not(target_arch = "wasm32")))]
+pub mod store;
 pub mod wire;
 use schema::{MethodContract, Schema, Value};
 
@@ -181,19 +190,17 @@ impl Session {
             .find(|lifetime| !lifetime.is_disposed() && lifetime.id().token() == *root)
             .ok_or(ShellError::UnknownMount)?;
         registry
-            .validate(tree)
-            .map_err(|_| ShellError::InvalidArguments)?;
-        let mut pending = vec![tree];
-        while let Some(node) = pending.pop() {
-            let contract = registry
-                .get(&node.component)
-                .ok_or(ShellError::InvalidArguments)?;
-            for (name, handle) in &node.events {
-                self.handles
-                    .check_event(handle, lifetime.id(), &contract.events[name])?;
-            }
-            pending.extend(node.children.iter());
-        }
+            .validate_with(tree, |node, contract| {
+                for (name, handle) in &node.events {
+                    self.handles
+                        .check_event(handle, lifetime.id(), &contract.events[name])?;
+                }
+                Ok(())
+            })
+            .map_err(|error| match error {
+                wire::ValidationError::Wire(_) => ShellError::InvalidArguments,
+                wire::ValidationError::Visitor(error) => error,
+            })?;
         Ok(())
     }
     pub fn pending_requests(&self) -> usize {

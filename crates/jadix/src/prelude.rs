@@ -120,12 +120,12 @@ pub use crate::app::{
     set_page_scroll_locked, set_scroll_freeze, set_second_instance_handler, set_window_fullscreen,
     suspense, throw_error, throw_resource_error, toggle_window_fullscreen, window_is_fullscreen,
     windows, AppBuilder, AppConfig, AppIcon, InstanceLaunch, InstancePolicy, Resource,
-    ResourceState, ScrollFreeze, WindowBackdrop, WindowClosed, WindowHandle, WindowOptions,
-    WindowSession,
+    ResourceState, ScreenOrientations, ScrollFreeze, WindowBackdrop, WindowClosed, WindowHandle,
+    WindowOptions, WindowSession,
 };
 pub use crate::app::{run_with_startup, StartupHandle, StartupHost};
 pub use crate::core::reactivity::{
-    batch, component_root, create_context, create_memo, create_signal, isolate_reads,
+    batch, component_root, create_context, create_memo, create_signal, isolate_reads, on_app_quit,
     provide_context, untrack, use_context, use_scoped_signal, use_signal, with_child_owner, Signal,
 };
 pub use crate::core::store::{create_store, store_field, ReadStore, Store, StoreField};
@@ -167,9 +167,12 @@ pub use crate::primitives::{
 };
 pub use crate::primitives::{
     boxed, canvas, div, effect_wrap, gstack, hstack, icon, interactive, portal, r#box, scene3d,
-    shader, text, vstack, BoxBuilder, Canvas2D, CanvasBuilder, CanvasSize, EffectWrapBuilder,
-    InteractiveBuilder, PortalBuilder, Scene3dBuilder, Scene3dCamera, Scene3dLight,
-    Scene3dMaterial, ShaderBuilder, TextBuilder,
+    shader, text, vstack, BlendMode, BoxBuilder, Brush2D, Canvas2D, CanvasBuilder,
+    CanvasImageSource, CanvasPath2D, CanvasSize, CompositeMode, EffectWrapBuilder, ExtendMode,
+    Font2D, FontError, FontMetrics2D, GlyphRun, GradientAlpha, GradientError, GradientStops,
+    Image2D, ImageSampling, InteractiveBuilder, LayerFilter, LayerOptions, LineCap, LineJoin,
+    Morphology, PortalBuilder, PositionedGlyph, Scene3dBuilder, Scene3dCamera, Scene3dLight,
+    Scene3dMaterial, ShaderBuilder, TextBuilder, VectorGradient,
 };
 
 #[cfg(feature = "macros")]
@@ -189,6 +192,7 @@ pub use crate::utils::font::{
     default_ui_mono_family_list, default_ui_sans_family_list, default_ui_serif_family_list,
     root_font_size_px, set_root_font_size, set_text_defaults, text_defaults, TextDefaults,
 };
+pub use crate::utils::hover_intent::DEFAULT_HOVER_OPEN_DELAY_MS;
 #[cfg(all(feature = "svg", feature = "animation-path"))]
 pub use crate::utils::{
     alloc_outputs, canonical_d, cubics_to_path_d, fit_icon, interp_linear, morph_destroy,
@@ -1540,6 +1544,8 @@ pub use crate::components::{
     WindowDragRegionProps,
     TABSTRIP_FOCUS_PREFIX,
 };
+#[cfg(feature = "webview")]
+pub use crate::platform::webview::{webview_evaluate, WebEvaluation, WebEvaluationError};
 pub use crate::text::TextDocument;
 #[cfg(feature = "document-diff")]
 pub use crate::text::{DiffDocument, DiffLineKind, DiffMode, DiffRow};
@@ -1558,3 +1564,51 @@ pub use crate::text::{DocumentHeightIndex, DocumentScrollAnchor};
 pub use crate::text::{Molecule, MoleculeAtom, MoleculeBond, MoleculeData};
 #[cfg(feature = "markdown")]
 pub use crate::text::{RichTextBlock, RichTextSpan};
+
+pub use crate::primitives::path::FillRule;
+
+pub use jadix_2d::{AtlasError, AtlasLimits, AtlasRegion, ImageAtlas};
+#[cfg(feature = "gpu")]
+pub use jadix_2d::{PreparedText2D, TextLayoutError, TextPrepareOptions, TextRenderMode};
+
+pub use jadix_2d::{
+    MipmapError, MipmapLimits, SampledScene2D, Scene2D, SceneError, SceneLimits, SceneOptions,
+    SceneSampling, SceneStats,
+};
+
+pub use jadix_2d::{ColorGlyphError, ColorGlyphOptions, ColorGlyphRun, GradientSpace};
+
+pub use jadix_2d::{Convolution, FilterColorSpace, FilterEdge, FilterError, TransferFunction};
+
+pub use jadix_2d::HueDirection;
+#[cfg(feature = "gpu")]
+pub use jadix_2d::{FontVariations, VariationError};
+
+#[cfg(feature = "icc")]
+pub use jadix_2d::IccTransform;
+pub use jadix_2d::{
+    AtlasCache, AtlasCacheStats, AtlasEntry, Color2D, ColorSpaceTag, GamutMapping, RegionImage,
+    SceneRegion,
+};
+#[cfg(feature = "gpu")]
+pub use jadix_2d::{GlyphAtlasCache, PreparedSceneGpu};
+
+#[cfg(feature = "gpu")]
+pub use jadix_2d::gpu::{GpuMesh, MeshColorSpace, MeshInstance, MeshUploadStats};
+
+#[cfg(feature = "gpu")]
+pub use jadix_2d::gpu::{GpuImageAlpha, GpuImageColor, GpuImageError};
+pub use jadix_2d::{FontEmbolden, GlyphRunOptions};
+
+pub use jadix_2d::{ColorContext2D, CssColorError};
+
+#[cfg(feature = "gpu")]
+pub use jadix_2d::gpu::AaQuality;
+
+pub use jadix_2d::{PathBooleanError, PathBooleanOp, PathBooleanOptions, PathGeometry2D};
+
+#[cfg(feature = "gpu")]
+pub use jadix_2d::gpu::PreparedSampledSceneGpu;
+
+#[cfg(feature = "gpu")]
+pub use jadix_2d::gpu::{RendererOptions, SceneMemoryEstimate, SceneRenderer2D};

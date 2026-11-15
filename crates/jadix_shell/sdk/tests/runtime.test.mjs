@@ -50,3 +50,29 @@ test('extended SDK controls share generated schemas and keys need no browser API
   assert.throws(() => jsx(Box, {}, '😀'.repeat(65)), /key/);
   assert.throws(() => jsx(Box, {}, '\ud800'), /key/);
 });
+
+
+test('Input and Textarea expose a bounded UTF-16 maxLength without truncating controlled values', () => {
+  for (const component of [Input, Textarea]) {
+    assert.equal(component({ value: 'external over-limit', maxLength: 0 }).props.maxLength, 0);
+    assert.equal(component({ value: '🦀', maxLength: 1048576 }).props.value, '🦀');
+    for (const limit of [-1, 0.5, 1048577, NaN, Infinity]) {
+      assert.throws(() => component({ value: '', maxLength: limit }));
+    }
+  }
+});
+
+test('UTF-8 budgets accept exact scalar boundaries and reject unpaired surrogates', () => {
+  for (const [scalar, width] of [['a', 1], ['é', 2], ['汉', 3], ['🦀', 4]]) {
+    const text = scalar.repeat(Math.floor(65536 / width));
+    assert.equal(Text({ text }).props.text, text);
+    assert.throws(() => Text({ text: text + scalar }), /string limit/);
+    const key = scalar.repeat(Math.floor(256 / width));
+    assert.equal(jsx(Box, {}, key).key, key);
+    assert.throws(() => jsx(Box, {}, key + scalar), /key/);
+  }
+  for (const text of ['\ud800', '\udfff', 'a\ud800z', '\ud800\ud800']) {
+    assert.throws(() => Text({ text }), /surrogate/);
+    assert.throws(() => jsx(Box, {}, text), /key/);
+  }
+});

@@ -80,6 +80,12 @@ export const schemas = [
             "type": "bool"
           },
           "required": false
+        },
+        "maxLength": {
+          "schema": {
+            "type": "number"
+          },
+          "required": false
         }
       }
     },
@@ -144,6 +150,23 @@ export const schemas = [
             "required": true
           },
           "y": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          }
+        }
+      },
+      "wheel": {
+        "type": "object",
+        "fields": {
+          "deltaX": {
+            "schema": {
+              "type": "number"
+            },
+            "required": true
+          },
+          "deltaY": {
             "schema": {
               "type": "number"
             },
@@ -239,6 +262,12 @@ export const schemas = [
         "disabled": {
           "schema": {
             "type": "bool"
+          },
+          "required": false
+        },
+        "maxLength": {
+          "schema": {
+            "type": "number"
           },
           "required": false
         }

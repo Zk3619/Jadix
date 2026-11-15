@@ -126,6 +126,58 @@ fn stationary_drag_does_not_schedule_another_layout() {
 }
 
 #[test]
+fn drawer_clears_text_edit_focus_only_after_drag_commits() {
+    crate::core::reactivity::create_root(|| {
+        DRAWER_DRAG.with(|drag| *drag.borrow_mut() = None);
+        set_drawer_viewport_size(800.0, 800.0);
+        let focused = use_signal("__jadix_button_focus_id", String::new);
+        focused.set("textarea:notes".into());
+        begin_drawer_drag(
+            "focus-drag".into(),
+            DrawerDirection::Down,
+            400.0,
+            200.0,
+            &[DrawerSnapPoint::Fraction(1.0)],
+            false,
+            Signal::new(true),
+            "focus-drag-handle".into(),
+            false,
+        );
+
+        let mut root = Element::new();
+        assert!(!tick_drawer_drag(&mut root, 400.0, 201.0));
+        assert_eq!(focused.peek(), "textarea:notes");
+        assert!(tick_drawer_drag(&mut root, 400.0, 203.0));
+        assert_eq!(focused.peek(), "");
+        clear_drawer_drag_if_any();
+    });
+}
+
+#[test]
+fn exclusive_drawer_handle_clears_text_edit_focus_on_start() {
+    crate::core::reactivity::create_root(|| {
+        DRAWER_DRAG.with(|drag| *drag.borrow_mut() = None);
+        set_drawer_viewport_size(800.0, 800.0);
+        let focused = use_signal("__jadix_button_focus_id", String::new);
+        focused.set("input:search".into());
+        begin_drawer_drag(
+            "exclusive-focus-drag".into(),
+            DrawerDirection::Down,
+            400.0,
+            200.0,
+            &[DrawerSnapPoint::Fraction(1.0)],
+            false,
+            Signal::new(true),
+            "exclusive-focus-handle".into(),
+            true,
+        );
+
+        assert_eq!(focused.peek(), "");
+        clear_drawer_drag_if_any();
+    });
+}
+
+#[test]
 fn secondary_button_does_not_start_drawer_drag() {
     crate::core::reactivity::create_root(|| {
         DRAWER_DRAG.with(|d| *d.borrow_mut() = None);

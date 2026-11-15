@@ -1,8 +1,39 @@
 use jadix_tasks::*;
+use std::future::Future;
+use std::pin::Pin;
 use std::sync::{
     atomic::{AtomicUsize, Ordering},
     Arc, Barrier,
 };
+use std::task::{Context, Poll, Wake, Waker};
+
+struct PendingDrop(Arc<AtomicUsize>);
+
+impl Future for PendingDrop {
+    type Output = ();
+
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<()> {
+        Poll::Pending
+    }
+}
+
+impl Drop for PendingDrop {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+struct CountWake(AtomicUsize);
+
+impl Wake for CountWake {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
 
 #[test]
 fn cancellation_is_idempotent_and_late_registration_is_not_lost() {
@@ -26,6 +57,30 @@ fn cancellation_is_idempotent_and_late_registration_is_not_lost() {
         cancellation.checkpoint().unwrap_err().kind,
         TaskErrorKind::Cancelled
     );
+}
+
+#[test]
+fn cancellation_wakes_waiting_task_and_drops_its_pending_future() {
+    let cancellation = CancellationToken::new();
+    let drops = Arc::new(AtomicUsize::new(0));
+    let dropped = drops.clone();
+    let mut future = Box::pin(cancellation.run_until_cancelled(PendingDrop(dropped)));
+    let wake = Arc::new(CountWake(AtomicUsize::new(0)));
+    let waker = Waker::from(wake.clone());
+    let mut context = Context::from_waker(&waker);
+
+    assert!(future.as_mut().poll(&mut context).is_pending());
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    assert!(cancellation.cancel());
+    assert_eq!(wake.0.load(Ordering::SeqCst), 1);
+    assert!(matches!(
+        future.as_mut().poll(&mut context),
+        Poll::Ready(Err(TaskError {
+            kind: TaskErrorKind::Cancelled,
+            ..
+        }))
+    ));
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 #[test]

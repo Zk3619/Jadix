@@ -1,4 +1,4 @@
-use crate::{authoring::BaseComponentBuilder, Element, Signal};
+use jadix::portable::{authoring::BaseComponentBuilder, Element, Signal};
 use jadix::presentation::{NodeContent, SelectOption};
 
 type Base = Option<Box<dyn FnOnce(BaseComponentBuilder) -> BaseComponentBuilder>>;
@@ -83,7 +83,7 @@ impl SelectBuilder {
 impl From<SelectBuilder> for Element {
     fn from(builder: SelectBuilder) -> Self {
         let value = builder.value.unwrap_or_else(|| {
-            crate::use_scoped_signal(&format!("{}__select_value", builder.id), || {
+            jadix::portable::use_scoped_signal(&format!("{}__select_value", builder.id), || {
                 builder.default_value
             })
         });
@@ -99,7 +99,7 @@ impl From<SelectBuilder> for Element {
         element
     }
 }
-impl crate::core::tree::IntoElementList for SelectBuilder {
+impl jadix::portable::core::tree::IntoElementList for SelectBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }

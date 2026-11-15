@@ -3,11 +3,15 @@ use jadix_shell::package::*;
 use std::collections::{BTreeMap, BTreeSet};
 
 fn fixture() -> (SignedManifest, PackagePolicy, BTreeMap<String, Vec<u8>>) {
+    fixture_with_schema(sha256(include_bytes!(
+        "../../jadix_components/schema/portable-v1.json"
+    )))
+}
+fn fixture_with_schema(
+    schema: String,
+) -> (SignedManifest, PackagePolicy, BTreeMap<String, Vec<u8>>) {
     let key = SigningKey::from_bytes(&[7; 32]);
     let bytes = b"export default { component: 'Text', text: 'hello' };".to_vec();
-    let schema = sha256(include_bytes!(
-        "../../jadix_components/schema/portable-v1.json"
-    ));
     let manifest = Manifest {
         format: 1,
         package: "example.counter".into(),
@@ -66,7 +70,11 @@ fn fixture() -> (SignedManifest, PackagePolicy, BTreeMap<String, Vec<u8>>) {
 fn package_v1_signature_bytes_match_independently_generated_fixed_vector() {
     let vector: serde_json::Value =
         serde_json::from_str(include_str!("fixtures/package-signature-v1.json")).unwrap();
-    let (signed, policy, resources) = fixture();
+    // The independent cryptographic vector fixes all manifest bytes, including
+    // its historical schema digest. Other package tests use the current schema.
+    let canonical: Manifest =
+        serde_json::from_str(vector["canonical_manifest"].as_str().unwrap()).unwrap();
+    let (signed, policy, resources) = fixture_with_schema(canonical.component_schema);
     let input = signed.manifest.signature_input().unwrap();
     assert_eq!(&input[..SIGNATURE_DOMAIN.len()], SIGNATURE_DOMAIN);
     assert_eq!(

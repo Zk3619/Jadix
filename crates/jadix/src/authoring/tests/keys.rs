@@ -50,8 +50,10 @@ fn shortcuts_follow_tree_and_attachment_order() {
         state: ElementState::Pressed,
         repeat: false,
     };
-    assert!(handlers(&root)
-        .into_iter()
-        .any(|handler| handler.dispatch(context)));
+    assert!(
+        handlers(&root)
+            .into_iter()
+            .any(|handler| handler.dispatch(context))
+    );
     assert_eq!(*order.borrow(), vec![0, 1]);
 }

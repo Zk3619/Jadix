@@ -1,0 +1,11 @@
+{
+  "name": "jadix-miniprogram-tools",
+  "private": true,
+  "devDependencies": {
+    "binaryen": "132.0.0"
+  },
+  "scripts": {
+    "build": "node ../../scripts/build-miniprogram.js",
+    "test": "node --test ../../crates/jadix_native/platforms/miniprogram/runtime.test.js"
+  }
+}

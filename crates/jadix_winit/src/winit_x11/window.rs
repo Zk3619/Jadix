@@ -303,7 +303,10 @@ impl CoreWindow for Window {
         self.0.global_cursor_position()
     }
 
-    fn set_input_region(&self, region: Option<&[crate::winit_core::window::InputRegionRect]>) -> Result<(), RequestError> {
+    fn set_input_region(
+        &self,
+        region: Option<&[crate::winit_core::window::InputRegionRect]>,
+    ) -> Result<(), RequestError> {
         self.0.set_input_region(region)
     }
 
@@ -2173,23 +2176,48 @@ impl UnownedWindow {
         Ok(())
     }
 
-    pub fn set_input_region(&self, region: Option<&[crate::winit_core::window::InputRegionRect]>) -> Result<(), RequestError> {
+    pub fn set_input_region(
+        &self,
+        region: Option<&[crate::winit_core::window::InputRegionRect]>,
+    ) -> Result<(), RequestError> {
         let connection = self.xconn.xcb_connection();
         match region {
-            None => connection.shape_mask(SO::SET, SK::INPUT, self.xwindow, 0, 0, x11rb::NONE)
-                .map_err(|error| os_error!(error))?.check().map_err(|error| os_error!(error))?,
+            None => connection
+                .shape_mask(SO::SET, SK::INPUT, self.xwindow, 0, 0, x11rb::NONE)
+                .map_err(|error| os_error!(error))?
+                .check()
+                .map_err(|error| os_error!(error))?,
             Some(rectangles) => {
-                let rectangles = rectangles.iter().filter(|rect| rect.size.width > 0 && rect.size.height > 0).map(|rect| {
-                    let invalid = |_| RequestError::NotSupported(NotSupportedError::new("input rectangle exceeds X11 coordinate range"));
-                    Ok(Rectangle {
-                        x: i16::try_from(rect.position.x).map_err(invalid)?,
-                        y: i16::try_from(rect.position.y).map_err(invalid)?,
-                        width: u16::try_from(rect.size.width).map_err(invalid)?,
-                        height: u16::try_from(rect.size.height).map_err(invalid)?,
+                let rectangles = rectangles
+                    .iter()
+                    .filter(|rect| rect.size.width > 0 && rect.size.height > 0)
+                    .map(|rect| {
+                        let invalid = |_| {
+                            RequestError::NotSupported(NotSupportedError::new(
+                                "input rectangle exceeds X11 coordinate range",
+                            ))
+                        };
+                        Ok(Rectangle {
+                            x: i16::try_from(rect.position.x).map_err(invalid)?,
+                            y: i16::try_from(rect.position.y).map_err(invalid)?,
+                            width: u16::try_from(rect.size.width).map_err(invalid)?,
+                            height: u16::try_from(rect.size.height).map_err(invalid)?,
+                        })
                     })
-                }).collect::<Result<Vec<_>, RequestError>>()?;
-                connection.shape_rectangles(SO::SET, SK::INPUT, ClipOrdering::UNSORTED, self.xwindow, 0, 0, &rectangles)
-                    .map_err(|error| os_error!(error))?.check().map_err(|error| os_error!(error))?;
+                    .collect::<Result<Vec<_>, RequestError>>()?;
+                connection
+                    .shape_rectangles(
+                        SO::SET,
+                        SK::INPUT,
+                        ClipOrdering::UNSORTED,
+                        self.xwindow,
+                        0,
+                        0,
+                        &rectangles,
+                    )
+                    .map_err(|error| os_error!(error))?
+                    .check()
+                    .map_err(|error| os_error!(error))?;
             }
         }
         self.shared_state_lock().cursor_hittest = None;

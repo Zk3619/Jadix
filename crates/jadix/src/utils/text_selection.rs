@@ -27,6 +27,19 @@ pub fn selectable_text_key(el: &Element) -> Option<String> {
     el.focus_id.clone().or_else(|| el.template_id.clone())
 }
 
+/// Return the hard-paragraph byte range containing a caret in static selectable text.
+/// Newline bytes are excluded; a caret on a newline belongs to the preceding paragraph.
+pub fn selectable_paragraph_range(text: &str, caret_byte_index: usize) -> Option<(usize, usize)> {
+    let mut caret = caret_byte_index.min(text.len());
+    while !text.is_char_boundary(caret) {
+        caret -= 1;
+    }
+
+    let start = text[..caret].rfind('\n').map_or(0, |newline| newline + 1);
+    let end = caret + text[caret..].find('\n').unwrap_or(text.len() - caret);
+    (start < end).then_some((start, end))
+}
+
 fn selection_bg_color() -> [u8; 4] {
     InputCaretDraw::default_selection_bg()
 }
@@ -125,3 +138,37 @@ fn try_copy_label_selection_subtree(el: &Element) -> bool {
 
 /// Label-to-control association attribute used by pointer and accessibility routing.
 pub const ATTR_LABEL_FOR: &str = "for";
+
+#[cfg(test)]
+mod tests {
+    use super::selectable_paragraph_range;
+
+    #[test]
+    fn paragraph_selection_uses_utf8_byte_ranges_and_excludes_newlines() {
+        let text = "第一段\nsecond\n末尾";
+        let first_end = "第一段".len();
+        let second_start = first_end + 1;
+        let second_end = second_start + "second".len();
+
+        assert_eq!(selectable_paragraph_range(text, 0), Some((0, first_end)));
+        assert_eq!(
+            selectable_paragraph_range(text, first_end),
+            Some((0, first_end))
+        );
+        assert_eq!(
+            selectable_paragraph_range(text, second_start),
+            Some((second_start, second_end))
+        );
+        assert_eq!(
+            selectable_paragraph_range(text, text.len()),
+            Some((second_end + 1, text.len()))
+        );
+    }
+
+    #[test]
+    fn paragraph_selection_skips_empty_paragraphs_and_clamps_the_caret() {
+        assert_eq!(selectable_paragraph_range("\ntext", 0), None);
+        assert_eq!(selectable_paragraph_range("text\n", usize::MAX), None);
+        assert_eq!(selectable_paragraph_range("text", usize::MAX), Some((0, 4)));
+    }
+}

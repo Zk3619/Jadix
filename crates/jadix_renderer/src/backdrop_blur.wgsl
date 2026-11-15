@@ -16,6 +16,8 @@ struct BlurUniforms {
     mode: f32,
     /// Mode 2: output alpha multiplier (modal underlay fade).
     blit_alpha: f32,
+    /// Mode 2: minimum blur mix at the progressive edge.
+    progressive_min_mix: f32,
 };
 
 @group(0) @binding(0)
@@ -94,5 +96,7 @@ fn fs_main(in: VertexOutput) -> @location(0) vec4<f32> {
     // Crossfade the sharp capture and the completed blur at the underlay opacity.
     let c = textureSample(src_tex, src_sampler, in.uv);
     let sharp = textureSample(sharp_tex, src_sampler, in.uv);
-    return mix(sharp, c, clamp(uniforms.blit_alpha, 0.0, 1.0));
+    let edge_mix = smoothstep(uniforms.direction.x, uniforms.direction.y, in.uv.y);
+    let progressive_mix = mix(uniforms.progressive_min_mix, 1.0, edge_mix);
+    return mix(sharp, c, clamp(uniforms.blit_alpha * progressive_mix, 0.0, 1.0));
 }

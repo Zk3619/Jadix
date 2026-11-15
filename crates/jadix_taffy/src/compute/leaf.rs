@@ -57,7 +57,12 @@ where
         SizingMode::ContentSize => {
             let node_size = known_dimensions;
             let node_min_size = Size::NONE;
-            let node_max_size = Size::NONE;
+            // A maximum size constrains the measured content contribution, while
+            // preferred and minimum sizes remain ignored in ContentSize mode.
+            let node_max_size = style
+                .max_size()
+                .maybe_resolve(parent_size, &resolve_calc_value)
+                .maybe_add(box_sizing_adjustment);
             (node_size, node_min_size, node_max_size, None)
         }
         SizingMode::InherentSize => {
@@ -225,5 +230,54 @@ where
             && measured_size.height == 0.0,
         oof_candidates: crate::tree::OofCandidates::NONE,
         oof_positioning_area: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::geometry::Line;
+    use crate::style::{LengthPercentageAuto, Style};
+    use crate::style_helpers::TaffyMaxContent;
+    use crate::tree::RequestedAxis;
+
+    fn content_size_input() -> LayoutInput {
+        LayoutInput {
+            run_mode: RunMode::ComputeSize,
+            sizing_mode: SizingMode::ContentSize,
+            axis: RequestedAxis::Both,
+            known_dimensions: Size::NONE,
+            known_dimensions_are_definite: Size {
+                width: true,
+                height: true,
+            },
+            parent_size: Size::NONE,
+            available_space: Size::MAX_CONTENT,
+            vertical_margins_are_collapsible: Line::FALSE,
+        }
+    }
+
+    #[test]
+    fn content_size_respects_max_size() {
+        let mut style: Style = Style::default();
+        style.max_size.height = LengthPercentageAuto::length(100.0);
+
+        let output = compute_leaf_layout(
+            content_size_input(),
+            &style,
+            |_, value| value,
+            |_, _| Size {
+                width: 240.0,
+                height: 600.0,
+            },
+        );
+
+        assert_eq!(
+            output.size,
+            Size {
+                width: 240.0,
+                height: 100.0,
+            }
+        );
     }
 }

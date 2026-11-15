@@ -9,6 +9,8 @@ fn node(root: RootId, content: NodeContent) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: Default::default(),
         },
@@ -69,7 +71,9 @@ fn measurement_drives_taffy_frames_and_retained_commits() {
         })
         .unwrap();
     assert_eq!(stats.measurements, 0);
-    assert!(stats.cache_hits >= 2);
+    assert!(stats.engine_reused >= 4);
+    assert_eq!(stats.engine_created, 0);
+    assert_eq!(stats.children_updated, 0);
     assert!(!backend.reconcile(&roots).unwrap());
 }
 

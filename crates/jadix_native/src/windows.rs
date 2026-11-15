@@ -73,12 +73,7 @@ struct Font(HFONT);
 
 impl Font {
     fn new(descriptor: &NodeDescriptor, scale: f64) -> Result<Self, String> {
-        let family = if descriptor.style.font_family == "system-ui" {
-            "Segoe UI"
-        } else {
-            &descriptor.style.font_family
-        };
-        let name = wide(family);
+        let name = wide(&fonts::resolve_family(&descriptor.style.font_family));
         let handle = unsafe {
             CreateFontW(
                 -(f64::from(descriptor.style.font_size) * scale)
@@ -148,6 +143,15 @@ enum RawEvent {
         checked: bool,
     },
     Focus {
+        control: NodeId,
+    },
+    FocusVisible {
+        control: NodeId,
+    },
+    Blur {
+        control: NodeId,
+    },
+    Submit {
         control: NodeId,
     },
     Edit {
@@ -222,6 +226,7 @@ struct WindowContext {
     grid_navigation: RefCell<BTreeSet<NodeId>>,
     paints: RefCell<BTreeMap<usize, paint::Paint>>,
     palette_dirty: Cell<bool>,
+    system_fonts_dirty: Cell<bool>,
     high_contrast: Cell<bool>,
     popovers: RefCell<Vec<ActivePopover>>,
     modal: Cell<Option<NodeId>>,
@@ -267,6 +272,35 @@ unsafe extern "system" fn edit_proc(
     reference: usize,
 ) -> LRESULT {
     let context = unsafe { &*(reference as *const WindowContext) };
+    let single_line =
+        unsafe { GetWindowLongPtrW(window, GWL_STYLE) } as u32 & ES_MULTILINE as u32 == 0;
+    if single_line && parameter == 0x0d {
+        if message == WM_GETDLGCODE {
+            return unsafe { DefSubclassProc(window, message, parameter, data) }
+                | DLGC_WANTMESSAGE as isize;
+        }
+        if message == WM_KEYDOWN {
+            let modified = [0x11, 0x12, 0x5b, 0x5c].into_iter().any(|key| unsafe {
+                windows_sys::Win32::UI::Input::KeyboardAndMouse::GetKeyState(key) < 0
+            });
+            if unsafe { IsWindowEnabled(window) } != 0
+                && !modified
+                && data as usize & (1 << 30) == 0
+                && !context
+                    .compositions
+                    .borrow()
+                    .contains_key(&(window as usize))
+            {
+                if let Some(control) = context.target(window) {
+                    context.push(RawEvent::Submit { control });
+                }
+            }
+            return 0;
+        }
+        if message == WM_CHAR {
+            return 0;
+        }
+    }
     if message == WM_IME_STARTCOMPOSITION {
         match unsafe { read_text(window) } {
             Ok(original) => {
@@ -595,7 +629,17 @@ unsafe extern "system" fn window_proc(
                         checked: unsafe { SendMessageW(child, BM_GETCHECK, 0, 0) } != 0,
                     }),
                     EN_SETFOCUS | BN_SETFOCUS | CBN_SETFOCUS => {
-                        context.push(RawEvent::Focus { control })
+                        let payload = if unsafe {
+                            SendMessageW(window, WM_QUERYUISTATE, 0, 0) as u32 & UISF_HIDEFOCUS == 0
+                        } {
+                            RawEvent::FocusVisible { control }
+                        } else {
+                            RawEvent::Focus { control }
+                        };
+                        context.push(payload)
+                    }
+                    EN_KILLFOCUS | BN_KILLFOCUS | CBN_KILLFOCUS => {
+                        context.push(RawEvent::Blur { control })
                     }
                     EN_CHANGE
                         if !context
@@ -669,10 +713,13 @@ unsafe extern "system" fn window_proc(
                 }
                 return 0;
             }
-            WM_SIZE | WM_SETTINGCHANGE | WM_THEMECHANGED if window == context.root.get() => {
+            WM_SIZE | WM_SETTINGCHANGE | WM_THEMECHANGED | WM_FONTCHANGE
+                if window == context.root.get() =>
+            {
                 if message != WM_SIZE {
                     context.high_contrast.set(paint::high_contrast());
                     context.palette_dirty.set(true);
+                    context.system_fonts_dirty.set(true);
                 }
                 context
                     .environment
@@ -903,6 +950,7 @@ impl WindowsHost {
             grid_navigation: RefCell::new(BTreeSet::new()),
             paints: RefCell::new(BTreeMap::new()),
             palette_dirty: Cell::new(true),
+            system_fonts_dirty: Cell::new(false),
             high_contrast: Cell::new(paint::high_contrast()),
             popovers: RefCell::new(Vec::new()),
             modal: Cell::new(None),
@@ -1581,7 +1629,10 @@ impl WindowsHost {
             }
         }
         self.refresh_scroll_positions()?;
-        if self.fonts_dirty || self.applied_scale != self.context.scale.get() {
+        if self.fonts_dirty
+            || self.context.system_fonts_dirty.get()
+            || self.applied_scale != self.context.scale.get()
+        {
             for control in self.controls.values_mut() {
                 let font = Font::new(&control.descriptor, self.context.scale.get())?;
                 unsafe {
@@ -1591,6 +1642,7 @@ impl WindowsHost {
             }
             self.applied_scale = self.context.scale.get();
             self.fonts_dirty = false;
+            self.context.system_fonts_dirty.set(false);
         }
         if self.context.failed.get() {
             return Err(String::from(
@@ -1600,7 +1652,7 @@ impl WindowsHost {
         let mut pending = std::mem::take(&mut *self.context.events.borrow_mut());
         self.context.event_bytes.set(0);
         for event in &pending {
-            if let RawEvent::Focus { control } = event {
+            if let RawEvent::Focus { control } | RawEvent::FocusVisible { control } = event {
                 if self
                     .controls
                     .get(control)
@@ -1629,6 +1681,9 @@ impl WindowsHost {
                 | RawEvent::Dismiss { control, .. }
                 | RawEvent::Activate { control, .. }
                 | RawEvent::Focus { control }
+                | RawEvent::FocusVisible { control }
+                | RawEvent::Blur { control }
+                | RawEvent::Submit { control }
                 | RawEvent::Edit { control, .. }
                 | RawEvent::Select { control, .. }
                 | RawEvent::Scroll { control, .. } => *control,
@@ -1639,10 +1694,11 @@ impl WindowsHost {
             if (!control.effective_enabled || !control.shown)
                 && !matches!(
                     &event,
-                    RawEvent::Drag {
-                        phase: DragPhase::Cancelled,
-                        ..
-                    }
+                    RawEvent::Blur { .. }
+                        | RawEvent::Drag {
+                            phase: DragPhase::Cancelled,
+                            ..
+                        }
                 )
             {
                 continue;
@@ -1766,6 +1822,23 @@ impl WindowsHost {
                     }
                 }
                 RawEvent::Focus { .. } => EventPayload::Focus,
+                RawEvent::FocusVisible { .. } => EventPayload::FocusVisible,
+                RawEvent::Blur { .. } => EventPayload::Blur,
+                RawEvent::Submit { .. } => {
+                    if !matches!(
+                        control.descriptor.content,
+                        NodeContent::Input { enabled: true, .. }
+                    ) {
+                        continue;
+                    }
+                    control.revision = control
+                        .revision
+                        .checked_add(1)
+                        .ok_or("native edit revision exhausted")?;
+                    EventPayload::Submit {
+                        revision: control.revision,
+                    }
+                }
                 RawEvent::Activate { checked, .. } => match control.descriptor.content {
                     NodeContent::Button { enabled: true, .. } => EventPayload::Activate,
                     NodeContent::Checkbox { enabled: true, .. }
@@ -1852,13 +1925,11 @@ impl WindowsHost {
                 let scale = self.context.scale.get();
                 let next = std::array::from_fn(|axis| {
                     let page = f64::from(state.page[axis]) / scale;
-                    let delta = if start[axis] < 0.0 {
-                        start[axis]
-                    } else if start[axis] + extent[axis] > page {
-                        (start[axis] + extent[axis] - page).min(start[axis])
-                    } else {
-                        0.0
-                    };
+                    let delta = crate::presentation::input::focus_reveal_delta(
+                        start[axis],
+                        start[axis] + extent[axis],
+                        page,
+                    );
                     state.offset[axis].saturating_add((delta * scale).round() as i32)
                 });
                 unsafe { scroll_window(&self.context, control.window, next) };
@@ -2308,6 +2379,12 @@ impl WindowsHost {
                     _ => None,
                 });
             self.accessibility.name(control.window, name)?;
+        }
+        if descriptor.accessible_description != control.descriptor.accessible_description
+            || (!control.initialized && descriptor.accessible_description.is_some())
+        {
+            self.accessibility
+                .description(control.window, descriptor.accessible_description.as_deref())?;
         }
         if matches!(descriptor.content, NodeContent::Button { .. })
             && matches!(
@@ -2760,6 +2837,9 @@ impl WindowsHost {
                             {
                                 self.accessibility.name(control.window, None)?;
                             }
+                            if control.descriptor.accessible_description.is_some() {
+                                self.accessibility.description(control.window, None)?;
+                            }
                             self.stats.removes += 1;
                             self.context
                                 .scrolls
@@ -3106,6 +3186,9 @@ impl PlatformHost for WindowsHost {
         let result = self.apply(batch, roots);
         self.context.suppress.set(false);
         if result.is_ok() && previous_focus != unsafe { GetFocus() } {
+            if let Some(control) = self.context.target(previous_focus) {
+                self.context.push(RawEvent::Blur { control });
+            }
             if let Some(control) = self.context.target(unsafe { GetFocus() }) {
                 if self.controls.get(&control).is_some_and(|control| {
                     matches!(
@@ -3152,6 +3235,9 @@ impl PlatformHost for WindowsHost {
             {
                 let _ = self.accessibility.name(control.window, None);
             }
+            if control.descriptor.accessible_description.is_some() {
+                let _ = self.accessibility.description(control.window, None);
+            }
         }
         if !self.window.is_null() && self.context.root.get() == self.window {
             unsafe {
@@ -3188,7 +3274,7 @@ impl Drop for WindowsHost {
 
 #[cfg(test)]
 mod tests {
-    use super::{Composition, NavigationKey, grid_navigation_key};
+    use super::{grid_navigation_key, Composition, NavigationKey};
 
     #[test]
     fn wrapped_control_ids_keep_queued_events_bound_to_the_original_generation() {
@@ -3210,6 +3296,8 @@ mod tests {
                 accessible_role: None,
                 accessible_selected: None,
                 accessible_expanded: None,
+                accessibility_relations: Default::default(),
+                accessible_description: None,
                 accessible_name: None,
             },
             children: vec![],

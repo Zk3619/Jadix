@@ -17,6 +17,23 @@ fn table_builds_and_sort_cycles() {
 }
 
 #[test]
+fn data_table_scrollbar_visibility_defaults_and_overrides() {
+    let default_builder = table("default-scrollbars");
+    assert_eq!(default_builder.scrollbar_visibility, "auto");
+
+    let configured = table("always-scrollbars").scrollbar_visibility("always");
+    assert_eq!(configured.scrollbar_visibility, "always");
+
+    let props = DataTableProps {
+        id: "rsx-scrollbars".into(),
+        row_count: Some(0),
+        scrollbar_visibility: Some("scroll".into()),
+        ..Default::default()
+    };
+    let _element = DataTable(props);
+}
+
+#[test]
 fn builder_ui_table_header_cell_style() {
     let el: Element = ui_table()
         .header_with(|h| {

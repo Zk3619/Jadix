@@ -1,7 +1,7 @@
 //! Lifecycle shared by non-Windows native platform views.
 use super::{collect_specs, webview_status, WebViewSpec, WebViewStatus};
 use crate::core::tree::Element;
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, rc::Rc, sync::Arc};
 use winit::{event::WindowEvent, window::Window};
 
 #[cfg(any(
@@ -38,10 +38,18 @@ mod engine {
         pub fn poll(&self) -> Option<WebViewStatus> {
             None
         }
+        pub fn evaluate(
+            &self,
+            _: &str,
+            _: jadix_core::web_evaluation::EvaluationReply,
+        ) -> Result<(), String> {
+            Err("WebView evaluation is unavailable".into())
+        }
     }
 }
 struct Entry {
-    browser: engine::Browser,
+    _evaluation: super::EvaluationHost,
+    browser: Rc<engine::Browser>,
     spec: WebViewSpec,
 }
 pub(crate) struct NativeWebViews {
@@ -94,9 +102,18 @@ impl NativeWebViews {
                     .and_then(|()| engine::Browser::new(window, &spec, scale));
                 match result {
                     Ok(browser) => {
+                        let browser = Rc::new(browser);
+                        let weak = Rc::downgrade(&browser);
+                        let evaluation =
+                            super::EvaluationHost::new(&spec.id, move |script, reply| {
+                                weak.upgrade()
+                                    .ok_or("WebView was destroyed")?
+                                    .evaluate(script, reply)
+                            });
                         self.entries.insert(
                             spec.id.clone(),
                             Entry {
+                                _evaluation: evaluation,
                                 browser,
                                 spec: spec.clone(),
                             },
@@ -109,6 +126,9 @@ impl NativeWebViews {
                 }
             }
             if let Some(entry) = self.entries.get_mut(&spec.id) {
+                if (entry.spec.url.as_str(), &entry.spec.html) != (spec.url.as_str(), &spec.html) {
+                    super::document_changed(crate::app::window_scope::active(), &spec.id);
+                }
                 if let Err(error) = entry.browser.update(&spec, scale) {
                     webview_status(&spec.id).try_set(WebViewStatus::Failed(error));
                 }
@@ -133,6 +153,11 @@ impl NativeWebViews {
         let mut pending = false;
         for (id, entry) in &self.entries {
             if let Some(status) = entry.browser.poll() {
+                super::evaluation_ready(
+                    crate::app::window_scope::active(),
+                    id,
+                    status == WebViewStatus::Ready,
+                );
                 let signal = webview_status(id);
                 if signal.peek() != status {
                     signal.try_set(status);

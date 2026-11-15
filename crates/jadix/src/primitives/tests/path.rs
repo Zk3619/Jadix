@@ -308,7 +308,7 @@ fn path_gpu_queues_mesh_job_not_sdf_instances() {
         .iter()
         .map(|op| match op {
             PathGpuOp::Mesh(m) => m.tris.len(),
-            PathGpuOp::Fill(_) => 0,
+            _ => 0,
         })
         .sum::<usize>();
     assert!(n >= 4, "stroke mesh must be triangles, got {n}");
@@ -332,7 +332,7 @@ fn path_gpu_queues_stencil_fill() {
     let ops = jobs[0].ops.clone().into_ops();
     let fill = ops.iter().find_map(|op| match op {
         PathGpuOp::Fill(f) => Some(f),
-        PathGpuOp::Mesh(_) => None,
+        _ => None,
     });
     let fill = fill.expect("fill op");
     assert!(!fill.even_odd);
@@ -588,4 +588,31 @@ fn flip_rgba_vertical_swaps_first_and_last_rows() {
     assert_eq!(&rgba[0..8], &[0, 0, 5, 255, 0, 0, 6, 255]);
     assert_eq!(&rgba[8..16], &[0, 3, 0, 255, 0, 4, 0, 255]);
     assert_eq!(&rgba[16..24], &[1, 0, 0, 255, 2, 0, 0, 255]);
+}
+
+#[test]
+fn stroke_options_survive_attributes_cache_identity_and_dpi() {
+    let commands = polyline(&[(2., 8.), (30., 8.)]);
+    let style = PathStyle::stroke([1.; 4], 2.)
+        .dashes(&[4., 2.], 1.)
+        .miter_limit(6.);
+    let element = attach_path(Element::new(), &commands, &style);
+    assert_eq!(
+        style_from_attrs(&element.attrs).stroke_options,
+        style.stroke_options
+    );
+    let id = register_path_scene(
+        vec![(commands.clone(), style.clone())],
+        Vec::new(),
+        0.,
+        32.,
+        16.,
+    );
+    let mut changed = style.clone();
+    changed.stroke_options.dash_offset = 2.;
+    let other = register_path_scene(vec![(commands, changed)], Vec::new(), 0., 32., 16.);
+    assert_ne!(
+        id, other,
+        "stroke options participate in retained geometry identity"
+    );
 }

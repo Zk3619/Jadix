@@ -6,6 +6,22 @@ use jadix_native::{
 };
 
 #[cfg(all(
+    feature = "field-workflow",
+    any(
+        feature = "gpu",
+        feature = "notes",
+        feature = "selection",
+        feature = "popover",
+        feature = "extended",
+        feature = "large-list"
+    )
+))]
+compile_error!("field-workflow requires its own native application without other sample features");
+
+#[cfg(not(feature = "gpu"))]
+pub mod field;
+
+#[cfg(all(
     feature = "selection",
     any(
         feature = "gpu",
@@ -39,17 +55,35 @@ pub mod notes;
 pub mod table;
 pub mod tree;
 pub mod workbench;
-#[cfg(all(feature = "notes", not(feature = "gpu")))]
+#[cfg(all(
+    feature = "notes",
+    not(feature = "gpu"),
+    not(feature = "field-workflow")
+))]
 #[cfg(any(target_os = "android", target_arch = "wasm32", feature = "uikit"))]
 type PlatformApp<Host> = notes::NotesApp<Host>;
-#[cfg(not(all(feature = "notes", not(feature = "gpu"))))]
+#[cfg(all(
+    not(all(feature = "notes", not(feature = "gpu"))),
+    not(feature = "field-workflow")
+))]
 #[cfg(any(target_os = "android", target_arch = "wasm32", feature = "uikit"))]
 type PlatformApp<Host> = NativeApp<Host>;
+#[cfg(all(feature = "field-workflow", not(feature = "gpu")))]
+#[cfg(any(target_os = "android", target_arch = "wasm32", feature = "uikit"))]
+type PlatformApp<Host> = field::FieldApp<Host>;
 
 #[cfg(target_os = "android")]
 mod android;
 #[cfg(feature = "uikit")]
 mod apple;
+#[cfg(all(
+    test,
+    feature = "uikit",
+    feature = "field-workflow",
+    not(feature = "gpu")
+))]
+#[path = "tests/apple_field.rs"]
+mod apple_field_tests;
 #[cfg(all(test, feature = "uikit", feature = "notes", not(feature = "gpu")))]
 #[path = "tests/apple_notes.rs"]
 mod apple_notes_tests;
@@ -65,7 +99,8 @@ mod apple_select_tests;
     not(feature = "notes"),
     not(feature = "gpu"),
     not(feature = "selection"),
-    not(feature = "popover")
+    not(feature = "popover"),
+    not(feature = "field-workflow")
 ))]
 #[path = "tests/apple.rs"]
 mod apple_tests;
@@ -119,6 +154,17 @@ pub fn page(count: Signal<usize>, value: Signal<String>) -> Element {
     {
         #[cfg(all(feature = "ohos", target_env = "ohos", not(feature = "gpu")))]
         let content = vstack()
+            .child({
+                let choices: Element = radio_group("native-appearance")
+                    .default_value("system")
+                    .options([
+                        radio_option("system", "System / ????"),
+                        radio_option("light", "Light / ??"),
+                        radio_option("unavailable", "Unavailable").disabled(true),
+                    ])
+                    .into();
+                choices
+            })
             .child(editor_dialog(value))
             .child(page_content(count, value));
         #[cfg(not(all(feature = "ohos", target_env = "ohos", not(feature = "gpu"))))]
@@ -215,6 +261,7 @@ fn page_content(count: Signal<usize>, value: Signal<String>) -> Element {
             let input: Element = input("name")
                 .value_signal(value)
                 .placeholder("Name / 中文")
+                .on_submit(move || count.set(count.get().saturating_add(1)))
                 .into();
             input.h(44.0).flex_shrink(0.0)
         })
@@ -236,55 +283,53 @@ fn page_content(count: Signal<usize>, value: Signal<String>) -> Element {
     any(feature = "extended", all(feature = "ohos", target_env = "ohos"))
 ))]
 fn editor_dialog(value: Signal<String>) -> Element {
-    dialog("edit")
-        .child(move || {
-            let trigger: Element = button("open-editor").child(text("Open editor")).into();
-            let trigger = DialogTrigger(DialogTriggerProps {
-                children: Some(trigger.h(44.0).flex_shrink(0.0)),
+    dialog("edit").child(move || {
+        let trigger: Element = button("open-editor").child(text("Open editor")).into();
+        let trigger = DialogTrigger(DialogTriggerProps {
+            children: Some(trigger.h(44.0).flex_shrink(0.0)),
+            ..Default::default()
+        });
+        let mut panel = dialog_content(DialogContentOpts::default(), move || {
+            let field: Element = input("dialog-name")
+                .value_signal(value)
+                .placeholder("Dialog name / 中文")
+                .into();
+            let done: Element = button("dialog-done")
+                .on_click(dialog_close)
+                .child(text("Done"))
+                .into();
+            let content = vstack()
+                .gap(12.0)
+                .child(label("Edit details", 28.0))
+                .child(field.h(44.0).flex_shrink(0.0))
+                .child(done.h(44.0).flex_shrink(0.0))
+                .child(dialog("confirm").child(|| {
+                    let trigger: Element = button("open-confirm").child(text("Advanced")).into();
+                    let trigger = DialogTrigger(DialogTriggerProps {
+                        children: Some(trigger.h(44.0).flex_shrink(0.0)),
+                        ..Default::default()
+                    });
+                    let mut nested = dialog_content(DialogContentOpts::default(), || {
+                        let done: Element = button("return-editor")
+                            .on_click(dialog_close)
+                            .child(text("Return"))
+                            .into();
+                        vstack()
+                            .gap(12.0)
+                            .child(label("Confirm changes", 28.0))
+                            .child(done.h(44.0).flex_shrink(0.0))
+                    });
+                    nested.descriptor.accessible_name = Some("Confirm changes".into());
+                    vstack().flex_shrink(0.0).child(trigger).child(nested)
+                }));
+            DialogBody(DialogBodyProps {
+                children: Some(content),
                 ..Default::default()
-            });
-            let mut panel = dialog_content(DialogContentOpts::default(), move || {
-                let field: Element = input("dialog-name")
-                    .value_signal(value)
-                    .placeholder("Dialog name / 中文")
-                    .into();
-                let done: Element = button("dialog-done")
-                    .on_click(dialog_close)
-                    .child(text("Done"))
-                    .into();
-                let content = vstack()
-                    .gap(12.0)
-                    .child(label("Edit details", 28.0))
-                    .child(field.h(44.0).flex_shrink(0.0))
-                    .child(done.h(44.0).flex_shrink(0.0))
-                    .child(dialog("confirm").child(|| {
-                        let trigger: Element =
-                            button("open-confirm").child(text("Advanced")).into();
-                        let trigger = DialogTrigger(DialogTriggerProps {
-                            children: Some(trigger.h(44.0).flex_shrink(0.0)),
-                            ..Default::default()
-                        });
-                        let mut nested = dialog_content(DialogContentOpts::default(), || {
-                            let done: Element = button("return-editor")
-                                .on_click(dialog_close)
-                                .child(text("Return"))
-                                .into();
-                            vstack()
-                                .gap(12.0)
-                                .child(label("Confirm changes", 28.0))
-                                .child(done.h(44.0).flex_shrink(0.0))
-                        });
-                        nested.descriptor.accessible_name = Some("Confirm changes".into());
-                        vstack().flex_shrink(0.0).child(trigger).child(nested)
-                    }));
-                DialogBody(DialogBodyProps {
-                    children: Some(content),
-                    ..Default::default()
-                })
-            });
-            panel.descriptor.accessible_name = Some("Edit details".into());
-            vstack().flex_shrink(0.0).child(trigger).child(panel)
-        })
+            })
+        });
+        panel.descriptor.accessible_name = Some("Edit details".into());
+        vstack().flex_shrink(0.0).child(trigger).child(panel)
+    })
 }
 
 impl<Host: PlatformHost> NativeApp<Host> {
@@ -392,6 +437,12 @@ impl<Host: PlatformHost> NativeApp<Host> {
         self.root
             .present(&mut nodes, self.viewport, self.environment)
             .map_err(|error| error.to_string())?;
+        #[cfg(not(feature = "gpu"))]
+        if let Some(node) = self.projection.take_focus_request(&self.element) {
+            self.root
+                .focus(Some(node))
+                .map_err(|error| error.to_string())?;
+        }
         Ok(())
     }
 
@@ -419,9 +470,11 @@ impl<Host: PlatformHost> NativeApp<Host> {
             event.payload,
             EventPayload::Activate
                 | EventPayload::Edit { .. }
+                | EventPayload::Submit { .. }
                 | EventPayload::Select { .. }
                 | EventPayload::Toggle { .. }
                 | EventPayload::Dismiss { .. }
+                | EventPayload::Navigate { .. }
         ) {
             self.projection
                 .dispatch(&mut self.element, event)

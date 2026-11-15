@@ -1279,6 +1279,7 @@ fn variant_selector_css(sel: &jadix_style_tokens::VariantSelector) -> String {
         VariantSelector::Hover => "hover".into(),
         VariantSelector::Focus => "focus".into(),
         VariantSelector::FocusVisible => "focus-visible".into(),
+        VariantSelector::FocusWithin => "focus-within".into(),
         VariantSelector::Active => "active".into(),
         VariantSelector::Disabled => "disabled".into(),
         VariantSelector::Dark => "dark".into(),

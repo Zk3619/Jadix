@@ -13,6 +13,38 @@ use web_time::Instant;
 
 use crate::core::reactivity::{use_signal, Signal};
 
+/// Shared UTF-16 admission limit. Controlled values and undo history are preserved.
+pub fn input_max_length_signal_key(id: &str) -> String {
+    format!("__jadix_input_max_length_{id}")
+}
+
+pub fn input_max_length(id: &str) -> Option<usize> {
+    use_signal(&input_max_length_signal_key(id), || None::<usize>).peek()
+}
+
+pub(crate) fn limited_input_insert<'a>(
+    id: &str,
+    value: &str,
+    selection: std::ops::Range<usize>,
+    insert: &'a str,
+) -> &'a str {
+    jadix_core::presentation::input::limited_insertion(
+        value,
+        selection,
+        insert,
+        input_max_length(id),
+    )
+    .unwrap_or("")
+}
+
+/// Multi-cursor edits are atomic; an over-limit controlled value may still shrink.
+pub(crate) fn accepts_input_edit(id: &str, old: &str, new: &str) -> bool {
+    input_max_length(id).is_none_or(|limit| {
+        let length = new.encode_utf16().count();
+        length <= limit || length < old.encode_utf16().count()
+    })
+}
+
 /// 单行文本焦点前缀（`input:{id}`）。
 pub const INPUT_FOCUS_PREFIX: &str = "input:";
 /// 多行文本焦点前缀（`textarea:{id}`）；controller 据此允许 Enter 换行。
@@ -678,6 +710,9 @@ pub fn input_value_signal_key(id: &str) -> String {
 pub fn input_preedit_signal_key(id: &str) -> String {
     format!("__jadix_input_preedit_{id}")
 }
+pub fn input_composition_handler_signal_key(id: &str) -> String {
+    format!("__jadix_input_composition_handler_{id}")
+}
 pub fn input_preedit_sel_signal_key(id: &str) -> String {
     format!("__jadix_input_preedit_sel_{id}")
 }
@@ -936,6 +971,7 @@ pub(crate) fn attach_text_edit_field_lifecycle(
         }
         crate::core::reactivity::remove_named_signal(&blur_key);
         crate::core::reactivity::remove_named_signal(&live_key);
+        crate::core::reactivity::remove_named_signal(&input_max_length_signal_key(&fid));
     })
 }
 
@@ -945,6 +981,7 @@ pub fn wipe_text_edit_named_slots(field_id: &str) {
     unbind_controlled_value(field_id);
     let keys = [
         input_value_signal_key(field_id),
+        input_max_length_signal_key(field_id),
         input_preedit_signal_key(field_id),
         input_preedit_sel_signal_key(field_id),
         input_preedit_marks_signal_key(field_id),

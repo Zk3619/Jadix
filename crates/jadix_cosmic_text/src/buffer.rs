@@ -1135,6 +1135,28 @@ impl Buffer {
         LayoutRunIter::new(self)
     }
 
+    /// Update paint colors in already shaped and laid-out text.
+    ///
+    /// Ranges are UTF-8 byte offsets in the buffer's concatenated text. This does not
+    /// change text, shaping attributes, line breaks, or glyph positions.
+    pub fn update_layout_colors(&mut self, colors: &[(core::ops::Range<usize>, Color)]) {
+        let mut line_start = 0;
+        for line in &mut self.lines {
+            let line_end = line_start + line.text().len();
+            let line_colors: Vec<_> = colors
+                .iter()
+                .filter_map(|(range, color)| {
+                    let start = range.start.max(line_start);
+                    let end = range.end.min(line_end);
+                    (start < end).then_some((start - line_start..end - line_start, *color))
+                })
+                .collect();
+            line.update_layout_colors(&line_colors);
+            line_start = line_end + line.ending().as_str().len();
+        }
+        self.redraw = true;
+    }
+
     /// Convert x, y position to Cursor (hit detection).
     ///
     /// Call [`shape_until_scroll`] first to ensure the buffer is up to date,

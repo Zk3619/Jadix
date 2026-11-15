@@ -528,7 +528,10 @@ impl CoreWindow for Window {
         self.common.current_monitor()
     }
 
-    fn set_input_region(&self, region: Option<&[crate::winit_core::window::InputRegionRect]>) -> Result<(), RequestError> {
+    fn set_input_region(
+        &self,
+        region: Option<&[crate::winit_core::window::InputRegionRect]>,
+    ) -> Result<(), RequestError> {
         self.common.set_input_region(region)?;
         self.request_redraw();
         Ok(())

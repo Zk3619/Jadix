@@ -3,11 +3,11 @@
 use jadix_native::{host::NativeRoot, presentation::*, windows::WindowsHost};
 use windows::Win32::{
     Foundation::HWND,
-    System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
+    System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER},
     UI::Accessibility::*,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    BM_GETCHECK, BS_PUSHBUTTON, BS_RADIOBUTTON, GWL_STYLE, GetWindowLongPtrW, SendMessageW,
+    GetWindowLongPtrW, SendMessageW, BM_GETCHECK, BS_PUSHBUTTON, BS_RADIOBUTTON, GWL_STYLE,
     WS_TABSTOP,
 };
 
@@ -23,10 +23,12 @@ fn radio_uses_native_checked_provider_and_updates_style_without_recreating_contr
                 enabled: true,
             },
             frame: Rect::default(),
+            accessible_description: None,
             accessible_name: Some("Delivery method".into()),
             accessible_role: Some(AccessibleRole::RadioItem { tab_stop: true }),
             accessible_selected: Some(true),
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
             style: style::NodeStyle {
                 width: Some(180.0),
                 height: Some(40.0),

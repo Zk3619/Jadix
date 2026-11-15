@@ -11,9 +11,24 @@ pub use common::RustImageData;
 pub use common::{ClipboardContent, ClipboardHandler, ContentFormat, Result};
 #[cfg(feature = "image")]
 pub use image::imageops::FilterType;
-#[cfg(target_os = "linux")]
+#[cfg(all(target_os = "linux", not(target_env = "ohos")))]
 pub use platform::ClipboardContextX11Options;
 pub use platform::{ClipboardContext, ClipboardWatcherContext, WatcherShutdown};
+
+/// Plain-text clipboard seam shared by UI hosts. Installing a provider is explicit;
+/// platform availability and errors remain observable by the caller.
+pub trait TextClipboard {
+    fn read_text(&self) -> Result<String>;
+    fn write_text(&self, text: &str) -> Result<()>;
+}
+impl<T: Clipboard + ?Sized> TextClipboard for T {
+    fn read_text(&self) -> Result<String> {
+        self.get_text()
+    }
+    fn write_text(&self, text: &str) -> Result<()> {
+        self.set_text(text.into())
+    }
+}
 
 pub trait Clipboard: Send {
     /// zh: 获得剪切板当前内容的所有格式

@@ -3,6 +3,50 @@
 use jadix_components::prelude::*;
 
 #[test]
+fn slider_accessibility_value_clamps_steps_and_syncs_without_remount() {
+    use jadix_components::core::reactivity::{create_root, create_signal};
+    use jadix_components::layout::LayoutTree;
+    let (_owner, ()) = create_root(|| {
+        let value = create_signal(10.0_f32);
+        let mut control: Element = slider("numeric-slider")
+            .min(0.0)
+            .max(100.0)
+            .step(5.0)
+            .value_signal(value)
+            .into();
+        let callback = control
+            .on_accessibility_value
+            .clone()
+            .expect("numeric handler");
+        let sync = control.reactive_sync.clone().unwrap();
+        let mut layout = LayoutTree::new();
+        for (input, expected) in [(73.0, 75.0), (-1.0, 0.0), (f64::MAX, 100.0), (41.0, 40.0)] {
+            assert!(callback.borrow_mut()(input));
+            assert_eq!(value.peek(), expected);
+            sync.run(&mut control, &mut layout);
+            assert_eq!(
+                control.attrs.get("aria-valuenow").unwrap(),
+                &expected.to_string()
+            );
+        }
+        assert_eq!(
+            control.attrs.get("aria-valuemin").map(String::as_str),
+            Some("0")
+        );
+        assert_eq!(
+            control.attrs.get("aria-valuemax").map(String::as_str),
+            Some("100")
+        );
+        let disabled: Element = slider("disabled-slider").disabled(true).into();
+        assert!(disabled.on_accessibility_value.is_none());
+        assert_eq!(
+            disabled.attrs.get("disabled").map(String::as_str),
+            Some("true")
+        );
+    });
+}
+
+#[test]
 fn prelude_live_text_constructor_dual_surface() {
     use jadix_components::core::reactivity::{create_effect, create_root};
     use jadix_components::core::tree::IntoNodeText;
@@ -382,7 +426,7 @@ fn prelude_hover_card_dual_surface_compiles() {
         ])
     });
     let el = ui! {
-        <HoverCard id="pre-hc-tag" open={open}>
+        <HoverCard id="pre-hc-tag" open={open} openDelay=65 closeDelay=120>
             <HoverCardTrigger openDelay=10 closeDelay=100>
                 <Button variant="link" size="sm">"@nextjs"</Button>
             </HoverCardTrigger>
@@ -395,6 +439,155 @@ fn prelude_hover_card_dual_surface_compiles() {
         </HoverCard>
     };
     let _: Element = el;
+}
+
+#[test]
+fn hover_card_uses_shared_hover_delay_and_builder_can_override_it() {
+    use jadix_components::core::reactivity::create_root;
+
+    let (_owner, (default_delay, trigger_delay, configured_delay, scoped_delay)) =
+        create_root(|| {
+            let default_value = create_signal(0_u64);
+            let _ = hover_card_scope("pre-hc-default-delay", None, || {
+                default_value.set(
+                    use_hover_card()
+                        .expect("hover card scope")
+                        .open_delay_ms
+                        .get(),
+                );
+                Element::new()
+            });
+            let trigger_value = create_signal(0_u64);
+            let _ = hover_card_scope("pre-hc-trigger-delay", None, || {
+                let trigger = HoverCardTrigger(HoverCardTriggerProps {
+                    id: String::new(),
+                    open_delay: Some(45),
+                    close_delay: None,
+                    children: Some(Element::new().text("Hover")),
+                    base: None,
+                });
+                let _ = trigger;
+                trigger_value.set(
+                    use_hover_card()
+                        .expect("hover card scope")
+                        .open_delay_ms
+                        .get(),
+                );
+                Element::new()
+            });
+            let configured_value = create_signal(0_u64);
+            let configured = hover_card("pre-hc-custom-delay")
+                .open_delay(85)
+                .close_delay(125)
+                .child(|| {
+                    let ctx = use_hover_card().expect("hover card scope");
+                    configured_value.set(ctx.open_delay_ms.get());
+                    assert_eq!(ctx.close_delay_ms.get(), 125);
+                    Element::new()
+                });
+            let _ = configured;
+            let scoped_value = create_signal(0_u64);
+            let _ = hover_card_scope_with_delays(
+                "pre-hc-root-delay",
+                None,
+                Some(65),
+                Some(120),
+                || {
+                    let ctx = use_hover_card().expect("hover card scope");
+                    scoped_value.set(ctx.open_delay_ms.get());
+                    Element::new()
+                },
+            );
+            (
+                default_value.get(),
+                trigger_value.get(),
+                configured_value.get(),
+                scoped_value.get(),
+            )
+        });
+
+    assert_eq!(DEFAULT_HOVER_OPEN_DELAY_MS, 300);
+    assert_eq!(default_delay, DEFAULT_HOVER_OPEN_DELAY_MS);
+    assert_eq!(trigger_delay, 45);
+    assert_eq!(configured_delay, 85);
+    assert_eq!(scoped_delay, 65);
+}
+
+#[test]
+fn tooltip_uses_shared_hover_delay_and_builder_can_override_it() {
+    use jadix_components::core::reactivity::create_root;
+
+    let _rsx = ui! {
+        <Tooltip id="pre-tip-rsx-delay" openDelay=65 closeDelay=120>
+            <TooltipTrigger openDelay=45>
+                <Button>"Hover"</Button>
+            </TooltipTrigger>
+            <TooltipContent>"Tip"</TooltipContent>
+        </Tooltip>
+    };
+
+    let (_owner, (default_delay, trigger_delay, configured_delay, scoped_delay)) =
+        create_root(|| {
+            let default_value = create_signal(0_u64);
+            let _ = tooltip_scope("pre-tip-default-delay", None, || {
+                default_value.set(use_tooltip().expect("tooltip scope").open_delay_ms.get());
+                Element::new()
+            });
+            let trigger_value = create_signal(0_u64);
+            let _ = tooltip_scope("pre-tip-trigger-delay", None, || {
+                let trigger = TooltipTrigger(TooltipTriggerProps {
+                    id: String::new(),
+                    open_delay: Some(45),
+                    close_delay: None,
+                    children: Some(Element::new().text("Hover")),
+                    base: None,
+                });
+                let _ = trigger;
+                trigger_value.set(use_tooltip().expect("tooltip scope").open_delay_ms.get());
+                Element::new()
+            });
+            let configured_value = create_signal(0_u64);
+            let configured = tooltip("pre-tip-custom-delay", "Tip")
+                .open_delay(85)
+                .close_delay(125)
+                .trigger(move |_| {
+                    let ctx = use_tooltip().expect("tooltip scope");
+                    Element::new().on_hover(move |_| {
+                        configured_value.set(ctx.open_delay_ms.get());
+                        assert_eq!(ctx.close_delay_ms.get(), 125);
+                    })
+                });
+            configured.children[0]
+                .on_hover
+                .as_ref()
+                .expect("tooltip trigger hover handler")
+                .borrow_mut()(true);
+            (
+                default_value.get(),
+                trigger_value.get(),
+                configured_value.get(),
+                {
+                    let scoped_value = create_signal(0_u64);
+                    let _ = tooltip_scope_with_delays(
+                        "pre-tip-root-delay",
+                        None,
+                        Some(65),
+                        Some(120),
+                        || {
+                            scoped_value
+                                .set(use_tooltip().expect("tooltip scope").open_delay_ms.get());
+                            Element::new()
+                        },
+                    );
+                    scoped_value.get()
+                },
+            )
+        });
+
+    assert_eq!(default_delay, 300);
+    assert_eq!(trigger_delay, 45);
+    assert_eq!(configured_delay, 85);
+    assert_eq!(scoped_delay, 65);
 }
 
 #[test]

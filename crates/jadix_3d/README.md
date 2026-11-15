@@ -24,11 +24,10 @@ The Jadix scene3d-models feature connects Renderer to scene3d().model(&SceneView
 Keep SceneView alive for the lifetime of its viewport. See
 [the capability guide](../../docs/desktop-capabilities.md) for examples and limitations.
 
-## Validation
+## Running the examples
 
 ~~~powershell
 cargo run -p jadix_3d --example inspect -- path/to/model.glb
-cargo test -p jadix_3d --features gpu-tests -- --nocapture
 cargo run -p jadix --features scene3d-models --example model_scene -- path/to/avatar.vrm
 ~~~
 

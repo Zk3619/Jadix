@@ -1,7 +1,7 @@
 use crate::{handles::Handle, schema::Value};
 use jadix_core::presentation::{component::ComponentSchema, style::NodeStyle, PROTOCOL_VERSION};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 pub const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
 
@@ -38,42 +38,73 @@ impl ComponentRegistry {
     }
 
     pub fn validate(&self, root: &ElementSpec) -> Result<(), WireError> {
+        self.validate_with(root, |_, _| Ok::<_, std::convert::Infallible>(()))
+            .map_err(|error| match error {
+                ValidationError::Wire(error) => error,
+                ValidationError::Visitor(never) => match never {},
+            })
+    }
+
+    pub(crate) fn validate_with<E>(
+        &self,
+        root: &ElementSpec,
+        mut visit: impl FnMut(&ElementSpec, &ComponentSchema) -> Result<(), E>,
+    ) -> Result<(), ValidationError<E>> {
         let mut pending = vec![(root, 0)];
         let mut visited = 0;
         while let Some((node, depth)) = pending.pop() {
             visited += 1;
             if visited > 4096 || depth > 32 || pending.len() > 4096 {
-                return Err(WireError::Limit);
+                return Err(WireError::Limit.into());
             }
             let schema = self
                 .components
                 .get(&node.component)
                 .ok_or(WireError::Component)?;
             if !schema.properties.accepts(&node.props) {
-                return Err(WireError::Properties);
+                return Err(WireError::Properties.into());
             }
             if !node.style.is_valid() {
-                return Err(WireError::Style);
+                return Err(WireError::Style.into());
             }
             if node
                 .events
                 .keys()
                 .any(|name| !schema.events.contains_key(name))
             {
-                return Err(WireError::Events);
+                return Err(WireError::Events.into());
             }
             if !schema.children && !node.children.is_empty() {
-                return Err(WireError::Children);
+                return Err(WireError::Children.into());
             }
-            let mut keys = std::collections::BTreeSet::new();
-            if node.key.as_ref().is_some_and(|key| key.is_empty() || key.len() > 256)
-                || node.children.iter().filter_map(|child| child.key.as_ref()).any(|key| !keys.insert(key))
+            let mut keys = HashSet::with_capacity(node.children.len());
+            if node
+                .key
+                .as_ref()
+                .is_some_and(|key| key.is_empty() || key.len() > 256)
+                || node
+                    .children
+                    .iter()
+                    .filter_map(|child| child.key.as_ref())
+                    .any(|key| !keys.insert(key))
             {
-                return Err(WireError::Properties);
+                return Err(WireError::Properties.into());
             }
+            visit(node, schema).map_err(ValidationError::Visitor)?;
             pending.extend(node.children.iter().map(|child| (child, depth + 1)));
         }
         Ok(())
+    }
+}
+
+pub(crate) enum ValidationError<E> {
+    Wire(WireError),
+    Visitor(E),
+}
+
+impl<E> From<WireError> for ValidationError<E> {
+    fn from(error: WireError) -> Self {
+        Self::Wire(error)
     }
 }
 
@@ -97,7 +128,7 @@ pub struct ElementSpec {
 pub enum Command {
     Mount {
         root: String,
-        tree: ElementSpec,
+        tree: Box<ElementSpec>,
     },
     WriteState {
         handle: Handle,
@@ -161,7 +192,7 @@ impl Envelope {
                     return Err(WireError::Properties);
                 }
                 registry.validate(tree)?;
-                let mut pending = vec![tree];
+                let mut pending = vec![tree.as_ref()];
                 while let Some(node) = pending.pop() {
                     if node
                         .events

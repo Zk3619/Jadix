@@ -404,12 +404,9 @@ impl EditorBridge {
                 return true;
             }
             Key::Named(NamedKey::Enter) => {
-                let newline = if source.text().contains("\r\n") {
-                    "\r\n"
-                } else {
-                    "\n"
-                };
-                let _ = self.state.replace_selection(newline);
+                let _ = self
+                    .state
+                    .insert_newline_with_list_continuation(!modifiers.shift_key());
                 return true;
             }
             _ => None,

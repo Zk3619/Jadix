@@ -214,6 +214,47 @@ fn document_view_virtualizes_large_code_and_handles_stale_scroll() {
 }
 
 #[test]
+fn deferred_document_blocks_inherit_their_original_context() {
+    use jadix_components::core::reactivity::{create_context, provide_context, use_context};
+    use std::{cell::RefCell, rc::Rc};
+
+    let context = create_context::<&'static str>();
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let rendered = seen.clone();
+    let (_owner, mut root) = create_root(|| {
+        provide_context(context, "document");
+        document_view("deferred-context-document")
+            .document("paragraph\n\n".repeat(300))
+            .viewport_h(220.0)
+            .block_renderer(move |_, block| {
+                rendered.borrow_mut().push(use_context(context));
+                Some(Element::new().text(block.text()).h(24.0))
+            })
+            .into()
+    });
+    let (_other, ()) = create_root(|| {
+        provide_context(context, "unrelated");
+        let mut layout = LayoutTree::new();
+        layout.build_and_layout(&mut root, 640.0, 220.0, [-1.0, -1.0]);
+        sync(&mut root, &mut layout);
+        seen.borrow_mut().clear();
+        use_signal(
+            &scroll_offset_y_signal_key("deferred-context-document"),
+            || 0.0_f32,
+        )
+        .set_silent(2_500.0);
+        sync(&mut root, &mut layout);
+        let seen = seen.borrow();
+        assert!(
+            !seen.is_empty(),
+            "scrolling must mount previously unseen blocks"
+        );
+        assert!(seen.iter().all(|value| *value == Some("document")));
+        assert_eq!(use_context(context), Some("unrelated"));
+    });
+}
+
+#[test]
 fn selection_search_and_undo_cover_unmounted_content() {
     let text = format!("start\n{}\u{4e2d}\u{6587} end", "middle\n".repeat(10_000));
     let state = DocumentEditorState::new(text.clone());
@@ -375,5 +416,24 @@ fn inline_code_reserves_its_full_width_next_to_math() {
             "code box must reserve glyph width: {:?}",
             code.layout_bounds
         );
+        let word = "0123456789".repeat(8);
+        let mut narrow: Element = document_view("oversized-inline-code")
+            .document(format!("`{word}` $x$"))
+            .into();
+        layout.build_and_layout(&mut narrow, 150.0, 480.0, [-1.0, -1.0]);
+        let code = find_text(&narrow, &word).unwrap();
+        assert!(code.layout_bounds[2] <= 150.0, "{:?}", code.layout_bounds);
+        assert!(code.layout_bounds[3] > 24.0, "long code must wrap");
+        assert_eq!(code.text.as_deref(), Some(word.as_str()));
     });
+}
+
+fn find_text<'a>(element: &'a Element, text: &str) -> Option<&'a Element> {
+    if element.text.as_deref() == Some(text) {
+        return Some(element);
+    }
+    element
+        .children
+        .iter()
+        .find_map(|child| find_text(child, text))
 }

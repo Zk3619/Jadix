@@ -14,6 +14,8 @@ fn node(root: RootId, content: NodeContent, width: f32, height: f32) -> Presenta
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
             style: presentation_style(width, height),
         },

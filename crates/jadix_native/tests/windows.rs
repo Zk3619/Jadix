@@ -12,9 +12,195 @@ fn node(root: RootId, content: NodeContent) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
+            accessible_description: None,
             accessible_name: None,
         },
         children: vec![],
+    }
+}
+
+#[test]
+fn late_dialogs_use_their_own_open_window_restore_focus_and_cancel_on_destroy() {
+    use jadix_native::{
+        host::{ApplyReceipt, PlatformHost},
+        layout::{LayoutError, MeasureRequest},
+    };
+    struct TraceHost {
+        inner: WindowsHost,
+        batches: Vec<CommitBatch>,
+    }
+    impl std::ops::Deref for TraceHost {
+        type Target = WindowsHost;
+        fn deref(&self) -> &WindowsHost {
+            &self.inner
+        }
+    }
+    impl PlatformHost for TraceHost {
+        fn is_alive(&self) -> bool {
+            self.inner.is_alive()
+        }
+        fn capabilities(&self) -> capabilities::BackendCapabilities {
+            self.inner.capabilities()
+        }
+        fn measure(
+            &mut self,
+            r: MeasureRequest,
+            d: &NodeDescriptor,
+        ) -> Result<MeasureResult, LayoutError> {
+            self.inner.measure(r, d)
+        }
+        fn publish(&mut self, r: RootId, v: u64, n: &[PresentationNode]) -> Result<(), String> {
+            self.inner.publish(r, v, n)
+        }
+        fn publish_batch(
+            &mut self,
+            b: &CommitBatch,
+            n: &[PresentationNode],
+        ) -> Result<ApplyReceipt, String> {
+            let receipt = self.inner.publish_batch(b, n)?;
+            self.batches.push(b.clone());
+            Ok(receipt)
+        }
+        fn take_events(&mut self) -> Result<Vec<PlatformEvent>, String> {
+            self.inner.take_events()
+        }
+        fn dispose(&mut self) {
+            self.inner.dispose()
+        }
+    }
+    fn present(root: &mut NativeRoot<TraceHost>, nodes: &mut [PresentationNode]) {
+        root.present(nodes, root.host().viewport(), root.host().environment())
+            .unwrap();
+    }
+    use windows_sys::Win32::UI::{
+        Input::KeyboardAndMouse::{GetFocus, IsWindowEnabled},
+        WindowsAndMessaging::{GetAncestor, GetParent, IsWindow, GA_ROOT},
+    };
+    let mut a = NativeRoot::new(TraceHost {
+        inner: WindowsHost::new("Jadix late dialog A", [420, 260]).unwrap(),
+        batches: vec![],
+    });
+    let mut b = NativeRoot::new(TraceHost {
+        inner: WindowsHost::new("Jadix late dialog B", [420, 260]).unwrap(),
+        batches: vec![],
+    });
+    let button = |id| {
+        node(
+            id,
+            NodeContent::Button {
+                label: "Open".into(),
+                enabled: true,
+            },
+        )
+    };
+    let (mut at, mut bt) = (vec![button(a.model().id())], vec![button(b.model().id())]);
+    present(&mut a, &mut at);
+    present(&mut b, &mut bt);
+    a.host().show();
+    b.host().show();
+    a.host().pump();
+    b.host().pump();
+    let (aid, bid) = (at[0].id, bt[0].id);
+    a.focus(Some(aid)).unwrap();
+    let (aw, bw) = (a.host().native_window(), b.host().native_window());
+    let original = a.host().control_identity(aid).unwrap();
+    assert_eq!(unsafe { GetFocus() } as usize, original);
+    let mut dialog = node(
+        a.model().id(),
+        NodeContent::Dialog {
+            open: true,
+            close_on_overlay_click: true,
+            revision: 0,
+        },
+    );
+    dialog.descriptor.style.width = Some(200.);
+    dialog.descriptor.style.height = Some(120.);
+    dialog.children.push(button(a.model().id()));
+    let (modal, inside) = (dialog.id, dialog.children[0].id);
+    at.push(dialog);
+    present(&mut a, &mut at);
+    let batch = a.host().batches.last().unwrap();
+    assert_eq!(batch.root, a.model().id());
+    let config=batch.operations.iter().position(|op|matches!(op,Operation::Create{node,descriptor,..} if *node==modal && matches!(descriptor.content,NodeContent::Dialog{open:true,..}))).unwrap();
+    let child=batch.operations.iter().position(|op|matches!(op,Operation::Create{node,parent:Some(p),..} if *node==inside && *p==modal)).unwrap();
+    assert!(
+        config < child,
+        "full modal configuration is in Create before child attachment"
+    );
+    let panel = a.host().control_identity(modal).unwrap() as *mut std::ffi::c_void;
+    assert_eq!(
+        unsafe { GetAncestor(panel, GA_ROOT) } as usize,
+        aw,
+        "late dialog belongs to A, never the last opened B"
+    );
+    assert_eq!(
+        unsafe { GetParent(GetParent(panel)) } as usize,
+        aw,
+        "backdrop configured under its own host before exposure"
+    );
+    assert_eq!(unsafe { IsWindowEnabled(original as _) }, 0);
+    assert_ne!(
+        unsafe { IsWindowEnabled(b.host().control_identity(bid).unwrap() as _) },
+        0
+    );
+    assert!(a.host().activate(aid).is_err());
+    assert!(a.host().control_identity(inside).is_some());
+    a.host().dismiss(modal, false).unwrap();
+    let events = a.poll_events().unwrap();
+    assert!(events
+        .iter()
+        .any(|e| e.node == modal && matches!(e.payload, EventPayload::Dismiss { .. })));
+    at.truncate(1);
+    present(&mut a, &mut at);
+    assert_eq!(
+        unsafe { GetFocus() } as usize,
+        original,
+        "removing a late modal restores the original control"
+    );
+    // B can now mount its own late dialog independently.
+    b.focus(Some(bid)).unwrap();
+    let mut other = node(
+        b.model().id(),
+        NodeContent::Dialog {
+            open: true,
+            close_on_overlay_click: true,
+            revision: 0,
+        },
+    );
+    let other_id = other.id;
+    other.children.push(button(b.model().id()));
+    bt.push(other);
+    present(&mut b, &mut bt);
+    let other_panel = b.host().control_identity(other_id).unwrap();
+    assert_eq!(
+        unsafe { GetAncestor(other_panel as _, GA_ROOT) } as usize,
+        bw
+    );
+    b.host().dismiss(other_id, true).unwrap(); // queued result must not survive destruction
+    b.dispose();
+    assert!(b.poll_events().is_err());
+    assert!(b.host().dismiss(other_id, false).is_err());
+    assert_eq!(unsafe { IsWindow(bw as _) }, 0);
+    assert_ne!(unsafe { IsWindow(aw as _) }, 0);
+    a.host().activate(aid).unwrap();
+    assert!(a
+        .poll_events()
+        .unwrap()
+        .iter()
+        .any(|e| e.node == aid && e.payload == EventPayload::Activate));
+    if let Some(directory) = std::env::var_os("JADIX_NATIVE_ACCEPTANCE_DIR") {
+        let p = std::path::PathBuf::from(directory);
+        std::fs::create_dir_all(&p).unwrap();
+        std::fs::write(
+            p.join("late-dialogs.json"),
+            serde_json::to_vec_pretty(&serde_json::json!({
+            "status":"pass","backend":"real Win32 WindowsHost","a":aw,"b":bw,
+            "late_owner_a":true,"late_owner_b":true,"config_in_create_before_child":true,
+            "focus_restore":true,"queued_dismiss_cancelled":true,"other_root_alive":true}))
+            .unwrap(),
+        )
+        .unwrap();
     }
 }
 
@@ -29,7 +215,10 @@ fn reduce(nodes: &mut [PresentationNode], events: &[PlatformEvent]) {
             match (&mut node.descriptor.content, &event.payload) {
                 (
                     NodeContent::Input {
-                        value, revision, ..
+                        max_length: None,
+                        value,
+                        revision,
+                        ..
                     },
                     EventPayload::Edit {
                         value: next,
@@ -69,6 +258,7 @@ fn uia_reads_accessible_name_and_native_password_state_after_updates() {
     let mut nodes = vec![node(
         root.model().id(),
         NodeContent::Input {
+            max_length: None,
             value: "private value".into(),
             placeholder: "Password".into(),
             enabled: true,
@@ -95,7 +285,10 @@ fn uia_reads_accessible_name_and_native_password_state_after_updates() {
 
     nodes[0].descriptor.accessible_name = Some("新的名称".into());
     if let NodeContent::Input {
-        enabled, password, ..
+        max_length: None,
+        enabled,
+        password,
+        ..
     } = &mut nodes[0].descriptor.content
     {
         *enabled = false;
@@ -127,6 +320,7 @@ fn native_controls_preserve_unicode_selection_identity_and_undo_after_reorder() 
         node(
             identifier,
             NodeContent::Input {
+                max_length: None,
                 value: "A😀中".into(),
                 placeholder: "write".into(),
                 enabled: true,
@@ -178,6 +372,7 @@ fn native_controls_preserve_unicode_selection_identity_and_undo_after_reorder() 
     assert_eq!(value, "A🙂文中");
     assert_eq!(*selection_utf16, [4, 4]);
     let NodeContent::Input {
+        max_length: None,
         value: current,
         revision: current_revision,
         ..
@@ -410,6 +605,7 @@ fn native_tab_traverses_nested_containers_and_reveals_the_focused_editor() {
         node(
             identifier,
             NodeContent::Input {
+                max_length: None,
                 value: String::new(),
                 placeholder: String::new(),
                 enabled: true,
@@ -463,6 +659,16 @@ fn native_tab_traverses_nested_containers_and_reveals_the_focused_editor() {
     assert!(events
         .iter()
         .any(|event| event.node == last && event.payload == EventPayload::Focus));
+    assert!(events
+        .iter()
+        .any(|event| event.node == first && event.payload == EventPayload::Blur));
+    assert_eq!(root.model().focused(), Some(last));
+    unsafe { SetFocus(root.host().native_window() as HWND) };
+    let events = root.poll_events().unwrap();
+    assert!(events
+        .iter()
+        .any(|event| event.node == last && event.payload == EventPayload::Blur));
+    assert_eq!(root.model().focused(), None);
     assert!(root.host().scroll_offset(nodes[0].id).unwrap()[1] > 300.0);
     let frame = root.host().control_frame(last).unwrap();
     assert!(
@@ -598,6 +804,7 @@ fn native_nested_modals_gate_background_trap_tab_dismiss_and_restore_focus() {
         node(
             identifier,
             NodeContent::Input {
+                max_length: None,
                 value: "draft".into(),
                 placeholder: "name".into(),
                 enabled: true,
@@ -719,4 +926,50 @@ fn native_nested_modals_gate_background_trap_tab_dismiss_and_restore_focus() {
     assert_eq!(unsafe { GetFocus() }, background_window);
     assert_ne!(unsafe { IsWindowEnabled(background_window) }, 0);
     assert_eq!(unsafe { IsWindowVisible(inner_window) }, 0);
+}
+
+#[test]
+fn focusing_a_partly_visible_tall_native_editor_keeps_the_scroll_position() {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
+    let mut root =
+        NativeRoot::new(WindowsHost::new("Jadix tall focus reveal", [320, 240]).unwrap());
+    let identifier = root.model().id();
+    let mut scroll = node(identifier, NodeContent::Scroll);
+    scroll.descriptor.style.width = Some(240.0);
+    scroll.descriptor.style.height = Some(80.0);
+    let scroll_id = scroll.id;
+    let mut spacer = node(identifier, NodeContent::Container);
+    spacer.descriptor.style.height = Some(40.0);
+    spacer.descriptor.style.shrink = 0.0;
+    let mut editor = node(
+        identifier,
+        NodeContent::Input {
+            max_length: None,
+            value: "tall focus target".into(),
+            placeholder: String::new(),
+            enabled: true,
+            password: false,
+            revision: 0,
+        },
+    );
+    editor.descriptor.style.height = Some(600.0);
+    editor.descriptor.style.shrink = 0.0;
+    let editor_id = editor.id;
+    scroll.children = vec![spacer, editor];
+    let mut nodes = vec![scroll];
+    present(&mut root, &mut nodes);
+    root.host().show();
+    let editor_window = root.host().control_identity(editor_id).unwrap();
+    for offset in [0.0, 120.0, 400.0] {
+        root.host().scroll_to(scroll_id, [0.0, offset]).unwrap();
+        let before = root.host().scroll_offset(scroll_id).unwrap();
+        unsafe { SetFocus(editor_window as _) };
+        assert_eq!(unsafe { GetFocus() } as usize, editor_window);
+        root.host().reveal(editor_id).unwrap();
+        assert_eq!(
+            root.host().scroll_offset(scroll_id).unwrap(),
+            before,
+            "focus must not move a partially visible oversized native editor"
+        );
+    }
 }

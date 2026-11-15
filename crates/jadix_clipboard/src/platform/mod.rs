@@ -14,6 +14,10 @@ pub use win::{ClipboardContext, ClipboardWatcherContext, WatcherShutdown};
 mod android;
 #[cfg(target_os = "android")]
 pub use android::{ClipboardContext, ClipboardWatcherContext, WatcherShutdown};
+#[cfg(target_env = "ohos")]
+mod ohos;
+#[cfg(target_env = "ohos")]
+pub use ohos::{ClipboardContext, ClipboardWatcherContext, WatcherShutdown};
 
 // Linux: runtime detection between Wayland and X11
 #[cfg(all(
@@ -22,7 +26,8 @@ pub use android::{ClipboardContext, ClipboardWatcherContext, WatcherShutdown};
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
-        target_os = "emscripten"
+        target_os = "emscripten",
+        target_env = "ohos"
     ))
 ))]
 mod x11;
@@ -33,7 +38,8 @@ mod x11;
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
-        target_os = "emscripten"
+        target_os = "emscripten",
+        target_env = "ohos"
     )),
     feature = "wayland"
 ))]
@@ -45,7 +51,8 @@ mod wayland;
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
-        target_os = "emscripten"
+        target_os = "emscripten",
+        target_env = "ohos"
     ))
 ))]
 pub use x11::ClipboardContextX11Options;
@@ -56,7 +63,8 @@ pub use x11::ClipboardContextX11Options;
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
-        target_os = "emscripten"
+        target_os = "emscripten",
+        target_env = "ohos"
     ))
 ))]
 mod linux_clipboard {
@@ -267,7 +275,8 @@ mod linux_clipboard {
         target_os = "macos",
         target_os = "ios",
         target_os = "android",
-        target_os = "emscripten"
+        target_os = "emscripten",
+        target_env = "ohos"
     ))
 ))]
 pub use linux_clipboard::{ClipboardContext, ClipboardWatcherContext, WatcherShutdown};

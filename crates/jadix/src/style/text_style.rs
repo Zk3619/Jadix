@@ -288,6 +288,7 @@ pub struct TextSpan {
     pub italic: bool,
     pub monospace: bool,
     pub underline: bool,
+    pub strikethrough: bool,
     /// Optional hyperlink target (markdown `[label](url)`).
     pub href: Option<String>,
 }
@@ -305,6 +306,7 @@ impl TextSpan {
             italic: false,
             monospace: false,
             underline: false,
+            strikethrough: false,
             href: None,
         }
     }
@@ -366,6 +368,11 @@ impl TextSpan {
 
     pub fn underline(mut self) -> Self {
         self.underline = true;
+        self
+    }
+
+    pub fn strikethrough(mut self) -> Self {
+        self.strikethrough = true;
         self
     }
 
@@ -512,6 +519,9 @@ pub struct TextStyle {
     pub align_last: Option<super::TextAlignLast>,
     /// Overflow when the box is too small (`clip` / `hidden` / `ellipsis` / `newline`).
     pub overflow: TextOverflow,
+    /// Non-inherited visible line budget for static text. Hidden source stays
+    /// available for search/selection; ellipsis is added only on actual overflow.
+    pub max_lines: Option<u16>,
     /// Soft-wrap policy (`normal` | `nowrap`). Button captions use `Nowrap` (ShadCN).
     pub white_space: WhiteSpace,
     /// Mid-line break mode when soft-wrapping (`word` / `char` / `none`).
@@ -558,6 +568,7 @@ impl Default for TextStyle {
             computed_align: None,
             align_last: None,
             overflow: TextOverflow::Clip,
+            max_lines: None,
             white_space: WhiteSpace::Normal,
             wrap_mode: crate::text::WrapMode::Word,
             selectable: false,

@@ -116,6 +116,7 @@ impl From<CodeEditorBuilder> for Element {
             .unwrap_or_else(|| document_field_id(&uri));
 
         let editor = build_text_edit_element(TextEditBuildParams {
+            max_length: None,
             field_id: field_id.clone(),
             placeholder: String::new(),
             disabled: false,

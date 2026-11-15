@@ -247,3 +247,45 @@ fn select_routes_to_shared_state_and_restores_atomically() {
     assert_eq!(app.state(), saved);
     assert!(app.event(&selected).is_err());
 }
+
+#[test]
+fn native_app_routes_radio_navigation_and_applies_requested_focus() {
+    use jadix_components::prelude::*;
+    let (_owner, (element, selected)) = create_root(|| {
+        let selected = create_signal("a".to_string());
+        let element: Element = radio_group("shared-radio")
+            .value_signal(selected)
+            .options([
+                radio_option("a", "Alpha"),
+                radio_option("blocked", "Unavailable").disabled(true),
+                radio_option("b", "Beta ??"),
+            ])
+            .into();
+        (element, selected)
+    });
+    let mut app = NativeApp::new(Host, [360.0, 640.0], 0, String::new()).unwrap();
+    app.element = element;
+    app.render().unwrap();
+    let ids = app.projection.navigation_nodes(&app.element);
+    assert_eq!(ids.len(), 2);
+    for (source, key, value, focus) in [
+        (ids[0], NavigationKey::Right, "b", ids[1]),
+        (ids[1], NavigationKey::Right, "a", ids[0]),
+        (ids[0], NavigationKey::End, "b", ids[1]),
+    ] {
+        let event = PlatformEvent {
+            node: source,
+            payload: EventPayload::Navigate {
+                key,
+                shift: false,
+                control: false,
+            },
+        };
+        app.root.event(&event).unwrap();
+        assert!(app.dispatch_event(&event).unwrap());
+        app.render().unwrap();
+        assert_eq!(selected.get(), value);
+        assert_eq!(app.root.model().focused(), Some(focus));
+        assert_eq!(app.projection.navigation_nodes(&app.element), ids);
+    }
+}

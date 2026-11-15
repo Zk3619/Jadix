@@ -1,0 +1,7 @@
+button::after { border: 0; }
+.text { overflow: hidden; }
+.focus-visible { box-shadow: 0 0 0 2px currentColor; }
+.wrap { white-space: pre-wrap; word-break: break-all; }
+.clip { white-space: pre; }
+.ellipsis { white-space: pre; text-overflow: ellipsis; }
+.overlay { position: fixed; top: 0; right: 0; bottom: 0; left: 0; }

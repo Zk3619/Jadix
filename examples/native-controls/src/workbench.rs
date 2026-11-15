@@ -38,7 +38,9 @@ fn node(identifier: NodeId, content: NodeContent, width: f32, height: f32) -> Pr
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessible_description: None,
             accessible_name: None,
+            accessibility_relations: Default::default(),
             style: style::NodeStyle {
                 width: Some(width),
                 height: Some(height),
@@ -159,6 +161,7 @@ impl<Host: PlatformHost> Workbench<Host> {
             let mut input = node(
                 row.input,
                 NodeContent::Input {
+                    max_length: None,
                     value: draft.display().into(),
                     placeholder: String::new(),
                     enabled: true,

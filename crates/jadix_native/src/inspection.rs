@@ -1,5 +1,5 @@
-use crate::{HeadlessRoot, presentation::NodeContent, wire};
-use serde_json::{Value, json};
+use crate::{presentation::NodeContent, wire, HeadlessRoot};
+use serde_json::{json, Value};
 
 impl HeadlessRoot {
     pub fn inspection(&self, include_text: bool) -> Value {
@@ -7,7 +7,7 @@ impl HeadlessRoot {
             let mut descriptor = wire::descriptor(&node.descriptor);
             let password = matches!(node.descriptor.content, NodeContent::Input { password: true, .. });
             if !include_text || password {
-                for key in ["text", "value", "placeholder", "source"] {
+                for key in ["text", "value", "placeholder", "source", "name", "description"] {
                     if descriptor.get(key).is_some() { descriptor[key] = Value::Null; }
                 }
                 if descriptor.get("options").is_some() { descriptor["options"] = Value::Null; }

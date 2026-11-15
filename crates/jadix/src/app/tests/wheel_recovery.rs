@@ -1,7 +1,7 @@
 #[cfg(feature = "product-tests")]
 use super::*;
 #[cfg(feature = "product-tests")]
-use crate::app::runtime::{clear_app_runtime, set_app_runtime, AppRuntime};
+use crate::app::runtime::{AppRuntime, clear_app_runtime, set_app_runtime};
 #[cfg(feature = "product-tests")]
 use crate::core::reactivity::{create_root, use_signal};
 #[cfg(feature = "product-tests")]

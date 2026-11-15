@@ -153,6 +153,7 @@ public final class NativeView extends FrameLayout implements AutoCloseable {
             case "textarea":
                 NativeInput input = new NativeInput(getContext());
                 input.setSingleLine(false);
+                input.setImeOptions(EditorInfo.IME_ACTION_NONE);
                 input.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE);
                 input.setGravity(android.view.Gravity.TOP | android.view.Gravity.START);
                 return input;
@@ -182,11 +183,12 @@ public final class NativeView extends FrameLayout implements AutoCloseable {
 
     void applyAccessibility(View view, JSONObject node) throws JSONException {
         String role = node.isNull("role") ? null : node.getString("role");
+        String supplementalDescription = node.isNull("description") ? null : node.getString("description");
         Object selectedValue = node.opt("selected");
         Object expandedValue = node.opt("expanded");
         Boolean selected = selectedValue instanceof Boolean ? (Boolean) selectedValue : null;
         Boolean expanded = expandedValue instanceof Boolean ? (Boolean) expandedValue : null;
-        if (role == null && selected == null && expanded == null) {
+        if (role == null && selected == null && expanded == null && supplementalDescription == null) {
             if (accessibility.remove(view) != null) {
                 view.setAccessibilityDelegate(null);
                 if (view.isAttachedToWindow()) view.sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
@@ -199,7 +201,7 @@ public final class NativeView extends FrameLayout implements AutoCloseable {
             accessibility.put(view, delegate);
             view.setAccessibilityDelegate(delegate);
         }
-        if (delegate.update(role, selected, expanded) && view.isAttachedToWindow()) {
+        if (delegate.update(role, selected, expanded, supplementalDescription) && view.isAttachedToWindow()) {
             view.sendAccessibilityEvent(android.view.accessibility.AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED);
         }
     }
@@ -208,19 +210,29 @@ public final class NativeView extends FrameLayout implements AutoCloseable {
         private String role;
         private Boolean selected;
         private Boolean expanded;
+        private String supplementalDescription;
 
-        boolean update(String role, Boolean selected, Boolean expanded) {
+        boolean update(String role, Boolean selected, Boolean expanded, String supplementalDescription) {
             boolean changed = !java.util.Objects.equals(this.role, role)
                 || !java.util.Objects.equals(this.selected, selected)
-                || !java.util.Objects.equals(this.expanded, expanded);
+                || !java.util.Objects.equals(this.expanded, expanded)
+                || !java.util.Objects.equals(this.supplementalDescription, supplementalDescription);
             this.role = role;
             this.selected = selected;
             this.expanded = expanded;
+            this.supplementalDescription = supplementalDescription;
             return changed;
         }
 
         @Override public void onInitializeAccessibilityNodeInfo(View host, AccessibilityNodeInfo info) {
             super.onInitializeAccessibilityNodeInfo(host, info);
+            if (Build.VERSION.SDK_INT >= 36) {
+                info.setSupplementalDescription(supplementalDescription);
+            } else {
+                info.getExtras().putCharSequence(
+                    "androidx.view.accessibility.AccessibilityNodeInfoCompat.SUPPLEMENTAL_DESCRIPTION_KEY",
+                    supplementalDescription);
+            }
             String description;
             switch (role == null ? "" : role) {
                 case "radiogroup": description = "Radio group"; break;
@@ -391,8 +403,9 @@ public final class NativeView extends FrameLayout implements AutoCloseable {
             try { emit(id, payload("toggle").put("checked", checked).put("revision", revision.toString())); }
             catch (JSONException error) { throw new IllegalStateException(error); }
         });
-        if (view instanceof Button || view instanceof EditText || view instanceof NativeSelect) view.setOnFocusChangeListener((focused, hasFocus) -> {
-            if (hasFocus) emit(id, payload("focus"));
+        if (view instanceof Button || view instanceof CompoundButton || view instanceof EditText || view instanceof NativeSelect) view.setOnFocusChangeListener((focused, hasFocus) -> {
+            if (!hasFocus) emit(id, payload("blur"));
+            else emit(id, payload(focused.isInTouchMode() ? "focus" : "focusVisible"));
         });
         if (view instanceof ScrollView) view.setOnScrollChangeListener((scrolled, x, y, oldX, oldY) -> {
             try { emit(id, payload("scroll").put("x", x / density).put("y", y / density)); }
@@ -970,7 +983,32 @@ public final class NativeView extends FrameLayout implements AutoCloseable {
         NativeInput(Context context) {
             super(context);
             setSingleLine(true);
+            setImeOptions(EditorInfo.IME_ACTION_DONE);
             setFilters(new android.text.InputFilter[0]);
+            setOnEditorActionListener((view, action, event) -> {
+                JSONObject descriptor = descriptors.get(getTag());
+                if (descriptor == null || !"input".equals(descriptor.optString("kind"))) return false;
+                if (event != null && (event.getKeyCode() != KeyEvent.KEYCODE_ENTER || event.getAction() != KeyEvent.ACTION_DOWN
+                        || event.getRepeatCount() != 0 || event.isCtrlPressed() || event.isAltPressed() || event.isMetaPressed())) return true;
+                if (event == null && action != EditorInfo.IME_ACTION_DONE && action != EditorInfo.IME_ACTION_GO
+                        && action != EditorInfo.IME_ACTION_SEARCH && action != EditorInfo.IME_ACTION_SEND) return false;
+                Editable text = getText();
+                if (publishing || !isEnabled() || imeDepth != 0 || root == null
+                        || BaseInputConnection.getComposingSpanStart(text) >= 0 || BaseInputConnection.getComposingSpanEnd(text) >= 0) return true;
+                String expectedRoot = root;
+                // TextWatcher posts its final edit first, so Submit observes the committed value.
+                post(() -> {
+                    if (!expectedRoot.equals(root) || views.get(getTag()) != this || !isEnabled() || imeDepth != 0
+                            || BaseInputConnection.getComposingSpanStart(getText()) >= 0
+                            || BaseInputConnection.getComposingSpanEnd(getText()) >= 0 || revision.bitLength() > 64) return;
+                    BigInteger next = revision.add(BigInteger.ONE);
+                    if (next.bitLength() > 64) return;
+                    revision = next;
+                    try { emit((String) getTag(), payload("submit").put("revision", revision.toString())); }
+                    catch (JSONException error) { throw new IllegalStateException(error); }
+                });
+                return true;
+            });
             addTextChangedListener(new TextWatcher() {
                 public void beforeTextChanged(CharSequence text, int start, int count, int after) {}
                 public void onTextChanged(CharSequence text, int start, int before, int count) {}

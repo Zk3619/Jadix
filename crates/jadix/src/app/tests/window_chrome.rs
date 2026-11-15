@@ -267,3 +267,17 @@ fn window_label_overrides_persistence_identity() {
     assert_eq!(cleared.persistence_label(true), Some(PRIMARY_WINDOW_LABEL));
     assert_eq!(cleared.persistence_label(false), None);
 }
+
+#[test]
+fn screen_orientation_policy_defaults_to_both_orientations() {
+    assert_eq!(
+        WindowOptions::new().screen_orientations,
+        ScreenOrientations::LandscapeAndPortrait
+    );
+    assert_eq!(
+        WindowOptions::new()
+            .screen_orientations(ScreenOrientations::Landscape)
+            .screen_orientations,
+        ScreenOrientations::Landscape
+    );
+}

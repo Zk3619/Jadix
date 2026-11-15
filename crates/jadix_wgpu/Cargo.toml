@@ -28,10 +28,12 @@
 "path" = "src/lib.rs"
 
 ["features"]
+# Public compute pipeline/pass entry points; backend capability is still checked at runtime.
+"compute" = []
 "angle" = ["dep:arrayvec", "dep:bytemuck", "dep:glow", "dep:glutin_wgl_sys", "dep:js-sys", "dep:khronos-egl", "dep:libloading", "dep:ndk-sys", "dep:objc2", "dep:parking_lot", "dep:profiling", "dep:renderdoc-sys", "dep:wasm-bindgen", "dep:wayland-sys", "dep:web-sys", "dep:windows", "dep:windows-result", "js-sys/std", "khronos-egl/dynamic", "khronos-egl/no-pkg-config", "khronos-egl/static", "wayland-sys/client", "wayland-sys/dlopen", "wayland-sys/egl", "web-sys/HtmlCanvasElement", "web-sys/HtmlImageElement", "web-sys/HtmlVideoElement", "web-sys/ImageBitmap", "web-sys/ImageData", "web-sys/OffscreenCanvas", "web-sys/VideoFrame", "web-sys/WebGl2RenderingContext", "web-sys/Window", "web-sys/default", "web-sys/std", "windows-result/std", "windows/Win32_Graphics_Gdi", "windows/Win32_Graphics_OpenGL", "windows/Win32_System_LibraryLoader", "windows/Win32_UI_WindowsAndMessaging"]
 "counters" = []
 "custom" = []
-"default" = ["dx12", "gles", "metal", "parking_lot", "std", "vulkan", "webgpu", "wgsl"]
+"default" = ["compute", "dx12", "gles", "metal", "parking_lot", "std", "vulkan", "webgpu", "wgsl"]
 "drm" = ["dep:drm"]
 "dx12" = ["dep:arrayvec", "dep:bit-set", "dep:bytemuck", "dep:gpu-allocator", "dep:libloading", "dep:once_cell", "dep:ordered-float", "dep:parking_lot", "dep:profiling", "dep:range-alloc", "dep:windows", "dep:windows-core", "gpu-allocator/d3d12", "gpu-allocator/hashbrown", "windows/Win32_Devices_DeviceAndDriverInstallation", "windows/Win32_Devices_Display", "windows/Win32_Graphics_Direct3D", "windows/Win32_Graphics_Direct3D12", "windows/Win32_Graphics_Direct3D_Dxc", "windows/Win32_Graphics_Direct3D_Fxc", "windows/Win32_Graphics_DirectComposition", "windows/Win32_Graphics_Dxgi_Common", "windows/Win32_Graphics_Gdi", "windows/Win32_Security", "windows/Win32_System_Diagnostics_Debug", "windows/Win32_System_Kernel", "windows/Win32_System_Performance", "windows/Win32_System_Threading", "windows/Win32_UI_WindowsAndMessaging"]
 "exhaust" = ["dep:exhaust"]

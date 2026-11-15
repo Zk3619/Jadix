@@ -73,6 +73,10 @@ pub enum PopupPlacement {
     RightStart,
     /// Prefer to the left of the trigger; top-aligned.
     LeftStart,
+    LeftCenter,
+    LeftEnd,
+    RightCenter,
+    RightEnd,
 }
 
 impl PopupPlacement {
@@ -86,6 +90,10 @@ impl PopupPlacement {
             Self::TopCenter => "top",
             Self::RightStart => "right-start",
             Self::LeftStart => "left-start",
+            Self::LeftCenter => "left",
+            Self::LeftEnd => "left-end",
+            Self::RightCenter => "right",
+            Self::RightEnd => "right-end",
         }
     }
 
@@ -96,8 +104,12 @@ impl PopupPlacement {
             "top-start" => Self::TopStart,
             "top-end" => Self::TopEnd,
             "top" | "top-center" => Self::TopCenter,
-            "right" | "right-start" => Self::RightStart,
-            "left" | "left-start" => Self::LeftStart,
+            "right-start" => Self::RightStart,
+            "right" => Self::RightCenter,
+            "right-end" => Self::RightEnd,
+            "left-start" => Self::LeftStart,
+            "left" => Self::LeftCenter,
+            "left-end" => Self::LeftEnd,
             _ => Self::BottomStart,
         }
     }
@@ -116,14 +128,26 @@ impl PopupPlacement {
             ("top", "start") => Self::TopStart,
             ("top", "end") => Self::TopEnd,
             ("top", _) => Self::TopCenter,
+            ("right", "center") => Self::RightCenter,
+            ("right", "end") => Self::RightEnd,
             ("right", _) => Self::RightStart,
+            ("left", "center") => Self::LeftCenter,
+            ("left", "end") => Self::LeftEnd,
             ("left", _) => Self::LeftStart,
             _ => Self::BottomStart,
         }
     }
 
     fn is_horizontal(self) -> bool {
-        matches!(self, Self::RightStart | Self::LeftStart)
+        matches!(
+            self,
+            Self::RightStart
+                | Self::LeftStart
+                | Self::LeftCenter
+                | Self::LeftEnd
+                | Self::RightCenter
+                | Self::RightEnd
+        )
     }
 }
 
@@ -300,6 +324,37 @@ pub fn compute_anchored_placement(
     preferred: PopupPlacement,
     gap: f32,
 ) -> (f32, f32, f32, bool) {
+    compute_anchored_placement_with_content_insets(
+        trigger,
+        viewport,
+        menu_w,
+        menu_h_estimate,
+        preferred,
+        gap,
+        [0.0, 0.0],
+    )
+}
+
+fn compute_anchored_placement_with_content_insets(
+    trigger: [f32; 4],
+    viewport: [f32; 2],
+    menu_w: f32,
+    menu_h_estimate: f32,
+    preferred: PopupPlacement,
+    gap: f32,
+    vertical_content_insets: [f32; 2],
+) -> (f32, f32, f32, bool) {
+    let trigger = if preferred.is_horizontal() {
+        let [top, bottom] = vertical_content_insets;
+        [
+            trigger[0],
+            trigger[1] - top.max(0.0),
+            trigger[2],
+            trigger[3] + top.max(0.0) + bottom.max(0.0),
+        ]
+    } else {
+        trigger
+    };
     let [tx, ty, tw, th] = trigger;
     let [vw, vh] = viewport;
     let margin = FLOATING_VIEWPORT_MARGIN;
@@ -312,7 +367,10 @@ pub fn compute_anchored_placement(
     if preferred.is_horizontal() {
         let space_right = (vw - margin - (tx + tw) - gap).max(0.0);
         let space_left = (tx - margin - gap).max(0.0);
-        let prefer_right = matches!(preferred, PopupPlacement::RightStart);
+        let prefer_right = matches!(
+            preferred,
+            PopupPlacement::RightStart | PopupPlacement::RightCenter | PopupPlacement::RightEnd
+        );
         let mut place_right = if prefer_right {
             space_right + 0.5 >= w.min(80.0) || space_right >= space_left
         } else {
@@ -329,7 +387,11 @@ pub fn compute_anchored_placement(
         } else {
             tx - gap - w
         };
-        let mut y = ty;
+        let mut y = match preferred {
+            PopupPlacement::LeftCenter | PopupPlacement::RightCenter => ty + (th - h) * 0.5,
+            PopupPlacement::LeftEnd | PopupPlacement::RightEnd => ty + th - h,
+            _ => ty,
+        };
         if x + w > vw - margin {
             x = (vw - margin - w).max(margin);
         }
@@ -414,9 +476,48 @@ fn compute_fixed_anchor(
     preferred: PopupPlacement,
     gap: f32,
 ) -> (f32, f32) {
+    compute_fixed_anchor_with_content_insets(
+        trigger,
+        viewport,
+        menu_w,
+        menu_h_estimate,
+        preferred,
+        gap,
+        [0.0, 0.0],
+    )
+}
+
+fn compute_fixed_anchor_with_content_insets(
+    trigger: [f32; 4],
+    viewport: [f32; 2],
+    menu_w: f32,
+    menu_h_estimate: f32,
+    preferred: PopupPlacement,
+    gap: f32,
+    vertical_content_insets: [f32; 2],
+) -> (f32, f32) {
     let [tx, ty, tw, th] = trigger;
     let [vw, _] = viewport;
     let margin = FLOATING_VIEWPORT_MARGIN;
+    if preferred.is_horizontal() {
+        let [top, bottom] = vertical_content_insets;
+        let ty = ty - top.max(0.0);
+        let th = th + top.max(0.0) + bottom.max(0.0);
+        let w = if menu_w > 0.0 { menu_w } else { tw };
+        let h = menu_h_estimate.max(0.0);
+        let right = matches!(
+            preferred,
+            PopupPlacement::RightStart | PopupPlacement::RightCenter | PopupPlacement::RightEnd
+        );
+        let gap = if gap < 0.0 { -tw } else { gap };
+        let x = if right { tx + tw + gap } else { tx - gap - w };
+        let y = match preferred {
+            PopupPlacement::LeftCenter | PopupPlacement::RightCenter => ty + (th - h) * 0.5,
+            PopupPlacement::LeftEnd | PopupPlacement::RightEnd => ty + th - h,
+            _ => ty,
+        };
+        return (x, y);
+    }
     let cover = gap < 0.0;
     let gap = if cover { -th } else { gap.max(0.0) };
     let w = if menu_w > 0.0 { menu_w } else { tw };
@@ -540,6 +641,14 @@ fn floating_content_h(el: &Element) -> Option<f32> {
         .get(ATTR_FLOATING_CONTENT_H)
         .and_then(|s| s.parse::<f32>().ok())
         .filter(|h| *h > 0.5)
+}
+
+fn floating_vertical_content_insets(el: &Element) -> [f32; 2] {
+    let [border_top, _, border_bottom, _] = el.style.resolved_border_widths();
+    [
+        crate::layout::lp_length_px(el.style.padding.top).unwrap_or(0.0) + border_top,
+        crate::layout::lp_length_px(el.style.padding.bottom).unwrap_or(0.0) + border_bottom,
+    ]
 }
 
 /// Auto-height scroll panels must hug the in-flow list, not the viewport cap.
@@ -1160,13 +1269,14 @@ fn apply_floating_menus(
                 FloatingPlace::default,
             );
             if preferred.is_horizontal() {
-                let (x, y, _, _) = compute_anchored_placement(
+                let (x, y, _, _) = compute_anchored_placement_with_content_insets(
                     tb,
                     viewport,
                     el.layout_bounds[2],
                     el.layout_bounds[3],
                     preferred,
                     gap,
+                    floating_vertical_content_insets(el),
                 );
                 let mut next = place.peek();
                 next.x = x;
@@ -1346,8 +1456,15 @@ fn apply_floating_menus(
                     .max(1.0);
                 (x, y, max_h)
             } else if strategy_fixed {
-                let (x, mut y) =
-                    compute_fixed_anchor(tb, viewport, estimate_w, estimate_h, preferred, gap);
+                let (x, mut y) = compute_fixed_anchor_with_content_insets(
+                    tb,
+                    viewport,
+                    estimate_w,
+                    estimate_h,
+                    preferred,
+                    gap,
+                    floating_vertical_content_insets(el),
+                );
                 // Cover + top: glue the trigger bottom so growing wrap height expands upward
                 // without jumping the seam (estimate→measured churn).
                 let cover = gap < 0.0;
@@ -1374,8 +1491,14 @@ fn apply_floating_menus(
                 let max_h = attr_max_h.unwrap_or(0.0);
                 (x, y, max_h)
             } else {
-                let (x, y, available_max_h, _) = compute_anchored_placement(
-                    tb, viewport, estimate_w, estimate_h, preferred, gap,
+                let (x, y, available_max_h, _) = compute_anchored_placement_with_content_insets(
+                    tb,
+                    viewport,
+                    estimate_w,
+                    estimate_h,
+                    preferred,
+                    gap,
+                    floating_vertical_content_insets(el),
                 );
                 let max_h = attr_max_h
                     .map(|cap| available_max_h.min(cap))

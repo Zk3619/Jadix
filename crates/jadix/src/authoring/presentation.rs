@@ -5,7 +5,7 @@ use crate::layout::LayoutTree;
 use std::rc::Rc;
 mod tree;
 pub(crate) use tree::Retirements;
-pub use tree::{attach_tree, attach_tree_with_cleanup, TreeSync};
+pub use tree::{TreeSync, attach_tree, attach_tree_with_cleanup};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum PaintEdge {

@@ -61,6 +61,7 @@ fn dummy_shaped(
 ) -> crate::renderer::text::ShapedTextEntry {
     let mut e = super::make_dummy_cache_entry(fs);
     e.shape_hash = hash;
+    e.paint_hash = hash;
     e.key_hash = hash.wrapping_mul(3);
     e.measured_text_w = measured;
     e

@@ -1,14 +1,11 @@
 #![cfg(all(feature = "ohos", not(target_env = "ohos")))]
 
-pub use jadix_native::{host, layout, presentation};
+pub use jadix_native::{environment, host, layout, presentation};
 #[path = "../src/ohos.rs"]
 mod adapter;
-#[path = "../src/popover.rs"]
-#[allow(
-    dead_code,
-    reason = "the contract harness shares the production overlay dependency resolver"
-)]
-mod popover;
+mod popover {
+    pub use jadix_layout::presentation_overlay::overlay_order_with_priority;
+}
 
 use adapter::OhosHost;
 use host::{NativeRoot, PlatformHost};
@@ -16,7 +13,7 @@ use presentation::*;
 use std::{
     cell::{Cell, RefCell},
     collections::BTreeMap,
-    ffi::{CStr, c_char, c_void},
+    ffi::{c_char, c_void, CStr},
     rc::Rc,
 };
 
@@ -25,14 +22,19 @@ struct Node {
     kind: i32,
     target: usize,
     label: String,
+    description: String,
     value: String,
     options: Vec<SelectOption>,
     selected: i32,
     interactive: bool,
+    checked: bool,
+    role: i32,
+    radio_group: String,
     select_closes: usize,
     children: Vec<usize>,
     frame: [f32; 4],
     backdrop: bool,
+    direction: i32,
 }
 
 #[derive(Default)]
@@ -41,6 +43,21 @@ struct Api {
     dialogs: Vec<usize>,
     available: bool,
     focus: usize,
+    accessibility_elements: Vec<AccessibilityElementSnapshot>,
+    accessibility_disposals: usize,
+}
+
+#[derive(Clone, Debug)]
+struct AccessibilityElementSnapshot {
+    id: i64,
+    parent_id: i64,
+    children: Vec<i64>,
+    component_type: String,
+    text: String,
+    description: String,
+    bounds: [i32; 4],
+    flags: u32,
+    target: usize,
 }
 
 thread_local! { static API: RefCell<Api> = RefCell::new(Api { available: true, ..Default::default() }); }
@@ -68,6 +85,69 @@ unsafe extern "C" fn jadix_ohos_content(
     unsafe {
         *result = value;
     }
+    0
+}
+
+#[no_mangle]
+extern "C" fn jadix_ohos_accessibility_create(
+    _: *mut c_void,
+    xcomponent: *mut c_void,
+) -> *mut c_void {
+    if xcomponent.is_null() {
+        return std::ptr::null_mut();
+    }
+    Box::into_raw(Box::new(1_u8)).cast()
+}
+
+#[no_mangle]
+unsafe extern "C" fn jadix_ohos_accessibility_dispose(provider: *mut c_void) {
+    if !provider.is_null() {
+        unsafe {
+            drop(Box::from_raw(provider.cast::<u8>()));
+        }
+        API.with_borrow_mut(|api| api.accessibility_disposals += 1);
+    }
+}
+
+#[no_mangle]
+unsafe extern "C" fn jadix_ohos_accessibility_replace(
+    provider: *mut c_void,
+    elements: *const adapter::OhosAccessibilityElement,
+    count: usize,
+) -> i32 {
+    if provider.is_null() || (count > 0 && elements.is_null()) {
+        return -1;
+    }
+    let snapshots = if count == 0 {
+        Vec::new()
+    } else {
+        unsafe { std::slice::from_raw_parts(elements, count) }
+            .iter()
+            .map(|element| AccessibilityElementSnapshot {
+                id: element.id,
+                parent_id: element.parent_id,
+                children: if element.child_count == 0 {
+                    Vec::new()
+                } else {
+                    unsafe { std::slice::from_raw_parts(element.child_ids, element.child_count) }
+                        .to_vec()
+                },
+                component_type: unsafe { CStr::from_ptr(element.component_type) }
+                    .to_string_lossy()
+                    .into_owned(),
+                text: unsafe { CStr::from_ptr(element.text) }
+                    .to_string_lossy()
+                    .into_owned(),
+                description: unsafe { CStr::from_ptr(element.description) }
+                    .to_string_lossy()
+                    .into_owned(),
+                bounds: [element.left, element.top, element.right, element.bottom],
+                flags: element.flags,
+                target: element.target as usize,
+            })
+            .collect()
+    };
+    API.with_borrow_mut(|api| api.accessibility_elements = snapshots);
     0
 }
 
@@ -197,14 +277,16 @@ unsafe extern "C" fn jadix_ohos_update(
     _: *const c_char,
     _: bool,
     _: bool,
-    _: bool,
+    checked: bool,
     _: f32,
     _: u32,
     _: *const c_char,
     _: u32,
     _: u32,
+    direction: i32,
     accessible: *const c_char,
-    _: i32,
+    description: *const c_char,
+    role: i32,
     _: i32,
     _: i32,
 ) -> i32 {
@@ -216,10 +298,31 @@ unsafe extern "C" fn jadix_ohos_update(
     };
     API.with_borrow_mut(|api| {
         let node = api.nodes.get_mut(&(handle as usize)).unwrap();
+        node.checked = checked;
+        node.role = role;
         node.label = label.into();
+        node.description = unsafe { CStr::from_ptr(description) }
+            .to_str()
+            .unwrap()
+            .into();
         node.value = unsafe { CStr::from_ptr(value) }.to_str().unwrap().into();
+        node.direction = direction;
     });
     0
+}
+
+#[no_mangle]
+unsafe extern "C" fn jadix_ohos_radio_group(handle: *mut c_void, group: *const c_char) -> i32 {
+    let group = unsafe { CStr::from_ptr(group) }
+        .to_string_lossy()
+        .into_owned();
+    API.with_borrow_mut(|api| {
+        api.nodes
+            .get_mut(&(handle as usize))
+            .filter(|node| node.kind == 12)
+            .map(|node| node.radio_group = group)
+            .map_or(-1, |_| 0)
+    })
 }
 
 #[no_mangle]
@@ -273,6 +376,12 @@ unsafe extern "C" fn jadix_ohos_select(
 }
 
 #[no_mangle]
+unsafe extern "C" fn jadix_ohos_max_length(_: *mut c_void, _: bool, limit: i32) -> i32 {
+    assert!(limit >= -1);
+    0
+}
+
+#[no_mangle]
 extern "C" fn jadix_ohos_select_close(handle: *mut c_void) -> i32 {
     API.with_borrow_mut(|api| {
         let node = api.nodes.get_mut(&(handle as usize)).unwrap();
@@ -318,6 +427,68 @@ fn mounted() -> NativeRoot<OhosHost> {
     NativeRoot::new(host)
 }
 
+#[test]
+fn opt_in_accessibility_publishes_and_replaces_the_virtual_tree() {
+    let mut token = 0_u8;
+    let pointer = std::ptr::from_mut(&mut token).cast();
+    let host = unsafe {
+        OhosHost::from_napi_with_accessibility(pointer, pointer, pointer, [360.0, 640.0], 2.0)
+    }
+    .unwrap();
+    let mut root = NativeRoot::new(host);
+    let mut child = button(root.model().id(), "Save");
+    child.descriptor.accessible_description = Some("Save changes".into());
+    child.descriptor.frame = Rect {
+        x: 3.0,
+        y: 5.0,
+        width: 20.0,
+        height: 10.0,
+    };
+    child.descriptor.accessible_role = Some(AccessibleRole::TabItem);
+    child.descriptor.accessible_selected = Some(true);
+    let child_id = child.id;
+    let mut roots = vec![node(
+        root.model().id(),
+        "Toolbar",
+        NodeContent::Container,
+        vec![child],
+    )];
+    let parent_id = roots[0].id;
+    root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+
+    API.with_borrow(|api| {
+        assert_eq!(api.accessibility_elements.len(), 2);
+        let parent = api
+            .accessibility_elements
+            .iter()
+            .find(|item| item.id == parent_id.generation() as i64)
+            .unwrap();
+        let child = api
+            .accessibility_elements
+            .iter()
+            .find(|item| item.id == child_id.generation() as i64)
+            .unwrap();
+        assert_eq!(parent.parent_id, 0);
+        assert_eq!(parent.children, [child.id]);
+        assert_eq!(child.parent_id, parent.id);
+        assert_eq!(child.component_type, "tab");
+        assert_eq!(child.text, "Save");
+        assert_eq!(child.description, "Save changes");
+        assert_eq!(child.bounds, [0, 0, 720, 48]);
+        assert_ne!(child.flags & (1 << 1), 0);
+        assert_ne!(child.target, 0);
+    });
+
+    roots[0].children.clear();
+    root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+    API.with_borrow(|api| {
+        assert_eq!(api.accessibility_elements.len(), 1);
+        assert!(api.accessibility_elements[0].children.is_empty());
+    });
+    root.dispose();
+    API.with_borrow(|api| assert_eq!(api.accessibility_disposals, 1));
+}
+
 fn node(
     root: RootId,
     name: &str,
@@ -329,10 +500,12 @@ fn node(
         descriptor: NodeDescriptor {
             content,
             frame: Rect::default(),
+            accessible_description: None,
             accessible_name: Some(name.into()),
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessibility_relations: Default::default(),
             style: Default::default(),
         },
         children,
@@ -357,6 +530,123 @@ fn button(root: RootId, name: &str) -> PresentationNode {
         },
         vec![],
     )
+}
+
+#[test]
+fn submit_follows_committed_edit_and_filters_composition_and_disabled_controls() {
+    let mut root = mounted();
+    let mut roots = vec![node(
+        root.model().id(),
+        "editor",
+        NodeContent::Input {
+            value: String::new(),
+            placeholder: String::new(),
+            max_length: None,
+            enabled: true,
+            password: false,
+            revision: 0,
+        },
+        vec![],
+    )];
+    root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+    let native = handle("editor");
+    let target = API.with_borrow(|api| api.nodes[&native].target);
+    let deliver = |kind, marked: &std::ffi::CStr| unsafe {
+        jadix_ohos_receive(
+            target as *mut c_void,
+            kind,
+            c"中文🙂".as_ptr(),
+            marked.as_ptr(),
+            0,
+            4,
+            4,
+            0.0,
+            0.0,
+        );
+    };
+    deliver(3, c"中文");
+    deliver(9, c"");
+    let events = root.poll_events().unwrap();
+    assert_eq!(events.len(), 1);
+    assert!(matches!(
+        events[0].payload,
+        EventPayload::Edit {
+            revision: 1,
+            composing_utf16: Some([0, 2]),
+            ..
+        }
+    ));
+    deliver(3, c"");
+    deliver(9, c"");
+    let events = root.poll_events().unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(
+        matches!(&events[0].payload, EventPayload::Edit { revision: 2, value, composing_utf16: None, .. } if value == "中文🙂")
+    );
+    assert_eq!(events[1].payload, EventPayload::Submit { revision: 3 });
+    assert!(root.event(&events[1]).is_err());
+    if let NodeContent::Input {
+        enabled,
+        revision,
+        value,
+        ..
+    } = &mut roots[0].descriptor.content
+    {
+        *enabled = false;
+        *revision = 3;
+        *value = "中文🙂".into();
+    }
+    root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+    deliver(9, c"");
+    assert!(root.poll_events().unwrap().is_empty());
+    root.dispose();
+    API.with_borrow(|api| assert!(!api.nodes.contains_key(&native)));
+}
+
+#[test]
+fn layout_direction_uses_arkui_ltr_rtl_and_auto_values() {
+    let mut root = mounted();
+    let id = root.model().id();
+    let mut roots = vec![button(id, "direction")];
+
+    root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+    assert_eq!(
+        API.with_borrow(|api| api.nodes[&handle("direction")].direction),
+        3
+    );
+
+    roots[0].descriptor.style.direction =
+        Some(jadix_native::environment::LayoutDirection::RightToLeft);
+    root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+    assert_eq!(
+        API.with_borrow(|api| api.nodes[&handle("direction")].direction),
+        1
+    );
+
+    roots[0].descriptor.style.direction =
+        Some(jadix_native::environment::LayoutDirection::LeftToRight);
+    root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+    assert_eq!(
+        API.with_borrow(|api| api.nodes[&handle("direction")].direction),
+        0
+    );
+    root.dispose();
+}
+
+#[test]
+fn description_updates_and_clears_without_replacing_native_name_or_identity() {
+    let mut root = mounted();
+    let mut roots = vec![button(root.model().id(), "Action")];
+    for description in [Some("说明 😀"), Some("Changed"), None] {
+        roots[0].descriptor.accessible_description = description.map(String::from);
+        root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+        API.with_borrow(|api| {
+            let node = &api.nodes[&handle("Action")];
+            assert_eq!(node.label, "Action");
+            assert_eq!(node.description, description.unwrap_or(""));
+        });
+    }
+    root.dispose();
 }
 
 fn handle(name: &str) -> usize {
@@ -622,6 +912,7 @@ fn inspection_redacts_text_and_preserves_pending_native_events() {
             "editor",
             NodeContent::Input {
                 value: "private plain 中文🙂".into(),
+                max_length: None,
                 placeholder: "private hint".into(),
                 enabled: true,
                 password: false,
@@ -634,6 +925,7 @@ fn inspection_redacts_text_and_preserves_pending_native_events() {
             "password",
             NodeContent::Input {
                 value: "password must remain hidden".into(),
+                max_length: None,
                 placeholder: "password hint".into(),
                 enabled: true,
                 password: true,
@@ -687,13 +979,11 @@ fn inspection_redacts_text_and_preserves_pending_native_events() {
 fn unavailable_dialog_interface_rejects_before_native_publication() {
     API.with_borrow_mut(|api| api.available = false);
     let mut root = mounted();
-    assert!(
-        !root
-            .host()
-            .capabilities()
-            .node_kinds
-            .contains(&presentation::capabilities::NodeKind::Select)
-    );
+    assert!(!root
+        .host()
+        .capabilities()
+        .node_kinds
+        .contains(&presentation::capabilities::NodeKind::Select));
     let mut roots = vec![node(
         root.model().id(),
         "unsupported",
@@ -849,4 +1139,115 @@ fn select_popup_is_closed_before_owner_overlay_stack_changes() {
     API.with_borrow(|api| assert_eq!(api.nodes[&trigger].select_closes, closes + 1));
     root.dispose();
     API.with_borrow(|api| assert!(api.nodes.is_empty()));
+}
+
+#[test]
+fn radio_retains_native_identity_checked_state_and_navigation() {
+    let mut root = mounted();
+    let mut item = button(root.model().id(), "radio ??");
+    item.descriptor.accessible_role = Some(AccessibleRole::RadioItem { tab_stop: true });
+    item.descriptor.accessible_selected = Some(true);
+    let mut roots = vec![item];
+    root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+    let native = handle("radio ??");
+    API.with_borrow(|api| {
+        assert_eq!(api.nodes[&native].kind, 12);
+        assert!(api.nodes[&native].checked);
+        assert_eq!(api.nodes[&native].role, 5);
+    });
+    roots[0].descriptor.accessible_role = Some(AccessibleRole::RadioItem { tab_stop: false });
+    roots[0].descriptor.accessible_selected = Some(false);
+    root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+    assert_eq!(native, handle("radio ??"));
+    let target = API.with_borrow(|api| {
+        assert!(!api.nodes[&native].checked);
+        assert_eq!(api.nodes[&native].role, 4);
+        api.nodes[&native].target as *mut c_void
+    });
+    unsafe {
+        jadix_ohos_receive(
+            target,
+            7,
+            std::ptr::null(),
+            std::ptr::null(),
+            3,
+            0,
+            0,
+            0.0,
+            0.0,
+        );
+    }
+    assert!(matches!(
+        root.poll_events().unwrap()[0].payload,
+        EventPayload::Navigate {
+            key: NavigationKey::Right,
+            shift: false,
+            control: false
+        }
+    ));
+    root.dispose();
+    API.with_borrow(|api| assert!(api.nodes.is_empty()));
+}
+
+#[test]
+fn radio_group_membership_tracks_nearest_group_after_moves() {
+    let mut root = mounted();
+    let mut item = button(root.model().id(), "grouped radio");
+    item.descriptor.accessible_role = Some(AccessibleRole::RadioItem { tab_stop: true });
+    item.descriptor.accessible_selected = Some(false);
+    let item_id = item.id;
+    let mut first = node(
+        root.model().id(),
+        "first group",
+        NodeContent::Container,
+        vec![item],
+    );
+    first.descriptor.accessible_role = Some(AccessibleRole::RadioGroup);
+    let first_id = first.id;
+    let mut second = node(
+        root.model().id(),
+        "second group",
+        NodeContent::Container,
+        vec![],
+    );
+    second.descriptor.accessible_role = Some(AccessibleRole::RadioGroup);
+    let second_id = second.id;
+    let mut roots = vec![first, second];
+    root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+    let native = handle("grouped radio");
+    API.with_borrow(|api| {
+        assert_eq!(api.nodes[&native].radio_group, first_id.token());
+    });
+
+    let item = roots[0].children.pop().unwrap();
+    assert_eq!(item.id, item_id);
+    roots[1].children.push(item);
+    root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+    API.with_borrow(|api| {
+        assert_eq!(api.nodes[&native].radio_group, second_id.token());
+    });
+    root.dispose();
+    API.with_borrow(|api| assert!(api.nodes.is_empty()));
+}
+
+#[test]
+fn radio_type_change_is_rejected_before_native_mutation() {
+    let mut root = mounted();
+    let mut roots = vec![button(root.model().id(), "plain")];
+    root.present(&mut roots, [360.0, 640.0], 0).unwrap();
+    let native = handle("plain");
+    roots[0].descriptor.accessible_role = Some(AccessibleRole::RadioItem { tab_stop: true });
+    let batch = CommitBatch {
+        root: root.model().id(),
+        previous: 1,
+        revision: 2,
+        operations: vec![Operation::Update {
+            node: roots[0].id,
+            descriptor: roots[0].descriptor.clone(),
+        }],
+    };
+    let error = root.host_mut().publish_batch(&batch, &roots).unwrap_err();
+    assert!(error.contains("new identity"));
+    API.with_borrow(|api| assert_eq!(api.nodes[&native].kind, 2));
+    root.dispose();
 }

@@ -1,7 +1,7 @@
 //! Fullscreen modal backdrop blur (downsample → separable Gaussian → upsample).
 //!
 //! Local `mount=` scrims: capture prefix → `blur()` → the scrim SDF samples it.
-//! Modal underlays: capture the **already-frosted** page → `blur()` → [`Self::blit_to`].
+//! Modal underlays: capture the **already-frosted** page → `blur()` → [`BackdropBlurPipeline::blit_to`].
 //! The two filters stack (CSS nested `backdrop-filter`); the modal blit must not
 //! skip local capture and replace it with a dummy-backdrop page.
 //!
@@ -18,6 +18,16 @@ use super::pipeline::VertexInput;
 /// wgpu minimum offset alignment for dynamic uniform buffers.
 const UNIFORM_STRIDE: u64 = 256;
 const MAX_PASSES: u64 = 8;
+
+/// Describes a single-pass vertical mix between the sharp scene capture and
+/// the existing full-resolution blurred capture. Coordinates are normalized
+/// vertical UV values; `min_mix` is the blur contribution at the leading edge.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ProgressiveBlur {
+    pub start: f32,
+    pub end: f32,
+    pub min_mix: f32,
+}
 
 /// `mode`: 0 = downsample, 1 = Gaussian 1D, 2 = upsample.
 /// WGSL uniform layout rounds struct size to vec2 alignment (32 bytes).
@@ -306,6 +316,7 @@ impl BackdropBlurPipeline {
             format,
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT
                 | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST
                 | wgpu::TextureUsages::COPY_SRC,
             view_formats: &[],
         });
@@ -486,6 +497,32 @@ impl BackdropBlurPipeline {
         Some((x0, y0, x1 - x0, y1 - y0))
     }
 
+    /// Capture an already rendered prefix without redrawing its display list.
+    /// The source must match the allocated scene and allow texture copies.
+    pub fn capture_from(&self, encoder: &mut wgpu::CommandEncoder, source: &wgpu::Texture) -> bool {
+        let Some(scene) = &self.scene else {
+            return false;
+        };
+        if source.width() != self.width
+            || source.height() != self.height
+            || source.format() != self.format
+            || source.sample_count() != 1
+            || !source.usage().contains(wgpu::TextureUsages::COPY_SRC)
+        {
+            return false;
+        }
+        encoder.copy_texture_to_texture(
+            source.as_image_copy(),
+            scene._texture.as_image_copy(),
+            wgpu::Extent3d {
+                width: self.width,
+                height: self.height,
+                depth_or_array_layers: 1,
+            },
+        );
+        true
+    }
+
     /// Blur `scene` with a CSS-like Gaussian (σ ≈ radius_px).
     ///
     /// With `--features compute` and a live [`ComputePipelines`], H/V (and large-image
@@ -633,6 +670,7 @@ impl BackdropBlurPipeline {
                 0.0,
                 0.0,
                 1.0,
+                0.0,
                 wgpu::Color::TRANSPARENT,
                 work_scissor,
             );
@@ -654,6 +692,7 @@ impl BackdropBlurPipeline {
                 0.0,
                 2.0,
                 1.0,
+                0.0,
                 wgpu::Color::TRANSPARENT,
                 work_scissor,
             );
@@ -704,6 +743,7 @@ impl BackdropBlurPipeline {
             sigma_work,
             1.0,
             1.0,
+            0.0,
             wgpu::Color::TRANSPARENT,
             work_scissor,
         );
@@ -724,6 +764,7 @@ impl BackdropBlurPipeline {
             sigma_work,
             1.0,
             1.0,
+            0.0,
             wgpu::Color::TRANSPARENT,
             work_scissor,
         );
@@ -747,6 +788,7 @@ impl BackdropBlurPipeline {
                 s2,
                 1.0,
                 1.0,
+                0.0,
                 wgpu::Color::TRANSPARENT,
                 work_scissor,
             );
@@ -767,6 +809,7 @@ impl BackdropBlurPipeline {
                 s2,
                 1.0,
                 1.0,
+                0.0,
                 wgpu::Color::TRANSPARENT,
                 work_scissor,
             );
@@ -789,6 +832,7 @@ impl BackdropBlurPipeline {
             0.0,
             2.0,
             1.0,
+            0.0,
             wgpu::Color::TRANSPARENT,
             full_scissor,
         );
@@ -855,6 +899,7 @@ impl BackdropBlurPipeline {
             0.0,
             2.0,
             1.0,
+            0.0,
             wgpu::Color::TRANSPARENT,
             None,
         );
@@ -1012,6 +1057,26 @@ impl BackdropBlurPipeline {
         alpha: f32,
         clear: wgpu::Color,
     ) {
+        self.blit_to_progressive(queue, encoder, dst, alpha, clear, None);
+    }
+
+    /// Blit with a progressive vertical blur mix.
+    ///
+    /// `ProgressiveBlur::start` and `ProgressiveBlur::end` are normalized
+    /// vertical UV coordinates. The blur is fully visible after `end`, fades
+    /// toward the sharp capture before `start`, and keeps `min_mix` as the
+    /// blur contribution at the leading edge. This is a
+    /// single composite pass over the existing blurred and sharp captures, so
+    /// enabling it does not add another capture, Gaussian pass, or allocation.
+    pub fn blit_to_progressive(
+        &self,
+        queue: &wgpu::Queue,
+        encoder: &mut wgpu::CommandEncoder,
+        dst: &wgpu::TextureView,
+        alpha: f32,
+        clear: wgpu::Color,
+        progressive: Option<ProgressiveBlur>,
+    ) {
         let Some(full) = self.full.as_ref() else {
             return;
         };
@@ -1019,6 +1084,11 @@ impl BackdropBlurPipeline {
         // writes run before submission, so reusing slot 0 overwrites the first
         // downsample pass's uniforms with blit mode. Reserve the final slot.
         let mut slot = (MAX_PASSES - 1) as u32;
+        let (start, end, min_mix) = progressive
+            .map(|mix| (mix.start, mix.end, mix.min_mix))
+            .unwrap_or((0.0, 0.0, 1.0));
+        let start = start.clamp(0.0, 1.0);
+        let end = end.clamp(start, 1.0);
         Self::dispatch_pass(
             &mut slot,
             &self.pipeline,
@@ -1034,10 +1104,11 @@ impl BackdropBlurPipeline {
                 .unwrap_or(&full.bind_group),
             dst,
             [1.0 / full.width as f32, 1.0 / full.height as f32],
-            [0.0, 0.0],
-            0.0,
+            [start, end],
+            2.0,
             2.0,
             alpha.clamp(0.0, 1.0),
+            min_mix.clamp(0.0, 1.0),
             clear,
             None,
         );
@@ -1064,6 +1135,7 @@ impl BackdropBlurPipeline {
         sigma: f32,
         mode: f32,
         blit_alpha: f32,
+        progressive_min_mix: f32,
         clear: wgpu::Color,
         scissor: Option<(u32, u32, u32, u32)>,
     ) {
@@ -1078,7 +1150,7 @@ impl BackdropBlurPipeline {
             sigma,
             mode,
             blit_alpha,
-            _pad: [0.0],
+            _pad: [progressive_min_mix],
         };
         queue.write_buffer(uniforms_buffer, offset, bytemuck::bytes_of(&u));
 

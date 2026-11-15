@@ -240,6 +240,12 @@ impl TexturePool {
         self.map.keys()
     }
 
+    /// Release resources and their metadata together when a host retires a scene.
+    pub(crate) fn retain_keys(&mut self, mut keep: impl FnMut(&str) -> bool) {
+        self.map.retain(|key, _| keep(key));
+        self.meta.retain(|key, _| self.map.contains_key(key));
+    }
+
     pub fn as_map(&self) -> &HashMap<String, GpuImageTexture> {
         &self.map
     }

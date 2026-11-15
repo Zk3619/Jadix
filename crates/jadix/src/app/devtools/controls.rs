@@ -253,6 +253,7 @@ pub(crate) struct TextField {
 fn text_field(id: &str, multiline: bool) -> TextField {
     TextField {
         params: TextEditBuildParams {
+            max_length: None,
             field_id: id.into(),
             placeholder: String::new(),
             disabled: false,

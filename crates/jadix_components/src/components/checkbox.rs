@@ -2,7 +2,7 @@
 //!
 //! 对齐 solid-ui / Kobalte **Checkbox** 控制面 + ShadCN 选中态色板：
 //! `size-4`, `rounded-sm`, unselected `border-primary`, selected `bg-primary` + Lucide `check`.
-//! Supports controlled/uncontrolled, `disabled`, `invalid` (`aria-invalid` look and feel).
+//! Supports controlled/uncontrolled, `indeterminate`, `disabled`, `invalid` (`aria-invalid` look and feel).
 //!
 //! ## Usage
 //! ```ignore
@@ -26,27 +26,29 @@
 //! </HStack>
 //! // Builder
 //! { Element::from(checkbox("demo").checked_signal(sig).invalid(true)) }
+//! // Aggregate state: activation requests checked=true; recompute mixed from children.
+//! <Checkbox checked=sig indeterminate=true />
 //! ```
 //!
 //! ## Notes
 //! - 未传 `checked` 时走 [`crate::utils::toggle_state::resolve_bool_signal`]（Owner 作用域 `{id}__checkbox`）；多实例请保证 `id` 唯一或依赖自动 id。
-//! - 状态用 `peek` + 每帧 style sync；Indicator 始终保留勾选字形，未选中仅字色透明。
+//! - 状态用 `peek` + 每帧 style sync；Indicator 保留勾选/横线字形，未选中仅字色透明。
 //! - Focusable; Space/Enter toggle shares the button path; nested copy / Label `for` clicks forward to this control.
 //! - With children, the whole Checkbox box (including gap/padding/description) activates the control.
 //!   Its default width hugs content; explicit width/padding can make a selectable card.
 
 use crate::components::base::SlotChrome;
-use crate::components::label::{label, label_accesskit_id_for, ATTR_LABEL_FOR};
+use crate::components::label::{ATTR_LABEL_FOR, label, label_accesskit_id_for};
 use crate::core::reactivity::Signal;
-use crate::core::tree::{parse_color, parse_text_color, Element, LayoutStatus};
+use crate::core::tree::{Element, LayoutStatus, parse_color, parse_text_color};
 use crate::layout::layout_tree::LayoutTree;
-use crate::primitives::interactive::interactive;
 use crate::primitives::r#box::hstack;
-use crate::style::{is_dark_theme, LineStyle};
+use crate::primitives::interactive::interactive;
+use crate::style::{LineStyle, is_dark_theme};
 use crate::utils::lucide_glyph;
 use crate::utils::resolve_instance_id;
 use crate::utils::text_node::build_icon_text_node;
-use crate::utils::toggle_state::{bool_on_click, resolve_bool_signal, SLOT_CHECKBOX};
+use crate::utils::toggle_state::{SLOT_CHECKBOX, bool_on_click_with_mixed, resolve_bool_signal};
 
 const ATTR_INVALID: &str = "data-invalid";
 const ATTR_INDICATOR: &str = "data-slot";
@@ -87,14 +89,18 @@ fn checked_chrome() -> ([f32; 4], [f32; 4], [u8; 4]) {
     )
 }
 
-fn check_glyph() -> String {
-    lucide_glyph("check").unwrap_or_else(|| "✓".into())
+fn indicator_glyph(mixed: bool) -> String {
+    if mixed {
+        lucide_glyph("minus").unwrap_or_else(|| "−".into())
+    } else {
+        lucide_glyph("check").unwrap_or_else(|| "✓".into())
+    }
 }
 
-/// solid-ui `CheckboxPrimitive.Indicator`: Fixed Lucide `check` centered inside the box.
+/// Fixed Lucide check/minus centered inside the box.
 /// 未选中时仍保留字形，仅把字色 alpha 置 0——避免「空节点 0×0 → 选中后对号不进布局」。
-fn build_indicator(fg: [u8; 4]) -> Element {
-    let mut icon = build_icon_text_node(check_glyph())
+fn build_indicator(fg: [u8; 4], mixed: bool) -> Element {
+    let mut icon = build_icon_text_node(indicator_glyph(mixed))
         .w(CHECK_PX)
         .h(CHECK_PX)
         .min_w(CHECK_PX)
@@ -119,8 +125,8 @@ fn find_indicator_mut(el: &mut Element) -> Option<&mut Element> {
     })
 }
 
-fn apply_indicator_state(indicator: &mut Element, fg: [u8; 4]) -> bool {
-    let want = check_glyph();
+fn apply_indicator_state(indicator: &mut Element, fg: [u8; 4], mixed: bool) -> bool {
+    let want = indicator_glyph(mixed);
     let want_align = crate::style::TextAlign::Center;
     let changed = indicator.text.as_deref() != Some(want.as_str())
         || indicator.text_style.color_resolved() != fg
@@ -234,6 +240,7 @@ pub struct CheckboxBuilder {
     id: String,
     checked: Option<Signal<bool>>,
     default_checked: bool,
+    indeterminate: bool,
     disabled: bool,
     invalid: bool,
     children: Vec<Element>,
@@ -248,6 +255,7 @@ pub fn Checkbox(
 identity [] id: String,
 plain [] checked: Option<Signal<bool>>,
 default [] default_checked: bool,
+default [] indeterminate: bool,
 default [] disabled: bool,
 default [] invalid: bool,
 default [] on_click: crate::core::tree::Handler,
@@ -255,6 +263,7 @@ plain [] children: Option<Element>,
 ) -> Element {
     let mut builder = checkbox(&id)
         .default_checked(default_checked)
+        .indeterminate(indeterminate)
         .disabled(disabled)
         .invalid(invalid);
 
@@ -299,6 +308,7 @@ pub fn checkbox(id: impl Into<String>) -> CheckboxBuilder {
         id: id.into(),
         checked: None,
         default_checked: false,
+        indeterminate: false,
         disabled: false,
         invalid: false,
         children: Vec::new(),
@@ -316,6 +326,13 @@ impl CheckboxBuilder {
 
     pub fn default_checked(mut self, v: bool) -> Self {
         self.default_checked = v;
+        self
+    }
+
+    /// 部分选中优先于 `checked` 显示横线；激活请求 `checked = true`。
+    /// 调用方应根据子项重新计算此属性。
+    pub fn indeterminate(mut self, v: bool) -> Self {
+        self.indeterminate = v;
         self
     }
 
@@ -347,7 +364,8 @@ impl From<CheckboxBuilder> for Element {
         let chrome = builder.chrome;
         let id = resolve_instance_id(builder.id, "checkbox");
         let sig = resolve_bool_signal(builder.checked, &id, SLOT_CHECKBOX, builder.default_checked);
-        let on = sig.peek();
+        let mixed = builder.indeterminate;
+        let on = mixed || sig.peek();
         let disabled = builder.disabled;
         let invalid = builder.invalid;
         let captions_raw = unpack_checkbox_children(builder.children);
@@ -374,8 +392,11 @@ impl From<CheckboxBuilder> for Element {
             .flex_shrink(0.0)
             .into();
         control = control.border(border, BORDER_W).bg(bg);
-        control = control.child(build_indicator(fg));
+        control = control.child(build_indicator(fg, mixed));
         control.checkbox_sync = Some(sig);
+        if mixed {
+            control.set_attr("aria-checked", "mixed");
+        }
         crate::authoring::presentation::attach(
             &mut control,
             crate::authoring::presentation::Phase::State,
@@ -395,7 +416,7 @@ impl From<CheckboxBuilder> for Element {
             .focus_id(id.clone())
             .focusable(!disabled)
             .focus_ring(!disabled)
-            .on_click(bool_on_click(sig, disabled, id.clone()))
+            .on_click(bool_on_click_with_mixed(sig, disabled, id.clone(), mixed))
             .into();
         if disabled {
             // 有文案时透明度挂在组合根，避免控制面再叠一层半透明。
@@ -489,7 +510,8 @@ fn sync_checkbox_checked_node(
             // Menu Content 等作用域关闭后，树节点可能仍短暂留在本帧；勿 peek 已 dispose 信号。
             el.checkbox_sync = None;
         } else {
-            let on = sig.peek();
+            let mixed = el.attrs.get("aria-checked").map(String::as_str) == Some("mixed");
+            let on = mixed || sig.peek();
             let invalid = el
                 .attrs
                 .get(ATTR_INVALID)
@@ -515,9 +537,9 @@ fn sync_checkbox_checked_node(
             }
 
             let indicator_changed = if let Some(indicator) = find_indicator_mut(el) {
-                apply_indicator_state(indicator, want_fg)
+                apply_indicator_state(indicator, want_fg, mixed)
             } else {
-                el.children.insert(0, build_indicator(want_fg));
+                el.children.insert(0, build_indicator(want_fg, mixed));
                 *impact = impact.merge(LayoutStatus::StructureChanged);
                 true
             };

@@ -38,3 +38,8 @@ registry 归档分发源码与来源声明，不携带大型 Noto 字体集。�
 ## 许可证
 
 Apache-2.0。保留 [LICENSE](LICENSE), [NOTICE](NOTICE) 及依赖的来源声明。
+
+共享 key 虚拟化由 `jadix::virtualization` 提供，不依赖 GPU／默认 feature 或 shell VM。
+`VirtualAxis::append` 保留已有 key 和实测高度，整批验证后才发布；Rust GPU、native、
+字符宿主复用同一个 `jadix_core` 实现。追加更新的摊还复杂度是 O(k log(N+k))，
+不能据此宣称 SDK 发布、布局、GPU collection 或宿主输出已是 O(k)。

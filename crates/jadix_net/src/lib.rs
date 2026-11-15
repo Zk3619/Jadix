@@ -4,6 +4,8 @@
 //! not implement HTTP, start threads, install an executor, or select a TLS stack.
 
 mod backend;
+#[cfg(all(feature = "native-https", not(target_arch = "wasm32")))]
+pub mod native_https;
 mod request;
 mod response;
 mod state;

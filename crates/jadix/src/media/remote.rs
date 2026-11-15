@@ -6,6 +6,8 @@
 
 use std::sync::{Arc, Mutex};
 
+use jadix_tasks::CancellationToken;
+
 /// True for `http://` / `https://` (after trim; case-insensitive).
 pub fn is_remote_src(src: &str) -> bool {
     let lower = src.trim().to_ascii_lowercase();
@@ -27,6 +29,24 @@ pub trait RemoteAssetFetcher: Send + Sync {
     /// the allocating fallback; cache adapters can return their retained bytes.
     fn fetch_shared(&self, url: &str) -> Result<Arc<[u8]>, String> {
         self.fetch(url).map(Arc::from)
+    }
+
+    /// Fetch bytes with cooperative cancellation. Existing adapters remain compatible and
+    /// receive a cancellation check around their blocking fetch; transports may override it
+    /// to interrupt their in-flight request.
+    fn fetch_shared_cancellable(
+        &self,
+        url: &str,
+        cancellation: &CancellationToken,
+    ) -> Result<Arc<[u8]>, String> {
+        cancellation
+            .checkpoint()
+            .map_err(|error| error.to_string())?;
+        let bytes = self.fetch_shared(url)?;
+        cancellation
+            .checkpoint()
+            .map_err(|error| error.to_string())?;
+        Ok(bytes)
     }
 }
 
@@ -67,6 +87,15 @@ pub fn fetch_remote_bytes(url: &str) -> Result<Vec<u8>, String> {
 pub fn fetch_remote_bytes_shared(url: &str) -> Result<Arc<[u8]>, String> {
     let url = url.trim();
     installed_fetcher(url)?.fetch_shared(url)
+}
+
+/// Fetch shared encoded bytes with cooperative cancellation for worker-owned requests.
+pub fn fetch_remote_bytes_shared_cancellable(
+    url: &str,
+    cancellation: &CancellationToken,
+) -> Result<Arc<[u8]>, String> {
+    let url = url.trim();
+    installed_fetcher(url)?.fetch_shared_cancellable(url, cancellation)
 }
 
 fn installed_fetcher(url: &str) -> Result<Arc<dyn RemoteAssetFetcher>, String> {

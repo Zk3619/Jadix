@@ -1,6 +1,6 @@
 use super::{button, Base, Element, Signal};
-use crate::authoring::SlotChrome;
-use crate::core::reactivity::{
+use jadix::portable::authoring::SlotChrome;
+use jadix::portable::core::reactivity::{
     component_root, create_context, provide_context, use_context, Context,
 };
 use jadix::presentation::NodeContent;
@@ -40,8 +40,9 @@ pub fn dialog_scope(
 ) -> Element {
     let id = id.into();
     component_root(|| {
-        let open =
-            open.unwrap_or_else(|| crate::use_scoped_signal(&format!("{id}__open"), || false));
+        let open = open.unwrap_or_else(|| {
+            jadix::portable::use_scoped_signal(&format!("{id}__open"), || false)
+        });
         provide_context(dialog_context(), DialogCtx { open, id });
         body()
     })
@@ -213,7 +214,7 @@ pub struct DialogBodyProps {
 #[allow(non_snake_case)]
 pub fn DialogBody(props: DialogBodyProps) -> Element {
     let context = use_dialog().expect("DialogBody requires Dialog");
-    let mut element = jadix::primitives::scroll()
+    let mut element = jadix::portable::primitives::scroll()
         .id(format!("{}__body", context.id))
         .min_h(0.0);
     element.descriptor.style.grow = 1.0;

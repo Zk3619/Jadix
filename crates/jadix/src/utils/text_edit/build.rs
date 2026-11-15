@@ -41,6 +41,7 @@ pub struct TextEditBuildParams {
     pub line_height_px: Option<f32>,
     pub leading_scale: Option<f32>,
     pub value: Option<Signal<String>>,
+    pub max_length: Option<usize>,
     /// CSS `text-align` (default `start`).
     pub text_align: crate::style::TextAlign,
     /// Single-line: preconfigured BoxBuilder (hstack chrome).
@@ -82,6 +83,7 @@ pub fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         line_height_px,
         leading_scale,
         value,
+        max_length,
         text_align,
         single_line_container,
         multiline,
@@ -97,6 +99,16 @@ pub fn build_text_edit_element(params: TextEditBuildParams) -> Element {
         undo,
         drop_undo_on_unmount,
     } = params;
+
+    assert!(
+        max_length.is_none_or(|limit| limit <= jadix_core::presentation::input::MAX_INPUT_LENGTH),
+        "max_length exceeds the shared input limit"
+    );
+    use_signal(
+        &crate::utils::text_field::input_max_length_signal_key(&field_id),
+        || None::<usize>,
+    )
+    .set_silent(max_length);
 
     if input_type.is_password() {
         crate::utils::text_edit_history::install_field_config(

@@ -1,4 +1,4 @@
-use crate::{Element, Signal};
+use jadix::portable::{Element, Signal};
 use jadix::{
     core::reactivity::{component_root, create_context, provide_context, use_context, Context},
     presentation::{AccessibleRole, NavigationKey, NodeContent},
@@ -48,8 +48,9 @@ pub fn tabs_scope(
     let default_value = default_value.into();
     let orientation = orientation.into();
     component_root(|| {
-        let selected = value
-            .unwrap_or_else(|| crate::use_scoped_signal(&format!("{id}__tabs"), || default_value));
+        let selected = value.unwrap_or_else(|| {
+            jadix::portable::use_scoped_signal(&format!("{id}__tabs"), || default_value)
+        });
         let context_value = TabsContext {
             id: id.clone(),
             selected,
@@ -148,6 +149,7 @@ impl TabsBuilder {
 pub struct TabsListProps {
     pub id: String,
     pub variant: Option<String>,
+    pub accessibility_label: Option<String>,
     pub value: Option<Signal<String>>,
     pub default_value: Option<String>,
     pub options: Option<Vec<(String, String)>>,
@@ -165,6 +167,10 @@ pub fn TabsList(props: TabsListProps) -> Element {
         Element::new().flex_row()
     };
     root.descriptor.accessible_role = Some(AccessibleRole::TabList);
+    root.descriptor.accessible_name = props
+        .accessibility_label
+        .filter(|label| !label.trim().is_empty())
+        .map(|label| label.trim().to_string());
     root.descriptor.style.gap = 4.0;
     if let Some(children) = props.children {
         root.children.push(children);
@@ -304,7 +310,7 @@ impl From<TabsTriggerBuilder> for Element {
         })
     }
 }
-impl crate::core::tree::IntoElementList for TabsTriggerBuilder {
+impl jadix::portable::core::tree::IntoElementList for TabsTriggerBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }

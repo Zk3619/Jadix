@@ -1570,6 +1570,16 @@ fn is_drawer_dragging(id: &str) -> bool {
     })
 }
 
+fn clear_text_edit_focus_for_drawer_drag() {
+    let focused = use_signal("__jadix_button_focus_id", String::new);
+    let focus_id = focused.peek();
+    if focus_id.starts_with(crate::utils::text_field::INPUT_FOCUS_PREFIX)
+        || focus_id.starts_with(crate::utils::text_field::TEXTAREA_FOCUS_PREFIX)
+    {
+        focused.set(String::new());
+    }
+}
+
 fn axis_delta(direction: DrawerDirection, drag: &DrawerDrag, x: f32, y: f32) -> f32 {
     match direction {
         DrawerDirection::Down => y - drag.start_y,
@@ -1612,6 +1622,7 @@ fn begin_drawer_drag(
     if exclusive {
         set_drawer_live_frac(&id, start_frac);
         set_pointer_capture(capture_id.clone());
+        clear_text_edit_focus_for_drawer_drag();
     }
     // Y-axis swipe resizes height from `frac`; extra stays 0. Horizontal still translates.
     let extra = if direction.is_vertical() {
@@ -1837,6 +1848,7 @@ pub(crate) fn tick_drawer_drag(root: &mut Element, x: f32, y: f32) -> bool {
             return false;
         }
         drag.committed = true;
+        clear_text_edit_focus_for_drawer_drag();
         clear_drawer_y_settling(&drag.id);
         if !drag.captured {
             set_pointer_capture(drag.capture_id.clone());

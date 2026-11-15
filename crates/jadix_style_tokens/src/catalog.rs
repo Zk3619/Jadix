@@ -70,6 +70,13 @@ impl TwLength {
     }
 }
 
+/// A line height keeps root-relative lengths distinct from font-relative scales.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum LineHeightToken {
+    Length(TwLength),
+    Scale(f32),
+}
+
 /// Classified utility (without variant prefixes).
 #[derive(Clone, Debug, PartialEq)]
 pub enum KnownUtility<'a> {
@@ -118,6 +125,7 @@ pub enum KnownUtility<'a> {
     BgColor(&'a str),
     TextColor(&'a str),
     TextSize(TwLength),
+    TextSizeWithLeading(TwLength, LineHeightToken),
     FontWeight(FontWeightToken),
     /// Tailwind `font-sans` — UI sans stack.
     FontFamilySans,
@@ -128,6 +136,7 @@ pub enum KnownUtility<'a> {
     /// Tailwind `leading-*` unitless scale (`none` / `tight` / …).
     Leading(f32),
     LeadingPx(f32),
+    LeadingLength(TwLength),
     BorderWidth(f32),
     BoxShadow(&'a str),
     AlignSelf(&'a str),
@@ -188,6 +197,8 @@ pub enum KnownUtility<'a> {
     PointerEventsBoxNone,
     /// Linear gradient direction angle (0=to-r, 90=to-b, 180=to-l, 270=to-t).
     BgGradientTo(f32),
+    /// Arbitrary CSS gradient, optionally disambiguated with the `image:` hint.
+    BgGradient(&'a str),
     GradientFrom(&'a str),
     GradientVia(&'a str),
     GradientTo(&'a str),
@@ -416,7 +427,9 @@ pub fn text_size_token_to_px(token: &str) -> Option<f32> {
 
 fn text_size_token_to_tw(token: &str) -> Option<TwLength> {
     if let Some(inner) = token.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
-        return parse_arbitrary_tw_length(inner.trim());
+        let inner = inner.trim().strip_prefix("length:").unwrap_or(inner.trim());
+        return parse_arbitrary_tw_length(inner)
+            .filter(|length| length.to_px(16.0).is_finite() && length.to_px(16.0) > 0.0);
     }
     match token {
         "xs" => Some(TwLength::Rem(0.75)),
@@ -810,12 +823,38 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
             }
             _ => {}
         }
+        if let Some((size, leading)) = rest.rsplit_once('/') {
+            if let Some(size) = text_size_token_to_tw(size) {
+                return line_height_token(leading)
+                    .map(|leading| KnownUtility::TextSizeWithLeading(size, leading));
+            }
+        }
         if let Some(len) = text_size_token_to_tw(rest) {
             return Some(KnownUtility::TextSize(len));
         }
         return Some(KnownUtility::TextColor(rest));
     }
     if let Some(rest) = token.strip_prefix("bg-") {
+        if let Some(value) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+            let image = value.strip_prefix("image:");
+            let value = image.unwrap_or(value);
+            if [
+                "linear-gradient(",
+                "radial-gradient(",
+                "conic-gradient(",
+                "repeating-linear-gradient(",
+                "repeating-radial-gradient(",
+                "repeating-conic-gradient(",
+            ]
+            .iter()
+            .any(|prefix| value.starts_with(prefix))
+            {
+                return Some(KnownUtility::BgGradient(value));
+            }
+            if image.is_some() {
+                return None;
+            }
+        }
         if rest == "gradient-to-r" {
             return Some(KnownUtility::BgGradientTo(0.0));
         }
@@ -851,17 +890,11 @@ pub fn classify_utility(token: &str) -> Option<KnownUtility<'_>> {
         };
     }
     if let Some(rest) = token.strip_prefix("leading-") {
-        if let Some(pixels) = rest
-            .strip_prefix('[')
-            .and_then(|value| value.strip_suffix("px]"))
-        {
-            return pixels
-                .parse::<f32>()
-                .ok()
-                .filter(|value| value.is_finite() && *value > 0.0)
-                .map(KnownUtility::LeadingPx);
-        }
-        return leading_scale_token(rest).map(KnownUtility::Leading);
+        return line_height_token(rest).map(|height| match height {
+            LineHeightToken::Length(TwLength::Px(px)) => KnownUtility::LeadingPx(px),
+            LineHeightToken::Length(length) => KnownUtility::LeadingLength(length),
+            LineHeightToken::Scale(scale) => KnownUtility::Leading(scale),
+        });
     }
     if let Some(rest) = token.strip_prefix("overflow-x-") {
         return Some(KnownUtility::OverflowX(rest));
@@ -1512,6 +1545,35 @@ fn parse_shimmer_angle_deg(rest: &str) -> Option<f32> {
         return v.parse().ok();
     }
     rest.parse().ok()
+}
+
+fn line_height_token(rest: &str) -> Option<LineHeightToken> {
+    if let Some(inner) = rest.strip_prefix('[').and_then(|s| s.strip_suffix(']')) {
+        if let Some(length) = parse_arbitrary_tw_length(inner) {
+            return match length {
+                TwLength::Em(scale) if scale.is_finite() && scale > 0.0 => {
+                    Some(LineHeightToken::Scale(scale))
+                }
+                length if length.to_px(16.0).is_finite() && length.to_px(16.0) > 0.0 => {
+                    Some(LineHeightToken::Length(length))
+                }
+                _ => None,
+            };
+        }
+        if let Some(percent) = inner.strip_suffix('%') {
+            return percent
+                .parse::<f32>()
+                .ok()
+                .filter(|value| value.is_finite() && *value > 0.0)
+                .map(|percent| LineHeightToken::Scale(percent / 100.0));
+        }
+    }
+    if let Some(scale) = leading_scale_token(rest) {
+        return Some(LineHeightToken::Scale(scale));
+    }
+    spacing_to_tw_length(rest)
+        .filter(|length| length.to_px(16.0).is_finite() && length.to_px(16.0) >= 0.0)
+        .map(LineHeightToken::Length)
 }
 
 fn leading_scale_token(rest: &str) -> Option<f32> {

@@ -1,4 +1,4 @@
-use crate::{Element, Signal};
+use jadix::portable::{Element, Signal};
 use jadix::{
     core::reactivity::{
         component_root, create_context, create_effect, on_cleanup, provide_context, use_context,
@@ -84,9 +84,10 @@ pub fn collapsible_scope(
     let group = group.filter(|group| !group.trim().is_empty());
     let winner = if exclusive {
         group.as_ref().map(|group| {
-            crate::use_scoped_signal(&format!("__jadix_native_collapsible_group:{group}"), || {
-                None::<String>
-            })
+            jadix::portable::use_scoped_signal(
+                &format!("__jadix_native_collapsible_group:{group}"),
+                || None::<String>,
+            )
         })
     } else {
         None
@@ -94,7 +95,7 @@ pub fn collapsible_scope(
     let unsupported = exclusive != group.is_some();
     component_root(|| {
         let open = open.unwrap_or_else(|| {
-            crate::use_scoped_signal(&format!("{id}__collapsible"), || default_open)
+            jadix::portable::use_scoped_signal(&format!("{id}__collapsible"), || default_open)
         });
         if let Some(winner) = winner {
             bind_exclusive(id.clone(), open, winner);
@@ -216,7 +217,7 @@ impl From<CollapsibleBuilder> for Element {
     }
 }
 
-impl crate::core::tree::IntoElementList for CollapsibleBuilder {
+impl jadix::portable::core::tree::IntoElementList for CollapsibleBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }
@@ -293,7 +294,7 @@ impl From<CollapsibleTriggerBuilder> for Element {
     }
 }
 
-impl crate::core::tree::IntoElementList for CollapsibleTriggerBuilder {
+impl jadix::portable::core::tree::IntoElementList for CollapsibleTriggerBuilder {
     fn into_element_list(self) -> Vec<Element> {
         vec![self.into()]
     }

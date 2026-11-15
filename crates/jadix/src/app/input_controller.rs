@@ -85,6 +85,9 @@ fn commit_user_edit(
     new_caret: usize,
     kind: crate::utils::text_edit_history::EditKind,
 ) {
+    if !crate::utils::text_field::accepts_input_edit(rest, &val_sig.peek(), &new_value) {
+        return;
+    }
     #[cfg(feature = "text-undo")]
     crate::utils::text_edit_history::will_user_edit_field(rest, kind);
     crate::utils::text_field::commit_value_sig(rest, val_sig, new_value);
@@ -104,8 +107,11 @@ fn commit_multi_edit(
     new_value: String,
     cursors: Vec<crate::utils::text_multi_cursor::TextCursor>,
     kind: crate::utils::text_edit_history::EditKind,
-) {
+) -> bool {
     let old_text = val_sig.peek();
+    if !crate::utils::text_field::accepts_input_edit(rest, &old_text, &new_value) {
+        return false;
+    }
     let old_cs = crate::utils::text_field::load_text_cursors(rest, &old_text);
     let old_latest = crate::utils::text_field::latest_caret_signal(rest).peek();
     #[cfg(feature = "text-undo")]
@@ -122,6 +128,7 @@ fn commit_multi_edit(
     crate::utils::text_edit_history::note_field_after_edit(rest);
     #[cfg(not(feature = "text-undo"))]
     let _ = kind;
+    true
 }
 
 fn nav_all_cursors(
@@ -211,8 +218,8 @@ impl super::App {
             Ime::Disabled => {
                 ime_support::clear_ime_end_drain();
                 ime_active.set(false);
-                if let Some(rest) = text_edit_rest(&fid) {
-                    Self::clear_ime_compose_state(rest);
+                if text_edit_rest(&fid).is_some() {
+                    Self::clear_ime_compose_state(&fid);
                 }
                 if ime_support::ime_diag_enabled() {
                     log::info!("JADIX_IME_DIAG Disabled fid={}", fid);
@@ -311,6 +318,12 @@ impl super::App {
                     // 空 Preedit（取消组字预览）只清显示；anchor 保留到 Commit / Disabled，
                     // 避免 Win 上 Preedit("") 紧接 Commit 时丢锚点。
                     pre.set(s.clone());
+                    if !s.is_empty() || !old_pre.is_empty() {
+                        crate::authoring::text::notify_composition_change(
+                            &fid,
+                            (!s.is_empty()).then(|| s.clone()),
+                        );
+                    }
                     sel.set(cursor);
                     let mk = crate::utils::text_field::input_preedit_marks_signal_key(rest);
                     crate::core::reactivity::use_signal(&mk, Vec::<(usize, usize, u8)>::new)
@@ -332,8 +345,8 @@ impl super::App {
                 if s.is_empty() {
                     // CPS_CANCEL / teardown often echoes an empty Commit after in-app
                     // focus switch (drain already cleared so typing works).
-                    if let Some(rest) = text_edit_rest(&fid) {
-                        Self::clear_ime_compose_state(rest);
+                    if text_edit_rest(&fid).is_some() {
+                        Self::clear_ime_compose_state(&fid);
                     }
                 } else if let Some(rest) = text_edit_rest(&fid) {
                     let vk = crate::utils::text_field::input_value_signal_key(rest);
@@ -341,7 +354,7 @@ impl super::App {
                     let mut v = val_sig.get();
                     let cs = crate::utils::text_field::load_text_cursors(rest, &v);
                     let multi = cs.len() > 1;
-                    let filtered = if multi {
+                    let mut filtered = if multi {
                         filter_typed_insert(rest, &v, &s)
                     } else {
                         let ak = crate::utils::text_field::input_ime_anchor_signal_key(rest);
@@ -355,7 +368,14 @@ impl super::App {
                         });
                         anchor = anchor.min(v.len());
                         anchor = v.floor_char_boundary(anchor);
-                        filter_typed_insert(rest, &v[..anchor], &s)
+                        let typed = filter_typed_insert(rest, &v[..anchor], &s);
+                        crate::utils::text_field::limited_input_insert(
+                            rest,
+                            &v,
+                            anchor..anchor,
+                            &typed,
+                        )
+                        .to_owned()
                     };
                     let ck = crate::utils::text_field::input_caret_signal_key(rest);
                     let caret_sig = crate::core::reactivity::use_signal(&ck, || None::<usize>);
@@ -365,13 +385,15 @@ impl super::App {
                         let cs = crate::utils::text_multi_cursor::insert_at_cursors(
                             &mut v, cs, &filtered,
                         );
-                        commit_multi_edit(
+                        if !commit_multi_edit(
                             rest,
                             val_sig,
                             v,
                             cs,
                             crate::utils::text_edit_history::EditKind::Replace,
-                        );
+                        ) {
+                            filtered.clear();
+                        }
                         crate::utils::text_field::latest_caret_signal(rest)
                             .peek()
                             .or_else(|| caret_sig.get())
@@ -397,7 +419,7 @@ impl super::App {
                         crate::utils::text_edit_history::note_field_after_edit(rest);
                         new_caret
                     };
-                    Self::clear_ime_compose_state(rest);
+                    Self::clear_ime_compose_state(&fid);
                     if !multi {
                         caret_sig.set(Some(new_caret));
                     }
@@ -430,11 +452,23 @@ impl super::App {
         }
     }
 
-    fn clear_ime_compose_state(rest: &str) {
+    fn clear_ime_compose_state(focus_id: &str) {
+        let Some(rest) = text_edit_rest(focus_id) else {
+            return;
+        };
         let pk = crate::utils::text_field::input_preedit_signal_key(rest);
+        let ak = crate::utils::text_field::input_ime_anchor_signal_key(rest);
+        let had_composition = !crate::core::reactivity::use_signal(&pk, String::new)
+            .peek()
+            .is_empty()
+            || crate::core::reactivity::use_signal(&ak, || None::<usize>)
+                .peek()
+                .is_some();
+        if had_composition {
+            crate::authoring::text::notify_composition_change(focus_id, None);
+        }
         let sk = crate::utils::text_field::input_preedit_sel_signal_key(rest);
         let tsk = crate::utils::text_field::input_selection_signal_key(rest);
-        let ak = crate::utils::text_field::input_ime_anchor_signal_key(rest);
         crate::core::reactivity::use_signal(&pk, String::new).set(String::new());
         crate::core::reactivity::use_signal(&sk, || Option::<(usize, usize)>::None).set(None);
         crate::core::reactivity::use_signal(&tsk, || None::<(usize, usize)>).set(None);
@@ -482,6 +516,28 @@ impl super::App {
         }
     }
 
+    pub(super) fn dispatch_window_shortcuts(&self, event: &KeyEvent) -> bool {
+        let fid =
+            crate::core::reactivity::use_signal("__jadix_button_focus_id", String::new).peek();
+        let focused =
+            if let Some(window) = super::window_scope::window_id_for_active_token() {
+                self.secondaries.borrow().get(&window).and_then(|state| {
+                    super::tree_hit::focused_key_handlers(&state.root_element, &fid)
+                })
+            } else {
+                self.state.borrow().as_ref().and_then(|state| {
+                    super::tree_hit::focused_key_handlers(&state.root_element, &fid)
+                })
+            };
+        super::tree_hit::run_window_key_handlers(
+            self.window_shortcut_handlers(),
+            focused.as_ref(),
+            text_edit_rest(&fid).is_some(),
+            event,
+            self.modifiers,
+        )
+    }
+
     fn handle_keyboard_input_ex(&mut self, event: KeyEvent, allow_primary_tree: bool) -> bool {
         if event.state == ElementState::Pressed {
             #[cfg(all(debug_assertions, feature = "devtools"))]
@@ -489,17 +545,8 @@ impl super::App {
                 crate::app::runtime::request_redraw();
                 return true;
             }
-            let shortcuts = self.window_shortcut_handlers();
-            let context = crate::authoring::keys::Context {
-                key: &event.logical_key,
-                modifiers: self.modifiers,
-                state: event.state,
-                repeat: event.repeat,
-            };
-            if shortcuts
-                .into_iter()
-                .any(|handler| handler.dispatch(context))
-            {
+            if allow_primary_tree && self.dispatch_window_shortcuts(&event) {
+                crate::app::runtime::request_redraw();
                 return true;
             }
         }
@@ -624,7 +671,11 @@ impl super::App {
                         let handled = if editing {
                             super::tree_hit::run_focused_keydown_only(&handlers, &event)
                         } else {
-                            super::tree_hit::run_focused_key_handlers(&handlers, &event)
+                            super::tree_hit::run_focused_key_handlers(
+                                &handlers,
+                                &event,
+                                self.modifiers,
+                            )
                         };
                         if handled {
                             if allow_primary_tree {
@@ -832,8 +883,9 @@ impl super::App {
                                                         s.floor_char_boundary(at)
                                                     };
                                                     let text = filter_typed_insert(rest, &s, &text);
+                                                    let text = crate::utils::text_field::limited_input_insert(rest, &s, insert_at..insert_at, &text);
                                                     if !text.is_empty() {
-                                                        s.insert_str(insert_at, &text);
+                                                        s.insert_str(insert_at, text);
                                                         let caret = insert_at + text.len();
                                                         commit_user_edit(
                                                         rest,
@@ -1724,8 +1776,14 @@ impl super::App {
                                 } else {
                                     filter_typed_insert(rest, &s, insert)
                                 };
+                                let text = crate::utils::text_field::limited_input_insert(
+                                    rest,
+                                    &s,
+                                    insert_at..insert_at,
+                                    &text,
+                                );
                                 if !text.is_empty() {
-                                    s.insert_str(insert_at, &text);
+                                    s.insert_str(insert_at, text);
                                     commit_user_edit(
                                         rest,
                                         val_sig,
@@ -1760,7 +1818,16 @@ impl super::App {
                                     {
                                         let first = s[insert_at..].chars().next().unwrap();
                                         let olen = first.len_utf8();
-                                        s.replace_range(insert_at..insert_at + olen, &text);
+                                        let text = crate::utils::text_field::limited_input_insert(
+                                            rest,
+                                            &s,
+                                            insert_at..insert_at + olen,
+                                            &text,
+                                        );
+                                        if text.is_empty() {
+                                            return true;
+                                        }
+                                        s.replace_range(insert_at..insert_at + olen, text);
                                         commit_user_edit(
                                             rest,
                                             val_sig,
@@ -1771,7 +1838,16 @@ impl super::App {
                                             crate::utils::text_edit_history::EditKind::Replace,
                                         );
                                     } else {
-                                        s.insert_str(insert_at, &text);
+                                        let text = crate::utils::text_field::limited_input_insert(
+                                            rest,
+                                            &s,
+                                            insert_at..insert_at,
+                                            &text,
+                                        );
+                                        if text.is_empty() {
+                                            return true;
+                                        }
+                                        s.insert_str(insert_at, text);
                                         commit_user_edit(
                                             rest,
                                             val_sig,

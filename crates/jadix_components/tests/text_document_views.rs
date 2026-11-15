@@ -77,6 +77,72 @@ fn auto_height_editor_primes_native_viewport_before_caret_follow() {
 }
 
 #[test]
+fn auto_height_editor_uses_intrinsic_minimum_instead_of_default_rows() {
+    let (_owner, ()) = create_root(|| {
+        let id = "auto-height-intrinsic-minimum";
+        let line_box =
+            jadix_components::utils::text_field::text_edit_line_box_px(16.0, Some(24.0), None);
+        let min_height =
+            jadix_components::utils::text_field::textarea_default_height(1, line_box, 8.0);
+        let two_row_height =
+            jadix_components::utils::text_field::textarea_default_height(2, line_box, 8.0);
+        let editor: Element = text_editor(id)
+            .value_signal(Signal::new(String::new()))
+            .font_size(16.0)
+            .auto_height(480.0)
+            .into();
+        let height = jadix_components::layout::dim_length_px(editor.style.size.height)
+            .expect("editor height");
+        assert!(height >= min_height, "height={height} min={min_height}");
+        assert!(
+            height < two_row_height,
+            "height={height} two_rows={two_row_height}"
+        );
+        assert!(
+            height
+                < jadix_components::utils::text_field::textarea_default_height(12, line_box, 8.0,)
+        );
+    });
+}
+
+#[test]
+fn auto_height_editor_grows_to_its_cap_and_shrinks_after_content_changes() {
+    let (_owner, ()) = create_root(|| {
+        let id = "auto-height-content-resize";
+        let text_key = jadix_components::utils::text_field::input_value_signal_key(id);
+        let text = use_signal(&text_key, String::new);
+        let mut editor: Element = text_editor(id)
+            .value_signal(Signal::new(String::new()))
+            .font_size(16.0)
+            .auto_height(80.0)
+            .into();
+        let mut layout = LayoutTree::new();
+        layout.build_and_layout(&mut editor, 240.0, 160.0, [-1.0, -1.0]);
+        let sync = editor.reactive_sync.clone().expect("auto-height sync");
+
+        text.set_silent("line\n".repeat(20));
+        assert_eq!(
+            sync.run(&mut editor, &mut layout),
+            LayoutStatus::LayoutChanged
+        );
+        assert_eq!(
+            jadix_components::layout::dim_length_px(editor.style.size.height),
+            Some(80.0)
+        );
+
+        text.set_silent(String::new());
+        assert_eq!(
+            sync.run(&mut editor, &mut layout),
+            LayoutStatus::LayoutChanged
+        );
+        let height = jadix_components::layout::dim_length_px(editor.style.size.height)
+            .expect("shrunk editor height");
+        assert!(height < 80.0, "height={height}");
+        assert!(height >= 40.0, "height={height}");
+    });
+}
+
+#[test]
 #[cfg(feature = "document-diff")]
 fn diff_view_rsx_accepts_a_precomputed_model() {
     let diff = DiffDocument::new("before\n", "after\n");

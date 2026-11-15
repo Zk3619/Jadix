@@ -146,7 +146,7 @@ viewport/font changes; application state and callbacks remain in Rust.
 | Browser | Real HTML controls, DOM intrinsic measurement, Taffy placement | Edge 156, Firefox 157 and Playwright WebKit 27.2 controls, nested dialogs, focus, scroll, fonts and disposal; Chromium CDP IME, synthetic composition probes on other engines |
 | iOS 14+ | Swift UILabel/UIButton/UITextField/UIScrollView, C callbacks | Rust ABI tests; Swift/Xcode compilation and device accessibility remain unverified |
 | Windows | Win32 STATIC/BUTTON/EDIT/COMBOBOX, retained native child windows, WIC images, modal/anchored portals and OS text measurement | Local shared-page, Unicode/undo, incremental/queue/isolation, embedded child roots, image recovery, nested modal focus and anchored popover probes; physical IME, screen reader and complete component support remain pending |
-| OHOS API 20+ native library / API 22 sample HAP | ArkUI NativeNode, Drawing measurement, UIAbility/NodeContent and NAPI callbacks; Tree/TreeItem role and selected-state source mapping, expanded state exposed only as descriptive text | SDK20 ARM64/x86-64 native cross-checks compile; unsigned API22 HAP builds; emulator runtime, input, accessibility-tree exposure and screen-reader output remain unverified; Tabs and ExpandCollapse patterns are not implemented |
+| OHOS API 20+ native library / API 22 sample HAP | ArkUI NativeNode, Drawing measurement, UIAbility/NodeContent and NAPI callbacks; Tree/TreeItem role and selected-state mapping; checkbox, switch and radio checked-state mapping; expanded state exposed only as descriptive text | SDK20 ARM64/x86-64 native cross-checks compile; unsigned API22 HAP builds; mocked production C++ verifies checked/unchecked accessibility states; emulator runtime, accessibility-tree exposure and screen-reader output remain unverified; IDREF relations, Tabs and ExpandCollapse patterns are not implemented |
 
 Run the Windows shared Rust page, bounded 100k-row editable list, or two-axis
 100k-row × 1000-column generated-value table:
@@ -207,8 +207,11 @@ binding. Logical navigation reveals and focuses the actual retained row. The
 real virtual row exposes Win32 TreeItem ControlType and Legacy selected state.
 TreeItems expose actionable SelectionItem/ExpandCollapse UIA patterns; the full
 logical virtual hierarchy and Tree container selection remain implementation
-work. OHOS role/state mapping is source-compiled
-only; it is not NativeNode or screen-reader acceptance.
+work. OHOS checked-state mapping now reaches the ArkUI accessibility-state object
+for native checkbox, switch and radio controls, with a production C++ mock
+contract for checked and unchecked values. It is not NativeNode or screen-reader
+acceptance; arbitrary IDREF relations and native expanded/collapsed state remain
+unsupported by the current built-in NativeNode API mapping.
 
 The Dock product uses native tab buttons and retained multiline editors, with
 split panels, floating native windows, layout undo/redo and bounded workspace
@@ -642,4 +645,8 @@ Simulator builds may opt into `--checks` to include programmatic UIKit probes.
 These probes are excluded from normal builds and rejected for device builds;
 they do not establish physical input, VoiceOver or distribution support.
 
+
+# iOS keyboard accessory
+
+Pass `--consistent-ui` to `build-ios.py` to enable the optional `jadix_native/consistent-ui` feature and attach an iOS-localized Done toolbar to native text inputs and text areas. The button ends editing through UIKit so normal blur events are delivered. This option does not replace the operating system keyboard or change the default build.
 

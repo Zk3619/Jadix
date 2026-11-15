@@ -26,17 +26,121 @@ fn document_rich_text_preserves_crlf_lines_and_attributes() {
 }
 
 #[test]
-fn document_span_colors_invalidate_shape_identity() {
+fn rich_span_color_changes_paint_identity_without_changing_shape_identity() {
     let original = vec![crate::style::TextSpan::new("fn").color([90, 120, 210, 255])];
     let changed = vec![crate::style::TextSpan::new("fn").color([190, 90, 110, 255])];
-    assert_ne!(
+    assert_eq!(
         super::rich_shape_identity_hash(1, Some(&original)),
         super::rich_shape_identity_hash(1, Some(&changed))
+    );
+    assert_ne!(
+        super::rich_paint_identity_hash(1, [0; 4], Some(&original)),
+        super::rich_paint_identity_hash(1, [0; 4], Some(&changed))
+    );
+    let heavier = vec![crate::style::TextSpan::new("fn")
+        .color([90, 120, 210, 255])
+        .weight(700)];
+    assert_ne!(
+        super::rich_shape_identity_hash(1, Some(&original)),
+        super::rich_shape_identity_hash(1, Some(&heavier))
     );
     assert_ne!(
         super::rich_shape_identity_hash(1, None),
         super::rich_shape_identity_hash(1, Some(&original))
     );
+}
+
+#[test]
+fn rich_paint_color_update_preserves_layout_and_glyph_geometry() {
+    let mut fonts = glyphon::FontSystem::new();
+    let mut buffer = glyphon::Buffer::new(&mut fonts, glyphon::Metrics::new(16.0, 24.0));
+    buffer.set_size(Some(200.0), None);
+    let original = glyphon::Color::rgba(90, 120, 210, 255);
+    let changed = glyphon::Color::rgba(190, 90, 110, 255);
+    let attrs = glyphon::Attrs::new().color(original);
+    buffer.set_rich_text(
+        [("text", attrs.clone())],
+        &attrs,
+        glyphon::Shaping::Advanced,
+        None,
+    );
+    buffer.shape_until_scroll(&mut fonts, false);
+    let _ = buffer.layout_runs().count();
+    let before: Vec<_> = buffer.lines[0]
+        .layout_opt()
+        .unwrap()
+        .iter()
+        .flat_map(|line| line.glyphs.iter())
+        .map(|glyph| (glyph.start, glyph.x, glyph.y, glyph.w, glyph.color_opt))
+        .collect();
+
+    buffer.update_layout_colors(&[(0..4, changed)]);
+
+    let layout = buffer.lines[0].layout_opt().expect("layout cache retained");
+    let after: Vec<_> = layout
+        .iter()
+        .flat_map(|line| line.glyphs.iter())
+        .map(|glyph| (glyph.start, glyph.x, glyph.y, glyph.w, glyph.color_opt))
+        .collect();
+    assert_eq!(before.len(), after.len());
+    for (before, after) in before.iter().zip(&after) {
+        assert_eq!(
+            (before.0, before.1, before.2, before.3),
+            (after.0, after.1, after.2, after.3)
+        );
+        if before.0 < 4 {
+            assert_eq!(after.4, Some(changed));
+        }
+    }
+
+    buffer.set_size(Some(10.0), None);
+    buffer.shape_until_scroll(&mut fonts, false);
+    assert!(buffer.layout_runs().count() > 1);
+    assert!(buffer
+        .layout_runs()
+        .flat_map(|run| run.glyphs)
+        .all(|glyph| glyph.color_opt == Some(changed)));
+    // A future shaping invalidation must also retain the paint attributes.
+    buffer.lines[0].reset_shaping();
+    buffer.shape_until_scroll(&mut fonts, false);
+    assert!(buffer
+        .layout_runs()
+        .flat_map(|run| run.glyphs)
+        .all(|glyph| glyph.color_opt == Some(changed)));
+}
+
+#[test]
+fn rich_paint_color_ranges_use_utf8_offsets_across_lines() {
+    let mut fonts = glyphon::FontSystem::new();
+    let mut buffer = glyphon::Buffer::new(&mut fonts, glyphon::Metrics::new(16.0, 24.0));
+    buffer.set_size(Some(200.0), None);
+    let attrs = glyphon::Attrs::new().color(glyphon::Color::rgba(90, 120, 210, 255));
+    buffer.set_text("日a\n雪b", &attrs, glyphon::Shaping::Advanced, None);
+    buffer.shape_until_scroll(&mut fonts, false);
+    let _ = buffer.layout_runs().count();
+    let changed = glyphon::Color::rgba(190, 90, 110, 255);
+    buffer.update_layout_colors(&[(5..8, changed)]);
+
+    assert_eq!(buffer.lines.len(), 2);
+    let first = buffer.lines[0].layout_opt().expect("first line layout");
+    assert!(first
+        .iter()
+        .flat_map(|line| line.glyphs.iter())
+        .all(|glyph| glyph.color_opt != Some(changed)));
+
+    let second = buffer.lines[1].layout_opt().expect("second line layout");
+    let snow = second
+        .iter()
+        .flat_map(|line| line.glyphs.iter())
+        .find(|glyph| glyph.start == 0)
+        .expect("雪 glyph");
+    assert_eq!(snow.color_opt, Some(changed));
+    let b = second
+        .iter()
+        .flat_map(|line| line.glyphs.iter())
+        .find(|glyph| glyph.start == 3)
+        .expect("b glyph");
+    assert_ne!(b.color_opt, Some(changed));
 }
 
 #[test]
@@ -402,7 +506,7 @@ fn scroll_like_label_cpu_stays_under_budget() {
 }
 
 #[test]
-fn shape_hash_changes_when_text_alpha_flips() {
+fn text_alpha_refreshes_paint_without_changing_shape_identity() {
     let family = glyphon::Family::SansSerif;
     let align = glyphon::cosmic_text::Align::Left;
     let shaping = glyphon::Shaping::Advanced;
@@ -436,10 +540,35 @@ fn shape_hash_changes_when_text_alpha_flips() {
         [100, 100, 100, 200],
         false,
     );
-    assert_ne!(
+    assert_eq!(
         hidden, shown,
-        "opacity/color alpha must invalidate shaped cache (Input adornments)"
+        "opacity must reuse shaping, including hidden Input adornments"
     );
+    assert_ne!(
+        super::rich_paint_identity_hash(hidden, [100, 100, 100, 0], None),
+        super::rich_paint_identity_hash(shown, [100, 100, 100, 200], None)
+    );
+    let mut fonts = glyphon::FontSystem::new();
+    let mut buffer = glyphon::Buffer::new(&mut fonts, glyphon::Metrics::new(14.0, 20.0));
+    let transparent = glyphon::Color::rgba(100, 100, 100, 0);
+    buffer.set_text(
+        "x",
+        &glyphon::Attrs::new().color(transparent),
+        shaping,
+        None,
+    );
+    buffer.shape_until_scroll(&mut fonts, false);
+    let glyphs = buffer.lines[0].layout_opt().unwrap()[0].glyphs.as_ptr();
+    let visible = glyphon::Color::rgba(100, 100, 100, 200);
+    for color in [visible, transparent, visible] {
+        buffer.update_layout_colors(&[(0..usize::MAX, color)]);
+        let layout = buffer.lines[0].layout_opt().unwrap();
+        assert_eq!(layout[0].glyphs.as_ptr(), glyphs);
+        assert!(layout[0]
+            .glyphs
+            .iter()
+            .all(|glyph| glyph.color_opt == Some(color)));
+    }
 }
 
 #[test]

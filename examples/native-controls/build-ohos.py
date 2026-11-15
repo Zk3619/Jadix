@@ -72,7 +72,7 @@ def main():
     parser.add_argument("--architecture", choices=["x86_64", "arm64"], default="x86_64")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--native-only", action="store_true")
-    parser.add_argument("--features", choices=["popover", "selection"], help="Build a shared Popover or Select product instead of Controls")
+    parser.add_argument("--features", choices=["popover", "selection", "field-workflow"], help="Build a shared Popover or Select product instead of Controls")
     parser.add_argument("--release", action="store_true")
     parser.add_argument("--offline", action="store_true")
     args = parser.parse_args()

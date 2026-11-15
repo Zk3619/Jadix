@@ -3,6 +3,18 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
 #[test]
+fn app_quit_handlers_follow_owner_lifetime() {
+    let (owner, ()) = create_root(|| {
+        on_app_quit(|| async {});
+    });
+    drop(owner);
+    assert!(take_app_quit_futures().is_empty());
+
+    on_app_quit(|| async {});
+    assert_eq!(take_app_quit_futures().len(), 1);
+}
+
+#[test]
 fn dynamic_deps_branch_only_subscribes_active_arm() {
     let cond = Signal::new(true);
     let a = Signal::new(0_i32);
@@ -32,6 +44,26 @@ fn dynamic_deps_branch_only_subscribes_active_arm() {
     assert_eq!(*runs.borrow(), 3);
     b.set(2);
     assert_eq!(*runs.borrow(), 4);
+}
+
+#[test]
+fn silent_signal_observers_fire_only_for_changed_values_and_unsubscribe() {
+    let (owner, ()) = create_root(|| {
+        let signal = create_signal(1_i32);
+        let calls = Rc::new(RefCell::new(0));
+        let observed = calls.clone();
+        let subscription = signal
+            .observe_silent(move || *observed.borrow_mut() += 1)
+            .unwrap();
+        signal.set_silent(1);
+        assert_eq!(*calls.borrow(), 0);
+        signal.set_silent(2);
+        assert_eq!(*calls.borrow(), 1);
+        drop(subscription);
+        signal.set_silent(3);
+        assert_eq!(*calls.borrow(), 1);
+    });
+    owner.dispose();
 }
 
 #[test]
@@ -357,6 +389,43 @@ fn create_root_and_on_cleanup() {
 }
 
 #[test]
+fn sibling_teardown_batches_cleanup_and_preserves_named_state() {
+    let (_observer, (removed, seen)) = create_root(|| {
+        let removed = create_signal(0_usize);
+        let seen = Rc::new(RefCell::new(Vec::new()));
+        create_effect({
+            let seen = Rc::clone(&seen);
+            move || seen.borrow_mut().push(removed.get())
+        });
+        (removed, seen)
+    });
+    let (parent, owned) = create_root(|| {
+        (0_usize..128)
+            .map(|index| {
+                component_root(|| {
+                    use_signal(&format!("teardown-named-{index}"), || index);
+                    on_cleanup(move || removed.update(|count| *count += 1));
+                    create_signal(index)
+                })
+            })
+            .collect::<Vec<_>>()
+    });
+    RUNTIME.with(|runtime| dispose_owner_children(&runtime.borrow(), parent.id()));
+    assert_eq!(*seen.borrow(), vec![0, 128]);
+    assert!(owned.iter().all(|signal| signal.try_get().is_none()));
+    for index in 0..128 {
+        let key = format!("teardown-named-{index}");
+        assert_eq!(use_signal(&key, || usize::MAX).peek(), index);
+        remove_named_signal(&key);
+    }
+    RUNTIME.with(|runtime| {
+        let rt = runtime.borrow();
+        assert!(rt.owners.borrow()[&parent.id()].children.is_empty());
+        assert!(!rt.named_signal_types.borrow().contains_key("teardown-named-0"));
+    });
+}
+
+#[test]
 fn on_mount_runs_once_not_on_signal_change() {
     let mounts = Rc::new(Cell::new(0_u32));
     let (_owner, sig) = create_root({
@@ -397,6 +466,28 @@ fn context_provide_and_use_walks_owners() {
         use_context(ctx)
     });
     assert_eq!(value.as_deref(), Some("hello"));
+}
+
+#[test]
+fn deferred_owner_restores_context_and_rejects_disposed_scope() {
+    let context = create_context::<&'static str>();
+    let (source, source_id) = create_root(|| {
+        provide_context(context, "source");
+        current_owner().unwrap()
+    });
+    let (_other, ()) = create_root(|| {
+        provide_context(context, "other");
+        assert_eq!(
+            try_with_owner(source_id, || component_root(|| use_context(context))),
+            Some(Some("source"))
+        );
+        assert_eq!(use_context(context), Some("other"));
+        source.dispose();
+        let called = Cell::new(false);
+        assert_eq!(try_with_owner(source_id, || called.set(true)), None);
+        assert!(!called.get());
+        assert_eq!(use_context(context), Some("other"));
+    });
 }
 
 #[test]

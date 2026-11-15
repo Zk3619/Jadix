@@ -199,15 +199,17 @@ impl DockWorkspace {
         static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
         let sequence = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let temporary = directory.join(format!(".workspace-{}-{sequence}.tmp", std::process::id()));
-        let mut file = std::fs::OpenOptions::new()
+        let file = std::fs::OpenOptions::new()
             .create_new(true)
             .write(true)
             .open(&temporary)
             .map_err(|error| error.to_string())?;
         let result = (|| -> Result<(), std::io::Error> {
-            file.write_all(&bytes)?;
-            file.sync_all()?;
-            drop(file);
+            {
+                let mut file = file;
+                file.write_all(&bytes)?;
+                file.sync_all()?;
+            }
             std::fs::rename(&temporary, directory.join("workspace.json"))?;
             #[cfg(unix)]
             std::fs::File::open(directory)?.sync_all()?;
@@ -286,7 +288,9 @@ fn node(id: NodeId, content: NodeContent, size: [f32; 2]) -> PresentationNode {
             accessible_role: None,
             accessible_selected: None,
             accessible_expanded: None,
+            accessible_description: None,
             accessible_name: None,
+            accessibility_relations: Default::default(),
             style: style::NodeStyle {
                 width: Some(size[0].max(0.0)),
                 height: Some(size[1].max(0.0)),
@@ -411,6 +415,7 @@ impl<Host: PlatformHost> DockView<Host> {
                         let mut editor = node(
                             ids.editor,
                             NodeContent::Textarea {
+                                max_length: None,
                                 value: draft.display().into(),
                                 placeholder: String::new(),
                                 enabled: selected,

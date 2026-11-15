@@ -10,6 +10,7 @@ readme = "README.md"
 [features]
 default = []
 json = ["dep:serde", "dep:serde_json"]
+native-https = []
 
 [dependencies]
 jadix_tasks.workspace = true

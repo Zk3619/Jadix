@@ -1,9 +1,9 @@
 use super::{button, Base, Element, Signal};
-use crate::authoring::SlotChrome;
-use crate::core::reactivity::{
+use jadix::portable::authoring::SlotChrome;
+use jadix::portable::core::reactivity::{
     component_root, create_context, provide_context, use_context, Context,
 };
-use jadix::{presentation::PopoverPlacement, PopoverBinding};
+use jadix::{portable::PopoverBinding, presentation::PopoverPlacement};
 use std::sync::OnceLock;
 
 #[derive(Clone)]
@@ -39,11 +39,13 @@ pub fn popover_scope(
 ) -> Element {
     let id = id.into();
     component_root(|| {
-        let open = open
-            .unwrap_or_else(|| crate::use_scoped_signal(&format!("{id}__popover_open"), || false));
-        let trigger_fid = crate::use_scoped_signal(&format!("{id}__popover_trigger_fid"), || {
-            format!("{id}__popover_trigger")
+        let open = open.unwrap_or_else(|| {
+            jadix::portable::use_scoped_signal(&format!("{id}__popover_open"), || false)
         });
+        let trigger_fid =
+            jadix::portable::use_scoped_signal(&format!("{id}__popover_trigger_fid"), || {
+                format!("{id}__popover_trigger")
+            });
         provide_context(
             popover_context(),
             PopoverCtx {

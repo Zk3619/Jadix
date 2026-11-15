@@ -2,11 +2,12 @@
 //! are dispatched by JadixWebViewHost onto Activity.runOnUiThread.
 use super::super::{WebViewSpec, WebViewStatus};
 use jni::{
-    objects::{GlobalRef, JClass, JObject, JValue},
+    objects::{GlobalRef, JClass, JObject, JString, JValue},
     JNIEnv, JavaVM,
 };
 use std::{
     cell::{Cell, RefCell},
+    collections::HashMap,
     sync::Arc,
 };
 use winit::window::Window;
@@ -23,6 +24,10 @@ pub struct Browser {
     previous: RefCell<Option<WebViewSpec>>,
     scale: Cell<f32>,
     visibility: Cell<Option<bool>>,
+    scope: crate::app::window_scope::WindowScope,
+    generation: Cell<u64>,
+    evaluation_serial: Cell<i64>,
+    evaluations: RefCell<HashMap<i64, jadix_core::web_evaluation::EvaluationReply>>,
 }
 impl Browser {
     pub fn new(_: &Arc<dyn Window>, spec: &WebViewSpec, scale: f32) -> Result<Self, String> {
@@ -65,6 +70,10 @@ impl Browser {
             previous: RefCell::new(None),
             scale: Cell::new(scale),
             visibility: Cell::new(None),
+            scope: crate::app::window_scope::active(),
+            generation: Cell::new(0),
+            evaluation_serial: Cell::new(0),
+            evaluations: RefCell::default(),
         };
         result.update(spec, scale)?;
         Ok(result)
@@ -134,23 +143,103 @@ impl Browser {
             let class: &JClass = self.class.as_obj().into();
             env.call_static_method(
                 class,
-                "status",
-                "(Landroid/app/Activity;Ljava/lang/String;)I",
+                "documentState",
+                "(Landroid/app/Activity;Ljava/lang/String;)J",
                 &[
                     JValue::Object(self.activity.as_obj()),
                     JValue::Object(id.as_ref()),
                 ],
             )
-            .and_then(|v| v.i())
+            .and_then(|v| v.j())
+        });
+        if let Ok(state) = result {
+            let generation = (state as u64) >> 2;
+            if self.generation.replace(generation) != generation {
+                super::super::document_changed(self.scope, &self.id);
+            }
+        }
+        self.evaluations.borrow_mut().retain(|serial, reply| {
+            let active = reply.is_active();
+            let raw = self.with_env(|env| {
+                let id = env.new_string(&self.id)?;
+                let class: &JClass = self.class.as_obj().into();
+                let value = env
+                    .call_static_method(
+                        class,
+                        "takeEvaluation",
+                        "(Landroid/app/Activity;Ljava/lang/String;JZ)Ljava/lang/String;",
+                        &[
+                            JValue::Object(self.activity.as_obj()),
+                            JValue::Object(id.as_ref()),
+                            JValue::Long(*serial),
+                            JValue::Bool((!active) as u8),
+                        ],
+                    )?
+                    .l()?;
+                if value.is_null() {
+                    Ok(None)
+                } else {
+                    Ok(Some(env.get_string(&JString::from(value))?.into()))
+                }
+            });
+            match raw {
+                Ok(Some(raw)) => {
+                    reply.complete(Ok(raw));
+                    false
+                }
+                Err(error) => {
+                    reply.complete(Err(error));
+                    false
+                }
+                Ok(None) => active,
+            }
         });
         match result {
-            Ok(1) => Some(WebViewStatus::Ready),
-            Ok(n) if n < 0 => Some(WebViewStatus::Failed(
+            Ok(n) if n & 3 == 1 => Some(WebViewStatus::Ready),
+            Ok(n) if n & 3 == 2 => Some(WebViewStatus::Failed(
                 "Android WebView navigation failed".into(),
             )),
             Ok(_) => Some(WebViewStatus::Loading),
             Err(_) => None,
         }
+    }
+    pub fn evaluate(
+        &self,
+        script: &str,
+        reply: jadix_core::web_evaluation::EvaluationReply,
+    ) -> Result<(), String> {
+        let serial = if reply.is_active() {
+            let serial = self
+                .evaluation_serial
+                .get()
+                .checked_add(1)
+                .ok_or("Evaluation IDs exhausted")?;
+            self.evaluation_serial.set(serial);
+            serial
+        } else {
+            0
+        };
+        self.with_env(|env| {
+            let id = env.new_string(&self.id)?;
+            let script = env.new_string(script)?;
+            let class: &JClass = self.class.as_obj().into();
+            env.call_static_method(
+                class,
+                "evaluate",
+                "(Landroid/app/Activity;Ljava/lang/String;JLjava/lang/String;)V",
+                &[
+                    JValue::Object(self.activity.as_obj()),
+                    JValue::Object(id.as_ref()),
+                    JValue::Long(serial),
+                    JValue::Object(script.as_ref()),
+                ],
+            )?;
+            Ok(())
+        })?;
+        if serial != 0 {
+            self.evaluations.borrow_mut().insert(serial, reply);
+        }
+        Ok(())
     }
 }
 impl Drop for Browser {

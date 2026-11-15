@@ -272,6 +272,23 @@ pub fn clear_shared_font_system() {
     });
 }
 
+/// Temporarily share a renderer's fonts during headless layout. Restore even on
+/// unwind, including an existing desktop renderer or owned layout font database.
+pub(crate) fn with_shared_font_system<R>(fonts: &mut FontSystem, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<LayoutFsSlot>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            LAYOUT_FONT_SYSTEM.with(|cell| *cell.borrow_mut() = self.0.take().unwrap());
+            invalidate_prepare_cache();
+        }
+    }
+    invalidate_prepare_cache();
+    let _restore = Restore(Some(LAYOUT_FONT_SYSTEM.with(|cell| {
+        std::mem::replace(&mut *cell.borrow_mut(), LayoutFsSlot::Shared(fonts))
+    })));
+    f()
+}
+
 /// Raw pointer to the install shared FontSystem (for secondary window shaping). UI thread only.
 pub fn shared_font_system_ptr() -> Option<*mut FontSystem> {
     LAYOUT_FONT_SYSTEM.with(|cell| match *cell.borrow() {

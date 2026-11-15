@@ -118,8 +118,14 @@ fn invalid_imports_preserve_the_original_notebook() {
         .save(None, "Existing".into(), "safe".into())
         .unwrap();
     let original = notebook.clone();
-    for source in ["{}","[]","{\"schema\":2}","{\"schema\":1,\"next_id\":\"2\",\"notes\":[{\"id\":\"1\",\"title\":\"A\",\"body\":\"\"},{\"id\":\"1\",\"title\":\"B\",\"body\":\"\"}]}"] {
-        assert!(Notebook::decode(source).is_err()); assert_eq!(notebook,original);
+    for source in [
+        "{}",
+        "[]",
+        "{\"schema\":2}",
+        "{\"schema\":1,\"next_id\":\"2\",\"notes\":[{\"id\":\"1\",\"title\":\"A\",\"body\":\"\"},{\"id\":\"1\",\"title\":\"B\",\"body\":\"\"}]}",
+    ] {
+        assert!(Notebook::decode(source).is_err());
+        assert_eq!(notebook, original);
     }
 }
 #[test]

@@ -1,0 +1,95 @@
+name: 2D rendering
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  cpu:
+    strategy:
+      matrix:
+        os: [windows-latest, ubuntu-24.04, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: |
+          cargo test --locked -p jadix_core --lib path::
+      - run: cargo test --locked -p jadix_2d --no-default-features
+      - name: Shaped text, color fonts and atlas
+        run: cargo test --locked -p jadix_2d --features text-layout,svg-fonts,icc
+      - name: Variable instances and shape-run cache
+        run: cargo test --locked -p jadix_2d --features text-layout,cosmic-text/shape-run-cache --test font_instances
+      - name: Renderer compute feature contracts
+        run: |
+          cargo test --locked -p jadix_renderer --lib
+          cargo test --locked -p jadix_renderer --features compute --lib
+      - name: Portable text engine without std
+        run: cargo check --locked -p jadix_cosmic_text --no-default-features --features no_std,swash --lib
+      - name: Metal library compilation
+        if: runner.os == 'macOS'
+        run: cargo check --locked -p jadix_2d --features backend-metal,compute --lib
+
+  gpu:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            backend: dx12
+          - os: ubuntu-24.04
+            backend: vulkan
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux software Vulkan
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y mesa-vulkan-drivers
+      - name: Independent GPU images and resource reuse
+        env:
+          JADIX_FORCE_SOFTWARE: '1'
+        run: cargo run --locked -p jadix_2d --example gpu_acceptance --features backend-${{ matrix.backend }} -- ${{ matrix.backend }} target/2d-acceptance 20
+      - name: High quality coverage and isolated GPU groups
+        env:
+          JADIX_FORCE_SOFTWARE: '1'
+        run: cargo run --locked -p jadix_2d --example gpu_acceptance --features backend-${{ matrix.backend }} -- ${{ matrix.backend }} target/2d-acceptance-high 20 straight high
+      - name: Reusable scenes, vector stops, text, filters and resource pressure
+        env:
+          JADIX_FORCE_SOFTWARE: '1'
+          JADIX_TEST_BACKEND: ${{ matrix.backend }}
+          JADIX_2D_EVIDENCE: ${{ github.workspace }}/target/2d-layer-matrix
+        run: cargo test --locked -p jadix_2d --example gpu_acceptance --features backend-${{ matrix.backend }},compute,test-hooks,text-layout,svg-fonts,icc -- --ignored --skip matched_tests --test-threads=1
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: rendering-${{ matrix.os }}-${{ matrix.backend }}
+          path: |
+            target/2d-acceptance/
+            target/2d-acceptance-high/
+            target/2d-layer-matrix/
+
+  portable-compile:
+    runs-on: ubuntu-24.04
+    env:
+      RUSTFLAGS: --cfg web_sys_unstable_apis
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --locked -p jadix_2d --no-default-features --lib --target wasm32-unknown-unknown
+      - run: cargo check --locked -p jadix_2d --features webgpu --lib --target wasm32-unknown-unknown
+      - run: cargo check --locked -p jadix_2d --features webgl --lib --target wasm32-unknown-unknown
+      - run: cargo check --locked -p jadix_2d --features text-layout,webgpu --lib --target wasm32-unknown-unknown
+      - run: cargo check --locked -p jadix_2d --features text-layout,webgl --lib --target wasm32-unknown-unknown
+      - run: cargo check --locked -p jadix_2d --features text-layout,svg-fonts,webgpu --lib --target wasm32-unknown-unknown
+      - run: cargo check --locked -p jadix_2d --features icc,webgpu --lib --target wasm32-unknown-unknown
+      - run: cargo check --locked -p jadix_2d --features compute,webgpu,text-layout,svg-fonts,icc --lib --target wasm32-unknown-unknown
+      - run: cargo check --locked -p jadix_2d --features compute,webgl --lib --target wasm32-unknown-unknown

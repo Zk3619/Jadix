@@ -9,10 +9,16 @@ pub use jadix_core::reactivity::*;
 #[cfg(feature = "macros")]
 #[doc(hidden)]
 pub use jadix_macros::ui_with_runtime as __ui_with_runtime;
-#[cfg(feature = "macros")]
+#[cfg(all(feature = "macros", not(feature = "gpu")))]
 #[macro_export]
 macro_rules! ui {
     ($($tokens:tt)*) => { $crate::__ui_with_runtime!($crate; $($tokens)*) };
+}
+
+#[cfg(feature = "macros")]
+#[macro_export]
+macro_rules! portable_ui {
+    ($($tokens:tt)*) => { $crate::portable::__ui_with_runtime!($crate::portable; $($tokens)*) };
 }
 
 pub use jadix_core::event::{Handler, ZeroArgFn};
@@ -35,6 +41,8 @@ pub struct Element {
     pub template_id: Option<String>,
     pub descriptor: NodeDescriptor,
     pub on_click: Option<Rc<RefCell<Box<dyn FnMut()>>>>,
+    pub on_submit: Option<Rc<RefCell<Box<dyn FnMut()>>>>,
+    pub on_composition_change: Option<Rc<RefCell<Box<dyn FnMut(Option<String>)>>>>,
     pub input: Option<Signal<String>>,
     pub checked: Option<Signal<bool>>,
     pub dialog_open: Option<Signal<bool>>,
@@ -69,13 +77,17 @@ impl Element {
             descriptor: NodeDescriptor {
                 content: NodeContent::Container,
                 frame: Rect::default(),
+                accessible_description: None,
                 accessible_name: None,
                 accessible_role: None,
                 accessible_selected: None,
                 accessible_expanded: None,
+                accessibility_relations: Default::default(),
                 style: Default::default(),
             },
             on_click: None,
+            on_submit: None,
+            on_composition_change: None,
             input: None,
             checked: None,
             dialog_open: None,
@@ -678,6 +690,73 @@ pub mod authoring {
                 self.resolve_focus_target(element, &wanted)
             }
 
+            /// Project visible editor insertion constraints. Values are UTF-16
+            /// code units; malformed authoring attributes reject publication.
+            pub fn input_limits(
+                &self,
+                element: &Element,
+            ) -> Result<Vec<(NodeId, usize)>, ProjectionError> {
+                let mut result = Vec::new();
+                let mut pending = vec![element];
+                while let Some(element) = pending.pop() {
+                    if !element.is_visible() {
+                        continue;
+                    }
+                    let limit = element
+                        .attrs
+                        .get("max_length")
+                        .map(|value| {
+                            value
+                                .parse::<usize>()
+                                .map_err(|_| ProjectionError::InvalidEvent)
+                        })
+                        .transpose()?
+                        .or(element.descriptor.content.input_max_length());
+                    if let Some(value) = limit {
+                        if value > jadix_core::presentation::input::MAX_INPUT_LENGTH
+                            || !matches!(
+                                element.descriptor.content,
+                                NodeContent::Input { .. } | NodeContent::Textarea { .. }
+                            )
+                        {
+                            return Err(ProjectionError::InvalidEvent);
+                        }
+                        if let Some(id) =
+                            element.identity.filter(|id| id.root == self.lifetime.id())
+                        {
+                            result.push((id, value));
+                        }
+                    }
+                    pending.extend(&element.children);
+                }
+                Ok(result)
+            }
+
+            /// Resolve one visible, currently projected template identity. Hidden
+            /// pages and ambiguous names return None; no stale identity is kept.
+            pub fn node_by_template(&self, element: &Element, wanted: &str) -> Option<NodeId> {
+                if self.lifetime.is_disposed() {
+                    return None;
+                }
+                let mut found = None;
+                let mut pending = vec![element];
+                while let Some(element) = pending.pop() {
+                    if !element.is_visible() {
+                        continue;
+                    }
+                    if element.template_id.as_deref() == Some(wanted) {
+                        let id = element
+                            .identity
+                            .filter(|id| id.root == self.lifetime.id())?;
+                        if found.replace(id).is_some() {
+                            return None;
+                        }
+                    }
+                    pending.extend(&element.children);
+                }
+                found
+            }
+
             fn resolve_focus_target(&self, element: &Element, wanted: &str) -> Option<NodeId> {
                 if self.lifetime.is_disposed() {
                     return None;
@@ -738,6 +817,17 @@ pub mod authoring {
                 return Err(ProjectionError::StaleNode);
             }
             let mut descriptor = element.descriptor.clone();
+            if let Some(value) = element.attrs.get("max_length") {
+                let value: usize = value.parse().map_err(|_| ProjectionError::InvalidEvent)?;
+                match &mut descriptor.content {
+                    NodeContent::Input { max_length, .. }
+                    | NodeContent::Textarea { max_length, .. } => *max_length = Some(value),
+                    _ => return Err(ProjectionError::InvalidEvent),
+                }
+            }
+            if !descriptor.content.is_valid() {
+                return Err(ProjectionError::InvalidEvent);
+            }
             if let Some(binding) = &element.popover {
                 if !matches!(descriptor.content, NodeContent::Container) {
                     return Err(ProjectionError::Unsupported("Popover panel content"));
@@ -905,6 +995,26 @@ pub mod authoring {
                 (
                     NodeContent::Input { enabled: true, .. }
                     | NodeContent::Textarea { enabled: true, .. },
+                    EventPayload::Submit { revision },
+                ) => {
+                    if *revision <= element.edit_revision || element.composing.is_some() {
+                        return Err(ProjectionError::InvalidEvent);
+                    }
+                    let callback = element.on_submit.clone();
+                    let mut callback = callback
+                        .as_ref()
+                        .map(|callback| callback.try_borrow_mut())
+                        .transpose()
+                        .map_err(|_| ProjectionError::InvalidEvent)?;
+                    element.edit_revision = *revision;
+                    if let Some(callback) = callback.as_mut() {
+                        callback();
+                    }
+                    Ok(())
+                }
+                (
+                    NodeContent::Input { enabled: true, .. }
+                    | NodeContent::Textarea { enabled: true, .. },
                     EventPayload::Edit {
                         value,
                         revision,
@@ -919,7 +1029,15 @@ pub mod authoring {
                     {
                         return Err(ProjectionError::InvalidEvent);
                     }
+                    let mut callback = element
+                        .on_composition_change
+                        .as_ref()
+                        .map(|callback| callback.try_borrow_mut())
+                        .transpose()
+                        .map_err(|_| ProjectionError::InvalidEvent)?;
                     let binding = element.input.ok_or(ProjectionError::InvalidEvent)?;
+                    let composition_changed =
+                        composing_utf16.is_some() || element.composing.is_some();
                     if composing_utf16.is_some() {
                         element.composing = Some(value.clone());
                     } else {
@@ -928,6 +1046,11 @@ pub mod authoring {
                         element.composing = None;
                     }
                     element.edit_revision = *revision;
+                    if composition_changed {
+                        if let Some(callback) = callback.as_mut() {
+                            callback(composing_utf16.map(|_| value.clone()));
+                        }
+                    }
                     Ok(())
                 }
                 (
@@ -961,6 +1084,6 @@ pub mod authoring {
 pub mod prelude {
     pub use super::{primitives::*, Element};
     #[cfg(feature = "macros")]
-    pub use crate::ui;
+    pub use crate::portable_ui as ui;
     pub use jadix_core::reactivity::*;
 }

@@ -164,13 +164,15 @@ pub(crate) fn element_self_pointer_hit_with(
     if !claims_own_bounds(el) {
         return false;
     }
+    let slop = el.hit_slop_edges();
+    let has_hit_slop = slop.top > 0.0 || slop.right > 0.0 || slop.bottom > 0.0 || slop.left > 0.0;
     let vis = crate::core::tree::visual_paint_aabb_with_ancestor(
         el,
         scroll_acc,
         ancestor_linear,
         ancestor_scale,
     );
-    if x < vis[0] || x > vis[0] + vis[2] || y < vis[1] || y > vis[1] + vis[3] {
+    if !has_hit_slop && (x < vis[0] || x > vis[0] + vis[2] || y < vis[1] || y > vis[1] + vis[3]) {
         return false;
     }
     let b = el.layout_bounds;
@@ -185,7 +187,7 @@ pub(crate) fn element_self_pointer_hit_with(
     }
     let mode = el.pointer_events_mode();
     if mode == PointerEvents::BoundingBox {
-        if crate::core::tree::css_spin_locks_pointer_to_layout_box(el) {
+        if has_hit_slop || crate::core::tree::css_spin_locks_pointer_to_layout_box(el) {
             return crate::core::tree::pointer_in_paint_border_box(
                 el,
                 [x, y],
@@ -1441,6 +1443,12 @@ pub(crate) fn reconcile_pointer_hovers_and_cursor(
     cbs: &mut Vec<(HoverCb, bool)>,
     immediate_miss_leave: bool,
 ) -> Option<CursorValue> {
+    // Window exit is not a geometric miss: edge/overflow hitboxes must not keep
+    // hover, and the layout-jitter grace must not defer their leave callback.
+    if !x.is_finite() || !y.is_finite() {
+        reconcile_hover_target(el, None, x, y, cbs, true);
+        return None;
+    }
     let hit = pick_hover_and_cursor(el, x, y, scroll_offset).into_option();
     let cursor = hit.as_ref().and_then(|hit| hit.cursor.clone());
     let dragging = crate::utils::drag::runtime::is_active();
@@ -1449,11 +1457,12 @@ pub(crate) fn reconcile_pointer_hovers_and_cursor(
     } else {
         hit.and_then(|hit| hit.hover)
     };
-    reconcile_hover_target(target, x, y, cbs, immediate_miss_leave || dragging);
+    reconcile_hover_target(el, target, x, y, cbs, immediate_miss_leave || dragging);
     cursor
 }
 
 fn reconcile_hover_target(
+    root: &Element,
     target: Option<HoverSlot>,
     x: f32,
     y: f32,
@@ -1468,8 +1477,17 @@ fn reconcile_hover_target(
     }
     let force = HOVER_NEEDS_RESYNC.replace(false);
     let scope = crate::core::reactivity::signal_key_scope();
-    let prev =
-        LAST_HOVER_BY_SCOPE.with(|map| map.borrow_mut().entry(scope).or_insert(None).clone());
+    let prev = LAST_HOVER_BY_SCOPE.with(|map| {
+        let mut map = map.borrow_mut();
+        let entry = map.entry(scope).or_insert(None);
+        let current = entry.clone().and_then(|mut old| {
+            old.regions
+                .retain(|region| hover_slot_is_present(root, region));
+            hover_slot_is_present(root, &old).then_some(old)
+        });
+        *entry = current.clone();
+        current
+    });
     let same_identity = match (&prev, &target) {
         (Some(a), Some(b)) => a.key == b.key,
         (None, None) => true,
@@ -1541,6 +1559,15 @@ fn reconcile_hover_target(
     LAST_HOVER_BY_SCOPE.with(|map| {
         *map.borrow_mut().entry(scope).or_insert(None) = None;
     });
+}
+
+fn hover_slot_is_present(root: &Element, slot: &HoverSlot) -> bool {
+    find_in_tree(root, |el| {
+        el.on_hover
+            .as_ref()
+            .is_some_and(|cb| hover_key_for(el, cb) == slot.key)
+    })
+    .is_some()
 }
 
 fn reconcile_hover_regions(
@@ -2212,14 +2239,18 @@ pub(super) fn focused_key_handlers(el: &Element, focus_id: &str) -> Option<Focus
 }
 
 /// Routes a key through previously extracted [`FocusedKeyHandlers`].
-pub(super) fn run_focused_key_handlers(handlers: &FocusedKeyHandlers, event: &KeyEvent) -> bool {
+pub(super) fn run_focused_key_handlers(
+    handlers: &FocusedKeyHandlers,
+    event: &KeyEvent,
+    modifiers: winit::keyboard::ModifiersState,
+) -> bool {
     if run_focused_keydown_only(handlers, event) {
         return true;
     }
     if event.state != ElementState::Pressed || event.repeat {
         return false;
     }
-    let activate = crate::utils::keyboard::is_enter_or_space(&event.logical_key);
+    let activate = focused_activation_key(event, modifiers);
     if activate && handlers.focusable {
         if let Some(cb) = &handlers.on_click {
             cb.borrow_mut()();
@@ -2227,6 +2258,42 @@ pub(super) fn run_focused_key_handlers(handlers: &FocusedKeyHandlers, event: &Ke
         }
     }
     false
+}
+
+fn focused_activation_key(event: &KeyEvent, modifiers: winit::keyboard::ModifiersState) -> bool {
+    event.state == ElementState::Pressed
+        && crate::utils::keyboard::is_enter_or_space(&event.logical_key)
+        && !modifiers.intersects(
+            winit::keyboard::ModifiersState::CONTROL
+                | winit::keyboard::ModifiersState::ALT
+                | winit::keyboard::ModifiersState::META,
+        )
+}
+
+/// A focused pressable control owns Return/Space before window shortcuts. Shift is allowed.
+/// Reserve repeats too, so holding a button's activation key cannot trigger another action.
+pub(super) fn run_window_key_handlers(
+    shortcuts: Vec<crate::authoring::keys::Handler>,
+    focused: Option<&FocusedKeyHandlers>,
+    editing: bool,
+    event: &KeyEvent,
+    modifiers: winit::keyboard::ModifiersState,
+) -> bool {
+    if !editing && focused_activation_key(event, modifiers) {
+        if let Some(handlers) = focused.filter(|h| h.focusable && h.on_click.is_some()) {
+            run_focused_key_handlers(handlers, event, modifiers);
+            return true;
+        }
+    }
+    let context = crate::authoring::keys::Context {
+        key: &event.logical_key,
+        modifiers,
+        state: event.state,
+        repeat: event.repeat,
+    };
+    shortcuts
+        .into_iter()
+        .any(|handler| handler.dispatch(context))
 }
 
 /// Run `on_key_down` only (no Space/Enter → click). Used while a text field is focused so

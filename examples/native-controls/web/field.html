@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jadix Field Workflow</title>
+<style>body{margin:0}#app{width:100vw;height:100dvh;min-height:480px}</style>
+<div id="app"></div>
+<script type="module">
+import init, {mount, resize, state, restore, storage_result, unmount, take_error} from './pkg/jadix_native_controls.js';
+await init();
+const key = 'jadix.field.v1';
+let observed = null;
+let blocked = false;
+mount('app');
+try {
+    observed = localStorage.getItem(key);
+    if (observed !== null) restore(observed);
+} catch (error) {
+    blocked = true;
+    storage_result(String(error));
+}
+const persist = () => {
+    const current = state();
+    if (current === undefined || current === observed) return;
+    try {
+        if (blocked) throw new Error('Stored request unavailable; preserve a backup before recovery.');
+        if (localStorage.getItem(key) !== observed) throw new Error('Request changed in another tab; reload before saving.');
+        localStorage.setItem(key, current);
+        observed = current;
+        storage_result(undefined);
+    } catch (error) { storage_result(String(error)); }
+};
+const schedule = () => queueMicrotask(persist);
+for (const event of ['click', 'input', 'change', 'keydown', 'compositionend']) addEventListener(event, schedule);
+addEventListener('beforeunload', event => {
+    if (state() !== undefined && state() !== observed) { event.preventDefault(); event.returnValue = ''; }
+});
+let environment = 1;
+const update = () => { if (state() !== undefined) resize(innerWidth, innerHeight, ++environment); };
+addEventListener('resize', update);
+document.fonts.addEventListener('loadingdone', update);
+await document.fonts.ready;
+update();
+window.jadixField = {state, restore, unmount, mount, take_error};
+</script>
+</html>

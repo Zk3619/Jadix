@@ -37,12 +37,14 @@ fn one_session_owner_drives_native_commits_and_revokes_late_host_results() {
         accessible_role: None,
         accessible_selected: None,
         accessible_expanded: None,
+        accessibility_relations: Default::default(),
         frame: Rect {
             x: 0.0,
             y: 0.0,
             width: 120.0,
             height: 40.0,
         },
+        accessible_description: None,
         accessible_name: None,
         style: Default::default(),
     };

@@ -3,7 +3,7 @@ use crate::*;
 /// Handle to a compute pipeline.
 ///
 /// A `ComputePipeline` object represents a compute pipeline and its single shader stage.
-/// It can be created with [`Device::create_compute_pipeline`].
+/// It can be created with `Device::create_compute_pipeline` (feature `compute`).
 ///
 /// Corresponds to [WebGPU `GPUComputePipeline`](https://gpuweb.github.io/gpuweb/#compute-pipeline).
 #[derive(Debug, Clone)]
@@ -37,7 +37,7 @@ impl ComputePipeline {
 
 /// Describes a compute pipeline.
 ///
-/// For use with [`Device::create_compute_pipeline`].
+/// For use with `Device::create_compute_pipeline` (feature `compute`).
 ///
 /// Corresponds to [WebGPU `GPUComputePipelineDescriptor`](
 /// https://gpuweb.github.io/gpuweb/#dictdef-gpucomputepipelinedescriptor).
@@ -47,7 +47,7 @@ pub struct ComputePipelineDescriptor<'a> {
     pub label: Label<'a>,
     /// The layout of bind groups for this pipeline.
     ///
-    /// If this is set, then [`Device::create_compute_pipeline`] will raise a validation error if
+    /// If this is set, then `Device::create_compute_pipeline` (feature `compute`) will raise a validation error if
     /// the layout doesn't match what the shader module(s) expect.
     ///
     /// Using the same [`PipelineLayout`] for many [`RenderPipeline`] or [`ComputePipeline`]

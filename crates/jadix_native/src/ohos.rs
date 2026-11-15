@@ -1,11 +1,12 @@
 use std::{
     cell::{Cell, RefCell},
     collections::{BTreeMap, VecDeque},
-    ffi::{CStr, CString, c_char, c_void},
+    ffi::{c_char, c_void, CStr, CString},
     rc::Rc,
 };
 
 use crate::{
+    environment::LayoutDirection,
     host::{ApplyReceipt, PlatformHost},
     layout::{LayoutError, MeasureRequest},
     presentation::{
@@ -19,6 +20,16 @@ unsafe extern "C" {
         environment: *mut c_void,
         value: *mut c_void,
         result: *mut *mut c_void,
+    ) -> i32;
+    fn jadix_ohos_accessibility_create(
+        environment: *mut c_void,
+        xcomponent: *mut c_void,
+    ) -> *mut c_void;
+    fn jadix_ohos_accessibility_dispose(provider: *mut c_void);
+    fn jadix_ohos_accessibility_replace(
+        provider: *mut c_void,
+        elements: *const OhosAccessibilityElement,
+        count: usize,
     ) -> i32;
     fn jadix_ohos_create(kind: i32, target: *mut c_void) -> *mut c_void;
     fn jadix_ohos_dispose(node: *mut c_void);
@@ -50,12 +61,16 @@ unsafe extern "C" {
         family: *const c_char,
         foreground: u32,
         background: u32,
+        direction: i32,
         accessible: *const c_char,
+        description: *const c_char,
         accessible_role: i32,
         accessible_selected: i32,
         accessible_expanded: i32,
     ) -> i32;
+    fn jadix_ohos_radio_group(node: *mut c_void, group: *const c_char) -> i32;
     fn jadix_ohos_focus(node: *mut c_void, focused: bool) -> i32;
+    fn jadix_ohos_max_length(node: *mut c_void, multiline: bool, limit: i32) -> i32;
     fn jadix_ohos_scroll(node: *mut c_void, horizontal: f32, vertical: f32) -> i32;
     fn jadix_ohos_measure(
         text: *const c_char,
@@ -66,6 +81,34 @@ unsafe extern "C" {
         result: *mut f64,
     ) -> i32;
 }
+
+#[repr(C)]
+pub(super) struct OhosAccessibilityElement {
+    pub(super) id: i64,
+    pub(super) parent_id: i64,
+    pub(super) child_ids: *const i64,
+    pub(super) child_count: usize,
+    pub(super) component_type: *const c_char,
+    pub(super) text: *const c_char,
+    pub(super) description: *const c_char,
+    pub(super) left: i32,
+    pub(super) top: i32,
+    pub(super) right: i32,
+    pub(super) bottom: i32,
+    pub(super) flags: u32,
+    pub(super) target: *mut c_void,
+}
+
+const A11Y_ENABLED: u32 = 1 << 0;
+const A11Y_SELECTED: u32 = 1 << 1;
+const A11Y_EXPANDED: u32 = 1 << 2;
+const A11Y_CHECKABLE: u32 = 1 << 3;
+const A11Y_CHECKED: u32 = 1 << 4;
+const A11Y_FOCUSABLE: u32 = 1 << 5;
+const A11Y_CLICKABLE: u32 = 1 << 6;
+const A11Y_SCROLLABLE: u32 = 1 << 7;
+const A11Y_EDITABLE: u32 = 1 << 8;
+const A11Y_PASSWORD: u32 = 1 << 9;
 
 const MAX_EVENTS: usize = 1024;
 const MAX_EVENT_BYTES: usize = 2 * 1024 * 1024;
@@ -90,6 +133,7 @@ struct Events {
 struct Target {
     node: NodeId,
     revision: Cell<u64>,
+    composing: Cell<bool>,
     events: Rc<Events>,
     enabled: Cell<bool>,
     options: RefCell<Option<Vec<SelectOption>>>,
@@ -125,7 +169,10 @@ unsafe extern "C" fn jadix_ohos_receive(
         return;
     }
     let target = unsafe { &*target.cast::<Target>() };
-    if target.events.closed.get() || target.events.suppress.get() || !target.enabled.get() {
+    if target.events.closed.get()
+        || target.events.suppress.get()
+        || (!target.enabled.get() && kind != 8)
+    {
         return;
     }
     let result =
@@ -133,6 +180,7 @@ unsafe extern "C" fn jadix_ohos_receive(
             let payload = match kind {
                 0 => EventPayload::Activate,
                 1 => EventPayload::Focus,
+                8 => EventPayload::Blur,
                 2 if start == 0 || start == 1 => {
                     let revision = target
                         .revision
@@ -189,12 +237,25 @@ unsafe extern "C" fn jadix_ohos_receive(
                         .checked_add(1)
                         .ok_or("ArkUI edit revision exhausted")?;
                     target.revision.set(revision);
+                    target.composing.set(composing.is_some());
                     EventPayload::Edit {
                         value,
                         revision,
                         selection_utf16: selection,
                         composing_utf16: composing,
                     }
+                }
+                9 => {
+                    if target.composing.get() {
+                        return Ok(());
+                    }
+                    let revision = target
+                        .revision
+                        .get()
+                        .checked_add(1)
+                        .ok_or("ArkUI submit revision exhausted")?;
+                    target.revision.set(revision);
+                    EventPayload::Submit { revision }
                 }
                 4 if x.is_finite() && y.is_finite() => EventPayload::Scroll {
                     x: x.into(),
@@ -230,6 +291,19 @@ unsafe extern "C" fn jadix_ohos_receive(
                     target.revision.set(revision);
                     EventPayload::Select { value, revision }
                 }
+                7 => EventPayload::Navigate {
+                    key: match start {
+                        0 => NavigationKey::Up,
+                        1 => NavigationKey::Down,
+                        2 => NavigationKey::Left,
+                        3 => NavigationKey::Right,
+                        4 => NavigationKey::Home,
+                        5 => NavigationKey::End,
+                        _ => return Err(String::from("invalid ArkUI navigation key")),
+                    },
+                    shift: false,
+                    control: false,
+                },
                 _ => return Err(String::from("unsupported or invalid ArkUI event")),
             };
             let bytes = match &payload {
@@ -268,6 +342,7 @@ struct Control {
     handle: *mut c_void,
     parent: Option<NodeId>,
     descriptor: NodeDescriptor,
+    radio_group: Option<NodeId>,
     target: Box<Target>,
 }
 
@@ -282,6 +357,7 @@ pub struct OhosHost {
     revision: u64,
     viewport: [f32; 2],
     density: f64,
+    accessibility: *mut c_void,
 }
 
 fn check(result: i32) -> Result<(), String> {
@@ -298,6 +374,20 @@ fn cstring(value: &str) -> Result<CString, String> {
 
 fn color(channels: [u8; 4]) -> u32 {
     u32::from_be_bytes([channels[3], channels[0], channels[1], channels[2]])
+}
+
+fn native_kind(descriptor: &NodeDescriptor) -> Result<i32, String> {
+    if matches!(
+        descriptor.accessible_role,
+        Some(AccessibleRole::RadioItem { .. })
+    ) {
+        return if matches!(descriptor.content, NodeContent::Button { .. }) {
+            Ok(12)
+        } else {
+            Err(String::from("ArkUI RadioItem requires Button content"))
+        };
+    }
+    kind(&descriptor.content)
 }
 
 fn kind(content: &NodeContent) -> Result<i32, String> {
@@ -318,6 +408,215 @@ fn kind(content: &NodeContent) -> Result<i32, String> {
 }
 
 impl OhosHost {
+    fn accessibility_component_type(node: &PresentationNode) -> &'static str {
+        match node.descriptor.accessible_role {
+            Some(AccessibleRole::RadioGroup) => "radiogroup",
+            Some(AccessibleRole::RadioItem { .. }) => "radio",
+            Some(AccessibleRole::TabList) => "tablist",
+            Some(AccessibleRole::TabItem) => "tab",
+            Some(AccessibleRole::TabPanel) => "tabpanel",
+            Some(AccessibleRole::Tree) => "tree",
+            Some(AccessibleRole::TreeItem) => "treeitem",
+            Some(AccessibleRole::Grid { .. }) => "grid",
+            Some(AccessibleRole::GridCell { .. }) => "gridcell",
+            Some(AccessibleRole::GridColumnHeader { .. }) => "columnheader",
+            None => match &node.descriptor.content {
+                NodeContent::Text(_) => "text",
+                NodeContent::Button { .. } => "button",
+                NodeContent::Input { .. } => "input",
+                NodeContent::Textarea { .. } => "textarea",
+                NodeContent::Checkbox { .. } => "checkbox",
+                NodeContent::Switch { .. } => "switch",
+                NodeContent::Select { .. } => "select",
+                NodeContent::Scroll => "scroll",
+                NodeContent::Image { .. } => "image",
+                NodeContent::Dialog { .. } => "dialog",
+                NodeContent::Popover { .. } => "popover",
+                NodeContent::Container => "group",
+            },
+        }
+    }
+
+    fn accessibility_text(node: &PresentationNode) -> String {
+        if let Some(name) = &node.descriptor.accessible_name {
+            return name.clone();
+        }
+        match &node.descriptor.content {
+            NodeContent::Text(text) => text.clone(),
+            NodeContent::Button { label, .. }
+            | NodeContent::Checkbox { label, .. }
+            | NodeContent::Switch { label, .. } => label.clone(),
+            NodeContent::Input {
+                value, placeholder, ..
+            }
+            | NodeContent::Textarea {
+                value, placeholder, ..
+            } => {
+                if value.is_empty() {
+                    placeholder.clone()
+                } else {
+                    value.clone()
+                }
+            }
+            NodeContent::Select {
+                options,
+                value,
+                placeholder,
+                ..
+            } => options
+                .iter()
+                .find(|option| option.value == *value)
+                .map(|option| option.label.clone())
+                .unwrap_or_else(|| placeholder.clone()),
+            NodeContent::Image { alt, .. } => alt.clone(),
+            _ => String::new(),
+        }
+    }
+
+    fn accessibility_flags(node: &PresentationNode) -> u32 {
+        let mut flags = 0;
+        let content = &node.descriptor.content;
+        let enabled = match content {
+            NodeContent::Button { enabled, .. }
+            | NodeContent::Input { enabled, .. }
+            | NodeContent::Textarea { enabled, .. }
+            | NodeContent::Checkbox { enabled, .. }
+            | NodeContent::Switch { enabled, .. }
+            | NodeContent::Select { enabled, .. } => *enabled,
+            _ => true,
+        };
+        if enabled {
+            flags |= A11Y_ENABLED;
+        }
+        if node.descriptor.accessible_selected == Some(true) {
+            flags |= A11Y_SELECTED;
+        }
+        if node.descriptor.accessible_expanded == Some(true) {
+            flags |= A11Y_EXPANDED;
+        }
+        if matches!(
+            content,
+            NodeContent::Checkbox { .. } | NodeContent::Switch { .. }
+        ) {
+            flags |= A11Y_CHECKABLE;
+        }
+        if matches!(
+            content,
+            NodeContent::Checkbox { checked: true, .. } | NodeContent::Switch { checked: true, .. }
+        ) {
+            flags |= A11Y_CHECKED;
+        }
+        if matches!(
+            content,
+            NodeContent::Button { .. }
+                | NodeContent::Input { .. }
+                | NodeContent::Textarea { .. }
+                | NodeContent::Checkbox { .. }
+                | NodeContent::Switch { .. }
+                | NodeContent::Select { .. }
+        ) {
+            flags |= A11Y_FOCUSABLE;
+        }
+        if matches!(
+            content,
+            NodeContent::Button { .. }
+                | NodeContent::Checkbox { .. }
+                | NodeContent::Switch { .. }
+                | NodeContent::Select { .. }
+        ) {
+            flags |= A11Y_CLICKABLE;
+        }
+        if matches!(content, NodeContent::Scroll) {
+            flags |= A11Y_SCROLLABLE;
+        }
+        if matches!(
+            content,
+            NodeContent::Input { .. } | NodeContent::Textarea { .. }
+        ) {
+            flags |= A11Y_EDITABLE;
+        }
+        if matches!(content, NodeContent::Input { password: true, .. }) {
+            flags |= A11Y_PASSWORD;
+        }
+        flags
+    }
+
+    fn publish_accessibility(&self, roots: &[PresentationNode]) -> Result<(), String> {
+        if self.accessibility.is_null() {
+            return Ok(());
+        }
+        let mut nodes = Vec::new();
+        let mut parents = Vec::new();
+        let mut pending: Vec<(i64, &PresentationNode)> =
+            roots.iter().rev().map(|node| (0, node)).collect();
+        while let Some((parent_id, node)) = pending.pop() {
+            let id = i64::try_from(node.id.generation())
+                .ok()
+                .filter(|id| *id <= i64::from(i32::MAX))
+                .ok_or_else(|| String::from("OHOS accessibility element ID exceeds ArkUI range"))?;
+            let child_ids = node
+                .children
+                .iter()
+                .map(|child| {
+                    i64::try_from(child.id.generation())
+                        .ok()
+                        .filter(|id| *id <= i64::from(i32::MAX))
+                        .ok_or_else(|| {
+                            String::from("OHOS accessibility child ID exceeds ArkUI range")
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let text = cstring(&Self::accessibility_text(node))?;
+            let description = cstring(
+                node.descriptor
+                    .accessible_description
+                    .as_deref()
+                    .unwrap_or(""),
+            )?;
+            let component_type = cstring(Self::accessibility_component_type(node))?;
+            let rect = node.descriptor.frame;
+            let scale = self.density;
+            let pixel = |value: f64| -> i32 {
+                (value * scale)
+                    .round()
+                    .clamp(i32::MIN as f64, i32::MAX as f64) as i32
+            };
+            let target = self
+                .controls
+                .get(&node.id)
+                .map(|control| (&*control.target as *const Target).cast_mut().cast())
+                .unwrap_or(std::ptr::null_mut());
+            parents.push((child_ids, component_type, text, description));
+            nodes.push(OhosAccessibilityElement {
+                id,
+                parent_id,
+                child_ids: std::ptr::null(),
+                child_count: 0,
+                component_type: std::ptr::null(),
+                text: std::ptr::null(),
+                description: std::ptr::null(),
+                left: pixel(rect.x),
+                top: pixel(rect.y),
+                right: pixel(rect.x + rect.width),
+                bottom: pixel(rect.y + rect.height),
+                flags: Self::accessibility_flags(node),
+                target,
+            });
+            pending.extend(node.children.iter().rev().map(|child| (id, child)));
+        }
+        // The owned strings and child ID vectors outlive the synchronous native call.
+        for (element, (children, component, text, description)) in nodes.iter_mut().zip(&parents) {
+            element.child_ids = children.as_ptr();
+            element.child_count = children.len();
+            element.component_type = component.as_ptr();
+            element.text = text.as_ptr();
+            element.description = description.as_ptr();
+        }
+        check(unsafe {
+            jadix_ohos_accessibility_replace(self.accessibility, nodes.as_ptr(), nodes.len())
+        })
+    }
+
     pub fn inspection(&self) -> Result<serde_json::Value, String> {
         let queue = self
             .events
@@ -385,7 +684,32 @@ impl OhosHost {
             revision: 0,
             viewport,
             density,
+            accessibility: std::ptr::null_mut(),
         })
+    }
+
+    /// Creates an ArkUI host with an XComponent-rooted virtual accessibility provider.
+    ///
+    /// # Safety
+    /// All N-API handles must belong to the same live environment. `xcomponent` must be an
+    /// XComponent FrameNode owned by the caller and must outlive this host.
+    pub unsafe fn from_napi_with_accessibility(
+        environment: *mut c_void,
+        node_content: *mut c_void,
+        xcomponent: *mut c_void,
+        viewport: [f32; 2],
+        density: f64,
+    ) -> Result<Self, String> {
+        if xcomponent.is_null() {
+            return Err(String::from("missing ArkUI XComponent FrameNode"));
+        }
+        let mut host = unsafe { Self::from_napi(environment, node_content, viewport, density) }?;
+        let provider = unsafe { jadix_ohos_accessibility_create(environment, xcomponent) };
+        if provider.is_null() {
+            return Err(String::from("ArkUI accessibility provider creation failed"));
+        }
+        host.accessibility = provider;
+        Ok(host)
     }
 
     pub fn resize(&mut self, viewport: [f32; 2], density: f64) -> Result<(), String> {
@@ -548,6 +872,7 @@ impl OhosHost {
                 enabled,
                 password,
                 revision,
+                ..
             } => (
                 value.as_str(),
                 placeholder.as_str(),
@@ -560,6 +885,7 @@ impl OhosHost {
                 placeholder,
                 enabled,
                 revision,
+                ..
             } => (
                 value.as_str(),
                 placeholder.as_str(),
@@ -597,32 +923,63 @@ impl OhosHost {
             &descriptor.style.font_family
         })?;
         let accessible = cstring(descriptor.accessible_name.as_deref().unwrap_or(""))?;
+        let description = cstring(descriptor.accessible_description.as_deref().unwrap_or(""))?;
         let accessible_role = match descriptor.accessible_role {
             Some(AccessibleRole::Tree) => 1,
             Some(AccessibleRole::TreeItem) => 2,
+            Some(AccessibleRole::RadioGroup) => 3,
+            Some(AccessibleRole::RadioItem { tab_stop: false }) => 4,
+            Some(AccessibleRole::RadioItem { tab_stop: true }) => 5,
             _ => 0,
         };
         let accessible_selected = descriptor.accessible_selected.map(i32::from).unwrap_or(-1);
         let accessible_expanded = descriptor.accessible_expanded.map(i32::from).unwrap_or(-1);
+        match &descriptor.content {
+            NodeContent::Input { max_length, .. } | NodeContent::Textarea { max_length, .. } => {
+                let limit = max_length
+                    .map(i32::try_from)
+                    .transpose()
+                    .map_err(|_| "ArkUI max length overflow")?
+                    .unwrap_or(-1);
+                check(unsafe {
+                    jadix_ohos_max_length(
+                        control.handle,
+                        matches!(descriptor.content, NodeContent::Textarea { .. }),
+                        limit,
+                    )
+                })?;
+            }
+            _ => {}
+        }
         check(unsafe {
             jadix_ohos_update(
                 control.handle,
-                kind(&descriptor.content)?,
+                native_kind(descriptor)?,
                 text.as_ptr(),
                 placeholder.as_ptr(),
                 enabled,
                 password,
                 matches!(
-                    descriptor.content,
-                    NodeContent::Checkbox { checked: true, .. }
-                        | NodeContent::Switch { checked: true, .. }
-                ),
+                    descriptor.accessible_role,
+                    Some(AccessibleRole::RadioItem { .. })
+                ) && descriptor.accessible_selected == Some(true)
+                    || matches!(
+                        descriptor.content,
+                        NodeContent::Checkbox { checked: true, .. }
+                            | NodeContent::Switch { checked: true, .. }
+                    ),
                 descriptor.style.font_size,
                 descriptor.style.font_weight.into(),
                 family.as_ptr(),
                 color(descriptor.style.foreground),
                 color(descriptor.style.background),
+                match descriptor.style.direction {
+                    Some(LayoutDirection::LeftToRight) => 0,
+                    Some(LayoutDirection::RightToLeft) => 1,
+                    None => 3,
+                },
                 accessible.as_ptr(),
+                description.as_ptr(),
                 accessible_role,
                 accessible_selected,
                 accessible_expanded,
@@ -675,6 +1032,9 @@ impl OhosHost {
             control.target.options.borrow_mut().take();
         }
         control.target.enabled.set(enabled);
+        if revision > control.target.revision.get() {
+            control.target.composing.set(false);
+        }
         control
             .target
             .revision
@@ -683,17 +1043,64 @@ impl OhosHost {
         Ok(())
     }
 
-    fn apply(&mut self, batch: &CommitBatch) -> Result<ApplyReceipt, String> {
-        if batch.operations.iter().any(|operation| match operation {
-            Operation::Create { descriptor, .. } | Operation::Update { descriptor, .. } => {
-                matches!(
-                    descriptor.accessible_role,
-                    Some(AccessibleRole::RadioGroup | AccessibleRole::RadioItem { .. })
-                )
+    fn sync_radio_groups(&mut self) -> Result<(), String> {
+        let mut updates = Vec::new();
+        for (node, control) in &self.controls {
+            if !matches!(
+                control.descriptor.accessible_role,
+                Some(AccessibleRole::RadioItem { .. })
+            ) {
+                continue;
             }
-            _ => false,
-        }) {
-            return Err(String::from("ArkUI radio groups are not implemented"));
+            let mut parent = control.parent;
+            let mut group = None;
+            while let Some(ancestor) = parent {
+                let ancestor_control = self
+                    .controls
+                    .get(&ancestor)
+                    .ok_or("unknown ArkUI radio ancestor")?;
+                if ancestor_control.descriptor.accessible_role == Some(AccessibleRole::RadioGroup) {
+                    group = Some(ancestor);
+                    break;
+                }
+                parent = ancestor_control.parent;
+            }
+            if group != control.radio_group {
+                updates.push((*node, control.handle, group));
+            }
+        }
+        for (node, handle, group) in updates {
+            let group_name = group.map(|id| id.token()).unwrap_or_default();
+            let group_name = cstring(&group_name)?;
+            check(unsafe { jadix_ohos_radio_group(handle, group_name.as_ptr()) })?;
+            self.controls
+                .get_mut(&node)
+                .ok_or("unknown ArkUI radio control")?
+                .radio_group = group;
+        }
+        Ok(())
+    }
+
+    fn apply(&mut self, batch: &CommitBatch) -> Result<ApplyReceipt, String> {
+        // Changing the platform node type under a live identity would lose input state.
+        // Validate the whole batch before touching the platform tree.
+        for operation in &batch.operations {
+            match operation {
+                Operation::Create { descriptor, .. } => {
+                    native_kind(descriptor)?;
+                }
+                Operation::Update { node, descriptor } => {
+                    let next = native_kind(descriptor)?;
+                    if let Some(control) = self.controls.get(node) {
+                        if next != native_kind(&control.descriptor)? {
+                            return Err(String::from(
+                                "ArkUI node type change requires a new identity",
+                            ));
+                        }
+                    }
+                }
+                _ => {}
+            }
         }
         if self.events.closed.get()
             || self.root.is_some_and(|root| root != batch.root)
@@ -717,13 +1124,14 @@ impl OhosHost {
                     let mut target = Box::new(Target {
                         node: *node,
                         revision: Cell::new(0),
+                        composing: Cell::new(false),
                         events: self.events.clone(),
                         enabled: Cell::new(true),
                         options: RefCell::new(None),
                     });
                     let handle = unsafe {
                         jadix_ohos_create(
-                            kind(&descriptor.content)?,
+                            native_kind(descriptor)?,
                             (&mut *target as *mut Target).cast(),
                         )
                     };
@@ -736,6 +1144,7 @@ impl OhosHost {
                             handle,
                             parent: *parent,
                             descriptor: descriptor.clone(),
+                            radio_group: None,
                             target,
                         },
                     );
@@ -799,6 +1208,7 @@ impl OhosHost {
                 }
             }
         }
+        self.sync_radio_groups()?;
         for control in self.controls.values() {
             let frame = control.descriptor.frame;
             let parent = control
@@ -947,6 +1357,9 @@ impl PlatformHost for OhosHost {
         })
         .map_err(|_| fail())?;
         let chrome = if matches!(
+            descriptor.accessible_role,
+            Some(AccessibleRole::RadioItem { .. })
+        ) || matches!(
             descriptor.content,
             NodeContent::Checkbox { .. } | NodeContent::Switch { .. }
         ) {
@@ -979,12 +1392,14 @@ impl PlatformHost for OhosHost {
     fn publish_batch(
         &mut self,
         batch: &CommitBatch,
-        _: &[PresentationNode],
+        roots: &[PresentationNode],
     ) -> Result<ApplyReceipt, String> {
         self.events.suppress.set(true);
         let result = self.apply(batch);
         self.events.suppress.set(false);
-        result
+        let receipt = result?;
+        self.publish_accessibility(roots)?;
+        Ok(receipt)
     }
 
     fn take_events(&mut self) -> Result<Vec<PlatformEvent>, String> {
@@ -1003,6 +1418,10 @@ impl PlatformHost for OhosHost {
     fn dispose(&mut self) {
         if self.events.closed.replace(true) {
             return;
+        }
+        if !self.accessibility.is_null() {
+            unsafe { jadix_ohos_accessibility_dispose(self.accessibility) };
+            self.accessibility = std::ptr::null_mut();
         }
         unsafe {
             jadix_ohos_mount(self.content, self.container, false);

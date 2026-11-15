@@ -2514,7 +2514,12 @@ impl OverlayPaintSplit {
             || first.chrome_start > 0
             || first.paint_op_start > 0
         {
-            starts.push(OverlayPaintBand::default());
+            // The synthetic page prefix has no authored opacity. Keep it
+            // neutral rather than inheriting the zeroed default of a band.
+            starts.push(OverlayPaintBand {
+                underlay_opacity: 1.0,
+                ..Default::default()
+            });
         }
         starts.extend_from_slice(&self.page_stack_bands);
         let mut out = Vec::with_capacity(starts.len());
@@ -2720,6 +2725,7 @@ pub struct LayoutTree {
     pub(crate) tree_retirements: crate::authoring::presentation::Retirements,
     /// Cross-frame fingerprint DL for paint-only sibling skip.
     collect_skip: crate::layout::collect_cache::CollectSkipState,
+    known_paint_paths: bool,
     opacity_groups_enabled: bool,
     layout_motion_registry: crate::motion::LayoutRegistry,
     #[cfg(test)]
@@ -2817,6 +2823,11 @@ impl LayoutTree {
     /// `true`: fully-visible scrolled subtrees translate last-frame ops; idle siblings replay.
     pub fn set_collect_skip_allowed(&mut self, allowed: bool) {
         self.collect_skip.allowed = allowed;
+    }
+    /// One-shot retained-scene handshake: all changes were leaves and every
+    /// changed ancestor hash path was invalidated. Live paint still restamps.
+    pub(crate) fn reuse_known_paint_paths(&mut self) {
+        self.known_paint_paths = true;
     }
 
     /// First frame of a CSS transform tween under an idle wrapper: ViewportsOnly
@@ -3757,6 +3768,7 @@ impl LayoutTree {
             deadlines: crate::authoring::deadline::WindowDeadlines::default(),
             tree_retirements: crate::authoring::presentation::Retirements::default(),
             collect_skip: crate::layout::collect_cache::CollectSkipState::default(),
+            known_paint_paths: false,
             opacity_groups_enabled: crate::core::tree::opacity_groups_enabled(),
             layout_motion_registry: crate::motion::LayoutRegistry::default(),
             #[cfg(test)]
@@ -4200,6 +4212,7 @@ impl LayoutTree {
         height: f32,
         mouse_pos: [f32; 2],
     ) -> RenderResult {
+        self.known_paint_paths = false;
         #[cfg(feature = "tracing")]
         let _span = tracing::trace_span!(
             "layout_tree.build_and_layout",
@@ -4819,7 +4832,8 @@ impl LayoutTree {
         let mut skip = std::mem::take(&mut self.collect_skip);
         skip.begin_frame();
         let t_stamp = Instant::now();
-        let reuse_idle = scroll_only && !std::mem::take(&mut skip.hash_bust);
+        let hash_bust = std::mem::take(&mut skip.hash_bust);
+        let reuse_idle = std::mem::take(&mut self.known_paint_paths) || (scroll_only && !hash_bust);
         crate::layout::collect_cache::stamp_subtree_paint_hashes(root, reuse_idle);
         let collect_stamp_ms = t_stamp.elapsed().as_secs_f32() * 1000.0;
         self.collect_instances_mut(
@@ -6667,7 +6681,13 @@ impl LayoutTree {
                 // Size textures in physical pixels so hard edges stay sharp under DPI scale.
                 let (tw, th) = gradient_texture_size(render_rect[2], render_rect[3]);
                 let tex_radii = gradient_texture_radii(resolved_radii);
-                let key = ensure_gradient_texture(grad, tw, th, tex_radii);
+                let grad = grad.resolve_current_color(
+                    element
+                        .text_style
+                        .color_resolved()
+                        .map(|c| c as f32 / 255.0),
+                );
+                let key = ensure_gradient_texture(&grad, tw, th, tex_radii);
                 if let Some(mut draw) =
                     TexturedDraw::clipped(render_rect, paint_parent_clip, key, opacity)
                 {

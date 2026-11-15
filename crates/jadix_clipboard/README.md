@@ -21,6 +21,8 @@ Platform-specific packages require the corresponding SDK.
 
 Default features: none. See [Cargo.toml](Cargo.toml) for the complete feature/dependency graph. A feature flag does not establish platform runtime validation. Applications normally select internal GPU/window packages through their facade rather than depending on platform internals.
 
+HarmonyOS targets (`target_env = "ohos"`) do not select the Linux X11 clipboard backend. The clipboard API uses the mobile unsupported-provider stub until an ArkUI clipboard bridge is implemented.
+
 ## Documentation
 
 [Project documentation](https://github.com/Zk3619/Jadix/tree/main/docs) covers application setup, platform integration, configuration, and API usage.

@@ -53,6 +53,7 @@ pub struct Font {
     harfrust: OwnedFace,
     data: FontData,
     id: fontdb::ID,
+    normalized_coords: Vec<i16>,
     monospace_fallback: Option<FontMonospaceFallback>,
     pub(crate) italic_or_oblique: bool,
 }
@@ -68,6 +69,11 @@ impl fmt::Debug for Font {
 impl Font {
     pub const fn id(&self) -> fontdb::ID {
         self.id
+    }
+
+    /// Coordinates in fvar axis order, shared with the rasterizer.
+    pub fn normalized_coords(&self) -> &[i16] {
+        &self.normalized_coords
     }
 
     pub fn monospace_em_width(&self) -> Option<f32> {
@@ -120,6 +126,14 @@ impl Font {
 
 impl Font {
     pub fn new(db: &fontdb::Database, id: fontdb::ID, weight: fontdb::Weight) -> Option<Self> {
+        Self::new_with_variations(db, id, weight, crate::FontVariations::empty())
+    }
+    pub fn new_with_variations(
+        db: &fontdb::Database,
+        id: fontdb::ID,
+        weight: fontdb::Weight,
+        variations: crate::FontVariations,
+    ) -> Option<Self> {
         let info = db.face(id)?;
 
         let data = match &info.source {
@@ -138,9 +152,11 @@ impl Font {
         // `ShaperData`, and once to create the persistent `FontRef` tied to the
         // lifetime of the face data.
         let font_ref = FontRef::from_index((*data).as_ref(), info.index).ok()?;
-        let location = font_ref
-            .axes()
-            .location([(Tag::new(b"wght"), weight.0 as f32)]);
+        let location = font_ref.axes().location(
+            variations
+                .settings(weight)
+                .map(|(tag, value)| (Tag::new(&tag), value)),
+        );
         let metrics = font_ref.metrics(Size::unscaled(), &location);
 
         let monospace_fallback = if cfg!(feature = "monospace_fallback") {
@@ -206,6 +222,7 @@ impl Font {
 
         Some(Self {
             id: info.id,
+            normalized_coords: location.coords().iter().map(|c| c.to_bits()).collect(),
             monospace_fallback,
             #[cfg(feature = "swash")]
             swash: {

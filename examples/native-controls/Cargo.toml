@@ -6,6 +6,7 @@ publish = false
 
 [features]
 uikit = ["jadix_native/uikit"]
+consistent-ui = ["jadix_native/consistent-ui"]
 windows = ["jadix_native/windows", "dep:windows-sys", "dep:windows"]
 native-gpu = ["windows", "jadix_native/windows-gpu"]
 native-code = ["windows", "jadix_native/code"]
@@ -16,6 +17,7 @@ selection = []
 popover = []
 large-list = []
 notes = []
+field-workflow = []
 gpu = ["jadix_components/gpu"]
 
 [[bin]]
@@ -27,6 +29,11 @@ required-features = ["windows"]
 name = "native-workbench"
 path = "src/workbench_windows.rs"
 required-features = ["windows"]
+
+[[bin]]
+name = "native-field"
+path = "src/field_windows.rs"
+required-features = ["windows", "field-workflow"]
 
 [[bin]]
 name = "native-inspector"

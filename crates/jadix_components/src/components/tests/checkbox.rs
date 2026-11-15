@@ -1,7 +1,7 @@
 use super::*;
 #[cfg(feature = "a11y")]
 use crate::a11y::bridge::{node_id_for_key, tree_update_from_elements};
-use crate::components::label::{label, ATTR_LABEL_FOR};
+use crate::components::label::{ATTR_LABEL_FOR, label};
 #[cfg(feature = "a11y")]
 use accesskit::Role;
 
@@ -14,6 +14,84 @@ fn click_at(root: &Element, point: [f32; 2]) -> bool {
     } else {
         false
     }
+}
+
+#[test]
+fn mixed_checkbox_keeps_one_checked_signal_and_requests_checked_on_activation() {
+    use crate::core::reactivity::{create_root, use_signal};
+
+    let (_owner, _) = create_root(|| {
+        let checked = use_signal("mixed-cb-state", || false);
+        let focus = use_signal("__jadix_button_focus_id", String::new);
+        let mut layout = LayoutTree::new();
+        for initial in [false, true] {
+            for disabled in [false, true] {
+                checked.set(initial);
+                focus.set("previous".into());
+                let mut el: Element = checkbox("mixed-cb")
+                    .checked_signal(checked)
+                    .indeterminate(true)
+                    .disabled(disabled)
+                    .into();
+                let mut impact = LayoutStatus::Clean;
+                sync_checkbox_checked_subtree(&mut el, &mut layout, &mut impact);
+                assert_eq!(impact, LayoutStatus::Clean);
+                assert_eq!(el.style.bg_color, checked_chrome().0);
+                let icon = find_indicator_mut(&mut el).unwrap();
+                assert_eq!(icon.text.as_deref(), Some(indicator_glyph(true).as_str()));
+                assert_eq!(icon.text_style.color_resolved(), indicator_fg(true));
+                #[cfg(feature = "a11y")]
+                {
+                    let tree = tree_update_from_elements(&el, None);
+                    let node = &tree
+                        .nodes
+                        .iter()
+                        .find(|(id, _)| *id == node_id_for_key("mixed-cb"))
+                        .unwrap()
+                        .1;
+                    assert_eq!(node.role(), Role::CheckBox);
+                    assert_eq!(node.toggled(), Some(accesskit::Toggled::Mixed));
+                }
+                el.on_click.as_ref().unwrap().borrow_mut()();
+                assert_eq!(checked.peek(), if disabled { initial } else { true });
+                assert_eq!(focus.peek(), if disabled { "previous" } else { "mixed-cb" });
+            }
+        }
+        // Rebuilding from the aggregate removes mixed state without replacing the signal.
+        checked.set(true);
+        let mut el = Checkbox(CheckboxProps {
+            id: "mixed-cb".into(),
+            checked: Some(checked),
+            indeterminate: Some(false),
+            ..Default::default()
+        });
+        assert_eq!(
+            find_indicator_mut(&mut el).unwrap().text.as_deref(),
+            Some(indicator_glyph(false).as_str())
+        );
+        #[cfg(feature = "a11y")]
+        {
+            let tree = tree_update_from_elements(&el, None);
+            let node = &tree
+                .nodes
+                .iter()
+                .find(|(id, _)| *id == node_id_for_key("mixed-cb"))
+                .unwrap()
+                .1;
+            assert_eq!(node.toggled(), Some(accesskit::Toggled::True));
+        }
+        el.on_click.as_ref().unwrap().borrow_mut()();
+        assert!(!checked.peek());
+        let mut impact = LayoutStatus::Clean;
+        sync_checkbox_checked_subtree(&mut el, &mut layout, &mut impact);
+        assert_eq!(
+            find_indicator_mut(&mut el)
+                .unwrap()
+                .text_style
+                .color_resolved(),
+            indicator_fg(false)
+        );
+    });
 }
 
 #[test]

@@ -1,7 +1,7 @@
 use super::*;
 use crate::core::reactivity::create_root;
 use crate::utils::popup::{
-    mark_floating, ATTR_FLOATING, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_TRIGGER,
+    ATTR_FLOATING, ATTR_FLOATING_MATCH_TRIGGER, ATTR_FLOATING_TRIGGER, mark_floating,
 };
 
 #[test]
@@ -214,11 +214,11 @@ fn scroll_selected_parse() {
 #[test]
 #[cfg(feature = "animation-base")]
 fn content_keeps_panel_tid_while_exiting() {
-    use crate::app::portal_overlay::{clear_overlay_stack, OverlayKind, OverlayMode};
+    use crate::app::portal_overlay::{OverlayKind, OverlayMode, clear_overlay_stack};
     use crate::core::reactivity::Signal;
     use crate::utils::anchored_overlay::{
-        anchored_overlay_is_mounted, anchored_overlay_phase, apply_anchored_overlay_panel_motion,
-        AnchoredOverlayContentOpts,
+        AnchoredOverlayContentOpts, anchored_overlay_is_mounted, anchored_overlay_phase,
+        apply_anchored_overlay_panel_motion,
     };
     use crate::utils::floating_motion::FloatingMotionKind;
     use crate::utils::presence::PresencePhase;

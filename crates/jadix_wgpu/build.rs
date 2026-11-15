@@ -24,6 +24,11 @@ fn main() {
     let requested_test = std::env::var_os("CARGO_CFG_TEST").is_some();
     let requested_windows = std::env::var_os("CARGO_CFG_WINDOWS").is_some();
     let requested_angle = std::env::var_os("CARGO_FEATURE_ANGLE").is_some();
+    let requested_compute = std::env::var_os("CARGO_FEATURE_COMPUTE").is_some();
+    println!("cargo:rustc-check-cfg=cfg(jadix_wgpu_feature_compute)");
+    if requested_compute {
+        println!("cargo:rustc-cfg=jadix_wgpu_feature_compute");
+    }
     let requested_counters = std::env::var_os("CARGO_FEATURE_COUNTERS").is_some();
     let requested_custom = std::env::var_os("CARGO_FEATURE_CUSTOM").is_some();
     let requested_drm = std::env::var_os("CARGO_FEATURE_DRM").is_some();

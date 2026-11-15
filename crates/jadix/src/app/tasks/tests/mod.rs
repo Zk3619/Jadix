@@ -4,6 +4,7 @@ use crate::{
     core::reactivity::{create_root, current_owner, signal_key_scope, Signal},
 };
 use std::{
+    pin::Pin,
     sync::atomic::AtomicUsize,
     task::{Context, Poll, Wake, Waker},
 };
@@ -261,6 +262,68 @@ fn future_factory_is_deferred_and_external_spawner_owns_polling() {
     assert!(value.lock().unwrap().is_none());
     drain_ui_tasks();
     assert_eq!(*value.lock().unwrap(), Some(42));
+}
+
+struct CountWake(Arc<AtomicUsize>);
+
+impl Wake for CountWake {
+    fn wake(self: Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    fn wake_by_ref(self: &Arc<Self>) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+struct PendingWork(Arc<AtomicUsize>);
+
+impl Future for PendingWork {
+    type Output = Result<(), TaskError>;
+
+    fn poll(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<Self::Output> {
+        Poll::Pending
+    }
+}
+
+impl Drop for PendingWork {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn cancellation_drops_pending_work_without_backend_abort() {
+    let _queue = UI_QUEUE_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let futures = Arc::new(Mutex::new(VecDeque::<BoxTask>::new()));
+    let queued = futures.clone();
+    let spawner = move |task| {
+        queued.lock().unwrap().push_back(task);
+        Ok(TaskHandle::default())
+    };
+    let drops = Arc::new(AtomicUsize::new(0));
+    let future_drops = drops.clone();
+    let (_owner, scope) = create_root(TaskScope::new);
+    let handle = scope
+        .spawn(
+            &spawner,
+            move |_| PendingWork(future_drops),
+            |_| panic!("cancelled task must not call back"),
+        )
+        .unwrap();
+    let mut task = futures.lock().unwrap().pop_front().unwrap();
+    let wakes = Arc::new(AtomicUsize::new(0));
+    let waker = Waker::from(Arc::new(CountWake(wakes.clone())));
+    let mut context = Context::from_waker(&waker);
+
+    assert_eq!(task.as_mut().poll(&mut context), Poll::Pending);
+    assert_eq!(drops.load(Ordering::SeqCst), 0);
+    handle.cancel();
+    assert_eq!(wakes.load(Ordering::SeqCst), 1);
+    assert_eq!(task.as_mut().poll(&mut context), Poll::Ready(()));
+    assert_eq!(drops.load(Ordering::SeqCst), 1);
 }
 
 #[test]

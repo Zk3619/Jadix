@@ -6,7 +6,7 @@
 //!
 //! Chrome（勾选字形、拇指位移、token 色）留在 `components/`。本模块禁止写圆角/配色。
 
-use crate::core::reactivity::{use_scoped_signal, use_signal, Signal};
+use crate::core::reactivity::{Signal, use_scoped_signal, use_signal};
 
 /// Toggle 非受控槽（与 Checkbox/Switch 同实例键时互不撞 store）。
 pub const SLOT_TOGGLE: &str = "toggle";
@@ -53,12 +53,26 @@ pub fn bool_on_click(
     disabled: bool,
     focus_id: String,
 ) -> impl FnMut() + 'static {
+    bool_on_click_with_mixed(signal, disabled, focus_id, false)
+}
+
+/// 混合态激活请求选中；其余状态沿用布尔翻转。混合态由调用方重新计算。
+pub fn bool_on_click_with_mixed(
+    signal: Signal<bool>,
+    disabled: bool,
+    focus_id: String,
+    mixed: bool,
+) -> impl FnMut() + 'static {
     move || {
-        if disabled {
+        if disabled || !signal.is_alive() {
             return;
         }
         use_signal("__jadix_button_focus_id", String::new).set(focus_id.clone());
-        write_bool_toggle(signal, false);
+        if mixed {
+            signal.set(true);
+        } else {
+            write_bool_toggle(signal, false);
+        }
     }
 }
 

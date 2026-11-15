@@ -60,11 +60,10 @@ use crate::utils::anchored_overlay::{
 use crate::utils::floating_motion::FloatingMotionKind;
 use crate::utils::hover_intent::{
     bind_hover_intent_effect, chain_region_hover, set_hovered, HoverIntent,
+    DEFAULT_HOVER_OPEN_DELAY_MS,
 };
 use crate::utils::popup::{ATTR_FLOATING_W, FLOATING_TRIGGER_GAP};
 
-/// Default open delay (ms); demos often use `delay={10}` — product default stays snappy.
-const DEFAULT_OPEN_DELAY_MS: u64 = 10;
 /// Default close delay (ms); demos use `closeDelay={100}` so the pointer can cross the sideOffset gap.
 const DEFAULT_CLOSE_DELAY_MS: u64 = 100;
 
@@ -81,8 +80,10 @@ pub struct HoverCardCtx {
     pub trigger_fid: Signal<String>,
     trigger_hovered: Signal<bool>,
     content_hovered: Signal<bool>,
-    open_delay_ms: Signal<u64>,
-    close_delay_ms: Signal<u64>,
+    /// Delay before pointer hover opens the hover card, in milliseconds.
+    pub open_delay_ms: Signal<u64>,
+    /// Delay before pointer leave closes the hover card, in milliseconds.
+    pub close_delay_ms: Signal<u64>,
 }
 
 fn hover_card_context() -> Context<HoverCardCtx> {
@@ -107,6 +108,17 @@ pub fn hover_card_scope(
     open: Option<Signal<bool>>,
     body: impl FnOnce() -> Element,
 ) -> Element {
+    hover_card_scope_with_delays(id, open, None, None, body)
+}
+
+/// Provide HoverCard context with root-level pointer delays before building its children.
+pub fn hover_card_scope_with_delays(
+    id: impl Into<String>,
+    open: Option<Signal<bool>>,
+    open_delay: Option<u64>,
+    close_delay: Option<u64>,
+    body: impl FnOnce() -> Element,
+) -> Element {
     let id = crate::utils::resolve_instance_id(id, "hover_card");
     let open =
         open.unwrap_or_else(|| use_signal(format!("{id}__hover_card_open").as_str(), || false));
@@ -116,11 +128,17 @@ pub fn hover_card_scope(
     let trigger_hovered = use_signal(format!("{id}__hover_card_th").as_str(), || false);
     let content_hovered = use_signal(format!("{id}__hover_card_ch").as_str(), || false);
     let open_delay_ms = use_signal(format!("{id}__hover_card_od").as_str(), || {
-        DEFAULT_OPEN_DELAY_MS
+        DEFAULT_HOVER_OPEN_DELAY_MS
     });
     let close_delay_ms = use_signal(format!("{id}__hover_card_cd").as_str(), || {
         DEFAULT_CLOSE_DELAY_MS
     });
+    if let Some(ms) = open_delay {
+        open_delay_ms.set(ms);
+    }
+    if let Some(ms) = close_delay {
+        close_delay_ms.set(ms);
+    }
 
     let mut root = with_child_owner(|| {
         provide_anchored_overlay_context(open, id.clone(), trigger_fid);
@@ -160,6 +178,8 @@ pub fn hover_card_scope(
 pub struct HoverCardBuilder {
     id: String,
     open: Option<Signal<bool>>,
+    open_delay_ms: Option<u64>,
+    close_delay_ms: Option<u64>,
 }
 
 /// Composite HoverCard entry (parity with `<HoverCard>`).
@@ -167,6 +187,8 @@ pub fn hover_card(id: impl Into<String>) -> HoverCardBuilder {
     HoverCardBuilder {
         id: id.into(),
         open: None,
+        open_delay_ms: None,
+        close_delay_ms: None,
     }
 }
 
@@ -181,9 +203,47 @@ impl HoverCardBuilder {
         self.open(open)
     }
 
+    /// Pointer-hover delay before opening, in milliseconds. Defaults to 300; 0 opens immediately.
+    /// `u64::MAX` disables hover opening; explicit state changes remain available.
+    pub fn open_delay(mut self, delay: u64) -> Self {
+        self.open_delay_ms = Some(delay);
+        self
+    }
+
+    /// Delay after pointer leave, in milliseconds. Defaults to 100.
+    /// `u64::MAX` disables hover closing.
+    pub fn close_delay(mut self, delay: u64) -> Self {
+        self.close_delay_ms = Some(delay);
+        self
+    }
+
+    /// Compatibility alias for [`Self::open_delay`].
+    #[doc(hidden)]
+    pub fn open_delay_ms(self, delay: u64) -> Self {
+        self.open_delay(delay)
+    }
+
+    /// Compatibility alias for [`Self::close_delay`].
+    #[doc(hidden)]
+    pub fn close_delay_ms(self, delay: u64) -> Self {
+        self.close_delay(delay)
+    }
+
     /// Build Trigger / Content subtree inside the context.
     pub fn child(self, body: impl FnOnce() -> Element) -> Element {
-        hover_card_scope(self.id, self.open, body)
+        let open_delay_ms = self.open_delay_ms;
+        let close_delay_ms = self.close_delay_ms;
+        hover_card_scope(self.id, self.open, || {
+            if let Some(ctx) = use_hover_card() {
+                if let Some(ms) = open_delay_ms {
+                    ctx.open_delay_ms.set(ms);
+                }
+                if let Some(ms) = close_delay_ms {
+                    ctx.close_delay_ms.set(ms);
+                }
+            }
+            body()
+        })
     }
 }
 

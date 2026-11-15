@@ -46,6 +46,19 @@ pub enum DocumentMark {
     Math,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DocumentListKind {
+    Bullet,
+    Ordered,
+}
+
+#[derive(Clone, Copy)]
+struct ListPrefixEdit {
+    start: usize,
+    end: usize,
+    replacement_len: usize,
+}
+
 impl DocumentMark {
     fn delimiter(self) -> &'static str {
         match self {
@@ -220,6 +233,59 @@ impl DocumentEditorState {
 
     pub fn replace_selection(&self, insert: &str) -> Result<(), DocumentEditError> {
         self.replace(self.selection().range(), insert)
+    }
+
+    pub fn insert_newline(&self) -> Result<(), DocumentEditError> {
+        self.insert_newline_with_list_continuation(true)
+    }
+
+    pub fn insert_newline_with_list_continuation(
+        &self,
+        continue_markdown_lists: bool,
+    ) -> Result<(), DocumentEditError> {
+        let snapshot = self.snapshot();
+        let newline = if snapshot.document.source().text().contains("\r\n") {
+            "\r\n"
+        } else {
+            "\n"
+        };
+        if !continue_markdown_lists
+            || snapshot.document.format() != DocumentFormat::Markdown
+            || !snapshot.selection.is_empty()
+        {
+            return self.replace_selection(newline);
+        }
+
+        let source = snapshot.document.source();
+        let Some(line) = source.line_at_byte(snapshot.selection.caret) else {
+            return self.replace_selection(newline);
+        };
+        let Some(range) = source.line_range(line) else {
+            return self.replace_selection(newline);
+        };
+        let line_text = &source.text()[range.clone()];
+        let Some(item) = markdown_list_continuation(line_text) else {
+            return self.replace_selection(newline);
+        };
+        if snapshot.selection.caret < range.start + item.content_start {
+            return self.replace_selection(newline);
+        }
+
+        if line_text[item.content_start..].trim().is_empty()
+            && snapshot.selection.caret == range.end
+        {
+            let indent = line_text
+                .as_bytes()
+                .iter()
+                .take_while(|byte| matches!(byte, b' ' | b'\t'))
+                .count();
+            self.replace(range.start + indent..snapshot.selection.caret, newline)
+        } else {
+            self.replace(
+                snapshot.selection.caret..snapshot.selection.caret,
+                &format!("{newline}{}", item.prefix),
+            )
+        }
     }
 
     pub fn replace(&self, range: Range<usize>, insert: &str) -> Result<(), DocumentEditError> {
@@ -500,6 +566,104 @@ impl DocumentEditorState {
         )
     }
 
+    /// Toggle a Markdown list over the selected lines. Non-Markdown documents are unchanged.
+    pub fn toggle_list(&self, kind: DocumentListKind) -> Result<(), DocumentEditError> {
+        let snapshot = self.snapshot();
+        if snapshot.document.format() != DocumentFormat::Markdown {
+            return Ok(());
+        }
+
+        let source = snapshot.document.source();
+        let text = source.text();
+        let selection = snapshot.selection;
+        let selected = selection.range();
+        let first = source
+            .line_at_byte(selected.start)
+            .ok_or(DocumentEditError::InvalidRange)?;
+        let last_byte = if selected.is_empty() {
+            selected.start
+        } else if selected.end > 0 && text.as_bytes()[selected.end - 1] == b'\n' {
+            selected.end - 1
+        } else {
+            selected.end
+        };
+        let last = source
+            .line_at_byte(last_byte)
+            .ok_or(DocumentEditError::InvalidRange)?;
+        let all_target = (first..=last).all(|line| {
+            let content = source.line(line).unwrap_or_default();
+            let indent = content
+                .bytes()
+                .take_while(|byte| matches!(*byte, b' ' | b'\t'))
+                .count();
+            list_marker(&content[indent..]).is_some_and(|(existing, _)| existing == kind)
+        });
+
+        let mut replacement = String::new();
+        let mut prefix_edits = Vec::with_capacity(last - first + 1);
+        let mut ordered_index = 1;
+        for line in first..=last {
+            let full = source.line_full_range(line).unwrap();
+            let content_range = source.line_range(line).unwrap();
+            let content = &text[content_range.clone()];
+            let indent = content
+                .bytes()
+                .take_while(|byte| matches!(*byte, b' ' | b'\t'))
+                .count();
+            let (marker_len, marker) = if all_target {
+                (
+                    list_marker(&content[indent..]).map_or(0, |(_, len)| len),
+                    String::new(),
+                )
+            } else {
+                let marker_len = list_marker(&content[indent..]).map_or(0, |(_, len)| len);
+                let marker = match kind {
+                    DocumentListKind::Bullet => "- ".to_string(),
+                    DocumentListKind::Ordered => {
+                        let marker = format!("{ordered_index}. ");
+                        ordered_index += 1;
+                        marker
+                    }
+                };
+                (marker_len, marker)
+            };
+            let prefix_start = content_range.start + indent;
+            let prefix_end = prefix_start + marker_len;
+            replacement.push_str(&text[full.start..prefix_start]);
+            replacement.push_str(&marker);
+            replacement.push_str(&text[prefix_end..full.end]);
+            prefix_edits.push(ListPrefixEdit {
+                start: prefix_start,
+                end: prefix_end,
+                replacement_len: marker.len(),
+            });
+        }
+
+        let map_offset = |offset: usize| {
+            let mut delta = 0isize;
+            for edit in &prefix_edits {
+                if offset < edit.start {
+                    break;
+                }
+                if offset <= edit.end {
+                    return edit.start.saturating_add_signed(delta) + edit.replacement_len;
+                }
+                delta += edit.replacement_len as isize - (edit.end - edit.start) as isize;
+            }
+            offset.saturating_add_signed(delta)
+        };
+        let after = DocumentSelection {
+            anchor: map_offset(selection.anchor),
+            caret: map_offset(selection.caret),
+        };
+        let range =
+            source.line_full_range(first).unwrap().start..source.line_full_range(last).unwrap().end;
+        if text[range.clone()] == replacement {
+            return Ok(());
+        }
+        self.apply(range, &replacement, after, false)
+    }
+
     pub fn insert_link(&self, destination: &str) -> Result<(), DocumentEditError> {
         let snapshot = self.snapshot();
         if snapshot.document.format() == DocumentFormat::RichText {
@@ -574,6 +738,113 @@ impl DocumentEditorState {
         }
         crate::app::runtime::request_redraw();
     }
+}
+
+struct MarkdownListContinuation {
+    prefix: String,
+    content_start: usize,
+}
+
+fn markdown_list_continuation(line: &str) -> Option<MarkdownListContinuation> {
+    let bytes = line.as_bytes();
+    let indent = bytes
+        .iter()
+        .take_while(|byte| matches!(byte, b' ' | b'\t'))
+        .count();
+    let marker_start = indent;
+    let (marker_end, next_marker) = match bytes.get(marker_start).copied()? {
+        b'-' | b'+' | b'*' => (marker_start + 1, None),
+        first if first.is_ascii_digit() => {
+            let digits_end = bytes[marker_start..]
+                .iter()
+                .position(|byte| !byte.is_ascii_digit())?
+                + marker_start;
+            let delimiter = *bytes.get(digits_end)?;
+            if !matches!(delimiter, b'.' | b')') {
+                return None;
+            }
+            let number = line[marker_start..digits_end].parse::<u64>().ok()?;
+            (
+                digits_end + 1,
+                Some(format!("{}{}", number.saturating_add(1), delimiter as char)),
+            )
+        }
+        _ => return None,
+    };
+    if !bytes
+        .get(marker_end)
+        .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        return None;
+    }
+    let mut content_start = marker_end;
+    while bytes
+        .get(content_start)
+        .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+    {
+        content_start += 1;
+    }
+
+    let mut prefix = String::from(&line[..indent]);
+    if let Some(next_marker) = next_marker {
+        prefix.push_str(&next_marker);
+    } else {
+        prefix.push_str(&line[marker_start..marker_end]);
+    }
+    prefix.push_str(&line[marker_end..content_start]);
+
+    if bytes
+        .get(content_start..content_start + 3)
+        .is_some_and(|task| {
+            task[0] == b'[' && matches!(task[1], b' ' | b'x' | b'X') && task[2] == b']'
+        })
+    {
+        let task_end = content_start + 3;
+        if bytes
+            .get(task_end)
+            .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+        {
+            prefix.push_str("[ ]");
+            content_start = task_end;
+            while bytes
+                .get(content_start)
+                .is_some_and(|byte| matches!(byte, b' ' | b'\t'))
+            {
+                content_start += 1;
+            }
+            prefix.push_str(&line[task_end..content_start]);
+        }
+    }
+
+    Some(MarkdownListContinuation {
+        prefix,
+        content_start,
+    })
+}
+
+fn list_marker(text: &str) -> Option<(DocumentListKind, usize)> {
+    let bytes = text.as_bytes();
+    if bytes.len() >= 2
+        && matches!(bytes[0], b'-' | b'+' | b'*')
+        && matches!(bytes[1], b' ' | b'\t')
+    {
+        return Some((DocumentListKind::Bullet, 2));
+    }
+    let digits = bytes
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if (1..=9).contains(&digits)
+        && bytes
+            .get(digits)
+            .is_some_and(|byte| matches!(*byte, b'.' | b')'))
+        && bytes
+            .get(digits + 1)
+            .is_some_and(|byte| matches!(*byte, b' ' | b'\t'))
+    {
+        return Some((DocumentListKind::Ordered, digits + 2));
+    }
+    None
 }
 
 fn validate(document: &Document, range: Range<usize>) -> Result<(), DocumentEditError> {

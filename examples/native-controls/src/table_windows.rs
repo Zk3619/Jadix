@@ -351,12 +351,12 @@ fn probe_keyboard(
 fn probe_grid(
     table: &jadix_native_controls::table::DataTable<jadix_native::windows::WindowsHost>,
 ) -> Result<(), String> {
+    use windows::core::Interface;
     use windows::Win32::{
         Foundation::HWND,
-        System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance},
+        System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER},
         UI::Accessibility::*,
     };
-    use windows::core::Interface;
 
     let inspect = || -> windows::core::Result<()> {
         let automation: IUIAutomation =
