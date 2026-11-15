@@ -1,0 +1,82 @@
+[package]
+name = "jadix_tui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Ratatui terminal views and Kitty graphics presentation for Jadix"
+
+[dependencies]
+ratatui = { version = "=0.30.2", default-features = false, features = ["crossterm"] }
+ratatui-image = { version = "=11.1.0", default-features = false, features = ["crossterm"] }
+crossterm = "=0.29.0"
+image.workspace = true
+jadix_2d.workspace = true
+jadix = { path = "../jadix", version = "0.1.0", default-features = false, optional = true }
+wgpu = { workspace = true, optional = true }
+jadix_document = { workspace = true, features = ["checkpoint"] }
+serde.workspace = true
+serde_json.workspace = true
+base64 = "=0.22.1"
+base64-simd = "=0.8.0"
+flate2 = "=1.1.9"
+jadix_tasks.workspace = true
+jadix_clipboard = { workspace = true, optional = true }
+jadix_core = { workspace = true, features = ["system-environment"] }
+jadix_layout.workspace = true
+jadix_shell = { workspace = true, optional = true, features = ["native-vm"] }
+unicode-segmentation.workspace = true
+unicode-bidi = "=0.3.18"
+unicode-bidi-mirroring = "=0.4.0"
+
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { workspace = true, features = ["Win32_Foundation", "Win32_System_Pipes", "Win32_System_Console", "Win32_System_Threading", "Win32_System_IO", "Win32_Security", "Win32_UI_WindowsAndMessaging", "Win32_System_LibraryLoader", "Win32_Graphics_Gdi"] }
+
+[features]
+default = []
+native-clipboard = ["dep:jadix_clipboard"]
+shell = ["dep:jadix_shell"]
+portable = ["dep:jadix", "jadix/macros"]
+jadix-gpu = ["dep:jadix", "jadix/gpu", "dep:wgpu"]
+backend-dx12 = ["jadix-gpu", "jadix/backend-dx12"]
+backend-vulkan = ["jadix-gpu", "jadix/backend-vulkan"]
+backend-gles = ["jadix-gpu", "jadix/backend-gles"]
+backend-metal = ["jadix-gpu", "jadix/backend-metal"]
+
+[dev-dependencies]
+jadix_components = { path = "../jadix_components", version = "0.1.0", default-features = false, features = ["macros"] }
+
+[[example]]
+name = "element_workbench"
+required-features = ["jadix-gpu"]
+
+[[example]]
+name = "shell_app"
+required-features = ["shell"]
+
+[[example]]
+name = "terminal_app"
+required-features = ["jadix-gpu"]
+
+[[example]]
+name = "portable_app"
+required-features = ["portable"]
+
+[[example]]
+name = "application_bench"
+required-features = ["portable"]
+
+[[example]]
+name = "business_bench"
+required-features = ["portable"]
+
+[[example]]
+name = "equivalent_app"
+required-features = ["portable"]
+
+[[example]]
+name = "equivalent_sdk"
+required-features = ["shell"]
