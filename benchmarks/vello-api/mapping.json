@@ -1,0 +1,827 @@
+{
+  "AaSupport::all": [
+    "partial",
+    "gpu::AaQuality",
+    "Jadix supports analytic per-primitive Area, Balanced/High/Reference and explicit SampledScene2D 1/2/4/8/16/32/64 whole-scene spatial samples with one final resolve; native MSAA8/16 identities still differ."
+  ],
+  "AaSupport::area_only": [
+    "equivalent",
+    "gpu::AaQuality::Area",
+    "GPU analytic pixel/triangle intersection area; independently clipped CPU f64 reference. Curves are tessellated; raw meshes must be non-overlapping, stencil-only expert fills reject. Different from Vello signed winding integration."
+  ],
+  "DrawGlyphs::new": [
+    "partial",
+    "Font2D::new; GlyphRun::new; PreparedText2D::new",
+    "Jadix uses immutable prepared glyph runs rather than a borrowed scene builder."
+  ],
+  "DrawGlyphs::brush": [
+    "equivalent",
+    "Canvas2D::set_fill_brush",
+    "Inherited fill brushes for monochrome outlines; native color paints retain font colors."
+  ],
+  "DrawGlyphs::brush_alpha": [
+    "equivalent",
+    "Canvas2D::set_global_alpha",
+    "Alpha affects complete draw/glyph according to prepared color semantics."
+  ],
+  "DrawGlyphs::brush_transform": [
+    "equivalent",
+    "Brush2D::with_transform",
+    "Explicit brush-local affine, combined with current transform."
+  ],
+  "DrawGlyphs::draw": [
+    "partial",
+    "Canvas2D::fill_glyph_run; stroke_glyph_run; fill_color_glyph_run",
+    "Prepared hinted/expanded outline drawing and native COLR paths. Native color glyph hint/embolden does not use monochrome options."
+  ],
+  "DrawGlyphs::font_embolden": [
+    "equivalent",
+    "GlyphRun::with_options; FontEmbolden",
+    "Same Kurbo expand_path engine, independent x/y amounts, join/miter/tolerance; explicit finite input limits. Prepared monochrome outlines, not native COLR paints or advance recalculation."
+  ],
+  "DrawGlyphs::font_size": [
+    "equivalent",
+    "GlyphRun::new; TextPrepareOptions",
+    "Font size participates in preparation and cache identity."
+  ],
+  "DrawGlyphs::glyph_transform": [
+    "equivalent",
+    "GlyphRunOptions::glyph_transform; per_glyph_transforms",
+    "Glyph-local affine before baseline translation, plus independent transforms per glyph. Canvas/run global transforms remain separate; public coordinate convention is Y-down."
+  ],
+  "DrawGlyphs::hint": [
+    "partial",
+    "GlyphRunOptions::hint; GlyphRun::with_options",
+    "Skrifa default HintingInstance on scalable outlines at preparation ppem, plus existing Swash text atlas. Canvas transforms do not rehint; native COLR paint graph remains unhinted."
+  ],
+  "DrawGlyphs::normalized_coords": [
+    "equivalent",
+    "Font2D::normalized_coords; GlyphRunOptions::normalized_coords",
+    "Exact post-avar F2Dot14 axis-order coordinates for prepared monochrome outlines. Does not retroactively change external shaping/advances."
+  ],
+  "DrawGlyphs::transform": [
+    "equivalent",
+    "Canvas2D::transform; SceneOptions::transform",
+    "Full affine path transform."
+  ],
+  "Renderer::new": [
+    "partial",
+    "gpu::PathGpu::try_new_with_format",
+    "Different pipeline architecture and configuration; supports RGBA8 sRGB and RGBA16F targets."
+  ],
+  "Renderer::render_to_texture": [
+    "partial",
+    "gpu::PathGpu::render; render_premultiplied",
+    "Jadix caller target is render attachment; Vello uses RGBA8 storage output; alpha/encoding must be normalized before comparisons."
+  ],
+  "Renderer::override_image": [
+    "equivalent",
+    "gpu::PathGpu::override_image",
+    "Per-renderer GPU texture overrides with immutable CPU fallback, shared by nested group renderers. Requires same device and TEXTURE_BINDING or COPY_SRC, explicit color/alpha; converts to cached linear FP16 on GPU."
+  ],
+  "Renderer::mark_override_image_dirty": [
+    "equivalent",
+    "gpu::PathGpu::mark_override_image_dirty",
+    "Explicit revision invalidation; refreshes image/mask/pattern caches on next encode. Current implementation clears image/layer caches and may reallocate on dirty."
+  ],
+  "Renderer::register_texture": [
+    "equivalent",
+    "gpu::PathGpu::register_texture; render_to_image",
+    "GPU-only image handles with transparent CPU fallback. RGBA/BGRA8 or RGBA16F, single-sample D2; <=16M pixels and <=4096 registrations and <=64M total pixels. Optional GPU-only FP16 mip generation, independent cropped domains and sampled-scene registry snapshots. Different resource preconditions from Vello COPY_SRC."
+  ],
+  "Renderer::unregister_texture": [
+    "equivalent",
+    "gpu::PathGpu::unregister_texture; prune_registered_textures",
+    "Restores original CPU fallback for subsequent GPU frames, invalidates nested caches, drops registration references. Submitted work keeps owned resources; submit pending encoders before registry mutations."
+  ],
+  "Scene::new": [
+    "equivalent",
+    "Scene2D::record; GpuCanvas::new_linear",
+    "Recorded callback or direct Canvas recording."
+  ],
+  "Scene::reset": [
+    "equivalent",
+    "Scene2D::reset; reset_and_resize; rerecord",
+    "Clear/reset a handle with copy-on-write snapshot isolation. Unique command storage retains capacity, clones/subscenes remain unchanged. Rerecord validates atomically in a fresh command vector; not Vello mutable Encoding storage."
+  ],
+  "Scene::append": [
+    "equivalent",
+    "Canvas2D::draw_scene; Scene2D::draw",
+    "Nested reusable shared scenes with appended transform and optional isolation."
+  ],
+  "Scene::fill": [
+    "equivalent",
+    "Canvas2D::set_fill_brush; set_fill_rule; fill_path",
+    "Solid/gradient/image brushes, explicit affine and fill rule."
+  ],
+  "Scene::stroke": [
+    "equivalent",
+    "Canvas2D::stroke_path; PathStyle; StrokeOptions",
+    "User-space stroke geometry, caps/joins/miter/dashes and arbitrary brushes."
+  ],
+  "Scene::draw_image": [
+    "equivalent",
+    "Canvas2D::draw_image; Image2D; PathGpu::register_texture",
+    "Nearest/Bilinear plus explicit 4x4 Mitchell Bicubic and 6x6 Lanczos3 on CPU/GPU; source crops clamp every tap, float/predefined-space and caller GPU textures. Explicit NPOT linear-premultiplied mip chains with Trilinear / bounded 16-tap Anisotropic / Gaussian elliptical Ewa sampling; GPU-only region imports can generate NPOT mip chains lazily without source readback; independently prefilter atlas crops with mipmapped_region; negative-lobe ringing clamp differs by source-domain contract."
+  ],
+  "Scene::draw_glyphs": [
+    "partial",
+    "GlyphRun::with_options; ColorGlyphRun; PreparedText2D",
+    "Low-level scalable hint/embolden/normalized/local transforms now available; color glyph graph remains a distinct preparation path."
+  ],
+  "Scene::push_layer": [
+    "equivalent",
+    "Canvas2D::push_layer_with_options",
+    "Blend/composition/opacity plus arbitrary filters and final clip/mask. Rasterization/region semantics differ."
+  ],
+  "Scene::push_clip_layer": [
+    "equivalent",
+    "Canvas2D::save; clip_path; restore",
+    "Save/restore path mask clips, or final layer clips. Explicit PathGeometry2D Intersection resolves clip/subject geometry before AA and avoids correlated identical-edge coverage multiplication; existing mask clip semantics are unchanged. SampledScene2D additionally retains per-sample clips, painter order and group composition until one final resolve; finite ordered grid, not analytic exact scene integration."
+  ],
+  "Scene::push_luminance_mask_layer": [
+    "equivalent",
+    "Canvas2D::push_luminance_layer",
+    "Premultiplied luminance mask; invert extension available."
+  ],
+  "Scene::pop_layer": [
+    "equivalent",
+    "Canvas2D::pop_layer",
+    "Closes an isolated group, applies ordered filters, then composition."
+  ],
+  "Scene::draw_blurred_rounded_rect": [
+    "partial",
+    "Canvas2D::draw_blurred_rounded_rect; draw_rounded_rect_shadow",
+    "Gaussian support differs: Jadix 4 sigma cutoff, independent corners/inset extension, not identical Vello 2.5 sigma clipping."
+  ],
+  "Scene::draw_blurred_rounded_rect_in": [
+    "equivalent",
+    "Canvas2D::save; clip_path; draw_blurred_rounded_rect; restore",
+    "Arbitrary shape clip composition through existing Canvas state."
+  ],
+  "Scene::encoding": [
+    "different",
+    "PreparedSceneGpu::ops; GpuCanvas::into_ops",
+    "Jadix triangle/brush/group ops are not Vello compute encoding."
+  ],
+  "Scene::encoding_mut": [
+    "different",
+    "GpuCanvas::into_ops; PathGpuOp",
+    "Editable owned prepared ops, not the same binary encoding."
+  ],
+  "Scene::bump_estimate": [
+    "partial",
+    "Scene2D::bump_estimate; PreparedSceneGpu::bump_estimate; gpu::SceneMemoryEstimate",
+    "Checked CPU replay/tessellation with explicit target and transform estimates geometry, vertex/Area payloads, unique images and conservative layer/target surfaces. Not Vello compute bump-buffer ABI or process/driver allocation guarantee."
+  ],
+  "RendererOptions::use_cpu": [
+    "partial",
+    "gpu::RendererOptions::use_cpu; SceneRenderer2D",
+    "Actual complete CPU drawing/clip/filter/composition followed by an FP16 upload/export pass; unlike Vello CPU coarse stages plus GPU fine rasterization. GPU-only source registrations require CPU fallback pixels."
+  ],
+  "RendererOptions::num_init_threads": [
+    "equivalent",
+    "gpu::RendererOptions::num_init_threads; PathGpu::warm_up",
+    "Explicit bounded native pipeline initialization workers over currently needed material jobs. macOS defaults to one, WebAssembly always serial. Not identical Vello stage scheduling."
+  ],
+  "RendererOptions::pipeline_cache": [
+    "equivalent",
+    "gpu::RendererOptions::pipeline_cache; PathGpu::try_new_with_options",
+    "Caller-owned same-device wgpu PipelineCache propagated to owned leaf/layer/filter/import/mip/sample-resolve pipelines. Persistent cache data tested on Vulkan; wgpu does not supply the same persistence on DX12. Independent GpuMesh pipelines remain separate."
+  ],
+  "RendererOptions": [
+    "partial",
+    "gpu::RendererOptions; gpu::SceneRenderer2D; gpu::PathGpu::try_new_with_options",
+    "Explicit CPU execution, initialization threads, same-device wgpu cache and quality options. CPU algorithm and AA behavior differ; see individual field rows."
+  ],
+  "low_level": [
+    "partial",
+    "gpu::low_level",
+    "Typed compute/render recording executor and staged Jadix scenes, enabled by compute. Native schema; no Vello shader-buffer encoding compatibility."
+  ],
+  "low_level::BindType": [
+    "equivalent",
+    "gpu::low_level::BindType",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::BindType::BufReadOnly": [
+    "equivalent",
+    "gpu::low_level::BindType::BufReadOnly",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::BindType::Buffer": [
+    "equivalent",
+    "gpu::low_level::BindType::Buffer",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::BindType::Image": [
+    "equivalent",
+    "gpu::low_level::BindType::Image",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::BindType::Image::0": [
+    "equivalent",
+    "gpu::low_level::BindType::Image::0",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::BindType::ImageRead": [
+    "equivalent",
+    "gpu::low_level::BindType::ImageRead",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::BindType::ImageRead::0": [
+    "equivalent",
+    "gpu::low_level::BindType::ImageRead::0",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::BindType::Uniform": [
+    "equivalent",
+    "gpu::low_level::BindType::Uniform",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::BufferProxy": [
+    "equivalent",
+    "gpu::low_level::BufferProxy",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::BufferProxy::id": [
+    "equivalent",
+    "gpu::low_level::BufferProxy::id",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::BufferProxy::name": [
+    "equivalent",
+    "gpu::low_level::BufferProxy::name",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::BufferProxy::new": [
+    "equivalent",
+    "gpu::low_level::BufferProxy::new",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::BufferProxy::size": [
+    "equivalent",
+    "gpu::low_level::BufferProxy::size",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::Command": [
+    "equivalent",
+    "gpu::low_level::Command",
+    "Actual ordered  command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Clear": [
+    "equivalent",
+    "gpu::low_level::Command::Clear",
+    "Actual ordered Clear command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Clear::0": [
+    "equivalent",
+    "gpu::low_level::Command::Clear::0",
+    "Actual ordered Clear command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Clear::1": [
+    "equivalent",
+    "gpu::low_level::Command::Clear::1",
+    "Actual ordered Clear command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Clear::2": [
+    "equivalent",
+    "gpu::low_level::Command::Clear::2",
+    "Actual ordered Clear command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Dispatch": [
+    "equivalent",
+    "gpu::low_level::Command::Dispatch",
+    "Actual ordered Dispatch command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Dispatch::0": [
+    "equivalent",
+    "gpu::low_level::Command::Dispatch::0",
+    "Actual ordered Dispatch command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Dispatch::1": [
+    "equivalent",
+    "gpu::low_level::Command::Dispatch::1",
+    "Actual ordered Dispatch command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Dispatch::2": [
+    "equivalent",
+    "gpu::low_level::Command::Dispatch::2",
+    "Actual ordered Dispatch command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::DispatchIndirect": [
+    "equivalent",
+    "gpu::low_level::Command::DispatchIndirect",
+    "Actual ordered DispatchIndirect command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::DispatchIndirect::0": [
+    "equivalent",
+    "gpu::low_level::Command::DispatchIndirect::0",
+    "Actual ordered DispatchIndirect command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::DispatchIndirect::1": [
+    "equivalent",
+    "gpu::low_level::Command::DispatchIndirect::1",
+    "Actual ordered DispatchIndirect command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::DispatchIndirect::2": [
+    "equivalent",
+    "gpu::low_level::Command::DispatchIndirect::2",
+    "Actual ordered DispatchIndirect command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::DispatchIndirect::3": [
+    "equivalent",
+    "gpu::low_level::Command::DispatchIndirect::3",
+    "Actual ordered DispatchIndirect command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Download": [
+    "equivalent",
+    "gpu::low_level::Command::Download",
+    "Actual ordered Download command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Download::0": [
+    "equivalent",
+    "gpu::low_level::Command::Download::0",
+    "Actual ordered Download command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Draw": [
+    "equivalent",
+    "gpu::low_level::Command::Draw",
+    "Actual ordered Draw command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Draw::0": [
+    "equivalent",
+    "gpu::low_level::Command::Draw::0",
+    "Actual ordered Draw command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::FreeBuffer": [
+    "equivalent",
+    "gpu::low_level::Command::FreeBuffer",
+    "Actual ordered FreeBuffer command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::FreeBuffer::0": [
+    "equivalent",
+    "gpu::low_level::Command::FreeBuffer::0",
+    "Actual ordered FreeBuffer command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::FreeImage": [
+    "equivalent",
+    "gpu::low_level::Command::FreeImage",
+    "Actual ordered FreeImage command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::FreeImage::0": [
+    "equivalent",
+    "gpu::low_level::Command::FreeImage::0",
+    "Actual ordered FreeImage command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Upload": [
+    "equivalent",
+    "gpu::low_level::Command::Upload",
+    "Actual ordered Upload command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Upload::0": [
+    "equivalent",
+    "gpu::low_level::Command::Upload::0",
+    "Actual ordered Upload command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::Upload::1": [
+    "equivalent",
+    "gpu::low_level::Command::Upload::1",
+    "Actual ordered Upload command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::UploadImage": [
+    "equivalent",
+    "gpu::low_level::Command::UploadImage",
+    "Actual ordered UploadImage command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::UploadImage::0": [
+    "equivalent",
+    "gpu::low_level::Command::UploadImage::0",
+    "Actual ordered UploadImage command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::UploadImage::1": [
+    "equivalent",
+    "gpu::low_level::Command::UploadImage::1",
+    "Actual ordered UploadImage command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::UploadUniform": [
+    "equivalent",
+    "gpu::low_level::Command::UploadUniform",
+    "Actual ordered UploadUniform command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::UploadUniform::0": [
+    "equivalent",
+    "gpu::low_level::Command::UploadUniform::0",
+    "Actual ordered UploadUniform command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::UploadUniform::1": [
+    "equivalent",
+    "gpu::low_level::Command::UploadUniform::1",
+    "Actual ordered UploadUniform command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::WriteImage": [
+    "equivalent",
+    "gpu::low_level::Command::WriteImage",
+    "Actual ordered WriteImage command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::WriteImage::0": [
+    "equivalent",
+    "gpu::low_level::Command::WriteImage::0",
+    "Actual ordered WriteImage command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::WriteImage::1": [
+    "equivalent",
+    "gpu::low_level::Command::WriteImage::1",
+    "Actual ordered WriteImage command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::Command::WriteImage::2": [
+    "equivalent",
+    "gpu::low_level::Command::WriteImage::2",
+    "Actual ordered WriteImage command in Engine::execute; preflight/budgets, retained resources and per-position download snapshots. Command schema differs; GPU validation is synchronous on native and asynchronous on browser."
+  ],
+  "low_level::FullShaders": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific FullShaders stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::backdrop": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific backdrop stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::bbox_clear": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific bbox_clear stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::binning": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific binning stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::clip_leaf": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific clip_leaf stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::clip_reduce": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific clip_reduce stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::coarse": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific coarse stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::draw_leaf": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific draw_leaf stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::draw_reduce": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific draw_reduce stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::fine_area": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Jadix Area integrates triangle coverage in a render pipeline, not the Vello fine compute stream."
+  ],
+  "low_level::FullShaders::fine_msaa16": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Jadix sampled scenes include16 ordered samples with different sample positions/whole-scene composition; no Vello fine shader ABI."
+  ],
+  "low_level::FullShaders::fine_msaa8": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Jadix sampled_grid supports2x4 and4x2 ordered8 samples including clip/layers/HDR/filter resolve; sample positions and render pipeline differ from native Vello fine_msaa8 compute kernel and ABI."
+  ],
+  "low_level::FullShaders::flatten": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Jadix PreparedSceneGpu replays and tessellates curves on CPU; no encoded Vello flatten kernel."
+  ],
+  "low_level::FullShaders::path_count": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific path_count stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::path_count_setup": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific path_count_setup stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::path_tiling": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific path_tiling stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::path_tiling_setup": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific path_tiling_setup stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::pathtag_is_cpu": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Jadix CPU preparation is explicit; no Vello pathtag stage toggle."
+  ],
+  "low_level::FullShaders::pathtag_reduce": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific pathtag_reduce stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::pathtag_reduce2": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific pathtag_reduce2 stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::pathtag_scan": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific pathtag_scan stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::pathtag_scan1": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific pathtag_scan1 stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::pathtag_scan_large": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific pathtag_scan_large stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::FullShaders::tile_alloc": [
+    "different",
+    "gpu::low_level::Engine::add_compute_shader; gpu::low_level::Render; gpu::AaQuality",
+    "Vello-specific tile_alloc stage indexes its encoded scene/intermediate buffers. Jadix retains native CPU preparation, Area/render paths and user WGSL dispatch; this algorithm-specific stage is not implemented as a compatible built-in kernel."
+  ],
+  "low_level::ImageFormat": [
+    "equivalent",
+    "gpu::low_level::ImageFormat",
+    "RGBA8/BGRA8 conversions have direct counterparts; Jadix additionally admits linear signed/HDR Rgba16Float. Format support still follows device features."
+  ],
+  "low_level::ImageFormat::Bgra8": [
+    "equivalent",
+    "gpu::low_level::ImageFormat::Bgra8",
+    "RGBA8/BGRA8 conversions have direct counterparts; Jadix additionally admits linear signed/HDR Rgba16Float. Format support still follows device features."
+  ],
+  "low_level::ImageFormat::Rgba8": [
+    "equivalent",
+    "gpu::low_level::ImageFormat::Rgba8",
+    "RGBA8/BGRA8 conversions have direct counterparts; Jadix additionally admits linear signed/HDR Rgba16Float. Format support still follows device features."
+  ],
+  "low_level::ImageFormat::from_wgpu": [
+    "equivalent",
+    "gpu::low_level::ImageFormat::from_wgpu",
+    "RGBA8/BGRA8 conversions have direct counterparts; Jadix additionally admits linear signed/HDR Rgba16Float. Format support still follows device features."
+  ],
+  "low_level::ImageFormat::to_wgpu": [
+    "equivalent",
+    "gpu::low_level::ImageFormat::to_wgpu",
+    "RGBA8/BGRA8 conversions have direct counterparts; Jadix additionally admits linear signed/HDR Rgba16Float. Format support still follows device features."
+  ],
+  "low_level::ImageProxy": [
+    "equivalent",
+    "gpu::low_level::ImageProxy",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::ImageProxy::format": [
+    "equivalent",
+    "gpu::low_level::ImageProxy::format",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::ImageProxy::height": [
+    "equivalent",
+    "gpu::low_level::ImageProxy::height",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::ImageProxy::id": [
+    "equivalent",
+    "gpu::low_level::ImageProxy::id",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::ImageProxy::new": [
+    "equivalent",
+    "gpu::low_level::ImageProxy::new",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::ImageProxy::width": [
+    "equivalent",
+    "gpu::low_level::ImageProxy::width",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::Recording": [
+    "equivalent",
+    "gpu::low_level::Recording",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::Recording::clear_all": [
+    "equivalent",
+    "gpu::low_level::Recording::clear_all",
+    "Whole aligned logical buffer clear at its recorded command position."
+  ],
+  "low_level::Recording::commands": [
+    "equivalent",
+    "gpu::low_level::Recording::commands",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::Recording::dispatch": [
+    "equivalent",
+    "gpu::low_level::Recording::dispatch",
+    "Consecutive group-0 bindings and explicit direct workgroup counts, cached lazy pipeline."
+  ],
+  "low_level::Recording::dispatch_indirect": [
+    "equivalent",
+    "gpu::low_level::Recording::dispatch_indirect",
+    "Checked 4-byte aligned 12-byte indirect range with actual GPU indirect execution."
+  ],
+  "low_level::Recording::download": [
+    "equivalent",
+    "gpu::low_level::Recording::download",
+    "Ordered COPY_SRC snapshot to returned MAP_READ staging buffer, preserving multiple snapshots of one resource."
+  ],
+  "low_level::Recording::draw": [
+    "equivalent",
+    "gpu::low_level::Recording::draw",
+    "Actual vertex-index render pipeline dispatch mixed with compute; explicit DrawParams and output format, no Vello DrawParams binary identity."
+  ],
+  "low_level::Recording::free_buffer": [
+    "equivalent",
+    "gpu::low_level::Recording::free_buffer",
+    "Retained buffer release after earlier encoded commands; old submitted work keeps handles alive."
+  ],
+  "low_level::Recording::free_image": [
+    "equivalent",
+    "gpu::low_level::Recording::free_image",
+    "Retained image release after earlier encoded commands; exported texture clones remain independently alive."
+  ],
+  "low_level::Recording::free_resource": [
+    "equivalent",
+    "gpu::low_level::Recording::free_resource",
+    "Explicit typed release; range release frees the underlying allocation; tombstones reject stale proxies until reset."
+  ],
+  "low_level::Recording::into_commands": [
+    "equivalent",
+    "gpu::low_level::Recording::into_commands",
+    "Consumes recorder into ordered commands."
+  ],
+  "low_level::Recording::push": [
+    "equivalent",
+    "gpu::low_level::Recording::push",
+    "Public owned typed Command recording."
+  ],
+  "low_level::Recording::upload": [
+    "equivalent",
+    "gpu::low_level::Recording::upload",
+    "Ordered staging COPY_SRC uploads into retained buffers; encoder copies preserve writes separated by dispatches."
+  ],
+  "low_level::Recording::upload_image": [
+    "equivalent",
+    "gpu::low_level::Recording::upload_image",
+    "Explicit ImageProxy with exact tightly packed input, padded encoder copies; supports RGBA8/BGRA8/FP16."
+  ],
+  "low_level::Recording::upload_uniform": [
+    "equivalent",
+    "gpu::low_level::Recording::upload_uniform",
+    "Uniform buffer creation/upload with device binding size and alignment validation."
+  ],
+  "low_level::Recording::write_image": [
+    "equivalent",
+    "gpu::low_level::Recording::write_image",
+    "Checked origin/size subregion copy; exact data length and no row overflow."
+  ],
+  "low_level::Render": [
+    "partial",
+    "gpu::low_level::Render",
+    "Staged Jadix CPU scene preparation plus caller-encoded GPU fine drawing with retained FP16 output. No Vello Encoding/Resolver or compute stage graph."
+  ],
+  "low_level::Render::bump_buf": [
+    "different",
+    "gpu::low_level::Render::bump_estimate",
+    "Checked CPU payload planning only; no GPU bump allocator buffer is exposed. Different allocation model, not a simulated Vello bump buffer."
+  ],
+  "low_level::Render::new": [
+    "partial",
+    "gpu::low_level::Render",
+    "Staged Jadix CPU scene preparation plus caller-encoded GPU fine drawing with retained FP16 output. No Vello Encoding/Resolver or compute stage graph."
+  ],
+  "low_level::Render::out_image": [
+    "partial",
+    "gpu::low_level::Render::out_image",
+    "Retained FP16 wgpu texture usable by Canvas imports or following GPU operations, rather than a Vello image proxy."
+  ],
+  "low_level::Render::record_fine": [
+    "partial",
+    "gpu::low_level::Render::record_fine",
+    "Actual drawing encoded into caller-owned wgpu encoder. Submit before encoding another frame on this retained Render. Geometry/AA algorithms differ from Vello fine compute."
+  ],
+  "low_level::Render::render_encoding_coarse": [
+    "partial",
+    "gpu::low_level::Render::new; PreparedSceneGpu::new",
+    "CPU replay/flatten/tessellation of Scene2D with explicit target/transform, retained for later record_fine. Does not accept Vello Encoding/Resolver."
+  ],
+  "low_level::Render::take_captured_buffers": [
+    "partial",
+    "gpu::low_level::Render::take_captured_scene",
+    "One-time owned prepared-geometry snapshot and checked resource estimates. GPU buffer downloads are separately available through Recording/Execution; no Vello intermediate-stage dump layout."
+  ],
+  "low_level::ResourceId": [
+    "equivalent",
+    "gpu::low_level::ResourceId",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::ResourceId::0": [
+    "equivalent",
+    "gpu::low_level::ResourceId::0",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::ResourceId::next": [
+    "equivalent",
+    "gpu::low_level::ResourceId::next",
+    "Native Jadix typed resource/recording interface; purpose correspondence, not a stable binary layout or Vello buffer encoding."
+  ],
+  "low_level::ResourceProxy": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ResourceProxy::Buffer": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy::Buffer",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ResourceProxy::Buffer::0": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy::Buffer::0",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ResourceProxy::BufferRange": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy::BufferRange",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ResourceProxy::BufferRange::offset": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy::BufferRange::offset",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ResourceProxy::BufferRange::proxy": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy::BufferRange::proxy",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ResourceProxy::BufferRange::size": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy::BufferRange::size",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ResourceProxy::Image": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy::Image",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ResourceProxy::Image::0": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy::Image::0",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ResourceProxy::as_buf": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy::as_buf",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ResourceProxy::as_image": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy::as_image",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ResourceProxy::new_buf": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy::new_buf",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ResourceProxy::new_image": [
+    "equivalent",
+    "gpu::low_level::ResourceProxy::new_image",
+    "Buffer/image/ranged bindings with checked offset, nonzero size, device limits and descriptor identity. Native Rust schema, explicit errors instead of unchecked getters."
+  ],
+  "low_level::ShaderId": [
+    "equivalent",
+    "gpu::low_level::ShaderId",
+    "Engine-owned registered WGSL pipeline identifier with globally unique values; cannot use Vello FullShaders IDs."
+  ],
+  "low_level::ShaderId::0": [
+    "equivalent",
+    "gpu::low_level::ShaderId::0",
+    "Engine-owned registered WGSL pipeline identifier with globally unique values; cannot use Vello FullShaders IDs."
+  ],
+  "low_level::vello_encoding": [
+    "different",
+    "Scene2D; PreparedSceneGpu; gpu::low_level::Recording",
+    "Jadix native scene and command schemas. Vello encoding dependency is not reexported or decoded."
+  ]
+}

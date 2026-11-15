@@ -1,0 +1,19 @@
+[package]
+name = "jadix-vello-reference"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+# Keep reference-only dependencies out of the framework workspace and lockfile.
+[workspace]
+
+[dependencies]
+vello_gpu = { version = "=0.3.0", default-features = false, features = ["wgpu"] }
+wgpu = { version = "=30.0.0", default-features = false, features = ["std", "wgsl", "dx12", "vulkan", "gles"] }
+pollster = "=0.4.0"
+serde_json = "1"
+image = { version = "=0.25.10", default-features = false, features = ["png"] }
+
+[profile.dev]
+opt-level = 1
+

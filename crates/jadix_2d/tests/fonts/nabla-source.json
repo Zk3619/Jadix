@@ -1,0 +1,18 @@
+{
+  "repository": "https://github.com/google/fonts",
+  "revision": "34a2c3daeeb2715576af0786ae4e9dc6c7d8ca2a",
+  "license": "SIL Open Font License 1.1",
+  "modified": false,
+  "files": {
+    "Nabla.ttf": {
+      "url": "https://raw.githubusercontent.com/google/fonts/34a2c3daeeb2715576af0786ae4e9dc6c7d8ca2a/ofl/nabla/Nabla%5BEDPT%2CEHLT%5D.ttf",
+      "bytes": 1643616,
+      "sha256": "e45cec60eb2099b4b4ffee8ebe005d1d3060771071ede1caeeeb12e37a2c00ae"
+    },
+    "Nabla-OFL.txt": {
+      "url": "https://raw.githubusercontent.com/google/fonts/34a2c3daeeb2715576af0786ae4e9dc6c7d8ca2a/ofl/nabla/OFL.txt",
+      "bytes": 4385,
+      "sha256": "999d3ace5ea7f04761689794a9c877b0a5fc8b22a469518ffad78b4facb2e61b"
+    }
+  }
+}

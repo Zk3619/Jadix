@@ -45,6 +45,7 @@ crates/**/target/
 
 !examples/
 !examples/**
+examples/miniprogram/node_modules/
 
 # Published docs placeholder (content lives in development-docs/, ignored).
 !docs/
@@ -57,6 +58,13 @@ development-docs/
 
 !scripts/
 !scripts/**
+
+# Reproducible renderer reference; keep its isolated build output local.
+!benchmarks/
+!benchmarks/vello-reference/
+!benchmarks/vello-reference/**
+benchmarks/vello-reference/target/
+benchmarks/vello-reference/__pycache__/
 
 !deny.toml
 
@@ -93,3 +101,19 @@ assets/*
 !assets/icons/
 !assets/icons/**
 !docs/css-properties-checklist.md
+
+# Round 15 reference/API audit and owned browser acceptance sources.
+!benchmarks/vello-compute/
+!benchmarks/vello-compute/**
+benchmarks/vello-compute/target/
+!benchmarks/vello-api/
+!benchmarks/vello-api/**
+benchmarks/vello-api/__pycache__/
+!benchmarks/browser-runtime/
+!benchmarks/browser-runtime/**
+benchmarks/browser-runtime/target/
+benchmarks/browser-runtime/pkg-*/
+benchmarks/browser-runtime/tools/
+benchmarks/browser-runtime/__pycache__/
+crates/jadix_2d/evidence/
+crates/jadix_shell/evidence/

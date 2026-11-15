@@ -1,0 +1,56 @@
+[package]
+name = "jadix_2d"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Independent 2D path geometry, gradients, rasterization and GPU meshes"
+
+[dependencies]
+jadix_core.workspace = true
+jadix_theme.workspace = true
+kurbo = "=0.13.1"
+lyon_tessellation = "=1.0.23"
+color = "=0.3.3"
+moxcms = { version = "=0.8.1", optional = true, features = ["extended_range"] }
+half = { version = "=2.7.1", features = ["bytemuck"] }
+ttf-parser.workspace = true
+skrifa = { version = "=0.44.0", default-features = false, features = ["std"] }
+resvg = { version = "=0.48.1", optional = true, default-features = false, features = ["raster-images"] }
+flate2 = { version = "=1.1.9", optional = true }
+image = { workspace = true, optional = true }
+cosmic-text = { package = "jadix_cosmic_text", version = "=0.1.0", path = "../jadix_cosmic_text", optional = true, default-features = false, features = ["std", "swash", "wasm-web"] }
+swash = { workspace = true, optional = true }
+foldhash = { version = "=0.2.0", optional = true }
+wgpu = { workspace = true, optional = true }
+bytemuck = { workspace = true, optional = true }
+jadix_renderer = { workspace = true, optional = true }
+
+[features]
+default = []
+icc = ["dep:moxcms"]
+text-layout = ["dep:cosmic-text", "dep:swash"]
+svg-fonts = ["dep:resvg", "dep:flate2", "dep:image"]
+test-hooks = []
+compute = ["gpu", "wgpu/compute", "jadix_renderer/compute"]
+gpu = ["dep:wgpu", "dep:bytemuck", "dep:jadix_renderer", "dep:foldhash"]
+backend-dx12 = ["gpu", "wgpu/dx12", "jadix_renderer/backend-dx12"]
+backend-vulkan = ["gpu", "wgpu/vulkan"]
+backend-gles = ["gpu", "wgpu/gles"]
+backend-metal = ["gpu", "wgpu/metal"]
+webgpu = ["gpu", "wgpu/webgpu"]
+webgl = ["gpu", "wgpu/webgl"]
+
+[dev-dependencies]
+pollster = "0.4"
+serde_json.workspace = true
+image.workspace = true
+
+[[example]]
+name = "gpu_acceptance"
+required-features = ["gpu"]
+
+
+[[example]]
+name = "imaging_capabilities"
+required-features = ["text-layout"]

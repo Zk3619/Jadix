@@ -1,0 +1,25 @@
+[package]
+name = "jadix-browser-acceptance"
+version = "0.1.0"
+edition = "2024"
+publish = false
+[workspace]
+[lib]
+crate-type = ["cdylib"]
+[features]
+default = ["jadix"]
+jadix = ["dep:jadix_2d"]
+compute = ["jadix", "jadix_2d/compute"]
+vello-reference = ["dep:vello", "dep:wgpu-upstream"]
+[dependencies]
+jadix_2d = { path = "../../crates/jadix_2d", features = ["webgpu", "webgl"], optional = true }
+wasm-bindgen = "=0.2.114"
+wasm-bindgen-futures = "=0.4.64"
+js-sys = "=0.3.91"
+web-sys = {version="=0.3.91",features=["OffscreenCanvas"]}
+serde_json = "1"
+vello = { version = "=0.11.0", default-features = false, features = ["wgpu"], optional = true }
+wgpu-upstream = { package = "wgpu", version = "=30.0.0", default-features = false, features = ["webgpu", "std", "wgsl"], optional = true }
+[profile.dev]
+opt-level = 1
+debug = 1

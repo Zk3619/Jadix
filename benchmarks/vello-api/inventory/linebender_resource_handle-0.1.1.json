@@ -1,0 +1,1952 @@
+{
+  "crate_version": "0.1.1",
+  "format_version": 56,
+  "target": {
+    "triple": "x86_64-unknown-linux-gnu",
+    "target_features": [
+      {
+        "name": "adx",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "aes",
+        "implies_features": [
+          "sse2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "amx-avx512",
+        "implies_features": [
+          "amx-tile"
+        ],
+        "unstable_feature_gate": "x86_amx_intrinsics",
+        "globally_enabled": false
+      },
+      {
+        "name": "amx-bf16",
+        "implies_features": [
+          "amx-tile"
+        ],
+        "unstable_feature_gate": "x86_amx_intrinsics",
+        "globally_enabled": false
+      },
+      {
+        "name": "amx-complex",
+        "implies_features": [
+          "amx-tile"
+        ],
+        "unstable_feature_gate": "x86_amx_intrinsics",
+        "globally_enabled": false
+      },
+      {
+        "name": "amx-fp8",
+        "implies_features": [
+          "amx-tile"
+        ],
+        "unstable_feature_gate": "x86_amx_intrinsics",
+        "globally_enabled": false
+      },
+      {
+        "name": "amx-fp16",
+        "implies_features": [
+          "amx-tile"
+        ],
+        "unstable_feature_gate": "x86_amx_intrinsics",
+        "globally_enabled": false
+      },
+      {
+        "name": "amx-int8",
+        "implies_features": [
+          "amx-tile"
+        ],
+        "unstable_feature_gate": "x86_amx_intrinsics",
+        "globally_enabled": false
+      },
+      {
+        "name": "amx-movrs",
+        "implies_features": [
+          "amx-tile"
+        ],
+        "unstable_feature_gate": "x86_amx_intrinsics",
+        "globally_enabled": false
+      },
+      {
+        "name": "amx-tf32",
+        "implies_features": [
+          "amx-tile"
+        ],
+        "unstable_feature_gate": "x86_amx_intrinsics",
+        "globally_enabled": false
+      },
+      {
+        "name": "amx-tile",
+        "implies_features": [],
+        "unstable_feature_gate": "x86_amx_intrinsics",
+        "globally_enabled": false
+      },
+      {
+        "name": "amx-transpose",
+        "implies_features": [
+          "amx-tile"
+        ],
+        "unstable_feature_gate": "x86_amx_intrinsics",
+        "globally_enabled": false
+      },
+      {
+        "name": "apxf",
+        "implies_features": [],
+        "unstable_feature_gate": "apx_target_feature",
+        "globally_enabled": false
+      },
+      {
+        "name": "avx",
+        "implies_features": [
+          "sse4.2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx2",
+        "implies_features": [
+          "avx"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx10.1",
+        "implies_features": [
+          "avx512bf16",
+          "avx512bitalg",
+          "avx512bw",
+          "avx512cd",
+          "avx512dq",
+          "avx512f",
+          "avx512fp16",
+          "avx512ifma",
+          "avx512vbmi",
+          "avx512vbmi2",
+          "avx512vl",
+          "avx512vnni",
+          "avx512vpopcntdq"
+        ],
+        "unstable_feature_gate": "avx10_target_feature",
+        "globally_enabled": false
+      },
+      {
+        "name": "avx10.2",
+        "implies_features": [
+          "avx10.1"
+        ],
+        "unstable_feature_gate": "avx10_target_feature",
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512bf16",
+        "implies_features": [
+          "avx512bw"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512bitalg",
+        "implies_features": [
+          "avx512bw"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512bw",
+        "implies_features": [
+          "avx512f"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512cd",
+        "implies_features": [
+          "avx512f"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512dq",
+        "implies_features": [
+          "avx512f"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512f",
+        "implies_features": [
+          "avx2",
+          "fma",
+          "f16c"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512fp16",
+        "implies_features": [
+          "avx512bw"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512ifma",
+        "implies_features": [
+          "avx512f"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512vbmi",
+        "implies_features": [
+          "avx512bw"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512vbmi2",
+        "implies_features": [
+          "avx512bw"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512vl",
+        "implies_features": [
+          "avx512f"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512vnni",
+        "implies_features": [
+          "avx512f"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512vp2intersect",
+        "implies_features": [
+          "avx512f"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avx512vpopcntdq",
+        "implies_features": [
+          "avx512f"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avxifma",
+        "implies_features": [
+          "avx2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avxneconvert",
+        "implies_features": [
+          "avx2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avxvnni",
+        "implies_features": [
+          "avx2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avxvnniint8",
+        "implies_features": [
+          "avx2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "avxvnniint16",
+        "implies_features": [
+          "avx2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "bmi1",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "bmi2",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "cmpxchg16b",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "ermsb",
+        "implies_features": [],
+        "unstable_feature_gate": "ermsb_target_feature",
+        "globally_enabled": false
+      },
+      {
+        "name": "f16c",
+        "implies_features": [
+          "avx"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "fma",
+        "implies_features": [
+          "avx"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "fxsr",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": true
+      },
+      {
+        "name": "gfni",
+        "implies_features": [
+          "sse2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "kl",
+        "implies_features": [
+          "sse2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "lahfsahf",
+        "implies_features": [],
+        "unstable_feature_gate": "lahfsahf_target_feature",
+        "globally_enabled": false
+      },
+      {
+        "name": "lzcnt",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "movbe",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "movrs",
+        "implies_features": [],
+        "unstable_feature_gate": "movrs_target_feature",
+        "globally_enabled": false
+      },
+      {
+        "name": "pclmulqdq",
+        "implies_features": [
+          "sse2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "popcnt",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "prfchw",
+        "implies_features": [],
+        "unstable_feature_gate": "prfchw_target_feature",
+        "globally_enabled": false
+      },
+      {
+        "name": "rdrand",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "rdseed",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "rtm",
+        "implies_features": [],
+        "unstable_feature_gate": "rtm_target_feature",
+        "globally_enabled": false
+      },
+      {
+        "name": "sha",
+        "implies_features": [
+          "sse2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "sha512",
+        "implies_features": [
+          "avx2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "sm3",
+        "implies_features": [
+          "avx"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "sm4",
+        "implies_features": [
+          "avx2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "soft-float",
+        "implies_features": [],
+        "unstable_feature_gate": "x87_target_feature",
+        "globally_enabled": false
+      },
+      {
+        "name": "sse",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": true
+      },
+      {
+        "name": "sse2",
+        "implies_features": [
+          "sse"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": true
+      },
+      {
+        "name": "sse3",
+        "implies_features": [
+          "sse2"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "sse4.1",
+        "implies_features": [
+          "ssse3"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "sse4.2",
+        "implies_features": [
+          "sse4.1"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "sse4a",
+        "implies_features": [
+          "sse3"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "ssse3",
+        "implies_features": [
+          "sse3"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "tbm",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "vaes",
+        "implies_features": [
+          "avx2",
+          "aes"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "vpclmulqdq",
+        "implies_features": [
+          "avx",
+          "pclmulqdq"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "widekl",
+        "implies_features": [
+          "kl"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "x87",
+        "implies_features": [],
+        "unstable_feature_gate": "x87_target_feature",
+        "globally_enabled": true
+      },
+      {
+        "name": "xop",
+        "implies_features": [
+          "avx",
+          "sse4a"
+        ],
+        "unstable_feature_gate": "xop_target_feature",
+        "globally_enabled": false
+      },
+      {
+        "name": "xsave",
+        "implies_features": [],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "xsavec",
+        "implies_features": [
+          "xsave"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "xsaveopt",
+        "implies_features": [
+          "xsave"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      },
+      {
+        "name": "xsaves",
+        "implies_features": [
+          "xsave"
+        ],
+        "unstable_feature_gate": null,
+        "globally_enabled": false
+      }
+    ]
+  },
+  "includes_private": false,
+  "source_sha256": "856005dadaec97434fe9ae5fe4ca791e841bb6bf261dd007f97027fe1d5f92d1",
+  "external_reexports": [],
+  "items": [
+    {
+      "path": "linebender_resource_handle",
+      "kind": "module",
+      "id": 149,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/lib.rs",
+        "begin": [
+          4,
+          1
+        ],
+        "end": [
+          39,
+          2
+        ]
+      },
+      "docs": "Linebender Resource Handle provides functionality for storing blobs of data and an associated ID.\nThis primitive is adapted in Peniko to store images, but the [`FontData`] type lives in this crate.\nThis crate is designed to allow making semver incompatible releases of Parley and Vello, whilst allowing them to be cross-compatible.\n\nThis crate is not intended for long-term use, and we expect our resource handling story to change.\nThat's the reason that this crate has the organisation name (\"Linebender\") in its crate name; we avoid squatting a more general name after we abandon it.",
+      "attrs": [
+        {
+          "other": "#[<cfg_attr>(not(test), warn(unused_crate_dependencies))]"
+        },
+        {
+          "other": "#[warn(unused_crate_dependencies)]"
+        },
+        {
+          "other": "#[warn(clippy::print_stdout, clippy::print_stderr)]"
+        },
+        {
+          "other": "#[<cfg_attr>(target_pointer_width = \"64\",\nwarn(clippy::trivially_copy_pass_by_ref))]"
+        },
+        {
+          "other": "#[warn(clippy::trivially_copy_pass_by_ref)]"
+        },
+        {
+          "other": "#[<cfg_attr>(docsrs, feature(doc_auto_cfg))]"
+        },
+        {
+          "other": "#[feature(doc_auto_cfg)]"
+        },
+        {
+          "other": "#[attr = NoStd]"
+        }
+      ],
+      "deprecation": null,
+      "signature": {
+        "is_crate": true,
+        "items": [
+          146,
+          147,
+          148
+        ],
+        "is_stripped": false
+      }
+    },
+    {
+      "path": "linebender_resource_handle::Blob",
+      "kind": "struct",
+      "id": 2,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          17,
+          1
+        ],
+        "end": [
+          20,
+          2
+        ]
+      },
+      "docs": "Shared data with an associated unique identifier.",
+      "attrs": [],
+      "deprecation": null,
+      "signature": {
+        "kind": {
+          "plain": {
+            "fields": [],
+            "has_stripped_fields": true
+          }
+        },
+        "generics": {
+          "params": [
+            {
+              "name": "T",
+              "kind": {
+                "type": {
+                  "bounds": [],
+                  "default": null,
+                  "is_synthetic": false
+                }
+              }
+            }
+          ],
+          "where_predicates": []
+        },
+        "impls": [
+          17,
+          18,
+          19,
+          20,
+          22,
+          24,
+          26,
+          29,
+          33,
+          36,
+          41,
+          44,
+          49,
+          54,
+          57,
+          62,
+          64,
+          69,
+          74,
+          79,
+          82,
+          85,
+          87,
+          90
+        ]
+      },
+      "trait_impls": [
+        "AsRef",
+        "Clone",
+        "Debug",
+        "Deserialize",
+        "Freeze",
+        "From",
+        "PartialEq",
+        "RefUnwindSafe",
+        "Send",
+        "Serialize",
+        "Sync",
+        "Unpin",
+        "UnwindSafe"
+      ]
+    },
+    {
+      "path": "linebender_resource_handle::Blob",
+      "kind": "use",
+      "id": 146,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/lib.rs",
+        "begin": [
+          30,
+          16
+        ],
+        "end": [
+          30,
+          20
+        ]
+      },
+      "docs": "",
+      "attrs": [],
+      "deprecation": null,
+      "signature": {
+        "source": "blob::Blob",
+        "name": "Blob",
+        "id": 2,
+        "is_glob": false
+      },
+      "reexport_source": "blob::Blob"
+    },
+    {
+      "path": "linebender_resource_handle::Blob::data",
+      "kind": "function",
+      "id": 12,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          134,
+          5
+        ],
+        "end": [
+          136,
+          6
+        ]
+      },
+      "docs": "Returns a reference to the underlying data.",
+      "attrs": [
+        {
+          "must_use": {
+            "reason": null
+          }
+        }
+      ],
+      "deprecation": null,
+      "signature": {
+        "sig": {
+          "inputs": [
+            [
+              "self",
+              {
+                "borrowed_ref": {
+                  "lifetime": null,
+                  "is_mutable": false,
+                  "type": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            ]
+          ],
+          "output": {
+            "borrowed_ref": {
+              "lifetime": null,
+              "is_mutable": false,
+              "type": {
+                "slice": {
+                  "generic": "T"
+                }
+              }
+            }
+          },
+          "is_c_variadic": false
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "is_const": false,
+          "is_unsafe": false,
+          "is_async": false,
+          "abi": "Rust"
+        },
+        "has_body": true
+      }
+    },
+    {
+      "path": "linebender_resource_handle::Blob::downgrade",
+      "kind": "function",
+      "id": 15,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          152,
+          5
+        ],
+        "end": [
+          157,
+          6
+        ]
+      },
+      "docs": "Downgrades the shared blob to a weak reference.",
+      "attrs": [
+        {
+          "must_use": {
+            "reason": null
+          }
+        }
+      ],
+      "deprecation": null,
+      "signature": {
+        "sig": {
+          "inputs": [
+            [
+              "self",
+              {
+                "borrowed_ref": {
+                  "lifetime": null,
+                  "is_mutable": false,
+                  "type": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            ]
+          ],
+          "output": {
+            "resolved_path": {
+              "path": "WeakBlob",
+              "id": 16,
+              "args": {
+                "angle_bracketed": {
+                  "args": [
+                    {
+                      "type": {
+                        "generic": "T"
+                      }
+                    }
+                  ],
+                  "constraints": []
+                }
+              }
+            }
+          },
+          "is_c_variadic": false
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "is_const": false,
+          "is_unsafe": false,
+          "is_async": false,
+          "abi": "Rust"
+        },
+        "has_body": true
+      }
+    },
+    {
+      "path": "linebender_resource_handle::Blob::from_raw_parts",
+      "kind": "function",
+      "id": 8,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          110,
+          5
+        ],
+        "end": [
+          112,
+          6
+        ]
+      },
+      "docs": "Creates a new blob from the given data and identifier.\n\nNote that while this function is not unsafe, usage of this in combination\nwith `new` (or with identifiers that are not uniquely associated with the given data)\ncan lead to inconsistencies.",
+      "attrs": [],
+      "deprecation": null,
+      "signature": {
+        "sig": {
+          "inputs": [
+            [
+              "data",
+              {
+                "resolved_path": {
+                  "path": "Arc",
+                  "id": 4,
+                  "args": {
+                    "angle_bracketed": {
+                      "args": [
+                        {
+                          "type": {
+                            "dyn_trait": {
+                              "traits": [
+                                {
+                                  "trait": {
+                                    "path": "AsRef",
+                                    "id": 5,
+                                    "args": {
+                                      "angle_bracketed": {
+                                        "args": [
+                                          {
+                                            "type": {
+                                              "slice": {
+                                                "generic": "T"
+                                              }
+                                            }
+                                          }
+                                        ],
+                                        "constraints": []
+                                      }
+                                    }
+                                  },
+                                  "generic_params": []
+                                },
+                                {
+                                  "trait": {
+                                    "path": "Send",
+                                    "id": 6,
+                                    "args": null
+                                  },
+                                  "generic_params": []
+                                },
+                                {
+                                  "trait": {
+                                    "path": "Sync",
+                                    "id": 7,
+                                    "args": null
+                                  },
+                                  "generic_params": []
+                                }
+                              ],
+                              "lifetime": null
+                            }
+                          }
+                        }
+                      ],
+                      "constraints": []
+                    }
+                  }
+                }
+              }
+            ],
+            [
+              "id",
+              {
+                "primitive": "u64"
+              }
+            ]
+          ],
+          "output": {
+            "generic": "Self"
+          },
+          "is_c_variadic": false
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "is_const": false,
+          "is_unsafe": false,
+          "is_async": false,
+          "abi": "Rust"
+        },
+        "has_body": true
+      }
+    },
+    {
+      "path": "linebender_resource_handle::Blob::id",
+      "kind": "function",
+      "id": 13,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          140,
+          5
+        ],
+        "end": [
+          142,
+          6
+        ]
+      },
+      "docs": "Returns the unique identifier associated with the data.",
+      "attrs": [
+        {
+          "must_use": {
+            "reason": null
+          }
+        }
+      ],
+      "deprecation": null,
+      "signature": {
+        "sig": {
+          "inputs": [
+            [
+              "self",
+              {
+                "borrowed_ref": {
+                  "lifetime": null,
+                  "is_mutable": false,
+                  "type": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            ]
+          ],
+          "output": {
+            "primitive": "u64"
+          },
+          "is_c_variadic": false
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "is_const": false,
+          "is_unsafe": false,
+          "is_async": false,
+          "abi": "Rust"
+        },
+        "has_body": true
+      }
+    },
+    {
+      "path": "linebender_resource_handle::Blob::into_raw_parts",
+      "kind": "function",
+      "id": 9,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          116,
+          5
+        ],
+        "end": [
+          118,
+          6
+        ]
+      },
+      "docs": "Consumes self and returns the inner components of the blob.",
+      "attrs": [
+        {
+          "must_use": {
+            "reason": null
+          }
+        }
+      ],
+      "deprecation": null,
+      "signature": {
+        "sig": {
+          "inputs": [
+            [
+              "self",
+              {
+                "generic": "Self"
+              }
+            ]
+          ],
+          "output": {
+            "tuple": [
+              {
+                "resolved_path": {
+                  "path": "Arc",
+                  "id": 4,
+                  "args": {
+                    "angle_bracketed": {
+                      "args": [
+                        {
+                          "type": {
+                            "dyn_trait": {
+                              "traits": [
+                                {
+                                  "trait": {
+                                    "path": "AsRef",
+                                    "id": 5,
+                                    "args": {
+                                      "angle_bracketed": {
+                                        "args": [
+                                          {
+                                            "type": {
+                                              "slice": {
+                                                "generic": "T"
+                                              }
+                                            }
+                                          }
+                                        ],
+                                        "constraints": []
+                                      }
+                                    }
+                                  },
+                                  "generic_params": []
+                                },
+                                {
+                                  "trait": {
+                                    "path": "Send",
+                                    "id": 6,
+                                    "args": null
+                                  },
+                                  "generic_params": []
+                                },
+                                {
+                                  "trait": {
+                                    "path": "Sync",
+                                    "id": 7,
+                                    "args": null
+                                  },
+                                  "generic_params": []
+                                }
+                              ],
+                              "lifetime": null
+                            }
+                          }
+                        }
+                      ],
+                      "constraints": []
+                    }
+                  }
+                }
+              },
+              {
+                "primitive": "u64"
+              }
+            ]
+          },
+          "is_c_variadic": false
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "is_const": false,
+          "is_unsafe": false,
+          "is_async": false,
+          "abi": "Rust"
+        },
+        "has_body": true
+      }
+    },
+    {
+      "path": "linebender_resource_handle::Blob::is_empty",
+      "kind": "function",
+      "id": 11,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          128,
+          5
+        ],
+        "end": [
+          130,
+          6
+        ]
+      },
+      "docs": "Returns true if the blob is empty.",
+      "attrs": [
+        {
+          "must_use": {
+            "reason": null
+          }
+        }
+      ],
+      "deprecation": null,
+      "signature": {
+        "sig": {
+          "inputs": [
+            [
+              "self",
+              {
+                "borrowed_ref": {
+                  "lifetime": null,
+                  "is_mutable": false,
+                  "type": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            ]
+          ],
+          "output": {
+            "primitive": "bool"
+          },
+          "is_c_variadic": false
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "is_const": false,
+          "is_unsafe": false,
+          "is_async": false,
+          "abi": "Rust"
+        },
+        "has_body": true
+      }
+    },
+    {
+      "path": "linebender_resource_handle::Blob::len",
+      "kind": "function",
+      "id": 10,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          122,
+          5
+        ],
+        "end": [
+          124,
+          6
+        ]
+      },
+      "docs": "Returns the length of the data.",
+      "attrs": [
+        {
+          "must_use": {
+            "reason": null
+          }
+        }
+      ],
+      "deprecation": null,
+      "signature": {
+        "sig": {
+          "inputs": [
+            [
+              "self",
+              {
+                "borrowed_ref": {
+                  "lifetime": null,
+                  "is_mutable": false,
+                  "type": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            ]
+          ],
+          "output": {
+            "primitive": "usize"
+          },
+          "is_c_variadic": false
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "is_const": false,
+          "is_unsafe": false,
+          "is_async": false,
+          "abi": "Rust"
+        },
+        "has_body": true
+      }
+    },
+    {
+      "path": "linebender_resource_handle::Blob::new",
+      "kind": "function",
+      "id": 3,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          95,
+          5
+        ],
+        "end": [
+          103,
+          6
+        ]
+      },
+      "docs": "Creates a new blob from the given data and generates a unique\nidentifier.",
+      "attrs": [],
+      "deprecation": null,
+      "signature": {
+        "sig": {
+          "inputs": [
+            [
+              "data",
+              {
+                "resolved_path": {
+                  "path": "Arc",
+                  "id": 4,
+                  "args": {
+                    "angle_bracketed": {
+                      "args": [
+                        {
+                          "type": {
+                            "dyn_trait": {
+                              "traits": [
+                                {
+                                  "trait": {
+                                    "path": "AsRef",
+                                    "id": 5,
+                                    "args": {
+                                      "angle_bracketed": {
+                                        "args": [
+                                          {
+                                            "type": {
+                                              "slice": {
+                                                "generic": "T"
+                                              }
+                                            }
+                                          }
+                                        ],
+                                        "constraints": []
+                                      }
+                                    }
+                                  },
+                                  "generic_params": []
+                                },
+                                {
+                                  "trait": {
+                                    "path": "Send",
+                                    "id": 6,
+                                    "args": null
+                                  },
+                                  "generic_params": []
+                                },
+                                {
+                                  "trait": {
+                                    "path": "Sync",
+                                    "id": 7,
+                                    "args": null
+                                  },
+                                  "generic_params": []
+                                }
+                              ],
+                              "lifetime": null
+                            }
+                          }
+                        }
+                      ],
+                      "constraints": []
+                    }
+                  }
+                }
+              }
+            ]
+          ],
+          "output": {
+            "generic": "Self"
+          },
+          "is_c_variadic": false
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "is_const": false,
+          "is_unsafe": false,
+          "is_async": false,
+          "abi": "Rust"
+        },
+        "has_body": true
+      }
+    },
+    {
+      "path": "linebender_resource_handle::Blob::strong_count",
+      "kind": "function",
+      "id": 14,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          146,
+          5
+        ],
+        "end": [
+          148,
+          6
+        ]
+      },
+      "docs": "Returns the number of existing strong pointers to this blob.",
+      "attrs": [
+        {
+          "must_use": {
+            "reason": null
+          }
+        }
+      ],
+      "deprecation": null,
+      "signature": {
+        "sig": {
+          "inputs": [
+            [
+              "self",
+              {
+                "borrowed_ref": {
+                  "lifetime": null,
+                  "is_mutable": false,
+                  "type": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            ]
+          ],
+          "output": {
+            "primitive": "usize"
+          },
+          "is_c_variadic": false
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "is_const": false,
+          "is_unsafe": false,
+          "is_async": false,
+          "abi": "Rust"
+        },
+        "has_body": true
+      }
+    },
+    {
+      "path": "linebender_resource_handle::FontData",
+      "kind": "struct",
+      "id": 119,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/font.rs",
+        "begin": [
+          8,
+          1
+        ],
+        "end": [
+          13,
+          2
+        ]
+      },
+      "docs": "Owned shareable font resource.",
+      "attrs": [],
+      "deprecation": null,
+      "signature": {
+        "kind": {
+          "plain": {
+            "fields": [
+              117,
+              118
+            ],
+            "has_stripped_fields": false
+          }
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "impls": [
+          121,
+          122,
+          123,
+          124,
+          125,
+          126,
+          127,
+          128,
+          129,
+          130,
+          131,
+          132,
+          133,
+          134,
+          135,
+          136,
+          138,
+          139,
+          142,
+          144
+        ]
+      },
+      "trait_impls": [
+        "Clone",
+        "Debug",
+        "Freeze",
+        "PartialEq",
+        "RefUnwindSafe",
+        "Send",
+        "StructuralPartialEq",
+        "Sync",
+        "Unpin",
+        "UnwindSafe"
+      ]
+    },
+    {
+      "path": "linebender_resource_handle::FontData",
+      "kind": "use",
+      "id": 148,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/lib.rs",
+        "begin": [
+          31,
+          1
+        ],
+        "end": [
+          31,
+          24
+        ]
+      },
+      "docs": "",
+      "attrs": [],
+      "deprecation": null,
+      "signature": {
+        "source": "font::FontData",
+        "name": "FontData",
+        "id": 119,
+        "is_glob": false
+      },
+      "reexport_source": "font::FontData"
+    },
+    {
+      "path": "linebender_resource_handle::FontData::data",
+      "kind": "struct_field",
+      "id": 117,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/font.rs",
+        "begin": [
+          10,
+          5
+        ],
+        "end": [
+          10,
+          23
+        ]
+      },
+      "docs": "Blob containing the content of the font file.",
+      "attrs": [],
+      "deprecation": null,
+      "signature": {
+        "resolved_path": {
+          "path": "crate::Blob",
+          "id": 2,
+          "args": {
+            "angle_bracketed": {
+              "args": [
+                {
+                  "type": {
+                    "primitive": "u8"
+                  }
+                }
+              ],
+              "constraints": []
+            }
+          }
+        }
+      }
+    },
+    {
+      "path": "linebender_resource_handle::FontData::index",
+      "kind": "struct_field",
+      "id": 118,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/font.rs",
+        "begin": [
+          12,
+          5
+        ],
+        "end": [
+          12,
+          19
+        ]
+      },
+      "docs": "Index of the font in a collection, or 0 for a single font.",
+      "attrs": [],
+      "deprecation": null,
+      "signature": {
+        "primitive": "u32"
+      }
+    },
+    {
+      "path": "linebender_resource_handle::FontData::new",
+      "kind": "function",
+      "id": 120,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/font.rs",
+        "begin": [
+          18,
+          5
+        ],
+        "end": [
+          20,
+          6
+        ]
+      },
+      "docs": "Creates a new font with the given data and collection index.",
+      "attrs": [
+        {
+          "must_use": {
+            "reason": null
+          }
+        }
+      ],
+      "deprecation": null,
+      "signature": {
+        "sig": {
+          "inputs": [
+            [
+              "data",
+              {
+                "resolved_path": {
+                  "path": "Blob",
+                  "id": 2,
+                  "args": {
+                    "angle_bracketed": {
+                      "args": [
+                        {
+                          "type": {
+                            "primitive": "u8"
+                          }
+                        }
+                      ],
+                      "constraints": []
+                    }
+                  }
+                }
+              }
+            ],
+            [
+              "index",
+              {
+                "primitive": "u32"
+              }
+            ]
+          ],
+          "output": {
+            "generic": "Self"
+          },
+          "is_c_variadic": false
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "is_const": false,
+          "is_unsafe": false,
+          "is_async": false,
+          "abi": "Rust"
+        },
+        "has_body": true
+      }
+    },
+    {
+      "path": "linebender_resource_handle::WeakBlob",
+      "kind": "struct",
+      "id": 16,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          162,
+          1
+        ],
+        "end": [
+          165,
+          2
+        ]
+      },
+      "docs": "Weak reference to a shared [blob](Blob).",
+      "attrs": [],
+      "deprecation": null,
+      "signature": {
+        "kind": {
+          "plain": {
+            "fields": [],
+            "has_stripped_fields": true
+          }
+        },
+        "generics": {
+          "params": [
+            {
+              "name": "T",
+              "kind": {
+                "type": {
+                  "bounds": [],
+                  "default": null,
+                  "is_synthetic": false
+                }
+              }
+            }
+          ],
+          "where_predicates": []
+        },
+        "impls": [
+          96,
+          97,
+          98,
+          99,
+          100,
+          101,
+          102,
+          103,
+          104,
+          105,
+          106,
+          107,
+          108,
+          109,
+          110,
+          111,
+          113,
+          115
+        ]
+      },
+      "trait_impls": [
+        "Clone",
+        "Debug",
+        "Freeze",
+        "RefUnwindSafe",
+        "Send",
+        "Sync",
+        "Unpin",
+        "UnwindSafe"
+      ]
+    },
+    {
+      "path": "linebender_resource_handle::WeakBlob",
+      "kind": "use",
+      "id": 147,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/lib.rs",
+        "begin": [
+          30,
+          22
+        ],
+        "end": [
+          30,
+          30
+        ]
+      },
+      "docs": "",
+      "attrs": [],
+      "deprecation": null,
+      "signature": {
+        "source": "blob::WeakBlob",
+        "name": "WeakBlob",
+        "id": 16,
+        "is_glob": false
+      },
+      "reexport_source": "blob::WeakBlob"
+    },
+    {
+      "path": "linebender_resource_handle::WeakBlob::id",
+      "kind": "function",
+      "id": 93,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          179,
+          5
+        ],
+        "end": [
+          181,
+          6
+        ]
+      },
+      "docs": "Returns the unique identifier associated with the data.",
+      "attrs": [
+        {
+          "must_use": {
+            "reason": null
+          }
+        }
+      ],
+      "deprecation": null,
+      "signature": {
+        "sig": {
+          "inputs": [
+            [
+              "self",
+              {
+                "borrowed_ref": {
+                  "lifetime": null,
+                  "is_mutable": false,
+                  "type": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            ]
+          ],
+          "output": {
+            "primitive": "u64"
+          },
+          "is_c_variadic": false
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "is_const": false,
+          "is_unsafe": false,
+          "is_async": false,
+          "abi": "Rust"
+        },
+        "has_body": true
+      }
+    },
+    {
+      "path": "linebender_resource_handle::WeakBlob::upgrade",
+      "kind": "function",
+      "id": 94,
+      "crate_id": 0,
+      "span": {
+        "filename": "src/blob.rs",
+        "begin": [
+          186,
+          5
+        ],
+        "end": [
+          191,
+          6
+        ]
+      },
+      "docs": "Upgrades the weak reference. Returns `None` if the inner value has been\ndropped.",
+      "attrs": [
+        {
+          "must_use": {
+            "reason": null
+          }
+        }
+      ],
+      "deprecation": null,
+      "signature": {
+        "sig": {
+          "inputs": [
+            [
+              "self",
+              {
+                "borrowed_ref": {
+                  "lifetime": null,
+                  "is_mutable": false,
+                  "type": {
+                    "generic": "Self"
+                  }
+                }
+              }
+            ]
+          ],
+          "output": {
+            "resolved_path": {
+              "path": "Option",
+              "id": 95,
+              "args": {
+                "angle_bracketed": {
+                  "args": [
+                    {
+                      "type": {
+                        "resolved_path": {
+                          "path": "Blob",
+                          "id": 2,
+                          "args": {
+                            "angle_bracketed": {
+                              "args": [
+                                {
+                                  "type": {
+                                    "generic": "T"
+                                  }
+                                }
+                              ],
+                              "constraints": []
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ],
+                  "constraints": []
+                }
+              }
+            }
+          },
+          "is_c_variadic": false
+        },
+        "generics": {
+          "params": [],
+          "where_predicates": []
+        },
+        "header": {
+          "is_const": false,
+          "is_unsafe": false,
+          "is_async": false,
+          "abi": "Rust"
+        },
+        "has_body": true
+      }
+    }
+  ]
+}

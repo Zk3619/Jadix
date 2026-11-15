@@ -1,0 +1,24 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>Jadix browser GPU acceptance</title>
+<body><h1>Browser GPU acceptance</h1><pre id="result">Running…</pre>
+<script type="module">
+import init,{run_jadix,css_cases} from './pkg-jadix/jadix_browser_acceptance.js';
+import initVello,{run_vello} from './pkg-vello-reference/jadix_browser_acceptance.js';
+const results=[]; const consoleErrors=[]; const originalError=console.error.bind(console); console.error=(...args)=>{consoleErrors.push(args.map(String).join(" ")); originalError(...args);};
+const report=()=>fetch('/result',{method:'POST',body:JSON.stringify({userAgent:navigator.userAgent,consoleErrors,results})});
+const bounded=(promise)=>Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(new Error('GPU operation timeout after 60s')),60000))]);
+window.addEventListener('error',e=>{results.push({status:'failed',stage:'window-error',error:String(e.message)});document.getElementById('result').textContent=JSON.stringify(results);});
+try {await init();
+const colorRows=JSON.parse(css_cases());const colorResults=[];
+for (const row of colorRows) {
+ const probe=document.createElement('div');probe.style.color='#4080c0';probe.style.colorScheme='light';probe.style.setProperty('--base','currentColor');probe.style.setProperty('--channels','255 0 0');probe.style.backgroundColor=row.css;document.body.append(probe);
+ const valid=probe.style.backgroundColor!=='';const resolved=getComputedStyle(probe).backgroundColor;
+ const canvas=document.createElement('canvas');canvas.width=1;canvas.height=1;const c=canvas.getContext('2d',{willReadFrequently:true});c.fillStyle=resolved;c.fillRect(0,0,1,1);const actual=Array.from(c.getImageData(0,0,1,1).data);probe.remove();
+ const maxDelta=Math.max(...actual.map((v,i)=>Math.abs(v-row.expected[i])));colorResults.push({...row,actual,resolved,maxDelta,status:valid&&maxDelta<=3?'pass':'failed'});
+}
+results.push({renderer:'CSS context vs Edge',status:colorResults.every(r=>r.status==='pass')?'pass':'failed',cases:colorResults});
+for (const name of ['webgpu','webgl']) {try {results.push(JSON.parse(await bounded(run_jadix(name))));}catch(e){results.push({renderer:'jadix_2d',backend:name,status:'failed',error:String(e)});}}
+try {await initVello();results.push(JSON.parse(await bounded(run_vello())));}catch(e){results.push({renderer:'vello 0.11.0',backend:'webgpu',status:'failed',error:String(e)});}}
+catch(e){results.push({status:'failed',stage:'init',error:String(e)});}
+document.getElementById('result').textContent=JSON.stringify(results,null,2);
+await fetch('/result',{method:'POST',body:JSON.stringify({userAgent:navigator.userAgent,consoleErrors,results})});
+</script></body></html>
